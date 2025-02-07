@@ -2,7 +2,7 @@
 
 NOTE: The service is live and running, currently being prepared for open sourcing. Planned public release - Late February 2025.
 
-👉 Try it for free at [vexa.ai](https://vexa.ai)
+👉 Try and use it for free at [vexa.ai](https://vexa.ai)
 
 ![Vexa Logo](assets/logo-placeholder.png)
 
