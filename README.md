@@ -8,7 +8,13 @@ NOTE: The service is live and running, currently being prepared for open sourcin
   <img src="assets/logodark.svg" alt="Vexa Logo" width="40"/>
 </p>
 
-Vexa is a powerful, distributed system for real-time meeting transcription, knowledge extraction, and analysis. It's designed to handle live audio streams from meetings and conversations, providing instant transcription and insights while delivering the full body of collected knowledge where it's needed most - all with fine-grained security and access control.
+Vexa combines the best of AI meeting notetakers (like **Otter.ai**, **Fathom.fm**, **Fireflies.ai**, **Tactiq.io**) with **powerful knowledge management** and **AI chat capabilities**. While other notetakers focus primarily on transcription and follow-ups, Vexa transforms your meetings into an **intelligent knowledge base** - imagine having **Claude Projects**' capabilities but trained specifically on your company's meeting knowledge, with **enterprise-grade security** and **access controls**.
+
+Our distributed system provides:
+- **Real-time transcription** with speaker detection
+- **Instant knowledge extraction** from conversations
+- **Contextual AI chat** that understands your company's entire meeting history
+- **Enterprise security** with granular access management
 
 ## 🚀 Features
 
