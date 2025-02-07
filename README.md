@@ -4,7 +4,9 @@ NOTE: The service is live and running, currently being prepared for open sourcin
 
 👉 Try it for free at [vexa.ai](https://vexa.ai)
 
-![Vexa Logo](assets/logodark.svg)
+<p align="center">
+  <img src="assets/logodark.svg" alt="Vexa Logo" width="400"/>
+</p>
 
 Vexa is a powerful, distributed system for real-time meeting transcription, knowledge extraction, and analysis. It's designed to handle live audio streams from meetings and conversations, providing instant transcription and insights while delivering the full body of collected knowledge where it's needed most - all with fine-grained security and access control.
 
