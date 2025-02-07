@@ -72,7 +72,7 @@ Built on scalable microservices architecture:
 - Product: [vexa.ai](https://vexa.ai)
 - LinkedIn: [@vexa.ai](https://www.linkedin.com/company/vexa-ai/)
 - X: [@grankin_d](https://x.com/grankin_d)
-- Discord: [@grankin_d](https://discord.gg/X8fU4Q2x)
+- Discord: [vexa discord server invite link](https://discord.gg/X8fU4Q2x)
 
 ---
 
