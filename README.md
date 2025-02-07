@@ -4,7 +4,6 @@ NOTE: The service is live and running and currently is getting prepared for open
 
 🌟 Go try it out and use for free at [vexa.ai](https://vexa.ai) to get a flavor of the service.
 
-![Vexa Logo](assets/logo-placeholder.png)
 
 Vexa is a powerful, distributed system for real-time audio processing, transcription, and analysis. It's designed to handle live audio streams from meetings and conversations, providing instant transcription and insights.
 
