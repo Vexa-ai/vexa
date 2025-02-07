@@ -2,21 +2,25 @@
 
 NOTE: The service is live and running, currently being prepared for open sourcing. Planned public release - Late February 2025.
 
-👉 Try and use it for free at [vexa.ai](https://vexa.ai)
+👉 Try it for free at [vexa.ai](https://vexa.ai)
 
-![Vexa Logo](assets/logo-placeholder.png)
+![Vexa Logo](assets/logodark.svg)
 
-Vexa is a powerful, distributed system for real-time audio processing, transcription, and analysis. It's designed to handle live audio streams from meetings and conversations, providing instant transcription and insights.
+Vexa is a powerful, distributed system for real-time meeting transcription, knowledge extraction, and analysis. It's designed to handle live audio streams from meetings and conversations, providing instant transcription and insights while delivering the full body of collected knowledge where it's needed most - all with fine-grained security and access control.
 
 ## 🚀 Features
 
+During meetings:
 - Real-time speaker-aware meeting transcription with AI contextual support and chat
+
+After meetings:
 - Meeting knowledge extraction from conversations and documents 
 - RAG-powered chat with full company context awareness
 - Fine-grained data access control
-- Scalable microservices architecture
 
 ## 🏗 System Architecture
+
+Built on scalable microservices architecture:
 
 ![System Architecture](assets/architecture-placeholder.png)
 
@@ -59,11 +63,9 @@ Vexa is a powerful, distributed system for real-time audio processing, transcrip
 - **Data Layer**: Redis, PostgreSQL, Qdrant, Elasticsearch
 - **Infrastructure**: Docker, Docker Compose
 
-## 🔗 Links
+## 🔗 Quick Links
 
 - Product: [vexa.ai](https://vexa.ai)
-- Documentation: [docs.vexa.ai](https://docs.vexa.ai)
-- Support: support@vexa.ai
 
 ---
 
