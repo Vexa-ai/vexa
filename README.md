@@ -1,5 +1,8 @@
 # Vexa - AI Meeting Notetaker and Knowledge Chat for Professionals and Teams
 
+Extract  business knowledge from 
+**Google Meet | Microsoft Teams | Zoom | Discord | Slack |** and more
+
 NOTE: The service is live and running, currently being prepared for open sourcing. Planned public release - Late February 2025.
 
 👉 Try it for free at [vexa.ai](https://vexa.ai)
