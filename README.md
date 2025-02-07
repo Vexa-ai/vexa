@@ -4,9 +4,10 @@ NOTE: The service is live and running, currently being prepared for open sourcin
 
 👉 Try it for free at [vexa.ai](https://vexa.ai)
 
-<p align="center">
+<p align="left">
   <img src="assets/logodark.svg" alt="Vexa Logo" width="40"/>
 </p>
+
 
 Vexa is a powerful, distributed system for real-time meeting transcription, knowledge extraction, and analysis. It's designed to handle live audio streams from meetings and conversations, providing instant transcription and insights while delivering the full body of collected knowledge where it's needed most - all with fine-grained security and access control.
 
@@ -64,6 +65,7 @@ Built on scalable microservices architecture:
 - **Backend**: Python 3.12+
 - **Data Layer**: Redis, PostgreSQL, Qdrant, Elasticsearch
 - **Infrastructure**: Docker, Docker Compose
+- **AI**: local Whisper, Openrouter for LLM calls
 
 ## 🔗 Quick Links
 
