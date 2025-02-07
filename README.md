@@ -8,18 +8,29 @@ NOTE: The service is live and running, currently being prepared for open sourcin
   <img src="assets/logodark.svg" alt="Vexa Logo" width="40"/>
 </p>
 
-
 Vexa is a powerful, distributed system for real-time meeting transcription, knowledge extraction, and analysis. It's designed to handle live audio streams from meetings and conversations, providing instant transcription and insights while delivering the full body of collected knowledge where it's needed most - all with fine-grained security and access control.
 
 ## 🚀 Features
 
-During meetings:
-- Real-time speaker-aware meeting transcription with AI contextual support and chat
+### During meetings:
+Real-time speaker-aware meeting transcription with AI contextual support and chat
 
-After meetings:
+<p align="center">
+  <img src="assets/extension.png" alt="Vexa Extension in Action" width="600"/>
+  <br>
+  <em>Chrome Extension: Real-time transcription and AI assistance during meetings</em>
+</p>
+
+### After meetings:
 - Meeting knowledge extraction from conversations and documents 
 - RAG-powered chat with full company context awareness
 - Fine-grained data access control
+
+<p align="center">
+  <img src="assets/dashboard.png" alt="Vexa Dashboard" width="600"/>
+  <br>
+  <em>Dashboard: Knowledge exploration and team collaboration</em>
+</p>
 
 ## 🏗 System Architecture
 
