@@ -3,7 +3,17 @@
 Extract  business knowledge from 
 **Google Meet | Microsoft Teams | Zoom | Discord | Slack |** and more
 
-NOTE: The service is live and running, currently being prepared for open sourcing. Planned public release - Late February 2025.
+## 🚀 Release Status
+
+**Transcription Service**: ✅ Already published as an open-source component! Our enterprise-grade, real-time audio transcription system is [available now on GitHub](https://github.com/Vexa-ai/vexa-transcription-service). This production-ready service offers secure, private speech-to-text conversion with self-hosted and on-premise deployment options for maximum data sovereignty and compliance. Features include:
+- Real-time transcription with advanced speaker detection
+- Multi-platform support including Google Meet integration
+- 5-10 second latency for live captions
+- On-premise deployment for HIPAA, GDPR, and high-security environments
+- Enterprise scalability supporting thousands of concurrent users
+
+**Knowledge Management Module**: 🔜 Coming in March 2025. This component will transform meeting transcripts into structured knowledge and enable AI-powered contextual search and insights.
+
 
 👉 Try it for free at [vexa.ai](https://vexa.ai)
 
@@ -78,6 +88,25 @@ Built on scalable microservices architecture:
 #### 3. Engine Service
 - Core business logic
 - Knowledge extraction and accessibility
+
+## 📦 Repository Structure
+
+### Published Components
+
+#### [Real-Time Audio Transcription Service](https://github.com/Vexa-ai/vexa-transcription-service)
+
+Our **Real-Time Audio Transcription Service** is now publicly available as an open-source component on GitHub. This production-ready system offers enterprise-grade speech-to-text conversion with advanced speaker detection, designed for privacy and compliance.
+
+Features:
+- Real-time transcription with 5-10 second latency
+- GPU acceleration with Whisper v3
+- Redis-backed storage for fast retrieval
+- Webhook-based integrations
+- Enterprise-scale architecture supporting thousands of concurrent users
+- Air-gapped deployment options for high-security environments
+
+The full repository is available at: [github.com/Vexa-ai/vexa-transcription-service](https://github.com/Vexa-ai/vexa-transcription-service)
+
 
 ## 🛠 Technology Stack
 
