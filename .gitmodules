@@ -1,0 +1,3 @@
+[submodule "vexa-transcription-service"]
+	path = vexa-transcription-service
+	url = https://github.com/Vexa-ai/vexa-transcription-service
