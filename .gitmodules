@@ -4,3 +4,6 @@
 [submodule "vexa-engine"]
 	path = vexa-engine
 	url = https://github.com/Vexa-ai/vexa-engine
+[submodule "whisper_service"]
+	path = whisper_service
+	url = https://github.com/Vexa-ai/whisper_service
