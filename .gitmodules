@@ -1,12 +1,12 @@
 [submodule "vexa-transcription-service"]
-	path = vexa-transcription-service
+	path = transcription-service
 	url = https://github.com/Vexa-ai/vexa-transcription-service
 [submodule "vexa-engine"]
-	path = vexa-engine
+	path = engine
 	url = https://github.com/Vexa-ai/vexa-engine
 [submodule "whisper_service"]
 	path = whisper_service
 	url = https://github.com/Vexa-ai/whisper_service
 [submodule "vexa-testing-app"]
-	path = vexa-testing-app
+	path = testing-app
 	url = https://github.com/Vexa-ai/vexa-testing-app

@@ -60,7 +60,7 @@ The transcription service manages audio streams, handles transcription, performs
 
 ```bash
 # Navigate to the transcription service directory
-cd ../vexa-transcription-service
+cd ../transcription-service
 
 # Create environment configuration file
 cp .env.example .env
@@ -79,7 +79,7 @@ The engine service handles the core business logic, knowledge extraction, and us
 
 ```bash
 # Navigate to the engine service directory
-cd ../vexa-engine
+cd ../engine
 
 # Create environment configuration file (if not already present)
 cp .env.example .env
@@ -94,7 +94,7 @@ The vexa-testing-app can be used to test the complete system with mock data.
 
 ```bash
 # Navigate to the testing app directory
-cd ../vexa-testing-app
+cd ../testing-app
 
 # Register a test user
 python register_test_user.py
@@ -112,7 +112,7 @@ To see the transcription results, open a new terminal and run:
 
 ```bash
 # Open a shell in the backend service
-docker compose exec vexa-backend bash
+docker compose exec backend bash
 
 # Run the demo script
 python demo.py
