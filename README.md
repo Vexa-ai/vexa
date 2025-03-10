@@ -134,7 +134,7 @@ Vexa employs a modular architecture ideal for enterprise environments requiring 
 ```bash
 git clone https://github.com/Vexa-ai/vexa
 cd vexa
-git submodule update --init --recursive
+git submodule update --init --recursive --remote
 ```
 
 ### Step 2: Set Up Whisper Service
@@ -171,7 +171,7 @@ docker compose up -d
 docker compose exec vexa-engine python clear_transcripts.py
 ```
 
-### Step 5: Test System
+### Step 5: Start Test Meeting API Calls Replay
 
 ```bash
 cd ../vexa-testing-app
@@ -179,12 +179,24 @@ python register_test_user.py
 python main.py
 ```
 
-### Step 6: View Results
+This will start sending API calls that simulate a meeting. Keep this terminal running for the duration of your test.
+
+### Step 6: View Results (In a Separate Terminal)
+
+While keeping the previous terminal with API calls running, open a new terminal and run:
 
 ```bash
 cd ../vexa-engine
 docker compose exec vexa-engine python demo.py
 ```
+
+### Step 7: Access Documentation and Dashboards
+
+After all services are running, you can access:
+
+- Transcription Service Swagger: [http://localhost:8008/docs](http://localhost:8008/docs)
+- Engine Service Swagger: [http://localhost:8010/docs](http://localhost:8010/docs)
+- Ray Model Deployment Dashboard: [http://localhost:8265/#/overview](http://localhost:8265/#/overview)
 
 ### Troubleshooting
 
