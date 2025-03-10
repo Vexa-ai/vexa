@@ -37,9 +37,6 @@ cp .env.example .env
 # Make the startup script executable
 chmod +x start.sh
 
-# Pull the pre-built Docker image
-docker pull vexaai/ray-whisper:latest
-
 # Start the service
 docker compose up -d
 ```
@@ -60,7 +57,7 @@ The transcription service manages audio streams, handles transcription, performs
 
 ```bash
 # Navigate to the transcription service directory
-cd ../transcription-service
+cd ../vexa-transcription-service
 
 # Create environment configuration file
 cp .env.example .env
@@ -79,13 +76,16 @@ The engine service handles the core business logic, knowledge extraction, and us
 
 ```bash
 # Navigate to the engine service directory
-cd ../engine
+cd ../vexa-engine
 
 # Create environment configuration file (if not already present)
 cp .env.example .env
 
 # Start the service
 docker compose up -d
+
+# Clear any existing transcripts (optional)
+docker compose exec vexa-engine python clear_transcripts.py
 ```
 
 ## 5. Test the System
@@ -94,13 +94,12 @@ The vexa-testing-app can be used to test the complete system with mock data.
 
 ```bash
 # Navigate to the testing app directory
-cd ../testing-app
+cd ../vexa-testing-app
 
 # Register a test user
 python register_test_user.py
 
-# Clear any existing transcripts (optional)
-python clear_transcripts.py
+
 
 # Start sending test data to the API
 python main.py
@@ -111,11 +110,12 @@ python main.py
 To see the transcription results, open a new terminal and run:
 
 ```bash
+cd vexa-engine
 # Open a shell in the backend service
-docker compose exec backend bash
+docker compose exec vexa-engine python demo.py
 
 # Run the demo script
-python demo.py
+
 ```
 
 This will display the transcribed files from the system.

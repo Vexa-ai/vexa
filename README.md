@@ -1,38 +1,54 @@
-# Vexa - AI Meeting Notetaker and Knowledge Chat for Professionals and Teams
-
-Extract  business knowledge from 
-**Google Meet | Microsoft Teams | Zoom | Discord | Slack |** and more
-
-## 🚀 Release Status
-
-**Transcription Service**: ✅ Already published as an open-source component! Our enterprise-grade, real-time audio transcription system is [available now on GitHub](https://github.com/Vexa-ai/vexa-transcription-service). This production-ready service offers secure, private speech-to-text conversion with self-hosted and on-premise deployment options for maximum data sovereignty and compliance. Features include:
-- Real-time transcription with advanced speaker detection
-- Multi-platform support including Google Meet integration
-- 5-10 second latency for live captions
-- On-premise deployment for HIPAA, GDPR, and high-security environments
-- Enterprise scalability supporting thousands of concurrent users
-
-**Knowledge Management Module**: 🔜 Coming in March 2025. This component will transform meeting transcripts into structured knowledge and enable AI-powered contextual search and insights.
-
-
-👉 Try it for free at [vexa.ai](https://vexa.ai)
+# Vexa – Secure Real-Time Meeting Transcription and Knowledge Management for Corporate In-House Deployment
 
 <p align="left">
   <img src="assets/logodark.svg" alt="Vexa Logo" width="40"/>
 </p>
 
-Vexa combines the best of AI meeting notetakers (like **Otter.ai**, **Fathom.fm**, **Fireflies.ai**, **Tactiq.io**) with **powerful knowledge management** and **AI chat capabilities**. While other notetakers focus primarily on transcription and follow-ups, Vexa transforms your meetings into an **intelligent knowledge base** - imagine having **Claude Projects**' capabilities but trained specifically on your company's meeting knowledge, with **enterprise-grade security** and **access controls**.
+Vexa is an enterprise-grade AI solution designed specifically for secure corporate environments where data security and compliance are non-negotiable. It enables professionals and teams to capture, transcribe, and transform meeting insights across platforms like **Google Meet**, **Microsoft Teams**, **Zoom**, **Discord**, **Slack**, and more into actionable knowledge.
 
-Our distributed system provides:
-- **Real-time transcription** with speaker detection
-- **Instant knowledge extraction** from conversations
-- **Contextual AI chat** that understands your company's entire meeting history
-- **Enterprise security** with granular access management
+Built as a multiuser, scalable microservice-based application, Vexa can efficiently service thousands of simultaneous users, converting speech to text in real-time and centralizing information for seamless knowledge extraction and controlled access.
 
-## 🚀 Features
+## 📑 Table of Contents
 
-### During meetings:
-Real-time speaker-aware meeting transcription with AI contextual support and chat
+1. [🚀 Release Status](#release-status)
+2. [🌟 Features](#features)
+3. [🏗 System Architecture](#system-architecture)
+4. [📦 Repository Structure](#repository-structure)
+5. [🛠 Technology Stack](#technology-stack)
+6. [🚀 Local Setup Instructions](#local-setup-instructions)
+7. [🔗 Quick Links](#quick-links)
+
+---
+
+## 🚀 Release Status
+
+### Currently Available
+
+- **[Real-Time Audio Transcription Service](https://github.com/Vexa-ai/vexa-transcription-service)**:
+  - Real-time speech-to-text conversion
+  - Secure on-premise deployment
+  - Speaker detection
+  - Low-latency performance (5-10 seconds)
+
+### Upcoming Releases (March 2025)
+
+- **Knowledge Management Module**:
+  - Converts transcripts into structured insights
+  - Contextual AI-powered search
+
+- **Google Chrome Extension**:
+  - Real-time transcription with AI assistance
+
+👉 [Try Vexa for free](https://vexa.ai) – currently available as a SaaS for free testing at [vexa.ai](https://vexa.ai), allowing users to experience Vexa's capabilities directly in a managed environment.
+
+---
+
+## 🌟 Features
+
+### During Meetings:
+
+- Real-time transcription with speaker identification
+- AI-driven contextual support and interactive chat
 
 <p align="center">
   <img src="assets/extension.png" alt="Vexa Extension in Action" width="600"/>
@@ -40,10 +56,11 @@ Real-time speaker-aware meeting transcription with AI contextual support and cha
   <em>Chrome Extension: Real-time transcription and AI assistance during meetings</em>
 </p>
 
-### After meetings:
-- Meeting knowledge extraction from conversations and documents 
-- RAG-powered chat with full company context awareness
-- Fine-grained data access control
+### After Meetings:
+
+- Intelligent knowledge extraction from conversations and documents
+- Context-aware chat powered by advanced retrieval augmented generation (RAG)
+- Enterprise-level data security with granular access controls
 
 <p align="center">
   <img src="assets/dashboard.png" alt="Vexa Dashboard" width="600"/>
@@ -51,78 +68,137 @@ Real-time speaker-aware meeting transcription with AI contextual support and cha
   <em>Dashboard: Knowledge exploration and team collaboration</em>
 </p>
 
+---
+
 ## 🏗 System Architecture
 
-Built on scalable microservices architecture:
-
-![System Architecture](assets/architecture-placeholder.png)
+Vexa employs a modular architecture ideal for enterprise environments requiring flexibility, scalability, and stringent security:
 
 ### User Interfaces
 
-#### Google Chrome Extension
-- Real-time transcripts with enhanced readability
-- Interactive contextual support with single-click actions
-- Contextual chat with access to company-wide knowledge base
+- **Google Chrome Extension**:
+  - Enhanced real-time transcription
+  - Interactive contextual assistance
 
-#### Meeting and Chat Interface
-- Company-wide data exploration by:
-  - Speaker
-  - Project
-  - Meeting
-- Advanced entity search:
-  - People
-  - Companies
-  - Products
-  - More
+- **Meeting and Knowledge Dashboard**:
+  - Centralized knowledge repository
+  - Advanced search and data exploration
 
-### Backend Architecture
+### Backend Services
 
-#### 1. Streamqueue Service
-- Real-time audio stream collection from client browser
+1. **Streamqueue Service**:
+   - Captures and manages real-time audio streams
 
-#### 2. Audio Service
-- Speech-to-text conversion using Whisper
-- Load balancer for distributed model instances (coming soon)
-- Speaker-aware transcription processing
+2. **Audio Service**:
+   - Whisper-based, GPU-accelerated transcription
 
-#### 3. Engine Service
-- Core business logic
-- Knowledge extraction and accessibility
+3. **Engine Service**:
+   - Processes knowledge extraction and access logic
+
+---
 
 ## 📦 Repository Structure
 
-### Published Components
+### Open Source Components
 
-#### [Real-Time Audio Transcription Service](https://github.com/Vexa-ai/vexa-transcription-service)
+- **[Real-Time Audio Transcription Service](https://github.com/Vexa-ai/vexa-transcription-service)**:
+  - Whisper integration for high-performance transcription
+  - GPU acceleration with Ray Serve
+  - Redis-backed fast data retrieval
+  - Webhook integrations for flexible data flows
 
-Our **Real-Time Audio Transcription Service** is now publicly available as an open-source component on GitHub. This production-ready system offers enterprise-grade speech-to-text conversion with advanced speaker detection, designed for privacy and compliance.
-
-Features:
-- Real-time transcription with 5-10 second latency
-- GPU acceleration with Whisper v3
-- Redis-backed storage for fast retrieval
-- Webhook-based integrations
-- Enterprise-scale architecture supporting thousands of concurrent users
-- Air-gapped deployment options for high-security environments
-
-The full repository is available at: [github.com/Vexa-ai/vexa-transcription-service](https://github.com/Vexa-ai/vexa-transcription-service)
-
+---
 
 ## 🛠 Technology Stack
 
 - **Frontend**: React, Chrome Extension APIs
 - **Backend**: Python 3.12+
-- **Data Layer**: Redis, PostgreSQL, Qdrant, Elasticsearch
+- **Databases**: Redis, PostgreSQL, Qdrant, Elasticsearch
 - **Infrastructure**: Docker, Docker Compose
-- **AI**: local Whisper, Openrouter for LLM calls
-
-## 🔗 Quick Links
-
-- Product: [vexa.ai](https://vexa.ai)
-- LinkedIn: [@vexa.ai](https://www.linkedin.com/company/vexa-ai/)
-- X: [@grankin_d](https://x.com/grankin_d)
-- Discord: [vexa discord server invite link](https://discord.gg/X8fU4Q2x)
+- **AI Models**: Whisper, Openrouter for large language models
 
 ---
 
-⭐ Star this repository to get notified when it becomes public!
+## 🚀 Local Setup Instructions
+
+### Prerequisites
+
+- Git
+- Docker and Docker Compose
+- NVIDIA GPU with CUDA
+- Minimum 4GB RAM
+- Stable internet connection
+
+### Step 1: Clone Repository
+
+```bash
+git clone https://github.com/Vexa-ai/vexa
+cd vexa
+git submodule update --init --recursive
+```
+
+### Step 2: Set Up Whisper Service
+
+```bash
+cd whisper_service
+cp .env.example .env
+chmod +x start.sh
+docker compose up -d
+```
+
+Check logs:
+
+```bash
+docker compose logs -f
+```
+
+### Step 3: Set Up Transcription Service
+
+```bash
+cd ../vexa-transcription-service
+cp .env.example .env
+# Set WHISPER_SERVICE_URL and WHISPER_API_TOKEN
+docker compose up -d
+```
+
+### Step 4: Set Up Engine Service
+
+```bash
+cd ../vexa-engine
+cp .env.example .env
+docker compose up -d
+# Optional clear existing transcripts
+docker compose exec vexa-engine python clear_transcripts.py
+```
+
+### Step 5: Test System
+
+```bash
+cd ../vexa-testing-app
+python register_test_user.py
+python main.py
+```
+
+### Step 6: View Results
+
+```bash
+cd ../vexa-engine
+docker compose exec vexa-engine python demo.py
+```
+
+### Troubleshooting
+
+- Logs: `docker compose logs -f`
+- Verify `.env` configurations
+- Ensure GPU passthrough is correctly configured
+
+---
+
+## 🔗 Quick Links
+
+- 🌐 [Vexa Website](https://vexa.ai)
+- 💼 [LinkedIn](https://www.linkedin.com/company/vexa-ai/)
+- 🐦 [X (@grankin_d)](https://x.com/grankin_d)
+- 💬 [Discord Community](https://discord.gg/X8fU4Q2x)
+
+⭐ Star this repository to stay updated on new releases!
