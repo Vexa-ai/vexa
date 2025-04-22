@@ -1,4 +1,4 @@
-# Vexa API Usage Guide sdfsdf
+# Vexa API Usage Guide
 
 **Status: Free Public Beta**
 
