@@ -1,4 +1,4 @@
-# Vexa API Usage Guide wefwefwef
+# Vexa API Usage Guide
 
 **Status: Free Public Beta**
 
