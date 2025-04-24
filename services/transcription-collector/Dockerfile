@@ -7,7 +7,7 @@ WORKDIR /app
 # Install shared library first
 COPY ./libs/shared-models /app/libs/shared-models
 # Explicitly install the shared library from its location within the container
-RUN pip install --no-cache-dir -e /app/libs/shared-models
+RUN pip install --no-cache-dir /app/libs/shared-models
 
 # Copy application code and requirements
 COPY ./services/transcription-collector/requirements.txt /app/

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Text, DateTime, Integer, create_engine, ForeignKey
+from sqlalchemy import Column, String, Text, DateTime, Integer, create_engine, ForeignKey, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 import datetime
@@ -9,10 +9,11 @@ Base = declarative_base()
 class User(Base):
     __tablename__ = 'users'
     
-    id = Column(String, primary_key=True)
-    name = Column(String, nullable=True)
-    email = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=True)
+    email = Column(String(255), nullable=True, index=True)
+    created_at = Column(DateTime, server_default=func.now())
+    max_concurrent_bots = Column(Integer, nullable=False, server_default='1', default=1)
     
     meetings = relationship("Meeting", back_populates="user")
     

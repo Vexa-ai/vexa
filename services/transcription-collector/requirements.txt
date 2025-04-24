@@ -3,7 +3,7 @@
 fastapi>=0.100.0
 uvicorn>=0.22.0
 websockets>=11.0.3
-redis>=4.6.0
+redis>=4.6.0  # Specifically require Redis >= 4.6.0 for reliable Streams support
 # asyncpg>=0.27.0 # Handled by shared-models
 # python-dotenv>=1.0.0 # Handled by shared-models
 # sqlalchemy # Handled by shared-models

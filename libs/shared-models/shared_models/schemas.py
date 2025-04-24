@@ -110,6 +110,7 @@ class UserBase(BaseModel): # Base for common user fields
     email: EmailStr
     name: Optional[str] = None
     image_url: Optional[str] = None
+    max_concurrent_bots: Optional[int] = Field(None, description="Maximum number of concurrent bots allowed for the user")
 
 class UserCreate(UserBase):
     pass
@@ -117,6 +118,7 @@ class UserCreate(UserBase):
 class UserResponse(UserBase):
     id: int
     created_at: datetime
+    max_concurrent_bots: int = Field(..., description="Maximum number of concurrent bots allowed for the user")
 
     class Config:
         orm_mode = True
@@ -136,7 +138,15 @@ class TokenResponse(TokenBase):
         orm_mode = True
 
 class UserDetailResponse(UserResponse):
-    tokens: List[TokenResponse] = []
+    api_tokens: List[TokenResponse] = []
+
+# --- ADD UserUpdate Schema for PATCH ---
+class UserUpdate(BaseModel):
+    email: Optional[EmailStr] = None # Make all fields optional for PATCH
+    name: Optional[str] = None
+    image_url: Optional[str] = None
+    max_concurrent_bots: Optional[int] = Field(None, description="Maximum number of concurrent bots allowed for the user")
+# --- END UserUpdate Schema ---
 
 # --- Meeting Schemas --- 
 
@@ -157,9 +167,22 @@ class MeetingBase(BaseModel):
 
     # Removed get_bot_platform method, use Platform.get_bot_name(self.platform.value) if needed
 
-class MeetingCreate(MeetingBase):
-    # user_id is derived from the API token, not sent in request
+class MeetingCreate(BaseModel):
+    platform: Platform
+    native_meeting_id: str = Field(..., description="The platform-specific ID for the meeting (e.g., Google Meet code, Zoom ID)")
     bot_name: Optional[str] = Field(None, description="Optional name for the bot in the meeting")
+    language: Optional[str] = Field(None, description="Optional language code for transcription (e.g., 'en', 'es')")
+    task: Optional[str] = Field(None, description="Optional task for the transcription model (e.g., 'transcribe', 'translate')")
+
+    @validator('platform')
+    def platform_must_be_valid(cls, v):
+        """Validate that the platform is one of the supported platforms"""
+        try:
+            Platform(v)
+            return v
+        except ValueError:
+            supported = ', '.join([p.value for p in Platform])
+            raise ValueError(f"Invalid platform '{v}'. Must be one of: {supported}")
 
 class MeetingResponse(BaseModel): # Not inheriting from MeetingBase anymore to avoid duplicate fields if DB model is used directly
     id: int = Field(..., description="Internal database ID for the meeting")
@@ -188,6 +211,8 @@ class TranscriptionSegment(BaseModel):
     language: Optional[str]
     created_at: Optional[datetime]
     speaker: Optional[str] = None
+    absolute_start_time: Optional[datetime] = Field(None, description="Absolute start timestamp of the segment (UTC)")
+    absolute_end_time: Optional[datetime] = Field(None, description="Absolute end timestamp of the segment (UTC)")
 
     class Config:
         orm_mode = True
@@ -238,6 +263,7 @@ class HealthResponse(BaseModel):
     status: str
     redis: str
     database: str
+    stream: Optional[str] = None
     timestamp: datetime
 
 class ErrorResponse(BaseModel):
@@ -245,3 +271,18 @@ class ErrorResponse(BaseModel):
 
 class MeetingListResponse(BaseModel):
     meetings: List[MeetingResponse] 
+
+# --- ADD Bot Status Schemas ---
+class BotStatus(BaseModel):
+    container_id: Optional[str] = None
+    container_name: Optional[str] = None
+    platform: Optional[str] = None
+    native_meeting_id: Optional[str] = None
+    status: Optional[str] = None
+    created_at: Optional[str] = None
+    labels: Optional[Dict[str, str]] = None
+    meeting_id_from_name: Optional[str] = None # Example auxiliary info
+
+class BotStatusResponse(BaseModel):
+    running_bots: List[BotStatus]
+# --- END Bot Status Schemas --- 

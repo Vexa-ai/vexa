@@ -3,6 +3,7 @@ import logging
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy import create_engine # For sync engine if needed for migrations later
+from sqlalchemy.sql import text
 
 # Import Base from models within the same package
 # Ensure models are imported somewhere before init_db is called so Base is populated.
@@ -60,4 +61,32 @@ async def init_db():
         logger.info("Database tables checked/created successfully.")
     except Exception as e:
         logger.error(f"Error initializing database tables: {e}", exc_info=True)
+        raise 
+
+# --- DANGEROUS: Recreate Function ---
+async def recreate_db():
+    """
+    DANGEROUS: Drops all tables and recreates them based on shared models' metadata.
+    THIS WILL RESULT IN COMPLETE DATA LOSS. USE WITH EXTREME CAUTION.
+    """
+    logger.warning(f"!!! DANGEROUS OPERATION: Dropping and recreating all tables in {DB_NAME} at {DB_HOST}:{DB_PORT} !!!")
+    try:
+        async with engine.begin() as conn:
+            # Instead of drop_all, use raw SQL to drop the schema with cascade
+            logger.warning("Dropping public schema with CASCADE...")
+            await conn.execute(text("DROP SCHEMA public CASCADE;"))
+            logger.warning("Public schema dropped.")
+            logger.info("Recreating public schema...")
+            await conn.execute(text("CREATE SCHEMA public;"))
+            # Optional: Grant permissions if needed (often handled by default roles)
+            # await conn.execute(text("GRANT ALL ON SCHEMA public TO public;")) 
+            # await conn.execute(text("GRANT ALL ON SCHEMA public TO postgres;")) 
+            logger.info("Public schema recreated.")
+            
+            logger.info("Recreating all tables based on models...")
+            await conn.run_sync(Base.metadata.create_all)
+            logger.info("All tables recreated successfully.")
+        logger.warning(f"!!! DANGEROUS OPERATION COMPLETE for {DB_NAME} at {DB_HOST}:{DB_PORT} !!!")
+    except Exception as e:
+        logger.error(f"Error recreating database tables: {e}", exc_info=True)
         raise 

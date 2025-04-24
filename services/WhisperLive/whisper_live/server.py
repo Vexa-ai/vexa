@@ -20,6 +20,15 @@ try:
 except Exception:
     pass
 
+# Import for health check HTTP server
+import http.server
+import socketserver
+import threading
+
+# Import Redis
+import redis
+import uuid
+
 # Setup basic logging
 logging.basicConfig(level=logging.INFO)
 
@@ -35,81 +44,274 @@ logger = logging.getLogger("transcription")
 logger.setLevel(logging.INFO)
 logger.addHandler(file_handler)
 
-# Transcription Collector client
+# Transcription Collector client using Redis Streams
 class TranscriptionCollectorClient:
-    def __init__(self, collector_url):
-        self.collector_url = collector_url
-        self.ws = None
-        self.connected = False
-        self.reconnect_thread = None
+    """Client that maintains connection to Redis on a separate thread
+    and attempts auto-reconnection when the connection is lost."""
+
+    def __init__(self, redis_stream_url=None):
+        """Initialize client with redis connection URL.
+        The connection will be established in a separate thread
+        when connect() is called.
+        
+        Args:
+            redis_stream_url: URL to redis server with the stream
+        """
+        # Use provided URL or environment variable with fallback to localhost
+        self.redis_url = (
+            redis_stream_url or 
+            os.getenv("REDIS_STREAM_URL") or 
+            "redis://localhost:6379/0"
+        )
+        
+        self.redis_client = None
+        self.is_connected = False
+        self.connection_lock = threading.Lock()
+        self.connection_thread = None
+        self.stop_requested = False
+        
+        # Stream key for transcriptions
+        self.stream_key = os.getenv("REDIS_STREAM_KEY", "transcription_segments")
+        
+        # Track session_uids for which we've published session_start events
+        self.session_starts_published = set()
+        
+        # Connect on initialization 
         self.connect()
-    
+
     def connect(self):
-        try:
-            self.ws = websocket.WebSocketApp(
-                self.collector_url,
-                on_open=self._on_open,
-                on_close=self._on_close,
-                on_error=self._on_error
+        """Connect to Redis in a separate thread with auto-reconnection."""
+        with self.connection_lock:
+            if self.connection_thread and self.connection_thread.is_alive():
+                logging.info("Connection thread already running.")
+                return
+                
+            self.stop_requested = False
+            self.connection_thread = threading.Thread(
+                target=self._connection_worker,
+                daemon=True
             )
-            threading.Thread(target=self.ws.run_forever, daemon=True).start()
-        except Exception as e:
-            logging.error(f"Error connecting to collector: {e}")
-            self._schedule_reconnect()
-    
-    def _on_open(self, ws):
-        self.connected = True
-        logging.info("Connected to transcription collector")
-    
-    def _on_close(self, ws, close_status_code, close_msg):
-        self.connected = False
-        logging.info("Disconnected from transcription collector")
-        self._schedule_reconnect()
-    
-    def _on_error(self, ws, error):
-        logging.error(f"Collector connection error: {error}")
-        self.connected = False
-        self._schedule_reconnect()
-    
-    def _schedule_reconnect(self):
-        if self.reconnect_thread is None or not self.reconnect_thread.is_alive():
-            self.reconnect_thread = threading.Timer(5.0, self.connect)
-            self.reconnect_thread.daemon = True
-            self.reconnect_thread.start()
-    
-    def send_transcription(self, data):
-        if self.connected and self.ws:
+            self.connection_thread.start()
+            logging.info("Started connection thread.")
+
+    def _connection_worker(self):
+        """Worker thread that establishes and maintains Redis connection.
+        Handles automatic reconnection with exponential backoff."""
+        retry_delay = 1  # Initial retry delay in seconds
+        max_retry_delay = 30  # Maximum retry delay
+        
+        while not self.stop_requested:
             try:
-                # Validate required fields
-                if "uid" not in data or not data["uid"]:
-                    logging.error("Cannot send transcription: missing client uid")
-                    return
+                # Parse Redis URL
+                logging.info(f"Connecting to Redis at {self.redis_url}")
+                self.redis_client = redis.from_url(
+                    self.redis_url,
+                    decode_responses=True
+                )
                 
-                if "segments" not in data or not data["segments"]:
-                    logging.error(f"Cannot send transcription: missing segments for client {data['uid']}")
-                    return
+                # Test connection
+                self.redis_client.ping()
                 
-                # Validate critical fields
-                required_fields = ["platform", "meeting_url", "token"]
-                for field in required_fields:
-                    if field not in data or not data[field]:
-                        logging.error(f"Cannot send transcription: missing {field} for client {data['uid']}")
-                        return
+                with self.connection_lock:
+                    self.is_connected = True
                 
-                # Send validated data
-                self.ws.send(json.dumps(data))
-                logging.debug(f"Sent transcription for client {data['uid']} with {len(data['segments'])} segments")
+                logging.info(f"Connected to Redis, stream key: {self.stream_key}")
+                
+                # Reset retry delay on successful connection
+                retry_delay = 1
+                
+                # Keep connection alive
+                while not self.stop_requested:
+                    # Ping Redis to keep connection alive and check health
+                    self.redis_client.ping()
+                    time.sleep(5)  # Check connection every 5 seconds
+                
+            except redis.ConnectionError as e:
+                logging.error(f"Redis connection error: {e}")
+                with self.connection_lock:
+                    self.is_connected = False
+                    self.redis_client = None
+                
             except Exception as e:
-                logging.error(f"Error sending to collector: {e}")
+                logging.error(f"Redis error: {e}")
+                with self.connection_lock:
+                    self.is_connected = False
+                    self.redis_client = None
+            
+            # Don't retry if stop was requested
+            if self.stop_requested:
+                break
+                
+            # Exponential backoff for retries
+            logging.info(f"Retrying connection in {retry_delay} seconds...")
+            time.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, max_retry_delay)
+    
+    def disconnect(self):
+        """Disconnect from Redis and stop the connection thread."""
+        with self.connection_lock:
+            self.stop_requested = True
+            self.is_connected = False
+            
+            if self.redis_client:
+                try:
+                    self.redis_client.close()
+                except Exception as e:
+                    logging.error(f"Error closing Redis connection: {e}")
+                self.redis_client = None
+            
+        # Wait for thread to terminate
+        if self.connection_thread and self.connection_thread.is_alive():
+            self.connection_thread.join(timeout=5.0)
+            logging.info("Disconnected from Redis")
+
+    def publish_session_start_event(self, token, platform, meeting_id, session_uid):
+        """Publish a session_start event to the Redis stream.
+        
+        Args:
+            token: User's API token
+            platform: Platform identifier (e.g., 'google_meet') 
+            meeting_id: Platform-specific meeting ID
+            session_uid: Unique identifier for this session
+        
+        Returns:
+            Boolean indicating success or failure
+        """
+        if session_uid in self.session_starts_published:
+            logging.debug(f"Session start already published for {session_uid}")
+            return True
+            
+        # Check connection
+        if not self.is_connected or not self.redis_client:
+            logging.warning("Cannot publish session_start: Not connected to Redis")
+            return False
+            
+        # Validate required fields
+        if not all([token, platform, meeting_id, session_uid]):
+            logging.error("Missing required fields for session_start event")
+            return False
+            
+        try:
+            # Create event payload with ISO 8601 timestamp
+            now = datetime.datetime.utcnow()
+            timestamp_iso = now.isoformat() + "Z"
+            
+            payload = {
+                "type": "session_start",
+                "token": token,
+                "platform": platform,
+                "meeting_id": meeting_id,
+                "uid": session_uid,
+                "start_timestamp": timestamp_iso
+            }
+            
+            # Publish to Redis stream
+            message = {
+                "payload": json.dumps(payload)
+            }
+            
+            result = self.redis_client.xadd(
+                self.stream_key,
+                message
+            )
+            
+            if result:
+                logging.info(f"Published session_start event for session {session_uid}")
+                # Mark this session as having a published start event
+                self.session_starts_published.add(session_uid)
+                return True
+            else:
+                logging.error(f"Failed to publish session_start event for {session_uid}")
+                return False
+                
+        except Exception as e:
+            logging.error(f"Error publishing session_start event: {e}")
+            return False
+
+    def send_transcription(self, token, platform, meeting_id, segments, session_uid=None):
+        """Send transcription segments to Redis stream.
+        
+        Args:
+            token: User's API token
+            platform: Platform identifier (e.g., 'google_meet') 
+            meeting_id: Platform-specific meeting ID
+            segments: List of transcription segments
+            session_uid: Optional unique identifier for this session
+            
+        Returns:
+            Boolean indicating success or failure
+        """
+        # Check connection
+        if not self.is_connected or not self.redis_client:
+            logging.warning("Cannot send transcription: Not connected to Redis")
+            return False
+            
+        # Validate required fields
+        if not all([token, platform, meeting_id, segments]):
+            logging.error("Missing required fields for transcription")
+            return False
+            
+        # Generate a session_uid if not provided
+        if not session_uid:
+            session_uid = str(uuid.uuid4())
+            
+        # If this is the first time we're seeing this session_uid, publish a session_start event
+        if session_uid not in self.session_starts_published:
+            self.publish_session_start_event(token, platform, meeting_id, session_uid)
+        
+        try:
+            # Create payload
+            payload = {
+                "type": "transcription",
+                "token": token,
+                "platform": platform, 
+                "meeting_id": meeting_id,
+                "segments": segments,
+                "uid": session_uid  # Include session_uid in transcription messages too
+            }
+            
+            # Publish to Redis stream
+            message = {
+                "payload": json.dumps(payload)
+            }
+            
+            result = self.redis_client.xadd(
+                self.stream_key,
+                message
+            )
+            
+            if result:
+                logging.debug(f"Published transcription with {len(segments)} segments")
+                return True
+            else:
+                logging.error("Failed to publish transcription")
+                return False
+                
+        except Exception as e:
+            logging.error(f"Error publishing transcription: {e}")
+            return False
 
 # Initialize collector client
 collector_client = None
 collector_url = os.environ.get("TRANSCRIPTION_COLLECTOR_URL")
-if collector_url:
-    logging.info(f"Initializing transcription collector client to {collector_url}")
-    collector_client = TranscriptionCollectorClient(collector_url)
+redis_stream_url = os.environ.get("REDIS_STREAM_URL")
+
+# Prefer REDIS_STREAM_URL if available, otherwise try to use TRANSCRIPTION_COLLECTOR_URL
+if redis_stream_url:
+    logging.info(f"Initializing transcription collector client with Redis Stream URL: {redis_stream_url}")
+    collector_client = TranscriptionCollectorClient(redis_stream_url)
+elif collector_url:
+    # For backward compatibility, if the URL is not a Redis URL, log a warning
+    if not collector_url.startswith("redis://"):
+        logging.warning(f"WebSocket URL detected: {collector_url}. Should migrate to Redis Stream URL format.")
+        # Still initialize with default Redis settings
+        collector_client = TranscriptionCollectorClient()
+    else:
+        logging.info(f"Initializing transcription collector client with URL: {collector_url}")
+        collector_client = TranscriptionCollectorClient(collector_url)
 else:
-    logging.info("No transcription collector URL provided, skipping collector integration")
+    logging.info("No Redis Stream URL provided, initializing with default settings")
+    collector_client = TranscriptionCollectorClient()
 
 class ClientManager:
     def __init__(self, max_clients=4, max_connection_time=600):
@@ -241,6 +443,10 @@ class TranscriptionServer:
         self.no_voice_activity_chunks = 0
         self.use_vad = True
         self.single_model = False
+        # Flag to track if server is healthy
+        self.is_healthy = False
+        # Health check HTTP server
+        self.health_server = None
 
     def initialize_client(
         self, websocket, options, faster_whisper_custom_model_path,
@@ -480,6 +686,9 @@ class TranscriptionServer:
         # Log server startup information
         logger.info(f"SERVER_START: host={host}, port={port}, backend={backend}, single_model={single_model}")
         
+        # Start health check HTTP server on port+1
+        self.start_health_check_server(host, port + 1)
+        
         with serve(
             functools.partial(
                 self.recv_audio,
@@ -491,7 +700,9 @@ class TranscriptionServer:
             host,
             port
         ) as server:
-            logger.info(f"SERVER_RUNNING: WhisperLive server running on {host}:{port}")
+            # Mark server as healthy once websocket server is running
+            self.is_healthy = True
+            logger.info(f"SERVER_RUNNING: WhisperLive server running on {host}:{port} with health check on {host}:{port+1}/health")
             server.serve_forever()
 
     def voice_activity(self, websocket, frame_np):
@@ -534,6 +745,50 @@ class TranscriptionServer:
         if self.client_manager.get_client(websocket):
             self.client_manager.remove_client(websocket)
 
+    def start_health_check_server(self, host, port):
+        """Start a simple HTTP server for health checks.
+        
+        This runs in a separate thread and listens on a different port than the WebSocket server.
+        """
+        class HealthCheckHandler(http.server.SimpleHTTPRequestHandler):
+            parent_server = self
+            
+            def do_GET(self):
+                if self.path == '/health':
+                    if self.parent_server.is_healthy:
+                        self.send_response(200)
+                        self.send_header('Content-type', 'text/plain')
+                        self.end_headers()
+                        self.wfile.write(b'OK')
+                    else:
+                        self.send_response(503)
+                        self.send_header('Content-type', 'text/plain')
+                        self.end_headers()
+                        self.wfile.write(b'Service Unavailable')
+                else:
+                    self.send_response(404)
+                    self.send_header('Content-type', 'text/plain')
+                    self.end_headers()
+                    self.wfile.write(b'Not Found')
+            
+            # Silence server logs
+            def log_message(self, format, *args):
+                return
+        
+        # Create HTTP server for health checks
+        try:
+            handler = HealthCheckHandler
+            self.health_server = socketserver.TCPServer((host, port), handler)
+            
+            # Start server in a new thread
+            health_thread = threading.Thread(target=self.health_server.serve_forever)
+            health_thread.daemon = True  # So it stops when the main thread stops
+            health_thread.start()
+            
+            logging.info(f"Health check HTTP server started on {host}:{port}")
+        except Exception as e:
+            logging.error(f"Failed to start health check server: {e}")
+
 
 class ServeClientBase(object):
     RATE = 16000
@@ -544,11 +799,13 @@ class ServeClientBase(object):
         self.websocket = websocket
         self.language = language
         self.task = task
-        self.client_uid = client_uid
+        self.client_uid = client_uid or str(uuid.uuid4())
         self.platform = platform
         self.meeting_url = meeting_url
         self.token = token
         self.meeting_id = meeting_id
+        
+        # Restore all the original instance variables that were deleted
         self.transcription_buffer = TranscriptionBuffer(self.client_uid)
         self.model = None
         self.is_multilingual = True
@@ -572,6 +829,17 @@ class ServeClientBase(object):
 
         # threading
         self.lock = threading.Lock()
+        
+        # Send SERVER_READY message
+        ready_message = json.dumps({"status": self.SERVER_READY, "uid": self.client_uid})
+        logging.info(f"Client {self.client_uid} connected. Sending SERVER_READY.")
+        self.websocket.send(ready_message)
+        
+        # Publish session_start event first if using Redis collector
+        if collector_client and all([platform, meeting_url, token, meeting_id]):
+            # Publish session start event
+            collector_client.publish_session_start_event(token, platform, meeting_id, self.client_uid)
+            logging.info(f"Published session_start event for client {self.client_uid}")
 
     def speech_to_text(self):
         raise NotImplementedError
@@ -707,16 +975,14 @@ class ServeClientBase(object):
             # Send to transcription collector if available
             global collector_client
             if collector_client:
-                # Include platform, meeting_url, and token in data sent to collector
-                collector_data = {
-                    "uid": self.client_uid,
-                    "platform": self.platform,  # Must be properly set now
-                    "meeting_url": self.meeting_url,  # Must be properly set now
-                    "token": self.token,  # Must be properly set now
-                    "meeting_id": self.meeting_id,  # Include meeting_id in the data
-                    "segments": segments
-                }
-                collector_client.send_transcription(collector_data)
+                # Send transcription to Redis stream
+                collector_client.send_transcription(
+                    token=self.token,
+                    platform=self.platform,
+                    meeting_id=self.meeting_id,
+                    segments=segments,
+                    session_uid=self.client_uid
+                )
             
             # Log the transcription data to file with more detailed formatting
             formatted_segments = []
@@ -762,15 +1028,14 @@ class ServeClientBase(object):
     def forward_to_collector(self, segments):
         """Forward transcriptions to the collector if available"""
         if collector_client and segments:
-            data = {
-                "uid": self.client_uid,
-                "platform": self.platform,
-                "meeting_url": self.meeting_url,
-                "token": self.token,
-                "meeting_id": self.meeting_id,
-                "segments": segments
-            }
-            collector_client.send_transcription(data)
+            # Send transcription to collector
+            collector_client.send_transcription(
+                token=self.token,
+                platform=self.platform,
+                meeting_id=self.meeting_id,
+                segments=segments,
+                session_uid=self.client_uid
+            )
 
 
 class ServeClientTensorRT(ServeClientBase):

@@ -1,6 +1,14 @@
 import { Page } from 'playwright';
 import { log, randomDelay } from '../utils';
 import { BotConfig } from '../types';
+import { v4 as uuidv4 } from 'uuid'; // Import UUID
+
+// --- ADDED: Function to generate UUID (if not already present globally) ---
+// If you have a shared utils file for this, import from there instead.
+function generateUUID() {
+    return uuidv4();
+}
+// --- --------------------------------------------------------- ---
 
 export async function handleGoogleMeet(botConfig: BotConfig, page: Page): Promise<void> {
   const leaveButton = `//button[@aria-label="Leave call"]`;
@@ -123,14 +131,21 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
   // Add type assertion for the object passed to evaluate
   await page.evaluate(async (config: BotConfig) => {
     // Destructure inside evaluate with types if needed, or just use config.* directly
-    const { meetingUrl, token, connectionId, platform, nativeMeetingId } = config;
+    const { meetingUrl, token, connectionId: originalConnectionId, platform, nativeMeetingId, language: initialLanguage, task: initialTask } = config;
 
-    const option = {
-      language: null,
-      task: "transcribe",
-      modelSize: "medium",
-      useVad: true,
-    }
+    // --- ADD Helper function to generate UUID in browser context ---
+    const generateUUID = () => {
+        if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+            return crypto.randomUUID();
+        } else {
+            // Basic fallback if crypto.randomUUID is not available
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+    };
+    // --- --------------------------------------------------------- ---
 
     await new Promise<void>((resolve, reject) => {
       try {
@@ -173,16 +188,25 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
         const stream = destinationNode.stream;
         (window as any).logBot(`Successfully combined ${sourcesConnected} audio streams.`);
 
-        // Ensure meetingUrl is not null before using btoa
-        const uniquePart = connectionId || btoa(nativeMeetingId || meetingUrl || ''); // Added || '' fallback for null meetingUrl
-        const structuredId = `${platform}_${uniquePart}`;
+        // --- MODIFIED: Keep original connectionId but don't use it for WebSocket UID ---
+        // const sessionUid = connectionId; // <-- OLD: Reused original connectionId
+        (window as any).logBot(`Original bot connection ID: ${originalConnectionId}`);
+        // --- ------------------------------------------------------------------------ ---
+
+        // --- ADDED: Add secondary leave button selector for confirmation ---
+        const secondaryLeaveButtonSelector = `//button[.//span[text()='Leave meeting']] | //button[.//span[text()='Just leave the meeting']]`; // Example, adjust based on actual UI
+        // --- ----------------------------------------------------------- ---
 
         const wsUrl = "ws://whisperlive:9090";
-        (window as any).logBot(`Attempting to connect WebSocket to: ${wsUrl} with platform: ${platform}`);
+        // (window as any).logBot(`Attempting to connect WebSocket to: ${wsUrl} with platform: ${platform}, session UID: ${sessionUid}`); // Log the correct UID
         
+        // --- ADD Browser-scope state for current WS config ---
+        let currentWsLanguage = initialLanguage;
+        let currentWsTask = initialTask;
+        // --- -------------------------------------------- ---
+
         let socket: WebSocket | null = null;
         let isServerReady = false;
-        let language = option.language;
         let retryCount = 0;
         const maxRetries = 5;
         const retryDelay = 2000;
@@ -201,29 +225,30 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
             socket = new WebSocket(wsUrl);
             
             socket.onopen = function() {
-              (window as any).logBot("WebSocket connection opened.");
+              // --- MODIFIED: Log current config being used --- 
+              // --- MODIFIED: Generate NEW UUID for this connection --- 
+              const currentSessionUid = generateUUID();
+              (window as any).logBot(`WebSocket connection opened. Using Lang: ${currentWsLanguage}, Task: ${currentWsTask}, New UID: ${currentSessionUid}`);
               retryCount = 0;
 
               if (socket) {
-                // Construct the handshake message DIRECTLY here
-                // Ensure platform, token, nativeMeetingId, meetingUrl are correctly passed
-                // into the page.evaluate scope from the outer botConfig
-                const handshakePayload = {
-                    uid: structuredId,       // From earlier construction based on nativeMeetingId/connectionId
-                    language: null,          // *** CHANGED from "ru" to null ***
-                    task: "transcribe",     // Literal value - Ensure this is required
-                    model: "medium",       // Literal value or from config if needed
-                    use_vad: true,           // Literal value or from config if needed
-                    platform: platform,      // External platform name passed into evaluate
-                    token: token,            // User token passed into evaluate
-                    meeting_id: nativeMeetingId, // Native ID passed into evaluate
-                    meeting_url: meetingUrl  // Meeting URL passed into evaluate
+                // Construct the initial configuration message using config values
+                const initialConfigPayload = {
+                    uid: currentSessionUid,       // <-- Use NEWLY generated UUID
+                    language: currentWsLanguage || null, // <-- Use browser-scope variable
+                    task: currentWsTask || 'transcribe', // <-- Use browser-scope variable
+                    model: "medium",            // Keep default or make configurable if needed
+                    use_vad: true,            // Keep default or make configurable if needed
+                    platform: platform,           // From config
+                    token: token,               // From config
+                    meeting_id: nativeMeetingId,  // From config
+                    meeting_url: meetingUrl || null // From config, default to null
                 };
 
-                const jsonPayload = JSON.stringify(handshakePayload);
+                const jsonPayload = JSON.stringify(initialConfigPayload);
 
                 // Log the exact payload being sent
-                (window as any).logBot(`DEBUG: Sending Handshake Payload: ${jsonPayload}`);
+                (window as any).logBot(`Sending initial config message: ${jsonPayload}`);
                 socket.send(jsonPayload);
               }
             };
@@ -231,7 +256,13 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
             socket.onmessage = (event) => {
               (window as any).logBot("Received message: " + event.data);
               const data = JSON.parse(event.data);
-              if (data["uid"] !== structuredId) return;
+              // NOTE: The check `if (data["uid"] !== sessionUid) return;` is removed
+              // because we no longer have a single sessionUid for the lifetime of the evaluate block.
+              // Each message *should* contain the UID associated with the specific WebSocket
+              // connection it came from. Downstream needs to handle this if correlation is needed.
+              // For now, we assume messages are relevant to the current bot context.
+              // Consider re-introducing a check if whisperlive echoes back the UID and it's needed.
+              
               if (data["status"] === "ERROR") {
                  (window as any).logBot(`WebSocket Server Error: ${data["message"]}`);
               } else if (data["status"] === "WAIT") {
@@ -239,7 +270,7 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
               } else if (!isServerReady) {
                  isServerReady = true;
                  (window as any).logBot("Server is ready.");
-              } else if (language === null && data["language"]) {
+              } else if (data["language"]) {
                 (window as any).logBot(`Language detected: ${data["language"]}`);
               } else if (data["message"] === "DISCONNECT") {
                 (window as any).logBot("Server requested disconnect.");
@@ -292,6 +323,69 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
             }
           }
         };
+        
+        // --- ADD Function exposed to Node.js for triggering reconfigure ---
+        (window as any).triggerWebSocketReconfigure = (newLang: string | null, newTask: string | null) => {
+            (window as any).logBot(`[Node->Browser] Received reconfigure. New Lang: ${newLang}, New Task: ${newTask}`);
+            currentWsLanguage = newLang; // Update browser state
+            currentWsTask = newTask || 'transcribe'; // Update browser state, default task if null
+
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                (window as any).logBot('[Node->Browser] Closing WebSocket to reconnect with new config.');
+                socket.close(); // Triggers onclose -> setupWebSocket which now reads updated vars
+            } else if (socket && (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.CLOSING)) {
+                (window as any).logBot('[Node->Browser] Socket is connecting or closing, cannot close now. Reconnect will use new config when it opens.');
+            } else {
+                 // Socket is null or already closed
+                 (window as any).logBot('[Node->Browser] Socket is null or closed. Attempting to setupWebSocket directly.');
+                 // Directly calling setupWebSocket might cause issues if the old one is mid-retry
+                 // Relying on the existing retry logic in onclose is likely safer.
+                 // If setupWebSocket is called here, ensure it handles potential double connections.
+                 // setupWebSocket(); 
+            }
+        };
+        // --- ----------------------------------------------------------- ---
+        
+        // --- ADDED: Expose leave function to Node context ---
+        (window as any).performLeaveAction = async () => {
+          (window as any).logBot('Attempting to leave the meeting from browser context...');
+          try {
+              // *** FIXED: Use document.evaluate for XPath ***
+              const primaryLeaveButtonXpath = `//button[@aria-label="Leave call"]`;
+              const secondaryLeaveButtonXpath = `//button[.//span[text()='Leave meeting']] | //button[.//span[text()='Just leave the meeting']]`;
+
+              const getElementByXpath = (path: string): HTMLElement | null => {
+                  const result = document.evaluate(path, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                  return result.singleNodeValue as HTMLElement | null;
+              };
+
+              const primaryLeaveButton = getElementByXpath(primaryLeaveButtonXpath);
+              if (primaryLeaveButton) {
+                  (window as any).logBot('Clicking primary leave button...');
+                  primaryLeaveButton.click(); // No need to cast HTMLElement if getElementByXpath returns it
+                  await new Promise(resolve => setTimeout(resolve, 1000)); // Wait a bit for potential confirmation dialog
+
+                  // Try clicking secondary/confirmation button if it appears
+                  const secondaryLeaveButton = getElementByXpath(secondaryLeaveButtonXpath);
+                  if (secondaryLeaveButton) {
+                       (window as any).logBot('Clicking secondary/confirmation leave button...');
+                      secondaryLeaveButton.click();
+                      await new Promise(resolve => setTimeout(resolve, 500)); // Short wait after final click
+                  } else {
+                       (window as any).logBot('Secondary leave button not found.');
+                  }
+                  (window as any).logBot('Leave sequence completed.');
+                  return true; // Indicate leave attempt was made
+              } else {
+                  (window as any).logBot('Primary leave button not found.');
+                  return false; // Indicate leave button wasn't found
+              }
+          } catch (err: any) {
+              (window as any).logBot(`Error during leave attempt: ${err.message}`);
+              return false; // Indicate error during leave
+          }
+        };
+        // --- --------------------------------------------- ---
         
         setupWebSocket();
 
@@ -412,3 +506,30 @@ const recordMeeting = async (page: Page, meetingUrl: string, token: string, conn
   await startRecording(page, dummyConfig);
 };
 */
+
+// --- ADDED: Exported function to trigger leave from Node.js ---
+export async function leaveGoogleMeet(page: Page): Promise<boolean> {
+    log('[leaveGoogleMeet] Triggering leave action in browser context...');
+    if (!page || page.isClosed()) {
+        log('[leaveGoogleMeet] Page is not available or closed.');
+        return false;
+    }
+    try {
+        // Call the function exposed within the page's evaluate context
+        const result = await page.evaluate(async () => {
+            if (typeof (window as any).performLeaveAction === 'function') {
+                return await (window as any).performLeaveAction();
+            } else {
+                (window as any).logBot?.('[Node Eval Error] performLeaveAction function not found on window.');
+                console.error('[Node Eval Error] performLeaveAction function not found on window.');
+                return false;
+            }
+        });
+        log(`[leaveGoogleMeet] Browser leave action result: ${result}`);
+        return result; // Return true if leave was attempted, false otherwise
+    } catch (error: any) {
+        log(`[leaveGoogleMeet] Error calling performLeaveAction in browser: ${error.message}`);
+        return false;
+    }
+}
+// --- ------------------------------------------------------- ---

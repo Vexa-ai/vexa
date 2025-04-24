@@ -1,7 +1,11 @@
-from .models import get_session, User, Meeting, Transcription
+from .models import User, Meeting, Transcription
 import logging
 from datetime import datetime
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.future import select
+
+# Import async session maker
+from shared_models.database import async_session_local
 
 logger = logging.getLogger(__name__)
 
@@ -9,23 +13,21 @@ class TranscriptionService:
     """Service for managing transcription data in the database"""
     
     @staticmethod
-    def get_or_create_user(user_id, name=None, email=None):
-        """Get or create a user record"""
-        session = get_session()
-        try:
-            user = session.query(User).filter_by(id=user_id).first()
-            if not user:
-                user = User(id=user_id, name=name, email=email)
-                session.add(user)
-                session.commit()
-                logger.info(f"Created user: {user_id}")
-            return user
-        except SQLAlchemyError as e:
-            session.rollback()
-            logger.error(f"Error getting/creating user: {e}")
-            raise
-        finally:
-            session.close()
+    async def get_or_create_user(user_id, name=None, email=None):
+        """Get or create a user record asynchronously."""
+        async with async_session_local() as session:
+            try:
+                result = await session.execute(select(User).filter_by(id=user_id))
+                user = result.scalars().first()
+                if not user:
+                    user = User(id=user_id, name=name, email=email)
+                    session.add(user)
+                    await session.commit()
+                    logger.info(f"Created user: {user_id}")
+                return user
+            except SQLAlchemyError as e:
+                logger.error(f"Error getting/creating user: {e}")
+                raise
     
     @staticmethod
     def create_meeting(meeting_id, user_id, title=None):

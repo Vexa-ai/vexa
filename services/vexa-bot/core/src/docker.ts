@@ -10,6 +10,9 @@ export const BotConfigSchema = z.object({
   token: z.string(),
   connectionId: z.string(),
   nativeMeetingId: z.string(), // *** ADDED schema field ***
+  language: z.string().nullish(), // Optional language
+  task: z.string().nullish(),     // Optional task
+  redisUrl: z.string(),         // Required Redis URL
   automaticLeave: z.object({
     waitingRoomTimeout: z.number().int(),
     noOneJoinedTimeout: z.number().int(),

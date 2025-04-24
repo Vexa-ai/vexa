@@ -16,6 +16,7 @@ class User(Base):
     name = Column(String(100))
     image_url = Column(Text)
     created_at = Column(DateTime, server_default=func.now())
+    max_concurrent_bots = Column(Integer, nullable=False, server_default='1', default=1) # Added field
     
     meetings = relationship("Meeting", back_populates="user")
     api_tokens = relationship("APIToken", back_populates="user")
@@ -45,6 +46,7 @@ class Meeting(Base):
 
     user = relationship("User", back_populates="meetings")
     transcriptions = relationship("Transcription", back_populates="meeting")
+    sessions = relationship("MeetingSession", back_populates="meeting", cascade="all, delete-orphan")
 
     # Add composite index for efficient lookup by user, platform, and native ID, including created_at for sorting
     __table_args__ = (
@@ -89,5 +91,20 @@ class Transcription(Base):
 
     meeting = relationship("Meeting", back_populates="transcriptions")
     
+    session_uid = Column(String, nullable=True, index=True) # Link to the specific bot session
+
     # Index for efficient querying by meeting_id and start_time
     __table_args__ = (Index('ix_transcription_meeting_start', 'meeting_id', 'start_time'),)
+
+# New table to store session start times
+class MeetingSession(Base):
+    __tablename__ = 'meeting_sessions'
+    id = Column(Integer, primary_key=True, index=True)
+    meeting_id = Column(Integer, ForeignKey('meetings.id'), nullable=False, index=True)
+    session_uid = Column(String, nullable=False, index=True) # Stores the 'uid' (based on connectionId)
+    # Store timezone-aware timestamp to avoid ambiguity
+    session_start_time = Column(sqlalchemy.DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    meeting = relationship("Meeting", back_populates="sessions") # Define relationship
+
+    __table_args__ = (UniqueConstraint('meeting_id', 'session_uid', name='_meeting_session_uc'),) # Ensure unique session per meeting

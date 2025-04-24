@@ -16,7 +16,8 @@ from shared_models.schemas import (
     TranscriptionResponse, TranscriptionSegment,
     UserCreate, UserResponse, TokenResponse, UserDetailResponse, # Admin Schemas
     ErrorResponse,
-    Platform # Import Platform enum for path parameters
+    Platform, # Import Platform enum for path parameters
+    BotStatusResponse # ADDED: Import response model for documentation
 )
 
 load_dotenv()
@@ -221,6 +222,34 @@ async def stop_bot_proxy(platform: Platform, native_meeting_id: str, request: Re
     """Forward request to Bot Manager to stop a bot."""
     url = f"{BOT_MANAGER_URL}/bots/{platform.value}/{native_meeting_id}"
     return await forward_request(app.state.http_client, "DELETE", url, request)
+
+# --- ADD Route for PUT /bots/.../config ---
+@app.put("/bots/{platform}/{native_meeting_id}/config",
+          tags=["Bot Management"],
+          summary="Update configuration for an active bot",
+          description="Updates the language and/or task for an active bot. Sends command via Bot Manager.",
+          status_code=status.HTTP_202_ACCEPTED,
+          dependencies=[Depends(api_key_scheme)])
+# Need to accept request body for PUT
+async def update_bot_config_proxy(platform: Platform, native_meeting_id: str, request: Request, body: Dict[str, Any]): 
+    """Forward request to Bot Manager to update bot config."""
+    url = f"{BOT_MANAGER_URL}/bots/{platform.value}/{native_meeting_id}/config"
+    # forward_request handles reading and passing the body from the original request
+    return await forward_request(app.state.http_client, "PUT", url, request)
+# -------------------------------------------
+
+# --- ADD Route for GET /bots/status ---
+@app.get("/bots/status",
+         tags=["Bot Management"],
+         summary="Get status of running bots for the user",
+         description="Retrieves a list of currently running bot containers associated with the authenticated user.",
+         response_model=BotStatusResponse, # Document expected response
+         dependencies=[Depends(api_key_scheme)])
+async def get_bots_status_proxy(request: Request):
+    """Forward request to Bot Manager to get running bot status."""
+    url = f"{BOT_MANAGER_URL}/bots/status"
+    return await forward_request(app.state.http_client, "GET", url, request)
+# --- END Route for GET /bots/status ---
 
 # --- Transcription Collector Routes --- 
 @app.get("/meetings",

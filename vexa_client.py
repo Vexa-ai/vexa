@@ -127,7 +127,7 @@ class VexaClient:
 
     # --- Bot Management ---
 
-    def request_bot(self, platform: str, native_meeting_id: str, bot_name: Optional[str] = None) -> Dict[str, Any]:
+    def request_bot(self, platform: str, native_meeting_id: str, bot_name: Optional[str] = None, language: Optional[str] = None, task: Optional[str] = None) -> Dict[str, Any]:
         """
         Requests a new bot to join a meeting using platform and native ID.
 
@@ -135,28 +135,78 @@ class VexaClient:
             platform: Platform identifier (e.g., 'google_meet', 'zoom').
             native_meeting_id: The platform-specific meeting identifier.
             bot_name: Optional name for the bot in the meeting.
+            language: Optional language code for transcription (e.g., 'en', 'es').
+            task: Optional transcription task ('transcribe' or 'translate').
 
         Returns:
             Dictionary representing the created/updated Meeting object.
         """
-        payload = {"platform": platform, "native_meeting_id": native_meeting_id}
+        payload = {
+            "platform": platform, 
+            "native_meeting_id": native_meeting_id
+        }
         if bot_name:
             payload["bot_name"] = bot_name
+        if language:
+            payload["language"] = language
+        if task:
+            payload["task"] = task
+            
         return self._request("POST", "/bots", api_type='user', json_data=payload)
 
-    def stop_bot(self, platform: str, native_meeting_id: str) -> Dict[str, Any]:
+    def stop_bot(self, platform: str, native_meeting_id: str) -> Dict[str, str]:
         """
-        Stops a running bot for a specific meeting using platform and native ID.
+        Requests a running bot to stop for a specific meeting using platform and native ID.
+        The API returns a 202 Accepted response immediately while the stop happens in the background.
 
         Args:
             platform: Platform identifier (e.g., 'google_meet', 'zoom').
             native_meeting_id: The platform-specific meeting identifier.
 
         Returns:
-            Dictionary representing the updated Meeting object.
+            A dictionary containing a confirmation message (e.g., {"message": "..."}).
         """
         path = f"/bots/{platform}/{native_meeting_id}"
+        # _request handles 202 status and returns the JSON body
         return self._request("DELETE", path, api_type='user')
+
+    def update_bot_config(self, platform: str, native_meeting_id: str, language: Optional[str] = None, task: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Updates the configuration (language, task) for an active bot.
+        The API returns a 202 Accepted response immediately while the command is sent.
+
+        Args:
+            platform: Platform identifier (e.g., 'google_meet').
+            native_meeting_id: The platform-specific meeting identifier.
+            language: Optional new language code (e.g., 'en', 'es'). Pass None to not update.
+            task: Optional new task ('transcribe' or 'translate'). Pass None to not update.
+
+        Returns:
+            A dictionary containing a confirmation message (e.g., {"message": "..."}).
+        """
+        path = f"/bots/{platform}/{native_meeting_id}/config"
+        payload = {}
+        if language is not None:
+            payload["language"] = language
+        if task is not None:
+            payload["task"] = task
+            
+        if not payload: # Check if there's anything to update
+            raise VexaClientError("No configuration updates provided (language or task must be specified).")
+            
+        # _request handles 202 status and returns the JSON body
+        return self._request("PUT", path, api_type='user', json_data=payload)
+
+    def get_running_bots_status(self) -> List[Dict[str, Any]]:
+        """
+        Retrieves the status of running bot containers for the authenticated user.
+
+        Returns:
+            List of dictionaries, each representing the status of a running bot container.
+        """
+        response = self._request("GET", "/bots/status", api_type='user')
+        # The API returns a dict {"running_bots": [...]}, extract the list.
+        return response.get("running_bots", [])
 
     # --- Transcriptions ---
 
@@ -187,7 +237,12 @@ class VexaClient:
 
     # --- Admin: User Management ---
 
-    def create_user(self, email: str, name: Optional[str] = None, image_url: Optional[str] = None) -> Dict[str, Any]:
+    def create_user(self, 
+                    email: str, 
+                    name: Optional[str] = None, 
+                    image_url: Optional[str] = None,
+                    max_concurrent_bots: Optional[int] = None
+                   ) -> Dict[str, Any]:
         """
         Creates a new user (Admin Only).
 
@@ -195,6 +250,7 @@ class VexaClient:
             email: The email address for the new user.
             name: Optional name for the user.
             image_url: Optional URL for the user's image.
+            max_concurrent_bots: Optional maximum number of concurrent bots allowed (defaults server-side if None).
 
         Returns:
             Dictionary representing the created User object.
@@ -204,6 +260,9 @@ class VexaClient:
             payload["name"] = name
         if image_url:
             payload["image_url"] = image_url
+        if max_concurrent_bots is not None:
+             payload["max_concurrent_bots"] = max_concurrent_bots
+             
         return self._request("POST", "/admin/users", api_type='admin', json_data=payload)
 
     def list_users(self, skip: int = 0, limit: int = 100) -> List[Dict[str, Any]]:
@@ -220,6 +279,39 @@ class VexaClient:
         params = {"skip": skip, "limit": limit}
         return self._request("GET", "/admin/users", api_type='admin', params=params)
 
+    def update_user(self, 
+                    user_id: int, 
+                    name: Optional[str] = None, 
+                    image_url: Optional[str] = None,
+                    max_concurrent_bots: Optional[int] = None
+                   ) -> Dict[str, Any]:
+        """
+        Updates specific fields for an existing user (Admin Only).
+        Only include parameters for the fields you want to change.
+
+        Args:
+            user_id: The ID of the user to update.
+            name: Optional new name for the user.
+            image_url: Optional new URL for the user's image.
+            max_concurrent_bots: Optional new maximum number of concurrent bots.
+
+        Returns:
+            Dictionary representing the updated User object.
+        """
+        payload = {}
+        if name is not None:
+            payload["name"] = name
+        if image_url is not None:
+            payload["image_url"] = image_url
+        if max_concurrent_bots is not None:
+             payload["max_concurrent_bots"] = max_concurrent_bots
+             
+        if not payload: # Check if any update fields were provided
+            raise VexaClientError("No update fields provided for update_user.")
+            
+        path = f"/admin/users/{user_id}"
+        return self._request("PATCH", path, api_type='admin', json_data=payload)
+
     # --- Admin: Token Management ---
 
     def create_token(self, user_id: int) -> Dict[str, Any]:
@@ -233,152 +325,3 @@ class VexaClient:
             Dictionary representing the created APIToken object.
         """
         return self._request("POST", f"/admin/users/{user_id}/tokens", api_type='admin')
-
-# --- Example Usage and E2E Test ---
-if __name__ == "__main__":
-    # --- Configuration ---
-    GATEWAY_URL = os.environ.get("VEXA_GATEWAY_URL", DEFAULT_BASE_URL)
-    # Load Admin Key: Use env var or default assumed to be in compose/kube secrets
-    # Defaulting to supersecretadmintoken if not set via env var
-    ADMIN_API_KEY = os.environ.get("VEXA_ADMIN_API_KEY", "supersecretadmintoken") 
-    TEST_USER_EMAIL = "test.e2e@example.com"
-    
-    print(f"--- Configuration ---")
-    print(f"Gateway URL: {GATEWAY_URL}")
-    print(f"Admin Key Used: {'*' * (len(ADMIN_API_KEY)-4)}{ADMIN_API_KEY[-4:]}" if ADMIN_API_KEY and len(ADMIN_API_KEY) > 4 else "Provided (short)")
-    print(f"Test User Email: {TEST_USER_EMAIL}")
-
-    admin_client = VexaClient(base_url=GATEWAY_URL, admin_key=ADMIN_API_KEY)
-    user_api_key = None
-    user_id = None
-
-    # --- Setup: Ensure User and Token Exist --- 
-    print("\n--- Setup: Ensuring Test User and API Key --- ")
-    try:
-        # 1. Find or create user
-        print(f"Checking for user: {TEST_USER_EMAIL}...")
-        # Note: Listing all users might be slow with many users. 
-        # A dedicated GET /admin/users/by_email?email=... endpoint would be better.
-        users = admin_client.list_users(limit=1000) # Assume test user is within first 1000
-        found_user = next((u for u in users if u.get('email') == TEST_USER_EMAIL), None)
-        
-        if found_user:
-            user_id = found_user['id']
-            print(f"Found existing user ID: {user_id}")
-        else:
-            print(f"User not found. Creating user: {TEST_USER_EMAIL}...")
-            new_user = admin_client.create_user(email=TEST_USER_EMAIL, name="E2E Test User")
-            user_id = new_user['id']
-            print(f"Created user ID: {user_id}")
-
-        # 2. Create API token for the user
-        # Note: This creates a new token every time the script runs.
-        # Consider storing/reusing tokens if needed, but for testing, new one is fine.
-        print(f"Creating token for user ID: {user_id}...")
-        token_info = admin_client.create_token(user_id=user_id)
-        user_api_key = token_info['token']
-        print(f"Obtained User API Key: {'*' * (len(user_api_key)-4)}{user_api_key[-4:]}")
-
-    except VexaClientError as e:
-        print(f"*** Setup Failed: Could not ensure user/token using Admin API: {e} ***")
-        print("   (Ensure the Admin API is running and the Admin Key is correct)")
-        exit(1)
-    except Exception as e:
-         print(f"*** Setup Failed: An unexpected error occurred during setup: {e} ***")
-         exit(1)
-         
-    if not user_api_key:
-         print("*** Setup Failed: Could not obtain User API Key. ***")
-         exit(1)
-
-    # --- Initialize User Client with Obtained Key --- 
-    user_client = VexaClient(base_url=GATEWAY_URL, api_key=user_api_key)
-
-    # --- End-to-End Test --- 
-    print(f"\n--- Running End-to-End Test against {GATEWAY_URL} ---")
-
-    target_meeting_url = "https://meet.google.com/owp-ybqz-pgi"
-    platform = "google_meet"
-    
-    # Extract native ID from URL
-    match = re.search(r"meet.google.com/([a-z]{3}-[a-z]{4}-[a-z]{3})", target_meeting_url)
-    if not match:
-        print(f"Error: Could not extract valid Google Meet ID from URL: {target_meeting_url}")
-        exit(1)
-    native_meeting_id = match.group(1)
-    print(f"Target Platform: {platform}")
-    print(f"Target Native ID: {native_meeting_id}")
-
-    bot_requested_successfully = False
-    test_failed = False
-
-    try:
-        # 1. Request the bot
-        print(f"\n1. Requesting bot for {platform} / {native_meeting_id}...")
-        try:
-            meeting_response = user_client.request_bot(platform=platform, native_meeting_id=native_meeting_id, bot_name="E2ETestBot")
-            print(f"   Request Bot Response: {meeting_response}")
-            if meeting_response.get('id') and meeting_response.get('status') in ['requested', 'active']:
-                 print("   Bot requested successfully.")
-                 bot_requested_successfully = True
-            else:
-                 print("   WARN: Bot request response did not indicate immediate success.")
-                 # Continue anyway, maybe it starts slightly delayed
-        except VexaClientError as e:
-            print(f"   *** Error requesting bot: {e} ***")
-            if "409" in str(e) or "already exists" in str(e).lower():
-                print("   Conflict: Bot for this meeting might already be active. Attempting to proceed...")
-                # Don't mark as success, but allow transcript check
-            else:
-                 test_failed = True # Mark test as failed if bot request fails for other reasons
-
-        # Only proceed if the test hasn't definitively failed yet
-        if not test_failed:
-             # 2. Wait for transcription
-            wait_time = 30
-            print(f"\n2. Waiting {wait_time} seconds for bot to join and transcribe...")
-            time.sleep(wait_time)
-
-            # 3. Get transcript
-            print(f"\n3. Attempting to get transcript for {platform} / {native_meeting_id}...")
-            transcript_found = False
-            try:
-                transcript = user_client.get_transcript(platform=platform, native_meeting_id=native_meeting_id)
-                print(f"   Transcript Response: {transcript}")
-                segments = transcript.get('segments', [])
-                if segments:
-                    print(f"   SUCCESS: Found {len(segments)} transcript segments!")
-                    for i, seg in enumerate(segments[:5]): # Print first 5 segments
-                         print(f"     Segment {i+1}: [{seg.get('start_time')} - {seg.get('end_time')}] {seg.get('text')}")
-                    transcript_found = True
-                else:
-                    print("   FAILURE: Transcript requested successfully, but no segments were found.")
-                    test_failed = True
-            except VexaClientError as e:
-                print(f"   *** Error getting transcript: {e} ***")
-                test_failed = True
-
-            except Exception as e:
-                print(f"\n*** An unexpected error occurred during the test: {e} ***")
-                test_failed = True
-
-    finally:
-        # 4. Stop the bot (always attempt cleanup, even if test failed, but only if requested or conflicted)
-        if bot_requested_successfully or (not test_failed and not bot_requested_successfully): # Attempt cleanup if bot was requested or conflicted
-            print(f"\n4. Cleaning up: Stopping bot for {platform} / {native_meeting_id}...")
-            try:
-                stop_response = user_client.stop_bot(platform=platform, native_meeting_id=native_meeting_id)
-                print(f"   Stop Bot Response: {stop_response}")
-            except VexaClientError as e:
-                print(f"   *** Error stopping bot during cleanup: {e} ***")
-        else:
-             print("\n4. Skipping cleanup: Bot was not successfully requested or test failed early.")
-
-    # --- Test Result --- 
-    print("\n--- End-to-End Test Result ---")
-    if not test_failed and transcript_found:
-        print("✅ SUCCESS: Bot joined and transcript segments were retrieved.")
-        exit(0)
-    else:
-        print("❌ FAILURE: Test did not complete successfully.")
-        exit(1) 

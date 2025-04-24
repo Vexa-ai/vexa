@@ -5,6 +5,9 @@ export type BotConfig = {
   token: string,
   connectionId: string,
   nativeMeetingId: string,
+  language?: string | null,
+  task?: string | null,
+  redisUrl: string,
   automaticLeave: {
     waitingRoomTimeout: number,
     noOneJoinedTimeout: number,

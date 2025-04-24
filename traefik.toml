@@ -1,0 +1,22 @@
+[api]
+  insecure = true
+  dashboard = true
+
+[entryPoints]
+  [entryPoints.web]
+    address = ":80"
+
+[providers]
+  [providers.docker]
+    exposedByDefault = false
+    network = "vexa_default"
+    watch = true
+
+[log]
+  level = "DEBUG"
+
+[accessLog]
+
+# Optional: Enable the ping middleware for health checks
+[ping]
+  entryPoint = "web" 

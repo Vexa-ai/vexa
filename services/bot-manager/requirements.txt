@@ -3,7 +3,7 @@
 fastapi
 uvicorn[standard]
 redis>=4.0.0,<5.0.0
-docker>=6.0.0,<7.0.0
+# docker>=6.0.0,<7.0.0 # REMOVED - No longer needed for counting
 python-dotenv
 # pydantic==1.10.7 # Now handled by shared-models
 celery==5.3.0
@@ -14,4 +14,12 @@ celery==5.3.0
 # databases[postgresql]>=0.5.0 # Now handled by shared-models
 email-validator # Added for Pydantic EmailStr support via shared-models
 requests_unixsocket # Add for testing socket connection directly
-# alembic # Optional: Add if database migrations are needed later 
+# alembic # Optional: Add if database migrations are needed later
+
+# Added for shared models/DB access:
+SQLAlchemy[asyncio]
+aiosqlite # If using sqlite async (often for testing)
+# asyncpg # Alternative async PostgreSQL driver
+
+# Added for bot limit check - REMOVED
+# docker 
