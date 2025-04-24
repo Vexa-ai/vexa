@@ -44,11 +44,11 @@ The default limit is **one (1) concurrently running bot** per user account. If y
 
     HEADERS = {
         "X-API-Key": API_KEY,
-        "Content-Type": "application/json" # Include for POST/PUT, harmless for GET/DELETE
+        "Content-Type": "application/json"
     }
 
     meeting_platform = "google_meet"
-    meeting_id = "abc-defg-hij" # Replace with a real meeting ID/URL part
+    meeting_id = "xxx-xxxx-xxx" # Replace with your meeting id from URL https://meet.google.com/xxx-xxxx-xxx
 
     request_bot_url = f"{BASE_URL}/bots"
     request_bot_payload = {
@@ -75,20 +75,6 @@ The default limit is **one (1) concurrently running bot** per user account. If y
 *   **Response:** Returns the transcript data, typically including segments with speaker, timestamp, and text.
 *   **Python Example:**
     ```python
-    import requests
-    import json
-
-    BASE_URL = "https://gateway.dev.vexa.ai"
-    API_KEY = "YOUR_API_KEY_HERE" # Replace with your actual API key
-
-    HEADERS = {
-        "X-API-Key": API_KEY,
-        "Content-Type": "application/json" # Include for POST/PUT, harmless for GET/DELETE
-    }
-
-    meeting_platform = "google_meet"
-    meeting_id = "abc-defg-hij" # Replace with a real meeting ID/URL part
-
     get_transcript_url = f"{BASE_URL}/transcripts/{meeting_platform}/{meeting_id}"
     
     response = requests.get(get_transcript_url, headers=HEADERS)
@@ -105,16 +91,7 @@ The default limit is **one (1) concurrently running bot** per user account. If y
 *   **Response:** Returns a list detailing the status of active bots.
 *   **Python Example:**
     ```python
-    import requests
-    import json
-
-    BASE_URL = "https://gateway.dev.vexa.ai"
-    API_KEY = "YOUR_API_KEY_HERE" # Replace with your actual API key
-
-    HEADERS = {
-        "X-API-Key": API_KEY,
-        "Content-Type": "application/json" # Include for POST/PUT, harmless for GET/DELETE
-    }
+    
 
     get_status_url = f"{BASE_URL}/bots/status"
     
@@ -137,36 +114,14 @@ The default limit is **one (1) concurrently running bot** per user account. If y
 *   **Response:** Indicates whether the update request was accepted.
 *   **Python Example:**
     ```python
-    import requests
-    import json
-
-    BASE_URL = "https://gateway.dev.vexa.ai"
-    API_KEY = "YOUR_API_KEY_HERE" # Replace with your actual API key
-
-    HEADERS = {
-        "X-API-Key": API_KEY,
-        "Content-Type": "application/json" # Include for POST/PUT, harmless for GET/DELETE
-    }
-
-    meeting_platform = "google_meet"
-    meeting_id = "abc-defg-hij" # Replace with a real meeting ID/URL part
-
     update_config_url = f"{BASE_URL}/bots/{meeting_platform}/{meeting_id}/config"
     update_payload = {
         "language": "es" # Example: change language to Spanish
     }
     
     response = requests.put(update_config_url, headers=HEADERS, json=update_payload)
-    
-    # print(f"Status Code: {response.status_code}")
-    # Handle potential empty body or non-JSON response for PUT
-    if response.content:
-        try:
-            print(response.json())
-        except json.JSONDecodeError:
-            print("Response (non-JSON):", response.text)
-    else:
-        print("Request accepted (No Content)") # Or just pass
+    print(response.json())
+
     ```
 
 ### Stop a Bot
@@ -181,33 +136,10 @@ The default limit is **one (1) concurrently running bot** per user account. If y
 *   **Response:** Confirms the bot removal, potentially returning the final meeting record details.
 *   **Python Example:**
     ```python
-    import requests
-    import json
-
-    BASE_URL = "https://gateway.dev.vexa.ai"
-    API_KEY = "YOUR_API_KEY_HERE" # Replace with your actual API key
-
-    HEADERS = {
-        "X-API-Key": API_KEY,
-        "Content-Type": "application/json" # Include for POST/PUT, harmless for GET/DELETE
-    }
-
-    meeting_platform = "google_meet"
-    meeting_id = "abc-defg-hij" # Replace with a real meeting ID/URL part
-
+   
     stop_bot_url = f"{BASE_URL}/bots/{meeting_platform}/{meeting_id}"
-    
     response = requests.delete(stop_bot_url, headers=HEADERS)
-    
-    # print(f"Status Code: {response.status_code}")
-    # Handle potential empty body or non-JSON response for DELETE
-    if response.content:
-        try:
-            print(response.json())
-        except json.JSONDecodeError:
-            print("Response (non-JSON):", response.text)
-    else:
-        print("Request successful (No Content)") # Or just pass
+    print(response.json())
     ```
 
 ### List Your Meetings
