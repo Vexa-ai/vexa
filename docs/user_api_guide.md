@@ -75,10 +75,10 @@ The default limit is **one (1) concurrently running bot** per user account. If y
 *   **Response:** Returns the transcript data, typically including segments with speaker, timestamp, and text.
 *   **Python Example:**
     ```python
+    # imports, HEADERS, meeting_id, meeting_platform as ABOVE
+    
     get_transcript_url = f"{BASE_URL}/transcripts/{meeting_platform}/{meeting_id}"
-    
     response = requests.get(get_transcript_url, headers=HEADERS)
-    
     print(response.json())
     ```
 
@@ -91,12 +91,10 @@ The default limit is **one (1) concurrently running bot** per user account. If y
 *   **Response:** Returns a list detailing the status of active bots.
 *   **Python Example:**
     ```python
+    # imports, HEADERS, meeting_id, meeting_platform as ABOVE
     
-
     get_status_url = f"{BASE_URL}/bots/status"
-    
     response = requests.get(get_status_url, headers=HEADERS)
-    
     print(response.json())
     ```
 
@@ -114,11 +112,12 @@ The default limit is **one (1) concurrently running bot** per user account. If y
 *   **Response:** Indicates whether the update request was accepted.
 *   **Python Example:**
     ```python
+    # imports, HEADERS, meeting_id, meeting_platform as ABOVE
+
     update_config_url = f"{BASE_URL}/bots/{meeting_platform}/{meeting_id}/config"
     update_payload = {
         "language": "es" # Example: change language to Spanish
     }
-    
     response = requests.put(update_config_url, headers=HEADERS, json=update_payload)
     print(response.json())
 
@@ -136,7 +135,7 @@ The default limit is **one (1) concurrently running bot** per user account. If y
 *   **Response:** Confirms the bot removal, potentially returning the final meeting record details.
 *   **Python Example:**
     ```python
-   
+       # imports, HEADERS, meeting_id, meeting_platform as ABOVE
     stop_bot_url = f"{BASE_URL}/bots/{meeting_platform}/{meeting_id}"
     response = requests.delete(stop_bot_url, headers=HEADERS)
     print(response.json())
