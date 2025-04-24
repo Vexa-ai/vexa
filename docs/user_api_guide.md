@@ -39,7 +39,7 @@ The default limit is **one (1) concurrently running bot** per user account. If y
     import requests
     import json
 
-    BASE_URL = "https://api.vexa.io" # Replace with the actual Vexa API base URL
+    BASE_URL = "https://gateway.dev.vexa.ai"
     API_KEY = "YOUR_API_KEY_HERE" # Replace with your actual API key
 
     HEADERS = {
@@ -78,7 +78,7 @@ The default limit is **one (1) concurrently running bot** per user account. If y
     import requests
     import json
 
-    BASE_URL = "https://api.vexa.io" # Replace with the actual Vexa API base URL
+    BASE_URL = "https://gateway.dev.vexa.ai"
     API_KEY = "YOUR_API_KEY_HERE" # Replace with your actual API key
 
     HEADERS = {
@@ -108,7 +108,7 @@ The default limit is **one (1) concurrently running bot** per user account. If y
     import requests
     import json
 
-    BASE_URL = "https://api.vexa.io" # Replace with the actual Vexa API base URL
+    BASE_URL = "https://gateway.dev.vexa.ai"
     API_KEY = "YOUR_API_KEY_HERE" # Replace with your actual API key
 
     HEADERS = {
@@ -140,7 +140,7 @@ The default limit is **one (1) concurrently running bot** per user account. If y
     import requests
     import json
 
-    BASE_URL = "https://api.vexa.io" # Replace with the actual Vexa API base URL
+    BASE_URL = "https://gateway.dev.vexa.ai"
     API_KEY = "YOUR_API_KEY_HERE" # Replace with your actual API key
 
     HEADERS = {
@@ -184,7 +184,7 @@ The default limit is **one (1) concurrently running bot** per user account. If y
     import requests
     import json
 
-    BASE_URL = "https://api.vexa.io" # Replace with the actual Vexa API base URL
+    BASE_URL = "https://gateway.dev.vexa.ai"
     API_KEY = "YOUR_API_KEY_HERE" # Replace with your actual API key
 
     HEADERS = {
@@ -222,7 +222,7 @@ The default limit is **one (1) concurrently running bot** per user account. If y
     import requests
     import json
 
-    BASE_URL = "https://api.vexa.io" # Replace with the actual Vexa API base URL
+    BASE_URL = "https://gateway.dev.vexa.ai"
     API_KEY = "YOUR_API_KEY_HERE" # Replace with your actual API key
 
     HEADERS = {
