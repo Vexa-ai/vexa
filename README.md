@@ -7,10 +7,23 @@
 Vexa is an API for **real-time meeting transcription** using **meeting bots** and direct **streaming from web/mobile apps**. It extracts knowledge from various platforms including:
 
 - **Google Meet**
-- **Zoom**
-- **Microsoft Teams**
+- **Zoom** (coming soon)
+- **Microsoft Teams** (coming soon)
 
-Built with a **scalable architecture**, Vexa is designed to eventually support **thousands of simultaneous users** and **concurrent transcription sessions**. It aims to be an **enterprise-grade** alternative to [recall.ai](https://recall.ai) with numerous extra features, developed with **secure corporate environments** in mind where **data security** and **compliance** are crucial.
+Built with a **scalable architecture**, Vexa is designed to support **thousands of simultaneous users** and **concurrent transcription sessions**. It serves as an **enterprise-grade** alternative to [recall.ai](https://recall.ai) with numerous extra features, developed with **secure corporate environments** in mind where **data security** and **compliance** are crucial.
+
+## 🎉 Major Release: Public API Now Available!
+
+The Vexa API is now **publicly available** at [vexa.ai](https://vexa.ai) with **self-service access** - get your API key in just 3 clicks and have everything running in under 5 minutes.
+
+### Key features in this release:
+
+- **Instant API Access**: Self-service API keys available directly from [vexa.ai](https://vexa.ai)
+- **Google Meet Bot Integration**: Programmatically send bots to join and transcribe meetings
+- **Real-Time Transcription**: Access meeting transcripts as they happen through the API
+- **Real-Time Translation**: Change the language of transcription to get instant translations across 99 languages
+
+
 
 ## API Capabilities
 
@@ -18,14 +31,14 @@ Built with a **scalable architecture**, Vexa is designed to eventually support *
 ## Simple API Integration
 **Set up and running in under 5 minutes**
 
-*(Note: Vexa is currently in closed beta. You are welcome to apply for free beta access and obtain your `X-API-Key` at [https://api.dev.vexa.ai/pricing](https://api.dev.vexa.ai/pricing))*.
+Get your API key in 3 clicks at [vexa.ai](https://vexa.ai) and start using the API immediately.
 
 ### Create a meeting bot
 ```bash
 # POST /bots
 curl -X POST https://gateway.dev.vexa.ai/bots \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: YOUR_CLIENT_API_KEY" \
+  -H "X-API-Key: YOUR_API_KEY" \
   -d '{
     "native_meeting_id": "xxx-xxxx-xxx",
     "platform": "google_meet"
@@ -78,7 +91,8 @@ curl -H "X-API-Key: YOUR_CLIENT_API_KEY" \
 
 ### Features:
 - **Real-time multilingual transcription** supporting **99 languages** with **Whisper**
-- (**Note:** Additional features like LLM processing, translation, RAG, and MCP server access are planned - see 'Coming Next')
+- **Real-time translation** across all 99 supported languages
+- (**Note:** Additional features like LLM processing, RAG, and MCP server access are planned - see 'Coming Next')
 
 ## Scalability Architecture Overview
 
@@ -87,19 +101,20 @@ Vexa is designed from the ground up as a **high-performance, scalable multiuser 
 
 ## Current Status
 
-- **Google Meet Bot:** Fully operational bot for joining Google Meet calls.
-- **Real-time Transcription:** Low-latency, multilingual transcription service is live.
-- **Pending:** Speaker identification is under development.
+- **Public API**: Fully available with self-service API keys at [vexa.ai](https://vexa.ai)
+- **Google Meet Bot:** Fully operational bot for joining Google Meet calls
+- **Real-time Transcription:** Low-latency, multilingual transcription service is live
+- **Real-time Translation:** Instant translation between 99 supported languages
+- **Pending:** Speaker identification is under development
 
 ## Coming Next
 
-- **Microsoft Teams Bot:** Integration for automated meeting attendance (April 2025).
-- **Zoom Bot:** Integration for automated meeting attendance (May 2025).
-- **Direct Streaming:** Ability to stream audio directly from web/mobile apps.
-- **Real-time LLM Processing:** Enhancements for transcript readability and features.
-- **Real-time Translation:** Translation between supported languages.
-- **Meeting Knowledge Extraction (RAG):** Post-meeting analysis and Q&A.
-- **MCP Server:** Access to transcription data for agents.
+- **Microsoft Teams Bot:** Integration for automated meeting attendance (April 2025)
+- **Zoom Bot:** Integration for automated meeting attendance (May 2025)
+- **Direct Streaming:** Ability to stream audio directly from web/mobile apps
+- **Real-time LLM Processing:** Enhancements for transcript readability and features
+- **Meeting Knowledge Extraction (RAG):** Post-meeting analysis and Q&A
+- **MCP Server:** Access to transcription data for agents
 
 ## Self-Deployment
 
