@@ -62,6 +62,19 @@ The default limit is **one (1) concurrently running bot** per user account. If y
     
     print(response.json())
     ```
+*   **cURL Example:**
+    ```bash
+    curl -X POST \
+      https://gateway.dev.vexa.ai/bots \
+      -H 'Content-Type: application/json' \
+      -H 'X-API-Key: YOUR_API_KEY_HERE' \
+      -d '{
+        "platform": "google_meet",
+        "native_meeting_id": "xxx-xxxx-xxx",
+        "language": "en",
+        "bot_name": "MyMeetingBot"
+      }'
+    ```
 
 ### Get Real Time Meeting Transcript
 
@@ -81,6 +94,12 @@ The default limit is **one (1) concurrently running bot** per user account. If y
     response = requests.get(get_transcript_url, headers=HEADERS)
     print(response.json())
     ```
+*   **cURL Example:**
+    ```bash
+    curl -X GET \
+      https://gateway.dev.vexa.ai/transcripts/google_meet/xxx-xxxx-xxx \
+      -H 'X-API-Key: YOUR_API_KEY_HERE'
+    ```
 
 ### Get Status of Running Bots
 
@@ -96,6 +115,12 @@ The default limit is **one (1) concurrently running bot** per user account. If y
     get_status_url = f"{BASE_URL}/bots/status"
     response = requests.get(get_status_url, headers=HEADERS)
     print(response.json())
+    ```
+*   **cURL Example:**
+    ```bash
+    curl -X GET \
+      https://gateway.dev.vexa.ai/bots/status \
+      -H 'X-API-Key: YOUR_API_KEY_HERE'
     ```
 
 ### Update Bot Configuration
@@ -122,6 +147,16 @@ The default limit is **one (1) concurrently running bot** per user account. If y
     print(response.json())
 
     ```
+*   **cURL Example:**
+    ```bash
+    curl -X PUT \
+      https://gateway.dev.vexa.ai/bots/google_meet/xxx-xxxx-xxx/config \
+      -H 'Content-Type: application/json' \
+      -H 'X-API-Key: YOUR_API_KEY_HERE' \
+      -d '{
+        "language": "es"
+      }'
+    ```
 
 ### Stop a Bot
 
@@ -139,6 +174,12 @@ The default limit is **one (1) concurrently running bot** per user account. If y
     stop_bot_url = f"{BASE_URL}/bots/{meeting_platform}/{meeting_id}"
     response = requests.delete(stop_bot_url, headers=HEADERS)
     print(response.json())
+    ```
+*   **cURL Example:**
+    ```bash
+    curl -X DELETE \
+      https://gateway.dev.vexa.ai/bots/google_meet/xxx-xxxx-xxx \
+      -H 'X-API-Key: YOUR_API_KEY_HERE'
     ```
 
 ### List Your Meetings
@@ -167,6 +208,12 @@ The default limit is **one (1) concurrently running bot** per user account. If y
     
     # print(f"Status Code: {response.status_code}")
     print(response.json())
+    ```
+*   **cURL Example:**
+    ```bash
+    curl -X GET \
+      https://gateway.dev.vexa.ai/meetings \
+      -H 'X-API-Key: YOUR_API_KEY_HERE'
     ```
 
 ## Need Help?
