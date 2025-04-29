@@ -23,8 +23,6 @@ The Vexa API is now **publicly available** at [vexa.ai](https://vexa.ai) with **
 - **Real-Time Transcription**: Access meeting transcripts as they happen through the API
 - **Real-Time Translation**: Change the language of transcription to get instant translations across 99 languages
 
-
-
 ## API Capabilities
 
 
@@ -77,27 +75,25 @@ curl -H "X-API-Key: YOUR_CLIENT_API_KEY" \
   }
 }
 ```
+## Example Client Implementation
 
-### Inputs:
-- **Meeting Bots**: Automated bots that join your meetings on:
-  - Google Meet
-  - Zoom
-  - Microsoft Teams
-  - And more platforms
+We've created a reference implementation that demonstrates the Vexa API capabilities in action. Check out our [example client](https://github.com/Vexa-ai/vexa_example_client) – a real-time transcription assistant for Google Meet that allows you to see conversations in any language.
 
-- **Direct Streaming**: Capture audio directly from:
-  - Web applications
-  - Mobile apps
+### Key Features
+
+- **Real-time Transcription**: Capture Google Meet conversations as they happen with minimal latency
+- **Live Translation**: View ongoing conversation in any of 99+ supported languages in real-time
+- **Export Options**: Copy, download as text, or export as CSV
+- **Meeting History**: Access and review past meeting transcripts
+
+Get started with the example client in minutes by following the instructions in the [repository](https://github.com/Vexa-ai/vexa_example_client).
+
 
 ### Features:
 - **Real-time multilingual transcription** supporting **99 languages** with **Whisper**
 - **Real-time translation** across all 99 supported languages
 - (**Note:** Additional features like LLM processing, RAG, and MCP server access are planned - see 'Coming Next')
 
-## Scalability Architecture Overview
-
-Vexa is designed from the ground up as a **high-performance, scalable multiuser service** using a microservice-based architecture allowing independent scaling of components and distributed processing.
-*(For architecture details relevant to deployment, see [DEPLOYMENT.md](DEPLOYMENT.md))*.
 
 ## Current Status
 
@@ -160,4 +156,4 @@ To contribute:
 
 Vexa is licensed under the **Apache License, Version 2.0**. See [LICENSE](LICENSE) for the full license text.
 
-The Vexa name and logo are trademarks of **Vexa.ai Inc**. See [TRADEMARK.md](TRADEMARK.md) for more information.
+The Vexa name and logo are trademarks of **Vexa.ai Inc**.
