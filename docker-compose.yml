@@ -102,7 +102,7 @@ services:
       - "9090"
       - "9091"
     deploy:
-      replicas: 1  # Sets to 1 to avoid GPU contention
+      replicas: 3  # Sets to 1 to avoid GPU contention
       resources:
         reservations:
           devices:
