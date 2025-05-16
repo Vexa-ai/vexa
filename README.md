@@ -75,19 +75,9 @@ curl -H "X-API-Key: YOUR_CLIENT_API_KEY" \
   }
 }
 ```
-## Example Client Implementation
+## Projects Built with Vexa
 
-We've created a reference implementation that demonstrates the Vexa API capabilities in action. Check out our [example client](https://github.com/Vexa-ai/vexa_example_client) – a real-time transcription assistant for Google Meet that allows you to see conversations in any language.
-
-### Key Features
-
-- **Real-time Transcription**: Capture Google Meet conversations as they happen with minimal latency
-- **Live Translation**: View ongoing conversation in any of 99+ supported languages in real-time
-- **Export Options**: Copy, download as text, or export as CSV
-- **Meeting History**: Access and review past meeting transcripts
-
-Get started with the example client in minutes by following the instructions in the [repository](https://github.com/Vexa-ai/vexa_example_client).
-
+To see examples of projects built using the Vexa API, including our example client and other community contributions, please see the [BUILT-WITH-VEXA.md](BUILT-WITH-VEXA.md) file.
 
 ### Features:
 - **Real-time multilingual transcription** supporting **99 languages** with **Whisper**
