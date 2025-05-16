@@ -2,10 +2,10 @@
   <img src="assets/logodark.svg" alt="Vexa Logo" width="40"/>
 </p>
 
+[![Get API Key](https://img.shields.io/badge/Get_API_Key-vexa.ai-blue)](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo) [![Join Discord](https://img.shields.io/badge/Join_Discord-Community-7289DA)](https://discord.gg/Ga9duGkVz9) [![Meet Founder](https://img.shields.io/badge/Meet_Founder-Dmitry_Grankin-0077B5)](https://www.linkedin.com/in/dmitry-grankin/) [![Self Hosted](https://img.shields.io/badge/Self_Hosted-Available-2ea44f)](DEPLOYMENT.md)
 
 # Vexa: API for **Real-Time Meeting Transcription**
-Get your api key at [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo
-)
+Get your api key at [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo)
 
 Vexa is an API for **real-time meeting transcription** using **meeting bots** and direct **streaming from web/mobile apps**. It extracts knowledge from various platforms including:
 
@@ -104,7 +104,7 @@ To see examples of projects built using the Vexa API, including our example clie
 
 ## Current Status
 
-- **Public API**: Fully available with self-service API keys at [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo
+- **Public API**: Fully available with self-service API keys at [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo)
 - **Google Meet Bot:** Fully operational bot for joining Google Meet calls
 - **Real-time Transcription:** Low-latency, multilingual transcription service is live
 - **Real-time Translation:** Instant translation between 99 supported languages
@@ -112,8 +112,8 @@ To see examples of projects built using the Vexa API, including our example clie
 
 ## Coming Next
 
-- **Microsoft Teams Bot:** Integration for automated meeting attendance (April 2025)
-- **Zoom Bot:** Integration for automated meeting attendance (May 2025)
+- **Microsoft Teams Bot:** Integration for automated meeting attendance (June 2025)
+- **Zoom Bot:** Integration for automated meeting attendance (July 2025)
 - **Direct Streaming:** Ability to stream audio directly from web/mobile apps
 - **Real-time LLM Processing:** Enhancements for transcript readability and features
 - **Meeting Knowledge Extraction (RAG):** Post-meeting analysis and Q&A
