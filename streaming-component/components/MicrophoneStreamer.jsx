@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 
 // --- Configuration ---
+// const WEBSOCKET_URL = "ws://localhost:9090"; // GPU version
 const WEBSOCKET_URL = "ws://localhost:9092"; // Use ws:// or wss:// as appropriate
 const TARGET_SAMPLE_RATE = 16000;
 const SCRIPT_PROCESSOR_BUFFER_SIZE = 4096; // Adjust buffer size as needed (powers of 2)
