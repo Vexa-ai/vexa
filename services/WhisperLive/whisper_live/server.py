@@ -656,7 +656,8 @@ class TranscriptionServer:
 
     def run(self,
             host,
-            port=9090,
+            # port=9090, #GPU version
+            port=9092, #CPU version
             backend="tensorrt",
             faster_whisper_custom_model_path=None,
             whisper_tensorrt_path=None,
@@ -1094,7 +1095,7 @@ class ServeClientTensorRT(ServeClientBase):
         self.transcriber = WhisperTRTLLM(
             model,
             assets_dir="assets",
-            device="cuda",
+            device="cuda", #NOTE: why is this hard coded?
             is_multilingual=multilingual,
             language=self.language,
             task=self.task
@@ -1302,7 +1303,7 @@ class ServeClientFasterWhisper(ServeClientBase):
             major, _ = torch.cuda.get_device_capability(device)
             self.compute_type = "float16" if major >= 7 else "float32"
         else:
-            self.compute_type = "int8"
+            self.compute_type = "default" #"int8" #NOTE: maybe we use default here...
 
         if self.model_size_or_path is None:
             return
