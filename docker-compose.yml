@@ -96,25 +96,33 @@ services:
       - REDIS_STREAM_NAME=transcription_segments
       - LANGUAGE_DETECTION_SEGMENTS=${LANGUAGE_DETECTION_SEGMENTS}
       - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD}
-    command:  ["--port", "9090", "--backend", "faster_whisper", "-fw", "/root/.cache/huggingface/hub/models--Systran--faster-whisper-medium/snapshots/08e178d48790749d25932bbc082711ddcfdfbc4f"]
+    command:
+      [
+        "--port",
+        "9090",
+        "--backend",
+        "faster_whisper",
+        "-fw",
+        "/root/.cache/huggingface/hub/models--Systran--faster-whisper-medium/snapshots/08e178d48790749d25932bbc082711ddcfdfbc4f",
+      ]
     # Expose 9091 port for health checks (9090 + 1)
     expose:
       - "9090"
       - "9091"
     deploy:
-      replicas: 1  # Sets to 1 to avoid GPU contention
+      replicas: 1 # Sets to 1 to avoid GPU contention
       resources:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['3']
+              device_ids: ["3"]
               capabilities: [gpu]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9091/health"]
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 30s  # Give time for model loading
+      start_period: 30s # Give time for model loading
     init: true
     depends_on:
       transcription-collector:
@@ -139,12 +147,73 @@ services:
       - "traefik.http.middlewares.whisperlive-headers.headers.customrequestheaders.Upgrade=websocket"
       - "traefik.http.routers.whisperlive.middlewares=whisperlive-headers"
 
+  # CPU version of WhisperLive for users without GPU
+  whisperlive-cpu:
+    build:
+      context: .
+      dockerfile: services/WhisperLive/Dockerfile.cpu
+    volumes:
+      - ./hub:/root/.cache/huggingface/hub
+      - ./services/WhisperLive/models:/app/models
+    environment:
+      - REDIS_STREAM_URL=redis://redis:6379/0/transcription_segments
+      - TRANSCRIPTION_COLLECTOR_URL=redis://redis:6379/0/transcription_segments
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_STREAM_NAME=transcription_segments
+      - LANGUAGE_DETECTION_SEGMENTS=10
+      - VAD_FILTER_THRESHOLD=0.5
+    command:
+      [
+        "--port",
+        "9092",
+        "--backend",
+        "faster_whisper",
+        "--omp_num_threads",
+        "4",
+      ]
+    # Use a different port than the GPU version
+    expose:
+      - "9092"
+      - "9093"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9093/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s # Longer start period for CPU model loading
+    init: true
+    depends_on:
+      transcription-collector:
+        condition: service_started
+    networks:
+      - vexa_default
+      - whispernet
+    # Don't auto-start CPU version, users can manually start it
+    profiles: ["cpu"]
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Add Traefik labels for service discovery
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.whisperlive-cpu.rule=Host(`whisperlive-cpu.localhost`)"
+      - "traefik.http.routers.whisperlive-cpu.entrypoints=web"
+      - "traefik.http.services.whisperlive-cpu.loadbalancer.server.port=9092"
+      - "traefik.http.middlewares.whisperlive-cpu-headers.headers.customrequestheaders.Connection=upgrade"
+      - "traefik.http.middlewares.whisperlive-cpu-headers.headers.customrequestheaders.Upgrade=websocket"
+      - "traefik.http.routers.whisperlive-cpu.middlewares=whisperlive-cpu-headers"
+
   # Replace nginx load-balancer with Traefik
   traefik:
     image: traefik:v2.10
     ports:
-      - "9090:80"  # Expose on host port 9090 (same as the old Nginx)
-      - "8085:8080"  # Traefik dashboard
+      - "9090:80" # Expose on host port 9090 (same as the old Nginx)
+      - "8085:8080" # Traefik dashboard
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik.toml:/etc/traefik/traefik.toml:ro
@@ -199,7 +268,8 @@ services:
 
   redis:
     image: redis:7.0-alpine
-    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    command:
+      ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
     volumes:
       - redis-data:/data
     networks:
