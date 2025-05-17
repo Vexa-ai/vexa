@@ -2,10 +2,11 @@
   <img src="assets/logodark.svg" alt="Vexa Logo" width="40"/>
 </p>
 
-[![Get API Key](https://img.shields.io/badge/Get_API_Key-vexa.ai-blue)](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo) [![Join Discord](https://img.shields.io/badge/Join_Discord-Community-7289DA)](https://discord.gg/Ga9duGkVz9) [![Meet Founder](https://img.shields.io/badge/Meet_Founder-Dmitry_Grankin-0077B5)](https://www.linkedin.com/in/dmitry-grankin/) [![Self Hosted](https://img.shields.io/badge/Self_Hosted-Available-2ea44f)](DEPLOYMENT.md)
+  [![Run Locally](https://img.shields.io/badge/Docker-Run_Locally-2496ED?style=flat-square&logo=docker&logoColor=white)](DEPLOYMENT.md) [![Self Hosted](https://img.shields.io/badge/Server-Self_Hosted-2EA44F?style=flat-square&logo=serverless&logoColor=white)](DEPLOYMENT.md)
 
 # Vexa: API for **Real-Time Meeting Transcription**
-Get your api key at [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo)
+
+
 
 Vexa is an API for **real-time meeting transcription** using **meeting bots** and direct **streaming from web/mobile apps**. It extracts knowledge from various platforms including:
 
@@ -20,6 +21,8 @@ It focuses on doing one job well: **clean, private, real-time transcription unde
 
 ## Build on Top. In Hours, Not Months
 
+
+
 **Build powerful meeting assistants (like Otter.ai, Fireflies.ai, Fathom) for your startup, internal use, or custom integrations.**
 
 The Vexa API provides powerful abstractions and a clear separation of concerns, enabling you to build sophisticated applications on top with a safe and enjoyable coding experience. 
@@ -30,6 +33,10 @@ Furthermore, with our **n8n integration** (see [Projects Built with Vexa](BUILT-
 
 
 ## Public Hosted API
+
+> 🔑 Get your API key at [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo) to try Vexa instantly. 
+
+> 🚀 Read [DEPLOYMENT.md](DEPLOYMENT.md) for self-hosting and local run.
 
 The Vexa API is **publicly available** at [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo) with **self-service access** - get your API key in just 3 clicks and have everything running in under 5 minutes.
 
@@ -156,6 +163,10 @@ We look forward to your contributions!
 - 💼 [LinkedIn](https://www.linkedin.com/company/vexa-ai/)
 - 🐦 [X (@grankin_d)](https://x.com/grankin_d)
 - 💬 [Discord Community](https://discord.gg/Ga9duGkVz9)
+
+[![Meet Founder](https://img.shields.io/badge/LinkedIn-Dmitry_Grankin-0A66C2?style=flat-square&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/dmitry-grankin/)
+
+[![Join Discord](https://img.shields.io/badge/Discord-Community-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/Ga9duGkVz9)
 
 ## License
 
