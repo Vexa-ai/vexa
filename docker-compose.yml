@@ -107,8 +107,8 @@ services:
       ]
     # Expose 9091 port for health checks (9090 + 1)
     expose:
-      - "9090"
-      - "9091"
+      - "9090" #use for transcription web socket
+      - "9091" #use for health check
     deploy:
       replicas: 1 # Sets to 1 to avoid GPU contention
       resources:
@@ -175,8 +175,8 @@ services:
       ]
     # Use a different port than the GPU version
     expose:
-      - "9092"
-      - "9093"
+      - "9092" #use for transcription web socket
+      - "9093" #use for health check
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9093/health"]
       interval: 10s
