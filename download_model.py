@@ -12,7 +12,7 @@ from faster_whisper import WhisperModel
 
 # Get model configuration from environment variables with fallbacks
 model_size: Literal["tiny", "base", "small", "medium", "large-v1", "large-v2", "large-v3", "large", "distil-small", "distil-medium", "distil-large"] = os.getenv('WHISPER_MODEL_SIZE', 'tiny')
-device: Literal["cpu", "cuda"] = os.getenv('COMPUTE_TYPE', 'cuda')
+device: Literal["cpu", "cuda", "auto"] = os.getenv('DEVICE_TYPE', 'cuda')
 compute_type: Literal["int8", "float16", "default"] = "default"  # Keep default for stability
 
 print(f"Downloading Whisper model with configuration:")
