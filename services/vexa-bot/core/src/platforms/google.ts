@@ -138,224 +138,277 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
   const { meetingUrl, token, connectionId, platform, nativeMeetingId } =
     botConfig; // nativeMeetingId is now in BotConfig type
 
+  //NOTE: The environment variables passed by docker_utils.py will be available to the Node.js process started by your entrypoint.sh.
+  // --- Read WHISPER_LIVE_URL from Node.js environment ---
+  const whisperLiveUrlFromEnv = process.env.WHISPER_LIVE_URL;
+
+  if (!whisperLiveUrlFromEnv) {
+    // Use the Node-side 'log' utility here
+    log(
+      "ERROR: WHISPER_LIVE_URL environment variable is not set for vexa-bot in its Node.js environment. Cannot start recording."
+    );
+    // Potentially throw an error or return to prevent further execution
+    // For example: throw new Error("WHISPER_LIVE_URL is not configured for the bot.");
+    return; // Or handle more gracefully
+  }
+  log(`[Node.js] WHISPER_LIVE_URL for vexa-bot is: ${whisperLiveUrlFromEnv}`);
+  // --- ------------------------------------------------- ---
+
   log("Starting actual recording with WebSocket connection");
 
-  // Pass the necessary config fields into the page context
-  // Add type assertion for the object passed to evaluate
-  await page.evaluate(async (config: BotConfig) => {
-    // Destructure inside evaluate with types if needed, or just use config.* directly
-    const {
-      meetingUrl,
-      token,
-      connectionId: originalConnectionId,
-      platform,
-      nativeMeetingId,
-      language: initialLanguage,
-      task: initialTask,
-    } = config;
+  // Pass the necessary config fields and the resolved URL into the page context. Inisde page.evalute we have the browser context.
+  //All code inside page.evalute executes as javascript running in the browser.
+  await page.evaluate(
+    async (pageArgs: {
+      botConfigData: BotConfig;
+      whisperUrlForBrowser: string;
+    }) => {
+      const { botConfigData, whisperUrlForBrowser } = pageArgs;
+      // Destructure from botConfigData as needed
+      const {
+        meetingUrl,
+        token,
+        connectionId: originalConnectionId,
+        platform,
+        nativeMeetingId,
+        language: initialLanguage,
+        task: initialTask,
+      } = botConfigData; // Use the nested botConfigData
 
-    // --- ADD Helper function to generate UUID in browser context ---
-    const generateUUID = () => {
-      if (typeof crypto !== "undefined" && crypto.randomUUID) {
-        return crypto.randomUUID();
-      } else {
-        // Basic fallback if crypto.randomUUID is not available
-        return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
-          /[xy]/g,
-          function (c) {
-            var r = (Math.random() * 16) | 0,
-              v = c == "x" ? r : (r & 0x3) | 0x8;
-            return v.toString(16);
-          }
-        );
-      }
-    };
-    // --- --------------------------------------------------------- ---
-
-    await new Promise<void>((resolve, reject) => {
-      try {
-        (window as any).logBot("Starting recording process.");
-        const mediaElements = Array.from(
-          document.querySelectorAll("audio, video")
-        ).filter((el: any) => !el.paused);
-        if (mediaElements.length === 0) {
-          return reject(
-            new Error(
-              "[BOT Error] No active media elements found. Ensure the meeting media is playing."
-            )
+      // --- ADD Helper function to generate UUID in browser context ---
+      const generateUUID = () => {
+        if (typeof crypto !== "undefined" && crypto.randomUUID) {
+          return crypto.randomUUID();
+        } else {
+          // Basic fallback if crypto.randomUUID is not available
+          return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
+            /[xy]/g,
+            function (c) {
+              var r = (Math.random() * 16) | 0,
+                v = c == "x" ? r : (r & 0x3) | 0x8;
+              return v.toString(16);
+            }
           );
         }
+      };
+      // --- --------------------------------------------------------- ---
 
-        // NEW: Create audio context and destination for mixing multiple streams
-        (window as any).logBot(
-          `Found ${mediaElements.length} active media elements.`
-        );
-        const audioContext = new AudioContext();
-        const destinationNode = audioContext.createMediaStreamDestination();
-        let sourcesConnected = 0;
-
-        // NEW: Connect all media elements to the destination node
-        mediaElements.forEach((element: any, index: number) => {
-          try {
-            const elementStream =
-              element.srcObject ||
-              (element.captureStream && element.captureStream()) ||
-              (element.mozCaptureStream && element.mozCaptureStream());
-
-            if (
-              elementStream instanceof MediaStream &&
-              elementStream.getAudioTracks().length > 0
-            ) {
-              const sourceNode =
-                audioContext.createMediaStreamSource(elementStream);
-              sourceNode.connect(destinationNode);
-              sourcesConnected++;
-              (window as any).logBot(
-                `Connected audio stream from element ${index + 1}/${
-                  mediaElements.length
-                }.`
-              );
-            }
-          } catch (error: any) {
-            (window as any).logBot(
-              `Could not connect element ${index + 1}: ${error.message}`
+      await new Promise<void>((resolve, reject) => {
+        try {
+          (window as any).logBot("Starting recording process.");
+          const mediaElements = Array.from(
+            document.querySelectorAll("audio, video")
+          ).filter((el: any) => !el.paused);
+          if (mediaElements.length === 0) {
+            return reject(
+              new Error(
+                "[BOT Error] No active media elements found. Ensure the meeting media is playing."
+              )
             );
           }
-        });
 
-        if (sourcesConnected === 0) {
-          return reject(
-            new Error(
-              "[BOT Error] Could not connect any audio streams. Check media permissions."
-            )
+          // NEW: Create audio context and destination for mixing multiple streams
+          (window as any).logBot(
+            `Found ${mediaElements.length} active media elements.`
           );
-        }
+          const audioContext = new AudioContext();
+          const destinationNode = audioContext.createMediaStreamDestination();
+          let sourcesConnected = 0;
 
-        // Use the combined stream instead of a single element's stream
-        const stream = destinationNode.stream;
-        (window as any).logBot(
-          `Successfully combined ${sourcesConnected} audio streams.`
-        );
+          // NEW: Connect all media elements to the destination node
+          mediaElements.forEach((element: any, index: number) => {
+            try {
+              const elementStream =
+                element.srcObject ||
+                (element.captureStream && element.captureStream()) ||
+                (element.mozCaptureStream && element.mozCaptureStream());
 
-        // --- MODIFIED: Keep original connectionId but don't use it for WebSocket UID ---
-        // const sessionUid = connectionId; // <-- OLD: Reused original connectionId
-        (window as any).logBot(
-          `Original bot connection ID: ${originalConnectionId}`
-        );
-        // --- ------------------------------------------------------------------------ ---
-
-        // --- ADDED: Add secondary leave button selector for confirmation ---
-        const secondaryLeaveButtonSelector = `//button[.//span[text()='Leave meeting']] | //button[.//span[text()='Just leave the meeting']]`; // Example, adjust based on actual UI
-        // --- ----------------------------------------------------------- ---
-
-        // const wsUrl = "ws://whisperlive:9090";
-        const wsUrl = "ws://whisperlive-cpu:9092";
-        // (window as any).logBot(`Attempting to connect WebSocket to: ${wsUrl} with platform: ${platform}, session UID: ${sessionUid}`); // Log the correct UID
-
-        // --- ADD Browser-scope state for current WS config ---
-        let currentWsLanguage = initialLanguage;
-        let currentWsTask = initialTask;
-        // --- -------------------------------------------- ---
-
-        let socket: WebSocket | null = null;
-        let isServerReady = false;
-        let retryCount = 0;
-        const maxRetries = 5;
-        const retryDelay = 2000;
-
-        const setupWebSocket = () => {
-          try {
-            if (socket) {
-              // Close previous socket if it exists
-              try {
-                socket.close();
-              } catch (err) {
-                // Ignore errors when closing
+              if (
+                elementStream instanceof MediaStream &&
+                elementStream.getAudioTracks().length > 0
+              ) {
+                const sourceNode =
+                  audioContext.createMediaStreamSource(elementStream);
+                sourceNode.connect(destinationNode);
+                sourcesConnected++;
+                (window as any).logBot(
+                  `Connected audio stream from element ${index + 1}/${
+                    mediaElements.length
+                  }.`
+                );
               }
+            } catch (error: any) {
+              (window as any).logBot(
+                `Could not connect element ${index + 1}: ${error.message}`
+              );
             }
+          });
 
-            socket = new WebSocket(wsUrl);
+          if (sourcesConnected === 0) {
+            return reject(
+              new Error(
+                "[BOT Error] Could not connect any audio streams. Check media permissions."
+              )
+            );
+          }
 
-            socket.onopen = function () {
-              // --- MODIFIED: Log current config being used ---
-              // --- MODIFIED: Generate NEW UUID for this connection ---
-              const currentSessionUid = generateUUID();
-              (window as any).logBot(
-                `WebSocket connection opened. Using Lang: ${currentWsLanguage}, Task: ${currentWsTask}, New UID: ${currentSessionUid}`
-              );
-              retryCount = 0;
+          // Use the combined stream instead of a single element's stream
+          const stream = destinationNode.stream;
+          (window as any).logBot(
+            `Successfully combined ${sourcesConnected} audio streams.`
+          );
 
+          // --- MODIFIED: Keep original connectionId but don't use it for WebSocket UID ---
+          // const sessionUid = connectionId; // <-- OLD: Reused original connectionId
+          (window as any).logBot(
+            `Original bot connection ID: ${originalConnectionId}`
+          );
+          // --- ------------------------------------------------------------------------ ---
+
+          // --- ADDED: Add secondary leave button selector for confirmation ---
+          const secondaryLeaveButtonSelector = `//button[.//span[text()='Leave meeting']] | //button[.//span[text()='Just leave the meeting']]`; // Example, adjust based on actual UI
+          // --- ----------------------------------------------------------- ---
+
+          // const wsUrl = "ws://whisperlive:9090";
+          const wsUrl = whisperUrlForBrowser;
+          if (!wsUrl) {
+            (window as any).logBot?.(
+              "CRITICAL: WhisperLive WebSocket URL is missing in browser context!"
+            );
+            console.error(
+              "CRITICAL: WhisperLive WebSocket URL is missing in browser context!"
+            );
+            return;
+          }
+          // (window as any).logBot(`Attempting to connect WebSocket to: ${wsUrl} with platform: ${platform}, session UID: ${sessionUid}`); // Log the correct UID
+
+          // --- ADD Browser-scope state for current WS config ---
+          let currentWsLanguage = initialLanguage;
+          let currentWsTask = initialTask;
+          // --- -------------------------------------------- ---
+
+          let socket: WebSocket | null = null;
+          let isServerReady = false;
+          let retryCount = 0;
+          const maxRetries = 5;
+          const retryDelay = 2000;
+
+          const setupWebSocket = () => {
+            try {
               if (socket) {
-                // Construct the initial configuration message using config values
-                const initialConfigPayload = {
-                  uid: currentSessionUid, // <-- Use NEWLY generated UUID
-                  language: currentWsLanguage || null, // <-- Use browser-scope variable
-                  task: currentWsTask || "transcribe", // <-- Use browser-scope variable
-                  model: "medium", // Keep default or make configurable if needed
-                  use_vad: true, // Keep default or make configurable if needed
-                  platform: platform, // From config
-                  token: token, // From config
-                  meeting_id: nativeMeetingId, // From config
-                  meeting_url: meetingUrl || null, // From config, default to null
-                };
-
-                const jsonPayload = JSON.stringify(initialConfigPayload);
-
-                // Log the exact payload being sent
-                (window as any).logBot(
-                  `Sending initial config message: ${jsonPayload}`
-                );
-                socket.send(jsonPayload);
-              }
-            };
-
-            socket.onmessage = (event) => {
-              (window as any).logBot("Received message: " + event.data);
-              const data = JSON.parse(event.data);
-              // NOTE: The check `if (data["uid"] !== sessionUid) return;` is removed
-              // because we no longer have a single sessionUid for the lifetime of the evaluate block.
-              // Each message *should* contain the UID associated with the specific WebSocket
-              // connection it came from. Downstream needs to handle this if correlation is needed.
-              // For now, we assume messages are relevant to the current bot context.
-              // Consider re-introducing a check if whisperlive echoes back the UID and it's needed.
-
-              if (data["status"] === "ERROR") {
-                (window as any).logBot(
-                  `WebSocket Server Error: ${data["message"]}`
-                );
-              } else if (data["status"] === "WAIT") {
-                (window as any).logBot(`Server busy: ${data["message"]}`);
-              } else if (!isServerReady) {
-                isServerReady = true;
-                (window as any).logBot("Server is ready.");
-              } else if (data["language"]) {
-                (window as any).logBot(
-                  `Language detected: ${data["language"]}`
-                );
-              } else if (data["message"] === "DISCONNECT") {
-                (window as any).logBot("Server requested disconnect.");
-                if (socket) {
+                // Close previous socket if it exists
+                try {
                   socket.close();
+                } catch (err) {
+                  // Ignore errors when closing
                 }
-              } else {
-                (window as any).logBot(
-                  `Transcription: ${JSON.stringify(data)}`
-                );
               }
-            };
 
-            socket.onerror = (event) => {
-              (window as any).logBot(
-                `WebSocket error: ${JSON.stringify(event)}`
-              );
-            };
+              socket = new WebSocket(wsUrl);
 
-            socket.onclose = (event) => {
-              (window as any).logBot(
-                `WebSocket connection closed. Code: ${event.code}, Reason: ${event.reason}`
-              );
+              socket.onopen = function () {
+                // --- MODIFIED: Log current config being used ---
+                // --- MODIFIED: Generate NEW UUID for this connection ---
+                const currentSessionUid = generateUUID();
+                (window as any).logBot(
+                  `WebSocket connection opened. Using Lang: ${currentWsLanguage}, Task: ${currentWsTask}, New UID: ${currentSessionUid}`
+                );
+                retryCount = 0;
 
-              // Retry logic
+                if (socket) {
+                  // Construct the initial configuration message using config values
+                  const initialConfigPayload = {
+                    uid: currentSessionUid, // <-- Use NEWLY generated UUID
+                    language: currentWsLanguage || null, // <-- Use browser-scope variable
+                    task: currentWsTask || "transcribe", // <-- Use browser-scope variable
+                    model: "medium", // Keep default or make configurable if needed
+                    use_vad: true, // Keep default or make configurable if needed
+                    platform: platform, // From config
+                    token: token, // From config
+                    meeting_id: nativeMeetingId, // From config
+                    meeting_url: meetingUrl || null, // From config, default to null
+                  };
+
+                  const jsonPayload = JSON.stringify(initialConfigPayload);
+
+                  // Log the exact payload being sent
+                  (window as any).logBot(
+                    `Sending initial config message: ${jsonPayload}`
+                  );
+                  socket.send(jsonPayload);
+                }
+              };
+
+              socket.onmessage = (event) => {
+                (window as any).logBot("Received message: " + event.data);
+                const data = JSON.parse(event.data);
+                // NOTE: The check `if (data["uid"] !== sessionUid) return;` is removed
+                // because we no longer have a single sessionUid for the lifetime of the evaluate block.
+                // Each message *should* contain the UID associated with the specific WebSocket
+                // connection it came from. Downstream needs to handle this if correlation is needed.
+                // For now, we assume messages are relevant to the current bot context.
+                // Consider re-introducing a check if whisperlive echoes back the UID and it's needed.
+
+                if (data["status"] === "ERROR") {
+                  (window as any).logBot(
+                    `WebSocket Server Error: ${data["message"]}`
+                  );
+                } else if (data["status"] === "WAIT") {
+                  (window as any).logBot(`Server busy: ${data["message"]}`);
+                } else if (!isServerReady) {
+                  isServerReady = true;
+                  (window as any).logBot("Server is ready.");
+                } else if (data["language"]) {
+                  (window as any).logBot(
+                    `Language detected: ${data["language"]}`
+                  );
+                } else if (data["message"] === "DISCONNECT") {
+                  (window as any).logBot("Server requested disconnect.");
+                  if (socket) {
+                    socket.close();
+                  }
+                } else {
+                  (window as any).logBot(
+                    `Transcription: ${JSON.stringify(data)}`
+                  );
+                }
+              };
+
+              socket.onerror = (event) => {
+                (window as any).logBot(
+                  `WebSocket error: ${JSON.stringify(event)}`
+                );
+              };
+
+              socket.onclose = (event) => {
+                (window as any).logBot(
+                  `WebSocket connection closed. Code: ${event.code}, Reason: ${event.reason}`
+                );
+
+                // Retry logic
+                if (retryCount < maxRetries) {
+                  const exponentialDelay = retryDelay * Math.pow(2, retryCount);
+                  retryCount++;
+                  (window as any).logBot(
+                    `Attempting to reconnect in ${exponentialDelay}ms. Retry ${retryCount}/${maxRetries}`
+                  );
+
+                  setTimeout(() => {
+                    (window as any).logBot(
+                      `Retrying WebSocket connection (${retryCount}/${maxRetries})...`
+                    );
+                    setupWebSocket();
+                  }, exponentialDelay);
+                } else {
+                  (window as any).logBot(
+                    "Maximum WebSocket reconnection attempts reached. Giving up."
+                  );
+                  // Optionally, we could reject the promise here if required
+                }
+              };
+            } catch (e: any) {
+              (window as any).logBot(`Error creating WebSocket: ${e.message}`);
+              // For initial connection errors, handle with retry logic
               if (retryCount < maxRetries) {
                 const exponentialDelay = retryDelay * Math.pow(2, retryCount);
                 retryCount++;
@@ -370,252 +423,234 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                   setupWebSocket();
                 }, exponentialDelay);
               } else {
-                (window as any).logBot(
-                  "Maximum WebSocket reconnection attempts reached. Giving up."
+                return reject(
+                  new Error(
+                    `WebSocket creation failed after ${maxRetries} attempts: ${e.message}`
+                  )
                 );
-                // Optionally, we could reject the promise here if required
               }
-            };
-          } catch (e: any) {
-            (window as any).logBot(`Error creating WebSocket: ${e.message}`);
-            // For initial connection errors, handle with retry logic
-            if (retryCount < maxRetries) {
-              const exponentialDelay = retryDelay * Math.pow(2, retryCount);
-              retryCount++;
+            }
+          };
+
+          // --- ADD Function exposed to Node.js for triggering reconfigure ---
+          (window as any).triggerWebSocketReconfigure = (
+            newLang: string | null,
+            newTask: string | null
+          ) => {
+            (window as any).logBot(
+              `[Node->Browser] Received reconfigure. New Lang: ${newLang}, New Task: ${newTask}`
+            );
+            currentWsLanguage = newLang; // Update browser state
+            currentWsTask = newTask || "transcribe"; // Update browser state, default task if null
+
+            if (socket && socket.readyState === WebSocket.OPEN) {
               (window as any).logBot(
-                `Attempting to reconnect in ${exponentialDelay}ms. Retry ${retryCount}/${maxRetries}`
+                "[Node->Browser] Closing WebSocket to reconnect with new config."
               );
-
-              setTimeout(() => {
-                (window as any).logBot(
-                  `Retrying WebSocket connection (${retryCount}/${maxRetries})...`
-                );
-                setupWebSocket();
-              }, exponentialDelay);
+              socket.close(); // Triggers onclose -> setupWebSocket which now reads updated vars
+            } else if (
+              socket &&
+              (socket.readyState === WebSocket.CONNECTING ||
+                socket.readyState === WebSocket.CLOSING)
+            ) {
+              (window as any).logBot(
+                "[Node->Browser] Socket is connecting or closing, cannot close now. Reconnect will use new config when it opens."
+              );
             } else {
-              return reject(
-                new Error(
-                  `WebSocket creation failed after ${maxRetries} attempts: ${e.message}`
-                )
+              // Socket is null or already closed
+              (window as any).logBot(
+                "[Node->Browser] Socket is null or closed. Attempting to setupWebSocket directly."
               );
+              // Directly calling setupWebSocket might cause issues if the old one is mid-retry
+              // Relying on the existing retry logic in onclose is likely safer.
+              // If setupWebSocket is called here, ensure it handles potential double connections.
+              // setupWebSocket();
             }
-          }
-        };
+          };
+          // --- ----------------------------------------------------------- ---
 
-        // --- ADD Function exposed to Node.js for triggering reconfigure ---
-        (window as any).triggerWebSocketReconfigure = (
-          newLang: string | null,
-          newTask: string | null
-        ) => {
-          (window as any).logBot(
-            `[Node->Browser] Received reconfigure. New Lang: ${newLang}, New Task: ${newTask}`
-          );
-          currentWsLanguage = newLang; // Update browser state
-          currentWsTask = newTask || "transcribe"; // Update browser state, default task if null
-
-          if (socket && socket.readyState === WebSocket.OPEN) {
+          // --- ADDED: Expose leave function to Node context ---
+          (window as any).performLeaveAction = async () => {
             (window as any).logBot(
-              "[Node->Browser] Closing WebSocket to reconnect with new config."
+              "Attempting to leave the meeting from browser context..."
             );
-            socket.close(); // Triggers onclose -> setupWebSocket which now reads updated vars
-          } else if (
-            socket &&
-            (socket.readyState === WebSocket.CONNECTING ||
-              socket.readyState === WebSocket.CLOSING)
-          ) {
-            (window as any).logBot(
-              "[Node->Browser] Socket is connecting or closing, cannot close now. Reconnect will use new config when it opens."
-            );
-          } else {
-            // Socket is null or already closed
-            (window as any).logBot(
-              "[Node->Browser] Socket is null or closed. Attempting to setupWebSocket directly."
-            );
-            // Directly calling setupWebSocket might cause issues if the old one is mid-retry
-            // Relying on the existing retry logic in onclose is likely safer.
-            // If setupWebSocket is called here, ensure it handles potential double connections.
-            // setupWebSocket();
-          }
-        };
-        // --- ----------------------------------------------------------- ---
+            try {
+              // *** FIXED: Use document.evaluate for XPath ***
+              const primaryLeaveButtonXpath = `//button[@aria-label="Leave call"]`;
+              const secondaryLeaveButtonXpath = `//button[.//span[text()='Leave meeting']] | //button[.//span[text()='Just leave the meeting']]`;
 
-        // --- ADDED: Expose leave function to Node context ---
-        (window as any).performLeaveAction = async () => {
-          (window as any).logBot(
-            "Attempting to leave the meeting from browser context..."
-          );
-          try {
-            // *** FIXED: Use document.evaluate for XPath ***
-            const primaryLeaveButtonXpath = `//button[@aria-label="Leave call"]`;
-            const secondaryLeaveButtonXpath = `//button[.//span[text()='Leave meeting']] | //button[.//span[text()='Just leave the meeting']]`;
-
-            const getElementByXpath = (path: string): HTMLElement | null => {
-              const result = document.evaluate(
-                path,
-                document,
-                null,
-                XPathResult.FIRST_ORDERED_NODE_TYPE,
-                null
-              );
-              return result.singleNodeValue as HTMLElement | null;
-            };
-
-            const primaryLeaveButton = getElementByXpath(
-              primaryLeaveButtonXpath
-            );
-            if (primaryLeaveButton) {
-              (window as any).logBot("Clicking primary leave button...");
-              primaryLeaveButton.click(); // No need to cast HTMLElement if getElementByXpath returns it
-              await new Promise((resolve) => setTimeout(resolve, 1000)); // Wait a bit for potential confirmation dialog
-
-              // Try clicking secondary/confirmation button if it appears
-              const secondaryLeaveButton = getElementByXpath(
-                secondaryLeaveButtonXpath
-              );
-              if (secondaryLeaveButton) {
-                (window as any).logBot(
-                  "Clicking secondary/confirmation leave button..."
+              const getElementByXpath = (path: string): HTMLElement | null => {
+                const result = document.evaluate(
+                  path,
+                  document,
+                  null,
+                  XPathResult.FIRST_ORDERED_NODE_TYPE,
+                  null
                 );
-                secondaryLeaveButton.click();
-                await new Promise((resolve) => setTimeout(resolve, 500)); // Short wait after final click
+                return result.singleNodeValue as HTMLElement | null;
+              };
+
+              const primaryLeaveButton = getElementByXpath(
+                primaryLeaveButtonXpath
+              );
+              if (primaryLeaveButton) {
+                (window as any).logBot("Clicking primary leave button...");
+                primaryLeaveButton.click(); // No need to cast HTMLElement if getElementByXpath returns it
+                await new Promise((resolve) => setTimeout(resolve, 1000)); // Wait a bit for potential confirmation dialog
+
+                // Try clicking secondary/confirmation button if it appears
+                const secondaryLeaveButton = getElementByXpath(
+                  secondaryLeaveButtonXpath
+                );
+                if (secondaryLeaveButton) {
+                  (window as any).logBot(
+                    "Clicking secondary/confirmation leave button..."
+                  );
+                  secondaryLeaveButton.click();
+                  await new Promise((resolve) => setTimeout(resolve, 500)); // Short wait after final click
+                } else {
+                  (window as any).logBot("Secondary leave button not found.");
+                }
+                (window as any).logBot("Leave sequence completed.");
+                return true; // Indicate leave attempt was made
               } else {
-                (window as any).logBot("Secondary leave button not found.");
+                (window as any).logBot("Primary leave button not found.");
+                return false; // Indicate leave button wasn't found
               }
-              (window as any).logBot("Leave sequence completed.");
-              return true; // Indicate leave attempt was made
-            } else {
-              (window as any).logBot("Primary leave button not found.");
-              return false; // Indicate leave button wasn't found
+            } catch (err: any) {
+              (window as any).logBot(
+                `Error during leave attempt: ${err.message}`
+              );
+              return false; // Indicate error during leave
             }
-          } catch (err: any) {
-            (window as any).logBot(
-              `Error during leave attempt: ${err.message}`
+          };
+          // --- --------------------------------------------- ---
+
+          setupWebSocket();
+
+          // FIXED: Revert to original audio processing that works with whisperlive
+          // but use our combined stream as the input source
+          const audioDataCache = [];
+          const context = new AudioContext();
+          const mediaStream = context.createMediaStreamSource(stream); // Use our combined stream
+          const recorder = context.createScriptProcessor(4096, 1, 1);
+
+          recorder.onaudioprocess = async (event) => {
+            // Check if server is ready AND socket is open
+            if (
+              !isServerReady ||
+              !socket ||
+              socket.readyState !== WebSocket.OPEN
+            ) {
+              // (window as any).logBot("WS not ready or closed, skipping audio data send."); // Optional debug log
+              return;
+            }
+            const inputData = event.inputBuffer.getChannelData(0);
+            const data = new Float32Array(inputData);
+            const targetLength = Math.round(
+              data.length * (16000 / context.sampleRate)
             );
-            return false; // Indicate error during leave
-          }
-        };
-        // --- --------------------------------------------- ---
+            const resampledData = new Float32Array(targetLength);
+            const springFactor = (data.length - 1) / (targetLength - 1);
+            resampledData[0] = data[0];
+            resampledData[targetLength - 1] = data[data.length - 1];
+            for (let i = 1; i < targetLength - 1; i++) {
+              const index = i * springFactor;
+              const leftIndex = Math.floor(index);
+              const rightIndex = Math.ceil(index);
+              const fraction = index - leftIndex;
+              resampledData[i] =
+                data[leftIndex] +
+                (data[rightIndex] - data[leftIndex]) * fraction;
+            }
+            // Send resampledData
+            if (socket && socket.readyState === WebSocket.OPEN) {
+              // Double check before sending
+              socket.send(resampledData); // send teh audio to whisperlive socket.
+            }
+          };
 
-        setupWebSocket();
+          // Connect the audio processing pipeline
+          mediaStream.connect(recorder);
+          recorder.connect(context.destination);
 
-        // FIXED: Revert to original audio processing that works with whisperlive
-        // but use our combined stream as the input source
-        const audioDataCache = [];
-        const context = new AudioContext();
-        const mediaStream = context.createMediaStreamSource(stream); // Use our combined stream
-        const recorder = context.createScriptProcessor(4096, 1, 1);
-
-        recorder.onaudioprocess = async (event) => {
-          // Check if server is ready AND socket is open
-          if (
-            !isServerReady ||
-            !socket ||
-            socket.readyState !== WebSocket.OPEN
-          ) {
-            // (window as any).logBot("WS not ready or closed, skipping audio data send."); // Optional debug log
-            return;
-          }
-          const inputData = event.inputBuffer.getChannelData(0);
-          const data = new Float32Array(inputData);
-          const targetLength = Math.round(
-            data.length * (16000 / context.sampleRate)
+          (window as any).logBot(
+            "Audio processing pipeline connected and sending data."
           );
-          const resampledData = new Float32Array(targetLength);
-          const springFactor = (data.length - 1) / (targetLength - 1);
-          resampledData[0] = data[0];
-          resampledData[targetLength - 1] = data[data.length - 1];
-          for (let i = 1; i < targetLength - 1; i++) {
-            const index = i * springFactor;
-            const leftIndex = Math.floor(index);
-            const rightIndex = Math.ceil(index);
-            const fraction = index - leftIndex;
-            resampledData[i] =
-              data[leftIndex] + (data[rightIndex] - data[leftIndex]) * fraction;
-          }
-          // Send resampledData
-          if (socket && socket.readyState === WebSocket.OPEN) {
-            // Double check before sending
-            socket.send(resampledData); // send teh audio to whisperlive socket.
-          }
-        };
 
-        // Connect the audio processing pipeline
-        mediaStream.connect(recorder);
-        recorder.connect(context.destination);
-
-        (window as any).logBot(
-          "Audio processing pipeline connected and sending data."
-        );
-
-        // Click the "People" button
-        const peopleButton = document.querySelector(
-          'button[aria-label^="People"]'
-        );
-        if (!peopleButton) {
-          recorder.disconnect();
-          return reject(
-            new Error(
-              "[BOT Inner Error] 'People' button not found. Update the selector."
-            )
+          // Click the "People" button
+          const peopleButton = document.querySelector(
+            'button[aria-label^="People"]'
           );
+          if (!peopleButton) {
+            recorder.disconnect();
+            return reject(
+              new Error(
+                "[BOT Inner Error] 'People' button not found. Update the selector."
+              )
+            );
+          }
+          (peopleButton as HTMLElement).click();
+
+          // Monitor participant list every 5 seconds
+          let aloneTime = 0;
+          const checkInterval = setInterval(() => {
+            const peopleList = document.querySelector('[role="list"]');
+            if (!peopleList) {
+              (window as any).logBot(
+                "Participant list not found; assuming meeting ended."
+              );
+              clearInterval(checkInterval);
+              recorder.disconnect();
+              resolve();
+              return;
+            }
+            const count = peopleList.childElementCount;
+            (window as any).logBot("Participant count: " + count);
+
+            if (count <= 1) {
+              aloneTime += 5;
+              (window as any).logBot(
+                "Bot appears alone for " + aloneTime + " seconds..."
+              );
+            } else {
+              aloneTime = 0;
+            }
+
+            if (aloneTime >= 10 || count === 0) {
+              (window as any).logBot(
+                "Meeting ended or bot alone for too long. Stopping recorder..."
+              );
+              clearInterval(checkInterval);
+              recorder.disconnect();
+              resolve();
+            }
+          }, 5000);
+
+          // Listen for unload and visibility changes
+          window.addEventListener("beforeunload", () => {
+            (window as any).logBot("Page is unloading. Stopping recorder...");
+            clearInterval(checkInterval);
+            recorder.disconnect();
+            resolve();
+          });
+          document.addEventListener("visibilitychange", () => {
+            if (document.visibilityState === "hidden") {
+              (window as any).logBot(
+                "Document is hidden. Stopping recorder..."
+              );
+              clearInterval(checkInterval);
+              recorder.disconnect();
+              resolve();
+            }
+          });
+        } catch (error: any) {
+          return reject(new Error("[BOT Error] " + error.message));
         }
-        (peopleButton as HTMLElement).click();
-
-        // Monitor participant list every 5 seconds
-        let aloneTime = 0;
-        const checkInterval = setInterval(() => {
-          const peopleList = document.querySelector('[role="list"]');
-          if (!peopleList) {
-            (window as any).logBot(
-              "Participant list not found; assuming meeting ended."
-            );
-            clearInterval(checkInterval);
-            recorder.disconnect();
-            resolve();
-            return;
-          }
-          const count = peopleList.childElementCount;
-          (window as any).logBot("Participant count: " + count);
-
-          if (count <= 1) {
-            aloneTime += 5;
-            (window as any).logBot(
-              "Bot appears alone for " + aloneTime + " seconds..."
-            );
-          } else {
-            aloneTime = 0;
-          }
-
-          if (aloneTime >= 10 || count === 0) {
-            (window as any).logBot(
-              "Meeting ended or bot alone for too long. Stopping recorder..."
-            );
-            clearInterval(checkInterval);
-            recorder.disconnect();
-            resolve();
-          }
-        }, 5000);
-
-        // Listen for unload and visibility changes
-        window.addEventListener("beforeunload", () => {
-          (window as any).logBot("Page is unloading. Stopping recorder...");
-          clearInterval(checkInterval);
-          recorder.disconnect();
-          resolve();
-        });
-        document.addEventListener("visibilitychange", () => {
-          if (document.visibilityState === "hidden") {
-            (window as any).logBot("Document is hidden. Stopping recorder...");
-            clearInterval(checkInterval);
-            recorder.disconnect();
-            resolve();
-          }
-        });
-      } catch (error: any) {
-        return reject(new Error("[BOT Error] " + error.message));
-      }
-    });
-  }, botConfig);
+      });
+    },
+    { botConfigData: botConfig, whisperUrlForBrowser: whisperLiveUrlFromEnv }
+  ); // Pass arguments to page.evaluate
 };
 
 // Remove the compatibility shim 'recordMeeting' if no longer needed,
