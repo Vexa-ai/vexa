@@ -15,6 +15,7 @@ numpy==2.2.5
 onnxruntime==1.22.0
 packaging==25.0
 protobuf==6.31.0
+python-dotenv==1.1.0
 pyyaml==6.0.2
 requests==2.32.3
 setuptools==80.7.1
