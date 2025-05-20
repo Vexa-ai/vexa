@@ -33,6 +33,8 @@ DOCKER_NETWORK = os.environ.get("DOCKER_NETWORK", "vexa_default")
 BOT_IMAGE_NAME = os.environ.get("BOT_IMAGE", "vexa-bot:latest")
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 
+DEVICE_TYPE = os.environ.get("DEVICE_TYPE", "cuda").lower()
+
 logger = logging.getLogger("bot_manager.docker_utils")
 
 # Global session for requests_unixsocket
@@ -256,12 +258,22 @@ async def start_bot_container(
     cleaned_config_data = {k: v for k, v in bot_config_data.items() if v is not None}
     bot_config_json = json.dumps(cleaned_config_data)
 
-    logger.info(f"Bot config: {bot_config_json}") # Log the full config
+    logger.debug(f"Bot config: {bot_config_json}") # Log the full config
 
+    # Determine WhisperLive URL based on DEVICE_TYPE
+    device_type_env = DEVICE_TYPE
+    whisper_live_url = os.getenv('WHISPER_LIVE_CPU_URL', 'ws://whisperlive-cpu:9092') # Default to CPU URL
+
+    if device_type_env == 'cuda':
+        whisper_live_url = os.getenv('WHISPER_LIVE_GPU_URL', 'ws://whisperlive:9090')
+        logger.debug(f"DEVICE_TYPE is '{device_type_env}'. Using GPU WhisperLive URL: {whisper_live_url}")
+    else:
+        logger.debug(f"DEVICE_TYPE is '{device_type_env}'. Using CPU WhisperLive URL: {whisper_live_url}")
+
+    # These are the environment variables passed to the Node.js process  of the vexa-bot started by your entrypoint.sh.
     environment = [
         f"BOT_CONFIG={bot_config_json}",
-        #  f"WHISPER_LIVE_URL={os.getenv('WHISPER_LIVE_URL', 'ws://whisperlive:9090')}"
-        f"WHISPER_LIVE_URL={os.getenv('WHISPER_LIVE_URL', 'ws://whisperlive-cpu:9092')}",
+        f"WHISPER_LIVE_URL={whisper_live_url}",
         f"LOG_LEVEL={os.getenv('LOG_LEVEL', 'INFO').upper()}",
     ]
 
