@@ -1,5 +1,4 @@
-name: vexa
-# version: '3.8' # Removed obsolete version
+name: vexa_cpu 
 
 services:
   api-gateway:
@@ -7,7 +6,7 @@ services:
       context: .
       dockerfile: services/api-gateway/Dockerfile
     ports:
-      - "8056:8000"
+      - "${API_GATEWAY_HOST_PORT:-8056}:8000"
     environment:
       - ADMIN_API_URL=http://admin-api:8001
       - BOT_MANAGER_URL=http://bot-manager:8080
@@ -30,7 +29,7 @@ services:
       context: .
       dockerfile: services/admin-api/Dockerfile
     ports:
-      - "8057:8001"
+      - "${ADMIN_API_HOST_PORT:-8057}:8001"
     env_file:
       - .env
     environment:
@@ -58,7 +57,7 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - BOT_IMAGE=vexa-bot:latest
-      - DOCKER_NETWORK=vexa_vexa_default
+      - DOCKER_NETWORK=vexa_cpu_vexa_default
       - LOG_LEVEL=DEBUG
       - DB_HOST=postgres
       - DB_PORT=5432
@@ -106,7 +105,7 @@ services:
       - |
         if [ "$${DEVICE_TYPE}" = "cuda" ]; then
           echo 'INFO: DEVICE_TYPE is cuda, starting WhisperLive GPU service.' &&
-          exec python /app/run_server.py --port 9090 --backend faster_whisper -fw /root/.cache/huggingface/hub/models--Systran--faster-whisper-medium/snapshots/08e178d48790749d25932bbc082711ddcfdfbc4f;
+          exec python3 /app/run_server.py --port 9090 --backend faster_whisper -fw /root/.cache/huggingface/hub/models--Systran--faster-whisper-medium/snapshots/08e178d48790749d25932bbc082711ddcfdfbc4f;
         else
           echo "INFO: DEVICE_TYPE is not cuda (it is '$${DEVICE_TYPE}'), WhisperLive GPU service will not start. Sleeping indefinitely." &&
           sleep infinity;
@@ -177,7 +176,7 @@ services:
       - |
         if [ "$${DEVICE_TYPE}" = "cpu" ]; then
           echo 'INFO: DEVICE_TYPE is cpu, starting WhisperLive CPU service.' &&
-          exec python /app/run_server.py --port 9092 --backend faster_whisper --omp_num_threads 4;
+          exec python3 /app/run_server.py --port 9092 --backend faster_whisper -fw /root/.cache/huggingface/hub/models--Systran--faster-whisper-tiny/snapshots/d90ca5fe260221311c53c58e660288d3deb8d356;
         else
           echo "INFO: DEVICE_TYPE is not cpu (it is '$${DEVICE_TYPE}'), WhisperLive CPU service will not start. Sleeping indefinitely." &&
           sleep infinity;
@@ -219,8 +218,8 @@ services:
   traefik:
     image: traefik:v2.10
     ports:
-      - "9090:80" # Expose on host port 9090 (same as the old Nginx)
-      - "8085:8080" # Traefik dashboard
+      - "${TRAEFIK_WEB_HOST_PORT:-9090}:80" # Expose on host port
+      - "${TRAEFIK_DASHBOARD_HOST_PORT:-8085}:8080" # Traefik dashboard
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik.toml:/etc/traefik/traefik.toml:ro
@@ -245,7 +244,7 @@ services:
       context: .
       dockerfile: services/transcription-collector/Dockerfile
     ports:
-      - "8123:8000"
+      - "${TRANSCRIPTION_COLLECTOR_HOST_PORT:-8123}:8000"
     environment:
       - DB_HOST=postgres
       - DB_PORT=5432
@@ -300,7 +299,7 @@ services:
       - vexa_default
     restart: unless-stopped
     ports:
-      - "5438:5432"
+      - "${POSTGRES_HOST_PORT:-5438}:5432"
 
 volumes:
   redis-data:
