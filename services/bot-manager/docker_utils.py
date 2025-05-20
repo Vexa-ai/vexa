@@ -1,4 +1,5 @@
 import requests_unixsocket
+import requests  # Make sure standard requests is imported
 import logging
 import json
 import uuid
@@ -7,6 +8,9 @@ import time
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 import asyncio
+
+# Explicitly import the exceptions from requests
+from requests.exceptions import RequestException, ConnectionError, HTTPError
 
 # Import the Platform class from shared models
 from shared_models.schemas import Platform
@@ -28,6 +32,8 @@ DOCKER_HOST = os.environ.get("DOCKER_HOST", "unix://var/run/docker.sock")
 DOCKER_NETWORK = os.environ.get("DOCKER_NETWORK", "vexa_default")
 BOT_IMAGE_NAME = os.environ.get("BOT_IMAGE", "vexa-bot:latest")
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
+
+DEVICE_TYPE = os.environ.get("DEVICE_TYPE", "cuda").lower()
 
 logger = logging.getLogger("bot_manager.docker_utils")
 
@@ -77,9 +83,9 @@ def get_socket_session(max_retries=3, delay=2):
             except FileNotFoundError as e:
                  # Log the actual exception message which now includes the absolute path
                  logger.warning(f"Attempt {retries+1}/{max_retries}: {e}. Retrying in {delay}s...")
-            except requests_unixsocket.exceptions.ConnectionError as e:
+            except ConnectionError as e:
                  logger.warning(f"Attempt {retries+1}/{max_retries}: Socket connection error ({e}). Is Docker running? Retrying in {delay}s...")
-            except requests_unixsocket.exceptions.HTTPError as e:
+            except HTTPError as e:
                 logger.error(f"Attempt {retries+1}/{max_retries}: HTTP error communicating with Docker socket: {e}", exc_info=True)
                  # Don't retry on HTTP errors like 4xx/5xx immediately, might be persistent issue
                 break
@@ -188,7 +194,7 @@ async def start_bot_container(
             current_bot_count = len(running_bots_info)
             logger.debug(f"[Limit Check] Found {current_bot_count} running bot containers for user {user_id} via socket API")
 
-        except requests_unixsocket.exceptions.RequestException as sock_err:
+        except RequestException as sock_err:
             logger.error(f"[Limit Check] Failed to count running bots via socket API for user {user_id}: {sock_err}", exc_info=True)
             raise HTTPException(status_code=500, detail="Failed to verify current bot count via Docker socket.")
         except Exception as count_err: # Catch other potential errors like JSONDecodeError
@@ -252,11 +258,22 @@ async def start_bot_container(
     cleaned_config_data = {k: v for k, v in bot_config_data.items() if v is not None}
     bot_config_json = json.dumps(cleaned_config_data)
 
-    logger.info(f"Bot config: {bot_config_json}") # Log the full config
+    logger.debug(f"Bot config: {bot_config_json}") # Log the full config
 
+    # Determine WhisperLive URL based on DEVICE_TYPE
+    device_type_env = DEVICE_TYPE
+    whisper_live_url = os.getenv('WHISPER_LIVE_CPU_URL', 'ws://whisperlive-cpu:9092') # Default to CPU URL
+
+    if device_type_env == 'cuda':
+        whisper_live_url = os.getenv('WHISPER_LIVE_GPU_URL', 'ws://whisperlive:9090')
+        logger.debug(f"DEVICE_TYPE is '{device_type_env}'. Using GPU WhisperLive URL: {whisper_live_url}")
+    else:
+        logger.debug(f"DEVICE_TYPE is '{device_type_env}'. Using CPU WhisperLive URL: {whisper_live_url}")
+
+    # These are the environment variables passed to the Node.js process  of the vexa-bot started by your entrypoint.sh.
     environment = [
         f"BOT_CONFIG={bot_config_json}",
-        f"WHISPER_LIVE_URL={os.getenv('WHISPER_LIVE_URL', 'ws://whisperlive:9090')}",
+        f"WHISPER_LIVE_URL={whisper_live_url}",
         f"LOG_LEVEL={os.getenv('LOG_LEVEL', 'INFO').upper()}",
     ]
 
@@ -312,7 +329,7 @@ async def start_bot_container(
 
         return container_id, connection_id # Return both values
 
-    except requests_unixsocket.exceptions.RequestException as e:
+    except RequestException as e:
         logger.error(f"HTTP error communicating with Docker socket: {e}", exc_info=True)
     except Exception as e:
         logger.error(f"Unexpected error starting container via socket: {e}", exc_info=True)
@@ -362,7 +379,7 @@ def stop_bot_container(container_id: str) -> bool:
             response.raise_for_status()
             return False # Should not be reached if raise_for_status() works
 
-    except requests_unixsocket.exceptions.RequestException as e:
+    except RequestException as e:
         # Handle 404 specifically if raise_for_status() doesn't catch it as expected
         if hasattr(e, 'response') and e.response is not None and e.response.status_code == 404:
             logger.warning(f"Container {container_id} not found (exception check), assuming already stopped/removed.")
@@ -405,7 +422,7 @@ async def get_running_bots_status(user_id: int) -> List[Dict[str, Any]]:
         running_containers = response.json()
         logger.info(f"[Bot Status] Found {len(running_containers)} running containers for user {user_id}")
 
-    except requests_unixsocket.exceptions.RequestException as sock_err:
+    except RequestException as sock_err:
         logger.error(f"[Bot Status] Failed to list containers via socket API for user {user_id}: {sock_err}", exc_info=True)
         return [] # Return empty on error listing containers
     except Exception as e:

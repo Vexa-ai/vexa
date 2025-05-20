@@ -128,3 +128,5 @@ docker-volumes/
 
 
 hub/
+
+*.mp3

@@ -1,0 +1,49 @@
+FROM python:3.10-slim
+
+# Set DEBIAN_FRONTEND to noninteractive to avoid prompts during apt-get install
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsndfile1 \
+    ffmpeg \
+    wget \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV OMP_NUM_THREADS=4
+
+# Set working directory
+WORKDIR /app
+
+# Copy only the requirements file first
+COPY services/WhisperLive/requirements/server.txt /tmp/requirements.txt
+
+# Remove GPU-specific dependencies from requirements.txt
+RUN sed -i '/openai-whisper/d' /tmp/requirements.txt || true \
+    && sed -i '/onnxruntime==/d' /tmp/requirements.txt || true
+
+# Install CPU-specific packages
+RUN pip install --no-cache-dir -r /tmp/requirements.txt \
+    && pip install --no-cache-dir onnxruntime \
+    && pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# Install CPU-optimized faster-whisper
+RUN pip install --no-cache-dir 'faster-whisper[cpu]'
+
+# Now copy the application code
+COPY services/WhisperLive/ /app/
+
+# Copy our entrypoint script
+COPY services/WhisperLive/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Set it as the entrypoint
+ENTRYPOINT ["/entrypoint.sh"]
+
+# Default command to run the server with faster_whisper backend
+# Use a small model size and more CPU threads for better performance
+CMD ["--port", "9090", "--backend", "faster_whisper", "--omp_num_threads", "4"] 
