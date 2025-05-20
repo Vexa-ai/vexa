@@ -13,7 +13,7 @@ ADMIN_API_TOKEN=SUPER_SECRET_ADMIN_TOKEN
 LANGUAGE_DETECTION_SEGMENTS=10
 VAD_FILTER_THRESHOLD=0.5
 WHISPER_MODEL_SIZE=tiny
-COMPUTE_TYPE=cpu # or gpu
+DEVICE_TYPE=cpu # or cuda
 ```
 
 ### Whisper model download & configuration
@@ -33,7 +33,7 @@ python download_model.py
 ```
 
 - Configure the size of the model to use in `.env` (e.g., `WHISPER_MODEL_SIZE=base`). `tiny`, `base`, `small`, `medium`, `large-v3` are available. `tiny` is recommended for CPU.
-- Configure the compute type to use in `.env` (e.g., `COMPUTE_TYPE=cpu` or `COMPUTE_TYPE=cuda`).
+- Configure the compute device type to use in `.env` (e.g., `DEVICE_TYPE=cpu` or `DEVICE_TYPE=cuda`).
 
 ### Building Required Components
 
