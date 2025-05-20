@@ -12,7 +12,28 @@ Before starting, ensure your `.env` file includes at least:
 ADMIN_API_TOKEN=SUPER_SECRET_ADMIN_TOKEN
 LANGUAGE_DETECTION_SEGMENTS=10
 VAD_FILTER_THRESHOLD=0.5
+WHISPER_MODEL_SIZE=tiny
+COMPUTE_TYPE=cpu # or gpu
 ```
+
+### Whisper model download & configuration
+
+- Create a virtual environment and install dependencies for the whisper model:
+
+```bash
+python -m venv whisper-env
+source whisper-env/bin/activate
+pip install -r requirements.txt
+```
+
+- Download the whisper model:
+
+```bash
+python download_model.py
+```
+
+- Configure the size of the model to use in `.env` (e.g., `WHISPER_MODEL_SIZE=base`). `tiny`, `base`, `small`, `medium`, `large-v3` are available. `tiny` is recommended for CPU.
+- Configure the compute type to use in `.env` (e.g., `COMPUTE_TYPE=cpu` or `COMPUTE_TYPE=cuda`).
 
 ### Building Required Components
 
