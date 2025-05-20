@@ -8,10 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 from typing import List # Import List for response model
+from datetime import datetime # Import datetime
+from sqlalchemy import func
+from pydantic import BaseModel
 
 # Import shared models and schemas
-from shared_models.models import User, APIToken, Base # Import Base for init_db
-from shared_models.schemas import UserCreate, UserResponse, TokenResponse, UserDetailResponse, UserBase, UserUpdate # Import UserBase for update and UserUpdate schema
+from shared_models.models import User, APIToken, Base, Meeting # Import Base for init_db and Meeting
+from shared_models.schemas import UserCreate, UserResponse, TokenResponse, UserDetailResponse, UserBase, UserUpdate, MeetingResponse # Import UserBase for update and UserUpdate schema
 
 # Database utilities (needs to be created)
 from shared_models.database import get_db, init_db # New import
@@ -25,6 +28,14 @@ logger = logging.getLogger("admin_api")
 
 # App initialization
 app = FastAPI(title="Vexa Admin API")
+
+# --- Pydantic Schemas for new endpoint ---
+class MeetingUserStat(MeetingResponse): # Inherit from MeetingResponse to get meeting fields
+    user: UserResponse # Embed UserResponse
+
+class PaginatedMeetingUserStatResponse(BaseModel):
+    total: int
+    items: List[MeetingUserStat]
 
 # Security - Reuse logic from bot-manager/auth.py for admin token verification
 API_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", auto_error=False) # Use a distinct header
@@ -213,6 +224,49 @@ async def delete_token(token_id: int, db: AsyncSession = Depends(get_db)):
     logger.info(f"Admin deleted token ID: {token_id}")
     # No body needed for 204 response
     return 
+
+# --- Usage Stats Endpoints ---
+@router.get("/stats/meetings-users",
+            response_model=PaginatedMeetingUserStatResponse,
+            summary="Get paginated list of meetings joined with users")
+async def list_meetings_with_users(
+    skip: int = 0, 
+    limit: int = 100, 
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Retrieves a paginated list of all meetings, joined with their associated user data.
+    """
+    # Query to count total items
+    count_query = select(func.count(Meeting.id))
+    total_result = await db.execute(count_query)
+    total = total_result.scalar_one_or_none() or 0
+
+    # Query to fetch items with join and pagination
+    query = (
+        select(Meeting)
+        .join(User, Meeting.user_id == User.id)
+        .options(selectinload(Meeting.user)) # Eager load the user relationship
+        .order_by(Meeting.created_at.desc()) # Example ordering
+        .offset(skip)
+        .limit(limit)
+    )
+    result = await db.execute(query)
+    meetings = result.scalars().all()
+
+    # Prepare the response items
+    response_items = []
+    for meeting in meetings:
+        # The user should be loaded due to selectinload
+        # We construct MeetingUserStat which expects a UserResponse for the 'user' field
+        user_response = UserResponse.from_orm(meeting.user) if meeting.user else None
+        meeting_user_stat = MeetingUserStat(
+            **MeetingResponse.from_orm(meeting).dict(), # Populate Meeting fields
+            user=user_response # Add the UserResponse
+        )
+        response_items.append(meeting_user_stat)
+        
+    return PaginatedMeetingUserStatResponse(total=total, items=response_items)
 
 # TODO: Add endpoints for GET /users/{id}, DELETE /users/{id}
 
