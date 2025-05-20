@@ -1,8 +1,30 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 
 // --- Configuration ---
-// const WEBSOCKET_URL = "ws://localhost:9090"; // GPU version
-const WEBSOCKET_URL = "ws://localhost:9092"; // Use ws:// or wss:// as appropriate
+const deviceType = import.meta.env.VITE_DEVICE_TYPE || "cuda"; // Default to CPU if not set
+let WEBSOCKET_URL;
+
+if (deviceType === "cuda") {
+  WEBSOCKET_URL = `ws://localhost:9090`;
+} else {
+  WEBSOCKET_URL = `ws://localhost:9092`;
+}
+
+if (!import.meta.env.VITE_DEVICE_TYPE) {
+  console.warn(
+    "VITE_DEVICE_TYPE is not set for the frontend! Defaulting to CPU mode (",
+    WEBSOCKET_URL,
+    ")"
+  );
+} else {
+  console.log(
+    "Frontend DEVICE_TYPE is:",
+    deviceType,
+    "WebSocket URL:",
+    WEBSOCKET_URL
+  );
+}
+
 const TARGET_SAMPLE_RATE = 16000;
 const SCRIPT_PROCESSOR_BUFFER_SIZE = 4096; // Adjust buffer size as needed (powers of 2)
 
