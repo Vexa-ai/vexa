@@ -66,6 +66,9 @@ services:
       - DB_USER=postgres
       - DB_PASSWORD=postgres
       - DOCKER_HOST=unix://var/run/docker.sock
+      - DEVICE_TYPE=${DEVICE_TYPE}
+      - WHISPER_LIVE_GPU_URL=ws://whisperlive:9090
+      - WHISPER_LIVE_CPU_URL=ws://whisperlive-cpu:9092
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     init: true
@@ -96,16 +99,18 @@ services:
       - REDIS_STREAM_NAME=transcription_segments
       - LANGUAGE_DETECTION_SEGMENTS=${LANGUAGE_DETECTION_SEGMENTS}
       - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD}
+      - DEVICE_TYPE=${DEVICE_TYPE}
+    entrypoint: /bin/sh
     command:
-      [
-        "--port",
-        "9090",
-        "--backend",
-        "faster_whisper",
-        "-fw",
-        "/root/.cache/huggingface/hub/models--Systran--faster-whisper-medium/snapshots/08e178d48790749d25932bbc082711ddcfdfbc4f",
-      ]
-    # Expose 9091 port for health checks (9090 + 1)
+      - "-c"
+      - |
+        if [ "$${DEVICE_TYPE}" = "cuda" ]; then
+          echo 'INFO: DEVICE_TYPE is cuda, starting WhisperLive GPU service.' &&
+          exec python /app/run_server.py --port 9090 --backend faster_whisper -fw /root/.cache/huggingface/hub/models--Systran--faster-whisper-medium/snapshots/08e178d48790749d25932bbc082711ddcfdfbc4f;
+        else
+          echo "INFO: DEVICE_TYPE is not cuda (it is '$${DEVICE_TYPE}'), WhisperLive GPU service will not start. Sleeping indefinitely." &&
+          sleep infinity;
+        fi
     expose:
       - "9090" #use for transcription web socket
       - "9091" #use for health check
@@ -115,7 +120,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["3"]
+              device_ids: ["3"] # Ensure this is configurable or correct for your setup
               capabilities: [gpu]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9091/health"]
@@ -149,6 +154,7 @@ services:
 
   # CPU version of WhisperLive for users without GPU
   whisperlive-cpu:
+    profiles: ["cpu"]
     build:
       context: .
       dockerfile: services/WhisperLive/Dockerfile.cpu
@@ -164,16 +170,18 @@ services:
       - REDIS_STREAM_NAME=transcription_segments
       - LANGUAGE_DETECTION_SEGMENTS=10
       - VAD_FILTER_THRESHOLD=0.5
+      - DEVICE_TYPE=${DEVICE_TYPE}
+    entrypoint: /bin/sh
     command:
-      [
-        "--port",
-        "9092",
-        "--backend",
-        "faster_whisper",
-        "--omp_num_threads",
-        "4",
-      ]
-    # Use a different port than the GPU version
+      - "-c"
+      - |
+        if [ "$${DEVICE_TYPE}" = "cpu" ]; then
+          echo 'INFO: DEVICE_TYPE is cpu, starting WhisperLive CPU service.' &&
+          exec python /app/run_server.py --port 9092 --backend faster_whisper --omp_num_threads 4;
+        else
+          echo "INFO: DEVICE_TYPE is not cpu (it is '$${DEVICE_TYPE}'), WhisperLive CPU service will not start. Sleeping indefinitely." &&
+          sleep infinity;
+        fi
     expose:
       - "9092" #use for transcription web socket
       - "9093" #use for health check
@@ -191,7 +199,6 @@ services:
       - vexa_default
       - whispernet
     # Don't auto-start CPU version, users can manually start it
-    profiles: ["cpu"]
     restart: unless-stopped
     logging:
       driver: "json-file"
