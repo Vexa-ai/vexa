@@ -1,37 +1,53 @@
-# Vexa - Local Deployment and Testing Guide
+# Quick start: Local Deployment and Testing
 
-This document provides concise instructions for setting up, running, and testing the Vexa system locally using Docker Compose and Make.
+Instructions for setting up, running, and testing the Vexa system locally using Docker Compose and Make.
 
 
 ### Quick Start with Make
 
 
 1.  **For CPU (Tiny Model, Slower Performance - Good for local tests/development):**
+   this will use 'whisper tiny' model, which can run on CPU.
     ```bash
     make all
     ```
     This command (among other things) uses `env-example.cpu` defaults for `.env` if not present.
 
 2.  **For GPU (Medium Model, Faster Performance - Requires NVIDIA GPU & Toolkit):**
+    this will use 'whisper medium' model, which is good enough to run on GPU.
     ```bash
     make all TARGET=gpu
     ```
     This uses `env-example.gpu` defaults for `.env` if not present.
 
 
-### Script for easy first testing
+### Testing the deployment
 
-Once services are running, test with `./run_vexa_interaction.sh` (ensure it's executable: `chmod +x run_vexa_interaction.sh`).
-- It reads `ADMIN_API_TOKEN` and **host ports** from `vexa_cpu/.env`.
-- Guides through user/token creation, bot dispatch to a Google Meet ID.
-- **Admit the bot** when prompted by the script (10s countdown).
-- `Ctrl+C` stops the script and bot.
+```bash
+make test
+```
 
-### API Documentation
+What to expect during testing:
+1. Test user and its token are created
+2. You will be asked for a meeting ID
+3. Provide the `xxx-xxxx-xxx` from your running meeting (`https://meet.google.com/xxx-xxxx-xxx`)
+4. Bot is sent to the meeting you provided 
+5. Wait about 10 sec for the bot to join the meeting
+6. Let the bot into the conference
+7. Start speaking
+8. Wait for the transcripts to appear. 
+ 
+The transcription latency can is higher and quality might be lower  when running locally in CPU mode, since you don't have a device to run bigger model quickly. But this is usually enough for development and testing
 
-API docs (Swagger/OpenAPI) are typically available at (ports are configurable in `.env`):
-- Main API: `http://localhost:${API_GATEWAY_HOST_PORT:-8056}/docs`
-- Admin API: `http://localhost:${ADMIN_API_HOST_PORT:-8057}/docs`
+
+### API Documentation that is running behind the hood
+
+API docs (Swagger/OpenAPI) are available at (ports are configurable in `.env`):
+
+```
+Main API docs:  http://localhost:8056/docs
+Admin API docs: http://localhost:8057/docs
+```
 
 **Managing Services:**
 - `make ps`: Show container status.

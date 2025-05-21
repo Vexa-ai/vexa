@@ -1,4 +1,4 @@
-.PHONY: all setup submodules env force-env download-model build-bot-image build up down clean ps logs
+.PHONY: all setup submodules env force-env download-model build-bot-image build up down clean ps logs test
 
 # Default target: Sets up everything and starts the services
 all: setup build up
@@ -208,3 +208,21 @@ ps: check_docker
 # Tail logs for all services
 logs:
 	@docker compose logs -f
+
+# Run the interaction test script
+test: check_docker
+	@echo "---> Running test script..."
+	@echo "---> API Documentation URLs:"
+	@if [ -f .env ]; then \
+		API_PORT=$$(grep -E '^[[:space:]]*API_GATEWAY_HOST_PORT=' .env | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//'); \
+		ADMIN_PORT=$$(grep -E '^[[:space:]]*ADMIN_API_HOST_PORT=' .env | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//'); \
+		[ -z "$$API_PORT" ] && API_PORT=8056; \
+		[ -z "$$ADMIN_PORT" ] && ADMIN_PORT=8057; \
+		echo "    Main API:  http://localhost:$$API_PORT/docs"; \
+		echo "    Admin API: http://localhost:$$ADMIN_PORT/docs"; \
+	else \
+		echo "    Main API:  http://localhost:8056/docs"; \
+		echo "    Admin API: http://localhost:8057/docs"; \
+	fi
+	@chmod +x run_vexa_interaction.sh
+	@./run_vexa_interaction.sh
