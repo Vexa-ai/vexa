@@ -1,4 +1,4 @@
-name: vexa_cpu 
+name: vexa
 
 services:
   api-gateway:
@@ -57,7 +57,7 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - BOT_IMAGE_NAME=${BOT_IMAGE_NAME:-vexa-bot:dev}
-      - DOCKER_NETWORK=vexa_cpu_vexa_default
+      - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa_default
       - LOG_LEVEL=DEBUG
       - DB_HOST=postgres
       - DB_PORT=5432
@@ -81,6 +81,7 @@ services:
     restart: unless-stopped
 
   whisperlive:
+    profiles: ["gpu"]
     build:
       context: .
       dockerfile: services/WhisperLive/Dockerfile.project

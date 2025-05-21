@@ -3,20 +3,33 @@
 # Default target: Sets up everything and starts the services
 all: setup build up
 
-# Target to perform all initial setup steps
-setup: submodules env download-model build-bot-image
-	@echo "Setup complete. Please ensure you have edited the .env file if necessary."
-	@echo "To specify a target for .env generation (cpu or gpu), run 'make env TARGET=cpu' or 'make env TARGET=gpu' first, then 'make setup'."
-	@echo "If no TARGET is specified for 'make setup', it will default to 'make env TARGET=cpu'."
+# Target to set up only the environment without Docker
+setup-env: submodules env download-model
+	@echo "Environment setup complete."
+	@echo "To specify a target for .env generation (cpu or gpu), run 'make env TARGET=cpu' or 'make env TARGET=gpu' first, then 'make setup-env'."
+	@echo "If no TARGET is specified, it defaults to 'make env TARGET=cpu'."
 	@echo "NOTE: If your .env file already exists, it will be preserved. To force recreation, use 'make force-env TARGET=cpu/gpu'."
 
+# Target to perform all initial setup steps
+setup: setup-env build-bot-image
+	@echo "Setup complete."
+
 # Initialize and update Git submodules
-# submodules:
-# 	@echo "---> Initializing and updating Git submodules..."
-# 	@git submodule update --init --recursive
+submodules:
+	@echo "---> Initializing and updating Git submodules..."
+	@git submodule update --init --recursive
 
 # Default bot image tag if not specified in .env
 BOT_IMAGE_NAME ?= vexa-bot:dev
+
+# Check if Docker daemon is running
+check_docker:
+	@echo "---> Checking if Docker is running..."
+	@if ! docker info > /dev/null 2>&1; then \
+		echo "ERROR: Docker is not running. Please start Docker Desktop or Docker daemon first."; \
+		exit 1; \
+	fi
+	@echo "---> Docker is running."
 
 # Include .env file if it exists for environment variables 
 -include .env
@@ -135,7 +148,7 @@ download-model:
 
 # Build the standalone vexa-bot image
 # Uses BOT_IMAGE_NAME from .env if available, otherwise falls back to default
-build-bot-image:
+build-bot-image: check_docker
 	@if [ -f .env ]; then \
 		ENV_BOT_IMAGE_NAME=$$(grep BOT_IMAGE_NAME .env | cut -d= -f2); \
 		if [ -n "$$ENV_BOT_IMAGE_NAME" ]; then \
@@ -151,42 +164,45 @@ build-bot-image:
 	fi
 
 # Build Docker Compose service images
-build:
+build: check_docker
 	@echo "---> Building Docker Compose services..."
 	@if [ "$(TARGET)" = "cpu" ]; then \
 		echo "---> Building with 'cpu' profile (includes whisperlive-cpu)..."; \
 		docker compose --profile cpu build; \
+	elif [ "$(TARGET)" = "gpu" ]; then \
+		echo "---> Building with 'gpu' profile (includes whisperlive GPU)..."; \
+		docker compose --profile gpu build; \
 	else \
-		echo "---> Building services. If you intend to use GPU and only GPU-specific services, ensure they are not tied to a profile not being activated."; \
-		docker compose build; \
+		echo "---> TARGET not explicitly set, defaulting to CPU mode. 'whisperlive' (GPU) will not be built."; \
+		docker compose --profile cpu build; \
 	fi
 
 # Start services in detached mode
-up:
+up: check_docker
 	@echo "---> Starting Docker Compose services..."
 	@if [ "$(TARGET)" = "cpu" ]; then \
 		echo "---> Activating 'cpu' profile to start whisperlive-cpu along with other services..."; \
 		docker compose --profile cpu up -d; \
 	elif [ "$(TARGET)" = "gpu" ]; then \
 		echo "---> Starting services for GPU. This will start 'whisperlive' (for GPU) and other default services. 'whisperlive-cpu' (profile=cpu) will not be started."; \
-		docker compose up -d; \
+		docker compose --profile gpu up -d; \
 	else \
-		echo "---> TARGET not explicitly cpu or gpu. Starting default services. 'whisperlive-cpu' (profile=cpu) may not start."; \
-		docker compose up -d; \
+		echo "---> TARGET not explicitly set, defaulting to CPU mode. 'whisperlive' (GPU) will not be started."; \
+		docker compose --profile cpu up -d; \
 	fi
 
 # Stop services
-down:
+down: check_docker
 	@echo "---> Stopping Docker Compose services..."
 	@docker compose down
 
 # Stop services and remove volumes
-clean:
+clean: check_docker
 	@echo "---> Stopping Docker Compose services and removing volumes..."
 	@docker compose down -v
 
 # Show container status
-ps:
+ps: check_docker
 	@docker compose ps
 
 # Tail logs for all services
