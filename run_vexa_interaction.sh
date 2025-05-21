@@ -155,7 +155,7 @@ if [[ "$JQ_INSTALLED" == true ]]; then
 else
     echo_info "Create user raw response: $CREATE_USER_RESPONSE"
     # Basic parsing if jq is not available (less reliable)
-    USER_ID=$(echo "$CREATE_USER_RESPONSE" | grep -o '"id": *[0-9]*' | awk -F': ' '{print $2}')
+    USER_ID=$(echo "$CREATE_USER_RESPONSE" | grep -o '"id":[0-9]*' | grep -o '[0-9]*')
     if [[ -z "$USER_ID" ]]; then
         echo_error "Failed to parse User ID from response. Ensure user was created via Admin Panel or install jq."
         exit 1
@@ -186,9 +186,9 @@ else
     # Basic parsing if jq is not available (less reliable)
     # Attempt to find a field named 'token' or 'api_key' as a fallback for non-jq users.
     # Prefer 'token' if both somehow existed, but focus on the more likely one based on recent findings.
-    USER_API_KEY=$(echo "$CREATE_TOKEN_RESPONSE" | grep -o '"token": *"[^"]*"' | awk -F'"' '{print $4}')
+    USER_API_KEY=$(echo "$CREATE_TOKEN_RESPONSE" | grep -o '"token":"[^"]*"' | grep -o ':"[^"]*"' | sed 's/:"//;s/"$//')
     if [[ -z "$USER_API_KEY" ]]; then # Fallback if 'token' field wasn't found, try 'api_key'
-        USER_API_KEY=$(echo "$CREATE_TOKEN_RESPONSE" | grep -o '"api_key": *"[^"]*"' | awk -F'"' '{print $4}')
+        USER_API_KEY=$(echo "$CREATE_TOKEN_RESPONSE" | grep -o '"api_key":"[^"]*"' | grep -o ':"[^"]*"' | sed 's/:"//;s/"$//')
     fi
     USER_API_KEY_FOR_STOP="$USER_API_KEY"
     if [[ -z "$USER_API_KEY" ]]; then
