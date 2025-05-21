@@ -56,7 +56,7 @@ services:
       dockerfile: services/bot-manager/Dockerfile
     environment:
       - REDIS_URL=redis://redis:6379/0
-      - BOT_IMAGE=vexa-bot:latest
+      - BOT_IMAGE_NAME=${BOT_IMAGE_NAME:-vexa-bot:dev}
       - DOCKER_NETWORK=vexa_cpu_vexa_default
       - LOG_LEVEL=DEBUG
       - DB_HOST=postgres

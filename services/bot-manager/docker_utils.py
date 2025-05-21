@@ -30,7 +30,7 @@ from shared_models.models import User, MeetingSession
 # Assuming these are still needed from config or env
 DOCKER_HOST = os.environ.get("DOCKER_HOST", "unix://var/run/docker.sock")
 DOCKER_NETWORK = os.environ.get("DOCKER_NETWORK", "vexa_default")
-BOT_IMAGE_NAME = os.environ.get("BOT_IMAGE", "vexa-bot:latest")
+BOT_IMAGE_NAME = os.environ.get("BOT_IMAGE_NAME", "vexa-bot:dev")
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 
 DEVICE_TYPE = os.environ.get("DEVICE_TYPE", "cuda").lower()
