@@ -33,16 +33,6 @@ For instance, the **Vexa Example Client** (see [Projects Built with Vexa](BUILT-
 
 Furthermore, with our **n8n integration** (see [Projects Built with Vexa](BUILT-WITH-VEXA.md) for examples), you can create incredibly complex workflows with no code, leveraging real-time transcription from Google Meet (with support for other platforms coming soon).
 
-
-## Public Hosted API
-
-> 🔑 Get your API key at [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo) to try Vexa instantly. 
-
-> 🚀 Read [DEPLOYMENT.md](DEPLOYMENT.md) for self-hosting and local run with single `make all` on CPU even on laptop or on your GPU server.
-
-The Vexa API is **publicly available** at [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo) with **self-service access** - get your API key in just 3 clicks and have everything running in under 5 minutes.
-
-
 <p align="center">
   <img src="assets/simplified_flow.png" alt="Vexa Architecture Flow" width="100%"/>
 </p>
@@ -54,6 +44,16 @@ The Vexa API is **publicly available** at [www.vexa.ai](https://www.vexa.ai/?utm
 - [WhisperLive](./services/WhisperLive): Real-time audio transcription service
 - [transcription-collector](./services/transcription-collector): Processes and stores transcription segments
 - [Database models](./libs/shared-models/shared_models/models.py): Data structures for storing meeting information
+
+
+
+## Public Hosted API
+
+> 🔑 Get your API key at [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo) to try Vexa instantly. 
+
+> 🚀 Read [DEPLOYMENT.md](DEPLOYMENT.md) for self-hosting and local run with single `make all` on CPU even on laptop or on your GPU server.
+
+The Vexa API is **publicly available** at [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo) with **self-service access** - get your API key in just 3 clicks and have everything running in under 5 minutes.
 
 
 ### Key features in this release:
