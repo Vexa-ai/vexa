@@ -102,63 +102,53 @@ curl -H "X-API-Key: YOUR_CLIENT_API_KEY" \
 
 ## System Architecture
 
-Here's a simplified diagram illustrating the relationships and interactions between Vexa's services. The service nodes in the diagram are clickable and link to their respective directories within the `services` folder.
+Below is a simplified diagram showing the core transcription flow in Vexa:
 
 ```mermaid
-graph TD
-    subgraph "External"
-        User[User/Client]
-    end
-
-    subgraph "Core Services (vexa_default network)"
-        APIGW["<a href='./services/api-gateway'>api-gateway</a>"]
-        ADMIN_API["<a href='./services/admin-api'>admin-api</a>"]
-        BOT_MGR["<a href='./services/bot-manager'>bot-manager</a>"]
-        TRANS_COL["<a href='./services/transcription-collector'>transcription-collector</a>"]
-        REDIS_DB[("Redis")]
-        POSTGRES_SQL_DB[("PostgreSQL")]
-
-        User -->|HTTP/S API Calls| APIGW
-
-        APIGW -->|Routes to| ADMIN_API
-        APIGW -->|Routes to| BOT_MGR
-        APIGW -->|Retrieves transcripts via| TRANS_COL
-
-        ADMIN_API -->|Stores/Retrieves data| POSTGRES_SQL_DB
-        ADMIN_API -->|Uses for caching/tasks| REDIS_DB
-
-        BOT_MGR -->|Manages bot lifecycle, stores metadata| POSTGRES_SQL_DB
-        BOT_MGR -->|Uses for state/queue| REDIS_DB
-        BOT_MGR -.->|Spawns/Manages| VEXA_BOT_CONTAINERS["<a href='./services/vexa-bot'>vexa-bot (Containers)</a>"]
-
-        TRANS_COL -->|Stores final transcripts| POSTGRES_SQL_DB
-        TRANS_COL -->|Consumes 'transcription_segments' stream from| REDIS_DB
-    end
-
-    subgraph "Transcription & Processing (vexa_default & whispernet networks)"
-        VEXA_BOT_CONTAINERS -->|Streams audio to| WL_GPU["<a href='./services/WhisperLive'>WhisperLive GPU</a>"]
-        VEXA_BOT_CONTAINERS -->|Streams audio to| WL_CPU["<a href='./services/WhisperLive'>WhisperLive CPU</a>"]
-
-        WL_GPU -->|Publishes to 'transcription_segments' stream in| REDIS_DB
-        WL_CPU -->|Publishes to 'transcription_segments' stream in| REDIS_DB
-
-        TRAEFIK["traefik (Reverse Proxy)"]
-        TRAEFIK -->|Routes to whisperlive.localhost| WL_GPU
-        TRAEFIK -->|Routes to whisperlive-cpu.localhost| WL_CPU
-    end
-
+graph LR
+    User([User/Client])
+    APIGW[api-gateway]
+    BOT_MGR[bot-manager]
+    VEXA_BOT[vexa-bot]
+    WHISPER[WhisperLive]
+    TRANS_COL[transcription-collector]
+    DB[(PostgreSQL DB)]
+    
+    User -->|"POST /bots"| APIGW
+    APIGW -->|"Create bot"| BOT_MGR
+    BOT_MGR -->|"Launch container"| VEXA_BOT
+    VEXA_BOT -->|"Stream audio via WebSocket"| WHISPER
+    WHISPER -->|"Redis message queue"| TRANS_COL
+    TRANS_COL -->|"Store"| DB
+    User -->|"GET /transcripts"| APIGW
+    APIGW -->|"Fetch transcripts"| DB
+    
+    classDef user fill:#F9E79F,stroke:#F1C40F,stroke-width:2px,color:black;
     classDef service fill:#D6EAF8,stroke:#2E86C1,stroke-width:2px,color:black;
-    class APIGW,ADMIN_API,BOT_MGR,TRANS_COL,WL_GPU,WL_CPU,VEXA_BOT_CONTAINERS service;
-
-    classDef datastore fill:#E8DAEF,stroke:#884EA0,stroke-width:2px,color:black;
-    class REDIS_DB,POSTGRES_SQL_DB datastore;
-
-    classDef external fill:#F9E79F,stroke:#F1C40F,stroke-width:2px,color:black;
-    class User external;
-
-    classDef utility fill:#D5F5E3,stroke:#2ECC71,stroke-width:2px,color:black;
-    class TRAEFIK utility;
+    classDef database fill:#E8DAEF,stroke:#884EA0,stroke-width:2px,color:black;
+    
+    class User user;
+    class APIGW,BOT_MGR,VEXA_BOT,WHISPER,TRANS_COL service;
+    class DB database;
 ```
+
+The diagram illustrates the key components and data flow:
+
+1. User sends a POST request to `/bots` to deploy a bot to a meeting
+2. API Gateway routes the request to Bot Manager
+3. Bot Manager launches a dedicated vexa-bot container for the meeting
+4. Vexa Bot streams audio to WhisperLive via WebSocket
+5. WhisperLive processes audio and pushes transcription segments to Redis
+6. Transcription Collector consumes and processes segments, storing them in PostgreSQL
+7. User requests real-time transcripts via GET `/transcripts`
+8. API Gateway retrieves and returns the transcripts to the user
+
+For more details on each component:
+- [api-gateway](./services/api-gateway): Routes API requests to appropriate services
+- [bot-manager](./services/bot-manager): Handles bot lifecycle management
+- [vexa-bot](./services/vexa-bot): The bot that joins meetings and captures audio
+- [WhisperLive](./services/WhisperLive): Real-time audio transcription service
+- [transcription-collector](./services/transcription-collector): Processes and stores transcription segments
 
 ## Projects Built with Vexa
 
