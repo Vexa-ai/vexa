@@ -104,33 +104,9 @@ curl -H "X-API-Key: YOUR_CLIENT_API_KEY" \
 
 Below is a simplified diagram showing the core transcription flow in Vexa:
 
-```mermaid
-graph LR
-    User([User/Client])
-    APIGW[api-gateway]
-    BOT_MGR[bot-manager]
-    VEXA_BOT[vexa-bot]
-    WHISPER[WhisperLive]
-    TRANS_COL[transcription-collector]
-    DB[(PostgreSQL DB)]
-    
-    User -->|"POST /bots"| APIGW
-    APIGW -->|"Create bot"| BOT_MGR
-    BOT_MGR -->|"Launch container"| VEXA_BOT
-    VEXA_BOT -->|"Stream audio via WebSocket"| WHISPER
-    WHISPER -->|"Redis message queue"| TRANS_COL
-    TRANS_COL -->|"Store"| DB
-    User -->|"GET /transcripts"| APIGW
-    APIGW -->|"Fetch transcripts"| DB
-    
-    classDef user fill:#F9E79F,stroke:#F1C40F,stroke-width:2px,color:black;
-    classDef service fill:#D6EAF8,stroke:#2E86C1,stroke-width:2px,color:black;
-    classDef database fill:#E8DAEF,stroke:#884EA0,stroke-width:2px,color:black;
-    
-    class User user;
-    class APIGW,BOT_MGR,VEXA_BOT,WHISPER,TRANS_COL service;
-    class DB database;
-```
+<p align="center">
+  <img src="assets/architecture-flow.svg" alt="Vexa Architecture Flow" width="100%"/>
+</p>
 
 The diagram illustrates the key components and data flow:
 
@@ -143,7 +119,7 @@ The diagram illustrates the key components and data flow:
 7. User requests real-time transcripts via GET `/transcripts`
 8. API Gateway retrieves and returns the transcripts to the user
 
-For more details on each component:
+Each component in the diagram is clickable and links to its corresponding directory in the codebase:
 - [api-gateway](./services/api-gateway): Routes API requests to appropriate services
 - [bot-manager](./services/bot-manager): Handles bot lifecycle management
 - [vexa-bot](./services/vexa-bot): The bot that joins meetings and captures audio
