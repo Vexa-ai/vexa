@@ -111,7 +111,6 @@ Here's a simplified diagram illustrating the relationships and interactions betw
 
 **Note on Clickability**: GitHub's Markdown renderer has limitations with inline HTML, and complex elements like `<map>` may not always function as interactive clickable areas.
 
-```html
 <img src="assets/vexa_architecture_diagram.png" usemap="#vexa-architecture-map" alt="Vexa System Architecture Diagram">
 <map name="vexa-architecture-map">
   <area shape="rect" coords="10,10,100,50" href="./services/api-gateway" alt="API Gateway" title="API Gateway service">
@@ -126,7 +125,6 @@ Here's a simplified diagram illustrating the relationships and interactions betw
     The href attributes should point to the relevant service directories.
   -->
 </map>
-```
 
 ## Projects Built with Vexa
 
