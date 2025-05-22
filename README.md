@@ -102,29 +102,63 @@ curl -H "X-API-Key: YOUR_CLIENT_API_KEY" \
 
 ## System Architecture
 
-Here's a simplified diagram illustrating the relationships and interactions between Vexa's services. The diagram below is intended to be an HTML image map.
+Here's a simplified diagram illustrating the relationships and interactions between Vexa's services. The service nodes in the diagram are clickable and link to their respective directories within the `services` folder.
 
-**Important Steps for You:**
-1.  **Create the Diagram Image**: Generate an image of the system architecture (e.g., using a diagramming tool or by screenshotting a rendered Mermaid diagram) and save it, for example, as `assets/vexa_architecture_diagram.png` in your project.
-2.  **Update Image Path**: If your image is not at `assets/vexa_architecture_diagram.png`, update the `src` attribute in the `<img>` tag below.
-3.  **Adjust Clickable Areas**: The `coords` attributes in the `<area>` tags below are **placeholders**. You **MUST** adjust these coordinates to accurately define the clickable regions corresponding to each service in *your* diagram image. Various online tools can help you determine these coordinates.
+```mermaid
+graph TD
+    subgraph "External"
+        User[User/Client]
+    end
 
-**Note on Clickability**: GitHub's Markdown renderer has limitations with inline HTML, and complex elements like `<map>` may not always function as interactive clickable areas.
+    subgraph "Core Services (vexa_default network)"
+        APIGW["<a href='./services/api-gateway'>api-gateway</a>"]
+        ADMIN_API["<a href='./services/admin-api'>admin-api</a>"]
+        BOT_MGR["<a href='./services/bot-manager'>bot-manager</a>"]
+        TRANS_COL["<a href='./services/transcription-collector'>transcription-collector</a>"]
+        REDIS_DB[("Redis")]
+        POSTGRES_SQL_DB[("PostgreSQL")]
 
-<img src="assets/vexa_architecture_diagram.png" usemap="#vexa-architecture-map" alt="Vexa System Architecture Diagram">
-<map name="vexa-architecture-map">
-  <area shape="rect" coords="10,10,100,50" href="./services/api-gateway" alt="API Gateway" title="API Gateway service">
-  <area shape="rect" coords="110,10,200,50" href="./services/admin-api" alt="Admin API" title="Admin API service">
-  <area shape="rect" coords="10,60,100,100" href="./services/bot-manager" alt="Bot Manager" title="Bot Manager service">
-  <area shape="rect" coords="110,60,200,100" href="./services/transcription-collector" alt="Transcription Collector" title="Transcription Collector service">
-  <area shape="rect" coords="10,110,100,150" href="./services/vexa-bot" alt="Vexa Bot" title="Vexa Bot service (runs in containers)">
-  <area shape="rect" coords="110,110,200,150" href="./services/WhisperLive" alt="WhisperLive" title="WhisperLive (Transcription Engine)">
-  <!-- 
-    Important: The coordinates above (e.g., "10,10,100,50") are placeholders. 
-    You MUST adjust these to match your diagram image. 
-    The href attributes should point to the relevant service directories.
-  -->
-</map>
+        User -->|HTTP/S API Calls| APIGW
+
+        APIGW -->|Routes to| ADMIN_API
+        APIGW -->|Routes to| BOT_MGR
+        APIGW -->|Retrieves transcripts via| TRANS_COL
+
+        ADMIN_API -->|Stores/Retrieves data| POSTGRES_SQL_DB
+        ADMIN_API -->|Uses for caching/tasks| REDIS_DB
+
+        BOT_MGR -->|Manages bot lifecycle, stores metadata| POSTGRES_SQL_DB
+        BOT_MGR -->|Uses for state/queue| REDIS_DB
+        BOT_MGR -.->|Spawns/Manages| VEXA_BOT_CONTAINERS["<a href='./services/vexa-bot'>vexa-bot (Containers)</a>"]
+
+        TRANS_COL -->|Stores final transcripts| POSTGRES_SQL_DB
+        TRANS_COL -->|Consumes 'transcription_segments' stream from| REDIS_DB
+    end
+
+    subgraph "Transcription & Processing (vexa_default & whispernet networks)"
+        VEXA_BOT_CONTAINERS -->|Streams audio to| WL_GPU["<a href='./services/WhisperLive'>WhisperLive GPU</a>"]
+        VEXA_BOT_CONTAINERS -->|Streams audio to| WL_CPU["<a href='./services/WhisperLive'>WhisperLive CPU</a>"]
+
+        WL_GPU -->|Publishes to 'transcription_segments' stream in| REDIS_DB
+        WL_CPU -->|Publishes to 'transcription_segments' stream in| REDIS_DB
+
+        TRAEFIK["traefik (Reverse Proxy)"]
+        TRAEFIK -->|Routes to whisperlive.localhost| WL_GPU
+        TRAEFIK -->|Routes to whisperlive-cpu.localhost| WL_CPU
+    end
+
+    classDef service fill:#D6EAF8,stroke:#2E86C1,stroke-width:2px,color:black;
+    class APIGW,ADMIN_API,BOT_MGR,TRANS_COL,WL_GPU,WL_CPU,VEXA_BOT_CONTAINERS service;
+
+    classDef datastore fill:#E8DAEF,stroke:#884EA0,stroke-width:2px,color:black;
+    class REDIS_DB,POSTGRES_SQL_DB datastore;
+
+    classDef external fill:#F9E79F,stroke:#F1C40F,stroke-width:2px,color:black;
+    class User external;
+
+    classDef utility fill:#D5F5E3,stroke:#2ECC71,stroke-width:2px,color:black;
+    class TRAEFIK utility;
+```
 
 ## Projects Built with Vexa
 
