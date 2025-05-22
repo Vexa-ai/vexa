@@ -42,13 +42,6 @@ Furthermore, with our **n8n integration** (see [Projects Built with Vexa](BUILT-
 
 The Vexa API is **publicly available** at [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo) with **self-service access** - get your API key in just 3 clicks and have everything running in under 5 minutes.
 
-### Key features in this release:
-
-- **Instant API Access**: Self-service API keys available directly from [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo)
-- **Google Meet Bot Integration**: Programmatically send bots to join and transcribe meetings
-- **Real-Time Transcription**: Access meeting transcripts as they happen through the API
-- **Real-Time Translation**: Change the language of transcription to get instant translations across 99 languages
-
 
 <p align="center">
   <img src="assets/simplified_flow.png" alt="Vexa Architecture Flow" width="100%"/>
@@ -61,6 +54,14 @@ The Vexa API is **publicly available** at [www.vexa.ai](https://www.vexa.ai/?utm
 - [WhisperLive](./services/WhisperLive): Real-time audio transcription service
 - [transcription-collector](./services/transcription-collector): Processes and stores transcription segments
 - [Database models](./libs/shared-models/shared_models/models.py): Data structures for storing meeting information
+
+
+### Key features in this release:
+
+- **Instant API Access**: Self-service API keys available directly from [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo)
+- **Google Meet Bot Integration**: Programmatically send bots to join and transcribe meetings
+- **Real-Time Transcription**: Access meeting transcripts as they happen through the API
+- **Real-Time Translation**: Change the language of transcription to get instant translations across 99 languages
 
 
 ## API Capabilities
