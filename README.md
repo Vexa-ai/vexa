@@ -99,6 +99,35 @@ curl -H "X-API-Key: YOUR_CLIENT_API_KEY" \
   }
 }
 ```
+
+## System Architecture
+
+Here's a simplified diagram illustrating the relationships and interactions between Vexa's services. The diagram below is intended to be an HTML image map.
+
+**Important Steps for You:**
+1.  **Create the Diagram Image**: Generate an image of the system architecture (e.g., using a diagramming tool or by screenshotting a rendered Mermaid diagram) and save it, for example, as `assets/vexa_architecture_diagram.png` in your project.
+2.  **Update Image Path**: If your image is not at `assets/vexa_architecture_diagram.png`, update the `src` attribute in the `<img>` tag below.
+3.  **Adjust Clickable Areas**: The `coords` attributes in the `<area>` tags below are **placeholders**. You **MUST** adjust these coordinates to accurately define the clickable regions corresponding to each service in *your* diagram image. Various online tools can help you determine these coordinates.
+
+**Note on Clickability**: GitHub's Markdown renderer has limitations with inline HTML, and complex elements like `<map>` may not always function as interactive clickable areas.
+
+```html
+<img src="assets/vexa_architecture_diagram.png" usemap="#vexa-architecture-map" alt="Vexa System Architecture Diagram">
+<map name="vexa-architecture-map">
+  <area shape="rect" coords="10,10,100,50" href="./services/api-gateway" alt="API Gateway" title="API Gateway service">
+  <area shape="rect" coords="110,10,200,50" href="./services/admin-api" alt="Admin API" title="Admin API service">
+  <area shape="rect" coords="10,60,100,100" href="./services/bot-manager" alt="Bot Manager" title="Bot Manager service">
+  <area shape="rect" coords="110,60,200,100" href="./services/transcription-collector" alt="Transcription Collector" title="Transcription Collector service">
+  <area shape="rect" coords="10,110,100,150" href="./services/vexa-bot" alt="Vexa Bot" title="Vexa Bot service (runs in containers)">
+  <area shape="rect" coords="110,110,200,150" href="./services/WhisperLive" alt="WhisperLive" title="WhisperLive (Transcription Engine)">
+  <!-- 
+    Important: The coordinates above (e.g., "10,10,100,50") are placeholders. 
+    You MUST adjust these to match your diagram image. 
+    The href attributes should point to the relevant service directories.
+  -->
+</map>
+```
+
 ## Projects Built with Vexa
 
 To see examples of projects built using the Vexa API, including our example client and other community contributions, please see the [BUILT-WITH-VEXA.md](BUILT-WITH-VEXA.md) file.
