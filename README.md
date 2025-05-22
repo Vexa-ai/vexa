@@ -7,6 +7,15 @@
 # Vexa: API for **Real-Time Meeting Transcription**
 
 
+<p align="center">
+  <b>🚀 Help us reach 500 stars! 🚀</b><br>
+  <b>Current: <img src="https://img.shields.io/github/stars/Vexa-ai/vexa?style=social" /> → Goal: 500 ⭐️</b><br>
+  <a href="https://github.com/Vexa-ai/vexa/stargazers">
+
+  </a>
+</p>
+
+
 
 Vexa is an API for **real-time meeting transcription** using **meeting bots** and direct **streaming from web/mobile apps**. It extracts knowledge from various platforms including:
 
@@ -121,6 +130,8 @@ curl -H "X-API-Key: YOUR_CLIENT_API_KEY" \
 
 To see examples of projects built using the Vexa API, including our example client and other community contributions, please see the [BUILT-WITH-VEXA.md](BUILT-WITH-VEXA.md) file.
 
+> 💫 If you're building with Vexa, we'd love your support! [Star our repo](https://github.com/Vexa-ai/vexa/stargazers) to help us reach 500 stars.
+
 ### Features:
 - **Real-time multilingual transcription** supporting **99 languages** with **Whisper**
 - **Real-time translation** across all 99 supported languages
@@ -176,6 +187,7 @@ Contributors are welcome! Join our community and help shape Vexa's future. Here'
   - Check task descriptions (often on the roadmap or Discord) for bounty details and requirements.
 
 We look forward to your contributions!
+
 
 ## Project Links
 
