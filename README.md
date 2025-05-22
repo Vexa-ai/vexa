@@ -19,6 +19,8 @@ It serves as an **privacy-first**, **open source** alternative to `recall.ai`.
 It focuses on doing one job well: **clean, private, real-time transcription under your control so you can safely build on top**.
 
 
+
+
 ## Build on Top. In Hours, Not Months
 
 
@@ -36,7 +38,7 @@ Furthermore, with our **n8n integration** (see [Projects Built with Vexa](BUILT-
 
 > 🔑 Get your API key at [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo) to try Vexa instantly. 
 
-> 🚀 Read [DEPLOYMENT.md](DEPLOYMENT.md) for self-hosting and local run.
+> 🚀 Read [DEPLOYMENT.md](DEPLOYMENT.md) for self-hosting and local run with single `make all` on CPU even on laptop or on your GPU server.
 
 The Vexa API is **publicly available** at [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo) with **self-service access** - get your API key in just 3 clicks and have everything running in under 5 minutes.
 
@@ -46,6 +48,20 @@ The Vexa API is **publicly available** at [www.vexa.ai](https://www.vexa.ai/?utm
 - **Google Meet Bot Integration**: Programmatically send bots to join and transcribe meetings
 - **Real-Time Transcription**: Access meeting transcripts as they happen through the API
 - **Real-Time Translation**: Change the language of transcription to get instant translations across 99 languages
+
+
+<p align="center">
+  <img src="assets/simplified_flow.png" alt="Vexa Architecture Flow" width="100%"/>
+</p>
+
+
+- [api-gateway](./services/api-gateway): Routes API requests to appropriate services
+- [bot-manager](./services/bot-manager): Handles bot lifecycle management
+- [vexa-bot](./services/vexa-bot): The bot that joins meetings and captures audio
+- [WhisperLive](./services/WhisperLive): Real-time audio transcription service
+- [transcription-collector](./services/transcription-collector): Processes and stores transcription segments
+- [Database models](./libs/shared-models/shared_models/models.py): Data structures for storing meeting information
+
 
 ## API Capabilities
 
@@ -99,32 +115,6 @@ curl -H "X-API-Key: YOUR_CLIENT_API_KEY" \
   }
 }
 ```
-
-## System Architecture
-
-Below is a simplified diagram showing the core transcription flow in Vexa:
-
-<p align="center">
-  <img src="assets/architecture-flow.svg" alt="Vexa Architecture Flow" width="100%"/>
-</p>
-
-The diagram illustrates the key components and data flow:
-
-1. User sends a POST request to `/bots` to deploy a bot to a meeting
-2. API Gateway routes the request to Bot Manager
-3. Bot Manager launches a dedicated vexa-bot container for the meeting
-4. Vexa Bot streams audio to WhisperLive via WebSocket
-5. WhisperLive processes audio and pushes transcription segments to Redis
-6. Transcription Collector consumes and processes segments, storing them in PostgreSQL
-7. User requests real-time transcripts via GET `/transcripts`
-8. API Gateway retrieves and returns the transcripts to the user
-
-Each component in the diagram is clickable and links to its corresponding directory in the codebase:
-- [api-gateway](./services/api-gateway): Routes API requests to appropriate services
-- [bot-manager](./services/bot-manager): Handles bot lifecycle management
-- [vexa-bot](./services/vexa-bot): The bot that joins meetings and captures audio
-- [WhisperLive](./services/WhisperLive): Real-time audio transcription service
-- [transcription-collector](./services/transcription-collector): Processes and stores transcription segments
 
 ## Projects Built with Vexa
 
