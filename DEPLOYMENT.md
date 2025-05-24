@@ -2,6 +2,7 @@
 
 Instructions for setting up, running, and testing the Vexa system locally using Docker Compose and Make.
 
+[3 min video tutorial](https://www.youtube.com/watch?v=bHMIByieVek)
 
 ### Quick Start with Make
 
@@ -36,8 +37,16 @@ What to expect during testing:
 6. Let the bot into the conference
 7. Start speaking
 8. Wait for the transcripts to appear. 
+
+Did it work? Tell us! 💬 [Join Discord Community!](https://discord.gg/Ga9duGkVz9)
  
+
+
+
 The transcription latency can is higher and quality might be lower  when running locally in CPU mode, since you don't have a device to run bigger model quickly. But this is usually enough for development and testing
+
+
+
 
 
 ### API Documentation that is running behind the hood
