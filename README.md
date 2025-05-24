@@ -8,8 +8,8 @@
 
 
 <p align="center">
-  <b>🚀 Help us reach 600 stars! 🚀</b><br>
-  <b>Current: <img src="https://img.shields.io/github/stars/Vexa-ai/vexa?style=social" /> → Goal: 600 ⭐️</b><br>
+  <b>🚀 Help us reach 700 stars! 🚀</b><br>
+  <b>Current: <img src="https://img.shields.io/github/stars/Vexa-ai/vexa?style=social" /> → Goal: 700 ⭐️</b><br>
   <a href="https://github.com/Vexa-ai/vexa/stargazers">
 
   </a>
