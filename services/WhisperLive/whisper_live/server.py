@@ -5,8 +5,9 @@ import json
 import functools
 import logging
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Tuple, Dict, Any
 import datetime
+from datetime import timedelta
 import websocket
 
 import torch
@@ -29,6 +30,12 @@ import threading
 import redis
 import uuid
 
+# Pydantic and dataclasses for speaker matching
+from pydantic import BaseModel
+from dataclasses import dataclass, field
+from datetime import datetime as dt
+from datetime import timezone
+
 # Setup basic logging
 logging.basicConfig(level=logging.INFO)
 
@@ -43,6 +50,340 @@ file_handler.setFormatter(file_formatter)
 logger = logging.getLogger("transcription")
 logger.setLevel(logging.INFO)
 logger.addHandler(file_handler)
+
+# Use the existing logger instance from the file for speaker matching related logs
+speaker_logger = logging.getLogger("transcription")
+
+class SpeakerMeta(BaseModel):
+    """Speaker metadata with activity information."""
+    name: str
+    mic_level: float
+    timestamp: dt
+    delay_sec: float = 0.0
+    meeting_id: Optional[str] = None
+    user_id: Optional[str] = None
+    meta_bits: Optional[str] = None
+
+    @classmethod
+    def from_client_payload(cls, speaker_payload: Dict[str, Any], meeting_id: str, timestamp_override: dt) -> 'SpeakerMeta':
+        """Create SpeakerMeta from client's speaker_activity_update payload item.
+        
+        Args:
+            speaker_payload: Dict containing 'id', 'name', 'mic_activity_bits'.
+            meeting_id: The meeting ID for this session.
+            timestamp_override: The timestamp from the parent speaker_activity_update message.
+                
+        Returns:
+            SpeakerMeta object with parsed data
+        """
+        try:
+            meta = speaker_payload.get('mic_activity_bits', '')
+            mic_level = sum(1 for c in meta if c == '1') / max(len(meta), 1) if meta else 0.0
+            
+            return cls(
+                name=speaker_payload['name'],
+                mic_level=mic_level,
+                timestamp=timestamp_override,
+                user_id=speaker_payload['id'],
+                meeting_id=meeting_id,
+                meta_bits=meta
+            )
+        except KeyError as e:
+            speaker_logger.error(f"Missing key {e} in speaker_payload: {speaker_payload}")
+            raise ValueError(f"Invalid speaker data format, missing key: {e}")
+        except Exception as e:
+            speaker_logger.error(f"Error parsing speaker data from client payload: {e}", exc_info=True)
+            raise ValueError(f"Invalid speaker data format: {e}")
+
+def convert_speaker_activity_to_meta(activity_payload: Dict[str, Any]) -> List[SpeakerMeta]:
+    """Convert 'speaker_activity_update' payload to a list of SpeakerMeta objects.
+    
+    Args:
+        activity_payload: The full payload of a 'speaker_activity_update' message.
+                          Expected to have 'speakers' list, 'meeting_id', and 'timestamp'.
+        
+    Returns:
+        List of SpeakerMeta objects.
+    """
+    speaker_metas = []
+    common_meeting_id = activity_payload.get('meeting_id')
+    common_timestamp_str = activity_payload.get('timestamp')
+
+    if not common_timestamp_str:
+        speaker_logger.warning("No 'timestamp' in speaker_activity_update payload. Skipping.")
+        return []
+    
+    try:
+        common_timestamp = dt.fromisoformat(common_timestamp_str.replace('Z', '+00:00'))
+        if common_timestamp.tzinfo is None:
+            common_timestamp = common_timestamp.replace(tzinfo=timezone.utc)
+    except ValueError:
+        speaker_logger.error(f"Invalid ISO format for common_timestamp: {common_timestamp_str}")
+        return []
+
+    client_speakers = activity_payload.get('speakers', [])
+    for speaker_data_item in client_speakers:
+        try:
+            speaker_meta = SpeakerMeta.from_client_payload(speaker_data_item, common_meeting_id, common_timestamp)
+            speaker_metas.append(speaker_meta)
+        except Exception as e:
+            speaker_logger.warning(f"Skipping invalid speaker data item: {speaker_data_item}, error: {e}")
+            continue
+    return speaker_metas
+
+@dataclass
+class TranscriptSegment:
+    """A segment of transcribed speech with timing and speaker information."""
+    content: str
+    start_timestamp: float
+    end_timestamp: float
+    speaker: Optional[str] = None
+    speaker_id: Optional[str] = None
+    confidence: float = 0.0
+    words: List[Dict[str, Any]] = field(default_factory=list)
+    server_timestamp: Optional[dt] = None
+
+    @property
+    def duration(self) -> float:
+        """Get segment duration in seconds."""
+        return self.end_timestamp - self.start_timestamp
+
+    @classmethod
+    def from_whisper_live_segment(cls, segment_data: Dict[str, Any], t0_timestamp: Optional[dt] = None) -> 'TranscriptSegment':
+        """Create TranscriptSegment from WhisperLive's output segment format.
+        
+        Args:
+            segment_data: Dict from WhisperLive, e.g., 
+                          {'text': ' Hello.', 'start': 0.0, 'end': 0.84} or
+                          {'text': ' World.', 'start': 0.84, 'end': 1.2, 'words': [{'word': 'World.', 'start': 0.84, 'end': 1.2, 'probability': 0.8}]}
+            t0_timestamp: The absolute start time of the audio session (datetime object).
+            
+        Returns:
+            TranscriptSegment object.
+        """
+        try:
+            start_time_sec = float(segment_data["start"])
+            end_time_sec = float(segment_data["end"])
+            text_content = segment_data["text"].strip()
+            
+            processed_words = []
+            segment_confidence = 0.0
+
+            if "words" in segment_data and segment_data["words"]:
+                for word_info in segment_data["words"]:
+                    processed_words.append({
+                        "word": word_info["word"].strip(),
+                        "start": float(word_info["start"]),
+                        "end": float(word_info["end"]),
+                        "confidence": float(word_info.get("probability", 0.0))
+                    })
+                word_confidences = [w["confidence"] for w in processed_words if "confidence" in w and w["confidence"] is not None]
+                if word_confidences:
+                    segment_confidence = sum(word_confidences) / len(word_confidences)
+            elif "probability" in segment_data :
+                 segment_confidence = float(segment_data.get("probability", 0.0))
+
+            return cls(
+                content=text_content,
+                start_timestamp=start_time_sec,
+                end_timestamp=end_time_sec,
+                confidence=segment_confidence,
+                words=processed_words,
+                server_timestamp=t0_timestamp
+            )
+            
+        except KeyError as e:
+            speaker_logger.error(f"Missing key {e} in WhisperLive segment_data: {segment_data}")
+            raise ValueError(f"Invalid WhisperLive segment_data format, missing key: {e}")
+        except Exception as e:
+            speaker_logger.error(f"Error creating TranscriptSegment from WhisperLive segment: {e}", exc_info=True)
+            speaker_logger.error(f"Problematic WhisperLive segment data: {segment_data}")
+            raise ValueError(f"Invalid WhisperLive segment data format: {e}")
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert segment to dictionary format for storage or sending."""
+        return {
+            "text": self.content,
+            "start": self.start_timestamp,
+            "end": self.end_timestamp,
+            "speaker_name": self.speaker,
+            "speaker_id": self.speaker_id,
+            "confidence": self.confidence,
+            "words": self.words,
+        }
+
+@dataclass
+class SpeakerActivitySegment:
+    """A continuous segment of speaker activity."""
+    speaker_name: str
+    speaker_id: str
+    start_time: dt
+    end_time: dt
+    avg_mic_level: float
+
+    @property
+    def duration(self) -> timedelta:
+        """Get segment duration."""
+        return self.end_time - self.start_time
+        
+    def intersection_with(self, target_start: dt, target_end: dt) -> timedelta:
+        """Calculate temporal intersection with another time range."""
+        overlap_start = max(self.start_time, target_start)
+        overlap_end = min(self.end_time, target_end)
+        if overlap_end > overlap_start:
+            return overlap_end - overlap_start
+        return timedelta(seconds=0)
+
+class TranscriptSpeakerMatcher:
+    """Class for matching transcripts with speakers based on temporal proximity and mic activity."""
+    
+    def __init__(self, t0: dt, min_mic_level_threshold: float = 0.1, speaker_activity_window_sec: float = 1.0):
+        """Initialize the matcher.
+        Args:
+            t0: Absolute start datetime of the session (UTC).
+            min_mic_level_threshold: Minimum mic activity level to consider a speaker active.
+            speaker_activity_window_sec: Duration in seconds for which a mic_activity_bit='1' implies speech.
+        """
+        self.t0 = t0
+        if self.t0.tzinfo is None:
+            self.t0 = self.t0.replace(tzinfo=timezone.utc)
+            
+        self.min_mic_level_threshold = min_mic_level_threshold
+        self.speaker_activity_window_sec = timedelta(seconds=speaker_activity_window_sec)
+        speaker_logger.info(f"TranscriptSpeakerMatcher initialized with t0: {self.t0.isoformat()}")
+
+    def _create_speaker_activity_segments(self, speaker_meta_list: List[SpeakerMeta]) -> List[SpeakerActivitySegment]:
+        """
+        Converts raw SpeakerMeta entries (each representing a snapshot of all speakers' mic activity)
+        into SpeakerActivitySegments, where each segment is a continuous period of a single speaker's activity.
+        """
+        activity_segments = []
+        if not speaker_meta_list:
+            return []
+
+        sorted_meta = sorted(speaker_meta_list, key=lambda sm: (sm.timestamp, sm.user_id or ''))
+
+        grouped_by_user = {}
+        for sm in sorted_meta:
+            if sm.user_id not in grouped_by_user:
+                grouped_by_user[sm.user_id] = []
+            grouped_by_user[sm.user_id].append(sm)
+
+        for user_id, metas in grouped_by_user.items():
+            if not metas: continue
+            
+            speaker_name = metas[0].name
+
+            active_sub_segments = []
+
+            for sm_entry in metas:
+                meta_bits = sm_entry.meta_bits
+                entry_timestamp = sm_entry.timestamp
+                if not meta_bits:
+                    continue
+
+                num_bits = len(meta_bits)
+                
+                for i, bit in enumerate(meta_bits):
+                    if bit == '1':
+                        slot_start_time = entry_timestamp - timedelta(seconds=(num_bits - i) * 0.1)
+                        slot_end_time = entry_timestamp - timedelta(seconds=(num_bits - i - 1) * 0.1)
+                        active_sub_segments.append((slot_start_time, slot_end_time))
+            
+            if not active_sub_segments:
+                continue
+
+            active_sub_segments.sort(key=lambda x: x[0])
+
+            merged_segments_for_user = []
+            current_start, current_end = active_sub_segments[0]
+
+            for i in range(1, len(active_sub_segments)):
+                next_start, next_end = active_sub_segments[i]
+                if next_start <= current_end:
+                    current_end = max(current_end, next_end)
+                else:
+                    merged_segments_for_user.append(SpeakerActivitySegment(
+                        speaker_name=speaker_name,
+                        speaker_id=user_id,
+                        start_time=current_start,
+                        end_time=current_end,
+                        avg_mic_level=1.0
+                    ))
+                    current_start, current_end = next_start, next_end
+            
+            merged_segments_for_user.append(SpeakerActivitySegment(
+                speaker_name=speaker_name,
+                speaker_id=user_id,
+                start_time=current_start,
+                end_time=current_end,
+                avg_mic_level=1.0
+            ))
+            activity_segments.extend(merged_segments_for_user)
+            
+        activity_segments.sort(key=lambda s: s.start_time)
+        speaker_logger.debug(f"Created {len(activity_segments)} speaker activity segments from raw meta data.")
+
+        return activity_segments
+
+    def match(self, speaker_meta_data: List[SpeakerMeta], transcription_segments: List[TranscriptSegment]) -> List[TranscriptSegment]:
+        """Match transcripts with speakers based on temporal proximity and mic activity.
+        
+        Args:
+            speaker_meta_data: List of speaker metadata derived from client's 'speaker_activity_update'.
+            transcription_segments: List of TranscriptSegment objects to match with speakers.
+            
+        Returns:
+            List of transcript segments with matched speaker_name and speaker_id.
+        """
+        if not speaker_meta_data or not transcription_segments:
+            speaker_logger.info("Matcher: No speaker data or transcription segments to match.")
+            return transcription_segments
+        
+        speaker_activity_periods = self._create_speaker_activity_segments(speaker_meta_data)
+
+        if not speaker_activity_periods:
+            speaker_logger.info("Matcher: No consolidated speaker activity periods created.")
+            return transcription_segments
+
+        for ts_segment in transcription_segments:
+            abs_segment_start = self.t0 + timedelta(seconds=ts_segment.start_timestamp)
+            abs_segment_end = self.t0 + timedelta(seconds=ts_segment.end_timestamp)
+            
+            segment_duration_td = abs_segment_end - abs_segment_start
+            if segment_duration_td.total_seconds() <= 0:
+                continue
+
+            best_match_speaker_name: Optional[str] = None
+            best_match_speaker_id: Optional[str] = None
+            max_overlap_ratio = 0.0
+            
+            possible_matches = []
+
+            for active_period in speaker_activity_periods:
+                intersection_duration_td = active_period.intersection_with(abs_segment_start, abs_segment_end)
+                
+                if intersection_duration_td.total_seconds() > 0:
+                    overlap_ratio = intersection_duration_td.total_seconds() / segment_duration_td.total_seconds()
+                    possible_matches.append({
+                        "speaker_name": active_period.speaker_name,
+                        "speaker_id": active_period.speaker_id,
+                        "overlap_ratio": overlap_ratio,
+                        "mic_level": active_period.avg_mic_level
+                    })
+            
+            if possible_matches:
+                possible_matches.sort(key=lambda m: m["overlap_ratio"], reverse=True)
+                
+                best_match = possible_matches[0]
+                
+                if best_match["overlap_ratio"] > 0.5: 
+                    ts_segment.speaker = best_match["speaker_name"]
+                    ts_segment.speaker_id = best_match["speaker_id"]
+                # else:
+                    # speaker_logger.debug(f"    No significant match for '{ts_segment.content[:20]}'. Best overlap: {best_match['speaker_name']} ({best_match['overlap_ratio']:.2f})")
+
+        return transcription_segments
 
 # Transcription Collector client using Redis Streams
 class TranscriptionCollectorClient:
@@ -228,7 +569,7 @@ class TranscriptionCollectorClient:
             logging.error(f"Error publishing session_start event: {e}")
             return False
 
-    def send_transcription(self, token, platform, meeting_id, segments, session_uid=None):
+    def send_transcription(self, token, platform, meeting_id, segments, session_uid=None, speaker_id=None, speaker_name=None):
         """Send transcription segments to Redis stream.
         
         Args:
@@ -237,6 +578,8 @@ class TranscriptionCollectorClient:
             meeting_id: Platform-specific meeting ID
             segments: List of transcription segments
             session_uid: Optional unique identifier for this session
+            speaker_id: Optional default speaker identifier (deprecated, use segment's speaker_id)
+            speaker_name: Optional default speaker name (deprecated, use segment's speaker_name)
             
         Returns:
             Boolean indicating success or failure
@@ -266,8 +609,9 @@ class TranscriptionCollectorClient:
                 "token": token,
                 "platform": platform, 
                 "meeting_id": meeting_id,
-                "segments": segments,
-                "uid": session_uid  # Include session_uid in transcription messages too
+                "segments": segments,  # Each segment should now include speaker_id and speaker_name
+                "uid": session_uid,
+                "language": None,  # Will be filled by transcription process
             }
             
             # Publish to Redis stream
@@ -281,7 +625,15 @@ class TranscriptionCollectorClient:
             )
             
             if result:
-                logging.debug(f"Published transcription with {len(segments)} segments")
+                # Extract speaker name from the first segment with a speaker_name for logging
+                segment_speaker = None
+                for segment in segments:
+                    if segment.get('speaker_name'):
+                        segment_speaker = segment.get('speaker_name')
+                        break
+                
+                logging.debug(f"Published transcription with {len(segments)} segments" + 
+                             (f" for speaker {segment_speaker}" if segment_speaker else ""))
                 return True
             else:
                 logging.error("Failed to publish transcription")
@@ -524,16 +876,24 @@ class TranscriptionServer:
     def get_audio_from_websocket(self, websocket):
         """
         Receives audio buffer from websocket and creates a numpy array out of it.
+        Also handles text messages like speaker updates.
 
         Args:
             websocket: The websocket to receive audio from.
 
         Returns:
-            A numpy array containing the audio.
+            A numpy array containing the audio, or False for non-audio data.
         """
         frame_data = websocket.recv()
+        
+        # Check if this is a text message rather than binary audio
+        if isinstance(frame_data, str):
+            self.process_websocket_message(websocket, frame_data)
+            return False  # Signal to call get_audio_from_websocket again
+        
         if frame_data == b"END_OF_AUDIO":
             return False
+        
         return np.frombuffer(frame_data, dtype=np.float32)
 
     def handle_new_connection(self, websocket, faster_whisper_custom_model_path,
@@ -587,23 +947,39 @@ class TranscriptionServer:
             return False
 
     def process_audio_frames(self, websocket):
-        frame_np = self.get_audio_from_websocket(websocket)
-        client = self.client_manager.get_client(websocket)
-        if frame_np is False:
+        try:
+            # Try to get audio data
+            frame_data = websocket.recv()
+            
+            # Check if this is a text message (JSON) rather than binary audio data
+            if isinstance(frame_data, str):
+                return self.process_websocket_message(websocket, frame_data)
+            
+            # If it's "END_OF_AUDIO" marker
+            if frame_data == b"END_OF_AUDIO":
+                client = self.client_manager.get_client(websocket)
+                if client and self.backend.is_tensorrt():
+                    client.set_eos(True)
+                return False
+            
+            # Otherwise, process as normal audio data
+            frame_np = np.frombuffer(frame_data, dtype=np.float32)
+            client = self.client_manager.get_client(websocket)
+            
             if self.backend.is_tensorrt():
-                client.set_eos(True)
-            return False
+                voice_active = self.voice_activity(websocket, frame_np)
+                if voice_active:
+                    self.no_voice_activity_chunks = 0
+                    client.set_eos(False)
+                if self.use_vad and not voice_active:
+                    return True
 
-        if self.backend.is_tensorrt():
-            voice_active = self.voice_activity(websocket, frame_np)
-            if voice_active:
-                self.no_voice_activity_chunks = 0
-                client.set_eos(False)
-            if self.use_vad and not voice_active:
-                return True
-
-        client.add_frames(frame_np)
-        return True
+            client.add_frames(frame_np)
+            return True
+        
+        except Exception as e:
+            logging.error(f"Error processing frame data: {e}")
+            return True  # Continue processing to be safe
 
     def recv_audio(self,
                    websocket,
@@ -612,7 +988,7 @@ class TranscriptionServer:
                    whisper_tensorrt_path=None,
                    trt_multilingual=False):
         """
-        Receive audio chunks from a client in an infinite loop.
+        Receive audio chunks and control messages from a client in an infinite loop.
 
         Continuously receives audio frames from a connected client
         over a WebSocket connection. It processes the audio frames using a
@@ -624,6 +1000,8 @@ class TranscriptionServer:
         until a slot is available.
         If a client's connection exceeds the maximum allowed time, it will
         be disconnected, and the client's resources will be cleaned up.
+        This method continuously receives data frames (audio or JSON control messages)
+        and processes them accordingly.
 
         Args:
             websocket (WebSocket): The WebSocket connection for the client.
@@ -633,7 +1011,7 @@ class TranscriptionServer:
             trt_multilingual(bool): Only used for tensorrt, True if multilingual model.
 
         Raises:
-            Exception: If there is an error during the audio frame processing.
+            Exception: If there is an error during processing.
         """
         self.backend = backend
         if not self.handle_new_connection(websocket, faster_whisper_custom_model_path,
@@ -790,6 +1168,27 @@ class TranscriptionServer:
         except Exception as e:
             logging.error(f"Failed to start health check server: {e}")
 
+    def process_websocket_message(self, websocket, message_data):
+        """Process non-audio WebSocket messages such as speaker updates."""
+        try:
+            message = json.loads(message_data)
+            client = self.client_manager.get_client(websocket)
+            
+            # Handle speaker update messages
+            if message.get("type") == "speaker_update" and client:
+                speaker_id = message.get("speaker_id")
+                speaker_name = message.get("speaker_name")
+                client.update_speaker(speaker_id, speaker_name)
+                return True
+            
+            return False  # Not a recognized message type
+        except json.JSONDecodeError:
+            logging.error("Failed to decode JSON message")
+            return False
+        except Exception as e:
+            logging.error(f"Error processing WebSocket message: {e}")
+            return False
+
 
 class ServeClientBase(object):
     RATE = 16000
@@ -806,10 +1205,26 @@ class ServeClientBase(object):
         self.token = token
         self.meeting_id = meeting_id
         
-        # Restore all the original instance variables that were deleted
+        # Timestamps and speaker data handling
+        self.transcription_start_time = dt.now(timezone.utc) # t0 for this client session, ensure timezone aware
+        self.speaker_activity_data: List[SpeakerMeta] = [] # Store SpeakerMeta objects
+        self.transcript_speaker_matcher = TranscriptSpeakerMatcher(t0=self.transcription_start_time)
+        speaker_logger.info(f"ServeClient {self.client_uid} initialized with t0: {self.transcription_start_time.isoformat()}")
+
+        # Old speaker tracking - can be removed or refactored if new system covers it.
+        # self.current_speaker_id = None 
+        # self.current_speaker_name = None
+        # self.speaker_update_time = None
+        # self.speaker_timeline = []
+        
         self.transcription_buffer = TranscriptionBuffer(self.client_uid)
-        self.model = None
-        self.is_multilingual = True
+        
+        # Enhanced speaker tracking
+        self.current_speaker_id = None
+        self.current_speaker_name = None
+        self.speaker_update_time = None
+        self.speaker_timeline = []  # List of {timestamp, iso_timestamp, speaker_id, speaker_name} entries
+        
         self.frames = b""
         self.timestamp_offset = 0.0
         self.frames_np = None
@@ -953,53 +1368,79 @@ class ServeClientBase(object):
     def send_transcription_to_client(self, segments):
         """
         Sends the specified transcription segments to the client over the websocket connection.
+        This method now also handles matching speakers to segments before sending.
 
-        This method formats the transcription segments into a JSON object and attempts to send
-        this object to the client. If an error occurs during the send operation, it logs the error.
-
-        Returns:
-            segments (list): A list of transcription segments to be sent to the client.
+        Args:
+            segments (list): A list of raw transcription segments (dictionaries) from Whisper.
         """
         try:
-            # Validate required client properties
             if not self.platform or not self.meeting_url or not self.token:
                 logging.error(f"ERROR: Missing required fields for client {self.client_uid}: platform={self.platform}, meeting_url={self.meeting_url}, token={self.token}")
-                # Don't default to unknown anymore, force these to be set properly
                 return
-                
+
+            # 1. Convert raw Whisper segments to TranscriptSegment objects
+            processed_transcript_segments: List[TranscriptSegment] = []
+            for seg_data in segments: # Assuming segments is a list of dicts from Whisper
+                try:
+                    # Pass self.transcription_start_time as t0 for relative to absolute conversion
+                    ts_seg = TranscriptSegment.from_whisper_live_segment(seg_data, t0_timestamp=self.transcription_start_time)
+                    processed_transcript_segments.append(ts_seg)
+                except ValueError as e:
+                    speaker_logger.error(f"Skipping invalid Whisper segment: {seg_data}. Error: {e}")
+                    continue
+            
+            # 2. Match speakers to these TranscriptSegment objects
+            # Lock speaker_activity_data if it can be modified by another thread (e.g., process_websocket_message)
+            # For simplicity, direct access here assumes process_websocket_message updates it sequentially or with its own locks if needed.
+            # It might be safer to copy self.speaker_activity_data if there's a risk of concurrent modification during matching.
+            current_speaker_activity_snapshot = self.speaker_activity_data.copy() # Take a snapshot for matching
+
+            matched_segments = self.transcript_speaker_matcher.match(
+                current_speaker_activity_snapshot, 
+                processed_transcript_segments
+            )
+
+            # 3. Convert matched TranscriptSegment objects back to dictionaries for sending
+            segments_to_send = [ts.to_dict() for ts in matched_segments]
+
             data = {
                 "uid": self.client_uid,
-                "segments": segments,
+                "segments": segments_to_send, # Send the matched segments
             }
             self.websocket.send(json.dumps(data))
             
             # Send to transcription collector if available
             global collector_client
             if collector_client:
-                # Send transcription to Redis stream
+                # Send transcription to Redis stream with speaker info
                 collector_client.send_transcription(
                     token=self.token,
                     platform=self.platform,
                     meeting_id=self.meeting_id,
-                    segments=segments,
-                    session_uid=self.client_uid
+                    segments=segments_to_send, # Send matched segments to collector as well
+                    session_uid=self.client_uid,
+                    # speaker_id and speaker_name are now part of each segment in segments_to_send
                 )
-            
-            # Log the transcription data to file with more detailed formatting
-            formatted_segments = []
-            for i, segment in enumerate(segments):
-                if 'start' in segment and 'end' in segment:
-                    formatted_segments.append(
-                        f"[{i}] ({segment.get('start', 'N/A')}-{segment.get('end', 'N/A')}) "
-                        f"[{'COMPLETE' if segment.get('completed', False) else 'PARTIAL'}]: "
-                        f"\"{segment.get('text', '')}\""
-                    )
-                else:
-                    formatted_segments.append(f"[{i}]: \"{segment.get('text', '')}\"")
+             # Log the transcription data to file with more detailed formatting 
+            formatted_log_segments = []
+            for i, seg_dict in enumerate(segments_to_send):
+                speaker_name = seg_dict.get('speaker_name', 'Unknown')
+                speaker_id = seg_dict.get('speaker_id', 'N/A')
+                text_content = seg_dict.get('text', '')
+                start_time = seg_dict.get('start', 'N/A')
+                end_time = seg_dict.get('end', 'N/A')
+                completed_status = 'COMPLETE' if seg_dict.get('completed', False) else 'PARTIAL' # Assuming 'completed' might be added to to_dict if needed
+
+                formatted_log_segments.append(
+                    f"[{i}] ({start_time}-{end_time}) "
+                    f"[{completed_status}] " 
+                    f"[Speaker: {speaker_name} ({speaker_id})]: "
+                    f"\"{text_content}\""
+                )
                     
-            logger.info(f"TRANSCRIPTION: client={self.client_uid}, platform={self.platform}, meeting_url={self.meeting_url}, token={self.token}, meeting_id={self.meeting_id}, segments=\n" + "\n".join(formatted_segments))
+            logger.info(f"TRANSCRIPTION: client={self.client_uid}, platform={self.platform}, meeting_url={self.meeting_url}, token={self.token}, meeting_id={self.meeting_id}, segments=\n" + "\n".join(formatted_log_segments))
         except Exception as e:
-            logging.error(f"[ERROR]: Sending data to client: {e}")
+            logging.error(f"[ERROR]: Sending data to client: {e}", exc_info=True)
 
     def disconnect(self):
         """
@@ -1035,8 +1476,68 @@ class ServeClientBase(object):
                 platform=self.platform,
                 meeting_id=self.meeting_id,
                 segments=segments,
-                session_uid=self.client_uid
+                session_uid=self.client_uid,
+                speaker_id=self.current_speaker_id,
+                speaker_name=self.current_speaker_name
             )
+
+    def update_speaker(self, speaker_id, speaker_name):
+        """Update the current active speaker information and record in timeline."""
+        timestamp = datetime.datetime.utcnow()
+        iso_timestamp = timestamp.isoformat() + "Z"
+        
+        # Don't update to None if we already have a speaker - only record in timeline
+        if speaker_id is None and speaker_name is None and self.current_speaker_id is not None:
+            logging.info(f"Ignoring None speaker update for {self.client_uid} - keeping current speaker: {self.current_speaker_name} ({self.current_speaker_id})")
+            return
+        
+        # Record in timeline
+        self.speaker_timeline.append({
+            "timestamp": timestamp,  # Store datetime object for comparisons
+            "iso_timestamp": iso_timestamp,  # Store string for JSON
+            "speaker_id": speaker_id,
+            "speaker_name": speaker_name
+        })
+        
+        # Update current speaker
+        self.current_speaker_id = speaker_id
+        self.current_speaker_name = speaker_name
+        self.speaker_update_time = iso_timestamp
+        
+        logging.info(f"Speaker updated for {self.client_uid}: {speaker_name} ({speaker_id})")
+        logger.info(f"SPEAKER_UPDATE: client={self.client_uid}, speaker_id={speaker_id}, speaker_name={speaker_name}")
+
+    def get_speaker_at_time(self, start_time, end_time):
+        """Find the speaker active during the given time period.
+        
+        Args:
+            start_time (float): Start time of the segment in seconds
+            end_time (float): End time of the segment in seconds
+            
+        Returns:
+            tuple: (speaker_id, speaker_name) or (None, None) if no speaker found
+        """
+        if not self.speaker_timeline:
+            return (self.current_speaker_id, self.current_speaker_name)
+        
+        # Calculate the timestamp for this segment's time
+        # Convert segment time (which is in seconds from start of transcription) to a timestamp
+        segment_midpoint = (start_time + end_time) / 2
+        segment_delta = datetime.timedelta(seconds=segment_midpoint)
+        segment_timestamp = self.transcription_start_time + segment_delta
+        
+        # Find the latest speaker update before or at this segment's time
+        latest_speaker = None
+        for entry in reversed(self.speaker_timeline):
+            if entry["timestamp"] <= segment_timestamp:
+                latest_speaker = entry
+                break
+        
+        if latest_speaker:
+            return (latest_speaker["speaker_id"], latest_speaker["speaker_name"])
+        
+        # If no speaker found before this segment, use current
+        return (self.current_speaker_id, self.current_speaker_name)
 
 
 class ServeClientTensorRT(ServeClientBase):
@@ -1250,6 +1751,41 @@ class ServeClientTensorRT(ServeClientBase):
             self.websocket.send(json.dumps(response))
         except ConnectionClosed:
             logging.warning(f"Connection closed for client {self.client_uid} while sending transcription.")
+
+    def process_websocket_message(self, websocket, message_data):
+        """Process non-audio WebSocket messages such as speaker updates."""
+        try:
+            message = json.loads(message_data)
+            client = self.client_manager.get_client(websocket)
+            if not client:
+                logging.warning(f"No client found for websocket in process_websocket_message")
+                return False
+
+            message_type = message.get("type")
+            
+            # Handle speaker_activity_update messages
+            if message_type == "speaker_activity_update":
+                speaker_logger.info(f"Received speaker_activity_update for client {client.client_uid}. Payload: {message}")
+                new_speaker_metas = convert_speaker_activity_to_meta(message) # message is the full payload
+                if new_speaker_metas:
+                    # Potentially lock client.speaker_activity_data if updates can be frequent and concurrent with reads
+                    client.speaker_activity_data.extend(new_speaker_metas)
+                    speaker_logger.info(f"Added {len(new_speaker_metas)} SpeakerMeta entries for client {client.client_uid}. Total now: {len(client.speaker_activity_data)}")
+                return True # Message handled
+            
+            # Handle other message types if necessary
+            # elif message_type == "some_other_control_message":
+            #     # ... handle it ...
+            #     return True
+
+            speaker_logger.debug(f"Received unhandled JSON message type: {message_type} for client {client.client_uid}")
+            return False  # Not a recognized or handled message type here
+        except json.JSONDecodeError:
+            logging.error("Failed to decode JSON message in process_websocket_message")
+            return False
+        except Exception as e:
+            logging.error(f"Error processing WebSocket message in process_websocket_message: {e}", exc_info=True)
+            return False
 
 
 class ServeClientFasterWhisper(ServeClientBase):
@@ -1533,17 +2069,23 @@ class ServeClientFasterWhisper(ServeClientBase):
             start (float): The start time of the transcription segment in seconds.
             end (float): The end time of the transcription segment in seconds.
             text (str): The transcribed text corresponding to the segment.
+            completed (bool): Whether this segment is marked as completed
 
         Returns:
             dict: A dictionary representing the formatted transcription segment, including
                 'start' and 'end' times as strings with three decimal places and the 'text'
                 of the transcription.
         """
+        # Get the speaker active during this segment
+        speaker_id, speaker_name = self.get_speaker_at_time(start, end)
+        
         return {
             'start': "{:.3f}".format(start),
             'end': "{:.3f}".format(end),
             'text': text,
-            'completed': completed
+            'completed': completed,
+            'speaker_id': speaker_id,
+            'speaker_name': speaker_name
         }
 
     def update_segments(self, segments, duration):
