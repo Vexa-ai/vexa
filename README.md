@@ -17,6 +17,8 @@
 
 
 
+💬 [Join Discord Community!](https://discord.gg/Ga9duGkVz9)
+
 Vexa is an API for **real-time meeting transcription** using **meeting bots** and direct **streaming from web/mobile apps**. It extracts knowledge from various platforms including:
 
 - **Google Meet**
