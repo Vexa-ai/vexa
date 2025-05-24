@@ -10,6 +10,7 @@ Instructions for setting up, running, and testing the Vexa system locally using 
 1.  **For CPU (Tiny Model, Slower Performance - Good for local tests/development):**
    this will use 'whisper tiny' model, which can run on CPU.
     ```bash
+    git clone https://github.com/Vexa-ai/vexa
     make all
     ```
     This command (among other things) uses `env-example.cpu` defaults for `.env` if not present.
@@ -17,6 +18,7 @@ Instructions for setting up, running, and testing the Vexa system locally using 
 2.  **For GPU (Medium Model, Faster Performance - Requires NVIDIA GPU & Toolkit):**
     this will use 'whisper medium' model, which is good enough to run on GPU.
     ```bash
+    git clone https://github.com/Vexa-ai/vexa
     make all TARGET=gpu
     ```
     This uses `env-example.gpu` defaults for `.env` if not present.
