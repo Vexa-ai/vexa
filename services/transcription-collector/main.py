@@ -237,6 +237,16 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any]) 
              logger.error(f"Logic error: internal_meeting_id not found for message {message_id} after checks.")
              return True # Treat as handled error to avoid loops
 
+        # Get speaker information from stream data if available
+        speaker_id = stream_data.get('speaker_id')
+        speaker_name = stream_data.get('speaker_name')
+        
+        # Log if we have speaker info
+        if speaker_id or speaker_name:
+            logger.info(f"[Msg {message_id}/Meet {internal_meeting_id}] Processing segments with speaker info: ID={speaker_id}, Name={speaker_name}")
+        else:
+            logger.info(f"[Msg {message_id}/Meet {internal_meeting_id}] Processing segments without speaker info.")
+
         # 4. Prepare segments for Redis Hash storage
         segment_count = 0
         hash_key = f"meeting:{internal_meeting_id}:segments"
@@ -272,7 +282,9 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any]) 
                  "end_time": end_time_float,
                  "language": language_content,
                  "updated_at": datetime.utcnow().isoformat() + "Z",
-                 "session_uid": session_uid_from_payload # Add session_uid
+                 "session_uid": session_uid_from_payload, # Add session_uid
+                 "speaker_id": speaker_id,  # Add speaker_id to segment data
+                 "speaker_name": speaker_name  # Add speaker_name to segment data
              }
              segments_to_store[start_time_key] = json.dumps(segment_redis_data)
              segment_count += 1
@@ -310,7 +322,9 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any]) 
                               return True # Proceed to ACK
 
                     # Log success (including cases where EXPIRE might have returned False/0)
-                    logger.info(f"Stored/Updated {segment_count} segments in Redis from message {message_id} for meeting {internal_meeting_id}. Results: {results}")
+                    logger.info(f"Stored/Updated {segment_count} segments in Redis from message {message_id}" + 
+                              (f" with speaker {speaker_name}" if speaker_name else "") + 
+                              f". Results: {results}")
 
                 # Note: The duplicate logger.info line below was removed as it's now covered by the else block above.
                 # logger.info(f"Stored {segment_count} segments in Redis from message {message_id} for meeting {internal_meeting_id}")
@@ -687,7 +701,9 @@ async def process_redis_to_postgres():
                                             end=segment_data['end_time'],
                                             text=segment_data['text'],
                                             language=segment_data.get('language'),
-                                            session_uid=segment_session_uid # Pass session_uid
+                                            session_uid=segment_session_uid, # Pass session_uid
+                                            speaker_id=segment_data.get('speaker_id'),  # Pass speaker_id 
+                                            speaker_name=segment_data.get('speaker_name')  # Pass speaker_name
                                         )
                                         batch_to_store.append(new_transcription)
                                     
@@ -735,7 +751,7 @@ async def process_redis_to_postgres():
 # --- Helper Functions ---
 
 # Simplified function - assumes meeting_id is valid
-def create_transcription_object(meeting_id: int, start: float, end: float, text: str, language: Optional[str], session_uid: Optional[str]) -> Transcription:
+def create_transcription_object(meeting_id: int, start: float, end: float, text: str, language: Optional[str], session_uid: Optional[str], speaker_id: Optional[str] = None, speaker_name: Optional[str] = None) -> Transcription:
     """Creates a Transcription ORM object without adding/committing."""
     return Transcription(
         meeting_id=meeting_id,
@@ -744,6 +760,8 @@ def create_transcription_object(meeting_id: int, start: float, end: float, text:
         text=text,
         language=language,
         session_uid=session_uid, # Add session_uid
+        speaker_id=speaker_id,  # Add speaker_id 
+        speaker_name=speaker_name,  # Add speaker_name
         created_at=datetime.utcnow() # Record creation time in DB
     )
 

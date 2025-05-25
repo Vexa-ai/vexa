@@ -16,6 +16,7 @@ The Transcription Collector uses a modular filtering system to identify and remo
 ### How Filtering Works
 
 1. Each segment passes through multiple filters:
+
    - Minimum character length check
    - Pattern matching against known non-informative patterns
    - Real word counting (excluding stopwords and special symbols)
@@ -55,7 +56,7 @@ CUSTOM_FILTERS = [
 # Add language-specific stopwords
 STOPWORDS = {
     "en": ["the", "and", "for", "you", "this", "that"],
-    # Add other languages as needed
+    #TODO: Add other languages as needed
 }
 ```
 
@@ -90,4 +91,4 @@ CUSTOM_FILTERS.append(filter_out_short_words_only)
 
 ## Deployment
 
-The Transcription Collector is designed to run as a Docker container alongside Redis and PostgreSQL. See the docker-compose.yml file for deployment configuration. 
+The Transcription Collector is designed to run as a Docker container alongside Redis and PostgreSQL. See the docker-compose.yml file for deployment configuration.
