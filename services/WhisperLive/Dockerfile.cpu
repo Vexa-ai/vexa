@@ -41,9 +41,15 @@ COPY services/WhisperLive/ /app/
 COPY services/WhisperLive/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
+# Copy healthcheck script
+COPY services/WhisperLive/healthcheck.sh /healthcheck.sh
+RUN chmod +x /healthcheck.sh
+
 # Set it as the entrypoint
 ENTRYPOINT ["/entrypoint.sh"]
 
-# Default command to run the server with faster_whisper backend
-# Use a small model size and more CPU threads for better performance
-CMD ["--port", "9090", "--backend", "faster_whisper", "--omp_num_threads", "4"] 
+# Default command to run the server with faster_whisper backend on CPU
+CMD ["--port", "9092", "--backend", "faster_whisper"]
+
+# Define the health check using the script
+HEALTHCHECK --interval=15s --timeout=5s --start-period=90s --retries=3 CMD /healthcheck.sh # Adjusted start-period for CPU 

@@ -115,6 +115,27 @@ async def list_users(skip: int = 0, limit: int = 100, db: AsyncSession = Depends
     users = result.scalars().all()
     return [UserResponse.from_orm(u) for u in users]
 
+@router.get("/users/email/{user_email}",
+            response_model=UserResponse, # Changed from UserDetailResponse
+            summary="Get a specific user by email") # Removed ', including their API tokens'
+async def get_user_by_email(user_email: str, db: AsyncSession = Depends(get_db)):
+    """Gets a user by their email.""" # Removed ', eagerly loading their API tokens.'
+    # Removed .options(selectinload(User.api_tokens))
+    result = await db.execute(
+        select(User)
+        .where(User.email == user_email)
+    )
+    user = result.scalars().first()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    # Return the user object. Pydantic will handle serialization using UserDetailResponse.
+    return user
+
 @router.get("/users/{user_id}", 
             response_model=UserDetailResponse, # Use the detailed response schema
             summary="Get a specific user by ID, including their API tokens")

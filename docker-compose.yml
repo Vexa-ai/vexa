@@ -115,19 +115,13 @@ services:
       - "9090" #use for transcription web socket
       - "9091" #use for health check
     deploy:
-      replicas: 1 # Sets to 1 to avoid GPU contention
+      replicas: 3 # Sets to 1 to avoid GPU contention
       resources:
         reservations:
           devices:
             - driver: nvidia
               device_ids: ["3"] # Ensure this is configurable or correct for your setup
               capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9091/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 30s # Give time for model loading
     init: true
     depends_on:
       transcription-collector:
@@ -170,7 +164,7 @@ services:
       - REDIS_STREAM_NAME=transcription_segments
       - LANGUAGE_DETECTION_SEGMENTS=10
       - VAD_FILTER_THRESHOLD=0.5
-      - DEVICE_TYPE=${DEVICE_TYPE}
+      - DEVICE_TYPE=cpu
     entrypoint: /bin/sh
     command:
       - "-c"
@@ -185,12 +179,6 @@ services:
     expose:
       - "9092" #use for transcription web socket
       - "9093" #use for health check
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9093/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 60s # Longer start period for CPU model loading
     init: true
     depends_on:
       transcription-collector:

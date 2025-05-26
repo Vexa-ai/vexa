@@ -312,6 +312,19 @@ class VexaClient:
         path = f"/admin/users/{user_id}"
         return self._request("PATCH", path, api_type='admin', json_data=payload)
 
+    def get_user_by_email(self, email: str) -> Dict[str, Any]:
+        """
+        Retrieves a specific user by their email address (Admin Only).
+
+        Args:
+            email: The email address of the user to retrieve.
+
+        Returns:
+            Dictionary representing the User object.
+        """
+        path = f"/admin/users/email/{email}"
+        return self._request("GET", path, api_type='admin')
+
     # --- Admin: Token Management ---
 
     def create_token(self, user_id: int) -> Dict[str, Any]:
