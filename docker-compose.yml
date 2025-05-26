@@ -67,7 +67,7 @@ services:
       - DOCKER_HOST=unix://var/run/docker.sock
       - DEVICE_TYPE=${DEVICE_TYPE}
       - WHISPER_LIVE_GPU_URL=ws://whisperlive:9090
-      - WHISPER_LIVE_CPU_URL=ws://whisperlive-cpu:9092
+      - WHISPER_LIVE_CPU_URL=ws://whisperlive-cpu:9090
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     init: true
@@ -171,14 +171,14 @@ services:
       - |
         if [ "$${DEVICE_TYPE}" = "cpu" ]; then
           echo 'INFO: DEVICE_TYPE is cpu, starting WhisperLive CPU service.' &&
-          exec python3 /app/run_server.py --port 9092 --backend faster_whisper -fw /root/.cache/huggingface/hub/models--Systran--faster-whisper-tiny/snapshots/d90ca5fe260221311c53c58e660288d3deb8d356;
+          exec python3 /app/run_server.py --port 9090 --backend faster_whisper -fw /root/.cache/huggingface/hub/models--Systran--faster-whisper-tiny/snapshots/d90ca5fe260221311c53c58e660288d3deb8d356;
         else
           echo "INFO: DEVICE_TYPE is not cpu (it is '$${DEVICE_TYPE}'), WhisperLive CPU service will not start. Sleeping indefinitely." &&
           sleep infinity;
         fi
     expose:
-      - "9092" #use for transcription web socket
-      - "9093" #use for health check
+      - "9090" #use for transcription web socket
+      - "9091" #use for health check
     init: true
     depends_on:
       transcription-collector:
@@ -198,7 +198,7 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.whisperlive-cpu.rule=Host(`whisperlive-cpu.localhost`)"
       - "traefik.http.routers.whisperlive-cpu.entrypoints=web"
-      - "traefik.http.services.whisperlive-cpu.loadbalancer.server.port=9092"
+      - "traefik.http.services.whisperlive-cpu.loadbalancer.server.port=9090"
       - "traefik.http.middlewares.whisperlive-cpu-headers.headers.customrequestheaders.Connection=upgrade"
       - "traefik.http.middlewares.whisperlive-cpu-headers.headers.customrequestheaders.Upgrade=websocket"
       - "traefik.http.routers.whisperlive-cpu.middlewares=whisperlive-cpu-headers"
