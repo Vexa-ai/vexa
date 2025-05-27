@@ -13,3 +13,4 @@ numpy<2
 openai-whisper==20240930
 tokenizers==0.20.3
 redis>=4.6.0
+pydantic>=2.0.0

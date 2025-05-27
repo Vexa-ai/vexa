@@ -237,6 +237,16 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any]) 
              logger.error(f"Logic error: internal_meeting_id not found for message {message_id} after checks.")
              return True # Treat as handled error to avoid loops
 
+        # Get speaker information from stream data if available
+        speaker_id = stream_data.get('speaker_id')
+        speaker_name = stream_data.get('speaker_name')
+        
+        # Log if we have speaker info
+        if speaker_id or speaker_name:
+            logger.info(f"[Msg {message_id}/Meet {internal_meeting_id}] Processing segments with speaker info: ID={speaker_id}, Name={speaker_name}")
+        else:
+            logger.info(f"[Msg {message_id}/Meet {internal_meeting_id}] Processing segments without speaker info.")
+
         # 4. Prepare segments for Redis Hash storage
         segment_count = 0
         hash_key = f"meeting:{internal_meeting_id}:segments"
@@ -264,15 +274,21 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any]) 
                  logger.warning(f"[Msg {message_id}/Meet {internal_meeting_id}] Skipping segment {i} with invalid time format: {time_err} - Segment: {segment}")
                  continue
                         
+             # Get speaker_id and speaker_name from the individual segment dictionary
+             segment_speaker_id = segment.get('speaker_id')
+             segment_speaker_name = segment.get('speaker_name')
+
              # Create data for Redis Hash
              start_time_key = f"{start_time_float:.3f}"
-             session_uid_from_payload = stream_data.get('uid') # Get uid from message payload
+             session_uid_from_payload = stream_data.get('uid')
              segment_redis_data = {
                  "text": text_content,
                  "end_time": end_time_float,
                  "language": language_content,
                  "updated_at": datetime.utcnow().isoformat() + "Z",
-                 "session_uid": session_uid_from_payload # Add session_uid
+                 "session_uid": session_uid_from_payload, # Add session_uid
+                 "speaker_id": segment_speaker_id,  # Fixed: use segment-specific speaker_id
+                 "speaker_name": segment_speaker_name  # Fixed: use segment-specific speaker_name
              }
              segments_to_store[start_time_key] = json.dumps(segment_redis_data)
              segment_count += 1
@@ -310,7 +326,9 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any]) 
                               return True # Proceed to ACK
 
                     # Log success (including cases where EXPIRE might have returned False/0)
-                    logger.info(f"Stored/Updated {segment_count} segments in Redis from message {message_id} for meeting {internal_meeting_id}. Results: {results}")
+                    logger.info(f"Stored/Updated {segment_count} segments in Redis from message {message_id}" + 
+                              (f" with speaker {speaker_name}" if speaker_name else "") + 
+                              f". Results: {results}")
 
                 # Note: The duplicate logger.info line below was removed as it's now covered by the else block above.
                 # logger.info(f"Stored {segment_count} segments in Redis from message {message_id} for meeting {internal_meeting_id}")
@@ -687,7 +705,8 @@ async def process_redis_to_postgres():
                                             end=segment_data['end_time'],
                                             text=segment_data['text'],
                                             language=segment_data.get('language'),
-                                            session_uid=segment_session_uid # Pass session_uid
+                                            session_uid=segment_session_uid, # Pass session_uid
+                                            speaker_name=segment_data.get('speaker_name')  # Pass speaker_name
                                         )
                                         batch_to_store.append(new_transcription)
                                     
@@ -735,7 +754,7 @@ async def process_redis_to_postgres():
 # --- Helper Functions ---
 
 # Simplified function - assumes meeting_id is valid
-def create_transcription_object(meeting_id: int, start: float, end: float, text: str, language: Optional[str], session_uid: Optional[str]) -> Transcription:
+def create_transcription_object(meeting_id: int, start: float, end: float, text: str, language: Optional[str], session_uid: Optional[str], speaker_name: Optional[str] = None) -> Transcription:
     """Creates a Transcription ORM object without adding/committing."""
     return Transcription(
         meeting_id=meeting_id,
@@ -744,6 +763,7 @@ def create_transcription_object(meeting_id: int, start: float, end: float, text:
         text=text,
         language=language,
         session_uid=session_uid, # Add session_uid
+        speaker=speaker_name,  # Assign speaker_name to the 'speaker' field
         created_at=datetime.utcnow() # Record creation time in DB
     )
 
@@ -886,6 +906,7 @@ async def get_transcript_by_native_id(
                     text=segment.text,
                     language=segment.language,
                     created_at=segment.created_at, # Corrected previously
+                    speaker=segment.speaker,  # Add speaker information from DB
                     # ---> ADD Populate absolute times <----
                     absolute_start_time=absolute_start_time,
                     absolute_end_time=absolute_end_time
@@ -939,6 +960,7 @@ async def get_transcript_by_native_id(
                         end_time=segment_data['end_time'],
                         text=segment_data['text'],
                         language=segment_data.get('language'), # Corrected previously
+                        speaker=segment_data.get('speaker_name'),  # Add speaker information from Redis
                         # created_at will be None for Redis segments
                         # ---> ADD Populate absolute times <----
                         absolute_start_time=absolute_start_time,
