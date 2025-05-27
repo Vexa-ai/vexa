@@ -290,8 +290,7 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
           let socket: WebSocket | null = null;
           let isServerReady = false;
           let retryCount = 0;
-          const maxRetries = 5;
-          const retryDelay = 2000;
+          const baseRetryDelay = botConfigData.reconnectionIntervalMs || 5000; // ADDED: Configurable retry delay, default 5s
 
           const setupWebSocket = () => {
             try {
@@ -385,50 +384,33 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                   `WebSocket connection closed. Code: ${event.code}, Reason: ${event.reason}`
                 );
 
-                // Retry logic
-                if (retryCount < maxRetries) {
-                  const exponentialDelay = retryDelay * Math.pow(2, retryCount);
-                  retryCount++;
-                  (window as any).logBot(
-                    `Attempting to reconnect in ${exponentialDelay}ms. Retry ${retryCount}/${maxRetries}`
-                  );
-
-                  setTimeout(() => {
-                    (window as any).logBot(
-                      `Retrying WebSocket connection (${retryCount}/${maxRetries})...`
-                    );
-                    setupWebSocket();
-                  }, exponentialDelay);
-                } else {
-                  (window as any).logBot(
-                    "Maximum WebSocket reconnection attempts reached. Giving up."
-                  );
-                  // Optionally, we could reject the promise here if required
-                }
-              };
-            } catch (e: any) {
-              (window as any).logBot(`Error creating WebSocket: ${e.message}`);
-              // For initial connection errors, handle with retry logic
-              if (retryCount < maxRetries) {
-                const exponentialDelay = retryDelay * Math.pow(2, retryCount);
+                // Retry logic - now retries indefinitely
                 retryCount++;
                 (window as any).logBot(
-                  `Attempting to reconnect in ${exponentialDelay}ms. Retry ${retryCount}/${maxRetries}`
+                  `Attempting to reconnect in ${baseRetryDelay}ms. Retry attempt ${retryCount}`
                 );
 
                 setTimeout(() => {
                   (window as any).logBot(
-                    `Retrying WebSocket connection (${retryCount}/${maxRetries})...`
+                    `Retrying WebSocket connection (attempt ${retryCount})...`
                   );
                   setupWebSocket();
-                }, exponentialDelay);
-              } else {
-                return reject(
-                  new Error(
-                    `WebSocket creation failed after ${maxRetries} attempts: ${e.message}`
-                  )
+                }, baseRetryDelay);
+              };
+            } catch (e: any) {
+              (window as any).logBot(`Error creating WebSocket: ${e.message}`);
+              // For initial connection errors, handle with retry logic - now retries indefinitely
+              retryCount++;
+              (window as any).logBot(
+                `Error during WebSocket setup. Attempting to reconnect in ${baseRetryDelay}ms. Retry attempt ${retryCount}`
+              );
+
+              setTimeout(() => {
+                (window as any).logBot(
+                  `Retrying WebSocket connection (attempt ${retryCount})...`
                 );
-              }
+                setupWebSocket();
+              }, baseRetryDelay);
             }
           };
 

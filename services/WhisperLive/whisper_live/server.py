@@ -8,6 +8,7 @@ from enum import Enum
 from typing import List, Optional
 import datetime
 import websocket
+import sys # Added sys import
 
 import torch
 import numpy as np
@@ -292,7 +293,7 @@ class TranscriptionCollectorClient:
             return False
 
 class ClientManager:
-    def __init__(self, max_clients=4, max_connection_time=600):
+    def __init__(self, max_clients=4, max_connection_time=3600):
         """
         Initializes the ClientManager with specified limits on client connections and connection durations.
 
@@ -440,6 +441,13 @@ class TranscriptionServer:
         self.health_server = None
         self.backend = None # Initialize backend attribute
 
+        # Self-monitoring
+        self.unhealthy_streak = 0
+        self.max_unhealthy_streak = 5  # Exit after 5 consecutive failed health checks
+        self.health_monitor_interval = 30  # Check health every 30 seconds
+        self.self_monitor_thread = None
+        self._stop_self_monitor = threading.Event()
+
     def initialize_client(
         self, websocket, options, faster_whisper_custom_model_path,
         whisper_tensorrt_path, trt_multilingual
@@ -558,7 +566,7 @@ class TranscriptionServer:
 
             if self.client_manager is None:
                 max_clients = options.get('max_clients', 4)
-                max_connection_time = options.get('max_connection_time', 600)
+                max_connection_time = options.get('max_connection_time', 3600)
                 self.client_manager = ClientManager(max_clients, max_connection_time)
 
             self.use_vad = options.get('use_vad')
@@ -674,7 +682,109 @@ class TranscriptionServer:
         ) as server:
             self.is_healthy = True # WebSocket server is up
             logger.info(f"SERVER_RUNNING: WhisperLive server running on {host}:{port} with health check on {host}:9091/health")
+            
+            # Start self-monitoring thread
+            if self.self_monitor_thread is None:
+                self._stop_self_monitor.clear()
+                self.self_monitor_thread = threading.Thread(target=self._self_monitor, daemon=True)
+                self.self_monitor_thread.start()
+                logger.info(f"SELF_MONITOR: Started self-monitoring thread. Interval: {self.health_monitor_interval}s, Max Streak: {self.max_unhealthy_streak}")
+
             server.serve_forever()
+
+    def _self_monitor(self):
+        """Periodically checks internal health and exits if persistently unhealthy."""
+        while not self._stop_self_monitor.is_set():
+            try:
+                # Check WebSocket server status (already tracked by self.is_healthy)
+                websocket_ok = self.is_healthy
+
+                # Check Redis connection status
+                redis_ok = False
+                redis_ping_details = "Collector client not initialized or not connected"
+                if self.collector_client and self.collector_client.is_connected and self.collector_client.redis_client:
+                    try:
+                        with self.collector_client.connection_lock:
+                            if self.collector_client.redis_client:
+                                self.collector_client.redis_client.ping()
+                                redis_ok = True
+                                redis_ping_details = "Ping OK"
+                            else:
+                                redis_ping_details = "redis_collector.redis_client is None (within lock)"
+                    except redis.exceptions.RedisError as e:
+                        redis_ping_details = f"Redis ping failed: {str(e)}"
+                        logging.warning(f"Self-monitor: {redis_ping_details}")
+                    except Exception as e:
+                        redis_ping_details = f"Unexpected error during Redis ping: {str(e)}"
+                        logging.warning(f"Self-monitor: {redis_ping_details}")
+                elif self.collector_client and not self.collector_client.is_connected:
+                    redis_ping_details = "Collector client initialized but not connected to Redis"
+
+                if websocket_ok and redis_ok:
+                    if self.unhealthy_streak > 0:
+                        logging.info(f"Self-monitor: Service recovered. WebSocket: OK, Redis: OK. Unhealthy streak reset.")
+                    self.unhealthy_streak = 0
+                else:
+                    self.unhealthy_streak += 1
+                    logging.warning(
+                        f"Self-monitor: Unhealthy check #{self.unhealthy_streak}/{self.max_unhealthy_streak}. "
+                        f"WebSocket Ready: {websocket_ok}, Redis Connected: {redis_ok} (Details: {redis_ping_details})"
+                    )
+
+                if self.unhealthy_streak >= self.max_unhealthy_streak:
+                    logging.critical(
+                        f"Self-monitor: Service unhealthy for {self.unhealthy_streak} consecutive checks. "
+                        f"Max streak of {self.max_unhealthy_streak} reached. Initiating self-termination."
+                    )
+                    self._graceful_shutdown_and_exit()
+                    return # Exit thread
+
+            except Exception as e:
+                # Catch any unexpected errors in the monitoring loop itself
+                logging.error(f"Self-monitor: Unexpected error in monitoring loop: {e}", exc_info=True)
+                self.unhealthy_streak +=1 # Count this as an unhealthy check to be safe
+                if self.unhealthy_streak >= self.max_unhealthy_streak:
+                    logging.critical(f"Self-monitor: Exiting due to repeated errors in monitoring loop.")
+                    self._graceful_shutdown_and_exit()
+                    return # Exit thread
+            
+            self._stop_self_monitor.wait(self.health_monitor_interval)
+
+    def _graceful_shutdown_and_exit(self):
+        """Attempts to gracefully shut down components and then exits the process."""
+        logging.info("Self-monitor: Attempting graceful shutdown...")
+        
+        # 1. Stop accepting new connections / mark as unhealthy for external checks
+        self.is_healthy = False
+
+        # 2. Stop the self-monitor thread from looping again
+        self._stop_self_monitor.set()
+
+        # 3. Close the HTTP health server
+        if self.health_server:
+            try:
+                logging.info("Self-monitor: Shutting down HTTP health check server...")
+                self.health_server.shutdown() # Graceful shutdown
+                self.health_server.server_close() # Release port
+                logging.info("Self-monitor: HTTP health check server shut down.")
+            except Exception as e:
+                logging.error(f"Self-monitor: Error shutting down HTTP health_server: {e}", exc_info=True)
+        
+        # 4. Disconnect the Redis collector client
+        if self.collector_client:
+            try:
+                logging.info("Self-monitor: Disconnecting TranscriptionCollectorClient...")
+                self.collector_client.disconnect()
+                logging.info("Self-monitor: TranscriptionCollectorClient disconnected.")
+            except Exception as e:
+                logging.error(f"Self-monitor: Error disconnecting collector_client: {e}", exc_info=True)
+
+        # 5. TODO: Add cleanup for active WebSocket client connections if possible.
+        # This is complex as `server.serve_forever()` blocks the main thread.
+        # Options: server.shutdown() if available, or rely on process exit for now.
+
+        logging.critical("Self-monitor: Graceful shutdown attempt complete. Exiting process with code 1.")
+        sys.exit(1) # Exit the process
 
     def voice_activity(self, websocket, frame_np):
         """
@@ -802,6 +912,9 @@ class TranscriptionServer:
             logging.info(f"Health check HTTP server started on {host}:{port}")
         except Exception as e:
             logging.error(f"Failed to start health check server: {e}")
+            # If health server fails to start, it's a critical issue.
+            # self.is_healthy might not be accurate for the self-monitor if this fails early.
+            # Consider setting self.is_healthy = False here or exiting if http health server is mandatory.
 
 
 class ServeClientBase(object):

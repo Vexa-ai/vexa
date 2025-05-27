@@ -13,5 +13,6 @@ export type BotConfig = {
     noOneJoinedTimeout: number,
     everyoneLeftTimeout: number
   },
+  reconnectionIntervalMs?: number,
   meeting_id?: number
 }
