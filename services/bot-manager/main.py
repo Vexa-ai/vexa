@@ -59,6 +59,13 @@ class MeetingConfigUpdate(BaseModel):
     task: Optional[str] = Field(None, description="New task ('transcribe' or 'translate')")
 # -------------------------------------------
 
+# --- ADDED: Pydantic Model for Bot Exit Callback ---
+class BotExitCallbackPayload(BaseModel):
+    connection_id: str = Field(..., description="The connectionId (session_uid) of the exiting bot.")
+    exit_code: int = Field(..., description="The exit code of the bot process (0 for success, 1 for UI leave failure).")
+    reason: Optional[str] = Field("self_initiated_leave", description="Reason for the exit.")
+# --- --------------------------------------------- ---
+
 @app.on_event("startup")
 async def startup_event():
     global redis_client # <-- Add global reference
@@ -526,6 +533,66 @@ async def get_user_bots_status(
             detail="Failed to retrieve bot status."
         )
 # --- END Endpoint: Get Running Bot Status --- 
+
+# --- ADDED: Endpoint for Vexa-Bot to report its exit status ---
+@app.post("/bots/internal/callback/exited",
+          status_code=status.HTTP_200_OK,
+          summary="Callback for vexa-bot to report its exit status",
+          include_in_schema=False) # Hidden from public API docs
+async def bot_exit_callback(
+    payload: BotExitCallbackPayload,
+    db: AsyncSession = Depends(get_db)
+):
+    logger.info(f"Received bot exit callback: connection_id={payload.connection_id}, exit_code={payload.exit_code}, reason={payload.reason}")
+
+    try:
+        # 1. Find the MeetingSession using the connection_id (session_uid)
+        session_stmt = select(MeetingSession).where(MeetingSession.session_uid == payload.connection_id)
+        session_result = await db.execute(session_stmt)
+        meeting_session = session_result.scalars().first()
+
+        if not meeting_session:
+            logger.warning(f"Bot exit callback: No MeetingSession found for connection_id/session_uid: {payload.connection_id}")
+            # Return 404 as we can't identify the meeting this bot belonged to.
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting session not found for the provided connection_id.")
+
+        meeting_id = meeting_session.meeting_id
+        logger.info(f"Bot exit callback: Found meeting_id {meeting_id} for connection_id {payload.connection_id}")
+
+        # 2. Find the Meeting record
+        meeting = await db.get(Meeting, meeting_id)
+        if not meeting:
+            logger.error(f"Bot exit callback: MeetingSession {meeting_session.id} (uid: {payload.connection_id}) exists, but corresponding Meeting {meeting_id} not found.")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting record not found, though session exists.")
+
+        # 3. Update Meeting status based on exit_code
+        # Avoid updating if already in a terminal state like 'completed', 'error' (unless we want to overwrite error specifically)
+        if meeting.status not in ['completed', 'failed']:
+            if payload.exit_code == 0:
+                meeting.status = 'completed'
+                logger.info(f"Bot exit callback: Meeting {meeting_id} status updated to 'completed'.")
+            else: # exit_code == 1 (or other non-zero)
+                # If bot couldn't click leave button, it's still a form of completion, but with a UI issue.
+                # We could use a more specific status, e.g., 'completed_with_ui_error' if defined,
+                # or just 'completed' but log the detail. For now, let's use 'failed' to indicate an issue.
+                meeting.status = 'failed' # Or 'completed_with_error'
+                logger.info(f"Bot exit callback: Meeting {meeting_id} status updated to 'failed' due to exit_code {payload.exit_code}.")
+            
+            meeting.end_time = datetime.utcnow()
+            await db.commit()
+            await db.refresh(meeting)
+            logger.info(f"Bot exit callback: Meeting {meeting_id} successfully updated.")
+        else:
+            logger.info(f"Bot exit callback: Meeting {meeting_id} already in a terminal state ('{meeting.status}'). No status update performed.")
+
+        return {"message": "Callback received and processed."}
+
+    except HTTPException as http_exc: # Re-raise HTTPExceptions directly
+        raise http_exc
+    except Exception as e:
+        logger.error(f"Error processing bot exit callback for connection_id {payload.connection_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error processing bot exit callback.")
+# --- --------------------------------------------------------- ---
 
 if __name__ == "__main__":
     uvicorn.run(

@@ -250,9 +250,10 @@ async def start_bot_container(
         "redisUrl": REDIS_URL,
         "automaticLeave": {
             "waitingRoomTimeout": 300000,
-            "noOneJoinedTimeout": 300000,
-            "everyoneLeftTimeout": 300000
-        }
+            "noOneJoinedTimeout": 120000,
+            "everyoneLeftTimeout": 60000
+        },
+        "botManagerCallbackUrl": f"http://bot-manager:8080/bots/internal/callback/exited"
     }
     # Remove keys with None values before serializing
     cleaned_config_data = {k: v for k, v in bot_config_data.items() if v is not None}

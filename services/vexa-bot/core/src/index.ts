@@ -6,12 +6,15 @@ import { browserArgs, userAgent } from "./constans";
 import { BotConfig } from "./types";
 import { createClient, RedisClientType } from 'redis';
 import { Page, Browser } from 'playwright-core';
+import * as http from 'http'; // ADDED: For HTTP callback
+import * as https from 'https'; // ADDED: For HTTPS callback (if needed)
 
 // Module-level variables to store current configuration
 let currentLanguage: string | null | undefined = null;
 let currentTask: string | null | undefined = 'transcribe'; // Default task
 let currentRedisUrl: string | null = null;
 let currentConnectionId: string | null = null;
+let botManagerCallbackUrl: string | null = null; // ADDED: To store callback URL
 
 // --- ADDED: Flag to prevent multiple shutdowns ---
 let isShuttingDown = false;
@@ -91,16 +94,56 @@ async function performGracefulLeave(page: Page): Promise<void> {
 
   let leaveSuccess = false;
   try {
-    // Call the appropriate platform-specific leave function
-    // Assuming google_meet for now based on previous context
-    // TODO: Make this platform-dynamic if supporting multiple platforms
     log("[Graceful Leave] Attempting platform-specific leave...");
     leaveSuccess = await leaveGoogleMeet(page);
     log(`[Graceful Leave] Platform leave attempt result: ${leaveSuccess}`);
   } catch (leaveError: any) {
     log(`[Graceful Leave] Error during platform leave attempt: ${leaveError.message}`);
-    leaveSuccess = false; // Ensure it's false on error
+    leaveSuccess = false;
   }
+
+  // --- ADDED: Notify bot-manager before exiting ---
+  if (botManagerCallbackUrl && currentConnectionId) {
+    const exitCode = leaveSuccess ? 0 : 1;
+    const payload = JSON.stringify({
+      connection_id: currentConnectionId,
+      exit_code: exitCode,
+      reason: "self_initiated_leave"
+    });
+
+    try {
+      log(`[Graceful Leave] Sending exit callback to ${botManagerCallbackUrl} with payload: ${payload}`);
+      const url = new URL(botManagerCallbackUrl);
+      const options = {
+        method: 'POST',
+        hostname: url.hostname,
+        port: url.port || (url.protocol === 'https:' ? 443 : 80),
+        path: url.pathname,
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload)
+        }
+      };
+
+      const req = (url.protocol === 'https:' ? https : http).request(options, (res) => {
+        log(`[Graceful Leave] Bot-manager callback response status: ${res.statusCode}`);
+        res.on('data', (d) => { /* consume data to free resources */ });
+      });
+
+      req.on('error', (error) => {
+        log(`[Graceful Leave] Error sending bot-manager callback: ${error.message}`);
+      });
+
+      req.write(payload);
+      req.end();
+      // Wait a very short moment for the HTTP request to be sent, but don't block exit indefinitely.
+      // This is a best-effort notification.
+      await new Promise(resolve => setTimeout(resolve, 500)); 
+    } catch (callbackError: any) {
+      log(`[Graceful Leave] Exception during bot-manager callback preparation: ${callbackError.message}`);
+    }
+  }
+  // --- ------------------------------------------ ---
 
   // Close Redis connection (if exists and open)
   if (redisSubscriber && redisSubscriber.isOpen) {
@@ -133,8 +176,6 @@ async function performGracefulLeave(page: Page): Promise<void> {
       process.exit(0);
   } else {
       log("[Graceful Leave] Leave attempt failed or button not found. Exiting process with code 1 (Failure). Waiting for external termination.");
-      // We exit with 1 to indicate failure, but the delayed stop from bot-manager will still kill it.
-      // If we *didn't* exit here, the process would hang until killed.
       process.exit(1);
   }
 }
@@ -148,10 +189,10 @@ async function performGracefulLeave(page: Page): Promise<void> {
 export async function runBot(botConfig: BotConfig): Promise<void> {
   // --- UPDATED: Parse and store config values ---
   currentLanguage = botConfig.language;
-  currentTask = botConfig.task || 'transcribe'; // Use default if null/undefined
+  currentTask = botConfig.task || 'transcribe';
   currentRedisUrl = botConfig.redisUrl;
   currentConnectionId = botConfig.connectionId;
-  // ---------------------------------------------
+  botManagerCallbackUrl = botConfig.botManagerCallbackUrl || null; // ADDED: Get callback URL from botConfig
 
   // Destructure other needed config values
   const { meetingUrl, platform, botName } = botConfig;
