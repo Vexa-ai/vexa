@@ -17,7 +17,7 @@ from shared_models.models import User, APIToken, Base, Meeting # Import Base for
 from shared_models.schemas import UserCreate, UserResponse, TokenResponse, UserDetailResponse, UserBase, UserUpdate, MeetingResponse # Import UserBase for update and UserUpdate schema
 
 # Database utilities (needs to be created)
-from shared_models.database import get_db, init_db # New import
+from shared_models.database import get_db, init_db , recreate_db # New import
 
 # Logging configuration
 logging.basicConfig(
@@ -279,6 +279,7 @@ async def startup_event():
     logger.info("Starting up Admin API...")
     # Requires database_utils.py to be created in admin-api/app
     await init_db() 
+    #await recreate_db()
     logger.info("Database initialized.")
 
 # Root endpoint (optional)
