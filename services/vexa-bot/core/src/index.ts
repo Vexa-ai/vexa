@@ -140,6 +140,11 @@ async function performGracefulLeave(page: Page): Promise<void> {
 }
 // --- ----------------------------- ---
 
+// --- ADDED: Function to be called from browser to trigger leave ---
+// This needs to be defined in a scope where 'page' will be available when it's exposed.
+// We will define the actual exposed function inside runBot where 'page' is in scope.
+// --- ------------------------------------------------------------ ---
+
 export async function runBot(botConfig: BotConfig): Promise<void> {
   // --- UPDATED: Parse and store config values ---
   currentLanguage = botConfig.language;
@@ -213,6 +218,17 @@ export async function runBot(botConfig: BotConfig): Promise<void> {
     }
   })
   const page = await context.newPage();
+
+  // --- ADDED: Expose a function for browser to trigger Node.js graceful leave ---
+  await page.exposeFunction("triggerNodeGracefulLeave", async () => {
+    log("[Node.js] Received triggerNodeGracefulLeave from browser context.");
+    if (!isShuttingDown) { // Check flag to avoid multiple triggers
+      await performGracefulLeave(page);
+    } else {
+      log("[Node.js] Ignoring triggerNodeGracefulLeave as shutdown is already in progress.");
+    }
+  });
+  // --- ----------------------------------------------------------------------- ---
 
   // Setup anti-detection measures
   await page.addInitScript(() => {

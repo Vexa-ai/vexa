@@ -584,6 +584,7 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
               );
               clearInterval(checkInterval);
               recorder.disconnect();
+              (window as any).triggerNodeGracefulLeave();
               resolve();
               return;
             }
@@ -605,6 +606,7 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
               );
               clearInterval(checkInterval);
               recorder.disconnect();
+              (window as any).triggerNodeGracefulLeave();
               resolve();
             }
           }, 5000);
@@ -614,6 +616,7 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
             (window as any).logBot("Page is unloading. Stopping recorder...");
             clearInterval(checkInterval);
             recorder.disconnect();
+            (window as any).triggerNodeGracefulLeave();
             resolve();
           });
           document.addEventListener("visibilitychange", () => {
@@ -623,6 +626,7 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
               );
               clearInterval(checkInterval);
               recorder.disconnect();
+              (window as any).triggerNodeGracefulLeave();
               resolve();
             }
           });
