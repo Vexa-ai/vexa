@@ -1,4 +1,4 @@
-name: vexa_cpu
+name: vexa_dev
 
 services:
   api-gateway:
