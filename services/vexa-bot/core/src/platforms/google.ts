@@ -290,7 +290,8 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
           let socket: WebSocket | null = null;
           let isServerReady = false;
           let retryCount = 0;
-          const baseRetryDelay = botConfigData.reconnectionIntervalMs || 5000; // ADDED: Configurable retry delay, default 5s
+          const configuredInterval = botConfigData.reconnectionIntervalMs;
+          const baseRetryDelay = (configuredInterval && configuredInterval <= 1000) ? configuredInterval : 1000; // Use configured if <= 1s, else 1s
 
           const setupWebSocket = () => {
             try {
@@ -305,7 +306,26 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
 
               socket = new WebSocket(wsUrl);
 
+              // --- NEW: Force-close if connection cannot be established quickly ---
+              const connectionTimeoutMs = 3000; // 3-second timeout for CONNECTING state
+              let connectionTimeoutHandle: number | null = window.setTimeout(() => {
+                if (socket && socket.readyState === WebSocket.CONNECTING) {
+                  (window as any).logBot(
+                    `Connection attempt timed out after ${connectionTimeoutMs}ms. Forcing close.`
+                  );
+                  try {
+                    socket.close(); // Triggers onclose -> retry logic
+                  } catch (_) {
+                    /* ignore */
+                  }
+                }
+              }, connectionTimeoutMs);
+
               socket.onopen = function () {
+                if (connectionTimeoutHandle !== null) {
+                  clearTimeout(connectionTimeoutHandle); // Clear connection watchdog
+                  connectionTimeoutHandle = null;
+                }
                 // --- MODIFIED: Log current config being used ---
                 // --- MODIFIED: Generate NEW UUID for this connection ---
                 const currentSessionUid = generateUUID();
@@ -374,12 +394,20 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
               };
 
               socket.onerror = (event) => {
+                if (connectionTimeoutHandle !== null) {
+                  clearTimeout(connectionTimeoutHandle);
+                  connectionTimeoutHandle = null;
+                }
                 (window as any).logBot(
                   `WebSocket error: ${JSON.stringify(event)}`
                 );
               };
 
               socket.onclose = (event) => {
+                if (connectionTimeoutHandle !== null) {
+                  clearTimeout(connectionTimeoutHandle);
+                  connectionTimeoutHandle = null;
+                }
                 (window as any).logBot(
                   `WebSocket connection closed. Code: ${event.code}, Reason: ${event.reason}`
                 );

@@ -143,12 +143,11 @@ services:
       - "traefik.http.middlewares.whisperlive-ws-headers.headers.customrequestheaders.Connection=upgrade"
       - "traefik.http.middlewares.whisperlive-ws-headers.headers.customrequestheaders.Upgrade=websocket"
       - "traefik.http.routers.whisperlive-router.middlewares=whisperlive-ws-headers"
-      - "traefik.docker.network=vexa_vexa_default"
       - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.path=/health"
       - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.port=9091"
       - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.scheme=http"
-      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.interval=5s"
-      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.timeout=3s"
+      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.interval=2s"
+      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.timeout=1s"
 
   # CPU version of WhisperLive for users without GPU
   whisperlive-cpu:
@@ -206,12 +205,11 @@ services:
       - "traefik.http.middlewares.whisperlive-ws-headers.headers.customrequestheaders.Connection=upgrade"
       - "traefik.http.middlewares.whisperlive-ws-headers.headers.customrequestheaders.Upgrade=websocket"
       - "traefik.http.routers.whisperlive-router.middlewares=whisperlive-ws-headers"
-      - "traefik.docker.network=vexa_vexa_default"
       - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.path=/health"
       - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.port=9091"
       - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.scheme=http"
-      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.interval=5s"
-      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.timeout=3s"
+      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.interval=2s"
+      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.timeout=1s"
 
   # Replace nginx load-balancer with Traefik
   traefik:
