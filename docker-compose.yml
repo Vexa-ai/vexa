@@ -66,8 +66,7 @@ services:
       - DB_PASSWORD=postgres
       - DOCKER_HOST=unix://var/run/docker.sock
       - DEVICE_TYPE=${DEVICE_TYPE}
-      - WHISPER_LIVE_GPU_URL=ws://whisperlive:9090
-      - WHISPER_LIVE_CPU_URL=ws://whisperlive-cpu:9090
+      - WHISPER_LIVE_URL=ws://whisperlive.internal/ws
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     init: true
@@ -115,7 +114,7 @@ services:
       - "9090" #use for transcription web socket
       - "9091" #use for health check
     deploy:
-      replicas: 1 # Sets to 1 to avoid GPU contention
+      replicas: 2 # Sets to 1 to avoid GPU contention
       resources:
         reservations:
           devices:
@@ -138,13 +137,18 @@ services:
     # Add Traefik labels for service discovery
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.whisperlive.rule=Host(`whisperlive.localhost`)"
-      - "traefik.http.routers.whisperlive.entrypoints=web"
-      - "traefik.http.services.whisperlive.loadbalancer.server.port=9090"
-      # Special headers for WebSocket support
-      - "traefik.http.middlewares.whisperlive-headers.headers.customrequestheaders.Connection=upgrade"
-      - "traefik.http.middlewares.whisperlive-headers.headers.customrequestheaders.Upgrade=websocket"
-      - "traefik.http.routers.whisperlive.middlewares=whisperlive-headers"
+      - "traefik.http.routers.whisperlive-router.rule=Host(`whisperlive.internal`) && PathPrefix(`/ws`)"
+      - "traefik.http.routers.whisperlive-router.entrypoints=web"
+      - "traefik.http.services.whisperlive-service.loadbalancer.server.port=9090"
+      - "traefik.http.middlewares.whisperlive-ws-headers.headers.customrequestheaders.Connection=upgrade"
+      - "traefik.http.middlewares.whisperlive-ws-headers.headers.customrequestheaders.Upgrade=websocket"
+      - "traefik.http.routers.whisperlive-router.middlewares=whisperlive-ws-headers"
+      - "traefik.docker.network=vexa_vexa_default"
+      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.port=9091"
+      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.scheme=http"
+      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.interval=5s"
+      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.timeout=3s"
 
   # CPU version of WhisperLive for users without GPU
   whisperlive-cpu:
@@ -196,12 +200,18 @@ services:
     # Add Traefik labels for service discovery
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.whisperlive-cpu.rule=Host(`whisperlive-cpu.localhost`)"
-      - "traefik.http.routers.whisperlive-cpu.entrypoints=web"
-      - "traefik.http.services.whisperlive-cpu.loadbalancer.server.port=9090"
-      - "traefik.http.middlewares.whisperlive-cpu-headers.headers.customrequestheaders.Connection=upgrade"
-      - "traefik.http.middlewares.whisperlive-cpu-headers.headers.customrequestheaders.Upgrade=websocket"
-      - "traefik.http.routers.whisperlive-cpu.middlewares=whisperlive-cpu-headers"
+      - "traefik.http.routers.whisperlive-router.rule=Host(`whisperlive.internal`) && PathPrefix(`/ws`)"
+      - "traefik.http.routers.whisperlive-router.entrypoints=web"
+      - "traefik.http.services.whisperlive-service.loadbalancer.server.port=9090"
+      - "traefik.http.middlewares.whisperlive-ws-headers.headers.customrequestheaders.Connection=upgrade"
+      - "traefik.http.middlewares.whisperlive-ws-headers.headers.customrequestheaders.Upgrade=websocket"
+      - "traefik.http.routers.whisperlive-router.middlewares=whisperlive-ws-headers"
+      - "traefik.docker.network=vexa_vexa_default"
+      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.port=9091"
+      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.scheme=http"
+      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.interval=5s"
+      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.timeout=3s"
 
   # Replace nginx load-balancer with Traefik
   traefik:
@@ -218,6 +228,8 @@ services:
       - "--providers.docker.exposedbydefault=false"
       - "--entrypoints.web.address=:80"
       - "--log.level=DEBUG"
+      - "--providers.docker.constraints=Label(`traefik.enable`, `true`)"
+      - "--providers.docker.watch=true"
     networks:
       - vexa_default
       - whispernet
