@@ -1,5 +1,4 @@
 name: vexa_dev
-
 services:
   api-gateway:
     build:
@@ -165,8 +164,8 @@ services:
       - REDIS_PORT=6379
       - REDIS_DB=0
       - REDIS_STREAM_NAME=transcription_segments
-      - LANGUAGE_DETECTION_SEGMENTS=10
-      - VAD_FILTER_THRESHOLD=0.5
+      - LANGUAGE_DETECTION_SEGMENTS=${LANGUAGE_DETECTION_SEGMENTS}
+      - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD}
       - DEVICE_TYPE=cpu
     entrypoint: /bin/sh
     deploy:
