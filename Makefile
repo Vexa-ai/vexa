@@ -1,4 +1,4 @@
-.PHONY: all setup submodules env force-env download-model build-bot-image build up down clean ps logs test
+.PHONY: all setup setup-env submodules env force-env download-model build-bot-image build up down clean ps logs test
 
 # Default target: Sets up everything and starts the services
 all: setup build up
@@ -165,6 +165,10 @@ build-bot-image: check_docker
 
 # Build Docker Compose service images
 build: check_docker
+ifndef TARGET
+	$(info TARGET not set for 'build'. Defaulting to cpu.)
+	$(eval TARGET := cpu)
+endif
 	@echo "---> Building Docker Compose services..."
 	@if [ "$(TARGET)" = "cpu" ]; then \
 		echo "---> Building with 'cpu' profile (includes whisperlive-cpu)..."; \
@@ -179,16 +183,20 @@ build: check_docker
 
 # Start services in detached mode
 up: check_docker
+ifndef TARGET
+	$(info TARGET not set for 'up'. Defaulting to cpu.)
+	$(eval TARGET := cpu)
+endif
 	@echo "---> Starting Docker Compose services..."
 	@if [ "$(TARGET)" = "cpu" ]; then \
 		echo "---> Activating 'cpu' profile to start whisperlive-cpu along with other services..."; \
-		docker compose --profile cpu up -d; \
+		docker compose --profile cpu up; \
 	elif [ "$(TARGET)" = "gpu" ]; then \
-		echo "---> Starting services for GPU. This will start 'whisperlive' (for GPU) and other default services. 'whisperlive-cpu' (profile=cpu) will not be started."; \
-		docker compose --profile gpu up -d; \
+		echo "---> Activating 'gpu' profile to start whisperlive (for GPU) along with other services..."; \
+		docker compose --profile gpu up; \
 	else \
 		echo "---> TARGET not explicitly set, defaulting to CPU mode. 'whisperlive' (GPU) will not be started."; \
-		docker compose --profile cpu up -d; \
+		docker compose --profile cpu up; \
 	fi
 
 # Stop services

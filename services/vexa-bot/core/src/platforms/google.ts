@@ -3,6 +3,22 @@ import { log, randomDelay } from "../utils";
 import { BotConfig } from "../types";
 import { v4 as uuidv4 } from "uuid"; // Import UUID
 
+// Define the MeetingConfig interface
+export interface MeetingConfig {
+  sessionUid?: string;
+  language?: string;
+  token: string;
+  meetingId?: string;
+  whisperLiveUrl?: string;
+}
+
+// Add global declaration for window.vexaSocket property
+declare global {
+  interface Window {
+    vexaSocket: WebSocket;
+  }
+}
+
 // --- ADDED: Function to generate UUID (if not already present globally) ---
 // If you have a shared utils file for this, import from there instead.
 function generateUUID() {
@@ -193,6 +209,24 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
       };
       // --- --------------------------------------------------------- ---
 
+      // Global cleanup function to prevent memory leaks
+      let cleanupFunctions: (() => void)[] = [];
+      const addCleanupFunction = (fn: () => void) => {
+        cleanupFunctions.push(fn);
+      };
+
+      const performGlobalCleanup = () => {
+        (window as any).logBot("Performing global cleanup...");
+        cleanupFunctions.forEach((fn) => {
+          try {
+            fn();
+          } catch (err) {
+            console.error("Error during cleanup:", err);
+          }
+        });
+        cleanupFunctions = [];
+      };
+
       await new Promise<void>((resolve, reject) => {
         try {
           (window as any).logBot("Starting recording process.");
@@ -214,6 +248,13 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
           const audioContext = new AudioContext();
           const destinationNode = audioContext.createMediaStreamDestination();
           let sourcesConnected = 0;
+
+          // Add audio context to cleanup
+          addCleanupFunction(() => {
+            if (audioContext.state !== "closed") {
+              audioContext.close();
+            }
+          });
 
           // NEW: Connect all media elements to the destination node
           mediaElements.forEach((element: any, index: number) => {
@@ -265,11 +306,6 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
           );
           // --- ------------------------------------------------------------------------ ---
 
-          // --- ADDED: Add secondary leave button selector for confirmation ---
-          const secondaryLeaveButtonSelector = `//button[.//span[text()='Leave meeting']] | //button[.//span[text()='Just leave the meeting']]`; // Example, adjust based on actual UI
-          // --- ----------------------------------------------------------- ---
-
-          // const wsUrl = "ws://whisperlive:9090";
           const wsUrl = whisperUrlForBrowser;
           if (!wsUrl) {
             (window as any).logBot?.(
@@ -278,9 +314,8 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
             console.error(
               "CRITICAL: WhisperLive WebSocket URL is missing in browser context!"
             );
-            return;
+            return reject(new Error("WhisperLive WebSocket URL is missing"));
           }
-          // (window as any).logBot(`Attempting to connect WebSocket to: ${wsUrl} with platform: ${platform}, session UID: ${sessionUid}`); // Log the correct UID
 
           // --- ADD Browser-scope state for current WS config ---
           let currentWsLanguage = initialLanguage;
@@ -292,6 +327,19 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
           let retryCount = 0;
           const maxRetries = 5;
           const retryDelay = 2000;
+
+          // --- ADDED: New interval reference for advanced speaker monitoring ---
+          let micPollingInterval: ReturnType<typeof setInterval> | null = null;
+          // --- --------------------------------------------------------------- ---
+
+          // --- ADDED: Audio chunk tracking for correlation ---
+          let audioChunkCounter = 0;
+          let audioChunkTimestamps: Array<{
+            chunkId: number;
+            timestamp: string;
+            duration: number;
+          }> = [];
+          // --- --------------------------------------------- ---
 
           const setupWebSocket = () => {
             try {
@@ -310,6 +358,8 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                 // --- MODIFIED: Log current config being used ---
                 // --- MODIFIED: Generate NEW UUID for this connection ---
                 const currentSessionUid = generateUUID();
+                (window as any).currentWsUid = currentSessionUid; // Store for speaker updates
+
                 (window as any).logBot(
                   `WebSocket connection opened. Using Lang: ${currentWsLanguage}, Task: ${currentWsTask}, New UID: ${currentSessionUid}`
                 );
@@ -336,40 +386,44 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                     `Sending initial config message: ${jsonPayload}`
                   );
                   socket.send(jsonPayload);
+
+                  // --- MODIFIED: Start new advanced speaker monitoring ---
+                  startAdvancedSpeakerMonitoring(); // Re-enabled advanced speaker monitoring
+                  // --- ------------------------------------------------- ---
                 }
               };
 
               socket.onmessage = (event) => {
-                (window as any).logBot("Received message: " + event.data);
-                const data = JSON.parse(event.data);
-                // NOTE: The check `if (data["uid"] !== sessionUid) return;` is removed
-                // because we no longer have a single sessionUid for the lifetime of the evaluate block.
-                // Each message *should* contain the UID associated with the specific WebSocket
-                // connection it came from. Downstream needs to handle this if correlation is needed.
-                // For now, we assume messages are relevant to the current bot context.
-                // Consider re-introducing a check if whisperlive echoes back the UID and it's needed.
+                try {
+                  (window as any).logBot("Received message: " + event.data);
+                  const data = JSON.parse(event.data);
 
-                if (data["status"] === "ERROR") {
-                  (window as any).logBot(
-                    `WebSocket Server Error: ${data["message"]}`
-                  );
-                } else if (data["status"] === "WAIT") {
-                  (window as any).logBot(`Server busy: ${data["message"]}`);
-                } else if (!isServerReady) {
-                  isServerReady = true;
-                  (window as any).logBot("Server is ready.");
-                } else if (data["language"]) {
-                  (window as any).logBot(
-                    `Language detected: ${data["language"]}`
-                  );
-                } else if (data["message"] === "DISCONNECT") {
-                  (window as any).logBot("Server requested disconnect.");
-                  if (socket) {
-                    socket.close();
+                  if (data["status"] === "ERROR") {
+                    (window as any).logBot(
+                      `WebSocket Server Error: ${data["message"]}`
+                    );
+                  } else if (data["status"] === "WAIT") {
+                    (window as any).logBot(`Server busy: ${data["message"]}`);
+                  } else if (!isServerReady) {
+                    isServerReady = true;
+                    (window as any).logBot("Server is ready.");
+                  } else if (data["language"]) {
+                    (window as any).logBot(
+                      `Language detected: ${data["language"]}`
+                    );
+                  } else if (data["message"] === "DISCONNECT") {
+                    (window as any).logBot("Server requested disconnect.");
+                    if (socket) {
+                      socket.close();
+                    }
+                  } else {
+                    (window as any).logBot(
+                      `Transcription: ${JSON.stringify(data)}`
+                    );
                   }
-                } else {
+                } catch (err: any) {
                   (window as any).logBot(
-                    `Transcription: ${JSON.stringify(data)}`
+                    `Error parsing WebSocket message: ${err.message}`
                   );
                 }
               };
@@ -384,6 +438,14 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                 (window as any).logBot(
                   `WebSocket connection closed. Code: ${event.code}, Reason: ${event.reason}`
                 );
+
+                isServerReady = false; // Reset server ready state
+
+                // Clean up intervals when socket closes
+                if (micPollingInterval) {
+                  clearInterval(micPollingInterval);
+                  micPollingInterval = null;
+                }
 
                 // Retry logic
                 if (retryCount < maxRetries) {
@@ -403,9 +465,21 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                   (window as any).logBot(
                     "Maximum WebSocket reconnection attempts reached. Giving up."
                   );
-                  // Optionally, we could reject the promise here if required
+                  performGlobalCleanup();
+                  reject(
+                    new Error(
+                      "WebSocket connection failed after maximum retries"
+                    )
+                  );
                 }
               };
+
+              // Add socket cleanup
+              addCleanupFunction(() => {
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                  socket.close();
+                }
+              });
             } catch (e: any) {
               (window as any).logBot(`Error creating WebSocket: ${e.message}`);
               // For initial connection errors, handle with retry logic
@@ -423,6 +497,7 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                   setupWebSocket();
                 }, exponentialDelay);
               } else {
+                performGlobalCleanup();
                 return reject(
                   new Error(
                     `WebSocket creation failed after ${maxRetries} attempts: ${e.message}`
@@ -461,10 +536,7 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
               (window as any).logBot(
                 "[Node->Browser] Socket is null or closed. Attempting to setupWebSocket directly."
               );
-              // Directly calling setupWebSocket might cause issues if the old one is mid-retry
-              // Relying on the existing retry logic in onclose is likely safer.
-              // If setupWebSocket is called here, ensure it handles potential double connections.
-              // setupWebSocket();
+              setupWebSocket();
             }
           };
           // --- ----------------------------------------------------------- ---
@@ -475,19 +547,26 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
               "Attempting to leave the meeting from browser context..."
             );
             try {
-              // *** FIXED: Use document.evaluate for XPath ***
-              const primaryLeaveButtonXpath = `//button[@aria-label="Leave call"]`;
-              const secondaryLeaveButtonXpath = `//button[.//span[text()='Leave meeting']] | //button[.//span[text()='Just leave the meeting']]`;
+              // Updated selectors to be more robust
+              const primaryLeaveButtonXpath = `//button[@aria-label="Leave call" or @aria-label="End call"]`;
+              const secondaryLeaveButtonXpath = `//button[contains(.,"Leave") or contains(.,"End call") or contains(.,"Exit")]`;
 
               const getElementByXpath = (path: string): HTMLElement | null => {
-                const result = document.evaluate(
-                  path,
-                  document,
-                  null,
-                  XPathResult.FIRST_ORDERED_NODE_TYPE,
-                  null
-                );
-                return result.singleNodeValue as HTMLElement | null;
+                try {
+                  const result = document.evaluate(
+                    path,
+                    document,
+                    null,
+                    XPathResult.FIRST_ORDERED_NODE_TYPE,
+                    null
+                  );
+                  return result.singleNodeValue as HTMLElement | null;
+                } catch (err: any) {
+                  (window as any).logBot(
+                    `Error evaluating XPath ${path}: ${err.message}`
+                  );
+                  return null;
+                }
               };
 
               const primaryLeaveButton = getElementByXpath(
@@ -495,7 +574,7 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
               );
               if (primaryLeaveButton) {
                 (window as any).logBot("Clicking primary leave button...");
-                primaryLeaveButton.click(); // No need to cast HTMLElement if getElementByXpath returns it
+                primaryLeaveButton.click();
                 await new Promise((resolve) => setTimeout(resolve, 1000)); // Wait a bit for potential confirmation dialog
 
                 // Try clicking secondary/confirmation button if it appears
@@ -512,6 +591,7 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                   (window as any).logBot("Secondary leave button not found.");
                 }
                 (window as any).logBot("Leave sequence completed.");
+                performGlobalCleanup(); // Clean up before leaving
                 return true; // Indicate leave attempt was made
               } else {
                 (window as any).logBot("Primary leave button not found.");
@@ -530,10 +610,21 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
 
           // FIXED: Revert to original audio processing that works with whisperlive
           // but use our combined stream as the input source
-          const audioDataCache = [];
           const context = new AudioContext();
           const mediaStream = context.createMediaStreamSource(stream); // Use our combined stream
           const recorder = context.createScriptProcessor(4096, 1, 1);
+
+          // Add recorder cleanup
+          addCleanupFunction(() => {
+            try {
+              recorder.disconnect();
+              if (context.state !== "closed") {
+                context.close();
+              }
+            } catch (err) {
+              console.error("Error cleaning up audio context:", err);
+            }
+          });
 
           recorder.onaudioprocess = async (event) => {
             // Check if server is ready AND socket is open
@@ -542,7 +633,6 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
               !socket ||
               socket.readyState !== WebSocket.OPEN
             ) {
-              // (window as any).logBot("WS not ready or closed, skipping audio data send."); // Optional debug log
               return;
             }
             const inputData = event.inputBuffer.getChannelData(0);
@@ -563,10 +653,40 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                 data[leftIndex] +
                 (data[rightIndex] - data[leftIndex]) * fraction;
             }
+
+            // --- ADDED: Track audio chunk timing ---
+            const chunkTimestamp = new Date().toISOString();
+            const chunkId = audioChunkCounter++;
+            const chunkDuration = resampledData.length / 16000; // Duration in seconds at 16kHz
+
+            audioChunkTimestamps.push({
+              chunkId: chunkId,
+              timestamp: chunkTimestamp,
+              duration: chunkDuration,
+            });
+
+            // Keep only last 100 chunks in memory
+            if (audioChunkTimestamps.length > 100) {
+              audioChunkTimestamps = audioChunkTimestamps.slice(-100);
+            }
+            // --- --------------------------------- ---
+
             // Send resampledData
             if (socket && socket.readyState === WebSocket.OPEN) {
               // Double check before sending
-              socket.send(resampledData); // send teh audio to whisperlive socket.
+              socket.send(resampledData); // send the audio to whisperlive socket.
+
+              // --- ADDED: Send audio chunk metadata immediately after audio ---
+              socket.send(
+                JSON.stringify({
+                  type: "audio_chunk_metadata",
+                  chunk_id: chunkId,
+                  timestamp: chunkTimestamp,
+                  duration: chunkDuration,
+                  uid: (window as any).currentWsUid || generateUUID(),
+                })
+              );
+              // --- --------------------------------------------------------- ---
             }
           };
 
@@ -578,100 +698,380 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
             "Audio processing pipeline connected and sending data."
           );
 
-          // Click the "People" button
-          const peopleButton = document.querySelector(
-            'button[aria-label^="People"]'
-          );
-          if (!peopleButton) {
-            recorder.disconnect();
-            return reject(
-              new Error(
-                "[BOT Inner Error] 'People' button not found. Update the selector."
-              )
-            );
+          // Click the "People" button with better error handling
+          const peopleButtonSelectors = [
+            'button[aria-label^="People"]',
+            'button[aria-label="People"]',
+            'button[data-panel-id="1"]',
+          ];
+
+          let peopleButton: Element | null = null;
+          for (const selector of peopleButtonSelectors) {
+            peopleButton = document.querySelector(selector);
+            if (peopleButton) break;
           }
-          (peopleButton as HTMLElement).click();
+
+          if (!peopleButton) {
+            (window as any).logBot(
+              "Warning: People button not found using any selector. Speaker detection may not work."
+            );
+          } else {
+            (peopleButton as HTMLElement).click();
+          }
 
           // Monitor participant list every 5 seconds
           let aloneTime = 0;
           const checkInterval = setInterval(() => {
-            const peopleList = document.querySelector('[role="list"]');
-            if (!peopleList) {
-              (window as any).logBot(
-                "Participant list not found; assuming meeting ended."
-              );
-              clearInterval(checkInterval);
-              recorder.disconnect();
-              resolve();
-              return;
-            }
-            const count = peopleList.childElementCount;
-            (window as any).logBot("Participant count: " + count);
+            try {
+              const peopleList = document.querySelector('[role="list"]');
+              if (!peopleList) {
+                (window as any).logBot(
+                  "Participant list not found; assuming meeting ended."
+                );
+                clearInterval(checkInterval);
+                performGlobalCleanup();
+                resolve();
+                return;
+              }
+              const count = peopleList.childElementCount;
+              (window as any).logBot("Participant count: " + count);
 
-            if (count <= 1) {
-              aloneTime += 5;
-              (window as any).logBot(
-                "Bot appears alone for " + aloneTime + " seconds..."
-              );
-            } else {
-              aloneTime = 0;
-            }
+              if (count <= 1) {
+                aloneTime += 5;
+                (window as any).logBot(
+                  "Bot appears alone for " + aloneTime + " seconds..."
+                );
+              } else {
+                aloneTime = 0;
+              }
 
-            if (aloneTime >= 10 || count === 0) {
+              if (aloneTime >= 10 || count === 0) {
+                (window as any).logBot(
+                  "Meeting ended or bot alone for too long. Stopping recorder..."
+                );
+                clearInterval(checkInterval);
+                performGlobalCleanup();
+                resolve();
+              }
+            } catch (err: any) {
               (window as any).logBot(
-                "Meeting ended or bot alone for too long. Stopping recorder..."
+                `Error in participant check: ${err.message}`
               );
-              clearInterval(checkInterval);
-              recorder.disconnect();
-              resolve();
             }
           }, 5000);
 
           // Listen for unload and visibility changes
           window.addEventListener("beforeunload", () => {
-            (window as any).logBot("Page is unloading. Stopping recorder...");
-            clearInterval(checkInterval);
+            (window as any).logBot(
+              "Page is unloading. Stopping recorder and speaker detection..."
+            );
+            if (micPollingInterval) {
+              clearInterval(micPollingInterval);
+              micPollingInterval = null;
+            }
+            if (checkInterval) clearInterval(checkInterval);
             recorder.disconnect();
             resolve();
           });
-          document.addEventListener("visibilitychange", () => {
+
+          // Listen for unload and visibility changes
+          const handleUnload = () => {
+            (window as any).logBot(
+              "Page is unloading. Stopping recorder and speaker detection..."
+            );
+            performGlobalCleanup();
+            resolve();
+          };
+
+          const handleVisibilityChange = () => {
             if (document.visibilityState === "hidden") {
               (window as any).logBot(
                 "Document is hidden. Stopping recorder..."
               );
-              clearInterval(checkInterval);
+              if (micPollingInterval) {
+                clearInterval(micPollingInterval);
+                micPollingInterval = null;
+              }
+              if (checkInterval) clearInterval(checkInterval);
               recorder.disconnect();
               resolve();
             }
+          };
+
+          window.addEventListener("beforeunload", handleUnload);
+          document.addEventListener("visibilitychange", handleVisibilityChange);
+
+          // Add event listener cleanup
+          addCleanupFunction(() => {
+            window.removeEventListener("beforeunload", handleUnload);
+            document.removeEventListener(
+              "visibilitychange",
+              handleVisibilityChange
+            );
           });
+
+          // --- ADDED: New Advanced Speaker Monitoring Function ---
+          const startAdvancedSpeakerMonitoring = () => {
+            (window as any).logBot("Starting advanced speaker monitoring...");
+
+            let participantNodes: Array<{
+              id: string;
+              name: string;
+              el: HTMLElement;
+              micNode: HTMLElement;
+              micActivity: string[]; // Stores '0' or '1'
+              lastState: boolean; // Track last known state
+              stateChanges: Array<{
+                // Track state changes with timestamps
+                timestamp: string;
+                state: "started" | "stopped";
+              }>;
+            }> = [];
+            let callName: string | null = null;
+            let nodeRefreshCounter = 0; // To refresh nodes less frequently
+            let sendDataCounter = 0; // To send data less frequently than raw polling
+
+            const peopleButtonSelector =
+              'button[aria-label="People"][data-panel-id="1"]';
+
+            const ensurePeoplePanelOpen = async () => {
+              const peopleButton = document.querySelector(
+                peopleButtonSelector
+              ) as HTMLElement;
+              if (!peopleButton) {
+                (window as any).logBot(
+                  "WARNING: People button not found for speaker detection."
+                );
+                return false;
+              }
+              const isPressed = peopleButton.getAttribute("aria-pressed");
+              if (isPressed !== "true") {
+                (window as any).logBot(
+                  "Opening People panel for speaker detection..."
+                );
+                peopleButton.click();
+                await new Promise((r) => setTimeout(r, 1500)); // Wait for panel to open
+              }
+              return true;
+            };
+
+            micPollingInterval = setInterval(async () => {
+              try {
+                if (
+                  !socket ||
+                  socket.readyState !== WebSocket.OPEN ||
+                  !isServerReady
+                ) {
+                  // (window as any).logBot( // Optional: this log can be very noisy
+                  //   "AdvancedSpeakerMonitoring: WS not ready or closed, skipping cycle."
+                  // );
+                  return;
+                }
+
+                nodeRefreshCounter++;
+                sendDataCounter++;
+
+                // Refresh participant nodes and call name every 50 cycles (50 * 50ms = 2.5 seconds)
+                if (nodeRefreshCounter % 50 === 1) {
+                  if (!(await ensurePeoplePanelOpen())) {
+                    (window as any).logBot(
+                      "AdvancedSpeakerMonitoring: Cannot ensure people panel is open. Skipping node refresh."
+                    );
+                    // Potentially stop or retry opening panel later
+                  } else {
+                    participantNodes = [];
+                    callName =
+                      (
+                        document.querySelector(
+                          "[jscontroller=yEvoid]"
+                        ) as HTMLDivElement | null
+                      )?.innerText?.trim() || "Unknown Call";
+
+                    const participantElements = Array.from(
+                      document.querySelectorAll(
+                        'div[role="listitem"][data-participant-id]'
+                      )
+                    ) as HTMLElement[];
+
+                    (window as any).logBot(
+                      `AdvancedSpeakerMonitoring: Found ${participantElements.length} participant elements.`
+                    );
+
+                    participantElements.forEach((el: HTMLElement) => {
+                      const participantId = el.getAttribute(
+                        "data-participant-id"
+                      );
+                      if (!participantId) return;
+
+                      let nameNode = el.querySelector(
+                        "[data-self-name]"
+                      ) as HTMLElement;
+                      if (!nameNode) {
+                        // Fallback selector, adjust if needed based on actual Google Meet DOM for participant names
+                        nameNode = el.querySelector(
+                          "span.zWGUib"
+                        ) as HTMLElement; // Common selector for name
+                      }
+                      // More robust name extraction, trying different common selectors
+                      let name = "Unknown Participant";
+                      if (nameNode) {
+                        name =
+                          nameNode.innerText?.split("\n").pop()?.trim() ||
+                          `Participant ${participantId}`;
+                      } else {
+                        // Try another common selector if the first one fails
+                        const secondaryNameNode = el.querySelector(
+                          ".cS7aqe.N2K3jd"
+                        ) as HTMLElement; // Another possible name element
+                        if (secondaryNameNode) {
+                          name =
+                            secondaryNameNode.innerText?.trim() ||
+                            `Participant ${participantId}`;
+                        } else {
+                          (window as any).logBot(
+                            `AdvancedSpeakerMonitoring: Name node not found for participant ${participantId}. Using default.`
+                          );
+                        }
+                      }
+
+                      const micNode = el.querySelector(
+                        'div[jscontroller="ES310d"]'
+                      ) as HTMLElement; // Google's mic status container
+
+                      if (micNode && name) {
+                        // Ensure micNode and name are found
+                        participantNodes.push({
+                          id: participantId,
+                          name: name,
+                          el: el,
+                          micNode: micNode,
+                          micActivity: [],
+                          lastState: false, // Initialize as not speaking
+                          stateChanges: [], // Initialize empty state changes
+                        });
+                      } else {
+                        (window as any).logBot(
+                          `AdvancedSpeakerMonitoring: Skipping participant ${participantId} due to missing mic or name node.`
+                        );
+                      }
+                    });
+                    (window as any).logBot(
+                      `AdvancedSpeakerMonitoring: Refreshed ${participantNodes.length} participant nodes. Call Name: ${callName}`
+                    );
+                  }
+                }
+
+                // Record mic activity for each participant
+                participantNodes.forEach((node) => {
+                  if (node && node.micNode) {
+                    const isSpeaking = node.micNode.classList.contains("HX2H7");
+                    node.micActivity.push(isSpeaking ? "1" : "0");
+
+                    // --- ADDED: Track state changes with precise timestamps ---
+                    if (isSpeaking !== node.lastState) {
+                      const changeTimestamp = new Date().toISOString();
+                      node.stateChanges.push({
+                        timestamp: changeTimestamp,
+                        state: isSpeaking ? "started" : "stopped",
+                      });
+                      node.lastState = isSpeaking;
+
+                      // Log state change
+                      (window as any).logBot(
+                        `Speaker ${node.name} ${
+                          isSpeaking ? "started" : "stopped"
+                        } speaking at ${changeTimestamp}`
+                      );
+                    }
+                    // --- ---------------------------------------------------- ---
+                  }
+                });
+
+                // Send data every 10 cycles (10 * 50ms = 0.5 seconds)
+                if (sendDataCounter % 10 === 0) {
+                  if (
+                    socket &&
+                    socket.readyState === WebSocket.OPEN &&
+                    isServerReady &&
+                    participantNodes.length > 0
+                  ) {
+                    const timestamp = new Date().toISOString();
+
+                    // --- MODIFIED: Include state changes in payload ---
+                    const payload = {
+                      type: "speaker_activity_update",
+                      uid: (window as any).currentWsUid || generateUUID(),
+                      meeting_id: nativeMeetingId,
+                      call_name: callName,
+                      timestamp: timestamp,
+                      speakers: participantNodes.map((p) => ({
+                        speaker_id: p.id,
+                        speaker_name: p.name,
+                        mic_activity_bits: p.micActivity.join(""),
+                        delay_sec: 0.1, // Reduced delay since we're tracking more precisely
+                        state_changes: p.stateChanges, // Include state changes
+                      })),
+                      // Include recent audio chunk info for correlation
+                      recent_audio_chunks: audioChunkTimestamps.slice(-10), // Last 10 chunks
+                    };
+                    // --- ---------------------------------------------- ---
+
+                    let payloadStr;
+                    try {
+                      payloadStr = JSON.stringify(payload);
+                    } catch (stringifyError: any) {
+                      (window as any).logBot(
+                        `AdvancedSpeakerMonitoring: ERROR stringifying payload: ${stringifyError.message}`
+                      );
+                      return; // Don't proceed if payload is bad
+                    }
+                    (window as any).logBot(
+                      `AdvancedSpeakerMonitoring: Sending speaker activity payload: ${payloadStr}`
+                    );
+                    socket.send(payloadStr);
+                    (window as any).logBot(
+                      `AdvancedSpeakerMonitoring: Sent speaker activity update. Participants: ${payload.speakers.length}`
+                    );
+
+                    // Clear processed data
+                    participantNodes.forEach((p) => {
+                      p.micActivity = [];
+                      p.stateChanges = []; // Clear state changes after sending
+                    });
+                  } else if (
+                    participantNodes.length === 0 &&
+                    nodeRefreshCounter > 50
+                  ) {
+                    (window as any).logBot(
+                      "AdvancedSpeakerMonitoring: No participant nodes to send data for, or socket not ready."
+                    );
+                  }
+                }
+              } catch (error: any) {
+                (window as any).logBot(
+                  `AdvancedSpeakerMonitoring: Interval CRITICAL ERROR: ${
+                    error.message
+                  }${error.stack ? "\nStack: " + error.stack : ""}`
+                );
+                // Optional: To prevent repeated errors, though this might hide the root cause.
+                // if (micPollingInterval) {
+                //   clearInterval(micPollingInterval);
+                //   micPollingInterval = null;
+                //   (window as any).logBot("AdvancedSpeakerMonitoring: Cleared interval due to critical error.");
+                // }
+              }
+            }, 50); // Poll every 50ms
+          };
+          // --- END OF New Advanced Speaker Monitoring Function ---
         } catch (error: any) {
+          performGlobalCleanup();
           return reject(new Error("[BOT Error] " + error.message));
         }
       });
     },
     { botConfigData: botConfig, whisperUrlForBrowser: whisperLiveUrlFromEnv }
-  ); // Pass arguments to page.evaluate
+  );
 };
-
-// Remove the compatibility shim 'recordMeeting' if no longer needed,
-// otherwise, ensure it constructs a valid BotConfig object.
-// Example if keeping:
-/*
-const recordMeeting = async (page: Page, meetingUrl: string, token: string, connectionId: string, platform: "google_meet" | "zoom" | "teams") => {
-  await prepareForRecording(page);
-  // Construct a minimal BotConfig - adjust defaults as needed
-  const dummyConfig: BotConfig = {
-      platform: platform,
-      meetingUrl: meetingUrl,
-      botName: "CompatibilityBot",
-      token: token,
-      connectionId: connectionId,
-      nativeMeetingId: "", // Might need to derive this if possible
-      automaticLeave: { waitingRoomTimeout: 300000, noOneJoinedTimeout: 300000, everyoneLeftTimeout: 300000 },
-  };
-  await startRecording(page, dummyConfig);
-};
-*/
 
 // --- ADDED: Exported function to trigger leave from Node.js ---
 export async function leaveGoogleMeet(page: Page): Promise<boolean> {
@@ -696,7 +1096,7 @@ export async function leaveGoogleMeet(page: Page): Promise<boolean> {
       }
     });
     log(`[leaveGoogleMeet] Browser leave action result: ${result}`);
-    return result; // Return true if leave was attempted, false otherwise
+    return result;
   } catch (error: any) {
     log(
       `[leaveGoogleMeet] Error calling performLeaveAction in browser: ${error.message}`
@@ -705,3 +1105,277 @@ export async function leaveGoogleMeet(page: Page): Promise<boolean> {
   }
 }
 // --- ------------------------------------------------------- ---
+
+// First, add a speaker detection function that will be run in the browser context
+
+// Add a speakerDetection module
+export async function runWithSpeakerDetection(page: Page, socket: WebSocket) {
+  // Implement speaker detection and send updates through the socket
+  await page.evaluate((socketUrl: string) => {
+    console.log("Starting speaker detection in Google Meet...");
+
+    // Initialize WebSocket connection if it doesn't exist
+    // Note: In the actual implementation, this socket is created by WhisperLive client
+    // and we would just reuse it instead of creating a new one.
+    // This is a simplification for this code snippet.
+    const socket = new WebSocket(socketUrl);
+
+    // Keep track of the current active speaker
+    let currentSpeakerId: string | null = null;
+    let currentSpeakerName: string | null = null;
+    let speakerPanelOpen = false;
+
+    // Function to check if the speakers panel is open
+    function isSpeakerPanelOpen(): boolean {
+      const peopleButton = document.querySelector(
+        'button[aria-label="People"][data-panel-id="1"]'
+      );
+      return (
+        !!peopleButton && peopleButton.getAttribute("aria-pressed") === "true"
+      );
+    }
+
+    // Function to open the speakers panel if closed
+    function openSpeakersPanel(): boolean {
+      const peopleButton = document.querySelector(
+        'button[aria-label="People"][data-panel-id="1"]'
+      );
+      if (
+        peopleButton &&
+        peopleButton.getAttribute("aria-pressed") === "false"
+      ) {
+        console.log("Opening speakers panel...");
+        (peopleButton as HTMLElement).click();
+        return true;
+      }
+      return false;
+    }
+
+    // Function to detect the active speaker from the participant list
+    function detectActiveSpeaker(): void {
+      try {
+        // First check if the panel is open
+        speakerPanelOpen = isSpeakerPanelOpen();
+        if (!speakerPanelOpen) {
+          const wasOpened = openSpeakersPanel();
+          if (wasOpened) {
+            // Give time for panel to open
+            setTimeout(detectActiveSpeaker, 500);
+            return;
+          }
+        }
+
+        // Look for speaking indicators in the participant list
+        const participants = document.querySelectorAll(
+          'div[role="listitem"][jscontroller="ZHOeze"]'
+        );
+
+        let newSpeakerId: string | null = null;
+        let newSpeakerName: string | null = null;
+
+        participants.forEach((participant) => {
+          // Check for the speaking indicator class (Google's active speaker highlight)
+          const isSpeaking = participant.classList.contains("v21hqf"); // Active speaker class
+
+          if (isSpeaking) {
+            // Get participant name and ID
+            const nameElement = participant.querySelector(".zWGUib");
+            const participantId = participant.getAttribute(
+              "data-participant-id"
+            );
+
+            if (nameElement && participantId) {
+              newSpeakerName = nameElement.textContent?.trim() || null;
+              newSpeakerId = participantId;
+
+              // Only send update if speaker changed
+              if (
+                newSpeakerId !== currentSpeakerId ||
+                newSpeakerName !== currentSpeakerName
+              ) {
+                console.log(
+                  `Active speaker: ${newSpeakerName} (${newSpeakerId})`
+                );
+                currentSpeakerId = newSpeakerId;
+                currentSpeakerName = newSpeakerName;
+
+                // Send the speaker update through WebSocket
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                  socket.send(
+                    JSON.stringify({
+                      type: "speaker_update",
+                      speaker_id: newSpeakerId,
+                      speaker_name: newSpeakerName,
+                      timestamp: new Date().toISOString(),
+                    })
+                  );
+                }
+              }
+            }
+          }
+        });
+
+        // If no active speaker found, but we had one before
+        if (!newSpeakerId && currentSpeakerId) {
+          console.log("No active speaker detected (not sending null update)");
+          currentSpeakerId = null;
+          currentSpeakerName = null;
+
+          /* Commenting out the null update
+          // Send update that no one is speaking
+          if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(
+              JSON.stringify({
+                type: "speaker_update",
+                speaker_id: null,
+                speaker_name: null,
+                timestamp: new Date().toISOString(),
+              })
+            );
+          }
+          */
+        }
+      } catch (error) {
+        console.error("Error detecting active speaker:", error);
+      }
+    }
+
+    // Run the speaker detection periodically
+    const speakerDetectionInterval = setInterval(detectActiveSpeaker, 1000);
+
+    // Clean up
+    window.addEventListener("beforeunload", () => {
+      clearInterval(speakerDetectionInterval);
+    });
+  }, socket.url);
+}
+
+// Modify the existing joinMeeting function to add speaker detection
+export async function joinMeetingWithSpeakerDetection(
+  page: Page,
+  meetingUrl: string,
+  config: MeetingConfig
+): Promise<void> {
+  await page.goto(meetingUrl, { waitUntil: "networkidle" });
+
+  // Execute existing joining logic...
+
+  // After successfully joining, set up audio capture and speaker detection
+  const socket = await setupAudioCapture(page, config);
+
+  // Now also run speaker detection on the same page
+  if (socket) {
+    await runWithSpeakerDetection(page, socket);
+  }
+}
+
+// This is the updated setupAudioCapture function
+async function setupAudioCapture(
+  page: Page,
+  config: MeetingConfig
+): Promise<WebSocket | null> {
+  try {
+    // Get the WebSocket URL from config or default
+    const wsUrl = config.whisperLiveUrl || "ws://localhost:9090";
+
+    // Create WebSocket connection for sending audio data
+    const socket = new WebSocket(wsUrl);
+
+    // Use addEventListener instead of .on method (which doesn't exist on the WebSocket interface)
+    socket.addEventListener("open", () => {
+      const options = {
+        uid: config.sessionUid || uuidv4(),
+        language: config.language || "en",
+        task: "transcribe",
+        initial_prompt: "",
+        platform: "google_meet",
+        meeting_url: page.url(),
+        token: config.token,
+        meeting_id: config.meetingId || extractMeetingIdFromUrl(page.url()),
+      };
+
+      socket.send(JSON.stringify(options));
+    });
+
+    // Set up audio capture in the browser
+    await page.evaluate((socketUrl: string) => {
+      // Define vexaSocket on the window for TypeScript
+      window.vexaSocket = null as unknown as WebSocket;
+
+      const audioContext = new AudioContext();
+      const destination = audioContext.createMediaStreamDestination();
+
+      // Create audio processor
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      processor.connect(destination);
+
+      processor.onaudioprocess = (e) => {
+        // Convert audio data to Float32Array
+        const input = e.inputBuffer.getChannelData(0);
+
+        // Send to server if socket is ready
+        if (
+          window.vexaSocket &&
+          window.vexaSocket.readyState === WebSocket.OPEN
+        ) {
+          window.vexaSocket.send(input);
+        }
+      };
+
+      // Connect to all audio elements as they appear
+      const connectToAudioElements = () => {
+        const audioElements = document.querySelectorAll("audio");
+        audioElements.forEach((audio) => {
+          if (!audio.dataset.connected) {
+            try {
+              const source = audioContext.createMediaElementSource(audio);
+              source.connect(processor);
+              source.connect(audioContext.destination);
+              audio.dataset.connected = "true";
+              console.log("Connected to audio element:", audio);
+            } catch (err) {
+              console.error("Error connecting to audio:", err);
+            }
+          }
+        });
+      };
+
+      // Initial connection
+      connectToAudioElements();
+
+      // Observe DOM for new audio elements
+      const observer = new MutationObserver(() => {
+        connectToAudioElements();
+      });
+
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+      });
+
+      // Create WebSocket and store in window for global access
+      const socket = new WebSocket(socketUrl);
+      window.vexaSocket = socket;
+
+      // Clean up on page unload
+      window.addEventListener("beforeunload", () => {
+        processor.disconnect();
+        observer.disconnect();
+        if (window.vexaSocket) {
+          window.vexaSocket.close();
+        }
+      });
+    }, wsUrl);
+
+    return socket;
+  } catch (error) {
+    console.error("Error setting up audio capture:", error);
+    return null;
+  }
+}
+
+// Helper function for meeting URL parsing
+function extractMeetingIdFromUrl(url: string): string {
+  const match = url.match(/\/([a-z]{3}-[a-z]{4}-[a-z]{3})/);
+  return match ? match[1] : "";
+}

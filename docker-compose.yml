@@ -1,4 +1,4 @@
-name: vexa
+name: vexa_cpu
 
 services:
   api-gateway:
@@ -265,10 +265,10 @@ services:
       - LOG_LEVEL=DEBUG
     init: true
     depends_on:
-      redis:
-        condition: service_started
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_started
     networks:
       - vexa_default
     restart: unless-stopped
