@@ -18,7 +18,9 @@ export const BotConfigSchema = z.object({
     noOneJoinedTimeout: z.number().int(),
     everyoneLeftTimeout: z.number().int()
   }),
-  meeting_id: z.number().int().optional() // Allow optional internal ID
+  reconnectionIntervalMs: z.number().int().optional(), // ADDED: Optional reconnection interval
+  meeting_id: z.number().int().optional(), // Allow optional internal ID
+  botManagerCallbackUrl: z.string().url().optional() // ADDED: Optional callback URL
 });
 
 
