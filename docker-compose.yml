@@ -169,6 +169,8 @@ services:
       - VAD_FILTER_THRESHOLD=0.5
       - DEVICE_TYPE=cpu
     entrypoint: /bin/sh
+    deploy:
+      replicas: 2
     command:
       - "-c"
       - |
@@ -229,8 +231,12 @@ services:
       - "--providers.docker.constraints=Label(`traefik.enable`, `true`)"
       - "--providers.docker.watch=true"
     networks:
-      - vexa_default
-      - whispernet
+      vexa_default:
+        aliases:
+          - whisperlive.internal
+      whispernet:
+        aliases:
+          - whisperlive.internal
     healthcheck:
       test: ["CMD", "wget", "--spider", "--quiet", "http://localhost/ping"]
       interval: 10s

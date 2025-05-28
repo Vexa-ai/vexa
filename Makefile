@@ -1,10 +1,11 @@
 .PHONY: all setup submodules env force-env download-model build-bot-image build up down clean ps logs test
 
 # Default target: Sets up everything and starts the services
-all: setup build up
+all: setup-env build-bot-image build up
 
 # Target to set up only the environment without Docker
-setup-env: submodules env download-model
+# Ensure .env is created based on TARGET *before* other setup steps
+setup-env: force-env submodules download-model
 	@echo "Environment setup complete."
 	@echo "To specify a target for .env generation (cpu or gpu), run 'make env TARGET=cpu' or 'make env TARGET=gpu' first, then 'make setup-env'."
 	@echo "If no TARGET is specified, it defaults to 'make env TARGET=cpu'."
