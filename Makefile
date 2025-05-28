@@ -5,11 +5,13 @@ all: setup-env build-bot-image build up
 
 # Target to set up only the environment without Docker
 # Ensure .env is created based on TARGET *before* other setup steps
-setup-env: force-env submodules download-model
+setup-env: env submodules download-model
 	@echo "Environment setup complete."
-	@echo "To specify a target for .env generation (cpu or gpu), run 'make env TARGET=cpu' or 'make env TARGET=gpu' first, then 'make setup-env'."
-	@echo "If no TARGET is specified, it defaults to 'make env TARGET=cpu'."
-	@echo "NOTE: If your .env file already exists, it will be preserved. To force recreation, use 'make force-env TARGET=cpu/gpu'."
+	@echo "The 'env' target (now called by setup-env) handles .env creation/preservation:"
+	@echo "  - If .env exists, it is preserved."
+	@echo "  - If .env does not exist, it is created based on the TARGET variable (e.g., 'make setup-env TARGET=gpu')."
+	@echo "  - If .env is created and no TARGET is specified, it defaults to 'cpu'."
+	@echo "To force an overwrite of an existing .env file, use 'make force-env TARGET=cpu/gpu'."
 
 # Target to perform all initial setup steps
 setup: setup-env build-bot-image
