@@ -1,7 +1,0 @@
-
-[submodule "services/vexa-bot"]
-	path = services/vexa-bot
-	url = https://github.com/Vexa-ai/vexa-bot
-[submodule "services/WhisperLive"]
-	path = services/WhisperLive
-	url = https://github.com/DmitriyG228/WhisperLive

@@ -1,11 +1,11 @@
-.PHONY: all setup submodules env force-env download-model build-bot-image build up down clean ps logs test
+.PHONY: all setup env force-env download-model build-bot-image build up down clean ps logs test
 
 # Default target: Sets up everything and starts the services
 all: setup-env build-bot-image build up
 
 # Target to set up only the environment without Docker
 # Ensure .env is created based on TARGET *before* other setup steps
-setup-env: env submodules download-model
+setup-env: env download-model
 	@echo "Environment setup complete."
 	@echo "The 'env' target (now called by setup-env) handles .env creation/preservation:"
 	@echo "  - If .env exists, it is preserved."
@@ -16,11 +16,6 @@ setup-env: env submodules download-model
 # Target to perform all initial setup steps
 setup: setup-env build-bot-image
 	@echo "Setup complete."
-
-# Initialize and update Git submodules
-submodules:
-	@echo "---> Initializing and updating Git submodules..."
-	@git submodule update --init --recursive
 
 # Default bot image tag if not specified in .env
 BOT_IMAGE_NAME ?= vexa-bot:dev
