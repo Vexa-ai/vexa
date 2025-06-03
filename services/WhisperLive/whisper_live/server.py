@@ -526,17 +526,142 @@ class TranscriptionServer:
     def get_audio_from_websocket(self, websocket):
         """
         Receives audio buffer from websocket and creates a numpy array out of it.
+        Also handles JSON control messages (speaker events, session control).
 
         Args:
             websocket: The websocket to receive audio from.
 
         Returns:
-            A numpy array containing the audio.
+            A numpy array containing the audio, or False if END_OF_AUDIO, or None if control message processed.
         """
         frame_data = websocket.recv()
+        
+        # Handle END_OF_AUDIO signal
         if frame_data == b"END_OF_AUDIO":
             return False
-        return np.frombuffer(frame_data, dtype=np.float32)
+            
+        # Check if this is a JSON control message (string) or binary audio data
+        try:
+            # Try to decode as JSON string first
+            if isinstance(frame_data, str) or (isinstance(frame_data, bytes) and frame_data.startswith(b'{')):
+                # This is a JSON control message
+                if isinstance(frame_data, bytes):
+                    frame_data = frame_data.decode('utf-8')
+                
+                control_message = json.loads(frame_data)
+                message_type = control_message.get("type", "unknown")
+                
+                logging.info(f"Received control message type: {message_type}")
+                
+                if message_type == "speaker_activity":
+                    self.handle_speaker_event(websocket, control_message)
+                elif message_type == "speaker_activity_update":
+                    self.handle_speaker_activity_update(websocket, control_message)
+                elif message_type == "audio_chunk_metadata":
+                    self.handle_audio_chunk_metadata(websocket, control_message)
+                elif message_type == "session_control":
+                    self.handle_session_control(websocket, control_message)
+                else:
+                    logging.warning(f"Unknown control message type: {message_type}")
+                
+                # Return None to indicate control message was processed (not audio)
+                return None
+                
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            # Not a JSON message, treat as binary audio data
+            pass
+        
+        # Process as binary audio data
+        try:
+            return np.frombuffer(frame_data, dtype=np.float32)
+        except (ValueError, TypeError) as e:
+            logging.error(f"Failed to process audio data: {e}")
+            return None
+
+    def handle_speaker_event(self, websocket, control_message):
+        """
+        Handle speaker activity events from the bot.
+        
+        Args:
+            websocket: The websocket connection
+            control_message: The parsed speaker event message
+        """
+        try:
+            payload = control_message.get("payload", {})
+            event_type = payload.get("event_type")
+            participant_name = payload.get("participant_name")
+            participant_id = payload.get("participant_id_meet")
+            timestamp = payload.get("client_timestamp_ms")
+            
+            logging.info(f"Speaker Event: {event_type} - {participant_name} ({participant_id}) at {timestamp}")
+            
+            # Future Phase 2: Store speaker events for timeline correlation
+            # For now, just log the events
+            
+        except Exception as e:
+            logging.error(f"Error processing speaker event: {e}")
+
+    def handle_session_control(self, websocket, control_message):
+        """
+        Handle session control messages from the bot.
+        
+        Args:
+            websocket: The websocket connection
+            control_message: The parsed session control message
+        """
+        try:
+            payload = control_message.get("payload", {})
+            event = payload.get("event")
+            session_uid = payload.get("uid")
+            timestamp = payload.get("client_timestamp_ms")
+            
+            logging.info(f"Session Control: {event} - Session {session_uid} at {timestamp}")
+            
+            if event == "LEAVING_MEETING":
+                # Handle graceful disconnect
+                logging.info(f"Bot signaled LEAVING_MEETING for session {session_uid}")
+                # The connection will be closed by the bot, we just acknowledge
+                
+        except Exception as e:
+            logging.error(f"Error processing session control: {e}")
+
+    def handle_speaker_activity_update(self, websocket, control_message):
+        """
+        Handle speaker activity update messages from the bot.
+        These are additional speaker state updates beyond the main speaker_activity events.
+        
+        Args:
+            websocket: The websocket connection
+            control_message: The parsed speaker activity update message
+        """
+        try:
+            payload = control_message.get("payload", {})
+            logging.debug(f"Speaker Activity Update received: {payload}")
+            
+            # Future Phase 2: Could be used for additional speaker state tracking
+            # For now, just log at debug level to avoid cluttering logs
+            
+        except Exception as e:
+            logging.error(f"Error processing speaker activity update: {e}")
+
+    def handle_audio_chunk_metadata(self, websocket, control_message):
+        """
+        Handle audio chunk metadata messages from the bot.
+        These contain information about audio chunks being processed.
+        
+        Args:
+            websocket: The websocket connection
+            control_message: The parsed audio chunk metadata message
+        """
+        try:
+            payload = control_message.get("payload", {})
+            logging.debug(f"Audio Chunk Metadata received: {payload}")
+            
+            # Future Phase 2: Could be used for audio quality monitoring, chunk timing analysis, etc.
+            # For now, just log at debug level to avoid cluttering logs
+            
+        except Exception as e:
+            logging.error(f"Error processing audio chunk metadata: {e}")
 
     def handle_new_connection(self, websocket, faster_whisper_custom_model_path,
                               whisper_tensorrt_path, trt_multilingual):
@@ -592,10 +717,16 @@ class TranscriptionServer:
     def process_audio_frames(self, websocket):
         frame_np = self.get_audio_from_websocket(websocket)
         client = self.client_manager.get_client(websocket)
+        
+        # Handle different return values from get_audio_from_websocket
         if frame_np is False:
+            # END_OF_AUDIO received
             if self.backend.is_tensorrt():
                 client.set_eos(True)
             return False
+        elif frame_np is None:
+            # Control message processed or error occurred, continue processing
+            return True
 
         if self.backend.is_tensorrt():
             voice_active = self.voice_activity(websocket, frame_np)
