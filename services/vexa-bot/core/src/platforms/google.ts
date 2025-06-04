@@ -710,20 +710,26 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
               const participantId = getParticipantId(participantElement);
               
               // Determine initial logical state based on current classes
-              let initialLogicalState = "silent";
-              if (speakingClasses.some(cls => participantElement.classList.contains(cls))) {
-                  initialLogicalState = "speaking";
-              } else if (participantElement.classList.contains(silenceClass)) {
-                  initialLogicalState = "silent";
+              speakingStates.set(participantId, "silent"); // Initialize participant as silent. logSpeakerEvent will handle transitions.
+
+              let classListForInitialScan = participantElement.classList; // Default to the main participant element's classes
+              // Check if any descendant has a speaking class
+              for (const cls of speakingClasses) {
+                  const descendantElement = participantElement.querySelector('.' + cls); // Corrected selector
+                  if (descendantElement) {
+                      classListForInitialScan = descendantElement.classList;
+                      break;
+                  }
               }
-              speakingStates.set(participantId, initialLogicalState);
+              // If no speaking descendant was found, classListForInitialScan remains participantElement.classList.
+              // This is correct for checking if participantElement itself has a speaking or silence class.
+
+              (window as any).logBot(`👁️ Observing: ${getParticipantName(participantElement)} (ID: ${participantId}). Performing initial participant state analysis.`);
+              // Call logSpeakerEvent with the determined classList.
+              // It will compare against the "silent" state and emit SPEAKER_START if currently speaking,
+              // or do nothing if currently silent (matching the initialized state).
+              logSpeakerEvent(participantElement, classListForInitialScan);
               
-              (window as any).logBot(`👁️ Observing: ${getParticipantName(participantElement)} (ID: ${participantId}), Initial state: ${initialLogicalState}`);
-              
-              // If initially speaking, log a START event
-              if (initialLogicalState === "speaking") {
-                  logSpeakerEvent(participantElement, participantElement.classList);
-              }
 
               const callback = function(mutationsList: MutationRecord[], observer: MutationObserver) {
                   for (const mutation of mutationsList) {
@@ -731,7 +737,8 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                           const targetElement = mutation.target as HTMLElement;
                           if (targetElement.matches(participantSelector) || participantElement.contains(targetElement)) {
                               const finalTarget = targetElement.matches(participantSelector) ? targetElement : participantElement;
-                              logSpeakerEvent(finalTarget, finalTarget.classList);
+                              // logSpeakerEvent(finalTarget, finalTarget.classList); // Old line
+                              logSpeakerEvent(finalTarget, targetElement.classList); // Corrected line
                           }
                       }
                   }
@@ -972,30 +979,37 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
           // Monitor participant list every 5 seconds
           let aloneTime = 0;
           const checkInterval = setInterval(() => {
-            const peopleList = document.querySelector('[role="list"]');
-            if (!peopleList) {
-              (window as any).logBot(
-                "Participant list not found; assuming meeting ended."
-              );
-              clearInterval(checkInterval);
-              recorder.disconnect();
-              (window as any).triggerNodeGracefulLeave();
-              resolve();
-              return;
-            }
-            const count = peopleList.childElementCount;
-            (window as any).logBot("Participant count: " + count);
+            const participantElements = document.querySelectorAll(participantSelector); // participantSelector is '.IisKdb'
+            const count = participantElements.length;
+            (window as any).logBot(`Participant count (using ${participantSelector}): ${count}`);
 
-            if (count <= 1) {
+            // If count is 0, it could mean everyone left, OR the participant list area itself is gone.
+            // This check helps determine if the list container itself has disappeared.
+            if (count === 0) {
+                const peopleListContainer = document.querySelector('[role="list"]'); // Check the original list container
+                if (!peopleListContainer || !document.body.contains(peopleListContainer)) {
+                     (window as any).logBot(
+                        "Participant list container not found (and participant count is 0); assuming meeting ended."
+                     );
+                     clearInterval(checkInterval);
+                     recorder.disconnect();
+                     (window as any).triggerNodeGracefulLeave();
+                     resolve(); // Resolve the main promise from page.evaluate
+                     return;   // Exit setInterval callback
+                }
+                // If peopleListContainer exists but count is 0 (no .IisKdb found),
+                // it means the list is genuinely empty. The aloneTime logic below will handle this.
+            }
+
+            if (count <= 1) { // Bot is 1, so count <= 1 means bot is alone or list is empty
               aloneTime += 5;
               (window as any).logBot(
                 "Bot appears alone for " + aloneTime + " seconds..."
               );
-            } else {
               aloneTime = 0;
             }
 
-            if (aloneTime >= 10 || count === 0) {
+            if (aloneTime >= 10) { // Simplified condition: if aloneTime accumulates, leave.
               (window as any).logBot(
                 "Meeting ended or bot alone for too long. Stopping recorder..."
               );
