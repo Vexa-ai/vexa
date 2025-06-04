@@ -31,13 +31,13 @@
 
 ### 📋 **Next Actions (Reflect New Phased Approach):**
 
-1.  **Immediate:** Implement Vexa Bot changes for relative speaker timestamps (Phase 1).
-2.  **Short-term:** Modify WhisperLive to forward speaker events to `speaker_events_relative` and transcripts to `transcription_segments` (Phase 2).
-3.  **Medium-term:** Develop Transcription Collector logic for dual-stream consumption, buffering, speaker-transcription mapping, and unified storage in the `transcriptions` table (Phase 3).
+1.  **DONE:** Implement Vexa Bot changes for relative speaker timestamps (Phase 1).
+2.  **Immediate:** Modify WhisperLive to forward speaker events to `speaker_events_relative` and transcripts to `transcription_segments` (Phase 2).
+3.  **Short-term:** Develop Transcription Collector logic for dual-stream consumption, buffering, speaker-transcription mapping, and unified storage in the `transcriptions` table (Phase 3).
 
 ---
 ### 🎯 **Success Metrics (To be evaluated for each phase):**
-*   **Phase 1:** Accurate relative timestamps for speaker events per session `uid`.
+*   **Phase 1:** Accurate relative timestamps for speaker events per session `uid`. **(✅ Successfully Met)**
 *   **Phase 2:** Correct routing of speaker and transcript data to their respective Redis streams with correct `uid` and relative timestamps.
 *   **Phase 3:** Reliable mapping of speakers to transcription segments. Correct storage of enriched transcripts. Session end times correctly updated.
 

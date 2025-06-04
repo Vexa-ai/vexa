@@ -293,6 +293,8 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
           const configuredInterval = botConfigData.reconnectionIntervalMs;
           const baseRetryDelay = (configuredInterval && configuredInterval <= 1000) ? configuredInterval : 1000; // Use configured if <= 1s, else 1s
 
+          let sessionAudioStartTimeMs: number | null = null; // ADDED: For relative speaker timestamps
+
           const setupWebSocket = () => {
             try {
               if (socket) {
@@ -329,8 +331,9 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                 // --- MODIFIED: Log current config being used ---
                 // --- MODIFIED: Generate NEW UUID for this connection ---
                 currentSessionUid = generateUUID(); // Update the currentSessionUid
+                sessionAudioStartTimeMs = null; // ADDED: Reset for new WebSocket session
                 (window as any).logBot(
-                  `WebSocket connection opened. Using Lang: ${currentWsLanguage}, Task: ${currentWsTask}, New UID: ${currentSessionUid}`
+                  `[RelativeTime] WebSocket connection opened. New UID: ${currentSessionUid}. sessionAudioStartTimeMs reset. Lang: ${currentWsLanguage}, Task: ${currentWsTask}`
                 );
                 retryCount = 0;
 
@@ -630,9 +633,18 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
           }
 
           function sendSpeakerEvent(eventType: string, participantElement: HTMLElement) {
+              const eventAbsoluteTimeMs = Date.now();
+              let relativeTimestampMs: number | null = null;
+
+              if (sessionAudioStartTimeMs === null) {
+                  (window as any).logBot(`[RelativeTime] SKIPPING speaker event: ${eventType} for ${getParticipantName(participantElement)}. sessionAudioStartTimeMs not yet set. UID: ${currentSessionUid}`);
+                  return; // Do not send if audio hasn't started for this session
+              }
+
+              relativeTimestampMs = eventAbsoluteTimeMs - sessionAudioStartTimeMs;
+
               const participantId = getParticipantId(participantElement);
               const participantName = getParticipantName(participantElement);
-              const clientTimestamp = Date.now();
 
               // Send speaker event via WebSocket if connected
               if (socket && socket.readyState === WebSocket.OPEN) {
@@ -642,7 +654,7 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                           event_type: eventType,
                           participant_name: participantName,
                           participant_id_meet: participantId,
-                          client_timestamp_ms: clientTimestamp,
+                          relative_client_timestamp_ms: relativeTimestampMs, // UPDATED
                           uid: currentSessionUid, // Use the current session UID
                           token: token,
                           platform: platform,
@@ -653,7 +665,7 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
 
                   try {
                       socket.send(JSON.stringify(speakerEventMessage));
-                      (window as any).logBot(`Speaker event sent: ${eventType} for ${participantName} (${participantId}) at ${new Date(clientTimestamp).toISOString()}`);
+                      (window as any).logBot(`[RelativeTime] Speaker event sent: ${eventType} for ${participantName} (${participantId}). RelativeTs: ${relativeTimestampMs}ms. UID: ${currentSessionUid}. (AbsoluteEventMs: ${eventAbsoluteTimeMs}, SessionT0Ms: ${sessionAudioStartTimeMs})`);
                   } catch (error: any) {
                       (window as any).logBot(`Error sending speaker event: ${error.message}`);
                   }
@@ -885,6 +897,13 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
               // (window as any).logBot("WS not ready or closed, skipping audio data send."); // Optional debug log
               return;
             }
+
+            // ADDED: Set sessionAudioStartTimeMs on the first audio chunk for this session
+            if (sessionAudioStartTimeMs === null) {
+                sessionAudioStartTimeMs = Date.now();
+                (window as any).logBot(`[RelativeTime] sessionAudioStartTimeMs set for UID ${currentSessionUid}: ${sessionAudioStartTimeMs} (at first audio data process)`);
+            }
+
             const inputData = event.inputBuffer.getChannelData(0);
             const data = new Float32Array(inputData);
             const targetLength = Math.round(
@@ -906,6 +925,15 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
             // Send resampledData
             if (socket && socket.readyState === WebSocket.OPEN) {
               // Double check before sending
+              // Ensure sessionAudioStartTimeMs is set before sending audio.
+              // This check is more of a safeguard; it should be set by the logic above.
+              if (sessionAudioStartTimeMs === null) {
+                (window as any).logBot(`[RelativeTime] CRITICAL WARNING: sessionAudioStartTimeMs is STILL NULL before sending audio data for UID ${currentSessionUid}. This should not happen.`);
+                // Optionally, set it here as a last resort, though it might be slightly delayed.
+                // sessionAudioStartTimeMs = Date.now();
+                // (window as any).logBot(`[RelativeTime] sessionAudioStartTimeMs set LATE for UID ${currentSessionUid}: ${sessionAudioStartTimeMs}`);
+                return; // Or decide if you want to send audio even if T0 was missed. For now, skipping if T0 is critical.
+              }
               socket.send(resampledData); // send teh audio to whisperlive socket.
             }
           };
