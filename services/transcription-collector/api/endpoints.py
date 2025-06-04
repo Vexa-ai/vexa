@@ -161,6 +161,7 @@ async def get_transcript_by_native_id(
                     end_time=segment.end_time,
                     text=segment.text,
                     language=segment.language,
+                    speaker=segment.speaker,
                     created_at=segment.created_at,
                     absolute_start_time=absolute_start_time,
                     absolute_end_time=absolute_end_time
@@ -196,6 +197,7 @@ async def get_transcript_by_native_id(
                         end_time=segment_data['end_time'],
                         text=segment_data['text'],
                         language=segment_data.get('language'),
+                        speaker=segment_data.get('speaker'),
                         absolute_start_time=absolute_start_time,
                         absolute_end_time=absolute_end_time
                     )

@@ -584,7 +584,7 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                   if (userExampleNameElement && userExampleNameElement.textContent && userExampleNameElement.textContent.trim()) {
                       const nameText = userExampleNameElement.textContent.trim();
                       if (nameText.length > 1 && nameText.length < 50 && /^[\p{L}\s.'-]+$/u.test(nameText)) {
-                          const forbiddenSubstrings = ["more_vert", "mic_off", "mic", "videocam", "videocam_off", "present_to_all"];
+                          const forbiddenSubstrings = ["more_vert", "mic_off", "mic", "videocam", "videocam_off", "present_to_all", "devices", "speaker", "speakers", "microphone"];
                           if (!forbiddenSubstrings.some(sub => nameText.toLowerCase().includes(sub.toLowerCase()))) {
                               return nameText;
                           }
@@ -604,9 +604,8 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                               if (selector.includes('data-tooltip') && nameText.includes("Tooltip for ")) {
                                   nameText = nameText.replace("Tooltip for ", "").trim();
                               }
-                              // Add null check after potential reassignment
                               if (nameText && nameText.trim()) {
-                                  const forbiddenSubstrings = ["more_vert", "mic_off", "mic", "videocam", "videocam_off", "present_to_all"];
+                                  const forbiddenSubstrings = ["more_vert", "mic_off", "mic", "videocam", "videocam_off", "present_to_all", "devices", "speaker", "speakers", "microphone"];
                                   if (!forbiddenSubstrings.some(sub => nameText!.toLowerCase().includes(sub.toLowerCase()))) {
                                       const trimmedName = nameText!.split('\n').pop()?.trim();
                                       return trimmedName || 'Unknown (Filtered)';
@@ -622,7 +621,17 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                       let nameText = (nameElement as HTMLElement).textContent || 
                                     (nameElement as HTMLElement).innerText || 
                                     nameElement.getAttribute('data-self-name');
-                      if (nameText && nameText.trim()) return nameText.trim();
+                      if (nameText && nameText.trim()) {
+                          // ADDED: Apply forbidden substrings and trimming logic here too
+                          const forbiddenSubstrings = ["more_vert", "mic_off", "mic", "videocam", "videocam_off", "present_to_all", "devices", "speaker", "speakers", "microphone"];
+                          if (!forbiddenSubstrings.some(sub => nameText!.toLowerCase().includes(sub.toLowerCase()))) {
+                              const trimmedName = nameText!.split('\n').pop()?.trim();
+                              if (trimmedName && trimmedName.length > 1 && trimmedName.length < 50 && /^[\p{L}\s.'-]+$/u.test(trimmedName)) { // Added basic length and char validation
+                                 return trimmedName;
+                              }
+                          }
+                          // If it was forbidden or failed validation, it won't return, allowing loop to continue or fallback.
+                      }
                   }
               }
               if (participantElement.textContent && participantElement.textContent.includes("You") && participantElement.textContent.length < 20) {

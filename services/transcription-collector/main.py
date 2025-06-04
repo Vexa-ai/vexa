@@ -22,10 +22,12 @@ from config import (
     IMMUTABILITY_THRESHOLD,
     LOG_LEVEL,
     REDIS_HOST,
-    REDIS_PORT
+    REDIS_PORT,
+    REDIS_SPEAKER_EVENTS_STREAM_NAME,
+    REDIS_SPEAKER_EVENTS_CONSUMER_GROUP
 )
 from api.endpoints import router as api_router
-from streaming.consumer import claim_stale_messages, consume_redis_stream
+from streaming.consumer import claim_stale_messages, consume_redis_stream, consume_speaker_events_stream
 from background.db_writer import process_redis_to_postgres
 
 app = FastAPI(
@@ -50,10 +52,11 @@ transcription_filter = TranscriptionFilter()
 # Background task references
 redis_to_pg_task = None
 stream_consumer_task = None
+speaker_stream_consumer_task = None
 
 @app.on_event("startup")
 async def startup():
-    global redis_client, redis_to_pg_task, stream_consumer_task, transcription_filter
+    global redis_client, redis_to_pg_task, stream_consumer_task, speaker_stream_consumer_task, transcription_filter
     
     logger.info(f"Connecting to Redis at {REDIS_HOST}:{REDIS_PORT}")
     temp_redis_client = aioredis.Redis(
@@ -83,6 +86,23 @@ async def startup():
             logger.error(f"Failed to create Redis consumer group: {e}", exc_info=True)
             return
     
+    # Ensure speaker events stream and consumer group exist
+    try:
+        logger.info(f"Ensuring Redis Stream group '{REDIS_SPEAKER_EVENTS_CONSUMER_GROUP}' exists for stream '{REDIS_SPEAKER_EVENTS_STREAM_NAME}'...")
+        await redis_client.xgroup_create(
+            name=REDIS_SPEAKER_EVENTS_STREAM_NAME, 
+            groupname=REDIS_SPEAKER_EVENTS_CONSUMER_GROUP, 
+            id='0',
+            mkstream=True
+        )
+        logger.info(f"Consumer group '{REDIS_SPEAKER_EVENTS_CONSUMER_GROUP}' ensured for stream '{REDIS_SPEAKER_EVENTS_STREAM_NAME}'.")
+    except redis.exceptions.ResponseError as e:
+        if "BUSYGROUP Consumer Group name already exists" in str(e):
+            logger.info(f"Consumer group '{REDIS_SPEAKER_EVENTS_CONSUMER_GROUP}' already exists for stream '{REDIS_SPEAKER_EVENTS_STREAM_NAME}'.")
+        else:
+            logger.error(f"Failed to create Redis consumer group for speaker events: {e}", exc_info=True)
+            return
+            
     logger.info("Database initialized.")
     
     await claim_stale_messages(redis_client)
@@ -93,11 +113,15 @@ async def startup():
     stream_consumer_task = asyncio.create_task(consume_redis_stream(redis_client))
     logger.info(f"Redis Stream consumer task started (Stream: {REDIS_STREAM_NAME}, Group: {REDIS_CONSUMER_GROUP}, Consumer: {CONSUMER_NAME})")
 
+    # Start speaker events consumer task
+    speaker_stream_consumer_task = asyncio.create_task(consume_speaker_events_stream(redis_client))
+    logger.info(f"Speaker Events Redis Stream consumer task started (Stream: {REDIS_SPEAKER_EVENTS_STREAM_NAME}, Group: {REDIS_SPEAKER_EVENTS_CONSUMER_GROUP}, Consumer: {CONSUMER_NAME + '-speaker'})")
+
 @app.on_event("shutdown")
 async def shutdown():
     logger.info("Application shutting down...")
     # Cancel background tasks
-    tasks_to_cancel = [redis_to_pg_task, stream_consumer_task]
+    tasks_to_cancel = [redis_to_pg_task, stream_consumer_task, speaker_stream_consumer_task]
     for i, task in enumerate(tasks_to_cancel):
         if task and not task.done():
             task.cancel()

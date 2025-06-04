@@ -2,7 +2,7 @@ import logging
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
 
 import redis # For redis.exceptions
 import redis.asyncio as aioredis # For type hinting redis_client
@@ -13,7 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from shared_models.database import async_session_local # For DB sessions
 from shared_models.models import User, Meeting, MeetingSession, APIToken
 from shared_models.schemas import Platform # WhisperLiveData not directly used by these functions from snippet
-from config import REDIS_SEGMENT_TTL # Changed from ..config
+from config import REDIS_SEGMENT_TTL, REDIS_SPEAKER_EVENT_KEY_PREFIX, REDIS_SPEAKER_EVENT_TTL # Added new configs (NEW)
+# NEW: Import speaker mapping function and statuses
+from mapping.speaker_mapper import map_speaker_to_segment, STATUS_MAPPED, STATUS_UNKNOWN, STATUS_NO_SPEAKER_EVENTS, STATUS_MULTIPLE, STATUS_ERROR
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +143,21 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                     return await process_session_start_event(message_id, stream_data, db, user, meeting) 
                 elif message_type == "transcription":
                     pass # Continue with transcription processing
+                elif message_type == "session_end": # NEW: Handle session_end for cleanup
+                    session_uid = stream_data.get('uid')
+                    if not session_uid:
+                        logger.warning(f"Message {message_id} (type: session_end) missing 'uid'. Skipping cleanup.")
+                        return True # Cannot process without UID, but ack
+                    
+                    speaker_event_key = f"{REDIS_SPEAKER_EVENT_KEY_PREFIX}:{session_uid}"
+                    try:
+                        deleted_count = await redis_c.delete(speaker_event_key)
+                        logger.info(f"Processed session_end for UID '{session_uid}'. Deleted speaker events key '{speaker_event_key}' from Redis (count: {deleted_count}).")
+                        # Note: MeetingSession.session_end_utc is not updated here due to no DB model changes allowed.
+                    except redis.exceptions.RedisError as e_redis:
+                        logger.error(f"Redis error deleting speaker events for UID '{session_uid}' on session_end: {e_redis}")
+                        return False # Retryable Redis error
+                    return True # Successfully processed session_end
                 else:
                     logger.warning(f"Message {message_id} has unknown type '{message_type}'. Skipping.")
                     return True
@@ -162,10 +179,14 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
             segment_count = 0
             hash_key = f"meeting:{internal_meeting_id}:segments"
             segments_to_store = {}
+            session_uid_from_payload = stream_data.get('uid')
+
+            if not session_uid_from_payload:
+                logger.warning(f"[Msg {message_id}/Meet {internal_meeting_id}] Message missing 'uid' for transcription segments. Cannot map speakers. Segments in this message will not have speaker info.")
             
             for i, segment in enumerate(stream_data.get('segments', [])):
                  if not isinstance(segment, dict) or segment.get('start') is None or segment.get('end') is None:
-                     logger.warning(f"[Msg {message_id}/Meet {internal_meeting_id}] Skipping segment {i} missing basic structure or 'start'/'end' times: {segment}")
+                     logger.warning(f"[Msg {message_id}/Meet {internal_meeting_id}] Skipping segment {i} missing structure or 'start'/'end': {segment}")
                      continue
                  try:
                      start_time_float = float(segment['start'])
@@ -173,17 +194,73 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                      text_content = segment.get('text') or ""
                      language_content = segment.get('language')
                  except (ValueError, TypeError) as time_err:
-                     logger.warning(f"[Msg {message_id}/Meet {internal_meeting_id}] Skipping segment {i} with invalid time format: {time_err} - Segment: {segment}")
+                     logger.warning(f"[Msg {message_id}/Meet {internal_meeting_id}] Skipping segment {i} invalid time format: {time_err} - Segment: {segment}")
                      continue
                             
                  start_time_key = f"{start_time_float:.3f}"
-                 session_uid_from_payload = stream_data.get('uid') 
+                 
+                 mapped_speaker_name: Optional[str] = None
+                 mapping_status: str = STATUS_UNKNOWN
+
+                 if session_uid_from_payload:
+                    try:
+                        segment_start_ms = start_time_float * 1000
+                        segment_end_ms = end_time_float * 1000
+                        speaker_event_key = f"{REDIS_SPEAKER_EVENT_KEY_PREFIX}:{session_uid_from_payload}"
+                        
+                        speaker_events_raw = await redis_c.zrangebyscore(
+                            speaker_event_key, 
+                            min=segment_start_ms, 
+                            max=segment_end_ms, 
+                            withscores=True
+                        )
+                        
+                        speaker_events_for_mapper: List[Tuple[str, float]] = []
+                        for event_data, score_ms in speaker_events_raw:
+                            event_json_str: Optional[str] = None
+                            if isinstance(event_data, bytes):
+                                event_json_str = event_data.decode('utf-8')
+                            elif isinstance(event_data, str):
+                                event_json_str = event_data
+                            else:
+                                logger.warning(f"[Msg {message_id}/Meet {internal_meeting_id}/Seg {start_time_key}] Unexpected speaker event data type from Redis: {type(event_data)}. Skipping this event.")
+                                continue
+                            
+                            speaker_events_for_mapper.append((event_json_str, float(score_ms)))
+
+                        if not speaker_events_for_mapper:
+                            logger.debug(f"[Msg {message_id}/Meet {internal_meeting_id}/Seg {start_time_key}] No speaker events in Redis for UID {session_uid_from_payload} in range {segment_start_ms:.0f}-{segment_end_ms:.0f}ms.")
+                            mapping_status = STATUS_NO_SPEAKER_EVENTS
+                        else:
+                            logger.debug(f"[Msg {message_id}/Meet {internal_meeting_id}/Seg {start_time_key}] {len(speaker_events_for_mapper)} speaker events for mapping.")
+
+                        mapping_result = map_speaker_to_segment(
+                            segment_start_ms=segment_start_ms,
+                            segment_end_ms=segment_end_ms,
+                            speaker_events_for_session=speaker_events_for_mapper,
+                            session_end_time_ms=None 
+                        )
+                        mapped_speaker_name = mapping_result.get("speaker_name")
+                        mapping_status = mapping_result.get("status", STATUS_ERROR)
+                        logger.info(f"[LiveMap UID:{session_uid_from_payload} Seg:{start_time_float:.2f}-{end_time_float:.2f}] Name: {mapped_speaker_name}, Status: {mapping_status}")
+
+                    except redis.exceptions.RedisError as re:
+                        logger.error(f"[Msg {message_id}/Meet {internal_meeting_id}/Seg {start_time_key}] Redis error fetching speaker events: {re}")
+                        mapping_status = STATUS_ERROR 
+                    except Exception as map_err:
+                        logger.error(f"[Msg {message_id}/Meet {internal_meeting_id}/Seg {start_time_key}] Live speaker mapping error: {map_err}", exc_info=True)
+                        mapping_status = STATUS_ERROR
+                 else:
+                    mapping_status = STATUS_UNKNOWN # No UID, cannot map
+
                  segment_redis_data = {
                      "text": text_content,
                      "end_time": end_time_float,
                      "language": language_content,
-                     "updated_at": datetime.now(timezone.utc).isoformat(), # Use timezone.utc
-                     "session_uid": session_uid_from_payload 
+                     "updated_at": datetime.now(timezone.utc).isoformat(), 
+                     "session_uid": session_uid_from_payload,
+                     "speaker": mapped_speaker_name,
+                     "speaker_mapping_status": mapping_status
                  }
                  segments_to_store[start_time_key] = json.dumps(segment_redis_data)
                  segment_count += 1
@@ -191,7 +268,7 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
             if segment_count > 0:
                 try:
                     async with redis_c.pipeline(transaction=True) as pipe:
-                        pipe.sadd(f"active_meetings", str(internal_meeting_id)) # Ensure active_meetings key is just the string
+                        pipe.sadd(f"active_meetings", str(internal_meeting_id))
                         pipe.expire(hash_key, REDIS_SEGMENT_TTL)
                         if segments_to_store:
                             pipe.hset(hash_key, mapping=segments_to_store)
@@ -216,3 +293,50 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
     except Exception as e:
         logger.error(f"Unexpected error in process_stream_message for {message_id}: {e}", exc_info=True)
         return False 
+
+async def process_speaker_event_message(message_id: str, event_data: Dict[str, Any], redis_c: aioredis.Redis) -> bool:
+    """Processes a single speaker event message from the Redis stream.
+    Stores the event in a Redis Sorted Set keyed by session_uid.
+    Returns True if processing is considered complete (can be ACKed),
+    False if a potentially recoverable error occurred (should not be ACKed).
+    """
+    try:
+        # Validate required fields for speaker event
+        required_fields = ["uid", "relative_client_timestamp_ms", "event_type", "participant_name"]
+        if not all(field in event_data for field in required_fields):
+            logger.warning(f"[SpeakerProcessor] Speaker event message {message_id} missing required fields. Skipping. Data: {event_data}")
+            return True  # Handled error (bad data), OK to ACK
+
+        session_uid = event_data["uid"]
+        try:
+            # Ensure timestamp is a float for Redis score
+            relative_timestamp_ms = float(event_data["relative_client_timestamp_ms"])
+        except ValueError:
+            logger.warning(f"[SpeakerProcessor] Invalid relative_client_timestamp_ms '{event_data['relative_client_timestamp_ms']}' for message {message_id}. Skipping.")
+            return True # Bad data, OK to ACK
+
+        # The entire event_data (which is the payload) will be stored as the value
+        # Ensure it's JSON-serializable (it should be if it came from JSON stream)
+        event_payload_json = json.dumps(event_data)
+        
+        sorted_set_key = f"{REDIS_SPEAKER_EVENT_KEY_PREFIX}:{session_uid}"
+
+        async with redis_c.pipeline(transaction=True) as pipe:
+            pipe.zadd(sorted_set_key, {event_payload_json: relative_timestamp_ms})
+            pipe.expire(sorted_set_key, REDIS_SPEAKER_EVENT_TTL)
+            results = await pipe.execute()
+
+        # Check pipeline results (optional, zadd returns num added, expire returns 1 or 0)
+        # For simplicity, we assume success if no exception
+        logger.debug(f"[SpeakerProcessor] Stored speaker event for UID '{session_uid}' at {relative_timestamp_ms}ms. Key: {sorted_set_key}. Message ID: {message_id}")
+        return True
+
+    except json.JSONDecodeError as json_err: # Should not happen if data is already dict
+        logger.error(f"[SpeakerProcessor] Error serializing speaker event payload to JSON for message {message_id}: {json_err}. Data: {event_data}")
+        return True # Cannot process, but ack to avoid loop with bad data format.
+    except redis.exceptions.RedisError as e_redis:
+        logger.error(f"[SpeakerProcessor] Redis error processing speaker event message {message_id}: {e_redis}", exc_info=True)
+        return False  # Potentially recoverable Redis error, DO NOT ACK
+    except Exception as e:
+        logger.error(f"[SpeakerProcessor] Unexpected error in process_speaker_event_message for {message_id}: {e}", exc_info=True)
+        return False # Unexpected error, DO NOT ACK 

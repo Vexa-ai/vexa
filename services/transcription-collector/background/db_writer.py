@@ -10,22 +10,23 @@ import redis.asyncio as aioredis
 from shared_models.database import async_session_local
 from shared_models.models import Transcription
 # No schemas needed directly by these functions as they create Transcription objects
-from config import BACKGROUND_TASK_INTERVAL, IMMUTABILITY_THRESHOLD
+from config import BACKGROUND_TASK_INTERVAL, IMMUTABILITY_THRESHOLD, REDIS_SPEAKER_EVENT_KEY_PREFIX
 from filters import TranscriptionFilter
 
 logger = logging.getLogger(__name__)
 
 # This helper is used by process_redis_to_postgres
-def create_transcription_object(meeting_id: int, start: float, end: float, text: str, language: Optional[str], session_uid: Optional[str]) -> Transcription:
+def create_transcription_object(meeting_id: int, start: float, end: float, text: str, language: Optional[str], session_uid: Optional[str], mapped_speaker_name: Optional[str]) -> Transcription:
     """Creates a Transcription ORM object without adding/committing."""
     return Transcription(
         meeting_id=meeting_id,
         start_time=start,
         end_time=end,
         text=text,
+        speaker=mapped_speaker_name,
         language=language,
         session_uid=session_uid, 
-        created_at=datetime.now(timezone.utc)
+        created_at=datetime.utcnow()
     )
 
 async def process_redis_to_postgres(redis_c: aioredis.Redis, local_transcription_filter: TranscriptionFilter):
@@ -86,6 +87,14 @@ async def process_redis_to_postgres(redis_c: aioredis.Redis, local_transcription
                                     segment_updated_at = segment_updated_at.replace(tzinfo=timezone.utc)
                                 
                                 if segment_updated_at < immutability_time:
+                                    # Segment is immutable. Speaker mapping was already done by processors.py.
+                                    # Directly use speaker info from segment_data.
+                                    mapped_speaker_name = segment_data.get("speaker") # Get pre-mapped speaker
+                                    # mapping_status = segment_data.get("speaker_mapping_status", STATUS_UNKNOWN) # Also available if needed
+
+                                    logger.debug(f"Segment {start_time_str} (UID: {segment_session_uid}) is immutable. Using pre-mapped speaker: '{mapped_speaker_name}'")
+
+                                    # Filter the segment (deduplication, etc.)
                                     if local_transcription_filter.filter_segment(segment_data['text'], language=segment_data.get('language')):
                                         new_transcription = create_transcription_object(
                                             meeting_id=meeting_id,
@@ -93,7 +102,8 @@ async def process_redis_to_postgres(redis_c: aioredis.Redis, local_transcription
                                             end=segment_data['end_time'],
                                             text=segment_data['text'],
                                             language=segment_data.get('language'),
-                                            session_uid=segment_session_uid
+                                            session_uid=segment_session_uid,
+                                            mapped_speaker_name=mapped_speaker_name
                                         )
                                         batch_to_store.append(new_transcription)
                                     segments_to_delete_from_redis.setdefault(meeting_id, set()).add(start_time_str)
