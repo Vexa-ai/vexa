@@ -1,6 +1,8 @@
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 import json
+import aioredis
+import redis
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +143,86 @@ def map_speaker_to_segment(
 
     return {
         "speaker_name": active_speaker_name,
+        "participant_id_meet": active_participant_id,
+        "status": mapping_status
+    } 
+
+# NEW Utility function to centralize fetching and mapping logic
+async def get_speaker_mapping_for_segment(
+    redis_c: 'aioredis.Redis', # Forward reference for type hint
+    session_uid: str,
+    segment_start_ms: float,
+    segment_end_ms: float,
+    config_speaker_event_key_prefix: str, # Pass REDIS_SPEAKER_EVENT_KEY_PREFIX
+    context_log_msg: str = "" # For more specific logging, e.g., "[LiveMap]" or "[FinalMap]"
+) -> Dict[str, Any]:
+    """
+    Fetches speaker events from Redis for a given segment and session, 
+    then maps them to determine the speaker.
+    """
+    if not session_uid:
+        logger.warning(f"{context_log_msg} No session_uid provided. Cannot map speakers.")
+        return {"speaker_name": None, "participant_id_meet": None, "status": STATUS_UNKNOWN}
+
+    mapped_speaker_name: Optional[str] = None
+    mapping_status: str = STATUS_UNKNOWN
+    active_participant_id: Optional[str] = None
+
+    try:
+        speaker_event_key = f"{config_speaker_event_key_prefix}:{session_uid}"
+        
+        # Fetch speaker events from Redis
+        speaker_events_raw = await redis_c.zrangebyscore(
+            speaker_event_key, 
+            min=segment_start_ms, 
+            max=segment_end_ms, 
+            withscores=True
+        )
+        
+        speaker_events_for_mapper: List[Tuple[str, float]] = []
+        for event_data, score_ms in speaker_events_raw:
+            event_json_str: Optional[str] = None
+            if isinstance(event_data, bytes):
+                event_json_str = event_data.decode('utf-8')
+            elif isinstance(event_data, str):
+                event_json_str = event_data
+            else:
+                logger.warning(f"{context_log_msg} UID:{session_uid} Seg:{segment_start_ms}-{segment_end_ms} Unexpected speaker event data type from Redis: {type(event_data)}. Skipping this event.")
+                continue
+            speaker_events_for_mapper.append((event_json_str, float(score_ms)))
+
+        log_prefix_detail = f"{context_log_msg} UID:{session_uid} Seg:{segment_start_ms:.0f}-{segment_end_ms:.0f}ms"
+
+        if not speaker_events_for_mapper:
+            logger.debug(f"{log_prefix_detail} No speaker events in Redis for mapping.")
+            mapping_status = STATUS_NO_SPEAKER_EVENTS
+        else:
+            logger.debug(f"{log_prefix_detail} {len(speaker_events_for_mapper)} speaker events for mapping.")
+
+        # Call the core mapping logic
+        mapping_result = map_speaker_to_segment(
+            segment_start_ms=segment_start_ms,
+            segment_end_ms=segment_end_ms,
+            speaker_events_for_session=speaker_events_for_mapper, # Already filtered by time for the segment
+            session_end_time_ms=None # session_end_time not critical for per-segment mapping here
+        )
+        
+        mapped_speaker_name = mapping_result.get("speaker_name")
+        active_participant_id = mapping_result.get("participant_id_meet")
+        mapping_status = mapping_result.get("status", STATUS_ERROR)
+        
+        if mapping_status != STATUS_NO_SPEAKER_EVENTS: # Avoid double logging if no events
+             logger.info(f"{log_prefix_detail} Result: Name='{mapped_speaker_name}', Status='{mapping_status}'")
+
+    except redis.exceptions.RedisError as re:
+        logger.error(f"{context_log_msg} UID:{session_uid} Seg:{segment_start_ms}-{segment_end_ms} Redis error fetching/processing speaker events: {re}", exc_info=True)
+        mapping_status = STATUS_ERROR 
+    except Exception as map_err:
+        logger.error(f"{context_log_msg} UID:{session_uid} Seg:{segment_start_ms}-{segment_end_ms} Speaker mapping error: {map_err}", exc_info=True)
+        mapping_status = STATUS_ERROR
+    
+    return {
+        "speaker_name": mapped_speaker_name,
         "participant_id_meet": active_participant_id,
         "status": mapping_status
     } 

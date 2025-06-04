@@ -14,8 +14,8 @@ from shared_models.database import async_session_local # For DB sessions
 from shared_models.models import User, Meeting, MeetingSession, APIToken
 from shared_models.schemas import Platform # WhisperLiveData not directly used by these functions from snippet
 from config import REDIS_SEGMENT_TTL, REDIS_SPEAKER_EVENT_KEY_PREFIX, REDIS_SPEAKER_EVENT_TTL # Added new configs (NEW)
-# NEW: Import speaker mapping function and statuses
-from mapping.speaker_mapper import map_speaker_to_segment, STATUS_MAPPED, STATUS_UNKNOWN, STATUS_NO_SPEAKER_EVENTS, STATUS_MULTIPLE, STATUS_ERROR
+# MODIFIED: Import the new utility function and only necessary statuses/base mapper if still needed elsewhere
+from mapping.speaker_mapper import get_speaker_mapping_for_segment, STATUS_UNKNOWN, STATUS_ERROR # Removed direct map_speaker_to_segment and other statuses if not directly used by this file
 
 logger = logging.getLogger(__name__)
 
@@ -199,59 +199,26 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                             
                  start_time_key = f"{start_time_float:.3f}"
                  
-                 mapped_speaker_name: Optional[str] = None
                  mapping_status: str = STATUS_UNKNOWN
 
                  if session_uid_from_payload:
-                    try:
-                        segment_start_ms = start_time_float * 1000
-                        segment_end_ms = end_time_float * 1000
-                        speaker_event_key = f"{REDIS_SPEAKER_EVENT_KEY_PREFIX}:{session_uid_from_payload}"
-                        
-                        speaker_events_raw = await redis_c.zrangebyscore(
-                            speaker_event_key, 
-                            min=segment_start_ms, 
-                            max=segment_end_ms, 
-                            withscores=True
-                        )
-                        
-                        speaker_events_for_mapper: List[Tuple[str, float]] = []
-                        for event_data, score_ms in speaker_events_raw:
-                            event_json_str: Optional[str] = None
-                            if isinstance(event_data, bytes):
-                                event_json_str = event_data.decode('utf-8')
-                            elif isinstance(event_data, str):
-                                event_json_str = event_data
-                            else:
-                                logger.warning(f"[Msg {message_id}/Meet {internal_meeting_id}/Seg {start_time_key}] Unexpected speaker event data type from Redis: {type(event_data)}. Skipping this event.")
-                                continue
-                            
-                            speaker_events_for_mapper.append((event_json_str, float(score_ms)))
-
-                        if not speaker_events_for_mapper:
-                            logger.debug(f"[Msg {message_id}/Meet {internal_meeting_id}/Seg {start_time_key}] No speaker events in Redis for UID {session_uid_from_payload} in range {segment_start_ms:.0f}-{segment_end_ms:.0f}ms.")
-                            mapping_status = STATUS_NO_SPEAKER_EVENTS
-                        else:
-                            logger.debug(f"[Msg {message_id}/Meet {internal_meeting_id}/Seg {start_time_key}] {len(speaker_events_for_mapper)} speaker events for mapping.")
-
-                        mapping_result = map_speaker_to_segment(
-                            segment_start_ms=segment_start_ms,
-                            segment_end_ms=segment_end_ms,
-                            speaker_events_for_session=speaker_events_for_mapper,
-                            session_end_time_ms=None 
-                        )
-                        mapped_speaker_name = mapping_result.get("speaker_name")
-                        mapping_status = mapping_result.get("status", STATUS_ERROR)
-                        logger.info(f"[LiveMap UID:{session_uid_from_payload} Seg:{start_time_float:.2f}-{end_time_float:.2f}] Name: {mapped_speaker_name}, Status: {mapping_status}")
-
-                    except redis.exceptions.RedisError as re:
-                        logger.error(f"[Msg {message_id}/Meet {internal_meeting_id}/Seg {start_time_key}] Redis error fetching speaker events: {re}")
-                        mapping_status = STATUS_ERROR 
-                    except Exception as map_err:
-                        logger.error(f"[Msg {message_id}/Meet {internal_meeting_id}/Seg {start_time_key}] Live speaker mapping error: {map_err}", exc_info=True)
-                        mapping_status = STATUS_ERROR
+                    # MODIFIED: Call the new utility function
+                    context_log = f"[LiveMap Msg:{message_id}/Meet:{internal_meeting_id}/Seg:{start_time_key}]"
+                    mapping_result = await get_speaker_mapping_for_segment(
+                        redis_c=redis_c,
+                        session_uid=session_uid_from_payload,
+                        segment_start_ms=start_time_float * 1000,
+                        segment_end_ms=end_time_float * 1000,
+                        config_speaker_event_key_prefix=REDIS_SPEAKER_EVENT_KEY_PREFIX,
+                        context_log_msg=context_log
+                    )
+                    mapped_speaker_name = mapping_result.get("speaker_name")
+                    mapping_status = mapping_result.get("status", STATUS_ERROR) # Default to STATUS_ERROR if not present
                  else:
-                    mapping_status = STATUS_UNKNOWN # No UID, cannot map
+                    # This case is now handled inside get_speaker_mapping_for_segment if session_uid is None,
+                    # but keeping explicit handling here is also fine for clarity if session_uid_from_payload is None from the start.
+                    logger.warning(f"[Msg {message_id}/Meet {internal_meeting_id}/Seg {start_time_key}] No session_uid_from_payload. Cannot map speakers.")
+                    mapping_status = STATUS_UNKNOWN
 
                  segment_redis_data = {
                      "text": text_content,

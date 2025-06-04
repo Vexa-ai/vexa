@@ -12,6 +12,15 @@ from shared_models.models import Transcription
 # No schemas needed directly by these functions as they create Transcription objects
 from config import BACKGROUND_TASK_INTERVAL, IMMUTABILITY_THRESHOLD, REDIS_SPEAKER_EVENT_KEY_PREFIX
 from filters import TranscriptionFilter
+# Speaker re-mapping before persistence
+from mapping.speaker_mapper import (
+    get_speaker_mapping_for_segment,
+    STATUS_MAPPED,
+    STATUS_UNKNOWN,
+    STATUS_NO_SPEAKER_EVENTS,
+    STATUS_MULTIPLE,
+    STATUS_ERROR,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,12 +96,51 @@ async def process_redis_to_postgres(redis_c: aioredis.Redis, local_transcription
                                     segment_updated_at = segment_updated_at.replace(tzinfo=timezone.utc)
                                 
                                 if segment_updated_at < immutability_time:
-                                    # Segment is immutable. Speaker mapping was already done by processors.py.
-                                    # Directly use speaker info from segment_data.
-                                    mapped_speaker_name = segment_data.get("speaker") # Get pre-mapped speaker
-                                    # mapping_status = segment_data.get("speaker_mapping_status", STATUS_UNKNOWN) # Also available if needed
+                                    # Segment is immutable. Attempt ONE FINAL speaker mapping pass if speaker name is missing or uncertain.
+                                    mapped_speaker_name: Optional[str] = segment_data.get("speaker")
+                                    mapping_status: str = segment_data.get("speaker_mapping_status", STATUS_UNKNOWN)
 
-                                    logger.debug(f"Segment {start_time_str} (UID: {segment_session_uid}) is immutable. Using pre-mapped speaker: '{mapped_speaker_name}'")
+                                    needs_remap = (
+                                        (not mapped_speaker_name)
+                                        or mapping_status in (STATUS_UNKNOWN, STATUS_NO_SPEAKER_EVENTS, STATUS_ERROR)
+                                    )
+
+                                    if needs_remap and segment_session_uid:
+                                        try:
+                                            segment_start_ms = float(start_time_str) * 1000.0
+                                            segment_end_ms = float(segment_data["end_time"]) * 1000.0
+                                            
+                                            context_log = f"[FinalMap Meet:{meeting_id}/Seg:{start_time_str}]"
+                                            mapping_result = await get_speaker_mapping_for_segment(
+                                                redis_c=redis_c,
+                                                session_uid=segment_session_uid,
+                                                segment_start_ms=segment_start_ms,
+                                                segment_end_ms=segment_end_ms,
+                                                config_speaker_event_key_prefix=REDIS_SPEAKER_EVENT_KEY_PREFIX,
+                                                context_log_msg=context_log
+                                            )
+
+                                            mapped_speaker_name = mapping_result.get("speaker_name")
+                                            mapping_status = mapping_result.get("status", STATUS_ERROR)
+                                            
+                                            # Persist new mapping back into Redis so API reflects it while still in Redis
+                                            segment_data["speaker"] = mapped_speaker_name
+                                            segment_data["speaker_mapping_status"] = mapping_status
+                                            await redis_c.hset(hash_key, start_time_str, json.dumps(segment_data))
+
+                                            logger.info(
+                                                f"[FinalMap] Meeting {meeting_id} segment {start_time_str} remapped to '{mapped_speaker_name}' with status {mapping_status}"
+                                            )
+                                        except Exception as map_err:
+                                            logger.error(
+                                                f"[FinalMap] Error remapping speaker for meeting {meeting_id} segment {start_time_str}: {map_err}",
+                                                exc_info=True,
+                                            )
+
+                                    else:
+                                        logger.debug(
+                                            f"Segment {start_time_str} (UID: {segment_session_uid}) uses speaker: '{mapped_speaker_name}' (status {mapping_status})"
+                                        )
 
                                     # Filter the segment (deduplication, etc.)
                                     if local_transcription_filter.filter_segment(segment_data['text'], language=segment_data.get('language')):
