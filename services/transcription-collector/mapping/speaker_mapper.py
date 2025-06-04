@@ -1,7 +1,7 @@
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 import json
-import aioredis
+import redis.asyncio as aioredis
 import redis
 
 logger = logging.getLogger(__name__)
@@ -9,9 +9,13 @@ logger = logging.getLogger(__name__)
 # Speaker mapping statuses
 STATUS_UNKNOWN = "UNKNOWN"
 STATUS_MAPPED = "MAPPED"
-STATUS_MULTIPLE = "MULTIPLE" # Not fully implemented in terms of selection logic here, defaults to last one for now
+STATUS_MULTIPLE = "MULTIPLE_CONCURRENT_SPEAKERS"
 STATUS_NO_SPEAKER_EVENTS = "NO_SPEAKER_EVENTS"
-STATUS_ERROR = "ERROR"
+STATUS_ERROR = "ERROR_IN_MAPPING"
+
+# NEW: Define buffer constants for fetching speaker events
+PRE_SEGMENT_SPEAKER_EVENT_FETCH_MS = 500  # Fetch events starting 2s before segment
+POST_SEGMENT_SPEAKER_EVENT_FETCH_MS = 500 # Fetch events up to 2s after segment
 
 def map_speaker_to_segment(
     segment_start_ms: float,
@@ -174,8 +178,8 @@ async def get_speaker_mapping_for_segment(
         # Fetch speaker events from Redis
         speaker_events_raw = await redis_c.zrangebyscore(
             speaker_event_key, 
-            min=segment_start_ms, 
-            max=segment_end_ms, 
+            min=segment_start_ms - PRE_SEGMENT_SPEAKER_EVENT_FETCH_MS, # MODIFIED
+            max=segment_end_ms + POST_SEGMENT_SPEAKER_EVENT_FETCH_MS, # MODIFIED
             withscores=True
         )
         
@@ -203,7 +207,7 @@ async def get_speaker_mapping_for_segment(
         mapping_result = map_speaker_to_segment(
             segment_start_ms=segment_start_ms,
             segment_end_ms=segment_end_ms,
-            speaker_events_for_session=speaker_events_for_mapper, # Already filtered by time for the segment
+            speaker_events_for_session=speaker_events_for_mapper, # Now contains all events for the session
             session_end_time_ms=None # session_end_time not critical for per-segment mapping here
         )
         

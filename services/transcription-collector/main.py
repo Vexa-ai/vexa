@@ -102,7 +102,7 @@ async def startup():
         else:
             logger.error(f"Failed to create Redis consumer group for speaker events: {e}", exc_info=True)
             return
-            
+    
     logger.info("Database initialized.")
     
     await claim_stale_messages(redis_client)

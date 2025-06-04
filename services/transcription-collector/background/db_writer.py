@@ -69,17 +69,20 @@ async def process_redis_to_postgres(redis_c: aioredis.Redis, local_transcription
                     try:
                         meeting_id = int(meeting_id_str)
                         hash_key = f"meeting:{meeting_id}:segments"
-                        redis_segments = await redis_c.hgetall(hash_key)
+                        redis_segments_dict = await redis_c.hgetall(hash_key)
                         
-                        if not redis_segments:
+                        if not redis_segments_dict:
                             await redis_c.srem("active_meetings", meeting_id_str)
-                            logger.debug(f"Removed empty meeting {meeting_id} from active meetings set")
+                            local_transcription_filter.clear_processed_segments_cache(meeting_id)
+                            logger.debug(f"Removed empty meeting {meeting_id} from active meetings set and cleared its filter cache.")
                             continue
+
+                        sorted_segment_items = sorted(redis_segments_dict.items(), key=lambda item: float(item[0]))
                             
-                        logger.debug(f"Processing {len(redis_segments)} segments from Redis Hash for meeting {meeting_id}")
+                        logger.debug(f"Processing {len(sorted_segment_items)} segments from Redis Hash for meeting {meeting_id} (sorted)")
                         immutability_time = datetime.now(timezone.utc) - timedelta(seconds=IMMUTABILITY_THRESHOLD)
                         
-                        for start_time_str, segment_json in redis_segments.items():
+                        for start_time_str, segment_json in sorted_segment_items:
                             try:
                                 segment_data = json.loads(segment_json)
                                 segment_session_uid = segment_data.get("session_uid")
@@ -143,11 +146,20 @@ async def process_redis_to_postgres(redis_c: aioredis.Redis, local_transcription
                                         )
 
                                     # Filter the segment (deduplication, etc.)
-                                    if local_transcription_filter.filter_segment(segment_data['text'], language=segment_data.get('language')):
+                                    segment_start_time_float = float(start_time_str)
+                                    segment_end_time_float = segment_data['end_time']
+                                    
+                                    if local_transcription_filter.filter_segment(
+                                        segment_data['text'], 
+                                        start_time=segment_start_time_float, 
+                                        end_time=segment_end_time_float, 
+                                        meeting_id=meeting_id,
+                                        language=segment_data.get('language')
+                                    ):
                                         new_transcription = create_transcription_object(
                                             meeting_id=meeting_id,
-                                            start=float(start_time_str),
-                                            end=segment_data['end_time'],
+                                            start=segment_start_time_float,
+                                            end=segment_end_time_float,
                                             text=segment_data['text'],
                                             language=segment_data.get('language'),
                                             session_uid=segment_session_uid,
