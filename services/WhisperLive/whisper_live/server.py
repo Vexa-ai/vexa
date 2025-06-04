@@ -74,6 +74,9 @@ class TranscriptionCollectorClient:
         # Stream key for transcriptions
         self.stream_key = os.getenv("REDIS_STREAM_KEY", "transcription_segments")
         
+        # Stream key for speaker events (NEW)
+        self.speaker_events_stream_key = os.getenv("REDIS_SPEAKER_EVENTS_RELATIVE_STREAM_KEY", "speaker_events_relative")
+        
         # Track session_uids for which we've published session_start events
         self.session_starts_published = set()
         
@@ -229,8 +232,102 @@ class TranscriptionCollectorClient:
             logging.error(f"Error publishing session_start event: {e}")
             return False
 
+    def publish_speaker_event(self, event_data: dict):
+        """Publish a speaker_activity event to the new Redis stream.
+        
+        Args:
+            event_data: The payload from the Vexa Bot's speaker_activity message.
+                        This includes uid, relative_client_timestamp_ms, participant_name, etc.
+        
+        Returns:
+            Boolean indicating success or failure
+        """
+        if not self.is_connected or not self.redis_client:
+            logging.warning(f"Cannot publish speaker event to {self.speaker_events_stream_key}: Not connected to Redis")
+            return False
+            
+        if not event_data or not isinstance(event_data, dict):
+            logging.error(f"Invalid event_data for publishing to {self.speaker_events_stream_key}")
+            return False
+
+        try:
+            # Add server received timestamp
+            now = datetime.datetime.utcnow()
+            timestamp_iso = now.isoformat() + "Z"
+            
+            # Create a new dictionary for the Redis message to avoid modifying the original
+            redis_message_payload = event_data.copy()
+            redis_message_payload["server_received_timestamp_iso"] = timestamp_iso
+            
+            # Ensure all values in redis_message_payload are suitable for xadd
+            # (typically strings, numbers, or booleans)
+            # For simplicity, we assume the structure is already flat as per planstate.md
+            
+            result = self.redis_client.xadd(
+                self.speaker_events_stream_key,
+                redis_message_payload 
+            )
+            
+            if result:
+                uid = redis_message_payload.get('uid', 'N/A')
+                event_type = redis_message_payload.get('event_type', 'N/A')
+                logging.info(f"Published speaker event ({event_type}) for UID {uid} to {self.speaker_events_stream_key}")
+                return True
+            else:
+                uid = redis_message_payload.get('uid', 'N/A')
+                logging.error(f"Failed to publish speaker event for UID {uid} to {self.speaker_events_stream_key}")
+                return False
+                
+        except Exception as e:
+            uid = event_data.get('uid', 'N/A')
+            logging.error(f"Error publishing speaker event for UID {uid} to {self.speaker_events_stream_key}: {e}")
+            logging.error(f"Error publishing transcription: {e}")
+            return False
+
+    def publish_session_end_event(self, token, platform, meeting_id, session_uid):
+        # ... (This method was in the original TranscriptionCollectorClient, ensure it's still there and correct)
+        # For brevity, not re-listing its full content if unchanged by this specific Phase 2 task.
+        # It should publish a message like: 
+        # payload = {
+        #     "type": "session_end",
+        #     "token": token, 
+        #     "platform": platform, 
+        #     "meeting_id": meeting_id, 
+        #     "uid": session_uid,
+        #     "end_timestamp": timestamp_iso 
+        # }
+        # to self.stream_key (transcription_segments stream)
+        if not self.is_connected or not self.redis_client:
+            logging.warning(f"Cannot publish session_end for UID {session_uid}: Not connected to Redis")
+            return False
+        try:
+            now = datetime.datetime.utcnow()
+            timestamp_iso = now.isoformat() + "Z"
+            payload = {
+                "type": "session_end",
+                "token": token,
+                "platform": platform,
+                "meeting_id": meeting_id,
+                "uid": session_uid,
+                "end_timestamp": timestamp_iso
+            }
+            message = {"payload": json.dumps(payload)}
+            result = self.redis_client.xadd(self.stream_key, message)
+            if result:
+                logging.info(f"Published session_end event for UID {session_uid} to {self.stream_key}")
+                # Remove from published starts if present, as session is now considered ended
+                if session_uid in self.session_starts_published:
+                    self.session_starts_published.remove(session_uid)
+                return True
+            else:
+                logging.error(f"Failed to publish session_end for UID {session_uid} to {self.stream_key}")
+                return False
+        except Exception as e:
+            logging.error(f"Error publishing session_end for UID {session_uid} to {self.stream_key}: {e}")
+            return False
+
     def send_transcription(self, token, platform, meeting_id, segments, session_uid=None):
-        """Send transcription segments to Redis stream.
+        """Send transcription segments to Redis stream (self.stream_key).
         
         Args:
             token: User's API token
@@ -242,54 +339,55 @@ class TranscriptionCollectorClient:
         Returns:
             Boolean indicating success or failure
         """
-        # Check connection
         if not self.is_connected or not self.redis_client:
-            logging.warning("Cannot send transcription: Not connected to Redis")
+            logging.warning(f"Cannot send transcription to {self.stream_key}: Not connected to Redis")
             return False
             
-        # Validate required fields
-        if not all([token, platform, meeting_id, segments]):
-            logging.error("Missing required fields for transcription")
+        # segments can be an empty list (e.g. for an early session_end or empty audio), 
+        # but other fields are required
+        if not all([token, platform, meeting_id]): 
+            logging.error(f"Missing required fields (token, platform, or meeting_id) for transcription UID {session_uid}")
             return False
             
-        # Generate a session_uid if not provided
         if not session_uid:
+            # This case should ideally be rare if uid is managed by the caller (ServeClient)
+            logging.warning("session_uid not provided to send_transcription, generating one.")
             session_uid = str(uuid.uuid4())
             
-        # If this is the first time we're seeing this session_uid, publish a session_start event
+        # If this is the first time we're seeing this session_uid for transcriptions, 
+        # publish a session_start event.
         if session_uid not in self.session_starts_published:
             self.publish_session_start_event(token, platform, meeting_id, session_uid)
         
         try:
-            # Create payload
             payload = {
-                "type": "transcription",
+                "type": "transcription", 
                 "token": token,
                 "platform": platform, 
                 "meeting_id": meeting_id,
-                "segments": segments,
-                "uid": session_uid  # Include session_uid in transcription messages too
+                "segments": segments, 
+                "uid": session_uid
             }
             
-            # Publish to Redis stream
             message = {
-                "payload": json.dumps(payload)
+                # Per current structure, the whole payload is JSON dumped into one field
+                "payload": json.dumps(payload) 
             }
             
             result = self.redis_client.xadd(
-                self.stream_key,
+                self.stream_key, 
                 message
             )
             
             if result:
-                logging.debug(f"Published transcription with {len(segments)} segments")
+                logging.debug(f"Published transcription with {len(segments)} segments for UID {session_uid} to {self.stream_key}")
                 return True
             else:
-                logging.error("Failed to publish transcription")
+                logging.error(f"Failed to publish transcription for UID {session_uid} to {self.stream_key}")
                 return False
                 
         except Exception as e:
-            logging.error(f"Error publishing transcription: {e}")
+            logging.error(f"Error publishing transcription for UID {session_uid} to {self.stream_key}: {e}")
             return False
 
 class ClientManager:
@@ -526,17 +624,146 @@ class TranscriptionServer:
     def get_audio_from_websocket(self, websocket):
         """
         Receives audio buffer from websocket and creates a numpy array out of it.
+        Also handles JSON control messages (speaker events, session control).
 
         Args:
             websocket: The websocket to receive audio from.
 
         Returns:
-            A numpy array containing the audio.
+            A numpy array containing the audio, or False if END_OF_AUDIO, or None if control message processed.
         """
         frame_data = websocket.recv()
+        
+        # Handle END_OF_AUDIO signal
         if frame_data == b"END_OF_AUDIO":
             return False
-        return np.frombuffer(frame_data, dtype=np.float32)
+            
+        # Check if this is a JSON control message (string) or binary audio data
+        try:
+            # Try to decode as JSON string first
+            if isinstance(frame_data, str) or (isinstance(frame_data, bytes) and frame_data.startswith(b'{')):
+                # This is a JSON control message
+                if isinstance(frame_data, bytes):
+                    frame_data = frame_data.decode('utf-8')
+                
+                control_message = json.loads(frame_data)
+                message_type = control_message.get("type", "unknown")
+                
+                logging.info(f"Received control message type: {message_type}")
+                
+                if message_type == "speaker_activity":
+                    # CORRECTED DISPATCH: Route "speaker_activity" to the new handler
+                    self.handle_speaker_activity_update(websocket, control_message)
+                elif message_type == "speaker_activity_update":
+                    # This branch can remain if "speaker_activity_update" is a distinct, valid type for other purposes.
+                    # Otherwise, it could be removed if "speaker_activity" is the sole type for this data.
+                    # For now, keeping it to ensure no other functionality breaks, assuming it might be used.
+                    self.handle_speaker_activity_update(websocket, control_message)
+                elif message_type == "audio_chunk_metadata":
+                    self.handle_audio_chunk_metadata(websocket, control_message)
+                elif message_type == "session_control":
+                    self.handle_session_control(websocket, control_message)
+                else:
+                    logging.warning(f"Unknown control message type: {message_type}")
+                
+                # Return None to indicate control message was processed (not audio)
+                return None
+                
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            # Not a JSON message, treat as binary audio data
+            pass
+        
+        # Process as binary audio data
+        try:
+            return np.frombuffer(frame_data, dtype=np.float32)
+        except (ValueError, TypeError) as e:
+            logging.error(f"Failed to process audio data: {e}")
+            return None
+
+    def handle_speaker_event(self, websocket, control_message):
+        """
+        Handle speaker activity events from the bot.
+        
+        Args:
+            websocket: The websocket connection
+            control_message: The parsed speaker event message
+        """
+        try:
+            payload = control_message.get("payload", {})
+            event_type = payload.get("event_type")
+            participant_name = payload.get("participant_name")
+            participant_id = payload.get("participant_id_meet")
+            timestamp = payload.get("client_timestamp_ms")
+            
+            logging.info(f"Speaker Event: {event_type} - {participant_name} ({participant_id}) at {timestamp}")
+            
+            # Future Phase 2: Store speaker events for timeline correlation
+            # For now, just log the events
+            
+        except Exception as e:
+            logging.error(f"Error processing speaker event: {e}")
+
+    def handle_session_control(self, websocket, control_message):
+        """
+        Handle session control messages from the bot.
+        
+        Args:
+            websocket: The websocket connection
+            control_message: The parsed session control message
+        """
+        try:
+            payload = control_message.get("payload", {})
+            event = payload.get("event")
+            session_uid = payload.get("uid")
+            timestamp = payload.get("client_timestamp_ms")
+            
+            logging.info(f"Session Control: {event} - Session {session_uid} at {timestamp}")
+            
+            if event == "LEAVING_MEETING":
+                # Handle graceful disconnect
+                logging.info(f"Bot signaled LEAVING_MEETING for session {session_uid}")
+                # The connection will be closed by the bot, we just acknowledge
+                
+        except Exception as e:
+            logging.error(f"Error processing session control: {e}")
+
+    def handle_speaker_activity_update(self, websocket, control_message):
+        """
+        Handle speaker activity update messages from the bot.
+        These are additional speaker state updates beyond the main speaker_activity events.
+        
+        Args:
+            websocket: The websocket connection
+            control_message: The parsed speaker activity update message
+        """
+        try:
+            payload = control_message.get("payload", {})
+            logging.debug(f"Speaker Activity Update received: {payload}")
+            
+            # Future Phase 2: Could be used for additional speaker state tracking
+            # For now, just log at debug level to avoid cluttering logs
+            
+        except Exception as e:
+            logging.error(f"Error processing speaker activity update: {e}")
+
+    def handle_audio_chunk_metadata(self, websocket, control_message):
+        """
+        Handle audio chunk metadata messages from the bot.
+        These contain information about audio chunks being processed.
+        
+        Args:
+            websocket: The websocket connection
+            control_message: The parsed audio chunk metadata message
+        """
+        try:
+            payload = control_message.get("payload", {})
+            logging.debug(f"Audio Chunk Metadata received: {payload}")
+            
+            # Future Phase 2: Could be used for audio quality monitoring, chunk timing analysis, etc.
+            # For now, just log at debug level to avoid cluttering logs
+            
+        except Exception as e:
+            logging.error(f"Error processing audio chunk metadata: {e}")
 
     def handle_new_connection(self, websocket, faster_whisper_custom_model_path,
                               whisper_tensorrt_path, trt_multilingual):
@@ -592,10 +819,16 @@ class TranscriptionServer:
     def process_audio_frames(self, websocket):
         frame_np = self.get_audio_from_websocket(websocket)
         client = self.client_manager.get_client(websocket)
+        
+        # Handle different return values from get_audio_from_websocket
         if frame_np is False:
+            # END_OF_AUDIO received
             if self.backend.is_tensorrt():
                 client.set_eos(True)
             return False
+        elif frame_np is None:
+            # Control message processed or error occurred, continue processing
+            return True
 
         if self.backend.is_tensorrt():
             voice_active = self.voice_activity(websocket, frame_np)
@@ -915,6 +1148,104 @@ class TranscriptionServer:
             # If health server fails to start, it's a critical issue.
             # self.is_healthy might not be accurate for the self-monitor if this fails early.
             # Consider setting self.is_healthy = False here or exiting if http health server is mandatory.
+
+    def handle_control_message(self, websocket, message):
+        """Handles incoming control messages from the client."""
+        client = self.client_manager.get_client(websocket) # CORRECTED
+        if not client:
+            logging.warning("Control message from unknown client (websocket not in client list).")
+            # Optionally, close websocket if it's unrecognized and sending control messages
+            # For now, just return to prevent further processing.
+            try:
+                # Example: Politely close or just ignore
+                # await websocket.close(code=1008, reason="Unrecognized client")
+                logging.info(f"Ignoring control message from unrecognized websocket: {websocket.remote_address}")
+            except Exception as e:
+                logging.error(f"Error handling unrecognized client during control message: {e}")
+            return
+
+        try:
+            control_message = json.loads(message)
+            message_type = control_message.get("type")
+            
+            # Log with client UID if available
+            logging.info(f"Received control message type: {message_type} from UID {client.uid if client else 'N/A'}")
+
+            if message_type == "speaker_event": 
+                # This path might be for older/different speaker events or specific debug.
+                # The primary path for Phase 2+ speaker activity is "speaker_activity".
+                # Assuming handle_speaker_event is a distinct, existing handler.
+                self.handle_speaker_event(websocket, control_message) 
+            elif message_type == "session_control":
+                self.handle_session_control(websocket, control_message)
+            elif message_type == "speaker_activity": # TARGET FOR PHASE 2
+                logging.info(f"DISPATCH_DEBUG: Entered 'speaker_activity' branch for UID {client.uid if client else 'N/A'}. Calling handle_speaker_activity_update.") # <-- ADDED THIS LINE
+                self.handle_speaker_activity_update(websocket, control_message)
+            elif message_type == "audio_chunk_metadata":
+                self.handle_audio_chunk_metadata(websocket, control_message)
+            else:
+                logging.warning(f"Unknown control message type: {message_type} from UID {client.uid if client else 'N/A'}")
+        except json.JSONDecodeError:
+            logging.error(f"Failed to decode JSON from control message from UID {client.uid if client else 'N/A'}: {message}")
+        except Exception as e:
+            logging.error(f"Error processing control message from UID {client.uid if client else 'N/A'}: {e}")
+
+
+    def handle_speaker_activity_update(self, websocket, control_message):
+        """
+        Handles incoming 'speaker_activity' updates from the client (Vexa Bot).
+        For Phase 2, this will forward the event payload to a new Redis stream.
+        """
+        client = self.client_manager.get_client(websocket) # CORRECTED
+        # This check is good even if also done in handle_control_message, 
+        # in case this method is ever called directly.
+        if not client:
+            logging.warning("handle_speaker_activity_update called but no client found for websocket.")
+            return
+
+        event_payload = control_message.get("payload")
+        if not event_payload or not isinstance(event_payload, dict):
+            logging.warning(f"Received speaker_activity with missing or invalid payload from UID {client.client_uid if client else 'N/A'}") # CORRECTED
+            return
+
+        # Use UID from payload if available, fallback to client.client_uid (they should match)
+        uid_for_log = event_payload.get('uid', client.client_uid if client else 'N/A_CLIENT_FALLBACK')  # CORRECTED
+        event_type = event_payload.get('event_type', 'N/A')
+        participant_name = event_payload.get('participant_name', 'N/A')
+        relative_ts = event_payload.get('relative_client_timestamp_ms', 'N/A')
+        
+        logging.info(
+            f"Processing Speaker Activity Update for UID {uid_for_log}: Type='{event_type}', Name='{participant_name}', RelativeTs={relative_ts}ms (Client on record: {client.client_uid if client else 'N/A_CLIENT_FALLBACK'})" # CORRECTED
+        )
+
+        if client.collector_client:  # CORRECTED: changed from collector_client_ref to collector_client
+            # The event_payload is what Vexa Bot sends.
+            # The publish_speaker_event method in collector_client will add server_received_timestamp_iso.
+            success = client.collector_client.publish_speaker_event(event_payload)  # CORRECTED: changed from collector_client_ref to collector_client
+            if success:
+                # Log already happens in publish_speaker_event, this is just confirmation of successful call
+                logging.debug(f"Successfully queued speaker event for UID {uid_for_log} to Redis via collector_client.")
+            else:
+                logging.error(f"Failed to queue speaker event for UID {uid_for_log} to Redis via collector_client.")
+        else:
+            logging.warning(f"Cannot forward speaker event for UID {uid_for_log}: collector_client not found for client {client.client_uid if client else 'N/A_CLIENT_FALLBACK'}.") # CORRECTED: changed from collector_client_ref to collector_client
+
+
+    def handle_audio_chunk_metadata(self, websocket, control_message):
+        client = self.client_manager.get_client(websocket)
+        if not client:
+            logging.warning("No client found for audio chunk metadata handling.")
+            return
+
+        try:
+            payload = control_message.get("payload", {})
+            logging.debug(f"Audio Chunk Metadata received: {payload}")
+            
+            # Future Phase 2: Could be used for audio quality monitoring, chunk timing analysis, etc.
+            # For now, just log at debug level to avoid cluttering logs
+            
+        except Exception as e:
+            logging.error(f"Error processing audio chunk metadata: {e}")
 
 
 class ServeClientBase(object):

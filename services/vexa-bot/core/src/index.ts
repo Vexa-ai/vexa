@@ -15,6 +15,8 @@ let currentTask: string | null | undefined = 'transcribe'; // Default task
 let currentRedisUrl: string | null = null;
 let currentConnectionId: string | null = null;
 let botManagerCallbackUrl: string | null = null; // ADDED: To store callback URL
+let currentPlatform: "google_meet" | "zoom" | "teams" | undefined;
+let page: Page | null = null; // Initialize page, will be set in runBot
 
 // --- ADDED: Flag to prevent multiple shutdowns ---
 let isShuttingDown = false;
@@ -84,77 +86,109 @@ const handleRedisMessage = async (message: string, channel: string, page: Page |
 // ----------------------------
 
 // --- ADDED: Graceful Leave Function ---
-async function performGracefulLeave(page: Page): Promise<void> {
+async function performGracefulLeave(
+  page: Page | null, // Allow page to be null for cases where it might not be available
+  exitCode: number = 1, // Default to 1 (failure/generic error)
+  reason: string = "self_initiated_leave" // Default reason
+): Promise<void> {
   if (isShuttingDown) {
     log("[Graceful Leave] Already in progress, ignoring duplicate call.");
     return;
   }
   isShuttingDown = true;
-  log("[Graceful Leave] Initiating graceful shutdown sequence...");
+  log(`[Graceful Leave] Initiating graceful shutdown sequence... Reason: ${reason}, Exit Code: ${exitCode}`);
 
-  let leaveSuccess = false;
-  try {
-    log("[Graceful Leave] Attempting platform-specific leave...");
-    leaveSuccess = await leaveGoogleMeet(page);
-    log(`[Graceful Leave] Platform leave attempt result: ${leaveSuccess}`);
-  } catch (leaveError: any) {
-    log(`[Graceful Leave] Error during platform leave attempt: ${leaveError.message}`);
-    leaveSuccess = false;
+  let platformLeaveSuccess = false;
+  if (page && !page.isClosed()) { // Only attempt platform leave if page is valid
+    try {
+      log("[Graceful Leave] Attempting platform-specific leave...");
+      // Assuming currentPlatform is set appropriately, or determine it if needed
+      if (currentPlatform === "google_meet") { // Add platform check if you have other platform handlers
+         platformLeaveSuccess = await leaveGoogleMeet(page);
+      } else {
+         log(`[Graceful Leave] No platform-specific leave defined for ${currentPlatform}. Page will be closed.`);
+         // If no specific leave, we still consider it "handled" to proceed with cleanup.
+         // The exitCode passed to this function will determine the callback's exitCode.
+         platformLeaveSuccess = true; // Or false if page closure itself is the "action"
+      }
+      log(`[Graceful Leave] Platform leave/close attempt result: ${platformLeaveSuccess}`);
+    } catch (leaveError: any) {
+      log(`[Graceful Leave] Error during platform leave/close attempt: ${leaveError.message}`);
+      platformLeaveSuccess = false;
+    }
+  } else {
+    log("[Graceful Leave] Page not available or already closed. Skipping platform-specific leave attempt.");
+    // If the page is already gone, we can't perform a UI leave.
+    // The provided exitCode and reason will dictate the callback.
+    // If reason is 'admission_failed', exitCode would be 2, and platformLeaveSuccess is irrelevant.
   }
 
-  // --- ADDED: Notify bot-manager before exiting ---
+  // Determine final exit code for callback based on initial reason or platform leave success.
+  // If the initial reason was something like 'admission_failed', use its specific exitCode.
+  // Otherwise, if it was a generic leave, success depends on platformLeaveSuccess.
+  const finalCallbackExitCode = (reason !== "self_initiated_leave") ? exitCode : (platformLeaveSuccess ? 0 : 1);
+  const finalCallbackReason = reason;
+
   if (botManagerCallbackUrl && currentConnectionId) {
-    const exitCode = leaveSuccess ? 0 : 1;
     const payload = JSON.stringify({
       connection_id: currentConnectionId,
-      exit_code: exitCode,
-      reason: "self_initiated_leave"
+      exit_code: finalCallbackExitCode,
+      reason: finalCallbackReason
     });
 
     try {
       log(`[Graceful Leave] Sending exit callback to ${botManagerCallbackUrl} with payload: ${payload}`);
       const url = new URL(botManagerCallbackUrl);
-      const options = {
+      const options: https.RequestOptions = { // Added type
         method: 'POST',
         hostname: url.hostname,
-        port: url.port || (url.protocol === 'https:' ? 443 : 80),
+        port: url.port || (url.protocol === 'https:' ? '443' : '80'),
         path: url.pathname,
         headers: {
           'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(payload)
+          'Content-Length': Buffer.byteLength(payload) // Assumes Buffer is available
         }
       };
 
-      const req = (url.protocol === 'https:' ? https : http).request(options, (res) => {
+      const req = (url.protocol === 'https:' ? https : http).request(options, (res: http.IncomingMessage) => { // Added type
         log(`[Graceful Leave] Bot-manager callback response status: ${res.statusCode}`);
-        res.on('data', (d) => { /* consume data to free resources */ });
+        res.on('data', () => { /* consume data */ });
       });
 
-      req.on('error', (error) => {
-        log(`[Graceful Leave] Error sending bot-manager callback: ${error.message}`);
+      req.on('error', (err: Error) => { // Added type
+        log(`[Graceful Leave] Error sending bot-manager callback: ${err.message}`);
       });
 
       req.write(payload);
       req.end();
-      // Wait a very short moment for the HTTP request to be sent, but don't block exit indefinitely.
-      // This is a best-effort notification.
       await new Promise(resolve => setTimeout(resolve, 500)); 
     } catch (callbackError: any) {
       log(`[Graceful Leave] Exception during bot-manager callback preparation: ${callbackError.message}`);
     }
+  } else {
+    log("[Graceful Leave] Bot manager callback URL or Connection ID not configured. Cannot send exit status.");
   }
-  // --- ------------------------------------------ ---
 
-  // Close Redis connection (if exists and open)
   if (redisSubscriber && redisSubscriber.isOpen) {
-      log("[Graceful Leave] Disconnecting Redis subscriber...");
-      try {
-          await redisSubscriber.unsubscribe();
-          await redisSubscriber.quit();
-          log("[Graceful Leave] Redis subscriber disconnected.");
-      } catch (err) {
-          log(`[Graceful Leave] Error closing Redis connection: ${err}`);
-      }
+    log("[Graceful Leave] Disconnecting Redis subscriber...");
+    try {
+        await redisSubscriber.unsubscribe();
+        await redisSubscriber.quit();
+        log("[Graceful Leave] Redis subscriber disconnected.");
+    } catch (err) {
+        log(`[Graceful Leave] Error closing Redis connection: ${err}`);
+    }
+  }
+
+  // Close the browser page if it's still open and wasn't closed by platform leave
+  if (page && !page.isClosed()) {
+    log("[Graceful Leave] Ensuring page is closed.");
+    try {
+      await page.close();
+      log("[Graceful Leave] Page closed.");
+    } catch (pageCloseError: any) {
+      log(`[Graceful Leave] Error closing page: ${pageCloseError.message}`);
+    }
   }
 
   // Close the browser instance
@@ -170,14 +204,11 @@ async function performGracefulLeave(page: Page): Promise<void> {
     log(`[Graceful Leave] Error closing browser: ${browserCloseError.message}`);
   }
 
-  // Exit the process only if the leave attempt was considered successful
-  if (leaveSuccess) {
-      log("[Graceful Leave] Exiting process with code 0 (Success).");
-      process.exit(0);
-  } else {
-      log("[Graceful Leave] Leave attempt failed or button not found. Exiting process with code 1 (Failure). Waiting for external termination.");
-      process.exit(1);
-  }
+  // Exit the process
+  // The process exit code should reflect the overall success/failure.
+  // If callback used finalCallbackExitCode, process.exit could use the same.
+  log(`[Graceful Leave] Exiting process with code ${finalCallbackExitCode} (Reason: ${finalCallbackReason}).`);
+  process.exit(finalCallbackExitCode);
 }
 // --- ----------------------------- ---
 
@@ -193,6 +224,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {
   currentRedisUrl = botConfig.redisUrl;
   currentConnectionId = botConfig.connectionId;
   botManagerCallbackUrl = botConfig.botManagerCallbackUrl || null; // ADDED: Get callback URL from botConfig
+  currentPlatform = botConfig.platform; // Set currentPlatform here
 
   // Destructure other needed config values
   const { meetingUrl, platform, botName } = botConfig;
@@ -258,13 +290,13 @@ export async function runBot(botConfig: BotConfig): Promise<void> {
       height: 720
     }
   })
-  const page = await context.newPage();
+  page = await context.newPage(); // Assign to the module-scoped page variable
 
   // --- ADDED: Expose a function for browser to trigger Node.js graceful leave ---
   await page.exposeFunction("triggerNodeGracefulLeave", async () => {
     log("[Node.js] Received triggerNodeGracefulLeave from browser context.");
-    if (!isShuttingDown) { // Check flag to avoid multiple triggers
-      await performGracefulLeave(page);
+    if (!isShuttingDown) {
+      await performGracefulLeave(page, 0, "self_initiated_leave_from_browser");
     } else {
       log("[Node.js] Ignoring triggerNodeGracefulLeave as shutdown is already in progress.");
     }
@@ -288,23 +320,23 @@ export async function runBot(botConfig: BotConfig): Promise<void> {
     Object.defineProperty(window, "outerHeight", { get: () => 1080 });
   });
 
-  // Switch based on the *external* platform name received in botConfig
-  switch (platform) {
-    case 'google_meet': // Use external name
-      await handleGoogleMeet(botConfig, page)
-      break;
-    case 'zoom': // External name
-      // todo
-      //await handleMeet(page);
-      break;
-    case 'teams': // External name
-      // todo
-      //  await handleTeams(page);
-      break;
-    default:
-      // Log the unexpected platform value
-      log(`Error: Unsupported platform received: ${platform}`);
-      throw new Error(`Unsupported platform: ${platform}`);
+  // Call the appropriate platform handler
+  try {
+    if (botConfig.platform === "google_meet") {
+      await handleGoogleMeet(botConfig, page, performGracefulLeave);
+    } else if (botConfig.platform === "zoom") {
+      log("Zoom platform not yet implemented.");
+      await performGracefulLeave(page, 1, "platform_not_implemented");
+    } else if (botConfig.platform === "teams") {
+      log("Teams platform not yet implemented.");
+      await performGracefulLeave(page, 1, "platform_not_implemented");
+    } else {
+      log(`Unknown platform: ${botConfig.platform}`);
+      await performGracefulLeave(page, 1, "unknown_platform");
+    }
+  } catch (error: any) {
+    log(`Error during platform handling: ${error.message}`);
+    await performGracefulLeave(page, 1, "platform_handler_exception");
   }
 
   log('Bot execution completed OR waiting for external termination/command.'); // Update log message
@@ -314,19 +346,11 @@ export async function runBot(botConfig: BotConfig): Promise<void> {
 // Setup signal handling to also trigger graceful leave
 const gracefulShutdown = async (signal: string) => {
     log(`Received signal: ${signal}. Triggering graceful shutdown.`);
-    // Need page context here - how to get it? 
-    // Option 1: Make page module-level (like browserInstance) - simpler for now
-    // Option 2: Track active pages in a map (more complex)
-    // Let's assume page is available or handle appropriately if not.
-    // This part needs refinement in Phase 5.
-    // For now, just log and attempt browser close if no page.
     if (!isShuttingDown) {
-        // If page is not easily accessible here, at least close the browser
-         log("[Signal Shutdown] Attempting to close browser directly.");
-         if (browserInstance && browserInstance.isConnected()) {
-            await browserInstance.close();
-         }
-         process.exit(signal === 'SIGINT' ? 130 : 143); // Standard exit codes for INT/TERM
+        // Determine the correct page instance if multiple are possible, or use a global 'currentPage'
+        // For now, assuming 'page' (if defined globally/module-scoped) or null
+        const pageToClose = typeof page !== 'undefined' ? page : null;
+        await performGracefulLeave(pageToClose, signal === 'SIGINT' ? 130 : 143, `signal_${signal.toLowerCase()}`);
     } else {
          log("[Signal Shutdown] Shutdown already in progress.");
     }

@@ -12,12 +12,15 @@ function generateUUID() {
 
 export async function handleGoogleMeet(
   botConfig: BotConfig,
-  page: Page
+  page: Page,
+  gracefulLeaveFunction: (page: Page | null, exitCode: number, reason: string) => Promise<void>
 ): Promise<void> {
   const leaveButton = `//button[@aria-label="Leave call"]`;
 
   if (!botConfig.meetingUrl) {
     log("Error: Meeting URL is required for Google Meet but is null.");
+    // If meeting URL is missing, we can't join, so trigger graceful leave.
+    await gracefulLeaveFunction(page, 1, "missing_meeting_url");
     return;
   }
 
@@ -25,7 +28,9 @@ export async function handleGoogleMeet(
   try {
     await joinMeeting(page, botConfig.meetingUrl, botConfig.botName);
   } catch (error: any) {
-    console.error(error.message);
+    console.error("Error during joinMeeting: " + error.message);
+    log("Error during joinMeeting: " + error.message + ". Triggering graceful leave.");
+    await gracefulLeaveFunction(page, 1, "join_meeting_error");
     return;
   }
 
@@ -50,14 +55,20 @@ export async function handleGoogleMeet(
 
     if (!isAdmitted) {
       console.error("Bot was not admitted into the meeting");
-      return;
+      log("Bot not admitted. Triggering graceful leave with admission_failed reason.");
+      
+      await gracefulLeaveFunction(page, 2, "admission_failed");
+      return; 
     }
 
     log("Successfully admitted to the meeting, starting recording");
     // Pass platform from botConfig to startRecording
     await startRecording(page, botConfig);
   } catch (error: any) {
-    console.error(error.message);
+    console.error("Error after join attempt (admission/recording setup): " + error.message);
+    log("Error after join attempt (admission/recording setup): " + error.message + ". Triggering graceful leave.");
+    // Use a general error code here, as it could be various issues.
+    await gracefulLeaveFunction(page, 1, "post_join_setup_error");
     return;
   }
 }
@@ -293,6 +304,8 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
           const configuredInterval = botConfigData.reconnectionIntervalMs;
           const baseRetryDelay = (configuredInterval && configuredInterval <= 1000) ? configuredInterval : 1000; // Use configured if <= 1s, else 1s
 
+          let sessionAudioStartTimeMs: number | null = null; // ADDED: For relative speaker timestamps
+
           const setupWebSocket = () => {
             try {
               if (socket) {
@@ -328,9 +341,10 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                 }
                 // --- MODIFIED: Log current config being used ---
                 // --- MODIFIED: Generate NEW UUID for this connection ---
-                const currentSessionUid = generateUUID();
+                currentSessionUid = generateUUID(); // Update the currentSessionUid
+                sessionAudioStartTimeMs = null; // ADDED: Reset for new WebSocket session
                 (window as any).logBot(
-                  `WebSocket connection opened. Using Lang: ${currentWsLanguage}, Task: ${currentWsTask}, New UID: ${currentSessionUid}`
+                  `[RelativeTime] WebSocket connection opened. New UID: ${currentSessionUid}. sessionAudioStartTimeMs reset. Lang: ${currentWsLanguage}, Task: ${currentWsTask}`
                 );
                 retryCount = 0;
 
@@ -538,6 +552,361 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
 
           setupWebSocket();
 
+          // --- ADD: Speaker Detection Logic (Adapted from speakers_console_test.js) ---
+          // Configuration for speaker detection
+          const participantSelector = '.IisKdb'; // Main selector for participant container/element
+          const speakingClasses = ['Oaajhc', 'HX2H7', 'wEsLMd', 'OgVli']; // Speaking/animation classes
+          const silenceClass = 'gjg47c';        // Class indicating the participant is silent
+          const nameSelectors = [               // Try these selectors to find participant's name
+              '.zWGUib',                        // Common name display class in Google Meet
+              '.XWGOtd',                        // Another potential name class
+              '[data-self-name]',               // Attribute often holding self name
+              '[data-participant-id]'           // Attribute for participant ID
+          ];
+
+          // State for tracking speaking status
+          const speakingStates = new Map(); // Stores the logical speaking state for each participant ID
+          
+          // Track current session UID for speaker events
+          let currentSessionUid = generateUUID(); // Initialize with a new UID
+
+          // Helper functions for speaker detection
+          function getParticipantId(element: HTMLElement) {
+              let id = element.getAttribute('data-participant-id');
+              if (!id) {
+                  const stableChild = element.querySelector('[jsinstance]');
+                  if (stableChild) {
+                      id = stableChild.getAttribute('jsinstance');
+                  }
+              }
+              if (!id) {
+                  if (!(element as any).dataset.vexaGeneratedId) {
+                      (element as any).dataset.vexaGeneratedId = 'vexa-id-' + Math.random().toString(36).substr(2, 9);
+                  }
+                  id = (element as any).dataset.vexaGeneratedId;
+              }
+              return id;
+          }
+
+          function getParticipantName(participantElement: HTMLElement) {
+              const mainTile = participantElement.closest('[data-participant-id]') as HTMLElement;
+              if (mainTile) {
+                  const userExampleNameElement = mainTile.querySelector('span.notranslate');
+                  if (userExampleNameElement && userExampleNameElement.textContent && userExampleNameElement.textContent.trim()) {
+                      const nameText = userExampleNameElement.textContent.trim();
+                      if (nameText.length > 1 && nameText.length < 50 && /^[\p{L}\s.'-]+$/u.test(nameText)) {
+                          const forbiddenSubstrings = ["more_vert", "mic_off", "mic", "videocam", "videocam_off", "present_to_all", "devices", "speaker", "speakers", "microphone"];
+                          if (!forbiddenSubstrings.some(sub => nameText.toLowerCase().includes(sub.toLowerCase()))) {
+                              return nameText;
+                          }
+                      }
+                  }
+                  const googleTsNameSelectors = [
+                      '[data-self-name]', '.zWGUib', '.cS7aqe.N2K3jd', '.XWGOtd', '[data-tooltip*="name"]'
+                  ];
+                  for (const selector of googleTsNameSelectors) {
+                      const nameElement = mainTile.querySelector(selector) as HTMLElement;
+                      if (nameElement) {
+                          let nameText = (nameElement as HTMLElement).textContent || 
+                                        (nameElement as HTMLElement).innerText || 
+                                        nameElement.getAttribute('data-self-name') || 
+                                        nameElement.getAttribute('data-tooltip');
+                          if (nameText && nameText.trim()) {
+                              if (selector.includes('data-tooltip') && nameText.includes("Tooltip for ")) {
+                                  nameText = nameText.replace("Tooltip for ", "").trim();
+                              }
+                              if (nameText && nameText.trim()) {
+                                  const forbiddenSubstrings = ["more_vert", "mic_off", "mic", "videocam", "videocam_off", "present_to_all", "devices", "speaker", "speakers", "microphone"];
+                                  if (!forbiddenSubstrings.some(sub => nameText!.toLowerCase().includes(sub.toLowerCase()))) {
+                                      const trimmedName = nameText!.split('\n').pop()?.trim();
+                                      return trimmedName || 'Unknown (Filtered)';
+                                  }
+                              }
+                          }
+                      }
+                  }
+              }
+              for (const selector of nameSelectors) {
+                  const nameElement = participantElement.querySelector(selector) as HTMLElement;
+                  if (nameElement) {
+                      let nameText = (nameElement as HTMLElement).textContent || 
+                                    (nameElement as HTMLElement).innerText || 
+                                    nameElement.getAttribute('data-self-name');
+                      if (nameText && nameText.trim()) {
+                          // ADDED: Apply forbidden substrings and trimming logic here too
+                          const forbiddenSubstrings = ["more_vert", "mic_off", "mic", "videocam", "videocam_off", "present_to_all", "devices", "speaker", "speakers", "microphone"];
+                          if (!forbiddenSubstrings.some(sub => nameText!.toLowerCase().includes(sub.toLowerCase()))) {
+                              const trimmedName = nameText!.split('\n').pop()?.trim();
+                              if (trimmedName && trimmedName.length > 1 && trimmedName.length < 50 && /^[\p{L}\s.'-]+$/u.test(trimmedName)) { // Added basic length and char validation
+                                 return trimmedName;
+                              }
+                          }
+                          // If it was forbidden or failed validation, it won't return, allowing loop to continue or fallback.
+                      }
+                  }
+              }
+              if (participantElement.textContent && participantElement.textContent.includes("You") && participantElement.textContent.length < 20) {
+                  return "You";
+              }
+              const idToDisplay = mainTile ? getParticipantId(mainTile) : getParticipantId(participantElement);
+              return `Participant (${idToDisplay})`;
+          }
+
+          function sendSpeakerEvent(eventType: string, participantElement: HTMLElement) {
+              const eventAbsoluteTimeMs = Date.now();
+              let relativeTimestampMs: number | null = null;
+
+              if (sessionAudioStartTimeMs === null) {
+                  (window as any).logBot(`[RelativeTime] SKIPPING speaker event: ${eventType} for ${getParticipantName(participantElement)}. sessionAudioStartTimeMs not yet set. UID: ${currentSessionUid}`);
+                  return; // Do not send if audio hasn't started for this session
+              }
+
+              relativeTimestampMs = eventAbsoluteTimeMs - sessionAudioStartTimeMs;
+
+              const participantId = getParticipantId(participantElement);
+              const participantName = getParticipantName(participantElement);
+
+              // Send speaker event via WebSocket if connected
+              if (socket && socket.readyState === WebSocket.OPEN) {
+                  const speakerEventMessage = {
+                      type: "speaker_activity",
+                      payload: {
+                          event_type: eventType,
+                          participant_name: participantName,
+                          participant_id_meet: participantId,
+                          relative_client_timestamp_ms: relativeTimestampMs, // UPDATED
+                          uid: currentSessionUid, // Use the current session UID
+                          token: token,
+                          platform: platform,
+                          meeting_id: nativeMeetingId,
+                          meeting_url: meetingUrl
+                      }
+                  };
+
+                  try {
+                      socket.send(JSON.stringify(speakerEventMessage));
+                      (window as any).logBot(`[RelativeTime] Speaker event sent: ${eventType} for ${participantName} (${participantId}). RelativeTs: ${relativeTimestampMs}ms. UID: ${currentSessionUid}. (AbsoluteEventMs: ${eventAbsoluteTimeMs}, SessionT0Ms: ${sessionAudioStartTimeMs})`);
+                  } catch (error: any) {
+                      (window as any).logBot(`Error sending speaker event: ${error.message}`);
+                  }
+              } else {
+                  (window as any).logBot(`WebSocket not ready, speaker event queued: ${eventType} for ${participantName}`);
+              }
+          }
+
+          function logSpeakerEvent(participantElement: HTMLElement, mutatedClassList: DOMTokenList) {
+              const participantId = getParticipantId(participantElement);
+              const participantName = getParticipantName(participantElement);
+              const previousLogicalState = speakingStates.get(participantId) || "silent";
+
+              const isNowVisiblySpeaking = speakingClasses.some(cls => mutatedClassList.contains(cls));
+              const isNowVisiblySilent = mutatedClassList.contains(silenceClass);
+
+              if (isNowVisiblySpeaking) {
+                  if (previousLogicalState !== "speaking") {
+                      (window as any).logBot(`🎤 SPEAKER_START: ${participantName} (ID: ${participantId})`);
+                      sendSpeakerEvent("SPEAKER_START", participantElement);
+                  }
+                  speakingStates.set(participantId, "speaking");
+              } else if (isNowVisiblySilent) {
+                  if (previousLogicalState === "speaking") {
+                      (window as any).logBot(`🔇 SPEAKER_END: ${participantName} (ID: ${participantId})`);
+                      sendSpeakerEvent("SPEAKER_END", participantElement);
+                  }
+                  speakingStates.set(participantId, "silent");
+              }
+          }
+
+          function observeParticipant(participantElement: HTMLElement) {
+              const participantId = getParticipantId(participantElement);
+              
+              // Determine initial logical state based on current classes
+              speakingStates.set(participantId, "silent"); // Initialize participant as silent. logSpeakerEvent will handle transitions.
+
+              let classListForInitialScan = participantElement.classList; // Default to the main participant element's classes
+              // Check if any descendant has a speaking class
+              for (const cls of speakingClasses) {
+                  const descendantElement = participantElement.querySelector('.' + cls); // Corrected selector
+                  if (descendantElement) {
+                      classListForInitialScan = descendantElement.classList;
+                      break;
+                  }
+              }
+              // If no speaking descendant was found, classListForInitialScan remains participantElement.classList.
+              // This is correct for checking if participantElement itself has a speaking or silence class.
+
+              (window as any).logBot(`👁️ Observing: ${getParticipantName(participantElement)} (ID: ${participantId}). Performing initial participant state analysis.`);
+              // Call logSpeakerEvent with the determined classList.
+              // It will compare against the "silent" state and emit SPEAKER_START if currently speaking,
+              // or do nothing if currently silent (matching the initialized state).
+              logSpeakerEvent(participantElement, classListForInitialScan);
+              
+
+              const callback = function(mutationsList: MutationRecord[], observer: MutationObserver) {
+                  for (const mutation of mutationsList) {
+                      if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
+                          const targetElement = mutation.target as HTMLElement;
+                          if (targetElement.matches(participantSelector) || participantElement.contains(targetElement)) {
+                              const finalTarget = targetElement.matches(participantSelector) ? targetElement : participantElement;
+                              // logSpeakerEvent(finalTarget, finalTarget.classList); // Old line
+                              logSpeakerEvent(finalTarget, targetElement.classList); // Corrected line
+                          }
+                      }
+                  }
+              };
+
+              const observer = new MutationObserver(callback);
+              observer.observe(participantElement, { 
+                  attributes: true, 
+                  attributeFilter: ['class'],
+                  subtree: true 
+              });
+              
+              if (!(participantElement as any).dataset.vexaObserverAttached) {
+                   (participantElement as any).dataset.vexaObserverAttached = 'true';
+              }
+          }
+
+          function scanForAllParticipants() {
+              const participantElements = document.querySelectorAll(participantSelector);
+              for (let i = 0; i < participantElements.length; i++) {
+                  const el = participantElements[i] as HTMLElement;
+                  if (!(el as any).dataset.vexaObserverAttached) {
+                       observeParticipant(el);
+                  }
+              }
+          }
+
+          // Initialize speaker detection
+          scanForAllParticipants();
+
+          // Monitor for new participants
+          const bodyObserver = new MutationObserver((mutationsList) => {
+              for (const mutation of mutationsList) {
+                  if (mutation.type === 'childList') {
+                      mutation.addedNodes.forEach(node => {
+                          if (node.nodeType === Node.ELEMENT_NODE) {
+                              const elementNode = node as HTMLElement;
+                              if (elementNode.matches(participantSelector) && !(elementNode as any).dataset.vexaObserverAttached) {
+                                  observeParticipant(elementNode);
+                              }
+                              const childElements = elementNode.querySelectorAll(participantSelector);
+                              for (let i = 0; i < childElements.length; i++) {
+                                  const childEl = childElements[i] as HTMLElement;
+                                  if (!(childEl as any).dataset.vexaObserverAttached) {
+                                      observeParticipant(childEl);
+                                  }
+                              }
+                          }
+                      });
+                      mutation.removedNodes.forEach(node => {
+                           if (node.nodeType === Node.ELEMENT_NODE) {
+                              const elementNode = node as HTMLElement;
+                              if (elementNode.matches(participantSelector)) {
+                                 const participantId = getParticipantId(elementNode);
+                                 const participantName = getParticipantName(elementNode);
+                                 if (speakingStates.get(participantId) === 'speaking') {
+                                      // Send synthetic SPEAKER_END if they were speaking when removed
+                                      (window as any).logBot(`🔇 SPEAKER_END (Participant removed while speaking): ${participantName} (ID: ${participantId})`);
+                                      sendSpeakerEvent("SPEAKER_END", elementNode);
+                                 }
+                                 speakingStates.delete(participantId);
+                                 delete (elementNode as any).dataset.vexaObserverAttached;
+                                 delete (elementNode as any).dataset.vexaGeneratedId;
+                                 (window as any).logBot(`🗑️ Removed observer for: ${participantName} (ID: ${participantId})`);
+                              }
+                           }
+                      });
+                  }
+              }
+          });
+
+          bodyObserver.observe(document.body, {
+              childList: true,
+              subtree: true
+          });
+
+          // --- ADD: Enhanced Leave Function with Session End Signal ---
+          (window as any).performLeaveAction = async () => {
+              (window as any).logBot("Attempting to leave the meeting from browser context...");
+              
+              // Send LEAVING_MEETING signal before closing WebSocket
+              if (socket && socket.readyState === WebSocket.OPEN) {
+                  try {
+                      const sessionControlMessage = {
+                          type: "session_control",
+                          payload: {
+                              event: "LEAVING_MEETING",
+                              uid: currentSessionUid,
+                              client_timestamp_ms: Date.now(),
+                              token: token,
+                              platform: platform,
+                              meeting_id: nativeMeetingId
+                          }
+                      };
+                      
+                      socket.send(JSON.stringify(sessionControlMessage));
+                      (window as any).logBot("LEAVING_MEETING signal sent to WhisperLive");
+                      
+                      // Wait a brief moment for the message to be sent
+                      await new Promise(resolve => setTimeout(resolve, 500));
+                  } catch (error: any) {
+                      (window as any).logBot(`Error sending LEAVING_MEETING signal: ${error.message}`);
+                  }
+              }
+
+              try {
+                  // *** FIXED: Use document.evaluate for XPath ***
+                  const primaryLeaveButtonXpath = `//button[@aria-label="Leave call"]`;
+                  const secondaryLeaveButtonXpath = `//button[.//span[text()='Leave meeting']] | //button[.//span[text()='Just leave the meeting']]`;
+
+                  const getElementByXpath = (path: string): HTMLElement | null => {
+                      const result = document.evaluate(
+                          path,
+                          document,
+                          null,
+                          XPathResult.FIRST_ORDERED_NODE_TYPE,
+                          null
+                      );
+                      return result.singleNodeValue as HTMLElement | null;
+                  };
+
+                  const primaryLeaveButton = getElementByXpath(
+                    primaryLeaveButtonXpath
+                  );
+                  if (primaryLeaveButton) {
+                    (window as any).logBot("Clicking primary leave button...");
+                    primaryLeaveButton.click(); // No need to cast HTMLElement if getElementByXpath returns it
+                    await new Promise((resolve) => setTimeout(resolve, 1000)); // Wait a bit for potential confirmation dialog
+
+                    // Try clicking secondary/confirmation button if it appears
+                    const secondaryLeaveButton = getElementByXpath(
+                      secondaryLeaveButtonXpath
+                    );
+                    if (secondaryLeaveButton) {
+                      (window as any).logBot(
+                        "Clicking secondary/confirmation leave button..."
+                      );
+                      secondaryLeaveButton.click();
+                      await new Promise((resolve) => setTimeout(resolve, 500)); // Short wait after final click
+                    } else {
+                      (window as any).logBot("Secondary leave button not found.");
+                    }
+                    (window as any).logBot("Leave sequence completed.");
+                    return true; // Indicate leave attempt was made
+                  } else {
+                    (window as any).logBot("Primary leave button not found.");
+                    return false; // Indicate leave button wasn't found
+                  }
+              } catch (err: any) {
+                (window as any).logBot(
+                  `Error during leave attempt: ${err.message}`
+                );
+                return false; // Indicate error during leave
+              }
+          };
+          // --- --------------------------------------------- ---
+
           // FIXED: Revert to original audio processing that works with whisperlive
           // but use our combined stream as the input source
           const audioDataCache = [];
@@ -555,6 +924,13 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
               // (window as any).logBot("WS not ready or closed, skipping audio data send."); // Optional debug log
               return;
             }
+
+            // ADDED: Set sessionAudioStartTimeMs on the first audio chunk for this session
+            if (sessionAudioStartTimeMs === null) {
+                sessionAudioStartTimeMs = Date.now();
+                (window as any).logBot(`[RelativeTime] sessionAudioStartTimeMs set for UID ${currentSessionUid}: ${sessionAudioStartTimeMs} (at first audio data process)`);
+            }
+
             const inputData = event.inputBuffer.getChannelData(0);
             const data = new Float32Array(inputData);
             const targetLength = Math.round(
@@ -576,6 +952,15 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
             // Send resampledData
             if (socket && socket.readyState === WebSocket.OPEN) {
               // Double check before sending
+              // Ensure sessionAudioStartTimeMs is set before sending audio.
+              // This check is more of a safeguard; it should be set by the logic above.
+              if (sessionAudioStartTimeMs === null) {
+                (window as any).logBot(`[RelativeTime] CRITICAL WARNING: sessionAudioStartTimeMs is STILL NULL before sending audio data for UID ${currentSessionUid}. This should not happen.`);
+                // Optionally, set it here as a last resort, though it might be slightly delayed.
+                // sessionAudioStartTimeMs = Date.now();
+                // (window as any).logBot(`[RelativeTime] sessionAudioStartTimeMs set LATE for UID ${currentSessionUid}: ${sessionAudioStartTimeMs}`);
+                return; // Or decide if you want to send audio even if T0 was missed. For now, skipping if T0 is critical.
+              }
               socket.send(resampledData); // send teh audio to whisperlive socket.
             }
           };
@@ -605,30 +990,37 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
           // Monitor participant list every 5 seconds
           let aloneTime = 0;
           const checkInterval = setInterval(() => {
-            const peopleList = document.querySelector('[role="list"]');
-            if (!peopleList) {
-              (window as any).logBot(
-                "Participant list not found; assuming meeting ended."
-              );
-              clearInterval(checkInterval);
-              recorder.disconnect();
-              (window as any).triggerNodeGracefulLeave();
-              resolve();
-              return;
-            }
-            const count = peopleList.childElementCount;
-            (window as any).logBot("Participant count: " + count);
+            const participantElements = document.querySelectorAll(participantSelector); // participantSelector is '.IisKdb'
+            const count = participantElements.length;
+            (window as any).logBot(`Participant count (using ${participantSelector}): ${count}`);
 
-            if (count <= 1) {
+            // If count is 0, it could mean everyone left, OR the participant list area itself is gone.
+            // This check helps determine if the list container itself has disappeared.
+            if (count === 0) {
+                const peopleListContainer = document.querySelector('[role="list"]'); // Check the original list container
+                if (!peopleListContainer || !document.body.contains(peopleListContainer)) {
+                     (window as any).logBot(
+                        "Participant list container not found (and participant count is 0); assuming meeting ended."
+                     );
+                     clearInterval(checkInterval);
+                     recorder.disconnect();
+                     (window as any).triggerNodeGracefulLeave();
+                     resolve(); // Resolve the main promise from page.evaluate
+                     return;   // Exit setInterval callback
+                }
+                // If peopleListContainer exists but count is 0 (no .IisKdb found),
+                // it means the list is genuinely empty. The aloneTime logic below will handle this.
+            }
+
+            if (count <= 1) { // Bot is 1, so count <= 1 means bot is alone or list is empty
               aloneTime += 5;
               (window as any).logBot(
                 "Bot appears alone for " + aloneTime + " seconds..."
               );
-            } else {
               aloneTime = 0;
             }
 
-            if (aloneTime >= 10 || count === 0) {
+            if (aloneTime >= 10) { // Simplified condition: if aloneTime accumulates, leave.
               (window as any).logBot(
                 "Meeting ended or bot alone for too long. Stopping recorder..."
               );
