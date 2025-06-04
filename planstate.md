@@ -32,14 +32,14 @@
 ### 📋 **Next Actions (Reflect New Phased Approach):**
 
 1.  **DONE:** Implement Vexa Bot changes for relative speaker timestamps (Phase 1).
-2.  **Immediate:** Modify WhisperLive to forward speaker events to `speaker_events_relative` and transcripts to `transcription_segments` (Phase 2).
-3.  **Short-term:** Develop Transcription Collector logic for dual-stream consumption, buffering, speaker-transcription mapping, and unified storage in the `transcriptions` table (Phase 3).
+2.  **DONE:** Modify WhisperLive to forward speaker events to `speaker_events_relative` and transcripts to `transcription_segments` (Phase 2).
+3.  **Immediate:** Develop Transcription Collector logic for dual-stream consumption, buffering, speaker-transcription mapping, and unified storage in the `transcriptions` table (Phase 3).
 
 ---
 ### 🎯 **Success Metrics (To be evaluated for each phase):**
 *   **Phase 1:** Accurate relative timestamps for speaker events per session `uid`. **(✅ Successfully Met)**
-*   **Phase 2:** Correct routing of speaker and transcript data to their respective Redis streams with correct `uid` and relative timestamps.
-*   **Phase 3:** Reliable mapping of speakers to transcription segments. Correct storage of enriched transcripts. Session end times correctly updated.
+*   **Phase 2:** Correct routing of speaker and transcript data to their respective Redis streams with correct `uid` and relative timestamps. **(✅ Successfully Met)**
+*   **Phase 3:** Successful consumption from both streams, temporal correlation of speaker events with transcript segments, and storage of speaker-enriched transcripts.
 
 ---
 
@@ -231,3 +231,29 @@
 *   **Testing:** Thoroughly test the relative timestamp generation in Vexa Bot, dual stream forwarding in WhisperLive, and the mapping logic in Transcription Collector with various scenarios (late speaker events, overlapping speech, reconnections).
 
 This revised plan aligns with the strategy of centralizing mapping in the Transcription Collector using relative timestamps from both Vexa Bot and WhisperLive, identified by a common session `uid`, and avoids storing raw speaker events separately.
+
+## Current Implementation Status
+
+### ✅ **PHASE 1 - COMPLETED SUCCESSFULLY** 
+**(Vexa Bot - Relative Speaker Timestamps & Event Transmission)**
+
+- ✅ Relative timestamp generation (`sessionAudioStartTimeMs` reference point)
+- ✅ WebSocket reconnection handling with time reset
+- ✅ Speaker event transmission with `uid` and `relative_client_timestamp_ms`
+- ✅ Verified in logs: Speaker events sent with correct relative timestamps
+
+### ✅ **PHASE 2 - COMPLETED SUCCESSFULLY** 
+**(WhisperLive - Dual Redis Stream Forwarding)**
+
+- ✅ New `REDIS_SPEAKER_EVENTS_RELATIVE_STREAM_KEY` environment variable
+- ✅ `TranscriptionCollectorClient.publish_speaker_event()` method 
+- ✅ Correct dispatching in `TranscriptionServer.handle_speaker_activity_update()`
+- ✅ Verified in Redis: Speaker events in `speaker_events_relative` stream with all required fields:
+  - `uid`, `event_type`, `participant_name`, `relative_client_timestamp_ms`
+  - `platform`, `meeting_id`, `token`, `meeting_url`, `server_received_timestamp_iso`
+- ✅ Verified: Transcripts still correctly routed to `transcription_segments` stream
+
+### 🚧 **PHASE 3 - READY FOR IMPLEMENTATION**
+**(Transcription Collector - Dual Stream Consumption & Speaker-Text Mapping)**
+
+**Requirements for Phase 3:**
