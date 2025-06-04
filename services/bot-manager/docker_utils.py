@@ -483,3 +483,54 @@ async def get_running_bots_status(user_id: int) -> List[Dict[str, Any]]:
             
     return bots_status
 # --- END: Get Running Bot Status --- 
+
+async def verify_container_running(container_id: str) -> bool:
+    """Verify if a container exists and is running via the Docker socket API."""
+    session = get_socket_session() # Assumes get_socket_session() is defined in this file
+    if not session:
+        logger.error(f"[Verify Container] Cannot verify container {container_id}, requests_unixsocket session not available.")
+        return False # Or raise an exception, depending on desired error handling
+
+    # Construct the correct base URL for socket requests
+    # This logic should mirror how other Docker API calls are made in this file
+    # For example, if DOCKER_HOST is 'unix:///var/run/docker.sock'
+    socket_path_relative = DOCKER_HOST.split('//', 1)[1] 
+    socket_path_abs = f"/{socket_path_relative}"
+    socket_path_encoded = socket_path_abs.replace("/", "%2F")
+    socket_url_base = f'http+unix://{socket_path_encoded}'
+    
+    inspect_url = f'{socket_url_base}/containers/{container_id}/json'
+    
+    try:
+        logger.debug(f"[Verify Container] Inspecting container {container_id} via URL: {inspect_url}")
+        # Make the request asynchronously. Requires session to be an AIOHTTP client or similar.
+        # If get_socket_session() returns a synchronous requests.Session, this needs to run in a thread.
+        # Assuming for now that session can handle async requests or this will be wrapped.
+        # For a synchronous session, it would be:
+        # response = await asyncio.to_thread(session.get, inspect_url)
+        
+        # If get_socket_session() returns a regular requests.Session:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, session.get, inspect_url)
+
+        if response.status_code == 404:
+            logger.info(f"[Verify Container] Container {container_id} not found (404).")
+            return False
+        
+        response.raise_for_status() # Raise an exception for other bad status codes (500, etc.)
+        
+        container_info = response.json()
+        is_running = container_info.get('State', {}).get('Running', False)
+        logger.info(f"[Verify Container] Container {container_id} found. Running: {is_running}")
+        return is_running
+        
+    except requests.exceptions.RequestException as e: # Catching requests-specific exceptions
+        if hasattr(e, 'response') and e.response is not None and e.response.status_code == 404:
+             logger.warning(f"[Verify Container] Container {container_id} not found during request (exception check).")
+             return False
+        logger.error(f"[Verify Container] HTTP error inspecting container {container_id}: {e}", exc_info=True)
+        return False # Treat HTTP errors (other than 404) as "not verifiable" or "not running"
+    except Exception as e:
+        logger.error(f"[Verify Container] Unexpected error inspecting container {container_id}: {e}", exc_info=True)
+        return False # Treat other errors as "not verifiable" or "not running"

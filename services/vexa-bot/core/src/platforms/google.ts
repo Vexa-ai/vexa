@@ -12,12 +12,15 @@ function generateUUID() {
 
 export async function handleGoogleMeet(
   botConfig: BotConfig,
-  page: Page
+  page: Page,
+  gracefulLeaveFunction: (page: Page | null, exitCode: number, reason: string) => Promise<void>
 ): Promise<void> {
   const leaveButton = `//button[@aria-label="Leave call"]`;
 
   if (!botConfig.meetingUrl) {
     log("Error: Meeting URL is required for Google Meet but is null.");
+    // If meeting URL is missing, we can't join, so trigger graceful leave.
+    await gracefulLeaveFunction(page, 1, "missing_meeting_url");
     return;
   }
 
@@ -25,7 +28,9 @@ export async function handleGoogleMeet(
   try {
     await joinMeeting(page, botConfig.meetingUrl, botConfig.botName);
   } catch (error: any) {
-    console.error(error.message);
+    console.error("Error during joinMeeting: " + error.message);
+    log("Error during joinMeeting: " + error.message + ". Triggering graceful leave.");
+    await gracefulLeaveFunction(page, 1, "join_meeting_error");
     return;
   }
 
@@ -50,14 +55,20 @@ export async function handleGoogleMeet(
 
     if (!isAdmitted) {
       console.error("Bot was not admitted into the meeting");
-      return;
+      log("Bot not admitted. Triggering graceful leave with admission_failed reason.");
+      
+      await gracefulLeaveFunction(page, 2, "admission_failed");
+      return; 
     }
 
     log("Successfully admitted to the meeting, starting recording");
     // Pass platform from botConfig to startRecording
     await startRecording(page, botConfig);
   } catch (error: any) {
-    console.error(error.message);
+    console.error("Error after join attempt (admission/recording setup): " + error.message);
+    log("Error after join attempt (admission/recording setup): " + error.message + ". Triggering graceful leave.");
+    // Use a general error code here, as it could be various issues.
+    await gracefulLeaveFunction(page, 1, "post_join_setup_error");
     return;
   }
 }
