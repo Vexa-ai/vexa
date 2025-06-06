@@ -910,9 +910,8 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
           // FIXED: Revert to original audio processing that works with whisperlive
           // but use our combined stream as the input source
           const audioDataCache = [];
-          const context = new AudioContext();
-          const mediaStream = context.createMediaStreamSource(stream); // Use our combined stream
-          const recorder = context.createScriptProcessor(4096, 1, 1);
+          const mediaStream = audioContext.createMediaStreamSource(stream); // Use our combined stream
+          const recorder = audioContext.createScriptProcessor(4096, 1, 1);
 
           recorder.onaudioprocess = async (event) => {
             // Check if server is ready AND socket is open
@@ -934,7 +933,7 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
             const inputData = event.inputBuffer.getChannelData(0);
             const data = new Float32Array(inputData);
             const targetLength = Math.round(
-              data.length * (16000 / context.sampleRate)
+              data.length * (16000 / audioContext.sampleRate)
             );
             const resampledData = new Float32Array(targetLength);
             const springFactor = (data.length - 1) / (targetLength - 1);
@@ -967,10 +966,13 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
 
           // Connect the audio processing pipeline
           mediaStream.connect(recorder);
-          recorder.connect(context.destination);
+          const gainNode = audioContext.createGain();
+          gainNode.gain.value = 0;
+          recorder.connect(gainNode);
+          gainNode.connect(audioContext.destination);
 
           (window as any).logBot(
-            "Audio processing pipeline connected and sending data."
+            "Audio processing pipeline connected and sending data silently."
           );
 
           // Click the "People" button
