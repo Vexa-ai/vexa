@@ -18,8 +18,10 @@ from whisper_live.vad import VoiceActivityDetector
 from whisper_live.transcriber import WhisperModel
 try:
     from whisper_live.transcriber_tensorrt import WhisperTRTLLM
+    TENSORRT_AVAILABLE = True
 except Exception:
-    pass
+    TENSORRT_AVAILABLE = False
+    WhisperTRTLLM = None
 
 # Import for health check HTTP server
 import http.server
@@ -1510,6 +1512,11 @@ class ServeClientTensorRT(ServeClientBase):
         """
         Instantiates a new model, sets it as the transcriber and does warmup if desired.
         """
+        if not TENSORRT_AVAILABLE:
+            raise RuntimeError(
+                "TensorRT dependencies are not available. Please install TensorRT libraries or use the faster_whisper backend instead."
+            )
+            
         self.transcriber = WhisperTRTLLM(
             model,
             assets_dir="assets",
@@ -1590,20 +1597,21 @@ class ServeClientTensorRT(ServeClientBase):
             start_time = self.timestamp_offset
             end_time = self.timestamp_offset + duration
             
+            segment_data = {
+                "text": last_segment + " ", 
+                "start": "{:.3f}".format(start_time),
+                "end": "{:.3f}".format(end_time),
+                "completed": True
+            }
+            
+            # Add language if available
+            if self.language is not None:
+                segment_data["language"] = self.language
+            
             if not len(self.transcript):
-                self.transcript.append({
-                    "text": last_segment + " ", 
-                    "start": "{:.3f}".format(start_time),
-                    "end": "{:.3f}".format(end_time),
-                    "completed": True
-                })
+                self.transcript.append(segment_data)
             elif self.transcript[-1]["text"].strip() != last_segment:
-                self.transcript.append({
-                    "text": last_segment + " ", 
-                    "start": "{:.3f}".format(start_time),
-                    "end": "{:.3f}".format(end_time),
-                    "completed": True
-                })
+                self.transcript.append(segment_data)
             
             self.timestamp_offset += duration
 
@@ -1647,7 +1655,7 @@ class ServeClientTensorRT(ServeClientBase):
             except Exception as e:
                 logging.error(f"[ERROR]: {e}")
 
-    def format_segment(self, start, end, text, completed=False):
+    def format_segment(self, start, end, text, completed=False, language=None):
         """
         Formats a transcription segment with precise start and end times alongside the transcribed text.
 
@@ -1655,18 +1663,26 @@ class ServeClientTensorRT(ServeClientBase):
             start (float): The start time of the transcription segment in seconds.
             end (float): The end time of the transcription segment in seconds.
             text (str): The transcribed text corresponding to the segment.
+            completed (bool): Whether the segment is completed or partial.
+            language (str): The detected language for this segment.
 
         Returns:
             dict: A dictionary representing the formatted transcription segment, including
-                'start' and 'end' times as strings with three decimal places and the 'text'
-                of the transcription.
+                'start' and 'end' times as strings with three decimal places, the 'text'
+                of the transcription, 'completed' status, and 'language' if provided.
         """
-        return {
+        segment = {
             'start': "{:.3f}".format(start),
             'end': "{:.3f}".format(end),
             'text': text,
             'completed': completed
         }
+        
+        # Add language if provided
+        if language is not None:
+            segment['language'] = language
+            
+        return segment
 
     def update_segments(self, segments, duration):
         """
@@ -1706,7 +1722,7 @@ class ServeClientTensorRT(ServeClientBase):
                 if s.no_speech_prob > self.no_speech_thresh:
                     continue
 
-                self.transcript.append(self.format_segment(start, end, text_, completed=True))
+                self.transcript.append(self.format_segment(start, end, text_, completed=True, language=self.language))
                 offset = min(duration, s.end)
 
         # only process the last segment if it satisfies the no_speech_thresh
@@ -1717,7 +1733,8 @@ class ServeClientTensorRT(ServeClientBase):
                     self.timestamp_offset + segments[-1].start,
                     self.timestamp_offset + min(duration, segments[-1].end),
                     self.current_out,
-                    completed=False
+                    completed=False,
+                    language=self.language
                 )
 
         if self.current_out.strip() == self.prev_out.strip() and self.current_out != '':
@@ -1742,7 +1759,8 @@ class ServeClientTensorRT(ServeClientBase):
                         self.timestamp_offset,
                         self.timestamp_offset + min(duration, self.end_time_for_same_output),
                         self.current_out,
-                        completed=True
+                        completed=True,
+                        language=self.language
                     ))
             self.current_out = ''
             offset = min(duration, self.end_time_for_same_output)
@@ -1758,6 +1776,30 @@ class ServeClientTensorRT(ServeClientBase):
                 self.timestamp_offset += offset
 
         return last_segment
+
+    def set_language(self, info):
+        """
+        Updates the language attribute based on the detected language information.
+
+        Args:
+            info (object): An object containing the detected language and its probability. This object
+                        must have at least two attributes: `language`, a string indicating the detected
+                        language, and `language_probability`, a float representing the confidence level
+                        of the language detection.
+        """
+        if hasattr(info, 'language_probability') and info.language_probability > 0.5:
+            self.language = info.language
+            logging.info(f"Detected language {self.language} with probability {info.language_probability}")
+            
+            language_data = {
+                "uid": self.client_uid, 
+                "language": self.language, 
+                "language_prob": info.language_probability
+            }
+            self.websocket.send(json.dumps(language_data))
+            
+            # Log the language detection to file in a more readable format
+            logger.info(f"LANGUAGE_DETECTION: client={self.client_uid}, language={self.language}, confidence={info.language_probability:.4f}")
 
 class ServeClientFasterWhisper(ServeClientBase):
 
@@ -2021,7 +2063,7 @@ class ServeClientFasterWhisper(ServeClientBase):
                 logging.error(f"[ERROR]: Failed to transcribe audio chunk: {e}")
                 time.sleep(0.01)
 
-    def format_segment(self, start, end, text, completed=False):
+    def format_segment(self, start, end, text, completed=False, language=None):
         """
         Formats a transcription segment with precise start and end times alongside the transcribed text.
 
@@ -2029,18 +2071,26 @@ class ServeClientFasterWhisper(ServeClientBase):
             start (float): The start time of the transcription segment in seconds.
             end (float): The end time of the transcription segment in seconds.
             text (str): The transcribed text corresponding to the segment.
+            completed (bool): Whether the segment is completed or partial.
+            language (str): The detected language for this segment.
 
         Returns:
             dict: A dictionary representing the formatted transcription segment, including
-                'start' and 'end' times as strings with three decimal places and the 'text'
-                of the transcription.
+                'start' and 'end' times as strings with three decimal places, the 'text'
+                of the transcription, 'completed' status, and 'language' if provided.
         """
-        return {
+        segment = {
             'start': "{:.3f}".format(start),
             'end': "{:.3f}".format(end),
             'text': text,
             'completed': completed
         }
+        
+        # Add language if provided
+        if language is not None:
+            segment['language'] = language
+            
+        return segment
 
     def update_segments(self, segments, duration):
         """
@@ -2080,7 +2130,7 @@ class ServeClientFasterWhisper(ServeClientBase):
                 if s.no_speech_prob > self.no_speech_thresh:
                     continue
 
-                self.transcript.append(self.format_segment(start, end, text_, completed=True))
+                self.transcript.append(self.format_segment(start, end, text_, completed=True, language=self.language))
                 offset = min(duration, s.end)
 
         # only process the last segment if it satisfies the no_speech_thresh
@@ -2091,7 +2141,8 @@ class ServeClientFasterWhisper(ServeClientBase):
                     self.timestamp_offset + segments[-1].start,
                     self.timestamp_offset + min(duration, segments[-1].end),
                     self.current_out,
-                    completed=False
+                    completed=False,
+                    language=self.language
                 )
 
         if self.current_out.strip() == self.prev_out.strip() and self.current_out != '':
@@ -2116,7 +2167,8 @@ class ServeClientFasterWhisper(ServeClientBase):
                         self.timestamp_offset,
                         self.timestamp_offset + min(duration, self.end_time_for_same_output),
                         self.current_out,
-                        completed=True
+                        completed=True,
+                        language=self.language
                     ))
             self.current_out = ''
             offset = min(duration, self.end_time_for_same_output)
