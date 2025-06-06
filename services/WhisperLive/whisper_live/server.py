@@ -550,75 +550,50 @@ class TranscriptionServer:
         self, websocket, options, faster_whisper_custom_model_path,
         whisper_tensorrt_path, trt_multilingual
     ):
-        client: Optional[ServeClientBase] = None
-
-        # Extract and log the critical fields
-        platform = options.get("platform")
-        meeting_url = options.get("meeting_url")
-        token = options.get("token")
-        meeting_id = options.get("meeting_id")  # Extract meeting_id from options
-        logging.info(f"Initializing client with uid={options['uid']}, platform={platform}, meeting_url={meeting_url}, token={token}, meeting_id={meeting_id}")
+        """
+        Initializes a client based on the backend type.
+        """
+        if options is None:
+            options = {}
+        backend_str = options.get("backend", self.backend)
+        backend = BackendType(backend_str)
         
-        if not platform or not meeting_url or not token:
-            logging.warning(f"Missing critical fields for client {options['uid']}: platform={platform}, meeting_url={meeting_url}, token={token}")
-
-        if self.backend.is_tensorrt():
-            try:
-                client = ServeClientTensorRT(
-                    websocket,
-                    multilingual=trt_multilingual,
-                    language=options["language"],
-                    task=options["task"],
-                    client_uid=options["uid"],
-                    platform=platform,
-                    meeting_url=meeting_url,
-                    token=token,
-                    meeting_id=meeting_id,  # Pass meeting_id to constructor
-                    model=whisper_tensorrt_path,
-                    single_model=self.single_model,
-                    collector_client_ref=self.collector_client
-                )
-                logging.info("Running TensorRT backend.")
-            except Exception as e:
-                logging.error(f"TensorRT-LLM not supported: {e}")
-                self.client_uid = options["uid"]
-                websocket.send(json.dumps({
-                    "uid": self.client_uid,
-                    "status": "WARNING",
-                    "message": "TensorRT-LLM not supported on Server yet. "
-                               "Reverting to available backend: 'faster_whisper'"
-                }))
-                self.backend = BackendType.FASTER_WHISPER
-
-        try:
-            if self.backend.is_faster_whisper():
-                if faster_whisper_custom_model_path is not None and os.path.exists(faster_whisper_custom_model_path):
-                    logging.info(f"Using custom model {faster_whisper_custom_model_path}")
-                    options["model"] = faster_whisper_custom_model_path
-                client = ServeClientFasterWhisper(
-                    websocket,
-                    language=options["language"],
-                    task=options["task"],
-                    client_uid=options["uid"],
-                    platform=platform,
-                    meeting_url=meeting_url,
-                    token=token,
-                    meeting_id=meeting_id,  # Pass meeting_id to constructor
-                    model=options["model"],
-                    initial_prompt=options.get("initial_prompt"),
-                    vad_parameters=options.get("vad_parameters"),
-                    use_vad=self.use_vad,
-                    single_model=self.single_model,
-                    collector_client_ref=self.collector_client
-                )
-
-                logging.info("Running faster_whisper backend.")
-        except Exception as e:
-            return
-
-        if client is None:
-            raise ValueError(f"Backend type {self.backend.value if self.backend else 'Unknown'} not recognised or not handled.")
-
+        # tensorrt client
+        if backend.is_tensorrt():
+            client = ServeClientTensorRT(
+                websocket,
+                multilingual=self.trt_multilingual,
+                language=options.get("language"),
+                task=options.get("task", "transcribe"),
+                client_uid=options.get("uid"),
+                model=self.whisper_tensorrt_path,
+                single_model=self.single_model,
+                platform=options.get("platform"),
+                meeting_url=options.get("meeting_url"),
+                token=options.get("token"),
+                meeting_id=options.get("meeting_id"),
+                collector_client_ref=self.collector_client,
+                server_options=self.server_options
+            )
+        # faster-whisper client
+        else:
+            client = ServeClientFasterWhisper(
+                websocket,
+                language=options.get("language"),
+                task=options.get("task", "transcribe"),
+                client_uid=options.get("uid"),
+                model=self.faster_whisper_custom_model_path or options.get("model", "small.en"),
+                initial_prompt=options.get("initial_prompt"),
+                vad_parameters=options.get("vad_parameters"),
+                use_vad=options.get("use_vad", True),
+                single_model=self.single_model,
+                platform=options.get("platform"),
+                meeting_url=options.get("meeting_url"),
+                token=options.get("token"),
+                meeting_id=options.get("meeting_id"),
+                collector_client_ref=self.collector_client,
+                server_options=self.server_options
+            )
         self.client_manager.add_client(websocket, client)
 
     def get_audio_from_websocket(self, websocket):
@@ -873,34 +848,25 @@ class TranscriptionServer:
             faster_whisper_custom_model_path=None,
             whisper_tensorrt_path=None,
             trt_multilingual=False,
-            single_model=False):
+            single_model=False,
+            server_options=None):
         """
         Run the transcription server.
-
-        Args:
-            host (str): The host address to bind the server.
-            port (int): The port number to bind the server.
         """
-        if faster_whisper_custom_model_path is not None and not os.path.exists(faster_whisper_custom_model_path):
-            raise ValueError(f"Custom faster_whisper model '{faster_whisper_custom_model_path}' is not a valid path.")
-        if whisper_tensorrt_path is not None and not os.path.exists(whisper_tensorrt_path):
-            raise ValueError(f"TensorRT model '{whisper_tensorrt_path}' is not a valid path.")
-        if single_model:
-            if faster_whisper_custom_model_path or whisper_tensorrt_path:
-                logging.info("Custom model option was provided. Switching to single model mode.")
-                self.single_model = True
-                # TODO: load model initially
-            else:
-                logging.info("Single model mode currently only works with custom models.")
-        if not BackendType.is_valid(backend):
-            raise ValueError(f"{backend} is not a valid backend type. Choose backend from {BackendType.valid_types()}")
-            
-        self.backend = BackendType(backend) # Set backend for the instance
+        self.backend = BackendType(backend)
+        self.faster_whisper_custom_model_path = faster_whisper_custom_model_path
+        self.whisper_tensorrt_path = whisper_tensorrt_path
+        self.trt_multilingual = trt_multilingual
+        self.single_model = single_model
+        self.server_options = server_options or {}
+
+        # For the health check, we need to know if Redis is being used.
+        # This is inferred from the presence of the REDIS_STREAM_URL env var.
+        redis_url_for_health_check = os.getenv("REDIS_STREAM_URL")
+        if redis_url_for_health_check:
+            self.start_health_check_server(host, 9091)
 
         logger.info(f"SERVER_START: host={host}, port={port}, backend={self.backend.value}, single_model={single_model}")
-        
-        # Use fixed health check port 9091 for consistency
-        self.start_health_check_server(host, 9091)
         
         with serve(
             functools.partial(
@@ -1255,7 +1221,8 @@ class ServeClientBase(object):
 
     def __init__(self, websocket, language="en", task="transcribe", client_uid=None, 
                  platform=None, meeting_url=None, token=None, meeting_id=None,
-                 collector_client_ref: Optional[TranscriptionCollectorClient] = None):
+                 collector_client_ref: Optional[TranscriptionCollectorClient] = None,
+                 server_options: Optional[dict] = None):
         self.websocket = websocket
         self.language = language
         self.task = task
@@ -1280,8 +1247,15 @@ class ServeClientBase(object):
         self.t_start = None
         self.exit = False
         self.same_output_count = 0
-        self.show_prev_out_thresh = 5   # if pause(no output from whisper) show previous output for 5 seconds
-        self.add_pause_thresh = 3       # add a blank to segment list as a pause(no speech) for 3 seconds
+
+        server_options = server_options or {}
+        self.max_buffer_s = server_options.get("max_buffer_s", 45)
+        self.discard_buffer_s = server_options.get("discard_buffer_s", 30)
+        self.clip_if_no_segment_s = server_options.get("clip_if_no_segment_s", 25)
+        self.clip_retain_s = server_options.get("clip_retain_s", 5)
+
+        self.show_prev_out_thresh = server_options.get("show_prev_out_thresh_s", 5)   # if pause(no output from whisper) show previous output for 5 seconds
+        self.add_pause_thresh = server_options.get("add_pause_thresh_s", 3)       # add a blank to segment list as a pause(no speech) for 3 seconds
         self.transcript = []
         self.send_last_n_segments = 10
 
@@ -1327,9 +1301,9 @@ class ServeClientBase(object):
 
         """
         self.lock.acquire()
-        if self.frames_np is not None and self.frames_np.shape[0] > 45*self.RATE:
-            self.frames_offset += 30.0
-            self.frames_np = self.frames_np[int(30*self.RATE):]
+        if self.frames_np is not None and self.frames_np.shape[0] > self.max_buffer_s * self.RATE:
+            self.frames_offset += self.discard_buffer_s
+            self.frames_np = self.frames_np[int(self.discard_buffer_s * self.RATE):]
             # check timestamp offset(should be >= self.frame_offset)
             # this basically means that there is no speech as timestamp offset hasnt updated
             # and is less than frame_offset
@@ -1348,9 +1322,9 @@ class ServeClientBase(object):
         no valid segment for the last 30 seconds from whisper
         """
         with self.lock:
-            if self.frames_np[int((self.timestamp_offset - self.frames_offset)*self.RATE):].shape[0] > 25 * self.RATE:
+            if self.frames_np[int((self.timestamp_offset - self.frames_offset)*self.RATE):].shape[0] > self.clip_if_no_segment_s * self.RATE:
                 duration = self.frames_np.shape[0] / self.RATE
-                self.timestamp_offset = self.frames_offset + duration - 5
+                self.timestamp_offset = self.frames_offset + duration - self.clip_retain_s
 
     def get_audio_chunk_for_processing(self):
         """
@@ -1504,9 +1478,10 @@ class ServeClientTensorRT(ServeClientBase):
     def __init__(self, websocket, task="transcribe", multilingual=False, language=None, 
                  client_uid=None, model=None, single_model=False, 
                  platform=None, meeting_url=None, token=None, meeting_id=None,
-                 collector_client_ref: Optional[TranscriptionCollectorClient] = None):
+                 collector_client_ref: Optional[TranscriptionCollectorClient] = None,
+                 server_options: Optional[dict] = None):
         super().__init__(websocket, language, task, client_uid, platform, meeting_url, token, meeting_id,
-                         collector_client_ref=collector_client_ref)
+                         collector_client_ref=collector_client_ref, server_options=server_options)
         self.eos = False
         
         # Log the critical parameters
@@ -1793,9 +1768,10 @@ class ServeClientFasterWhisper(ServeClientBase):
                  client_uid=None, model="small.en", initial_prompt=None, 
                  vad_parameters=None, use_vad=True, single_model=False, 
                  platform=None, meeting_url=None, token=None, meeting_id=None,
-                 collector_client_ref: Optional[TranscriptionCollectorClient] = None):
+                 collector_client_ref: Optional[TranscriptionCollectorClient] = None,
+                 server_options: Optional[dict] = None):
         super().__init__(websocket, language, task, client_uid, platform, meeting_url, token, meeting_id,
-                         collector_client_ref=collector_client_ref)
+                         collector_client_ref=collector_client_ref, server_options=server_options)
         self.model_sizes = [
             "tiny", "tiny.en", "base", "base.en", "small", "small.en",
             "medium", "medium.en", "large-v2", "large-v3", "distil-small.en",
@@ -1810,9 +1786,12 @@ class ServeClientFasterWhisper(ServeClientBase):
         self.language = "en" if self.model_size_or_path.endswith("en") else language
         self.task = task
         self.initial_prompt = initial_prompt
-        self.vad_parameters = vad_parameters or {"onset": 0.5}
-        self.no_speech_thresh = 0.45
-        self.same_output_threshold = 10
+
+        server_options = server_options or {}
+        self.min_audio_s = server_options.get("min_audio_s", 1.0)
+        self.vad_parameters = vad_parameters or {"onset": server_options.get("vad_onset", 0.5)}
+        self.no_speech_thresh = server_options.get("vad_no_speech_thresh", 0.45)
+        self.same_output_threshold = server_options.get("same_output_threshold", 10)
         self.end_time_for_same_output = None
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -2025,7 +2004,7 @@ class ServeClientFasterWhisper(ServeClientBase):
             self.clip_audio_if_no_valid_segment()
 
             input_bytes, duration = self.get_audio_chunk_for_processing()
-            if duration < 1.0:
+            if duration < self.min_audio_s:
                 time.sleep(0.1)     # wait for audio chunks to arrive
                 continue
             try:
