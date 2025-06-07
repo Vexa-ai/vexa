@@ -1,4 +1,4 @@
-.PHONY: all setup submodules env force-env download-model build-bot-image build up down clean ps logs test migrate makemigrations init-db stamp-db migrate-or-init
+.PHONY: all setup submodules env force-env download-model build-bot-image build up down ps logs test migrate makemigrations init-db stamp-db migrate-or-init
 
 # Default target: Sets up everything and starts the services
 all: setup-env build-bot-image build up migrate-or-init
@@ -199,11 +199,6 @@ down: check_docker
 	@echo "---> Stopping Docker Compose services..."
 	@docker compose down
 
-# Stop services and remove volumes
-clean: check_docker
-	@echo "---> Stopping Docker Compose services and removing volumes..."
-	@docker compose down -v
-
 # Show container status
 ps: check_docker
 	@docker compose ps
@@ -242,14 +237,14 @@ migrate-or-init: check_docker
 	@echo "---> Waiting for database to be ready..."
 	@sleep 5
 	@echo "---> Checking if alembic_version table exists..."
-	@if docker-compose exec -T postgres psql -U postgres -d vexa -c "SELECT 1 FROM alembic_version LIMIT 1;" 2>/dev/null >/dev/null; then \
+	@if docker-compose exec -T transcription-collector psql -U postgres -d vexa -c "SELECT 1 FROM alembic_version LIMIT 1;" 2>/dev/null >/dev/null; then \
 		echo "---> Database has migration history, applying pending migrations..."; \
-		docker-compose exec -T transcription-collector alembic upgrade head; \
+		docker-compose exec -T transcription-collector alembic -c /app/alembic.ini upgrade head; \
 	else \
-		echo "---> Fresh database detected, initializing with current schema..."; \
-		docker-compose exec -T transcription-collector python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db())"; \
-		docker-compose exec -T transcription-collector alembic stamp head; \
-		echo "---> Database initialized and stamped with latest migration version!"; \
+		echo "---> Fresh or non-Alembic database detected. Stamping with initial migration and upgrading..."; \
+		docker-compose exec -T transcription-collector alembic -c /app/alembic.ini stamp head; \
+		docker-compose exec -T transcription-collector alembic -c /app/alembic.ini upgrade head; \
+		echo "---> Database initialized and up-to-date!"; \
 	fi
 	@echo "---> Database migration/initialization complete!"
 
@@ -261,7 +256,7 @@ migrate: check_docker
 		exit 1; \
 	fi
 	@echo "---> Running alembic upgrade head..."
-	@docker-compose exec -T transcription-collector alembic upgrade head
+	@docker-compose exec -T transcription-collector alembic -c /app/alembic.ini upgrade head
 
 # Create a new migration file based on model changes
 makemigrations: check_docker
@@ -275,7 +270,7 @@ makemigrations: check_docker
 		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
 		exit 1; \
 	fi
-	@docker-compose exec -T transcription-collector alembic revision --autogenerate -m "$(M)"
+	@docker-compose exec -T transcription-collector alembic -c /app/alembic.ini revision --autogenerate -m "$(M)"
 
 # Initialize the database (first time setup) - creates tables and stamps with latest revision
 init-db: check_docker
@@ -287,7 +282,7 @@ init-db: check_docker
 	@echo "---> Creating all tables from models..."
 	@docker-compose exec -T transcription-collector python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db())"
 	@echo "---> Stamping database with latest migration version..."
-	@docker-compose exec -T transcription-collector alembic stamp head
+	@docker-compose exec -T transcription-collector alembic -c /app/alembic.ini stamp head
 	@echo "---> Database initialization complete!"
 
 # Stamp existing database with current version (for existing installations)
@@ -297,7 +292,7 @@ stamp-db: check_docker
 		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
 		exit 1; \
 	fi
-	@docker-compose exec -T transcription-collector alembic stamp head
+	@docker-compose exec -T transcription-collector alembic -c /app/alembic.ini stamp head
 	@echo "---> Database stamped successfully!"
 
 # Show current migration status
@@ -308,8 +303,8 @@ migration-status: check_docker
 		exit 1; \
 	fi
 	@echo "---> Current database version:"
-	@docker-compose exec -T transcription-collector alembic current
+	@docker-compose exec -T transcription-collector alembic -c /app/alembic.ini current
 	@echo "---> Migration history:"
-	@docker-compose exec -T transcription-collector alembic history --verbose
+	@docker-compose exec -T transcription-collector alembic -c /app/alembic.ini history --verbose
 
 # --- End Database Migration Commands ---
