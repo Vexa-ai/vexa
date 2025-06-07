@@ -1,7 +1,7 @@
-.PHONY: all setup submodules env force-env download-model build-bot-image build up down clean ps logs test
+.PHONY: all setup submodules env force-env download-model build-bot-image build up down clean ps logs test migrate makemigrations init-db stamp-db migrate-or-init
 
 # Default target: Sets up everything and starts the services
-all: setup-env build-bot-image build up
+all: setup-env build-bot-image build up migrate-or-init
 
 # Target to set up only the environment without Docker
 # Ensure .env is created based on TARGET *before* other setup steps
@@ -229,3 +229,87 @@ test: check_docker
 	fi
 	@chmod +x run_vexa_interaction.sh
 	@./run_vexa_interaction.sh
+
+# --- Database Migration Commands ---
+
+# Smart migration: detects if database is fresh or existing and handles appropriately
+migrate-or-init: check_docker
+	@echo "---> Checking database state and applying migrations..."
+	@if ! docker-compose ps postgres | grep -q "Up"; then \
+		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
+		exit 1; \
+	fi
+	@echo "---> Waiting for database to be ready..."
+	@sleep 5
+	@echo "---> Checking if alembic_version table exists..."
+	@if docker-compose exec -T postgres psql -U postgres -d vexa -c "SELECT 1 FROM alembic_version LIMIT 1;" 2>/dev/null >/dev/null; then \
+		echo "---> Database has migration history, applying pending migrations..."; \
+		docker-compose exec -T transcription-collector alembic upgrade head; \
+	else \
+		echo "---> Fresh database detected, initializing with current schema..."; \
+		docker-compose exec -T transcription-collector python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db())"; \
+		docker-compose exec -T transcription-collector alembic stamp head; \
+		echo "---> Database initialized and stamped with latest migration version!"; \
+	fi
+	@echo "---> Database migration/initialization complete!"
+
+# Apply all pending migrations to bring database to latest version
+migrate: check_docker
+	@echo "---> Applying database migrations..."
+	@if ! docker-compose ps postgres | grep -q "Up"; then \
+		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
+		exit 1; \
+	fi
+	@echo "---> Running alembic upgrade head..."
+	@docker-compose exec -T transcription-collector alembic upgrade head
+
+# Create a new migration file based on model changes
+makemigrations: check_docker
+	@if [ -z "$(M)" ]; then \
+		echo "Usage: make makemigrations M=\"your migration message\""; \
+		echo "Example: make makemigrations M=\"Add user profile table\""; \
+		exit 1; \
+	fi
+	@echo "---> Creating new migration: $(M)"
+	@if ! docker-compose ps postgres | grep -q "Up"; then \
+		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
+		exit 1; \
+	fi
+	@docker-compose exec -T transcription-collector alembic revision --autogenerate -m "$(M)"
+
+# Initialize the database (first time setup) - creates tables and stamps with latest revision
+init-db: check_docker
+	@echo "---> Initializing database for the first time..."
+	@if ! docker-compose ps postgres | grep -q "Up"; then \
+		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
+		exit 1; \
+	fi
+	@echo "---> Creating all tables from models..."
+	@docker-compose exec -T transcription-collector python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db())"
+	@echo "---> Stamping database with latest migration version..."
+	@docker-compose exec -T transcription-collector alembic stamp head
+	@echo "---> Database initialization complete!"
+
+# Stamp existing database with current version (for existing installations)
+stamp-db: check_docker
+	@echo "---> Stamping existing database with current migration version..."
+	@if ! docker-compose ps postgres | grep -q "Up"; then \
+		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
+		exit 1; \
+	fi
+	@docker-compose exec -T transcription-collector alembic stamp head
+	@echo "---> Database stamped successfully!"
+
+# Show current migration status
+migration-status: check_docker
+	@echo "---> Checking migration status..."
+	@if ! docker-compose ps postgres | grep -q "Up"; then \
+		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
+		exit 1; \
+	fi
+	@echo "---> Current database version:"
+	@docker-compose exec -T transcription-collector alembic current
+	@echo "---> Migration history:"
+	@docker-compose exec -T transcription-collector alembic history --verbose
+
+# --- End Database Migration Commands ---

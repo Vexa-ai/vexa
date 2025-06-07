@@ -1,6 +1,7 @@
 import sqlalchemy
 from sqlalchemy import (Column, String, Text, Integer, DateTime, Float, ForeignKey, Index, UniqueConstraint)
-from sqlalchemy.sql import func
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.sql import func, text
 from sqlalchemy.orm import declarative_base, relationship
 from datetime import datetime # Needed for Transcription model default
 from shared_models.schemas import Platform # Import Platform for the static method
@@ -41,6 +42,7 @@ class Meeting(Base):
     bot_container_id = Column(String(255), nullable=True)
     start_time = Column(DateTime, nullable=True)
     end_time = Column(DateTime, nullable=True)
+    data = Column(JSONB, nullable=False, default=text("'{}'::jsonb"))
     created_at = Column(DateTime, server_default=func.now(), index=True)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -57,6 +59,7 @@ class Meeting(Base):
             'platform_specific_id',
             'created_at' # Include created_at because the query orders by it
         ),
+        Index('ix_meeting_data_gin', 'data', postgresql_using='gin'),
         # Optional: Unique constraint (uncomment if needed, ensure native_meeting_id cannot be NULL if unique)
         # UniqueConstraint('user_id', 'platform', 'platform_specific_id', name='_user_platform_native_id_uc'),
     )

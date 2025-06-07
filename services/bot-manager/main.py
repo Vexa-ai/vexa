@@ -9,6 +9,7 @@ from typing import Optional, List, Dict, Any
 import redis.asyncio as aioredis
 import asyncio
 import json
+import httpx
 
 # Local imports - Remove unused ones
 # from app.database.models import init_db # Using local init_db now
@@ -18,7 +19,7 @@ import json
 from config import BOT_IMAGE_NAME, REDIS_URL
 from docker_utils import get_socket_session, close_docker_client, start_bot_container, stop_bot_container, _record_session_start, get_running_bots_status, verify_container_running
 from shared_models.database import init_db, get_db, async_session_local
-from shared_models.models import User, Meeting, MeetingSession # <--- ADD MeetingSession import
+from shared_models.models import User, Meeting, MeetingSession, Transcription # <--- ADD MeetingSession and Transcription import
 from shared_models.schemas import MeetingCreate, MeetingResponse, Platform, BotStatusResponse # Import new schemas and Platform
 from auth import get_user_and_token # Import the new dependency
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -612,6 +613,55 @@ async def bot_exit_callback(
             if payload.exit_code == 0:
                 meeting.status = 'completed'
                 logger.info(f"Bot exit callback: Meeting {meeting_id} status updated to 'completed'.")
+                
+                # Automatically aggregate data by calling the transcription-collector service
+                try:
+                    collector_url = f"http://transcription-collector:8000/internal/transcripts/{meeting_id}"
+                    async with httpx.AsyncClient() as client:
+                        logger.info(f"Bot exit callback: Calling transcription-collector for meeting {meeting_id} at {collector_url}")
+                        response = await client.get(collector_url, timeout=10.0)
+                    
+                    if response.status_code == 200:
+                        transcription_segments = response.json()
+                        logger.info(f"Bot exit callback: Received {len(transcription_segments)} segments from collector for meeting {meeting_id}")
+                        
+                        unique_speakers = set()
+                        unique_languages = set()
+                        
+                        for segment in transcription_segments:
+                            speaker = segment.get('speaker')
+                            language = segment.get('language')
+                            if speaker and speaker.strip():
+                                unique_speakers.add(speaker.strip())
+                            if language and language.strip():
+                                unique_languages.add(language.strip())
+                        
+                        aggregated_data = {}
+                        if unique_speakers:
+                            aggregated_data['participants'] = sorted(list(unique_speakers))
+                        if unique_languages:
+                            aggregated_data['languages'] = sorted(list(unique_languages))
+                        
+                        if aggregated_data:
+                            existing_data = meeting.data or {}
+                            if 'participants' not in existing_data and 'participants' in aggregated_data:
+                                existing_data['participants'] = aggregated_data['participants']
+                            if 'languages' not in existing_data and 'languages' in aggregated_data:
+                                existing_data['languages'] = aggregated_data['languages']
+                            
+                            meeting.data = existing_data
+                            logger.info(f"Bot exit callback: Auto-aggregated data for meeting {meeting_id}: {aggregated_data}")
+                        else:
+                            logger.info(f"Bot exit callback: No new participants or languages to aggregate for meeting {meeting_id}")
+
+                    else:
+                        logger.error(f"Bot exit callback: Failed to get transcript from collector for meeting {meeting_id}. Status: {response.status_code}, Body: {response.text}")
+
+                except httpx.RequestError as exc:
+                    logger.error(f"Bot exit callback: An error occurred while requesting transcript for meeting {meeting_id} from {exc.request.url!r}: {exc}", exc_info=True)
+                except Exception as e:
+                    logger.error(f"Bot exit callback: Failed to process and aggregate data for meeting {meeting_id}: {e}", exc_info=True)
+
             elif payload.exit_code == 2 and payload.reason == "admission_failed": # Specific handling for admission failure
                 meeting.status = 'failed'
                 logger.info(f"Bot exit callback: Meeting {meeting_id} status updated to 'failed' due to admission failure (exit_code {payload.exit_code}).")
