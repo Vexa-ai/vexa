@@ -238,13 +238,11 @@ migrate-or-init: check_docker
 	@sleep 5
 	@echo "---> Checking if alembic_version table exists..."
 	@if docker-compose exec -T transcription-collector psql -U postgres -d vexa -c "SELECT 1 FROM alembic_version LIMIT 1;" 2>/dev/null >/dev/null; then \
-		echo "---> Database has migration history, applying pending migrations..."; \
-		docker-compose exec -T transcription-collector alembic -c /app/alembic.ini upgrade head; \
+		echo "---> Database has migration history, running 'make migrate'..."; \
+		$(MAKE) migrate; \
 	else \
-		echo "---> Fresh or non-Alembic database detected. Stamping with initial migration and upgrading..."; \
-		docker-compose exec -T transcription-collector alembic -c /app/alembic.ini stamp head; \
-		docker-compose exec -T transcription-collector alembic -c /app/alembic.ini upgrade head; \
-		echo "---> Database initialized and up-to-date!"; \
+		echo "---> Fresh or non-Alembic database detected, running 'make init-db'..."; \
+		$(MAKE) init-db; \
 	fi
 	@echo "---> Database migration/initialization complete!"
 
