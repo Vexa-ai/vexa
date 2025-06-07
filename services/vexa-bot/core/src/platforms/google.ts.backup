@@ -575,17 +575,19 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
 
             // --- ADD: Speaker Detection Logic (Adapted from speakers_console_test.js) ---
             // Configuration for speaker detection
-            const participantSelector = 'div[data-participant-id]'; // UPDATED: More specific selector
+            const participantSelector = '.IisKdb'; // Main selector for participant container/element
             const speakingClasses = ['Oaajhc', 'HX2H7', 'wEsLMd', 'OgVli']; // Speaking/animation classes
             const silenceClass = 'gjg47c';        // Class indicating the participant is silent
             const nameSelectors = [               // Try these selectors to find participant's name
+                '.zWGUib',                        // Common name display class in Google Meet
+                '.XWGOtd',                        // Another potential name class
+                '[data-self-name]',               // Attribute often holding self name
                 '[data-participant-id]'           // Attribute for participant ID
             ];
 
             // State for tracking speaking status
             const speakingStates = new Map(); // Stores the logical speaking state for each participant ID
-            const activeParticipants = new Map(); // NEW: Central map for all known participants
-
+            
             // Track current session UID for speaker events
             let currentSessionUid = generateUUID(); // Initialize with a new UID
 
@@ -760,8 +762,6 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                 // or do nothing if currently silent (matching the initialized state).
                 logSpeakerEvent(participantElement, classListForInitialScan);
                 
-                // NEW: Add participant to our central map
-                activeParticipants.set(participantId, { name: getParticipantName(participantElement), element: participantElement });
 
                 const callback = function(mutationsList: MutationRecord[], observer: MutationObserver) {
                     for (const mutation of mutationsList) {
@@ -835,9 +835,6 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                                    delete (elementNode as any).dataset.vexaObserverAttached;
                                    delete (elementNode as any).dataset.vexaGeneratedId;
                                    (window as any).logBot(`🗑️ Removed observer for: ${participantName} (ID: ${participantId})`);
-                                   
-                                   // NEW: Remove participant from our central map
-                                   activeParticipants.delete(participantId);
                                 }
                              }
                         });
@@ -1016,12 +1013,12 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
             // Monitor participant list every 5 seconds
             let aloneTime = 0;
             const checkInterval = setInterval(() => {
-              // UPDATED: Use the size of our central map as the source of truth
-              const count = activeParticipants.size;
-              const participantIds = Array.from(activeParticipants.keys());
-              (window as any).logBot(`Participant check: Found ${count} unique participants from central list. IDs: ${JSON.stringify(participantIds)}`);
+              const participantElements = document.querySelectorAll(participantSelector); // participantSelector is '.IisKdb'
+              const count = participantElements.length;
+              (window as any).logBot(`Participant count (using ${participantSelector}): ${count}`);
 
               // If count is 0, it could mean everyone left, OR the participant list area itself is gone.
+              // This check helps determine if the list container itself has disappeared.
               if (count === 0) {
                   const peopleListContainer = document.querySelector('[role="list"]'); // Check the original list container
                   if (!peopleListContainer || !document.body.contains(peopleListContainer)) {
@@ -1034,31 +1031,26 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                        resolve(); // Resolve the main promise from page.evaluate
                        return;   // Exit setInterval callback
                   }
+                  // If peopleListContainer exists but count is 0 (no .IisKdb found),
+                  // it means the list is genuinely empty. The aloneTime logic below will handle this.
               }
 
-              // FIXED: Correct logic for tracking alone time
-              if (count <= 1) { // Bot is 1, so count <= 1 means bot is alone
-                aloneTime += 5; // It's a 5-second interval
-              } else {
-                // Someone else is here, so reset the timer.
-                if (aloneTime > 0) {
-                    (window as any).logBot('Another participant joined. Resetting alone timer.');
-                }
+              if (count <= 1) { // Bot is 1, so count <= 1 means bot is alone or list is empty
+                aloneTime += 5;
+                (window as any).logBot(
+                  "Bot appears alone for " + aloneTime + " seconds..."
+                );
                 aloneTime = 0;
               }
 
-              if (aloneTime >= 10) { // If bot has been alone for 10 seconds...
+              if (aloneTime >= 10) { // Simplified condition: if aloneTime accumulates, leave.
                 (window as any).logBot(
-                  "Meeting ended or bot has been alone for 10 seconds. Stopping recorder..."
+                  "Meeting ended or bot alone for too long. Stopping recorder..."
                 );
                 clearInterval(checkInterval);
                 recorder.disconnect();
                 (window as any).triggerNodeGracefulLeave();
                 resolve();
-              } else if (aloneTime > 0) { // Log countdown if timer has started
-                 (window as any).logBot(
-                  `Bot has been alone for ${aloneTime} seconds. Will leave in ${10 - aloneTime} more seconds.`
-                );
               }
             }, 5000);
 
@@ -1081,9 +1073,6 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                 resolve();
               }
             });
-          }).catch(err => {
-              reject(err);
-          });
           } catch (error: any) {
             return reject(new Error("[BOT Error] " + error.message));
           }
@@ -1091,6 +1080,7 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
       },
       { botConfigData: botConfig, whisperUrlForBrowser: whisperLiveUrlFromEnv }
     ); // Pass arguments to page.evaluate
+  });
 };
 
 // Remove the compatibility shim 'recordMeeting' if no longer needed,
