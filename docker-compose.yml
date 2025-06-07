@@ -66,8 +66,11 @@ services:
       - DOCKER_HOST=unix://var/run/docker.sock
       - DEVICE_TYPE=${DEVICE_TYPE}
       - WHISPER_LIVE_URL=ws://whisperlive.internal/ws
+      - RECORDING_VOLUME_PATH=/app/recordings
+      - RECORDING_BIND_SOURCE=/data/vexa/recordings
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /data/vexa/recordings:/app/recordings
     init: true
     depends_on:
       redis:

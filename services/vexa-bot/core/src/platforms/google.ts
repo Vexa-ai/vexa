@@ -290,8 +290,44 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
               `Successfully combined ${sourcesConnected} audio streams.`
             );
 
+            // --- NEW: Start MediaRecorder to save audio using the COMBINED stream ---
+            try {
+              const audioRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+              
+              audioRecorder.ondataavailable = async (event: BlobEvent) => {
+                if (event.data.size > 0) {
+                  const reader = new FileReader();
+                  reader.onloadend = () => {
+                    const base64 = (reader.result as string).split(',')[1];
+                    (window as any).onAudioChunk(base64);
+                  };
+                  reader.readAsDataURL(event.data);
+                }
+              };
+              
+              audioRecorder.start(1000); // Get audio chunk every 1 second
+              (window as any).logBot('[AudioRecord] MediaRecorder for audio saving has started.');
+
+              // Stop recorder on leave
+              const originalLeave = (window as any).triggerNodeGracefulLeave;
+              (window as any).triggerNodeGracefulLeave = () => {
+                if (audioRecorder.state === 'recording') {
+                  audioRecorder.stop();
+                  (window as any).logBot('[AudioRecord] MediaRecorder for audio saving has stopped.');
+                }
+                originalLeave();
+              };
+            } catch (err: any) {
+               (window as any).logBot(`[AudioRecord] Error starting MediaRecorder: ${err.message}`);
+               // Don't block transcription if audio fails
+            }
+            // --- END NEW ---
+
+            let socket = new WebSocket(whisperUrlForBrowser);
+            socket.binaryType = "arraybuffer";
+
             // --- MODIFIED: Keep original connectionId but don't use it for WebSocket UID ---
-            // const sessionUid = connectionId; // <-- OLD: Reused original connectionId
+            const sessionUid = generateUUID(); // UID for whisper, separate from connectionId
             (window as any).logBot(
               `Original bot connection ID: ${originalConnectionId}`
             );
@@ -302,16 +338,6 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
             // --- ----------------------------------------------------------- ---
 
             // const wsUrl = "ws://whisperlive:9090";
-            const wsUrl = whisperUrlForBrowser;
-            if (!wsUrl) {
-              (window as any).logBot?.(
-                "CRITICAL: WhisperLive WebSocket URL is missing in browser context!"
-              );
-              console.error(
-                "CRITICAL: WhisperLive WebSocket URL is missing in browser context!"
-              );
-              return;
-            }
             // (window as any).logBot(`Attempting to connect WebSocket to: ${wsUrl} with platform: ${platform}, session UID: ${sessionUid}`); // Log the correct UID
 
             // --- ADD Browser-scope state for current WS config ---
@@ -319,7 +345,6 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
             let currentWsTask = initialTask;
             // --- -------------------------------------------- ---
 
-            let socket: WebSocket | null = null;
             let isServerReady = false;
             let retryCount = 0;
             const configuredInterval = botConfigData.reconnectionIntervalMs;
@@ -338,7 +363,7 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                   }
                 }
 
-                socket = new WebSocket(wsUrl);
+                socket = new WebSocket(whisperUrlForBrowser);
 
                 // --- NEW: Force-close if connection cannot be established quickly ---
                 const connectionTimeoutMs = 3000; // 3-second timeout for CONNECTING state

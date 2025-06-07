@@ -8,6 +8,7 @@ import { createClient, RedisClientType } from 'redis';
 import { Page, Browser } from 'playwright-core';
 import * as http from 'http'; // ADDED: For HTTP callback
 import * as https from 'https'; // ADDED: For HTTPS callback (if needed)
+import * as fs from 'fs'; // ADDED: For file stream operations
 
 // Module-level variables to store current configuration
 let currentLanguage: string | null | undefined = null;
@@ -287,10 +288,37 @@ export async function runBot(botConfig: BotConfig): Promise<void> {
     userAgent: userAgent,
     viewport: {
       width: 1280,
-      height: 720
-    }
-  })
-  page = await context.newPage(); // Assign to the module-scoped page variable
+      height: 720,
+    },
+    recordVideo: {
+      dir: '/app/recordings',
+      size: { width: 1280, height: 720 },
+    },
+  });
+
+  // --- NEW: Audio Recording Setup ---
+  const audioFilePath = `/app/recordings/audio_${botConfig.connectionId}.webm`;
+  const audioWriteStream = fs.createWriteStream(audioFilePath);
+  log(`[AudioRecord] Audio will be saved to: ${audioFilePath}`);
+
+  await context.exposeFunction('onAudioChunk', (chunk: string) => {
+    // We receive the chunk as a base64 string, convert it back to a buffer
+    const buffer = Buffer.from(chunk, 'base64');
+    audioWriteStream.write(buffer);
+  });
+  // --- END NEW ---
+
+  const page = await context.newPage();
+
+  // --- NEW: Close audio stream on page close ---
+  page.on('close', () => {
+    log(`[AudioRecord] Page closed, finalizing audio stream.`);
+    audioWriteStream.end();
+  });
+  // --- END NEW ---
+
+  // Log browser version
+  const browserVersion = browserInstance.version();
 
   // --- ADDED: Expose a function for browser to trigger Node.js graceful leave ---
   await page.exposeFunction("triggerNodeGracefulLeave", async () => {
