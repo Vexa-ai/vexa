@@ -245,7 +245,12 @@ async def update_meeting_data(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Updates the user-editable data for the latest meeting matching the platform and native ID."""
+    """Updates the user-editable data (name, participants, languages, notes) for the latest meeting matching the platform and native ID."""
+    
+    logger.info(f"[API] User {current_user.id} updating meeting {platform.value}/{native_meeting_id}")
+    logger.debug(f"[API] Raw meeting_update object: {meeting_update}")
+    logger.debug(f"[API] meeting_update.data type: {type(meeting_update.data)}")
+    logger.debug(f"[API] meeting_update.data content: {meeting_update.data}")
     
     stmt = select(Meeting).where(
         Meeting.user_id == current_user.id,
@@ -262,7 +267,24 @@ async def update_meeting_data(
             detail=f"Meeting not found for platform {platform.value} and ID {native_meeting_id}"
         )
         
-    update_data = meeting_update.data.dict(exclude_unset=True)
+    # Extract update data from the MeetingDataUpdate object
+    try:
+        if hasattr(meeting_update.data, 'dict'):
+            # meeting_update.data is a MeetingDataUpdate pydantic object
+            update_data = meeting_update.data.dict(exclude_unset=True)
+            logger.debug(f"[API] Extracted update_data via .dict(): {update_data}")
+        else:
+            # Fallback: meeting_update.data is already a dict
+            update_data = meeting_update.data
+            logger.debug(f"[API] Using update_data as dict: {update_data}")
+    except AttributeError:
+        # Handle case where data might be parsed differently
+        update_data = meeting_update.data
+        logger.debug(f"[API] Fallback update_data: {update_data}")
+    
+    # Remove None values from update_data
+    update_data = {k: v for k, v in update_data.items() if v is not None}
+    logger.debug(f"[API] Final update_data after filtering None values: {update_data}")
     
     if not update_data:
         raise HTTPException(
@@ -272,12 +294,102 @@ async def update_meeting_data(
         
     if meeting.data is None:
         meeting.data = {}
+        logger.debug(f"[API] Initialized empty meeting.data")
         
+    logger.debug(f"[API] Current meeting.data before update: {meeting.data}")
+        
+    # Only allow updating restricted fields: name, participants, languages, notes
+    allowed_fields = {'name', 'participants', 'languages', 'notes'}
+    updated_fields = []
+    
+    # Create a new copy of the data dict to ensure SQLAlchemy detects the change
+    new_data = dict(meeting.data) if meeting.data else {}
+    
     for key, value in update_data.items():
-        if value is not None:
-            meeting.data[key] = value
+        if key in allowed_fields and value is not None:
+            new_data[key] = value
+            updated_fields.append(f"{key}={value}")
+            logger.debug(f"[API] Updated field {key} = {value}")
+        else:
+            logger.debug(f"[API] Skipped field {key} (not in allowed_fields or value is None)")
+    
+    # Assign the new dict to ensure SQLAlchemy detects the change
+    meeting.data = new_data
+    
+    # Mark the field as modified to ensure SQLAlchemy detects the change
+    from sqlalchemy.orm import attributes
+    attributes.flag_modified(meeting, "data")
+    
+    logger.info(f"[API] Updated fields: {', '.join(updated_fields) if updated_fields else 'none'}")
+    logger.debug(f"[API] Final meeting.data after update: {meeting.data}")
 
     await db.commit()
     await db.refresh(meeting)
     
-    return MeetingResponse.from_orm(meeting) 
+    logger.debug(f"[API] Meeting.data after commit and refresh: {meeting.data}")
+    
+    return MeetingResponse.from_orm(meeting)
+
+@router.delete("/meetings/{platform}/{native_meeting_id}",
+              summary="Delete meeting and its transcripts",
+              dependencies=[Depends(get_current_user)])
+async def delete_meeting(
+    platform: Platform,
+    native_meeting_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Deletes the latest meeting matching the platform and native ID, along with all its transcripts."""
+    
+    stmt = select(Meeting).where(
+        Meeting.user_id == current_user.id,
+        Meeting.platform == platform.value,
+        Meeting.platform_specific_id == native_meeting_id
+    ).order_by(Meeting.created_at.desc())
+    
+    result = await db.execute(stmt)
+    meeting = result.scalars().first()
+    
+    if not meeting:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Meeting not found for platform {platform.value} and ID {native_meeting_id}"
+        )
+    
+    internal_meeting_id = meeting.id
+    logger.info(f"[API] User {current_user.id} deleting meeting {internal_meeting_id}")
+    
+    # Delete transcripts from PostgreSQL
+    stmt_transcripts = select(Transcription).where(Transcription.meeting_id == internal_meeting_id)
+    result_transcripts = await db.execute(stmt_transcripts)
+    transcripts = result_transcripts.scalars().all()
+    
+    for transcript in transcripts:
+        await db.delete(transcript)
+    
+    # Delete meeting sessions
+    stmt_sessions = select(MeetingSession).where(MeetingSession.meeting_id == internal_meeting_id)
+    result_sessions = await db.execute(stmt_sessions)
+    sessions = result_sessions.scalars().all()
+    
+    for session in sessions:
+        await db.delete(session)
+    
+    # Delete transcript segments from Redis
+    redis_c = getattr(request.app.state, 'redis_client', None)
+    if redis_c:
+        try:
+            hash_key = f"meeting:{internal_meeting_id}:segments"
+            await redis_c.delete(hash_key)
+            logger.debug(f"[API] Deleted Redis hash {hash_key}")
+        except Exception as e:
+            logger.error(f"[API] Failed to delete Redis data for meeting {internal_meeting_id}: {e}")
+    
+    # Delete the meeting record
+    await db.delete(meeting)
+    await db.commit()
+    
+    logger.info(f"[API] Successfully deleted meeting {internal_meeting_id} and all its data")
+    
+    return {"message": f"Meeting {platform.value}/{native_meeting_id} and all its transcripts have been deleted"} 

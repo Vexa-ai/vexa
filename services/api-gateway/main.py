@@ -12,7 +12,7 @@ from typing import Dict, Any, List, Optional
 
 # Import schemas for documentation
 from shared_models.schemas import (
-    MeetingCreate, MeetingResponse, MeetingListResponse, # Updated/Added Schemas
+    MeetingCreate, MeetingResponse, MeetingListResponse, MeetingDataUpdate, # Updated/Added Schemas
     TranscriptionResponse, TranscriptionSegment,
     UserCreate, UserResponse, TokenResponse, UserDetailResponse, # Admin Schemas
     ErrorResponse,
@@ -277,13 +277,40 @@ async def get_transcript_proxy(platform: Platform, native_meeting_id: str, reque
 @app.patch("/meetings/{platform}/{native_meeting_id}",
            tags=["Transcriptions"],
            summary="Update meeting data",
-           description="Updates meeting metadata like name, participants, languages, and notes for a specific meeting.",
+           description="Updates meeting metadata. Only name, participants, languages, and notes can be updated.",
            response_model=MeetingResponse,
-           dependencies=[Depends(api_key_scheme)])
+           dependencies=[Depends(api_key_scheme)],
+           openapi_extra={
+               "requestBody": {
+                   "content": {
+                       "application/json": {
+                           "schema": {
+                               "type": "object",
+                               "properties": {
+                                   "data": MeetingDataUpdate.schema()
+                               },
+                               "required": ["data"]
+                           }
+                       }
+                   },
+                   "required": True,
+                   "description": "Meeting data to update (name, participants, languages, notes only)"
+               },
+           })
 async def update_meeting_data_proxy(platform: Platform, native_meeting_id: str, request: Request, body: Dict[str, Any]):
     """Forward request to Transcription Collector to update meeting data."""
     url = f"{TRANSCRIPTION_COLLECTOR_URL}/meetings/{platform.value}/{native_meeting_id}"
     return await forward_request(app.state.http_client, "PATCH", url, request)
+
+@app.delete("/meetings/{platform}/{native_meeting_id}",
+            tags=["Transcriptions"],
+            summary="Delete meeting and its transcripts",
+            description="Deletes a specific meeting and all its associated transcripts. This action cannot be undone.",
+            dependencies=[Depends(api_key_scheme)])
+async def delete_meeting_proxy(platform: Platform, native_meeting_id: str, request: Request):
+    """Forward request to Transcription Collector to delete meeting and its transcripts."""
+    url = f"{TRANSCRIPTION_COLLECTOR_URL}/meetings/{platform.value}/{native_meeting_id}"
+    return await forward_request(app.state.http_client, "DELETE", url, request)
 
 # --- Admin API Routes --- 
 @app.api_route("/admin/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"], 

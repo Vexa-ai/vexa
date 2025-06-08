@@ -329,7 +329,7 @@ class VexaClient:
                            languages: Optional[List[str]] = None,
                            notes: Optional[str] = None) -> Dict[str, Any]:
         """
-        Updates meeting metadata like name, participants, languages, and notes.
+        Updates meeting metadata. Only name, participants, languages, and notes can be updated.
 
         Args:
             platform: Platform identifier (e.g., 'google_meet', 'zoom').
@@ -359,6 +359,20 @@ class VexaClient:
         payload = {"data": data_payload}
         path = f"/meetings/{platform}/{native_meeting_id}"
         return self._request("PATCH", path, api_type='user', json_data=payload)
+
+    def delete_meeting(self, platform: str, native_meeting_id: str) -> Dict[str, str]:
+        """
+        Deletes a meeting and all its associated transcripts.
+        
+        Args:
+            platform: Platform identifier (e.g., 'google_meet', 'zoom').
+            native_meeting_id: The platform-specific meeting identifier.
+            
+        Returns:
+            Dictionary containing a confirmation message.
+        """
+        path = f"/meetings/{platform}/{native_meeting_id}"
+        return self._request("DELETE", path, api_type='user')
 
     # --- Admin: User Management ---
 

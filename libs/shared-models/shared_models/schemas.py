@@ -203,9 +203,16 @@ class MeetingResponse(BaseModel): # Not inheriting from MeetingBase anymore to a
         use_enum_values = True # Serialize Platform enum to its string value
 
 # --- Meeting Update Schema ---
+class MeetingDataUpdate(BaseModel):
+    """Schema for updating meeting data fields - restricted to user-editable fields only"""
+    name: Optional[str] = Field(None, description="Meeting name/title")
+    participants: Optional[List[str]] = Field(None, description="List of participant names")
+    languages: Optional[List[str]] = Field(None, description="List of language codes detected/used in the meeting")
+    notes: Optional[str] = Field(None, description="Meeting notes or description")
+
 class MeetingUpdate(BaseModel):
     """Schema for updating meeting data via PATCH requests"""
-    data: Optional[Dict] = Field(None, description="JSON data containing meeting metadata like name, participants, languages, and notes")
+    data: MeetingDataUpdate = Field(..., description="Meeting metadata to update")
 
 # --- Transcription Schemas --- 
 
