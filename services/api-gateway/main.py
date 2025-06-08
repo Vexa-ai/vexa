@@ -274,6 +274,17 @@ async def get_transcript_proxy(platform: Platform, native_meeting_id: str, reque
     url = f"{TRANSCRIPTION_COLLECTOR_URL}/transcripts/{platform.value}/{native_meeting_id}"
     return await forward_request(app.state.http_client, "GET", url, request)
 
+@app.patch("/meetings/{platform}/{native_meeting_id}",
+           tags=["Transcriptions"],
+           summary="Update meeting data",
+           description="Updates meeting metadata like name, participants, languages, and notes for a specific meeting.",
+           response_model=MeetingResponse,
+           dependencies=[Depends(api_key_scheme)])
+async def update_meeting_data_proxy(platform: Platform, native_meeting_id: str, request: Request, body: Dict[str, Any]):
+    """Forward request to Transcription Collector to update meeting data."""
+    url = f"{TRANSCRIPTION_COLLECTOR_URL}/meetings/{platform.value}/{native_meeting_id}"
+    return await forward_request(app.state.http_client, "PATCH", url, request)
+
 # --- Admin API Routes --- 
 @app.api_route("/admin/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"], 
                tags=["Administration"],

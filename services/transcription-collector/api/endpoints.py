@@ -6,7 +6,7 @@ from typing import List, Optional, Dict, Tuple
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy import select, and_, func, distinct, text
 from sqlalchemy.ext.asyncio import AsyncSession
-# from sqlalchemy.orm import joinedload # Not directly used in the provided snippets for these endpoints
+import redis.asyncio as aioredis
 
 from shared_models.database import get_db
 from shared_models.models import User, Meeting, Transcription, MeetingSession
@@ -16,7 +16,8 @@ from shared_models.schemas import (
     MeetingListResponse,
     TranscriptionResponse,
     Platform,
-    TranscriptionSegment
+    TranscriptionSegment,
+    MeetingUpdate
 )
 
 from config import IMMUTABILITY_THRESHOLD
@@ -25,6 +26,104 @@ from api.auth import get_current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+async def _get_full_transcript_segments(
+    internal_meeting_id: int,
+    db: AsyncSession,
+    redis_c: aioredis.Redis
+) -> List[TranscriptionSegment]:
+    """
+    Core logic to fetch and merge transcript segments from PG and Redis.
+    """
+    logger.debug(f"[_get_full_transcript_segments] Fetching for meeting ID {internal_meeting_id}")
+    
+    # 1. Fetch session start times for this meeting
+    stmt_sessions = select(MeetingSession).where(MeetingSession.meeting_id == internal_meeting_id)
+    result_sessions = await db.execute(stmt_sessions)
+    sessions = result_sessions.scalars().all()
+    session_times: Dict[str, datetime] = {session.session_uid: session.session_start_time for session in sessions}
+    if not session_times:
+        logger.warning(f"[_get_full_transcript_segments] No session start times found in DB for meeting {internal_meeting_id}.")
+
+    # 2. Fetch transcript segments from PostgreSQL (immutable segments)
+    stmt_transcripts = select(Transcription).where(Transcription.meeting_id == internal_meeting_id)
+    result_transcripts = await db.execute(stmt_transcripts)
+    db_segments = result_transcripts.scalars().all()
+
+    # 3. Fetch segments from Redis (mutable segments)
+    hash_key = f"meeting:{internal_meeting_id}:segments"
+    redis_segments_raw = {}
+    if redis_c:
+        try:
+            redis_segments_raw = await redis_c.hgetall(hash_key)
+        except Exception as e:
+            logger.error(f"[_get_full_transcript_segments] Failed to fetch from Redis hash {hash_key}: {e}", exc_info=True)
+
+    # 4. Calculate absolute times and merge segments
+    merged_segments_with_abs_time: Dict[str, Tuple[datetime, TranscriptionSegment]] = {}
+
+    for segment in db_segments:
+        key = f"{segment.start_time:.3f}"
+        session_uid = segment.session_uid
+        session_start = session_times.get(session_uid)
+        if session_uid and session_start:
+            try:
+                if session_start.tzinfo is None:
+                    session_start = session_start.replace(tzinfo=timezone.utc)
+                absolute_start_time = session_start + timedelta(seconds=segment.start_time)
+                absolute_end_time = session_start + timedelta(seconds=segment.end_time)
+                segment_obj = TranscriptionSegment(
+                    start_time=segment.start_time,
+                    end_time=segment.end_time,
+                    text=segment.text,
+                    language=segment.language,
+                    speaker=segment.speaker,
+                    created_at=segment.created_at,
+                    absolute_start_time=absolute_start_time,
+                    absolute_end_time=absolute_end_time
+                )
+                merged_segments_with_abs_time[key] = (absolute_start_time, segment_obj)
+            except Exception as calc_err:
+                 logger.error(f"[API Meet {internal_meeting_id}] Error calculating absolute time for DB segment {key} (UID: {session_uid}): {calc_err}")
+        else:
+            logger.warning(f"[API Meet {internal_meeting_id}] Missing session UID ({session_uid}) or start time for DB segment {key}. Cannot calculate absolute time.")
+
+    for start_time_str, segment_json in redis_segments_raw.items():
+        try:
+            segment_data = json.loads(segment_json)
+            session_uid_from_redis = segment_data.get("session_uid")
+            potential_session_key = session_uid_from_redis
+            if session_uid_from_redis:
+                # This logic to strip prefixes is brittle. A better solution would be to store the canonical session_uid.
+                # For now, keeping it to match previous behavior.
+                prefixes_to_check = [f"{p.value}_" for p in Platform]
+                for prefix in prefixes_to_check:
+                    if session_uid_from_redis.startswith(prefix):
+                        potential_session_key = session_uid_from_redis[len(prefix):]
+                        break
+            session_start = session_times.get(potential_session_key) 
+            if 'end_time' in segment_data and 'text' in segment_data and session_uid_from_redis and session_start:
+                if session_start.tzinfo is None:
+                    session_start = session_start.replace(tzinfo=timezone.utc)
+                relative_start_time = float(start_time_str)
+                absolute_start_time = session_start + timedelta(seconds=relative_start_time)
+                absolute_end_time = session_start + timedelta(seconds=segment_data['end_time'])
+                segment_obj = TranscriptionSegment(
+                    start_time=relative_start_time,
+                    end_time=segment_data['end_time'],
+                    text=segment_data['text'],
+                    language=segment_data.get('language'),
+                    speaker=segment_data.get('speaker'),
+                    absolute_start_time=absolute_start_time,
+                    absolute_end_time=absolute_end_time
+                )
+                merged_segments_with_abs_time[start_time_str] = (absolute_start_time, segment_obj)
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
+            logger.error(f"[_get_full_transcript_segments] Error parsing Redis segment {start_time_str} for meeting {internal_meeting_id}: {e}")
+
+    # 5. Sort based on calculated absolute time and return
+    sorted_segment_tuples = sorted(merged_segments_with_abs_time.values(), key=lambda item: item[0])
+    return [segment_obj for abs_time, segment_obj in sorted_segment_tuples]
 
 @router.get("/health", response_model=HealthResponse)
 async def health_check(request: Request, db: AsyncSession = Depends(get_db)):
@@ -78,20 +177,17 @@ async def get_transcript_by_native_id(
 ):
     """Retrieves the meeting details and transcript segments for a meeting specified by its platform and native ID.
     Finds the *latest* matching meeting record for the user.
-    Combines data from both PostgreSQL (immutable segments) and Redis Hashes (mutable segments), sorting chronologically based on session start times.
+    Combines data from both PostgreSQL (immutable segments) and Redis Hashes (mutable segments).
     """
     logger.debug(f"[API] User {current_user.id} requested transcript for {platform.value} / {native_meeting_id}")
-    redis_c = getattr(request.app.state, 'redis_client', None) # Get redis_client from app.state
-    local_transcription_filter = TranscriptionFilter() # Instantiate filter
+    redis_c = getattr(request.app.state, 'redis_client', None)
 
-    # 1. Find the latest meeting matching platform and native ID for the user
     stmt_meeting = select(Meeting).where(
         Meeting.user_id == current_user.id,
-        Meeting.platform == platform.value, # Use platform.value if 'platform' is an Enum
+        Meeting.platform == platform.value,
         Meeting.platform_specific_id == native_meeting_id
     ).order_by(Meeting.created_at.desc())
 
-    logger.debug(f"[API] Executing meeting lookup query...")
     result_meeting = await db.execute(stmt_meeting)
     meeting = result_meeting.scalars().first()
     
@@ -103,141 +199,85 @@ async def get_transcript_by_native_id(
         )
 
     internal_meeting_id = meeting.id
-    logger.debug(f"[API] Found meeting record ID {internal_meeting_id}")
+    logger.debug(f"[API] Found meeting record ID {internal_meeting_id}, fetching segments...")
 
-    # 2. Fetch session start times for this meeting
-    logger.debug(f"[API Meet {internal_meeting_id}] Fetching session start times...")
-    stmt_sessions = select(MeetingSession).where(MeetingSession.meeting_id == internal_meeting_id)
-    result_sessions = await db.execute(stmt_sessions)
-    sessions = result_sessions.scalars().all()
-    session_times: Dict[str, datetime] = {session.session_uid: session.session_start_time for session in sessions}
-    logger.debug(f"[API Meet {internal_meeting_id}] Found {len(session_times)} sessions: {list(session_times.keys())}")
-    if not session_times:
-        logger.warning(f"[API Meet {internal_meeting_id}] No session start times found in DB. Sorting may be inaccurate if reconnections occurred.")
-
-    # 3. Fetch transcript segments from PostgreSQL (immutable segments)
-    logger.debug(f"[API Meet {internal_meeting_id}] Fetching segments from PostgreSQL...")
-    stmt_transcripts = select(Transcription).where(
-        Transcription.meeting_id == internal_meeting_id
-    )
-    result_transcripts = await db.execute(stmt_transcripts)
-    db_segments = result_transcripts.scalars().all()
-    logger.debug(f"[API Meet {internal_meeting_id}] Retrieved {len(db_segments)} segments from PostgreSQL.")
+    sorted_segments = await _get_full_transcript_segments(internal_meeting_id, db, redis_c)
     
-    # 4. Fetch segments from Redis (mutable segments)
-    hash_key = f"meeting:{internal_meeting_id}:segments"
-    redis_segments_raw = {}
-    logger.debug(f"[API Meet {internal_meeting_id}] Fetching segments from Redis Hash: {hash_key}...")
-    try:
-        if redis_c:
-            # Check if the meeting is recent enough to warrant checking Redis
-            # This logic was originally controlled by IMMUTABILITY_THRESHOLD in process_redis_to_postgres
-            # We need a similar check here or always fetch from Redis and let client handle it.
-            # For now, copying the old behavior of fetching if redis_client is available.
-            # A more refined approach might involve checking meeting.updated_at or similar.
-            redis_segments_raw = await redis_c.hgetall(hash_key)
-            logger.debug(f"[API Meet {internal_meeting_id}] Retrieved {len(redis_segments_raw)} raw segments from Redis Hash.")
-        else: 
-            logger.error(f"[API Meet {internal_meeting_id}] Redis client not available from app.state for fetching mutable segments")
-    except Exception as e:
-        logger.error(f"[API Meet {internal_meeting_id}] Failed to fetch mutable segments from Redis: {e}", exc_info=True)
+    logger.info(f"[API Meet {internal_meeting_id}] Merged and sorted into {len(sorted_segments)} total segments.")
     
-    # 5. Calculate absolute times and merge segments
-    logger.debug(f"[API Meet {internal_meeting_id}] Calculating absolute times and merging...")
-    merged_segments_with_abs_time: Dict[str, Tuple[datetime, TranscriptionSegment]] = {}
-
-    for segment in db_segments:
-        key = f"{segment.start_time:.3f}"
-        session_uid = segment.session_uid
-        session_start = session_times.get(session_uid)
-        if session_uid and session_start:
-            try:
-                if session_start.tzinfo is None:
-                     session_start = session_start.replace(tzinfo=timezone.utc)
-                absolute_start_time = session_start + timedelta(seconds=segment.start_time)
-                absolute_end_time = session_start + timedelta(seconds=segment.end_time)
-                segment_obj = TranscriptionSegment(
-                    start_time=segment.start_time,
-                    end_time=segment.end_time,
-                    text=segment.text,
-                    language=segment.language,
-                    speaker=segment.speaker,
-                    created_at=segment.created_at,
-                    absolute_start_time=absolute_start_time,
-                    absolute_end_time=absolute_end_time
-                )
-                merged_segments_with_abs_time[key] = (absolute_start_time, segment_obj)
-            except Exception as calc_err:
-                 logger.error(f"[API Meet {internal_meeting_id}] Error calculating absolute time for DB segment {key} (UID: {session_uid}): {calc_err}")
-        else:
-            logger.warning(f"[API Meet {internal_meeting_id}] Missing session UID ({session_uid}) or start time for DB segment {key}. Cannot calculate absolute time.")
-
-    for start_time_str, segment_json in redis_segments_raw.items():
-        try:
-            segment_data = json.loads(segment_json)
-            session_uid_from_redis = segment_data.get("session_uid")
-            potential_session_key = session_uid_from_redis
-            if session_uid_from_redis:
-                prefixes_to_check = [f"{p.value}_" for p in Platform]
-                for prefix in prefixes_to_check:
-                    if session_uid_from_redis.startswith(prefix):
-                        potential_session_key = session_uid_from_redis[len(prefix):]
-                        logger.debug(f"[API Meet {internal_meeting_id}] Stripped prefix '{prefix}' from Redis UID '{session_uid_from_redis}', using key '{potential_session_key}' for lookup.")
-                        break
-            session_start = session_times.get(potential_session_key) 
-            if 'end_time' in segment_data and 'text' in segment_data and session_uid_from_redis and session_start:
-                try:
-                    if session_start.tzinfo is None:
-                         session_start = session_start.replace(tzinfo=timezone.utc)
-                    relative_start_time = float(start_time_str)
-                    absolute_start_time = session_start + timedelta(seconds=relative_start_time)
-                    absolute_end_time = session_start + timedelta(seconds=segment_data['end_time'])
-                    segment_obj = TranscriptionSegment(
-                        start_time=relative_start_time,
-                        end_time=segment_data['end_time'],
-                        text=segment_data['text'],
-                        language=segment_data.get('language'),
-                        speaker=segment_data.get('speaker'),
-                        absolute_start_time=absolute_start_time,
-                        absolute_end_time=absolute_end_time
-                    )
-                    # Apply filtering for Redis segments
-                    # The original filter logic was complex and based on IMMUTABILITY_THRESHOLD.
-                    # Here, we assume all fetched Redis segments are candidates.
-                    # A proper filter might need to be applied if TranscriptionFilter has such logic.
-                    # For now, let's include it and it can be refined.
-                    # The filter in main.py was used for *live* segments, this is on-demand retrieval.
-                    # The IMMUTABILITY_THRESHOLD logic in main was for *writing* to PG.
-                    # Here, we're *reading*. The main filter was `transcription_filter.filter_segments`
-                    # which took a list of segments.
-                    # This part of the logic needs careful review against the original filter's purpose.
-                    # The `TranscriptionFilter` in `filters.py` might be for *live stream processing*.
-                    # The old code did not explicitly filter Redis results in `get_transcript_by_native_id`
-                    # using `transcription_filter.filter_segments` but rather used `IMMUTABILITY_THRESHOLD`
-                    # implicitly by what `process_redis_to_postgres` *hadn't yet processed*.
-                    # For now, I will include all segments from Redis if they are valid.
-                    merged_segments_with_abs_time[start_time_str] = (absolute_start_time, segment_obj)
-                except Exception as calc_err:
-                    logger.error(f"[API Meet {internal_meeting_id}] Error calculating absolute time for Redis segment {start_time_str} (UID: {session_uid_from_redis}): {calc_err}")
-            else:
-                if not ('end_time' in segment_data and 'text' in segment_data):
-                     logger.warning(f"[API Meet {internal_meeting_id}] Skipping Redis segment {start_time_str} due to missing keys (end_time/text). JSON: {segment_json[:100]}...")
-                elif not session_uid_from_redis:
-                     logger.warning(f"[API Meet {internal_meeting_id}] Skipping Redis segment {start_time_str} due to missing session_uid in Redis data. JSON: {segment_json[:100]}...")
-                elif not session_start:
-                     logger.warning(f"[API Meet {internal_meeting_id}] Skipping Redis segment {start_time_str} with original UID {session_uid_from_redis} (lookup key: {potential_session_key}) because session start time not found in DB.")
-                else:
-                     logger.warning(f"[API Meet {internal_meeting_id}] Skipping Redis segment {start_time_str} for unknown reason.")
-        except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
-            logger.error(f"[API Meet {internal_meeting_id}] Error parsing Redis segment {start_time_str}: {e}")
-
-    # 6. Sort based on calculated absolute time
-    sorted_segment_tuples = sorted(merged_segments_with_abs_time.values(), key=lambda item: item[0])
-    sorted_segments = [segment_obj for abs_time, segment_obj in sorted_segment_tuples]
-    logger.info(f"[API Meet {internal_meeting_id}] Merged and sorted into {len(sorted_segments)} total segments based on absolute time.")
-    
-    # 7. Construct the response
     meeting_details = MeetingResponse.from_orm(meeting)
     response_data = meeting_details.dict()
     response_data["segments"] = sorted_segments
-    return TranscriptionResponse(**response_data) 
+    return TranscriptionResponse(**response_data)
+
+
+@router.get("/internal/transcripts/{meeting_id}",
+            response_model=List[TranscriptionSegment],
+            summary="[Internal] Get all transcript segments for a meeting",
+            include_in_schema=False)
+async def get_transcript_internal(
+    meeting_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """Internal endpoint for services to fetch all transcript segments for a given meeting ID."""
+    logger.debug(f"[Internal API] Transcript segments requested for meeting {meeting_id}")
+    redis_c = getattr(request.app.state, 'redis_client', None)
+    
+    meeting = await db.get(Meeting, meeting_id)
+    if not meeting:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Meeting with ID {meeting_id} not found."
+        )
+        
+    segments = await _get_full_transcript_segments(meeting_id, db, redis_c)
+    return segments
+
+@router.patch("/meetings/{platform}/{native_meeting_id}",
+             response_model=MeetingResponse,
+             summary="Update meeting data by platform and native ID",
+             dependencies=[Depends(get_current_user)])
+async def update_meeting_data(
+    platform: Platform,
+    native_meeting_id: str,
+    meeting_update: MeetingUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Updates the user-editable data for the latest meeting matching the platform and native ID."""
+    
+    stmt = select(Meeting).where(
+        Meeting.user_id == current_user.id,
+        Meeting.platform == platform.value,
+        Meeting.platform_specific_id == native_meeting_id
+    ).order_by(Meeting.created_at.desc())
+    
+    result = await db.execute(stmt)
+    meeting = result.scalars().first()
+    
+    if not meeting:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Meeting not found for platform {platform.value} and ID {native_meeting_id}"
+        )
+        
+    update_data = meeting_update.data.dict(exclude_unset=True)
+    
+    if not update_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No data provided for update."
+        )
+        
+    if meeting.data is None:
+        meeting.data = {}
+        
+    for key, value in update_data.items():
+        if value is not None:
+            meeting.data[key] = value
+
+    await db.commit()
+    await db.refresh(meeting)
+    
+    return MeetingResponse.from_orm(meeting) 

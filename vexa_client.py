@@ -213,13 +213,99 @@ class VexaClient:
     def get_meetings(self) -> List[Dict[str, Any]]:
         """
         Retrieves the list of meetings initiated by the user associated with the API key.
+        
+        Each meeting includes metadata such as:
+        - Basic meeting info (id, platform, status, timestamps, etc.)
+        - Meeting data (name, participants, languages, notes) in the 'data' field
+        - Auto-collected participants and languages (populated when meeting completes)
 
         Returns:
-            List of dictionaries, each representing a Meeting object.
+            List of dictionaries, each representing a Meeting object with the following structure:
+            {
+                "id": int,
+                "platform": str,
+                "native_meeting_id": str,
+                "status": str,
+                "start_time": str (ISO datetime),
+                "end_time": str (ISO datetime),
+                "data": {
+                    "name": str (optional),
+                    "participants": List[str] (optional, auto-collected from transcripts),
+                    "languages": List[str] (optional, auto-collected from transcripts),  
+                    "notes": str (optional)
+                },
+                "created_at": str (ISO datetime),
+                "updated_at": str (ISO datetime),
+                ...
+            }
         """
         response = self._request("GET", "/meetings", api_type='user')
         # The API returns a dict {"meetings": [...]}, extract the list.
-        return response.get("meetings", [])
+        meetings = response.get("meetings", [])
+        
+        # Ensure each meeting has a data field (backward compatibility)
+        for meeting in meetings:
+            if "data" not in meeting:
+                meeting["data"] = {}
+                
+        return meetings
+
+    def get_meeting_by_id(self, platform: str, native_meeting_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieves a specific meeting by platform and native ID from the user's meetings list.
+        
+        Args:
+            platform: Platform identifier (e.g., 'google_meet', 'zoom').
+            native_meeting_id: The platform-specific meeting identifier.
+            
+        Returns:
+            Dictionary representing the Meeting object, or None if not found.
+        """
+        meetings = self.get_meetings()
+        for meeting in meetings:
+            if (meeting.get("platform") == platform and 
+                meeting.get("native_meeting_id") == native_meeting_id):
+                return meeting
+        return None
+
+    @staticmethod
+    def get_meeting_metadata(meeting: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Extracts metadata from a meeting object.
+        
+        Args:
+            meeting: Meeting dictionary as returned by get_meetings() or get_meeting_by_id().
+            
+        Returns:
+            Dictionary containing the meeting's metadata (name, participants, languages, notes).
+        """
+        return meeting.get("data", {})
+
+    @staticmethod
+    def get_meeting_participants(meeting: Dict[str, Any]) -> List[str]:
+        """
+        Extracts participant list from a meeting object.
+        
+        Args:
+            meeting: Meeting dictionary as returned by get_meetings() or get_meeting_by_id().
+            
+        Returns:
+            List of participant names (empty list if none found).
+        """
+        return meeting.get("data", {}).get("participants", [])
+
+    @staticmethod
+    def get_meeting_languages(meeting: Dict[str, Any]) -> List[str]:
+        """
+        Extracts language list from a meeting object.
+        
+        Args:
+            meeting: Meeting dictionary as returned by get_meetings() or get_meeting_by_id().
+            
+        Returns:
+            List of language codes (empty list if none found).
+        """
+        return meeting.get("data", {}).get("languages", [])
 
     def get_transcript(self, platform: str, native_meeting_id: str) -> Dict[str, Any]:
         """
@@ -234,6 +320,45 @@ class VexaClient:
         """
         path = f"/transcripts/{platform}/{native_meeting_id}"
         return self._request("GET", path, api_type='user')
+
+    def update_meeting_data(self, 
+                           platform: str, 
+                           native_meeting_id: str,
+                           name: Optional[str] = None,
+                           participants: Optional[List[str]] = None,
+                           languages: Optional[List[str]] = None,
+                           notes: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Updates meeting metadata like name, participants, languages, and notes.
+
+        Args:
+            platform: Platform identifier (e.g., 'google_meet', 'zoom').
+            native_meeting_id: The platform-specific meeting identifier.
+            name: Optional meeting name/title.
+            participants: Optional list of participant names.
+            languages: Optional list of language codes detected/used in the meeting.
+            notes: Optional meeting notes or description.
+
+        Returns:
+            Dictionary representing the updated Meeting object.
+        """
+        # Build the data payload with only provided fields
+        data_payload = {}
+        if name is not None:
+            data_payload["name"] = name
+        if participants is not None:
+            data_payload["participants"] = participants
+        if languages is not None:
+            data_payload["languages"] = languages
+        if notes is not None:
+            data_payload["notes"] = notes
+            
+        if not data_payload:
+            raise VexaClientError("No data fields provided for meeting update.")
+            
+        payload = {"data": data_payload}
+        path = f"/meetings/{platform}/{native_meeting_id}"
+        return self._request("PATCH", path, api_type='user', json_data=payload)
 
     # --- Admin: User Management ---
 

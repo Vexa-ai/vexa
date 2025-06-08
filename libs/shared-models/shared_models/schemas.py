@@ -194,12 +194,18 @@ class MeetingResponse(BaseModel): # Not inheriting from MeetingBase anymore to a
     bot_container_id: Optional[str]
     start_time: Optional[datetime]
     end_time: Optional[datetime]
+    data: Optional[Dict] = Field(default_factory=dict, description="JSON data containing meeting metadata like name, participants, languages, and notes")
     created_at: datetime
     updated_at: datetime
 
     class Config:
         orm_mode = True
         use_enum_values = True # Serialize Platform enum to its string value
+
+# --- Meeting Update Schema ---
+class MeetingUpdate(BaseModel):
+    """Schema for updating meeting data via PATCH requests"""
+    data: Optional[Dict] = Field(None, description="JSON data containing meeting metadata like name, participants, languages, and notes")
 
 # --- Transcription Schemas --- 
 
