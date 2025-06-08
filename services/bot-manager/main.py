@@ -27,6 +27,8 @@ from sqlalchemy.future import select
 from sqlalchemy import and_, desc
 from datetime import datetime # For start_time
 
+from app.tasks.bot_exit_tasks import run_all_tasks
+
 # Configure logging
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
@@ -614,53 +616,9 @@ async def bot_exit_callback(
                 meeting.status = 'completed'
                 logger.info(f"Bot exit callback: Meeting {meeting_id} status updated to 'completed'.")
                 
-                # Automatically aggregate data by calling the transcription-collector service
-                try:
-                    collector_url = f"http://transcription-collector:8000/internal/transcripts/{meeting_id}"
-                    async with httpx.AsyncClient() as client:
-                        logger.info(f"Bot exit callback: Calling transcription-collector for meeting {meeting_id} at {collector_url}")
-                        response = await client.get(collector_url, timeout=10.0)
-                    
-                    if response.status_code == 200:
-                        transcription_segments = response.json()
-                        logger.info(f"Bot exit callback: Received {len(transcription_segments)} segments from collector for meeting {meeting_id}")
-                        
-                        unique_speakers = set()
-                        unique_languages = set()
-                        
-                        for segment in transcription_segments:
-                            speaker = segment.get('speaker')
-                            language = segment.get('language')
-                            if speaker and speaker.strip():
-                                unique_speakers.add(speaker.strip())
-                            if language and language.strip():
-                                unique_languages.add(language.strip())
-                        
-                        aggregated_data = {}
-                        if unique_speakers:
-                            aggregated_data['participants'] = sorted(list(unique_speakers))
-                        if unique_languages:
-                            aggregated_data['languages'] = sorted(list(unique_languages))
-                        
-                        if aggregated_data:
-                            existing_data = meeting.data or {}
-                            if 'participants' not in existing_data and 'participants' in aggregated_data:
-                                existing_data['participants'] = aggregated_data['participants']
-                            if 'languages' not in existing_data and 'languages' in aggregated_data:
-                                existing_data['languages'] = aggregated_data['languages']
-                            
-                            meeting.data = existing_data
-                            logger.info(f"Bot exit callback: Auto-aggregated data for meeting {meeting_id}: {aggregated_data}")
-                        else:
-                            logger.info(f"Bot exit callback: No new participants or languages to aggregate for meeting {meeting_id}")
-
-                    else:
-                        logger.error(f"Bot exit callback: Failed to get transcript from collector for meeting {meeting_id}. Status: {response.status_code}, Body: {response.text}")
-
-                except httpx.RequestError as exc:
-                    logger.error(f"Bot exit callback: An error occurred while requesting transcript for meeting {meeting_id} from {exc.request.url!r}: {exc}", exc_info=True)
-                except Exception as e:
-                    logger.error(f"Bot exit callback: Failed to process and aggregate data for meeting {meeting_id}: {e}", exc_info=True)
+                # Schedule all post-meeting background tasks
+                background_tasks.add_task(run_all_tasks, meeting.id)
+                logger.info(f"Bot exit callback: Scheduled post-meeting tasks for meeting {meeting_id}.")
 
             elif payload.exit_code == 2 and payload.reason == "admission_failed": # Specific handling for admission failure
                 meeting.status = 'failed'
