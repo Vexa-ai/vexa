@@ -291,16 +291,16 @@ async def list_meetings_with_users(
 
 # TODO: Add endpoints for GET /users/{id}, DELETE /users/{id}
 
-# Include the router in the main app
-app.include_router(router)
-
-# Add startup event to initialize DB (if needed for this service)
+# App events
 @app.on_event("startup")
 async def startup_event():
-    logger.info("Starting up Admin API...")
-    # Requires database_utils.py to be created in admin-api/app
-    await init_db() 
-    logger.info("Database initialized.")
+    logger.info("Admin API starting up. Skipping automatic DB initialization.")
+    # The 'migrate-or-init' Makefile target is now responsible for all DB setup.
+    # await init_db()
+    pass
+
+# Include the admin router
+app.include_router(router)
 
 # Root endpoint (optional)
 @app.get("/")
