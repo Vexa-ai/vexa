@@ -291,6 +291,39 @@ The default limit is **one (1) concurrently running bot** per user account. If y
       -H 'X-API-Key: YOUR_API_KEY_HERE'
     ```
 
+### Set User Webhook URL
+
+*   **Endpoint:** `PUT /user/webhook`
+*   **Description:** Sets a webhook URL for the authenticated user. When events occur (e.g., a meeting finishes processing), a POST request with the meeting data will be sent to this URL.
+*   **Headers:**
+    *   `Content-Type: application/json`
+    *   `X-API-Key: YOUR_API_KEY_HERE`
+*   **Request Body:** A JSON object containing the webhook URL:
+    *   `webhook_url`: (string, required) The full URL to which Vexa should send webhook notifications.
+*   **Response:** Returns the updated user record.
+*   **Python Example:**
+    ```python
+    # imports, HEADERS from previous examples
+    
+    set_webhook_url = f"{BASE_URL}/user/webhook"
+    webhook_payload = {
+        "webhook_url": "https://your-service.com/webhook-receiver"
+    }
+    
+    response = requests.put(set_webhook_url, headers=HEADERS, json=webhook_payload)
+    print(response.json())
+    ```
+*   **cURL Example:**
+    ```bash
+    curl -X PUT \
+      https://gateway.dev.vexa.ai/user/webhook \
+      -H 'Content-Type: application/json' \
+      -H 'X-API-Key: YOUR_API_KEY_HERE' \
+      -d '{
+        "webhook_url": "https://your-service.com/webhook-receiver"
+      }'
+    ```
+
 ## Need Help?
 
 Contact Vexa support via the designated channels if you encounter issues or have questions regarding API usage or API key provisioning.

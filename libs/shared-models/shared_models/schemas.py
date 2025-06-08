@@ -1,4 +1,4 @@
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict, Tuple, Any
 from pydantic import BaseModel, Field, EmailStr, validator
 from datetime import datetime
 from enum import Enum, auto
@@ -111,6 +111,7 @@ class UserBase(BaseModel): # Base for common user fields
     name: Optional[str] = None
     image_url: Optional[str] = None
     max_concurrent_bots: Optional[int] = Field(None, description="Maximum number of concurrent bots allowed for the user")
+    data: Optional[Dict[str, Any]] = Field(None, description="JSONB storage for arbitrary user data, like webhook URLs")
 
 class UserCreate(UserBase):
     pass
