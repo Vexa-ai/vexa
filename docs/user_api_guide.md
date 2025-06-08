@@ -216,6 +216,81 @@ The default limit is **one (1) concurrently running bot** per user account. If y
       -H 'X-API-Key: YOUR_API_KEY_HERE'
     ```
 
+### Update Meeting Data
+
+*   **Endpoint:** `PATCH /meetings/{platform}/{native_meeting_id}`
+*   **Description:** Updates meeting metadata such as name, participants, languages, and notes. Only these specific fields can be updated.
+*   **Path Parameters:**
+    *   `platform`: (string) The platform of the meeting.
+    *   `native_meeting_id`: (string) The unique identifier of the meeting.
+*   **Headers:**
+    *   `Content-Type: application/json`
+    *   `X-API-Key: YOUR_API_KEY_HERE`
+*   **Request Body:** A JSON object containing the meeting data to update:
+    *   `data`: (object, required) Container for meeting metadata
+        *   `name`: (string, optional) Meeting name/title
+        *   `participants`: (array, optional) List of participant names
+        *   `languages`: (array, optional) List of language codes detected/used in the meeting
+        *   `notes`: (string, optional) Meeting notes or description
+*   **Response:** Returns the updated meeting record.
+*   **Python Example:**
+    ```python
+    # imports, HEADERS, meeting_id, meeting_platform as ABOVE
+    
+    update_meeting_url = f"{BASE_URL}/meetings/{meeting_platform}/{meeting_id}"
+    update_payload = {
+        "data": {
+            "name": "Weekly Team Standup",
+            "participants": ["Alice", "Bob", "Charlie"],
+            "languages": ["en"],
+            "notes": "Discussed Q4 roadmap and sprint planning"
+        }
+    }
+    
+    response = requests.patch(update_meeting_url, headers=HEADERS, json=update_payload)
+    print(response.json())
+    ```
+*   **cURL Example:**
+    ```bash
+    curl -X PATCH \
+      https://gateway.dev.vexa.ai/meetings/google_meet/xxx-xxxx-xxx \
+      -H 'Content-Type: application/json' \
+      -H 'X-API-Key: YOUR_API_KEY_HERE' \
+      -d '{
+        "data": {
+          "name": "Weekly Team Standup",
+          "participants": ["Alice", "Bob", "Charlie"],
+          "languages": ["en"],
+          "notes": "Discussed Q4 roadmap and sprint planning"
+        }
+      }'
+    ```
+
+### Delete Meeting and Transcripts
+
+*   **Endpoint:** `DELETE /meetings/{platform}/{native_meeting_id}`
+*   **Description:** Permanently deletes a meeting and all its associated transcripts. **This action cannot be undone.**
+*   **Path Parameters:**
+    *   `platform`: (string) The platform of the meeting.
+    *   `native_meeting_id`: (string) The unique identifier of the meeting.
+*   **Headers:**
+    *   `X-API-Key: YOUR_API_KEY_HERE`
+*   **Response:** Returns a confirmation message.
+*   **Python Example:**
+    ```python
+    # imports, HEADERS, meeting_id, meeting_platform as ABOVE
+    
+    delete_meeting_url = f"{BASE_URL}/meetings/{meeting_platform}/{meeting_id}"
+    response = requests.delete(delete_meeting_url, headers=HEADERS)
+    print(response.json())
+    ```
+*   **cURL Example:**
+    ```bash
+    curl -X DELETE \
+      https://gateway.dev.vexa.ai/meetings/google_meet/xxx-xxxx-xxx \
+      -H 'X-API-Key: YOUR_API_KEY_HERE'
+    ```
+
 ## Need Help?
 
 Contact Vexa support via the designated channels if you encounter issues or have questions regarding API usage or API key provisioning.
