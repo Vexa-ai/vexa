@@ -227,24 +227,41 @@ test: check_docker
 
 # --- Database Migration Commands ---
 
-# Smart migration: detects if database is fresh or existing and handles appropriately
+# Smart migration: detects if database is fresh, legacy, or already Alembic-managed.
+# This is the primary target for ensuring the database schema is up to date.
 migrate-or-init: check_docker
-	@echo "---> Checking database state and applying migrations..."
-	@if ! docker-compose ps postgres | grep -q "Up"; then \
+	@echo "---> Starting smart database migration/initialization..."; \
+	if ! docker-compose ps -q postgres | grep -q .; then \
 		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
 		exit 1; \
-	fi
-	@echo "---> Waiting for database to be ready..."
-	@sleep 5
-	@echo "---> Checking if alembic_version table exists..."
-	@if docker-compose exec -T transcription-collector psql -U postgres -d vexa -c "SELECT 1 FROM alembic_version LIMIT 1;" 2>/dev/null >/dev/null; then \
-		echo "---> Database has migration history, running 'make migrate'..."; \
+	fi; \
+	echo "---> Waiting for database to be ready..."; \
+	count=0; \
+	while ! docker-compose exec -T postgres pg_isready -U postgres -d vexa -q; do \
+		if [ $$count -ge 12 ]; then \
+			echo "ERROR: Database did not become ready in 60 seconds."; \
+			exit 1; \
+		fi; \
+		echo "Database not ready, waiting 5 seconds..."; \
+		sleep 5; \
+		count=$$((count+1)); \
+	done; \
+	echo "---> Database is ready. Checking its state..."; \
+	if docker-compose exec -T transcription-collector psql -U postgres -d vexa -c "SELECT 1 FROM alembic_version LIMIT 1;" >/dev/null 2>&1; then \
+		echo "STATE: Alembic-managed database detected."; \
+		echo "ACTION: Running standard migrations..."; \
+		$(MAKE) migrate; \
+	elif docker-compose exec -T postgres psql -U postgres -d vexa -t -c "SELECT to_regclass('public.meetings');" | grep -q "meetings"; then \
+		echo "STATE: Legacy (non-Alembic) database detected."; \
+		echo "ACTION: Stamping at 'base' and migrating to 'head' to bring it under Alembic control..."; \
+		docker-compose exec -T transcription-collector alembic -c /app/alembic.ini stamp base; \
 		$(MAKE) migrate; \
 	else \
-		echo "---> Fresh or non-Alembic database detected, running 'make init-db'..."; \
+		echo "STATE: Fresh, empty database detected."; \
+		echo "ACTION: Initializing a new database with the latest schema and stamping it..."; \
 		$(MAKE) init-db; \
-	fi
-	@echo "---> Database migration/initialization complete!"
+	fi; \
+	echo "---> Smart database migration/initialization complete!"
 
 # Apply all pending migrations to bring database to latest version
 migrate: check_docker
