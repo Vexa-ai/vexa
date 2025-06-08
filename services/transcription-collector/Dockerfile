@@ -10,6 +10,7 @@ COPY ./libs/shared-models /app/libs/shared-models
 RUN pip install --no-cache-dir /app/libs/shared-models
 
 COPY alembic.ini /app/alembic.ini
+COPY ./libs/shared-models/alembic /app/alembic
 
 # Copy application code and requirements
 # COPY ./services/transcription-collector/requirements.txt /app/ # Replaced by the line below
