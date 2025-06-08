@@ -374,6 +374,21 @@ class VexaClient:
         path = f"/meetings/{platform}/{native_meeting_id}"
         return self._request("DELETE", path, api_type='user')
 
+    # --- User Profile ---
+
+    def set_webhook_url(self, webhook_url: str) -> Dict[str, Any]:
+        """
+        Sets the webhook URL for the authenticated user.
+
+        Args:
+            webhook_url: The URL to which webhook notifications should be sent.
+
+        Returns:
+            Dictionary representing the updated User object.
+        """
+        payload = {"webhook_url": webhook_url}
+        return self._request("PUT", "/user/webhook", api_type='user', json_data=payload)
+
     # --- Admin: User Management ---
 
     def create_user(self, 

@@ -206,7 +206,7 @@ async def root():
              },
          })
 # Function signature remains generic for forwarding
-async def request_bot_proxy(request: Request, body: Dict[str, Any]): 
+async def request_bot_proxy(request: Request): 
     """Forward request to Bot Manager to start a bot."""
     url = f"{BOT_MANAGER_URL}/bots"
     # forward_request handles reading and passing the body from the original request
@@ -231,7 +231,7 @@ async def stop_bot_proxy(platform: Platform, native_meeting_id: str, request: Re
           status_code=status.HTTP_202_ACCEPTED,
           dependencies=[Depends(api_key_scheme)])
 # Need to accept request body for PUT
-async def update_bot_config_proxy(platform: Platform, native_meeting_id: str, request: Request, body: Dict[str, Any]): 
+async def update_bot_config_proxy(platform: Platform, native_meeting_id: str, request: Request): 
     """Forward request to Bot Manager to update bot config."""
     url = f"{BOT_MANAGER_URL}/bots/{platform.value}/{native_meeting_id}/config"
     # forward_request handles reading and passing the body from the original request
@@ -297,7 +297,7 @@ async def get_transcript_proxy(platform: Platform, native_meeting_id: str, reque
                    "description": "Meeting data to update (name, participants, languages, notes only)"
                },
            })
-async def update_meeting_data_proxy(platform: Platform, native_meeting_id: str, request: Request, body: Dict[str, Any]):
+async def update_meeting_data_proxy(platform: Platform, native_meeting_id: str, request: Request):
     """Forward request to Transcription Collector to update meeting data."""
     url = f"{TRANSCRIPTION_COLLECTOR_URL}/meetings/{platform.value}/{native_meeting_id}"
     return await forward_request(app.state.http_client, "PATCH", url, request)
@@ -311,6 +311,18 @@ async def delete_meeting_proxy(platform: Platform, native_meeting_id: str, reque
     """Forward request to Transcription Collector to delete meeting and its transcripts."""
     url = f"{TRANSCRIPTION_COLLECTOR_URL}/meetings/{platform.value}/{native_meeting_id}"
     return await forward_request(app.state.http_client, "DELETE", url, request)
+
+# --- User Profile Routes ---
+@app.put("/user/webhook",
+         tags=["User"],
+         summary="Set user webhook URL",
+         description="Sets a webhook URL for the authenticated user to receive notifications.",
+         status_code=status.HTTP_200_OK,
+         dependencies=[Depends(api_key_scheme)])
+async def set_user_webhook_proxy(request: Request):
+    """Forward request to Admin API to set user webhook."""
+    url = f"{ADMIN_API_URL}/user/webhook"
+    return await forward_request(app.state.http_client, "PUT", url, request)
 
 # --- Admin API Routes --- 
 @app.api_route("/admin/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"], 

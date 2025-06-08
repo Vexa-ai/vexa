@@ -18,6 +18,7 @@ class User(Base):
     image_url = Column(Text)
     created_at = Column(DateTime, server_default=func.now())
     max_concurrent_bots = Column(Integer, nullable=False, server_default='1', default=1) # Added field
+    data = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=lambda: {})
     
     meetings = relationship("Meeting", back_populates="user")
     api_tokens = relationship("APIToken", back_populates="user")

@@ -27,6 +27,8 @@ from sqlalchemy.future import select
 from sqlalchemy import and_, desc
 from datetime import datetime # For start_time
 
+from app.tasks.bot_exit_tasks import run_all_tasks
+
 # Configure logging
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
@@ -589,110 +591,72 @@ async def bot_exit_callback(
     background_tasks: BackgroundTasks, # Added BackgroundTasks dependency
     db: AsyncSession = Depends(get_db)
 ):
+    """
+    Handles the exit callback from a bot container.
+    - Finds the corresponding meeting session and meeting record.
+    - Updates the meeting status to 'completed' or 'failed'.
+    - **Always schedules post-meeting tasks (like webhooks) regardless of exit code.**
+    - If the exit was clean, it's assumed the container will self-terminate.
+    - If the exit was due to an error, a delayed stop is scheduled to ensure cleanup.
+    """
     logger.info(f"Received bot exit callback: connection_id={payload.connection_id}, exit_code={payload.exit_code}, reason={payload.reason}")
+    
+    session_uid = payload.connection_id
+    exit_code = payload.exit_code
 
     try:
-        session_stmt = select(MeetingSession).where(MeetingSession.session_uid == payload.connection_id)
+        # Find the meeting session to get the meeting_id
+        session_stmt = select(MeetingSession).where(MeetingSession.session_uid == session_uid)
         session_result = await db.execute(session_stmt)
         meeting_session = session_result.scalars().first()
 
         if not meeting_session:
-            logger.warning(f"Bot exit callback: No MeetingSession found for connection_id/session_uid: {payload.connection_id}")
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting session not found for the provided connection_id.")
+            logger.error(f"Bot exit callback: Could not find meeting session for connection_id {session_uid}. Cannot update meeting status.")
+            # Still return 200 OK to the bot, as we can't do anything else.
+            return {"status": "error", "detail": "Meeting session not found"}
 
         meeting_id = meeting_session.meeting_id
-        logger.info(f"Bot exit callback: Found meeting_id {meeting_id} for connection_id {payload.connection_id}")
+        logger.info(f"Bot exit callback: Found meeting_id {meeting_id} for connection_id {session_uid}")
 
+        # Now get the full meeting object
         meeting = await db.get(Meeting, meeting_id)
         if not meeting:
-            logger.error(f"Bot exit callback: MeetingSession {meeting_session.id} (uid: {payload.connection_id}) exists, but corresponding Meeting {meeting_id} not found.")
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting record not found, though session exists.")
+            logger.error(f"Bot exit callback: Found session but could not find meeting {meeting_id} itself.")
+            return {"status": "error", "detail": f"Meeting {meeting_id} not found"}
 
-        should_stop_container = False
-        if meeting.status not in ['completed', 'failed']:
-            if payload.exit_code == 0:
-                meeting.status = 'completed'
-                logger.info(f"Bot exit callback: Meeting {meeting_id} status updated to 'completed'.")
-                
-                # Automatically aggregate data by calling the transcription-collector service
-                try:
-                    collector_url = f"http://transcription-collector:8000/internal/transcripts/{meeting_id}"
-                    async with httpx.AsyncClient() as client:
-                        logger.info(f"Bot exit callback: Calling transcription-collector for meeting {meeting_id} at {collector_url}")
-                        response = await client.get(collector_url, timeout=10.0)
-                    
-                    if response.status_code == 200:
-                        transcription_segments = response.json()
-                        logger.info(f"Bot exit callback: Received {len(transcription_segments)} segments from collector for meeting {meeting_id}")
-                        
-                        unique_speakers = set()
-                        unique_languages = set()
-                        
-                        for segment in transcription_segments:
-                            speaker = segment.get('speaker')
-                            language = segment.get('language')
-                            if speaker and speaker.strip():
-                                unique_speakers.add(speaker.strip())
-                            if language and language.strip():
-                                unique_languages.add(language.strip())
-                        
-                        aggregated_data = {}
-                        if unique_speakers:
-                            aggregated_data['participants'] = sorted(list(unique_speakers))
-                        if unique_languages:
-                            aggregated_data['languages'] = sorted(list(unique_languages))
-                        
-                        if aggregated_data:
-                            existing_data = meeting.data or {}
-                            if 'participants' not in existing_data and 'participants' in aggregated_data:
-                                existing_data['participants'] = aggregated_data['participants']
-                            if 'languages' not in existing_data and 'languages' in aggregated_data:
-                                existing_data['languages'] = aggregated_data['languages']
-                            
-                            meeting.data = existing_data
-                            logger.info(f"Bot exit callback: Auto-aggregated data for meeting {meeting_id}: {aggregated_data}")
-                        else:
-                            logger.info(f"Bot exit callback: No new participants or languages to aggregate for meeting {meeting_id}")
-
-                    else:
-                        logger.error(f"Bot exit callback: Failed to get transcript from collector for meeting {meeting_id}. Status: {response.status_code}, Body: {response.text}")
-
-                except httpx.RequestError as exc:
-                    logger.error(f"Bot exit callback: An error occurred while requesting transcript for meeting {meeting_id} from {exc.request.url!r}: {exc}", exc_info=True)
-                except Exception as e:
-                    logger.error(f"Bot exit callback: Failed to process and aggregate data for meeting {meeting_id}: {e}", exc_info=True)
-
-            elif payload.exit_code == 2 and payload.reason == "admission_failed": # Specific handling for admission failure
-                meeting.status = 'failed'
-                logger.info(f"Bot exit callback: Meeting {meeting_id} status updated to 'failed' due to admission failure (exit_code {payload.exit_code}).")
-                should_stop_container = True # Mark for container stop
-            else: # Other non-zero exit codes
-                meeting.status = 'failed'
-                logger.info(f"Bot exit callback: Meeting {meeting_id} status updated to 'failed' due to exit_code {payload.exit_code}.")
-                should_stop_container = True # Mark for container stop
-            
-            meeting.end_time = datetime.utcnow()
-            await db.commit()
-            await db.refresh(meeting)
-            logger.info(f"Bot exit callback: Meeting {meeting_id} successfully updated in DB.")
-
-            # If marked for container stop and container ID exists
-            if should_stop_container and meeting.bot_container_id:
-                logger.info(f"Bot exit callback: Scheduling delayed stop for container {meeting.bot_container_id} of failed meeting {meeting.id}.")
-                background_tasks.add_task(_delayed_container_stop, meeting.bot_container_id, 10) # Shorter delay for automated cleanup
-            elif should_stop_container and not meeting.bot_container_id:
-                logger.warning(f"Bot exit callback: Meeting {meeting.id} marked for container stop, but no bot_container_id found.")
-
+        # Update meeting status based on exit code
+        if exit_code == 0:
+            meeting.status = 'completed'
+            logger.info(f"Bot exit callback: Meeting {meeting_id} status updated to 'completed'.")
         else:
-            logger.info(f"Bot exit callback: Meeting {meeting_id} already in a terminal state ('{meeting.status}'). No status update performed. Container stop not re-evaluated.")
+            meeting.status = 'failed'
+            logger.warning(f"Bot exit callback: Meeting {meeting_id} status updated to 'failed' due to exit_code {exit_code}.")
+        
+        meeting.end_time = datetime.utcnow()
+        await db.commit()
+        await db.refresh(meeting)
+        logger.info(f"Bot exit callback: Meeting {meeting.id} successfully updated in DB.")
 
-        return {"message": "Callback received and processed."}
+        # ALWAYS schedule post-meeting tasks, regardless of exit code
+        logger.info(f"Bot exit callback: Scheduling post-meeting tasks for meeting {meeting.id}.")
+        background_tasks.add_task(run_all_tasks, meeting.id)
 
-    except HTTPException as http_exc:
-        raise http_exc
+        # If the bot exited with an error, it might not have cleaned itself up.
+        # Schedule a delayed stop as a safeguard.
+        if exit_code != 0 and meeting.bot_container_id:
+            logger.warning(f"Bot exit callback: Scheduling delayed stop for container {meeting.bot_container_id} of failed meeting {meeting.id}.")
+            background_tasks.add_task(_delayed_container_stop, meeting.bot_container_id, delay_seconds=10)
+
+        return {"status": "callback processed", "meeting_id": meeting.id, "final_status": meeting.status}
+
     except Exception as e:
-        logger.error(f"Error processing bot exit callback for connection_id {payload.connection_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error processing bot exit callback.")
+        logger.error(f"Bot exit callback: An unexpected error occurred: {e}", exc_info=True)
+        # Attempt to rollback any partial changes
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An internal error occurred while processing the bot exit callback."
+        )
 # --- --------------------------------------------------------- ---
 
 if __name__ == "__main__":
