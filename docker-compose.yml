@@ -29,20 +29,16 @@ services:
       dockerfile: services/admin-api/Dockerfile
     ports:
       - "${ADMIN_API_HOST_PORT:-8057}:8001"
-    env_file:
-      - .env
     environment:
-      - REDIS_URL=redis://redis:6379/0
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_NAME=vexa
       - DB_USER=postgres
       - DB_PASSWORD=postgres
+      - ADMIN_API_TOKEN=${ADMIN_API_TOKEN}
       - LOG_LEVEL=DEBUG
     init: true
     depends_on:
-      redis:
-        condition: service_started
       postgres:
         condition: service_healthy
     networks:

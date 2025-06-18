@@ -16,12 +16,16 @@ import httpx
 # from app.database.service import TranscriptionService # Not used here
 # from app.tasks.monitoring import celery_app # Not used here
 
-from config import BOT_IMAGE_NAME, REDIS_URL
-from docker_utils import get_socket_session, close_docker_client, start_bot_container, stop_bot_container, _record_session_start, get_running_bots_status, verify_container_running
+from .config import BOT_IMAGE_NAME, REDIS_URL
+from .docker_utils import (
+    get_socket_session, close_docker_client, start_bot_container, 
+    stop_bot_container, _record_session_start, get_running_bots_status, 
+    verify_container_running
+)
 from shared_models.database import init_db, get_db, async_session_local
 from shared_models.models import User, Meeting, MeetingSession, Transcription # <--- ADD MeetingSession and Transcription import
 from shared_models.schemas import MeetingCreate, MeetingResponse, Platform, BotStatusResponse # Import new schemas and Platform
-from auth import get_user_and_token # Import the new dependency
+from app.auth import get_user_and_token # MODIFIED
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import and_, desc
@@ -135,10 +139,10 @@ async def root():
           response_model=MeetingResponse,
           status_code=status.HTTP_201_CREATED,
           summary="Request a new bot instance to join a meeting",
-          dependencies=[Depends(get_user_and_token)])
+          dependencies=[Depends(get_user_and_token)]) # MODIFIED
 async def request_bot(
     req: MeetingCreate,
-    auth_data: tuple[str, User] = Depends(get_user_and_token),
+    auth_data: tuple[str, User] = Depends(get_user_and_token), # MODIFIED
     db: AsyncSession = Depends(get_db)
 ):
     """Handles requests to launch a new bot container for a meeting.

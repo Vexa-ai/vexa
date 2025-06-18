@@ -11,12 +11,27 @@ from .models import Base
 
 logger = logging.getLogger("shared_models.database")
 
-# --- Database Configuration --- 
-DB_HOST = os.environ.get("DB_HOST", "postgres")
-DB_PORT = os.environ.get("DB_PORT", "5432")
-DB_NAME = os.environ.get("DB_NAME", "vexa")
-DB_USER = os.environ.get("DB_USER", "postgres")
-DB_PASSWORD = os.environ.get("DB_PASSWORD", "postgres")
+# --- Database Configuration ---
+DB_HOST = os.environ.get("DB_HOST")
+DB_PORT = os.environ.get("DB_PORT")
+DB_NAME = os.environ.get("DB_NAME")
+DB_USER = os.environ.get("DB_USER")
+DB_PASSWORD = os.environ.get("DB_PASSWORD")
+
+# --- Validation at startup ---
+if not all([DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD]):
+    missing_vars = [
+        var_name
+        for var_name, var_value in {
+            "DB_HOST": DB_HOST,
+            "DB_PORT": DB_PORT,
+            "DB_NAME": DB_NAME,
+            "DB_USER": DB_USER,
+            "DB_PASSWORD": DB_PASSWORD,
+        }.items()
+        if not var_value
+    ]
+    raise ValueError(f"Missing required database environment variables: {', '.join(missing_vars)}")
 
 DATABASE_URL = f"postgresql+asyncpg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 DATABASE_URL_SYNC = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"

@@ -8,6 +8,11 @@ import time
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 import asyncio
+from contextlib import asynccontextmanager
+import aiodocker
+# from app.auth import get_current_user_ws # This function does not exist
+from app.config import REDIS_URL # Import from the single source of truth
+from requests.exceptions import RequestException, Timeout, ConnectionError
 
 # Explicitly import the exceptions from requests
 from requests.exceptions import RequestException, ConnectionError, HTTPError
@@ -31,14 +36,14 @@ from shared_models.models import User, MeetingSession
 DOCKER_HOST = os.environ.get("DOCKER_HOST", "unix://var/run/docker.sock")
 DOCKER_NETWORK = os.environ.get("DOCKER_NETWORK", "vexa_default")
 BOT_IMAGE_NAME = os.environ.get("BOT_IMAGE_NAME", "vexa-bot:dev")
-REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 
+# For example, use 'cuda' for NVIDIA GPUs or 'cpu' for CPU
 DEVICE_TYPE = os.environ.get("DEVICE_TYPE", "cuda").lower()
 
 logger = logging.getLogger("bot_manager.docker_utils")
 
 # Global session for requests_unixsocket
-_socket_session = None
+unix_socket_session = None
 
 # Define a local exception
 class DockerConnectionError(Exception):
@@ -46,8 +51,8 @@ class DockerConnectionError(Exception):
 
 def get_socket_session(max_retries=3, delay=2):
     """Initializes and returns a requests_unixsocket session with retries."""
-    global _socket_session
-    if _socket_session is None:
+    global unix_socket_session
+    if unix_socket_session is None:
         logger.info(f"Attempting to initialize requests_unixsocket session for {DOCKER_HOST}...")
         retries = 0
         # Extract socket path correctly AND ensure it's absolute
@@ -77,8 +82,8 @@ def get_socket_session(max_retries=3, delay=2):
                 version_data = response.json()
                 api_version = version_data.get('ApiVersion')
                 logger.info(f"requests_unixsocket session initialized. Docker API version: {api_version}")
-                _socket_session = temp_session # Assign only on success
-                return _socket_session
+                unix_socket_session = temp_session # Assign only on success
+                return unix_socket_session
 
             except FileNotFoundError as e:
                  # Log the actual exception message which now includes the absolute path
@@ -97,21 +102,21 @@ def get_socket_session(max_retries=3, delay=2):
                 time.sleep(delay)
             else:
                 logger.error(f"Failed to connect to Docker socket at {DOCKER_HOST} after {max_retries} attempts.")
-                _socket_session = None
+                unix_socket_session = None
                 raise DockerConnectionError(f"Could not connect to Docker socket after {max_retries} attempts.")
 
-    return _socket_session
+    return unix_socket_session
 
 def close_docker_client(): # Keep name for compatibility in main.py
     """Closes the requests_unixsocket session."""
-    global _socket_session
-    if _socket_session:
+    global unix_socket_session
+    if unix_socket_session:
         logger.info("Closing requests_unixsocket session.")
         try:
-            _socket_session.close()
+            unix_socket_session.close()
         except Exception as e:
             logger.warning(f"Error closing requests_unixsocket session: {e}")
-        _socket_session = None
+        unix_socket_session = None
 
 # Helper async function to record session start
 async def _record_session_start(meeting_id: int, session_uid: str):
