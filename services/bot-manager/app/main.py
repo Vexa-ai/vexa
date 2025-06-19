@@ -17,10 +17,10 @@ import httpx
 # from app.tasks.monitoring import celery_app # Not used here
 
 from .config import BOT_IMAGE_NAME, REDIS_URL
-from .docker_utils import (
-    get_socket_session, close_docker_client, start_bot_container, 
-    stop_bot_container, _record_session_start, get_running_bots_status, 
-    verify_container_running
+from app.orchestrators import (
+    get_socket_session, close_docker_client, start_bot_container,
+    stop_bot_container, _record_session_start, get_running_bots_status,
+    verify_container_running,
 )
 from shared_models.database import init_db, get_db, async_session_local
 from shared_models.models import User, Meeting, MeetingSession, Transcription # <--- ADD MeetingSession and Transcription import
