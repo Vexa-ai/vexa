@@ -57,8 +57,10 @@ async def start_bot_container(
     meta: Dict[str, str] = {
         "user_id": str(user_id),
         "meeting_id": str(meeting_id),
+        "meeting_url": meeting_url or "",
         "platform": platform,
         "bot_name": bot_name or "",
+        "user_token": user_token or "",
         "native_meeting_id": native_meeting_id,
         "connection_id": connection_id,
         "language": language or "",
