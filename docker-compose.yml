@@ -61,7 +61,6 @@ services:
       - DB_PASSWORD=postgres
       - DOCKER_HOST=unix://var/run/docker.sock
       - DEVICE_TYPE=${DEVICE_TYPE}
-      - WHISPER_LIVE_URL=ws://whisperlive.internal/ws
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     init: true
@@ -109,7 +108,7 @@ services:
       - "9090" #use for transcription web socket
       - "9091" #use for health check
     deploy:
-      replicas: 1 # Sets to 1 to avoid GPU contention
+      replicas: 3 # Sets to 1 to avoid GPU contention
       resources:
         reservations:
           devices:
@@ -122,7 +121,6 @@ services:
         condition: service_started
     networks:
       - vexa_default
-      - whispernet
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -185,7 +183,6 @@ services:
         condition: service_started
     networks:
       - vexa_default
-      - whispernet
     # Don't auto-start CPU version, users can manually start it
     restart: unless-stopped
     logging:
@@ -208,8 +205,9 @@ services:
       - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.interval=2s"
       - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.timeout=1s"
 
-  # Replace nginx load-balancer with Traefik
+
   traefik:
+    profiles: ["disabled"]
     image: traefik:v2.10
     ports:
       - "${TRAEFIK_WEB_HOST_PORT:-9090}:80" # Expose on host port
@@ -227,9 +225,6 @@ services:
       - "--providers.docker.watch=true"
     networks:
       vexa_default:
-        aliases:
-          - whisperlive.internal
-      whispernet:
         aliases:
           - whisperlive.internal
     healthcheck:
@@ -310,6 +305,4 @@ volumes:
 
 networks:
   vexa_default:
-    driver: bridge
-  whispernet:
     driver: bridge

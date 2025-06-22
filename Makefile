@@ -1,7 +1,7 @@
 .PHONY: all setup submodules env force-env download-model build-bot-image build up down ps logs test migrate makemigrations init-db stamp-db migrate-or-init
 
 # Default target: Sets up everything and starts the services
-all: setup-env build-bot-image build up migrate-or-init
+all: setup-env build-bot-image build up migrate-or-init test
 
 # Target to set up only the environment without Docker
 # Ensure .env is created based on TARGET *before* other setup steps

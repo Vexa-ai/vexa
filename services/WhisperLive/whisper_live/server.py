@@ -9,6 +9,7 @@ from typing import List, Optional
 import datetime
 import websocket
 import sys # Added sys import
+import socket  # Added to resolve container IP for ws_url
 
 import torch
 import numpy as np
@@ -548,6 +549,50 @@ class TranscriptionServer:
         self.self_monitor_thread = None
         self._stop_self_monitor = threading.Event()
 
+        # --- WL Scaling: publish live session count & heartbeat ---
+        self._wl_redis = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"))
+        self._listen_port = int(os.getenv("WL_LISTEN_PORT", os.getenv("PORT", "9090")))
+        # Prefer Nomad alloc-id for stable grouping; fall back to HOSTNAME or random uuid
+        self._alloc_id = os.getenv("NOMAD_ALLOC_ID", os.getenv("HOSTNAME", str(uuid.uuid4())[:8]))
+        
+        # Derive container IP on the same network used to reach Redis (guaranteed shared with other app services).
+        try:
+            probe_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            # UDP connect does not send packets; it just sets internal routing.
+            probe_sock.connect((os.getenv("REDIS_HOST", "redis"), int(os.getenv("REDIS_PORT", "6379"))))
+            self._pod_ip = probe_sock.getsockname()[0]
+            probe_sock.close()
+        except Exception:
+            # Fallback to hostname resolution
+            try:
+                self._pod_ip = socket.gethostbyname(socket.gethostname())
+            except Exception:
+                self._pod_ip = "127.0.0.1"
+        
+        self._ws_url = f"ws://{self._pod_ip}:{self._listen_port}/ws"
+        self._metric_stop_evt = threading.Event()
+        threading.Thread(target=self._metric_heartbeat, daemon=True).start()
+        # --- End WL Scaling block ---
+
+    # --- WL Scaling helper methods (class level) ---
+    def _metric_heartbeat(self):
+        """Background timer that refreshes Redis score + heartbeat every 15 s."""
+        while not self._metric_stop_evt.is_set():
+            self._publish_sessions_metric()
+            self._metric_stop_evt.wait(15)
+
+    def _publish_sessions_metric(self):
+        """Update wl:rank sorted-set score and wl:hb:<url> heartbeat key."""
+        try:
+            current = len(self.client_manager.clients) if self.client_manager else 0
+            pipe = self._wl_redis.pipeline()
+            pipe.zadd("wl:rank", {self._ws_url: current})
+            pipe.setex(f"wl:hb:{self._ws_url}", 35, 1)
+            pipe.execute()
+        except Exception as exc:
+            logging.warning(f"WhisperLive metric publish failed: {exc}")
+    # --- End WL Scaling helper methods ---
+
     def initialize_client(
         self, websocket, options, faster_whisper_custom_model_path,
         whisper_tensorrt_path, trt_multilingual
@@ -597,6 +642,8 @@ class TranscriptionServer:
                 server_options=self.server_options
             )
         self.client_manager.add_client(websocket, client)
+        # Update Redis metric after new client joins
+        self._publish_sessions_metric()
 
     def get_audio_from_websocket(self, websocket):
         """
@@ -884,6 +931,10 @@ class TranscriptionServer:
             self.is_healthy = True # WebSocket server is up
             logger.info(f"SERVER_RUNNING: WhisperLive server running on {host}:{port} with health check on {host}:9091/health")
             
+            # Immediately publish to Redis so clients can discover this server
+            self._publish_sessions_metric()
+            logger.info(f"REDIS_PUBLISH: Server published to Redis immediately on startup")
+            
             # Start self-monitoring thread
             if self.self_monitor_thread is None:
                 self._stop_self_monitor.clear()
@@ -1026,6 +1077,8 @@ class TranscriptionServer:
         """
         if self.client_manager.get_client(websocket):
             self.client_manager.remove_client(websocket)
+        # Update Redis metric after client leaves
+        self._publish_sessions_metric()
 
     def start_health_check_server(self, host, port):
         """Start a simple HTTP server for health checks.

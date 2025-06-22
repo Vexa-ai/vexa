@@ -149,22 +149,46 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
   const { meetingUrl, token, connectionId, platform, nativeMeetingId } =
     botConfig; // nativeMeetingId is now in BotConfig type
 
-  //NOTE: The environment variables passed by docker_utils.py will be available to the Node.js process started by your entrypoint.sh.
-  // --- Read WHISPER_LIVE_URL from Node.js environment ---
-  const whisperLiveUrlFromEnv = process.env.WHISPER_LIVE_URL;
+  // --- Start: Minimal Refactor for Self-Healing WS Connection ---
+  const { createClient } = await import("redis");
+  const redisUrl = process.env.REDIS_URL || "redis://redis:6379/0";
+  const redisClient = createClient({ url: redisUrl });
+  await redisClient.connect();
 
-  if (!whisperLiveUrlFromEnv) {
-    // Use the Node-side 'log' utility here
-    log(
-      "ERROR: WHISPER_LIVE_URL environment variable is not set for vexa-bot in its Node.js environment. Cannot start recording."
-    );
-    // Potentially throw an error or return to prevent further execution
-    // For example: throw new Error("WHISPER_LIVE_URL is not configured for the bot.");
-    return; // Or handle more gracefully
+  // This function will be called from the browser context to get the next best WS URL
+  const getNextCandidate = async (failedUrl: string | null): Promise<string | null> => {
+    log(`[Node.js] getNextCandidate called. Failed URL: ${failedUrl}`);
+    if (failedUrl) {
+      try {
+        log(`[Node.js] Removing failed candidate from Redis: ${failedUrl}`);
+        await redisClient.zRem("wl:rank", failedUrl);
+      } catch (e: any) {
+        log(`[Node.js] Error removing candidate from Redis: ${e.message}`);
+      }
+    }
+    try {
+      log("[Node.js] Fetching next best candidate from Redis...");
+      const candidates: string[] = await redisClient.zRange("wl:rank", 0, 0);
+      const nextUrl = candidates[0] ?? null;
+      log(`[Node.js] Next candidate is: ${nextUrl}`);
+      return nextUrl;
+    } catch (e: any) {
+      log(`[Node.js] Error fetching next candidate from Redis: ${e.message}`);
+      return null;
+    }
+  };
+  await page.exposeFunction('getNextCandidate', getNextCandidate);
+  
+  // Resolve WhisperLive WebSocket URL dynamically – env override > initial Redis fetch
+  let whisperLiveUrlResolved: string | null = process.env.WHISPER_LIVE_URL || await getNextCandidate(null);
+  // --- End: Minimal Refactor ---
+
+  if (!whisperLiveUrlResolved) {
+    log("ERROR: Could not resolve WhisperLive WebSocket URL via env or Redis. Aborting recording.");
+    await redisClient.quit(); // Ensure redis client is closed
+    return;
   }
-  log(`[Node.js] WHISPER_LIVE_URL for vexa-bot is: ${whisperLiveUrlFromEnv}`);
-  // --- ------------------------------------------------- ---
-
+  log(`[Node.js] Using initial WhisperLive URL: ${whisperLiveUrlResolved}`);
   log("Starting actual recording with WebSocket connection");
 
   // Pass the necessary config fields and the resolved URL into the page context. Inisde page.evalute we have the browser context.
@@ -175,6 +199,7 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
       whisperUrlForBrowser: string;
     }) => {
       const { botConfigData, whisperUrlForBrowser } = pageArgs;
+
       // Destructure from botConfigData as needed
       const {
         meetingUrl,
@@ -321,71 +346,57 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
 
             let socket: WebSocket | null = null;
             let isServerReady = false;
-            let retryCount = 0;
-            const configuredInterval = botConfigData.reconnectionIntervalMs;
-            const baseRetryDelay = (configuredInterval && configuredInterval <= 1000) ? configuredInterval : 1000; // Use configured if <= 1s, else 1s
-
+            
             let sessionAudioStartTimeMs: number | null = null; // ADDED: For relative speaker timestamps
 
-            const setupWebSocket = () => {
-              try {
-                if (socket) {
-                  // Close previous socket if it exists
-                  try {
-                    socket.close();
-                  } catch (err) {
-                    // Ignore errors when closing
-                  }
-                }
+            const connectToWhisperLive = (wsUrl: string | null) => {
+              if (!wsUrl) {
+                (window as any).logBot("[Failover] No WhisperLive URL available. Will retry lookup in 5s.");
+                setTimeout(async () => {
+                  const freshUrl = await (window as any).getNextCandidate(null);
+                  connectToWhisperLive(freshUrl);
+                }, 5000);
+                return;
+              }
 
+              try {
                 socket = new WebSocket(wsUrl);
 
                 // --- NEW: Force-close if connection cannot be established quickly ---
-                const connectionTimeoutMs = 3000; // 3-second timeout for CONNECTING state
-                let connectionTimeoutHandle: number | null = window.setTimeout(() => {
+                const connectionTimeoutMs = 5000; // 5-second timeout for CONNECTING state
+                const connectionTimeoutHandle = window.setTimeout(() => {
                   if (socket && socket.readyState === WebSocket.CONNECTING) {
                     (window as any).logBot(
-                      `Connection attempt timed out after ${connectionTimeoutMs}ms. Forcing close.`
+                      `[Failover] Connection to ${wsUrl} timed out after ${connectionTimeoutMs}ms. Forcing close.`
                     );
-                    try {
-                      socket.close(); // Triggers onclose -> retry logic
-                    } catch (_) {
-                      /* ignore */
-                    }
+                    socket.close(); // Triggers onclose -> retry logic
                   }
                 }, connectionTimeoutMs);
 
                 socket.onopen = function () {
-                  if (connectionTimeoutHandle !== null) {
-                    clearTimeout(connectionTimeoutHandle); // Clear connection watchdog
-                    connectionTimeoutHandle = null;
-                  }
-                  // --- MODIFIED: Log current config being used ---
-                  // --- MODIFIED: Generate NEW UUID for this connection ---
-                  currentSessionUid = generateUUID(); // Update the currentSessionUid
-                  sessionAudioStartTimeMs = null; // ADDED: Reset for new WebSocket session
+                  clearTimeout(connectionTimeoutHandle);
+                  
+                  currentSessionUid = generateUUID(); 
+                  sessionAudioStartTimeMs = null; 
                   (window as any).logBot(
-                    `[RelativeTime] WebSocket connection opened. New UID: ${currentSessionUid}. sessionAudioStartTimeMs reset. Lang: ${currentWsLanguage}, Task: ${currentWsTask}`
+                    `[Failover] WebSocket connection opened successfully to ${wsUrl}. New UID: ${currentSessionUid}. Lang: ${currentWsLanguage}, Task: ${currentWsTask}`
                   );
-                  retryCount = 0;
+                  isServerReady = false; // Reset ready state for new connection
 
                   if (socket) {
-                    // Construct the initial configuration message using config values
                     const initialConfigPayload = {
-                      uid: currentSessionUid, // <-- Use NEWLY generated UUID
-                      language: currentWsLanguage || null, // <-- Use browser-scope variable
-                      task: currentWsTask || "transcribe", // <-- Use browser-scope variable
-                      model: "medium", // Keep default or make configurable if needed
-                      use_vad: true, // Keep default or make configurable if needed
-                      platform: platform, // From config
-                      token: token, // From config
-                      meeting_id: nativeMeetingId, // From config
-                      meeting_url: meetingUrl || null, // From config, default to null
+                      uid: currentSessionUid,
+                      language: currentWsLanguage || null,
+                      task: currentWsTask || "transcribe",
+                      model: "medium",
+                      use_vad: true,
+                      platform: platform,
+                      token: token,
+                      meeting_id: nativeMeetingId,
+                      meeting_url: meetingUrl || null,
                     };
 
                     const jsonPayload = JSON.stringify(initialConfigPayload);
-
-                    // Log the exact payload being sent
                     (window as any).logBot(
                       `Sending initial config message: ${jsonPayload}`
                     );
@@ -396,84 +407,58 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                 socket.onmessage = (event) => {
                   (window as any).logBot("Received message: " + event.data);
                   const data = JSON.parse(event.data);
-                  // NOTE: The check `if (data["uid"] !== sessionUid) return;` is removed
-                  // because we no longer have a single sessionUid for the lifetime of the evaluate block.
-                  // Each message *should* contain the UID associated with the specific WebSocket
-                  // connection it came from. Downstream needs to handle this if correlation is needed.
-                  // For now, we assume messages are relevant to the current bot context.
-                  // Consider re-introducing a check if whisperlive echoes back the UID and it's needed.
 
                   if (data["status"] === "ERROR") {
-                    (window as any).logBot(
-                      `WebSocket Server Error: ${data["message"]}`
-                    );
+                    (window as any).logBot(`WebSocket Server Error: ${data["message"]}`);
                   } else if (data["status"] === "WAIT") {
                     (window as any).logBot(`Server busy: ${data["message"]}`);
-                  } else if (!isServerReady) {
+                  } else if (!isServerReady && data["status"] === "SERVER_READY") {
                     isServerReady = true;
                     (window as any).logBot("Server is ready.");
                   } else if (data["language"]) {
-                    (window as any).logBot(
-                      `Language detected: ${data["language"]}`
-                    );
+                    (window as any).logBot(`Language detected: ${data["language"]}`);
                   } else if (data["message"] === "DISCONNECT") {
                     (window as any).logBot("Server requested disconnect.");
-                    if (socket) {
-                      socket.close();
-                    }
+                    if (socket) socket.close();
                   } else {
-                    (window as any).logBot(
-                      `Transcription: ${JSON.stringify(data)}`
-                    );
+                    (window as any).logBot(`Transcription: ${JSON.stringify(data)}`);
                   }
                 };
 
                 socket.onerror = (event) => {
-                  if (connectionTimeoutHandle !== null) {
-                    clearTimeout(connectionTimeoutHandle);
-                    connectionTimeoutHandle = null;
-                  }
+                  clearTimeout(connectionTimeoutHandle);
                   (window as any).logBot(
-                    `WebSocket error: ${JSON.stringify(event)}`
+                    `[Failover] WebSocket error for ${wsUrl}. This will trigger onclose.`
                   );
                 };
 
-                socket.onclose = (event) => {
-                  if (connectionTimeoutHandle !== null) {
-                    clearTimeout(connectionTimeoutHandle);
-                    connectionTimeoutHandle = null;
+                socket.onclose = async (event) => {
+                  clearTimeout(connectionTimeoutHandle);
+                  (window as any).logBot(
+                    `[Failover] WebSocket connection to ${wsUrl} closed. Code: ${event.code}, Reason: ${event.reason}.`
+                  );
+
+                  // Call the exposed Node.js function to remove the bad URL and get a new one
+                  (window as any).logBot(`[Failover] Asking for next candidate...`);
+                  const nextUrl = await (window as any).getNextCandidate(wsUrl);
+
+                  if (nextUrl) {
+                    (window as any).logBot(`[Failover] Got next candidate: ${nextUrl}. Retrying in 1s.`);
+                    setTimeout(() => connectToWhisperLive(nextUrl), 1000);
+                  } else {
+                    (window as any).logBot("[Failover] No more candidates available. Retrying lookup in 5s.");
+                    setTimeout(async () => {
+                      const freshUrl = await (window as any).getNextCandidate(null);
+                      connectToWhisperLive(freshUrl);
+                    }, 5000);
                   }
-                  (window as any).logBot(
-                    `WebSocket connection closed. Code: ${event.code}, Reason: ${event.reason}`
-                  );
-
-                  // Retry logic - now retries indefinitely
-                  retryCount++;
-                  (window as any).logBot(
-                    `Attempting to reconnect in ${baseRetryDelay}ms. Retry attempt ${retryCount}`
-                  );
-
-                  setTimeout(() => {
-                    (window as any).logBot(
-                      `Retrying WebSocket connection (attempt ${retryCount})...`
-                    );
-                    setupWebSocket();
-                  }, baseRetryDelay);
                 };
               } catch (e: any) {
-                (window as any).logBot(`Error creating WebSocket: ${e.message}`);
-                // For initial connection errors, handle with retry logic - now retries indefinitely
-                retryCount++;
-                (window as any).logBot(
-                  `Error during WebSocket setup. Attempting to reconnect in ${baseRetryDelay}ms. Retry attempt ${retryCount}`
-                );
-
-                setTimeout(() => {
-                  (window as any).logBot(
-                    `Retrying WebSocket connection (attempt ${retryCount})...`
-                  );
-                  setupWebSocket();
-                }, baseRetryDelay);
+                (window as any).logBot(`[Failover] Critical error creating WebSocket: ${e.message}. Retrying...`);
+                setTimeout(async () => {
+                    const freshUrl = await (window as any).getNextCandidate(wsUrl);
+                    connectToWhisperLive(freshUrl); // This will now handle null gracefully
+                }, 5000);
               }
             };
 
@@ -571,7 +556,7 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
             };
             // --- --------------------------------------------- ---
 
-            setupWebSocket();
+            connectToWhisperLive(whisperUrlForBrowser);
 
             // --- ADD: Speaker Detection Logic (Adapted from speakers_console_test.js) ---
             // Configuration for speaker detection
@@ -1084,13 +1069,16 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
           }).catch(err => {
               reject(err);
           });
-          } catch (error: any) {
-            return reject(new Error("[BOT Error] " + error.message));
-          }
-        });
-      },
-      { botConfigData: botConfig, whisperUrlForBrowser: whisperLiveUrlFromEnv }
-    ); // Pass arguments to page.evaluate
+        } catch (error: any) {
+          return reject(new Error("[BOT Error] " + error.message));
+        }
+      });
+    },
+    { botConfigData: botConfig, whisperUrlForBrowser: whisperLiveUrlResolved }
+  );
+  
+  // After page.evaluate finishes (e.g., on graceful leave), close the redis client
+  await redisClient.quit();
 };
 
 // Remove the compatibility shim 'recordMeeting' if no longer needed,
