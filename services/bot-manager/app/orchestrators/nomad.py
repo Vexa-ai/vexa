@@ -16,8 +16,15 @@ import httpx
 
 logger = logging.getLogger("bot_manager.nomad_utils")
 
-# Nomad connection parameters
-NOMAD_ADDR = os.getenv("NOMAD_ADDR", "http://localhost:4646").rstrip("/")
+# Nomad connection parameters - MODIFIED to use injected Nomad agent IP and fail if not present
+NOMAD_AGENT_IP = os.getenv("NOMAD_IP_http")
+if not NOMAD_AGENT_IP:
+    raise RuntimeError(
+        "NOMAD_IP_http environment variable not set. "
+        "This is required for the bot-manager to connect to the Nomad API."
+    )
+NOMAD_ADDR = os.getenv("NOMAD_ADDR", f"http://{NOMAD_AGENT_IP}:4646").rstrip("/")
+
 # Name of the *parameterised* job that represents a vexa-bot instance
 BOT_JOB_NAME = os.getenv("VEXA_BOT_JOB_NAME", "vexa-bot")
 
@@ -96,6 +103,18 @@ async def start_bot_container(
                 connection_id,
             )
             return dispatched_id, connection_id
+    except httpx.HTTPStatusError as e:
+        error_details = "Unknown error"
+        try:
+            error_body = e.response.text
+            if error_body:
+                error_details = error_body
+        except Exception:
+            pass
+        logger.error(
+            "HTTP %s error dispatching Nomad job to %s: %s. Response body: %s",
+            e.response.status_code, NOMAD_ADDR, e, error_details
+        )
     except httpx.HTTPError as e:
         logger.error("HTTP error talking to Nomad at %s: %s", NOMAD_ADDR, e)
     except Exception as e:  # noqa: BLE001
