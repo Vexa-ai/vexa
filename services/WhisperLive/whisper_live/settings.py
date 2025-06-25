@@ -59,7 +59,7 @@ MIN_AUDIO_S = 1.0
 # the VAD is. A higher value requires a more confident prediction of speech to
 # trigger the VAD. Adjust this if the VAD is too sensitive to background noise
 # or not sensitive enough to quiet speech.
-VAD_ONSET = 0.1
+VAD_ONSET = 0.5
 
 # The threshold for the VAD to decide that there is no speech in an audio
 # chunk. This is used by the Whisper model's internal VAD.

@@ -143,6 +143,7 @@ async def forward_request(client: httpx.AsyncClient, method: str, url: str, requ
     
     # Debug logging for original request headers
     print(f"DEBUG: Original request headers: {dict(request.headers)}")
+    print(f"DEBUG: Original query params: {dict(request.query_params)}")
     
     # Determine target service based on URL path prefix
     is_admin_request = url.startswith(f"{ADMIN_API_URL}/admin")
@@ -167,11 +168,16 @@ async def forward_request(client: httpx.AsyncClient, method: str, url: str, requ
     # Debug logging for forwarded headers
     print(f"DEBUG: Forwarded headers: {headers}")
     
+    # Forward query parameters
+    forwarded_params = dict(request.query_params)
+    if forwarded_params:
+        print(f"DEBUG: Forwarding query params: {forwarded_params}")
+    
     content = await request.body()
     
     try:
         print(f"DEBUG: Forwarding {method} request to {url}")
-        resp = await client.request(method, url, headers=headers, content=content)
+        resp = await client.request(method, url, headers=headers, params=forwarded_params or None, content=content)
         print(f"DEBUG: Response from {url}: status={resp.status_code}")
         # Return downstream response directly (including headers, status code)
         return Response(content=resp.content, status_code=resp.status_code, headers=dict(resp.headers))
