@@ -155,32 +155,100 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
   const redisClient = createClient({ url: redisUrl });
   await redisClient.connect();
 
-  // This function will be called from the browser context to get the next best WS URL
-  const getNextCandidate = async (failedUrl: string | null): Promise<string | null> => {
-    log(`[Node.js] getNextCandidate called. Failed URL: ${failedUrl}`);
-    if (failedUrl) {
-      try {
-        log(`[Node.js] Removing failed candidate from Redis: ${failedUrl}`);
-        await redisClient.zRem("wl:rank", failedUrl);
-      } catch (e: any) {
-        log(`[Node.js] Error removing candidate from Redis: ${e.message}`);
-      }
-    }
+  // Atomic allocation function using Redis Lua script
+  const allocateServer = async (): Promise<string | null> => {
+    const maxClients = 10; // WhisperLive server capacity
+    
+    const luaScript = `
+      -- Find server with lowest score that has capacity
+      local servers = redis.call('ZRANGE', 'wl:rank', 0, -1, 'WITHSCORES')
+      if #servers == 0 then
+        return nil
+      end
+      
+      -- Iterate through servers (format: url1, score1, url2, score2, ...)
+      for i = 1, #servers, 2 do
+        local url = servers[i]
+        local score = tonumber(servers[i + 1])
+        
+        -- Check if server has capacity
+        if score < tonumber(ARGV[1]) then
+          -- Atomically increment score and return URL
+          redis.call('ZINCRBY', 'wl:rank', 1, url)
+          return url
+        end
+      end
+      
+      -- No server has capacity
+      return nil
+    `;
+    
     try {
-      log("[Node.js] Fetching next best candidate from Redis...");
-      const candidates: string[] = await redisClient.zRange("wl:rank", 0, 0);
-      const nextUrl = candidates[0] ?? null;
-      log(`[Node.js] Next candidate is: ${nextUrl}`);
-      return nextUrl;
+      log("[Node.js] Atomically allocating server using Lua script...");
+      const allocatedUrl = await redisClient.eval(luaScript, {
+        keys: [],
+        arguments: [maxClients.toString()]
+      }) as string | null;
+      
+      if (allocatedUrl) {
+        log(`[Node.js] Allocated server: ${allocatedUrl}`);
+      } else {
+        log("[Node.js] No servers available with capacity");
+      }
+      
+      return allocatedUrl;
     } catch (e: any) {
-      log(`[Node.js] Error fetching next candidate from Redis: ${e.message}`);
+      log(`[Node.js] Error in atomic server allocation: ${e.message}`);
       return null;
     }
   };
+
+  // Deallocate function to decrement server score when bot disconnects
+  const deallocateServer = async (serverUrl: string): Promise<void> => {
+    try {
+      log(`[Node.js] Deallocating server: ${serverUrl}`);
+      await redisClient.zIncrBy("wl:rank", -1, serverUrl);
+      log(`[Node.js] Successfully deallocated server: ${serverUrl}`);
+    } catch (e: any) {
+      log(`[Node.js] Error deallocating server: ${e.message}`);
+    }
+  };
+
+  // Updated getNextCandidate that handles failed URLs and uses atomic allocation
+  const getNextCandidate = async (failedUrl: string | null): Promise<string | null> => {
+    log(`[Node.js] getNextCandidate called. Failed URL: ${failedUrl}`);
+    
+    if (failedUrl) {
+      try {
+        log(`[Node.js] Deallocating and removing failed server: ${failedUrl}`);
+        // First deallocate the slot this bot was using
+        await deallocateServer(failedUrl);
+        // Then remove the failed server from the registry
+        await redisClient.zRem("wl:rank", failedUrl);
+      } catch (e: any) {
+        log(`[Node.js] Error handling failed candidate: ${e.message}`);
+      }
+    }
+    
+    // Use atomic allocation to get next available server
+    return await allocateServer();
+  };
+
   await page.exposeFunction('getNextCandidate', getNextCandidate);
   
-  // Resolve WhisperLive WebSocket URL dynamically – env override > initial Redis fetch
+  // Expose deallocateServer function to browser context for cleanup
+  await page.exposeFunction('deallocateServer', deallocateServer);
+  
+  // Track current allocated server for cleanup
+  let currentAllocatedServer: string | null = null;
+  
+  // Resolve WhisperLive WebSocket URL dynamically – env override > initial Redis fetch  
   let whisperLiveUrlResolved: string | null = process.env.WHISPER_LIVE_URL || await getNextCandidate(null);
+  
+  // Track the initially allocated server (only if we used atomic allocation)
+  if (whisperLiveUrlResolved && !process.env.WHISPER_LIVE_URL) {
+    currentAllocatedServer = whisperLiveUrlResolved;
+  }
   // --- End: Minimal Refactor ---
 
   if (!whisperLiveUrlResolved) {
