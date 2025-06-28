@@ -73,7 +73,9 @@ const handleRedisMessage = async (message: string, channel: string, page: Page |
         // TODO: Implement leave logic (Phase 4)
         log("Received leave command");
         if (!isShuttingDown && page && !page.isClosed()) { // Check flag and page state
-          await performGracefulLeave(page);
+          // A command-initiated leave is a successful completion, not an error.
+          // Exit with code 0 to signal success to Nomad and prevent restarts.
+          await performGracefulLeave(page, 0, "self_initiated_leave");
         } else {
            log("Ignoring leave command: Already shutting down or page unavailable.")
         }
@@ -123,10 +125,9 @@ async function performGracefulLeave(
     // If reason is 'admission_failed', exitCode would be 2, and platformLeaveSuccess is irrelevant.
   }
 
-  // Determine final exit code for callback based on initial reason or platform leave success.
-  // If the initial reason was something like 'admission_failed', use its specific exitCode.
-  // Otherwise, if it was a generic leave, success depends on platformLeaveSuccess.
-  const finalCallbackExitCode = (reason !== "self_initiated_leave") ? exitCode : (platformLeaveSuccess ? 0 : 1);
+  // Determine final exit code. If the initial intent was a successful exit (code 0),
+  // it should always be 0. For other cases, base it on the platform leave success.
+  const finalCallbackExitCode = (exitCode === 0) ? 0 : (platformLeaveSuccess ? 0 : 1);
   const finalCallbackReason = reason;
 
   if (botManagerCallbackUrl && currentConnectionId) {
