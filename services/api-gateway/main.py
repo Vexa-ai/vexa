@@ -12,7 +12,7 @@ from typing import Dict, Any, List, Optional
 
 # Import schemas for documentation
 from shared_models.schemas import (
-    MeetingCreate, MeetingResponse, MeetingListResponse, # Updated/Added Schemas
+    MeetingCreate, MeetingResponse, MeetingListResponse, MeetingDataUpdate, # Updated/Added Schemas
     TranscriptionResponse, TranscriptionSegment,
     UserCreate, UserResponse, TokenResponse, UserDetailResponse, # Admin Schemas
     ErrorResponse,
@@ -143,6 +143,7 @@ async def forward_request(client: httpx.AsyncClient, method: str, url: str, requ
     
     # Debug logging for original request headers
     print(f"DEBUG: Original request headers: {dict(request.headers)}")
+    print(f"DEBUG: Original query params: {dict(request.query_params)}")
     
     # Determine target service based on URL path prefix
     is_admin_request = url.startswith(f"{ADMIN_API_URL}/admin")
@@ -167,11 +168,16 @@ async def forward_request(client: httpx.AsyncClient, method: str, url: str, requ
     # Debug logging for forwarded headers
     print(f"DEBUG: Forwarded headers: {headers}")
     
+    # Forward query parameters
+    forwarded_params = dict(request.query_params)
+    if forwarded_params:
+        print(f"DEBUG: Forwarding query params: {forwarded_params}")
+    
     content = await request.body()
     
     try:
         print(f"DEBUG: Forwarding {method} request to {url}")
-        resp = await client.request(method, url, headers=headers, content=content)
+        resp = await client.request(method, url, headers=headers, params=forwarded_params or None, content=content)
         print(f"DEBUG: Response from {url}: status={resp.status_code}")
         # Return downstream response directly (including headers, status code)
         return Response(content=resp.content, status_code=resp.status_code, headers=dict(resp.headers))
@@ -206,7 +212,7 @@ async def root():
              },
          })
 # Function signature remains generic for forwarding
-async def request_bot_proxy(request: Request, body: Dict[str, Any]): 
+async def request_bot_proxy(request: Request): 
     """Forward request to Bot Manager to start a bot."""
     url = f"{BOT_MANAGER_URL}/bots"
     # forward_request handles reading and passing the body from the original request
@@ -231,7 +237,7 @@ async def stop_bot_proxy(platform: Platform, native_meeting_id: str, request: Re
           status_code=status.HTTP_202_ACCEPTED,
           dependencies=[Depends(api_key_scheme)])
 # Need to accept request body for PUT
-async def update_bot_config_proxy(platform: Platform, native_meeting_id: str, request: Request, body: Dict[str, Any]): 
+async def update_bot_config_proxy(platform: Platform, native_meeting_id: str, request: Request): 
     """Forward request to Bot Manager to update bot config."""
     url = f"{BOT_MANAGER_URL}/bots/{platform.value}/{native_meeting_id}/config"
     # forward_request handles reading and passing the body from the original request
@@ -273,6 +279,56 @@ async def get_transcript_proxy(platform: Platform, native_meeting_id: str, reque
     """Forward request to Transcription Collector to get a transcript."""
     url = f"{TRANSCRIPTION_COLLECTOR_URL}/transcripts/{platform.value}/{native_meeting_id}"
     return await forward_request(app.state.http_client, "GET", url, request)
+
+@app.patch("/meetings/{platform}/{native_meeting_id}",
+           tags=["Transcriptions"],
+           summary="Update meeting data",
+           description="Updates meeting metadata. Only name, participants, languages, and notes can be updated.",
+           response_model=MeetingResponse,
+           dependencies=[Depends(api_key_scheme)],
+           openapi_extra={
+               "requestBody": {
+                   "content": {
+                       "application/json": {
+                           "schema": {
+                               "type": "object",
+                               "properties": {
+                                   "data": MeetingDataUpdate.schema()
+                               },
+                               "required": ["data"]
+                           }
+                       }
+                   },
+                   "required": True,
+                   "description": "Meeting data to update (name, participants, languages, notes only)"
+               },
+           })
+async def update_meeting_data_proxy(platform: Platform, native_meeting_id: str, request: Request):
+    """Forward request to Transcription Collector to update meeting data."""
+    url = f"{TRANSCRIPTION_COLLECTOR_URL}/meetings/{platform.value}/{native_meeting_id}"
+    return await forward_request(app.state.http_client, "PATCH", url, request)
+
+@app.delete("/meetings/{platform}/{native_meeting_id}",
+            tags=["Transcriptions"],
+            summary="Delete meeting and its transcripts",
+            description="Deletes a specific meeting and all its associated transcripts. This action cannot be undone.",
+            dependencies=[Depends(api_key_scheme)])
+async def delete_meeting_proxy(platform: Platform, native_meeting_id: str, request: Request):
+    """Forward request to Transcription Collector to delete meeting and its transcripts."""
+    url = f"{TRANSCRIPTION_COLLECTOR_URL}/meetings/{platform.value}/{native_meeting_id}"
+    return await forward_request(app.state.http_client, "DELETE", url, request)
+
+# --- User Profile Routes ---
+@app.put("/user/webhook",
+         tags=["User"],
+         summary="Set user webhook URL",
+         description="Sets a webhook URL for the authenticated user to receive notifications.",
+         status_code=status.HTTP_200_OK,
+         dependencies=[Depends(api_key_scheme)])
+async def set_user_webhook_proxy(request: Request):
+    """Forward request to Admin API to set user webhook."""
+    url = f"{ADMIN_API_URL}/user/webhook"
+    return await forward_request(app.state.http_client, "PUT", url, request)
 
 # --- Admin API Routes --- 
 @app.api_route("/admin/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"], 

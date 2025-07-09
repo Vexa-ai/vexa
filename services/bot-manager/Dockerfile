@@ -17,6 +17,7 @@ COPY ./services/bot-manager/app /app/app
 
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip && pip install httpx
 
 # Expose port (internal only, but good practice)
 EXPOSE 8080

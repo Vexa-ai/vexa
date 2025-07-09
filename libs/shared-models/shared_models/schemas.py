@@ -1,4 +1,4 @@
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict, Tuple, Any
 from pydantic import BaseModel, Field, EmailStr, validator
 from datetime import datetime
 from enum import Enum, auto
@@ -111,6 +111,7 @@ class UserBase(BaseModel): # Base for common user fields
     name: Optional[str] = None
     image_url: Optional[str] = None
     max_concurrent_bots: Optional[int] = Field(None, description="Maximum number of concurrent bots allowed for the user")
+    data: Optional[Dict[str, Any]] = Field(None, description="JSONB storage for arbitrary user data, like webhook URLs")
 
 class UserCreate(UserBase):
     pass
@@ -194,12 +195,25 @@ class MeetingResponse(BaseModel): # Not inheriting from MeetingBase anymore to a
     bot_container_id: Optional[str]
     start_time: Optional[datetime]
     end_time: Optional[datetime]
+    data: Optional[Dict] = Field(default_factory=dict, description="JSON data containing meeting metadata like name, participants, languages, and notes")
     created_at: datetime
     updated_at: datetime
 
     class Config:
         orm_mode = True
         use_enum_values = True # Serialize Platform enum to its string value
+
+# --- Meeting Update Schema ---
+class MeetingDataUpdate(BaseModel):
+    """Schema for updating meeting data fields - restricted to user-editable fields only"""
+    name: Optional[str] = Field(None, description="Meeting name/title")
+    participants: Optional[List[str]] = Field(None, description="List of participant names")
+    languages: Optional[List[str]] = Field(None, description="List of language codes detected/used in the meeting")
+    notes: Optional[str] = Field(None, description="Meeting notes or description")
+
+class MeetingUpdate(BaseModel):
+    """Schema for updating meeting data via PATCH requests"""
+    data: MeetingDataUpdate = Field(..., description="Meeting metadata to update")
 
 # --- Transcription Schemas --- 
 

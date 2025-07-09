@@ -35,8 +35,8 @@ async_session_local = sessionmaker(
     expire_on_commit=False,
 )
 
-# --- Sync Engine (Optional, for Alembic) ---
-# sync_engine = create_engine(DATABASE_URL_SYNC)
+# --- Sync Engine (For Alembic migrations) ---
+sync_engine = create_engine(DATABASE_URL_SYNC)
 
 # --- FastAPI Dependency --- 
 async def get_db() -> AsyncSession:
