@@ -53,7 +53,7 @@ endif
 			echo "ADMIN_API_TOKEN=token" > env-example.cpu; \
 			echo "LANGUAGE_DETECTION_SEGMENTS=10" >> env-example.cpu; \
 			echo "VAD_FILTER_THRESHOLD=0.5" >> env-example.cpu; \
-			echo "WHISPER_MODEL_SIZE=tiny" >> env-example.cpu; \
+			echo "WHISPER_MODEL_SIZE=medium" >> env-example.cpu; \
 			echo "DEVICE_TYPE=cpu" >> env-example.cpu; \
 			echo "BOT_IMAGE_NAME=vexa-bot:dev" >> env-example.cpu; \
 			echo "# Exposed Host Ports" >> env-example.cpu; \
@@ -103,7 +103,7 @@ endif
 			echo "ADMIN_API_TOKEN=token" > env-example.cpu; \
 			echo "LANGUAGE_DETECTION_SEGMENTS=10" >> env-example.cpu; \
 			echo "VAD_FILTER_THRESHOLD=0.5" >> env-example.cpu; \
-			echo "WHISPER_MODEL_SIZE=tiny" >> env-example.cpu; \
+			echo "WHISPER_MODEL_SIZE=medium" >> env-example.cpu; \
 			echo "DEVICE_TYPE=cpu" >> env-example.cpu; \
 			echo "BOT_IMAGE_NAME=vexa-bot:dev" >> env-example.cpu; \
 			echo "# Exposed Host Ports" >> env-example.cpu; \

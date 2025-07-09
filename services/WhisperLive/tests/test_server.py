@@ -49,7 +49,7 @@ class TestServerConnection(unittest.TestCase):
             'uid': 'test_client',
             'language': 'en',
             'task': 'transcribe',
-            'model': 'tiny.en'
+            'model': 'medium.en'
         })
         self.server.recv_audio(mock_websocket, BackendType("faster_whisper"))
 
@@ -59,7 +59,7 @@ class TestServerConnection(unittest.TestCase):
             'uid': 'test_client',
             'language': 'en',
             'task': 'transcribe',
-            'model': 'tiny.en'
+            'model': 'medium.en'
         }),  np.array([1, 2, 3]).tobytes()]
 
         with self.assertLogs(level="ERROR"):
