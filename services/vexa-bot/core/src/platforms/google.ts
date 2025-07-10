@@ -3,13 +3,13 @@ import { log, randomDelay } from "../utils";
 import { BotConfig } from "../types";
 import { v4 as uuidv4 } from "uuid"; // Import UUID
 import fs from "fs/promises";
+import { BotCallbacks } from "../gateways/BotCallbacks";
 
 // --- ADDED: Function to generate UUID (if not already present globally) ---
 // If you have a shared utils file for this, import from there instead.
 function generateUUID() {
   return uuidv4();
 }
-// --- --------------------------------------------------------- ---
 
 export async function handleGoogleMeet(
   botConfig: BotConfig,
@@ -18,7 +18,8 @@ export async function handleGoogleMeet(
     page: Page | null,
     exitCode: number,
     reason: string
-  ) => Promise<void>
+  ) => Promise<void>,
+  botCallbacks?: BotCallbacks
 ): Promise<void> {
   const leaveButton = `//button[@aria-label="Leave call"]`;
 
@@ -74,8 +75,14 @@ export async function handleGoogleMeet(
 
     log("Successfully admitted to the meeting, starting recording");
     // Pass platform from botConfig to startRecording
-    await startRecording(page, botConfig);
-    await saveVideoAs(page, botConfig);
+    await startRecording(page, botConfig, botCallbacks);
+    const videoFilePath = await page.video()?.path();
+    if (videoFilePath) {
+      await botCallbacks?.onStartRecording(
+        videoFilePath,
+        botConfig.connectionId
+      );
+    }
   } catch (error: any) {
     console.error(
       "Error after join attempt (admission/recording setup): " + error.message
@@ -162,7 +169,11 @@ const joinMeeting = async (page: Page, meetingUrl: string, botName: string) => {
 };
 
 // Modified to have only the actual recording functionality
-const startRecording = async (page: Page, botConfig: BotConfig) => {
+const startRecording = async (
+  page: Page,
+  botConfig: BotConfig,
+  botCallbacks?: BotCallbacks
+) => {
   // Destructure needed fields from botConfig
   const { meetingUrl, token, connectionId, platform, nativeMeetingId } =
     botConfig; // nativeMeetingId is now in BotConfig type
@@ -356,6 +367,7 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                     );
                   }
                   originalLeave();
+                  botCallbacks?.onMeetingEnd(originalConnectionId);
                 };
               } catch (err: any) {
                 (window as any).logBot(
@@ -496,6 +508,11 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                         socket.close();
                       }
                     } else {
+                      // --- ADDED: Collect transcription segments for SRT ---
+                      botCallbacks?.onTranscriptionSegmentsReceived(
+                        data["segments"] || data
+                      );
+
                       (window as any).logBot(
                         `Transcription: ${JSON.stringify(data)}`
                       );
@@ -1355,20 +1372,6 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
     { botConfigData: botConfig, whisperUrlForBrowser: whisperLiveUrlFromEnv }
   ); // Pass arguments to page.evaluate
 };
-
-async function saveVideoAs(page: Page, botConfig: BotConfig) {
-  const videoFilePath = await page.video()?.path();
-  if (videoFilePath) {
-    const videoDir = `/app/recordings`;
-    const newVideoPath = `/${videoDir}/video_${botConfig.connectionId}.webm`;
-    try {
-      await fs.rename(videoFilePath, newVideoPath);
-    } catch (e) {
-      console.error(e);
-      console.log(`"${videoFilePath}" -> "${newVideoPath}" rename failed`);
-    }
-  }
-}
 
 // Remove the compatibility shim 'recordMeeting' if no longer needed,
 // otherwise, ensure it constructs a valid BotConfig object.

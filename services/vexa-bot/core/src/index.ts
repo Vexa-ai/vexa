@@ -9,6 +9,7 @@ import { Page, Browser } from "playwright-core";
 import * as http from "http"; // ADDED: For HTTP callback
 import * as https from "https"; // ADDED: For HTTPS callback (if needed)
 import * as fs from "fs"; // ADDED: For file stream operations
+import { VexaBotCallbacks } from "./adapters/gateways/VexaBotCallbacks";
 
 // Module-level variables to store current configuration
 let currentLanguage: string | null | undefined = null;
@@ -419,7 +420,12 @@ export async function runBot(botConfig: BotConfig): Promise<void> {
   // Call the appropriate platform handler
   try {
     if (botConfig.platform === "google_meet") {
-      await handleGoogleMeet(botConfig, page, performGracefulLeave);
+      await handleGoogleMeet(
+        botConfig,
+        page,
+        performGracefulLeave,
+        new VexaBotCallbacks()
+      );
     } else if (botConfig.platform === "zoom") {
       log("Zoom platform not yet implemented.");
       await performGracefulLeave(page, 1, "platform_not_implemented");
