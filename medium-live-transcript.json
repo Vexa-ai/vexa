@@ -1,0 +1,2001 @@
+{
+  "id": 3374,
+  "platform": "google_meet",
+  "native_meeting_id": "yku-qofq-vyy",
+  "constructed_meeting_url": "https://meet.google.com/yku-qofq-vyy",
+  "status": "active",
+  "start_time": "2025-07-09T14:19:18.521743",
+  "end_time": null,
+  "segments": [
+    {
+      "start": 28.698,
+      "end": 29.698,
+      "text": " Brain?",
+      "language": "en",
+      "created_at": "2025-07-09T14:21:04.824281",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:20:04.533304+00:00",
+      "absolute_end_time": "2025-07-09T14:20:05.533304+00:00"
+    },
+    {
+      "start": 30.958,
+      "end": 32.958,
+      "text": " Leon and Vompa",
+      "language": "en",
+      "created_at": "2025-07-09T14:21:04.824551",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:20:06.793304+00:00",
+      "absolute_end_time": "2025-07-09T14:20:08.793304+00:00"
+    },
+    {
+      "start": 31.078,
+      "end": 31.67,
+      "text": " Neon",
+      "language": "en",
+      "created_at": "2025-07-09T14:20:44.808957",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:20:06.913304+00:00",
+      "absolute_end_time": "2025-07-09T14:20:07.505304+00:00"
+    },
+    {
+      "start": 32.958,
+      "end": 35.958,
+      "text": " Leon and Vanpelle, we'll see you in two weeks.",
+      "language": "en",
+      "created_at": "2025-07-09T14:21:04.824681",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:20:08.793304+00:00",
+      "absolute_end_time": "2025-07-09T14:20:11.793304+00:00"
+    },
+    {
+      "start": 97.24,
+      "end": 98.54,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:21:54.847564",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:21:13.075304+00:00",
+      "absolute_end_time": "2025-07-09T14:21:14.375304+00:00"
+    },
+    {
+      "start": 97.7,
+      "end": 98.7,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:21:54.848307",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:21:13.535304+00:00",
+      "absolute_end_time": "2025-07-09T14:21:14.535304+00:00"
+    },
+    {
+      "start": 184.821,
+      "end": 189.511,
+      "text": " It's almost a bot in Bekshalab's Reunion.",
+      "language": "en",
+      "created_at": "2025-07-09T14:24:54.940098",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:22:40.656304+00:00",
+      "absolute_end_time": "2025-07-09T14:22:45.346304+00:00"
+    },
+    {
+      "start": 185.511,
+      "end": 189.511,
+      "text": " It's almost a bot in Bekshalab's Reunion.",
+      "language": "en",
+      "created_at": "2025-07-09T14:23:24.866431",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:22:41.346304+00:00",
+      "absolute_end_time": "2025-07-09T14:22:45.346304+00:00"
+    },
+    {
+      "start": 192.623,
+      "end": 194.623,
+      "text": " You can use both of them.",
+      "language": "en",
+      "created_at": "2025-07-09T14:24:54.940302",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:22:48.458304+00:00",
+      "absolute_end_time": "2025-07-09T14:22:50.458304+00:00"
+    },
+    {
+      "start": 203.675,
+      "end": 205.675,
+      "text": " I think I'll even send Tiny.",
+      "language": "en",
+      "created_at": "2025-07-09T14:24:54.940433",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:22:59.510304+00:00",
+      "absolute_end_time": "2025-07-09T14:23:01.510304+00:00"
+    },
+    {
+      "start": 208.412,
+      "end": 210.412,
+      "text": " I'm going to send a tiny",
+      "language": "en",
+      "created_at": "2025-07-09T14:24:54.940553",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:23:04.247304+00:00",
+      "absolute_end_time": "2025-07-09T14:23:06.247304+00:00"
+    },
+    {
+      "start": 210.412,
+      "end": 212.412,
+      "text": " the need for life,",
+      "language": "en",
+      "created_at": "2025-07-09T14:24:54.940672",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:23:06.247304+00:00",
+      "absolute_end_time": "2025-07-09T14:23:08.247304+00:00"
+    },
+    {
+      "start": 212.412,
+      "end": 214.412,
+      "text": " you send the medium",
+      "language": "en",
+      "created_at": "2025-07-09T14:24:54.940794",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:23:08.247304+00:00",
+      "absolute_end_time": "2025-07-09T14:23:10.247304+00:00"
+    },
+    {
+      "start": 214.412,
+      "end": 216.399,
+      "text": " and we send",
+      "language": "en",
+      "created_at": "2025-07-09T14:24:54.940915",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:23:10.247304+00:00",
+      "absolute_end_time": "2025-07-09T14:23:12.234304+00:00"
+    },
+    {
+      "start": 216.399,
+      "end": 221.399,
+      "text": " See you in a minute.",
+      "language": "en",
+      "created_at": "2025-07-09T14:24:54.941031",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:23:12.234304+00:00",
+      "absolute_end_time": "2025-07-09T14:23:17.234304+00:00"
+    },
+    {
+      "start": 216.412,
+      "end": 216.399,
+      "text": " ...",
+      "language": "en",
+      "created_at": "2025-07-09T14:23:44.882321",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:23:12.247304+00:00",
+      "absolute_end_time": "2025-07-09T14:23:12.234304+00:00"
+    },
+    {
+      "start": 221.399,
+      "end": 222.239,
+      "text": " Yeah.",
+      "language": "en",
+      "created_at": "2025-07-09T14:24:54.941145",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:23:17.234304+00:00",
+      "absolute_end_time": "2025-07-09T14:23:18.074304+00:00"
+    },
+    {
+      "start": 229.401,
+      "end": 231.401,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:24:54.941261",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:23:25.236304+00:00",
+      "absolute_end_time": "2025-07-09T14:23:27.236304+00:00"
+    },
+    {
+      "start": 253.363,
+      "end": 253.863,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:24:24.923084",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:23:49.198304+00:00",
+      "absolute_end_time": "2025-07-09T14:23:49.698304+00:00"
+    },
+    {
+      "start": 284.463,
+      "end": 285.463,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:24:54.941969",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:24:20.298304+00:00",
+      "absolute_end_time": "2025-07-09T14:24:21.298304+00:00"
+    },
+    {
+      "start": 325.806,
+      "end": 326.806,
+      "text": " Thank you very much.",
+      "language": "en",
+      "created_at": "2025-07-09T14:26:45.003864",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:25:01.641304+00:00",
+      "absolute_end_time": "2025-07-09T14:25:02.641304+00:00"
+    },
+    {
+      "start": 334.35,
+      "end": 335.35,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:26:45.004671",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:25:10.185304+00:00",
+      "absolute_end_time": "2025-07-09T14:25:11.185304+00:00"
+    },
+    {
+      "start": 355.896,
+      "end": 356.896,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:26:45.004809",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:25:31.731304+00:00",
+      "absolute_end_time": "2025-07-09T14:25:32.731304+00:00"
+    },
+    {
+      "start": 356.896,
+      "end": 356.916,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:26:04.969911",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:25:32.731304+00:00",
+      "absolute_end_time": "2025-07-09T14:25:32.751304+00:00"
+    },
+    {
+      "start": 361.098,
+      "end": 365.818,
+      "text": " That's what that's what that's everything",
+      "language": "en",
+      "created_at": "2025-07-09T14:26:45.004948",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:25:36.933304+00:00",
+      "absolute_end_time": "2025-07-09T14:25:41.653304+00:00"
+    },
+    {
+      "start": 361.598,
+      "end": 365.858,
+      "text": " That's what that's what that's everything",
+      "language": "en",
+      "created_at": "2025-07-09T14:26:24.986445",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:25:37.433304+00:00",
+      "absolute_end_time": "2025-07-09T14:25:41.693304+00:00"
+    },
+    {
+      "start": 365.818,
+      "end": 366.818,
+      "text": " That's it.",
+      "language": "en",
+      "created_at": "2025-07-09T14:26:55.019266",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:25:41.653304+00:00",
+      "absolute_end_time": "2025-07-09T14:25:42.653304+00:00"
+    },
+    {
+      "start": 366.818,
+      "end": 367.818,
+      "text": " No?",
+      "language": "en",
+      "created_at": "2025-07-09T14:26:55.019452",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:25:42.653304+00:00",
+      "absolute_end_time": "2025-07-09T14:25:43.653304+00:00"
+    },
+    {
+      "start": 367.818,
+      "end": 376.848,
+      "text": " No?",
+      "language": "en",
+      "created_at": "2025-07-09T14:27:05.033516",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:25:43.653304+00:00",
+      "absolute_end_time": "2025-07-09T14:25:52.683304+00:00"
+    },
+    {
+      "start": 376.848,
+      "end": 377.444,
+      "text": " Okay.",
+      "language": "en",
+      "created_at": "2025-07-09T14:27:05.033704",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:25:52.683304+00:00",
+      "absolute_end_time": "2025-07-09T14:25:53.279304+00:00"
+    },
+    {
+      "start": 377.444,
+      "end": 380.444,
+      "text": " I don't want you to take a look at that.",
+      "language": "en",
+      "created_at": "2025-07-09T14:27:05.033844",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:25:53.279304+00:00",
+      "absolute_end_time": "2025-07-09T14:25:56.279304+00:00"
+    },
+    {
+      "start": 377.848,
+      "end": 377.444,
+      "text": " That's it.",
+      "language": "en",
+      "created_at": "2025-07-09T14:26:24.987580",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:25:53.683304+00:00",
+      "absolute_end_time": "2025-07-09T14:25:53.279304+00:00"
+    },
+    {
+      "start": 380.444,
+      "end": 390.075,
+      "text": " All right.",
+      "language": "en",
+      "created_at": "2025-07-09T14:26:45.005104",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:25:56.279304+00:00",
+      "absolute_end_time": "2025-07-09T14:26:05.910304+00:00"
+    },
+    {
+      "start": 380.714,
+      "end": 389.944,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:27:05.033971",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:25:56.549304+00:00",
+      "absolute_end_time": "2025-07-09T14:26:05.779304+00:00"
+    },
+    {
+      "start": 389.944,
+      "end": 390.944,
+      "text": " Thank you very much.",
+      "language": "en",
+      "created_at": "2025-07-09T14:27:05.034103",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:26:05.779304+00:00",
+      "absolute_end_time": "2025-07-09T14:26:06.779304+00:00"
+    },
+    {
+      "start": 390.944,
+      "end": 390.964,
+      "text": " Bye.",
+      "language": "en",
+      "created_at": "2025-07-09T14:26:45.005919",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:26:06.779304+00:00",
+      "absolute_end_time": "2025-07-09T14:26:06.799304+00:00"
+    },
+    {
+      "start": 391.534,
+      "end": 392.534,
+      "text": " No?",
+      "language": "en",
+      "created_at": "2025-07-09T14:27:15.040441",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:26:07.369304+00:00",
+      "absolute_end_time": "2025-07-09T14:26:08.369304+00:00"
+    },
+    {
+      "start": 392.534,
+      "end": 393.534,
+      "text": " God, thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:26:45.006073",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:26:08.369304+00:00",
+      "absolute_end_time": "2025-07-09T14:26:09.369304+00:00"
+    },
+    {
+      "start": 392.714,
+      "end": 394.094,
+      "text": " God, this is...",
+      "language": "en",
+      "created_at": "2025-07-09T14:27:45.056986",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:26:08.549304+00:00",
+      "absolute_end_time": "2025-07-09T14:26:09.929304+00:00"
+    },
+    {
+      "start": 394.094,
+      "end": 395.094,
+      "text": " This is my office.",
+      "language": "en",
+      "created_at": "2025-07-09T14:27:45.057181",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:26:09.929304+00:00",
+      "absolute_end_time": "2025-07-09T14:26:10.929304+00:00"
+    },
+    {
+      "start": 395.094,
+      "end": 397.094,
+      "text": " No, I want it to be here.",
+      "language": "en",
+      "created_at": "2025-07-09T14:27:55.071152",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:26:10.929304+00:00",
+      "absolute_end_time": "2025-07-09T14:26:12.929304+00:00"
+    },
+    {
+      "start": 397.094,
+      "end": 400.164,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:27:55.072058",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:26:12.929304+00:00",
+      "absolute_end_time": "2025-07-09T14:26:15.999304+00:00"
+    },
+    {
+      "start": 398.164,
+      "end": 399.164,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:26:55.020155",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:26:13.999304+00:00",
+      "absolute_end_time": "2025-07-09T14:26:14.999304+00:00"
+    },
+    {
+      "start": 400.164,
+      "end": 406.684,
+      "text": " I think it's for the 3rd round.",
+      "language": "en",
+      "created_at": "2025-07-09T14:27:55.072225",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:26:15.999304+00:00",
+      "absolute_end_time": "2025-07-09T14:26:22.519304+00:00"
+    },
+    {
+      "start": 406.684,
+      "end": 411.264,
+      "text": " Thank you very much.",
+      "language": "en",
+      "created_at": "2025-07-09T14:28:15.081393",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:26:22.519304+00:00",
+      "absolute_end_time": "2025-07-09T14:26:27.099304+00:00"
+    },
+    {
+      "start": 411.264,
+      "end": 412.544,
+      "text": " Uhhh...",
+      "language": "en",
+      "created_at": "2025-07-09T14:28:25.087869",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:26:27.099304+00:00",
+      "absolute_end_time": "2025-07-09T14:26:28.379304+00:00"
+    },
+    {
+      "start": 412.544,
+      "end": 414.544,
+      "text": " I don't know what it was.",
+      "language": "en",
+      "created_at": "2025-07-09T14:28:25.088089",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:26:28.379304+00:00",
+      "absolute_end_time": "2025-07-09T14:26:30.379304+00:00"
+    },
+    {
+      "start": 414.544,
+      "end": 415.044,
+      "text": " What was it?",
+      "language": "en",
+      "created_at": "2025-07-09T14:28:25.088870",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:26:30.379304+00:00",
+      "absolute_end_time": "2025-07-09T14:26:30.879304+00:00"
+    },
+    {
+      "start": 415.044,
+      "end": 417.044,
+      "text": " No, no, ask Amine first.",
+      "language": "en",
+      "created_at": "2025-07-09T14:28:35.103831",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:26:30.879304+00:00",
+      "absolute_end_time": "2025-07-09T14:26:32.879304+00:00"
+    },
+    {
+      "start": 447.1,
+      "end": 448.44,
+      "text": " Do you want to start?",
+      "language": "en",
+      "created_at": "2025-07-09T14:28:35.104047",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:27:02.935304+00:00",
+      "absolute_end_time": "2025-07-09T14:27:04.275304+00:00"
+    },
+    {
+      "start": 447.44,
+      "end": 449.44,
+      "text": " Do you want to start?",
+      "language": "en",
+      "created_at": "2025-07-09T14:27:45.057372",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:27:03.275304+00:00",
+      "absolute_end_time": "2025-07-09T14:27:05.275304+00:00"
+    },
+    {
+      "start": 452.133,
+      "end": 455.733,
+      "text": " Don't make that admin API documentation.",
+      "language": "en",
+      "created_at": "2025-07-09T14:28:35.104202",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:27:07.968304+00:00",
+      "absolute_end_time": "2025-07-09T14:27:11.568304+00:00"
+    },
+    {
+      "start": 455.733,
+      "end": 459.333,
+      "text": " There is a markdown called vexa-admin-apr-documentation.",
+      "language": "en",
+      "created_at": "2025-07-09T14:28:35.104355",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:27:11.568304+00:00",
+      "absolute_end_time": "2025-07-09T14:27:15.168304+00:00"
+    },
+    {
+      "start": 459.333,
+      "end": 464.333,
+      "text": " to the command to create a user to recover his angel.",
+      "language": "en",
+      "created_at": "2025-07-09T14:28:45.119871",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:27:15.168304+00:00",
+      "absolute_end_time": "2025-07-09T14:27:20.168304+00:00"
+    },
+    {
+      "start": 464.333,
+      "end": 465.543,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:28:55.133844",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:27:20.168304+00:00",
+      "absolute_end_time": "2025-07-09T14:27:21.378304+00:00"
+    },
+    {
+      "start": 464.543,
+      "end": 465.543,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:27:55.072433",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:27:20.378304+00:00",
+      "absolute_end_time": "2025-07-09T14:27:21.378304+00:00"
+    },
+    {
+      "start": 481.188,
+      "end": 485.188,
+      "text": " Le maximum de concurrent bot, c'est ça qu'il y a, je pense.",
+      "language": "en",
+      "created_at": "2025-07-09T14:28:55.134068",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:27:37.023304+00:00",
+      "absolute_end_time": "2025-07-09T14:27:41.023304+00:00"
+    },
+    {
+      "start": 485.188,
+      "end": 488.928,
+      "text": " You can't do more.",
+      "language": "en",
+      "created_at": "2025-07-09T14:30:05.167652",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:27:41.023304+00:00",
+      "absolute_end_time": "2025-07-09T14:27:44.763304+00:00"
+    },
+    {
+      "start": 486.928,
+      "end": 490.208,
+      "text": " You can't do more.",
+      "language": "en",
+      "created_at": "2025-07-09T14:28:25.089160",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:27:42.763304+00:00",
+      "absolute_end_time": "2025-07-09T14:27:46.043304+00:00"
+    },
+    {
+      "start": 487.188,
+      "end": 487.594,
+      "text": " Je peux pas...",
+      "language": "en",
+      "created_at": "2025-07-09T14:28:15.082195",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:27:43.023304+00:00",
+      "absolute_end_time": "2025-07-09T14:27:43.429304+00:00"
+    },
+    {
+      "start": 489.328,
+      "end": 491.328,
+      "text": " I'm sorry.",
+      "language": "en",
+      "created_at": "2025-07-09T14:44:15.316827",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:27:45.163304+00:00",
+      "absolute_end_time": "2025-07-09T14:27:47.163304+00:00"
+    },
+    {
+      "start": 491.328,
+      "end": 493.328,
+      "text": " I'm sorry.",
+      "language": "en",
+      "created_at": "2025-07-09T14:44:45.339312",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:27:47.163304+00:00",
+      "absolute_end_time": "2025-07-09T14:27:49.163304+00:00"
+    },
+    {
+      "start": 493.328,
+      "end": 495.117,
+      "text": " No.",
+      "language": "en",
+      "created_at": "2025-07-09T14:28:25.089316",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:27:49.163304+00:00",
+      "absolute_end_time": "2025-07-09T14:27:50.952304+00:00"
+    },
+    {
+      "start": 493.788,
+      "end": 499.788,
+      "text": " No. But first, why would a person need more than 5 friends at the start?",
+      "language": "en",
+      "created_at": "2025-07-09T14:44:45.339516",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:27:49.623304+00:00",
+      "absolute_end_time": "2025-07-09T14:27:55.623304+00:00"
+    },
+    {
+      "start": 499.788,
+      "end": 500.788,
+      "text": " At the start?",
+      "language": "en",
+      "created_at": "2025-07-09T14:44:45.340314",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:27:55.623304+00:00",
+      "absolute_end_time": "2025-07-09T14:27:56.623304+00:00"
+    },
+    {
+      "start": 500.788,
+      "end": 501.711,
+      "text": " Yes.",
+      "language": "en",
+      "created_at": "2025-07-09T14:28:35.104547",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:27:56.623304+00:00",
+      "absolute_end_time": "2025-07-09T14:27:57.546304+00:00"
+    },
+    {
+      "start": 500.968,
+      "end": 505.048,
+      "text": " Oui, non c'est pas par user c'est bon c'est par user",
+      "language": "en",
+      "created_at": "2025-07-09T14:44:45.340463",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:27:56.803304+00:00",
+      "absolute_end_time": "2025-07-09T14:28:00.883304+00:00"
+    },
+    {
+      "start": 505.048,
+      "end": 506.048,
+      "text": " What's up?",
+      "language": "en",
+      "created_at": "2025-07-09T14:30:05.169621",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:28:00.883304+00:00",
+      "absolute_end_time": "2025-07-09T14:28:01.883304+00:00"
+    },
+    {
+      "start": 506.048,
+      "end": 513.048,
+      "text": " And at the same time, we will not have a user who will have 5 reunions at the same time.",
+      "language": "en",
+      "created_at": "2025-07-09T14:30:05.169764",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:28:01.883304+00:00",
+      "absolute_end_time": "2025-07-09T14:28:08.883304+00:00"
+    },
+    {
+      "start": 513.048,
+      "end": 518.568,
+      "text": " It's not the user, normally.",
+      "language": "en",
+      "created_at": "2025-07-09T14:30:05.169883",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:28:08.883304+00:00",
+      "absolute_end_time": "2025-07-09T14:28:14.403304+00:00"
+    },
+    {
+      "start": 514.088,
+      "end": 519.088,
+      "text": " It's not the user, normally.",
+      "language": "en",
+      "created_at": "2025-07-09T14:28:55.136832",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:28:09.923304+00:00",
+      "absolute_end_time": "2025-07-09T14:28:14.923304+00:00"
+    },
+    {
+      "start": 573.968,
+      "end": 575.178,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:45:05.363564",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:29:09.803304+00:00",
+      "absolute_end_time": "2025-07-09T14:29:11.013304+00:00"
+    },
+    {
+      "start": 574.178,
+      "end": 575.178,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:29:45.159850",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:29:10.013304+00:00",
+      "absolute_end_time": "2025-07-09T14:29:11.013304+00:00"
+    },
+    {
+      "start": 592.322,
+      "end": 595.202,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:30:05.171025",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:29:28.157304+00:00",
+      "absolute_end_time": "2025-07-09T14:29:31.037304+00:00"
+    },
+    {
+      "start": 1423.004,
+      "end": 1424.004,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:43:55.288116",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:43:18.839304+00:00",
+      "absolute_end_time": "2025-07-09T14:43:19.839304+00:00"
+    },
+    {
+      "start": 1430.464,
+      "end": 1431.464,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:45:35.382761",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:43:26.299304+00:00",
+      "absolute_end_time": "2025-07-09T14:43:27.299304+00:00"
+    },
+    {
+      "start": 1431.464,
+      "end": 1431.964,
+      "text": " Bye.",
+      "language": "en",
+      "created_at": "2025-07-09T14:44:05.302209",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:43:27.299304+00:00",
+      "absolute_end_time": "2025-07-09T14:43:27.799304+00:00"
+    },
+    {
+      "start": 1434.026,
+      "end": 1435.026,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:44:05.302873",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:43:29.861304+00:00",
+      "absolute_end_time": "2025-07-09T14:43:30.861304+00:00"
+    },
+    {
+      "start": 1438.194,
+      "end": 1439.194,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:45:35.383414",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:43:34.029304+00:00",
+      "absolute_end_time": "2025-07-09T14:43:35.029304+00:00"
+    },
+    {
+      "start": 1439.194,
+      "end": 1439.47,
+      "text": " Bye.",
+      "language": "en",
+      "created_at": "2025-07-09T14:44:15.317644",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:43:35.029304+00:00",
+      "absolute_end_time": "2025-07-09T14:43:35.305304+00:00"
+    },
+    {
+      "start": 1451.543,
+      "end": 1452.543,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:44:25.324097",
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:43:47.378304+00:00",
+      "absolute_end_time": "2025-07-09T14:43:48.378304+00:00"
+    },
+    {
+      "start": 1453.483,
+      "end": 1470.243,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:46:15.415125",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:43:49.318304+00:00",
+      "absolute_end_time": "2025-07-09T14:44:06.078304+00:00"
+    },
+    {
+      "start": 1470.243,
+      "end": 1471.243,
+      "text": " Thank you very much.",
+      "language": "en",
+      "created_at": "2025-07-09T14:46:25.429118",
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:44:06.078304+00:00",
+      "absolute_end_time": "2025-07-09T14:44:07.078304+00:00"
+    },
+    {
+      "start": 1471.243,
+      "end": 1472.243,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:46:25.429308",
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:44:07.078304+00:00",
+      "absolute_end_time": "2025-07-09T14:44:08.078304+00:00"
+    },
+    {
+      "start": 1472.243,
+      "end": 1472.263,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:44:45.341107",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:44:08.078304+00:00",
+      "absolute_end_time": "2025-07-09T14:44:08.098304+00:00"
+    },
+    {
+      "start": 1472.643,
+      "end": 1475.643,
+      "text": " Sorry, I don't know what you're talking about.",
+      "language": "en",
+      "created_at": "2025-07-09T14:46:35.443845",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:44:08.478304+00:00",
+      "absolute_end_time": "2025-07-09T14:44:11.478304+00:00"
+    },
+    {
+      "start": 1475.643,
+      "end": 1477.643,
+      "text": " Two seconds, two seconds.",
+      "language": "en",
+      "created_at": "2025-07-09T14:46:55.459624",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:44:11.478304+00:00",
+      "absolute_end_time": "2025-07-09T14:44:13.478304+00:00"
+    },
+    {
+      "start": 1477.643,
+      "end": 1479.643,
+      "text": " Thank you very much.",
+      "language": "en",
+      "created_at": "2025-07-09T14:46:55.459958",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:44:13.478304+00:00",
+      "absolute_end_time": "2025-07-09T14:44:15.478304+00:00"
+    },
+    {
+      "start": 1479.643,
+      "end": 1480.643,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:46:55.460217",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:44:15.478304+00:00",
+      "absolute_end_time": "2025-07-09T14:44:16.478304+00:00"
+    },
+    {
+      "start": 1480.643,
+      "end": 1480.663,
+      "text": " Have a good evening.",
+      "language": "en",
+      "created_at": "2025-07-09T14:44:55.349777",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:44:16.478304+00:00",
+      "absolute_end_time": "2025-07-09T14:44:16.498304+00:00"
+    },
+    {
+      "start": 1496.995,
+      "end": 1497.888,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:47:05.479966",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:44:32.830304+00:00",
+      "absolute_end_time": "2025-07-09T14:44:33.723304+00:00"
+    },
+    {
+      "start": 1497.995,
+      "end": 1497.888,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:45:05.364334",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:44:33.830304+00:00",
+      "absolute_end_time": "2025-07-09T14:44:33.723304+00:00"
+    },
+    {
+      "start": 1515.349,
+      "end": 1516.909,
+      "text": " Thank you very much.",
+      "language": "en",
+      "created_at": "2025-07-09T14:47:05.480168",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:44:51.184304+00:00",
+      "absolute_end_time": "2025-07-09T14:44:52.744304+00:00"
+    },
+    {
+      "start": 1515.909,
+      "end": 1518.909,
+      "text": " Thank you very much.",
+      "language": "en",
+      "created_at": "2025-07-09T14:45:35.383627",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:44:51.744304+00:00",
+      "absolute_end_time": "2025-07-09T14:44:54.744304+00:00"
+    },
+    {
+      "start": 1517.979,
+      "end": 1519.979,
+      "text": " Yes.",
+      "language": "en",
+      "created_at": "2025-07-09T14:47:15.493356",
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:44:53.814304+00:00",
+      "absolute_end_time": "2025-07-09T14:44:55.814304+00:00"
+    },
+    {
+      "start": 1519.979,
+      "end": 1522.979,
+      "text": " Yes, and you can't enter with your mouth closed.",
+      "language": "en",
+      "created_at": "2025-07-09T14:45:45.396671",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:44:55.814304+00:00",
+      "absolute_end_time": "2025-07-09T14:44:58.814304+00:00"
+    },
+    {
+      "start": 1547.112,
+      "end": 1557.112,
+      "text": " I tried to make it work on my side, but it took a lot of time and I don't think it's in GPU mode.",
+      "language": "en",
+      "created_at": "2025-07-09T14:47:15.493580",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:45:22.947304+00:00",
+      "absolute_end_time": "2025-07-09T14:45:32.947304+00:00"
+    },
+    {
+      "start": 1557.112,
+      "end": 1568.612,
+      "text": " So what we understand is that we can't turn the Whistler mode on a CPU, so we have to get to the GPU mode.",
+      "language": "en",
+      "created_at": "2025-07-09T14:47:25.507353",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:45:32.947304+00:00",
+      "absolute_end_time": "2025-07-09T14:45:44.447304+00:00"
+    },
+    {
+      "start": 1568.612,
+      "end": 1571.612,
+      "text": " The thing is that Youssef doesn't have a GPU on his machine.",
+      "language": "en",
+      "created_at": "2025-07-09T14:47:35.520648",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:45:44.447304+00:00",
+      "absolute_end_time": "2025-07-09T14:45:47.447304+00:00"
+    },
+    {
+      "start": 1571.612,
+      "end": 1572.56,
+      "text": " I don't have one.",
+      "language": "en",
+      "created_at": "2025-07-09T14:46:25.430148",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:45:47.447304+00:00",
+      "absolute_end_time": "2025-07-09T14:45:48.395304+00:00"
+    },
+    {
+      "start": 1571.662,
+      "end": 1583.662,
+      "text": " I have one on mine, but we need to be able to configure the project properly so that it can run with the GPU activated.",
+      "language": "en",
+      "created_at": "2025-07-09T14:47:35.520883",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:45:47.497304+00:00",
+      "absolute_end_time": "2025-07-09T14:45:59.497304+00:00"
+    },
+    {
+      "start": 1583.662,
+      "end": 1593.662,
+      "text": " At the moment, we are using the bot that is on the cloud and on a machine that is configured as GPU.",
+      "language": "en",
+      "created_at": "2025-07-09T14:48:15.549421",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:45:59.497304+00:00",
+      "absolute_end_time": "2025-07-09T14:46:09.497304+00:00"
+    },
+    {
+      "start": 1597.002,
+      "end": 1598.002,
+      "text": " Okay.",
+      "language": "en",
+      "created_at": "2025-07-09T14:48:25.562606",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:46:12.837304+00:00",
+      "absolute_end_time": "2025-07-09T14:46:13.837304+00:00"
+    },
+    {
+      "start": 1598.002,
+      "end": 1605.002,
+      "text": " I have already made two bots enter, one bot that uses the tiny model and one bot that uses the medium model.",
+      "language": "en",
+      "created_at": "2025-07-09T14:48:25.562842",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:46:13.837304+00:00",
+      "absolute_end_time": "2025-07-09T14:46:20.837304+00:00"
+    },
+    {
+      "start": 1605.272,
+      "end": 1608.272,
+      "text": " transfer but it is tiny.",
+      "language": "en",
+      "created_at": "2025-07-09T14:48:35.576753",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:46:21.107304+00:00",
+      "absolute_end_time": "2025-07-09T14:46:24.107304+00:00"
+    },
+    {
+      "start": 1606.002,
+      "end": 1608.002,
+      "text": " Transferbot uses the tiny model.",
+      "language": "en",
+      "created_at": "2025-07-09T14:46:55.460611",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:46:21.837304+00:00",
+      "absolute_end_time": "2025-07-09T14:46:23.837304+00:00"
+    },
+    {
+      "start": 1608.272,
+      "end": 1609.245,
+      "text": " My meeting.",
+      "language": "en",
+      "created_at": "2025-07-09T14:47:05.480359",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:46:24.107304+00:00",
+      "absolute_end_time": "2025-07-09T14:46:25.080304+00:00"
+    },
+    {
+      "start": 1608.322,
+      "end": 1612.322,
+      "text": " MyMeetingBug uses the medium.",
+      "language": "en",
+      "created_at": "2025-07-09T14:48:45.590558",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:46:24.157304+00:00",
+      "absolute_end_time": "2025-07-09T14:46:28.157304+00:00"
+    },
+    {
+      "start": 1612.322,
+      "end": 1618.372,
+      "text": " I will compare the two transcripts to see if there is really a big difference between the two.",
+      "language": "en",
+      "created_at": "2025-07-09T14:48:45.590850",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:46:28.157304+00:00",
+      "absolute_end_time": "2025-07-09T14:46:34.207304+00:00"
+    },
+    {
+      "start": 1612.372,
+      "end": 1618.372,
+      "text": " I will compare the two transcripts to see if there is really a big difference between the two.",
+      "language": "en",
+      "created_at": "2025-07-09T14:47:15.493786",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:46:28.207304+00:00",
+      "absolute_end_time": "2025-07-09T14:46:34.207304+00:00"
+    },
+    {
+      "start": 1618.372,
+      "end": 1624.372,
+      "text": " I didn't see the recorder, why isn't it there?",
+      "language": "en",
+      "created_at": "2025-07-09T14:48:45.591006",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:46:34.207304+00:00",
+      "absolute_end_time": "2025-07-09T14:46:40.207304+00:00"
+    },
+    {
+      "start": 1624.372,
+      "end": 1626.452,
+      "text": " He was there.",
+      "language": "en",
+      "created_at": "2025-07-09T14:48:55.604352",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:46:40.207304+00:00",
+      "absolute_end_time": "2025-07-09T14:46:42.287304+00:00"
+    },
+    {
+      "start": 1624.452,
+      "end": 1626.452,
+      "text": " He was there.",
+      "language": "en",
+      "created_at": "2025-07-09T14:47:25.507610",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:46:40.287304+00:00",
+      "absolute_end_time": "2025-07-09T14:46:42.287304+00:00"
+    },
+    {
+      "start": 1626.452,
+      "end": 1637.842,
+      "text": " My computer is unbearable.",
+      "language": "en",
+      "created_at": "2025-07-09T14:49:05.618711",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:46:42.287304+00:00",
+      "absolute_end_time": "2025-07-09T14:46:53.677304+00:00"
+    },
+    {
+      "start": 1637.842,
+      "end": 1640.842,
+      "text": " It's absolutely unbearable.",
+      "language": "en",
+      "created_at": "2025-07-09T14:47:35.521088",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:46:53.677304+00:00",
+      "absolute_end_time": "2025-07-09T14:46:56.677304+00:00"
+    },
+    {
+      "start": 1639.262,
+      "end": 1641.262,
+      "text": " I think it's a good thing.",
+      "language": "en",
+      "created_at": "2025-07-09T14:49:05.618919",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:46:55.097304+00:00",
+      "absolute_end_time": "2025-07-09T14:46:57.097304+00:00"
+    },
+    {
+      "start": 1641.262,
+      "end": 1643.262,
+      "text": " I think it's a good thing.",
+      "language": "en",
+      "created_at": "2025-07-09T14:47:45.534423",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:46:57.097304+00:00",
+      "absolute_end_time": "2025-07-09T14:46:59.097304+00:00"
+    },
+    {
+      "start": 1661.27,
+      "end": 1680.49,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:49:05.619091",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:47:17.105304+00:00",
+      "absolute_end_time": "2025-07-09T14:47:36.325304+00:00"
+    },
+    {
+      "start": 1686.483,
+      "end": 1695.583,
+      "text": " I think we need to repeat it, so we can compare the transcripts.",
+      "language": "en",
+      "created_at": "2025-07-09T14:49:15.632930",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:47:42.318304+00:00",
+      "absolute_end_time": "2025-07-09T14:47:51.418304+00:00"
+    },
+    {
+      "start": 1695.583,
+      "end": 1696.083,
+      "text": " OK.",
+      "language": "en",
+      "created_at": "2025-07-09T14:49:15.633701",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:47:51.418304+00:00",
+      "absolute_end_time": "2025-07-09T14:47:51.918304+00:00"
+    },
+    {
+      "start": 1696.083,
+      "end": 1699.083,
+      "text": " Bon, je vais répéter juste pour le dernier but.",
+      "language": "en",
+      "created_at": "2025-07-09T14:49:15.633879",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:47:51.918304+00:00",
+      "absolute_end_time": "2025-07-09T14:47:54.918304+00:00"
+    },
+    {
+      "start": 1699.083,
+      "end": 1700.634,
+      "text": " Amin, ce qu'il a fait...",
+      "language": "en",
+      "created_at": "2025-07-09T14:48:35.577040",
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:47:54.918304+00:00",
+      "absolute_end_time": "2025-07-09T14:47:56.469304+00:00"
+    },
+    {
+      "start": 1699.223,
+      "end": 1708.223,
+      "text": " What he did was try to return the Vexa to the GPU to be able to use the medium model.",
+      "language": "en",
+      "created_at": "2025-07-09T14:49:15.634045",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:47:55.058304+00:00",
+      "absolute_end_time": "2025-07-09T14:48:04.058304+00:00"
+    },
+    {
+      "start": 1708.223,
+      "end": 1712.783,
+      "text": " The problem on my part is that I did not manage to turn the medium on CPU,",
+      "language": "en",
+      "created_at": "2025-07-09T14:49:25.647916",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:48:04.058304+00:00",
+      "absolute_end_time": "2025-07-09T14:48:08.618304+00:00"
+    },
+    {
+      "start": 1712.783,
+      "end": 1715.783,
+      "text": " And apparently, according to Scott's discussion,",
+      "language": "en",
+      "created_at": "2025-07-09T14:49:25.648136",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:48:08.618304+00:00",
+      "absolute_end_time": "2025-07-09T14:48:11.618304+00:00"
+    },
+    {
+      "start": 1715.783,
+      "end": 1724.783,
+      "text": " If we want to turn the medium, we have to go through the GtU.",
+      "language": "en",
+      "created_at": "2025-07-09T14:49:35.661366",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:48:11.618304+00:00",
+      "absolute_end_time": "2025-07-09T14:48:20.618304+00:00"
+    },
+    {
+      "start": 1724.783,
+      "end": 1726.175,
+      "text": " We have to go through...",
+      "language": "en",
+      "created_at": "2025-07-09T14:48:55.605335",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:48:20.618304+00:00",
+      "absolute_end_time": "2025-07-09T14:48:22.010304+00:00"
+    },
+    {
+      "start": 1724.893,
+      "end": 1733.893,
+      "text": " We had to go through the GPU, so what we did was we were trying to run this on Ami's machine,",
+      "language": "en",
+      "created_at": "2025-07-09T14:49:35.661617",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:48:20.728304+00:00",
+      "absolute_end_time": "2025-07-09T14:48:29.728304+00:00"
+    },
+    {
+      "start": 1733.893,
+      "end": 1736.893,
+      "text": " which is something we haven't always managed to do.",
+      "language": "en",
+      "created_at": "2025-07-09T14:49:35.661785",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:48:29.728304+00:00",
+      "absolute_end_time": "2025-07-09T14:48:32.728304+00:00"
+    },
+    {
+      "start": 1736.893,
+      "end": 1737.691,
+      "text": " And I had the pleasure of working with you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:49:45.676119",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:48:32.728304+00:00",
+      "absolute_end_time": "2025-07-09T14:48:33.526304+00:00"
+    },
+    {
+      "start": 1737.691,
+      "end": 1741.771,
+      "text": " I launched the transcript bot that uses the tiny model",
+      "language": "en",
+      "created_at": "2025-07-09T14:49:45.676340",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:48:33.526304+00:00",
+      "absolute_end_time": "2025-07-09T14:48:37.606304+00:00"
+    },
+    {
+      "start": 1738.893,
+      "end": 1737.691,
+      "text": " Thank you very much.",
+      "language": "en",
+      "created_at": "2025-07-09T14:49:05.619780",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:48:34.728304+00:00",
+      "absolute_end_time": "2025-07-09T14:48:33.526304+00:00"
+    },
+    {
+      "start": 1741.771,
+      "end": 1746.051,
+      "text": " And the MyMeetingBot that uses the Vexa Live,",
+      "language": "en",
+      "created_at": "2025-07-09T14:49:45.676505",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:48:37.606304+00:00",
+      "absolute_end_time": "2025-07-09T14:48:41.886304+00:00"
+    },
+    {
+      "start": 1746.051,
+      "end": 1747.051,
+      "text": " ...",
+      "language": "en",
+      "created_at": "2025-07-09T14:49:55.691699",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:48:41.886304+00:00",
+      "absolute_end_time": "2025-07-09T14:48:42.886304+00:00"
+    },
+    {
+      "start": 1747.051,
+      "end": 1747.35,
+      "text": " ...",
+      "language": "en",
+      "created_at": "2025-07-09T14:49:55.691926",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:48:42.886304+00:00",
+      "absolute_end_time": "2025-07-09T14:48:43.185304+00:00"
+    },
+    {
+      "start": 1747.35,
+      "end": 1748.35,
+      "text": " del medium.",
+      "language": "en",
+      "created_at": "2025-07-09T14:49:55.692084",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:48:43.185304+00:00",
+      "absolute_end_time": "2025-07-09T14:48:44.185304+00:00"
+    },
+    {
+      "start": 1748.35,
+      "end": 1754.35,
+      "text": " The goal is to compare the transcript and see what it looks like with the two models",
+      "language": "en",
+      "created_at": "2025-07-09T14:50:05.707299",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:48:44.185304+00:00",
+      "absolute_end_time": "2025-07-09T14:48:50.185304+00:00"
+    },
+    {
+      "start": 1754.35,
+      "end": 1760.35,
+      "text": " and to identify if there is really a big difference or not and if it is worth using the GPU,",
+      "language": "en",
+      "created_at": "2025-07-09T14:50:05.707660",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:48:50.185304+00:00",
+      "absolute_end_time": "2025-07-09T14:48:56.185304+00:00"
+    },
+    {
+      "start": 1760.35,
+      "end": 1763.45,
+      "text": " Well, we have to opt for our own descent.",
+      "language": "en",
+      "created_at": "2025-07-09T14:50:15.723954",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:48:56.185304+00:00",
+      "absolute_end_time": "2025-07-09T14:48:59.285304+00:00"
+    },
+    {
+      "start": 1764.17,
+      "end": 1766.17,
+      "text": " But apart from that, there's no...",
+      "language": "en",
+      "created_at": "2025-07-09T14:50:15.724288",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:49:00.005304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:02.005304+00:00"
+    },
+    {
+      "start": 1764.45,
+      "end": 1765.275,
+      "text": " But apart from that...",
+      "language": "en",
+      "created_at": "2025-07-09T14:49:35.662653",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:49:00.285304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:01.110304+00:00"
+    },
+    {
+      "start": 1766.17,
+      "end": 1767.17,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:50:15.726325",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:49:02.005304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:03.005304+00:00"
+    },
+    {
+      "start": 1767.17,
+      "end": 1768.17,
+      "text": " Good night.",
+      "language": "en",
+      "created_at": "2025-07-09T14:50:25.740428",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:49:03.005304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:04.005304+00:00"
+    },
+    {
+      "start": 1768.17,
+      "end": 1768.19,
+      "text": " Your power pushes.",
+      "language": "en",
+      "created_at": "2025-07-09T14:49:45.677253",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:49:04.005304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:04.025304+00:00"
+    },
+    {
+      "start": 1774.377,
+      "end": 1776.377,
+      "text": " That's it.",
+      "language": "en",
+      "created_at": "2025-07-09T14:50:25.740669",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:49:10.212304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:12.212304+00:00"
+    },
+    {
+      "start": 1776.377,
+      "end": 1778.377,
+      "text": " I don't know about your HF side.",
+      "language": "en",
+      "created_at": "2025-07-09T14:50:25.740853",
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:49:12.212304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:14.212304+00:00"
+    },
+    {
+      "start": 1778.377,
+      "end": 1781.435,
+      "text": " Yes.",
+      "language": "en",
+      "created_at": "2025-07-09T14:49:55.692844",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:49:14.212304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:17.270304+00:00"
+    },
+    {
+      "start": 1780.117,
+      "end": 1781.117,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:50:25.741619",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:49:15.952304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:16.952304+00:00"
+    },
+    {
+      "start": 1781.117,
+      "end": 1784.117,
+      "text": " Yes, I will continue to work on the evening.",
+      "language": "en",
+      "created_at": "2025-07-09T14:50:25.741811",
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:49:16.952304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:19.952304+00:00"
+    },
+    {
+      "start": 1784.117,
+      "end": 1788.117,
+      "text": " I'm going to add a new agent, ClickUp.",
+      "language": "en",
+      "created_at": "2025-07-09T14:50:25.741995",
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:49:19.952304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:23.952304+00:00"
+    },
+    {
+      "start": 1788.117,
+      "end": 1793.117,
+      "text": " And now I'm going to add the VDM for Samaritans.",
+      "language": "en",
+      "created_at": "2025-07-09T14:50:35.757390",
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:49:23.952304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:28.952304+00:00"
+    },
+    {
+      "start": 1793.117,
+      "end": 1797.117,
+      "text": " before entering the password.",
+      "language": "en",
+      "created_at": "2025-07-09T14:50:45.770780",
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:49:28.952304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:32.952304+00:00"
+    },
+    {
+      "start": 1797.117,
+      "end": 1804.117,
+      "text": " and I started to change the endpoints",
+      "language": "en",
+      "created_at": "2025-07-09T14:50:45.771043",
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:49:32.952304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:39.952304+00:00"
+    },
+    {
+      "start": 1804.117,
+      "end": 1806.117,
+      "text": " So that's not a point for me.",
+      "language": "en",
+      "created_at": "2025-07-09T14:50:55.787154",
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:49:39.952304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:41.952304+00:00"
+    },
+    {
+      "start": 1806.117,
+      "end": 1807.117,
+      "text": " That's about it.",
+      "language": "en",
+      "created_at": "2025-07-09T14:51:05.801304",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:49:41.952304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:42.952304+00:00"
+    },
+    {
+      "start": 1807.117,
+      "end": 1808.117,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:51:05.801533",
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:49:42.952304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:43.952304+00:00"
+    },
+    {
+      "start": 1808.117,
+      "end": 1811.757,
+      "text": " is a linear meeting agent.",
+      "language": "en",
+      "created_at": "2025-07-09T14:51:05.801709",
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:49:43.952304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:47.592304+00:00"
+    },
+    {
+      "start": 1811.757,
+      "end": 1812.757,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:51:15.816456",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:49:47.592304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:48.592304+00:00"
+    },
+    {
+      "start": 1812.757,
+      "end": 1812.777,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:50:25.742650",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:49:48.592304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:48.612304+00:00"
+    },
+    {
+      "start": 1812.967,
+      "end": 1813.849,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": "2025-07-09T14:51:25.829651",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:49:48.802304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:49.684304+00:00"
+    },
+    {
+      "start": 1813.849,
+      "end": 1815.849,
+      "text": " I'm going to take a little bit of a summarizer.",
+      "language": "en",
+      "created_at": "2025-07-09T14:51:25.829934",
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:49:49.684304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:51.684304+00:00"
+    },
+    {
+      "start": 1813.967,
+      "end": 1813.849,
+      "text": " Have a good one.",
+      "language": "en",
+      "created_at": "2025-07-09T14:50:25.743310",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:49:49.802304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:49.684304+00:00"
+    },
+    {
+      "start": 1815.849,
+      "end": 1821.849,
+      "text": " I'm on this part to adjust the land point.",
+      "language": "en",
+      "created_at": "2025-07-09T14:51:35.847445",
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:49:51.684304+00:00",
+      "absolute_end_time": "2025-07-09T14:49:57.684304+00:00"
+    },
+    {
+      "start": 1821.849,
+      "end": 1827.849,
+      "text": " I haven't tested it yet if it works or not, because I haven't tested it yet.",
+      "language": "en",
+      "created_at": "2025-07-09T14:51:35.847717",
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:49:57.684304+00:00",
+      "absolute_end_time": "2025-07-09T14:50:03.684304+00:00"
+    },
+    {
+      "start": 1827.849,
+      "end": 1830.789,
+      "text": " And that's it.",
+      "language": "en",
+      "created_at": "2025-07-09T14:51:45.861597",
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:50:03.684304+00:00",
+      "absolute_end_time": "2025-07-09T14:50:06.624304+00:00"
+    },
+    {
+      "start": 1828.789,
+      "end": 1830.789,
+      "text": " And that's it.",
+      "language": "en",
+      "created_at": "2025-07-09T14:50:45.771296",
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:50:04.624304+00:00",
+      "absolute_end_time": "2025-07-09T14:50:06.624304+00:00"
+    },
+    {
+      "start": 1836.046,
+      "end": 1845.046,
+      "text": " Okay, so the goal is to continue to move forward, to compare the transcripts.",
+      "language": "en",
+      "created_at": "2025-07-09T14:51:45.861856",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:50:11.881304+00:00",
+      "absolute_end_time": "2025-07-09T14:50:20.881304+00:00"
+    },
+    {
+      "start": 1845.046,
+      "end": 1848.046,
+      "text": " Clubs versus medium versus medium.",
+      "language": "en",
+      "created_at": "2025-07-09T14:51:05.801925",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:50:20.881304+00:00",
+      "absolute_end_time": "2025-07-09T14:50:23.881304+00:00"
+    },
+    {
+      "start": 1846.346,
+      "end": 1848.346,
+      "text": " club vs medium vs team",
+      "language": "en",
+      "created_at": "2025-07-09T14:51:55.876740",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:50:22.181304+00:00",
+      "absolute_end_time": "2025-07-09T14:50:24.181304+00:00"
+    },
+    {
+      "start": 1848.346,
+      "end": 1849.346,
+      "text": " See you next week.",
+      "language": "en",
+      "created_at": "2025-07-09T14:51:55.876987",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:50:24.181304+00:00",
+      "absolute_end_time": "2025-07-09T14:50:25.181304+00:00"
+    },
+    {
+      "start": 1849.346,
+      "end": 1854.346,
+      "text": " to see what we get and what are the cool actions behind it.",
+      "language": "en",
+      "created_at": null,
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:50:25.181304+00:00",
+      "absolute_end_time": "2025-07-09T14:50:30.181304+00:00"
+    },
+    {
+      "start": 1854.396,
+      "end": 1866.396,
+      "text": " It's exactly as soon as you finish that, but now I'm starting to do this part to try to have the same summary that I have.",
+      "language": "en",
+      "created_at": null,
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:50:30.231304+00:00",
+      "absolute_end_time": "2025-07-09T14:50:42.231304+00:00"
+    },
+    {
+      "start": 1856.346,
+      "end": 1858.243,
+      "text": " That's exactly what I said when you finished that.",
+      "language": "en",
+      "created_at": "2025-07-09T14:51:05.802128",
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:50:32.181304+00:00",
+      "absolute_end_time": "2025-07-09T14:50:34.078304+00:00"
+    },
+    {
+      "start": 1866.396,
+      "end": 1868.274,
+      "text": " Okay.",
+      "language": "en",
+      "created_at": "2025-07-09T14:51:15.816754",
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:50:42.231304+00:00",
+      "absolute_end_time": "2025-07-09T14:50:44.109304+00:00"
+    },
+    {
+      "start": 1867.116,
+      "end": 1869.116,
+      "text": " Good",
+      "language": "en",
+      "created_at": null,
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:50:42.951304+00:00",
+      "absolute_end_time": "2025-07-09T14:50:44.951304+00:00"
+    },
+    {
+      "start": 1869.356,
+      "end": 1872.356,
+      "text": " OK, well, we'll do that.",
+      "language": "en",
+      "created_at": null,
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:50:45.191304+00:00",
+      "absolute_end_time": "2025-07-09T14:50:48.191304+00:00"
+    },
+    {
+      "start": 1869.476,
+      "end": 1870.131,
+      "text": " Okay",
+      "language": "en",
+      "created_at": "2025-07-09T14:51:25.832051",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:50:45.311304+00:00",
+      "absolute_end_time": "2025-07-09T14:50:45.966304+00:00"
+    },
+    {
+      "start": 1872.356,
+      "end": 1877.356,
+      "text": " And Youssef, we will also have to see how to obtain the SRT file.",
+      "language": "en",
+      "created_at": null,
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:50:48.191304+00:00",
+      "absolute_end_time": "2025-07-09T14:50:53.191304+00:00"
+    },
+    {
+      "start": 1877.356,
+      "end": 1880.356,
+      "text": " Is there any support?",
+      "language": "en",
+      "created_at": "2025-07-09T14:51:35.847965",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:50:53.191304+00:00",
+      "absolute_end_time": "2025-07-09T14:50:56.191304+00:00"
+    },
+    {
+      "start": 1877.696,
+      "end": 1881.696,
+      "text": " Is there a support for that or not?",
+      "language": "en",
+      "created_at": null,
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:50:53.531304+00:00",
+      "absolute_end_time": "2025-07-09T14:50:57.531304+00:00"
+    },
+    {
+      "start": 1881.696,
+      "end": 1887.196,
+      "text": " Maybe it will be possible to ask Oblec directly if the functionality is available or not.",
+      "language": "en",
+      "created_at": null,
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:50:57.531304+00:00",
+      "absolute_end_time": "2025-07-09T14:51:03.031304+00:00"
+    },
+    {
+      "start": 1887.196,
+      "end": 1888.892,
+      "text": " Because I think the code that I had...",
+      "language": "en",
+      "created_at": "2025-07-09T14:51:45.862099",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:51:03.031304+00:00",
+      "absolute_end_time": "2025-07-09T14:51:04.727304+00:00"
+    },
+    {
+      "start": 1887.216,
+      "end": 1896.216,
+      "text": " I think the code that I had read was in the part of code that was not used for the moment.",
+      "language": "en",
+      "created_at": null,
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:51:03.051304+00:00",
+      "absolute_end_time": "2025-07-09T14:51:12.051304+00:00"
+    },
+    {
+      "start": 1896.216,
+      "end": 1897.808,
+      "text": " So it's possible that I tried.",
+      "language": "en",
+      "created_at": "2025-07-09T14:51:45.863050",
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:51:12.051304+00:00",
+      "absolute_end_time": "2025-07-09T14:51:13.643304+00:00"
+    },
+    {
+      "start": 1896.326,
+      "end": 1904.636,
+      "text": " So it's possible that the children won't be available for the time being.",
+      "language": "en",
+      "created_at": null,
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:51:12.161304+00:00",
+      "absolute_end_time": "2025-07-09T14:51:20.471304+00:00"
+    },
+    {
+      "start": 1904.636,
+      "end": 1906.636,
+      "text": " Okay.",
+      "language": "en",
+      "created_at": null,
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:51:20.471304+00:00",
+      "absolute_end_time": "2025-07-09T14:51:22.471304+00:00"
+    },
+    {
+      "start": 1906.636,
+      "end": 1908.396,
+      "text": " Okay.",
+      "language": "en",
+      "created_at": "2025-07-09T14:51:55.877230",
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:51:22.471304+00:00",
+      "absolute_end_time": "2025-07-09T14:51:24.231304+00:00"
+    },
+    {
+      "start": 1906.716,
+      "end": 1908.716,
+      "text": " Okay, d'accord.",
+      "language": "en",
+      "created_at": null,
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:51:22.551304+00:00",
+      "absolute_end_time": "2025-07-09T14:51:24.551304+00:00"
+    },
+    {
+      "start": 1908.716,
+      "end": 1909.789,
+      "text": " Okay.",
+      "language": "en",
+      "created_at": null,
+      "speaker": "Youssef Bezzarga",
+      "absolute_start_time": "2025-07-09T14:51:24.551304+00:00",
+      "absolute_end_time": "2025-07-09T14:51:25.624304+00:00"
+    },
+    {
+      "start": 1909.056,
+      "end": 1911.056,
+      "text": " Okay, well, we'll do it like this.",
+      "language": "en",
+      "created_at": null,
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:51:24.891304+00:00",
+      "absolute_end_time": "2025-07-09T14:51:26.891304+00:00"
+    },
+    {
+      "start": 1911.056,
+      "end": 1913.039,
+      "text": " Come on, I'll let you...",
+      "language": "en",
+      "created_at": null,
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:51:26.891304+00:00",
+      "absolute_end_time": "2025-07-09T14:51:28.874304+00:00"
+    },
+    {
+      "start": 1912.036,
+      "end": 1916.036,
+      "text": " Come on, I'll let you know if the transcripts are still available.",
+      "language": "en",
+      "created_at": null,
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:51:27.871304+00:00",
+      "absolute_end_time": "2025-07-09T14:51:31.871304+00:00"
+    },
+    {
+      "start": 1916.726,
+      "end": 1917.726,
+      "text": " Yes.",
+      "language": "en",
+      "created_at": null,
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:51:32.561304+00:00",
+      "absolute_end_time": "2025-07-09T14:51:33.561304+00:00"
+    },
+    {
+      "start": 1917.036,
+      "end": 1917.59,
+      "text": " Yes.",
+      "language": "en",
+      "created_at": null,
+      "speaker": null,
+      "absolute_start_time": "2025-07-09T14:51:32.871304+00:00",
+      "absolute_end_time": "2025-07-09T14:51:33.425304+00:00"
+    },
+    {
+      "start": 1917.726,
+      "end": 1918.566,
+      "text": " Okay.",
+      "language": "en",
+      "created_at": null,
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:51:33.561304+00:00",
+      "absolute_end_time": "2025-07-09T14:51:34.401304+00:00"
+    },
+    {
+      "start": 1918.566,
+      "end": 1919.066,
+      "text": " Ready?",
+      "language": "en",
+      "created_at": null,
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:51:34.401304+00:00",
+      "absolute_end_time": "2025-07-09T14:51:34.901304+00:00"
+    },
+    {
+      "start": 1919.066,
+      "end": 1920.066,
+      "text": " Thank you.",
+      "language": "en",
+      "created_at": null,
+      "speaker": "Amine Bezzarga",
+      "absolute_start_time": "2025-07-09T14:51:34.901304+00:00",
+      "absolute_end_time": "2025-07-09T14:51:35.901304+00:00"
+    },
+    {
+      "start": 1920.066,
+      "end": 1920.906,
+      "text": " Thank you so much.",
+      "language": "en",
+      "created_at": null,
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:51:35.901304+00:00",
+      "absolute_end_time": "2025-07-09T14:51:36.741304+00:00"
+    },
+    {
+      "start": 1920.906,
+      "end": 1921.406,
+      "text": " 30.",
+      "language": "en",
+      "created_at": null,
+      "speaker": "Achref BEN YAHIA",
+      "absolute_start_time": "2025-07-09T14:51:36.741304+00:00",
+      "absolute_end_time": "2025-07-09T14:51:37.241304+00:00"
+    }
+  ]
+}

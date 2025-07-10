@@ -1,0 +1,21 @@
+00:05 Youssef Bezzarga: Je pense qu'il faut répéter du coup, comparer bien les transcripts.
+Ok, bon, je vais répéter juste pour le dernier bot.
+Amix, Ce qu'il a fait, c'est qu'il a essayé de faire tourner le Vexa sur GPU pour pouvoir utiliser le modèle Medium.
+Le problème, de mon côté, c'est que je n'ai pas réussi à faire tourner le medium sur CPU et apparemment, D'après la discussion du Scout, si on veut faire tourner le Medium, il faut passer forcément par le GPU. Du coup, Ce qu'on a fait, c'est que là, on est en train d'essayer de faire tourner Vexa sur la machine de la mine, Parce qu'on n'a pas toujours réussi à faire. Et moi, j'ai lancé le transcript BOT, qui utilise le modèle Tiny et le mymeeting Bot, qui utilise la Vexa Live. Qui utilisent elles-mêmes le modèle Medium.
+Un peu. L'objectif, c'est de comparer les principes et voir ce que ça donne avec les deux modèles pour pouvoir identifier s'il y a vraiment une grande différence ou pas. Et si ça vaut le coup d'utiliser le GPU. Eh bien, il faut opter pour une autre solution.
+Mais à part, ça, il n'y a pas autre chose.
+Voilà, je ne sais pas de ton côté, Ashut.
+01:39 Achref BEN YAHIA: Oui, pour moi, J'ai continué à travailler sur le swap, J'ai ajouté un pick-up, et maintenant, je vais ajouter le LLM pour le Samari, en amont, avant d'entrer dans le swap. Et j'ai commencé à changer le vent. point.
+Maintenant, le endpoint est mené à Linear Meeting, agent, Mais maintenant, ça doit mener à LDM et à summarizer, et LDM doit mener à l'autre swap.
+Je suis sur cette partie pour réguler le endpoint. Je n'ai pas encore testé si ça marche bien, parce que je n'ai pas travaillé.
+Voilà, c'est ça.
+02:33 Amine Bezzarga: Ok, du coup là, de toute façon, le but qui est de continuer à avancer, de comparer les transcripts, Claap versus medium versus TEAM, Et voir ce qu'on obtient. Et quelles sont les actions qui découlent derrière.
+02:52 Achref BEN YAHIA: C'est exactement, Dès que vous terminez, ça, À un moment, je commence à faire cette partie pour essayer d'avoir...
+03:07 Amine Bezzarga: Ok, on fait ça. Et Youssef, Il faudra aussi qu'on regarde comment réussir à obtenir le fichier SRT.
+Est-ce qu'il y a un support pour ça ou pas ? Peut-être que ça peut avoir le coup de vous demander directement au MEC si la fonction IP est disponible ou pas.
+Moi, je pense que le code que j'avais lu, c'était justement dans la partie de...
+Dans la partie de code qui n'est pas utilisée pour l'instant. Donc, c'est possible que les fichiers de santé ne soient pas disponibles.
+03:43 Youssef Bezzarga: Ok, d'accord.
+03:47 Amine Bezzarga: Ok, bon, on fait comme ça.
+Allez, je vous laisse me dire si les transcripts sont bons. Yes, ok.
+03:55 Youssef Bezzarga: Salut.

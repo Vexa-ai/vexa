@@ -178,7 +178,7 @@ services:
       - |
         if [ "$${DEVICE_TYPE}" = "cpu" ]; then
           echo 'INFO: DEVICE_TYPE is cpu, starting WhisperLive CPU service.' &&
-          exec python3 /app/run_server.py --port 9090 --backend faster_whisper -fw /root/.cache/huggingface/hub/models--Systran--faster-whisper-medium/snapshots/08e178d48790749d25932bbc082711ddcfdfbc4f;
+          exec python3 /app/run_server.py --port 9090 --backend faster_whisper -fw /root/.cache/huggingface/hub/models--Systran--faster-whisper-tiny/snapshots/d90ca5fe260221311c53c58e660288d3deb8d356;
         else
           echo "INFO: DEVICE_TYPE is not cpu (it is '$${DEVICE_TYPE}'), WhisperLive CPU service will not start. Sleeping indefinitely." &&
           sleep infinity;
