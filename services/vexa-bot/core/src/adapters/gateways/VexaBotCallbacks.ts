@@ -9,12 +9,18 @@ export class VexaBotCallbacks implements BotCallbacks {
   transcriptionSegments: TranscriptionSegment[] = [];
 
   onStartRecording = async (videoFilePath: string, botConnectionId: string) => {
+    log(
+      `[VexaBotCallbacks] onStartRecording - ${videoFilePath} - ${botConnectionId}`
+    );
     return await saveVideoAs(videoFilePath, botConnectionId);
   };
 
   onTranscriptionSegmentsReceived = async (
     data: TranscriptionSegment[] | TranscriptionSegment
   ) => {
+    log(
+      `[VexaBotCallbacks] onTranscriptionSegmentsReceived - ${JSON.stringify(data)}`
+    );
     if (Array.isArray(data)) {
       log(`Adding ${data.length} segments to SRT collection`);
       this.transcriptionSegments.push(...data);
@@ -30,9 +36,13 @@ export class VexaBotCallbacks implements BotCallbacks {
   };
 
   onMeetingEnd = async (connectionId: string) => {
-    log("[BotCallbacks] Meeting ended");
+    log(`[VexaBotCallbacks] Meeting ended - ${connectionId}`);
+
     const transcriptionSegments = this.transcriptionSegments;
-    log(`Writing SRT file with ${transcriptionSegments.length} segments`);
+    log(
+      `[VexaBotCallbacks] Writing SRT file with ${transcriptionSegments.length} segments`
+    );
+
     if (transcriptionSegments.length > 0) {
       try {
         // Send SRT data to Node.js context for file writing

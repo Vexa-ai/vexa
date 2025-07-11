@@ -76,13 +76,6 @@ export async function handleGoogleMeet(
     log("Successfully admitted to the meeting, starting recording");
     // Pass platform from botConfig to startRecording
     await startRecording(page, botConfig, botCallbacks);
-    const videoFilePath = await page.video()?.path();
-    if (videoFilePath) {
-      await botCallbacks?.onStartRecording(
-        videoFilePath,
-        botConfig.connectionId
-      );
-    }
   } catch (error: any) {
     console.error(
       "Error after join attempt (admission/recording setup): " + error.message
@@ -177,6 +170,13 @@ const startRecording = async (
   // Destructure needed fields from botConfig
   const { meetingUrl, token, connectionId, platform, nativeMeetingId } =
     botConfig; // nativeMeetingId is now in BotConfig type
+
+  log(`startRecording : ${botCallbacks}`);
+
+  const videoFilePath = await page.video()?.path();
+  if (videoFilePath) {
+    await botCallbacks?.onStartRecording(videoFilePath, botConfig.connectionId);
+  }
 
   //NOTE: The environment variables passed by docker_utils.py will be available to the Node.js process started by your entrypoint.sh.
   // --- Read WHISPER_LIVE_URL from Node.js environment ---
@@ -366,8 +366,8 @@ const startRecording = async (
                       "[AudioRecord] MediaRecorder for audio saving has stopped."
                     );
                   }
-                  originalLeave();
                   botCallbacks?.onMeetingEnd(originalConnectionId);
+                  originalLeave();
                 };
               } catch (err: any) {
                 (window as any).logBot(
