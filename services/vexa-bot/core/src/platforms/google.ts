@@ -366,8 +366,11 @@ const startRecording = async (
                       "[AudioRecord] MediaRecorder for audio saving has stopped."
                     );
                   }
-                  botCallbacks?.onMeetingEnd(originalConnectionId);
-                  originalLeave();
+
+                  (async () => {
+                    await botCallbacks?.onMeetingEnd(originalConnectionId);
+                    originalLeave();
+                  })();
                 };
               } catch (err: any) {
                 (window as any).logBot(

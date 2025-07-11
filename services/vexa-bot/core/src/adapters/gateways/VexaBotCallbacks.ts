@@ -15,7 +15,7 @@ export class VexaBotCallbacks implements BotCallbacks {
     return await saveVideoAs(videoFilePath, botConnectionId);
   };
 
-  onTranscriptionSegmentsReceived = async (
+  onTranscriptionSegmentsReceived = (
     data: TranscriptionSegment[] | TranscriptionSegment
   ) => {
     log(

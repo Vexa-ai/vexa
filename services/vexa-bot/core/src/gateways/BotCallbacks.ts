@@ -13,7 +13,7 @@ export interface BotCallbacks {
   onMeetingEnd: (botConnectionId: string) => Promise<void>;
   onTranscriptionSegmentsReceived: (
     data: TranscriptionSegment[] | TranscriptionSegment
-  ) => Promise<void>;
+  ) => void;
   onStartRecording: (
     videoFilePath: string,
     botConnectionId: string
