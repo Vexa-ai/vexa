@@ -2,7 +2,6 @@ import { Page } from "playwright";
 import { log, randomDelay } from "../utils";
 import { BotConfig } from "../types";
 import { v4 as uuidv4 } from "uuid"; // Import UUID
-import fs from "fs/promises";
 import { BotCallbacks } from "../gateways/BotCallbacks";
 
 // --- ADDED: Function to generate UUID (if not already present globally) ---
@@ -359,7 +358,7 @@ const startRecording = async (
 
                 // Stop recorder on leave
                 const originalLeave = (window as any).triggerNodeGracefulLeave;
-                (window as any).triggerNodeGracefulLeave = () => {
+                (window as any).triggerNodeGracefulLeave = async () => {
                   if (audioRecorder.state === "recording") {
                     audioRecorder.stop();
                     (window as any).logBot(
@@ -367,10 +366,8 @@ const startRecording = async (
                     );
                   }
 
-                  (async () => {
-                    await botCallbacks?.onMeetingEnd(originalConnectionId);
-                    originalLeave();
-                  })();
+                  await botCallbacks?.onMeetingEnd(originalConnectionId);
+                  originalLeave();
                 };
               } catch (err: any) {
                 (window as any).logBot(
