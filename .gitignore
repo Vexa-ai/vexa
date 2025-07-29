@@ -130,3 +130,5 @@ docker-volumes/
 hub/
 
 *.mp3
+
+node_modules/

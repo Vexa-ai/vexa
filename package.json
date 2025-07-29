@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@types/otplib": "^10.0.0"
+  }
+}

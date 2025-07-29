@@ -1,153 +1,143 @@
 import { Page } from "playwright";
 import { log, randomDelay } from "../utils";
 import { BotConfig } from "../types";
-import { v4 as uuidv4 } from "uuid"; // Import UUID
+import { MeetingPlatformBase } from "./meetingPlatformBot";
 
-// --- ADDED: Function to generate UUID (if not already present globally) ---
-// If you have a shared utils file for this, import from there instead.
-function generateUUID() {
-  return uuidv4();
-}
-// --- --------------------------------------------------------- ---
-
-export async function handleGoogleMeet(
-  botConfig: BotConfig,
-  page: Page,
-  gracefulLeaveFunction: (page: Page | null, exitCode: number, reason: string) => Promise<void>
-): Promise<void> {
-  const leaveButton = `//button[@aria-label="Leave call"]`;
-
-  if (!botConfig.meetingUrl) {
-    log("Error: Meeting URL is required for Google Meet but is null.");
-    // If meeting URL is missing, we can't join, so trigger graceful leave.
-    await gracefulLeaveFunction(page, 1, "missing_meeting_url");
-    return;
+export class GoogleMeetBot extends MeetingPlatformBase {
+  leaveButton = `//button[@aria-label="Leave call"]`;
+  
+  constructor(page: Page, botConfig: BotConfig) {
+    log("USING NEW ABSTRACTED CLASS")
+    super(page, botConfig);
   }
+  
+  async handleMeeting(
+      gracefulLeaveFunction: (page: Page | null, exitCode: number, reason: string) => Promise<void>
+    ): Promise<void> {
 
-  log("Joining Google Meet");
-  try {
-    await joinMeeting(page, botConfig.meetingUrl, botConfig.botName);
-  } catch (error: any) {
-    console.error("Error during joinMeeting: " + error.message);
-    log("Error during joinMeeting: " + error.message + ". Triggering graceful leave.");
-    await gracefulLeaveFunction(page, 1, "join_meeting_error");
-    return;
-  }
-
-  // Setup websocket connection and meeting admission concurrently
-  log("Starting WebSocket connection while waiting for meeting admission");
-  try {
-    // Run both processes concurrently
-    const [isAdmitted] = await Promise.all([
-      // Wait for admission to the meeting
-      waitForMeetingAdmission(
-        page,
-        leaveButton,
-        botConfig.automaticLeave.waitingRoomTimeout
-      ).catch((error) => {
-        log("Meeting admission failed: " + error.message);
-        return false;
-      }),
-
-      // Prepare for recording (expose functions, etc.) while waiting for admission
-      prepareForRecording(page),
-    ]);
-
-    if (!isAdmitted) {
-      console.error("Bot was not admitted into the meeting");
-      log("Bot not admitted. Triggering graceful leave with admission_failed reason.");
-      
-      await gracefulLeaveFunction(page, 2, "admission_failed");
-      return; 
+    if (!this.botConfig.meetingUrl) {
+      log("Error: Meeting URL is required for Google Meet but is null.");
+      // If meeting URL is missing, we can't join, so trigger graceful leave.
+      await gracefulLeaveFunction(this.page, 1, "missing_meeting_url");
+      return;
     }
 
-    log("Successfully admitted to the meeting, starting recording");
-    // Pass platform from botConfig to startRecording
-    await startRecording(page, botConfig);
-  } catch (error: any) {
-    console.error("Error after join attempt (admission/recording setup): " + error.message);
-    log("Error after join attempt (admission/recording setup): " + error.message + ". Triggering graceful leave.");
-    // Use a general error code here, as it could be various issues.
-    await gracefulLeaveFunction(page, 1, "post_join_setup_error");
-    return;
-  }
-}
+    log("Joining Google Meet");
+    try {
+      await this.joinMeeting();
+    } catch (error: any) {
+      console.error("Error during joinMeeting: " + error.message);
+      log("Error during joinMeeting: " + error.message + ". Triggering graceful leave.");
+      await gracefulLeaveFunction(this.page, 1, "join_meeting_error");
+      return;
+    }
 
-// New function to wait for meeting admission
-const waitForMeetingAdmission = async (
-  page: Page,
-  leaveButton: string,
-  timeout: number
-): Promise<boolean> => {
-  try {
-    await page.waitForSelector(leaveButton, { timeout });
-    log("Successfully admitted to the meeting");
-    return true;
-  } catch {
-    throw new Error(
-      "Bot was not admitted into the meeting within the timeout period"
-    );
-  }
-};
+    // Setup websocket connection and meeting admission concurrently
+    log("Starting WebSocket connection while waiting for meeting admission");
+    try {
+      // Run both processes concurrently
+      const [isAdmitted] = await Promise.all([
+        // Wait for admission to the meeting
+        this.waitForAdmission().catch((error) => {
+          log("Meeting admission failed: " + error.message);
+          return false;
+        }),
 
-// Prepare for recording by exposing necessary functions
-const prepareForRecording = async (page: Page): Promise<void> => {
-  // Expose the logBot function to the browser context
-  await page.exposeFunction("logBot", (msg: string) => {
-    log(msg);
-  });
-};
+        // Prepare for recording (expose functions, etc.) while waiting for admission
+        this.prepareForRecording(),
+      ]);
 
-const joinMeeting = async (page: Page, meetingUrl: string, botName: string) => {
-  const enterNameField = 'input[type="text"][aria-label="Your name"]';
-  const joinButton = '//button[.//span[text()="Ask to join"]]';
-  const muteButton = '[aria-label*="Turn off microphone"]';
-  const cameraOffButton = '[aria-label*="Turn off camera"]';
+      if (!isAdmitted) {
+        console.error("Bot was not admitted into the meeting");
+        log("Bot not admitted. Triggering graceful leave with admission_failed reason.");
+        
+        await gracefulLeaveFunction(this.page, 2, "admission_failed");
+        return; 
+      }
 
-  await page.goto(meetingUrl, { waitUntil: "networkidle" });
-  await page.bringToFront();
-
-  // Add a longer, fixed wait after navigation for page elements to settle
-  log("Waiting for page elements to settle after navigation...");
-  await page.waitForTimeout(5000); // Wait 5 seconds
-
-  // Enter name and join
-  // Keep the random delay before interacting, but ensure page is settled first
-  await page.waitForTimeout(randomDelay(1000));
-  log("Attempting to find name input field...");
-  // Increase timeout drastically
-  await page.waitForSelector(enterNameField, { timeout: 120000 }); // 120 seconds
-  log("Name input field found.");
-
-  await page.waitForTimeout(randomDelay(1000));
-  await page.fill(enterNameField, botName);
-
-  // Mute mic and camera if available
-  try {
-    await page.waitForTimeout(randomDelay(500));
-    await page.click(muteButton, { timeout: 200 });
-    await page.waitForTimeout(200);
-  } catch (e) {
-    log("Microphone already muted or not found.");
-  }
-  try {
-    await page.waitForTimeout(randomDelay(500));
-    await page.click(cameraOffButton, { timeout: 200 });
-    await page.waitForTimeout(200);
-  } catch (e) {
-    log("Camera already off or not found.");
+      log("Successfully admitted to the meeting, starting recording");
+      // Pass platform from botConfig to startRecording
+      await this.startRecording();
+    } catch (error: any) {
+      console.error("Error after join attempt (admission/recording setup): " + error.message);
+      log("Error after join attempt (admission/recording setup): " + error.message + ". Triggering graceful leave.");
+      // Use a general error code here, as it could be various issues.
+      await gracefulLeaveFunction(this.page, 1, "post_join_setup_error");
+      return;
+    }
   }
 
-  await page.waitForSelector(joinButton, { timeout: 60000 });
-  await page.click(joinButton);
-  log(`${botName} joined the Meeting.`);
-};
+  async joinMeeting(): Promise<void> {
 
-// Modified to have only the actual recording functionality
-const startRecording = async (page: Page, botConfig: BotConfig) => {
-  // Destructure needed fields from botConfig
+    if (!this.botConfig.meetingUrl) {
+      throw new Error("Meeting URL is not provided in botConfig.");
+    }
+
+    const enterNameField = 'input[type="text"][aria-label="Your name"]';
+    const joinButton = '//button[.//span[text()="Ask to join"]]';
+    const muteButton = '[aria-label*="Turn off microphone"]';
+    const cameraOffButton = '[aria-label*="Turn off camera"]';
+
+    await this.page.goto(this.botConfig.meetingUrl, { waitUntil: "networkidle" });
+    await this.page.bringToFront();
+
+    // Add a longer, fixed wait after navigation for page elements to settle
+    log("Waiting for page elements to settle after navigation...");
+    await this.page.waitForTimeout(5000); // Wait 5 seconds
+
+    // Enter name and join
+    // Keep the random delay before interacting, but ensure page is settled first
+    await this.page.waitForTimeout(randomDelay(1000));
+    log("Attempting to find name input field...");
+    // Increase timeout drastically
+    await this.page.waitForSelector(enterNameField, { timeout: 120000 }); // 120 seconds
+    log("Name input field found.");
+
+    await this.page.waitForTimeout(randomDelay(1000));
+    await this.page.fill(enterNameField, this.botConfig.botName);
+
+    // Mute mic and camera if available
+    try {
+      await this.page.waitForTimeout(randomDelay(500));
+      await this.page.click(muteButton, { timeout: 200 });
+      await this.page.waitForTimeout(200);
+    } catch (e) {
+      log("Microphone already muted or not found.");
+    }
+    try {
+      await this.page.waitForTimeout(randomDelay(500));
+      await this.page.click(cameraOffButton, { timeout: 200 });
+      await this.page.waitForTimeout(200);
+    } catch (e) {
+      log("Camera already off or not found.");
+    }
+
+    await this.page.waitForSelector(joinButton, { timeout: 60000 });
+    await this.page.click(joinButton);
+    log(`${this.botConfig.botName} joined the Meeting.`);
+  }
+  async waitForAdmission(): Promise<boolean> {
+    try {
+      await this.page.waitForSelector(this.leaveButton, { timeout: this.botConfig.automaticLeave.waitingRoomTimeout });
+      log("Successfully admitted to the meeting");
+      return true;
+    } catch {
+      throw new Error(
+        "Bot was not admitted into the meeting within the timeout period"
+      );
+    }
+  }
+
+  async prepareForRecording(): Promise<void> {
+    await this.page.exposeFunction("logBot", (msg: string) => {
+      log(msg);
+    });
+  }
+
+  async startRecording(): Promise<void> {
+        // Destructure needed fields from botConfig
   const { meetingUrl, token, connectionId, platform, nativeMeetingId } =
-    botConfig; // nativeMeetingId is now in BotConfig type
+    this.botConfig; // nativeMeetingId is now in BotConfig type
 
   //NOTE: The environment variables passed by docker_utils.py will be available to the Node.js process started by your entrypoint.sh.
   // --- Read WHISPER_LIVE_URL from Node.js environment ---
@@ -167,9 +157,9 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
 
   log("Starting actual recording with WebSocket connection");
 
-  // Pass the necessary config fields and the resolved URL into the page context. Inisde page.evalute we have the browser context.
+  // Pass the necessary config fields and the resolved URL into the this.page context. Inisde page.evalute we have the browser context.
   //All code inside page.evalute executes as javascript running in the browser.
-  await page.evaluate(
+  await this.page.evaluate(
     async (pageArgs: {
       botConfigData: BotConfig;
       whisperUrlForBrowser: string;
@@ -1089,44 +1079,23 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
           }
         });
       },
-      { botConfigData: botConfig, whisperUrlForBrowser: whisperLiveUrlFromEnv }
+      { botConfigData: this.botConfig, whisperUrlForBrowser: whisperLiveUrlFromEnv }
     ); // Pass arguments to page.evaluate
-};
-
-// Remove the compatibility shim 'recordMeeting' if no longer needed,
-// otherwise, ensure it constructs a valid BotConfig object.
-// Example if keeping:
-/*
-const recordMeeting = async (page: Page, meetingUrl: string, token: string, connectionId: string, platform: "google_meet" | "zoom" | "teams") => {
-  await prepareForRecording(page);
-  // Construct a minimal BotConfig - adjust defaults as needed
-  const dummyConfig: BotConfig = {
-      platform: platform,
-      meetingUrl: meetingUrl,
-      botName: "CompatibilityBot",
-      token: token,
-      connectionId: connectionId,
-      nativeMeetingId: "", // Might need to derive this if possible
-      automaticLeave: { waitingRoomTimeout: 300000, noOneJoinedTimeout: 300000, everyoneLeftTimeout: 300000 },
-  };
-  await startRecording(page, dummyConfig);
-};
-*/
-
-// --- ADDED: Exported function to trigger leave from Node.js ---
-export async function leaveGoogleMeet(page: Page): Promise<boolean> {
-  log("[leaveGoogleMeet] Triggering leave action in browser context...");
-  if (!page || page.isClosed()) {
-    log("[leaveGoogleMeet] Page is not available or closed.");
-    return false;
   }
-  try {
-    // Call the function exposed within the page's evaluate context
-    const result = await page.evaluate(async () => {
-      if (typeof (window as any).performLeaveAction === "function") {
-        return await (window as any).performLeaveAction();
-      } else {
-        (window as any).logBot?.(
+
+  async leaveMeeting(): Promise<boolean> {
+    log("[leaveGoogleMeet] Triggering leave action in browser context...");
+    if (!this.page || this.page.isClosed()) {
+      log("[leaveGoogleMeet] Page is not available or closed.");
+      return false;
+    }
+    try {
+      // Call the function exposed within the page's evaluate context
+      const result = await this.page.evaluate(async () => {
+        if (typeof (window as any).performLeaveAction === "function") {
+          return await (window as any).performLeaveAction();
+        } else {
+          (window as any).logBot?.(
           "[Node Eval Error] performLeaveAction function not found on window."
         );
         console.error(
@@ -1143,5 +1112,23 @@ export async function leaveGoogleMeet(page: Page): Promise<boolean> {
     );
     return false;
   }
+  }
 }
-// --- ------------------------------------------------------- ---
+
+let _GoogleMeetBot: GoogleMeetBot | null = null;
+
+export function handleGoogleMeet(
+  botConfig: BotConfig,
+  page: any,
+  performGracefulLeave: (page: any, exitCode?: number, reason?: string) => Promise<void>
+) {
+  _GoogleMeetBot = new GoogleMeetBot(page, botConfig);
+  return _GoogleMeetBot.handleMeeting(performGracefulLeave);
+}
+
+export function leaveGoogleMeet(page: any): Promise<boolean> {
+  if (!_GoogleMeetBot) {
+    return Promise.reject(new Error("Google Meet bot not initialized."));
+  }
+  return _GoogleMeetBot.leaveMeeting();
+}
