@@ -139,7 +139,8 @@ async def start_bot_container(
     user_token: str,
     native_meeting_id: str,
     language: Optional[str],
-    task: Optional[str]
+    task: Optional[str],
+    credentials: Optional[Dict[str, str]],
 ) -> Optional[tuple[str, str]]:
     """
     Starts a vexa-bot container via requests_unixsocket AFTER checking user limit.
@@ -154,7 +155,8 @@ async def start_bot_container(
         native_meeting_id: The platform-specific meeting ID (e.g., 'xyz-abc-pdq').
         language: Optional language code for transcription.
         task: Optional transcription task ('transcribe' or 'translate').
-        
+        credentials: Optional credentials to pass to the meeting bot.
+
     Returns:
         A tuple (container_id, connection_id) if successful, None otherwise.
     """
@@ -253,7 +255,8 @@ async def start_bot_container(
             "noOneJoinedTimeout": 120000,
             "everyoneLeftTimeout": 60000
         },
-        "botManagerCallbackUrl": f"http://bot-manager:8080/bots/internal/callback/exited"
+        "botManagerCallbackUrl": f"http://bot-manager:8080/bots/internal/callback/exited",
+        "credentials": credentials,
     }
     # Remove keys with None values before serializing
     cleaned_config_data = {k: v for k, v in bot_config_data.items() if v is not None}
@@ -292,7 +295,7 @@ async def start_bot_container(
         "Labels": {"vexa.user_id": str(user_id)}, # *** ADDED Label ***
         "HostConfig": {
             "NetworkMode": DOCKER_NETWORK,
-            "AutoRemove": True
+            "AutoRemove": os.getenv("DOCKER_AUTO_REMOVE", "true").lower() == "true",
         },
     }
 

@@ -4,7 +4,7 @@ import { BotConfig } from "./types"; // Import the BotConfig type
 
 // Define a schema that matches your JSON configuration
 export const BotConfigSchema = z.object({
-  platform: z.enum(["google_meet", "zoom", "teams"]),
+  platform: z.enum(["google_meet", "zoom", "teams", "google_okta"]),
   meetingUrl: z.string().url().nullable(), // Allow null from BOT_CONFIG
   botName: z.string(),
   token: z.string(),
@@ -18,9 +18,14 @@ export const BotConfigSchema = z.object({
     noOneJoinedTimeout: z.number().int(),
     everyoneLeftTimeout: z.number().int()
   }),
-  reconnectionIntervalMs: z.number().int().optional(), // ADDED: Optional reconnection interval
-  meeting_id: z.number().int().optional(), // Allow optional internal ID
-  botManagerCallbackUrl: z.string().url().optional() // ADDED: Optional callback URL
+  reconnectionIntervalMs: z.number().int().optional(),
+  meeting_id: z.number().int().optional(),
+  botManagerCallbackUrl: z.string().url().optional(),
+  credentials: z.object({
+    googleUsername: z.string().optional(),
+    googlePassword: z.string().optional(),
+    mfaSecret: z.string().optional()
+  }).optional()
 });
 
 

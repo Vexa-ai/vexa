@@ -54,7 +54,7 @@ def generate_bot_config(meeting_url, native_meeting_id, platform, bot_name, lang
 
 def extract_native_id(url, platform):
     """Basic extraction of native ID from URL (adjust if needed)."""
-    if platform == "google_meet":
+    if platform == "google_meet" or platform == "google_okta":
         # Example: https://meet.google.com/xyz-abc-pdq -> xyz-abc-pdq
         try:
             # Handle potential trailing slash and query parameters
@@ -126,7 +126,7 @@ def main():
     parser = argparse.ArgumentParser(description="Launch multiple Vexa bots directly into a meeting.")
     parser.add_argument("meeting_url", help="The full URL of the meeting to join.")
     parser.add_argument("-n", "--num_bots", type=int, default=1, help="Number of bots to launch.")
-    parser.add_argument("-p", "--platform", default=DEFAULT_PLATFORM, choices=["google_meet", "zoom", "teams"], help="Meeting platform.")
+    parser.add_argument("-p", "--platform", default=DEFAULT_PLATFORM, choices=["google_meet", "zoom", "teams", "google_okta"], help="Meeting platform.")
     parser.add_argument("--bot_name_prefix", default=DEFAULT_BOT_NAME_PREFIX, help="Prefix for bot names (will be appended with a number).")
     parser.add_argument("--lang", default=DEFAULT_LANGUAGE, help="Language code for transcription (e.g., 'en', 'es').")
     parser.add_argument("--task", default=DEFAULT_TASK, choices=["transcribe", "translate"], help="Transcription task.")

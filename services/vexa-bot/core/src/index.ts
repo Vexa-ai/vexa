@@ -8,6 +8,7 @@ import { createClient, RedisClientType } from 'redis';
 import { Page, Browser } from 'playwright-core';
 import * as http from 'http'; // ADDED: For HTTP callback
 import * as https from 'https'; // ADDED: For HTTPS callback (if needed)
+import { handleGoogleOkta, leaveGoogleOkta } from "./platforms/google-okta";
 
 // Module-level variables to store current configuration
 let currentLanguage: string | null | undefined = null;
@@ -15,7 +16,7 @@ let currentTask: string | null | undefined = 'transcribe'; // Default task
 let currentRedisUrl: string | null = null;
 let currentConnectionId: string | null = null;
 let botManagerCallbackUrl: string | null = null; // ADDED: To store callback URL
-let currentPlatform: "google_meet" | "zoom" | "teams" | undefined;
+let currentPlatform: "google_meet" | "zoom" | "teams" | "google_okta" | undefined;
 let page: Page | null = null; // Initialize page, will be set in runBot
 
 // --- ADDED: Flag to prevent multiple shutdowns ---
@@ -105,6 +106,8 @@ async function performGracefulLeave(
       // Assuming currentPlatform is set appropriately, or determine it if needed
       if (currentPlatform === "google_meet") { // Add platform check if you have other platform handlers
          platformLeaveSuccess = await leaveGoogleMeet(page);
+      } else if (currentPlatform === "google_okta") {
+         platformLeaveSuccess = await leaveGoogleOkta(page);
       } else {
          log(`[Graceful Leave] No platform-specific leave defined for ${currentPlatform}. Page will be closed.`);
          // If no specific leave, we still consider it "handled" to proceed with cleanup.
@@ -324,6 +327,8 @@ export async function runBot(botConfig: BotConfig): Promise<void> {
   try {
     if (botConfig.platform === "google_meet") {
       await handleGoogleMeet(botConfig, page, performGracefulLeave);
+    } else if (botConfig.platform === "google_okta") {
+      await handleGoogleOkta(botConfig, page, performGracefulLeave);
     } else if (botConfig.platform === "zoom") {
       log("Zoom platform not yet implemented.");
       await performGracefulLeave(page, 1, "platform_not_implemented");

@@ -16,7 +16,7 @@ import httpx
 # from app.database.service import TranscriptionService # Not used here
 # from app.tasks.monitoring import celery_app # Not used here
 
-from config import BOT_IMAGE_NAME, REDIS_URL
+from config import BOT_IMAGE_NAME, REDIS_URL, CREDENTIALS
 from docker_utils import get_socket_session, close_docker_client, start_bot_container, stop_bot_container, _record_session_start, get_running_bots_status, verify_container_running
 from shared_models.database import init_db, get_db, async_session_local
 from shared_models.models import User, Meeting, MeetingSession, Transcription # <--- ADD MeetingSession and Transcription import
@@ -271,7 +271,8 @@ async def request_bot(
             user_token=user_token,
             native_meeting_id=native_meeting_id,
             language=req.language,
-            task=req.task
+            task=req.task,
+            credentials=CREDENTIALS
         )
         logger.info(f"Call to start_bot_container completed. Container ID: {container_id}, Connection ID: {connection_id}")
 

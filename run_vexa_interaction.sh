@@ -96,7 +96,27 @@ echo_info "Effective ADMIN_API_URL: $ADMIN_API_URL"
 USER_EMAIL="testuser$(date +%s)@example.com"
 USER_NAME="Test User $(date +%s)"
 BOT_NAME="VexaFirstTestBot"
-PLATFORM="google_meet"
+
+# --- Platform Selection ---
+while true; do
+    echo "Select platform:"
+    echo "1) google_meet"
+    echo "2) google_okta"
+    read -p "Enter choice [1-2]: " PLATFORM_CHOICE
+    case $PLATFORM_CHOICE in
+        1)
+            PLATFORM="google_meet"
+            break
+            ;;
+        2)
+            PLATFORM="google_okta"
+            break
+            ;;
+        *)
+            echo_warn "Invalid choice. Please enter 1 or 2."
+            ;;
+    esac
+done
 
 # --- Function to stop the bot --- 
 MEETING_ID_TO_STOP=""

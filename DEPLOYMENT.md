@@ -68,3 +68,11 @@ Admin API docs: http://localhost:8057/docs
 - `make down`: Stop all services.
 - `make clean`: Stop services and remove volumes.
 
+**Setting up secrets for Google Okta 2FA integration:**
+
+If you are planning on using Vexa within a google workspace with SSO through Okta, you will need to set up the bot manager with your credentials.
+
+- Create a file named `docker-compose.secrets.yml` in the root directory.
+- Copy the contents from `docker-compose.secrets.SAMPLE.yml` and fill in your credentials
+- To get the MFA secret, you can scan the QR code with a scanner app. This will output a 6-digit code in the URL. This is your MFA secret.
+- Start the bot manager with `docker-compose -f docker-compose.yml -f docker-compose.secrets.yml up`.

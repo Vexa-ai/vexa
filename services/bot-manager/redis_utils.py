@@ -52,7 +52,7 @@ def extract_platform_specific_id(platform: str, meeting_url: str) -> Optional[st
     """Extracts the platform-specific part of the meeting URL."""
     try:
         # Expect 'google' as the platform identifier
-        if platform == "google_meet":
+        if platform == "google_meet" or platform == "google_okta":
             # https://meet.google.com/abc-def-ghi OR meet.google.com/abc-def-ghi
             match = re.search(r'(?:meet\.google\.com/)?([a-z]{3}-[a-z]{4}-[a-z]{3})', meeting_url)
             if match:

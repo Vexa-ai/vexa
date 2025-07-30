@@ -4,10 +4,6 @@ import { Page } from "playwright";
 import { log, randomDelay } from "../utils";
 import { authenticator } from 'otplib';
 
-const GOOGLE_USERNAME = process.env.GOOGLE_USERNAME;
-const GOOGLE_PASSWORD = process.env.GOOGLE_PASSWORD;
-const MFA_SECRET = process.env.MFA_SECRET;
-
 export class GoogleOktaBot extends GoogleMeetBot {
     botConfig: BotConfig;
     page: Page;
@@ -33,12 +29,12 @@ export class GoogleOktaBot extends GoogleMeetBot {
                 timeout: 2000,
             });
 
-            log('2FA challenge detected, generating TOTP code...');
-            if (!MFA_SECRET) {
-            log('MFA_SECRET is not set, skipping 2FA challenge handling.');
+        log('2FA challenge detected, generating TOTP code...');
+        if (!this.botConfig.credentials || !this.botConfig.credentials.mfaSecret) {
+            log('mfaSecret is not set in botConfig.credentials, skipping 2FA challenge handling.');
             return;
         }
-            const totpCode = authenticator.generate(MFA_SECRET);
+        const totpCode = authenticator.generate(this.botConfig.credentials.mfaSecret);
 
             if (totpCode) {
             // Fill in the TOTP code
@@ -60,8 +56,9 @@ export class GoogleOktaBot extends GoogleMeetBot {
     }
 
     async _loginWithOkta(): Promise<void> {
-        if (!GOOGLE_USERNAME || !GOOGLE_PASSWORD) {
-            throw new Error("Google credentials are not set in environment variables.");
+        if (!this.botConfig.credentials || !this.botConfig.credentials.googleUsername || !this.botConfig.credentials.googlePassword) {
+            log(JSON.stringify(this.botConfig));
+            throw new Error("Google credentials are not set in botConfig.credentials.");
         }
 
         log('[INFO] Navigating to Google login...');
@@ -71,21 +68,21 @@ export class GoogleOktaBot extends GoogleMeetBot {
 
         // We first fill in the email on google. Once this is done we are
         // redirected to okta where we need to fill in the username
-        await this.page.fill('input[type="email"]', GOOGLE_USERNAME);
+        await this.page.fill('input[type="email"]', this.botConfig.credentials.googleUsername);
         await this.page.click('#identifierNext');
 
         await this.page.waitForSelector('input[type="text"][name="identifier"]', {
             state: 'visible',
             timeout: 15000,
         });
-        await this.page.fill('input[type="text"][name="identifier"]', GOOGLE_USERNAME);
+        await this.page.fill('input[type="text"][name="identifier"]', this.botConfig.credentials.googleUsername);
         await this.page.click('input[type="submit"]');
 
         await this.page.waitForSelector('input[type="password"]', {
             state: 'visible',
             timeout: 15000,
         });
-        await this.page.fill('input[type="password"]', GOOGLE_PASSWORD);
+        await this.page.fill('input[type="password"]', this.botConfig.credentials.googlePassword);
         await this.page.click('input[type="submit"]');
 
         // Wait for navigation or 2FA challenge
@@ -97,7 +94,7 @@ export class GoogleOktaBot extends GoogleMeetBot {
         }
 
         // Handle 2FA if MFA_SECRET is provided
-        if (MFA_SECRET) {
+        if (this.botConfig.credentials && this.botConfig.credentials.mfaSecret) {
             await this._handle2FAChallenge();
         }
 
@@ -149,4 +146,22 @@ export class GoogleOktaBot extends GoogleMeetBot {
             );
         }
     }
+}
+
+let _GoogleMeetBot: GoogleOktaBot | null = null;
+
+export function handleGoogleOkta(
+  botConfig: BotConfig,
+  page: any,
+  performGracefulLeave: (page: any, exitCode?: number, reason?: string) => Promise<void>
+) {
+  _GoogleMeetBot = new GoogleOktaBot(page, botConfig);
+  return _GoogleMeetBot.handleMeeting(performGracefulLeave);
+}
+
+export function leaveGoogleOkta(page: any): Promise<boolean> {
+  if (!_GoogleMeetBot) {
+    return Promise.reject(new Error("Google Okta bot not initialized."));
+  }
+  return _GoogleMeetBot.leaveMeeting();
 }

@@ -12,6 +12,7 @@ class Platform(str, Enum):
     The value is the external API name, while the bot_name is what's used internally by the bot.
     """
     GOOGLE_MEET = "google_meet"
+    GOOGLE_OKTA = "google_okta"
     ZOOM = "zoom"
     TEAMS = "teams"
     
@@ -24,7 +25,8 @@ class Platform(str, Enum):
         mapping = {
             Platform.GOOGLE_MEET: "google_meet",
             Platform.ZOOM: "zoom",
-            Platform.TEAMS: "teams"
+            Platform.TEAMS: "teams",
+            Platform.GOOGLE_OKTA: "google_okta"
         }
         return mapping[self]
     
@@ -56,7 +58,8 @@ class Platform(str, Enum):
         reverse_mapping = {
             "google_meet": Platform.GOOGLE_MEET.value,
             "zoom": Platform.ZOOM.value,
-            "teams": Platform.TEAMS.value
+            "teams": Platform.TEAMS.value,
+            "google_okta": Platform.GOOGLE_OKTA.value
         }
         return reverse_mapping.get(bot_platform_name)
 
@@ -68,7 +71,7 @@ class Platform(str, Enum):
         """
         try:
             platform = Platform(platform_str)
-            if platform == Platform.GOOGLE_MEET:
+            if platform == Platform.GOOGLE_MEET or platform == Platform.GOOGLE_OKTA:
                 # Basic validation for Google Meet code format (xxx-xxxx-xxx)
                 if re.fullmatch(r"^[a-z]{3}-[a-z]{4}-[a-z]{3}$", native_id):
                      return f"https://meet.google.com/{native_id}"

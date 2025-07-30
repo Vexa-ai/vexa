@@ -9,3 +9,11 @@ LOCK_TIMEOUT_SECONDS = 300 # 5 minutes
 LOCK_PREFIX = "bot_lock:"
 MAP_PREFIX = "bot_map:"
 STATUS_PREFIX = "bot_status:" 
+
+# Credentials for Google Okta integration
+# These are expected to be set in the environment variables
+CREDENTIALS = {
+    "googleUsername": os.getenv("GOOGLE_USERNAME", ""),
+    "googlePassword": os.getenv("GOOGLE_PASSWORD", ""),
+    "mfaSecret": os.getenv("MFA_SECRET", "")
+}

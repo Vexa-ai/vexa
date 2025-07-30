@@ -132,3 +132,4 @@ hub/
 *.mp3
 
 node_modules/
+docker-compose.secrets.yml

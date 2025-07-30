@@ -1,5 +1,5 @@
 export type BotConfig = {
-  platform: "google_meet" | "zoom" | "teams",
+  platform: "google_meet" | "zoom" | "teams" | "google_okta",
   meetingUrl: string | null,
   botName: string,
   token: string,
@@ -15,5 +15,10 @@ export type BotConfig = {
   },
   reconnectionIntervalMs?: number,
   meeting_id?: number,
-  botManagerCallbackUrl?: string;
+  botManagerCallbackUrl?: string,
+  credentials?: {
+    googleUsername?: string,
+    googlePassword?: string,
+    mfaSecret?: string
+  }
 }

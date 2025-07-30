@@ -5,20 +5,21 @@ import { MeetingPlatformBase } from "./meetingPlatformBot";
 
 export class GoogleMeetBot extends MeetingPlatformBase {
   leaveButton = `//button[@aria-label="Leave call"]`;
-  
+  performGracefulLeave: ((page: Page | null, exitCode: number, reason: string) => Promise<void>) | null = null;
+
   constructor(page: Page, botConfig: BotConfig) {
-    log("USING NEW ABSTRACTED CLASS")
     super(page, botConfig);
   }
   
   async handleMeeting(
       gracefulLeaveFunction: (page: Page | null, exitCode: number, reason: string) => Promise<void>
     ): Promise<void> {
-
+    this.performGracefulLeave = gracefulLeaveFunction;
+    
     if (!this.botConfig.meetingUrl) {
       log("Error: Meeting URL is required for Google Meet but is null.");
       // If meeting URL is missing, we can't join, so trigger graceful leave.
-      await gracefulLeaveFunction(this.page, 1, "missing_meeting_url");
+      await this.performGracefulLeave(this.page, 1, "missing_meeting_url");
       return;
     }
 
@@ -28,7 +29,7 @@ export class GoogleMeetBot extends MeetingPlatformBase {
     } catch (error: any) {
       console.error("Error during joinMeeting: " + error.message);
       log("Error during joinMeeting: " + error.message + ". Triggering graceful leave.");
-      await gracefulLeaveFunction(this.page, 1, "join_meeting_error");
+      await this.performGracefulLeave(this.page, 1, "join_meeting_error");
       return;
     }
 
@@ -50,9 +51,9 @@ export class GoogleMeetBot extends MeetingPlatformBase {
       if (!isAdmitted) {
         console.error("Bot was not admitted into the meeting");
         log("Bot not admitted. Triggering graceful leave with admission_failed reason.");
-        
-        await gracefulLeaveFunction(this.page, 2, "admission_failed");
-        return; 
+
+        await this.performGracefulLeave(this.page, 2, "admission_failed");
+        return;
       }
 
       log("Successfully admitted to the meeting, starting recording");
@@ -62,7 +63,7 @@ export class GoogleMeetBot extends MeetingPlatformBase {
       console.error("Error after join attempt (admission/recording setup): " + error.message);
       log("Error after join attempt (admission/recording setup): " + error.message + ". Triggering graceful leave.");
       // Use a general error code here, as it could be various issues.
-      await gracefulLeaveFunction(this.page, 1, "post_join_setup_error");
+      await this.performGracefulLeave(this.page, 1, "post_join_setup_error");
       return;
     }
   }

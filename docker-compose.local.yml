@@ -1,0 +1,15 @@
+version: "3.8"
+services:
+  bot-manager:
+    volumes:
+      - ./services/bot-manager:/app
+      - ./libs/shared-models:/app/libs/shared-models
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      # Remove containers automatically after they stop. 
+      # disabling this makes it easier to debug issues with bots, 
+      # launched from the manager, but you will need to manually remove 
+      # stopped containers.
+      - DOCKER_AUTO_REMOVE=false 
+
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
