@@ -157,7 +157,9 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
 
   // Atomic allocation function using Redis Lua script
   const allocateServer = async (): Promise<string | null> => {
-    const maxClients = 10; // WhisperLive server capacity
+    // Capacity configured via env, default to 10
+    const envMax = process && process.env && process.env.WL_MAX_CLIENTS;
+    const maxClients = envMax ? parseInt(envMax, 10) : 10; // WhisperLive server capacity
     
     const luaScript = `
       -- Find server with lowest score that has capacity
@@ -191,9 +193,9 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
       }) as string | null;
       
       if (allocatedUrl) {
-        log(`[Node.js] Allocated server: ${allocatedUrl}`);
+        log(`[Node.js] Allocated server: ${allocatedUrl} (capacity maxClients=${maxClients})`);
       } else {
-        log("[Node.js] No servers available with capacity");
+        log(`{Node.js] No servers available with capacity (maxClients=${maxClients})`);
       }
       
       return allocatedUrl;
@@ -244,6 +246,8 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
   
   // Resolve WhisperLive WebSocket URL dynamically – env override > initial Redis fetch  
   let whisperLiveUrlResolved: string | null = process.env.WHISPER_LIVE_URL || await getNextCandidate(null);
+  const resolvedMaxClients = (process && process.env && process.env.WL_MAX_CLIENTS) ? parseInt(process.env.WL_MAX_CLIENTS as string, 10) : 10;
+  log(`[Node.js] Effective capacity (maxClients) for allocation: ${resolvedMaxClients}`);
   
   // Track the initially allocated server (only if we used atomic allocation)
   if (whisperLiveUrlResolved && !process.env.WHISPER_LIVE_URL) {

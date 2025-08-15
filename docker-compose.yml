@@ -94,6 +94,7 @@ services:
       - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD}
       - DEVICE_TYPE=${DEVICE_TYPE}
       - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}
+      - WL_MAX_CLIENTS=${WL_MAX_CLIENTS}
     entrypoint: /bin/sh
     command:
       - "-c"
@@ -117,7 +118,7 @@ services:
       - "9090" #use for transcription web socket
       - "9091" #use for health check
     deploy:
-      replicas: 3 # Sets to 1 to avoid GPU contention
+      replicas: 1 # Sets to 1 to avoid GPU contention
       resources:
         reservations:
           devices:
@@ -171,6 +172,7 @@ services:
       - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD}
       - DEVICE_TYPE=cpu
       - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}
+      - WL_MAX_CLIENTS=${WL_MAX_CLIENTS}
     entrypoint: /bin/sh
     deploy:
       replicas: 2

@@ -549,6 +549,13 @@ class TranscriptionServer:
         self.self_monitor_thread = None
         self._stop_self_monitor = threading.Event()
 
+        # --- Capacity configuration (WL_MAX_CLIENTS, default 10) ---
+        try:
+            self.config_max_clients = int(os.getenv("WL_MAX_CLIENTS", "10"))
+        except Exception:
+            self.config_max_clients = 10
+        logging.info(f"CONFIG: max_clients set to {self.config_max_clients} (env WL_MAX_CLIENTS)")
+
         # --- WL Scaling: publish live session count & heartbeat ---
         self._wl_redis = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"))
         self._listen_port = int(os.getenv("WL_LISTEN_PORT", os.getenv("PORT", "9090")))
@@ -816,9 +823,11 @@ class TranscriptionServer:
             logging.info(f"Connection parameters received: uid={options['uid']}, platform={options['platform']}, meeting_url={options['meeting_url']}, token={options['token']}, meeting_id={options['meeting_id']}")
 
             if self.client_manager is None:
-                max_clients = options.get('max_clients', 4)
+                # Enforce server-side capacity from env (ignore client-provided max_clients)
+                max_clients = int(self.config_max_clients)
                 max_connection_time = options.get('max_connection_time', 3600)
                 self.client_manager = ClientManager(max_clients, max_connection_time)
+                logging.info(f"CAPACITY: Initialized ClientManager with max_clients={max_clients}, max_connection_time={max_connection_time}")
 
             self.use_vad = options.get('use_vad')
             if self.client_manager.is_server_full(websocket, options):
@@ -929,7 +938,7 @@ class TranscriptionServer:
             port
         ) as server:
             self.is_healthy = True # WebSocket server is up
-            logger.info(f"SERVER_RUNNING: WhisperLive server running on {host}:{port} with health check on {host}:9091/health")
+            logger.info(f"SERVER_RUNNING: WhisperLive server running on {host}:{port} with health check on {host}:9091/health and max_clients={self.config_max_clients}")
             
             # Immediately publish to Redis so clients can discover this server
             self._publish_sessions_metric()
