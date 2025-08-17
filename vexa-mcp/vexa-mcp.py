@@ -1,23 +1,96 @@
-import requests
 import json
-from mcp.server.fastmcp import FastMCP
+from fastapi import FastAPI, Header, HTTPException, Depends
+from fastapi_mcp import FastApiMCP
 from typing import Dict, Any, List, Optional
-import os
+from pydantic import BaseModel, Field
+import httpx
 
-mcp = FastMCP("Vexa-MCP")
-
+app = FastAPI()
 
 BASE_URL = "https://gateway.dev.vexa.ai"
-VEXA_API_KEY = os.environ.get("VEXA_API_KEY")
 
-HEADERS = {
-    "X-API-Key": VEXA_API_KEY,
-    "Content-Type": "application/json"
-}
+# ---------------------------
+# Dependencies & Utilities
+# ---------------------------
+async def get_api_key(authorization: Optional[str] = Header(None)) -> str:
+    """
+    Extract API key from Authorization header.
+    Expected format: "Bearer YOUR_API_KEY"
+    """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+    
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Authorization header must start with 'Bearer '")
+    
+    return authorization[7:]  # Remove "Bearer " prefix
 
 
-@mcp.tool()
-def request_meeting_bot(meeting_id: str, language: Optional[str] = None, bot_name: Optional[str] = None, meeting_platform: str = "google_meet") -> Dict[str, Any]:
+def get_headers(api_key: str) -> Dict[str, str]:
+    """Create headers with the provided API key"""
+    return {
+        "X-API-Key": api_key,
+        "Content-Type": "application/json"
+    }
+
+
+# ---------------------------
+# Request Models
+# ---------------------------
+class RequestMeetingBot(BaseModel):
+    meeting_id: str = Field(..., description="The unique identifier for the meeting (e.g., 'xxx-xxxx-xxx' from Google Meet URL)")
+    language: Optional[str] = Field(None, description="Optional language code for transcription (e.g., 'en', 'es'). If not specified, auto-detected")
+    bot_name: Optional[str] = Field(None, description="Optional custom name for the bot in the meeting")
+    meeting_platform: str = Field("google_meet", description="The meeting platform (e.g., 'google_meet', 'zoom'). Default is 'google_meet'.")
+
+
+class UpdateBotConfig(BaseModel):
+    language: str = Field(..., description="New language code for transcription (e.g., 'en', 'es')")
+
+
+class UpdateMeetingData(BaseModel):
+    name: Optional[str] = Field(None, description="Optional meeting name/title")
+    participants: Optional[List[str]] = Field(None, description="Optional list of participant names")
+    languages: Optional[List[str]] = Field(None, description="Optional list of language codes detected/used in the meeting")
+    notes: Optional[str] = Field(None, description="Optional meeting notes or description")
+
+
+# ---------------------------
+# Helper for async requests
+# ---------------------------
+async def make_request(method: str, url: str, api_key: str, payload: Optional[dict] = None):
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.request(
+                method,
+                url,
+                headers=get_headers(api_key),
+                json=payload
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPStatusError as http_err:
+        return {
+            "error": "HTTP error occurred",
+            "status_code": http_err.response.status_code,
+            "details": http_err.response.text
+        }
+    except httpx.TimeoutException:
+        return {"error": "Request timed out"}
+    except httpx.RequestError as req_err:
+        return {"error": "Request failed", "details": str(req_err)}
+    except Exception as e:
+        return {"error": "Unexpected error", "details": str(e)}
+
+
+# ---------------------------
+# Endpoints (docstrings preserved)
+# ---------------------------
+@app.post("/request-meeting-bot", operation_id="request_meeting_bot")
+async def request_meeting_bot(
+    data: RequestMeetingBot,
+    api_key: str = Depends(get_api_key)
+) -> Dict[str, Any]:
     """
     Request a Vexa bot to join a meeting for transcription.
     
@@ -32,30 +105,17 @@ def request_meeting_bot(meeting_id: str, language: Optional[str] = None, bot_nam
     
     Note: After a successful request, it typically takes about 10 seconds for the bot to join the meeting.
     """
+    url = f"{BASE_URL}/bots"
+    payload = data.dict()
+    return await make_request("POST", url, api_key, payload)
 
-    request_bot_url = f"{BASE_URL}/bots"
-    request_bot_payload = {
-        "platform": meeting_platform,
-        "native_meeting_id": meeting_id,
-        "language": language, # Optional: specify language
-        "bot_name": bot_name # Optional: custom name
-    }
 
-    try:
-        response = requests.post(request_bot_url, headers=HEADERS, json=request_bot_payload, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.HTTPError as http_err:
-        return {"error": "HTTP error occurred", "details": str(http_err), "status_code": getattr(http_err.response, 'status_code', None)}
-    except requests.exceptions.Timeout:
-        return {"error": "Request timed out"}
-    except requests.exceptions.RequestException as req_err:
-        return {"error": "Request failed", "details": str(req_err)}
-    except Exception as e:
-        return {"error": "An unexpected error occurred", "details": str(e)}
-
-@mcp.tool()
-def get_meeting_transcript(meeting_id: str, meeting_platform: str = "google_meet") -> Dict[str, Any]:
+@app.get("/meeting-transcript/{meeting_platform}/{meeting_id}", operation_id="get_meeting_transcript")
+async def get_meeting_transcript(
+    meeting_id: str,
+    meeting_platform: str = "google_meet",
+    api_key: str = Depends(get_api_key)
+) -> Dict[str, Any]:
     """
     Get the real-time transcript for a meeting.
     
@@ -68,48 +128,29 @@ def get_meeting_transcript(meeting_id: str, meeting_platform: str = "google_meet
     
     Note: This provides real-time transcription data and can be called during or after the meeting.
     """
-    get_transcript_url = f"{BASE_URL}/transcripts/{meeting_platform}/{meeting_id}"
-    
-    try:
-        response = requests.get(get_transcript_url, headers=HEADERS, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.HTTPError as http_err:
-        return {"error": "HTTP error occurred", "details": str(http_err), "status_code": getattr(http_err.response, 'status_code', None)}
-    except requests.exceptions.Timeout:
-        return {"error": "Request timed out"}
-    except requests.exceptions.RequestException as req_err:
-        return {"error": "Request failed", "details": str(req_err)}
-    except Exception as e:
-        return {"error": "An unexpected error occurred", "details": str(e)}
+    url = f"{BASE_URL}/transcripts/{meeting_platform}/{meeting_id}"
+    return await make_request("GET", url, api_key)
 
 
-@mcp.tool()
-def get_bot_status() -> Dict[str, Any]:
+@app.get("/bot-status", operation_id="get_bot_status")
+async def get_bot_status(api_key: str = Depends(get_api_key)) -> Dict[str, Any]:
     """
     Get the status of currently running bots.
     
     Returns:
         JSON with details about active bots under your API key
     """
-    get_status_url = f"{BASE_URL}/bots/status"
-    
-    try:
-        response = requests.get(get_status_url, headers=HEADERS, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.HTTPError as http_err:
-        return {"error": "HTTP error occurred", "details": str(http_err), "status_code": getattr(http_err.response, 'status_code', None)}
-    except requests.exceptions.Timeout:
-        return {"error": "Request timed out"}
-    except requests.exceptions.RequestException as req_err:
-        return {"error": "Request failed", "details": str(req_err)}
-    except Exception as e:
-        return {"error": "An unexpected error occurred", "details": str(e)}
+    url = f"{BASE_URL}/bots/status"
+    return await make_request("GET", url, api_key)
 
 
-@mcp.tool()
-def update_bot_config(meeting_id: str, language: str, meeting_platform: str = "google_meet") -> Dict[str, Any]:
+@app.put("/bot-config/{meeting_platform}/{meeting_id}", operation_id="update_bot_config")
+async def update_bot_config(
+    meeting_id: str,
+    data: UpdateBotConfig,
+    meeting_platform: str = "google_meet",
+    api_key: str = Depends(get_api_key)
+) -> Dict[str, Any]:
     """
     Update the configuration of an active bot (e.g., changing the language).
     
@@ -121,27 +162,16 @@ def update_bot_config(meeting_id: str, language: str, meeting_platform: str = "g
     Returns:
         JSON indicating whether the update request was accepted
     """
-    update_config_url = f"{BASE_URL}/bots/{meeting_platform}/{meeting_id}/config"
-    update_payload = {
-        "language": language
-    }
-    
-    try:
-        response = requests.put(update_config_url, headers=HEADERS, json=update_payload, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.HTTPError as http_err:
-        return {"error": "HTTP error occurred", "details": str(http_err), "status_code": getattr(http_err.response, 'status_code', None)}
-    except requests.exceptions.Timeout:
-        return {"error": "Request timed out"}
-    except requests.exceptions.RequestException as req_err:
-        return {"error": "Request failed", "details": str(req_err)}
-    except Exception as e:
-        return {"error": "An unexpected error occurred", "details": str(e)}
+    url = f"{BASE_URL}/bots/{meeting_platform}/{meeting_id}/config"
+    return await make_request("PUT", url, api_key, data.dict())
 
 
-@mcp.tool()
-def stop_bot(meeting_id: str, meeting_platform: str = "google_meet") -> Dict[str, Any]:
+@app.delete("/bot/{meeting_platform}/{meeting_id}", operation_id="stop_bot")
+async def stop_bot(
+    meeting_id: str,
+    meeting_platform: str = "google_meet",
+    api_key: str = Depends(get_api_key)
+) -> Dict[str, Any]:
     """
     Remove an active bot from a meeting.
     
@@ -152,48 +182,29 @@ def stop_bot(meeting_id: str, meeting_platform: str = "google_meet") -> Dict[str
     Returns:
         JSON confirming the bot removal
     """
-    stop_bot_url = f"{BASE_URL}/bots/{meeting_platform}/{meeting_id}"
-    
-    try:
-        response = requests.delete(stop_bot_url, headers=HEADERS, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.HTTPError as http_err:
-        return {"error": "HTTP error occurred", "details": str(http_err), "status_code": getattr(http_err.response, 'status_code', None)}
-    except requests.exceptions.Timeout:
-        return {"error": "Request timed out"}
-    except requests.exceptions.RequestException as req_err:
-        return {"error": "Request failed", "details": str(req_err)}
-    except Exception as e:
-        return {"error": "An unexpected error occurred", "details": str(e)}
+    url = f"{BASE_URL}/bots/{meeting_platform}/{meeting_id}"
+    return await make_request("DELETE", url, api_key)
 
 
-@mcp.tool()
-def list_meetings() -> Dict[str, Any]:
+@app.get("/meetings", operation_id="list_meetings")
+async def list_meetings(api_key: str = Depends(get_api_key)) -> Dict[str, Any]:
     """
     List all meetings associated with your API key.
     
     Returns:
         JSON with a list of meeting records
     """
-    list_meetings_url = f"{BASE_URL}/meetings"
-    
-    try:
-        response = requests.get(list_meetings_url, headers=HEADERS, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.HTTPError as http_err:
-        return {"error": "HTTP error occurred", "details": str(http_err), "status_code": getattr(http_err.response, 'status_code', None)}
-    except requests.exceptions.Timeout:
-        return {"error": "Request timed out"}
-    except requests.exceptions.RequestException as req_err:
-        return {"error": "Request failed", "details": str(req_err)}
-    except Exception as e:
-        return {"error": "An unexpected error occurred", "details": str(e)}
+    url = f"{BASE_URL}/meetings"
+    return await make_request("GET", url, api_key)
 
 
-@mcp.tool()
-def update_meeting_data(meeting_id: str, name: Optional[str] = None, participants: Optional[List[str]] = None, languages: Optional[List[str]] = None, notes: Optional[str] = None, meeting_platform: str = "google_meet") -> Dict[str, Any]:
+@app.patch("/meeting/{meeting_platform}/{meeting_id}", operation_id="update_meeting_data")
+async def update_meeting_data(
+    meeting_id: str,
+    data: UpdateMeetingData,
+    meeting_platform: str = "google_meet",
+    api_key: str = Depends(get_api_key)
+) -> Dict[str, Any]:
     """
     Update meeting metadata such as name, participants, languages, and notes.
     
@@ -208,37 +219,17 @@ def update_meeting_data(meeting_id: str, name: Optional[str] = None, participant
     Returns:
         JSON with the updated meeting record
     """
-    update_meeting_url = f"{BASE_URL}/meetings/{meeting_platform}/{meeting_id}"
-    
-    # Build data payload with only provided fields
-    data = {}
-    if name is not None:
-        data["name"] = name
-    if participants is not None:
-        data["participants"] = participants
-    if languages is not None:
-        data["languages"] = languages
-    if notes is not None:
-        data["notes"] = notes
-    
-    update_payload = {"data": data}
-    
-    try:
-        response = requests.patch(update_meeting_url, headers=HEADERS, json=update_payload, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.HTTPError as http_err:
-        return {"error": "HTTP error occurred", "details": str(http_err), "status_code": getattr(http_err.response, 'status_code', None)}
-    except requests.exceptions.Timeout:
-        return {"error": "Request timed out"}
-    except requests.exceptions.RequestException as req_err:
-        return {"error": "Request failed", "details": str(req_err)}
-    except Exception as e:
-        return {"error": "An unexpected error occurred", "details": str(e)}
+    url = f"{BASE_URL}/meetings/{meeting_platform}/{meeting_id}"
+    payload = {"data": {k: v for k, v in data.dict().items() if v is not None}}
+    return await make_request("PATCH", url, api_key, payload)
 
 
-@mcp.tool()
-def delete_meeting(meeting_id: str, meeting_platform: str = "google_meet") -> Dict[str, Any]:
+@app.delete("/meeting/{meeting_platform}/{meeting_id}", operation_id="delete_meeting")
+async def delete_meeting(
+    meeting_id: str,
+    meeting_platform: str = "google_meet",
+    api_key: str = Depends(get_api_key)
+) -> Dict[str, Any]:
     """
     Permanently delete a meeting and all its associated transcripts.
     
@@ -251,21 +242,16 @@ def delete_meeting(meeting_id: str, meeting_platform: str = "google_meet") -> Di
     
     Warning: This action cannot be undone.
     """
-    delete_meeting_url = f"{BASE_URL}/meetings/{meeting_platform}/{meeting_id}"
-    
-    try:
-        response = requests.delete(delete_meeting_url, headers=HEADERS, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.HTTPError as http_err:
-        return {"error": "HTTP error occurred", "details": str(http_err), "status_code": getattr(http_err.response, 'status_code', None)}
-    except requests.exceptions.Timeout:
-        return {"error": "Request timed out"}
-    except requests.exceptions.RequestException as req_err:
-        return {"error": "Request failed", "details": str(req_err)}
-    except Exception as e:
-        return {"error": "An unexpected error occurred", "details": str(e)}
+    url = f"{BASE_URL}/meetings/{meeting_platform}/{meeting_id}"
+    return await make_request("DELETE", url, api_key)
 
+
+# ---------------------------
+# MCP & Server
+# ---------------------------
+mcp = FastApiMCP(app)
+mcp.mount_http()
 
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

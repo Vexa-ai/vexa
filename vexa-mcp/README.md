@@ -1,101 +1,107 @@
-# Vexa MCP Server Setup Guide
+# Vexa Meeting Bot MCP Setup Guide
 
-This guide will help you set up and run the Vexa MCP (Model Context Protocol) Server to enable transcription capabilities in Claude Desktop (or any MCP client of your choice)!
+Welcome! This guide will help you set up and connect Claude (or any other client) to the Vexa Meeting Bot MCP (Model Context Protocol).
+Follow these steps carefully, even if you are new to these tools. In under 5 minutes you will be easily set up. All we have to do is install Node.js and copy paste a config.
 
-## Prerequisites
+## 1. Install Node.js (Required for npm)
 
-- Claude Desktop installed on your system
-- A Vexa API key
+The MCP uses `npm` (Node Package Manager) to connect to the server, which comes with Node.js. If you do not have Node.js installed:
 
-## 🚀 Quick Setup
+- Go to the [Node.js download page](https://nodejs.org/)
+- Download the **LTS** (Long Term Support) version for your operating system (Windows, Mac, or Linux)
+- Run the installer and follow the prompts
+- After installation, open a terminal (Command Prompt, PowerShell, or Terminal) and run:
 
-### Step 1: Install the MCP Server File
-
-Download or clone the `vexa-mcp.py` file to your desired directory on your machine.
-
-### Step 2: Install UV (Recommended)
-
-UV is a fast Python package installer and resolver. Choose your platform:
-
-**Windows (PowerShell):**
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+node -v
+npm -v
 ```
 
-**macOS/Linux:**
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+You should see version numbers for both. If you do, you are ready to proceed.
 
-Learn more about [uv](https://docs.astral.sh/uv/)
+## 2. Prepare Your API Key
 
-### Step 3: Install Dependencies
+You will need your Vexa API key to connect to the MCP. If you do not have one, please generate it or view existing ones from https://vexa.ai/dashboard/api-keys
 
-Choose one of the following methods:
+## 3. Configure Claude to Connect to Vexa MCP
+(Same steps can be followed to connect to any other MCP Client (Cursor etc..) make sure you use the same config)
 
-**Option A: Using UV (Recommended)**
-```bash
-uv add "mcp[cli]" requests
-```
-
-**Option B: Using pip**
-```bash
-pip install "mcp[cli]" requests
-```
-
-### Step 4: Configure Claude Desktop
 
 1. **Open Claude Desktop Settings**
    - Launch Claude Desktop
    - Navigate to **Settings** → **Developer**
-   - Click **Edit Config**
+   - Click **Edit Config** (This will open a file in a text editor such as notepad)
+
 
 2. **Add MCP Server Configuration**
-   
-   Paste the following configuration into the config file, replacing the placeholder values:
 
-   ```json
-   {
-     "mcpServers": {
-       "Vexa-MCP": {
-         "command": "uv",
-         "args": [
-           "--directory",
-           "[full_path_to_directory_with_vexa-mcp.py_file]",
-           "run",
-           "vexa-mcp.py"
-         ],
-         "env": {
-           "VEXA_API_KEY": "[your_api_key]"
-         }
-       }
-     }
-   }
-   ```
+**Paste the following configuration into your the config file you just opened:**
+(They differ on Windows/Mac, choose the one that matches your system)
 
-3. **Update Configuration Values**
-   - Replace `[full_path_to_directory_with_vexa-mcp.py_file]` with the actual path to your directory
-   - Replace `[your_api_key]` with your Vexa API key
 
-4. **Save and Restart**
-   - Save the configuration file
-   - Restart Claude Desktop
+**For Windows:**
 
-   Everything should work well now. You can use the same config in other MCP clients such as Cursor etc..
+```json
+{
+  "mcpServers": {
+    "fastapi-mcp": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://gateway.dev.vexa.ai/mcp",
+        "--header",
+        "Authorization:${VEXA_API_KEY}"
+      ],
+      "env": {
+        "VEXA_API_KEY": "Bearer YOUR_API_KEY_HERE"
+      }
+    }
+  }
+}
+```
 
-## ✅ Verification
+**For macOS:**
 
-After restarting Claude Desktop, the Vexa MCP server should be available. You can verify the setup by checking if transcription capabilities are working in your Claude conversations.
+```json
+{
+  "mcpServers": {
+    "fastapi-mcp": {
+      "command": "npx",
+      "args": [
+        "-y"
+        "mcp-remote",
+        "https://gateway.dev.vexa.ai/mcp",
+        "--header",
+        "Authorization: Bearer ${VEXA_API_KEY}"
+      ],
+      "env": {
+        "VEXA_API_KEY": "YOUR_API_KEY_HERE"
+      }
+    }
+  }
+}
+```
 
-## 🔧 Troubleshooting
 
-- **API Key Issues**: Verify your Vexa API key is valid and properly set in the environment variables
-- **Path Issues**: Make sure to use the full absolute path to the directory containing `vexa-mcp.py`
-- **UV Issues**: Make sure uv is properly installed by running `uv --version`. Restart if issue persists
+- **Important:** Replace `YOUR_API_KEY_HERE` with your real Vexa API key. Do not share your API key with others.
 
-## Additional Resources
-- [MCP Protocol Documentation](https://modelcontextprotocol.io/)
+
+## 4. Start Using the MCP
+
+Once you have completed the above steps:
+
+- Save your configuration file
+- Restart Claude
+- Go to developer settings again and ensure that MCP server is there and running
+- Start using it
+
+## Troubleshooting
+
+- If you see errors about missing `npx` or `npm`, make sure Node.js is installed
+- If you get authentication errors, double-check your API key
+- For further help, contact Vexa support
 
 ---
 
-**Need help?** Contact us directly
+**For more information about the Vexa API Gateway, visit:** [https://gateway.dev.vexa.ai](https://gateway.dev.vexa.ai)
