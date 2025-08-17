@@ -562,21 +562,35 @@ class TranscriptionServer:
         # Prefer Nomad alloc-id for stable grouping; fall back to HOSTNAME or random uuid
         self._alloc_id = os.getenv("NOMAD_ALLOC_ID", os.getenv("HOSTNAME", str(uuid.uuid4())[:8]))
         
-        # Derive container IP on the same network used to reach Redis (guaranteed shared with other app services).
-        try:
-            probe_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            # UDP connect does not send packets; it just sets internal routing.
-            probe_sock.connect((os.getenv("REDIS_HOST", "redis"), int(os.getenv("REDIS_PORT", "6379"))))
-            self._pod_ip = probe_sock.getsockname()[0]
-            probe_sock.close()
-        except Exception:
-            # Fallback to hostname resolution
+        # Use forced IP from environment if available, otherwise derive container IP
+        forced_ip = os.getenv("WL_FORCE_IP")
+        if forced_ip:
+            self._pod_ip = forced_ip
+            logging.info(f"✅ USING FORCED IP: WL_FORCE_IP={forced_ip}")
+        else:
+            # Derive container IP on the same network used to reach Redis (guaranteed shared with other app services).
             try:
-                self._pod_ip = socket.gethostbyname(socket.gethostname())
+                probe_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                # UDP connect does not send packets; it just sets internal routing.
+                probe_sock.connect((os.getenv("REDIS_HOST", "redis"), int(os.getenv("REDIS_PORT", "6379"))))
+                self._pod_ip = probe_sock.getsockname()[0]
+                probe_sock.close()
             except Exception:
-                self._pod_ip = "127.0.0.1"
+                # Fallback to hostname resolution
+                try:
+                    self._pod_ip = socket.gethostbyname(socket.gethostname())
+                except Exception:
+                    self._pod_ip = "127.0.0.1"
+            logging.info(f"⚠️  AUTO-DETECTED IP: {self._pod_ip} (no WL_FORCE_IP set)")
+        
+        logging.info(f"🔍 FINAL POD IP: {self._pod_ip}")
+        logging.info(f"🔍 LISTEN PORT: {self._listen_port}")
+        logging.info(f"🔍 ENV WL_FORCE_IP: {os.getenv('WL_FORCE_IP', 'NOT_SET')}")
+        logging.info(f"🔍 ENV WL_LISTEN_PORT: {os.getenv('WL_LISTEN_PORT', 'NOT_SET')}")
         
         self._ws_url = f"ws://{self._pod_ip}:{self._listen_port}/ws"
+        logging.info(f"🌐 WEBSOCKET URL CONFIGURED: {self._ws_url}")
+        logging.info(f"📡 THIS URL WILL BE REGISTERED TO REDIS: {self._ws_url}")
         self._metric_stop_evt = threading.Event()
         threading.Thread(target=self._metric_heartbeat, daemon=True).start()
         # --- End WL Scaling block ---
