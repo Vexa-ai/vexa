@@ -126,8 +126,8 @@ async function performGracefulLeave(
   }
 
   // Determine final exit code. If the initial intent was a successful exit (code 0),
-  // it should always be 0. For other cases, base it on the platform leave success.
-  const finalCallbackExitCode = (exitCode === 0) ? 0 : (platformLeaveSuccess ? 0 : 1);
+  // it should always be 0. For error cases (non-zero exit codes), preserve the original error code.
+  const finalCallbackExitCode = (exitCode === 0) ? 0 : exitCode;
   const finalCallbackReason = reason;
 
   if (botManagerCallbackUrl && currentConnectionId) {
