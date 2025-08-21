@@ -1,4 +1,5 @@
 import json
+import os
 from fastapi import FastAPI, Header, HTTPException, Depends
 from fastapi_mcp import FastApiMCP
 from typing import Dict, Any, List, Optional
@@ -7,7 +8,7 @@ import httpx
 
 app = FastAPI()
 
-BASE_URL = "https://gateway.dev.vexa.ai"
+BASE_URL = os.getenv("API_GATEWAY_URL", "http://api-gateway:8000")
 
 # ---------------------------
 # Dependencies & Utilities

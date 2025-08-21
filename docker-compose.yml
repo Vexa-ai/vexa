@@ -254,6 +254,23 @@ services:
       - vexa_default
     restart: unless-stopped
 
+  mcp:
+    build:
+      context: .
+      dockerfile: services/mcp/Dockerfile
+    ports:
+      - "${MCP_HOST_PORT:-18888}:18888"
+    environment:
+      - API_GATEWAY_URL=http://api-gateway:8000
+      - LOG_LEVEL=DEBUG
+    init: true
+    depends_on:
+      api-gateway:
+        condition: service_started
+    networks:
+      - vexa_default
+    restart: unless-stopped
+
   redis:
     image: redis:7.0-alpine
     command:
