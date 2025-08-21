@@ -1,0 +1,17 @@
+{
+    "mcpServers": {
+      "Vexa": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "mcp-remote",
+          "http://localhost:18888/mcp",
+          "--header",
+          "Authorization:${VEXA_API_KEY}"
+        ],
+        "env": {
+          "VEXA_API_KEY": "AgJpnjTjOfpcqCHdGu2E1qDh6sYOxe7EAdOZkGuc"
+        }
+      }
+    }
+  }

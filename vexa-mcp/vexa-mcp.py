@@ -15,15 +15,9 @@ BASE_URL = "https://gateway.dev.vexa.ai"
 async def get_api_key(authorization: Optional[str] = Header(None)) -> str:
     """
     Extract API key from Authorization header.
-    Expected format: "Bearer YOUR_API_KEY"
+    Expected format: "YOUR_API_KEY"
     """
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Missing Authorization header")
-    
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Authorization header must start with 'Bearer '")
-    
-    return authorization[7:]  # Remove "Bearer " prefix
+    return authorization
 
 
 def get_headers(api_key: str) -> Dict[str, str]:
@@ -38,10 +32,10 @@ def get_headers(api_key: str) -> Dict[str, str]:
 # Request Models
 # ---------------------------
 class RequestMeetingBot(BaseModel):
-    meeting_id: str = Field(..., description="The unique identifier for the meeting (e.g., 'xxx-xxxx-xxx' from Google Meet URL)")
+    native_meeting_id: str = Field(..., description="The unique identifier for the meeting (e.g., 'xxx-xxxx-xxx' from Google Meet URL)")
     language: Optional[str] = Field(None, description="Optional language code for transcription (e.g., 'en', 'es'). If not specified, auto-detected")
     bot_name: Optional[str] = Field(None, description="Optional custom name for the bot in the meeting")
-    meeting_platform: str = Field("google_meet", description="The meeting platform (e.g., 'google_meet', 'zoom'). Default is 'google_meet'.")
+    platform: str = Field("google_meet", description="The meeting platform (e.g., 'google_meet', 'zoom'). Default is 'google_meet'.")
 
 
 class UpdateBotConfig(BaseModel):
@@ -95,7 +89,7 @@ async def request_meeting_bot(
     Request a Vexa bot to join a meeting for transcription.
     
     Args:
-        meeting_id: The unique identifier for the meeting (e.g., 'xxx-xxxx-xxx' from Google Meet URL)
+        native_meeting_id: The unique identifier for the meeting (e.g., 'xxx-xxxx-xxx' from Google Meet URL)
         language: Optional language code for transcription (e.g., 'en', 'es'). If not specified, auto-detected
         bot_name: Optional custom name for the bot in the meeting
         meeting_platform: The meeting platform (e.g., 'google_meet', 'zoom'). Default is 'google_meet'.
@@ -254,4 +248,4 @@ mcp.mount_http()
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=18888)
