@@ -95,25 +95,7 @@ services:
       - DEVICE_TYPE=${DEVICE_TYPE}
       - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}
       - WL_MAX_CLIENTS=${WL_MAX_CLIENTS}
-    entrypoint: /bin/sh
-    command:
-      - "-c"
-      - |
-        if [ "$${DEVICE_TYPE}" = "cuda" ]; then
-          echo 'INFO: DEVICE_TYPE is cuda, starting WhisperLive GPU service.' &&
-          MODEL_PATH=$$(find /root/.cache/huggingface/hub -name "*faster-whisper*" -type d | head -1)
-          if [ -n "$$MODEL_PATH" ]; then
-            SNAPSHOT_PATH=$$(find "$$MODEL_PATH/snapshots" -maxdepth 1 -type d | grep -v "snapshots$$" | head -1)
-            echo "Using model at: $$SNAPSHOT_PATH"
-            exec python3 /app/run_server.py --port 9090 --backend faster_whisper -fw "$$SNAPSHOT_PATH";
-          else
-            echo "No model found in hub directory"
-            exit 1
-          fi
-        else
-          echo "INFO: DEVICE_TYPE is not cuda (it is '$${DEVICE_TYPE}'), WhisperLive GPU service will not start. Sleeping indefinitely." &&
-          sleep infinity;
-        fi
+    command: --port 9090 --backend faster_whisper --faster_whisper_custom_model_path ${WHISPER_MODEL_SIZE}
     expose:
       - "9090" #use for transcription web socket
       - "9091" #use for health check
@@ -173,27 +155,9 @@ services:
       - DEVICE_TYPE=cpu
       - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}
       - WL_MAX_CLIENTS=${WL_MAX_CLIENTS}
-    entrypoint: /bin/sh
     deploy:
       replicas: 2
-    command:
-      - "-c"
-      - |
-        if [ "$${DEVICE_TYPE}" = "cpu" ]; then
-          echo 'INFO: DEVICE_TYPE is cpu, starting WhisperLive CPU service.' &&
-          MODEL_PATH=$$(find /root/.cache/huggingface/hub -name "*faster-whisper*" -type d | head -1)
-          if [ -n "$$MODEL_PATH" ]; then
-            SNAPSHOT_PATH=$$(find "$$MODEL_PATH/snapshots" -maxdepth 1 -type d | grep -v "snapshots$$" | head -1)
-            echo "Using model at: $$SNAPSHOT_PATH"
-            exec python3 /app/run_server.py --port 9090 --backend faster_whisper -fw "$$SNAPSHOT_PATH";
-          else
-            echo "No model found in hub directory"
-            exit 1
-          fi
-        else
-          echo "INFO: DEVICE_TYPE is not cpu (it is '$${DEVICE_TYPE}'), WhisperLive CPU service will not start. Sleeping indefinitely." &&
-          sleep infinity;
-        fi
+    command: --port 9090 --backend faster_whisper --faster_whisper_custom_model_path ${WHISPER_MODEL_SIZE}
     expose:
       - "9090" #use for transcription web socket
       - "9091" #use for health check

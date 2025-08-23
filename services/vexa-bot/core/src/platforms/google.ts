@@ -460,7 +460,7 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                       uid: currentSessionUid,
                       language: currentWsLanguage || null,
                       task: currentWsTask || "transcribe",
-                      model: "medium",
+                      model: null, // Let the server use WHISPER_MODEL_SIZE from environment
                       use_vad: true,
                       platform: platform,
                       token: token,
