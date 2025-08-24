@@ -1130,33 +1130,63 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
               "Audio processing pipeline connected and sending data silently."
             );
 
-            // Click the "People" button
-            const peopleButton = document.querySelector(
-              'button[aria-label^="People"]'
-            );
-            if (!peopleButton) {
-              recorder.disconnect();
-              
-              // Capture detailed error context for debugging
-              const errorContext = {
-                error_type: "ui_element_not_found",
-                element_selector: 'button[aria-label^="People"]',
-                page_url: window.location.href,
-                page_title: document.title,
-                available_buttons: Array.from(document.querySelectorAll('button')).map(btn => ({
-                  aria_label: btn.getAttribute('aria-label'),
-                  text_content: btn.textContent?.trim(),
-                  class_list: Array.from(btn.classList)
-                })).slice(0, 10) // Limit to first 10 buttons
-              };
-              
-              return reject(
-                new Error(
-                  `[BOT Inner Error] 'People' button not found. Update the selector. Context: ${JSON.stringify(errorContext)}`
-                )
-              );
+            // Click the "People" button - Updated with multiple selector strategies
+            const peopleButtonSelectors = [
+              'button[aria-label^="People"]',
+              'button[aria-label*="people"]',
+              'button[aria-label*="Participants"]',
+              'button[aria-label*="participants"]',
+              'button[aria-label*="Show people"]',
+              'button[aria-label*="show people"]',
+              'button[aria-label*="View people"]',
+              'button[aria-label*="view people"]',
+              'button[aria-label*="Meeting participants"]',
+              'button[aria-label*="meeting participants"]',
+              // Try text content based selectors
+              'button:has(span:contains("People"))',
+              'button:has(span:contains("people"))',
+              'button:has(span:contains("Participants"))',
+              'button:has(span:contains("participants"))',
+              // Try icon-based selectors
+              'button[data-mdc-dialog-action]',
+              'button[data-tooltip*="people"]',
+              'button[data-tooltip*="People"]',
+              'button[data-tooltip*="participants"]',
+              'button[data-tooltip*="Participants"]'
+            ];
+
+            let peopleButton: HTMLElement | null = null;
+            let usedSelector = '';
+
+            // Try each selector until we find the button
+            for (const selector of peopleButtonSelectors) {
+              try {
+                const button = document.querySelector(selector);
+                if (button) {
+                  peopleButton = button as HTMLElement;
+                  usedSelector = selector;
+                  (window as any).logBot(`Found People button using selector: ${selector}`);
+                  break;
+                }
+              } catch (e) {
+                // Some selectors might not be supported in older browsers
+                continue;
+              }
             }
-            (peopleButton as HTMLElement).click();
+
+            if (!peopleButton) {
+              // Fallback: If we can't find the People button, we can still monitor participants
+              // using the existing MutationObserver system that watches for participant elements
+              (window as any).logBot(`People button not found, but continuing with fallback participant monitoring via MutationObserver`);
+              (window as any).peopleButtonClicked = false;
+            } else {
+              // Log which selector worked
+              (window as any).logBot(`Successfully found People button using selector: ${usedSelector}`);
+              peopleButton.click();
+              
+              // Set a flag that we successfully clicked the People button
+              (window as any).peopleButtonClicked = true;
+            }
 
             // Monitor participant list every 5 seconds
             let aloneTime = 0;
