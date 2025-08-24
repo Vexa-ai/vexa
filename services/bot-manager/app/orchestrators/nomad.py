@@ -123,40 +123,159 @@ async def start_bot_container(
     return None, None
 
 
-def stop_bot_container(container_id: str) -> bool:  # type: ignore
+def stop_bot_container(container_id: str) -> bool:
     """Stop (force-fail) a dispatched Nomad job by ID.
 
-    For now this is a stub that logs the request and returns False to indicate
-    the operation is not implemented.
+    Uses the Nomad API to stop the job allocation.
     """
-    logger.warning(
-        "stop_bot_container called for %s but Nomad stop not yet implemented.",
-        container_id,
-    )
+    logger.info(f"Stopping Nomad allocation {container_id}")
+    
+    try:
+        # Use requests for synchronous operation
+        import requests
+        
+        # Stop the allocation
+        url = f"{NOMAD_ADDR}/v1/allocation/{container_id}/stop"
+        resp = requests.post(url, timeout=10)
+        
+        if resp.status_code == 200:
+            logger.info(f"Successfully stopped allocation {container_id}")
+            return True
+        elif resp.status_code == 404:
+            logger.warning(f"Allocation {container_id} not found, may already be stopped")
+            return True
+        else:
+            logger.error(f"Failed to stop allocation {container_id}: HTTP {resp.status_code}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Error stopping allocation {container_id}: {e}")
     return False
 
 
-async def get_running_bots_status(user_id: int) -> List[Dict[str, Any]]:  # type: ignore
-    """Return a list of running bots for the given user.
-
-    Stub implementation – returns an empty list.
+async def get_running_bots_status(user_id: int) -> List[Dict[str, Any]]:
+    """Return a list of running bots for the given user by querying Nomad API.
+    
+    Queries the Nomad API to find all running vexa-bot jobs and filters them
+    by the user_id in the job metadata.
     """
-    logger.info(
-        "get_running_bots_status called for user %s – not yet implemented for Nomad.",
-        user_id,
-    )
+    logger.info(f"Querying Nomad for running bots for user {user_id}")
+    
+    try:
+        # Query Nomad for all running vexa-bot jobs
+        url = f"{NOMAD_ADDR}/v1/jobs"
+        params = {"prefix": BOT_JOB_NAME}
+        
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url, params=params, timeout=10)
+            resp.raise_for_status()
+            jobs_data = resp.json()
+            
+            running_bots = []
+            
+            for job in jobs_data:
+                # Only process vexa-bot jobs
+                if not job.get("ID", "").startswith(BOT_JOB_NAME):
+                    continue
+                    
+                # Check if job is running
+                job_status = job.get("Status", "")
+                if job_status not in ["running", "pending"]:
+                    continue
+                
+                # Get job details to access metadata
+                job_id = job.get("ID")
+                job_detail_url = f"{NOMAD_ADDR}/v1/job/{job_id}"
+                
+                try:
+                    detail_resp = await client.get(job_detail_url, timeout=10)
+                    detail_resp.raise_for_status()
+                    job_detail = detail_resp.json()
+                    
+                    # Extract metadata from the job
+                    job_meta = job_detail.get("Meta", {})
+                    job_user_id = job_meta.get("user_id")
+                    
+                    # Only include bots for the requested user
+                    if job_user_id and str(job_user_id) == str(user_id):
+                        # Get allocation info for container details
+                        allocations_url = f"{NOMAD_ADDR}/v1/job/{job_id}/allocations"
+                        alloc_resp = await client.get(allocations_url, timeout=10)
+                        alloc_resp.raise_for_status()
+                        allocations = alloc_resp.json()
+                        
+                        container_id = None
+                        if allocations:
+                            # Use the first allocation ID as container ID
+                            container_id = allocations[0].get("ID")
+                        
+                        bot_status = {
+                            "container_id": container_id,
+                            "container_name": job_id,
+                            "platform": job_meta.get("platform"),
+                            "native_meeting_id": job_meta.get("native_meeting_id"),
+                            "status": job_status,
+                            "created_at": job.get("SubmitTime"),
+                            "labels": job_meta,
+                            "meeting_id_from_name": job_meta.get("meeting_id")
+                        }
+                        
+                        running_bots.append(bot_status)
+                        logger.debug(f"Found running bot: {bot_status}")
+                        
+                except Exception as detail_error:
+                    logger.warning(f"Failed to get details for job {job_id}: {detail_error}")
+                    continue
+            
+            logger.info(f"Found {len(running_bots)} running bots for user {user_id}")
+            return running_bots
+            
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP {e.response.status_code} error querying Nomad jobs: {e}")
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP error talking to Nomad at {NOMAD_ADDR}: {e}")
+    except Exception as e:
+        logger.exception(f"Unexpected error querying Nomad for running bots: {e}")
+    
+    # Return empty list on any error
     return []
 
 
-async def verify_container_running(container_id: str) -> bool:  # type: ignore
+async def verify_container_running(container_id: str) -> bool:
     """Return True if the dispatched Nomad job is still running.
 
-    Stub implementation – always returns True.
+    Queries the Nomad API to check if the job allocation is still active.
     """
-    logger.debug(
-        "verify_container_running called for %s – assuming running (stub).",
-        container_id,
-    )
+    logger.debug(f"Verifying if Nomad allocation {container_id} is still running")
+    
+    try:
+        # Query Nomad for the specific allocation
+        url = f"{NOMAD_ADDR}/v1/allocation/{container_id}"
+        
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url, timeout=10)
+            resp.raise_for_status()
+            allocation_data = resp.json()
+            
+            # Check if allocation is running
+            client_status = allocation_data.get("ClientStatus", "")
+            is_running = client_status in ["running", "pending"]
+            
+            logger.debug(f"Allocation {container_id} client status: {client_status}, running: {is_running}")
+            return is_running
+            
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            # Allocation not found, assume it's not running
+            logger.debug(f"Allocation {container_id} not found (404), assuming not running")
+            return False
+        logger.warning(f"HTTP {e.response.status_code} error checking allocation {container_id}: {e}")
+    except httpx.HTTPError as e:
+        logger.warning(f"HTTP error checking allocation {container_id}: {e}")
+    except Exception as e:
+        logger.warning(f"Unexpected error checking allocation {container_id}: {e}")
+    
+    # On any error, assume running to be safe
     return True
 
 # Alias for shared function – import lazily to avoid circulars

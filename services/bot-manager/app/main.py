@@ -71,6 +71,8 @@ class BotExitCallbackPayload(BaseModel):
     connection_id: str = Field(..., description="The connectionId (session_uid) of the exiting bot.")
     exit_code: int = Field(..., description="The exit code of the bot process (0 for success, 1 for UI leave failure).")
     reason: Optional[str] = Field("self_initiated_leave", description="Reason for the exit.")
+    error_details: Optional[Dict[str, Any]] = Field(None, description="Detailed error information including stack trace, error message, and context.")
+    platform_specific_error: Optional[str] = Field(None, description="Platform-specific error message or details.")
 
 class BotStartupCallbackPayload(BaseModel):
     connection_id: str = Field(..., description="The connection ID of the bot session.")
@@ -641,6 +643,23 @@ async def bot_exit_callback(
         else:
             meeting.status = 'failed'
             logger.warning(f"Bot exit callback: Meeting {meeting_id} status updated to 'failed' due to exit_code {exit_code}.")
+            
+            # Store detailed error information in the meeting's data field
+            if payload.error_details or payload.platform_specific_error:
+                if not meeting.data:
+                    meeting.data = {}
+                
+                error_data = {
+                    "exit_code": exit_code,
+                    "reason": payload.reason,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "error_details": payload.error_details,
+                    "platform_specific_error": payload.platform_specific_error
+                }
+                
+                # Store in data field for debugging and analysis
+                meeting.data["last_error"] = error_data
+                logger.info(f"Bot exit callback: Stored error details in meeting {meeting_id} data: {error_data}")
         
         meeting.end_time = datetime.utcnow()
         await db.commit()

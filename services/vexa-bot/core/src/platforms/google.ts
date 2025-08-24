@@ -57,7 +57,7 @@ async function callStartupCallback(botConfig: BotConfig): Promise<void> {
 export async function handleGoogleMeet(
   botConfig: BotConfig,
   page: Page,
-  gracefulLeaveFunction: (page: Page | null, exitCode: number, reason: string) => Promise<void>
+  gracefulLeaveFunction: (page: Page | null, exitCode: number, reason: string, errorDetails?: any) => Promise<void>
 ): Promise<void> {
   const leaveButton = `//button[@aria-label="Leave call"]`;
 
@@ -74,7 +74,17 @@ export async function handleGoogleMeet(
   } catch (error: any) {
     console.error("Error during joinMeeting: " + error.message);
     log("Error during joinMeeting: " + error.message + ". Triggering graceful leave.");
-    await gracefulLeaveFunction(page, 1, "join_meeting_error");
+    
+    const errorDetails = {
+      error_message: error.message,
+      error_stack: error.stack,
+      error_name: error.name,
+      context: "join_meeting_error",
+      platform: "google_meet",
+      timestamp: new Date().toISOString()
+    };
+    
+    await gracefulLeaveFunction(page, 1, "join_meeting_error", errorDetails);
     return;
   }
 
@@ -120,8 +130,19 @@ export async function handleGoogleMeet(
   } catch (error: any) {
     console.error("Error after join attempt (admission/recording setup): " + error.message);
     log("Error after join attempt (admission/recording setup): " + error.message + ". Triggering graceful leave.");
+    
+    // Capture detailed error information for debugging
+    const errorDetails = {
+      error_message: error.message,
+      error_stack: error.stack,
+      error_name: error.name,
+      context: "post_join_setup_error",
+      platform: "google_meet",
+      timestamp: new Date().toISOString()
+    };
+    
     // Use a general error code here, as it could be various issues.
-    await gracefulLeaveFunction(page, 1, "post_join_setup_error");
+    await gracefulLeaveFunction(page, 1, "post_join_setup_error", errorDetails);
     return;
   }
 }
@@ -1115,9 +1136,23 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
             );
             if (!peopleButton) {
               recorder.disconnect();
+              
+              // Capture detailed error context for debugging
+              const errorContext = {
+                error_type: "ui_element_not_found",
+                element_selector: 'button[aria-label^="People"]',
+                page_url: window.location.href,
+                page_title: document.title,
+                available_buttons: Array.from(document.querySelectorAll('button')).map(btn => ({
+                  aria_label: btn.getAttribute('aria-label'),
+                  text_content: btn.textContent?.trim(),
+                  class_list: Array.from(btn.classList)
+                })).slice(0, 10) // Limit to first 10 buttons
+              };
+              
               return reject(
                 new Error(
-                  "[BOT Inner Error] 'People' button not found. Update the selector."
+                  `[BOT Inner Error] 'People' button not found. Update the selector. Context: ${JSON.stringify(errorContext)}`
                 )
               );
             }

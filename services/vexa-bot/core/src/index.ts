@@ -91,7 +91,8 @@ const handleRedisMessage = async (message: string, channel: string, page: Page |
 async function performGracefulLeave(
   page: Page | null, // Allow page to be null for cases where it might not be available
   exitCode: number = 1, // Default to 1 (failure/generic error)
-  reason: string = "self_initiated_leave" // Default reason
+  reason: string = "self_initiated_leave", // Default reason
+  errorDetails?: any // Optional detailed error information
 ): Promise<void> {
   if (isShuttingDown) {
     log("[Graceful Leave] Already in progress, ignoring duplicate call.");
@@ -134,7 +135,9 @@ async function performGracefulLeave(
     const payload = JSON.stringify({
       connection_id: currentConnectionId,
       exit_code: finalCallbackExitCode,
-      reason: finalCallbackReason
+      reason: finalCallbackReason,
+      error_details: errorDetails || null,
+      platform_specific_error: errorDetails?.error_message || null
     });
 
     try {
