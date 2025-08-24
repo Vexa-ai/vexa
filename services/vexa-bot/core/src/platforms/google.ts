@@ -8,6 +8,50 @@ import { v4 as uuidv4 } from "uuid"; // Import UUID
 function generateUUID() {
   return uuidv4();
 }
+
+// --- ADDED: Function to call startup callback ---
+async function callStartupCallback(botConfig: BotConfig): Promise<void> {
+  if (!botConfig.botManagerCallbackUrl) {
+    log("Warning: No bot manager callback URL configured. Cannot send startup callback.");
+    return;
+  }
+
+  if (!botConfig.container_name) {
+    log("Warning: No container name configured. Cannot send startup callback.");
+    return;
+  }
+
+  try {
+    // Extract the base URL and modify it for the startup callback
+    const baseUrl = botConfig.botManagerCallbackUrl.replace('/exited', '/started');
+    const startupUrl = baseUrl;
+    
+    const payload = {
+      connection_id: botConfig.connectionId,
+      container_id: botConfig.container_name
+    };
+
+    log(`Sending startup callback to ${startupUrl} with payload: ${JSON.stringify(payload)}`);
+    
+    // Use fetch API (available in Node.js 18+)
+    const response = await fetch(startupUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (response.ok) {
+      const result = await response.json();
+      log(`Startup callback successful: ${JSON.stringify(result)}`);
+    } else {
+      log(`Startup callback failed with status ${response.status}: ${response.statusText}`);
+    }
+  } catch (error: any) {
+    log(`Error sending startup callback: ${error.message}`);
+  }
+}
 // --- --------------------------------------------------------- ---
 
 export async function handleGoogleMeet(
@@ -62,6 +106,15 @@ export async function handleGoogleMeet(
     }
 
     log("Successfully admitted to the meeting, starting recording");
+    
+    // --- ADDED: Call startup callback to notify bot-manager that bot is active ---
+    try {
+      await callStartupCallback(botConfig);
+      log("Startup callback sent successfully");
+    } catch (callbackError: any) {
+      log(`Warning: Failed to send startup callback: ${callbackError.message}. Continuing with recording...`);
+    }
+    
     // Pass platform from botConfig to startRecording
     await startRecording(page, botConfig);
   } catch (error: any) {

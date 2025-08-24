@@ -40,7 +40,7 @@ BOT_IMAGE_NAME = os.environ.get("BOT_IMAGE_NAME", "vexa-bot:dev")
 # For example, use 'cuda' for NVIDIA GPUs or 'cpu' for CPU
 DEVICE_TYPE = os.environ.get("DEVICE_TYPE", "cuda").lower()
 
-logger = logging.getLogger("bot_manager.docker_utils")
+logger = logging.getLogger("bot_manager.orchestrator_utils")
 
 # Global session for requests_unixsocket
 unix_socket_session = None
@@ -253,6 +253,7 @@ async def start_bot_container(
         "language": language,
         "task": task,
         "redisUrl": REDIS_URL,
+        "container_name": container_name,  # ADDED: Container name for identification
         "automaticLeave": {
             "waitingRoomTimeout": 300000,
             "noOneJoinedTimeout": 120000,

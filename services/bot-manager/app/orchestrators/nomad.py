@@ -160,4 +160,4 @@ async def verify_container_running(container_id: str) -> bool:  # type: ignore
     return True
 
 # Alias for shared function – import lazily to avoid circulars
-from app.docker_utils import _record_session_start  # noqa: E402 
+from app.orchestrator_utils import _record_session_start  # noqa: E402 

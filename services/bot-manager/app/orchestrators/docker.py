@@ -1,5 +1,5 @@
 """Docker orchestrator shim.
-Re-exports a stable set of symbols from ``app.docker_utils`` so that the
+Re-exports a stable set of symbols from ``app.orchestrator_utils`` so that the
 rest of the codebase can import them from ``app.orchestrators`` regardless of
 the chosen backend.
 """
@@ -9,7 +9,7 @@ the chosen backend.
 # caused ``_record_session_start`` to be ``None`` when the caller attempted to
 # create an asyncio task.
 
-from app.docker_utils import (  # noqa: F401
+from app.orchestrator_utils import (  # noqa: F401
     get_socket_session,
     close_docker_client,
     start_bot_container,

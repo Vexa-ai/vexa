@@ -149,7 +149,7 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
   const { meetingUrl, token, connectionId, platform, nativeMeetingId } =
     botConfig; // nativeMeetingId is now in BotConfig type
 
-  //NOTE: The environment variables passed by docker_utils.py will be available to the Node.js process started by your entrypoint.sh.
+  //NOTE: The environment variables passed by orchestrator_utils.py will be available to the Node.js process started by your entrypoint.sh.
   // --- Read WHISPER_LIVE_URL from Node.js environment ---
   const whisperLiveUrlFromEnv = process.env.WHISPER_LIVE_URL;
 
