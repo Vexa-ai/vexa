@@ -154,7 +154,8 @@ async def create_user(user_in: UserCreate, response: Response, db: AsyncSession 
     db_user = User(
         email=user_data['email'],
         name=user_data.get('name'),
-        image_url=user_data.get('image_url')
+        image_url=user_data.get('image_url'),
+        max_concurrent_bots=0
     )
     db.add(db_user)
     await db.commit()
