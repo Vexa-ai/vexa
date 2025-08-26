@@ -39,7 +39,7 @@ The default limit is **one (1) concurrently running bot** per user account. If y
     import requests
     import json
 
-    BASE_URL = "https://gateway.dev.vexa.ai"
+    BASE_URL = "https://api.cloud.vexa.ai"
     API_KEY = "YOUR_API_KEY_HERE" # Replace with your actual API key
 
     HEADERS = {
@@ -65,7 +65,7 @@ The default limit is **one (1) concurrently running bot** per user account. If y
 *   **cURL Example:**
     ```bash
     curl -X POST \
-      https://gateway.dev.vexa.ai/bots \
+      https://api.cloud.vexa.ai/bots \
       -H 'Content-Type: application/json' \
       -H 'X-API-Key: YOUR_API_KEY_HERE' \
       -d '{
@@ -97,7 +97,7 @@ The default limit is **one (1) concurrently running bot** per user account. If y
 *   **cURL Example:**
     ```bash
     curl -X GET \
-      https://gateway.dev.vexa.ai/transcripts/google_meet/xxx-xxxx-xxx \
+      https://api.cloud.vexa.ai/transcripts/google_meet/xxx-xxxx-xxx \
       -H 'X-API-Key: YOUR_API_KEY_HERE'
     ```
 
@@ -119,7 +119,7 @@ The default limit is **one (1) concurrently running bot** per user account. If y
 *   **cURL Example:**
     ```bash
     curl -X GET \
-      https://gateway.dev.vexa.ai/bots/status \
+      https://api.cloud.vexa.ai/bots/status \
       -H 'X-API-Key: YOUR_API_KEY_HERE'
     ```
 
@@ -150,7 +150,7 @@ The default limit is **one (1) concurrently running bot** per user account. If y
 *   **cURL Example:**
     ```bash
     curl -X PUT \
-      https://gateway.dev.vexa.ai/bots/google_meet/xxx-xxxx-xxx/config \
+      https://api.cloud.vexa.ai/bots/google_meet/xxx-xxxx-xxx/config \
       -H 'Content-Type: application/json' \
       -H 'X-API-Key: YOUR_API_KEY_HERE' \
       -d '{
@@ -178,7 +178,7 @@ The default limit is **one (1) concurrently running bot** per user account. If y
 *   **cURL Example:**
     ```bash
     curl -X DELETE \
-      https://gateway.dev.vexa.ai/bots/google_meet/xxx-xxxx-xxx \
+      https://api.cloud.vexa.ai/bots/google_meet/xxx-xxxx-xxx \
       -H 'X-API-Key: YOUR_API_KEY_HERE'
     ```
 
@@ -194,7 +194,7 @@ The default limit is **one (1) concurrently running bot** per user account. If y
     import requests
     import json
 
-    BASE_URL = "https://gateway.dev.vexa.ai"
+    BASE_URL = "https://api.cloud.vexa.ai"
     API_KEY = "YOUR_API_KEY_HERE" # Replace with your actual API key
 
     HEADERS = {
@@ -212,7 +212,7 @@ The default limit is **one (1) concurrently running bot** per user account. If y
 *   **cURL Example:**
     ```bash
     curl -X GET \
-      https://gateway.dev.vexa.ai/meetings \
+      https://api.cloud.vexa.ai/meetings \
       -H 'X-API-Key: YOUR_API_KEY_HERE'
     ```
 
@@ -253,7 +253,7 @@ The default limit is **one (1) concurrently running bot** per user account. If y
 *   **cURL Example:**
     ```bash
     curl -X PATCH \
-      https://gateway.dev.vexa.ai/meetings/google_meet/xxx-xxxx-xxx \
+      https://api.cloud.vexa.ai/meetings/google_meet/xxx-xxxx-xxx \
       -H 'Content-Type: application/json' \
       -H 'X-API-Key: YOUR_API_KEY_HERE' \
       -d '{
@@ -287,7 +287,7 @@ The default limit is **one (1) concurrently running bot** per user account. If y
 *   **cURL Example:**
     ```bash
     curl -X DELETE \
-      https://gateway.dev.vexa.ai/meetings/google_meet/xxx-xxxx-xxx \
+      https://api.cloud.vexa.ai/meetings/google_meet/xxx-xxxx-xxx \
       -H 'X-API-Key: YOUR_API_KEY_HERE'
     ```
 
@@ -316,7 +316,7 @@ The default limit is **one (1) concurrently running bot** per user account. If y
 *   **cURL Example:**
     ```bash
     curl -X PUT \
-      https://gateway.dev.vexa.ai/user/webhook \
+      https://api.cloud.vexa.ai/user/webhook \
       -H 'Content-Type: application/json' \
       -H 'X-API-Key: YOUR_API_KEY_HERE' \
       -d '{
