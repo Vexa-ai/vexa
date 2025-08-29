@@ -108,10 +108,9 @@ export async function handleGoogleMeet(
     ]);
 
     if (!isAdmitted) {
-      console.error("Bot was not admitted into the meeting");
-      log("Bot not admitted. Triggering graceful leave with admission_failed reason.");
+      log("Bot was not admitted into the meeting within the timeout period. This is a normal completion.");
       
-      await gracefulLeaveFunction(page, 2, "admission_failed");
+      await gracefulLeaveFunction(page, 0, "admission_failed");
       return; 
     }
 
@@ -169,6 +168,50 @@ const prepareForRecording = async (page: Page): Promise<void> => {
   // Expose the logBot function to the browser context
   await page.exposeFunction("logBot", (msg: string) => {
     log(msg);
+  });
+
+  // Ensure leave function is available even before admission
+  await page.evaluate(() => {
+    if (typeof (window as any).performLeaveAction !== "function") {
+      (window as any).performLeaveAction = async () => {
+        try {
+          const primaryLeaveButtonXpath = `//button[@aria-label="Leave call"]`;
+          const secondaryLeaveButtonXpath = `//button[.//span[text()='Leave meeting']] | //button[.//span[text()='Just leave the meeting']]`;
+
+          const getElementByXpath = (path: string): HTMLElement | null => {
+            const result = document.evaluate(
+              path,
+              document,
+              null,
+              XPathResult.FIRST_ORDERED_NODE_TYPE,
+              null
+            );
+            return result.singleNodeValue as HTMLElement | null;
+          };
+
+          const primaryLeaveButton = getElementByXpath(primaryLeaveButtonXpath);
+          if (primaryLeaveButton) {
+            (window as any).logBot?.("Clicking primary leave button...");
+            primaryLeaveButton.click();
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+            const secondaryLeaveButton = getElementByXpath(secondaryLeaveButtonXpath);
+            if (secondaryLeaveButton) {
+              (window as any).logBot?.("Clicking secondary/confirmation leave button...");
+              secondaryLeaveButton.click();
+              await new Promise((resolve) => setTimeout(resolve, 500));
+            }
+            (window as any).logBot?.("Leave sequence completed.");
+            return true;
+          } else {
+            (window as any).logBot?.("Primary leave button not found.");
+            return false;
+          }
+        } catch (err: any) {
+          (window as any).logBot?.(`Error during leave attempt: ${err.message}`);
+          return false;
+        }
+      };
+    }
   });
 };
 

@@ -166,7 +166,11 @@ async def request_bot(
 
     constructed_url = Platform.construct_meeting_url(req.platform.value, native_meeting_id)
     if not constructed_url:
-        logger.warning(f"Could not construct meeting URL for platform {req.platform.value} and ID {native_meeting_id}. Proceeding without URL for bot.")
+        logger.error(f"Invalid meeting URL for platform {req.platform.value} and ID {native_meeting_id}. Rejecting request.")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid platform/native_meeting_id combination: cannot construct meeting URL"
+        )
 
     existing_meeting_stmt = select(Meeting).where(
         Meeting.user_id == current_user.id,
@@ -266,6 +270,41 @@ async def request_bot(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error preparing bot launch.")
 
     meeting_id = current_meeting_for_bot_launch.id # Internal DB ID for the bot being launched.
+
+    # Preflight validation of required runtime inputs (guard against bad env rendering)
+    invalid_fields: list[str] = []
+
+    def _is_invalid(val):
+        try:
+            if val is None:
+                return True
+            if isinstance(val, str):
+                v = val.strip()
+                return v == "" or ("\n" in v) or ("\r" in v)
+            return False
+        except Exception:
+            return True
+
+    if _is_invalid(constructed_url):
+        invalid_fields.append("constructed_url")
+    if _is_invalid(req.platform.value):
+        invalid_fields.append("platform")
+    if _is_invalid(native_meeting_id):
+        invalid_fields.append("native_meeting_id")
+    if _is_invalid(user_token):
+        invalid_fields.append("user_token")
+
+    if invalid_fields:
+        logger.error(f"Preflight validation failed. Invalid fields: {invalid_fields}")
+        try:
+            current_meeting_for_bot_launch.status = 'error'
+            await db.commit()
+        except Exception as _:
+            pass
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid inputs: {', '.join(invalid_fields)}"
+        )
 
     # 4. Start the bot container
     container_id = None
