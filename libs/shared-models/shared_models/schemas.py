@@ -147,6 +147,7 @@ class UserUpdate(BaseModel):
     name: Optional[str] = None
     image_url: Optional[str] = None
     max_concurrent_bots: Optional[int] = Field(None, description="Maximum number of concurrent bots allowed for the user")
+    data: Optional[Dict[str, Any]] = Field(None, description="JSONB storage for arbitrary user data, like webhook URLs and subscription info")
 # --- END UserUpdate Schema ---
 
 # --- Meeting Schemas --- 

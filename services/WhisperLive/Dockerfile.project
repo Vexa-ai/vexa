@@ -38,8 +38,11 @@ RUN sed -i '/openai-whisper/d' /tmp/requirements.txt || true \
 # Install remaining Python dependencies from the modified requirements file
 RUN python3 -m pip install --no-cache-dir -r /tmp/requirements.txt
 
-# Now copy the application code
+# Build argument to force COPY layer rebuild when code changes
+ARG BUILD_DATE=unknown
+# Now copy the application code (using build arg to force rebuild)
 COPY services/WhisperLive/ /app/
+RUN echo "Build date: $BUILD_DATE" > /app/build_info.txt
 
 # Copy our entrypoint script
 COPY services/WhisperLive/entrypoint.sh /entrypoint.sh

@@ -5,7 +5,7 @@ Follow these steps carefully, even if you are new to these tools. In under 5 min
 
 ## 1. Install Node.js (Required for npm)
 
-The MCP uses `npm` (Node Package Manager) to connect to the server, which comes with Node.js. If you do not have Node.js installed, install it form here, only takes a couple seconds:
+The MCP uses `npm` (Node Package Manager) to connect to the server, which comes with Node.js. If you do not have Node.js installed:
 
 - Go to the [Node.js download page](https://nodejs.org/)
 - Download the **LTS** (Long Term Support) version for your operating system (Windows, Mac, or Linux)
@@ -35,7 +35,9 @@ You will need your Vexa API key to connect to the MCP. If you do not have one, p
 
 2. **Add MCP Server Configuration**
 
+
 **Paste the following configuration into your the claude config file you just opened:**
+
 
 ```json
 {

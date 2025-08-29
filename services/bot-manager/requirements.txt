@@ -23,3 +23,8 @@ aiosqlite # If using sqlite async (often for testing)
 
 # Added for bot limit check - REMOVED
 # docker 
+
+requests
+httpx
+psycopg2-binary
+aiodocker 
