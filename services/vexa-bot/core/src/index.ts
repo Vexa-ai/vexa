@@ -343,7 +343,9 @@ export async function runBot(botConfig: BotConfig): Promise<void> {
     await performGracefulLeave(page, 1, "platform_handler_exception");
   }
 
-  log('Bot execution completed OR waiting for external termination/command.'); // Update log message
+  // If we reached here without an explicit shutdown (e.g., admission failed path returned, or normal end),
+  // force a graceful exit to ensure the container terminates cleanly.
+  await performGracefulLeave(page, 0, "normal_completion");
 }
 
 // --- ADDED: Basic Signal Handling (for future Phase 5) ---
