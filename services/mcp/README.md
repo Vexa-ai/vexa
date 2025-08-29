@@ -35,11 +35,9 @@ You will need your Vexa API key to connect to the MCP. If you do not have one, p
 
 2. **Add MCP Server Configuration**
 
-**Paste the following configuration into your the config file you just opened:**
-(They differ on Windows/Mac, choose the one that matches your system)
 
+**Paste the following configuration into your the claude config file you just opened:**
 
-**For Windows:**
 
 ```json
 {
@@ -49,31 +47,9 @@ You will need your Vexa API key to connect to the MCP. If you do not have one, p
       "args": [
         "-y",
         "mcp-remote",
-        "https://gateway.dev.vexa.ai/mcp",
+        "https://api.cloud.vexa.ai/mcp",
         "--header",
         "Authorization:${VEXA_API_KEY}"
-      ],
-      "env": {
-        "VEXA_API_KEY": "Bearer YOUR_API_KEY_HERE"
-      }
-    }
-  }
-}
-```
-
-**For macOS:**
-
-```json
-{
-  "mcpServers": {
-    "fastapi-mcp": {
-      "command": "npx",
-      "args": [
-        "-y"
-        "mcp-remote",
-        "https://gateway.dev.vexa.ai/mcp",
-        "--header",
-        "Authorization: Bearer ${VEXA_API_KEY}"
       ],
       "env": {
         "VEXA_API_KEY": "YOUR_API_KEY_HERE"
@@ -82,7 +58,6 @@ You will need your Vexa API key to connect to the MCP. If you do not have one, p
   }
 }
 ```
-
 
 - **Important:** Replace `YOUR_API_KEY_HERE` with your real Vexa API key. Do not share your API key with others.
 
