@@ -13,6 +13,8 @@ import json
 from typing import Optional, Tuple, Dict, Any, List
 
 import httpx
+from fastapi import HTTPException
+from app.orchestrators.common import enforce_user_concurrency_limit
 
 logger = logging.getLogger("bot_manager.nomad_utils")
 
@@ -59,6 +61,14 @@ async def start_bot_container(
 
     Returns (dispatched_job_id, connection_id) on success.
     """
+    # === START: Bot Limit Check (Nomad) ===
+    async def _count_for_user() -> int:
+        bots = await get_running_bots_status(user_id)
+        return len(bots)
+
+    await enforce_user_concurrency_limit(user_id, _count_for_user)
+    # === END: Bot Limit Check (Nomad) ===
+
     connection_id = str(uuid.uuid4())
 
     meta: Dict[str, str] = {

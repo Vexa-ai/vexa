@@ -32,6 +32,9 @@ from sqlalchemy.future import select
 from shared_models.models import User, MeetingSession
 # <--- END ADD
 
+# Shared concurrency enforcement helper
+from app.orchestrators.common import enforce_user_concurrency_limit
+
 # Assuming these are still needed from config or env
 DOCKER_HOST = os.environ.get("DOCKER_HOST", "unix://var/run/docker.sock")
 DOCKER_NETWORK = os.environ.get("DOCKER_NETWORK", "vexa_default")
@@ -164,69 +167,37 @@ async def start_bot_container(
         A tuple (container_id, connection_id) if successful, None otherwise.
     """
     # === START: Bot Limit Check ===
-    try:
-        # Fetch user details (including max_concurrent_bots)
-        user = await TranscriptionService.get_or_create_user(user_id)
-        if not user:
-             logger.error(f"User with ID {user_id} not found...")
-             raise HTTPException(status_code=404, detail=f"User {user_id} not found.")
-
-        # Count currently running bots for this user using labels via Docker API Socket
-        session = get_socket_session() # Get the existing session
+    async def _count_for_user() -> int:
+        session = get_socket_session()
         if not session:
-             logger.error("[Limit Check] Cannot count running bots, requests_unixsocket session not available.")
-             raise HTTPException(status_code=500, detail="Failed to connect to Docker to verify bot count.")
-             
+            logger.error("[Limit Check] Cannot count running bots, requests_unixsocket session not available.")
+            raise HTTPException(status_code=500, detail="Failed to connect to Docker to verify bot count.")
+
         try:
-            # Construct filters for Docker API
             filters = json.dumps({
                 "label": [f"vexa.user_id={user_id}"],
                 "status": ["running"]
             })
-            
-            # Make request to list containers endpoint
+
             socket_path_relative = DOCKER_HOST.split('//', 1)[1]
             socket_path_abs = f"/{socket_path_relative}"
             socket_path_encoded = socket_path_abs.replace("/", "%2F")
             socket_url_base = f'http+unix://{socket_path_encoded}'
             list_url = f'{socket_url_base}/containers/json'
-            
+
             logger.debug(f"[Limit Check] Querying {list_url} with filters: {filters}")
             response = session.get(list_url, params={"filters": filters, "all": "false"})
-            response.raise_for_status() # Check for HTTP errors
-            
+            response.raise_for_status()
             running_bots_info = response.json()
-            current_bot_count = len(running_bots_info)
-            logger.debug(f"[Limit Check] Found {current_bot_count} running bot containers for user {user_id} via socket API")
-
+            return len(running_bots_info)
         except RequestException as sock_err:
             logger.error(f"[Limit Check] Failed to count running bots via socket API for user {user_id}: {sock_err}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Failed to verify current bot count via Docker socket.")
-        except Exception as count_err: # Catch other potential errors like JSONDecodeError
+            raise
+        except Exception as count_err:
             logger.error(f"[Limit Check] Unexpected error counting running bots via socket API for user {user_id}: {count_err}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Failed to process bot count verification.")
+            raise
 
-        # Check against the user's limit (logic remains the same)
-        user_limit = user.max_concurrent_bots
-        logger.info(f"Checking bot limit for user {user_id}: Found {current_bot_count} running bots, limit is {user_limit}")
-
-        if not hasattr(user, 'max_concurrent_bots') or user_limit is None:
-             logger.error(f"User {user_id} is missing the max_concurrent_bots attribute...")
-             raise HTTPException(status_code=500, detail="User configuration error: Bot limit not set.")
-
-        if current_bot_count >= user_limit:
-            logger.warning(f"User {user_id} reached bot limit ({user_limit})...")
-            raise HTTPException(
-                status_code=403,
-                detail=f"User has reached the maximum concurrent bot limit ({user_limit})."
-            )
-        logger.info(f"User {user_id} is under bot limit ({current_bot_count}/{user_limit}). Proceeding...")
-
-    except HTTPException as http_exc:
-         raise http_exc
-    except Exception as e:
-         logger.error(f"Error during bot limit check for user {user_id}: {e}", exc_info=True)
-         raise HTTPException(status_code=500, detail="Failed to verify bot limit.")
+    await enforce_user_concurrency_limit(user_id, _count_for_user)
     # === END: Bot Limit Check ===
 
     # --- Original start_bot_container logic (using requests_unixsocket) --- 
