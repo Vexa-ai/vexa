@@ -73,6 +73,8 @@ class TranscriptionCollectorClient:
         self.connection_lock = threading.Lock()
         self.connection_thread = None
         self.stop_requested = False
+        # Optional back-reference to the TranscriptionServer (set by server after creation)
+        self.server_ref = None
         
         # Stream key for transcriptions
         self.stream_key = os.getenv("REDIS_STREAM_KEY", "transcription_segments")
@@ -529,6 +531,11 @@ class TranscriptionServer:
         redis_stream_url_env = os.getenv("REDIS_STREAM_URL")
         if redis_stream_url_env:
             self.collector_client = TranscriptionCollectorClient(redis_stream_url=redis_stream_url_env)
+            try:
+                # Attach back-reference so client handlers can update server_last_transcription_ts
+                self.collector_client.server_ref = self
+            except Exception:
+                pass
             # Attempt to connect the collector client immediately if needed, or rely on its internal connect()
             if hasattr(self.collector_client, 'connect') and callable(getattr(self.collector_client, 'connect')) and not self.collector_client.is_connected:
                  # This connect call is from the original global init, ensuring it's still triggered
@@ -548,6 +555,35 @@ class TranscriptionServer:
         self.health_monitor_interval = 30  # Check health every 30 seconds
         self.self_monitor_thread = None
         self._stop_self_monitor = threading.Event()
+
+        # --- Server-level speaker-based circuit breaker configuration ---
+        # Use speaker activity as ground truth for "speech happening".
+        def _get_bool_env(name: str, default: str) -> bool:
+            val = os.getenv(name, default).strip().lower()
+            return val in ("1", "true", "yes", "on")
+
+        self.use_speaker_ground_truth = _get_bool_env("WL_USE_SPEAKER_GROUND_TRUTH", "true")
+        try:
+            self.server_speaker_no_tx_stall_s = float(os.getenv("WL_SERVER_SPEAKER_NO_TX_STALL_S", "30"))
+        except Exception:
+            self.server_speaker_no_tx_stall_s = 30.0
+        try:
+            self.speaker_active_window_s = float(os.getenv("WL_SPEAKER_ACTIVE_WINDOW_S", "8"))
+        except Exception:
+            self.speaker_active_window_s = 8.0
+        try:
+            self.server_warmup_s = float(os.getenv("WL_SERVER_WARMUP_S", "60"))
+        except Exception:
+            self.server_warmup_s = 60.0
+
+        # Timestamps tracked globally across all sessions
+        self.server_start_ts = time.time()
+        self.server_last_transcription_ts = None  # updated whenever any session emits segments
+        self.last_speaker_event_ts = None         # updated on incoming speaker_activity events
+        logging.info(
+            f"CONFIG: speaker_circuit_breaker use_speaker_gt={self.use_speaker_ground_truth}, "
+            f"stall={self.server_speaker_no_tx_stall_s}s, speaker_window={self.speaker_active_window_s}s, warmup={self.server_warmup_s}s"
+        )
 
         # --- Capacity configuration (WL_MAX_CLIENTS, default 10) ---
         try:
@@ -995,6 +1031,34 @@ class TranscriptionServer:
                 elif self.collector_client and not self.collector_client.is_connected:
                     redis_ping_details = "Collector client initialized but not connected to Redis"
 
+                # Server-level speaker-based stall detection
+                if self.use_speaker_ground_truth:
+                    now = time.time()
+                    # Warmup grace period
+                    if (now - self.server_start_ts) < self.server_warmup_s:
+                        pass
+                    else:
+                    # Consider there is current speaking activity if we saw a speaker event recently
+                        speaker_active = (
+                            self.last_speaker_event_ts is not None and
+                            (now - self.last_speaker_event_ts) <= self.speaker_active_window_s
+                        )
+                    # If someone is speaking recently but we haven't emitted any transcript segments
+                    # for a prolonged period, consider the server wedged and exit to self-heal.
+                        if speaker_active:
+                            no_tx_age = None
+                            if self.server_last_transcription_ts is None:
+                                no_tx_age = float('inf')
+                            else:
+                                no_tx_age = now - self.server_last_transcription_ts
+                            if no_tx_age is not None and no_tx_age >= self.server_speaker_no_tx_stall_s:
+                                logging.critical(
+                                    f"WATCHDOG: SERVER_CIRCUIT_TRIPPED speaker_active window={self.speaker_active_window_s}s "
+                                    f"but no transcripts for {no_tx_age:.1f}s (>= {self.server_speaker_no_tx_stall_s}s). Exiting."
+                                )
+                                self._graceful_shutdown_and_exit()
+                                return
+
                 if websocket_ok and redis_ok:
                     if self.unhealthy_streak > 0:
                         logging.info(f"Self-monitor: Service recovered. WebSocket: OK, Redis: OK. Unhealthy streak reset.")
@@ -1274,6 +1338,12 @@ class TranscriptionServer:
         else:
             logging.warning(f"Cannot forward speaker event for UID {uid_for_log}: collector_client not found for client {client.client_uid if client else 'N/A_CLIENT_FALLBACK'}.") # CORRECTED: changed from collector_client_ref to collector_client
 
+        # Update server-level last speaker-event timestamp
+        try:
+            self.last_speaker_event_ts = time.time()
+        except Exception:
+            pass
+
 
     def handle_audio_chunk_metadata(self, websocket, control_message):
         client = self.client_manager.get_client(websocket)
@@ -1507,6 +1577,21 @@ class ServeClientBase(object):
                     formatted_segments.append(f"[{i}]: \"{segment.get('text', '')}\"")
                     
             logger.info(f"TRANSCRIPTION: client={self.client_uid}, platform={self.platform}, meeting_url={self.meeting_url}, token={self.token}, meeting_id={self.meeting_id}, segments=\n" + "\n".join(formatted_segments))
+            # Update server-level last transcription timestamp for circuit breaker
+            try:
+                # Access the parent TranscriptionServer via collector_client if available
+                # We do not have a direct reference here; use global update via Redis ping thread owner
+                # Instead, use a lightweight process-wide marker
+                from time import time as _now
+                # Store on the TranscriptionServer instance through the collector reference if possible
+                if self.collector_client and hasattr(self.collector_client, 'server_ref') and self.collector_client.server_ref:
+                    self.collector_client.server_ref.server_last_transcription_ts = _now()
+                else:
+                    # Fallback: set a module-level variable; self-monitor reads instance field primarily
+                    globals().setdefault('_WL_SERVER_LAST_TX', 0)
+                    globals()['_WL_SERVER_LAST_TX'] = _now()
+            except Exception:
+                pass
         except Exception as e:
             logging.error(f"[ERROR]: Sending data to client: {e}")
 
