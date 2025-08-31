@@ -22,10 +22,23 @@ from shared_models.schemas import (
 
 load_dotenv()
 
-# Configuration from environment variables
-ADMIN_API_URL = os.getenv("ADMIN_API_URL", "http://admin-api:8001")
-BOT_MANAGER_URL = os.getenv("BOT_MANAGER_URL", "http://bot-manager:8080")
-TRANSCRIPTION_COLLECTOR_URL = os.getenv("TRANSCRIPTION_COLLECTOR_URL", "http://transcription-collector:8000")
+# Configuration - Service endpoints are now mandatory environment variables
+ADMIN_API_URL = os.getenv("ADMIN_API_URL")
+BOT_MANAGER_URL = os.getenv("BOT_MANAGER_URL")
+TRANSCRIPTION_COLLECTOR_URL = os.getenv("TRANSCRIPTION_COLLECTOR_URL")
+
+# --- Validation at startup ---
+if not all([ADMIN_API_URL, BOT_MANAGER_URL, TRANSCRIPTION_COLLECTOR_URL]):
+    missing_vars = [
+        var_name
+        for var_name, var_value in {
+            "ADMIN_API_URL": ADMIN_API_URL,
+            "BOT_MANAGER_URL": BOT_MANAGER_URL,
+            "TRANSCRIPTION_COLLECTOR_URL": TRANSCRIPTION_COLLECTOR_URL,
+        }.items()
+        if not var_value
+    ]
+    raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
 
 # Response Models
 # class BotResponseModel(BaseModel): ...

@@ -13,6 +13,7 @@ export const BotConfigSchema = z.object({
   language: z.string().nullish(), // Optional language
   task: z.string().nullish(),     // Optional task
   redisUrl: z.string(),         // Required Redis URL
+  container_name: z.string().optional(), // ADDED: Optional container name
   automaticLeave: z.object({
     waitingRoomTimeout: z.number().int(),
     noOneJoinedTimeout: z.number().int(),

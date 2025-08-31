@@ -9,6 +9,7 @@ from typing import List, Optional
 import datetime
 import websocket
 import sys # Added sys import
+import socket  # Added to resolve container IP for ws_url
 
 import torch
 import numpy as np
@@ -72,6 +73,8 @@ class TranscriptionCollectorClient:
         self.connection_lock = threading.Lock()
         self.connection_thread = None
         self.stop_requested = False
+        # Optional back-reference to the TranscriptionServer (set by server after creation)
+        self.server_ref = None
         
         # Stream key for transcriptions
         self.stream_key = os.getenv("REDIS_STREAM_KEY", "transcription_segments")
@@ -528,6 +531,11 @@ class TranscriptionServer:
         redis_stream_url_env = os.getenv("REDIS_STREAM_URL")
         if redis_stream_url_env:
             self.collector_client = TranscriptionCollectorClient(redis_stream_url=redis_stream_url_env)
+            try:
+                # Attach back-reference so client handlers can update server_last_transcription_ts
+                self.collector_client.server_ref = self
+            except Exception:
+                pass
             # Attempt to connect the collector client immediately if needed, or rely on its internal connect()
             if hasattr(self.collector_client, 'connect') and callable(getattr(self.collector_client, 'connect')) and not self.collector_client.is_connected:
                  # This connect call is from the original global init, ensuring it's still triggered
@@ -547,6 +555,100 @@ class TranscriptionServer:
         self.health_monitor_interval = 30  # Check health every 30 seconds
         self.self_monitor_thread = None
         self._stop_self_monitor = threading.Event()
+
+        # --- Server-level speaker-based circuit breaker configuration ---
+        # Use speaker activity as ground truth for "speech happening".
+        def _get_bool_env(name: str, default: str) -> bool:
+            val = os.getenv(name, default).strip().lower()
+            return val in ("1", "true", "yes", "on")
+
+        self.use_speaker_ground_truth = _get_bool_env("WL_USE_SPEAKER_GROUND_TRUTH", "true")
+        try:
+            self.server_speaker_no_tx_stall_s = float(os.getenv("WL_SERVER_SPEAKER_NO_TX_STALL_S", "30"))
+        except Exception:
+            self.server_speaker_no_tx_stall_s = 30.0
+        try:
+            self.speaker_active_window_s = float(os.getenv("WL_SPEAKER_ACTIVE_WINDOW_S", "8"))
+        except Exception:
+            self.speaker_active_window_s = 8.0
+        try:
+            self.server_warmup_s = float(os.getenv("WL_SERVER_WARMUP_S", "60"))
+        except Exception:
+            self.server_warmup_s = 60.0
+
+        # Timestamps tracked globally across all sessions
+        self.server_start_ts = time.time()
+        self.server_last_transcription_ts = None  # updated whenever any session emits segments
+        self.last_speaker_event_ts = None         # updated on incoming speaker_activity events
+        logging.info(
+            f"CONFIG: speaker_circuit_breaker use_speaker_gt={self.use_speaker_ground_truth}, "
+            f"stall={self.server_speaker_no_tx_stall_s}s, speaker_window={self.speaker_active_window_s}s, warmup={self.server_warmup_s}s"
+        )
+
+        # --- Capacity configuration (WL_MAX_CLIENTS, default 10) ---
+        try:
+            self.config_max_clients = int(os.getenv("WL_MAX_CLIENTS", "10"))
+        except Exception:
+            self.config_max_clients = 10
+        logging.info(f"CONFIG: max_clients set to {self.config_max_clients} (env WL_MAX_CLIENTS)")
+
+        # --- WL Scaling: publish live session count & heartbeat ---
+        self._wl_redis = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"))
+        self._listen_port = int(os.getenv("WL_LISTEN_PORT", os.getenv("PORT", "9090")))
+        # Prefer Nomad alloc-id for stable grouping; fall back to HOSTNAME or random uuid
+        self._alloc_id = os.getenv("NOMAD_ALLOC_ID", os.getenv("HOSTNAME", str(uuid.uuid4())[:8]))
+        
+        # Use forced IP from environment if available, otherwise derive container IP
+        forced_ip = os.getenv("WL_FORCE_IP")
+        if forced_ip:
+            self._pod_ip = forced_ip
+            logging.info(f"✅ USING FORCED IP: WL_FORCE_IP={forced_ip}")
+        else:
+            # Derive container IP on the same network used to reach Redis (guaranteed shared with other app services).
+            try:
+                probe_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                # UDP connect does not send packets; it just sets internal routing.
+                probe_sock.connect((os.getenv("REDIS_HOST", "redis"), int(os.getenv("REDIS_PORT", "6379"))))
+                self._pod_ip = probe_sock.getsockname()[0]
+                probe_sock.close()
+            except Exception:
+                # Fallback to hostname resolution
+                try:
+                    self._pod_ip = socket.gethostbyname(socket.gethostname())
+                except Exception:
+                    self._pod_ip = "127.0.0.1"
+            logging.info(f"⚠️  AUTO-DETECTED IP: {self._pod_ip} (no WL_FORCE_IP set)")
+        
+        logging.info(f"🔍 FINAL POD IP: {self._pod_ip}")
+        logging.info(f"🔍 LISTEN PORT: {self._listen_port}")
+        logging.info(f"🔍 ENV WL_FORCE_IP: {os.getenv('WL_FORCE_IP', 'NOT_SET')}")
+        logging.info(f"🔍 ENV WL_LISTEN_PORT: {os.getenv('WL_LISTEN_PORT', 'NOT_SET')}")
+        
+        self._ws_url = f"ws://{self._pod_ip}:{self._listen_port}/ws"
+        logging.info(f"🌐 WEBSOCKET URL CONFIGURED: {self._ws_url}")
+        logging.info(f"📡 THIS URL WILL BE REGISTERED TO REDIS: {self._ws_url}")
+        self._metric_stop_evt = threading.Event()
+        threading.Thread(target=self._metric_heartbeat, daemon=True).start()
+        # --- End WL Scaling block ---
+
+    # --- WL Scaling helper methods (class level) ---
+    def _metric_heartbeat(self):
+        """Background timer that refreshes Redis score + heartbeat every 15 s."""
+        while not self._metric_stop_evt.is_set():
+            self._publish_sessions_metric()
+            self._metric_stop_evt.wait(15)
+
+    def _publish_sessions_metric(self):
+        """Update wl:rank sorted-set score and wl:hb:<url> heartbeat key."""
+        try:
+            current = len(self.client_manager.clients) if self.client_manager else 0
+            pipe = self._wl_redis.pipeline()
+            pipe.zadd("wl:rank", {self._ws_url: current})
+            pipe.setex(f"wl:hb:{self._ws_url}", 35, 1)
+            pipe.execute()
+        except Exception as exc:
+            logging.warning(f"WhisperLive metric publish failed: {exc}")
+    # --- End WL Scaling helper methods ---
 
     def initialize_client(
         self, websocket, options, faster_whisper_custom_model_path,
@@ -597,6 +699,8 @@ class TranscriptionServer:
                 server_options=self.server_options
             )
         self.client_manager.add_client(websocket, client)
+        # Update Redis metric after new client joins
+        self._publish_sessions_metric()
 
     def get_audio_from_websocket(self, websocket):
         """
@@ -769,9 +873,11 @@ class TranscriptionServer:
             logging.info(f"Connection parameters received: uid={options['uid']}, platform={options['platform']}, meeting_url={options['meeting_url']}, token={options['token']}, meeting_id={options['meeting_id']}")
 
             if self.client_manager is None:
-                max_clients = options.get('max_clients', 4)
+                # Enforce server-side capacity from env (ignore client-provided max_clients)
+                max_clients = int(self.config_max_clients)
                 max_connection_time = options.get('max_connection_time', 3600)
                 self.client_manager = ClientManager(max_clients, max_connection_time)
+                logging.info(f"CAPACITY: Initialized ClientManager with max_clients={max_clients}, max_connection_time={max_connection_time}")
 
             self.use_vad = options.get('use_vad')
             if self.client_manager.is_server_full(websocket, options):
@@ -882,7 +988,11 @@ class TranscriptionServer:
             port
         ) as server:
             self.is_healthy = True # WebSocket server is up
-            logger.info(f"SERVER_RUNNING: WhisperLive server running on {host}:{port} with health check on {host}:9091/health")
+            logger.info(f"SERVER_RUNNING: WhisperLive server running on {host}:{port} with health check on {host}:9091/health and max_clients={self.config_max_clients}")
+            
+            # Immediately publish to Redis so clients can discover this server
+            self._publish_sessions_metric()
+            logger.info(f"REDIS_PUBLISH: Server published to Redis immediately on startup")
             
             # Start self-monitoring thread
             if self.self_monitor_thread is None:
@@ -920,6 +1030,34 @@ class TranscriptionServer:
                         logging.warning(f"Self-monitor: {redis_ping_details}")
                 elif self.collector_client and not self.collector_client.is_connected:
                     redis_ping_details = "Collector client initialized but not connected to Redis"
+
+                # Server-level speaker-based stall detection
+                if self.use_speaker_ground_truth:
+                    now = time.time()
+                    # Warmup grace period
+                    if (now - self.server_start_ts) < self.server_warmup_s:
+                        pass
+                    else:
+                    # Consider there is current speaking activity if we saw a speaker event recently
+                        speaker_active = (
+                            self.last_speaker_event_ts is not None and
+                            (now - self.last_speaker_event_ts) <= self.speaker_active_window_s
+                        )
+                    # If someone is speaking recently but we haven't emitted any transcript segments
+                    # for a prolonged period, consider the server wedged and exit to self-heal.
+                        if speaker_active:
+                            no_tx_age = None
+                            if self.server_last_transcription_ts is None:
+                                no_tx_age = float('inf')
+                            else:
+                                no_tx_age = now - self.server_last_transcription_ts
+                            if no_tx_age is not None and no_tx_age >= self.server_speaker_no_tx_stall_s:
+                                logging.critical(
+                                    f"WATCHDOG: SERVER_CIRCUIT_TRIPPED speaker_active window={self.speaker_active_window_s}s "
+                                    f"but no transcripts for {no_tx_age:.1f}s (>= {self.server_speaker_no_tx_stall_s}s). Exiting."
+                                )
+                                self._graceful_shutdown_and_exit()
+                                return
 
                 if websocket_ok and redis_ok:
                     if self.unhealthy_streak > 0:
@@ -1026,6 +1164,8 @@ class TranscriptionServer:
         """
         if self.client_manager.get_client(websocket):
             self.client_manager.remove_client(websocket)
+        # Update Redis metric after client leaves
+        self._publish_sessions_metric()
 
     def start_health_check_server(self, host, port):
         """Start a simple HTTP server for health checks.
@@ -1198,6 +1338,12 @@ class TranscriptionServer:
         else:
             logging.warning(f"Cannot forward speaker event for UID {uid_for_log}: collector_client not found for client {client.client_uid if client else 'N/A_CLIENT_FALLBACK'}.") # CORRECTED: changed from collector_client_ref to collector_client
 
+        # Update server-level last speaker-event timestamp
+        try:
+            self.last_speaker_event_ts = time.time()
+        except Exception:
+            pass
+
 
     def handle_audio_chunk_metadata(self, websocket, control_message):
         client = self.client_manager.get_client(websocket)
@@ -1220,6 +1366,10 @@ class ServeClientBase(object):
     RATE = 16000
     SERVER_READY = "SERVER_READY"
     DISCONNECT = "DISCONNECT"
+    
+    # Hallucination filter - load once per class
+    _hallucinations = None
+    _hallucinations_loaded = False
 
     def __init__(self, websocket, language="en", task="transcribe", client_uid=None, 
                  platform=None, meeting_url=None, token=None, meeting_id=None,
@@ -1276,9 +1426,84 @@ class ServeClientBase(object):
         if self.collector_client and all([platform, meeting_url, token, meeting_id]):
             self.collector_client.publish_session_start_event(token, platform, meeting_id, self.client_uid)
             logging.info(f"Published session_start event for client {self.client_uid}")
+        
+        # Load hallucination filter
+        self._load_hallucinations()
 
     def speech_to_text(self):
         raise NotImplementedError
+    
+    def _load_hallucinations(self):
+        """Load hallucination strings from file if not already loaded."""
+        if ServeClientBase._hallucinations_loaded:
+            return
+            
+        try:
+            # Collect hallucination strings from multiple sources:
+            # - Single files: /app/hallucinations.txt and local hallucinations.txt
+            # - Language folders: /app/hallucinations/** and local ../hallucinations/**
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            candidates = []
+
+            # Single-file locations (backward compatible)
+            app_root_file = "/app/hallucinations.txt"
+            local_root_file = os.path.join(script_dir, "..", "hallucinations.txt")
+            if os.path.exists(app_root_file):
+                candidates.append(app_root_file)
+            if os.path.exists(local_root_file):
+                candidates.append(local_root_file)
+
+            # Folder-based locations (language-separated files)
+            app_dir = "/app/hallucinations"
+            local_dir = os.path.join(script_dir, "..", "hallucinations")
+            for directory in (app_dir, local_dir):
+                if os.path.isdir(directory):
+                    for root, _dirs, files in os.walk(directory):
+                        for name in files:
+                            # Accept common text list extensions
+                            if name.lower().endswith((".txt", ".list")):
+                                candidates.append(os.path.join(root, name))
+
+            # Read and deduplicate entries across all sources
+            unique_entries = set()
+            loaded_files = 0
+            for path in candidates:
+                try:
+                    with open(path, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            normalized = line.strip().lower()
+                            if normalized:
+                                unique_entries.add(normalized)
+                    loaded_files += 1
+                    logging.info(f"Loaded hallucination filters from {path}")
+                except Exception as read_err:
+                    logging.warning(f"Failed to read hallucination file {path}: {read_err}")
+
+            ServeClientBase._hallucinations = sorted(unique_entries)
+            logging.info(
+                f"Loaded {len(ServeClientBase._hallucinations)} unique hallucination filters from {loaded_files} file(s)"
+            )
+        except Exception as e:
+            logging.error(f"Error loading hallucination filters: {e}")
+            ServeClientBase._hallucinations = []
+        
+        ServeClientBase._hallucinations_loaded = True
+    
+    def _filter_hallucinations(self, text):
+        """Filter out hallucination strings from transcription text."""
+        if not ServeClientBase._hallucinations or not text:
+            return text
+            
+        # Convert to lowercase for comparison
+        text_lower = text.lower().strip()
+        
+        # Check if the entire text matches any hallucination
+        for hallucination in ServeClientBase._hallucinations:
+            if text_lower == hallucination:
+                logging.debug(f"Filtered hallucination: '{text}' matches '{hallucination}'")
+                return None  # Return None to indicate this should be omitted
+        
+        return text  # Return original text if no hallucination detected
 
     def transcribe_audio(self):
         raise NotImplementedError
@@ -1431,6 +1656,21 @@ class ServeClientBase(object):
                     formatted_segments.append(f"[{i}]: \"{segment.get('text', '')}\"")
                     
             logger.info(f"TRANSCRIPTION: client={self.client_uid}, platform={self.platform}, meeting_url={self.meeting_url}, token={self.token}, meeting_id={self.meeting_id}, segments=\n" + "\n".join(formatted_segments))
+            # Update server-level last transcription timestamp for circuit breaker
+            try:
+                # Access the parent TranscriptionServer via collector_client if available
+                # We do not have a direct reference here; use global update via Redis ping thread owner
+                # Instead, use a lightweight process-wide marker
+                from time import time as _now
+                # Store on the TranscriptionServer instance through the collector reference if possible
+                if self.collector_client and hasattr(self.collector_client, 'server_ref') and self.collector_client.server_ref:
+                    self.collector_client.server_ref.server_last_transcription_ts = _now()
+                else:
+                    # Fallback: set a module-level variable; self-monitor reads instance field primarily
+                    globals().setdefault('_WL_SERVER_LAST_TX', 0)
+                    globals()['_WL_SERVER_LAST_TX'] = _now()
+            except Exception:
+                pass
         except Exception as e:
             logging.error(f"[ERROR]: Sending data to client: {e}")
 
@@ -1713,7 +1953,24 @@ class ServeClientTensorRT(ServeClientBase):
         if len(segments) > 1 and segments[-1].no_speech_prob <= self.no_speech_thresh:
             for i, s in enumerate(segments[:-1]):
                 text_ = s.text
-                self.text.append(text_)
+                # Update circuit-breaker timestamp BEFORE filtering, so hallucinations still count as activity
+                try:
+                    if self.collector_client and hasattr(self.collector_client, 'server_ref') and self.collector_client.server_ref:
+                        self.collector_client.server_ref.server_last_transcription_ts = time.time()
+                except Exception:
+                    pass
+
+                # Apply hallucination filter
+                filtered_text = self._filter_hallucinations(text_)
+                if filtered_text is None:
+                    # Log and skip this segment if it's a hallucination
+                    try:
+                        logger.info(f'HALLUCINATION_FILTERED: "{text_}"')
+                    except Exception:
+                        pass
+                    continue
+                
+                self.text.append(filtered_text)
                 with self.lock:
                     start, end = self.timestamp_offset + s.start, self.timestamp_offset + min(duration, s.end)
 
@@ -1722,20 +1979,37 @@ class ServeClientTensorRT(ServeClientBase):
                 if s.no_speech_prob > self.no_speech_thresh:
                     continue
 
-                self.transcript.append(self.format_segment(start, end, text_, completed=True, language=self.language))
+                self.transcript.append(self.format_segment(start, end, filtered_text, completed=True, language=self.language))
                 offset = min(duration, s.end)
 
         # only process the last segment if it satisfies the no_speech_thresh
         if segments[-1].no_speech_prob <= self.no_speech_thresh:
-            self.current_out += segments[-1].text
-            with self.lock:
-                last_segment = self.format_segment(
-                    self.timestamp_offset + segments[-1].start,
-                    self.timestamp_offset + min(duration, segments[-1].end),
-                    self.current_out,
-                    completed=False,
-                    language=self.language
-                )
+            # Update circuit-breaker timestamp BEFORE filtering for the last (partial) segment
+            try:
+                if self.collector_client and hasattr(self.collector_client, 'server_ref') and self.collector_client.server_ref:
+                    self.collector_client.server_ref.server_last_transcription_ts = time.time()
+            except Exception:
+                pass
+
+            # Apply hallucination filter to the current output
+            filtered_current_out = self._filter_hallucinations(segments[-1].text)
+            if filtered_current_out is not None:
+                self.current_out += filtered_current_out
+                with self.lock:
+                    last_segment = self.format_segment(
+                        self.timestamp_offset + segments[-1].start,
+                        self.timestamp_offset + min(duration, segments[-1].end),
+                        self.current_out,
+                        completed=False,
+                        language=self.language
+                    )
+            else:
+                # Log and skip this segment if it's a hallucination
+                try:
+                    logger.info(f'HALLUCINATION_FILTERED: "{segments[-1].text}"')
+                except Exception:
+                    pass
+                last_segment = None
 
         if self.current_out.strip() == self.prev_out.strip() and self.current_out != '':
             self.same_output_count += 1
@@ -1753,15 +2027,31 @@ class ServeClientTensorRT(ServeClientBase):
         # and append the segment to the list
         if self.same_output_count > self.same_output_threshold:
             if not len(self.text) or self.text[-1].strip().lower() != self.current_out.strip().lower():
-                self.text.append(self.current_out)
-                with self.lock:
-                    self.transcript.append(self.format_segment(
-                        self.timestamp_offset,
-                        self.timestamp_offset + min(duration, self.end_time_for_same_output),
-                        self.current_out,
-                        completed=True,
-                        language=self.language
-                    ))
+                # Update circuit-breaker timestamp BEFORE filtering repeated incomplete output
+                try:
+                    if self.collector_client and hasattr(self.collector_client, 'server_ref') and self.collector_client.server_ref:
+                        self.collector_client.server_ref.server_last_transcription_ts = time.time()
+                except Exception:
+                    pass
+
+                # Apply hallucination filter before adding to transcript
+                filtered_current_out = self._filter_hallucinations(self.current_out)
+                if filtered_current_out is not None:
+                    self.text.append(filtered_current_out)
+                    with self.lock:
+                        self.transcript.append(self.format_segment(
+                            self.timestamp_offset,
+                            self.timestamp_offset + min(duration, self.end_time_for_same_output),
+                            filtered_current_out,
+                            completed=True,
+                            language=self.language
+                        ))
+                else:
+                    # Log filtered repeated hallucination
+                    try:
+                        logger.info(f'HALLUCINATION_FILTERED: "{self.current_out}"')
+                    except Exception:
+                        pass
             self.current_out = ''
             offset = min(duration, self.end_time_for_same_output)
             self.same_output_count = 0
@@ -2121,7 +2411,25 @@ class ServeClientFasterWhisper(ServeClientBase):
         if len(segments) > 1 and segments[-1].no_speech_prob <= self.no_speech_thresh:
             for i, s in enumerate(segments[:-1]):
                 text_ = s.text
-                self.text.append(text_)
+
+                # Update circuit-breaker timestamp BEFORE filtering, so hallucinations still count as activity
+                try:
+                    if self.collector_client and hasattr(self.collector_client, 'server_ref') and self.collector_client.server_ref:
+                        self.collector_client.server_ref.server_last_transcription_ts = time.time()
+                except Exception:
+                    pass
+
+                # Apply hallucination filter
+                filtered_text = self._filter_hallucinations(text_)
+                if filtered_text is None:
+                    # Log and skip this segment if it's a hallucination
+                    try:
+                        logger.info(f'HALLUCINATION_FILTERED: "{text_}"')
+                    except Exception:
+                        pass
+                    continue
+                
+                self.text.append(filtered_text)
                 with self.lock:
                     start, end = self.timestamp_offset + s.start, self.timestamp_offset + min(duration, s.end)
 
@@ -2130,20 +2438,37 @@ class ServeClientFasterWhisper(ServeClientBase):
                 if s.no_speech_prob > self.no_speech_thresh:
                     continue
 
-                self.transcript.append(self.format_segment(start, end, text_, completed=True, language=self.language))
+                self.transcript.append(self.format_segment(start, end, filtered_text, completed=True, language=self.language))
                 offset = min(duration, s.end)
 
         # only process the last segment if it satisfies the no_speech_thresh
         if segments[-1].no_speech_prob <= self.no_speech_thresh:
-            self.current_out += segments[-1].text
-            with self.lock:
-                last_segment = self.format_segment(
-                    self.timestamp_offset + segments[-1].start,
-                    self.timestamp_offset + min(duration, segments[-1].end),
-                    self.current_out,
-                    completed=False,
-                    language=self.language
-                )
+            # Update circuit-breaker timestamp BEFORE filtering for the last (partial) segment
+            try:
+                if self.collector_client and hasattr(self.collector_client, 'server_ref') and self.collector_client.server_ref:
+                    self.collector_client.server_ref.server_last_transcription_ts = time.time()
+            except Exception:
+                pass
+
+            # Apply hallucination filter to the current output
+            filtered_current_out = self._filter_hallucinations(segments[-1].text)
+            if filtered_current_out is not None:
+                self.current_out += filtered_current_out
+                with self.lock:
+                    last_segment = self.format_segment(
+                        self.timestamp_offset + segments[-1].start,
+                        self.timestamp_offset + min(duration, segments[-1].end),
+                        self.current_out,
+                        completed=False,
+                        language=self.language
+                    )
+            else:
+                # Log and skip this segment if it's a hallucination
+                try:
+                    logger.info(f'HALLUCINATION_FILTERED: "{segments[-1].text}"')
+                except Exception:
+                    pass
+                last_segment = None
 
         if self.current_out.strip() == self.prev_out.strip() and self.current_out != '':
             self.same_output_count += 1
@@ -2161,15 +2486,31 @@ class ServeClientFasterWhisper(ServeClientBase):
         # and append the segment to the list
         if self.same_output_count > self.same_output_threshold:
             if not len(self.text) or self.text[-1].strip().lower() != self.current_out.strip().lower():
-                self.text.append(self.current_out)
-                with self.lock:
-                    self.transcript.append(self.format_segment(
-                        self.timestamp_offset,
-                        self.timestamp_offset + min(duration, self.end_time_for_same_output),
-                        self.current_out,
-                        completed=True,
-                        language=self.language
-                    ))
+                # Update circuit-breaker timestamp BEFORE filtering repeated incomplete output
+                try:
+                    if self.collector_client and hasattr(self.collector_client, 'server_ref') and self.collector_client.server_ref:
+                        self.collector_client.server_ref.server_last_transcription_ts = time.time()
+                except Exception:
+                    pass
+
+                # Apply hallucination filter before adding to transcript
+                filtered_current_out = self._filter_hallucinations(self.current_out)
+                if filtered_current_out is not None:
+                    self.text.append(filtered_current_out)
+                    with self.lock:
+                        self.transcript.append(self.format_segment(
+                            self.timestamp_offset,
+                            self.timestamp_offset + min(duration, self.end_time_for_same_output),
+                            filtered_current_out,
+                            completed=True,
+                            language=self.language
+                        ))
+                else:
+                    # Log filtered repeated hallucination
+                    try:
+                        logger.info(f'HALLUCINATION_FILTERED: "{self.current_out}"')
+                    except Exception:
+                        pass
             self.current_out = ''
             offset = min(duration, self.end_time_for_same_output)
             self.same_output_count = 0

@@ -29,20 +29,16 @@ services:
       dockerfile: services/admin-api/Dockerfile
     ports:
       - "${ADMIN_API_HOST_PORT:-8057}:8001"
-    env_file:
-      - .env
     environment:
-      - REDIS_URL=redis://redis:6379/0
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_NAME=vexa
       - DB_USER=postgres
       - DB_PASSWORD=postgres
+      - ADMIN_API_TOKEN=${ADMIN_API_TOKEN}
       - LOG_LEVEL=DEBUG
     init: true
     depends_on:
-      redis:
-        condition: service_started
       postgres:
         condition: service_healthy
     networks:
@@ -65,7 +61,6 @@ services:
       - DB_PASSWORD=postgres
       - DOCKER_HOST=unix://var/run/docker.sock
       - DEVICE_TYPE=${DEVICE_TYPE}
-      - WHISPER_LIVE_URL=ws://whisperlive.internal/ws
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     init: true
@@ -96,19 +91,17 @@ services:
       - REDIS_DB=0
       - REDIS_STREAM_NAME=transcription_segments
       - LANGUAGE_DETECTION_SEGMENTS=${LANGUAGE_DETECTION_SEGMENTS}
-      - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD}
       - DEVICE_TYPE=${DEVICE_TYPE}
-    entrypoint: /bin/sh
-    command:
-      - "-c"
-      - |
-        if [ "$${DEVICE_TYPE}" = "cuda" ]; then
-          echo 'INFO: DEVICE_TYPE is cuda, starting WhisperLive GPU service.' &&
-          exec python3 /app/run_server.py --port 9090 --backend faster_whisper -fw /root/.cache/huggingface/hub/models--Systran--faster-whisper-medium/snapshots/08e178d48790749d25932bbc082711ddcfdfbc4f;
-        else
-          echo "INFO: DEVICE_TYPE is not cuda (it is '$${DEVICE_TYPE}'), WhisperLive GPU service will not start. Sleeping indefinitely." &&
-          sleep infinity;
-        fi
+      - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}
+      - WL_MAX_CLIENTS=${WL_MAX_CLIENTS}
+      # Server-level speaker-based circuit breaker
+      - WL_USE_SPEAKER_GROUND_TRUTH=${WL_USE_SPEAKER_GROUND_TRUTH:-true}
+      - WL_SERVER_SPEAKER_NO_TX_STALL_S=${WL_SERVER_SPEAKER_NO_TX_STALL_S:-30}
+      - WL_SPEAKER_ACTIVE_WINDOW_S=${WL_SPEAKER_ACTIVE_WINDOW_S:-8}
+      - WL_SERVER_WARMUP_S=${WL_SERVER_WARMUP_S:-60}
+      # VAD filter - most permissive to catch hallucinations during silence
+      - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD:-0}
+    command: --port 9090 --backend faster_whisper --faster_whisper_custom_model_path ${WHISPER_MODEL_SIZE}
     expose:
       - "9090" #use for transcription web socket
       - "9091" #use for health check
@@ -126,27 +119,13 @@ services:
         condition: service_started
     networks:
       - vexa_default
-      - whispernet
     restart: unless-stopped
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
-    # Add Traefik labels for service discovery
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.whisperlive-router.rule=Host(`whisperlive.internal`) && PathPrefix(`/ws`)"
-      - "traefik.http.routers.whisperlive-router.entrypoints=web"
-      - "traefik.http.services.whisperlive-service.loadbalancer.server.port=9090"
-      - "traefik.http.middlewares.whisperlive-ws-headers.headers.customrequestheaders.Connection=upgrade"
-      - "traefik.http.middlewares.whisperlive-ws-headers.headers.customrequestheaders.Upgrade=websocket"
-      - "traefik.http.routers.whisperlive-router.middlewares=whisperlive-ws-headers"
-      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.path=/health"
-      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.port=9091"
-      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.scheme=http"
-      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.interval=2s"
-      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.timeout=1s"
+
 
   # CPU version of WhisperLive for users without GPU
   whisperlive-cpu:
@@ -167,19 +146,11 @@ services:
       - LANGUAGE_DETECTION_SEGMENTS=${LANGUAGE_DETECTION_SEGMENTS}
       - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD}
       - DEVICE_TYPE=cpu
-    entrypoint: /bin/sh
+      - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}
+      - WL_MAX_CLIENTS=${WL_MAX_CLIENTS}
     deploy:
       replicas: 2
-    command:
-      - "-c"
-      - |
-        if [ "$${DEVICE_TYPE}" = "cpu" ]; then
-          echo 'INFO: DEVICE_TYPE is cpu, starting WhisperLive CPU service.' &&
-          exec python3 /app/run_server.py --port 9090 --backend faster_whisper -fw /root/.cache/huggingface/hub/models--Systran--faster-whisper-tiny/snapshots/d90ca5fe260221311c53c58e660288d3deb8d356;
-        else
-          echo "INFO: DEVICE_TYPE is not cpu (it is '$${DEVICE_TYPE}'), WhisperLive CPU service will not start. Sleeping indefinitely." &&
-          sleep infinity;
-        fi
+    command: --port 9090 --backend faster_whisper --faster_whisper_custom_model_path ${WHISPER_MODEL_SIZE}
     expose:
       - "9090" #use for transcription web socket
       - "9091" #use for health check
@@ -189,7 +160,6 @@ services:
         condition: service_started
     networks:
       - vexa_default
-      - whispernet
     # Don't auto-start CPU version, users can manually start it
     restart: unless-stopped
     logging:
@@ -197,51 +167,9 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    # Add Traefik labels for service discovery
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.whisperlive-router.rule=Host(`whisperlive.internal`) && PathPrefix(`/ws`)"
-      - "traefik.http.routers.whisperlive-router.entrypoints=web"
-      - "traefik.http.services.whisperlive-service.loadbalancer.server.port=9090"
-      - "traefik.http.middlewares.whisperlive-ws-headers.headers.customrequestheaders.Connection=upgrade"
-      - "traefik.http.middlewares.whisperlive-ws-headers.headers.customrequestheaders.Upgrade=websocket"
-      - "traefik.http.routers.whisperlive-router.middlewares=whisperlive-ws-headers"
-      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.path=/health"
-      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.port=9091"
-      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.scheme=http"
-      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.interval=2s"
-      - "traefik.http.services.whisperlive-service.loadbalancer.healthcheck.timeout=1s"
 
-  # Replace nginx load-balancer with Traefik
-  traefik:
-    image: traefik:v2.10
-    ports:
-      - "${TRAEFIK_WEB_HOST_PORT:-9090}:80" # Expose on host port
-      - "${TRAEFIK_DASHBOARD_HOST_PORT:-8085}:8080" # Traefik dashboard
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./traefik.toml:/etc/traefik/traefik.toml:ro
-    command:
-      - "--api.insecure=true"
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.web.address=:80"
-      - "--log.level=DEBUG"
-      - "--providers.docker.constraints=Label(`traefik.enable`, `true`)"
-      - "--providers.docker.watch=true"
-    networks:
-      vexa_default:
-        aliases:
-          - whisperlive.internal
-      whispernet:
-        aliases:
-          - whisperlive.internal
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost/ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-    restart: unless-stopped
+
+
 
   transcription-collector:
     build:
@@ -275,6 +203,23 @@ services:
         condition: service_started
       postgres:
         condition: service_healthy
+    networks:
+      - vexa_default
+    restart: unless-stopped
+
+  mcp:
+    build:
+      context: .
+      dockerfile: services/mcp/Dockerfile
+    ports:
+      - "${MCP_HOST_PORT:-18888}:18888"
+    environment:
+      - API_GATEWAY_URL=http://api-gateway:8000
+      - LOG_LEVEL=DEBUG
+    init: true
+    depends_on:
+      api-gateway:
+        condition: service_started
     networks:
       - vexa_default
     restart: unless-stopped
@@ -314,6 +259,4 @@ volumes:
 
 networks:
   vexa_default:
-    driver: bridge
-  whispernet:
     driver: bridge

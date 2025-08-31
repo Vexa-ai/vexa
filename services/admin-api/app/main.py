@@ -154,7 +154,8 @@ async def create_user(user_in: UserCreate, response: Response, db: AsyncSession 
     db_user = User(
         email=user_data['email'],
         name=user_data.get('name'),
-        image_url=user_data.get('image_url')
+        image_url=user_data.get('image_url'),
+        max_concurrent_bots=user_data.get('max_concurrent_bots', 0)
     )
     db.add(db_user)
     await db.commit()
@@ -216,13 +217,15 @@ async def get_user(user_id: int, db: AsyncSession = Depends(get_db)):
 @admin_router.patch("/users/{user_id}",
              response_model=UserResponse,
              summary="Update user details",
-             description="Update user's name, image URL, or max concurrent bots.")
+             description="Update user's name, image URL, max concurrent bots, or data.")
 async def update_user(user_id: int, user_update: UserUpdate, db: AsyncSession = Depends(get_db)):
     """
     Updates specific fields of a user.
     Only provide the fields you want to change in the request body.
     Requires admin privileges.
     """
+    print(f"=== ADMIN PATCH USER {user_id} CALLED ===")
+    
     # Fetch the user to update
     result = await db.execute(select(User).where(User.id == user_id))
     db_user = result.scalars().first()
@@ -232,6 +235,8 @@ async def update_user(user_id: int, user_update: UserUpdate, db: AsyncSession = 
 
     # Get the update data, excluding unset fields to only update provided values
     update_data = user_update.dict(exclude_unset=True)
+    print(f"=== Raw update_data: {update_data} ===")
+    logger.info(f"Admin PATCH for user {user_id}. Raw update_data: {update_data}")
 
     # Prevent changing email via this endpoint (if desired)
     if 'email' in update_data and update_data['email'] != db_user.email:
@@ -239,12 +244,31 @@ async def update_user(user_id: int, user_update: UserUpdate, db: AsyncSession = 
     elif 'email' in update_data:
          del update_data['email'] # Don't attempt to update email to the same value
 
-    # Update the user object attributes
+    # Handle data field specially for JSONB
     updated = False
+    if 'data' in update_data:
+        new_data = update_data.pop('data')  # Remove from update_data to handle separately
+        if new_data is not None:
+            logger.info(f"Admin updating data field for user ID: {user_id}. Current: {db_user.data}, New: {new_data}")
+            
+            # Replace the data field entirely (rather than merging)
+            db_user.data = new_data
+            
+            # Flag the 'data' field as modified for SQLAlchemy to detect the change
+            attributes.flag_modified(db_user, "data")
+            updated = True
+            logger.info(f"Admin updated data field for user ID: {user_id}")
+    else:
+        logger.info(f"Admin PATCH for user {user_id}: 'data' not in update_data keys: {list(update_data.keys())}")
+
+    # Update the remaining user object attributes
     for key, value in update_data.items():
         if hasattr(db_user, key) and getattr(db_user, key) != value:
             setattr(db_user, key, value)
             updated = True
+            logger.info(f"Admin updated {key} for user ID: {user_id}")
+
+    logger.info(f"Admin update for user ID: {user_id}, updated: {updated}")
 
     # If any changes were made, commit them
     if updated:

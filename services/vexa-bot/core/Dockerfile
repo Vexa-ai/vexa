@@ -1,5 +1,5 @@
 # --- Build Stage ---
-FROM mcr.microsoft.com/playwright:v1.51.0-jammy AS base
+FROM mcr.microsoft.com/playwright:v1.55.0-jammy AS base
 
 # Install required OS dependencies (e.g., for Xvfb and other utilities)
 RUN apt-get update && apt-get install -y \
@@ -28,7 +28,7 @@ RUN npm run build
 RUN npx playwright install-deps && npx playwright install --with-deps
 
 # --- Runtime Stage ---
-FROM mcr.microsoft.com/playwright:v1.51.0-jammy AS runtime
+FROM mcr.microsoft.com/playwright:v1.55.0-jammy AS runtime
 
 # Set working directory
 WORKDIR /app

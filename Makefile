@@ -1,7 +1,7 @@
 .PHONY: all setup submodules env force-env download-model build-bot-image build up down ps logs test migrate makemigrations init-db stamp-db migrate-or-init
 
 # Default target: Sets up everything and starts the services
-all: setup-env build-bot-image build up migrate-or-init
+all: setup-env build-bot-image build up migrate-or-init test
 
 # Target to set up only the environment without Docker
 # Ensure .env is created based on TARGET *before* other setup steps
@@ -271,6 +271,14 @@ migrate: check_docker
 	@if ! docker-compose ps postgres | grep -q "Up"; then \
 		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
 		exit 1; \
+	fi
+	@# Preflight: if currently at dc59a1c03d1f and users.data already exists, stamp next revision
+	@current_version=$$(docker-compose exec -T transcription-collector alembic -c /app/alembic.ini current 2>/dev/null | grep -E '^[a-f0-9]{12}' | head -1 || echo ""); \
+	if [ "$$current_version" = "dc59a1c03d1f" ]; then \
+		if docker-compose exec -T postgres psql -U postgres -d vexa -t -c "SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'data';" | grep -q 1; then \
+			echo "---> Preflight: detected existing column users.data. Stamping 5befe308fa8b..."; \
+			docker-compose exec -T transcription-collector alembic -c /app/alembic.ini stamp 5befe308fa8b; \
+		fi; \
 	fi
 	@echo "---> Running alembic upgrade head..."
 	@docker-compose exec -T transcription-collector alembic -c /app/alembic.ini upgrade head

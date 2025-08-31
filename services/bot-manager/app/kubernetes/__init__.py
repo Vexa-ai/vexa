@@ -1,1 +1,0 @@
-# Kubernetes client package 
