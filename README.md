@@ -32,6 +32,13 @@ It focuses on doing one job well: **clean, private, real-time transcription unde
 
 
 
+## News (31 August 2025)
+
+- **MCP server for agents (new microservice):** Full Vexa API access from any MCP-capable agent (Claude Desktop, Cursor, etc.). See `services/mcp`.
+- **Hallucination filtering:** Greatly reduced hallucinations in selected languages. Contributions welcome — add phrases to `services/WhisperLive/hallucinations/` for your language.
+- **Google Meet UI updates:** Bot adjusted to the latest Google Meet UI changes for reliable joining and capture.
+
+
 ## Build on Top. In Hours, Not Months
 
 
@@ -155,7 +162,6 @@ To see examples of projects built using the Vexa API, including our example clie
 - **Direct Streaming:** Ability to stream audio directly from web/mobile apps
 - **Real-time LLM Processing:** Enhancements for transcript readability and features
 - **Meeting Knowledge Extraction (RAG):** Post-meeting analysis and Q&A
-- **MCP Server:** Access to transcription data for agents
 
 ## Self-Deployment
 
