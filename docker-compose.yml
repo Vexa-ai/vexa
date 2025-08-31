@@ -91,7 +91,6 @@ services:
       - REDIS_DB=0
       - REDIS_STREAM_NAME=transcription_segments
       - LANGUAGE_DETECTION_SEGMENTS=${LANGUAGE_DETECTION_SEGMENTS}
-      - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD}
       - DEVICE_TYPE=${DEVICE_TYPE}
       - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}
       - WL_MAX_CLIENTS=${WL_MAX_CLIENTS}
@@ -100,6 +99,8 @@ services:
       - WL_SERVER_SPEAKER_NO_TX_STALL_S=${WL_SERVER_SPEAKER_NO_TX_STALL_S:-30}
       - WL_SPEAKER_ACTIVE_WINDOW_S=${WL_SPEAKER_ACTIVE_WINDOW_S:-8}
       - WL_SERVER_WARMUP_S=${WL_SERVER_WARMUP_S:-60}
+      # VAD filter - most permissive to catch hallucinations during silence
+      - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD:-0}
     command: --port 9090 --backend faster_whisper --faster_whisper_custom_model_path ${WHISPER_MODEL_SIZE}
     expose:
       - "9090" #use for transcription web socket

@@ -1366,6 +1366,10 @@ class ServeClientBase(object):
     RATE = 16000
     SERVER_READY = "SERVER_READY"
     DISCONNECT = "DISCONNECT"
+    
+    # Hallucination filter - load once per class
+    _hallucinations = None
+    _hallucinations_loaded = False
 
     def __init__(self, websocket, language="en", task="transcribe", client_uid=None, 
                  platform=None, meeting_url=None, token=None, meeting_id=None,
@@ -1422,9 +1426,84 @@ class ServeClientBase(object):
         if self.collector_client and all([platform, meeting_url, token, meeting_id]):
             self.collector_client.publish_session_start_event(token, platform, meeting_id, self.client_uid)
             logging.info(f"Published session_start event for client {self.client_uid}")
+        
+        # Load hallucination filter
+        self._load_hallucinations()
 
     def speech_to_text(self):
         raise NotImplementedError
+    
+    def _load_hallucinations(self):
+        """Load hallucination strings from file if not already loaded."""
+        if ServeClientBase._hallucinations_loaded:
+            return
+            
+        try:
+            # Collect hallucination strings from multiple sources:
+            # - Single files: /app/hallucinations.txt and local hallucinations.txt
+            # - Language folders: /app/hallucinations/** and local ../hallucinations/**
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            candidates = []
+
+            # Single-file locations (backward compatible)
+            app_root_file = "/app/hallucinations.txt"
+            local_root_file = os.path.join(script_dir, "..", "hallucinations.txt")
+            if os.path.exists(app_root_file):
+                candidates.append(app_root_file)
+            if os.path.exists(local_root_file):
+                candidates.append(local_root_file)
+
+            # Folder-based locations (language-separated files)
+            app_dir = "/app/hallucinations"
+            local_dir = os.path.join(script_dir, "..", "hallucinations")
+            for directory in (app_dir, local_dir):
+                if os.path.isdir(directory):
+                    for root, _dirs, files in os.walk(directory):
+                        for name in files:
+                            # Accept common text list extensions
+                            if name.lower().endswith((".txt", ".list")):
+                                candidates.append(os.path.join(root, name))
+
+            # Read and deduplicate entries across all sources
+            unique_entries = set()
+            loaded_files = 0
+            for path in candidates:
+                try:
+                    with open(path, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            normalized = line.strip().lower()
+                            if normalized:
+                                unique_entries.add(normalized)
+                    loaded_files += 1
+                    logging.info(f"Loaded hallucination filters from {path}")
+                except Exception as read_err:
+                    logging.warning(f"Failed to read hallucination file {path}: {read_err}")
+
+            ServeClientBase._hallucinations = sorted(unique_entries)
+            logging.info(
+                f"Loaded {len(ServeClientBase._hallucinations)} unique hallucination filters from {loaded_files} file(s)"
+            )
+        except Exception as e:
+            logging.error(f"Error loading hallucination filters: {e}")
+            ServeClientBase._hallucinations = []
+        
+        ServeClientBase._hallucinations_loaded = True
+    
+    def _filter_hallucinations(self, text):
+        """Filter out hallucination strings from transcription text."""
+        if not ServeClientBase._hallucinations or not text:
+            return text
+            
+        # Convert to lowercase for comparison
+        text_lower = text.lower().strip()
+        
+        # Check if the entire text matches any hallucination
+        for hallucination in ServeClientBase._hallucinations:
+            if text_lower == hallucination:
+                logging.debug(f"Filtered hallucination: '{text}' matches '{hallucination}'")
+                return None  # Return None to indicate this should be omitted
+        
+        return text  # Return original text if no hallucination detected
 
     def transcribe_audio(self):
         raise NotImplementedError
@@ -1874,7 +1953,24 @@ class ServeClientTensorRT(ServeClientBase):
         if len(segments) > 1 and segments[-1].no_speech_prob <= self.no_speech_thresh:
             for i, s in enumerate(segments[:-1]):
                 text_ = s.text
-                self.text.append(text_)
+                # Update circuit-breaker timestamp BEFORE filtering, so hallucinations still count as activity
+                try:
+                    if self.collector_client and hasattr(self.collector_client, 'server_ref') and self.collector_client.server_ref:
+                        self.collector_client.server_ref.server_last_transcription_ts = time.time()
+                except Exception:
+                    pass
+
+                # Apply hallucination filter
+                filtered_text = self._filter_hallucinations(text_)
+                if filtered_text is None:
+                    # Log and skip this segment if it's a hallucination
+                    try:
+                        logger.info(f'HALLUCINATION_FILTERED: "{text_}"')
+                    except Exception:
+                        pass
+                    continue
+                
+                self.text.append(filtered_text)
                 with self.lock:
                     start, end = self.timestamp_offset + s.start, self.timestamp_offset + min(duration, s.end)
 
@@ -1883,20 +1979,37 @@ class ServeClientTensorRT(ServeClientBase):
                 if s.no_speech_prob > self.no_speech_thresh:
                     continue
 
-                self.transcript.append(self.format_segment(start, end, text_, completed=True, language=self.language))
+                self.transcript.append(self.format_segment(start, end, filtered_text, completed=True, language=self.language))
                 offset = min(duration, s.end)
 
         # only process the last segment if it satisfies the no_speech_thresh
         if segments[-1].no_speech_prob <= self.no_speech_thresh:
-            self.current_out += segments[-1].text
-            with self.lock:
-                last_segment = self.format_segment(
-                    self.timestamp_offset + segments[-1].start,
-                    self.timestamp_offset + min(duration, segments[-1].end),
-                    self.current_out,
-                    completed=False,
-                    language=self.language
-                )
+            # Update circuit-breaker timestamp BEFORE filtering for the last (partial) segment
+            try:
+                if self.collector_client and hasattr(self.collector_client, 'server_ref') and self.collector_client.server_ref:
+                    self.collector_client.server_ref.server_last_transcription_ts = time.time()
+            except Exception:
+                pass
+
+            # Apply hallucination filter to the current output
+            filtered_current_out = self._filter_hallucinations(segments[-1].text)
+            if filtered_current_out is not None:
+                self.current_out += filtered_current_out
+                with self.lock:
+                    last_segment = self.format_segment(
+                        self.timestamp_offset + segments[-1].start,
+                        self.timestamp_offset + min(duration, segments[-1].end),
+                        self.current_out,
+                        completed=False,
+                        language=self.language
+                    )
+            else:
+                # Log and skip this segment if it's a hallucination
+                try:
+                    logger.info(f'HALLUCINATION_FILTERED: "{segments[-1].text}"')
+                except Exception:
+                    pass
+                last_segment = None
 
         if self.current_out.strip() == self.prev_out.strip() and self.current_out != '':
             self.same_output_count += 1
@@ -1914,15 +2027,31 @@ class ServeClientTensorRT(ServeClientBase):
         # and append the segment to the list
         if self.same_output_count > self.same_output_threshold:
             if not len(self.text) or self.text[-1].strip().lower() != self.current_out.strip().lower():
-                self.text.append(self.current_out)
-                with self.lock:
-                    self.transcript.append(self.format_segment(
-                        self.timestamp_offset,
-                        self.timestamp_offset + min(duration, self.end_time_for_same_output),
-                        self.current_out,
-                        completed=True,
-                        language=self.language
-                    ))
+                # Update circuit-breaker timestamp BEFORE filtering repeated incomplete output
+                try:
+                    if self.collector_client and hasattr(self.collector_client, 'server_ref') and self.collector_client.server_ref:
+                        self.collector_client.server_ref.server_last_transcription_ts = time.time()
+                except Exception:
+                    pass
+
+                # Apply hallucination filter before adding to transcript
+                filtered_current_out = self._filter_hallucinations(self.current_out)
+                if filtered_current_out is not None:
+                    self.text.append(filtered_current_out)
+                    with self.lock:
+                        self.transcript.append(self.format_segment(
+                            self.timestamp_offset,
+                            self.timestamp_offset + min(duration, self.end_time_for_same_output),
+                            filtered_current_out,
+                            completed=True,
+                            language=self.language
+                        ))
+                else:
+                    # Log filtered repeated hallucination
+                    try:
+                        logger.info(f'HALLUCINATION_FILTERED: "{self.current_out}"')
+                    except Exception:
+                        pass
             self.current_out = ''
             offset = min(duration, self.end_time_for_same_output)
             self.same_output_count = 0
@@ -2282,7 +2411,25 @@ class ServeClientFasterWhisper(ServeClientBase):
         if len(segments) > 1 and segments[-1].no_speech_prob <= self.no_speech_thresh:
             for i, s in enumerate(segments[:-1]):
                 text_ = s.text
-                self.text.append(text_)
+
+                # Update circuit-breaker timestamp BEFORE filtering, so hallucinations still count as activity
+                try:
+                    if self.collector_client and hasattr(self.collector_client, 'server_ref') and self.collector_client.server_ref:
+                        self.collector_client.server_ref.server_last_transcription_ts = time.time()
+                except Exception:
+                    pass
+
+                # Apply hallucination filter
+                filtered_text = self._filter_hallucinations(text_)
+                if filtered_text is None:
+                    # Log and skip this segment if it's a hallucination
+                    try:
+                        logger.info(f'HALLUCINATION_FILTERED: "{text_}"')
+                    except Exception:
+                        pass
+                    continue
+                
+                self.text.append(filtered_text)
                 with self.lock:
                     start, end = self.timestamp_offset + s.start, self.timestamp_offset + min(duration, s.end)
 
@@ -2291,20 +2438,37 @@ class ServeClientFasterWhisper(ServeClientBase):
                 if s.no_speech_prob > self.no_speech_thresh:
                     continue
 
-                self.transcript.append(self.format_segment(start, end, text_, completed=True, language=self.language))
+                self.transcript.append(self.format_segment(start, end, filtered_text, completed=True, language=self.language))
                 offset = min(duration, s.end)
 
         # only process the last segment if it satisfies the no_speech_thresh
         if segments[-1].no_speech_prob <= self.no_speech_thresh:
-            self.current_out += segments[-1].text
-            with self.lock:
-                last_segment = self.format_segment(
-                    self.timestamp_offset + segments[-1].start,
-                    self.timestamp_offset + min(duration, segments[-1].end),
-                    self.current_out,
-                    completed=False,
-                    language=self.language
-                )
+            # Update circuit-breaker timestamp BEFORE filtering for the last (partial) segment
+            try:
+                if self.collector_client and hasattr(self.collector_client, 'server_ref') and self.collector_client.server_ref:
+                    self.collector_client.server_ref.server_last_transcription_ts = time.time()
+            except Exception:
+                pass
+
+            # Apply hallucination filter to the current output
+            filtered_current_out = self._filter_hallucinations(segments[-1].text)
+            if filtered_current_out is not None:
+                self.current_out += filtered_current_out
+                with self.lock:
+                    last_segment = self.format_segment(
+                        self.timestamp_offset + segments[-1].start,
+                        self.timestamp_offset + min(duration, segments[-1].end),
+                        self.current_out,
+                        completed=False,
+                        language=self.language
+                    )
+            else:
+                # Log and skip this segment if it's a hallucination
+                try:
+                    logger.info(f'HALLUCINATION_FILTERED: "{segments[-1].text}"')
+                except Exception:
+                    pass
+                last_segment = None
 
         if self.current_out.strip() == self.prev_out.strip() and self.current_out != '':
             self.same_output_count += 1
@@ -2322,15 +2486,31 @@ class ServeClientFasterWhisper(ServeClientBase):
         # and append the segment to the list
         if self.same_output_count > self.same_output_threshold:
             if not len(self.text) or self.text[-1].strip().lower() != self.current_out.strip().lower():
-                self.text.append(self.current_out)
-                with self.lock:
-                    self.transcript.append(self.format_segment(
-                        self.timestamp_offset,
-                        self.timestamp_offset + min(duration, self.end_time_for_same_output),
-                        self.current_out,
-                        completed=True,
-                        language=self.language
-                    ))
+                # Update circuit-breaker timestamp BEFORE filtering repeated incomplete output
+                try:
+                    if self.collector_client and hasattr(self.collector_client, 'server_ref') and self.collector_client.server_ref:
+                        self.collector_client.server_ref.server_last_transcription_ts = time.time()
+                except Exception:
+                    pass
+
+                # Apply hallucination filter before adding to transcript
+                filtered_current_out = self._filter_hallucinations(self.current_out)
+                if filtered_current_out is not None:
+                    self.text.append(filtered_current_out)
+                    with self.lock:
+                        self.transcript.append(self.format_segment(
+                            self.timestamp_offset,
+                            self.timestamp_offset + min(duration, self.end_time_for_same_output),
+                            filtered_current_out,
+                            completed=True,
+                            language=self.language
+                        ))
+                else:
+                    # Log filtered repeated hallucination
+                    try:
+                        logger.info(f'HALLUCINATION_FILTERED: "{self.current_out}"')
+                    except Exception:
+                        pass
             self.current_out = ''
             offset = min(duration, self.end_time_for_same_output)
             self.same_output_count = 0

@@ -1,0 +1,48 @@
+# Exact Transcription Strings from Current Bot Logs (Deduplicated)
+# Updated: 2025-08-31
+# Source: WhisperLive container logs - exact strings including spaces and punctuation
+
+# English: 
+ All right.
+ because I have not done that in the last few years.
+ But I grow them
+ But I grow young
+ Bye.
+ Bye bye.
+ Bye-bye.
+ Can I go?
+ Do you want me to turn it off?
+ Have a good night, guys.
+ I'll see you next time.
+ I love you.
+ I'm happy to be here.
+ I'm just a form.
+ Let's do that again.
+ Nice.
+ No.
+ OK.
+ Okay.
+ Okay, thank you.
+ So I am going to turn this off.
+ Thanks for watching!
+ Thanks for watching.
+ Thank you.
+ Thank you for having me.
+ Thank you for listening.
+ Thank you for today.
+ Thank you for your time.
+ Thank you so much.
+ Thank you very much.
+ Thank you very much for coming.
+ that I thought I'd just like to talk about for a minute.
+ Yeah.
+ Yes.
+
+ Thank you for your time, and I'll see you next time.
+ Thank you so much for joining us.
+ Thank you so much for joining us today, and we'll see you next time.
+ Thanks.
+ Bye!
+
+
+
