@@ -5,7 +5,7 @@ Follow these steps carefully, even if you are new to these tools. In under 5 min
 
 ## 1. Install Node.js (Required for npm)
 
-The MCP uses `npm` (Node Package Manager) to connect to the server, which comes with Node.js. If you do not have Node.js installed:
+The MCP uses `npm` (Node Package Manager) to connect to the server, which comes with Node.js. If you do not have Node.js installed, install it form here, only takes a couple seconds:
 
 - Go to the [Node.js download page](https://nodejs.org/)
 - Download the **LTS** (Long Term Support) version for your operating system (Windows, Mac, or Linux)
@@ -35,11 +35,7 @@ You will need your Vexa API key to connect to the MCP. If you do not have one, p
 
 2. **Add MCP Server Configuration**
 
-**Paste the following configuration into your the config file you just opened:**
-(They differ on Windows/Mac, choose the one that matches your system)
-
-
-**For Windows:**
+**Paste the following configuration into your the claude config file you just opened:**
 
 ```json
 {
@@ -49,31 +45,9 @@ You will need your Vexa API key to connect to the MCP. If you do not have one, p
       "args": [
         "-y",
         "mcp-remote",
-        "https://gateway.dev.vexa.ai/mcp",
+        "https://api.cloud.vexa.ai/mcp",
         "--header",
         "Authorization:${VEXA_API_KEY}"
-      ],
-      "env": {
-        "VEXA_API_KEY": "Bearer YOUR_API_KEY_HERE"
-      }
-    }
-  }
-}
-```
-
-**For macOS:**
-
-```json
-{
-  "mcpServers": {
-    "fastapi-mcp": {
-      "command": "npx",
-      "args": [
-        "-y"
-        "mcp-remote",
-        "https://gateway.dev.vexa.ai/mcp",
-        "--header",
-        "Authorization: Bearer ${VEXA_API_KEY}"
       ],
       "env": {
         "VEXA_API_KEY": "YOUR_API_KEY_HERE"
@@ -82,7 +56,6 @@ You will need your Vexa API key to connect to the MCP. If you do not have one, p
   }
 }
 ```
-
 
 - **Important:** Replace `YOUR_API_KEY_HERE` with your real Vexa API key. Do not share your API key with others.
 
@@ -104,4 +77,4 @@ Once you have completed the above steps:
 
 ---
 
-**For more information about the Vexa API Gateway, visit:** [https://gateway.dev.vexa.ai](https://gateway.dev.vexa.ai)
+**For more information about the Vexa API , visit:** [https://vexa.ai](https://vexa.ai)
