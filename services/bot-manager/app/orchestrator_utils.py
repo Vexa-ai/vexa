@@ -33,7 +33,8 @@ from shared_models.models import User, MeetingSession
 # <--- END ADD
 
 # Shared concurrency enforcement helper
-from app.orchestrators.common import enforce_user_concurrency_limit
+from app.orchestrators.common import enforce_user_concurrency_limit, count_user_active_bots
+from sqlalchemy import select as sa_select
 
 # Assuming these are still needed from config or env
 DOCKER_HOST = os.environ.get("DOCKER_HOST", "unix://var/run/docker.sock")
@@ -168,34 +169,8 @@ async def start_bot_container(
     """
     # === START: Bot Limit Check ===
     async def _count_for_user() -> int:
-        session = get_socket_session()
-        if not session:
-            logger.error("[Limit Check] Cannot count running bots, requests_unixsocket session not available.")
-            raise HTTPException(status_code=500, detail="Failed to connect to Docker to verify bot count.")
-
-        try:
-            filters = json.dumps({
-                "label": [f"vexa.user_id={user_id}"],
-                "status": ["running"]
-            })
-
-            socket_path_relative = DOCKER_HOST.split('//', 1)[1]
-            socket_path_abs = f"/{socket_path_relative}"
-            socket_path_encoded = socket_path_abs.replace("/", "%2F")
-            socket_url_base = f'http+unix://{socket_path_encoded}'
-            list_url = f'{socket_url_base}/containers/json'
-
-            logger.debug(f"[Limit Check] Querying {list_url} with filters: {filters}")
-            response = session.get(list_url, params={"filters": filters, "all": "false"})
-            response.raise_for_status()
-            running_bots_info = response.json()
-            return len(running_bots_info)
-        except RequestException as sock_err:
-            logger.error(f"[Limit Check] Failed to count running bots via socket API for user {user_id}: {sock_err}", exc_info=True)
-            raise
-        except Exception as count_err:
-            logger.error(f"[Limit Check] Unexpected error counting running bots via socket API for user {user_id}: {count_err}", exc_info=True)
-            raise
+        # Use centralized DB-based seat counter (excludes 'stopping')
+        return await count_user_active_bots(user_id)
 
     await enforce_user_concurrency_limit(user_id, _count_for_user)
     # === END: Bot Limit Check ===
@@ -447,12 +422,27 @@ async def get_running_bots_status(user_id: int) -> List[Dict[str, Any]]:
                 except Exception as db_err:
                     logger.error(f"[Bot Status] DB error fetching meeting {meeting_id_int}: {db_err}", exc_info=True)
             
+            # Map a normalized status from Docker's human string
+            normalized_status = None
+            try:
+                if isinstance(status, str):
+                    s = status.lower()
+                    if s.startswith('up'):
+                        normalized_status = 'Up'
+                    elif s.startswith('exited') or 'dead' in s:
+                        normalized_status = 'Exited'
+                    elif 'restarting' in s or 'starting' in s:
+                        normalized_status = 'Starting'
+            except Exception:
+                pass
+
             bots_status.append({
                 "container_id": container_id,
                 "container_name": name,
                 "platform": platform, # Added
                 "native_meeting_id": native_meeting_id, # Added
                 "status": status,
+                "normalized_status": normalized_status,
                 "created_at": created_at,
                 "labels": labels,
                 "meeting_id_from_name": meeting_id_from_name

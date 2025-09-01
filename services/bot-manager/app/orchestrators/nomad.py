@@ -14,7 +14,7 @@ from typing import Optional, Tuple, Dict, Any, List
 
 import httpx
 from fastapi import HTTPException
-from app.orchestrators.common import enforce_user_concurrency_limit
+from app.orchestrators.common import enforce_user_concurrency_limit, count_user_active_bots
 
 logger = logging.getLogger("bot_manager.nomad_utils")
 
@@ -63,8 +63,8 @@ async def start_bot_container(
     """
     # === START: Bot Limit Check (Nomad) ===
     async def _count_for_user() -> int:
-        bots = await get_running_bots_status(user_id)
-        return len(bots)
+        # Use centralized DB-based seat counter (excludes 'stopping')
+        return await count_user_active_bots(user_id)
 
     await enforce_user_concurrency_limit(user_id, _count_for_user)
     # === END: Bot Limit Check (Nomad) ===
@@ -144,18 +144,28 @@ def stop_bot_container(container_id: str) -> bool:
         # Use requests for synchronous operation
         import requests
         
-        # Stop the allocation
+        # First try to stop as an allocation ID
         url = f"{NOMAD_ADDR}/v1/allocation/{container_id}/stop"
         resp = requests.post(url, timeout=10)
-        
         if resp.status_code == 200:
             logger.info(f"Successfully stopped allocation {container_id}")
             return True
-        elif resp.status_code == 404:
-            logger.warning(f"Allocation {container_id} not found, may already be stopped")
-            return True
+        if resp.status_code == 404:
+            logger.warning(f"Allocation {container_id} not found as allocation. Falling back to job deregister.")
         else:
-            logger.error(f"Failed to stop allocation {container_id}: HTTP {resp.status_code}")
+            logger.warning(f"Allocation stop returned HTTP {resp.status_code}. Falling back to job deregister for {container_id}.")
+
+        # Fallback: treat container_id as job ID and deregister with purge
+        try:
+            job_url = f"{NOMAD_ADDR}/v1/job/{container_id}/deregister?purge=true"
+            job_resp = requests.post(job_url, timeout=10)
+            if job_resp.status_code in (200, 202, 404):
+                logger.info(f"Job deregister fallback for {container_id} returned HTTP {job_resp.status_code}.")
+                return True
+            logger.error(f"Job deregister fallback failed for {container_id}: HTTP {job_resp.status_code}")
+            return False
+        except Exception as e:
+            logger.error(f"Error during job deregister fallback for {container_id}: {e}")
             return False
             
     except Exception as e:
@@ -188,9 +198,9 @@ async def get_running_bots_status(user_id: int) -> List[Dict[str, Any]]:
                 if not job.get("ID", "").startswith(BOT_JOB_NAME):
                     continue
                     
-                # Check if job is running
+                # Check if job is active or pending
                 job_status = job.get("Status", "")
-                if job_status not in ["running", "pending"]:
+                if job_status not in ["running", "pending", "dead", "complete"]:
                     continue
                 
                 # Get job details to access metadata
@@ -219,12 +229,22 @@ async def get_running_bots_status(user_id: int) -> List[Dict[str, Any]]:
                             # Use the first allocation ID as container ID
                             container_id = allocations[0].get("ID")
                         
+                        # Map normalized status for clients
+                        normalized = None
+                        if job_status == "running":
+                            normalized = "Up"
+                        elif job_status == "pending":
+                            normalized = "Starting"
+                        elif job_status in ["dead", "complete"]:
+                            normalized = "Exited"
+
                         bot_status = {
                             "container_id": container_id,
                             "container_name": job_id,
                             "platform": job_meta.get("platform"),
                             "native_meeting_id": job_meta.get("native_meeting_id"),
                             "status": job_status,
+                            "normalized_status": normalized,
                             "created_at": job.get("SubmitTime"),
                             "labels": job_meta,
                             "meeting_id_from_name": job_meta.get("meeting_id")
@@ -276,17 +296,16 @@ async def verify_container_running(container_id: str) -> bool:
             
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
-            # Allocation not found, assume it's not running
-            logger.debug(f"Allocation {container_id} not found (404), assuming not running")
+            logger.debug(f"Allocation {container_id} not found (404), not running")
             return False
         logger.warning(f"HTTP {e.response.status_code} error checking allocation {container_id}: {e}")
+        return False
     except httpx.HTTPError as e:
         logger.warning(f"HTTP error checking allocation {container_id}: {e}")
+        return False
     except Exception as e:
         logger.warning(f"Unexpected error checking allocation {container_id}: {e}")
-    
-    # On any error, assume running to be safe
-    return True
+        return False
 
 # Alias for shared function – import lazily to avoid circulars
 from app.orchestrator_utils import _record_session_start  # noqa: E402 
