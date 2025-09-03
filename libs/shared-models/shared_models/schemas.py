@@ -4,6 +4,23 @@ from datetime import datetime
 from enum import Enum, auto
 import re # Import re for native ID validation
 
+# --- Language Codes from faster-whisper ---
+# These are the accepted language codes from the faster-whisper library
+# Source: faster_whisper.tokenizer._LANGUAGE_CODES
+ACCEPTED_LANGUAGE_CODES = {
+    "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs", "cy", 
+    "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "ha", "haw", 
+    "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja", "jw", "ka", "kk", "km", "kn", 
+    "ko", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt", 
+    "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sd", "si", 
+    "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl", 
+    "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo", "zh", "yue"
+}
+
+# --- Allowed Tasks ---
+# These are the tasks supported by WhisperLive
+ALLOWED_TASKS = {"transcribe", "translate"}
+
 # --- Platform Definitions ---
 
 class Platform(str, Enum):
@@ -186,6 +203,20 @@ class MeetingCreate(BaseModel):
             supported = ', '.join([p.value for p in Platform])
             raise ValueError(f"Invalid platform '{v}'. Must be one of: {supported}")
 
+    @validator('language')
+    def validate_language(cls, v):
+        """Validate that the language code is one of the accepted language codes."""
+        if v is not None and v != "" and v not in ACCEPTED_LANGUAGE_CODES:
+            raise ValueError(f"Invalid language code '{v}'. Must be one of: {sorted(ACCEPTED_LANGUAGE_CODES)}")
+        return v
+
+    @validator('task')
+    def validate_task(cls, v):
+        """Validate that the task is one of the allowed tasks."""
+        if v is not None and v != "" and v not in ALLOWED_TASKS:
+            raise ValueError(f"Invalid task '{v}'. Must be one of: {sorted(ALLOWED_TASKS)}")
+        return v
+
 class MeetingResponse(BaseModel): # Not inheriting from MeetingBase anymore to avoid duplicate fields if DB model is used directly
     id: int = Field(..., description="Internal database ID for the meeting")
     user_id: int
@@ -212,9 +243,38 @@ class MeetingDataUpdate(BaseModel):
     languages: Optional[List[str]] = Field(None, description="List of language codes detected/used in the meeting")
     notes: Optional[str] = Field(None, description="Meeting notes or description")
 
+    @validator('languages')
+    def validate_languages(cls, v):
+        """Validate that all language codes in the list are accepted faster-whisper codes."""
+        if v is not None:
+            invalid_languages = [lang for lang in v if lang not in ACCEPTED_LANGUAGE_CODES]
+            if invalid_languages:
+                raise ValueError(f"Invalid language codes: {invalid_languages}. Must be one of: {sorted(ACCEPTED_LANGUAGE_CODES)}")
+        return v
+
 class MeetingUpdate(BaseModel):
     """Schema for updating meeting data via PATCH requests"""
     data: MeetingDataUpdate = Field(..., description="Meeting metadata to update")
+
+# --- Bot Configuration Update Schema ---
+class MeetingConfigUpdate(BaseModel):
+    """Schema for updating bot configuration (language and task)"""
+    language: Optional[str] = Field(None, description="New language code (e.g., 'en', 'es')")
+    task: Optional[str] = Field(None, description="New task ('transcribe' or 'translate')")
+
+    @validator('language')
+    def validate_language(cls, v):
+        """Validate that the language code is one of the accepted faster-whisper codes."""
+        if v is not None and v != "" and v not in ACCEPTED_LANGUAGE_CODES:
+            raise ValueError(f"Invalid language code '{v}'. Must be one of: {sorted(ACCEPTED_LANGUAGE_CODES)}")
+        return v
+
+    @validator('task')
+    def validate_task(cls, v):
+        """Validate that the task is one of the allowed tasks."""
+        if v is not None and v != "" and v not in ALLOWED_TASKS:
+            raise ValueError(f"Invalid task '{v}'. Must be one of: {sorted(ALLOWED_TASKS)}")
+        return v
 
 # --- Transcription Schemas --- 
 
@@ -228,6 +288,13 @@ class TranscriptionSegment(BaseModel):
     speaker: Optional[str] = None
     absolute_start_time: Optional[datetime] = Field(None, description="Absolute start timestamp of the segment (UTC)")
     absolute_end_time: Optional[datetime] = Field(None, description="Absolute end timestamp of the segment (UTC)")
+
+    @validator('language')
+    def validate_language(cls, v):
+        """Validate that the language code is one of the accepted faster-whisper codes."""
+        if v is not None and v != "" and v not in ACCEPTED_LANGUAGE_CODES:
+            raise ValueError(f"Invalid language code '{v}'. Must be one of: {sorted(ACCEPTED_LANGUAGE_CODES)}")
+        return v
 
     class Config:
         orm_mode = True

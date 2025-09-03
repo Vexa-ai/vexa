@@ -23,7 +23,7 @@ from app.orchestrators import (
 )
 from shared_models.database import init_db, get_db, async_session_local
 from shared_models.models import User, Meeting, MeetingSession, Transcription # <--- ADD MeetingSession and Transcription import
-from shared_models.schemas import MeetingCreate, MeetingResponse, Platform, BotStatusResponse # Import new schemas and Platform
+from shared_models.schemas import MeetingCreate, MeetingResponse, Platform, BotStatusResponse, MeetingConfigUpdate # Import new schemas and Platform
 from app.auth import get_user_and_token # MODIFIED
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -59,11 +59,7 @@ redis_client: Optional[aioredis.Redis] = None
 # class BotRequest(BaseModel): ... -> Replaced by MeetingCreate
 # class BotResponse(BaseModel): ... -> Replaced by MeetingResponse
 
-# --- ADD Pydantic Model for Config Update ---
-class MeetingConfigUpdate(BaseModel):
-    language: Optional[str] = Field(None, description="New language code (e.g., 'en', 'es')")
-    task: Optional[str] = Field(None, description="New task ('transcribe' or 'translate')")
-# -------------------------------------------
+# --- REMOVED: Local MeetingConfigUpdate class - now using shared_models.schemas.MeetingConfigUpdate ---
 
 # --- ADDED: Pydantic Model for Bot Exit Callback ---
 class BotExitCallbackPayload(BaseModel):
