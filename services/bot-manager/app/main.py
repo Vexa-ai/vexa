@@ -20,15 +20,14 @@ from .config import BOT_IMAGE_NAME, REDIS_URL
 from app.orchestrators import (
     get_socket_session, close_docker_client, start_bot_container,
     stop_bot_container, _record_session_start, get_running_bots_status,
-    verify_container_running,
 )
 from shared_models.database import init_db, get_db, async_session_local
 from shared_models.models import User, Meeting, MeetingSession, Transcription # <--- ADD MeetingSession and Transcription import
-from shared_models.schemas import MeetingCreate, MeetingResponse, Platform, BotStatusResponse # Import new schemas and Platform
+from shared_models.schemas import MeetingCreate, MeetingResponse, Platform, BotStatusResponse, MeetingConfigUpdate # Import new schemas and Platform
 from app.auth import get_user_and_token # MODIFIED
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import and_, desc
+from sqlalchemy import and_, desc, func
 from datetime import datetime # For start_time
 
 from app.tasks.bot_exit_tasks import run_all_tasks
@@ -60,11 +59,7 @@ redis_client: Optional[aioredis.Redis] = None
 # class BotRequest(BaseModel): ... -> Replaced by MeetingCreate
 # class BotResponse(BaseModel): ... -> Replaced by MeetingResponse
 
-# --- ADD Pydantic Model for Config Update ---
-class MeetingConfigUpdate(BaseModel):
-    language: Optional[str] = Field(None, description="New language code (e.g., 'en', 'es')")
-    task: Optional[str] = Field(None, description="New task ('transcribe' or 'translate')")
-# -------------------------------------------
+# --- REMOVED: Local MeetingConfigUpdate class - now using shared_models.schemas.MeetingConfigUpdate ---
 
 # --- ADDED: Pydantic Model for Bot Exit Callback ---
 class BotExitCallbackPayload(BaseModel):
@@ -184,41 +179,29 @@ async def request_bot(
 
     if existing_meeting:
         logger.info(f"Found existing meeting record {existing_meeting.id} with status '{existing_meeting.status}' for user {current_user.id}, platform '{req.platform.value}', native ID '{native_meeting_id}'.")
-        if existing_meeting.bot_container_id:
-            try:
-                container_is_running = await verify_container_running(existing_meeting.bot_container_id)
-                if not container_is_running:
-                    logger.warning(f"Container {existing_meeting.bot_container_id} for existing meeting {existing_meeting.id} (status: {existing_meeting.status}) not found or not running. Cleaning up database state.")
-                    existing_meeting.status = 'failed'
-                    existing_meeting.end_time = datetime.utcnow()
-                    await db.commit()
-                    await db.refresh(existing_meeting)
-                    logger.info(f"Existing meeting {existing_meeting.id} marked as 'failed'. Allowing new bot request to proceed.")
-                    existing_meeting = None
-                else:
-                    logger.warning(f"User {current_user.id} requested duplicate bot. Active bot container {existing_meeting.bot_container_id} is running for meeting {existing_meeting.id}.")
-                    # This HTTPException should be propagated up if the container is indeed running.
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail=f"An active or requested meeting already exists for this platform and meeting ID, and its container is running. Meeting ID: {existing_meeting.id}"
-                    )
-            except HTTPException as http_exc: # Specifically catch and re-raise HTTPExceptions
-                logger.warning(f"Propagating HTTPException during container verification for meeting {existing_meeting.id}: {http_exc.detail}")
-                raise http_exc
-            except Exception as e:
-                logger.error(f"Error checking container state for meeting {existing_meeting.id}: {e}", exc_info=True)
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Error verifying existing container status. Please try again. If the problem persists, contact support. Meeting ID: {existing_meeting.id}"
-                )
-        else: # existing_meeting.bot_container_id is None
-            logger.warning(f"Existing meeting {existing_meeting.id} is in status '{existing_meeting.status}' but has no container ID. Marking as 'failed'.")
-            existing_meeting.status = 'failed' 
-            existing_meeting.end_time = datetime.utcnow()
-            await db.commit()
-            await db.refresh(existing_meeting)
-            logger.info(f"Existing meeting {existing_meeting.id} marked as 'failed' due to missing container_id. Allowing new bot request to proceed.")
-            existing_meeting = None
+        # Enforce DB-only uniqueness: if there's any requested/active meeting, reject immediately.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"An active or requested meeting already exists for this platform and meeting ID. Meeting ID: {existing_meeting.id}"
+        )
+    
+    # --- Fast-fail concurrency limit check (DB-based) ---
+    user_limit = int(getattr(current_user, "max_concurrent_bots", 0) or 0)
+    if user_limit > 0:
+        count_stmt = select(func.count()).select_from(Meeting).where(
+            and_(
+                Meeting.user_id == current_user.id,
+                Meeting.status.in_(['requested', 'active'])
+            )
+        )
+        count_result = await db.execute(count_stmt)
+        active_count = int(count_result.scalar() or 0)
+        if active_count >= user_limit:
+            logger.warning(f"User {current_user.id} reached concurrent bot limit {active_count}/{user_limit}. Rejecting new launch.")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"User has reached the maximum concurrent bot limit ({user_limit})."
+            )
     
     if existing_meeting is None:
         logger.info(f"No active/valid existing meeting found for user {current_user.id}, platform '{req.platform.value}', native ID '{native_meeting_id}'. Proceeding to create a new meeting record.")

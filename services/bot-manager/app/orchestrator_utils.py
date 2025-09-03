@@ -167,13 +167,7 @@ async def start_bot_container(
     Returns:
         A tuple (container_id, connection_id) if successful, None otherwise.
     """
-    # === START: Bot Limit Check ===
-    async def _count_for_user() -> int:
-        # Use centralized DB-based seat counter (excludes 'stopping')
-        return await count_user_active_bots(user_id)
-
-    await enforce_user_concurrency_limit(user_id, _count_for_user)
-    # === END: Bot Limit Check ===
+    # Concurrency limit is now checked in request_bot (fast-fail). Keep minimal here.
 
     # --- Original start_bot_container logic (using requests_unixsocket) --- 
     session = get_socket_session()
