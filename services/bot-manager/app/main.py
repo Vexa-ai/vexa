@@ -20,7 +20,6 @@ from .config import BOT_IMAGE_NAME, REDIS_URL
 from app.orchestrators import (
     get_socket_session, close_docker_client, start_bot_container,
     stop_bot_container, _record_session_start, get_running_bots_status,
-    verify_container_running,
 )
 from shared_models.database import init_db, get_db, async_session_local
 from shared_models.models import User, Meeting, MeetingSession, Transcription # <--- ADD MeetingSession and Transcription import
@@ -184,41 +183,11 @@ async def request_bot(
 
     if existing_meeting:
         logger.info(f"Found existing meeting record {existing_meeting.id} with status '{existing_meeting.status}' for user {current_user.id}, platform '{req.platform.value}', native ID '{native_meeting_id}'.")
-        if existing_meeting.bot_container_id:
-            try:
-                container_is_running = await verify_container_running(existing_meeting.bot_container_id)
-                if not container_is_running:
-                    logger.warning(f"Container {existing_meeting.bot_container_id} for existing meeting {existing_meeting.id} (status: {existing_meeting.status}) not found or not running. Cleaning up database state.")
-                    existing_meeting.status = 'failed'
-                    existing_meeting.end_time = datetime.utcnow()
-                    await db.commit()
-                    await db.refresh(existing_meeting)
-                    logger.info(f"Existing meeting {existing_meeting.id} marked as 'failed'. Allowing new bot request to proceed.")
-                    existing_meeting = None
-                else:
-                    logger.warning(f"User {current_user.id} requested duplicate bot. Active bot container {existing_meeting.bot_container_id} is running for meeting {existing_meeting.id}.")
-                    # This HTTPException should be propagated up if the container is indeed running.
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail=f"An active or requested meeting already exists for this platform and meeting ID, and its container is running. Meeting ID: {existing_meeting.id}"
-                    )
-            except HTTPException as http_exc: # Specifically catch and re-raise HTTPExceptions
-                logger.warning(f"Propagating HTTPException during container verification for meeting {existing_meeting.id}: {http_exc.detail}")
-                raise http_exc
-            except Exception as e:
-                logger.error(f"Error checking container state for meeting {existing_meeting.id}: {e}", exc_info=True)
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Error verifying existing container status. Please try again. If the problem persists, contact support. Meeting ID: {existing_meeting.id}"
-                )
-        else: # existing_meeting.bot_container_id is None
-            logger.warning(f"Existing meeting {existing_meeting.id} is in status '{existing_meeting.status}' but has no container ID. Marking as 'failed'.")
-            existing_meeting.status = 'failed' 
-            existing_meeting.end_time = datetime.utcnow()
-            await db.commit()
-            await db.refresh(existing_meeting)
-            logger.info(f"Existing meeting {existing_meeting.id} marked as 'failed' due to missing container_id. Allowing new bot request to proceed.")
-            existing_meeting = None
+        # Enforce DB-only uniqueness: if there's any requested/active meeting, reject immediately.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"An active or requested meeting already exists for this platform and meeting ID. Meeting ID: {existing_meeting.id}"
+        )
     
     if existing_meeting is None:
         logger.info(f"No active/valid existing meeting found for user {current_user.id}, platform '{req.platform.value}', native ID '{native_meeting_id}'. Proceeding to create a new meeting record.")
