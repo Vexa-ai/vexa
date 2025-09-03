@@ -294,9 +294,26 @@ class BotStatus(BaseModel):
     platform: Optional[str] = None
     native_meeting_id: Optional[str] = None
     status: Optional[str] = None
+    normalized_status: Optional[str] = None
     created_at: Optional[str] = None
     labels: Optional[Dict[str, str]] = None
     meeting_id_from_name: Optional[str] = None # Example auxiliary info
+
+    @validator('normalized_status')
+    def validate_normalized_status(cls, v):
+        if v is None:
+            return v
+        allowed = {
+            'Requested',
+            'Starting',
+            'Up',
+            'Stopping',
+            'Exited',
+            'Failed'
+        }
+        if v not in allowed:
+            raise ValueError(f"normalized_status must be one of {sorted(allowed)}")
+        return v
 
 class BotStatusResponse(BaseModel):
     running_bots: List[BotStatus]

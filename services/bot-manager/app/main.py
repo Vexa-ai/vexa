@@ -176,7 +176,7 @@ async def request_bot(
         Meeting.user_id == current_user.id,
         Meeting.platform == req.platform.value,
         Meeting.platform_specific_id == native_meeting_id,
-        Meeting.status.in_(['requested', 'active', 'stopping']) # Include 'stopping' to prevent new bot if one is on its way out
+        Meeting.status.in_(['requested', 'active']) # Do NOT block on 'stopping' to allow immediate new bot
     ).order_by(desc(Meeting.created_at)).limit(1) # Get the latest one if multiple somehow exist
     
     result = await db.execute(existing_meeting_stmt)
@@ -525,32 +525,40 @@ async def stop_bot(
 
     logger.info(f"Received stop request for {platform_value}/{native_meeting_id} from user {current_user.id}")
 
-    # 1. Find the *latest* active meeting for this user/platform/native_id
-    #    (Similar logic as in PUT /config)
+    # 1. Find the latest meeting in a stoppable state (pre-active or active)
+    #    Allow stopping at pre-active states too: 'requested' | 'active' | 'stopping'
     stmt = select(Meeting).where(
         Meeting.user_id == current_user.id,
         Meeting.platform == platform_value,
         Meeting.platform_specific_id == native_meeting_id,
-        Meeting.status == 'active' # Only target active meetings
+        Meeting.status.in_(['requested', 'active', 'stopping'])
     ).order_by(desc(Meeting.created_at))
 
     result = await db.execute(stmt)
     meeting = result.scalars().first()
 
     if not meeting:
-        logger.warning(f"Stop request failed: No active meeting found for {platform_value}/{native_meeting_id} for user {current_user.id}")
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Active meeting not found.")
+        logger.warning(f"Stop request: No meeting in stoppable state for {platform_value}/{native_meeting_id} for user {current_user.id}")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No meeting found to stop.")
+
+    # Idempotency: already stopping → accept
+    if meeting.status == 'stopping':
+        logger.info(f"Stop request: Meeting {meeting.id} already in 'stopping'. Returning 202 idempotently.")
+        return {"message": "Stop already in progress."}
 
     if not meeting.bot_container_id:
-         logger.warning(f"Stop request failed: Active meeting {meeting.id} found, but has no associated container ID.")
-         # Update status to error? Or just report failure?
-         meeting.status = 'error' # Mark as error if container ID is missing
+         logger.info(f"Stop request: Meeting {meeting.id} has no container ID. Finalizing immediately.")
+         meeting.status = 'completed'
+         meeting.end_time = datetime.utcnow()
          await db.commit()
-         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Meeting found but has no associated container.")
+         # Schedule post-meeting tasks even if it never became active
+         logger.info(f"Scheduling post-meeting tasks for meeting {meeting.id} (no container case).")
+         background_tasks.add_task(run_all_tasks, meeting.id)
+         return {"message": "Stop request accepted; meeting finalized (no running container)."}
 
     logger.info(f"Found active meeting {meeting.id} with container {meeting.bot_container_id} for stop request.")
 
-    # 2. Find the *earliest* session UID for this meeting
+    # 2. Find the earliest session UID for this meeting (may not exist yet at pre-active)
     session_stmt = select(MeetingSession.session_uid).where(
         MeetingSession.meeting_id == meeting.id
     ).order_by(MeetingSession.session_start_time.asc()) # Order by start time ascending
@@ -559,11 +567,7 @@ async def stop_bot(
     earliest_session_uid = session_result.scalars().first()
 
     if not earliest_session_uid:
-        logger.error(f"Stop request failed: Could not find any session UID for meeting {meeting.id}. Cannot send leave command.")
-        # This is an inconsistent state. Mark meeting as error?
-        meeting.status = 'error'
-        await db.commit()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal state error: Meeting session UID not found.")
+        logger.warning(f"Stop request: No session UID for meeting {meeting.id} (pre-active). Skipping leave command.")
 
     logger.info(f"Found earliest session UID '{earliest_session_uid}' for meeting {meeting.id}. Preparing to send leave command.")
 

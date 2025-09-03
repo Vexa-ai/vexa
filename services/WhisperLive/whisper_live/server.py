@@ -562,6 +562,9 @@ class TranscriptionServer:
             val = os.getenv(name, default).strip().lower()
             return val in ("1", "true", "yes", "on")
 
+        # Master enable/disable flag for circuit breaker (default: disabled)
+        self.circuit_breaker_enabled = _get_bool_env("WL_CIRCUIT_BREAKER_ENABLED", "false")
+
         self.use_speaker_ground_truth = _get_bool_env("WL_USE_SPEAKER_GROUND_TRUTH", "true")
         try:
             self.server_speaker_no_tx_stall_s = float(os.getenv("WL_SERVER_SPEAKER_NO_TX_STALL_S", "30"))
@@ -580,6 +583,13 @@ class TranscriptionServer:
         self.server_start_ts = time.time()
         self.server_last_transcription_ts = None  # updated whenever any session emits segments
         self.last_speaker_event_ts = None         # updated on incoming speaker_activity events
+
+        # Circuit breaker consecutive trigger requirement (avoid single-check flaps)
+        try:
+            self.circuit_breaker_consecutive = int(os.getenv("WL_CIRCUIT_BREAKER_CONSECUTIVE", "2"))
+        except Exception:
+            self.circuit_breaker_consecutive = 2
+        self.no_tx_while_speaker_streak = 0
         logging.info(
             f"CONFIG: speaker_circuit_breaker use_speaker_gt={self.use_speaker_ground_truth}, "
             f"stall={self.server_speaker_no_tx_stall_s}s, speaker_window={self.speaker_active_window_s}s, warmup={self.server_warmup_s}s"
@@ -1031,33 +1041,45 @@ class TranscriptionServer:
                 elif self.collector_client and not self.collector_client.is_connected:
                     redis_ping_details = "Collector client initialized but not connected to Redis"
 
-                # Server-level speaker-based stall detection
-                if self.use_speaker_ground_truth:
+                # Server-level stall detection (gated only by master flag)
+                if self.circuit_breaker_enabled:
                     now = time.time()
                     # Warmup grace period
                     if (now - self.server_start_ts) < self.server_warmup_s:
-                        pass
+                        # During warmup do not evaluate breaker
+                        self.no_tx_while_speaker_streak = 0
                     else:
                     # Consider there is current speaking activity if we saw a speaker event recently
                         speaker_active = (
                             self.last_speaker_event_ts is not None and
                             (now - self.last_speaker_event_ts) <= self.speaker_active_window_s
                         )
-                    # If someone is speaking recently but we haven't emitted any transcript segments
-                    # for a prolonged period, consider the server wedged and exit to self-heal.
-                        if speaker_active:
+                        # Only evaluate breaker if core dependencies look OK (avoid tripping while already unhealthy)
+                        if websocket_ok and redis_ok and speaker_active:
                             no_tx_age = None
                             if self.server_last_transcription_ts is None:
                                 no_tx_age = float('inf')
                             else:
                                 no_tx_age = now - self.server_last_transcription_ts
+
                             if no_tx_age is not None and no_tx_age >= self.server_speaker_no_tx_stall_s:
-                                logging.critical(
-                                    f"WATCHDOG: SERVER_CIRCUIT_TRIPPED speaker_active window={self.speaker_active_window_s}s "
-                                    f"but no transcripts for {no_tx_age:.1f}s (>= {self.server_speaker_no_tx_stall_s}s). Exiting."
-                                )
-                                self._graceful_shutdown_and_exit()
-                                return
+                                self.no_tx_while_speaker_streak += 1
+                                if self.no_tx_while_speaker_streak >= max(1, self.circuit_breaker_consecutive):
+                                    logging.critical(
+                                        f"WATCHDOG: SERVER_CIRCUIT_TRIPPED after {self.no_tx_while_speaker_streak} consecutive checks; "
+                                        f"speaker_active window={self.speaker_active_window_s}s but no transcripts for {no_tx_age:.1f}s "
+                                        f"(>= {self.server_speaker_no_tx_stall_s}s). Exiting."
+                                    )
+                                    self._graceful_shutdown_and_exit()
+                                    return
+                            else:
+                                # Transcripts resumed or not stalled long enough
+                                if self.no_tx_while_speaker_streak > 0:
+                                    logging.info("WATCHDOG: breaker condition cleared; resetting streak")
+                                self.no_tx_while_speaker_streak = 0
+                        else:
+                            # No speaker activity or dependencies not OK; do not count
+                            self.no_tx_while_speaker_streak = 0
 
                 if websocket_ok and redis_ok:
                     if self.unhealthy_streak > 0:
@@ -1109,21 +1131,19 @@ class TranscriptionServer:
             except Exception as e:
                 logging.error(f"Self-monitor: Error shutting down HTTP health_server: {e}", exc_info=True)
         
-        # 4. Disconnect the Redis collector client
-        if self.collector_client:
-            try:
-                logging.info("Self-monitor: Disconnecting TranscriptionCollectorClient...")
-                self.collector_client.disconnect()
-                logging.info("Self-monitor: TranscriptionCollectorClient disconnected.")
-            except Exception as e:
-                logging.error(f"Self-monitor: Error disconnecting collector_client: {e}", exc_info=True)
+        # 4. Do NOT proactively disconnect Redis from a background thread.
+        #    If we need to self-heal, exit the process and let the supervisor restart cleanly.
 
         # 5. TODO: Add cleanup for active WebSocket client connections if possible.
         # This is complex as `server.serve_forever()` blocks the main thread.
         # Options: server.shutdown() if available, or rely on process exit for now.
 
-        logging.critical("Self-monitor: Graceful shutdown attempt complete. Exiting process with code 1.")
-        sys.exit(1) # Exit the process
+        logging.critical("Self-monitor: Shutdown sequence complete. Forcing process exit with code 1.")
+        try:
+            import os
+            os._exit(1)  # Ensure the whole process terminates even if called from a non-main thread
+        except Exception:
+            sys.exit(1)
 
     def voice_activity(self, websocket, frame_np):
         """
