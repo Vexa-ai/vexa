@@ -27,7 +27,7 @@ from shared_models.schemas import MeetingCreate, MeetingResponse, Platform, BotS
 from app.auth import get_user_and_token # MODIFIED
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import and_, desc
+from sqlalchemy import and_, desc, func
 from datetime import datetime # For start_time
 
 from app.tasks.bot_exit_tasks import run_all_tasks
@@ -188,6 +188,24 @@ async def request_bot(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"An active or requested meeting already exists for this platform and meeting ID. Meeting ID: {existing_meeting.id}"
         )
+    
+    # --- Fast-fail concurrency limit check (DB-based) ---
+    user_limit = int(getattr(current_user, "max_concurrent_bots", 0) or 0)
+    if user_limit > 0:
+        count_stmt = select(func.count()).select_from(Meeting).where(
+            and_(
+                Meeting.user_id == current_user.id,
+                Meeting.status.in_(['requested', 'active'])
+            )
+        )
+        count_result = await db.execute(count_stmt)
+        active_count = int(count_result.scalar() or 0)
+        if active_count >= user_limit:
+            logger.warning(f"User {current_user.id} reached concurrent bot limit {active_count}/{user_limit}. Rejecting new launch.")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"User has reached the maximum concurrent bot limit ({user_limit})."
+            )
     
     if existing_meeting is None:
         logger.info(f"No active/valid existing meeting found for user {current_user.id}, platform '{req.platform.value}', native ID '{native_meeting_id}'. Proceeding to create a new meeting record.")
