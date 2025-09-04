@@ -6,16 +6,10 @@
 
 # Vexa: API for **Real-Time Meeting Transcription**
 
-
 <p align="center">
   <b>🚀 Help us reach 1500 stars! 🚀</b><br>
   <b>Current: <img src="https://img.shields.io/github/stars/Vexa-ai/vexa?style=social" /> → Goal: 1500 ⭐️</b><br>
   <a href="https://github.com/Vexa-ai/vexa/stargazers">
-
-  </a>
-</p>
-
-
 
 💬 [Join Discord Community!](https://discord.gg/Ga9duGkVz9)
 
@@ -29,23 +23,17 @@ It serves as an **privacy-first**, **open source** alternative to `recall.ai`.
 
 It focuses on doing one job well: **clean, private, real-time transcription under your control so you can safely build on top**.
 
-
-
-
 ## News (31 August 2025)
 
-- **MCP server for agents (new microservice):** Full Vexa API access from any MCP-capable agent (Claude Desktop, Cursor, etc.). See `services/mcp`.
+- **MCP server for agents (new microservice):** Full Vexa API access from any MCP-capable agent (Claude Desktop, Cursor, etc.). See `services/mcp`. Built with https://github.com/tadata-org/fastpi_mcp
 - **Hallucination filtering:** Greatly reduced hallucinations in selected languages. Contributions welcome — add phrases to `services/WhisperLive/hallucinations/` for your language.
 - **Google Meet UI updates:** Bot adjusted to the latest Google Meet UI changes for reliable joining and capture.
 
-
 ## Build on Top. In Hours, Not Months
-
-
 
 **Build powerful meeting assistants (like Otter.ai, Fireflies.ai, Fathom) for your startup, internal use, or custom integrations.**
 
-The Vexa API provides powerful abstractions and a clear separation of concerns, enabling you to build sophisticated applications on top with a safe and enjoyable coding experience. 
+The Vexa API provides powerful abstractions and a clear separation of concerns, enabling you to build sophisticated applications on top with a safe and enjoyable coding experience.
 
 For instance, the **Vexa Example Client** (see [Projects Built with Vexa](BUILT-WITH-VEXA.md)) was built in just 3 hours of live coding with Cursor, showcasing the rapid development possible with Vexa.
 
@@ -55,24 +43,21 @@ Furthermore, with our **n8n integration** (see [Projects Built with Vexa](BUILT-
   <img src="assets/simplified_flow.png" alt="Vexa Architecture Flow" width="100%"/>
 </p>
 
-
 - [api-gateway](./services/api-gateway): Routes API requests to appropriate services
+- [mcp](./services/mcp): Provides MCP-capable agents with Vexa as a toolkit
 - [bot-manager](./services/bot-manager): Handles bot lifecycle management
 - [vexa-bot](./services/vexa-bot): The bot that joins meetings and captures audio
 - [WhisperLive](./services/WhisperLive): Real-time audio transcription service
 - [transcription-collector](./services/transcription-collector): Processes and stores transcription segments
 - [Database models](./libs/shared-models/shared_models/models.py): Data structures for storing meeting information
 
-
-
 ## Public Hosted API
 
-> 🔑 Get your API key at [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo) to try Vexa instantly. 
+> 🔑 Get your API key at [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo) to try Vexa instantly.
 
 > 🚀 Read [DEPLOYMENT.md](DEPLOYMENT.md) for self-hosting and local run with single `make all` on CPU even on laptop or on your GPU server.
 
 The Vexa API is **publicly available** at [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo) with **self-service access** - get your API key in just 3 clicks and have everything running in under 5 minutes.
-
 
 ### Key features in this release:
 
@@ -81,16 +66,16 @@ The Vexa API is **publicly available** at [www.vexa.ai](https://www.vexa.ai/?utm
 - **Real-Time Transcription**: Access meeting transcripts as they happen through the API
 - **Real-Time Translation**: Change the language of transcription to get instant translations across 99 languages
 
-
 ## API Capabilities
 
-
 ## Simple API Integration
+
 **Set up and running in under 5 minutes**
 
 Get your API key in 3 clicks at [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo) and start using the API immediately.
 
 ### Create a meeting bot
+
 ```bash
 # POST /bots
 curl -X POST https://gateway.dev.vexa.ai/bots \
@@ -103,6 +88,7 @@ curl -X POST https://gateway.dev.vexa.ai/bots \
 ```
 
 ### Retrieve meeting transcript
+
 ```bash
 # GET /transcripts/{platform}/{native_meeting_id}
 # Example assumes native_meeting_id is derived from the meeting URL
@@ -142,10 +128,10 @@ To see examples of projects built using the Vexa API, including our example clie
 > 💫 If you're building with Vexa, we'd love your support! [Star our repo](https://github.com/Vexa-ai/vexa/stargazers) to help us reach 1500 stars.
 
 ### Features:
+
 - **Real-time multilingual transcription** supporting **99 languages** with **Whisper**
 - **Real-time translation** across all 99 supported languages
 - (**Note:** Additional features like LLM processing, RAG, and MCP server access are planned - see 'Coming Next')
-
 
 ## Current Status
 
@@ -167,7 +153,7 @@ To see examples of projects built using the Vexa API, including our example clie
 
 For **security-minded companies**, Vexa offers complete **self-deployment** options.
 
-To run Vexa locally on your own infrastructure, the primary command you'll use after cloning the repository is `make all`. This command sets up the environment (CPU by default, or GPU if specified), builds all necessary Docker images, and starts the services. 
+To run Vexa locally on your own infrastructure, the primary command you'll use after cloning the repository is `make all`. This command sets up the environment (CPU by default, or GPU if specified), builds all necessary Docker images, and starts the services.
 
 [3 min video tutorial](https://www.youtube.com/watch?v=bHMIByieVek)
 
@@ -177,19 +163,20 @@ Detailed instructions: [Local Deployment and Testing Guide](DEPLOYMENT.md).
 
 Contributors are welcome! Join our community and help shape Vexa's future. Here's how to get involved:
 
-1.  **Understand Our Direction**:
-    *   Check out the **project roadmap** to see where we're headed: [Vexa Project Roadmap](https://github.com/orgs/Vexa-ai/projects/1)
+1. **Understand Our Direction**:
 
-2.  **Engage on Discord** ([Discord Community](https://discord.gg/Ga9duGkVz9)):
-    *   **Introduce Yourself**: Start by saying hello in the introductions channel.
-    *   **Stay Informed**: Check the Discord channel for known issues, feature requests, and ongoing discussions. Issues actively being discussed often have dedicated channels.
-    *   **Discuss Ideas**: Share your feature requests, report bugs, and participate in conversations about a specific issue you're interested in delivering.
-    *   **Get Assigned**: If you feel ready to contribute, discuss the issue you'd like to work on and ask to get assigned on Discord.
+   * Check out the **project roadmap** to see where we're headed: [Vexa Project Roadmap](https://github.com/orgs/Vexa-ai/projects/1)
+2. **Engage on Discord** ([Discord Community](https://discord.gg/Ga9duGkVz9)):
 
-3.  **Development Process**:
-    *   Browse available **tasks** (often linked from Discord discussions or the roadmap).
-    *   Request task assignment through Discord if not already assigned.
-    *   Submit **pull requests** for review.
+   * **Introduce Yourself**: Start by saying hello in the introductions channel.
+   * **Stay Informed**: Check the Discord channel for known issues, feature requests, and ongoing discussions. Issues actively being discussed often have dedicated channels.
+   * **Discuss Ideas**: Share your feature requests, report bugs, and participate in conversations about a specific issue you're interested in delivering.
+   * **Get Assigned**: If you feel ready to contribute, discuss the issue you'd like to work on and ask to get assigned on Discord.
+3. **Development Process**:
+
+   * Browse available **tasks** (often linked from Discord discussions or the roadmap).
+   * Request task assignment through Discord if not already assigned.
+   * Submit **pull requests** for review.
 
 - **Critical Tasks & Bounties**:
   - Selected **high-priority tasks** may be marked with **bounties**.
@@ -197,7 +184,6 @@ Contributors are welcome! Join our community and help shape Vexa's future. Here'
   - Check task descriptions (often on the roadmap or Discord) for bounty details and requirements.
 
 We look forward to your contributions!
-
 
 ## Project Links
 
