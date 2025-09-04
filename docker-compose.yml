@@ -67,10 +67,10 @@ services:
       - DEVICE_TYPE=${DEVICE_TYPE}
       - WHISPER_LIVE_URL=ws://whisperlive.internal/ws
       - RECORDING_VOLUME_PATH=/app/recordings
-      - RECORDING_BIND_SOURCE=/Users/Youssef/faktions/transcript_bots/vexa/recordings
+      - RECORDING_BIND_SOURCE=/data/vexa/recordings
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./recordings:/app/recordings
+      - ${WORKING_DIR:-.}/data/vexa/recordings:/app/recordings
     init: true
     depends_on:
       redis:
@@ -87,8 +87,8 @@ services:
       context: .
       dockerfile: services/WhisperLive/Dockerfile.project
     volumes:
-      - ./hub:/root/.cache/huggingface/hub
-      - ./services/WhisperLive/models:/app/models
+      - ${WORKING_DIR:-.}/hub:/root/.cache/huggingface/hub
+      - ${WORKING_DIR:-.}/services/WhisperLive/models:/app/models
     environment:
       # Use Redis Stream URL instead of WebSocket URL
       - REDIS_STREAM_URL=redis://redis:6379/0/transcription_segments
@@ -121,8 +121,9 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["3"] # Ensure this is configurable or correct for your setup
+              device_ids: ["0"] # Ensure this is configurable or correct for your setup
               capabilities: [gpu]
+              # count: 1
     init: true
     depends_on:
       transcription-collector:
@@ -158,8 +159,8 @@ services:
       context: .
       dockerfile: services/WhisperLive/Dockerfile.cpu
     volumes:
-      - ./hub:/root/.cache/huggingface/hub
-      - ./services/WhisperLive/models:/app/models
+      - ${WORKING_DIR:-.}/hub:/root/.cache/huggingface/hub
+      - ${WORKING_DIR:-.}/services/WhisperLive/models:/app/models
     environment:
       - REDIS_STREAM_URL=redis://redis:6379/0/transcription_segments
       - TRANSCRIPTION_COLLECTOR_URL=redis://redis:6379/0/transcription_segments
@@ -223,7 +224,7 @@ services:
       - "${TRAEFIK_DASHBOARD_HOST_PORT:-8085}:8080" # Traefik dashboard
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./traefik.toml:/etc/traefik/traefik.toml:ro
+      - ${WORKING_DIR:-.}/traefik.toml:/etc/traefik/traefik.toml:ro
     command:
       - "--api.insecure=true"
       - "--providers.docker=true"
@@ -253,8 +254,8 @@ services:
     ports:
       - "${TRANSCRIPTION_COLLECTOR_HOST_PORT:-8123}:8000"
     volumes:
-      - ./alembic.ini:/app/alembic.ini
-      - ./libs/shared-models/alembic:/app/alembic
+      - ${WORKING_DIR:-.}/alembic.ini:/app/alembic.ini
+      - ${WORKING_DIR:-.}/libs/shared-models/alembic:/app/alembic
     environment:
       - DB_HOST=postgres
       - DB_PORT=5432
@@ -314,6 +315,12 @@ services:
 volumes:
   redis-data:
   postgres-data:
+  # traefik-data:
+  #   driver: local
+  #   driver_opts:
+  #     type: "none"
+  #     o: "bind"
+  #     device: "./"
 
 networks:
   vexa_default:

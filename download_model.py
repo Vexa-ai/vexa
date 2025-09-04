@@ -20,7 +20,7 @@ print(f"Model Size: {model_size}")
 print(f"Device: {device}")
 print(f"Compute Type: {compute_type}")
 
-model = WhisperModel(model_size, device=device, compute_type=compute_type)
+# model = WhisperModel(model_size, device=device, compute_type=compute_type)
 
 print(f"\nSuccessfully downloaded {model_size} model for {device} device.")
 

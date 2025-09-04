@@ -135,7 +135,7 @@ class DockerClient:
                 container_name = f"bot-{user_id}-{meeting_id}"
                 container = self.client.containers.get(container_name)
                 container.stop()
-                container.remove()
+                # container.remove()
                 logger.info(f"Deleted container {container_name}")
                 return {"status": "deleted", "container_name": container_name}
             else:
@@ -146,7 +146,7 @@ class DockerClient:
                 )
                 for container in containers:
                     container.stop()
-                    container.remove()
+                    # container.remove()
                     logger.info(f"Deleted container {container.name}")
                 return {"status": "deleted", "count": len(containers)}
         except docker.errors.NotFound:

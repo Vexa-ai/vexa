@@ -359,6 +359,10 @@ const startRecording = async (
                 // Stop recorder on leave
                 const originalLeave = (window as any).triggerNodeGracefulLeave;
                 (window as any).triggerNodeGracefulLeave = async () => {
+                  (window as any).logBot(
+                    `triggerNodeGracefulLeave for connection ID: ${originalConnectionId}`
+                  );
+
                   if (audioRecorder.state === "recording") {
                     audioRecorder.stop();
                     (window as any).logBot(
@@ -366,8 +370,15 @@ const startRecording = async (
                     );
                   }
 
-                  await botCallbacks?.onMeetingEnd(originalConnectionId);
-                  originalLeave();
+                  try {
+                    await botCallbacks?.onMeetingEnd(originalConnectionId);
+                  } catch (error) {
+                    (window as any).logBot(
+                      `triggerNodeGracefulLeave error: ${error}`
+                    );
+                  } finally {
+                    originalLeave();
+                  }
                 };
               } catch (err: any) {
                 (window as any).logBot(

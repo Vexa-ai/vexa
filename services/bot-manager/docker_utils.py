@@ -295,7 +295,7 @@ async def start_bot_container(
             "Binds": [f"{RECORDING_BIND_SOURCE}:{RECORDING_VOLUME_PATH}"],
             "NetworkMode": DOCKER_NETWORK,
             "ShmSize": 2 * 1024 * 1024 * 1024,  # 2GB
-            "AutoRemove": True
+            # "AutoRemove": True
         },
         "Labels": {
             "vexa.user_id": str(user_id),
