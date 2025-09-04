@@ -4,6 +4,56 @@ Instructions for setting up, running, and testing the Vexa system locally using 
 
 [3 min video tutorial](https://www.youtube.com/watch?v=bHMIByieVek)
 
+## Prerequisites (Ubuntu/Debian)
+
+Before running Vexa, ensure you have the following installed on your Ubuntu system:
+
+### Required Dependencies
+```bash
+# Update package list
+sudo apt update
+
+# Install Python (ensure "python" command works) and venv support
+sudo apt install -y python3 python3-pip python-is-python3 python3-venv
+
+# Install Make and Git
+sudo apt install -y make git
+
+# Install the latest Docker Engine (includes docker compose v2)
+# Remove older packages (safe if not present)
+sudo apt remove -y docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc || true
+
+# Dependencies for Docker repo
+sudo apt install -y ca-certificates curl gnupg
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt update
+
+# Install Docker Engine + Compose V2 plugin
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# Start and enable Docker service
+sudo systemctl enable --now docker
+
+# Optional: allow current user to run docker without sudo (relogin required)
+sudo usermod -aG docker $USER
+
+# Verify versions
+docker --version
+docker compose version
+```
+
+
+### Verify installation
+Run the following to verify all prerequisites are present:
+```bash
+python --version
+make --version
+docker --version
+docker compose version
+```
+
 ### Quick Start with Make
 
 
@@ -15,6 +65,8 @@ Instructions for setting up, running, and testing the Vexa system locally using 
     make all
     ```
     This command (among other things) uses `env-example.cpu` defaults for `.env` if not present.
+    It also creates a local Python virtual environment (`.venv`) to download the Whisper model
+    into `./hub` so Docker can reuse the cache. No system-wide Python packages are installed.
 
 2.  **For GPU (Medium Model, Faster Performance - Requires NVIDIA GPU & Toolkit):**
     this will use 'whisper medium' model, which is good enough to run on GPU.
@@ -24,13 +76,8 @@ Instructions for setting up, running, and testing the Vexa system locally using 
     make all TARGET=gpu
     ```
     This uses `env-example.gpu` defaults for `.env` if not present.
+    Like CPU mode, model artifacts are cached under `./hub` via a local `.venv`.
 
-
-### Testing the deployment
-
-```bash
-make test
-```
 
 What to expect during testing:
 1. Test user and its token are created
