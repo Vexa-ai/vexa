@@ -4,6 +4,64 @@ Instructions for setting up, running, and testing the Vexa system locally using 
 
 [3 min video tutorial](https://www.youtube.com/watch?v=bHMIByieVek)
 
+## Prerequisites (Ubuntu/Debian)
+
+Before running Vexa, ensure you have the following installed on your Ubuntu system:
+
+### Required Dependencies
+```bash
+# Update package list
+sudo apt update
+
+# Install Python (ensure "python" command works)
+sudo apt install -y python3 python3-pip python-is-python3
+
+# Install Make and Git
+sudo apt install -y make git
+
+# Install the latest Docker Engine (includes docker compose v2)
+# Remove older packages (safe if not present)
+sudo apt remove -y docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc || true
+
+# Dependencies for Docker repo
+sudo apt install -y ca-certificates curl gnupg
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt update
+
+# Install Docker Engine + Compose V2 plugin
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# Start and enable Docker service
+sudo systemctl enable --now docker
+
+# Optional: allow current user to run docker without sudo (relogin required)
+sudo usermod -aG docker $USER
+
+# Verify versions
+docker --version
+docker compose version
+```
+
+### Docker Version Requirements
+- **Docker**: 20.10+ (Docker Engine from Docker’s official repository recommended)
+- **Compose**: v2+ (accessible as `docker compose`)
+
+If you see errors like:
+- `docker: 'compose' is not a docker command` → Install Compose V2 via the steps above.
+- `unknown flag: --profile` → You are likely using legacy `docker-compose` v1; install Compose V2.
+- `'name' does not match any of the regexes` → Ensure you're using Docker Compose v2.0+ which supports the `name` field (version field is deprecated).
+
+### Verify installation
+Run the following to verify all prerequisites are present:
+```bash
+python --version
+make --version
+docker --version
+docker compose version
+```
+
 ### Quick Start with Make
 
 
