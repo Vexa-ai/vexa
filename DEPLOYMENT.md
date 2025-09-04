@@ -44,14 +44,6 @@ docker --version
 docker compose version
 ```
 
-### Docker Version Requirements
-- **Docker**: 20.10+ (Docker Engine from Docker’s official repository recommended)
-- **Compose**: v2+ (accessible as `docker compose`)
-
-If you see errors like:
-- `docker: 'compose' is not a docker command` → Install Compose V2 via the steps above.
-- `unknown flag: --profile` → You are likely using legacy `docker-compose` v1; install Compose V2.
-- `'name' does not match any of the regexes` → Ensure you're using Docker Compose v2.0+ which supports the `name` field (version field is deprecated).
 
 ### Verify installation
 Run the following to verify all prerequisites are present:
@@ -86,17 +78,6 @@ docker compose version
     This uses `env-example.gpu` defaults for `.env` if not present.
     Like CPU mode, model artifacts are cached under `./hub` via a local `.venv`.
 
-
-### Testing the deployment
-
-```bash
-make test
-```
-
-Note: The test script uses `curl` and optionally `jq`. Install `jq` for improved JSON parsing:
-```bash
-sudo apt install -y jq
-```
 
 What to expect during testing:
 1. Test user and its token are created
