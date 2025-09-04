@@ -13,8 +13,8 @@ Before running Vexa, ensure you have the following installed on your Ubuntu syst
 # Update package list
 sudo apt update
 
-# Install Python (ensure "python" command works)
-sudo apt install -y python3 python3-pip python-is-python3
+# Install Python (ensure "python" command works) and venv support
+sudo apt install -y python3 python3-pip python-is-python3 python3-venv
 
 # Install Make and Git
 sudo apt install -y make git
@@ -73,6 +73,8 @@ docker compose version
     make all
     ```
     This command (among other things) uses `env-example.cpu` defaults for `.env` if not present.
+    It also creates a local Python virtual environment (`.venv`) to download the Whisper model
+    into `./hub` so Docker can reuse the cache. No system-wide Python packages are installed.
 
 2.  **For GPU (Medium Model, Faster Performance - Requires NVIDIA GPU & Toolkit):**
     this will use 'whisper medium' model, which is good enough to run on GPU.
@@ -82,12 +84,18 @@ docker compose version
     make all TARGET=gpu
     ```
     This uses `env-example.gpu` defaults for `.env` if not present.
+    Like CPU mode, model artifacts are cached under `./hub` via a local `.venv`.
 
 
 ### Testing the deployment
 
 ```bash
 make test
+```
+
+Note: The test script uses `curl` and optionally `jq`. Install `jq` for improved JSON parsing:
+```bash
+sudo apt install -y jq
 ```
 
 What to expect during testing:

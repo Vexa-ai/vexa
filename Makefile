@@ -146,8 +146,16 @@ download-model:
 	@mkdir -p ./hub
 	@echo "---> Ensuring ./hub directory is writable..."
 	@chmod u+w ./hub
+	@echo "---> Preparing Python virtual environment for model download..."
+	@if [ ! -d .venv ]; then \
+		python3 -m venv .venv; \
+	fi
+	@echo "---> Upgrading pip in venv..."
+	@. .venv/bin/activate && python -m pip install --upgrade pip >/dev/null 2>&1 || true
+	@echo "---> Installing Python requirements into venv (this may take a while)..."
+	@. .venv/bin/activate && python -m pip install --no-cache-dir -r requirements.txt >/dev/null 2>&1 || true
 	@echo "---> Downloading Whisper model (this may take a while)..."
-	@python download_model.py
+	@. .venv/bin/activate && python download_model.py
 
 # Build the standalone vexa-bot image
 # Uses BOT_IMAGE_NAME from .env if available, otherwise falls back to default

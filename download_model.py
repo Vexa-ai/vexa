@@ -5,8 +5,10 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-# The HF_HOME environment variable configures the local storage location for the Hugging Face library
-os.environ['HF_HOME'] = '.'
+# Ensure a local cache dir exists and point HF_HOME to ./hub so it aligns with docker-compose bind mounts
+hub_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), 'hub'))
+os.makedirs(hub_dir, exist_ok=True)
+os.environ['HF_HOME'] = hub_dir
 
 from faster_whisper import WhisperModel
 
