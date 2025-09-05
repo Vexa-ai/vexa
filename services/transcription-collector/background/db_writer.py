@@ -183,6 +183,30 @@ async def process_redis_to_postgres(redis_c: aioredis.Redis, local_transcription
                         db.add_all(batch_to_store)
                         await db.commit()
                         logger.info(f"Stored {len(batch_to_store)} segments to PostgreSQL from {len(segments_to_delete_from_redis)} meetings")
+                        # Publish finalized segments per meeting via Redis Pub/Sub
+                        try:
+                            # Group by meeting for channel fan-out
+                            segments_by_meeting: Dict[int, list] = {}
+                            for t in batch_to_store:
+                                segments_by_meeting.setdefault(t.meeting_id, []).append({
+                                    "start": t.start_time,
+                                    "end": t.end_time,
+                                    "text": t.text,
+                                    "language": t.language,
+                                    "speaker": t.speaker,
+                                    "session_uid": t.session_uid,
+                                })
+                            for m_id, segs in segments_by_meeting.items():
+                                event_payload = {
+                                    "type": "transcript.finalized",
+                                    "meeting": {"id": m_id},
+                                    "payload": {"segments": segs},
+                                    "ts": datetime.now(timezone.utc).isoformat()
+                                }
+                                channel = f"tc:meeting:{m_id}:finalized"
+                                await redis_c.publish(channel, json.dumps(event_payload))
+                        except Exception as pub_err:
+                            logger.error(f"Failed to publish finalized segments: {pub_err}")
                         
                         for meeting_id, start_times in segments_to_delete_from_redis.items():
                             if start_times:

@@ -1,5 +1,5 @@
 fastapi==0.95.1
-uvicorn==0.22.0
+uvicorn[standard]==0.22.0
 httpx==0.24.0
 pydantic==1.10.7
 python-dotenv==1.0.0
@@ -7,4 +7,5 @@ python-dotenv==1.0.0
 pyyaml==6.0
 python-multipart==0.0.6
 # Added for Pydantic email validation
-email-validator==2.0.0 
+email-validator==2.0.0
+redis==5.0.6

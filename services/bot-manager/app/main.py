@@ -32,6 +32,24 @@ from datetime import datetime # For start_time
 
 from app.tasks.bot_exit_tasks import run_all_tasks
 
+async def publish_meeting_status_change(meeting_id: int, new_status: str, redis_client: Optional[aioredis.Redis] = None):
+    """Helper function to publish meeting status changes via Redis Pub/Sub"""
+    if redis_client:
+        try:
+            status_payload = {
+                "type": "meeting.status",
+                "meeting": {"id": meeting_id},
+                "payload": {"status": new_status},
+                "ts": datetime.utcnow().isoformat()
+            }
+            status_channel = f"bm:meeting:{meeting_id}:status"
+            await redis_client.publish(status_channel, json.dumps(status_payload))
+            logger.info(f"Published meeting status change to '{status_channel}': {new_status}")
+        except Exception as e:
+            logger.error(f"Failed to publish meeting status change for meeting {meeting_id}: {e}")
+    else:
+        logger.warning("Redis client not available for publishing meeting status change")
+
 # Configure logging
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
@@ -282,6 +300,7 @@ async def request_bot(
         try:
             current_meeting_for_bot_launch.status = 'error'
             await db.commit()
+            await publish_meeting_status_change(meeting_id, 'error', redis_client)
         except Exception as _:
             pass
         raise HTTPException(
@@ -315,6 +334,7 @@ async def request_bot(
             
             current_meeting_for_bot_launch.status = 'error'
             await db.commit()
+            await publish_meeting_status_change(meeting_id, 'error', redis_client)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"status": "error", "message": error_msg, "meeting_id": meeting_id}
@@ -347,6 +367,7 @@ async def request_bot(
                  if container_id: 
                      meeting_to_update.bot_container_id = container_id
                  await db.commit()
+                 await publish_meeting_status_change(meeting_id, 'error', redis_client)
             elif not meeting_to_update:
                 logger.error(f"Could not find meeting {meeting_id} to update status to error after HTTPException.")
         except Exception as db_err:
@@ -363,6 +384,7 @@ async def request_bot(
                  if container_id:
                      meeting_to_update.bot_container_id = container_id
                  await db.commit()
+                 await publish_meeting_status_change(meeting_id, 'error', redis_client)
             elif not meeting_to_update:
                 logger.error(f"Could not find meeting {meeting_id} to update status to error after unexpected exception.")
         except Exception as db_err:
@@ -534,6 +556,7 @@ async def stop_bot(
          meeting.status = 'completed'
          meeting.end_time = datetime.utcnow()
          await db.commit()
+         await publish_meeting_status_change(meeting.id, 'completed', redis_client)
          # Schedule post-meeting tasks even if it never became active
          logger.info(f"Scheduling post-meeting tasks for meeting {meeting.id} (no container case).")
          background_tasks.add_task(run_all_tasks, meeting.id)
@@ -586,6 +609,9 @@ async def stop_bot(
     # Don't set end_time here, let the stop confirmation (or lack thereof) handle it.
     await db.commit()
     logger.info(f"Meeting {meeting.id} status updated.")
+
+    # 5.1. Publish meeting status change via Redis Pub/Sub
+    await publish_meeting_status_change(meeting.id, 'stopping', redis_client)
 
     # 6. Return 202 Accepted
     logger.info(f"Stop request for meeting {meeting.id} accepted. Leave command sent, delayed stop scheduled.")
@@ -663,11 +689,14 @@ async def bot_exit_callback(
             return {"status": "error", "detail": f"Meeting {meeting_id} not found"}
 
         # Update meeting status based on exit code
+        new_status = None
         if exit_code == 0:
             meeting.status = 'completed'
+            new_status = 'completed'
             logger.info(f"Bot exit callback: Meeting {meeting_id} status updated to 'completed'.")
         else:
             meeting.status = 'failed'
+            new_status = 'failed'
             logger.warning(f"Bot exit callback: Meeting {meeting_id} status updated to 'failed' due to exit_code {exit_code}.")
             
             # Store detailed error information in the meeting's data field
@@ -691,6 +720,10 @@ async def bot_exit_callback(
         await db.commit()
         await db.refresh(meeting)
         logger.info(f"Bot exit callback: Meeting {meeting.id} successfully updated in DB.")
+
+        # Publish meeting status change via Redis Pub/Sub
+        if new_status:
+            await publish_meeting_status_change(meeting.id, new_status, redis_client)
 
         # ALWAYS schedule post-meeting tasks, regardless of exit code
         logger.info(f"Bot exit callback: Scheduling post-meeting tasks for meeting {meeting.id}.")
@@ -771,6 +804,10 @@ async def bot_startup_callback(
         await db.commit()
         await db.refresh(meeting)
         logger.info(f"Bot startup callback: Meeting {meeting.id} successfully updated in DB.")
+
+        # Publish meeting status change via Redis Pub/Sub (only if status changed to 'active')
+        if meeting.status == 'active' and old_status != 'active':
+            await publish_meeting_status_change(meeting.id, 'active', redis_client)
 
         return {"status": "startup processed", "meeting_id": meeting.id, "status": meeting.status}
 

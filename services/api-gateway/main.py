@@ -1,5 +1,5 @@
 import uvicorn
-from fastapi import FastAPI, Request, Response, HTTPException, status, Depends
+from fastapi import FastAPI, Request, Response, HTTPException, status, Depends, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import APIKeyHeader
@@ -8,7 +8,9 @@ import os
 from dotenv import load_dotenv
 import json # For request body processing
 from pydantic import BaseModel, Field
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
+import asyncio
+import redis.asyncio as aioredis
 
 # Import schemas for documentation
 from shared_models.schemas import (
@@ -142,10 +144,17 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     app.state.http_client = httpx.AsyncClient()
+    # Initialize Redis for Pub/Sub used by WS
+    redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
+    app.state.redis = await aioredis.from_url(redis_url, encoding="utf-8", decode_responses=True)
 
 @app.on_event("shutdown")
 async def shutdown_event():
     await app.state.http_client.aclose()
+    try:
+        await app.state.redis.close()
+    except Exception:
+        pass
 
 # --- Helper for Forwarding --- 
 async def forward_request(client: httpx.AsyncClient, method: str, url: str, request: Request) -> Response:
@@ -354,6 +363,114 @@ async def forward_admin_request(request: Request, path: str):
     admin_path = f"/admin/{path}" 
     url = f"{ADMIN_API_URL}{admin_path}"
     return await forward_request(app.state.http_client, request.method, url, request)
+
+# --- WebSocket Multiplex Endpoint ---
+@app.websocket("/ws")
+async def websocket_multiplex(ws: WebSocket):
+    # Accept first to avoid HTTP 403 during handshake when rejecting
+    await ws.accept()
+    # Authenticate using header or query param
+    api_key = ws.headers.get("x-api-key") or ws.query_params.get("api_key")
+    if not api_key:
+        try:
+            await ws.send_text(json.dumps({"type": "error", "error": "missing_api_key"}))
+        finally:
+            await ws.close(code=4401)  # Unauthorized
+        return
+
+    redis = app.state.redis
+    sub_tasks: Dict[int, asyncio.Task] = {}
+    subscribed_meetings: Set[int] = set()
+
+    async def subscribe_meeting(meeting_id: int):
+        if meeting_id in subscribed_meetings:
+            return
+        subscribed_meetings.add(meeting_id)
+        channels = [
+            f"tc:meeting:{meeting_id}:mutable",
+            f"tc:meeting:{meeting_id}:finalized",
+            f"bm:meeting:{meeting_id}:status",
+        ]
+
+        async def fan_in(channel_names: List[str]):
+            pubsub = redis.pubsub()
+            await pubsub.subscribe(*channel_names)
+            try:
+                async for message in pubsub.listen():
+                    if message.get("type") != "message":
+                        continue
+                    data = message.get("data")
+                    try:
+                        await ws.send_text(data)
+                    except Exception:
+                        break
+            finally:
+                try:
+                    await pubsub.unsubscribe(*channel_names)
+                    await pubsub.close()
+                except Exception:
+                    pass
+
+        sub_tasks[meeting_id] = asyncio.create_task(fan_in(channels))
+
+    async def unsubscribe_meeting(meeting_id: int):
+        task = sub_tasks.pop(meeting_id, None)
+        if task:
+            task.cancel()
+        subscribed_meetings.discard(meeting_id)
+
+    try:
+        # Expect subscribe messages from client
+        while True:
+            raw = await ws.receive_text()
+            try:
+                msg = json.loads(raw)
+            except Exception:
+                await ws.send_text(json.dumps({"type": "error", "error": "invalid_json"}))
+                continue
+
+            action = msg.get("action")
+            if action == "subscribe":
+                # Expect meetings: [ { platform, native_id } ] or internal ids
+                meetings = msg.get("meetings") or []
+                internal_ids: Set[int] = set()
+                # Resolve via collector HTTP (reuse gateway routing)
+                # For simplicity, allow direct internal ids: meetings: [ { id: 123 } ]
+                for m in meetings:
+                    if isinstance(m, dict) and "id" in m:
+                        try:
+                            internal_ids.add(int(m["id"]))
+                        except Exception:
+                            pass
+                for m_id in internal_ids:
+                    await subscribe_meeting(m_id)
+                await ws.send_text(json.dumps({"type": "subscribed", "meetings": list(internal_ids)}))
+            elif action == "unsubscribe":
+                meetings = msg.get("meetings") or []
+                ids = []
+                for m in meetings:
+                    if isinstance(m, dict) and "id" in m:
+                        try:
+                            ids.append(int(m["id"]))
+                        except Exception:
+                            pass
+                for m_id in ids:
+                    await unsubscribe_meeting(m_id)
+                await ws.send_text(json.dumps({"type": "unsubscribed", "meetings": ids}))
+            elif action == "ping":
+                await ws.send_text(json.dumps({"type": "pong"}))
+            else:
+                await ws.send_text(json.dumps({"type": "error", "error": "unknown_action"}))
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        try:
+            await ws.send_text(json.dumps({"type": "error", "error": str(e)}))
+        except Exception:
+            pass
+    finally:
+        for task in sub_tasks.values():
+            task.cancel()
 
 # --- Main Execution --- 
 if __name__ == "__main__":
