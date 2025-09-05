@@ -123,7 +123,31 @@ async def _get_full_transcript_segments(
 
     # 5. Sort based on calculated absolute time and return
     sorted_segment_tuples = sorted(merged_segments_with_abs_time.values(), key=lambda item: item[0])
-    return [segment_obj for abs_time, segment_obj in sorted_segment_tuples]
+    segments = [segment_obj for abs_time, segment_obj in sorted_segment_tuples]
+    
+    # 6. Deduplicate overlapping segments with identical text
+    deduped: List[TranscriptionSegment] = []
+    for seg in segments:
+        if not deduped:
+            deduped.append(seg)
+            continue
+
+        last = deduped[-1]
+        same_text = (seg.text or "").strip() == (last.text or "").strip()
+        overlaps = max(seg.start_time, last.start_time) < min(seg.end_time, last.end_time)
+
+        if same_text and overlaps:
+            # If current is fully inside last → drop current
+            if seg.start_time >= last.start_time and seg.end_time <= last.end_time:
+                continue
+            # If current fully contains last → replace with current
+            if seg.start_time <= last.start_time and seg.end_time >= last.end_time:
+                deduped[-1] = seg
+                continue
+
+        deduped.append(seg)
+
+    return deduped
 
 @router.get("/health", response_model=HealthResponse)
 async def health_check(request: Request, db: AsyncSession = Depends(get_db)):

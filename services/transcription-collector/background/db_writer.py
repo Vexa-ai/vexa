@@ -149,6 +149,11 @@ async def process_redis_to_postgres(redis_c: aioredis.Redis, local_transcription
                                     segment_start_time_float = float(start_time_str)
                                     segment_end_time_float = segment_data['end_time']
                                     
+                                    # Fix inverted timestamps before filtering
+                                    if segment_end_time_float < segment_start_time_float:
+                                        segment_start_time_float, segment_end_time_float = segment_end_time_float, segment_start_time_float
+                                        logger.warning(f"[FinalMap] Corrected inverted segment times for meet {meeting_id}, start={segment_start_time_float}, end={segment_end_time_float}")
+                                    
                                     if local_transcription_filter.filter_segment(
                                         segment_data['text'], 
                                         start_time=segment_start_time_float, 

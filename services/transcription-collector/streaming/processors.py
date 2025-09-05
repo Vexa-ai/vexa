@@ -196,6 +196,16 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                  except (ValueError, TypeError) as time_err:
                      logger.warning(f"[Msg {message_id}/Meet {internal_meeting_id}] Skipping segment {i} invalid time format: {time_err} - Segment: {segment}")
                      continue
+                
+                 # Fix inverted timestamps
+                 if end_time_float < start_time_float:
+                     start_time_float, end_time_float = end_time_float, start_time_float
+                     logger.warning(f"[Msg {message_id}/Meet {internal_meeting_id}] Corrected inverted times to start={start_time_float}, end={end_time_float}")
+                
+                 # Skip zero/negative duration segments
+                 if end_time_float - start_time_float < 1e-3:
+                     logger.debug(f"[Msg {message_id}/Meet {internal_meeting_id}] Skipping ~zero-length segment: {segment}")
+                     continue
                             
                  start_time_key = f"{start_time_float:.3f}"
                  
