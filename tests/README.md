@@ -125,13 +125,65 @@ Design:
 - **Meeting ID Source**: All meeting IDs MUST be extracted from user-provided meeting URLs via `parse_meeting_url()` function. Never hardcode or generate meeting IDs.
 - Aggregated run: each launch logs PASS/FAIL; non-zero exit if any fails.
 
+## Usage
+
+### Full Test Suite (Recommended)
+Run all tests sequentially in optimal order (fastest to slowest):
+
+**Option 1: Direct Python command**
+```bash
+python meeting_bot_suite.py --api-key YOUR_API_KEY --meeting-url "https://meet.google.com/abc-defg-hij"
+```
+
+**Option 2: Using the helper script (recommended)**
+```bash
+./run_full_tests.sh YOUR_API_KEY "https://meet.google.com/abc-defg-hij"
+```
+
+With concurrency test (requires 3 meeting URLs):
+```bash
+python meeting_bot_suite.py --api-key YOUR_API_KEY --meeting-url "https://meet.google.com/abc-defg-hij" --meeting-urls "https://meet.google.com/url1" "https://meet.google.com/url2" "https://meet.google.com/url3"
+```
+
+Or using the helper script:
+```bash
+./run_full_tests.sh YOUR_API_KEY "https://meet.google.com/abc-defg-hij" "https://meet.google.com/url1" "https://meet.google.com/url2" "https://meet.google.com/url3"
+```
+
+### Individual Tests
+Run specific tests only:
+```bash
+# Validation tests only
+python meeting_bot_suite.py --api-key YOUR_API_KEY --only validation
+
+# Stop-before-join test only
+python meeting_bot_suite.py --api-key YOUR_API_KEY --meeting-url "https://meet.google.com/abc-defg-hij" --only stop_before_join
+
+# Joining failure test only (takes 5+ minutes)
+python meeting_bot_suite.py --api-key YOUR_API_KEY --meeting-url "https://meet.google.com/abc-defg-hij" --only joining_failure
+```
+
+### Test Execution Order
+The full test suite runs tests in optimal order (fastest to slowest):
+1. **Validation** (negative) - FASTEST (~30 seconds)
+2. **Stop-before-join** - FAST (~2 minutes)
+3. **On-meeting path** - MEDIUM (~3 minutes)
+4. **Alone end** - MEDIUM (~3 minutes)
+5. **Evicted end** - MEDIUM (~3 minutes)
+6. **Concurrency** - MEDIUM (~2 minutes, optional)
+7. **Joining failure** - SLOWEST (~5+ minutes, timeout period)
+
 Launches:
 1) Validation (negative)
    - Validate token and input: REST auth failures (401/403), invalid platform/native_id (422), WS invalid key and malformed payloads, unauthorized subscription.
 
 2) Stop-before-join
    - Ask user not to allow the bot to join; call stop immediately.
-   - Validate on stop: (1) DB status updated immediately (`stopping` then terminal), (2) container exits, (3) bot left meeting, (4) post-meeting routines done, (webhook fired if configured).
+   - Validate on stop: 
+   (1) DB status updated immediately (`stopping` then terminal), 
+   (2) container exits, 
+   (3) bot left meeting, 
+   (4) post-meeting routines done, (webhook fired if configured).
    - **CRITICAL**: Test immediate new bot creation after stop request - system must allow new bot instantly without waiting for graceful shutdown.
 
 3) Joining rejected
@@ -168,5 +220,46 @@ Guards and invariants:
 - Every API call and WS connect/message is validated before forwarding.
 - Every stop validation checks: immediate status change, container death, bot left (user), and post-meeting routines completion within bounded timeouts.
 
-File:
-- `vexa/tests/meeting_bot_suite.py` (single file; self-contained Pydantic models and helpers).
+## Test Results and Summary
+
+The full test suite provides comprehensive validation of the meeting bot system:
+
+### Expected Results
+- **All tests should PASS** for a healthy system
+- **Database status validation** is performed for every test
+- **Container cleanup** is verified after each test
+- **Transcript availability** is checked where applicable
+
+### Test Summary Output
+The suite provides a detailed summary at the end:
+```
+📊 FULL TEST SUITE SUMMARY
+============================================================
+✅ VALIDATION: PASSED
+✅ STOP-BEFORE-JOIN: PASSED
+✅ ON-MEETING: PASSED
+✅ ALONE-END: PASSED
+✅ EVICTED-END: PASSED
+✅ CONCURRENCY: PASSED
+✅ JOINING-FAILURE: PASSED
+
+📈 RESULTS:
+   ✅ Passed: 7
+   ❌ Failed: 0
+   ⚠️  Skipped: 0
+   📊 Total: 7
+
+🎉 ALL TESTS PASSED! Meeting bot system is working correctly.
+```
+
+### Exit Codes
+- `0`: All tests passed
+- `1`: One or more tests failed
+- `130`: Interrupted by user (Ctrl+C)
+- `99`: Not implemented error
+- `1`: Unexpected error
+
+## File Structure
+- `vexa/tests/meeting_bot_suite.py` (single file; self-contained Pydantic models and helpers)
+- `vexa/tests/run_full_tests.sh` (helper script for easy test execution)
+- `vexa/tests/README.md` (this documentation)

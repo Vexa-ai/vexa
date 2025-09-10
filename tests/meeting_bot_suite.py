@@ -1485,6 +1485,132 @@ class MeetingBotTestSuite:
         
         print("Evicted end test completed.")
 
+    async def run_full_test_suite(self, meeting_url: Optional[str] = None, meeting_urls: Optional[List[str]] = None) -> None:
+        """Run all tests sequentially in optimal order (fastest to slowest)."""
+        if not meeting_url:
+            print("❌ Meeting URL is required for full test suite")
+            return
+        
+        print(f"\n{'='*60}")
+        print("🚀 VEXA MEETING BOT FULL TEST SUITE")
+        print(f"{'='*60}")
+        print(f"Meeting URL: {meeting_url}")
+        print(f"API Base: {self.api_base}")
+        print(f"WebSocket: {self.ws_url}")
+        print(f"{'='*60}")
+        
+        test_results = {}
+        total_tests = 7  # validation, stop_before_join, on_meeting, alone_end, evicted_end, concurrency, joining_failure
+        
+        # Test 1: Validation (negative) - FASTEST
+        print(f"\n{'='*20} TEST 1/7: VALIDATION {'='*20}")
+        try:
+            await self.run_validation_negative(meeting_url)
+            test_results["validation"] = "PASSED"
+            print("✅ VALIDATION TEST: PASSED")
+        except Exception as e:
+            test_results["validation"] = f"FAILED: {e}"
+            print(f"❌ VALIDATION TEST: FAILED - {e}")
+        
+        # Test 2: Stop-before-join - FAST
+        print(f"\n{'='*20} TEST 2/7: STOP-BEFORE-JOIN {'='*20}")
+        try:
+            await self.run_stop_before_join(meeting_url)
+            test_results["stop_before_join"] = "PASSED"
+            print("✅ STOP-BEFORE-JOIN TEST: PASSED")
+        except Exception as e:
+            test_results["stop_before_join"] = f"FAILED: {e}"
+            print(f"❌ STOP-BEFORE-JOIN TEST: FAILED - {e}")
+        
+        # Test 3: On-meeting path - MEDIUM
+        print(f"\n{'='*20} TEST 3/7: ON-MEETING PATH {'='*20}")
+        try:
+            await self.run_on_meeting_path(meeting_url)
+            test_results["on_meeting"] = "PASSED"
+            print("✅ ON-MEETING PATH TEST: PASSED")
+        except Exception as e:
+            test_results["on_meeting"] = f"FAILED: {e}"
+            print(f"❌ ON-MEETING PATH TEST: FAILED - {e}")
+        
+        # Test 4: Alone end - MEDIUM
+        print(f"\n{'='*20} TEST 4/7: ALONE END {'='*20}")
+        try:
+            await self.run_alone_end(meeting_url)
+            test_results["alone_end"] = "PASSED"
+            print("✅ ALONE END TEST: PASSED")
+        except Exception as e:
+            test_results["alone_end"] = f"FAILED: {e}"
+            print(f"❌ ALONE END TEST: FAILED - {e}")
+        
+        # Test 5: Evicted end - MEDIUM
+        print(f"\n{'='*20} TEST 5/7: EVICTED END {'='*20}")
+        try:
+            await self.run_evicted_end(meeting_url)
+            test_results["evicted_end"] = "PASSED"
+            print("✅ EVICTED END TEST: PASSED")
+        except Exception as e:
+            test_results["evicted_end"] = f"FAILED: {e}"
+            print(f"❌ EVICTED END TEST: FAILED - {e}")
+        
+        # Test 6: Concurrency - MEDIUM (if URLs provided)
+        if meeting_urls and len(meeting_urls) >= 3:
+            print(f"\n{'='*20} TEST 6/7: CONCURRENCY {'='*20}")
+            try:
+                await self.run_concurrency_test(meeting_urls)
+                test_results["concurrency"] = "PASSED"
+                print("✅ CONCURRENCY TEST: PASSED")
+            except Exception as e:
+                test_results["concurrency"] = f"FAILED: {e}"
+                print(f"❌ CONCURRENCY TEST: FAILED - {e}")
+        else:
+            print(f"\n{'='*20} TEST 6/7: CONCURRENCY {'='*20}")
+            print("⚠️  SKIPPING CONCURRENCY TEST: Requires 3 meeting URLs")
+            test_results["concurrency"] = "SKIPPED"
+        
+        # Test 7: Joining failure (not attended) - SLOWEST (5+ minutes)
+        print(f"\n{'='*20} TEST 7/7: JOINING FAILURE {'='*20}")
+        print("⚠️  WARNING: This test takes 5+ minutes (timeout period)")
+        try:
+            await self.run_joining_failure(meeting_url)
+            test_results["joining_failure"] = "PASSED"
+            print("✅ JOINING FAILURE TEST: PASSED")
+        except Exception as e:
+            test_results["joining_failure"] = f"FAILED: {e}"
+            print(f"❌ JOINING FAILURE TEST: FAILED - {e}")
+        
+        # Final Summary
+        print(f"\n{'='*60}")
+        print("📊 FULL TEST SUITE SUMMARY")
+        print(f"{'='*60}")
+        
+        passed_tests = 0
+        failed_tests = 0
+        skipped_tests = 0
+        
+        for test_name, result in test_results.items():
+            status_icon = "✅" if result == "PASSED" else "⚠️" if result == "SKIPPED" else "❌"
+            print(f"{status_icon} {test_name.upper().replace('_', '-')}: {result}")
+            
+            if result == "PASSED":
+                passed_tests += 1
+            elif result == "SKIPPED":
+                skipped_tests += 1
+            else:
+                failed_tests += 1
+        
+        print(f"\n📈 RESULTS:")
+        print(f"   ✅ Passed: {passed_tests}")
+        print(f"   ❌ Failed: {failed_tests}")
+        print(f"   ⚠️  Skipped: {skipped_tests}")
+        print(f"   📊 Total: {len(test_results)}")
+        
+        if failed_tests == 0:
+            print(f"\n🎉 ALL TESTS PASSED! Meeting bot system is working correctly.")
+            return 0
+        else:
+            print(f"\n💥 {failed_tests} TEST(S) FAILED! Please review the failures above.")
+            return 1
+
     async def run_concurrency_test(self, meeting_urls: List[str]) -> None:
         """Concurrency subtest: Test bot limiting and concurrent bot creation."""
         if not meeting_urls or len(meeting_urls) < 3:
@@ -1721,7 +1847,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "alone_end",
         "evicted_end",
         "concurrency",
-    ], help="Run only a specific launch")
+        "full_suite",
+    ], help="Run only a specific test or full suite")
     return p
 
 
@@ -1764,6 +1891,19 @@ async def main_async() -> int:
             return 1
         await suite.run_concurrency_test(args.meeting_urls)
         return 0
+    
+    if args.only == "full_suite":
+        if not args.meeting_url:
+            print("❌ Full test suite requires --meeting-url")
+            return 1
+        return await suite.run_full_test_suite(args.meeting_url, args.meeting_urls)
+
+    # Default: run full suite if no --only specified
+    if not args.only:
+        if not args.meeting_url:
+            print("❌ Meeting URL is required. Use --meeting-url or --only <test_name>")
+            return 1
+        return await suite.run_full_test_suite(args.meeting_url, args.meeting_urls)
 
     print(f"API base: {api_base}; WS: {ws_url}")
     return 0
