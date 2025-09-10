@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
+from pydantic import BaseModel
 from sqlalchemy import select, and_, func, distinct, text
 from sqlalchemy.ext.asyncio import AsyncSession
 import redis.asyncio as aioredis
@@ -17,7 +18,8 @@ from shared_models.schemas import (
     TranscriptionResponse,
     Platform,
     TranscriptionSegment,
-    MeetingUpdate
+    MeetingUpdate,
+    MeetingCreate
 )
 
 from config import IMMUTABILITY_THRESHOLD
@@ -26,6 +28,21 @@ from api.auth import get_current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+class WsMeetingRef(MeetingCreate):
+    """
+    Schema for WS subscription meeting reference.
+    Inherits validation from MeetingCreate but only platform and native_meeting_id are relevant.
+    """
+    class Config:
+        extra = 'ignore'
+
+class WsAuthorizeSubscribeRequest(BaseModel):
+    meetings: List[WsMeetingRef]
+
+class WsAuthorizeSubscribeResponse(BaseModel):
+    authorized: List[Dict[str, str]]
+    errors: List[str] = []
+
 
 async def _get_full_transcript_segments(
     internal_meeting_id: int,
@@ -234,6 +251,53 @@ async def get_transcript_by_native_id(
     response_data = meeting_details.dict()
     response_data["segments"] = sorted_segments
     return TranscriptionResponse(**response_data)
+
+
+@router.post("/ws/authorize-subscribe",
+            response_model=WsAuthorizeSubscribeResponse,
+            summary="Authorize WS subscription for meetings",
+            description="Validates that the authenticated user is allowed to subscribe to the given meetings and that identifiers are valid.",
+            dependencies=[Depends(get_current_user)])
+async def ws_authorize_subscribe(
+    payload: WsAuthorizeSubscribeRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    authorized: List[Dict[str, str]] = []
+    errors: List[str] = []
+
+    meetings = payload.meetings or []
+    if not meetings:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="'meetings' must be a non-empty list")
+
+    for idx, meeting_ref in enumerate(meetings):
+        platform_value = meeting_ref.platform.value if isinstance(meeting_ref.platform, Platform) else str(meeting_ref.platform)
+        native_id = meeting_ref.native_meeting_id
+
+        # Validate platform/native ID format via construct_meeting_url
+        try:
+            constructed = Platform.construct_meeting_url(platform_value, native_id)
+        except Exception:
+            constructed = None
+        if not constructed:
+            errors.append(f"meetings[{idx}] invalid native_meeting_id for platform '{platform_value}'")
+            continue
+
+        stmt_meeting = select(Meeting).where(
+            Meeting.user_id == current_user.id,
+            Meeting.platform == platform_value,
+            Meeting.platform_specific_id == native_id
+        ).order_by(Meeting.created_at.desc()).limit(1)
+
+        result = await db.execute(stmt_meeting)
+        meeting = result.scalars().first()
+        if not meeting:
+            errors.append(f"meetings[{idx}] not authorized or not found for user")
+            continue
+
+        authorized.append({"platform": platform_value, "native_id": native_id})
+
+    return WsAuthorizeSubscribeResponse(authorized=authorized, errors=errors)
 
 
 @router.get("/internal/transcripts/{meeting_id}",

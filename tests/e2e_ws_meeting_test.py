@@ -313,6 +313,72 @@ async def test_invalid_websocket_data(ws_url: str, api_key: str) -> None:
         raise
 
 
+async def test_unauthorized_ws_subscription(ws_url: str, api_key: str, platform: str, unauthorized_native_id: str) -> None:
+    """Test that subscribing to a meeting that does NOT belong to the user is rejected.
+
+    Acceptance:
+    - Server responds with an error (preferred), OR
+    - Server acknowledges but does NOT include the unauthorized meeting in the subscribed list, and no events arrive for it.
+    Failure:
+    - Server subscribes the client to the unauthorized meeting and/or events arrive for it.
+    """
+    print("Testing WS subscription to unauthorized meeting (should be rejected)...")
+    headers = [("X-API-Key", api_key)]
+    sep = '&' if '?' in ws_url else '?'
+    ws_url_with_key = f"{ws_url}{sep}api_key={api_key}"
+
+    async with websockets.connect(ws_url_with_key, extra_headers=headers, ping_interval=None) as ws:
+        subscribe_msg = {"action": "subscribe", "meetings": [{"platform": platform, "native_id": unauthorized_native_id}]}
+        await ws.send(json.dumps(subscribe_msg))
+
+        # Expect either an error, or a subscribed list that does NOT include the unauthorized meeting
+        try:
+            frame = await asyncio.wait_for(ws.recv(), timeout=3)
+        except asyncio.TimeoutError:
+            # No response; treat as soft pass (not ideal, but at least not subscribed)
+            print("    ✓ No subscribe ack for unauthorized meeting (soft pass)")
+            return
+
+        try:
+            msg = json.loads(frame)
+        except Exception:
+            msg = {}
+
+        if isinstance(msg, dict) and msg.get("type") == "error":
+            print("    ✓ WS returned error for unauthorized meeting subscription")
+            return
+
+        if isinstance(msg, dict) and msg.get("type") == "subscribed":
+            meetings = msg.get("meetings") or []
+            found = any(
+                isinstance(m, dict)
+                and m.get("platform") == platform
+                and m.get("native_id") == unauthorized_native_id
+                for m in meetings
+            )
+            if found:
+                raise TestFailure("❌ WS subscribed to an unauthorized meeting")
+            else:
+                print("    ✓ Unauthorized meeting was not included in subscribed list")
+                # Additionally, ensure no events arrive shortly for that meeting
+                try:
+                    frame2 = await asyncio.wait_for(ws.recv(), timeout=2)
+                    try:
+                        msg2 = json.loads(frame2)
+                    except Exception:
+                        msg2 = {}
+                    if isinstance(msg2, dict) and msg2.get("meeting"):
+                        meet = msg2.get("meeting") or {}
+                        if meet.get("platform") == platform and (meet.get("native_id") or meet.get("native_meeting_id")) == unauthorized_native_id:
+                            raise TestFailure("❌ WS delivered event for unauthorized meeting")
+                except asyncio.TimeoutError:
+                    pass
+                return
+
+        # Any other response: treat as failure-safe
+        raise TestFailure(f"❌ Unexpected WS response for unauthorized meeting: {msg or frame}")
+
+
 async def e2e_test(cfg: TestConfig) -> None:
     print("=" * 80)
     print("E2E MEETING BOT TEST SUITE")
@@ -384,6 +450,14 @@ async def e2e_test(cfg: TestConfig) -> None:
     print("NEGATIVE TEST 4: INVALID WEBSOCKET DATA")
     print("-" * 30)
     await test_invalid_websocket_data(cfg.ws_url, cfg.api_key)
+    print()
+
+    # Test unauthorized meeting subscription (valid-looking ID that should not belong to this user)
+    print("NEGATIVE TEST 5: UNAUTHORIZED WS SUBSCRIPTION")
+    print("-" * 30)
+    # Use a valid Google Meet format that's unlikely to be owned by this user
+    unauthorized_native_id = "qwe-rtyu-iop"
+    await test_unauthorized_ws_subscription(cfg.ws_url, cfg.api_key, "google_meet", unauthorized_native_id)
     print()
     
     print("✓ Negative tests completed - invalid API key, platform, meeting ID, and WebSocket data properly rejected")

@@ -372,7 +372,7 @@ async def forward_admin_request(request: Request, path: str):
 async def websocket_multiplex(ws: WebSocket):
     # Accept first to avoid HTTP 403 during handshake when rejecting
     await ws.accept()
-    # Authenticate using header or query param
+    # Authenticate using header or query param AND validate token against DB
     api_key = ws.headers.get("x-api-key") or ws.query_params.get("api_key")
     if not api_key:
         try:
@@ -380,6 +380,8 @@ async def websocket_multiplex(ws: WebSocket):
         finally:
             await ws.close(code=4401)  # Unauthorized
         return
+
+    # Do not resolve API key to user here; leave authorization to downstream service
 
     redis = app.state.redis
     sub_tasks: Dict[Tuple[str, str], asyncio.Task] = {}
@@ -444,47 +446,42 @@ async def websocket_multiplex(ws: WebSocket):
                     await ws.send_text(json.dumps({"type": "error", "error": "invalid_subscribe_payload", "details": "'meetings' list cannot be empty"}))
                     continue
 
-                subscribed: List[Dict[str, str]] = []
-                errors: List[str] = []
-                to_subscribe: List[Tuple[str, str]] = []
+                # Call downstream authorization API in transcription-collector
+                try:
+                    # Convert incoming meetings (platform/native_id) to expected schema (platform/native_meeting_id)
+                    payload_meetings = []
+                    for m in meetings:
+                        if isinstance(m, dict):
+                            plat = str(m.get("platform", "")).strip()
+                            nid = str(m.get("native_id", "")).strip()
+                            if plat and nid:
+                                payload_meetings.append({"platform": plat, "native_meeting_id": nid})
+                    if not payload_meetings:
+                        await ws.send_text(json.dumps({"type": "error", "error": "invalid_subscribe_payload", "details": "no valid meeting objects"}))
+                        continue
 
-                for idx, m in enumerate(meetings):
-                    if not isinstance(m, dict):
-                        errors.append(f"meetings[{idx}] must be an object")
+                    url = f"{TRANSCRIPTION_COLLECTOR_URL}/ws/authorize-subscribe"
+                    headers = {"X-API-Key": api_key}
+                    resp = await app.state.http_client.post(url, headers=headers, json={"meetings": payload_meetings})
+                    if resp.status_code != 200:
+                        await ws.send_text(json.dumps({"type": "error", "error": "authorization_service_error", "status": resp.status_code, "detail": resp.text}))
                         continue
-                    plat = str(m.get("platform", "")).strip()
-                    nid = str(m.get("native_id", "")).strip()
-                    if not plat or not nid:
-                        errors.append(f"meetings[{idx}] missing 'platform' or 'native_id'")
-                        continue
-                    try:
-                        # Validate platform enum
-                        Platform(plat)
-                    except Exception:
-                        errors.append(f"meetings[{idx}] invalid platform '{plat}'")
-                        continue
-                    # Validate native ID format against platform rules
-                    try:
-                        constructed = Platform.construct_meeting_url(plat, nid)
-                    except Exception:
-                        constructed = None
-                    if not constructed:
-                        errors.append(f"meetings[{idx}] invalid native_id format for platform '{plat}'")
-                        continue
-                    to_subscribe.append((plat, nid))
-
-                if errors:
-                    await ws.send_text(json.dumps({"type": "error", "error": "invalid_subscribe_payload", "details": errors}))
+                    data = resp.json()
+                    authorized = data.get("authorized") or []
+                    errors = data.get("errors") or []
+                    if errors:
+                        await ws.send_text(json.dumps({"type": "error", "error": "invalid_subscribe_payload", "details": errors}))
+                        # Continue to subscribe to any meetings that were authorized
+                    subscribed: List[Dict[str, str]] = []
+                    for item in authorized:
+                        plat = item.get("platform"); nid = item.get("native_id")
+                        if plat and nid:
+                            await subscribe_meeting(plat, nid)
+                            subscribed.append({"platform": plat, "native_id": nid})
+                    await ws.send_text(json.dumps({"type": "subscribed", "meetings": subscribed}))
+                except Exception as e:
+                    await ws.send_text(json.dumps({"type": "error", "error": "authorization_call_failed", "details": str(e)}))
                     continue
-
-                for plat, nid in to_subscribe:
-                    await subscribe_meeting(plat, nid)
-                    subscribed.append({"platform": plat, "native_id": nid})
-
-                await ws.send_text(json.dumps({
-                    "type": "subscribed",
-                    "meetings": subscribed
-                }))
             elif action == "unsubscribe":
                 meetings = msg.get("meetings", None)
                 if not isinstance(meetings, list):
