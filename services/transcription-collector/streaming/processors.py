@@ -1,7 +1,7 @@
 import logging
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List, Tuple
 
 import redis # For redis.exceptions
@@ -180,6 +180,20 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
             hash_key = f"meeting:{internal_meeting_id}:segments"
             segments_to_store = {}
             session_uid_from_payload = stream_data.get('uid')
+            # Resolve session start time for absolute UTC timestamp computation
+            session_start_utc = None
+            try:
+                if session_uid_from_payload:
+                    stmt_session_time = select(MeetingSession).where(
+                        MeetingSession.meeting_id == meeting.id,
+                        MeetingSession.session_uid == session_uid_from_payload
+                    )
+                    result_session_time = await db.execute(stmt_session_time)
+                    session_row = result_session_time.scalars().first()
+                    if session_row and getattr(session_row, 'session_start_time', None):
+                        session_start_utc = session_row.session_start_time
+            except Exception as _sess_err:
+                logger.warning(f"[Msg {message_id}/Meet {internal_meeting_id}] Unable to resolve session start time for UID {session_uid_from_payload}: {_sess_err}")
 
             if not session_uid_from_payload:
                 logger.warning(f"[Msg {message_id}/Meet {internal_meeting_id}] Message missing 'uid' for transcription segments. Cannot map speakers. Segments in this message will not have speaker info.")
@@ -239,6 +253,15 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                      "speaker": mapped_speaker_name,
                      "speaker_mapping_status": mapping_status
                  }
+                 # Compute absolute UTC timestamps if session start time is known
+                 if session_start_utc is not None:
+                     try:
+                         abs_start_dt = session_start_utc + timedelta(seconds=start_time_float)
+                         abs_end_dt = session_start_utc + timedelta(seconds=end_time_float)
+                         segment_redis_data["absolute_start_time"] = abs_start_dt.isoformat()
+                         segment_redis_data["absolute_end_time"] = abs_end_dt.isoformat()
+                     except Exception as _abs_err:
+                         logger.debug(f"[Msg {message_id}/Meet {internal_meeting_id}] Failed to compute absolute times: {_abs_err}")
                  segments_to_store[start_time_key] = json.dumps(segment_redis_data)
                  segment_count += 1
             
@@ -260,6 +283,41 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                 except Exception as pipe_err:
                      logger.error(f"Unexpected pipeline error storing segments for message {message_id}: {pipe_err}", exc_info=True)
                      return False
+                # Publish mutable transcript update via Redis Pub/Sub (quick win)
+                try:
+                    updated_segments = []
+                    for k, v in segments_to_store.items():
+                        try:
+                            seg_dict = json.loads(v)
+                        except Exception:
+                            seg_dict = {"raw": v}
+                        # include numeric start for convenience
+                        try:
+                            seg_start = float(k)
+                        except Exception:
+                            seg_start = k
+                        
+                        # Ensure absolute UTC time fields are included for WebSocket
+                        segment_with_times = {"start": seg_start, **seg_dict}
+                        
+                        # Add absolute time fields if they exist in the stored segment
+                        if 'absolute_start_time' in seg_dict:
+                            segment_with_times['absolute_start_time'] = seg_dict['absolute_start_time']
+                        if 'absolute_end_time' in seg_dict:
+                            segment_with_times['absolute_end_time'] = seg_dict['absolute_end_time']
+                        
+                        updated_segments.append(segment_with_times)
+
+                    event_payload = {
+                        "type": "transcript.mutable",
+                        "meeting": {"platform": platform_val, "native_id": native_meeting_id},
+                        "payload": {"segments": updated_segments},
+                        "ts": datetime.now(timezone.utc).isoformat()
+                    }
+                    channel = f"tc:meeting:{platform_val}:{native_meeting_id}:mutable"
+                    await redis_c.publish(channel, json.dumps(event_payload))
+                except Exception as pub_err:
+                    logger.error(f"Failed to publish mutable transcript update for meeting {internal_meeting_id}: {pub_err}")
             else:
                 logger.info(f"No valid segments found in message {message_id} for meeting {internal_meeting_id} to store in Redis.")
             return True

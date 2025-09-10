@@ -10,6 +10,7 @@ services:
       - ADMIN_API_URL=http://admin-api:8001
       - BOT_MANAGER_URL=http://bot-manager:8080
       - TRANSCRIPTION_COLLECTOR_URL=http://transcription-collector:8000
+      - REDIS_URL=redis://redis:6379/0
       - LOG_LEVEL=DEBUG
     init: true
     depends_on:

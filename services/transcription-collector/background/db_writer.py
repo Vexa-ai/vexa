@@ -8,7 +8,7 @@ import redis # For redis.exceptions
 import redis.asyncio as aioredis
 
 from shared_models.database import async_session_local
-from shared_models.models import Transcription
+from shared_models.models import Transcription, Meeting
 # No schemas needed directly by these functions as they create Transcription objects
 from config import BACKGROUND_TASK_INTERVAL, IMMUTABILITY_THRESHOLD, REDIS_SPEAKER_EVENT_KEY_PREFIX
 from filters import TranscriptionFilter
@@ -197,14 +197,22 @@ async def process_redis_to_postgres(redis_c: aioredis.Redis, local_transcription
                                     "session_uid": t.session_uid,
                                 })
                             for m_id, segs in segments_by_meeting.items():
-                                event_payload = {
-                                    "type": "transcript.finalized",
-                                    "meeting": {"id": m_id},
-                                    "payload": {"segments": segs},
-                                    "ts": datetime.now(timezone.utc).isoformat()
-                                }
-                                channel = f"tc:meeting:{m_id}:finalized"
-                                await redis_c.publish(channel, json.dumps(event_payload))
+                                try:
+                                    meet_row = await db.get(Meeting, m_id)
+                                except Exception:
+                                    meet_row = None
+                                if meet_row and meet_row.platform and meet_row.platform_specific_id:
+                                    try:
+                                        payload = {
+                                            "type": "transcript.finalized",
+                                            "meeting": {"platform": meet_row.platform, "native_id": meet_row.platform_specific_id},
+                                            "payload": {"segments": segs},
+                                            "ts": datetime.now(timezone.utc).isoformat()
+                                        }
+                                        channel = f"tc:meeting:{meet_row.platform}:{meet_row.platform_specific_id}:finalized"
+                                        await redis_c.publish(channel, json.dumps(payload))
+                                    except Exception as _pub_err:
+                                        logger.error(f"Failed to publish finalized segments for meeting {m_id}: {_pub_err}")
                         except Exception as pub_err:
                             logger.error(f"Failed to publish finalized segments: {pub_err}")
                         

@@ -205,7 +205,8 @@ async def get_transcript_by_native_id(
     """
     logger.debug(f"[API] User {current_user.id} requested transcript for {platform.value} / {native_meeting_id}")
     redis_c = getattr(request.app.state, 'redis_client', None)
-
+    
+    #TODO: here we want to get a union of the meeting for platform/native meeting id instead of just the latest
     stmt_meeting = select(Meeting).where(
         Meeting.user_id == current_user.id,
         Meeting.platform == platform.value,

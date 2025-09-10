@@ -8,9 +8,10 @@ import os
 from dotenv import load_dotenv
 import json # For request body processing
 from pydantic import BaseModel, Field
-from typing import Dict, Any, List, Optional, Set
+from typing import Dict, Any, List, Optional, Set, Tuple
 import asyncio
 import redis.asyncio as aioredis
+from datetime import datetime
 
 # Import schemas for documentation
 from shared_models.schemas import (
@@ -364,6 +365,8 @@ async def forward_admin_request(request: Request, path: str):
     url = f"{ADMIN_API_URL}{admin_path}"
     return await forward_request(app.state.http_client, request.method, url, request)
 
+# --- Removed internal ID resolution and full transcript fetching from Gateway ---
+
 # --- WebSocket Multiplex Endpoint ---
 @app.websocket("/ws")
 async def websocket_multiplex(ws: WebSocket):
@@ -379,17 +382,18 @@ async def websocket_multiplex(ws: WebSocket):
         return
 
     redis = app.state.redis
-    sub_tasks: Dict[int, asyncio.Task] = {}
-    subscribed_meetings: Set[int] = set()
+    sub_tasks: Dict[Tuple[str, str], asyncio.Task] = {}
+    subscribed_meetings: Set[Tuple[str, str]] = set()
 
-    async def subscribe_meeting(meeting_id: int):
-        if meeting_id in subscribed_meetings:
+    async def subscribe_meeting(platform: str, native_id: str):
+        key = (platform, native_id)
+        if key in subscribed_meetings:
             return
-        subscribed_meetings.add(meeting_id)
+        subscribed_meetings.add(key)
         channels = [
-            f"tc:meeting:{meeting_id}:mutable",
-            f"tc:meeting:{meeting_id}:finalized",
-            f"bm:meeting:{meeting_id}:status",
+            f"tc:meeting:{platform}:{native_id}:mutable",
+            f"tc:meeting:{platform}:{native_id}:finalized",
+            f"bm:meeting:{platform}:{native_id}:status",
         ]
 
         async def fan_in(channel_names: List[str]):
@@ -411,13 +415,14 @@ async def websocket_multiplex(ws: WebSocket):
                 except Exception:
                     pass
 
-        sub_tasks[meeting_id] = asyncio.create_task(fan_in(channels))
+        sub_tasks[key] = asyncio.create_task(fan_in(channels))
 
-    async def unsubscribe_meeting(meeting_id: int):
-        task = sub_tasks.pop(meeting_id, None)
+    async def unsubscribe_meeting(platform: str, native_id: str):
+        key = (platform, native_id)
+        task = sub_tasks.pop(key, None)
         if task:
             task.cancel()
-        subscribed_meetings.discard(meeting_id)
+        subscribed_meetings.discard(key)
 
     try:
         # Expect subscribe messages from client
@@ -431,32 +436,84 @@ async def websocket_multiplex(ws: WebSocket):
 
             action = msg.get("action")
             if action == "subscribe":
-                # Expect meetings: [ { platform, native_id } ] or internal ids
-                meetings = msg.get("meetings") or []
-                internal_ids: Set[int] = set()
-                # Resolve via collector HTTP (reuse gateway routing)
-                # For simplicity, allow direct internal ids: meetings: [ { id: 123 } ]
-                for m in meetings:
-                    if isinstance(m, dict) and "id" in m:
-                        try:
-                            internal_ids.add(int(m["id"]))
-                        except Exception:
-                            pass
-                for m_id in internal_ids:
-                    await subscribe_meeting(m_id)
-                await ws.send_text(json.dumps({"type": "subscribed", "meetings": list(internal_ids)}))
+                meetings = msg.get("meetings", None)
+                if not isinstance(meetings, list):
+                    await ws.send_text(json.dumps({"type": "error", "error": "invalid_subscribe_payload", "details": "'meetings' must be a non-empty list"}))
+                    continue
+                if len(meetings) == 0:
+                    await ws.send_text(json.dumps({"type": "error", "error": "invalid_subscribe_payload", "details": "'meetings' list cannot be empty"}))
+                    continue
+
+                subscribed: List[Dict[str, str]] = []
+                errors: List[str] = []
+                to_subscribe: List[Tuple[str, str]] = []
+
+                for idx, m in enumerate(meetings):
+                    if not isinstance(m, dict):
+                        errors.append(f"meetings[{idx}] must be an object")
+                        continue
+                    plat = str(m.get("platform", "")).strip()
+                    nid = str(m.get("native_id", "")).strip()
+                    if not plat or not nid:
+                        errors.append(f"meetings[{idx}] missing 'platform' or 'native_id'")
+                        continue
+                    try:
+                        # Validate platform enum
+                        Platform(plat)
+                    except Exception:
+                        errors.append(f"meetings[{idx}] invalid platform '{plat}'")
+                        continue
+                    # Validate native ID format against platform rules
+                    try:
+                        constructed = Platform.construct_meeting_url(plat, nid)
+                    except Exception:
+                        constructed = None
+                    if not constructed:
+                        errors.append(f"meetings[{idx}] invalid native_id format for platform '{plat}'")
+                        continue
+                    to_subscribe.append((plat, nid))
+
+                if errors:
+                    await ws.send_text(json.dumps({"type": "error", "error": "invalid_subscribe_payload", "details": errors}))
+                    continue
+
+                for plat, nid in to_subscribe:
+                    await subscribe_meeting(plat, nid)
+                    subscribed.append({"platform": plat, "native_id": nid})
+
+                await ws.send_text(json.dumps({
+                    "type": "subscribed",
+                    "meetings": subscribed
+                }))
             elif action == "unsubscribe":
-                meetings = msg.get("meetings") or []
-                ids = []
-                for m in meetings:
-                    if isinstance(m, dict) and "id" in m:
-                        try:
-                            ids.append(int(m["id"]))
-                        except Exception:
-                            pass
-                for m_id in ids:
-                    await unsubscribe_meeting(m_id)
-                await ws.send_text(json.dumps({"type": "unsubscribed", "meetings": ids}))
+                meetings = msg.get("meetings", None)
+                if not isinstance(meetings, list):
+                    await ws.send_text(json.dumps({"type": "error", "error": "invalid_unsubscribe_payload", "details": "'meetings' must be a list"}))
+                    continue
+                unsubscribed: List[Dict[str, str]] = []
+                errors: List[str] = []
+
+                for idx, m in enumerate(meetings):
+                    if not isinstance(m, dict):
+                        errors.append(f"meetings[{idx}] must be an object")
+                        continue
+                    plat = str(m.get("platform", "")).strip()
+                    nid = str(m.get("native_id", "")).strip()
+                    if not plat or not nid:
+                        errors.append(f"meetings[{idx}] missing 'platform' or 'native_id'")
+                        continue
+                    await unsubscribe_meeting(plat, nid)
+                    unsubscribed.append({"platform": plat, "native_id": nid})
+
+                if errors and not unsubscribed:
+                    await ws.send_text(json.dumps({"type": "error", "error": "invalid_unsubscribe_payload", "details": errors}))
+                    continue
+
+                await ws.send_text(json.dumps({
+                    "type": "unsubscribed",
+                    "meetings": unsubscribed
+                }))
+                
             elif action == "ping":
                 await ws.send_text(json.dumps({"type": "pong"}))
             else:

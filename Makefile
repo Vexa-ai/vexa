@@ -153,7 +153,7 @@ download-model:
 	@echo "---> Upgrading pip in venv..."
 	@. .venv/bin/activate && python -m pip install --upgrade pip >/dev/null 2>&1 || true
 	@echo "---> Installing Python requirements into venv (this may take a while)..."
-	@. .venv/bin/activate && python -m pip install --no-cache-dir -r requirements.txt >/dev/null 2>&1 || true
+	@. .venv/bin/activate && pip install --no-cache-dir -r requirements.txt
 	@echo "---> Downloading Whisper model (this may take a while)..."
 	@. .venv/bin/activate && python download_model.py
 
