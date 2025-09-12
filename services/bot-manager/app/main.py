@@ -193,7 +193,7 @@ async def request_bot(
         # Enforce DB-only uniqueness: if there's any requested/active meeting, reject immediately.
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"An active or requested meeting already exists for this platform and meeting ID. Meeting ID: {existing_meeting.id}"
+            detail=f"An active or requested meeting already exists for this platform and meeting ID. Platform: {req.platform.value}, Native Meeting ID: {native_meeting_id}"
         )
     
     # --- Fast-fail concurrency limit check (DB-based) ---

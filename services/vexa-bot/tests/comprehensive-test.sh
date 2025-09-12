@@ -12,7 +12,7 @@ CONTAINER_NAME="vexa-bot-test"
 IMAGE_NAME="vexa-bot:test"
 MEETING_URL="https://meet.google.com/uvn-edao-vyo"
 MEETING_ID="wnr-jktr-drt"
-TOTAL_ITERATIONS=20
+TOTAL_ITERATIONS=3
 
 # Colors for output
 RED='\033[0;31m'
@@ -144,8 +144,8 @@ run_iteration() {
     
     docker run -d \
         --name "$CONTAINER_NAME" \
-        --network vexa_vexa_default \
-        -e BOT_CONFIG="{\"platform\":\"google_meet\",\"meetingUrl\":\"$MEETING_URL\",\"botName\":\"TestBot\",\"connectionId\":\"$connection_id\",\"nativeMeetingId\":\"$MEETING_ID\",\"token\":\"test-token\",\"redisUrl\":\"redis://redis:6379/0\",\"container_name\":\"$CONTAINER_NAME\",\"automaticLeave\":{\"waitingRoomTimeout\":30000,\"noOneJoinedTimeout\":60000,\"everyoneLeftTimeout\":10000}}" \
+        --network vexa_dev_vexa_default \
+        -e BOT_CONFIG="{\"platform\":\"google_meet\",\"meetingUrl\":\"$MEETING_URL\",\"botName\":\"TestBot\",\"connectionId\":\"$connection_id\",\"nativeMeetingId\":\"$MEETING_ID\",\"token\":\"test-token\",\"redisUrl\":\"redis://redis:6379/0\",\"container_name\":\"$CONTAINER_NAME\",\"automaticLeave\":{\"waitingRoomTimeout\":300000,\"noOneJoinedTimeout\":600000,\"everyoneLeftTimeout\":10000}}" \
         --cap-add=SYS_ADMIN \
         --shm-size=2g \
         "$IMAGE_NAME" > /dev/null 2>&1

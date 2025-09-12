@@ -30,6 +30,92 @@ let redisSubscriber: RedisClientType | null = null;
 let browserInstance: Browser | null = null;
 // -------------------------------
 
+// --- ADDED: Session Management Utilities ---
+/**
+ * Generate UUID for session identification
+ */
+export function generateUUID(): string {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID();
+  } else {
+    // Basic fallback if crypto.randomUUID is not available
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
+      /[xy]/g,
+      function (c) {
+        var r = (Math.random() * 16) | 0,
+          v = c == "x" ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+      }
+    );
+  }
+}
+
+/**
+ * Get current timestamp in milliseconds
+ */
+export function getCurrentTimestamp(): number {
+  return Date.now();
+}
+
+/**
+ * Calculate relative timestamp from session start
+ */
+export function calculateRelativeTimestamp(sessionStartTimeMs: number | null): number | null {
+  if (sessionStartTimeMs === null) {
+    return null;
+  }
+  return Date.now() - sessionStartTimeMs;
+}
+
+/**
+ * Create session control message
+ */
+export function createSessionControlMessage(
+  event: string,
+  sessionUid: string,
+  botConfig: { token: string; platform: string; nativeMeetingId: string }
+) {
+  return {
+    type: "session_control",
+    payload: {
+      event: event,
+      uid: sessionUid,
+      client_timestamp_ms: Date.now(),
+      token: botConfig.token,
+      platform: botConfig.platform,
+      meeting_id: botConfig.nativeMeetingId
+    }
+  };
+}
+
+/**
+ * Create speaker activity message
+ */
+export function createSpeakerActivityMessage(
+  eventType: string,
+  participantName: string,
+  participantId: string,
+  relativeTimestampMs: number,
+  sessionUid: string,
+  botConfig: { token: string; platform: string; nativeMeetingId: string; meetingUrl: string | null }
+) {
+  return {
+    type: "speaker_activity",
+    payload: {
+      event_type: eventType,
+      participant_name: participantName,
+      participant_id_meet: participantId,
+      relative_client_timestamp_ms: relativeTimestampMs,
+      uid: sessionUid,
+      token: botConfig.token,
+      platform: botConfig.platform,
+      meeting_id: botConfig.nativeMeetingId,
+      meeting_url: botConfig.meetingUrl
+    }
+  };
+}
+// --- ------------------------------------ ---
+
 // --- ADDED: Message Handler ---
 // --- MODIFIED: Make async and add page parameter ---
 const handleRedisMessage = async (message: string, channel: string, page: Page | null) => {

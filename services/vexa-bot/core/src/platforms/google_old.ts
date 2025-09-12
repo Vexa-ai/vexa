@@ -8,12 +8,56 @@ import { v4 as uuidv4 } from "uuid"; // Import UUID
 function generateUUID() {
   return uuidv4();
 }
+
+// --- ADDED: Function to call startup callback ---
+async function callStartupCallback(botConfig: BotConfig): Promise<void> {
+  if (!botConfig.botManagerCallbackUrl) {
+    log("Warning: No bot manager callback URL configured. Cannot send startup callback.");
+    return;
+  }
+
+  if (!botConfig.container_name) {
+    log("Warning: No container name configured. Cannot send startup callback.");
+    return;
+  }
+
+  try {
+    // Extract the base URL and modify it for the startup callback
+    const baseUrl = botConfig.botManagerCallbackUrl.replace('/exited', '/started');
+    const startupUrl = baseUrl;
+    
+    const payload = {
+      connection_id: botConfig.connectionId,
+      container_id: botConfig.container_name
+    };
+
+    log(`Sending startup callback to ${startupUrl} with payload: ${JSON.stringify(payload)}`);
+    
+    // Use fetch API (available in Node.js 18+)
+    const response = await fetch(startupUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (response.ok) {
+      const result = await response.json();
+      log(`Startup callback successful: ${JSON.stringify(result)}`);
+    } else {
+      log(`Startup callback failed with status ${response.status}: ${response.statusText}`);
+    }
+  } catch (error: any) {
+    log(`Error sending startup callback: ${error.message}`);
+  }
+}
 // --- --------------------------------------------------------- ---
 
 export async function handleGoogleMeet(
   botConfig: BotConfig,
   page: Page,
-  gracefulLeaveFunction: (page: Page | null, exitCode: number, reason: string) => Promise<void>
+  gracefulLeaveFunction: (page: Page | null, exitCode: number, reason: string, errorDetails?: any) => Promise<void>
 ): Promise<void> {
   const leaveButton = `//button[@aria-label="Leave call"]`;
 
@@ -30,7 +74,17 @@ export async function handleGoogleMeet(
   } catch (error: any) {
     console.error("Error during joinMeeting: " + error.message);
     log("Error during joinMeeting: " + error.message + ". Triggering graceful leave.");
-    await gracefulLeaveFunction(page, 1, "join_meeting_error");
+    
+    const errorDetails = {
+      error_message: error.message,
+      error_stack: error.stack,
+      error_name: error.name,
+      context: "join_meeting_error",
+      platform: "google_meet",
+      timestamp: new Date().toISOString()
+    };
+    
+    await gracefulLeaveFunction(page, 1, "join_meeting_error", errorDetails);
     return;
   }
 
@@ -54,21 +108,40 @@ export async function handleGoogleMeet(
     ]);
 
     if (!isAdmitted) {
-      console.error("Bot was not admitted into the meeting");
-      log("Bot not admitted. Triggering graceful leave with admission_failed reason.");
+      log("Bot was not admitted into the meeting within the timeout period. This is a normal completion.");
       
-      await gracefulLeaveFunction(page, 2, "admission_failed");
+      await gracefulLeaveFunction(page, 0, "admission_failed");
       return; 
     }
 
     log("Successfully admitted to the meeting, starting recording");
+    
+    // --- ADDED: Call startup callback to notify bot-manager that bot is active ---
+    try {
+      await callStartupCallback(botConfig);
+      log("Startup callback sent successfully");
+    } catch (callbackError: any) {
+      log(`Warning: Failed to send startup callback: ${callbackError.message}. Continuing with recording...`);
+    }
+    
     // Pass platform from botConfig to startRecording
     await startRecording(page, botConfig);
   } catch (error: any) {
     console.error("Error after join attempt (admission/recording setup): " + error.message);
     log("Error after join attempt (admission/recording setup): " + error.message + ". Triggering graceful leave.");
+    
+    // Capture detailed error information for debugging
+    const errorDetails = {
+      error_message: error.message,
+      error_stack: error.stack,
+      error_name: error.name,
+      context: "post_join_setup_error",
+      platform: "google_meet",
+      timestamp: new Date().toISOString()
+    };
+    
     // Use a general error code here, as it could be various issues.
-    await gracefulLeaveFunction(page, 1, "post_join_setup_error");
+    await gracefulLeaveFunction(page, 1, "post_join_setup_error", errorDetails);
     return;
   }
 }
@@ -80,12 +153,295 @@ const waitForMeetingAdmission = async (
   timeout: number
 ): Promise<boolean> => {
   try {
-    await page.waitForSelector(leaveButton, { timeout });
+    log("Waiting for meeting admission...");
+    
+    // Take screenshot at start of admission check
+    await page.screenshot({ path: '/app/screenshots/bot-checkpoint-1-admission-start.png', fullPage: true });
+    log("📸 Screenshot taken: Start of admission check");
+    
+    // FIRST: Check if bot is already admitted (no waiting room needed)
+    log("Checking if bot is already admitted to the meeting...");
+    const initialAdmissionIndicators = [
+      'button[aria-label*="People"]',
+      'button[aria-label*="people"]',
+      'button[aria-label*="Chat"]',
+      'button[aria-label*="chat"]',
+      'button[aria-label*="Leave call"]',
+      'button[aria-label*="Leave meeting"]',
+      '[role="toolbar"]',
+      '[data-participant-id]',
+      'button[aria-label*="Turn off microphone"]',
+      'button[aria-label*="Turn on microphone"]'
+    ];
+    
+    for (const indicator of initialAdmissionIndicators) {
+      try {
+        await page.waitForSelector(indicator, { timeout: 2000 });
+        log(`Found admission indicator: ${indicator} - Bot is already admitted to the meeting!`);
+        
+        // Take screenshot when already admitted
+        await page.screenshot({ path: '/app/screenshots/bot-checkpoint-2-admitted.png', fullPage: true });
+        log("📸 Screenshot taken: Bot confirmed already admitted to meeting");
+        
+        log("Successfully admitted to the meeting - no waiting room required");
+        return true;
+      } catch {
+        continue;
+      }
+    }
+    
+    log("Bot not yet admitted - checking for waiting room indicators...");
+    
+    // Second, check if we're still in waiting room
+    const waitingRoomIndicators = [
+      'text="Please wait until a meeting host brings you into the call"',
+      'text="Waiting for the host to let you in"',
+      'text="You\'re in the waiting room"',
+      'text="Asking to be let in"',
+      '[aria-label*="waiting room"]',
+      '[aria-label*="Asking to be let in"]',
+      'text="Ask to join"',
+      'text="Join now"',
+      'text="Can\'t join the meeting"',
+      'text="Meeting not found"'
+    ];
+    
+    // Check for waiting room indicators first, but don't exit immediately
+    let stillInWaitingRoom = false;
+    for (const waitingIndicator of waitingRoomIndicators) {
+      try {
+        await page.waitForSelector(waitingIndicator, { timeout: 2000 });
+        log(`Found waiting room indicator: ${waitingIndicator} - Bot is still in waiting room`);
+        
+        // Take screenshot when waiting room indicator found
+        await page.screenshot({ path: '/app/screenshots/bot-checkpoint-4-waiting-room.png', fullPage: true });
+        log("📸 Screenshot taken: Bot confirmed in waiting room");
+        
+        stillInWaitingRoom = true;
+        break;
+      } catch {
+        // Continue to next indicator if this one wasn't found
+        continue;
+      }
+    }
+    
+    // If we're in waiting room, wait for the full timeout period for admission
+    if (stillInWaitingRoom) {
+      log(`Bot is in waiting room. Waiting for ${timeout}ms for admission...`);
+      
+      // Wait for the full timeout period, checking periodically for admission
+      const checkInterval = 5000; // Check every 5 seconds
+      const startTime = Date.now();
+      let screenshotCounter = 0;
+      
+      while (Date.now() - startTime < timeout) {
+        // Take periodic screenshot for debugging
+        screenshotCounter++;
+        await page.screenshot({ path: `/app/screenshots/bot-waiting-periodic-${screenshotCounter}.png`, fullPage: true });
+        log(`📸 Periodic screenshot ${screenshotCounter} taken during waiting period`);
+        
+        // Check if we're still in waiting room
+        let stillWaiting = false;
+        for (const waitingIndicator of waitingRoomIndicators) {
+          try {
+            await page.waitForSelector(waitingIndicator, { timeout: 1000 });
+            stillWaiting = true;
+            break;
+          } catch {
+            continue;
+          }
+        }
+        
+        if (!stillWaiting) {
+          log("Waiting room indicator disappeared - bot is likely admitted, checking for admission indicators...");
+          
+          // Immediately check for admission indicators since waiting room disappeared
+          let quickAdmissionCheck = false;
+          const quickAdmissionIndicators = [
+            'button[aria-label*="People"]',
+            'button[aria-label*="people"]',
+            'button[aria-label*="Chat"]',
+            'button[aria-label*="chat"]',
+            'button[aria-label*="Leave call"]',
+            'button[aria-label*="Leave meeting"]',
+            '[role="toolbar"]',
+            '[data-participant-id]'
+          ];
+          
+          for (const indicator of quickAdmissionIndicators) {
+            try {
+              await page.waitForSelector(indicator, { timeout: 1000 });
+              log(`Found admission indicator: ${indicator} - Bot is confirmed admitted!`);
+              quickAdmissionCheck = true;
+              break;
+            } catch {
+              continue;
+            }
+          }
+          
+          if (quickAdmissionCheck) {
+            log("Successfully admitted to the meeting - waiting room disappeared and admission indicators found");
+            return true;
+          } else {
+            log("Waiting room disappeared but no admission indicators found yet - continuing to wait...");
+            // Continue waiting for admission indicators to appear
+          }
+        }
+        
+        // Wait before next check
+        await page.waitForTimeout(checkInterval);
+        log(`Still in waiting room... ${Math.round((Date.now() - startTime) / 1000)}s elapsed`);
+      }
+      
+      // After waiting, check if we're still in waiting room
+      let finalWaitingCheck = false;
+      for (const waitingIndicator of waitingRoomIndicators) {
+        try {
+          await page.waitForSelector(waitingIndicator, { timeout: 2000 });
+          finalWaitingCheck = true;
+          break;
+        } catch {
+          continue;
+        }
+      }
+      
+      if (finalWaitingCheck) {
+        throw new Error("Bot is still in the waiting room after timeout - not admitted to the meeting");
+      }
+    }
+    
+    // PRIORITY: Check for audio/transcription activity first (most reliable indicator)
+    log("Checking for audio/transcription activity as primary admission indicator...");
+    
+    // Take initial screenshot before checking for admission indicators
+    await page.screenshot({ path: '/app/screenshots/bot-checking-admission-start.png', fullPage: true });
+    log("📸 Screenshot taken: Starting admission indicator check");
+    
+    // Wait for audio activity indicators - these are the most reliable signs of admission
+    // ORDERED BY LIKELIHOOD: Most common indicators first for faster detection
+    const audioIndicators = [
+      // Most common meeting indicators (check these first!)
+      'button[aria-label*="Chat"]',
+      'button[aria-label*="chat"]',
+      'button[aria-label*="People"]',
+      'button[aria-label*="people"]',
+      'button[aria-label*="Participants"]',
+      'button[aria-label*="Leave call"]',
+      'button[aria-label*="Leave meeting"]',
+      // Audio/video controls that appear when in meeting
+      'button[aria-label*="Turn off microphone"]',
+      'button[aria-label*="Turn on microphone"]',
+      'button[aria-label*="Turn off camera"]',
+      'button[aria-label*="Turn on camera"]',
+      // Share and present buttons
+      'button[aria-label*="Share screen"]',
+      'button[aria-label*="Present now"]',
+      // Meeting toolbar and controls
+      '[role="toolbar"]',
+      '[data-participant-id]',
+      '[data-self-name]',
+      // Audio level indicators
+      '[data-audio-level]',
+      '[aria-label*="microphone"]',
+      '[aria-label*="camera"]',
+      // Meeting controls toolbar
+      '[data-tooltip*="microphone"]',
+      '[data-tooltip*="camera"]',
+      // Video tiles and meeting UI
+      '[aria-label*="meeting"]',
+      'div[data-meeting-id]'
+    ];
+    
+    let admitted = false;
+    let audioCheckCounter = 0;
+    
+    // Use much faster timeout for each check (500ms instead of timeout/indicators.length)
+    const fastTimeout = 500;
+    
+    for (const indicator of audioIndicators) {
+      try {
+        audioCheckCounter++;
+        log(`Checking audio indicator ${audioCheckCounter}/${audioIndicators.length}: ${indicator}`);
+        
+        // Take screenshot before checking each indicator
+        await page.screenshot({ path: `/app/screenshots/bot-audio-check-${audioCheckCounter}.png`, fullPage: true });
+        log(`📸 Screenshot taken: Checking audio indicator ${audioCheckCounter}`);
+        
+        await page.waitForSelector(indicator, { timeout: fastTimeout });
+        log(`Found audio indicator: ${indicator} - Bot is admitted to the meeting`);
+        
+        // Take screenshot when audio indicator is found
+        await page.screenshot({ path: '/app/screenshots/bot-checkpoint-2-admitted.png', fullPage: true });
+        log("📸 Screenshot taken: Bot confirmed admitted to meeting via audio indicators");
+        
+        admitted = true;
+        break;
+      } catch {
+        // Continue to next indicator
+        continue;
+      }
+    }
+    
+    // FALLBACK: If no audio indicators found, check for other meeting UI elements
+    if (!admitted) {
+      log("No audio indicators found, checking for other meeting UI elements...");
+      
+      const meetingIndicators = [
+        // People button indicates meeting UI is fully loaded
+        'button[aria-label*="People"]',
+        'button[aria-label*="people"]',
+        'button[aria-label*="Participants"]',
+        // Chat button indicates meeting is active
+        'button[aria-label*="Chat"]',
+        'button[aria-label*="chat"]',
+        // Participant list or meeting tiles
+        '[data-participant-id]',
+        // Meeting toolbar
+        '[role="toolbar"]',
+        // Video tiles
+        '[data-self-name]',
+        // Meeting info
+        '[aria-label*="meeting"]'
+      ];
+      
+      for (const indicator of meetingIndicators) {
+        try {
+          await page.waitForSelector(indicator, { timeout: timeout / meetingIndicators.length });
+          log(`Found meeting indicator: ${indicator} - Bot is admitted to the meeting`);
+          
+          // Take screenshot when meeting indicator is found
+          await page.screenshot({ path: '/app/screenshots/bot-checkpoint-2-admitted.png', fullPage: true });
+          log("📸 Screenshot taken: Bot confirmed admitted to meeting via UI indicators");
+          
+          admitted = true;
+          break;
+        } catch {
+          // Continue to next indicator
+          continue;
+        }
+      }
+    }
+    
+    if (!admitted) {
+      // Take screenshot when no meeting indicators found
+      await page.screenshot({ path: '/app/screenshots/bot-checkpoint-3-no-indicators.png', fullPage: true });
+      log("📸 Screenshot taken: No meeting indicators found");
+      
+      // If we can't find any meeting indicators, the bot likely failed to join
+      log("No meeting indicators found - bot likely failed to join or is in unknown state");
+      throw new Error("Bot failed to join the meeting - no meeting indicators found");
+    }
+    
+    if (admitted) {
     log("Successfully admitted to the meeting");
     return true;
-  } catch {
+    } else {
+      throw new Error("Could not determine admission status");
+    }
+    
+  } catch (error: any) {
     throw new Error(
-      "Bot was not admitted into the meeting within the timeout period"
+      `Bot was not admitted into the meeting within the timeout period: ${error.message}`
     );
   }
 };
@@ -95,6 +451,50 @@ const prepareForRecording = async (page: Page): Promise<void> => {
   // Expose the logBot function to the browser context
   await page.exposeFunction("logBot", (msg: string) => {
     log(msg);
+  });
+
+  // Ensure leave function is available even before admission
+  await page.evaluate(() => {
+    if (typeof (window as any).performLeaveAction !== "function") {
+      (window as any).performLeaveAction = async () => {
+        try {
+          const primaryLeaveButtonXpath = `//button[@aria-label="Leave call"]`;
+          const secondaryLeaveButtonXpath = `//button[.//span[text()='Leave meeting']] | //button[.//span[text()='Just leave the meeting']]`;
+
+          const getElementByXpath = (path: string): HTMLElement | null => {
+            const result = document.evaluate(
+              path,
+              document,
+              null,
+              XPathResult.FIRST_ORDERED_NODE_TYPE,
+              null
+            );
+            return result.singleNodeValue as HTMLElement | null;
+          };
+
+          const primaryLeaveButton = getElementByXpath(primaryLeaveButtonXpath);
+          if (primaryLeaveButton) {
+            (window as any).logBot?.("Clicking primary leave button...");
+            primaryLeaveButton.click();
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+            const secondaryLeaveButton = getElementByXpath(secondaryLeaveButtonXpath);
+            if (secondaryLeaveButton) {
+              (window as any).logBot?.("Clicking secondary/confirmation leave button...");
+              secondaryLeaveButton.click();
+              await new Promise((resolve) => setTimeout(resolve, 500));
+            }
+            (window as any).logBot?.("Leave sequence completed.");
+            return true;
+          } else {
+            (window as any).logBot?.("Primary leave button not found.");
+            return false;
+          }
+        } catch (err: any) {
+          (window as any).logBot?.(`Error during leave attempt: ${err.message}`);
+          return false;
+        }
+      };
+    }
   });
 };
 
@@ -107,6 +507,10 @@ const joinMeeting = async (page: Page, meetingUrl: string, botName: string) => {
   await page.goto(meetingUrl, { waitUntil: "networkidle" });
   await page.bringToFront();
 
+  // Take screenshot after navigation
+  await page.screenshot({ path: '/app/screenshots/bot-checkpoint-0-after-navigation.png', fullPage: true });
+  log("📸 Screenshot taken: After navigation to meeting URL");
+
   // Add a longer, fixed wait after navigation for page elements to settle
   log("Waiting for page elements to settle after navigation...");
   await page.waitForTimeout(5000); // Wait 5 seconds
@@ -118,6 +522,10 @@ const joinMeeting = async (page: Page, meetingUrl: string, botName: string) => {
   // Increase timeout drastically
   await page.waitForSelector(enterNameField, { timeout: 120000 }); // 120 seconds
   log("Name input field found.");
+  
+  // Take screenshot after finding name field
+  await page.screenshot({ path: '/app/screenshots/bot-checkpoint-0-name-field-found.png', fullPage: true });
+  log("📸 Screenshot taken: Name input field found");
 
   await page.waitForTimeout(randomDelay(1000));
   await page.fill(enterNameField, botName);
@@ -141,6 +549,10 @@ const joinMeeting = async (page: Page, meetingUrl: string, botName: string) => {
   await page.waitForSelector(joinButton, { timeout: 60000 });
   await page.click(joinButton);
   log(`${botName} joined the Meeting.`);
+  
+  // Take screenshot after clicking "Ask to join"
+  await page.screenshot({ path: '/app/screenshots/bot-checkpoint-0-after-ask-to-join.png', fullPage: true });
+  log("📸 Screenshot taken: After clicking 'Ask to join'");
 };
 
 // Modified to have only the actual recording functionality
@@ -149,22 +561,118 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
   const { meetingUrl, token, connectionId, platform, nativeMeetingId } =
     botConfig; // nativeMeetingId is now in BotConfig type
 
-  //NOTE: The environment variables passed by orchestrator_utils.py will be available to the Node.js process started by your entrypoint.sh.
-  // --- Read WHISPER_LIVE_URL from Node.js environment ---
-  const whisperLiveUrlFromEnv = process.env.WHISPER_LIVE_URL;
+  // --- Start: Minimal Refactor for Self-Healing WS Connection ---
+  const { createClient } = await import("redis");
+  const redisUrl = process.env.REDIS_URL || "redis://redis:6379/0";
+  const redisClient = createClient({ url: redisUrl });
+  await redisClient.connect();
 
-  if (!whisperLiveUrlFromEnv) {
-    // Use the Node-side 'log' utility here
-    log(
-      "ERROR: WHISPER_LIVE_URL environment variable is not set for vexa-bot in its Node.js environment. Cannot start recording."
-    );
-    // Potentially throw an error or return to prevent further execution
-    // For example: throw new Error("WHISPER_LIVE_URL is not configured for the bot.");
-    return; // Or handle more gracefully
+  // Atomic allocation function using Redis Lua script
+  const allocateServer = async (): Promise<string | null> => {
+    // Capacity configured via env, default to 10
+    const envMax = process && process.env && process.env.WL_MAX_CLIENTS;
+    const maxClients = envMax ? parseInt(envMax, 10) : 10; // WhisperLive server capacity
+    
+    const luaScript = `
+      -- Find server with lowest score that has capacity
+      local servers = redis.call('ZRANGE', 'wl:rank', 0, -1, 'WITHSCORES')
+      if #servers == 0 then
+        return nil
+      end
+      
+      -- Iterate through servers (format: url1, score1, url2, score2, ...)
+      for i = 1, #servers, 2 do
+        local url = servers[i]
+        local score = tonumber(servers[i + 1])
+        
+        -- Check if server has capacity
+        if score < tonumber(ARGV[1]) then
+          -- Atomically increment score and return URL
+          redis.call('ZINCRBY', 'wl:rank', 1, url)
+          return url
+        end
+      end
+      
+      -- No server has capacity
+      return nil
+    `;
+    
+    try {
+      log("[Node.js] Atomically allocating server using Lua script...");
+      const allocatedUrl = await redisClient.eval(luaScript, {
+        keys: [],
+        arguments: [maxClients.toString()]
+      }) as string | null;
+      
+      if (allocatedUrl) {
+        log(`[Node.js] Allocated server: ${allocatedUrl} (capacity maxClients=${maxClients})`);
+      } else {
+        log(`{Node.js] No servers available with capacity (maxClients=${maxClients})`);
+      }
+      
+      return allocatedUrl;
+    } catch (e: any) {
+      log(`[Node.js] Error in atomic server allocation: ${e.message}`);
+      return null;
+    }
+  };
+
+  // Deallocate function to decrement server score when bot disconnects
+  const deallocateServer = async (serverUrl: string): Promise<void> => {
+    try {
+      log(`[Node.js] Deallocating server: ${serverUrl}`);
+      await redisClient.zIncrBy("wl:rank", -1, serverUrl);
+      log(`[Node.js] Successfully deallocated server: ${serverUrl}`);
+    } catch (e: any) {
+      log(`[Node.js] Error deallocating server: ${e.message}`);
+    }
+  };
+
+  // Updated getNextCandidate that handles failed URLs and uses atomic allocation
+  const getNextCandidate = async (failedUrl: string | null): Promise<string | null> => {
+    log(`[Node.js] getNextCandidate called. Failed URL: ${failedUrl}`);
+    
+    if (failedUrl) {
+      try {
+        log(`[Node.js] Deallocating and removing failed server: ${failedUrl}`);
+        // First deallocate the slot this bot was using
+        await deallocateServer(failedUrl);
+        // Then remove the failed server from the registry
+        await redisClient.zRem("wl:rank", failedUrl);
+      } catch (e: any) {
+        log(`[Node.js] Error handling failed candidate: ${e.message}`);
+      }
+    }
+    
+    // Use atomic allocation to get next available server
+    return await allocateServer();
+  };
+
+  await page.exposeFunction('getNextCandidate', getNextCandidate);
+  
+  // Expose deallocateServer function to browser context for cleanup
+  await page.exposeFunction('deallocateServer', deallocateServer);
+  
+  // Track current allocated server for cleanup
+  let currentAllocatedServer: string | null = null;
+  
+  // Resolve WhisperLive WebSocket URL dynamically – env override > initial Redis fetch  
+  let whisperLiveUrlResolved: string | null = process.env.WHISPER_LIVE_URL || await getNextCandidate(null);
+  const resolvedMaxClients = (process && process.env && process.env.WL_MAX_CLIENTS) ? parseInt(process.env.WL_MAX_CLIENTS as string, 10) : 10;
+  log(`[Node.js] Effective capacity (maxClients) for allocation: ${resolvedMaxClients}`);
+  
+  // Track the initially allocated server (only if we used atomic allocation)
+  if (whisperLiveUrlResolved && !process.env.WHISPER_LIVE_URL) {
+    currentAllocatedServer = whisperLiveUrlResolved;
   }
-  log(`[Node.js] WHISPER_LIVE_URL for vexa-bot is: ${whisperLiveUrlFromEnv}`);
-  // --- ------------------------------------------------- ---
+  // --- End: Minimal Refactor ---
 
+  if (!whisperLiveUrlResolved) {
+    log("ERROR: Could not resolve WhisperLive WebSocket URL via env or Redis. Aborting recording.");
+    await redisClient.quit(); // Ensure redis client is closed
+    return;
+  }
+  log(`[Node.js] Using initial WhisperLive URL: ${whisperLiveUrlResolved}`);
   log("Starting actual recording with WebSocket connection");
 
   // Pass the necessary config fields and the resolved URL into the page context. Inisde page.evalute we have the browser context.
@@ -175,6 +683,7 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
       whisperUrlForBrowser: string;
     }) => {
       const { botConfigData, whisperUrlForBrowser } = pageArgs;
+
       // Destructure from botConfigData as needed
       const {
         meetingUrl,
@@ -321,71 +830,57 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
 
             let socket: WebSocket | null = null;
             let isServerReady = false;
-            let retryCount = 0;
-            const configuredInterval = botConfigData.reconnectionIntervalMs;
-            const baseRetryDelay = (configuredInterval && configuredInterval <= 1000) ? configuredInterval : 1000; // Use configured if <= 1s, else 1s
-
+            
             let sessionAudioStartTimeMs: number | null = null; // ADDED: For relative speaker timestamps
 
-            const setupWebSocket = () => {
-              try {
-                if (socket) {
-                  // Close previous socket if it exists
-                  try {
-                    socket.close();
-                  } catch (err) {
-                    // Ignore errors when closing
-                  }
-                }
+            const connectToWhisperLive = (wsUrl: string | null) => {
+              if (!wsUrl) {
+                (window as any).logBot("[Failover] No WhisperLive URL available. Will retry lookup in 5s.");
+                setTimeout(async () => {
+                  const freshUrl = await (window as any).getNextCandidate(null);
+                  connectToWhisperLive(freshUrl);
+                }, 5000);
+                return;
+              }
 
+              try {
                 socket = new WebSocket(wsUrl);
 
                 // --- NEW: Force-close if connection cannot be established quickly ---
-                const connectionTimeoutMs = 3000; // 3-second timeout for CONNECTING state
-                let connectionTimeoutHandle: number | null = window.setTimeout(() => {
+                const connectionTimeoutMs = 5000; // 5-second timeout for CONNECTING state
+                const connectionTimeoutHandle = window.setTimeout(() => {
                   if (socket && socket.readyState === WebSocket.CONNECTING) {
                     (window as any).logBot(
-                      `Connection attempt timed out after ${connectionTimeoutMs}ms. Forcing close.`
+                      `[Failover] Connection to ${wsUrl} timed out after ${connectionTimeoutMs}ms. Forcing close.`
                     );
-                    try {
-                      socket.close(); // Triggers onclose -> retry logic
-                    } catch (_) {
-                      /* ignore */
-                    }
+                    socket.close(); // Triggers onclose -> retry logic
                   }
                 }, connectionTimeoutMs);
 
                 socket.onopen = function () {
-                  if (connectionTimeoutHandle !== null) {
-                    clearTimeout(connectionTimeoutHandle); // Clear connection watchdog
-                    connectionTimeoutHandle = null;
-                  }
-                  // --- MODIFIED: Log current config being used ---
-                  // --- MODIFIED: Generate NEW UUID for this connection ---
-                  currentSessionUid = generateUUID(); // Update the currentSessionUid
-                  sessionAudioStartTimeMs = null; // ADDED: Reset for new WebSocket session
+                  clearTimeout(connectionTimeoutHandle);
+                  
+                  currentSessionUid = generateUUID(); 
+                  sessionAudioStartTimeMs = null; 
                   (window as any).logBot(
-                    `[RelativeTime] WebSocket connection opened. New UID: ${currentSessionUid}. sessionAudioStartTimeMs reset. Lang: ${currentWsLanguage}, Task: ${currentWsTask}`
+                    `[Failover] WebSocket connection opened successfully to ${wsUrl}. New UID: ${currentSessionUid}. Lang: ${currentWsLanguage}, Task: ${currentWsTask}`
                   );
-                  retryCount = 0;
+                  isServerReady = false; // Reset ready state for new connection
 
                   if (socket) {
-                    // Construct the initial configuration message using config values
                     const initialConfigPayload = {
-                      uid: currentSessionUid, // <-- Use NEWLY generated UUID
-                      language: currentWsLanguage || null, // <-- Use browser-scope variable
-                      task: currentWsTask || "transcribe", // <-- Use browser-scope variable
-                      model: "medium", // Keep default or make configurable if needed
-                      use_vad: true, // Keep default or make configurable if needed
-                      platform: platform, // From config
-                      token: token, // From config
-                      meeting_id: nativeMeetingId, // From config
-                      meeting_url: meetingUrl || null, // From config, default to null
+                      uid: currentSessionUid,
+                      language: currentWsLanguage || null,
+                      task: currentWsTask || "transcribe",
+                      model: null, // Let the server use WHISPER_MODEL_SIZE from environment
+                      use_vad: true,
+                      platform: platform,
+                      token: token,
+                      meeting_id: nativeMeetingId,
+                      meeting_url: meetingUrl || null,
                     };
 
                     const jsonPayload = JSON.stringify(initialConfigPayload);
-
-                    // Log the exact payload being sent
                     (window as any).logBot(
                       `Sending initial config message: ${jsonPayload}`
                     );
@@ -396,84 +891,58 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                 socket.onmessage = (event) => {
                   (window as any).logBot("Received message: " + event.data);
                   const data = JSON.parse(event.data);
-                  // NOTE: The check `if (data["uid"] !== sessionUid) return;` is removed
-                  // because we no longer have a single sessionUid for the lifetime of the evaluate block.
-                  // Each message *should* contain the UID associated with the specific WebSocket
-                  // connection it came from. Downstream needs to handle this if correlation is needed.
-                  // For now, we assume messages are relevant to the current bot context.
-                  // Consider re-introducing a check if whisperlive echoes back the UID and it's needed.
 
                   if (data["status"] === "ERROR") {
-                    (window as any).logBot(
-                      `WebSocket Server Error: ${data["message"]}`
-                    );
+                    (window as any).logBot(`WebSocket Server Error: ${data["message"]}`);
                   } else if (data["status"] === "WAIT") {
                     (window as any).logBot(`Server busy: ${data["message"]}`);
-                  } else if (!isServerReady) {
+                  } else if (!isServerReady && data["status"] === "SERVER_READY") {
                     isServerReady = true;
                     (window as any).logBot("Server is ready.");
                   } else if (data["language"]) {
-                    (window as any).logBot(
-                      `Language detected: ${data["language"]}`
-                    );
+                    (window as any).logBot(`Language detected: ${data["language"]}`);
                   } else if (data["message"] === "DISCONNECT") {
                     (window as any).logBot("Server requested disconnect.");
-                    if (socket) {
-                      socket.close();
-                    }
+                    if (socket) socket.close();
                   } else {
-                    (window as any).logBot(
-                      `Transcription: ${JSON.stringify(data)}`
-                    );
+                    (window as any).logBot(`Transcription: ${JSON.stringify(data)}`);
                   }
                 };
 
                 socket.onerror = (event) => {
-                  if (connectionTimeoutHandle !== null) {
-                    clearTimeout(connectionTimeoutHandle);
-                    connectionTimeoutHandle = null;
-                  }
+                  clearTimeout(connectionTimeoutHandle);
                   (window as any).logBot(
-                    `WebSocket error: ${JSON.stringify(event)}`
+                    `[Failover] WebSocket error for ${wsUrl}. This will trigger onclose.`
                   );
                 };
 
-                socket.onclose = (event) => {
-                  if (connectionTimeoutHandle !== null) {
-                    clearTimeout(connectionTimeoutHandle);
-                    connectionTimeoutHandle = null;
+                socket.onclose = async (event) => {
+                  clearTimeout(connectionTimeoutHandle);
+                  (window as any).logBot(
+                    `[Failover] WebSocket connection to ${wsUrl} closed. Code: ${event.code}, Reason: ${event.reason}.`
+                  );
+
+                  // Call the exposed Node.js function to remove the bad URL and get a new one
+                  (window as any).logBot(`[Failover] Asking for next candidate...`);
+                  const nextUrl = await (window as any).getNextCandidate(wsUrl);
+
+                  if (nextUrl) {
+                    (window as any).logBot(`[Failover] Got next candidate: ${nextUrl}. Retrying in 1s.`);
+                    setTimeout(() => connectToWhisperLive(nextUrl), 1000);
+                  } else {
+                    (window as any).logBot("[Failover] No more candidates available. Retrying lookup in 5s.");
+                    setTimeout(async () => {
+                      const freshUrl = await (window as any).getNextCandidate(null);
+                      connectToWhisperLive(freshUrl);
+                    }, 5000);
                   }
-                  (window as any).logBot(
-                    `WebSocket connection closed. Code: ${event.code}, Reason: ${event.reason}`
-                  );
-
-                  // Retry logic - now retries indefinitely
-                  retryCount++;
-                  (window as any).logBot(
-                    `Attempting to reconnect in ${baseRetryDelay}ms. Retry attempt ${retryCount}`
-                  );
-
-                  setTimeout(() => {
-                    (window as any).logBot(
-                      `Retrying WebSocket connection (attempt ${retryCount})...`
-                    );
-                    setupWebSocket();
-                  }, baseRetryDelay);
                 };
               } catch (e: any) {
-                (window as any).logBot(`Error creating WebSocket: ${e.message}`);
-                // For initial connection errors, handle with retry logic - now retries indefinitely
-                retryCount++;
-                (window as any).logBot(
-                  `Error during WebSocket setup. Attempting to reconnect in ${baseRetryDelay}ms. Retry attempt ${retryCount}`
-                );
-
-                setTimeout(() => {
-                  (window as any).logBot(
-                    `Retrying WebSocket connection (attempt ${retryCount})...`
-                  );
-                  setupWebSocket();
-                }, baseRetryDelay);
+                (window as any).logBot(`[Failover] Critical error creating WebSocket: ${e.message}. Retrying...`);
+                setTimeout(async () => {
+                    const freshUrl = await (window as any).getNextCandidate(wsUrl);
+                    connectToWhisperLive(freshUrl); // This will now handle null gracefully
+                }, 5000);
               }
             };
 
@@ -571,23 +1040,21 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
             };
             // --- --------------------------------------------- ---
 
-            setupWebSocket();
+            connectToWhisperLive(whisperUrlForBrowser);
 
             // --- ADD: Speaker Detection Logic (Adapted from speakers_console_test.js) ---
             // Configuration for speaker detection
-            const participantSelector = '.IisKdb'; // Main selector for participant container/element
+            const participantSelector = 'div[data-participant-id]'; // UPDATED: More specific selector
             const speakingClasses = ['Oaajhc', 'HX2H7', 'wEsLMd', 'OgVli']; // Speaking/animation classes
             const silenceClass = 'gjg47c';        // Class indicating the participant is silent
             const nameSelectors = [               // Try these selectors to find participant's name
-                '.zWGUib',                        // Common name display class in Google Meet
-                '.XWGOtd',                        // Another potential name class
-                '[data-self-name]',               // Attribute often holding self name
                 '[data-participant-id]'           // Attribute for participant ID
             ];
 
             // State for tracking speaking status
             const speakingStates = new Map(); // Stores the logical speaking state for each participant ID
-            
+            const activeParticipants = new Map(); // NEW: Central map for all known participants
+
             // Track current session UID for speaker events
             let currentSessionUid = generateUUID(); // Initialize with a new UID
 
@@ -762,6 +1229,8 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                 // or do nothing if currently silent (matching the initialized state).
                 logSpeakerEvent(participantElement, classListForInitialScan);
                 
+                // NEW: Add participant to our central map
+                activeParticipants.set(participantId, { name: getParticipantName(participantElement), element: participantElement });
 
                 const callback = function(mutationsList: MutationRecord[], observer: MutationObserver) {
                     for (const mutation of mutationsList) {
@@ -835,6 +1304,9 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                                    delete (elementNode as any).dataset.vexaObserverAttached;
                                    delete (elementNode as any).dataset.vexaGeneratedId;
                                    (window as any).logBot(`🗑️ Removed observer for: ${participantName} (ID: ${participantId})`);
+                                   
+                                   // NEW: Remove participant from our central map
+                                   activeParticipants.delete(participantId);
                                 }
                              }
                         });
@@ -996,29 +1468,73 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
               "Audio processing pipeline connected and sending data silently."
             );
 
-            // Click the "People" button
-            const peopleButton = document.querySelector(
-              'button[aria-label^="People"]'
-            );
-            if (!peopleButton) {
-              recorder.disconnect();
-              return reject(
-                new Error(
-                  "[BOT Inner Error] 'People' button not found. Update the selector."
-                )
-              );
+            // Click the "People" button - Updated with multiple selector strategies
+            const peopleButtonSelectors = [
+              'button[aria-label^="People"]',
+              'button[aria-label*="people"]',
+              'button[aria-label*="Participants"]',
+              'button[aria-label*="participants"]',
+              'button[aria-label*="Show people"]',
+              'button[aria-label*="show people"]',
+              'button[aria-label*="View people"]',
+              'button[aria-label*="view people"]',
+              'button[aria-label*="Meeting participants"]',
+              'button[aria-label*="meeting participants"]',
+              // Try text content based selectors
+              'button:has(span:contains("People"))',
+              'button:has(span:contains("people"))',
+              'button:has(span:contains("Participants"))',
+              'button:has(span:contains("participants"))',
+              // Try icon-based selectors
+              'button[data-mdc-dialog-action]',
+              'button[data-tooltip*="people"]',
+              'button[data-tooltip*="People"]',
+              'button[data-tooltip*="participants"]',
+              'button[data-tooltip*="Participants"]'
+            ];
+
+            let peopleButton: HTMLElement | null = null;
+            let usedSelector = '';
+
+            // Try each selector until we find the button
+            for (const selector of peopleButtonSelectors) {
+              try {
+                const button = document.querySelector(selector);
+                if (button) {
+                  peopleButton = button as HTMLElement;
+                  usedSelector = selector;
+                  (window as any).logBot(`Found People button using selector: ${selector}`);
+                  break;
+                }
+              } catch (e) {
+                // Some selectors might not be supported in older browsers
+                continue;
+              }
             }
-            (peopleButton as HTMLElement).click();
+
+            if (!peopleButton) {
+              // Fallback: If we can't find the People button, we can still monitor participants
+              // using the existing MutationObserver system that watches for participant elements
+              (window as any).logBot(`People button not found, but continuing with fallback participant monitoring via MutationObserver`);
+              (window as any).peopleButtonClicked = false;
+            } else {
+              // Log which selector worked
+              (window as any).logBot(`Successfully found People button using selector: ${usedSelector}`);
+              peopleButton.click();
+              
+              // Set a flag that we successfully clicked the People button
+              (window as any).peopleButtonClicked = true;
+            }
 
             // Monitor participant list every 5 seconds
             let aloneTime = 0;
             const checkInterval = setInterval(() => {
-              const participantElements = document.querySelectorAll(participantSelector); // participantSelector is '.IisKdb'
-              const count = participantElements.length;
-              (window as any).logBot(`Participant count (using ${participantSelector}): ${count}`);
+              // UPDATED: Use the size of our central map as the source of truth
+              const count = activeParticipants.size;
+              const participantIds = Array.from(activeParticipants.keys());
+              (window as any).logBot(`Participant check: Found ${count} unique participants from central list. IDs: ${JSON.stringify(participantIds)}`);
 
               // If count is 0, it could mean everyone left, OR the participant list area itself is gone.
-              // This check helps determine if the list container itself has disappeared.
               if (count === 0) {
                   const peopleListContainer = document.querySelector('[role="list"]'); // Check the original list container
                   if (!peopleListContainer || !document.body.contains(peopleListContainer)) {
@@ -1031,26 +1547,35 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                        resolve(); // Resolve the main promise from page.evaluate
                        return;   // Exit setInterval callback
                   }
-                  // If peopleListContainer exists but count is 0 (no .IisKdb found),
-                  // it means the list is genuinely empty. The aloneTime logic below will handle this.
               }
 
-              if (count <= 1) { // Bot is 1, so count <= 1 means bot is alone or list is empty
+              // FIXED: Correct logic for tracking alone time
+              if (count === 1) { // Bot is the only participant (count = 1)
+                aloneTime += 5; // It's a 5-second interval
+              } else if (count === 0) {
+                // No participants at all - meeting might have ended
                 aloneTime += 5;
-                (window as any).logBot(
-                  "Bot appears alone for " + aloneTime + " seconds..."
-                );
+              } else {
+                // Multiple participants (count > 1) - someone else is here, reset the timer
+                if (aloneTime > 0) {
+                    (window as any).logBot('Another participant joined. Resetting alone timer.');
+                }
                 aloneTime = 0;
               }
 
-              if (aloneTime >= 10) { // Simplified condition: if aloneTime accumulates, leave.
+              const everyoneLeftTimeoutSeconds = botConfigData.automaticLeave.everyoneLeftTimeout / 1000;
+              if (aloneTime >= everyoneLeftTimeoutSeconds) { // If bot has been alone for configured timeout...
                 (window as any).logBot(
-                  "Meeting ended or bot alone for too long. Stopping recorder..."
+                  `Meeting ended or bot has been alone for ${everyoneLeftTimeoutSeconds} seconds. Stopping recorder...`
                 );
                 clearInterval(checkInterval);
                 recorder.disconnect();
                 (window as any).triggerNodeGracefulLeave();
                 resolve();
+              } else if (aloneTime > 0) { // Log countdown if timer has started
+                 (window as any).logBot(
+                  `Bot has been alone for ${aloneTime} seconds. Will leave in ${everyoneLeftTimeoutSeconds - aloneTime} more seconds.`
+                );
               }
             }, 5000);
 
@@ -1073,14 +1598,19 @@ const startRecording = async (page: Page, botConfig: BotConfig) => {
                 resolve();
               }
             });
-          } catch (error: any) {
-            return reject(new Error("[BOT Error] " + error.message));
-          }
-        });
-      },
-      { botConfigData: botConfig, whisperUrlForBrowser: whisperLiveUrlFromEnv }
-    ); // Pass arguments to page.evaluate
-  });
+          }).catch(err => {
+              reject(err);
+          });
+        } catch (error: any) {
+          return reject(new Error("[BOT Error] " + error.message));
+        }
+      });
+    },
+    { botConfigData: botConfig, whisperUrlForBrowser: whisperLiveUrlResolved }
+  );
+  
+  // After page.evaluate finishes (e.g., on graceful leave), close the redis client
+  await redisClient.quit();
 };
 
 // Remove the compatibility shim 'recordMeeting' if no longer needed,

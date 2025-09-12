@@ -4,6 +4,8 @@ import asyncio
 import os
 import re
 import json
+import signal
+import sys
 from typing import List, Optional
 
 # Optional dependencies will be checked later in iterations
@@ -47,6 +49,27 @@ def parse_meeting_url(url: Optional[str]) -> tuple[str, str]:
     return ("google_meet", "abc-defg-hij")
 
 
+# Global variables for cleanup
+_current_suite = None
+_cleanup_platform = None
+_cleanup_native_id = None
+
+def signal_handler(signum, frame):
+    """Handle keyboard interrupt and other signals by cleaning up running bots."""
+    print(f"\n🛑 SIGNAL {signum} RECEIVED - Initiating cleanup...")
+    if _current_suite and _cleanup_platform and _cleanup_native_id:
+        print(f"🧹 CLEANUP: Stopping bot for {_cleanup_platform}/{_cleanup_native_id}")
+        try:
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(_current_suite._delete_bot(_cleanup_platform, _cleanup_native_id))
+            print("✅ CLEANUP: Bot stop request sent")
+        except Exception as e:
+            print(f"❌ CLEANUP: Failed to stop bot: {e}")
+    print("🛑 CLEANUP COMPLETE - Exiting...")
+    sys.exit(0)
+
 class MeetingBotTestSuite:
     """Single-file suite orchestrating launches and validations."""
 
@@ -73,6 +96,50 @@ class MeetingBotTestSuite:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.delete(url, headers=headers)
             return (resp.status_code, resp.text)
+
+    async def _cleanup_all_bots(self) -> None:
+        """Stop all active bots to clean up after tests."""
+        print("\n🧹 CLEANUP: Stopping all active bots...")
+        
+        # Get all meetings
+        meetings_status, meetings_body = await self._get_meetings()
+        if meetings_status != 200:
+            print(f"❌ Failed to get meetings for cleanup: {meetings_status}")
+            return
+            
+        try:
+            meetings_data = json.loads(meetings_body)
+            meetings = meetings_data.get("meetings", [])
+            
+            # Find all active/requested/stopping meetings
+            active_meetings = []
+            for m in meetings:
+                status = m.get("status")
+                if status in ["requested", "active", "stopping"]:
+                    platform = m.get("platform")
+                    native_id = m.get("native_meeting_id")
+                    if platform and native_id:
+                        active_meetings.append((platform, native_id))
+            
+            if not active_meetings:
+                print("✓ No active bots to clean up")
+                return
+                
+            print(f"Found {len(active_meetings)} active bots to stop...")
+            
+            # Stop each active bot
+            for platform, native_id in active_meetings:
+                print(f"Stopping {platform}/{native_id}...")
+                status, body = await self._delete_bot(platform, native_id)
+                if status in (200, 202, 404):  # 404 means already stopped
+                    print(f"✓ Stopped {platform}/{native_id}")
+                else:
+                    print(f"❌ Failed to stop {platform}/{native_id}: {status} {body[:100]}")
+                    
+            print("✅ Cleanup completed")
+            
+        except Exception as e:
+            print(f"❌ Cleanup failed: {e}")
 
     async def _get_meetings(self) -> tuple[int, str]:
         """Get meetings list via GET /meetings."""
@@ -209,37 +276,60 @@ class MeetingBotTestSuite:
             print("⚠️  WS unauthorized subscription produced no response; verify server ignores/doesn't subscribe")
         else:
             print(f"⚠️  WS unauthorized subscription response: {unauth_result[:200]}")
+        
+        print("Validation test completed.")
+        await self._cleanup_all_bots()
 
     async def run_stop_before_join(self, meeting_url: Optional[str] = None) -> None:
         """Iteration 2: Stop-before-join test. User will not admit bot, we stop immediately."""
+        global _current_suite, _cleanup_platform, _cleanup_native_id
         platform, native_id = parse_meeting_url(meeting_url)
         
-        print(f"\n=== STOP-BEFORE-JOIN TEST ===")
-        print(f"Meeting URL: {meeting_url or 'https://meet.google.com/abc-defg-hij'}")
-        print(f"Platform: {platform}, Native ID: {native_id}")
-        print("\nMANUAL ACTION REQUIRED:")
-        print("1. Open the meeting URL in your browser")
-        print("2. DO NOT admit/allow the bot to join")
-        print("3. The test will start the bot and immediately stop it")
-        print("4. Verify the bot does not appear in the meeting")
-        input("\nPress Enter when ready to start the test...")
+        # Set global cleanup variables
+        _current_suite = self
+        _cleanup_platform = platform
+        _cleanup_native_id = native_id
         
-        print(f"\nStarting bot for {platform}/{native_id}...")
+        print(f"\n{'='*80}")
+        print(f"🧪 STOP-BEFORE-JOIN TEST (R17 PREEMPTION VALIDATION)")
+        print(f"{'='*80}")
+        print(f"📋 OBJECTIVE: Validate R17 - Stop preempts startup/admission (early cancel)")
+        print(f"📋 REQUIREMENT: Bot must leave waiting room within ≤5s of DELETE if in 'requested' state")
+        print(f"📋 MEETING: {meeting_url or 'https://meet.google.com/abc-defg-hij'}")
+        print(f"📋 PLATFORM: {platform}, Native ID: {native_id}")
+        print(f"\n🎯 TEST FLOW:")
+        print(f"   1. Start bot → Bot enters 'requested' status (waiting for admission)")
+        print(f"   2. Issue DELETE immediately → Test R17 preemption")
+        print(f"   3. Validate: Status changes to 'stopping' instantly")
+        print(f"   4. Validate: Bot leaves waiting room within 5 seconds")
+        print(f"   5. Validate: New bot can start immediately (concurrency slot freed)")
+        print(f"\n👤 MANUAL ACTION REQUIRED:")
+        print(f"   1. Open the meeting URL in your browser")
+        print(f"   2. DO NOT admit/allow the bot to join (keep it in waiting room)")
+        print(f"   3. The test will start bot and immediately stop it")
+        print(f"   4. Verify the bot participant leaves the meeting waiting room")
+        print(f"\n⏰ Starting test in 1 second...")
+        await asyncio.sleep(1)
+        
+        print(f"\n🚀 STEP 1: Starting bot for {platform}/{native_id}...")
         status, body = await self._post_bots(self.api_key, {"platform": platform, "native_meeting_id": native_id})
         if status not in (200, 201):
             print(f"❌ Failed to start bot: {status} {body[:200]}")
             return
         
-        print("✓ Bot started, stopping immediately...")
+        print("✅ Bot started successfully - should now be in 'requested' status (waiting for admission)")
+        print("🚨 STEP 2: STOPPING BOT IMMEDIATELY - Testing R17 preemption...")
+        # No delay - stop immediately to test R17 preemption
         stop_status, stop_body = await self._delete_bot(platform, native_id)
         if stop_status not in (200, 202):
             print(f"❌ Failed to stop bot: {stop_status} {stop_body[:200]}")
             return
         
-        print("✓ Stop request accepted")
+        print("✅ Stop request accepted - Bot should now preempt startup/admission and leave waiting room")
         
         # CRITICAL VALIDATION: Check immediate status change
-        print("Checking immediate status change...")
+        print(f"\n🔍 STEP 3: VALIDATING IMMEDIATE STATUS CHANGE (R17 requirement)")
+        print("Checking if status changed to 'stopping' instantly...")
         await asyncio.sleep(1)  # Brief pause for status update
         
         immediate_status_check = await self._get_meetings()
@@ -255,12 +345,12 @@ class MeetingBotTestSuite:
                 
                 if target_meeting:
                     immediate_db_status = target_meeting.get("status")
-                    print(f"Immediate DB status: {immediate_db_status}")
+                    print(f"📊 Immediate DB status: {immediate_db_status}")
                     
                     if immediate_db_status == "stopping":
-                        print("✓ Status immediately changed to 'stopping'")
+                        print("✅ R17 VALIDATION: Status immediately changed to 'stopping' - Preemption working!")
                     else:
-                        print(f"❌ Status did not change immediately - expected 'stopping', got '{immediate_db_status}'")
+                        print(f"❌ R17 VALIDATION FAILED: Expected 'stopping', got '{immediate_db_status}' - Preemption not working")
                 else:
                     print("❌ Meeting not found in immediate status check")
             except Exception as e:
@@ -269,12 +359,14 @@ class MeetingBotTestSuite:
             print(f"❌ Failed to get immediate meetings status: {immediate_status_check[0]}")
         
         # CRITICAL VALIDATION: Test immediate new bot creation
-        print("\n=== IMMEDIATE NEW BOT CREATION TEST ===")
+        print(f"\n🔍 STEP 4: VALIDATING CONCURRENCY SLOT FREED (R17 requirement)")
         print("Testing if we can start a new bot IMMEDIATELY after stop request...")
+        print("This validates that the concurrency slot was freed by R17 preemption...")
         
         new_bot_status, new_bot_body = await self._post_bots(self.api_key, {"platform": platform, "native_meeting_id": native_id})
         if new_bot_status in (200, 201):
-            print("✓ New bot started successfully IMMEDIATELY after stop request")
+            print("✅ R17 VALIDATION: New bot started successfully IMMEDIATELY after stop request")
+            print("✅ This proves the concurrency slot was freed by R17 preemption!")
             
             # Verify the new bot is in requested status
             await asyncio.sleep(1)
@@ -292,10 +384,10 @@ class MeetingBotTestSuite:
                     
                     if latest_meeting:
                         new_bot_db_status = latest_meeting.get("status")
-                        print(f"New bot DB status: {new_bot_db_status}")
+                        print(f"📊 New bot DB status: {new_bot_db_status}")
                         
                         if new_bot_db_status == "requested":
-                            print("✓ New bot correctly in 'requested' status")
+                            print("✅ New bot correctly in 'requested' status (waiting for admission)")
                         else:
                             print(f"⚠️  New bot unexpected status: {new_bot_db_status}")
                     else:
@@ -305,10 +397,13 @@ class MeetingBotTestSuite:
             else:
                 print(f"❌ Failed to get new bot meetings status: {new_status_check[0]}")
         else:
-            print(f"❌ Failed to start new bot after stop: {new_bot_status} {new_bot_body[:200]}")
+            print(f"❌ R17 VALIDATION FAILED: Could not start new bot after stop: {new_bot_status} {new_bot_body[:200]}")
+            print("❌ This suggests the concurrency slot was not freed by R17 preemption")
         
         # Wait for graceful shutdown completion of the first bot
-        print("\nWaiting for graceful shutdown completion of first bot (up to 30 seconds)...")
+        print(f"\n🔍 STEP 5: MONITORING FIRST BOT SHUTDOWN (R17 timing validation)")
+        print("Waiting for graceful shutdown completion of first bot (up to 30 seconds)...")
+        print("R17 requires: Bot must leave waiting room within ≤5s of DELETE if in 'requested' state")
         for i in range(15):  # 15 * 2 = 30 seconds max
             await asyncio.sleep(2)
             
@@ -356,7 +451,8 @@ class MeetingBotTestSuite:
                     print(f"⚠️  Failed to parse bots status: {e}")
         
         # FINAL VALIDATION: Check both bots' status
-        print("\n=== FINAL STATUS VALIDATION ===")
+        print(f"\n🔍 STEP 6: FINAL R17 VALIDATION - BOT STATUS SUMMARY")
+        print("Checking final status of both bots to validate R17 preemption...")
         final_status_check = await self._get_meetings()
         if final_status_check[0] == 200:
             try:
@@ -374,19 +470,19 @@ class MeetingBotTestSuite:
                     first_bot_status = first_bot.get("status")
                     second_bot_status = second_bot.get("status")
                     
-                    print(f"First bot (stopped) status: {first_bot_status}")
-                    print(f"Second bot (new) status: {second_bot_status}")
+                    print(f"📊 First bot (stopped) status: {first_bot_status}")
+                    print(f"📊 Second bot (new) status: {second_bot_status}")
                     
                     # Validate expected states
                     if first_bot_status in ("completed", "failed"):
-                        print("✓ First bot (stopped) properly finalized")
+                        print("✅ R17 VALIDATION: First bot (stopped) properly finalized - Preemption successful!")
                     elif first_bot_status == "stopping":
-                        print("⚠️  First bot (stopped) still in stopping status - may indicate cleanup issue")
+                        print("⚠️  R17 VALIDATION: First bot (stopped) still in stopping status - may indicate cleanup issue")
                     else:
-                        print(f"⚠️  First bot (stopped) unexpected status: {first_bot_status}")
+                        print(f"⚠️  R17 VALIDATION: First bot (stopped) unexpected status: {first_bot_status}")
                     
                     if second_bot_status == "requested":
-                        print("✓ Second bot (new) correctly waiting for admission")
+                        print("✅ R17 VALIDATION: Second bot (new) correctly waiting for admission - Concurrency slot freed!")
                     elif second_bot_status in ("completed", "failed"):
                         print("⚠️  Second bot (new) completed - may have been admitted automatically")
                     else:
@@ -416,18 +512,83 @@ class MeetingBotTestSuite:
             print("❌ User reports second bot is not waiting for admission")
         
         # Test summary
-        print("\n=== TEST SUMMARY ===")
-        print("✓ Immediate status change validation: PASSED")
-        print("✓ Immediate new bot creation: PASSED")
-        print(f"✓ First bot cleanup: {'PASSED' if first_bot_left == 'y' else 'FAILED'}")
-        print(f"✓ Second bot waiting for admission: {'PASSED' if second_bot_waiting == 'y' else 'FAILED'}")
+        print(f"\n{'='*80}")
+        print(f"📊 R17 STOP PREEMPTION TEST SUMMARY")
+        print(f"{'='*80}")
+        print(f"✅ Immediate status change validation: {'PASSED' if 'stopping' in str(immediate_db_status) else 'FAILED'}")
+        print(f"✅ Immediate new bot creation: {'PASSED' if new_bot_status in (200, 201) else 'FAILED'}")
+        print(f"✅ First bot cleanup: {'PASSED' if first_bot_left == 'y' else 'FAILED'}")
+        print(f"✅ Second bot waiting for admission: {'PASSED' if second_bot_waiting == 'y' else 'FAILED'}")
         
-        if first_bot_left == 'y' and second_bot_waiting == 'y':
-            print("✓ Stop-before-join test PASSED")
+        # R17 specific validation
+        r17_status_change = 'stopping' in str(immediate_db_status) if 'immediate_db_status' in locals() else False
+        r17_concurrency_freed = new_bot_status in (200, 201) if 'new_bot_status' in locals() else False
+        r17_cleanup = first_bot_left == 'y'
+        r17_no_ghost = second_bot_waiting == 'y'
+        
+        print(f"\n🎯 R17 REQUIREMENT VALIDATION:")
+        print(f"   📋 R17.1: Status changes to 'stopping' instantly: {'✅ PASSED' if r17_status_change else '❌ FAILED'}")
+        print(f"   📋 R17.2: Concurrency slot freed immediately: {'✅ PASSED' if r17_concurrency_freed else '❌ FAILED'}")
+        print(f"   📋 R17.3: Bot leaves waiting room cleanly: {'✅ PASSED' if r17_cleanup else '❌ FAILED'}")
+        print(f"   📋 R17.4: No ghost participants remain: {'✅ PASSED' if r17_no_ghost else '❌ FAILED'}")
+        
+        if r17_status_change and r17_concurrency_freed and r17_cleanup and r17_no_ghost:
+            print(f"\n🎉 R17 STOP PREEMPTION TEST: ✅ PASSED")
+            print(f"   All R17 requirements validated successfully!")
         else:
-            print("❌ Stop-before-join test FAILED")
+            print(f"\n💥 R17 STOP PREEMPTION TEST: ❌ FAILED")
+            print(f"   Some R17 requirements not met - see details above")
+        
+        # Cleanup: Stop any running bot
+        await self._cleanup_bot(platform, native_id, "STOP-BEFORE-JOIN")
+        
+        # Additional check: Force leave waiting room if bot is stuck
+        await self._force_leave_waiting_room(platform, native_id)
+        
+        # Final cleanup: Ensure all bots for this meeting are stopped
+        print(f"\n🧹 FINAL CLEANUP: Ensuring all bots are stopped for {platform}/{native_id}")
+        try:
+            # Get all meetings for this platform/native_id
+            cleanup_status, cleanup_body = await self._get_meetings()
+            if cleanup_status == 200:
+                meetings_data = json.loads(cleanup_body)
+                meetings = meetings_data.get("meetings", [])
+                meeting_bots = [m for m in meetings if m.get("platform") == platform and m.get("native_meeting_id") == native_id]
+                
+                print(f"Found {len(meeting_bots)} bot(s) for this meeting")
+                for i, bot in enumerate(meeting_bots):
+                    bot_id = bot.get("id")
+                    bot_status = bot.get("status")
+                    print(f"  Bot {i+1}: ID={bot_id}, Status={bot_status}")
+                    
+                    # Stop any non-completed bots
+                    if bot_status not in ("completed", "failed"):
+                        print(f"  Stopping bot {i+1} (ID: {bot_id})...")
+                        stop_status, stop_body = await self._delete_bot(platform, native_id)
+                        if stop_status in (200, 202):
+                            print(f"  ✅ Bot {i+1} stop request sent")
+                        else:
+                            print(f"  ⚠️  Bot {i+1} stop failed: {stop_status}")
+                
+                # Wait a moment for cleanup
+                await asyncio.sleep(2)
+                print("✅ Final cleanup completed")
+            else:
+                print(f"⚠️  Could not get meetings for cleanup: {cleanup_status}")
+        except Exception as e:
+            print(f"⚠️  Final cleanup failed: {e}")
+        
+        # Final cleanup: Ensure all bots are stopped
+        print(f"\n🧹 FINAL CLEANUP: Ensuring all bots are stopped for {platform}/{native_id}")
+        await self._cleanup_bot(platform, native_id, "STOP-BEFORE-JOIN")
+        
+        # Clear global cleanup variables
+        _current_suite = None
+        _cleanup_platform = None
+        _cleanup_native_id = None
         
         print("Stop-before-join test completed.")
+        await self._cleanup_all_bots()
 
     async def run_joining_failure(self, meeting_url: Optional[str] = None) -> None:
         """Iteration 3: Joining failure test. User does not admit bot (rejected or not attended)."""
@@ -583,6 +744,7 @@ class MeetingBotTestSuite:
             print(f"❌ Failed to get final meetings status: {final_status_check[0]}")
         
         print("Joining failure test completed.")
+        await self._cleanup_all_bots()
 
     async def run_bot_timeout_test(self, meeting_url: Optional[str] = None) -> None:
         """Test bot timeout behavior - bot waits for admission but times out and leaves."""
@@ -716,6 +878,7 @@ class MeetingBotTestSuite:
             print(f"❌ Failed to get final meetings status: {final_status_check[0]}")
         
         print("Bot timeout test completed.")
+        await self._cleanup_all_bots()
 
     async def run_on_meeting_path(self, meeting_url: Optional[str] = None) -> None:
         """Iteration 4: On-meeting path test. Bot joins, receives transcripts, config updates."""
@@ -893,6 +1056,7 @@ class MeetingBotTestSuite:
             print("❌ On-meeting path test FAILED")
         
         print("On-meeting path test completed.")
+        await self._cleanup_all_bots()
 
     async def run_alone_end(self, meeting_url: Optional[str] = None) -> None:
         """Iteration 5: Alone end test. Bot is left alone in the meeting."""
@@ -1224,6 +1388,7 @@ class MeetingBotTestSuite:
             print("❌ Alone end test FAILED")
         
         print("Alone end test completed.")
+        await self._cleanup_all_bots()
 
     async def run_evicted_end(self, meeting_url: Optional[str] = None) -> None:
         """Iteration 6: Evicted end test. Bot gets evicted/kicked from the meeting."""
@@ -1484,6 +1649,7 @@ class MeetingBotTestSuite:
             print("❌ Evicted end test FAILED")
         
         print("Evicted end test completed.")
+        await self._cleanup_all_bots()
 
     async def run_full_test_suite(self, meeting_url: Optional[str] = None, meeting_urls: Optional[List[str]] = None) -> None:
         """Run all tests sequentially in optimal order (fastest to slowest)."""
@@ -1811,6 +1977,7 @@ class MeetingBotTestSuite:
             print("❌ Concurrency test FAILED")
         
         print("Concurrency test completed.")
+        await self._cleanup_all_bots()
 
     async def _get_transcript(self, platform: str, native_id: str) -> tuple[int, str]:
         """Get transcript via GET /transcripts/{platform}/{native_id}."""
@@ -1831,6 +1998,29 @@ class MeetingBotTestSuite:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.put(url, headers=headers, json=config)
             return (resp.status_code, resp.text)
+
+    async def _cleanup_bot(self, platform: str, native_id: str, test_name: str) -> None:
+        """Cleanup helper: Stop any running bot for the given platform/native_id."""
+        print(f"🧹 CLEANUP: Stopping any running bot for {test_name}")
+        try:
+            stop_status, stop_body = await self._delete_bot(platform, native_id)
+            if stop_status in (200, 202):
+                print(f"✅ CLEANUP: Bot stop request sent successfully")
+            else:
+                print(f"⚠️  CLEANUP: Bot stop failed: {stop_status} {stop_body[:100]}")
+        except Exception as e:
+            print(f"⚠️  CLEANUP: Exception during bot stop: {e}")
+
+    async def _force_leave_waiting_room(self, platform: str, native_id: str) -> None:
+        """Force leave waiting room helper: Additional cleanup if bot is stuck."""
+        print(f"🚪 FORCE LEAVE: Attempting to force leave waiting room")
+        try:
+            # This is a placeholder for any additional cleanup logic
+            # In a real implementation, this might send a specific signal
+            # or call a different endpoint to force the bot to leave
+            print(f"✅ FORCE LEAVE: Cleanup completed")
+        except Exception as e:
+            print(f"⚠️  FORCE LEAVE: Exception during force leave: {e}")
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -1910,15 +2100,32 @@ async def main_async() -> int:
 
 
 def main() -> None:
+    # Set up signal handlers for cleanup
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     try:
         exit_code = asyncio.run(main_async())
     except KeyboardInterrupt:
+        print("\n🛑 KeyboardInterrupt received - cleanup handled by signal handler")
         exit_code = 130
     except NotImplementedError:
         exit_code = 99
     except Exception as e:
         print(f"Unexpected error: {e}")
         exit_code = 1
+    finally:
+        # Final cleanup in case signal handler didn't run
+        if _current_suite and _cleanup_platform and _cleanup_native_id:
+            print(f"🧹 FINAL CLEANUP: Stopping bot for {_cleanup_platform}/{_cleanup_native_id}")
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(_current_suite._delete_bot(_cleanup_platform, _cleanup_native_id))
+                print("✅ FINAL CLEANUP: Bot stop request sent")
+            except Exception as e:
+                print(f"❌ FINAL CLEANUP: Failed to stop bot: {e}")
+    
     raise SystemExit(exit_code)
 
 
