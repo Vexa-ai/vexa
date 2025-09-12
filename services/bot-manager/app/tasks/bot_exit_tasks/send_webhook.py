@@ -1,7 +1,8 @@
 import logging
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
-from shared_models.models import Meeting, User
+from shared_models.models import Meeting, MeetingSession, User
+from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,16 @@ async def run(meeting: Meeting, db: AsyncSession):
         if not webhook_url:
             logger.info(f"No webhook URL configured for user {user.email} (meeting {meeting.id})")
             return
+        
+        session_statement = (
+            select(MeetingSession.session_uid)
+            .where(MeetingSession.meeting_id == meeting.id)
+            .order_by(MeetingSession.session_start_time.asc())
+            .limit(1)
+        )
+
+        session_result = await db.execute(session_statement)
+        connection_id = session_result.scalars().first() 
 
         # Prepare the webhook payload
         payload = {
@@ -34,6 +45,7 @@ async def run(meeting: Meeting, db: AsyncSession):
             'constructed_meeting_url': meeting.constructed_meeting_url,
             'status': meeting.status,
             'bot_container_id': meeting.bot_container_id,
+            'connection_id': connection_id if connection_id else None,
             'start_time': meeting.start_time.isoformat() if meeting.start_time else None,
             'end_time': meeting.end_time.isoformat() if meeting.end_time else None,
             'data': meeting.data or {},
