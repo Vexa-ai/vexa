@@ -2,6 +2,7 @@ import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import { log } from "./utils";
 import { chromium } from "playwright-extra";
 import { handleGoogleMeet, leaveGoogleMeet } from "./platforms/google";
+import { handleMicrosoftTeams, leaveMicrosoftTeams } from "./platforms/teams";
 import { browserArgs, userAgent } from "./constans";
 import { BotConfig } from "./types";
 import { createClient, RedisClientType } from 'redis';
@@ -194,6 +195,8 @@ async function performGracefulLeave(
       // Assuming currentPlatform is set appropriately, or determine it if needed
       if (currentPlatform === "google_meet") { // Add platform check if you have other platform handlers
          platformLeaveSuccess = await leaveGoogleMeet(page);
+      } else if (currentPlatform === "teams") {
+         platformLeaveSuccess = await leaveMicrosoftTeams(page);
       } else {
          log(`[Graceful Leave] No platform-specific leave defined for ${currentPlatform}. Page will be closed.`);
          // If no specific leave, we still consider it "handled" to proceed with cleanup.
@@ -359,28 +362,46 @@ export async function runBot(botConfig: BotConfig): Promise<void> {
   }
   // -------------------------------------------------
 
-  // Use Stealth Plugin to avoid detection
-  const stealthPlugin = StealthPlugin();
-  stealthPlugin.enabledEvasions.delete("iframe.contentWindow");
-  stealthPlugin.enabledEvasions.delete("media.codecs");
-  chromium.use(stealthPlugin);
+  // Simple browser setup like simple-bot.js
+  if (botConfig.platform === "teams") {
+    log("Using MS Edge browser for Teams platform (simple-bot.js approach)");
+    // Launch browser in headless mode with Edge channel (exactly like simple-bot.js)
+    browserInstance = await chromium.launch({ 
+      headless: false,
+      channel: 'msedge'
+    });
+    
+    // Create context with simple permissions (exactly like simple-bot.js)
+    const context = await browserInstance.newContext({
+      permissions: ['microphone', 'camera']
+    });
+    
+    page = await context.newPage();
+  } else {
+    log("Using Chrome browser for non-Teams platform");
+    // Use Stealth Plugin for non-Teams platforms
+    const stealthPlugin = StealthPlugin();
+    stealthPlugin.enabledEvasions.delete("iframe.contentWindow");
+    stealthPlugin.enabledEvasions.delete("media.codecs");
+    chromium.use(stealthPlugin);
 
-  // Launch browser with stealth configuration
-  browserInstance = await chromium.launch({
-    headless: false,
-    args: browserArgs,
-  });
+    browserInstance = await chromium.launch({
+      headless: false,
+      args: browserArgs,
+    });
 
-  // Create a new page with permissions and viewport
-  const context = await browserInstance.newContext({
-    permissions: ["camera", "microphone"],
-    userAgent: userAgent,
-    viewport: {
-      width: 1280,
-      height: 720
-    }
-  })
-  page = await context.newPage(); // Assign to the module-scoped page variable
+    // Create a new page with permissions and viewport for non-Teams
+    const context = await browserInstance.newContext({
+      permissions: ["camera", "microphone"],
+      userAgent: userAgent,
+      viewport: {
+        width: 1280,
+        height: 720
+      }
+    });
+    
+    page = await context.newPage();
+  }
 
   // --- ADDED: Expose a function for browser to trigger Node.js graceful leave ---
   await page.exposeFunction("triggerNodeGracefulLeave", async () => {
@@ -418,8 +439,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {
       log("Zoom platform not yet implemented.");
       await performGracefulLeave(page, 1, "platform_not_implemented");
     } else if (botConfig.platform === "teams") {
-      log("Teams platform not yet implemented.");
-      await performGracefulLeave(page, 1, "platform_not_implemented");
+      await handleMicrosoftTeams(botConfig, page, performGracefulLeave);
     } else {
       log(`Unknown platform: ${botConfig.platform}`);
       await performGracefulLeave(page, 1, "unknown_platform");

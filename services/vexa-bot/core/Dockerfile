@@ -18,14 +18,19 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 
 RUN npm install
+# Install TypeScript globally to avoid permission issues
+RUN npm install -g typescript
 # Copy the rest of the application source code
 COPY . .
 
-# Build the TypeScript code (assumes "npm run build" invokes tsc)
-RUN npm run build
+# Build the TypeScript code
+RUN tsc
 
 # Install Playwright dependencies (if not already installed via npm)
 RUN npx playwright install-deps && npx playwright install --with-deps
+
+# Install MS Edge for Teams support
+RUN npx playwright install msedge
 
 # --- Runtime Stage ---
 FROM mcr.microsoft.com/playwright:v1.55.0-jammy AS runtime
@@ -42,6 +47,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy the built application and node_modules from the base stage
 COPY --from=base /app /app
+
+# Install MS Edge in runtime stage as well
+RUN npx playwright install msedge
 
 # Ensure the Playwright cache directory has proper permissions (adjust path if needed)
 RUN mkdir -p /root/ms-playwright && chmod -R 777 /root/ms-playwright
