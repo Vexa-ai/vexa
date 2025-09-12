@@ -365,15 +365,26 @@ export async function runBot(botConfig: BotConfig): Promise<void> {
   // Simple browser setup like simple-bot.js
   if (botConfig.platform === "teams") {
     log("Using MS Edge browser for Teams platform (simple-bot.js approach)");
-    // Launch browser in headless mode with Edge channel (exactly like simple-bot.js)
+    // Launch browser in headless mode with Edge channel with insecure WebSocket support
     browserInstance = await chromium.launch({ 
       headless: false,
-      channel: 'msedge'
+      channel: 'msedge',
+      args: [
+        '--disable-web-security',
+        '--disable-features=VizDisplayCompositor',
+        '--allow-running-insecure-content',
+        '--ignore-certificate-errors',
+        '--ignore-ssl-errors',
+        '--ignore-certificate-errors-spki-list',
+        '--disable-site-isolation-trials',
+        '--disable-features=VizDisplayCompositor'
+      ]
     });
     
     // Create context with simple permissions (exactly like simple-bot.js)
     const context = await browserInstance.newContext({
-      permissions: ['microphone', 'camera']
+      permissions: ['microphone', 'camera'],
+      ignoreHTTPSErrors: true
     });
     
     page = await context.newPage();
