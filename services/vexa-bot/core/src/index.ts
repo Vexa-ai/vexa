@@ -2,7 +2,7 @@ import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import { log } from "./utils";
 import { chromium } from "playwright-extra";
 import { handleGoogleMeet, leaveGoogleMeet } from "./platforms/google";
-import { handleMicrosoftTeams, leaveMicrosoftTeams } from "./platforms/teams";
+import { handleMicrosoftTeams, leaveMicrosoftTeams } from "./platforms/msteams/teams";
 import { browserArgs, userAgent } from "./constans";
 import { BotConfig } from "./types";
 import { createClient, RedisClientType } from 'redis';

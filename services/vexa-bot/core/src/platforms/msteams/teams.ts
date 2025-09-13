@@ -1,10 +1,10 @@
 import { Page } from "playwright";
-import { log, randomDelay } from "../utils";
-import { BotConfig } from "../types";
-import { generateUUID, createSessionControlMessage, createSpeakerActivityMessage } from "../index";
-import { WhisperLiveService } from "../services/whisperlive";
-import { AudioService } from "../services/audio";
-import { WebSocketManager } from "../utils/websocket";
+import { log, randomDelay } from "../../utils";
+import { BotConfig } from "../../types";
+import { generateUUID, createSessionControlMessage, createSpeakerActivityMessage } from "../../index";
+import { WhisperLiveService } from "../../services/whisperlive";
+import { AudioService } from "../../services/audio";
+import { WebSocketManager } from "../../utils/websocket";
 
 // --- ADDED: Function to call startup callback ---
 async function callStartupCallback(botConfig: BotConfig): Promise<void> {
