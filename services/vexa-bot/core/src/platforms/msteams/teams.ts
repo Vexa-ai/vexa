@@ -5,6 +5,19 @@ import { generateUUID, createSessionControlMessage, createSpeakerActivityMessage
 import { WhisperLiveService } from "../../services/whisperlive";
 import { AudioService } from "../../services/audio";
 import { WebSocketManager } from "../../utils/websocket";
+import { 
+  teamsInitialAdmissionIndicators,
+  teamsWaitingRoomIndicators,
+  teamsAdmissionIndicators,
+  teamsParticipantSelectors,
+  teamsSpeakingClassNames,
+  teamsSilenceClassNames,
+  teamsParticipantContainerSelectors,
+  teamsPrimaryLeaveButtonSelectors,
+  teamsSecondaryLeaveButtonSelectors,
+  teamsNameSelectors,
+  teamsSpeakingIndicators
+} from "./selectors";
 
 
 // --- Teams-Specific Functions ---
@@ -23,23 +36,7 @@ const waitForTeamsMeetingAdmission = async (
     
     // FIRST: Check if bot is already admitted (no waiting room needed)
     log("Checking if bot is already admitted to the Teams meeting...");
-    const initialAdmissionIndicators = [
-      'button[aria-label*="People"]',
-      'button[aria-label*="people"]',
-      'button[aria-label*="Chat"]', 
-      'button[aria-label*="chat"]',
-      'button[aria-label*="Leave"]',
-      'button[aria-label*="leave"]',
-      'button[aria-label*="End meeting"]',
-      'button[aria-label*="end meeting"]',
-      '[role="toolbar"]',
-      'button[aria-label*="Turn off microphone"]',
-      'button[aria-label*="Turn on microphone"]',
-      'button[aria-label*="Mute"]',
-      'button[aria-label*="mute"]',
-      'button[aria-label*="Camera"]',
-      'button[aria-label*="camera"]'
-    ];
+    const initialAdmissionIndicators = teamsInitialAdmissionIndicators;
     
     for (const indicator of initialAdmissionIndicators) {
       try {
@@ -60,17 +57,7 @@ const waitForTeamsMeetingAdmission = async (
     log("Bot not yet admitted - checking for Teams waiting room indicators...");
     
     // Second, check if we're still in waiting room
-    const waitingRoomIndicators = [
-      'text="You\'re in the lobby"',
-      'text="Waiting for someone to let you in"',
-      'text="Please wait until someone admits you"',
-      'text="Wait for someone to admit you"',
-      'text="Waiting to be admitted"',
-      '[aria-label*="waiting"]',
-      '[aria-label*="lobby"]',
-      'text="Your request to join has been sent"',
-      'text="Meeting not found"'
-    ];
+    const waitingRoomIndicators = teamsWaitingRoomIndicators;
     
     // Check for waiting room indicators first, but don't exit immediately
     let stillInWaitingRoom = false;
@@ -174,35 +161,7 @@ const waitForTeamsMeetingAdmission = async (
     
     // Wait for Teams meeting indicators - these are the most reliable signs of admission
     // ORDERED BY LIKELIHOOD: Most common indicators first for faster detection
-    const teamsAdmissionIndicators = [
-      // Most common Teams meeting indicators (check these first!)
-      'button[aria-label*="Chat"]',
-      'button[aria-label*="chat"]', 
-      'button[aria-label*="People"]',
-      'button[aria-label*="people"]',
-      'button[aria-label*="Participants"]',
-      'button[aria-label*="Leave"]',
-      'button[aria-label*="leave"]',
-      // Audio/video controls that appear when in Teams meeting
-      'button[aria-label*="Turn off microphone"]',
-      'button[aria-label*="Turn on microphone"]',
-      'button[aria-label*="Mute"]',
-      'button[aria-label*="mute"]',
-      'button[aria-label*="Turn off camera"]',
-      'button[aria-label*="Turn on camera"]',
-      'button[aria-label*="Camera"]',
-      'button[aria-label*="camera"]',
-      // Share and present buttons
-      'button[aria-label*="Share"]',
-      'button[aria-label*="share"]',
-      'button[aria-label*="Present"]',
-      'button[aria-label*="present"]',
-      // Meeting toolbar and controls
-      '[role="toolbar"]',
-      // Teams specific meeting UI
-      '[data-tid*="meeting"]',
-      '[data-tid*="call"]'
-    ];
+    const meetingAdmissionIndicators: string[] = teamsAdmissionIndicators;
     
     let admitted = false;
     let admissionCheckCounter = 0;
@@ -210,10 +169,10 @@ const waitForTeamsMeetingAdmission = async (
     // Use much faster timeout for each check (500ms instead of timeout/indicators.length)
     const fastTimeout = 500;
     
-    for (const indicator of teamsAdmissionIndicators) {
+    for (const indicator of meetingAdmissionIndicators) {
       try {
         admissionCheckCounter++;
-        log(`Checking Teams admission indicator ${admissionCheckCounter}/${teamsAdmissionIndicators.length}: ${indicator}`);
+        log(`Checking Teams admission indicator ${admissionCheckCounter}/${meetingAdmissionIndicators.length}: ${indicator}`);
         
         // Take screenshot before checking each indicator
         await page.screenshot({ path: `/app/screenshots/teams-admission-check-${admissionCheckCounter}.png`, fullPage: true });
@@ -287,8 +246,14 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
     async (pageArgs: {
       botConfigData: BotConfig;
       whisperUrlForBrowser: string;
+      selectors: {
+        participantSelectors: string[];
+        speakingClasses: string[];
+        silenceClasses: string[];
+        containerSelectors: string[];
+      };
     }) => {
-      const { botConfigData, whisperUrlForBrowser } = pageArgs;
+      const { botConfigData, whisperUrlForBrowser, selectors } = pageArgs;
 
       // Use browser utility classes from the global bundle
       const { BrowserAudioService, BrowserWhisperLiveService } = (window as any).VexaBrowserUtils;
@@ -399,40 +364,16 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
               (window as any).logBot("Setting up Teams speaker detection...");
               
               // Teams-specific configuration for speaker detection
-              const participantSelectors = [
-                '[data-tid="voice-level-stream-outline"]', // Main speaker indicator
-                '[data-tid*="participant"]',
-                '[aria-label*="participant"]',
-                '[data-tid*="roster"]',
-                '[data-tid*="roster-item"]',
-                '[data-tid*="video-tile"]',
-                '[data-tid*="videoTile"]',
-                '[data-tid*="participant-tile"]',
-                '[data-tid*="participantTile"]',
-                '[role="listitem"]',
-                '.participant-tile',
-                '.video-tile',
-                '.roster-item'
-              ];
+              const participantSelectors = selectors.participantSelectors;
               
               // Teams-specific speaking/silence detection based on voice-level-stream-outline
               // The voice-level-stream-outline element appears/disappears or changes state when someone speaks
-              const speakingIndicators = [
-                '[data-tid="voice-level-stream-outline"]'
-              ];
+              const speakingIndicators = teamsSpeakingIndicators;
               
               // Teams-specific speaking/silence classes (fallback)
-              const speakingClasses = [
-                'speaking', 'active-speaker', 'speaker-active', 'speaking-indicator',
-                'audio-active', 'mic-active', 'microphone-active', 'voice-active',
-                'speaking-border', 'speaking-glow', 'speaking-highlight',
-                'participant-speaking', 'user-speaking', 'speaker-indicator'
-              ];
+              const speakingClasses = selectors.speakingClasses;
               
-              const silenceClasses = [
-                'silent', 'muted', 'mic-off', 'microphone-off', 'audio-inactive',
-                'participant-silent', 'user-silent', 'no-audio'
-              ];
+              const silenceClasses = selectors.silenceClasses;
               
               // State for tracking speaking status
               const speakingStates = new Map(); // Stores the logical speaking state for each participant ID
@@ -470,26 +411,10 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
               
               function getTeamsParticipantName(participantElement: HTMLElement) {
                 // Teams-specific name selectors based on actual UI structure
-                const teamsNameSelectors = [
-                  // Look for the actual name div structure
-                  'div[class*="___2u340f0"]', // The actual name div class pattern
-                  '[data-tid*="display-name"]',
-                  '[data-tid*="participant-name"]',
-                  '[data-tid*="user-name"]',
-                  '[aria-label*="name"]',
-                  '.participant-name',
-                  '.display-name',
-                  '.user-name',
-                  '.roster-item-name',
-                  '.video-tile-name',
-                  'span[title]',
-                  '[title*="name"]',
-                  '.ms-Persona-primaryText',
-                  '.ms-Persona-secondaryText'
-                ];
+                const nameSelectors = teamsNameSelectors;
                 
                 // Try to find name in the main element or its children
-                for (const selector of teamsNameSelectors) {
+                for (const selector of nameSelectors) {
                   const nameElement = participantElement.querySelector(selector) as HTMLElement;
                   if (nameElement) {
                     let nameText = nameElement.textContent || 
@@ -751,14 +676,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
 
               // Fallback: polling-based detection tailored for MS Teams
               // Periodically scan participant containers and detect speaking based on visibility of voice-level outline
-              const teamsParticipantContainerSelectors = [
-                '[data-tid*="participant"]',
-                '[data-tid*="roster-item"]',
-                '[data-tid*="video-tile"]',
-                '[data-tid*="videoTile"]',
-                '.participant-tile',
-                '.video-tile'
-              ];
+              const containerSelectors: string[] = selectors.containerSelectors;
 
               const lastSpeakingStateById = new Map();
               const POLL_MS = 500;
@@ -801,7 +719,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
               const pollTeamsActiveSpeakers = () => {
                 try {
                   const containers: HTMLElement[] = [];
-                  teamsParticipantContainerSelectors.forEach(sel => {
+                  containerSelectors.forEach(sel => {
                     document.querySelectorAll(sel).forEach((el) => {
                       containers.push(el as HTMLElement);
                     });
@@ -911,7 +829,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                     const container = getContainerForIndicator(indicator);
                     if (!container) return;
                     // Try Teams-specific name div first
-                    const nameDiv = container.querySelector('div[class*="___2u340f0"]') as HTMLElement | null;
+                    const nameDiv = container.querySelector(teamsNameSelectors[0]) as HTMLElement | null;
                     const participantNameFromDiv = nameDiv && nameDiv.textContent ? nameDiv.textContent.trim() : null;
                     const participantIdRaw = getTeamsParticipantId(container) as unknown as string | null;
                     const participantNameRaw = participantNameFromDiv || (getTeamsParticipantName(container) as unknown as string | null);
@@ -1088,7 +1006,16 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
         }
       });
     },
-    { botConfigData: botConfig, whisperUrlForBrowser: whisperLiveUrl }
+    { 
+      botConfigData: botConfig, 
+      whisperUrlForBrowser: whisperLiveUrl,
+      selectors: {
+        participantSelectors: teamsParticipantSelectors,
+        speakingClasses: teamsSpeakingClassNames,
+        silenceClasses: teamsSilenceClassNames,
+        containerSelectors: teamsParticipantContainerSelectors
+      }
+    }
   );
   
   // After page.evaluate finishes, cleanup services
@@ -1102,28 +1029,26 @@ const prepareForRecording = async (page: Page): Promise<void> => {
     log(msg);
   });
 
+  // Expose selectors/constants for browser context consumers
+  await page.exposeFunction("getTeamsSelectors", (): { teamsPrimaryLeaveButtonSelectors: string[]; teamsSecondaryLeaveButtonSelectors: string[] } => ({
+    teamsPrimaryLeaveButtonSelectors,
+    teamsSecondaryLeaveButtonSelectors
+  }));
+
 
   // Ensure leave function is available even before admission
   await page.evaluate(() => {
     if (typeof (window as any).performLeaveAction !== "function") {
       (window as any).performLeaveAction = async () => {
         try {
-          // Teams-specific leave button selectors
-          const primaryLeaveButtonSelectors = [
-            'button[aria-label*="Leave"]',
-            'button[aria-label*="leave"]', 
-            'button[aria-label*="End meeting"]',
-            'button[aria-label*="end meeting"]',
-            'button[aria-label*="Hang up"]',
-            'button[aria-label*="hang up"]'
-          ];
-
-          const secondaryLeaveButtonSelectors = [
-            'button:has-text("Leave meeting")',
-            'button:has-text("Leave")',
-            'button:has-text("End meeting")',
-            'button:has-text("Hang up")'
-          ];
+          const sel = (window as any).getTeamsSelectors?.();
+          if (sel) {
+            (window as any).teamsPrimaryLeaveButtonSelectors = sel.teamsPrimaryLeaveButtonSelectors;
+            (window as any).teamsSecondaryLeaveButtonSelectors = sel.teamsSecondaryLeaveButtonSelectors;
+          }
+          // Teams-specific leave button selectors (injected from Node via globals)
+          const primaryLeaveButtonSelectors = (window as any).teamsPrimaryLeaveButtonSelectors as string[];
+          const secondaryLeaveButtonSelectors = (window as any).teamsSecondaryLeaveButtonSelectors as string[];
 
           // Try primary leave buttons
           for (const selector of primaryLeaveButtonSelectors) {
@@ -1191,53 +1116,33 @@ export async function handleMicrosoftTeams(
     await page.screenshot({ path: '/app/screenshots/teams-step-1-initial.png', fullPage: true });
     log("📸 Screenshot: Step 1 - Initial page load");
 
-    // Step 2: Try to find and click "Continue on this browser" button (exactly like simple-bot.js)
-    log("Step 2: Looking for 'Continue on this browser' button...");
+    // Step 2: Click "Continue on this browser" button
+    log("Step 2: Looking for continue button...");
     try {
-      const continueButton = page.getByRole('button', { name: 'Continue on this browser' });
+
+      const continueButton = page.locator('button:has-text("Continue")').first();
       await continueButton.waitFor({ timeout: 10000 });
       await continueButton.click();
-      log("✅ Clicked 'Continue on this browser'");
+      log("✅ Clicked continue button");
       await page.waitForTimeout(3000);
     } catch (error) {
-      log("ℹ️ 'Continue on this browser' button not found, trying alternative selectors...");
-      
-      // Try alternative selectors for continue button
-      try {
-        const altContinueButton = page.locator('button:has-text("Continue")').first();
-        await altContinueButton.waitFor({ timeout: 5000 });
-        await altContinueButton.click();
-        log("✅ Clicked alternative continue button");
-        await page.waitForTimeout(3000);
-      } catch (altError) {
-        log("ℹ️ Alternative continue button not found, continuing...");
-      }
+      log("ℹ️ Continue button not found, continuing...");
     }
 
     await page.screenshot({ path: '/app/screenshots/teams-step-2-after-continue.png', fullPage: true });
     log("📸 Screenshot: Step 2 - After continue click");
 
-    // Step 3: Try to find and click "Join now" button (exactly like simple-bot.js)
-    log("Step 3: Looking for 'Join now' button...");
+    // Step 3: Click join button 
+    log("Step 3: Looking for join button...");
     try {
-      const joinNowButton = page.getByRole('button', { name: 'Join now' });
-      await joinNowButton.waitFor({ timeout: 10000 });
-      await joinNowButton.click();
-      log("✅ Clicked 'Join now'");
+
+      const joinButton = page.locator('button:has-text("Join")').first();
+      await joinButton.waitFor({ timeout: 10000 });
+      await joinButton.click();
+      log("✅ Clicked join button");
       await page.waitForTimeout(3000);
     } catch (error) {
-      log("ℹ️ 'Join now' button not found, trying alternative selectors...");
-      
-      // Try alternative selectors for join button
-      try {
-        const altJoinButton = page.locator('button:has-text("Join")').first();
-        await altJoinButton.waitFor({ timeout: 5000 });
-        await altJoinButton.click();
-        log("✅ Clicked alternative join button");
-        await page.waitForTimeout(3000);
-      } catch (altError) {
-        log("ℹ️ Alternative join button not found, continuing...");
-      }
+      log("ℹ️ Join button not found, continuing...");
     }
 
     // Step 4: Try to turn off camera (exactly like simple-bot.js)
@@ -1251,68 +1156,29 @@ export async function handleMicrosoftTeams(
       log("ℹ️ Camera button not found or already off");
     }
 
-    // Step 5: Try to set display name (exactly like simple-bot.js)
+    // Step 5: Set display nam
     log("Step 5: Trying to set display name...");
     try {
-      const nameInput = page.getByRole('textbox', { name: 'Display name' });
+
+      const nameInput = page.locator('input[placeholder*="name"], input[placeholder*="Name"], input[type="text"]').first();
       await nameInput.waitFor({ timeout: 5000 });
       await nameInput.fill(botConfig.botName);
       log(`✅ Display name set to "${botConfig.botName}"`);
     } catch (error) {
-      log("ℹ️ Display name input not found, trying alternative selectors...");
-      
-      // Try alternative selectors for name input
-      try {
-        const altNameInput = page.locator('input[placeholder*="name"], input[placeholder*="Name"], input[type="text"]').first();
-        await altNameInput.waitFor({ timeout: 5000 });
-        await altNameInput.fill(botConfig.botName);
-        log(`✅ Display name set to "${botConfig.botName}" using alternative selector`);
-      } catch (altError) {
-        log("ℹ️ Alternative name input not found, trying text-based selector...");
-        
-        // Try text-based selector
-        try {
-          const textNameInput = page.locator('input:has-text("Type your name")').first();
-          await textNameInput.waitFor({ timeout: 3000 });
-          await textNameInput.fill(botConfig.botName);
-          log(`✅ Display name set to "${botConfig.botName}" using text selector`);
-        } catch (textError) {
-          log("ℹ️ Text-based name input not found, trying CSS selector...");
-          
-          // Try CSS selector for the name input
-          try {
-            const cssNameInput = page.locator('input[type="text"]').first();
-            await cssNameInput.waitFor({ timeout: 3000 });
-            await cssNameInput.fill(botConfig.botName);
-            log(`✅ Display name set to "${botConfig.botName}" using CSS selector`);
-          } catch (cssError) {
-            log("ℹ️ CSS selector name input not found");
-          }
-        }
-      }
+      log("ℹ️ Display name input not found, continuing...");
     }
 
-    // Step 6: Try to find final join button (exactly like simple-bot.js)
+    // Step 6: Click final join button
     log("Step 6: Looking for final join button...");
     try {
-      const finalJoinButton = page.getByRole('button', { name: 'Join' });
+
+      const finalJoinButton = page.locator('button:has-text("Join now"), button:has-text("Join")').first();
       await finalJoinButton.waitFor({ timeout: 10000 });
       await finalJoinButton.click();
       log("✅ Clicked final join button");
-    await page.waitForTimeout(5000);
+      await page.waitForTimeout(5000);
     } catch (error) {
-      log("ℹ️ Final join button not found, trying alternative selectors...");
-      
-      // Try alternative selectors for join button
-      try {
-        const altJoinButton = page.locator('button:has-text("Join now"), button:has-text("Join")').first();
-        await altJoinButton.waitFor({ timeout: 5000 });
-        await altJoinButton.click();
-        log("✅ Clicked alternative join button");
-        await page.waitForTimeout(5000);
-      } catch (altError) {
-        log("ℹ️ Alternative join button not found");
-      }
+      log("ℹ️ Final join button not found");
     }
 
     await page.screenshot({ path: '/app/screenshots/teams-step-3-after-permissions.png', fullPage: true });
