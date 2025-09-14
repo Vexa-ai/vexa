@@ -1,54 +1,11 @@
 import { Page } from "playwright";
-import { log, randomDelay } from "../../utils";
+import { log, randomDelay, callStartupCallback } from "../../utils";
 import { BotConfig } from "../../types";
 import { generateUUID, createSessionControlMessage, createSpeakerActivityMessage } from "../../index";
 import { WhisperLiveService } from "../../services/whisperlive";
 import { AudioService } from "../../services/audio";
 import { WebSocketManager } from "../../utils/websocket";
 
-// --- ADDED: Function to call startup callback ---
-async function callStartupCallback(botConfig: BotConfig): Promise<void> {
-  if (!botConfig.botManagerCallbackUrl) {
-    log("Warning: No bot manager callback URL configured. Cannot send startup callback.");
-    return;
-  }
-
-  if (!botConfig.container_name) {
-    log("Warning: No container name configured. Cannot send startup callback.");
-    return;
-  }
-
-  try {
-    // Extract the base URL and modify it for the startup callback
-    const baseUrl = botConfig.botManagerCallbackUrl.replace('/exited', '/started');
-    const startupUrl = baseUrl;
-    
-    const payload = {
-      connection_id: botConfig.connectionId,
-      container_id: botConfig.container_name
-    };
-
-    log(`Sending startup callback to ${startupUrl} with payload: ${JSON.stringify(payload)}`);
-    
-    // Use fetch API (available in Node.js 18+)
-    const response = await fetch(startupUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (response.ok) {
-      const result = await response.json();
-      log(`Startup callback successful: ${JSON.stringify(result)}`);
-    } else {
-      log(`Startup callback failed with status ${response.status}: ${response.statusText}`);
-    }
-  } catch (error: any) {
-    log(`Error sending startup callback: ${error.message}`);
-  }
-}
 
 // --- Teams-Specific Functions ---
 
@@ -320,6 +277,11 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
   log(`[Node.js] Using WhisperLive URL for Teams: ${whisperLiveUrl}`);
   log("Starting Teams recording with WebSocket connection");
 
+  // Load browser utility classes from the bundled global file
+  await page.addScriptTag({
+    path: require('path').join(__dirname, '../../browser-utils.global.js'),
+  });
+
   // Pass the necessary config fields and the resolved URL into the page context
   await page.evaluate(
     async (pageArgs: {
@@ -328,326 +290,9 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
     }) => {
       const { botConfigData, whisperUrlForBrowser } = pageArgs;
 
-      // Create browser-compatible AudioService implementation (same as Google Meet)
-      class BrowserAudioService {
-        private config: any;
-        private processor: any = null;
-
-        constructor(config: any) {
-          this.config = config;
-        }
-
-        async findMediaElements(retries: number = 5, delay: number = 2000): Promise<HTMLMediaElement[]> {
-          for (let i = 0; i < retries; i++) {
-            const mediaElements = Array.from(
-              document.querySelectorAll("audio, video")
-            ).filter((el: any) => 
-              !el.paused && 
-              el.srcObject instanceof MediaStream && 
-              el.srcObject.getAudioTracks().length > 0
-            ) as HTMLMediaElement[];
-
-            if (mediaElements.length > 0) {
-              (window as any).logBot(`Found ${mediaElements.length} active Teams media elements with audio tracks after ${i + 1} attempt(s).`);
-              return mediaElements;
-            }
-            (window as any).logBot(`[Teams Audio] No active media elements found. Retrying in ${delay}ms... (Attempt ${i + 2}/${retries})`);
-            await new Promise(resolve => setTimeout(resolve, delay));
-          }
-          return [];
-        }
-
-        async createCombinedAudioStream(mediaElements: HTMLMediaElement[]): Promise<MediaStream> {
-          if (mediaElements.length === 0) {
-            throw new Error("No Teams media elements provided for audio stream creation");
-          }
-
-          (window as any).logBot(`Found ${mediaElements.length} active Teams media elements.`);
-          const audioContext = new AudioContext();
-          const destinationNode = audioContext.createMediaStreamDestination();
-          let sourcesConnected = 0;
-
-          // Connect all media elements to the destination node
-          mediaElements.forEach((element: any, index: number) => {
-            try {
-              const elementStream =
-                element.srcObject ||
-                (element.captureStream && element.captureStream()) ||
-                (element.mozCaptureStream && element.mozCaptureStream());
-
-              if (
-                elementStream instanceof MediaStream &&
-                elementStream.getAudioTracks().length > 0
-              ) {
-                const sourceNode = audioContext.createMediaStreamSource(elementStream);
-                sourceNode.connect(destinationNode);
-                sourcesConnected++;
-                (window as any).logBot(`Connected Teams audio stream from element ${index + 1}/${mediaElements.length}.`);
-              }
-            } catch (error: any) {
-              (window as any).logBot(`Could not connect Teams element ${index + 1}: ${error.message}`);
-            }
-          });
-
-          if (sourcesConnected === 0) {
-            throw new Error("Could not connect any Teams audio streams. Check media permissions.");
-          }
-
-          (window as any).logBot(`Successfully combined ${sourcesConnected} Teams audio streams.`);
-          return destinationNode.stream;
-        }
-
-        async initializeAudioProcessor(combinedStream: MediaStream): Promise<any> {
-          const audioContext = new AudioContext();
-          const destinationNode = audioContext.createMediaStreamDestination();
-          const mediaStream = audioContext.createMediaStreamSource(combinedStream);
-          const recorder = audioContext.createScriptProcessor(
-            this.config.bufferSize,
-            this.config.inputChannels,
-            this.config.outputChannels
-          );
-          const gainNode = audioContext.createGain();
-          gainNode.gain.value = 0; // Silent playback
-
-          // Connect the audio processing pipeline
-          mediaStream.connect(recorder);
-          recorder.connect(gainNode);
-          gainNode.connect(audioContext.destination);
-
-          this.processor = {
-            audioContext,
-            destinationNode,
-            recorder,
-            mediaStream,
-            gainNode,
-            sessionAudioStartTimeMs: null
-          };
-
-          (window as any).logBot("Teams audio processing pipeline connected and ready.");
-          return this.processor;
-        }
-
-        setupAudioDataProcessor(onAudioData: (audioData: Float32Array, sessionStartTime: number | null) => void): void {
-          if (!this.processor) {
-            throw new Error("Teams audio processor not initialized");
-          }
-
-          this.processor.recorder.onaudioprocess = async (event: any) => {
-            // Set session start time on first audio chunk
-            if (this.processor!.sessionAudioStartTimeMs === null) {
-              this.processor!.sessionAudioStartTimeMs = Date.now();
-              (window as any).logBot(`[Teams Audio] Session audio start time set: ${this.processor!.sessionAudioStartTimeMs}`);
-            }
-
-            const inputData = event.inputBuffer.getChannelData(0);
-            const resampledData = this.resampleAudioData(inputData, this.processor!.audioContext.sampleRate);
-            
-            onAudioData(resampledData, this.processor!.sessionAudioStartTimeMs);
-          };
-        }
-
-        private resampleAudioData(inputData: Float32Array, sourceSampleRate: number): Float32Array {
-          const targetLength = Math.round(
-            inputData.length * (this.config.targetSampleRate / sourceSampleRate)
-          );
-          const resampledData = new Float32Array(targetLength);
-          const springFactor = (inputData.length - 1) / (targetLength - 1);
-          
-          resampledData[0] = inputData[0];
-          resampledData[targetLength - 1] = inputData[inputData.length - 1];
-          
-          for (let i = 1; i < targetLength - 1; i++) {
-            const index = i * springFactor;
-            const leftIndex = Math.floor(index);
-            const rightIndex = Math.ceil(index);
-            const fraction = index - leftIndex;
-            resampledData[i] =
-              inputData[leftIndex] +
-              (inputData[rightIndex] - inputData[leftIndex]) * fraction;
-          }
-          
-          return resampledData;
-        }
-
-        getSessionAudioStartTime(): number | null {
-          return this.processor?.sessionAudioStartTimeMs || null;
-        }
-
-        disconnect(): void {
-          if (this.processor) {
-            try {
-              this.processor.recorder.disconnect();
-              this.processor.mediaStream.disconnect();
-              this.processor.gainNode.disconnect();
-              this.processor.audioContext.close();
-              (window as any).logBot("Teams audio processing pipeline disconnected.");
-            } catch (error: any) {
-              (window as any).logBot(`Error disconnecting Teams audio pipeline: ${error.message}`);
-            }
-            this.processor = null;
-          }
-        }
-      }
-
-      // Create browser-compatible WhisperLiveService implementation (same as Google Meet)
-      class BrowserWhisperLiveService {
-        private whisperLiveUrl: string;
-        private socket: WebSocket | null = null;
-        private isServerReady: boolean = false;
-
-        constructor(config: any) {
-          this.whisperLiveUrl = config.whisperLiveUrl;
-        }
-
-        async connectToWhisperLive(
-          botConfigData: any,
-          onMessage: (data: any) => void,
-          onError: (error: Event) => void,
-          onClose: (event: CloseEvent) => void
-        ): Promise<WebSocket | null> {
-          try {
-            this.socket = new WebSocket(this.whisperLiveUrl);
-            
-            this.socket.onopen = () => {
-              (window as any).logBot(`[Teams] WebSocket connection opened successfully to ${this.whisperLiveUrl}. New UID: ${generateUUID()}. Lang: ${botConfigData.language}, Task: ${botConfigData.task}`);
-              
-              const configPayload = {
-                uid: generateUUID(),
-                language: botConfigData.language || null,
-                task: botConfigData.task || "transcribe",
-                model: null,
-                use_vad: true,
-                platform: botConfigData.platform,
-                token: botConfigData.token,
-                meeting_id: botConfigData.nativeMeetingId,
-                meeting_url: botConfigData.meetingUrl || null,
-              };
-
-              (window as any).logBot(`Teams sending initial config message: ${JSON.stringify(configPayload)}`);
-              this.socket!.send(JSON.stringify(configPayload));
-            };
-
-            this.socket.onmessage = (event) => {
-              const data = JSON.parse(event.data);
-              onMessage(data);
-            };
-
-            this.socket.onerror = onError;
-            this.socket.onclose = onClose;
-
-            return this.socket;
-          } catch (error: any) {
-            (window as any).logBot(`[Teams WhisperLive] Connection error: ${error.message}`);
-            return null;
-          }
-        }
-
-        sendAudioData(audioData: Float32Array): boolean {
-          if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-            return false;
-          }
-
-          try {
-            this.socket.send(audioData);
-            return true;
-          } catch (error: any) {
-            (window as any).logBot(`[Teams WhisperLive] Error sending audio data: ${error.message}`);
-            return false;
-          }
-        }
-
-        sendSpeakerEvent(eventType: string, participantName: string, participantId: string, relativeTimestampMs: number, botConfigData: any): boolean {
-          if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-            return false;
-          }
-
-          const speakerEventMessage = {
-            type: "speaker_activity",
-            payload: {
-              event_type: eventType,
-              participant_name: participantName,
-              participant_id_meet: participantId,
-              relative_client_timestamp_ms: relativeTimestampMs,
-              uid: generateUUID(),
-              token: botConfigData.token,
-              platform: botConfigData.platform,
-              meeting_id: botConfigData.nativeMeetingId,
-              meeting_url: botConfigData.meetingUrl
-            }
-          };
-
-          try {
-            this.socket.send(JSON.stringify(speakerEventMessage));
-            return true;
-          } catch (error: any) {
-            (window as any).logBot(`[Teams WhisperLive] Error sending speaker event: ${error.message}`);
-            return false;
-          }
-        }
-
-        sendSessionControl(event: string, botConfigData: any): boolean {
-          if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-            return false;
-          }
-
-          const sessionControlMessage = {
-            type: "session_control",
-            payload: {
-              event: event,
-              uid: generateUUID(),
-              client_timestamp_ms: Date.now(),
-              token: botConfigData.token,
-              platform: botConfigData.platform,
-              meeting_id: botConfigData.nativeMeetingId
-            }
-          };
-
-          try {
-            this.socket.send(JSON.stringify(sessionControlMessage));
-            return true;
-          } catch (error: any) {
-            (window as any).logBot(`[Teams WhisperLive] Error sending session control: ${error.message}`);
-            return false;
-          }
-        }
-
-        isReady(): boolean {
-          return this.isServerReady;
-        }
-
-        setServerReady(ready: boolean): void {
-          this.isServerReady = ready;
-        }
-
-        isOpen(): boolean {
-          return this.socket?.readyState === WebSocket.OPEN;
-        }
-
-        close(): void {
-          if (this.socket) {
-            this.socket.close();
-            this.socket = null;
-          }
-        }
-      }
-
-      // Helper function for UUID generation
-      function generateUUID(): string {
-        if (typeof crypto !== "undefined" && crypto.randomUUID) {
-          return crypto.randomUUID();
-        } else {
-          return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
-            /[xy]/g,
-            function (c) {
-              var r = (Math.random() * 16) | 0,
-                v = c == "x" ? r : (r & 0x3) | 0x8;
-              return v.toString(16);
-            }
-          );
-        }
-      }
-
-      // Initialize services in browser context
+      // Use browser utility classes from the global bundle
+      const { BrowserAudioService, BrowserWhisperLiveService } = (window as any).VexaBrowserUtils;
+      
       const audioService = new BrowserAudioService({
         targetSampleRate: 16000,
         bufferSize: 4096,
@@ -655,9 +300,12 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
         outputChannels: 1
       });
 
+      // Use BrowserWhisperLiveService with stubborn mode for Teams
       const whisperLiveService = new BrowserWhisperLiveService({
         whisperLiveUrl: whisperUrlForBrowser
-      });
+      }, true); // Enable stubborn mode for Teams
+
+
 
       await new Promise<void>((resolve, reject) => {
         try {
@@ -686,6 +334,26 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
           }).then(async (processor: any) => {
             // Setup audio data processing
             audioService.setupAudioDataProcessor(async (audioData: Float32Array, sessionStartTime: number | null) => {
+              // (log trimmed)
+              
+              // Only send after server ready
+              if (!whisperLiveService.isReady()) {
+                // (log trimmed)
+                return;
+              }
+              // Compute simple RMS and peak for diagnostics
+              let sumSquares = 0;
+              let peak = 0;
+              for (let i = 0; i < audioData.length; i++) {
+                const v = audioData[i];
+                sumSquares += v * v;
+                const a = Math.abs(v);
+                if (a > peak) peak = a;
+              }
+              const rms = Math.sqrt(sumSquares / Math.max(1, audioData.length));
+              // (log trimmed)
+              // Diagnostic: send metadata first
+              whisperLiveService.sendAudioChunkMetadata(audioData.length, 16000);
               // Send audio data to WhisperLive
               const success = whisperLiveService.sendAudioData(audioData);
               if (!success) {
@@ -697,7 +365,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
             return await whisperLiveService.connectToWhisperLive(
               botConfigData,
               (data: any) => {
-                (window as any).logBot("Teams received message: " + JSON.stringify(data));
+                // (log trimmed) received transcription message
                 if (data["status"] === "ERROR") {
                   (window as any).logBot(`Teams WebSocket Server Error: ${data["message"]}`);
                 } else if (data["status"] === "WAIT") {
@@ -711,7 +379,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                   (window as any).logBot("Teams Server requested disconnect.");
                   whisperLiveService.close();
                 } else {
-                  (window as any).logBot(`Teams Transcription: ${JSON.stringify(data)}`);
+                  // (log trimmed) transcription summary
                 }
               },
               (event: Event) => {
@@ -726,46 +394,640 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
             // Initialize Teams-specific speaker detection (browser context)
             (window as any).logBot("Initializing Teams speaker detection...");
             
-            // Teams-specific speaker detection logic (simplified for now)
+            // Teams-specific speaker detection logic (comprehensive like Google Meet)
             const initializeTeamsSpeakerDetection = (whisperLiveService: any, audioService: any, botConfigData: any) => {
               (window as any).logBot("Setting up Teams speaker detection...");
               
-              // Monitor for participant changes in Teams
-              const participantObserver = new MutationObserver((mutations) => {
-                mutations.forEach((mutation) => {
-                  if (mutation.type === 'childList') {
-                    // Check for new participants or speaker changes in Teams
-                    const speakerElements = document.querySelectorAll('[data-tid*="participant"], [aria-label*="participant"]');
-                    speakerElements.forEach((element: any, index: number) => {
-                      const participantId = element.getAttribute('data-tid') || `teams-participant-${index}`;
-                      const participantName = element.textContent || element.getAttribute('aria-label') || 'Unknown Teams User';
+              // Teams-specific configuration for speaker detection
+              const participantSelectors = [
+                '[data-tid="voice-level-stream-outline"]', // Main speaker indicator
+                '[data-tid*="participant"]',
+                '[aria-label*="participant"]',
+                '[data-tid*="roster"]',
+                '[data-tid*="roster-item"]',
+                '[data-tid*="video-tile"]',
+                '[data-tid*="videoTile"]',
+                '[data-tid*="participant-tile"]',
+                '[data-tid*="participantTile"]',
+                '[role="listitem"]',
+                '.participant-tile',
+                '.video-tile',
+                '.roster-item'
+              ];
+              
+              // Teams-specific speaking/silence detection based on voice-level-stream-outline
+              // The voice-level-stream-outline element appears/disappears or changes state when someone speaks
+              const speakingIndicators = [
+                '[data-tid="voice-level-stream-outline"]'
+              ];
+              
+              // Teams-specific speaking/silence classes (fallback)
+              const speakingClasses = [
+                'speaking', 'active-speaker', 'speaker-active', 'speaking-indicator',
+                'audio-active', 'mic-active', 'microphone-active', 'voice-active',
+                'speaking-border', 'speaking-glow', 'speaking-highlight',
+                'participant-speaking', 'user-speaking', 'speaker-indicator'
+              ];
+              
+              const silenceClasses = [
+                'silent', 'muted', 'mic-off', 'microphone-off', 'audio-inactive',
+                'participant-silent', 'user-silent', 'no-audio'
+              ];
+              
+              // State for tracking speaking status
+              const speakingStates = new Map(); // Stores the logical speaking state for each participant ID
+              const activeParticipants = new Map(); // Central map for all known participants
+              
+              // Helper functions for Teams speaker detection
+              function getTeamsParticipantId(element: HTMLElement) {
+                // Try various Teams-specific attributes
+                let id = element.getAttribute('data-tid') || 
+                        element.getAttribute('data-participant-id') ||
+                        element.getAttribute('data-user-id') ||
+                        element.getAttribute('data-object-id') ||
+                        element.getAttribute('id');
+                
+                if (!id) {
+                  // Look for stable child elements
+                  const stableChild = element.querySelector('[data-tid], [data-participant-id], [data-user-id]');
+                  if (stableChild) {
+                    id = stableChild.getAttribute('data-tid') || 
+                         stableChild.getAttribute('data-participant-id') ||
+                         stableChild.getAttribute('data-user-id');
+                  }
+                }
+                
+                if (!id) {
+                  // Generate a stable ID if none found
+                  if (!(element as any).dataset.vexaGeneratedId) {
+                    (element as any).dataset.vexaGeneratedId = 'teams-id-' + Math.random().toString(36).substr(2, 9);
+                  }
+                  id = (element as any).dataset.vexaGeneratedId;
+                }
+                
+                return id;
+              }
+              
+              function getTeamsParticipantName(participantElement: HTMLElement) {
+                // Teams-specific name selectors based on actual UI structure
+                const teamsNameSelectors = [
+                  // Look for the actual name div structure
+                  'div[class*="___2u340f0"]', // The actual name div class pattern
+                  '[data-tid*="display-name"]',
+                  '[data-tid*="participant-name"]',
+                  '[data-tid*="user-name"]',
+                  '[aria-label*="name"]',
+                  '.participant-name',
+                  '.display-name',
+                  '.user-name',
+                  '.roster-item-name',
+                  '.video-tile-name',
+                  'span[title]',
+                  '[title*="name"]',
+                  '.ms-Persona-primaryText',
+                  '.ms-Persona-secondaryText'
+                ];
+                
+                // Try to find name in the main element or its children
+                for (const selector of teamsNameSelectors) {
+                  const nameElement = participantElement.querySelector(selector) as HTMLElement;
+                  if (nameElement) {
+                    let nameText = nameElement.textContent || 
+                                  nameElement.innerText || 
+                                  nameElement.getAttribute('title') ||
+                                  nameElement.getAttribute('aria-label');
+                    
+                    if (nameText && nameText.trim()) {
+                      // Clean up the name text
+                      nameText = nameText.trim();
                       
-                      if (participantId && participantId !== botConfigData.nativeMeetingId) {
-                        // Send speaker activity event
+                      // Filter out non-name content
+                      const forbiddenSubstrings = [
+                        "more_vert", "mic_off", "mic", "videocam", "videocam_off", 
+                        "present_to_all", "devices", "speaker", "speakers", "microphone",
+                        "camera", "camera_off", "share", "chat", "participant", "user"
+                      ];
+                      
+                      if (nameText && !forbiddenSubstrings.some(sub => nameText!.toLowerCase().includes(sub.toLowerCase()))) {
+                        // Basic validation
+                        if (nameText.length > 1 && nameText.length < 50 && /^[\p{L}\s.'-]+$/u.test(nameText)) {
+                          return nameText;
+                        }
+                      }
+                    }
+                  }
+                }
+                
+                // Fallback: try to extract from aria-label
+                const ariaLabel = participantElement.getAttribute('aria-label');
+                if (ariaLabel && ariaLabel.includes('name')) {
+                  const nameMatch = ariaLabel.match(/name[:\s]+([^,]+)/i);
+                  if (nameMatch && nameMatch[1]) {
+                    const nameText = nameMatch[1].trim();
+                    if (nameText.length > 1 && nameText.length < 50) {
+                      return nameText;
+                    }
+                  }
+                }
+                
+                // Final fallback
+                const idToDisplay = getTeamsParticipantId(participantElement);
+                return `Teams Participant (${idToDisplay})`;
+              }
+              
+              function sendTeamsSpeakerEvent(eventType: string, participantElement: HTMLElement) {
+                const eventAbsoluteTimeMs = Date.now();
                         const sessionStartTime = audioService.getSessionAudioStartTime();
-                        const relativeTimestamp = sessionStartTime ? Date.now() - sessionStartTime : 0;
+                
+                if (sessionStartTime === null) {
+                  (window as any).logBot(`[Teams Speaker] SKIPPING speaker event: ${eventType}. Session audio start time not yet set.`);
+                  return;
+                }
+                
+                const relativeTimestampMs = eventAbsoluteTimeMs - sessionStartTime;
+                const participantId = getTeamsParticipantId(participantElement);
+                const participantName = getTeamsParticipantName(participantElement);
+                
+                // Send via BrowserWhisperLiveService helper (handles OPEN state internally)
+                try {
+                  const sent = whisperLiveService.sendSpeakerEvent(
+                    eventType,
+                    participantName,
+                    participantId,
+                    relativeTimestampMs,
+                    botConfigData
+                  );
+                  if (sent) {
+                    (window as any).logBot(`[Teams Speaker] Speaker event sent: ${eventType} for ${participantName} (${participantId}). RelativeTs: ${relativeTimestampMs}ms.`);
+                  } else {
+                    (window as any).logBot(`[Teams Speaker] WebSocket not ready, speaker event queued/skipped: ${eventType} for ${participantName}`);
+                  }
+                } catch (error: any) {
+                  (window as any).logBot(`[Teams Speaker] Error sending speaker event: ${error.message}`);
+                }
+              }
+              
+              function logTeamsSpeakerEvent(participantElement: HTMLElement, mutatedClassList: DOMTokenList) {
+                const participantId = getTeamsParticipantId(participantElement);
+                const participantName = getTeamsParticipantName(participantElement);
+                const previousLogicalState = speakingStates.get(participantId) || "silent";
+                
+                // Check for voice-level-stream-outline element (primary Teams speaker indicator)
+                const voiceLevelElement = participantElement.querySelector('[data-tid="voice-level-stream-outline"]') as HTMLElement;
+                const isVoiceLevelVisible = voiceLevelElement && 
+                  voiceLevelElement.offsetWidth > 0 && 
+                  voiceLevelElement.offsetHeight > 0 &&
+                  getComputedStyle(voiceLevelElement).display !== 'none' &&
+                  getComputedStyle(voiceLevelElement).visibility !== 'hidden';
+                
+                // Fallback to class-based detection
+                const isNowVisiblySpeaking = speakingClasses.some(cls => mutatedClassList.contains(cls));
+                const isNowVisiblySilent = silenceClasses.some(cls => mutatedClassList.contains(cls));
+                
+                // Determine if currently speaking based on voice-level-stream-outline visibility
+                const isCurrentlySpeaking = isVoiceLevelVisible || isNowVisiblySpeaking;
+                
+                if (isCurrentlySpeaking) {
+                  if (previousLogicalState !== "speaking") {
+                    (window as any).logBot(`🎤 [Teams] SPEAKER_START: ${participantName} (ID: ${participantId}) - Voice level visible: ${isVoiceLevelVisible}`);
+                    sendTeamsSpeakerEvent("SPEAKER_START", participantElement);
+                  }
+                  speakingStates.set(participantId, "speaking");
+                } else if (isNowVisiblySilent || !isVoiceLevelVisible) {
+                  if (previousLogicalState === "speaking") {
+                    (window as any).logBot(`🔇 [Teams] SPEAKER_END: ${participantName} (ID: ${participantId}) - Voice level hidden: ${!isVoiceLevelVisible}`);
+                    sendTeamsSpeakerEvent("SPEAKER_END", participantElement);
+                  }
+                  speakingStates.set(participantId, "silent");
+                }
+              }
+              
+              function observeTeamsParticipant(participantElement: HTMLElement) {
+                const participantId = getTeamsParticipantId(participantElement);
+                const participantName = getTeamsParticipantName(participantElement);
+                
+                // Initialize participant as silent
+                speakingStates.set(participantId, "silent");
+                
+                // Check initial state
+                let classListForInitialScan = participantElement.classList;
+                for (const cls of speakingClasses) {
+                  const descendantElement = participantElement.querySelector('.' + cls);
+                  if (descendantElement) {
+                    classListForInitialScan = descendantElement.classList;
+                    break;
+                  }
+                }
+                
+                (window as any).logBot(`👁️ [Teams] Observing: ${participantName} (ID: ${participantId}). Performing initial participant state analysis.`);
+                
+                // DEBUG: Log all current classes on the participant element
+                const allClasses = Array.from(participantElement.classList);
+                (window as any).logBot(`🔍 [Teams DEBUG] Participant ${participantName} current classes: [${allClasses.join(', ')}]`);
+                
+                // Also check child elements for classes
+                const childElements = participantElement.querySelectorAll('*');
+                childElements.forEach((child, index) => {
+                  if (child.classList.length > 0) {
+                    const childClasses = Array.from(child.classList);
+                    (window as any).logBot(`🔍 [Teams DEBUG] Child ${index} classes: [${childClasses.join(', ')}]`);
+                  }
+                });
+                
+                logTeamsSpeakerEvent(participantElement, classListForInitialScan);
+                
+                // Add participant to central map
+                activeParticipants.set(participantId, { name: participantName, element: participantElement });
+                
+                const callback = function(mutationsList: MutationRecord[], observer: MutationObserver) {
+                  for (const mutation of mutationsList) {
+                    if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
+                      const targetElement = mutation.target as HTMLElement;
+                      if (participantElement.contains(targetElement)) {
+                        // DEBUG: Log class changes
+                        const newClasses = Array.from(targetElement.classList);
+                        (window as any).logBot(`🔍 [Teams DEBUG] Class change detected for ${participantName}: [${newClasses.join(', ')}]`);
+                        logTeamsSpeakerEvent(participantElement, targetElement.classList);
+                      }
+                    }
+                  }
+                };
+                
+                const observer = new MutationObserver(callback);
+                observer.observe(participantElement, { 
+                  attributes: true, 
+                  attributeFilter: ['class'],
+                  subtree: true 
+                });
+                
+                if (!(participantElement as any).dataset.vexaObserverAttached) {
+                  (participantElement as any).dataset.vexaObserverAttached = 'true';
+                }
+              }
+              
+              function scanForAllTeamsParticipants() {
+                for (const selector of participantSelectors) {
+                  const participantElements = document.querySelectorAll(selector);
+                  for (let i = 0; i < participantElements.length; i++) {
+                    const el = participantElements[i] as HTMLElement;
+                    if (!(el as any).dataset.vexaObserverAttached) {
+                      observeTeamsParticipant(el);
+                    }
+                  }
+                }
+              }
+              
+              // Initialize speaker detection
+              scanForAllTeamsParticipants();
+              
+              // Monitor for new participants
+              const bodyObserver = new MutationObserver((mutationsList) => {
+                for (const mutation of mutationsList) {
+                  if (mutation.type === 'childList') {
+                    mutation.addedNodes.forEach(node => {
+                      if (node.nodeType === Node.ELEMENT_NODE) {
+                        const elementNode = node as HTMLElement;
                         
-                        whisperLiveService.sendSpeakerEvent(
-                          'speaker_active',
-                          participantName,
-                          participantId,
-                          relativeTimestamp,
-                          botConfigData
-                        );
+                        // Check if the added node matches any participant selector
+                        for (const selector of participantSelectors) {
+                          if (elementNode.matches(selector) && !(elementNode as any).dataset.vexaObserverAttached) {
+                            observeTeamsParticipant(elementNode);
+                          }
+                          
+                          // Check children
+                          const childElements = elementNode.querySelectorAll(selector);
+                          for (let i = 0; i < childElements.length; i++) {
+                            const childEl = childElements[i] as HTMLElement;
+                            if (!(childEl as any).dataset.vexaObserverAttached) {
+                              observeTeamsParticipant(childEl);
+                            }
+                          }
+                        }
+                      }
+                    });
+                    
+                    mutation.removedNodes.forEach(node => {
+                      if (node.nodeType === Node.ELEMENT_NODE) {
+                        const elementNode = node as HTMLElement;
+                        
+                        // Check if removed node was a participant
+                        for (const selector of participantSelectors) {
+                          if (elementNode.matches(selector)) {
+                            const participantId = getTeamsParticipantId(elementNode);
+                            const participantName = getTeamsParticipantName(elementNode);
+                            
+                            if (speakingStates.get(participantId) === 'speaking') {
+                              (window as any).logBot(`🔇 [Teams] SPEAKER_END (Participant removed while speaking): ${participantName} (ID: ${participantId})`);
+                              sendTeamsSpeakerEvent("SPEAKER_END", elementNode);
+                            }
+                            
+                            speakingStates.delete(participantId);
+                            activeParticipants.delete(participantId);
+                            delete (elementNode as any).dataset.vexaObserverAttached;
+                            delete (elementNode as any).dataset.vexaGeneratedId;
+                            (window as any).logBot(`🗑️ [Teams] Removed observer for: ${participantName} (ID: ${participantId})`);
+                          }
+                        }
                       }
                     });
                   }
-                });
+                }
               });
 
               // Start observing the Teams meeting container
               const meetingContainer = document.querySelector('[role="main"]') || document.body;
-              participantObserver.observe(meetingContainer, {
+              bodyObserver.observe(meetingContainer, {
                 childList: true,
                 subtree: true
               });
 
-              (window as any).logBot("Teams speaker detection initialized");
+              // Expose active participants count for meeting monitoring
+              (window as any).getTeamsActiveParticipantsCount = () => activeParticipants.size;
+              (window as any).getTeamsActiveParticipants = () => Array.from(activeParticipants.keys());
+              
+              // DEBUG: Add live debugging function for speaker detection
+              (window as any).debugTeamsSpeakerDetection = () => {
+                (window as any).logBot("🔍 [DEBUG] Teams Speaker Detection Status:");
+                (window as any).logBot(`  Active participants: ${activeParticipants.size}`);
+                
+                // List all active participants
+                activeParticipants.forEach((participant, id) => {
+                  (window as any).logBot(`  Participant: ${participant.name} (ID: ${id})`);
+                });
+                
+                // Check current DOM for Teams elements
+                const participantSelectors = [
+                  '[data-tid="voice-level-stream-outline"]',
+                  '[data-tid*="participant"]',
+                  '[aria-label*="participant"]',
+                  '[data-tid*="roster"]',
+                  '[data-tid*="roster-item"]',
+                  '[data-tid*="video-tile"]',
+                  '[data-tid*="videoTile"]',
+                  '[data-tid*="participant-tile"]',
+                  '[data-tid*="participantTile"]',
+                  '[role="listitem"]',
+                  '.participant-tile',
+                  '.video-tile',
+                  '.roster-item'
+                ];
+                
+                (window as any).logBot("🔍 [DEBUG] Current DOM elements found:");
+                participantSelectors.forEach(selector => {
+                  const elements = document.querySelectorAll(selector);
+                  if (elements.length > 0) {
+                    (window as any).logBot(`  ${selector}: ${elements.length} elements`);
+                    elements.forEach((el, i) => {
+                      const id = el.getAttribute('data-tid') || el.getAttribute('id') || 'no-id';
+                      const name = el.textContent?.trim().substring(0, 50) || 'no-text';
+                      (window as any).logBot(`    [${i}] ID: ${id}, Text: "${name}"`);
+                    });
+                  }
+                });
+                
+                // Check for voice-level-stream-outline specifically
+                const voiceLevelElements = document.querySelectorAll('[data-tid="voice-level-stream-outline"]');
+                (window as any).logBot(`🔍 [DEBUG] Voice-level-stream-outline elements: ${voiceLevelElements.length}`);
+                voiceLevelElements.forEach((el, i) => {
+                  const parent = el.parentElement;
+                  const parentId = parent?.getAttribute('data-tid') || parent?.getAttribute('id') || 'no-parent-id';
+                  const parentText = parent?.textContent?.trim().substring(0, 50) || 'no-parent-text';
+                  (window as any).logBot(`  Voice level [${i}] parent: ID=${parentId}, Text="${parentText}"`);
+                });
+              };
+              
+              (window as any).logBot("Teams speaker detection initialized with comprehensive participant tracking");
+              
+              // DEBUG: Auto-debug every 10 seconds
+              setInterval(() => {
+                (window as any).debugTeamsSpeakerDetection();
+              }, 10000);
+
+              // Fallback: polling-based detection tailored for MS Teams
+              // Periodically scan participant containers and detect speaking based on visibility of voice-level outline
+              const teamsParticipantContainerSelectors = [
+                '[data-tid*="participant"]',
+                '[data-tid*="roster-item"]',
+                '[data-tid*="video-tile"]',
+                '[data-tid*="videoTile"]',
+                '.participant-tile',
+                '.video-tile'
+              ];
+
+              const lastSpeakingStateById = new Map();
+              const POLL_MS = 500;
+
+              const isVoiceLevelVisibleForContainer = (containerEl: HTMLElement): boolean => {
+                // Primary Teams indicator
+                const voiceLevel = containerEl.querySelector('[data-tid="voice-level-stream-outline"]') as HTMLElement | null;
+                const visible = (el: HTMLElement) => {
+                  const cs = getComputedStyle(el);
+                  const rect = el.getBoundingClientRect();
+                  const ariaHidden = el.getAttribute('aria-hidden') === 'true';
+                  const transform = cs.transform || '';
+                  const scaledToZero = /matrix\((?:[^,]+,){4}\s*0(?:,|\s*\))/.test(transform) || transform.includes('scale(0');
+                  const occluded = !!el.closest('.vdi-frame-occlusion');
+                  return (
+                    rect.width > 0 &&
+                    rect.height > 0 &&
+                    cs.display !== 'none' &&
+                    cs.visibility !== 'hidden' &&
+                    cs.opacity !== '0' &&
+                    !ariaHidden &&
+                    !scaledToZero &&
+                    !occluded
+                  );
+                };
+
+                if (voiceLevel && visible(voiceLevel)) return true;
+
+                // Fallbacks: any child with class patterns suggesting audio activity
+                const fallback = containerEl.querySelector(
+                  '[class*="voice" i][class*="level" i], [class*="speaking" i], [data-audio-active="true"]'
+                ) as HTMLElement | null;
+                if (fallback && visible(fallback)) return true;
+
+                return false;
+              };
+
+              const pollTeamsActiveSpeakers = () => {
+                try {
+                  const containers: HTMLElement[] = [];
+                  teamsParticipantContainerSelectors.forEach(sel => {
+                    document.querySelectorAll(sel).forEach((el) => {
+                      containers.push(el as HTMLElement);
+                    });
+                  });
+
+                  containers.forEach((container) => {
+                    const participantId = String(getTeamsParticipantId(container) || "unknown");
+                    const participantName = String(getTeamsParticipantName(container) || `Teams Participant (${participantId})`);
+                    const speaking = isVoiceLevelVisibleForContainer(container);
+                    const prev = lastSpeakingStateById.get(participantId) || 'silent';
+
+                    if (speaking && prev !== 'speaking') {
+                      (window as any).logBot(`🎤 [Teams/Poll] SPEAKER_START: ${participantName} (ID: ${participantId})`);
+                      sendTeamsSpeakerEvent('SPEAKER_START', container);
+                      lastSpeakingStateById.set(participantId, 'speaking');
+                    } else if (!speaking && prev === 'speaking') {
+                      (window as any).logBot(`🔇 [Teams/Poll] SPEAKER_END: ${participantName} (ID: ${participantId})`);
+                      sendTeamsSpeakerEvent('SPEAKER_END', container);
+                      lastSpeakingStateById.set(participantId, 'silent');
+                    } else if (!lastSpeakingStateById.has(participantId)) {
+                      lastSpeakingStateById.set(participantId, speaking ? 'speaking' : 'silent');
+                    }
+                  });
+                } catch (e: any) {
+                  (window as any).logBot(`[Teams/Poll] Error while polling speakers: ${e.message}`);
+                }
+              };
+
+              // Start polling loop (container-based visibility)
+              setInterval(pollTeamsActiveSpeakers, POLL_MS);
+
+              // Teams-specific: Poll explicit voice-level indicators and emit START/END on presence changes
+              const lastIndicatorStateById = new Map<string, boolean>();
+              const lastEventTsById = new Map<string, number>();
+              const lastSeenTsById = new Map<string, number>();
+              const observedIndicators = new WeakSet<HTMLElement>();
+              const DEBOUNCE_MS = 300; // reduce duplicate START spam
+              const INACTIVITY_MS = 2000; // END after no visible indicator for this long
+
+              const getContainerForIndicator = (indicator: HTMLElement): HTMLElement | null => {
+                // Prefer explicit container if present
+                const container = indicator.closest('[data-stream-type]') as HTMLElement | null;
+                if (container) return container;
+                // Fallback to a few parent hops
+                let parent: HTMLElement | null = indicator.parentElement;
+                let hops = 0;
+                while (parent && hops < 5) {
+                  if (parent.hasAttribute('data-tid') || parent.hasAttribute('data-stream-type')) return parent;
+                  parent = parent.parentElement;
+                  hops++;
+                }
+                return indicator.parentElement as HTMLElement | null;
+              };
+
+              const pollTeamsVoiceIndicators = () => {
+                try {
+                  // Collect indicators across same-origin iframes as well
+                  const getAllDocuments = (): Document[] => {
+                    const docs: Document[] = [document];
+                    const visit = (doc: Document) => {
+                      const iframes = Array.from(doc.querySelectorAll('iframe')) as HTMLIFrameElement[];
+                      for (const frame of iframes) {
+                        try {
+                          const fd = frame.contentDocument;
+                          if (fd && fd.domain === document.domain) {
+                            docs.push(fd);
+                            visit(fd);
+                          }
+                        } catch (_) { /* cross-origin, ignore */ }
+                      }
+                    };
+                    visit(document);
+                    return docs;
+                  };
+
+                  const allDocs = getAllDocuments();
+                  const indicators: HTMLElement[] = [];
+                  for (const doc of allDocs) {
+                    doc.querySelectorAll('[data-tid="voice-level-stream-outline"]').forEach(el => indicators.push(el as HTMLElement));
+                  }
+                  const currentSpeakingIds = new Set<string>();
+
+                  const isVisible = (el: HTMLElement) => {
+                    const cs = getComputedStyle(el);
+                    const rect = el.getBoundingClientRect();
+                    const ariaHidden = el.getAttribute('aria-hidden') === 'true';
+                    const transform = cs.transform || '';
+                    const scaledToZero = /matrix\((?:[^,]+,){4}\s*0(?:,|\s*\))/.test(transform) || transform.includes('scale(0');
+                    const occluded = !!el.closest('.vdi-frame-occlusion');
+                    return (
+                      rect.width > 0 &&
+                      rect.height > 0 &&
+                      cs.visibility !== 'hidden' &&
+                      cs.display !== 'none' &&
+                      cs.opacity !== '0' &&
+                      !ariaHidden &&
+                      !scaledToZero &&
+                      !occluded
+                    );
+                  };
+
+                  indicators.forEach((indicator) => {
+                    const container = getContainerForIndicator(indicator);
+                    if (!container) return;
+                    // Try Teams-specific name div first
+                    const nameDiv = (container.ownerDocument || document).querySelector('div[class*="___2u340f0"]') as HTMLElement | null;
+                    const participantNameFromDiv = nameDiv && nameDiv.textContent ? nameDiv.textContent.trim() : null;
+                    const participantIdRaw = getTeamsParticipantId(container) as unknown as string | null;
+                    const participantNameRaw = participantNameFromDiv || (getTeamsParticipantName(container) as unknown as string | null);
+                    const participantId = participantIdRaw ?? 'unknown';
+                    const participantName = participantNameRaw ?? `Teams Participant (${participantId})`;
+
+                    // Track last seen for fallback END logic
+                    lastSeenTsById.set(participantId, Date.now());
+
+                    // Observe this indicator for visibility changes to emit END quickly
+                    if (!observedIndicators.has(indicator)) {
+                      try {
+                        const observer = new MutationObserver(() => {
+                          if (!isVisible(indicator)) {
+                            const wasSpeaking = lastIndicatorStateById.get(participantId) === true;
+                            if (wasSpeaking) {
+                              const name = participantName;
+                              (window as any).logBot(`🔇 [Teams/Indicator] SPEAKER_END (observer): ${name} (ID: ${participantId})`);
+                              sendTeamsSpeakerEvent('SPEAKER_END', container);
+                              lastIndicatorStateById.set(participantId, false);
+                              lastEventTsById.set(participantId, Date.now());
+                            }
+                          }
+                        });
+                        observer.observe(indicator, { attributes: true, attributeFilter: ['class', 'style', 'aria-hidden'] });
+                        observedIndicators.add(indicator);
+                      } catch {}
+                    }
+
+                    if (isVisible(indicator)) {
+                      currentSpeakingIds.add(participantId);
+
+                      const prevSpeaking = lastIndicatorStateById.get(participantId) === true;
+                      const now = Date.now();
+                      const lastTs = lastEventTsById.get(participantId) || 0;
+                      if (!prevSpeaking && (now - lastTs) > DEBOUNCE_MS) {
+                        (window as any).logBot(`🎤 [Teams/Indicator] SPEAKER_START: ${participantName} (ID: ${participantId})`);
+                        sendTeamsSpeakerEvent('SPEAKER_START', container);
+                        lastIndicatorStateById.set(participantId, true);
+                        lastEventTsById.set(participantId, now);
+                      }
+                    }
+                  });
+
+                  // Handle speakers that stopped (previously true but not in current set)
+                  const nowTs = Date.now();
+                  Array.from(lastIndicatorStateById.keys()).forEach((participantId) => {
+                    const wasSpeaking = lastIndicatorStateById.get(participantId) === true;
+                    const seenTs = lastSeenTsById.get(participantId) || 0;
+                    if (wasSpeaking && !currentSpeakingIds.has(participantId) && (nowTs - seenTs) > INACTIVITY_MS) {
+                      const participant = activeParticipants.get(participantId);
+                      const element = participant?.element as HTMLElement | undefined;
+                      const name = participant?.name || `Teams Participant (${participantId})`;
+                      if (element) {
+                        (window as any).logBot(`🔇 [Teams/Indicator] SPEAKER_END: ${name} (ID: ${participantId})`);
+                        sendTeamsSpeakerEvent('SPEAKER_END', element);
+                      }
+                      lastIndicatorStateById.set(participantId, false);
+                      lastEventTsById.set(participantId, nowTs);
+                    }
+                  });
+                } catch (e: any) {
+                  (window as any).logBot(`[Teams/Indicator] Error while polling indicators: ${e.message}`);
+                }
+              };
+
+              // Poll indicators at 300ms for snappier detection
+              setInterval(pollTeamsVoiceIndicators, 300);
             };
 
             // Setup Teams meeting monitoring (browser context)
@@ -781,9 +1043,8 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
               let hasEverHadMultipleParticipants = false;
 
               const checkInterval = setInterval(() => {
-                // Check participant count in Teams
-                const participantElements = document.querySelectorAll('[data-tid*="participant"], [aria-label*="participant"]');
-                const currentParticipantCount = participantElements.length;
+                // Check participant count using the comprehensive speaker detection system
+                const currentParticipantCount = (window as any).getTeamsActiveParticipantsCount ? (window as any).getTeamsActiveParticipantsCount() : 0;
                 
                 if (currentParticipantCount !== lastParticipantCount) {
                   (window as any).logBot(`Teams Participant check: Found ${currentParticipantCount} unique participants.`);
@@ -879,6 +1140,7 @@ const prepareForRecording = async (page: Page): Promise<void> => {
   await page.exposeFunction("logBot", (msg: string) => {
     log(msg);
   });
+
 
   // Ensure leave function is available even before admission
   await page.evaluate(() => {
