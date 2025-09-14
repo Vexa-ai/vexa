@@ -251,6 +251,8 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
         speakingClasses: string[];
         silenceClasses: string[];
         containerSelectors: string[];
+        nameSelectors: string[];
+        speakingIndicators: string[];
       };
     }) => {
       const { botConfigData, whisperUrlForBrowser, selectors } = pageArgs;
@@ -368,7 +370,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
               
               // Teams-specific speaking/silence detection based on voice-level-stream-outline
               // The voice-level-stream-outline element appears/disappears or changes state when someone speaks
-              const speakingIndicators = teamsSpeakingIndicators;
+              const speakingIndicators = selectors.speakingIndicators;
               
               // Teams-specific speaking/silence classes (fallback)
               const speakingClasses = selectors.speakingClasses;
@@ -411,7 +413,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
               
               function getTeamsParticipantName(participantElement: HTMLElement) {
                 // Teams-specific name selectors based on actual UI structure
-                const nameSelectors = teamsNameSelectors;
+                const nameSelectors = selectors.nameSelectors;
                 
                 // Try to find name in the main element or its children
                 for (const selector of nameSelectors) {
@@ -829,7 +831,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                     const container = getContainerForIndicator(indicator);
                     if (!container) return;
                     // Try Teams-specific name div first
-                    const nameDiv = container.querySelector(teamsNameSelectors[0]) as HTMLElement | null;
+                    const nameDiv = container.querySelector(selectors.nameSelectors[0]) as HTMLElement | null;
                     const participantNameFromDiv = nameDiv && nameDiv.textContent ? nameDiv.textContent.trim() : null;
                     const participantIdRaw = getTeamsParticipantId(container) as unknown as string | null;
                     const participantNameRaw = participantNameFromDiv || (getTeamsParticipantName(container) as unknown as string | null);
@@ -1013,7 +1015,9 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
         participantSelectors: teamsParticipantSelectors,
         speakingClasses: teamsSpeakingClassNames,
         silenceClasses: teamsSilenceClassNames,
-        containerSelectors: teamsParticipantContainerSelectors
+        containerSelectors: teamsParticipantContainerSelectors,
+        nameSelectors: teamsNameSelectors,
+        speakingIndicators: teamsSpeakingIndicators
       }
     }
   );
