@@ -540,7 +540,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                         const sessionStartTime = audioService.getSessionAudioStartTime();
                 
                 if (sessionStartTime === null) {
-                  (window as any).logBot(`[Teams Speaker] SKIPPING speaker event: ${eventType}. Session audio start time not yet set.`);
+                  // (log trimmed)
                   return;
                 }
                 
@@ -558,12 +558,12 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                     botConfigData
                   );
                   if (sent) {
-                    (window as any).logBot(`[Teams Speaker] Speaker event sent: ${eventType} for ${participantName} (${participantId}). RelativeTs: ${relativeTimestampMs}ms.`);
-                  } else {
-                    (window as any).logBot(`[Teams Speaker] WebSocket not ready, speaker event queued/skipped: ${eventType} for ${participantName}`);
+                    // (log trimmed)
+                } else {
+                    // (log trimmed)
                   }
                 } catch (error: any) {
-                  (window as any).logBot(`[Teams Speaker] Error sending speaker event: ${error.message}`);
+                  // (log trimmed)
                 }
               }
               
@@ -573,6 +573,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                 const previousLogicalState = speakingStates.get(participantId) || "silent";
                 
                 // Check for voice-level-stream-outline element (primary Teams speaker indicator)
+                // NOTE: voice-level-stream-outline appears when participant is SILENT, disappears when SPEAKING
                 const voiceLevelElement = participantElement.querySelector('[data-tid="voice-level-stream-outline"]') as HTMLElement;
                 const isVoiceLevelVisible = voiceLevelElement && 
                   voiceLevelElement.offsetWidth > 0 && 
@@ -585,7 +586,8 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                 const isNowVisiblySilent = silenceClasses.some(cls => mutatedClassList.contains(cls));
                 
                 // Determine if currently speaking based on voice-level-stream-outline visibility
-                const isCurrentlySpeaking = isVoiceLevelVisible || isNowVisiblySpeaking;
+                // Voice level visible = participant is SILENT, voice level hidden = participant is SPEAKING
+                const isCurrentlySpeaking = !isVoiceLevelVisible || isNowVisiblySpeaking;
                 
                 if (isCurrentlySpeaking) {
                   if (previousLogicalState !== "speaking") {
@@ -593,9 +595,9 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                     sendTeamsSpeakerEvent("SPEAKER_START", participantElement);
                   }
                   speakingStates.set(participantId, "speaking");
-                } else if (isNowVisiblySilent || !isVoiceLevelVisible) {
+                } else {
                   if (previousLogicalState === "speaking") {
-                    (window as any).logBot(`🔇 [Teams] SPEAKER_END: ${participantName} (ID: ${participantId}) - Voice level hidden: ${!isVoiceLevelVisible}`);
+                    (window as any).logBot(`🔇 [Teams] SPEAKER_END: ${participantName} (ID: ${participantId}) - Voice level visible: ${isVoiceLevelVisible}`);
                     sendTeamsSpeakerEvent("SPEAKER_END", participantElement);
                   }
                   speakingStates.set(participantId, "silent");
@@ -623,14 +625,14 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                 
                 // DEBUG: Log all current classes on the participant element
                 const allClasses = Array.from(participantElement.classList);
-                (window as any).logBot(`🔍 [Teams DEBUG] Participant ${participantName} current classes: [${allClasses.join(', ')}]`);
+                // (log trimmed)
                 
                 // Also check child elements for classes
                 const childElements = participantElement.querySelectorAll('*');
                 childElements.forEach((child, index) => {
                   if (child.classList.length > 0) {
                     const childClasses = Array.from(child.classList);
-                    (window as any).logBot(`🔍 [Teams DEBUG] Child ${index} classes: [${childClasses.join(', ')}]`);
+                    // (log trimmed)
                   }
                 });
                 
@@ -646,7 +648,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                       if (participantElement.contains(targetElement)) {
                         // DEBUG: Log class changes
                         const newClasses = Array.from(targetElement.classList);
-                        (window as any).logBot(`🔍 [Teams DEBUG] Class change detected for ${participantName}: [${newClasses.join(', ')}]`);
+                        // (log trimmed)
                         logTeamsSpeakerEvent(participantElement, targetElement.classList);
                       }
                     }
@@ -745,63 +747,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
               (window as any).getTeamsActiveParticipantsCount = () => activeParticipants.size;
               (window as any).getTeamsActiveParticipants = () => Array.from(activeParticipants.keys());
               
-              // DEBUG: Add live debugging function for speaker detection
-              (window as any).debugTeamsSpeakerDetection = () => {
-                (window as any).logBot("🔍 [DEBUG] Teams Speaker Detection Status:");
-                (window as any).logBot(`  Active participants: ${activeParticipants.size}`);
-                
-                // List all active participants
-                activeParticipants.forEach((participant, id) => {
-                  (window as any).logBot(`  Participant: ${participant.name} (ID: ${id})`);
-                });
-                
-                // Check current DOM for Teams elements
-                const participantSelectors = [
-                  '[data-tid="voice-level-stream-outline"]',
-                  '[data-tid*="participant"]',
-                  '[aria-label*="participant"]',
-                  '[data-tid*="roster"]',
-                  '[data-tid*="roster-item"]',
-                  '[data-tid*="video-tile"]',
-                  '[data-tid*="videoTile"]',
-                  '[data-tid*="participant-tile"]',
-                  '[data-tid*="participantTile"]',
-                  '[role="listitem"]',
-                  '.participant-tile',
-                  '.video-tile',
-                  '.roster-item'
-                ];
-                
-                (window as any).logBot("🔍 [DEBUG] Current DOM elements found:");
-                participantSelectors.forEach(selector => {
-                  const elements = document.querySelectorAll(selector);
-                  if (elements.length > 0) {
-                    (window as any).logBot(`  ${selector}: ${elements.length} elements`);
-                    elements.forEach((el, i) => {
-                      const id = el.getAttribute('data-tid') || el.getAttribute('id') || 'no-id';
-                      const name = el.textContent?.trim().substring(0, 50) || 'no-text';
-                      (window as any).logBot(`    [${i}] ID: ${id}, Text: "${name}"`);
-                    });
-                  }
-                });
-                
-                // Check for voice-level-stream-outline specifically
-                const voiceLevelElements = document.querySelectorAll('[data-tid="voice-level-stream-outline"]');
-                (window as any).logBot(`🔍 [DEBUG] Voice-level-stream-outline elements: ${voiceLevelElements.length}`);
-                voiceLevelElements.forEach((el, i) => {
-                  const parent = el.parentElement;
-                  const parentId = parent?.getAttribute('data-tid') || parent?.getAttribute('id') || 'no-parent-id';
-                  const parentText = parent?.textContent?.trim().substring(0, 50) || 'no-parent-text';
-                  (window as any).logBot(`  Voice level [${i}] parent: ID=${parentId}, Text="${parentText}"`);
-                });
-              };
-              
-              (window as any).logBot("Teams speaker detection initialized with comprehensive participant tracking");
-              
-              // DEBUG: Auto-debug every 10 seconds
-              setInterval(() => {
-                (window as any).debugTeamsSpeakerDetection();
-              }, 10000);
+              // Debug helpers removed to reduce log noise
 
               // Fallback: polling-based detection tailored for MS Teams
               // Periodically scan participant containers and detect speaking based on visibility of voice-level outline
@@ -819,6 +765,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
 
               const isVoiceLevelVisibleForContainer = (containerEl: HTMLElement): boolean => {
                 // Primary Teams indicator
+                // NOTE: voice-level-stream-outline appears when participant is SILENT, disappears when SPEAKING
                 const voiceLevel = containerEl.querySelector('[data-tid="voice-level-stream-outline"]') as HTMLElement | null;
                 const visible = (el: HTMLElement) => {
                   const cs = getComputedStyle(el);
@@ -839,15 +786,16 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                   );
                 };
 
-                if (voiceLevel && visible(voiceLevel)) return true;
+                // Voice level visible = participant is SILENT, voice level hidden = participant is SPEAKING
+                if (voiceLevel && visible(voiceLevel)) return false; // Return false for speaking (voice level visible means silent)
 
                 // Fallbacks: any child with class patterns suggesting audio activity
                 const fallback = containerEl.querySelector(
                   '[class*="voice" i][class*="level" i], [class*="speaking" i], [data-audio-active="true"]'
                 ) as HTMLElement | null;
-                if (fallback && visible(fallback)) return true;
+                if (fallback && visible(fallback)) return true; // Return true for speaking (fallback indicators)
 
-                return false;
+                return true; // Default to speaking if no voice level indicator found
               };
 
               const pollTeamsActiveSpeakers = () => {
@@ -860,17 +808,21 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                   });
 
                   containers.forEach((container) => {
-                    const participantId = String(getTeamsParticipantId(container) || "unknown");
-                    const participantName = String(getTeamsParticipantName(container) || `Teams Participant (${participantId})`);
+                    const idRaw = getTeamsParticipantId(container) as any;
+                    const nameRaw = getTeamsParticipantName(container) as any;
+                    const participantName = String(nameRaw || 'Unknown Participant');
+                    const participantId = String(idRaw || participantName);
                     const speaking = isVoiceLevelVisibleForContainer(container);
                     const prev = lastSpeakingStateById.get(participantId) || 'silent';
 
                     if (speaking && prev !== 'speaking') {
-                      (window as any).logBot(`🎤 [Teams/Poll] SPEAKER_START: ${participantName} (ID: ${participantId})`);
+                      const ts = new Date().toISOString();
+                      (window as any).logBot(`[${ts}] [SPEAKER_START] ${participantName}`);
                       sendTeamsSpeakerEvent('SPEAKER_START', container);
                       lastSpeakingStateById.set(participantId, 'speaking');
                     } else if (!speaking && prev === 'speaking') {
-                      (window as any).logBot(`🔇 [Teams/Poll] SPEAKER_END: ${participantName} (ID: ${participantId})`);
+                      const ts = new Date().toISOString();
+                      (window as any).logBot(`[${ts}] [SPEAKER_END] ${participantName}`);
                       sendTeamsSpeakerEvent('SPEAKER_END', container);
                       lastSpeakingStateById.set(participantId, 'silent');
                     } else if (!lastSpeakingStateById.has(participantId)) {
@@ -878,7 +830,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                     }
                   });
                 } catch (e: any) {
-                  (window as any).logBot(`[Teams/Poll] Error while polling speakers: ${e.message}`);
+                  // (log trimmed)
                 }
               };
 
@@ -959,12 +911,12 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                     const container = getContainerForIndicator(indicator);
                     if (!container) return;
                     // Try Teams-specific name div first
-                    const nameDiv = (container.ownerDocument || document).querySelector('div[class*="___2u340f0"]') as HTMLElement | null;
+                    const nameDiv = container.querySelector('div[class*="___2u340f0"]') as HTMLElement | null;
                     const participantNameFromDiv = nameDiv && nameDiv.textContent ? nameDiv.textContent.trim() : null;
                     const participantIdRaw = getTeamsParticipantId(container) as unknown as string | null;
                     const participantNameRaw = participantNameFromDiv || (getTeamsParticipantName(container) as unknown as string | null);
-                    const participantId = participantIdRaw ?? 'unknown';
-                    const participantName = participantNameRaw ?? `Teams Participant (${participantId})`;
+                    const participantName = (participantNameRaw ?? 'Unknown Participant');
+                    const participantId = (participantIdRaw ?? participantName);
 
                     // Track last seen for fallback END logic
                     lastSeenTsById.set(participantId, Date.now());
@@ -973,15 +925,21 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                     if (!observedIndicators.has(indicator)) {
                       try {
                         const observer = new MutationObserver(() => {
-                          if (!isVisible(indicator)) {
-                            const wasSpeaking = lastIndicatorStateById.get(participantId) === true;
-                            if (wasSpeaking) {
-                              const name = participantName;
-                              (window as any).logBot(`🔇 [Teams/Indicator] SPEAKER_END (observer): ${name} (ID: ${participantId})`);
-                              sendTeamsSpeakerEvent('SPEAKER_END', container);
-                              lastIndicatorStateById.set(participantId, false);
-                              lastEventTsById.set(participantId, Date.now());
-                            }
+                          const currentlyVisible = isVisible(indicator);
+                          const wasSpeaking = lastIndicatorStateById.get(participantId) === true;
+                          // Voice level visible = participant is SILENT, voice level hidden = participant is SPEAKING
+                          if (!currentlyVisible && !wasSpeaking) {
+                            const ts = new Date().toISOString();
+                            (window as any).logBot(`[${ts}] [SPEAKER_START] ${participantName}`);
+                            sendTeamsSpeakerEvent('SPEAKER_START', container);
+                            lastIndicatorStateById.set(participantId, true);
+                            lastEventTsById.set(participantId, Date.now());
+                          } else if (currentlyVisible && wasSpeaking) {
+                            const ts = new Date().toISOString();
+                            (window as any).logBot(`[${ts}] [SPEAKER_END] ${participantName}`);
+                            sendTeamsSpeakerEvent('SPEAKER_END', container);
+                            lastIndicatorStateById.set(participantId, false);
+                            lastEventTsById.set(participantId, Date.now());
                           }
                         });
                         observer.observe(indicator, { attributes: true, attributeFilter: ['class', 'style', 'aria-hidden'] });
@@ -989,14 +947,16 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                       } catch {}
                     }
 
-                    if (isVisible(indicator)) {
+                    // Voice level visible = participant is SILENT, voice level hidden = participant is SPEAKING
+                    if (!isVisible(indicator)) {
                       currentSpeakingIds.add(participantId);
 
                       const prevSpeaking = lastIndicatorStateById.get(participantId) === true;
                       const now = Date.now();
                       const lastTs = lastEventTsById.get(participantId) || 0;
                       if (!prevSpeaking && (now - lastTs) > DEBOUNCE_MS) {
-                        (window as any).logBot(`🎤 [Teams/Indicator] SPEAKER_START: ${participantName} (ID: ${participantId})`);
+                        const ts = new Date().toISOString();
+                        (window as any).logBot(`[${ts}] [SPEAKER_START] ${participantName}`);
                         sendTeamsSpeakerEvent('SPEAKER_START', container);
                         lastIndicatorStateById.set(participantId, true);
                         lastEventTsById.set(participantId, now);
@@ -1014,7 +974,8 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                       const element = participant?.element as HTMLElement | undefined;
                       const name = participant?.name || `Teams Participant (${participantId})`;
                       if (element) {
-                        (window as any).logBot(`🔇 [Teams/Indicator] SPEAKER_END: ${name} (ID: ${participantId})`);
+                        const ts = new Date().toISOString();
+                        (window as any).logBot(`[${ts}] [SPEAKER_END] ${name}`);
                         sendTeamsSpeakerEvent('SPEAKER_END', element);
                       }
                       lastIndicatorStateById.set(participantId, false);
@@ -1022,7 +983,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                     }
                   });
                 } catch (e: any) {
-                  (window as any).logBot(`[Teams/Indicator] Error while polling indicators: ${e.message}`);
+                  // (log trimmed)
                 }
               };
 
@@ -1047,7 +1008,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                 const currentParticipantCount = (window as any).getTeamsActiveParticipantsCount ? (window as any).getTeamsActiveParticipantsCount() : 0;
                 
                 if (currentParticipantCount !== lastParticipantCount) {
-                  (window as any).logBot(`Teams Participant check: Found ${currentParticipantCount} unique participants.`);
+                  // (log trimmed)
                   lastParticipantCount = currentParticipantCount;
                   
                   // Track if we've ever had multiple participants
