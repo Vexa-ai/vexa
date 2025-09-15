@@ -78,9 +78,9 @@ class Platform(str, Enum):
         return reverse_mapping.get(bot_platform_name)
 
     @classmethod
-    def construct_meeting_url(cls, platform_str: str, native_id: str) -> Optional[str]:
+    def construct_meeting_url(cls, platform_str: str, native_id: str, passcode: Optional[str] = None) -> Optional[str]:
         """
-        Constructs the full meeting URL from platform and native ID.
+        Constructs the full meeting URL from platform, native ID, and optional passcode.
         Returns None if the platform is unknown or ID is invalid for the platform.
         """
         try:
@@ -97,7 +97,7 @@ class Platform(str, Enum):
                 match = re.fullmatch(r"^(\d{9,11})(?:\?pwd=(.+))?$", native_id)
                 if match:
                     zoom_id = match.group(1)
-                    pwd = match.group(2)
+                    pwd = match.group(2) or passcode  # Use passcode parameter if provided
                     url = f"https://*.zoom.us/j/{zoom_id}" # Domain might vary, use wildcard? Or require specific domain?
                     if pwd:
                         url += f"?pwd={pwd}"
@@ -105,17 +105,19 @@ class Platform(str, Enum):
                 else:
                     return None # Invalid ID format
             elif platform == Platform.TEAMS:
-                # Teams URLs are complex and often require context - this is a placeholder
-                # Might need more specific parsing or different approach for Teams
-                # Assuming native_id might be part of a longer URL or require tenant info.
-                # This is a very basic guess and likely needs refinement.
-                 if native_id: # Placeholder validation
-                    # Cannot reliably construct full Teams URL from just an ID usually
-                     # Let's return None indicating we can't construct it reliably here
-                     # The bot might handle this differently based on the native_id
-                     return None # Cannot reliably construct
-                 else:
-                     return None
+                # Teams meeting ID (numeric) and optional passcode
+                if native_id.startswith(('https://teams.microsoft.com', 'https://teams.live.com')):
+                    # Already a full Teams URL - return as-is
+                    return native_id
+                else:
+                    # Parse meeting ID (numeric)
+                    if re.fullmatch(r"^\d{10,15}$", native_id):
+                        url = f"https://teams.live.com/meet/{native_id}"
+                        if passcode:
+                            url += f"?p={passcode}"
+                        return url
+                    else:
+                        return None # Invalid Teams ID format
             else:
                 return None # Unknown platform
         except ValueError:
@@ -192,6 +194,7 @@ class MeetingCreate(BaseModel):
     bot_name: Optional[str] = Field(None, description="Optional name for the bot in the meeting")
     language: Optional[str] = Field(None, description="Optional language code for transcription (e.g., 'en', 'es')")
     task: Optional[str] = Field(None, description="Optional task for the transcription model (e.g., 'transcribe', 'translate')")
+    passcode: Optional[str] = Field(None, description="Optional passcode for the meeting (Teams and Zoom only)")
 
     @validator('platform')
     def platform_must_be_valid(cls, v):
@@ -202,6 +205,23 @@ class MeetingCreate(BaseModel):
         except ValueError:
             supported = ', '.join([p.value for p in Platform])
             raise ValueError(f"Invalid platform '{v}'. Must be one of: {supported}")
+
+    @validator('passcode')
+    def validate_passcode(cls, v, values):
+        """Validate passcode usage based on platform"""
+        if v is not None and v != "":
+            platform = values.get('platform')
+            if platform == Platform.GOOGLE_MEET:
+                raise ValueError("Passcode is not supported for Google Meet meetings")
+            elif platform == Platform.TEAMS:
+                # Teams passcode validation (alphanumeric, reasonable length)
+                if not re.match(r'^[A-Za-z0-9]{8,20}$', v):
+                    raise ValueError("Teams passcode must be 8-20 alphanumeric characters")
+            elif platform == Platform.ZOOM:
+                # Zoom passcode validation (numeric, 6-10 digits)
+                if not re.match(r'^\d{6,10}$', v):
+                    raise ValueError("Zoom passcode must be 6-10 digits")
+        return v
 
     @validator('language')
     def validate_language(cls, v):

@@ -170,7 +170,7 @@ async def request_bot(
     logger.info(f"Received bot request for platform '{req.platform.value}' with native ID '{req.native_meeting_id}' from user {current_user.id}")
     native_meeting_id = req.native_meeting_id
 
-    constructed_url = Platform.construct_meeting_url(req.platform.value, native_meeting_id)
+    constructed_url = Platform.construct_meeting_url(req.platform.value, native_meeting_id, req.passcode)
     if not constructed_url:
         logger.error(f"Invalid meeting URL for platform {req.platform.value} and ID {native_meeting_id}. Rejecting request.")
         raise HTTPException(
@@ -217,11 +217,17 @@ async def request_bot(
     if existing_meeting is None:
         logger.info(f"No active/valid existing meeting found for user {current_user.id}, platform '{req.platform.value}', native ID '{native_meeting_id}'. Proceeding to create a new meeting record.")
         # Create Meeting record in DB
+        # Prepare data field with passcode if provided
+        meeting_data = {}
+        if req.passcode:
+            meeting_data['passcode'] = req.passcode
+            
         new_meeting = Meeting(
             user_id=current_user.id,
             platform=req.platform.value,
             platform_specific_id=native_meeting_id,
             status='requested',
+            data=meeting_data,
             # Ensure other necessary fields like created_at are handled by the model or explicitly set
         )
         db.add(new_meeting)

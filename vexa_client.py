@@ -1,7 +1,7 @@
 # vexa_client.py
 
 import requests
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 import os
 from urllib.parse import urljoin
 import time # Import time for sleep
@@ -127,16 +127,36 @@ class VexaClient:
 
     # --- Bot Management ---
 
-    def request_bot(self, platform: str, native_meeting_id: str, bot_name: Optional[str] = None, language: Optional[str] = None, task: Optional[str] = None) -> Dict[str, Any]:
+    @staticmethod
+    def parse_teams_url(teams_url: str) -> Tuple[str, str]:
+        """
+        Parses a Teams meeting URL to extract meeting ID and passcode.
+        
+        Args:
+            teams_url: Full Teams meeting URL (e.g., "https://teams.live.com/meet/9398850880426?p=RBZCWdxyp85TpcKna8")
+            
+        Returns:
+            Tuple of (meeting_id, passcode) where passcode is empty string if not present.
+        """
+        meeting_id_match = re.search(r'/meet/(\d+)', teams_url)
+        meeting_id = meeting_id_match.group(1) if meeting_id_match else ''
+        
+        passcode_match = re.search(r'\?p=([^&]+)', teams_url)
+        passcode = passcode_match.group(1) if passcode_match else ''
+        
+        return (meeting_id, passcode)
+
+    def request_bot(self, platform: str, native_meeting_id: str, bot_name: Optional[str] = None, language: Optional[str] = None, task: Optional[str] = None, passcode: Optional[str] = None) -> Dict[str, Any]:
         """
         Requests a new bot to join a meeting using platform and native ID.
 
         Args:
-            platform: Platform identifier (e.g., 'google_meet', 'zoom').
+            platform: Platform identifier (e.g., 'google_meet', 'zoom', 'teams').
             native_meeting_id: The platform-specific meeting identifier.
             bot_name: Optional name for the bot in the meeting.
             language: Optional language code for transcription (e.g., 'en', 'es').
             task: Optional transcription task ('transcribe' or 'translate').
+            passcode: Optional passcode for Teams meetings (required for Teams, not allowed for Google Meet).
 
         Returns:
             Dictionary representing the created/updated Meeting object.
@@ -151,8 +171,26 @@ class VexaClient:
             payload["language"] = language
         if task:
             payload["task"] = task
+        if passcode:
+            payload["passcode"] = passcode
             
         return self._request("POST", "/bots", api_type='user', json_data=payload)
+
+    def request_teams_bot(self, teams_url: str, bot_name: Optional[str] = None, language: Optional[str] = None, task: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Convenience method to request a Teams bot using a full Teams meeting URL.
+        
+        Args:
+            teams_url: Full Teams meeting URL (e.g., "https://teams.live.com/meet/9398850880426?p=RBZCWdxyp85TpcKna8")
+            bot_name: Optional name for the bot in the meeting.
+            language: Optional language code for transcription (e.g., 'en', 'es').
+            task: Optional transcription task ('transcribe' or 'translate').
+            
+        Returns:
+            Dictionary representing the created/updated Meeting object.
+        """
+        meeting_id, passcode = self.parse_teams_url(teams_url)
+        return self.request_bot("teams", meeting_id, bot_name, language, task, passcode)
 
     def stop_bot(self, platform: str, native_meeting_id: str) -> Dict[str, str]:
         """
