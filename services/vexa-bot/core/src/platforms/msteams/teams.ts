@@ -1184,62 +1184,40 @@ const prepareForRecording = async (page: Page, botConfig: BotConfig): Promise<vo
             }
           }
           
-          // Try primary leave buttons with enhanced detection
+          // Try each selector until one works
           for (const selector of primaryLeaveButtonSelectors) {
             try {
               const leaveButton = document.querySelector(selector) as HTMLElement;
               if (leaveButton) {
-                // Check if button is visible and enabled
-                const isVisible = leaveButton.offsetWidth > 0 && leaveButton.offsetHeight > 0;
-                const isEnabled = !leaveButton.hasAttribute('disabled') && leaveButton.getAttribute('aria-disabled') !== 'true';
+                (window as any).logBot?.(`🔍 Trying selector: ${selector}`);
+                (window as any).logBot?.(`🔘 Button details: aria-label="${leaveButton.getAttribute('aria-label')}", data-tid="${leaveButton.getAttribute('data-tid')}", id="${leaveButton.getAttribute('id')}"`);
                 
-                if (isVisible && isEnabled) {
-                  (window as any).logBot?.(`✅ Found enabled Teams leave button: ${selector}`);
-                  (window as any).logBot?.(`🔘 Button details: aria-label="${leaveButton.getAttribute('aria-label')}", data-tid="${leaveButton.getAttribute('data-tid')}", id="${leaveButton.getAttribute('id')}"`);
-                  
-                  // Scroll button into view if needed
-                  leaveButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                  await new Promise((resolve) => setTimeout(resolve, 500));
-                  
-                  // Click the button
-                  (window as any).logBot?.(`🖱️ Clicking Teams leave button...`);
-                  leaveButton.click();
-                  await new Promise((resolve) => setTimeout(resolve, 1500));
-                  
-                  // Check for confirmation dialogs and click them
-                  (window as any).logBot?.(`🔍 Checking for confirmation dialogs...`);
-                  let confirmationClicked = false;
-                  
-                  for (const secondarySelector of secondaryLeaveButtonSelectors) {
-                    try {
-                      const confirmButton = document.querySelector(secondarySelector) as HTMLElement;
-                      if (confirmButton && confirmButton.offsetWidth > 0 && confirmButton.offsetHeight > 0) {
-                        (window as any).logBot?.(`✅ Found confirmation button: ${secondarySelector}`);
-                        (window as any).logBot?.(`🔘 Confirmation details: text="${confirmButton.textContent?.trim()}", aria-label="${confirmButton.getAttribute('aria-label')}"`);
-                        
-                        confirmButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        await new Promise((resolve) => setTimeout(resolve, 300));
-                        
-                        (window as any).logBot?.(`🖱️ Clicking confirmation button...`);
-                        confirmButton.click();
-                        confirmationClicked = true;
-                        await new Promise((resolve) => setTimeout(resolve, 1000));
-                        break;
-                      }
-                    } catch (e) {
-                      continue;
+                // Try to click the button
+                leaveButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                await new Promise((resolve) => setTimeout(resolve, 500));
+                
+                (window as any).logBot?.(`🖱️ Clicking Teams leave button...`);
+                leaveButton.click();
+                await new Promise((resolve) => setTimeout(resolve, 1500));
+                
+                // Check for confirmation dialogs
+                (window as any).logBot?.(`🔍 Checking for confirmation dialogs...`);
+                for (const confirmSelector of secondaryLeaveButtonSelectors) {
+                  try {
+                    const confirmButton = document.querySelector(confirmSelector) as HTMLElement;
+                    if (confirmButton) {
+                      (window as any).logBot?.(`✅ Found confirmation button: ${confirmSelector}`);
+                      confirmButton.click();
+                      await new Promise((resolve) => setTimeout(resolve, 1000));
+                      break;
                     }
+                  } catch (e) {
+                    continue;
                   }
-                  
-                  if (!confirmationClicked) {
-                    (window as any).logBot?.(`ℹ️ No confirmation dialog found - leave action may be complete`);
-                  }
-                  
-                  (window as any).logBot?.(`✅ Teams leave sequence completed successfully`);
-                  return true;
-                } else {
-                  (window as any).logBot?.(`⚠️ Leave button found but not usable: visible=${isVisible}, enabled=${isEnabled}`);
                 }
+                
+                (window as any).logBot?.(`✅ Teams leave sequence completed successfully`);
+                return true;
               }
             } catch (e: any) {
               (window as any).logBot?.(`❌ Error with selector ${selector}: ${e.message}`);
