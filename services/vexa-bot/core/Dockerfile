@@ -54,6 +54,9 @@ RUN npx playwright install msedge
 # Ensure the Playwright cache directory has proper permissions (adjust path if needed)
 RUN mkdir -p /root/ms-playwright && chmod -R 777 /root/ms-playwright
 
+# Create storage directory structure for bot data (screenshots, logs, etc.)
+RUN mkdir -p /app/storage/screenshots /app/storage/logs /app/storage/temp && chmod -R 777 /app/storage
+
 # Copy an entrypoint script that will start Xvfb and run our bot
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh

@@ -21,6 +21,121 @@ ACCEPTED_LANGUAGE_CODES = {
 # These are the tasks supported by WhisperLive
 ALLOWED_TASKS = {"transcribe", "translate"}
 
+# --- Meeting Status Definitions ---
+
+class MeetingStatus(str, Enum):
+    """
+    Meeting status values with their sources and transitions.
+    
+    Status Flow:
+    requested -> joining -> awaiting_admission -> active -> completed
+                                    |              |
+                                    v              v
+                                 failed         failed
+    
+    Sources:
+    - requested: POST bot API (user)
+    - joining: bot callback
+    - awaiting_admission: bot callback  
+    - active: bot callback
+    - completed: user (stop bot API - PRIORITY!), bot callback
+    - failed: bot callback, validation errors
+    """
+    REQUESTED = "requested"
+    JOINING = "joining"
+    AWAITING_ADMISSION = "awaiting_admission"
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+class MeetingCompletionReason(str, Enum):
+    """
+    Reasons for meeting completion.
+    """
+    STOPPED = "stopped"  # User stopped by API
+    VALIDATION_ERROR = "validation_error"  # Post bot validation failed
+    AWAITING_ADMISSION_TIMEOUT = "awaiting_admission_timeout"  # Timeout during awaiting admission
+    AWAITING_ADMISSION_REJECTED = "awaiting_admission_rejected"  # Rejected during awaiting admission
+    LEFT_ALONE = "left_alone"  # Timeout for being alone
+    EVICTED = "evicted"  # Kicked out from meeting using meeting UI
+
+class MeetingFailureStage(str, Enum):
+    """
+    Stages where meeting can fail.
+    """
+    REQUESTED = "requested"
+    JOINING = "joining"
+    AWAITING_ADMISSION = "awaiting_admission"
+    ACTIVE = "active"
+
+# --- Status Transition Helpers ---
+
+def get_valid_status_transitions() -> Dict[MeetingStatus, List[MeetingStatus]]:
+    """
+    Returns valid status transitions for meetings.
+    
+    Returns:
+        Dict mapping current status to list of valid next statuses
+    """
+    return {
+        MeetingStatus.REQUESTED: [MeetingStatus.JOINING, MeetingStatus.FAILED, MeetingStatus.COMPLETED],
+        MeetingStatus.JOINING: [MeetingStatus.AWAITING_ADMISSION, MeetingStatus.FAILED, MeetingStatus.COMPLETED],
+        MeetingStatus.AWAITING_ADMISSION: [MeetingStatus.ACTIVE, MeetingStatus.FAILED, MeetingStatus.COMPLETED],
+        MeetingStatus.ACTIVE: [MeetingStatus.COMPLETED, MeetingStatus.FAILED],
+        MeetingStatus.COMPLETED: [],  # Terminal state
+        MeetingStatus.FAILED: [],  # Terminal state
+    }
+
+def is_valid_status_transition(from_status: MeetingStatus, to_status: MeetingStatus) -> bool:
+    """
+    Check if a status transition is valid.
+    
+    Args:
+        from_status: Current meeting status
+        to_status: Desired new status
+        
+    Returns:
+        True if transition is valid, False otherwise
+    """
+    valid_transitions = get_valid_status_transitions()
+    return to_status in valid_transitions.get(from_status, [])
+
+def get_status_source(from_status: MeetingStatus, to_status: MeetingStatus) -> str:
+    """
+    Get the source that should trigger this status transition.
+    
+    Args:
+        from_status: Current meeting status
+        to_status: Desired new status
+        
+    Returns:
+        Source description ("user", "bot_callback", "validation_error")
+    """
+    # User-controlled transitions (via API)
+    if to_status == MeetingStatus.COMPLETED and from_status == MeetingStatus.ACTIVE:
+        return "user"  # Stop bot API has priority
+    
+    # Bot callback transitions
+    bot_callback_transitions = [
+        (MeetingStatus.REQUESTED, MeetingStatus.JOINING),
+        (MeetingStatus.JOINING, MeetingStatus.AWAITING_ADMISSION),
+        (MeetingStatus.AWAITING_ADMISSION, MeetingStatus.ACTIVE),
+        (MeetingStatus.ACTIVE, MeetingStatus.COMPLETED),
+        (MeetingStatus.REQUESTED, MeetingStatus.FAILED),
+        (MeetingStatus.JOINING, MeetingStatus.FAILED),
+        (MeetingStatus.AWAITING_ADMISSION, MeetingStatus.FAILED),
+        (MeetingStatus.ACTIVE, MeetingStatus.FAILED),
+    ]
+    
+    if (from_status, to_status) in bot_callback_transitions:
+        return "bot_callback"
+    
+    # Validation error transitions
+    if to_status == MeetingStatus.FAILED and from_status == MeetingStatus.REQUESTED:
+        return "validation_error"
+    
+    return "unknown"
+
 # --- Platform Definitions ---
 
 class Platform(str, Enum):
@@ -243,13 +358,37 @@ class MeetingResponse(BaseModel): # Not inheriting from MeetingBase anymore to a
     platform: Platform # Use the enum type
     native_meeting_id: Optional[str] = Field(None, description="The native meeting identifier provided during creation") # Renamed from platform_specific_id for clarity
     constructed_meeting_url: Optional[str] = Field(None, description="The meeting URL constructed internally, if possible") # Added for info
-    status: str
+    status: MeetingStatus = Field(..., description="Current meeting status")
     bot_container_id: Optional[str]
     start_time: Optional[datetime]
     end_time: Optional[datetime]
-    data: Optional[Dict] = Field(default_factory=dict, description="JSON data containing meeting metadata like name, participants, languages, and notes")
+    data: Optional[Dict] = Field(default_factory=dict, description="JSON data containing meeting metadata like name, participants, languages, notes, and status reasons")
     created_at: datetime
     updated_at: datetime
+
+    @validator('data')
+    def validate_status_data(cls, v, values):
+        """Validate that status-related data is consistent with meeting status."""
+        if v is None:
+            return v
+            
+        status = values.get('status')
+        if not status:
+            return v
+            
+        # Validate completion reasons
+        if status == MeetingStatus.COMPLETED:
+            reason = v.get('completion_reason')
+            if reason and reason not in [r.value for r in MeetingCompletionReason]:
+                raise ValueError(f"Invalid completion_reason '{reason}'. Must be one of: {[r.value for r in MeetingCompletionReason]}")
+        
+        # Validate failure stage
+        elif status == MeetingStatus.FAILED:
+            stage = v.get('failure_stage')
+            if stage and stage not in [s.value for s in MeetingFailureStage]:
+                raise ValueError(f"Invalid failure_stage '{stage}'. Must be one of: {[s.value for s in MeetingFailureStage]}")
+        
+        return v
 
     class Config:
         orm_mode = True

@@ -1,5 +1,5 @@
 import { Page } from "playwright";
-import { log, randomDelay, callStartupCallback } from "../../utils";
+import { log, randomDelay, callStartupCallback, callJoiningCallback, callAwaitingAdmissionCallback } from "../../utils";
 import { BotConfig } from "../../types";
 import { generateUUID, createSessionControlMessage, createSpeakerActivityMessage } from "../../index";
 import { WhisperLiveService } from "../../services/whisperlive";
@@ -25,108 +25,96 @@ import {
 // New function to wait for Teams meeting admission
 const waitForTeamsMeetingAdmission = async (
   page: Page,
-  timeout: number
+  timeout: number,
+  botConfig: BotConfig
 ): Promise<boolean> => {
   try {
     log("Waiting for Teams meeting admission...");
     
-    // Take screenshot at start of admission check
-    await page.screenshot({ path: '/app/screenshots/teams-admission-start.png', fullPage: true });
-    log("📸 Screenshot taken: Start of Teams admission check");
-    
     // FIRST: Check if bot is already admitted (no waiting room needed)
     log("Checking if bot is already admitted to the Teams meeting...");
-    const initialAdmissionIndicators = teamsInitialAdmissionIndicators;
     
-    for (const indicator of initialAdmissionIndicators) {
+    // Check for visible Leave button in meeting toolbar (single robust indicator)
+    const initialLeaveButtonVisible = await page.locator('[role="toolbar"] [aria-label*="Leave"]').first().isVisible();
+    const initialLeaveButtonEnabled = initialLeaveButtonVisible && !(await page.locator('[role="toolbar"] [aria-label*="Leave"]').first().getAttribute('aria-disabled'));
+    
+    // Negative check: ensure we're not still in lobby/pre-join
+    const initialLobbyTextVisible = await page.locator('text="Someone will let you in shortly"').isVisible();
+    const initialJoinNowButtonVisible = await page.getByRole('button', { name: /Join now/i }).isVisible();
+    
+    if (initialLeaveButtonVisible && initialLeaveButtonEnabled && !initialLobbyTextVisible && !initialJoinNowButtonVisible) {
+      log(`Found Teams admission indicator: visible Leave button - Bot is already admitted to the meeting!`);
+      
+      // STATUS CHANGE: Bot is already admitted - take screenshot before AWAITING_ADMISSION callback
+      await page.screenshot({ path: '/app/storage/screenshots/teams-status-awaiting-admission-immediate.png', fullPage: true });
+      log("📸 Screenshot taken: Bot state when AWAITING_ADMISSION callback is triggered (immediate admission)");
+      
+      // --- Call awaiting admission callback even for immediate admission ---
       try {
-        await page.waitForSelector(indicator, { timeout: 2000 });
-        log(`Found Teams admission indicator: ${indicator} - Bot is already admitted to the meeting!`);
-        
-        // Take screenshot when already admitted
-        await page.screenshot({ path: '/app/screenshots/teams-admitted.png', fullPage: true });
-        log("📸 Screenshot taken: Bot confirmed already admitted to Teams meeting");
-        
-        log("Successfully admitted to the Teams meeting - no waiting room required");
-        return true;
-      } catch {
-        continue;
+        await callAwaitingAdmissionCallback(botConfig);
+        log("Awaiting admission callback sent successfully (immediate admission)");
+      } catch (callbackError: any) {
+        log(`Warning: Failed to send awaiting admission callback: ${callbackError.message}. Continuing...`);
       }
+      
+      log("Successfully admitted to the Teams meeting - no waiting room required");
+      return true;
     }
     
     log("Bot not yet admitted - checking for Teams waiting room indicators...");
     
-    // Second, check if we're still in waiting room
-    const waitingRoomIndicators = teamsWaitingRoomIndicators;
-    
-    // Check for waiting room indicators first, but don't exit immediately
+    // Check for waiting room indicators using visibility checks
     let stillInWaitingRoom = false;
-    for (const waitingIndicator of waitingRoomIndicators) {
+    
+    // Check for lobby text visibility
+    const waitingLobbyTextVisible = await page.locator('text="Someone will let you in shortly"').isVisible();
+    const waitingJoinNowButtonVisible = await page.getByRole('button', { name: /Join now/i }).isVisible();
+    
+    if (waitingLobbyTextVisible || waitingJoinNowButtonVisible) {
+      log(`Found Teams waiting room indicator: lobby text or Join now button visible - Bot is still in waiting room`);
+      
+      // STATUS CHANGE: Bot is in waiting room - take screenshot before AWAITING_ADMISSION callback
+      await page.screenshot({ path: '/app/storage/screenshots/teams-status-awaiting-admission-waiting-room.png', fullPage: true });
+      log("📸 Screenshot taken: Bot state when AWAITING_ADMISSION callback is triggered (waiting room)");
+      
+      // --- Call awaiting admission callback to notify bot-manager that bot is waiting ---
       try {
-        await page.waitForSelector(waitingIndicator, { timeout: 2000 });
-        log(`Found Teams waiting room indicator: ${waitingIndicator} - Bot is still in waiting room`);
-        
-        // Take screenshot when waiting room indicator found
-        await page.screenshot({ path: '/app/screenshots/teams-waiting-room.png', fullPage: true });
-        log("📸 Screenshot taken: Bot confirmed in Teams waiting room");
-        
-        stillInWaitingRoom = true;
-        break;
-      } catch {
-        // Continue to next indicator if this one wasn't found
-        continue;
+        await callAwaitingAdmissionCallback(botConfig);
+        log("Awaiting admission callback sent successfully");
+      } catch (callbackError: any) {
+        log(`Warning: Failed to send awaiting admission callback: ${callbackError.message}. Continuing with admission wait...`);
       }
+      
+      stillInWaitingRoom = true;
     }
     
     // If we're in waiting room, wait for the full timeout period for admission
     if (stillInWaitingRoom) {
       log(`Bot is in Teams waiting room. Waiting for ${timeout}ms for admission...`);
       
-      // Wait for the full timeout period, checking periodically for admission
+      // Wait for the full timeout period, checking periodically for admission (NO PERIODIC SCREENSHOTS)
       const checkInterval = 5000; // Check every 5 seconds
       const startTime = Date.now();
-      let screenshotCounter = 0;
       
       while (Date.now() - startTime < timeout) {
-        // Take periodic screenshot for debugging
-        screenshotCounter++;
-        await page.screenshot({ path: `/app/screenshots/teams-waiting-periodic-${screenshotCounter}.png`, fullPage: true });
-        log(`📸 Periodic screenshot ${screenshotCounter} taken during Teams waiting period`);
-        
-        // Check if we're still in waiting room
-        let stillWaiting = false;
-        for (const waitingIndicator of waitingRoomIndicators) {
-          try {
-            await page.waitForSelector(waitingIndicator, { timeout: 1000 });
-            stillWaiting = true;
-            break;
-          } catch {
-            continue;
-          }
-        }
+        // Check if we're still in waiting room using visibility
+        const lobbyTextStillVisible = await page.locator('text="Someone will let you in shortly"').isVisible();
+        const joinNowButtonStillVisible = await page.getByRole('button', { name: /Join now/i }).isVisible();
+        const stillWaiting = lobbyTextStillVisible || joinNowButtonStillVisible;
         
         if (!stillWaiting) {
           log("Teams waiting room indicator disappeared - bot is likely admitted, checking for admission indicators...");
           
           // Immediately check for admission indicators since waiting room disappeared
-          let quickAdmissionCheck = false;
-          for (const indicator of initialAdmissionIndicators) {
-            try {
-              await page.waitForSelector(indicator, { timeout: 1000 });
-              log(`Found Teams admission indicator: ${indicator} - Bot is confirmed admitted!`);
-              quickAdmissionCheck = true;
-              break;
-            } catch {
-              continue;
-            }
-          }
+          const leaveButtonNowVisible = await page.locator('[role="toolbar"] [aria-label*="Leave"]').first().isVisible();
+          const leaveButtonNowEnabled = leaveButtonNowVisible && !(await page.locator('[role="toolbar"] [aria-label*="Leave"]').first().getAttribute('aria-disabled'));
           
-          if (quickAdmissionCheck) {
-            log("Successfully admitted to the Teams meeting - waiting room disappeared and admission indicators found");
+          if (leaveButtonNowVisible && leaveButtonNowEnabled) {
+            log(`Found Teams admission indicator: visible Leave button - Bot is confirmed admitted!`);
             return true;
           } else {
-            log("Teams waiting room disappeared but no admission indicators found yet - continuing to wait...");
-            // Continue waiting for admission indicators to appear
+            log("Teams waiting room disappeared - bot is admitted (no waiting room = admitted)");
+            return true; // If waiting room disappeared, bot is admitted regardless of Leave button visibility
           }
         }
         
@@ -135,17 +123,10 @@ const waitForTeamsMeetingAdmission = async (
         log(`Still in Teams waiting room... ${Math.round((Date.now() - startTime) / 1000)}s elapsed`);
       }
       
-      // After waiting, check if we're still in waiting room
-      let finalWaitingCheck = false;
-      for (const waitingIndicator of waitingRoomIndicators) {
-        try {
-          await page.waitForSelector(waitingIndicator, { timeout: 2000 });
-          finalWaitingCheck = true;
-          break;
-        } catch {
-          continue;
-        }
-      }
+      // After waiting, check if we're still in waiting room using visibility
+      const finalLobbyTextVisible = await page.locator('text="Someone will let you in shortly"').isVisible();
+      const finalJoinNowButtonVisible = await page.getByRole('button', { name: /Join now/i }).isVisible();
+      const finalWaitingCheck = finalLobbyTextVisible || finalJoinNowButtonVisible;
       
       if (finalWaitingCheck) {
         throw new Error("Bot is still in the Teams waiting room after timeout - not admitted to the meeting");
@@ -155,49 +136,23 @@ const waitForTeamsMeetingAdmission = async (
     // PRIORITY: Check for Teams meeting controls/toolbar (most reliable indicator)
     log("Checking for Teams meeting controls as primary admission indicator...");
     
-    // Take initial screenshot before checking for admission indicators
-    await page.screenshot({ path: '/app/screenshots/teams-checking-admission-start.png', fullPage: true });
-    log("📸 Screenshot taken: Starting Teams admission indicator check");
+    // Check for visible Leave button in meeting toolbar (single robust indicator)
+    log("Checking for visible Leave button in meeting toolbar...");
     
-    // Wait for Teams meeting indicators - these are the most reliable signs of admission
-    // ORDERED BY LIKELIHOOD: Most common indicators first for faster detection
-    const meetingAdmissionIndicators: string[] = teamsAdmissionIndicators;
+    const finalLeaveButtonVisible = await page.locator('[role="toolbar"] [aria-label*="Leave"]').first().isVisible();
+    const finalLeaveButtonEnabled = finalLeaveButtonVisible && !(await page.locator('[role="toolbar"] [aria-label*="Leave"]').first().getAttribute('aria-disabled'));
     
-    let admitted = false;
-    let admissionCheckCounter = 0;
+    // Negative check: ensure we're not still in lobby/pre-join
+    const finalLobbyTextVisible = await page.locator('text="Someone will let you in shortly"').isVisible();
+    const finalJoinNowButtonVisible = await page.getByRole('button', { name: /Join now/i }).isVisible();
     
-    // Use much faster timeout for each check (500ms instead of timeout/indicators.length)
-    const fastTimeout = 500;
+    const admitted = finalLeaveButtonVisible && finalLeaveButtonEnabled && !finalLobbyTextVisible && !finalJoinNowButtonVisible;
     
-    for (const indicator of meetingAdmissionIndicators) {
-      try {
-        admissionCheckCounter++;
-        log(`Checking Teams admission indicator ${admissionCheckCounter}/${meetingAdmissionIndicators.length}: ${indicator}`);
-        
-        // Take screenshot before checking each indicator
-        await page.screenshot({ path: `/app/screenshots/teams-admission-check-${admissionCheckCounter}.png`, fullPage: true });
-        log(`📸 Screenshot taken: Checking Teams admission indicator ${admissionCheckCounter}`);
-        
-        await page.waitForSelector(indicator, { timeout: fastTimeout });
-        log(`Found Teams admission indicator: ${indicator} - Bot is admitted to the meeting`);
-        
-        // Take screenshot when admission indicator is found
-        await page.screenshot({ path: '/app/screenshots/teams-admitted-confirmed.png', fullPage: true });
-        log("📸 Screenshot taken: Bot confirmed admitted to Teams meeting via admission indicators");
-        
-        admitted = true;
-        break;
-      } catch {
-        // Continue to next indicator
-        continue;
-      }
+    if (admitted) {
+      log(`Found Teams admission indicator: visible Leave button - Bot is admitted to the meeting`);
     }
     
     if (!admitted) {
-      // Take screenshot when no meeting indicators found
-      await page.screenshot({ path: '/app/screenshots/teams-no-indicators.png', fullPage: true });
-      log("📸 Screenshot taken: No Teams meeting indicators found");
-      
       // If we can't find any meeting indicators, the bot likely failed to join
       log("No Teams meeting indicators found - bot likely failed to join or is in unknown state");
       throw new Error("Bot failed to join the Teams meeting - no meeting indicators found");
@@ -1051,8 +1006,18 @@ const prepareForRecording = async (page: Page): Promise<void> => {
             (window as any).teamsSecondaryLeaveButtonSelectors = sel.teamsSecondaryLeaveButtonSelectors;
           }
           // Teams-specific leave button selectors (injected from Node via globals)
-          const primaryLeaveButtonSelectors = (window as any).teamsPrimaryLeaveButtonSelectors as string[];
-          const secondaryLeaveButtonSelectors = (window as any).teamsSecondaryLeaveButtonSelectors as string[];
+          const primaryLeaveButtonSelectors = (window as any).teamsPrimaryLeaveButtonSelectors as string[] || [
+            'button[aria-label*="Leave"]',
+            'button[aria-label*="leave"]',
+            'button[aria-label*="End meeting"]',
+            'button[aria-label*="end meeting"]'
+          ];
+          const secondaryLeaveButtonSelectors = (window as any).teamsSecondaryLeaveButtonSelectors as string[] || [
+            'button:has-text("Leave meeting")',
+            'button:has-text("Leave")',
+            'button:has-text("End meeting")',
+            'button:has-text("Hang up")'
+          ];
 
           // Try primary leave buttons
           for (const selector of primaryLeaveButtonSelectors) {
@@ -1111,19 +1076,26 @@ export async function handleMicrosoftTeams(
   }
 
   try {
-    // Step 1: Navigate to Teams meeting (exactly like simple-bot.js)
+    // Step 1: Navigate to Teams meeting
     log(`Step 1: Navigating to Teams meeting: ${botConfig.meetingUrl}`);
     await page.goto(botConfig.meetingUrl, { waitUntil: 'networkidle', timeout: 30000 });
     await page.waitForTimeout(5000);
     
-    // Take initial screenshot
-    await page.screenshot({ path: '/app/screenshots/teams-step-1-initial.png', fullPage: true });
-    log("📸 Screenshot: Step 1 - Initial page load");
+    // STATUS CHANGE: Bot is joining - take screenshot before JOINING callback
+    await page.screenshot({ path: '/app/storage/screenshots/teams-status-joining.png', fullPage: true });
+    log("📸 Screenshot taken: Bot state when JOINING callback is triggered");
+    
+    // --- Call joining callback to notify bot-manager that bot is joining ---
+    try {
+      await callJoiningCallback(botConfig);
+      log("Joining callback sent successfully");
+    } catch (callbackError: any) {
+      log(`Warning: Failed to send joining callback: ${callbackError.message}. Continuing with join process...`);
+    }
 
-    // Step 2: Click "Continue on this browser" button
+    // UI ACTION: Click "Continue on this browser" button
     log("Step 2: Looking for continue button...");
     try {
-
       const continueButton = page.locator('button:has-text("Continue")').first();
       await continueButton.waitFor({ timeout: 10000 });
       await continueButton.click();
@@ -1133,13 +1105,9 @@ export async function handleMicrosoftTeams(
       log("ℹ️ Continue button not found, continuing...");
     }
 
-    await page.screenshot({ path: '/app/screenshots/teams-step-2-after-continue.png', fullPage: true });
-    log("📸 Screenshot: Step 2 - After continue click");
-
-    // Step 3: Click join button 
+    // UI ACTION: Click join button 
     log("Step 3: Looking for join button...");
     try {
-
       const joinButton = page.locator('button:has-text("Join")').first();
       await joinButton.waitFor({ timeout: 10000 });
       await joinButton.click();
@@ -1149,7 +1117,7 @@ export async function handleMicrosoftTeams(
       log("ℹ️ Join button not found, continuing...");
     }
 
-    // Step 4: Try to turn off camera (exactly like simple-bot.js)
+    // UI ACTION: Try to turn off camera
     log("Step 4: Trying to turn off camera...");
     try {
       const cameraButton = page.getByRole('button', { name: 'Turn off camera' });
@@ -1160,10 +1128,9 @@ export async function handleMicrosoftTeams(
       log("ℹ️ Camera button not found or already off");
     }
 
-    // Step 5: Set display nam
+    // UI ACTION: Set display name
     log("Step 5: Trying to set display name...");
     try {
-
       const nameInput = page.locator('input[placeholder*="name"], input[placeholder*="Name"], input[type="text"]').first();
       await nameInput.waitFor({ timeout: 5000 });
       await nameInput.fill(botConfig.botName);
@@ -1172,10 +1139,9 @@ export async function handleMicrosoftTeams(
       log("ℹ️ Display name input not found, continuing...");
     }
 
-    // Step 6: Click final join button
+    // UI ACTION: Click final join button
     log("Step 6: Looking for final join button...");
     try {
-
       const finalJoinButton = page.locator('button:has-text("Join now"), button:has-text("Join")').first();
       await finalJoinButton.waitFor({ timeout: 10000 });
       await finalJoinButton.click();
@@ -1185,10 +1151,7 @@ export async function handleMicrosoftTeams(
       log("ℹ️ Final join button not found");
     }
 
-    await page.screenshot({ path: '/app/screenshots/teams-step-3-after-permissions.png', fullPage: true });
-    log("📸 Screenshot: Step 3 - After join attempts");
-
-    // Step 7: Check current state (exactly like simple-bot.js)
+    // Check current state
     log("Step 7: Checking current state...");
     const currentUrl = page.url();
     log(`📍 Current URL: ${currentUrl}`);
@@ -1199,7 +1162,7 @@ export async function handleMicrosoftTeams(
       // Run both processes concurrently
       const [isAdmitted] = await Promise.all([
         // Wait for admission to the Teams meeting
-        waitForTeamsMeetingAdmission(page, botConfig.automaticLeave.waitingRoomTimeout).catch((error) => {
+        waitForTeamsMeetingAdmission(page, botConfig.automaticLeave.waitingRoomTimeout, botConfig).catch((error) => {
           log("Teams meeting admission failed: " + error.message);
           return false;
         }),
@@ -1216,7 +1179,11 @@ export async function handleMicrosoftTeams(
 
     log("Successfully admitted to the Teams meeting, starting recording");
     
-    // --- ADDED: Call startup callback to notify bot-manager that bot is active ---
+    // STATUS CHANGE: Bot is active - take screenshot before STARTUP callback
+    await page.screenshot({ path: '/app/storage/screenshots/teams-status-startup.png', fullPage: true });
+    log("📸 Screenshot taken: Bot state when STARTUP callback is triggered");
+    
+    // --- Call startup callback to notify bot-manager that bot is active ---
     try {
       await callStartupCallback(botConfig);
       log("Startup callback sent successfully");

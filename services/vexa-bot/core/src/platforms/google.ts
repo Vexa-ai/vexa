@@ -1,5 +1,5 @@
 import { Page } from "playwright";
-import { log, randomDelay, callStartupCallback } from "../utils";
+import { log, randomDelay, callStartupCallback, callJoiningCallback, callAwaitingAdmissionCallback } from "../utils";
 import { BrowserAudioService, BrowserWhisperLiveService, generateBrowserUUID } from "../utils/browser";
 import { BotConfig } from "../types";
 import { generateUUID, createSessionControlMessage, createSpeakerActivityMessage } from "../index";
@@ -23,7 +23,7 @@ export async function handleGoogleMeet(
 
   log("Joining Google Meet");
   try {
-    await joinMeeting(page, botConfig.meetingUrl, botConfig.botName);
+    await joinMeeting(page, botConfig.meetingUrl, botConfig.botName, botConfig);
   } catch (error: any) {
     console.error("Error during joinMeeting: " + error.message);
     log("Error during joinMeeting: " + error.message + ". Triggering graceful leave.");
@@ -50,7 +50,8 @@ export async function handleGoogleMeet(
       waitForMeetingAdmission(
         page,
         leaveButton,
-        botConfig.automaticLeave.waitingRoomTimeout
+        botConfig.automaticLeave.waitingRoomTimeout,
+        botConfig
       ).catch((error) => {
         log("Meeting admission failed: " + error.message);
         return false;
@@ -105,7 +106,8 @@ export async function handleGoogleMeet(
 const waitForMeetingAdmission = async (
   page: Page,
   leaveButton: string,
-  timeout: number
+  timeout: number,
+  botConfig: BotConfig
 ): Promise<boolean> => {
   try {
     log("Waiting for meeting admission...");
@@ -137,6 +139,14 @@ const waitForMeetingAdmission = async (
         // Take screenshot when already admitted
         await page.screenshot({ path: '/app/screenshots/bot-checkpoint-2-admitted.png', fullPage: true });
         log("📸 Screenshot taken: Bot confirmed already admitted to meeting");
+        
+        // --- ADDED: Call awaiting admission callback even for immediate admission ---
+        try {
+          await callAwaitingAdmissionCallback(botConfig);
+          log("Awaiting admission callback sent successfully (immediate admission)");
+        } catch (callbackError: any) {
+          log(`Warning: Failed to send awaiting admission callback: ${callbackError.message}. Continuing...`);
+        }
         
         log("Successfully admitted to the meeting - no waiting room required");
         return true;
@@ -183,6 +193,14 @@ const waitForMeetingAdmission = async (
     // If we're in waiting room, wait for the full timeout period for admission
     if (stillInWaitingRoom) {
       log(`Bot is in waiting room. Waiting for ${timeout}ms for admission...`);
+      
+      // --- ADDED: Call awaiting admission callback to notify bot-manager that bot is waiting ---
+      try {
+        await callAwaitingAdmissionCallback(botConfig);
+        log("Awaiting admission callback sent successfully");
+      } catch (callbackError: any) {
+        log(`Warning: Failed to send awaiting admission callback: ${callbackError.message}. Continuing with admission wait...`);
+      }
       
       // Wait for the full timeout period, checking periodically for admission
       const checkInterval = 5000; // Check every 5 seconds
@@ -453,7 +471,7 @@ const prepareForRecording = async (page: Page): Promise<void> => {
   });
 };
 
-const joinMeeting = async (page: Page, meetingUrl: string, botName: string) => {
+const joinMeeting = async (page: Page, meetingUrl: string, botName: string, botConfig: BotConfig) => {
   const enterNameField = 'input[type="text"][aria-label="Your name"]';
   const joinButton = '//button[.//span[text()="Ask to join"]]';
   const muteButton = '[aria-label*="Turn off microphone"]';
@@ -465,6 +483,14 @@ const joinMeeting = async (page: Page, meetingUrl: string, botName: string) => {
   // Take screenshot after navigation
   await page.screenshot({ path: '/app/screenshots/bot-checkpoint-0-after-navigation.png', fullPage: true });
   log("📸 Screenshot taken: After navigation to meeting URL");
+  
+  // --- ADDED: Call joining callback to notify bot-manager that bot is joining ---
+  try {
+    await callJoiningCallback(botConfig);
+    log("Joining callback sent successfully");
+  } catch (callbackError: any) {
+    log(`Warning: Failed to send joining callback: ${callbackError.message}. Continuing with join process...`);
+  }
 
   // Add a longer, fixed wait after navigation for page elements to settle
   log("Waiting for page elements to settle after navigation...");

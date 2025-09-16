@@ -2,61 +2,73 @@
 // Keep this file free of runtime logic; export constants only.
 
 export const teamsInitialAdmissionIndicators: string[] = [
-  'button[aria-label*="People"]',
-  'button[aria-label*="people"]',
-  'button[aria-label*="Chat"]',
-  'button[aria-label*="chat"]',
-  'button[aria-label*="Leave"]',
-  'button[aria-label*="leave"]',
-  'button[aria-label*="End meeting"]',
-  'button[aria-label*="end meeting"]',
-  '[role="toolbar"]',
-  'button[aria-label*="Turn off microphone"]',
-  'button[aria-label*="Turn on microphone"]',
-  'button[aria-label*="Mute"]',
-  'button[aria-label*="mute"]',
-  'button[aria-label*="Camera"]',
-  'button[aria-label*="camera"]'
+  // Single robust indicator: visible Leave button in meeting toolbar
+  '[role="toolbar"] [aria-label*="Leave"]:visible:not([aria-disabled="true"])'
 ];
 
 export const teamsWaitingRoomIndicators: string[] = [
+  // Pre-join screen specific text (generic patterns)
+  'text="Someone will let you in shortly"',
+  'text*="Someone will let you in shortly"', // Generic pattern for any bot name
   'text="You\'re in the lobby"',
   'text="Waiting for someone to let you in"',
   'text="Please wait until someone admits you"',
   'text="Wait for someone to admit you"',
   'text="Waiting to be admitted"',
+  'text="Your request to join has been sent"',
+  
+  // Pre-join screen specific elements
+  'button:has-text("Join now")',
+  'button:has-text("Cancel")',
+  'text="Microsoft Teams meeting"',
+  
+  // Pre-join screen specific aria labels
   '[aria-label*="waiting"]',
   '[aria-label*="lobby"]',
-  'text="Your request to join has been sent"',
-  'text="Meeting not found"'
+  '[aria-label*="Join now"]',
+  '[aria-label*="Cancel"]',
+  
+  // Pre-join screen specific classes/attributes
+  '[data-tid*="pre-join"]',
+  '[data-tid*="lobby"]',
+  '[data-tid*="waiting"]',
+  
+  // Error states
+  'text="Meeting not found"',
+  'text="Unable to join"'
 ];
 
 export const teamsAdmissionIndicators: string[] = [
-  // Most common Teams meeting indicators (check these first!)
-  'button[aria-label*="Chat"]',
-  'button[aria-label*="chat"]',
-  'button[aria-label*="People"]',
-  'button[aria-label*="people"]',
-  'button[aria-label*="Participants"]',
-  'button[aria-label*="Leave"]',
-  'button[aria-label*="leave"]',
-  // Audio/video controls that appear when in Teams meeting
-  'button[aria-label*="Turn off microphone"]',
-  'button[aria-label*="Turn on microphone"]',
-  'button[aria-label*="Mute"]',
-  'button[aria-label*="mute"]',
-  'button[aria-label*="Turn off camera"]',
-  'button[aria-label*="Turn on camera"]',
-  'button[aria-label*="Camera"]',
-  'button[aria-label*="camera"]',
-  // Share and present buttons
-  'button[aria-label*="Share"]',
-  'button[aria-label*="share"]',
-  'button[aria-label*="Present"]',
-  'button[aria-label*="present"]',
-  // Meeting toolbar and controls
-  '[role="toolbar"]',
-  // Teams specific meeting UI
+  // Most reliable indicators - meeting-specific elements that don't exist in pre-join
+  'div:has-text("In this meeting")',
+  'div[aria-label*="In this meeting"]',
+  'div:has-text("Waiting in lobby")',
+  'div[aria-label*="Waiting in lobby"]',
+  
+  // Meeting toolbar with specific controls (not pre-join toolbar)
+  '[role="toolbar"] button[aria-label*="Share"]',
+  '[role="toolbar"] button[aria-label*="Present"]',
+  '[role="toolbar"] button[aria-label*="Leave"]',
+  '[role="toolbar"] button[aria-label*="End meeting"]',
+  
+  // Meeting navigation tabs (active in meeting, not pre-join)
+  'button[aria-label*="Chat"]:not([disabled])',
+  'button[aria-label*="People"]:not([disabled])',
+  'button[aria-label*="Participants"]:not([disabled])',
+  
+  // Meeting-specific audio/video controls (enabled, not pre-join disabled state)
+  'button[aria-label*="Turn off microphone"]:not([disabled])',
+  'button[aria-label*="Turn on microphone"]:not([disabled])',
+  'button[aria-label*="Turn off camera"]:not([disabled])',
+  'button[aria-label*="Turn on camera"]:not([disabled])',
+  
+  // Meeting-specific UI elements
+  '[data-tid*="meeting-controls"]',
+  '[data-tid*="call-controls"]',
+  '[data-tid*="meeting-toolbar"]',
+  '[data-tid*="participants-panel"]',
+  
+  // Meeting-specific data attributes
   '[data-tid*="meeting"]',
   '[data-tid*="call"]'
 ];

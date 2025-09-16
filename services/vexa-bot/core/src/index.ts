@@ -31,6 +31,42 @@ let redisSubscriber: RedisClientType | null = null;
 let browserInstance: Browser | null = null;
 // -------------------------------
 
+// --- ADDED: Exit Reason Mapping Function ---
+function mapExitReasonToStatus(reason: string, exitCode: number): { status: string; reason?: string; stage?: string } {
+  if (exitCode === 0) {
+    // Successful exits (completed)
+    switch (reason) {
+      case "admission_failed":
+        return { status: "completed", reason: "awaiting_admission_timeout" };
+      case "self_initiated_leave":
+        return { status: "completed", reason: "stopped" };
+      case "left_alone":
+        return { status: "completed", reason: "left_alone" };
+      case "evicted":
+        return { status: "completed", reason: "evicted" };
+      default:
+        return { status: "completed", reason: "stopped" };
+    }
+  } else {
+    // Failed exits
+    switch (reason) {
+      case "teams_error":
+      case "google_meet_error":
+      case "zoom_error":
+        return { status: "failed", stage: "joining" };
+      case "post_join_setup_error":
+        return { status: "failed", stage: "joining" };
+      case "missing_meeting_url":
+        return { status: "failed", stage: "requested" };
+      case "validation_error":
+        return { status: "failed", stage: "requested" };
+      default:
+        return { status: "failed", stage: "active" };
+    }
+  }
+}
+// -----------------------------------------
+
 // --- ADDED: Session Management Utilities ---
 /**
  * Generate UUID for session identification
@@ -221,12 +257,20 @@ async function performGracefulLeave(
   const finalCallbackReason = reason;
 
   if (botManagerCallbackUrl && currentConnectionId) {
+    // Map exit reason to new status system
+    const statusMapping = mapExitReasonToStatus(finalCallbackReason, finalCallbackExitCode);
+    
+    log(`🔥 CALLBACK: EXIT (${statusMapping.status} status) - reason: ${finalCallbackReason}, exit_code: ${finalCallbackExitCode}`);
+    
     const payload = JSON.stringify({
       connection_id: currentConnectionId,
       exit_code: finalCallbackExitCode,
       reason: finalCallbackReason,
       error_details: errorDetails || null,
-      platform_specific_error: errorDetails?.error_message || null
+      platform_specific_error: errorDetails?.error_message || null,
+      // Add new status system fields
+      completion_reason: statusMapping.reason || null,
+      failure_stage: statusMapping.stage || null
     });
 
     try {

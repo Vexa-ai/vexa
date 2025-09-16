@@ -39,7 +39,7 @@ class Meeting(Base):
     platform = Column(String(100), nullable=False) # e.g., 'google_meet', 'zoom'
     # Database column name is platform_specific_id but we use native_meeting_id in the code
     platform_specific_id = Column(String(255), index=True, nullable=True)
-    status = Column(String(50), nullable=False, default='requested', index=True)
+    status = Column(String(50), nullable=False, default='requested', index=True)  # Values: requested, joining, awaiting_admission, active, completed, failed
     bot_container_id = Column(String(255), nullable=True)
     start_time = Column(DateTime, nullable=True)
     end_time = Column(DateTime, nullable=True)

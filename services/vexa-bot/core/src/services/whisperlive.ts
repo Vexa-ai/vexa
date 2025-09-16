@@ -109,7 +109,7 @@ export class WhisperLiveService {
       language: botConfig.language || null,
       task: botConfig.task || "transcribe",
       model: null, // Let server use WHISPER_MODEL_SIZE from environment
-      use_vad: true,
+      use_vad: false,
       platform: botConfig.platform,
       token: botConfig.token,
       meeting_id: botConfig.nativeMeetingId,
@@ -134,6 +134,32 @@ export class WhisperLiveService {
       return true;
     } catch (error: any) {
       log(`[WhisperLive] Error sending audio data: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Send audio chunk metadata to WhisperLive
+   */
+  sendAudioChunkMetadata(chunkLength: number, sampleRate: number): boolean {
+    if (!this.connection?.socket || this.connection.socket.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+
+    const meta = {
+      type: "audio_chunk_metadata",
+      payload: {
+        length: chunkLength,
+        sample_rate: sampleRate,
+        client_timestamp_ms: Date.now(),
+      },
+    };
+
+    try {
+      this.connection.socket.send(JSON.stringify(meta));
+      return true;
+    } catch (error: any) {
+      log(`[WhisperLive] Error sending audio chunk metadata: ${error.message}`);
       return false;
     }
   }
