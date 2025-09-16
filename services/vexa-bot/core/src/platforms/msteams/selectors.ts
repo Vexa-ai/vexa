@@ -113,19 +113,41 @@ export const teamsParticipantContainerSelectors: string[] = [
 
 // Leave button selectors (used in browser context via page.evaluate)
 export const teamsPrimaryLeaveButtonSelectors: string[] = [
+  // Specific Teams leave button attributes (most reliable)
+  'button[data-tid="hangup-main-btn"]',
+  'button[id="hangup-button"]',
+  'button[aria-label="Leave"]',
+  
+  // Generic aria-label patterns
   'button[aria-label*="Leave"]',
   'button[aria-label*="leave"]',
   'button[aria-label*="End meeting"]',
   'button[aria-label*="end meeting"]',
   'button[aria-label*="Hang up"]',
-  'button[aria-label*="hang up"]'
+  'button[aria-label*="hang up"]',
+  
+  // Role-based selectors
+  '[role="toolbar"] button[aria-label*="Leave"]',
+  '[role="toolbar"] button[data-tid="hangup-main-btn"]'
 ];
 
 export const teamsSecondaryLeaveButtonSelectors: string[] = [
+  // Text-based selectors (for confirmation dialogs)
   'button:has-text("Leave meeting")',
   'button:has-text("Leave")',
   'button:has-text("End meeting")',
-  'button:has-text("Hang up")'
+  'button:has-text("Hang up")',
+  'button:has-text("End call")',
+  'button:has-text("Leave call")',
+  
+  // Confirmation dialog specific selectors
+  '[role="dialog"] button:has-text("Leave")',
+  '[role="dialog"] button:has-text("End meeting")',
+  '[role="alertdialog"] button:has-text("Leave")',
+  
+  // Generic confirmation patterns
+  'button[aria-label*="confirm"]:has-text("Leave")',
+  'button[aria-label*="confirm"]:has-text("End")'
 ];
 
 // Teams name selectors for participant identification
@@ -150,6 +172,96 @@ export const teamsNameSelectors: string[] = [
 // Teams speaking indicators (primary voice level detection)
 export const teamsSpeakingIndicators: string[] = [
   '[data-tid="voice-level-stream-outline"]'
+];
+
+// Teams removal/error state indicators
+export const teamsRemovalIndicators: string[] = [
+  // Removal messages
+  'text="You\'ve been removed from this meeting"',
+  'text*="You\'ve been removed from this meeting"',
+  'text="You have been removed from this meeting"',
+  'text*="You have been removed from this meeting"',
+  'text="Removed from meeting"',
+  'text*="Removed from meeting"',
+  
+  // Removal buttons
+  'button:has-text("Rejoin")',
+  'button:has-text("Dismiss")',
+  'button[aria-label*="Rejoin"]',
+  'button[aria-label*="Dismiss"]',
+  
+  // Error states
+  'text="Meeting ended"',
+  'text*="Meeting ended"',
+  'text="Call ended"',
+  'text*="Call ended"',
+  'text="Connection lost"',
+  'text*="Connection lost"',
+  'text="Unable to connect"',
+  'text*="Unable to connect"',
+  
+  // Generic error patterns
+  '[role="alert"]',
+  '[role="alertdialog"]',
+  '.error-message',
+  '.connection-error',
+  '.meeting-error'
+];
+
+// Teams UI interaction selectors
+export const teamsContinueButtonSelectors: string[] = [
+  'button:has-text("Continue")'
+];
+
+export const teamsJoinButtonSelectors: string[] = [
+  'button:has-text("Join")',
+  'button:has-text("Join now")'
+];
+
+export const teamsCameraButtonSelectors: string[] = [
+  'button[aria-label*="Turn off camera"]',
+  'button[aria-label*="Turn on camera"]'
+];
+
+export const teamsNameInputSelectors: string[] = [
+  'input[placeholder*="name"]',
+  'input[placeholder*="Name"]',
+  'input[type="text"]'
+];
+
+// Teams meeting container selectors
+export const teamsMeetingContainerSelectors: string[] = [
+  '[role="main"]',
+  'body'
+];
+
+// Teams voice level detection selectors
+export const teamsVoiceLevelSelectors: string[] = [
+  '[data-tid="voice-level-stream-outline"]'
+];
+
+// Teams occlusion detection selectors
+export const teamsOcclusionSelectors: string[] = [
+  '.vdi-frame-occlusion'
+];
+
+// Teams stream type selectors
+export const teamsStreamTypeSelectors: string[] = [
+  '[data-stream-type]'
+];
+
+// Teams audio activity selectors
+export const teamsAudioActivitySelectors: string[] = [
+  '[class*="voice" i][class*="level" i]',
+  '[class*="speaking" i]',
+  '[data-audio-active="true"]'
+];
+
+// Teams participant ID selectors
+export const teamsParticipantIdSelectors: string[] = [
+  '[data-tid]',
+  '[data-participant-id]',
+  '[data-user-id]'
 ];
 
 

@@ -1,5 +1,5 @@
 import { Page } from "playwright";
-import { log, randomDelay, callStartupCallback, callJoiningCallback, callAwaitingAdmissionCallback } from "../../utils";
+import { log, randomDelay, callStartupCallback, callJoiningCallback, callAwaitingAdmissionCallback, callLeaveCallback } from "../../utils";
 import { BotConfig } from "../../types";
 import { generateUUID, createSessionControlMessage, createSpeakerActivityMessage } from "../../index";
 import { WhisperLiveService } from "../../services/whisperlive";
@@ -16,11 +16,45 @@ import {
   teamsPrimaryLeaveButtonSelectors,
   teamsSecondaryLeaveButtonSelectors,
   teamsNameSelectors,
-  teamsSpeakingIndicators
+  teamsSpeakingIndicators,
+  teamsRemovalIndicators,
+  teamsContinueButtonSelectors,
+  teamsJoinButtonSelectors,
+  teamsCameraButtonSelectors,
+  teamsNameInputSelectors,
+  teamsMeetingContainerSelectors,
+  teamsVoiceLevelSelectors,
+  teamsOcclusionSelectors,
+  teamsStreamTypeSelectors,
+  teamsAudioActivitySelectors,
+  teamsParticipantIdSelectors
 } from "./selectors";
 
 
 // --- Teams-Specific Functions ---
+
+// Function to check if bot has been removed from the meeting
+const checkForTeamsRemoval = async (page: Page): Promise<boolean> => {
+  try {
+    // Check for removal indicators
+    for (const selector of teamsRemovalIndicators) {
+      try {
+        const element = await page.locator(selector).first();
+        if (await element.isVisible()) {
+          log(`🚨 Teams removal detected: Found removal indicator "${selector}"`);
+          return true;
+        }
+      } catch (e) {
+        // Continue checking other selectors
+        continue;
+      }
+    }
+    return false;
+  } catch (error: any) {
+    log(`Error checking for Teams removal: ${error.message}`);
+    return false;
+  }
+};
 
 // New function to wait for Teams meeting admission
 const waitForTeamsMeetingAdmission = async (
@@ -35,11 +69,11 @@ const waitForTeamsMeetingAdmission = async (
     log("Checking if bot is already admitted to the Teams meeting...");
     
     // Check for visible Leave button in meeting toolbar (single robust indicator)
-    const initialLeaveButtonVisible = await page.locator('[role="toolbar"] [aria-label*="Leave"]').first().isVisible();
-    const initialLeaveButtonEnabled = initialLeaveButtonVisible && !(await page.locator('[role="toolbar"] [aria-label*="Leave"]').first().getAttribute('aria-disabled'));
+    const initialLeaveButtonVisible = await page.locator(teamsInitialAdmissionIndicators[0]).first().isVisible();
+    const initialLeaveButtonEnabled = initialLeaveButtonVisible && !(await page.locator(teamsInitialAdmissionIndicators[0]).first().getAttribute('aria-disabled'));
     
     // Negative check: ensure we're not still in lobby/pre-join
-    const initialLobbyTextVisible = await page.locator('text="Someone will let you in shortly"').isVisible();
+    const initialLobbyTextVisible = await page.locator(teamsWaitingRoomIndicators[0]).isVisible();
     const initialJoinNowButtonVisible = await page.getByRole('button', { name: /Join now/i }).isVisible();
     
     if (initialLeaveButtonVisible && initialLeaveButtonEnabled && !initialLobbyTextVisible && !initialJoinNowButtonVisible) {
@@ -67,7 +101,7 @@ const waitForTeamsMeetingAdmission = async (
     let stillInWaitingRoom = false;
     
     // Check for lobby text visibility
-    const waitingLobbyTextVisible = await page.locator('text="Someone will let you in shortly"').isVisible();
+    const waitingLobbyTextVisible = await page.locator(teamsWaitingRoomIndicators[0]).isVisible();
     const waitingJoinNowButtonVisible = await page.getByRole('button', { name: /Join now/i }).isVisible();
     
     if (waitingLobbyTextVisible || waitingJoinNowButtonVisible) {
@@ -98,7 +132,7 @@ const waitForTeamsMeetingAdmission = async (
       
       while (Date.now() - startTime < timeout) {
         // Check if we're still in waiting room using visibility
-        const lobbyTextStillVisible = await page.locator('text="Someone will let you in shortly"').isVisible();
+        const lobbyTextStillVisible = await page.locator(teamsWaitingRoomIndicators[0]).isVisible();
         const joinNowButtonStillVisible = await page.getByRole('button', { name: /Join now/i }).isVisible();
         const stillWaiting = lobbyTextStillVisible || joinNowButtonStillVisible;
         
@@ -106,8 +140,8 @@ const waitForTeamsMeetingAdmission = async (
           log("Teams waiting room indicator disappeared - bot is likely admitted, checking for admission indicators...");
           
           // Immediately check for admission indicators since waiting room disappeared
-          const leaveButtonNowVisible = await page.locator('[role="toolbar"] [aria-label*="Leave"]').first().isVisible();
-          const leaveButtonNowEnabled = leaveButtonNowVisible && !(await page.locator('[role="toolbar"] [aria-label*="Leave"]').first().getAttribute('aria-disabled'));
+          const leaveButtonNowVisible = await page.locator(teamsInitialAdmissionIndicators[0]).first().isVisible();
+          const leaveButtonNowEnabled = leaveButtonNowVisible && !(await page.locator(teamsInitialAdmissionIndicators[0]).first().getAttribute('aria-disabled'));
           
           if (leaveButtonNowVisible && leaveButtonNowEnabled) {
             log(`Found Teams admission indicator: visible Leave button - Bot is confirmed admitted!`);
@@ -124,7 +158,7 @@ const waitForTeamsMeetingAdmission = async (
       }
       
       // After waiting, check if we're still in waiting room using visibility
-      const finalLobbyTextVisible = await page.locator('text="Someone will let you in shortly"').isVisible();
+      const finalLobbyTextVisible = await page.locator(teamsWaitingRoomIndicators[0]).isVisible();
       const finalJoinNowButtonVisible = await page.getByRole('button', { name: /Join now/i }).isVisible();
       const finalWaitingCheck = finalLobbyTextVisible || finalJoinNowButtonVisible;
       
@@ -139,11 +173,11 @@ const waitForTeamsMeetingAdmission = async (
     // Check for visible Leave button in meeting toolbar (single robust indicator)
     log("Checking for visible Leave button in meeting toolbar...");
     
-    const finalLeaveButtonVisible = await page.locator('[role="toolbar"] [aria-label*="Leave"]').first().isVisible();
-    const finalLeaveButtonEnabled = finalLeaveButtonVisible && !(await page.locator('[role="toolbar"] [aria-label*="Leave"]').first().getAttribute('aria-disabled'));
+    const finalLeaveButtonVisible = await page.locator(teamsInitialAdmissionIndicators[0]).first().isVisible();
+    const finalLeaveButtonEnabled = finalLeaveButtonVisible && !(await page.locator(teamsInitialAdmissionIndicators[0]).first().getAttribute('aria-disabled'));
     
     // Negative check: ensure we're not still in lobby/pre-join
-    const finalLobbyTextVisible = await page.locator('text="Someone will let you in shortly"').isVisible();
+    const finalLobbyTextVisible = await page.locator(teamsWaitingRoomIndicators[0]).isVisible();
     const finalJoinNowButtonVisible = await page.getByRole('button', { name: /Join now/i }).isVisible();
     
     const admitted = finalLeaveButtonVisible && finalLeaveButtonEnabled && !finalLobbyTextVisible && !finalJoinNowButtonVisible;
@@ -211,6 +245,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
       };
     }) => {
       const { botConfigData, whisperUrlForBrowser, selectors } = pageArgs;
+      const selectorsTyped = selectors as any;
 
       // Use browser utility classes from the global bundle
       const { BrowserAudioService, BrowserWhisperLiveService } = (window as any).VexaBrowserUtils;
@@ -347,7 +382,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                 
                 if (!id) {
                   // Look for stable child elements
-                  const stableChild = element.querySelector('[data-tid], [data-participant-id], [data-user-id]');
+                  const stableChild = element.querySelector(selectorsTyped.participantIdSelectors.join(', '));
                   if (stableChild) {
                     id = stableChild.getAttribute('data-tid') || 
                          stableChild.getAttribute('data-participant-id') ||
@@ -456,7 +491,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                 
                 // Check for voice-level-stream-outline element (primary Teams speaker indicator)
                 // NOTE: voice-level-stream-outline appears when participant is SILENT, disappears when SPEAKING
-                const voiceLevelElement = participantElement.querySelector('[data-tid="voice-level-stream-outline"]') as HTMLElement;
+                const voiceLevelElement = participantElement.querySelector(selectorsTyped.voiceLevelSelectors[0]) as HTMLElement;
                 const isVoiceLevelVisible = voiceLevelElement && 
                   voiceLevelElement.offsetWidth > 0 && 
                   voiceLevelElement.offsetHeight > 0 &&
@@ -619,7 +654,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
               });
 
               // Start observing the Teams meeting container
-              const meetingContainer = document.querySelector('[role="main"]') || document.body;
+              const meetingContainer = document.querySelector(selectorsTyped.meetingContainerSelectors[0]) || document.body;
               bodyObserver.observe(meetingContainer, {
                 childList: true,
                 subtree: true
@@ -641,14 +676,14 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
               const isVoiceLevelVisibleForContainer = (containerEl: HTMLElement): boolean => {
                 // Primary Teams indicator
                 // NOTE: voice-level-stream-outline appears when participant is SILENT, disappears when SPEAKING
-                const voiceLevel = containerEl.querySelector('[data-tid="voice-level-stream-outline"]') as HTMLElement | null;
+                const voiceLevel = containerEl.querySelector(selectorsTyped.voiceLevelSelectors[0]) as HTMLElement | null;
                 const visible = (el: HTMLElement) => {
                   const cs = getComputedStyle(el);
                   const rect = el.getBoundingClientRect();
                   const ariaHidden = el.getAttribute('aria-hidden') === 'true';
                   const transform = cs.transform || '';
                   const scaledToZero = /matrix\((?:[^,]+,){4}\s*0(?:,|\s*\))/.test(transform) || transform.includes('scale(0');
-                  const occluded = !!el.closest('.vdi-frame-occlusion');
+                  const occluded = !!el.closest(selectorsTyped.occlusionSelectors[0]);
                   return (
                     rect.width > 0 &&
                     rect.height > 0 &&
@@ -666,7 +701,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
 
                 // Fallbacks: any child with class patterns suggesting audio activity
                 const fallback = containerEl.querySelector(
-                  '[class*="voice" i][class*="level" i], [class*="speaking" i], [data-audio-active="true"]'
+                  selectorsTyped.audioActivitySelectors.join(', ')
                 ) as HTMLElement | null;
                 if (fallback && visible(fallback)) return true; // Return true for speaking (fallback indicators)
 
@@ -722,7 +757,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
 
               const getContainerForIndicator = (indicator: HTMLElement): HTMLElement | null => {
                 // Prefer explicit container if present
-                const container = indicator.closest('[data-stream-type]') as HTMLElement | null;
+                const container = indicator.closest(selectorsTyped.streamTypeSelectors[0]) as HTMLElement | null;
                 if (container) return container;
                 // Fallback to a few parent hops
                 let parent: HTMLElement | null = indicator.parentElement;
@@ -759,7 +794,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                   const allDocs = getAllDocuments();
                   const indicators: HTMLElement[] = [];
                   for (const doc of allDocs) {
-                    doc.querySelectorAll('[data-tid="voice-level-stream-outline"]').forEach(el => indicators.push(el as HTMLElement));
+                    doc.querySelectorAll(selectorsTyped.voiceLevelSelectors[0]).forEach(el => indicators.push(el as HTMLElement));
                   }
                   const currentSpeakingIds = new Set<string>();
 
@@ -769,7 +804,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                     const ariaHidden = el.getAttribute('aria-hidden') === 'true';
                     const transform = cs.transform || '';
                     const scaledToZero = /matrix\((?:[^,]+,){4}\s*0(?:,|\s*\))/.test(transform) || transform.includes('scale(0');
-                    const occluded = !!el.closest('.vdi-frame-occlusion');
+                    const occluded = !!el.closest(selectorsTyped.occlusionSelectors[0]);
                     return (
                       rect.width > 0 &&
                       rect.height > 0 &&
@@ -878,7 +913,56 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
               let speakersIdentified = false;
               let hasEverHadMultipleParticipants = false;
 
+              // Teams removal detection function (browser context)
+              const checkForRemoval = () => {
+                try {
+                  // 1) Strong text heuristics on body text
+                  const bodyText = (document.body?.innerText || '').toLowerCase();
+                  const removalPhrases = [
+                    "you've been removed from this meeting",
+                    'you have been removed from this meeting',
+                    'removed from meeting',
+                    'meeting ended',
+                    'call ended'
+                  ];
+                  if (removalPhrases.some(p => bodyText.includes(p))) {
+                    (window as any).logBot('🚨 Teams removal detected via body text');
+                    return true;
+                  }
+
+                  // 2) Button heuristics
+                  const buttons = Array.from(document.querySelectorAll('button')) as HTMLElement[];
+                  for (const btn of buttons) {
+                    const txt = (btn.textContent || btn.innerText || '').trim().toLowerCase();
+                    const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+                    if (txt === 'rejoin' || txt === 'dismiss' || aria.includes('rejoin') || aria.includes('dismiss')) {
+                      if (btn.offsetWidth > 0 && btn.offsetHeight > 0) {
+                        const cs = getComputedStyle(btn);
+                        if (cs.display !== 'none' && cs.visibility !== 'hidden') {
+                          (window as any).logBot('🚨 Teams removal detected via visible buttons (Rejoin/Dismiss)');
+                          return true;
+                        }
+                      }
+                    }
+                  }
+
+                  return false;
+                } catch (error: any) {
+                  (window as any).logBot(`Error checking for Teams removal: ${error.message}`);
+                  return false;
+                }
+              };
+
               const checkInterval = setInterval(() => {
+                // First check for removal state
+                if (checkForRemoval()) {
+                  (window as any).logBot("🚨 Bot has been removed from the Teams meeting. Initiating graceful leave...");
+                  clearInterval(checkInterval);
+                  audioService.disconnect();
+                  whisperLiveService.close();
+                  resolve();
+                  return;
+                }
                 // Check participant count using the comprehensive speaker detection system
                 const currentParticipantCount = (window as any).getTeamsActiveParticipantsCount ? (window as any).getTeamsActiveParticipantsCount() : 0;
                 
@@ -972,17 +1056,67 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
         silenceClasses: teamsSilenceClassNames,
         containerSelectors: teamsParticipantContainerSelectors,
         nameSelectors: teamsNameSelectors,
-        speakingIndicators: teamsSpeakingIndicators
-      }
+        speakingIndicators: teamsSpeakingIndicators,
+        voiceLevelSelectors: teamsVoiceLevelSelectors,
+        occlusionSelectors: teamsOcclusionSelectors,
+        streamTypeSelectors: teamsStreamTypeSelectors,
+        audioActivitySelectors: teamsAudioActivitySelectors,
+        participantIdSelectors: teamsParticipantIdSelectors,
+        meetingContainerSelectors: teamsMeetingContainerSelectors
+      } as any
     }
   );
   
+  // Start periodic removal checking from Node.js side (does not exit the process; caller handles gracefulLeave)
+  log("Starting periodic Teams removal monitoring...");
+  const removalCheckInterval = setInterval(async () => {
+    try {
+      const isRemoved = await checkForTeamsRemoval(page);
+      if (isRemoved) {
+        log("🚨 Teams removal detected from Node.js side. Triggering in-page leave...");
+        clearInterval(removalCheckInterval);
+        try {
+          await callLeaveCallback(botConfig, "removed_from_meeting");
+        } catch {}
+        try {
+          if (typeof (page as any).performLeaveAction === 'function') {
+            // no-op, performLeaveAction exists only in browser context
+          }
+        } catch {}
+        try {
+          // Attempt to click Rejoin/Dismiss to close the modal gracefully
+          await page.evaluate(() => {
+            const clickIfVisible = (el: HTMLElement | null) => {
+              if (!el) return;
+              const rect = el.getBoundingClientRect();
+              const cs = getComputedStyle(el);
+              if (rect.width > 0 && rect.height > 0 && cs.display !== 'none' && cs.visibility !== 'hidden') {
+                el.click();
+              }
+            };
+            const btns = Array.from(document.querySelectorAll('button')) as HTMLElement[];
+            for (const b of btns) {
+              const t = (b.textContent || b.innerText || '').trim().toLowerCase();
+              const a = (b.getAttribute('aria-label') || '').toLowerCase();
+              if (t === 'dismiss' || a.includes('dismiss')) { clickIfVisible(b); break; }
+            }
+          });
+        } catch {}
+      }
+    } catch (error: any) {
+      log(`Error during removal check: ${error.message}`);
+    }
+  }, 1500);
+
   // After page.evaluate finishes, cleanup services
   await whisperLiveService.cleanup();
+  
+  // Clear removal check interval
+  clearInterval(removalCheckInterval);
 };
 
 // Prepare for recording by exposing necessary functions
-const prepareForRecording = async (page: Page): Promise<void> => {
+const prepareForRecording = async (page: Page, botConfig: BotConfig): Promise<void> => {
   // Expose the logBot function to the browser context
   await page.exposeFunction("logBot", (msg: string) => {
     log(msg);
@@ -994,59 +1128,121 @@ const prepareForRecording = async (page: Page): Promise<void> => {
     teamsSecondaryLeaveButtonSelectors
   }));
 
+  // Expose bot config for callback functions
+  await page.exposeFunction("getBotConfig", (): BotConfig => botConfig);
+
 
   // Ensure leave function is available even before admission
   await page.evaluate(() => {
     if (typeof (window as any).performLeaveAction !== "function") {
       (window as any).performLeaveAction = async () => {
         try {
+          // Call leave callback first to notify bot-manager
+          (window as any).logBot?.("🔥 Calling leave callback before attempting to leave...");
+          try {
+            const botConfig = (window as any).getBotConfig?.();
+            if (botConfig) {
+              // We need to call the callback from Node.js context, not browser context
+              // This will be handled by the Node.js side when leaveMicrosoftTeams is called
+              (window as any).logBot?.("📡 Leave callback will be sent from Node.js context");
+            }
+          } catch (callbackError: any) {
+            (window as any).logBot?.(`⚠️ Warning: Could not prepare leave callback: ${callbackError.message}`);
+          }
+
           const sel = (window as any).getTeamsSelectors?.();
           if (sel) {
             (window as any).teamsPrimaryLeaveButtonSelectors = sel.teamsPrimaryLeaveButtonSelectors;
             (window as any).teamsSecondaryLeaveButtonSelectors = sel.teamsSecondaryLeaveButtonSelectors;
           }
           // Teams-specific leave button selectors (injected from Node via globals)
-          const primaryLeaveButtonSelectors = (window as any).teamsPrimaryLeaveButtonSelectors as string[] || [
-            'button[aria-label*="Leave"]',
-            'button[aria-label*="leave"]',
-            'button[aria-label*="End meeting"]',
-            'button[aria-label*="end meeting"]'
-          ];
-          const secondaryLeaveButtonSelectors = (window as any).teamsSecondaryLeaveButtonSelectors as string[] || [
-            'button:has-text("Leave meeting")',
-            'button:has-text("Leave")',
-            'button:has-text("End meeting")',
-            'button:has-text("Hang up")'
-          ];
+          const primaryLeaveButtonSelectors = (window as any).teamsPrimaryLeaveButtonSelectors as string[] || [];
+          const secondaryLeaveButtonSelectors = (window as any).teamsSecondaryLeaveButtonSelectors as string[] || [];
 
-          // Try primary leave buttons
+          // Enhanced leave button detection with better logging
+          (window as any).logBot?.("🔍 Starting Teams leave button detection...");
+          
+          // First, log all available buttons for debugging
+          const allButtons = document.querySelectorAll('button');
+          (window as any).logBot?.(`📊 Found ${allButtons.length} buttons on page`);
+          
+          // Log potential leave buttons for debugging
+          for (const button of allButtons) {
+            const ariaLabel = button.getAttribute('aria-label');
+            const dataTid = button.getAttribute('data-tid');
+            const id = button.getAttribute('id');
+            const textContent = button.textContent?.trim();
+            
+            if (ariaLabel?.toLowerCase().includes('leave') || 
+                ariaLabel?.toLowerCase().includes('hang') ||
+                ariaLabel?.toLowerCase().includes('end') ||
+                dataTid?.includes('hangup') ||
+                id?.includes('hangup') ||
+                textContent?.toLowerCase().includes('leave') ||
+                textContent?.toLowerCase().includes('hang')) {
+              (window as any).logBot?.(`🎯 Potential leave button: aria-label="${ariaLabel}", data-tid="${dataTid}", id="${id}", text="${textContent}"`);
+            }
+          }
+          
+          // Try primary leave buttons with enhanced detection
           for (const selector of primaryLeaveButtonSelectors) {
             try {
               const leaveButton = document.querySelector(selector) as HTMLElement;
               if (leaveButton) {
-                (window as any).logBot?.(`Clicking Teams primary leave button: ${selector}`);
-                leaveButton.click();
-                await new Promise((resolve) => setTimeout(resolve, 1000));
+                // Check if button is visible and enabled
+                const isVisible = leaveButton.offsetWidth > 0 && leaveButton.offsetHeight > 0;
+                const isEnabled = !leaveButton.hasAttribute('disabled') && leaveButton.getAttribute('aria-disabled') !== 'true';
                 
-                // Try secondary/confirmation buttons
-                for (const secondarySelector of secondaryLeaveButtonSelectors) {
-                  try {
-                    const confirmButton = document.querySelector(secondarySelector) as HTMLElement;
-                    if (confirmButton) {
-                      (window as any).logBot?.(`Clicking Teams confirmation leave button: ${secondarySelector}`);
-                      confirmButton.click();
-                      await new Promise((resolve) => setTimeout(resolve, 500));
-                      break;
+                if (isVisible && isEnabled) {
+                  (window as any).logBot?.(`✅ Found enabled Teams leave button: ${selector}`);
+                  (window as any).logBot?.(`🔘 Button details: aria-label="${leaveButton.getAttribute('aria-label')}", data-tid="${leaveButton.getAttribute('data-tid')}", id="${leaveButton.getAttribute('id')}"`);
+                  
+                  // Scroll button into view if needed
+                  leaveButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  await new Promise((resolve) => setTimeout(resolve, 500));
+                  
+                  // Click the button
+                  (window as any).logBot?.(`🖱️ Clicking Teams leave button...`);
+                  leaveButton.click();
+                  await new Promise((resolve) => setTimeout(resolve, 1500));
+                  
+                  // Check for confirmation dialogs and click them
+                  (window as any).logBot?.(`🔍 Checking for confirmation dialogs...`);
+                  let confirmationClicked = false;
+                  
+                  for (const secondarySelector of secondaryLeaveButtonSelectors) {
+                    try {
+                      const confirmButton = document.querySelector(secondarySelector) as HTMLElement;
+                      if (confirmButton && confirmButton.offsetWidth > 0 && confirmButton.offsetHeight > 0) {
+                        (window as any).logBot?.(`✅ Found confirmation button: ${secondarySelector}`);
+                        (window as any).logBot?.(`🔘 Confirmation details: text="${confirmButton.textContent?.trim()}", aria-label="${confirmButton.getAttribute('aria-label')}"`);
+                        
+                        confirmButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        await new Promise((resolve) => setTimeout(resolve, 300));
+                        
+                        (window as any).logBot?.(`🖱️ Clicking confirmation button...`);
+                        confirmButton.click();
+                        confirmationClicked = true;
+                        await new Promise((resolve) => setTimeout(resolve, 1000));
+                        break;
+                      }
+                    } catch (e) {
+                      continue;
                     }
-                  } catch (e) {
-                    continue;
                   }
+                  
+                  if (!confirmationClicked) {
+                    (window as any).logBot?.(`ℹ️ No confirmation dialog found - leave action may be complete`);
+                  }
+                  
+                  (window as any).logBot?.(`✅ Teams leave sequence completed successfully`);
+                  return true;
+                } else {
+                  (window as any).logBot?.(`⚠️ Leave button found but not usable: visible=${isVisible}, enabled=${isEnabled}`);
                 }
-                
-                (window as any).logBot?.("Teams leave sequence completed.");
-                return true;
               }
-            } catch (e) {
+            } catch (e: any) {
+              (window as any).logBot?.(`❌ Error with selector ${selector}: ${e.message}`);
               continue;
             }
           }
@@ -1096,7 +1292,7 @@ export async function handleMicrosoftTeams(
     // UI ACTION: Click "Continue on this browser" button
     log("Step 2: Looking for continue button...");
     try {
-      const continueButton = page.locator('button:has-text("Continue")').first();
+      const continueButton = page.locator(teamsContinueButtonSelectors[0]).first();
       await continueButton.waitFor({ timeout: 10000 });
       await continueButton.click();
       log("✅ Clicked continue button");
@@ -1108,7 +1304,7 @@ export async function handleMicrosoftTeams(
     // UI ACTION: Click join button 
     log("Step 3: Looking for join button...");
     try {
-      const joinButton = page.locator('button:has-text("Join")').first();
+      const joinButton = page.locator(teamsJoinButtonSelectors[0]).first();
       await joinButton.waitFor({ timeout: 10000 });
       await joinButton.click();
       log("✅ Clicked join button");
@@ -1120,7 +1316,7 @@ export async function handleMicrosoftTeams(
     // UI ACTION: Try to turn off camera
     log("Step 4: Trying to turn off camera...");
     try {
-      const cameraButton = page.getByRole('button', { name: 'Turn off camera' });
+      const cameraButton = page.locator(teamsCameraButtonSelectors[0]);
       await cameraButton.waitFor({ timeout: 5000 });
       await cameraButton.click();
       log("✅ Camera turned off");
@@ -1131,7 +1327,7 @@ export async function handleMicrosoftTeams(
     // UI ACTION: Set display name
     log("Step 5: Trying to set display name...");
     try {
-      const nameInput = page.locator('input[placeholder*="name"], input[placeholder*="Name"], input[type="text"]').first();
+      const nameInput = page.locator(teamsNameInputSelectors.join(', ')).first();
       await nameInput.waitFor({ timeout: 5000 });
       await nameInput.fill(botConfig.botName);
       log(`✅ Display name set to "${botConfig.botName}"`);
@@ -1142,7 +1338,7 @@ export async function handleMicrosoftTeams(
     // UI ACTION: Click final join button
     log("Step 6: Looking for final join button...");
     try {
-      const finalJoinButton = page.locator('button:has-text("Join now"), button:has-text("Join")').first();
+      const finalJoinButton = page.locator(teamsJoinButtonSelectors.join(', ')).first();
       await finalJoinButton.waitFor({ timeout: 10000 });
       await finalJoinButton.click();
       log("✅ Clicked final join button");
@@ -1168,7 +1364,7 @@ export async function handleMicrosoftTeams(
         }),
 
         // Prepare for recording (expose functions, etc.) while waiting for admission
-        prepareForRecording(page),
+        prepareForRecording(page, botConfig),
       ]);
     
     if (!isAdmitted) {
@@ -1219,12 +1415,26 @@ export async function handleMicrosoftTeams(
 }
 
 // --- ADDED: Exported function to trigger leave from Node.js ---
-export async function leaveMicrosoftTeams(page: Page | null): Promise<boolean> {
+export async function leaveMicrosoftTeams(page: Page | null, botConfig?: BotConfig, reason: string = "manual_leave"): Promise<boolean> {
   log("[leaveMicrosoftTeams] Triggering leave action in browser context...");
   if (!page || page.isClosed()) {
     log("[leaveMicrosoftTeams] Page is not available or closed.");
     return false;
   }
+
+  // Call leave callback first to notify bot-manager
+  if (botConfig) {
+    try {
+      log("🔥 Calling leave callback before attempting to leave...");
+      await callLeaveCallback(botConfig, reason);
+      log("✅ Leave callback sent successfully");
+    } catch (callbackError: any) {
+      log(`⚠️ Warning: Failed to send leave callback: ${callbackError.message}. Continuing with leave attempt...`);
+    }
+  } else {
+    log("⚠️ Warning: No bot config provided, cannot send leave callback");
+  }
+
   try {
     const result = await page.evaluate(async () => {
       if (typeof (window as any).performLeaveAction === "function") {

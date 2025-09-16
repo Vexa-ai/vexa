@@ -144,3 +144,49 @@ export async function callAwaitingAdmissionCallback(botConfig: any): Promise<voi
   }
 }
 
+export async function callLeaveCallback(botConfig: any, reason: string = "manual_leave"): Promise<void> {
+  log("🔥 CALLBACK: LEAVE (leaving status)");
+  
+  if (!botConfig.botManagerCallbackUrl) {
+    log("Warning: No bot manager callback URL configured. Cannot send leave callback.");
+    return;
+  }
+
+  if (!botConfig.connectionId) {
+    log("Warning: No connection ID configured. Cannot send leave callback.");
+    return;
+  }
+
+  try {
+    // Use the same URL structure as startup callback
+    const baseUrl = botConfig.botManagerCallbackUrl.replace('/exited', '/leaving');
+    const leavingUrl = baseUrl;
+    
+    const payload = {
+      connection_id: botConfig.connectionId,
+      container_id: botConfig.container_name,
+      status: "leaving",
+      reason: reason,
+      timestamp: new Date().toISOString()
+    };
+
+    log(`Sending leave callback to ${leavingUrl} with payload: ${JSON.stringify(payload)}`);
+
+    const response = await fetch(leavingUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (response.ok) {
+      log("Leave callback sent successfully");
+    } else {
+      log(`Leave callback failed with status: ${response.status}`);
+    }
+  } catch (error: any) {
+    log(`Error sending leave callback: ${error.message}`);
+  }
+}
+
