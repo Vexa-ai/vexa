@@ -683,6 +683,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                             
                             speakingStates.delete(participantId);
                             activeParticipants.delete(participantId);
+                            
                             delete (elementNode as any).dataset.vexaObserverAttached;
                             delete (elementNode as any).dataset.vexaGeneratedId;
                             (window as any).logBot(`🗑️ [Teams] Removed observer for: ${participantName} (ID: ${participantId})`);
@@ -701,9 +702,32 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                 subtree: true
               });
 
-              // Expose active participants count for meeting monitoring
-              (window as any).getTeamsActiveParticipantsCount = () => activeParticipants.size;
-              (window as any).getTeamsActiveParticipants = () => Array.from(activeParticipants.keys());
+              // Simple participant counting - poll every 5 seconds and subtract 1 for bot
+              let currentParticipantCount = 0;
+              
+              const countParticipants = () => {
+                // Find all participant containers
+                const participantContainers = document.querySelectorAll(selectors.containerSelectors.join(', '));
+                const totalCount = participantContainers.length;
+                
+                // Subtract 1 for the bot itself
+                const humanCount = Math.max(0, totalCount - 1);
+                
+                if (humanCount !== currentParticipantCount) {
+                  (window as any).logBot(`🔢 Participant count changed: ${currentParticipantCount} → ${humanCount} (total: ${totalCount}, humans: ${humanCount})`);
+                  currentParticipantCount = humanCount;
+                }
+                
+                return humanCount;
+              };
+              
+              // Do initial count immediately, then poll every 5 seconds
+              countParticipants();
+              setInterval(countParticipants, 5000);
+              
+              // Expose participant count for meeting monitoring
+              (window as any).getTeamsActiveParticipantsCount = () => currentParticipantCount;
+              (window as any).getTeamsActiveParticipants = () => ['simplified-counting'];
               
               // Debug helpers removed to reduce log noise
 
@@ -946,7 +970,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
             const setupTeamsMeetingMonitoring = (botConfigData: any, audioService: any, whisperLiveService: any, resolve: any) => {
               (window as any).logBot("Setting up Teams meeting monitoring...");
               
-              const startupAloneTimeoutSeconds = 20 * 60; // 20 minutes during startup
+              const startupAloneTimeoutSeconds = 10; // 10 seconds during startup (for testing)
               const everyoneLeftTimeoutSeconds = 10; // 10 seconds after speakers identified
               
               let aloneTime = 0;
@@ -1008,7 +1032,10 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                 const currentParticipantCount = (window as any).getTeamsActiveParticipantsCount ? (window as any).getTeamsActiveParticipantsCount() : 0;
                 
                 if (currentParticipantCount !== lastParticipantCount) {
-                  // (log trimmed)
+                  (window as any).logBot(`🔢 Teams participant count changed: ${lastParticipantCount} → ${currentParticipantCount}`);
+                  const participantList = (window as any).getTeamsActiveParticipants ? (window as any).getTeamsActiveParticipants() : [];
+                  (window as any).logBot(`👥 Current participants: ${JSON.stringify(participantList)}`);
+                  
                   lastParticipantCount = currentParticipantCount;
                   
                   // Track if we've ever had multiple participants
@@ -1019,23 +1046,29 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                   }
                 }
 
-                if (currentParticipantCount <= 1) {
+                if (currentParticipantCount === 0) {
                   aloneTime++;
                   
                   // Determine timeout based on whether speakers have been identified
                   const currentTimeout = speakersIdentified ? everyoneLeftTimeoutSeconds : startupAloneTimeoutSeconds;
                   const timeoutDescription = speakersIdentified ? "post-speaker" : "startup";
                   
+                  (window as any).logBot(`⏱️ Teams bot alone time: ${aloneTime}s/${currentTimeout}s (${timeoutDescription} mode, speakers identified: ${speakersIdentified})`);
+                  
                   if (aloneTime >= currentTimeout) {
                     if (speakersIdentified) {
                       (window as any).logBot(`Teams meeting ended or bot has been alone for ${everyoneLeftTimeoutSeconds} seconds after speakers were identified. Stopping recorder...`);
+                      clearInterval(checkInterval);
+                      audioService.disconnect();
+                      whisperLiveService.close();
+                      reject(new Error("TEAMS_BOT_LEFT_ALONE_TIMEOUT"));
                     } else {
-                      (window as any).logBot(`Teams bot has been alone for ${startupAloneTimeoutSeconds/60} minutes during startup with no other participants. Stopping recorder...`);
+                      (window as any).logBot(`Teams bot has been alone for ${startupAloneTimeoutSeconds} seconds during startup with no other participants. Stopping recorder...`);
+                      clearInterval(checkInterval);
+                      audioService.disconnect();
+                      whisperLiveService.close();
+                      reject(new Error("TEAMS_BOT_STARTUP_ALONE_TIMEOUT"));
                     }
-                    clearInterval(checkInterval);
-                    audioService.disconnect();
-                    whisperLiveService.close();
-                    resolve();
                   } else if (aloneTime > 0 && aloneTime % 10 === 0) { // Log every 10 seconds to avoid spam
                     if (speakersIdentified) {
                       (window as any).logBot(`Teams bot has been alone for ${aloneTime} seconds (${timeoutDescription} mode). Will leave in ${currentTimeout - aloneTime} more seconds.`);
@@ -1435,6 +1468,19 @@ export async function handleMicrosoftTeams(
     if (error.message === "TEAMS_BOT_REMOVED_BY_ADMIN" || error.message.includes("TEAMS_BOT_REMOVED_BY_ADMIN")) {
       log("🚨 Bot was removed from Teams meeting by admin. Exiting gracefully...");
       await gracefulLeaveFunction(page, 0, "removed_by_admin");
+      return;
+    }
+    
+    // Handle left alone timeout scenarios
+    if (error.message === "TEAMS_BOT_LEFT_ALONE_TIMEOUT" || error.message.includes("TEAMS_BOT_LEFT_ALONE_TIMEOUT")) {
+      log("⏰ Bot was left alone in Teams meeting for 10 seconds. Exiting gracefully...");
+      await gracefulLeaveFunction(page, 0, "left_alone_timeout");
+      return;
+    }
+    
+    if (error.message === "TEAMS_BOT_STARTUP_ALONE_TIMEOUT" || error.message.includes("TEAMS_BOT_STARTUP_ALONE_TIMEOUT")) {
+      log("⏰ Bot was alone during startup for 10 seconds. Exiting gracefully...");
+      await gracefulLeaveFunction(page, 0, "startup_alone_timeout");
       return;
     }
     
