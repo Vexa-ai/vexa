@@ -2,8 +2,12 @@
 // Keep this file free of runtime logic; export constants only.
 
 export const teamsInitialAdmissionIndicators: string[] = [
-  // Single robust indicator: visible Leave button in meeting toolbar
-  '[role="toolbar"] [aria-label*="Leave"]:visible:not([aria-disabled="true"])'
+  // Most reliable indicators: Leave buttons that actually exist in Teams meetings
+  'button[id="hangup-button"]',
+  'button[data-tid="hangup-main-btn"]', 
+  'button[aria-label="Leave"]',
+  '[role="toolbar"] button[aria-label*="Leave"]',
+  'button[aria-label*="Leave"]'
 ];
 
 export const teamsWaitingRoomIndicators: string[] = [

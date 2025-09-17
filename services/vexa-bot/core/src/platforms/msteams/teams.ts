@@ -82,6 +82,27 @@ const checkForTeamsRemoval = async (page: Page): Promise<boolean> => {
 };
 
 // New function to wait for Teams meeting admission
+// Helper function to check for any visible and enabled Leave button
+const checkForAdmissionIndicators = async (page: Page): Promise<boolean> => {
+  for (const selector of teamsInitialAdmissionIndicators) {
+    try {
+      const element = page.locator(selector).first();
+      const isVisible = await element.isVisible();
+      if (isVisible) {
+        const isDisabled = await element.getAttribute('aria-disabled');
+        if (isDisabled !== 'true') {
+          log(`✅ Found admission indicator: ${selector}`);
+          return true;
+        }
+      }
+    } catch (error) {
+      // Continue to next selector if this one fails
+      continue;
+    }
+  }
+  return false;
+};
+
 const waitForTeamsMeetingAdmission = async (
   page: Page,
   timeout: number,
@@ -93,15 +114,14 @@ const waitForTeamsMeetingAdmission = async (
     // FIRST: Check if bot is already admitted (no waiting room needed)
     log("Checking if bot is already admitted to the Teams meeting...");
     
-    // Check for visible Leave button in meeting toolbar (single robust indicator)
-    const initialLeaveButtonVisible = await page.locator(teamsInitialAdmissionIndicators[0]).first().isVisible();
-    const initialLeaveButtonEnabled = initialLeaveButtonVisible && !(await page.locator(teamsInitialAdmissionIndicators[0]).first().getAttribute('aria-disabled'));
+    // Check for any visible Leave button (multiple selectors for robustness)
+    const initialLeaveButtonFound = await checkForAdmissionIndicators(page);
     
     // Negative check: ensure we're not still in lobby/pre-join
     const initialLobbyTextVisible = await page.locator(teamsWaitingRoomIndicators[0]).isVisible();
     const initialJoinNowButtonVisible = await page.getByRole('button', { name: /Join now/i }).isVisible();
     
-    if (initialLeaveButtonVisible && initialLeaveButtonEnabled && !initialLobbyTextVisible && !initialJoinNowButtonVisible) {
+    if (initialLeaveButtonFound && !initialLobbyTextVisible && !initialJoinNowButtonVisible) {
       log(`Found Teams admission indicator: visible Leave button - Bot is already admitted to the meeting!`);
       
       // STATUS CHANGE: Bot is already admitted - take screenshot before AWAITING_ADMISSION callback
@@ -152,7 +172,7 @@ const waitForTeamsMeetingAdmission = async (
       log(`Bot is in Teams waiting room. Waiting for ${timeout}ms for admission...`);
       
       // Wait for the full timeout period, checking periodically for admission (NO PERIODIC SCREENSHOTS)
-      const checkInterval = 5000; // Check every 5 seconds
+      const checkInterval = 2000; // Check every 2 seconds for faster detection
       const startTime = Date.now();
       
       while (Date.now() - startTime < timeout) {
@@ -172,11 +192,10 @@ const waitForTeamsMeetingAdmission = async (
           }
           
           // Check for admission indicators since waiting room disappeared and no rejection found
-          const leaveButtonNowVisible = await page.locator(teamsInitialAdmissionIndicators[0]).first().isVisible();
-          const leaveButtonNowEnabled = leaveButtonNowVisible && !(await page.locator(teamsInitialAdmissionIndicators[0]).first().getAttribute('aria-disabled'));
+          const leaveButtonNowFound = await checkForAdmissionIndicators(page);
           
-          if (leaveButtonNowVisible && leaveButtonNowEnabled) {
-            log(`✅ Bot was admitted to the Teams meeting: visible Leave button confirmed`);
+          if (leaveButtonNowFound) {
+            log(`✅ Bot was admitted to the Teams meeting: Leave button confirmed`);
             return true;
           } else {
             log("⚠️ Teams waiting room disappeared but no clear admission indicators found - assuming admitted");
@@ -202,17 +221,16 @@ const waitForTeamsMeetingAdmission = async (
     // PRIORITY: Check for Teams meeting controls/toolbar (most reliable indicator)
     log("Checking for Teams meeting controls as primary admission indicator...");
     
-    // Check for visible Leave button in meeting toolbar (single robust indicator)
+    // Check for any visible Leave button (multiple selectors for robustness)
     log("Checking for visible Leave button in meeting toolbar...");
     
-    const finalLeaveButtonVisible = await page.locator(teamsInitialAdmissionIndicators[0]).first().isVisible();
-    const finalLeaveButtonEnabled = finalLeaveButtonVisible && !(await page.locator(teamsInitialAdmissionIndicators[0]).first().getAttribute('aria-disabled'));
+    const finalLeaveButtonFound = await checkForAdmissionIndicators(page);
     
     // Negative check: ensure we're not still in lobby/pre-join
     const finalLobbyTextVisible = await page.locator(teamsWaitingRoomIndicators[0]).isVisible();
     const finalJoinNowButtonVisible = await page.getByRole('button', { name: /Join now/i }).isVisible();
     
-    const admitted = finalLeaveButtonVisible && finalLeaveButtonEnabled && !finalLobbyTextVisible && !finalJoinNowButtonVisible;
+    const admitted = finalLeaveButtonFound && !finalLobbyTextVisible && !finalJoinNowButtonVisible;
     
     if (admitted) {
       log(`Found Teams admission indicator: visible Leave button - Bot is admitted to the meeting`);
