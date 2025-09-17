@@ -314,17 +314,19 @@ export const teamsParticipantIdSelectors: string[] = [
 
 // Teams comprehensive leave selectors (stateless - covers all scenarios)
 export const teamsLeaveSelectors: string[] = [
-  // Cancel buttons (for awaiting admission/waiting room) - try these first
-  'button[aria-label="Cancel"]',
-  'button:has-text("Cancel")',
-  
-  // Leave buttons (for active meetings) - most reliable first
-  'button[aria-label="Leave"]',
-  'button:has-text("Leave")',
+  // WORKING SELECTORS FIRST - confirmed from logs
+  'button[id="hangup-button"]', // ✅ CONFIRMED WORKING - successfully clicked in logs
   
   // Teams-specific leave/hangup buttons
   'button[data-tid="hangup-main-btn"]',
-  'button[id="hangup-button"]',
+  
+  // Cancel buttons (for awaiting admission/waiting room)
+  'button[aria-label="Cancel"]',
+  'button:has-text("Cancel")',
+  
+  // Leave buttons (for active meetings)
+  'button[aria-label="Leave"]',
+  'button:has-text("Leave")',
   
   // More specific leave patterns
   'button[aria-label*="Leave"]',

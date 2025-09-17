@@ -428,7 +428,8 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
               
               // State for tracking speaking status
               const speakingStates = new Map(); // Stores the logical speaking state for each participant ID
-              const activeParticipants = new Map(); // Central map for all known participants
+              
+              // Participant tracking no longer stored in memory; we query ARIA roles when needed
               
               // Helper functions for Teams speaker detection
               function getTeamsParticipantId(element: HTMLElement) {
@@ -524,6 +525,8 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                 const participantId = getTeamsParticipantId(participantElement);
                 const participantName = getTeamsParticipantName(participantElement);
                 
+                // Note: We do not maintain participant lists here anymore; events are forwarded only
+                
                 // Send via BrowserWhisperLiveService helper (handles OPEN state internally)
                 try {
                   const sent = whisperLiveService.sendSpeakerEvent(
@@ -584,6 +587,8 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                 const participantId = getTeamsParticipantId(participantElement);
                 const participantName = getTeamsParticipantName(participantElement);
                 
+                // Skip tracking here; we only observe for speaking state
+                
                 // Initialize participant as silent
                 speakingStates.set(participantId, "silent");
                 
@@ -614,8 +619,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                 
                 logTeamsSpeakerEvent(participantElement, classListForInitialScan);
                 
-                // Add participant to central map
-                activeParticipants.set(participantId, { name: participantName, element: participantElement });
+                // No longer adding to activeParticipants here - we track participants via speaker events only
                 
                 const callback = function(mutationsList: MutationRecord[], observer: MutationObserver) {
                   for (const mutation of mutationsList) {
@@ -700,7 +704,6 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                             }
                             
                             speakingStates.delete(participantId);
-                            activeParticipants.delete(participantId);
                             
                             delete (elementNode as any).dataset.vexaObserverAttached;
                             delete (elementNode as any).dataset.vexaGeneratedId;
@@ -720,23 +723,17 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                 subtree: true
               });
 
-              // Simple participant counting - poll every 5 seconds and subtract 1 for bot
+              // Simple participant counting - poll every 5 seconds using ARIA list
               let currentParticipantCount = 0;
               
               const countParticipants = () => {
-                // Find all participant containers
-                const participantContainers = document.querySelectorAll(selectors.containerSelectors.join(', '));
-                const totalCount = participantContainers.length;
-                
-                // Subtract 1 for the bot itself
-                const humanCount = Math.max(0, totalCount - 1);
-                
-                if (humanCount !== currentParticipantCount) {
-                  (window as any).logBot(`🔢 Participant count changed: ${currentParticipantCount} → ${humanCount} (total: ${totalCount}, humans: ${humanCount})`);
-                  currentParticipantCount = humanCount;
+                const names = collectAriaParticipants();
+                const totalCount = botConfigData?.name ? names.length + 1 : names.length;
+                if (totalCount !== currentParticipantCount) {
+                  (window as any).logBot(`🔢 Participant count: ${currentParticipantCount} → ${totalCount}`);
+                  currentParticipantCount = totalCount;
                 }
-                
-                return humanCount;
+                return totalCount;
               };
               
               // Do initial count immediately, then poll every 5 seconds
@@ -744,8 +741,47 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
               setInterval(countParticipants, 5000);
               
               // Expose participant count for meeting monitoring
-              (window as any).getTeamsActiveParticipantsCount = () => currentParticipantCount;
-              (window as any).getTeamsActiveParticipants = () => ['simplified-counting'];
+              // Accessible-roles based participant collection (robust and simple)
+              function collectAriaParticipants(): string[] {
+                try {
+                  // Find all menuitems in the Participants panel that contain an avatar/image
+                  const menuItems = Array.from(document.querySelectorAll('[role="menuitem"]')) as HTMLElement[];
+                  const names = new Set<string>();
+                  for (const item of menuItems) {
+                    const hasImg = !!(item.querySelector('img') || item.querySelector('[role="img"]'));
+                    if (!hasImg) continue;
+                    // Derive accessible-like name
+                    const aria = item.getAttribute('aria-label');
+                    let name = aria && aria.trim() ? aria.trim() : '';
+                    if (!name) {
+                      const text = (item.textContent || '').trim();
+                      if (text) name = text;
+                    }
+                    if (name) {
+                      names.add(name);
+                    }
+                  }
+                  return Array.from(names);
+                } catch (err: any) {
+                  const msg = (err && err.message) ? err.message : String(err);
+                  (window as any).logBot?.(`⚠️ [ARIA Participants] Error collecting participants: ${msg}`);
+                  return [];
+                }
+              }
+
+              (window as any).getTeamsActiveParticipantsCount = () => {
+                // Use ARIA role-based collection and include the bot if name is known
+                const names = collectAriaParticipants();
+                const total = botConfigData?.name ? names.length + 1 : names.length;
+                return total;
+              };
+              (window as any).getTeamsActiveParticipants = () => {
+                // Return ARIA role-based names plus bot (if known)
+                const names = collectAriaParticipants();
+                if (botConfigData?.name) names.push(botConfigData.name);
+                (window as any).logBot(`🔍 [ARIA Participants] ${JSON.stringify(names)}`);
+                return names;
+              };
               
               // Debug helpers removed to reduce log noise
 
@@ -957,24 +993,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                     }
                   });
 
-                  // Handle speakers that stopped (previously true but not in current set)
-                  const nowTs = Date.now();
-                  Array.from(lastIndicatorStateById.keys()).forEach((participantId) => {
-                    const wasSpeaking = lastIndicatorStateById.get(participantId) === true;
-                    const seenTs = lastSeenTsById.get(participantId) || 0;
-                    if (wasSpeaking && !currentSpeakingIds.has(participantId) && (nowTs - seenTs) > INACTIVITY_MS) {
-                      const participant = activeParticipants.get(participantId);
-                      const element = participant?.element as HTMLElement | undefined;
-                      const name = participant?.name || `Teams Participant (${participantId})`;
-                      if (element) {
-                        const ts = new Date().toISOString();
-                        (window as any).logBot(`[${ts}] [SPEAKER_END] ${name}`);
-                        sendTeamsSpeakerEvent('SPEAKER_END', element);
-                      }
-                      lastIndicatorStateById.set(participantId, false);
-                      lastEventTsById.set(participantId, nowTs);
-                    }
-                  });
+                  // Note: Removed complex fallback speaker detection logic - using single mechanism via speaker events only
                 } catch (e: any) {
                   // (log trimmed)
                 }
@@ -1324,7 +1343,7 @@ export async function handleMicrosoftTeams(
     // Step 1: Navigate to Teams meeting
     log(`Step 1: Navigating to Teams meeting: ${botConfig.meetingUrl}`);
     await page.goto(botConfig.meetingUrl, { waitUntil: 'networkidle', timeout: 30000 });
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(2000);
     
     // STATUS CHANGE: Bot is joining - take screenshot before JOINING callback
     await page.screenshot({ path: '/app/storage/screenshots/teams-status-joining.png', fullPage: true });
@@ -1345,7 +1364,7 @@ export async function handleMicrosoftTeams(
       await continueButton.waitFor({ timeout: 10000 });
       await continueButton.click();
       log("✅ Clicked continue button");
-      await page.waitForTimeout(3000);
+      await page.waitForTimeout(1000);
     } catch (error) {
       log("ℹ️ Continue button not found, continuing...");
     }
@@ -1357,7 +1376,7 @@ export async function handleMicrosoftTeams(
       await joinButton.waitFor({ timeout: 10000 });
       await joinButton.click();
       log("✅ Clicked join button");
-      await page.waitForTimeout(3000);
+      await page.waitForTimeout(1000);
     } catch (error) {
       log("ℹ️ Join button not found, continuing...");
     }
@@ -1391,7 +1410,7 @@ export async function handleMicrosoftTeams(
       await finalJoinButton.waitFor({ timeout: 10000 });
       await finalJoinButton.click();
       log("✅ Clicked final join button");
-      await page.waitForTimeout(5000);
+      await page.waitForTimeout(1000);
     } catch (error) {
       log("ℹ️ Final join button not found");
     }
