@@ -31,6 +31,13 @@ let redisSubscriber: RedisClientType | null = null;
 let browserInstance: Browser | null = null;
 // -------------------------------
 
+// --- ADDED: Stop signal tracking ---
+let stopSignalReceived = false;
+export function hasStopSignalReceived(): boolean {
+  return stopSignalReceived || isShuttingDown;
+}
+// -----------------------------------
+
 // --- ADDED: Exit Reason Mapping Function ---
 function mapExitReasonToStatus(reason: string, exitCode: number): { status: string; reason?: string; stage?: string } {
   if (exitCode === 0) {
@@ -193,6 +200,8 @@ const handleRedisMessage = async (message: string, channel: string, page: Page |
                log("Page not available or closed, cannot send reconfigure command to browser.");
           }
       } else if (command.action === 'leave') {
+        // Mark that a stop was requested via Redis
+        stopSignalReceived = true;
         // TODO: Implement leave logic (Phase 4)
         log("Received leave command");
         if (!isShuttingDown && page && !page.isClosed()) { // Check flag and page state

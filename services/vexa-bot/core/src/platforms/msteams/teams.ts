@@ -1,7 +1,7 @@
 import { Page } from "playwright";
 import { log, randomDelay, callStartupCallback, callJoiningCallback, callAwaitingAdmissionCallback, callLeaveCallback } from "../../utils";
 import { BotConfig } from "../../types";
-import { generateUUID, createSessionControlMessage, createSpeakerActivityMessage } from "../../index";
+import { generateUUID, createSessionControlMessage, createSpeakerActivityMessage, hasStopSignalReceived } from "../../index";
 import { WhisperLiveService } from "../../services/whisperlive";
 import { AudioService } from "../../services/audio";
 import { WebSocketManager } from "../../utils/websocket";
@@ -1420,6 +1420,13 @@ export async function handleMicrosoftTeams(
     const currentUrl = page.url();
     log(`📍 Current URL: ${currentUrl}`);
     
+    // Quick pre-admission stop check before waiting to be admitted
+    if (hasStopSignalReceived()) {
+      log("⛔ Stop signal detected before admission wait. Exiting without joining.");
+      await gracefulLeaveFunction(page, 0, "stop_requested_pre_admission");
+      return;
+    }
+
     // Setup websocket connection and meeting admission concurrently
     log("Starting WebSocket connection while waiting for Teams meeting admission");
     try {
