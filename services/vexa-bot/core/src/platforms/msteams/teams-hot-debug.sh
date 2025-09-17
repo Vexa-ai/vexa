@@ -32,7 +32,6 @@ fi
 
 # Resolve paths
 ROOT_DIR="$(cd ../../.. && pwd)"                 # core root
-TESTS_DIR="$ROOT_DIR/src/tests"                   # core/src/tests
 DIST_DIR="$ROOT_DIR/dist"                         # core/dist (built output)
 
 # Ensure fresh code by rebuilding dist files
@@ -47,7 +46,7 @@ if [ ! -d "$DIST_DIR" ]; then
 fi
 
 echo "🤖 Running Teams bot container with bind mounts (hot-reload)..."
-cd "$TESTS_DIR"
+# cd "$TESTS_DIR"  # Tests directory doesn't exist, staying in current directory
 
 # Start the bot container in the background
 docker run --rm --name "$CONTAINER_NAME" \
@@ -141,6 +140,13 @@ fi
 
 echo "🎉 Automatic graceful leave test completed!"
 cleanup_and_exit 0
+
+# Cleanup function
+cleanup_and_exit() {
+    echo "🧹 Cleaning up..."
+    docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+    exit ${1:-0}
+}
 
 # Set up signal handler for Ctrl+C
 cleanup_on_interrupt() {
