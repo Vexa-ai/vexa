@@ -8,6 +8,7 @@ import { WebSocketManager } from "../../utils/websocket";
 import { 
   teamsInitialAdmissionIndicators,
   teamsWaitingRoomIndicators,
+  teamsRejectionIndicators,
   teamsAdmissionIndicators,
   teamsParticipantSelectors,
   teamsSpeakingClassNames,
@@ -27,11 +28,35 @@ import {
   teamsOcclusionSelectors,
   teamsStreamTypeSelectors,
   teamsAudioActivitySelectors,
-  teamsParticipantIdSelectors
+  teamsParticipantIdSelectors,
+  teamsLeaveSelectors
 } from "./selectors";
 
 
 // --- Teams-Specific Functions ---
+
+// Function to check if bot has been rejected from the meeting
+const checkForTeamsRejection = async (page: Page): Promise<boolean> => {
+  try {
+    // Check for rejection indicators
+    for (const selector of teamsRejectionIndicators) {
+      try {
+        const element = await page.locator(selector).first();
+        if (await element.isVisible()) {
+          log(`🚨 Teams admission rejection detected: Found rejection indicator "${selector}"`);
+          return true;
+        }
+      } catch (e) {
+        // Continue checking other selectors
+        continue;
+      }
+    }
+    return false;
+  } catch (error: any) {
+    log(`Error checking for Teams rejection: ${error.message}`);
+    return false;
+  }
+};
 
 // Function to check if bot has been removed from the meeting
 const checkForTeamsRemoval = async (page: Page): Promise<boolean> => {
@@ -137,18 +162,25 @@ const waitForTeamsMeetingAdmission = async (
         const stillWaiting = lobbyTextStillVisible || joinNowButtonStillVisible;
         
         if (!stillWaiting) {
-          log("Teams waiting room indicator disappeared - bot is likely admitted, checking for admission indicators...");
+          log("Teams waiting room indicator disappeared - checking if bot was admitted or rejected...");
           
-          // Immediately check for admission indicators since waiting room disappeared
+          // CRITICAL: Check for rejection first since that's a definitive outcome
+          const isRejected = await checkForTeamsRejection(page);
+          if (isRejected) {
+            log("🚨 Bot was rejected from the Teams meeting by admin");
+            throw new Error("Bot admission was rejected by meeting admin");
+          }
+          
+          // Check for admission indicators since waiting room disappeared and no rejection found
           const leaveButtonNowVisible = await page.locator(teamsInitialAdmissionIndicators[0]).first().isVisible();
           const leaveButtonNowEnabled = leaveButtonNowVisible && !(await page.locator(teamsInitialAdmissionIndicators[0]).first().getAttribute('aria-disabled'));
           
           if (leaveButtonNowVisible && leaveButtonNowEnabled) {
-            log(`Found Teams admission indicator: visible Leave button - Bot is confirmed admitted!`);
+            log(`✅ Bot was admitted to the Teams meeting: visible Leave button confirmed`);
             return true;
           } else {
-            log("Teams waiting room disappeared - bot is admitted (no waiting room = admitted)");
-            return true; // If waiting room disappeared, bot is admitted regardless of Leave button visibility
+            log("⚠️ Teams waiting room disappeared but no clear admission indicators found - assuming admitted");
+            return true; // Fallback: if waiting room disappeared and no rejection, assume admitted
           }
         }
         
@@ -187,8 +219,17 @@ const waitForTeamsMeetingAdmission = async (
     }
     
     if (!admitted) {
-      // If we can't find any meeting indicators, the bot likely failed to join
-      log("No Teams meeting indicators found - bot likely failed to join or is in unknown state");
+      // CRITICAL: Before concluding failure, check if bot was actually rejected
+      log("No Teams meeting indicators found - checking if bot was rejected before concluding failure...");
+      
+      const isRejected = await checkForTeamsRejection(page);
+      if (isRejected) {
+        log("🚨 Bot was rejected from the Teams meeting by admin (final check)");
+        throw new Error("Bot admission was rejected by meeting admin");
+      }
+      
+      // If no rejection found, then it's likely a join failure or unknown state
+      log("No rejection indicators found - bot likely failed to join or is in unknown state");
       throw new Error("Bot failed to join the Teams meeting - no meeting indicators found");
     }
     
@@ -960,7 +1001,7 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
                   clearInterval(checkInterval);
                   audioService.disconnect();
                   whisperLiveService.close();
-                  resolve();
+                  reject(new Error("TEAMS_BOT_REMOVED_BY_ADMIN"));
                   return;
                 }
                 // Check participant count using the comprehensive speaker detection system
@@ -1069,20 +1110,15 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
   
   // Start periodic removal checking from Node.js side (does not exit the process; caller handles gracefulLeave)
   log("Starting periodic Teams removal monitoring...");
+  let removalDetected = false;
   const removalCheckInterval = setInterval(async () => {
     try {
       const isRemoved = await checkForTeamsRemoval(page);
-      if (isRemoved) {
-        log("🚨 Teams removal detected from Node.js side. Triggering in-page leave...");
+      if (isRemoved && !removalDetected) {
+        removalDetected = true; // Prevent duplicate detection
+        log("🚨 Teams removal detected from Node.js side. Initiating graceful shutdown...");
         clearInterval(removalCheckInterval);
-        try {
-          await callLeaveCallback(botConfig, "removed_from_meeting");
-        } catch {}
-        try {
-          if (typeof (page as any).performLeaveAction === 'function') {
-            // no-op, performLeaveAction exists only in browser context
-          }
-        } catch {}
+        
         try {
           // Attempt to click Rejoin/Dismiss to close the modal gracefully
           await page.evaluate(() => {
@@ -1102,8 +1138,15 @@ const startTeamsRecording = async (page: Page, botConfig: BotConfig) => {
             }
           });
         } catch {}
+        
+        // Properly exit with removal reason - this will prevent the normal completion flow
+        throw new Error("TEAMS_BOT_REMOVED_BY_ADMIN");
       }
     } catch (error: any) {
+      if (error.message === "TEAMS_BOT_REMOVED_BY_ADMIN") {
+        // Re-throw the removal signal
+        throw error;
+      }
       log(`Error during removal check: ${error.message}`);
     }
   }, 1500);
@@ -1123,9 +1166,10 @@ const prepareForRecording = async (page: Page, botConfig: BotConfig): Promise<vo
   });
 
   // Expose selectors/constants for browser context consumers
-  await page.exposeFunction("getTeamsSelectors", (): { teamsPrimaryLeaveButtonSelectors: string[]; teamsSecondaryLeaveButtonSelectors: string[] } => ({
+  await page.exposeFunction("getTeamsSelectors", (): { teamsPrimaryLeaveButtonSelectors: string[]; teamsSecondaryLeaveButtonSelectors: string[]; teamsLeaveSelectors: string[] } => ({
     teamsPrimaryLeaveButtonSelectors,
-    teamsSecondaryLeaveButtonSelectors
+    teamsSecondaryLeaveButtonSelectors,
+    teamsLeaveSelectors
   }));
 
   // Expose bot config for callback functions
@@ -1133,7 +1177,7 @@ const prepareForRecording = async (page: Page, botConfig: BotConfig): Promise<vo
 
 
   // Ensure leave function is available even before admission
-  await page.evaluate(() => {
+  await page.evaluate((selectorsData) => {
     if (typeof (window as any).performLeaveAction !== "function") {
       (window as any).performLeaveAction = async () => {
         try {
@@ -1150,74 +1194,50 @@ const prepareForRecording = async (page: Page, botConfig: BotConfig): Promise<vo
             (window as any).logBot?.(`⚠️ Warning: Could not prepare leave callback: ${callbackError.message}`);
           }
 
-          const sel = (window as any).getTeamsSelectors?.();
-          if (sel) {
-            (window as any).teamsPrimaryLeaveButtonSelectors = sel.teamsPrimaryLeaveButtonSelectors;
-            (window as any).teamsSecondaryLeaveButtonSelectors = sel.teamsSecondaryLeaveButtonSelectors;
-          }
-          // Teams-specific leave button selectors (injected from Node via globals)
-          const primaryLeaveButtonSelectors = (window as any).teamsPrimaryLeaveButtonSelectors as string[] || [];
-          const secondaryLeaveButtonSelectors = (window as any).teamsSecondaryLeaveButtonSelectors as string[] || [];
+          // Use directly injected selectors (stateless approach)
+          const leaveSelectors = selectorsData.teamsLeaveSelectors || [];
 
-          // Enhanced leave button detection with better logging
-          (window as any).logBot?.("🔍 Starting Teams leave button detection...");
+          (window as any).logBot?.("🔍 Starting stateless Teams leave button detection...");
+          (window as any).logBot?.(`📋 Will try ${leaveSelectors.length} selectors until one works`);
           
-          // First, log all available buttons for debugging
-          const allButtons = document.querySelectorAll('button');
-          (window as any).logBot?.(`📊 Found ${allButtons.length} buttons on page`);
-          
-          // Log potential leave buttons for debugging
-          for (const button of allButtons) {
-            const ariaLabel = button.getAttribute('aria-label');
-            const dataTid = button.getAttribute('data-tid');
-            const id = button.getAttribute('id');
-            const textContent = button.textContent?.trim();
-            
-            if (ariaLabel?.toLowerCase().includes('leave') || 
-                ariaLabel?.toLowerCase().includes('hang') ||
-                ariaLabel?.toLowerCase().includes('end') ||
-                dataTid?.includes('hangup') ||
-                id?.includes('hangup') ||
-                textContent?.toLowerCase().includes('leave') ||
-                textContent?.toLowerCase().includes('hang')) {
-              (window as any).logBot?.(`🎯 Potential leave button: aria-label="${ariaLabel}", data-tid="${dataTid}", id="${id}", text="${textContent}"`);
-            }
-          }
-          
-          // Try each selector until one works
-          for (const selector of primaryLeaveButtonSelectors) {
+          // Try each selector until one works (stateless iteration)
+          for (let i = 0; i < leaveSelectors.length; i++) {
+            const selector = leaveSelectors[i];
             try {
-              const leaveButton = document.querySelector(selector) as HTMLElement;
-              if (leaveButton) {
-                (window as any).logBot?.(`🔍 Trying selector: ${selector}`);
-                (window as any).logBot?.(`🔘 Button details: aria-label="${leaveButton.getAttribute('aria-label')}", data-tid="${leaveButton.getAttribute('data-tid')}", id="${leaveButton.getAttribute('id')}"`);
+              (window as any).logBot?.(`🔍 [${i + 1}/${leaveSelectors.length}] Trying selector: ${selector}`);
+              
+              const button = document.querySelector(selector) as HTMLElement;
+              if (button) {
+                // Check if button is visible and clickable
+                const rect = button.getBoundingClientRect();
+                const computedStyle = getComputedStyle(button);
+                const isVisible = rect.width > 0 && rect.height > 0 && 
+                                computedStyle.display !== 'none' && 
+                                computedStyle.visibility !== 'hidden' &&
+                                computedStyle.opacity !== '0';
                 
-                // Try to click the button
-                leaveButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                await new Promise((resolve) => setTimeout(resolve, 500));
-                
-                (window as any).logBot?.(`🖱️ Clicking Teams leave button...`);
-                leaveButton.click();
-                await new Promise((resolve) => setTimeout(resolve, 1500));
-                
-                // Check for confirmation dialogs
-                (window as any).logBot?.(`🔍 Checking for confirmation dialogs...`);
-                for (const confirmSelector of secondaryLeaveButtonSelectors) {
-                  try {
-                    const confirmButton = document.querySelector(confirmSelector) as HTMLElement;
-                    if (confirmButton) {
-                      (window as any).logBot?.(`✅ Found confirmation button: ${confirmSelector}`);
-                      confirmButton.click();
-                      await new Promise((resolve) => setTimeout(resolve, 1000));
-                      break;
-                    }
-                  } catch (e) {
-                    continue;
-                  }
+                if (isVisible) {
+                  const ariaLabel = button.getAttribute('aria-label');
+                  const dataTid = button.getAttribute('data-tid');
+                  const textContent = button.textContent?.trim();
+                  
+                  (window as any).logBot?.(`✅ Found clickable button: aria-label="${ariaLabel}", data-tid="${dataTid}", text="${textContent}"`);
+                  
+                  // Scroll into view and click
+                  button.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  await new Promise((resolve) => setTimeout(resolve, 500));
+                  
+                  (window as any).logBot?.(`🖱️ Clicking Teams button...`);
+                  button.click();
+                  await new Promise((resolve) => setTimeout(resolve, 1000));
+                  
+                  (window as any).logBot?.(`✅ Successfully clicked button with selector: ${selector}`);
+                  return true;
+                } else {
+                  (window as any).logBot?.(`ℹ️ Button found but not visible for selector: ${selector}`);
                 }
-                
-                (window as any).logBot?.(`✅ Teams leave sequence completed successfully`);
-                return true;
+              } else {
+                (window as any).logBot?.(`ℹ️ No button found for selector: ${selector}`);
               }
             } catch (e: any) {
               (window as any).logBot?.(`❌ Error with selector ${selector}: ${e.message}`);
@@ -1225,7 +1245,7 @@ const prepareForRecording = async (page: Page, botConfig: BotConfig): Promise<vo
             }
           }
           
-          (window as any).logBot?.("Teams primary leave button not found.");
+          (window as any).logBot?.("❌ No working leave/cancel button found - tried all selectors");
           return false;
         } catch (err: any) {
           (window as any).logBot?.(`Error during Teams leave attempt: ${err.message}`);
@@ -1233,7 +1253,7 @@ const prepareForRecording = async (page: Page, botConfig: BotConfig): Promise<vo
         }
       };
     }
-  });
+  }, { teamsLeaveSelectors });
 };
 
 export async function handleMicrosoftTeams(
@@ -1334,21 +1354,59 @@ export async function handleMicrosoftTeams(
     log("Starting WebSocket connection while waiting for Teams meeting admission");
     try {
       // Run both processes concurrently
-      const [isAdmitted] = await Promise.all([
+      const [admissionResult] = await Promise.all([
         // Wait for admission to the Teams meeting
         waitForTeamsMeetingAdmission(page, botConfig.automaticLeave.waitingRoomTimeout, botConfig).catch((error) => {
           log("Teams meeting admission failed: " + error.message);
-          return false;
+          
+          // Check if the error indicates rejection by admin
+          if (error.message.includes("rejected by meeting admin")) {
+            return { admitted: false, rejected: true, reason: "admission_rejected_by_admin" };
+          }
+          
+          return { admitted: false, rejected: false, reason: "admission_timeout" };
         }),
 
         // Prepare for recording (expose functions, etc.) while waiting for admission
         prepareForRecording(page, botConfig),
       ]);
     
+    // Handle different admission outcomes
+    const isAdmitted = admissionResult === true || (typeof admissionResult === 'object' && admissionResult.admitted);
+    
     if (!isAdmitted) {
-      log("Bot was not admitted into the Teams meeting within the timeout period. This is a normal completion.");
-      await gracefulLeaveFunction(page, 0, "admission_failed");
-      return;
+      const rejectionInfo = typeof admissionResult === 'object' ? admissionResult : { reason: "admission_timeout" };
+      
+      if ('rejected' in rejectionInfo && rejectionInfo.rejected) {
+        log("🚨 Bot was rejected from the Teams meeting by admin. Exiting gracefully...");
+        
+        // For rejection, we don't need to attempt leave since we're not in the meeting
+        await gracefulLeaveFunction(page, 0, rejectionInfo.reason);
+        return;
+      } else {
+        log("Bot was not admitted into the Teams meeting within the timeout period. Attempting graceful leave...");
+        
+        // Attempt stateless leave before calling gracefulLeaveFunction (for timeout scenarios)
+        try {
+          const result = await page.evaluate(async () => {
+            if (typeof (window as any).performLeaveAction === "function") {
+              return await (window as any).performLeaveAction();
+            }
+            return false;
+          });
+          
+          if (result) {
+            log("✅ Successfully performed graceful leave during admission timeout");
+          } else {
+            log("⚠️ Could not perform graceful leave during admission timeout - continuing with normal exit");
+          }
+        } catch (leaveError: any) {
+          log(`⚠️ Error during graceful leave attempt: ${leaveError.message} - continuing with normal exit`);
+        }
+        
+        await gracefulLeaveFunction(page, 0, rejectionInfo.reason);
+        return;
+      }
     }
 
     log("Successfully admitted to the Teams meeting, starting recording");
@@ -1365,31 +1423,43 @@ export async function handleMicrosoftTeams(
       log(`Warning: Failed to send startup callback: ${callbackError.message}. Continuing with recording...`);
     }
     
-    // Start recording with Teams-specific logic
-    await startTeamsRecording(page, botConfig);
-    } catch (error: any) {
-      console.error("Error after Teams join attempt (admission/recording setup): " + error.message);
-      log("Error after Teams join attempt (admission/recording setup): " + error.message + ". Triggering graceful leave.");
-      
-      // Capture detailed error information for debugging
-      const errorDetails = {
-        error_message: error.message,
-        error_stack: error.stack,
-        error_name: error.name,
-        context: "post_join_setup_error",
-        platform: "teams",
-        timestamp: new Date().toISOString()
-      };
-      
-      // Use a general error code here, as it could be various issues.
-      await gracefulLeaveFunction(page, 1, "post_join_setup_error", errorDetails);
+  // Start recording with Teams-specific logic
+  await startTeamsRecording(page, botConfig);
+  
+  // If we reach here, recording finished normally (not due to removal)
+  log("Teams recording completed normally");
+  await gracefulLeaveFunction(page, 0, "normal_completion");
+  
+  } catch (error: any) {
+    // Handle removal detection specifically (check for the error message with or without page.evaluate prefix)
+    if (error.message === "TEAMS_BOT_REMOVED_BY_ADMIN" || error.message.includes("TEAMS_BOT_REMOVED_BY_ADMIN")) {
+      log("🚨 Bot was removed from Teams meeting by admin. Exiting gracefully...");
+      await gracefulLeaveFunction(page, 0, "removed_by_admin");
       return;
     }
-
-  } catch (error: any) {
-    log(`❌ Error in Microsoft Teams bot: ${error.message}`);
-    await gracefulLeaveFunction(page, 1, "teams_error", error);
+    
+    console.error("Error after Teams join attempt (admission/recording setup): " + error.message);
+    log("Error after Teams join attempt (admission/recording setup): " + error.message + ". Triggering graceful leave.");
+    
+    // Capture detailed error information for debugging
+    const errorDetails = {
+      error_message: error.message,
+      error_stack: error.stack,
+      error_name: error.name,
+      context: "post_join_setup_error",
+      platform: "teams",
+      timestamp: new Date().toISOString()
+    };
+    
+    // Use a general error code here, as it could be various issues.
+    await gracefulLeaveFunction(page, 1, "post_join_setup_error", errorDetails);
+    return;
   }
+
+} catch (error: any) {
+  log(`❌ Error in Microsoft Teams bot: ${error.message}`);
+  await gracefulLeaveFunction(page, 1, "teams_error", error);
+}
 }
 
 // --- ADDED: Exported function to trigger leave from Node.js ---

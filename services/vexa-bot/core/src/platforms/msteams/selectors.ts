@@ -38,6 +38,50 @@ export const teamsWaitingRoomIndicators: string[] = [
   'text="Unable to join"'
 ];
 
+export const teamsRejectionIndicators: string[] = [
+  // Primary rejection message
+  'text="Sorry, but you were denied"',
+  'text*="Sorry, but you were denied"',
+  
+  // Alternative rejection patterns
+  'text="You were denied entry"',
+  'text*="You were denied entry"',
+  'text="Access denied"',
+  'text*="Access denied"',
+  'text="Entry denied"',
+  'text*="Entry denied"',
+  'text="Request denied"',
+  'text*="Request denied"',
+  'text="Admission denied"',
+  'text*="Admission denied"',
+  'text="Unable to join"',
+  'text*="Unable to join"',
+  'text="Connection failed"',
+  'text*="Connection failed"',
+  'text="Join failed"',
+  'text*="Join failed"',
+  
+  // Rejection dialog elements
+  '[role="dialog"]:has-text("denied")',
+  '[role="alertdialog"]:has-text("denied")',
+  '[role="dialog"]:has-text("failed")',
+  '[role="alertdialog"]:has-text("failed")',
+  
+  // Rejection button patterns that indicate failure/retry scenarios
+  'button:has-text("Try again")',
+  'button:has-text("Retry")',
+  'button:has-text("OK")',
+  'button[aria-label*="denied"]',
+  'button[data-tid*="retry"]',
+  'button[data-tid="calling-retry-cancelbutton"]', // Specific pattern from logs
+  
+  // Error state indicators
+  '[data-tid*="error"]',
+  '[data-tid*="failed"]',
+  '[class*="error"]',
+  '[class*="failed"]'
+];
+
 export const teamsAdmissionIndicators: string[] = [
   // Most reliable indicators - meeting-specific elements that don't exist in pre-join
   'div:has-text("In this meeting")',
@@ -262,6 +306,52 @@ export const teamsParticipantIdSelectors: string[] = [
   '[data-tid]',
   '[data-participant-id]',
   '[data-user-id]'
+];
+
+// Teams comprehensive leave selectors (stateless - covers all scenarios)
+export const teamsLeaveSelectors: string[] = [
+  // Cancel buttons (for awaiting admission/waiting room) - try these first
+  'button[aria-label="Cancel"]',
+  'button:has-text("Cancel")',
+  
+  // Leave buttons (for active meetings) - most reliable first
+  'button[aria-label="Leave"]',
+  'button:has-text("Leave")',
+  
+  // Teams-specific leave/hangup buttons
+  'button[data-tid="hangup-main-btn"]',
+  'button[id="hangup-button"]',
+  
+  // More specific leave patterns
+  'button[aria-label*="Leave"]',
+  'button[aria-label*="leave"]',
+  '[role="toolbar"] button[aria-label*="Leave"]',
+  
+  // End meeting alternatives
+  'button[aria-label*="End meeting"]',
+  'button:has-text("End meeting")',
+  'button[aria-label*="Hang up"]',
+  'button:has-text("Hang up")',
+  
+  // Close/dismiss alternatives
+  'button:has-text("Close")',
+  'button[aria-label="Close"]',
+  'button:has-text("Dismiss")',
+  'button[aria-label="Dismiss"]',
+  
+  // Generic cancel patterns
+  'button[aria-label*="Cancel"]',
+  'button[data-tid*="cancel"]',
+  '[role="button"]:has-text("Cancel")',
+  
+  // Confirmation dialog buttons
+  '[role="dialog"] button:has-text("Leave")',
+  '[role="dialog"] button:has-text("End meeting")',
+  '[role="alertdialog"] button:has-text("Leave")',
+  
+  // Fallback patterns
+  'input[type="button"][value="Cancel"]',
+  'input[type="submit"][value="Cancel"]'
 ];
 
 

@@ -11,7 +11,7 @@ set -e
 CONTAINER_NAME="vexa-bot-teams-hot"
 IMAGE_NAME="vexa-bot:test"
 SCREENSHOTS_DIR="/home/dima/dev/bot-storage/screenshots/run-$(date +%Y%m%d-%H%M%S)"
-MEETING_URL="https://teams.live.com/meet/932343181564?p=2U94z2rIbXvghLIP8f"
+MEETING_URL="https://teams.live.com/meet/9327884808517?p=zCmPHnrCLiXtY5atOp"
 
 echo "🔥 Starting Teams Hot-Reload Debug"
 
@@ -59,7 +59,7 @@ docker run --rm --name "$CONTAINER_NAME" \
     "meetingUrl":"'$MEETING_URL'",
     "botName":"TeamsDebugBot",
     "connectionId":"teams-hot-debug",
-    "nativeMeetingId":"932343181564",
+    "nativeMeetingId":"9327884808517",
     "token":"debug-token",
     "redisUrl":"redis://redis:6379/0",
     "container_name":"'$CONTAINER_NAME'",
