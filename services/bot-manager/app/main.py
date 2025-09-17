@@ -585,8 +585,8 @@ async def update_bot_config(
 
 @app.delete("/bots/{platform}/{native_meeting_id}",
              status_code=status.HTTP_202_ACCEPTED,
-             summary="Request stop for a running bot",
-             description="Sends a 'leave' command to the bot via Redis and schedules a delayed container stop. Returns 202 Accepted immediately.",
+             summary="Request stop for a bot",
+             description="Stops a bot from any status (requested, joining, awaiting_admission, active). Sends a 'leave' command to the bot via Redis and schedules a delayed container stop. Returns 202 Accepted immediately.",
              dependencies=[Depends(get_user_and_token)])
 async def stop_bot(
     platform: Platform,
@@ -597,11 +597,13 @@ async def stop_bot(
 ):
     """
     Handles requests to stop a bot for a specific meeting.
-    1. Finds the latest active meeting record.
+    Allows stopping from any meeting status (requested, joining, awaiting_admission, active).
+    Already completed/failed meetings return idempotent success.
+    1. Finds the latest meeting record regardless of status.
     2. Finds the earliest session UID (original connection ID) associated with that meeting.
     3. Publishes a 'leave' command to the bot via Redis Pub/Sub.
     4. Schedules a background task to stop the Docker container after a delay.
-    5. Updates the meeting status to 'stopping' (or keeps 'active' until confirmed).
+    5. Bot will transition to 'completed' via exit callback.
     6. Returns 202 Accepted.
     """
     user_token, current_user = auth_data
@@ -609,43 +611,43 @@ async def stop_bot(
 
     logger.info(f"Received stop request for {platform_value}/{native_meeting_id} from user {current_user.id}")
 
-    # 1. Find the latest meeting in a stoppable state (pre-active or active)
-    #    Allow stopping at pre-active states too: 'requested' | 'active' | 'stopping'
+    # 1. Find the latest meeting - allow stopping from any status
+    #    This allows explicit stopping regardless of current state
     stmt = select(Meeting).where(
         Meeting.user_id == current_user.id,
         Meeting.platform == platform_value,
-        Meeting.platform_specific_id == native_meeting_id,
-        Meeting.status.in_(['requested', 'active', 'stopping'])
+        Meeting.platform_specific_id == native_meeting_id
     ).order_by(desc(Meeting.created_at))
 
     result = await db.execute(stmt)
     meeting = result.scalars().first()
 
     if not meeting:
-        logger.warning(f"Stop request: No meeting in stoppable state for {platform_value}/{native_meeting_id} for user {current_user.id}")
+        logger.warning(f"Stop request: No meeting found for {platform_value}/{native_meeting_id} for user {current_user.id}")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No meeting found to stop.")
 
-    # Idempotency: already completed → accept
-    if meeting.status == MeetingStatus.COMPLETED.value:
-        logger.info(f"Stop request: Meeting {meeting.id} already completed. Returning 202 idempotently.")
-        return {"message": "Meeting already completed."}
+    # Handle already completed or failed meetings
+    if meeting.status in [MeetingStatus.COMPLETED.value, MeetingStatus.FAILED.value]:
+        logger.info(f"Stop request: Meeting {meeting.id} already in terminal state '{meeting.status}'. Returning 202 idempotently.")
+        return {"message": f"Meeting already {meeting.status}."}
 
+    # Handle meetings without container ID - can be in any non-terminal status
     if not meeting.bot_container_id:
-         logger.info(f"Stop request: Meeting {meeting.id} has no container ID. Finalizing immediately.")
-         success = await update_meeting_status(
-             meeting, 
-             MeetingStatus.COMPLETED, 
-             db,
-             completion_reason=MeetingCompletionReason.STOPPED
-         )
-         if success:
-             await publish_meeting_status_change(meeting.id, MeetingStatus.COMPLETED.value, redis_client, platform_value, native_meeting_id)
-         # Schedule post-meeting tasks even if it never became active
-         logger.info(f"Scheduling post-meeting tasks for meeting {meeting.id} (no container case).")
-         background_tasks.add_task(run_all_tasks, meeting.id)
-         return {"message": "Stop request accepted; meeting finalized (no running container)."}
+        logger.info(f"Stop request: Meeting {meeting.id} has no container ID (status: {meeting.status}). Finalizing immediately.")
+        success = await update_meeting_status(
+            meeting, 
+            MeetingStatus.COMPLETED, 
+            db,
+            completion_reason=MeetingCompletionReason.STOPPED
+        )
+        if success:
+            await publish_meeting_status_change(meeting.id, MeetingStatus.COMPLETED.value, redis_client, platform_value, native_meeting_id)
+        # Schedule post-meeting tasks even if it never became active
+        logger.info(f"Scheduling post-meeting tasks for meeting {meeting.id} (no container case).")
+        background_tasks.add_task(run_all_tasks, meeting.id)
+        return {"message": "Stop request accepted; meeting finalized (no running container)."}
 
-    logger.info(f"Found active meeting {meeting.id} with container {meeting.bot_container_id} for stop request.")
+    logger.info(f"Found meeting {meeting.id} (status: {meeting.status}) with container {meeting.bot_container_id} for stop request.")
 
     # 2. Find the earliest session UID for this meeting (may not exist yet at pre-active)
     session_stmt = select(MeetingSession.session_uid).where(
