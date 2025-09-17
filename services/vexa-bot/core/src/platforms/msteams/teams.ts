@@ -124,11 +124,7 @@ const waitForTeamsMeetingAdmission = async (
     if (initialLeaveButtonFound && !initialLobbyTextVisible && !initialJoinNowButtonVisible) {
       log(`Found Teams admission indicator: visible Leave button - Bot is already admitted to the meeting!`);
       
-      // STATUS CHANGE: Bot is already admitted - take screenshot before AWAITING_ADMISSION callback
-      await page.screenshot({ path: '/app/storage/screenshots/teams-status-awaiting-admission-immediate.png', fullPage: true });
-      log("📸 Screenshot taken: Bot state when AWAITING_ADMISSION callback is triggered (immediate admission)");
-      
-      // --- Call awaiting admission callback even for immediate admission ---
+
       try {
         await callAwaitingAdmissionCallback(botConfig);
         log("Awaiting admission callback sent successfully (immediate admission)");
@@ -152,9 +148,6 @@ const waitForTeamsMeetingAdmission = async (
     if (waitingLobbyTextVisible || waitingJoinNowButtonVisible) {
       log(`Found Teams waiting room indicator: lobby text or Join now button visible - Bot is still in waiting room`);
       
-      // STATUS CHANGE: Bot is in waiting room - take screenshot before AWAITING_ADMISSION callback
-      await page.screenshot({ path: '/app/storage/screenshots/teams-status-awaiting-admission-waiting-room.png', fullPage: true });
-      log("📸 Screenshot taken: Bot state when AWAITING_ADMISSION callback is triggered (waiting room)");
       
       // --- Call awaiting admission callback to notify bot-manager that bot is waiting ---
       try {
@@ -171,7 +164,7 @@ const waitForTeamsMeetingAdmission = async (
     if (stillInWaitingRoom) {
       log(`Bot is in Teams waiting room. Waiting for ${timeout}ms for admission...`);
       
-      // Wait for the full timeout period, checking periodically for admission (NO PERIODIC SCREENSHOTS)
+
       const checkInterval = 2000; // Check every 2 seconds for faster detection
       const startTime = Date.now();
       
@@ -1331,7 +1324,6 @@ export async function handleMicrosoftTeams(
   page: Page,
   gracefulLeaveFunction: (page: Page | null, exitCode: number, reason: string, errorDetails?: any) => Promise<void>
 ): Promise<void> {
-  log("Starting Microsoft Teams bot - Using simple approach with MS Edge");
   
   if (!botConfig.meetingUrl) {
     log("Error: Meeting URL is required for Microsoft Teams but is null.");
@@ -1343,13 +1335,10 @@ export async function handleMicrosoftTeams(
     // Step 1: Navigate to Teams meeting
     log(`Step 1: Navigating to Teams meeting: ${botConfig.meetingUrl}`);
     await page.goto(botConfig.meetingUrl, { waitUntil: 'networkidle', timeout: 30000 });
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(500);
     
-    // STATUS CHANGE: Bot is joining - take screenshot before JOINING callback
-    await page.screenshot({ path: '/app/storage/screenshots/teams-status-joining.png', fullPage: true });
-    log("📸 Screenshot taken: Bot state when JOINING callback is triggered");
-    
-    // --- Call joining callback to notify bot-manager that bot is joining ---
+    //await page.screenshot({ path: '/app/storage/screenshots/teams-status-joining.png', fullPage: true });
+  
     try {
       await callJoiningCallback(botConfig);
       log("Joining callback sent successfully");
@@ -1357,31 +1346,28 @@ export async function handleMicrosoftTeams(
       log(`Warning: Failed to send joining callback: ${callbackError.message}. Continuing with join process...`);
     }
 
-    // UI ACTION: Click "Continue on this browser" button
     log("Step 2: Looking for continue button...");
     try {
       const continueButton = page.locator(teamsContinueButtonSelectors[0]).first();
       await continueButton.waitFor({ timeout: 10000 });
       await continueButton.click();
       log("✅ Clicked continue button");
-      await page.waitForTimeout(1000);
+      await page.waitForTimeout(500);
     } catch (error) {
       log("ℹ️ Continue button not found, continuing...");
     }
 
-    // UI ACTION: Click join button 
     log("Step 3: Looking for join button...");
     try {
       const joinButton = page.locator(teamsJoinButtonSelectors[0]).first();
       await joinButton.waitFor({ timeout: 10000 });
       await joinButton.click();
       log("✅ Clicked join button");
-      await page.waitForTimeout(1000);
+      await page.waitForTimeout(500);
     } catch (error) {
       log("ℹ️ Join button not found, continuing...");
     }
 
-    // UI ACTION: Try to turn off camera
     log("Step 4: Trying to turn off camera...");
     try {
       const cameraButton = page.locator(teamsCameraButtonSelectors[0]);
@@ -1392,7 +1378,6 @@ export async function handleMicrosoftTeams(
       log("ℹ️ Camera button not found or already off");
     }
 
-    // UI ACTION: Set display name
     log("Step 5: Trying to set display name...");
     try {
       const nameInput = page.locator(teamsNameInputSelectors.join(', ')).first();
@@ -1403,7 +1388,6 @@ export async function handleMicrosoftTeams(
       log("ℹ️ Display name input not found, continuing...");
     }
 
-    // UI ACTION: Click final join button
     log("Step 6: Looking for final join button...");
     try {
       const finalJoinButton = page.locator(teamsJoinButtonSelectors.join(', ')).first();
@@ -1415,19 +1399,17 @@ export async function handleMicrosoftTeams(
       log("ℹ️ Final join button not found");
     }
 
-    // Check current state
+
     log("Step 7: Checking current state...");
-    const currentUrl = page.url();
-    log(`📍 Current URL: ${currentUrl}`);
-    
-    // Quick pre-admission stop check before waiting to be admitted
+
+
     if (hasStopSignalReceived()) {
       log("⛔ Stop signal detected before admission wait. Exiting without joining.");
       await gracefulLeaveFunction(page, 0, "stop_requested_pre_admission");
       return;
     }
 
-    // Setup websocket connection and meeting admission concurrently
+   
     log("Starting WebSocket connection while waiting for Teams meeting admission");
     try {
       // Run both processes concurrently
@@ -1488,9 +1470,7 @@ export async function handleMicrosoftTeams(
 
     log("Successfully admitted to the Teams meeting, starting recording");
     
-    // STATUS CHANGE: Bot is active - take screenshot before STARTUP callback
-    await page.screenshot({ path: '/app/storage/screenshots/teams-status-startup.png', fullPage: true });
-    log("📸 Screenshot taken: Bot state when STARTUP callback is triggered");
+
     
     // --- Call startup callback to notify bot-manager that bot is active ---
     try {
