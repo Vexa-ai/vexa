@@ -123,7 +123,6 @@ export const teamsAdmissionIndicators: string[] = [
 
 // Participant-related selectors and class names for speaker detection
 export const teamsParticipantSelectors: string[] = [
-  '[data-tid="voice-level-stream-outline"]', // Main speaker indicator
   '[data-tid*="participant"]',
   '[aria-label*="participant"]',
   '[data-tid*="roster"]',

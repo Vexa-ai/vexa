@@ -293,7 +293,8 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
                 // Check for voice-level-stream-outline element (primary Teams speaker indicator)
                 // NOTE: voice-level-stream-outline appears when participant is SILENT, disappears when SPEAKING
                 const voiceLevelElement = participantElement.querySelector(selectorsTyped.voiceLevelSelectors[0]) as HTMLElement;
-                const isVoiceLevelVisible = voiceLevelElement && 
+                const hasVoiceLevelElement = !!voiceLevelElement;
+                const isVoiceLevelVisible = hasVoiceLevelElement && 
                   voiceLevelElement.offsetWidth > 0 && 
                   voiceLevelElement.offsetHeight > 0 &&
                   getComputedStyle(voiceLevelElement).display !== 'none' &&
@@ -303,9 +304,15 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
                 const isNowVisiblySpeaking = speakingClasses.some(cls => mutatedClassList.contains(cls));
                 const isNowVisiblySilent = silenceClasses.some(cls => mutatedClassList.contains(cls));
                 
-                // Determine if currently speaking based on voice-level-stream-outline visibility
-                // Voice level visible = participant is SILENT, voice level hidden = participant is SPEAKING
-                const isCurrentlySpeaking = !isVoiceLevelVisible || isNowVisiblySpeaking;
+                // Determine if currently speaking
+                // If voice-level indicator exists: visible => SILENT, hidden => SPEAKING
+                // If no indicator exists: rely on class-based detection only
+                let isCurrentlySpeaking = false;
+                if (hasVoiceLevelElement) {
+                  isCurrentlySpeaking = !isVoiceLevelVisible || isNowVisiblySpeaking;
+                } else {
+                  isCurrentlySpeaking = isNowVisiblySpeaking && !isNowVisiblySilent;
+                }
                 
                 if (isCurrentlySpeaking) {
                   if (previousLogicalState !== "speaking") {
@@ -380,6 +387,22 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
               
               // Initialize speaker detection
               scanForAllTeamsParticipants();
+
+              // Polling fallback to catch speaking indicator changes not driven by class mutations
+              setInterval(() => {
+                try {
+                  for (const selector of participantSelectors) {
+                    const participants = document.querySelectorAll(selector);
+                    for (let i = 0; i < participants.length; i++) {
+                      const el = participants[i] as HTMLElement;
+                      // Use container's classList for evaluation; function will also check voice-level element
+                      logTeamsSpeakerEvent(el, el.classList);
+                    }
+                  }
+                } catch (e) {
+                  // best-effort polling; ignore errors
+                }
+              }, 500);
               
               // Monitor for new participants
               const bodyObserver = new MutationObserver((mutationsList) => {

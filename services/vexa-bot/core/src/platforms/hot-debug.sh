@@ -63,11 +63,13 @@ if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
 fi
 
 # Resolve paths
-ROOT_DIR="$(cd ../.. && pwd)"              # core root
-DIST_DIR="$ROOT_DIR/dist"                  # core/dist (built output)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"  # core root
+DIST_DIR="$ROOT_DIR/dist"                    # core/dist (built output)
 
 # Ensure fresh code by rebuilding dist files
 echo "🔄 Rebuilding dist files to ensure fresh code..."
+echo "📍 ROOT_DIR: $ROOT_DIR"
 cd "$ROOT_DIR"
 npm run build
 echo "✅ Dist files rebuilt"
