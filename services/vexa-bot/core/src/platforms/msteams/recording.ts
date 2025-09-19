@@ -233,8 +233,8 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
                       ];
                       
                       if (nameText && !forbiddenSubstrings.some(sub => nameText!.toLowerCase().includes(sub.toLowerCase()))) {
-                        // Basic validation
-                        if (nameText.length > 1 && nameText.length < 50 && /^[\p{L}\s.'-]+$/u.test(nameText)) {
+                        // Basic length validation only (allow numbers, parentheses, etc.)
+                        if (nameText.length > 1 && nameText.length < 50) {
                           return nameText;
                         }
                       }

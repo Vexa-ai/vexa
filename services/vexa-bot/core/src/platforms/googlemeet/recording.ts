@@ -498,7 +498,8 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                   const element = el as HTMLElement;
                   const text = (element.textContent || '').trim();
                   if (text && element.children.length === 0) {
-                    if (/^[A-Z][a-z]+\s[A-Z][a-z]+$/.test(text) || (botName && text === botName)) {
+                    // Basic length validation only (allow numbers, parentheses, etc.)
+                    if ((text.length > 1 && text.length < 50) || (botName && text === botName)) {
                       participants.push(text);
                     }
                   }
@@ -507,7 +508,8 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
               const tooltips = document.querySelectorAll('main [role="tooltip"]');
               tooltips.forEach((el: Element) => {
                 const text = (el.textContent || '').trim();
-                if (text && (/^[A-Z][a-z]+\s[A-Z][a-z]+$/.test(text) || (botName && text === botName))) {
+                // Basic length validation only (allow numbers, parentheses, etc.)
+                if (text && ((text.length > 1 && text.length < 50) || (botName && text === botName))) {
                   participants.push(text);
                 }
               });
