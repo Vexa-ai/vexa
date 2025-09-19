@@ -470,6 +470,7 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
               const lastIndicatorStateById = new Map<string, boolean>();
               const lastEventTsById = new Map<string, number>();
               const observedIndicators = new WeakSet<HTMLElement>();
+              const observedIndicatorsList = new Set<HTMLElement>();
               const DEBOUNCE_MS = 300;
 
               function getContainerForIndicator(indicator: HTMLElement): HTMLElement | null {
@@ -541,6 +542,7 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
                         });
                         observer.observe(indicator, { attributes: true, attributeFilter: ['class', 'style', 'aria-hidden'] });
                         observedIndicators.add(indicator);
+                        observedIndicatorsList.add(indicator);
                       } catch {}
                     }
 
@@ -562,7 +564,42 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
                 } catch {}
               };
 
-              setInterval(pollTeamsVoiceIndicators, 300);
+              setInterval(pollTeamsVoiceIndicators, 150);
+
+              // requestAnimationFrame loop for near real-time indicator sampling
+              function fastIndicatorTick() {
+                try {
+                  const now = Date.now();
+                  observedIndicatorsList.forEach((indicator) => {
+                    if (!indicator.isConnected) {
+                      observedIndicatorsList.delete(indicator);
+                      return;
+                    }
+                    const container = getContainerForIndicator(indicator);
+                    if (!container) return;
+                    const participantId = String(getTeamsParticipantId(container) || 'unknown');
+                    const participantName = String(getTeamsParticipantName(container) || participantId);
+                    const visible = isElementActuallyVisible(indicator);
+                    const wasSpeaking = lastIndicatorStateById.get(participantId) === true;
+                    const lastTs = lastEventTsById.get(participantId) || 0;
+                    if (!visible && !wasSpeaking && (now - lastTs) > DEBOUNCE_MS) {
+                      const ts = new Date().toISOString();
+                      (window as any).logBot(`[${ts}] [SPEAKER_START] ${participantName}`);
+                      sendTeamsSpeakerEvent('SPEAKER_START', container);
+                      lastIndicatorStateById.set(participantId, true);
+                      lastEventTsById.set(participantId, now);
+                    } else if (visible && wasSpeaking && (now - lastTs) > DEBOUNCE_MS) {
+                      const ts = new Date().toISOString();
+                      (window as any).logBot(`[${ts}] [SPEAKER_END] ${participantName}`);
+                      sendTeamsSpeakerEvent('SPEAKER_END', container);
+                      lastIndicatorStateById.set(participantId, false);
+                      lastEventTsById.set(participantId, now);
+                    }
+                  });
+                } catch {}
+                requestAnimationFrame(fastIndicatorTick);
+              }
+              requestAnimationFrame(fastIndicatorTick);
               
               // Monitor for new participants
               const bodyObserver = new MutationObserver((mutationsList) => {
