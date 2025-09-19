@@ -28,9 +28,9 @@ class MeetingStatus(str, Enum):
     Meeting status values with their sources and transitions.
     
     Status Flow:
-    requested -> joining -> awaiting_admission -> active -> completed
-                                    |              |
-                                    v              v
+    requested -> joining -> awaiting_admission -> active -> stopping -> completed
+                                    |              |                 \
+                                    v              v                  -> failed
                                  failed         failed
     
     Sources:
@@ -38,13 +38,15 @@ class MeetingStatus(str, Enum):
     - joining: bot callback
     - awaiting_admission: bot callback  
     - active: bot callback
-    - completed: user (stop bot API - PRIORITY!), bot callback
+    - stopping: user (stop bot API)
+    - completed: user, bot callback
     - failed: bot callback, validation errors
     """
     REQUESTED = "requested"
     JOINING = "joining"
     AWAITING_ADMISSION = "awaiting_admission"
     ACTIVE = "active"
+    STOPPING = "stopping"
     COMPLETED = "completed"
     FAILED = "failed"
 
@@ -78,10 +80,33 @@ def get_valid_status_transitions() -> Dict[MeetingStatus, List[MeetingStatus]]:
         Dict mapping current status to list of valid next statuses
     """
     return {
-        MeetingStatus.REQUESTED: [MeetingStatus.JOINING, MeetingStatus.FAILED, MeetingStatus.COMPLETED],
-        MeetingStatus.JOINING: [MeetingStatus.AWAITING_ADMISSION, MeetingStatus.FAILED, MeetingStatus.COMPLETED],
-        MeetingStatus.AWAITING_ADMISSION: [MeetingStatus.ACTIVE, MeetingStatus.FAILED, MeetingStatus.COMPLETED],
-        MeetingStatus.ACTIVE: [MeetingStatus.COMPLETED, MeetingStatus.FAILED],
+        MeetingStatus.REQUESTED: [
+            MeetingStatus.JOINING,
+            MeetingStatus.FAILED,
+            MeetingStatus.COMPLETED,
+            MeetingStatus.STOPPING,
+        ],
+        MeetingStatus.JOINING: [
+            MeetingStatus.AWAITING_ADMISSION,
+            MeetingStatus.FAILED,
+            MeetingStatus.COMPLETED,
+            MeetingStatus.STOPPING,
+        ],
+        MeetingStatus.AWAITING_ADMISSION: [
+            MeetingStatus.ACTIVE,
+            MeetingStatus.FAILED,
+            MeetingStatus.COMPLETED,
+            MeetingStatus.STOPPING,
+        ],
+        MeetingStatus.ACTIVE: [
+            MeetingStatus.STOPPING,
+            MeetingStatus.COMPLETED,
+            MeetingStatus.FAILED,
+        ],
+        MeetingStatus.STOPPING: [
+            MeetingStatus.COMPLETED,
+            MeetingStatus.FAILED,
+        ],
         MeetingStatus.COMPLETED: [],  # Terminal state
         MeetingStatus.FAILED: [],  # Terminal state
     }
@@ -112,8 +137,8 @@ def get_status_source(from_status: MeetingStatus, to_status: MeetingStatus) -> s
         Source description ("user", "bot_callback", "validation_error")
     """
     # User-controlled transitions (via API)
-    if to_status == MeetingStatus.COMPLETED and from_status == MeetingStatus.ACTIVE:
-        return "user"  # Stop bot API has priority
+    if to_status in (MeetingStatus.STOPPING, MeetingStatus.COMPLETED):
+        return "user"  # Stop bot API initiated
     
     # Bot callback transitions
     bot_callback_transitions = [
@@ -121,10 +146,12 @@ def get_status_source(from_status: MeetingStatus, to_status: MeetingStatus) -> s
         (MeetingStatus.JOINING, MeetingStatus.AWAITING_ADMISSION),
         (MeetingStatus.AWAITING_ADMISSION, MeetingStatus.ACTIVE),
         (MeetingStatus.ACTIVE, MeetingStatus.COMPLETED),
+        (MeetingStatus.STOPPING, MeetingStatus.COMPLETED),
         (MeetingStatus.REQUESTED, MeetingStatus.FAILED),
         (MeetingStatus.JOINING, MeetingStatus.FAILED),
         (MeetingStatus.AWAITING_ADMISSION, MeetingStatus.FAILED),
         (MeetingStatus.ACTIVE, MeetingStatus.FAILED),
+        (MeetingStatus.STOPPING, MeetingStatus.FAILED),
     ]
     
     if (from_status, to_status) in bot_callback_transitions:

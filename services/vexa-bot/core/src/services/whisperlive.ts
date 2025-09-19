@@ -251,47 +251,34 @@ export class WhisperLiveService {
    */
   private async allocateServer(redisClient: any): Promise<string | null> {
     const maxClients = this.config.maxClients || 10;
-    
+    // Heartbeat-aware, non-incrementing allocator. Server enforces capacity and returns WAIT.
     const luaScript = `
-      -- Find server with lowest score that has capacity
+      local max = tonumber(ARGV[1])
       local servers = redis.call('ZRANGE', 'wl:rank', 0, -1, 'WITHSCORES')
-      if #servers == 0 then
-        return nil
-      end
-      
-      -- Iterate through servers (format: url1, score1, url2, score2, ...)
+      if #servers == 0 then return nil end
       for i = 1, #servers, 2 do
         local url = servers[i]
         local score = tonumber(servers[i + 1])
-        
-        -- Check if server has capacity
-        if score < tonumber(ARGV[1]) then
-          -- Atomically increment score and return URL
-          redis.call('ZINCRBY', 'wl:rank', 1, url)
+        if redis.call('EXISTS', 'wl:hb:' .. url) == 0 then
+          -- purge dead entries on the fly
+          redis.call('ZREM', 'wl:rank', url)
+        elseif score < max then
           return url
         end
       end
-      
-      -- No server has capacity
       return nil
     `;
-    
     try {
-      log("[WhisperLive] Atomically allocating server using Lua script...");
-      const allocatedUrl = await redisClient.eval(luaScript, {
-        keys: [],
-        arguments: [maxClients.toString()]
-      }) as string | null;
-      
+      log("[WhisperLive] Selecting server using heartbeat-aware Lua script...");
+      const allocatedUrl = await redisClient.eval(luaScript, { keys: [], arguments: [maxClients.toString()] }) as string | null;
       if (allocatedUrl) {
-        log(`[WhisperLive] Allocated server: ${allocatedUrl} (capacity maxClients=${maxClients})`);
+        log(`[WhisperLive] Selected server: ${allocatedUrl} (maxClients=${maxClients})`);
       } else {
-        log(`[WhisperLive] No servers available with capacity (maxClients=${maxClients})`);
+        log(`[WhisperLive] No live servers under capacity (maxClients=${maxClients})`);
       }
-      
       return allocatedUrl;
     } catch (error: any) {
-      log(`[WhisperLive] Error in atomic server allocation: ${error.message}`);
+      log(`[WhisperLive] Error selecting server: ${error.message}`);
       return null;
     }
   }

@@ -42,7 +42,9 @@ async def update_meeting_status(
     db: AsyncSession,
     completion_reason: Optional[MeetingCompletionReason] = None,
     failure_stage: Optional[MeetingFailureStage] = None,
-    error_details: Optional[str] = None
+    error_details: Optional[str] = None,
+    transition_reason: Optional[str] = None,
+    transition_metadata: Optional[Dict[str, Any]] = None
 ) -> bool:
     """
     Update meeting status with proper validation and data enrichment.
@@ -69,29 +71,71 @@ async def update_meeting_status(
     old_status = meeting.status
     meeting.status = new_status.value
     
-    # Update data field with status-specific information
+    # Update data field with status-specific information (work on a fresh copy so JSONB change is detected)
     if not meeting.data:
-        meeting.data = {}
+        current_data: Dict[str, Any] = {}
+    else:
+        try:
+            current_data = dict(meeting.data)
+        except Exception:
+            current_data = {}
     
     if new_status == MeetingStatus.COMPLETED:
         if completion_reason:
-            meeting.data['completion_reason'] = completion_reason.value
+            current_data['completion_reason'] = completion_reason.value
         meeting.end_time = datetime.utcnow()
         
     elif new_status == MeetingStatus.FAILED:
         if failure_stage:
-            meeting.data['failure_stage'] = failure_stage.value
+            current_data['failure_stage'] = failure_stage.value
         if error_details:
-            meeting.data['error_details'] = error_details
+            current_data['error_details'] = error_details
         meeting.end_time = datetime.utcnow()
     
-    # Add status transition metadata
-    meeting.data['status_transition'] = {
+    # Add status transition metadata: single canonical list at data['status_transition']
+    transition_entry = {
         'from': old_status,
         'to': new_status.value,
         'timestamp': datetime.utcnow().isoformat(),
         'source': get_status_source(current_status, new_status)
     }
+    if transition_reason:
+        transition_entry['reason'] = transition_reason
+    if completion_reason:
+        transition_entry['completion_reason'] = completion_reason.value
+    if failure_stage:
+        transition_entry['failure_stage'] = failure_stage.value
+    if error_details:
+        transition_entry['error_details'] = error_details
+    if isinstance(transition_metadata, dict) and transition_metadata:
+        try:
+            # Merge without overwriting existing keys
+            for k, v in transition_metadata.items():
+                if k not in transition_entry:
+                    transition_entry[k] = v
+        except Exception:
+            pass
+    try:
+        existing = current_data.get('status_transition')
+        if isinstance(existing, dict):
+            transitions_list = [existing]
+        elif isinstance(existing, list):
+            transitions_list = existing
+        else:
+            transitions_list = []
+        transitions_list = list(transitions_list) + [transition_entry]
+        current_data['status_transition'] = transitions_list
+        # Remove deprecated key if present
+        if 'status_transitions' in current_data:
+            try:
+                del current_data['status_transitions']
+            except Exception:
+                pass
+    except Exception:
+        current_data['status_transition'] = [transition_entry]
+
+    # Assign back the rebuilt data object so SQLAlchemy marks JSONB as changed
+    meeting.data = current_data
     
     await db.commit()
     await db.refresh(meeting)
@@ -148,6 +192,8 @@ class BotExitCallbackPayload(BaseModel):
     reason: Optional[str] = Field("self_initiated_leave", description="Reason for the exit.")
     error_details: Optional[Dict[str, Any]] = Field(None, description="Detailed error information including stack trace, error message, and context.")
     platform_specific_error: Optional[str] = Field(None, description="Platform-specific error message or details.")
+    completion_reason: Optional[MeetingCompletionReason] = Field(None, description="Reason for completion if applicable.")
+    failure_stage: Optional[MeetingFailureStage] = Field(None, description="Stage where failure occurred if applicable.")
 
 class BotStartupCallbackPayload(BaseModel):
     connection_id: str = Field(..., description="The connection ID of the bot session.")
@@ -649,6 +695,33 @@ async def stop_bot(
 
     logger.info(f"Found meeting {meeting.id} (status: {meeting.status}) with container {meeting.bot_container_id} for stop request.")
 
+    # --- SIMPLE FAST-PATH: If very recent and pre-active, finalize immediately and kill container ---
+    try:
+        seconds_since_created = (datetime.utcnow() - meeting.created_at).total_seconds() if meeting.created_at else None
+    except Exception:
+        seconds_since_created = None
+    if meeting.status in [MeetingStatus.REQUESTED.value, MeetingStatus.JOINING.value, MeetingStatus.AWAITING_ADMISSION.value] and (seconds_since_created is not None and seconds_since_created < 5):
+        logger.info(f"Stop request: Meeting {meeting.id} is pre-active and started {seconds_since_created:.2f}s ago. Finalizing immediately and stopping container.")
+        # Mark stop intent to ignore late callbacks
+        if meeting.data is None:
+            meeting.data = {}
+        meeting.data["stop_requested"] = True
+        await db.commit()
+        # Stop container ASAP (no delay) in background
+        background_tasks.add_task(_delayed_container_stop, meeting.bot_container_id, 0)
+        # Finalize meeting now
+        success = await update_meeting_status(
+            meeting,
+            MeetingStatus.COMPLETED,
+            db,
+            completion_reason=MeetingCompletionReason.STOPPED
+        )
+        if success:
+            await publish_meeting_status_change(meeting.id, MeetingStatus.COMPLETED.value, redis_client, platform_value, native_meeting_id)
+        # Schedule post-meeting tasks
+        background_tasks.add_task(run_all_tasks, meeting.id)
+        return {"message": "Stop request accepted; meeting finalized immediately (pre-active)."}
+
     # 2. Find the earliest session UID for this meeting (may not exist yet at pre-active)
     session_stmt = select(MeetingSession.session_uid).where(
         MeetingSession.meeting_id == meeting.id
@@ -776,11 +849,21 @@ async def bot_exit_callback(
         # Update meeting status based on exit code
         new_status = None
         if exit_code == 0:
+            # Prefer bot-provided completion_reason, fallback to STOPPED
+            provided_reason = payload.completion_reason or MeetingCompletionReason.STOPPED
+            transition_meta = {
+                "exit_code": exit_code
+            }
+            if payload.platform_specific_error:
+                transition_meta["platform_specific_error"] = payload.platform_specific_error
             success = await update_meeting_status(
                 meeting, 
                 MeetingStatus.COMPLETED, 
                 db,
-                completion_reason=MeetingCompletionReason.STOPPED
+                completion_reason=provided_reason,
+                error_details=payload.error_details if isinstance(payload.error_details, str) else (json.dumps(payload.error_details) if payload.error_details else None),
+                transition_reason=payload.reason,
+                transition_metadata=transition_meta
             )
             if success:
                 new_status = MeetingStatus.COMPLETED.value
@@ -789,12 +872,24 @@ async def bot_exit_callback(
                 logger.error(f"Bot exit callback: Failed to update meeting {meeting_id} status to 'completed'")
                 return {"status": "error", "detail": "Failed to update meeting status"}
         else:
+            # Prefer bot-provided failure_stage, fallback to ACTIVE
+            provided_stage = payload.failure_stage or MeetingFailureStage.ACTIVE
+            error_msg = f"Bot exited with code {exit_code}"
+            if payload.reason:
+                error_msg += f"; reason: {payload.reason}"
+            transition_meta = {
+                "exit_code": exit_code
+            }
+            if payload.platform_specific_error:
+                transition_meta["platform_specific_error"] = payload.platform_specific_error
             success = await update_meeting_status(
                 meeting, 
                 MeetingStatus.FAILED, 
                 db,
-                failure_stage=MeetingFailureStage.ACTIVE,
-                error_details=f"Bot exited with code {exit_code}"
+                failure_stage=provided_stage,
+                error_details=error_msg,
+                transition_reason=payload.reason,
+                transition_metadata=transition_meta
             )
             if success:
                 new_status = MeetingStatus.FAILED.value
@@ -890,6 +985,11 @@ async def bot_startup_callback(
             logger.error(f"Bot startup callback: Found session but could not find meeting {meeting_id} itself.")
             return {"status": "error", "detail": f"Meeting {meeting_id} not found"}
 
+        # If user stopped early, ignore startup transition
+        if meeting.data and isinstance(meeting.data, dict) and meeting.data.get("stop_requested"):
+            logger.info(f"Bot startup callback: stop_requested set for meeting {meeting_id}. Ignoring startup transition.")
+            return {"status": "ignored", "detail": "stop requested"}
+
         # Update meeting status to active and set start time
         old_status = meeting.status
         if meeting.status in [MeetingStatus.REQUESTED.value, MeetingStatus.JOINING.value, MeetingStatus.AWAITING_ADMISSION.value, MeetingStatus.FAILED.value]:
@@ -904,6 +1004,7 @@ async def bot_startup_callback(
                 await db.commit()
                 await db.refresh(meeting)
                 logger.info(f"Bot startup callback: Meeting {meeting_id} status updated from '{old_status}' to 'active' with container {container_id}.")
+                # No manual transition writes here; update_meeting_status already recorded the transition
             else:
                 logger.error(f"Bot startup callback: Failed to update meeting {meeting_id} status to 'active'")
                 return {"status": "error", "detail": "Failed to update meeting status"}
@@ -975,6 +1076,11 @@ async def bot_joining_callback(
                 detail=f"Meeting not found for session: {meeting_session.meeting_id}"
             )
 
+        # If user stopped early, ignore joining transition
+        if meeting.data and isinstance(meeting.data, dict) and meeting.data.get("stop_requested"):
+            logger.info(f"Bot joining callback: stop_requested set for meeting {meeting.id}. Ignoring joining transition.")
+            return {"status": "ignored", "detail": "stop requested"}
+
         # Update meeting status to joining
         success = await update_meeting_status(
             meeting=meeting,
@@ -986,6 +1092,7 @@ async def bot_joining_callback(
             logger.info(f"Bot joining callback: Successfully updated meeting {meeting.id} status to 'joining'")
             # Publish status change to Redis
             await publish_meeting_status_change(meeting.id, MeetingStatus.JOINING.value, redis_client, meeting.platform, meeting.platform_specific_id)
+            # No manual transition writes here; update_meeting_status already recorded the transition
 
         return {"status": "joining processed", "meeting_id": meeting.id, "status": meeting.status}
 
@@ -1041,6 +1148,11 @@ async def bot_awaiting_admission_callback(
                 detail=f"Meeting not found for session: {meeting_session.meeting_id}"
             )
 
+        # If user stopped early, ignore awaiting admission transition
+        if meeting.data and isinstance(meeting.data, dict) and meeting.data.get("stop_requested"):
+            logger.info(f"Bot awaiting admission callback: stop_requested set for meeting {meeting.id}. Ignoring waiting room transition.")
+            return {"status": "ignored", "detail": "stop requested"}
+
         # Update meeting status to awaiting_admission
         success = await update_meeting_status(
             meeting=meeting,
@@ -1052,6 +1164,7 @@ async def bot_awaiting_admission_callback(
             logger.info(f"Bot awaiting admission callback: Successfully updated meeting {meeting.id} status to 'awaiting_admission'")
             # Publish status change to Redis
             await publish_meeting_status_change(meeting.id, MeetingStatus.AWAITING_ADMISSION.value, redis_client, meeting.platform, meeting.platform_specific_id)
+            # No manual transition writes here; update_meeting_status already recorded the transition
 
         return {"status": "awaiting_admission processed", "meeting_id": meeting.id, "status": meeting.status}
 

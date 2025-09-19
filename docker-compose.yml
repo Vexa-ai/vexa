@@ -107,7 +107,7 @@ services:
       - "9090" #use for transcription web socket
       - "9091" #use for health check
     deploy:
-      replicas: 1 # Sets to 1 to avoid GPU contention
+      replicas: 3
       resources:
         reservations:
           devices:

@@ -639,13 +639,26 @@ class TranscriptionServer:
         logging.info(f"📡 THIS URL WILL BE REGISTERED TO REDIS: {self._ws_url}")
         self._metric_stop_evt = threading.Event()
         threading.Thread(target=self._metric_heartbeat, daemon=True).start()
+        # Register OS signal handlers to gracefully deregister on shutdown
+        try:
+            self._register_signal_handlers()
+        except Exception as exc:
+            logging.warning(f"Failed to register shutdown handlers: {exc}")
         # --- End WL Scaling block ---
 
     # --- WL Scaling helper methods (class level) ---
     def _metric_heartbeat(self):
         """Background timer that refreshes Redis score + heartbeat every 15 s."""
+        scrub_every_n = 4  # ~60s if interval is 15s
+        tick = 0
         while not self._metric_stop_evt.is_set():
             self._publish_sessions_metric()
+            try:
+                if tick % scrub_every_n == 0:
+                    self._scrub_stale_servers()
+            except Exception as exc:
+                logging.warning(f"WhisperLive metric scrub failed: {exc}")
+            tick += 1
             self._metric_stop_evt.wait(15)
 
     def _publish_sessions_metric(self):
@@ -659,6 +672,48 @@ class TranscriptionServer:
         except Exception as exc:
             logging.warning(f"WhisperLive metric publish failed: {exc}")
     # --- End WL Scaling helper methods ---
+
+    def _scrub_stale_servers(self):
+        """Remove wl:rank members that do not have a live heartbeat."""
+        try:
+            members = self._wl_redis.zrange("wl:rank", 0, -1)
+            if not members:
+                return
+            pipe = self._wl_redis.pipeline()
+            for url in members:
+                if not self._wl_redis.exists(f"wl:hb:{url}"):
+                    pipe.zrem("wl:rank", url)
+            pipe.execute()
+        except Exception as exc:
+            logging.warning(f"WhisperLive scrub encountered an error: {exc}")
+
+    def _register_signal_handlers(self):
+        import signal
+        def _handler(signum, frame):
+            try:
+                self._on_shutdown(signum)
+            finally:
+                # Best-effort immediate process exit after cleanup
+                pass
+        # Register common termination signals
+        signal.signal(signal.SIGTERM, _handler)
+        signal.signal(signal.SIGINT, _handler)
+
+    def _on_shutdown(self, signum):
+        """Gracefully stop heartbeat thread and deregister from Redis."""
+        try:
+            self._metric_stop_evt.set()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "_ws_url") and self._ws_url:
+                pipe = self._wl_redis.pipeline()
+                pipe.zrem("wl:rank", self._ws_url)
+                pipe.delete(f"wl:hb:{self._ws_url}")
+                pipe.execute()
+                logging.info(f"DEREGISTERED WhisperLive server from Redis (signal {signum}): {self._ws_url}")
+        except Exception as exc:
+            logging.warning(f"Failed to deregister WhisperLive server on shutdown: {exc}")
 
     def initialize_client(
         self, websocket, options, faster_whisper_custom_model_path,
