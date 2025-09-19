@@ -11,7 +11,7 @@ set -e
 CONTAINER_NAME="vexa-bot-teams-hot"
 IMAGE_NAME="vexa-bot:test"
 SCREENSHOTS_DIR="/home/dima/dev/bot-storage/screenshots/run-$(date +%Y%m%d-%H%M%S)"
-MEETING_URL="https://teams.live.com/meet/9327884808517?p=zCmPHnrCLiXtY5atOp"
+MEETING_URL="${1:-https://teams.live.com/meet/9342205715849?p=1Tw4SOPN4ZfYgCKRcQ}"
 
 echo "🔥 Starting Teams Hot-Reload Debug"
 

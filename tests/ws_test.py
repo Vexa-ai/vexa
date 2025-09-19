@@ -116,105 +116,51 @@ def format_time_display(segment: dict) -> str:
     return "[NO UTC TIME]"
 
 def print_clean_transcript(segments: list, status_line: str = None):
-    """Print a clean, single transcript view with UTC timestamps.
-    Optionally include a status line (e.g., meeting status) at the top.
+    """Append only new transcript segments in time order without redrawing.
+    Uses absolute UTC timestamps to order and a printed-id set to avoid duplicates.
     """
     if not segments:
         return
-    
-    # Clear screen for clean display
-    clear_screen()
-    
-    print(f"{Colors.HEADER}{'='*80}{Colors.END}")
-    print(f"{Colors.BOLD}📝 LIVE TRANSCRIPT{Colors.END}")
-    if status_line:
-        print(status_line)
-    print(f"{Colors.HEADER}{'='*80}{Colors.END}")
-    
-    # Sort segments by absolute UTC start time ONLY
-    def sort_key(segment):
-        abs_start = segment.get('absolute_start_time', '')
-        if abs_start:
-            return abs_start
-        # If no UTC time, put at end with high priority
-        return '9999-12-31T23:59:59+00:00'
-    
-    sorted_segments = sorted(segments, key=sort_key)
-    
-    # Group segments by speaker and combine text
-    current_speaker = None
-    current_text = []
-    current_start_segment = None
-    current_end_segment = None
-    
+
+    # One-time header
+    if not hasattr(print_clean_transcript, '_initialized'):
+        clear_screen()
+        print(f"{Colors.HEADER}{'='*60}{Colors.END}")
+        print(f"{Colors.BOLD}📝 LIVE TRANSCRIPT{Colors.END}")
+        if status_line:
+            print(status_line)
+        print(f"{Colors.HEADER}{'='*60}{Colors.END}")
+        print_clean_transcript._initialized = True
+        print_clean_transcript._printed_ids = set()
+
+    # Sort all segments by absolute UTC start time; skip those without UTC
+    sorted_segments = sorted(
+        (s for s in segments if s.get('absolute_start_time')),
+        key=lambda s: s.get('absolute_start_time')
+    )
+
     for segment in sorted_segments:
-        speaker = segment.get('speaker', 'Unknown Speaker')
+        speaker = segment.get('speaker') or 'Unknown'
         text = clean_text(segment.get('text', ''))
-        
-        if speaker != current_speaker:
-            # Print previous speaker's combined text
-            if current_speaker and current_text:
-                speaker_display = f"{Colors.CYAN}{current_speaker}{Colors.END}"
-                time_range = format_time_display(current_start_segment) if current_start_segment else "[??:??:?? - ??:??:??]"
-                combined_text = ' '.join(current_text)
-                print(f"{speaker_display} {time_range}: {Colors.BOLD}{combined_text}{Colors.END}")
-            
-            # Start new speaker
-            current_speaker = speaker
-            current_text = [text] if text else []
-            current_start_segment = segment
-            current_end_segment = segment
-        else:
-            # Continue with same speaker
-            if text:
-                current_text.append(text)
-            current_end_segment = segment
-    
-    # Print final speaker's text
-    if current_speaker and current_text:
-        speaker_display = f"{Colors.CYAN}{current_speaker}{Colors.END}"
-        time_range = format_time_display(current_start_segment) if current_start_segment else "[??:??:?? - ??:??:??]"
-        combined_text = ' '.join(current_text)
-        print(f"{speaker_display} {time_range}: {Colors.BOLD}{combined_text}{Colors.END}")
-    
-    print(f"{Colors.HEADER}{'='*80}{Colors.END}")
-    print(f"{Colors.YELLOW}Press Ctrl+C to exit{Colors.END}")
+        if not text:
+            continue
+
+        # Stable unique id per finalized text at that absolute start time
+        abs_start = segment.get('absolute_start_time', '')
+        seg_uid = f"{abs_start}|{text}"
+        if seg_uid in print_clean_transcript._printed_ids:
+            continue
+
+        print_clean_transcript._printed_ids.add(seg_uid)
+
+        time_range = format_time_display(segment)
+        speaker_display = f"{Colors.CYAN}{speaker}{Colors.END}"
+        print(f"{speaker_display} {time_range}: {Colors.BOLD}{text}{Colors.END}")
 
 def debug_segment_fields(segments: list, event_type: str):
-    """Debug function to check what fields are in WebSocket segments"""
-    if not segments:
-        return
-    
-    print(f"\n{Colors.YELLOW}🔍 DEBUG: {event_type} segment fields:{Colors.END}")
-    sample_segment = segments[0]
-    print(f"Available fields: {list(sample_segment.keys())}")
-    
-    # Check for absolute time fields
-    has_absolute_start = 'absolute_start_time' in sample_segment
-    has_absolute_end = 'absolute_end_time' in sample_segment
-    has_relative_start = 'start' in sample_segment
-    has_relative_end = 'end_time' in sample_segment
-    
-    print(f"absolute_start_time: {Colors.GREEN if has_absolute_start else Colors.RED}{has_absolute_start}{Colors.END}")
-    print(f"absolute_end_time: {Colors.GREEN if has_absolute_end else Colors.RED}{has_absolute_end}{Colors.END}")
-    print(f"start (relative): {Colors.YELLOW if has_relative_start else Colors.RED}{has_relative_start}{Colors.END}")
-    print(f"end_time (relative): {Colors.YELLOW if has_relative_end else Colors.RED}{has_relative_end}{Colors.END}")
-    
-    if has_absolute_start:
-        print(f"Sample absolute_start_time: {sample_segment.get('absolute_start_time')}")
-    if has_absolute_end:
-        print(f"Sample absolute_end_time: {sample_segment.get('absolute_end_time')}")
-    
-    # Save raw message to file
-    import json
-    with open(f'/tmp/ws_debug_{event_type}.json', 'w') as f:
-        json.dump({
-            "event_type": event_type,
-            "sample_segment": sample_segment,
-            "all_segments": segments[:3]  # First 3 segments
-        }, f, indent=2, ensure_ascii=False)
-    print(f"{Colors.CYAN}Raw message saved to: /tmp/ws_debug_{event_type}.json{Colors.END}")
-    print()
+    """Debug function to check what fields are in WebSocket segments - disabled for clean output"""
+    # Debug output disabled for clean transcript display
+    pass
 
 def print_event(event: dict, merge_and_render=None, status_by_label=None):
     """Print or merge a WebSocket event.

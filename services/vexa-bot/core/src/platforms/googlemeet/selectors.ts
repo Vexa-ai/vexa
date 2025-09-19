@@ -244,17 +244,20 @@ export const googleRemovalIndicators: string[] = [
 
 // Google Meet UI interaction selectors
 export const googleJoinButtonSelectors: string[] = [
+  '//button[.//span[text()="Ask to join"]]',
   'button:has-text("Ask to join")',
   'button:has-text("Join now")',
   'button:has-text("Join")'
 ];
 
 export const googleCameraButtonSelectors: string[] = [
+  '[aria-label*="Turn off camera"]',
   'button[aria-label*="Turn off camera"]',
   'button[aria-label*="Turn on camera"]'
 ];
 
 export const googleMicrophoneButtonSelectors: string[] = [
+  '[aria-label*="Turn off microphone"]',
   'button[aria-label*="Turn off microphone"]',
   'button[aria-label*="Turn on microphone"]'
 ];
