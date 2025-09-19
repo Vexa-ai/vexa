@@ -137,43 +137,43 @@ export async function handleGoogleMeet(
     // If we reach here, recording finished normally (not due to removal)
     log("Google Meet recording completed normally");
     await gracefulLeaveFunction(page, 0, "normal_completion");
-    } catch (error: any) {
-      // Handle removal detection specifically (check for the error message with or without page.evaluate prefix)
-      if (error.message === "GOOGLE_MEET_BOT_REMOVED_BY_ADMIN" || error.message.includes("GOOGLE_MEET_BOT_REMOVED_BY_ADMIN")) {
-        log("🚨 Bot was removed from Google Meet meeting by admin. Exiting gracefully...");
-        await gracefulLeaveFunction(page, 0, "removed_by_admin");
-        return;
-      }
-      
-      // Handle left alone timeout scenarios
-      if (error.message === "GOOGLE_MEET_BOT_LEFT_ALONE_TIMEOUT" || error.message.includes("GOOGLE_MEET_BOT_LEFT_ALONE_TIMEOUT")) {
-        log("⏰ Bot was left alone in Google Meet meeting for 10 seconds. Exiting gracefully...");
-        await gracefulLeaveFunction(page, 0, "left_alone_timeout");
-        return;
-      }
-      
-      if (error.message === "GOOGLE_MEET_BOT_STARTUP_ALONE_TIMEOUT" || error.message.includes("GOOGLE_MEET_BOT_STARTUP_ALONE_TIMEOUT")) {
-        log("⏰ Bot was alone during startup for 20 minutes. Exiting gracefully...");
-        await gracefulLeaveFunction(page, 0, "startup_alone_timeout");
-        return;
-      }
-      
-      console.error("Error after Google Meet join attempt (admission/recording setup): " + error.message);
-      log("Error after Google Meet join attempt (admission/recording setup): " + error.message + ". Triggering graceful leave.");
-      
-      // Capture detailed error information for debugging
-      const errorDetails = {
-        error_message: error.message,
-        error_stack: error.stack,
-        error_name: error.name,
-        context: "post_join_setup_error",
-        platform: "google_meet",
-        timestamp: new Date().toISOString()
-      };
-      
-      // Use a general error code here, as it could be various issues.
-      await gracefulLeaveFunction(page, 1, "post_join_setup_error", errorDetails);
+  } catch (error: any) {
+    // Handle removal detection specifically (check for the error message with or without page.evaluate prefix)
+    if (error.message === "GOOGLE_MEET_BOT_REMOVED_BY_ADMIN" || error.message.includes("GOOGLE_MEET_BOT_REMOVED_BY_ADMIN")) {
+      log("🚨 Bot was removed from Google Meet meeting by admin. Exiting gracefully...");
+      await gracefulLeaveFunction(page, 0, "removed_by_admin");
       return;
+    }
+    
+    // Handle left alone timeout scenarios
+    if (error.message === "GOOGLE_MEET_BOT_LEFT_ALONE_TIMEOUT" || error.message.includes("GOOGLE_MEET_BOT_LEFT_ALONE_TIMEOUT")) {
+      log("⏰ Bot was left alone in Google Meet meeting for 10 seconds. Exiting gracefully...");
+      await gracefulLeaveFunction(page, 0, "left_alone_timeout");
+      return;
+    }
+    
+    if (error.message === "GOOGLE_MEET_BOT_STARTUP_ALONE_TIMEOUT" || error.message.includes("GOOGLE_MEET_BOT_STARTUP_ALONE_TIMEOUT")) {
+      log("⏰ Bot was alone during startup for 20 minutes. Exiting gracefully...");
+      await gracefulLeaveFunction(page, 0, "startup_alone_timeout");
+      return;
+    }
+    
+    console.error("Error after Google Meet join attempt (admission/recording setup): " + error.message);
+    log("Error after Google Meet join attempt (admission/recording setup): " + error.message + ". Triggering graceful leave.");
+    
+    // Capture detailed error information for debugging
+    const errorDetails = {
+      error_message: error.message,
+      error_stack: error.stack,
+      error_name: error.name,
+      context: "post_join_setup_error",
+      platform: "google_meet",
+      timestamp: new Date().toISOString()
+    };
+    
+    // Use a general error code here, as it could be various issues.
+    await gracefulLeaveFunction(page, 1, "post_join_setup_error", errorDetails);
+    return;
     } finally {
       // Always stop removal monitoring
       stopRemovalMonitor();
