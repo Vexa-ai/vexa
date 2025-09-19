@@ -1,8 +1,8 @@
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import { log } from "./utils";
 import { chromium } from "playwright-extra";
-import { handleGoogleMeet, leaveGoogleMeet } from "./platforms/googlemeet/google";
-import { handleMicrosoftTeams, leaveMicrosoftTeams } from "./platforms/msteams/teams";
+import { handleGoogleMeet, leaveGoogleMeet } from "./platforms/googlemeet";
+import { handleMicrosoftTeams, leaveMicrosoftTeams } from "./platforms/msteams";
 import { browserArgs, userAgent } from "./constans";
 import { BotConfig } from "./types";
 import { createClient, RedisClientType } from 'redis';

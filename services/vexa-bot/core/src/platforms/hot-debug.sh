@@ -1,19 +1,52 @@
 #!/bin/bash
 
-# Google Meet Hot-Reload Debug Script
-# Runs the Google Meet bot container with bind mounts so you can live-edit code
-# without rebuilding the image. Pair this with `node dev-watch.js` to rebuild
-# dist/browser-utils.global.js on the host automatically.
+# Unified Platform Hot-Reload Debug Script
+# Runs bot containers with bind mounts so you can live-edit code
+# without rebuilding the image. Supports both Google Meet and Teams.
+#
+# Usage:
+#   ./hot-debug.sh google [meeting-url]
+#   ./hot-debug.sh teams [meeting-url]
 
 set -e
 
+# Check platform argument
+PLATFORM="${1}"
+if [[ "$PLATFORM" != "google" && "$PLATFORM" != "teams" ]]; then
+  echo "❌ Usage: $0 <google|teams> [meeting-url]"
+  echo "   Examples:"
+  echo "     $0 google https://meet.google.com/abc-defg-hij"
+  echo "     $0 teams https://teams.live.com/meet/123456789"
+  exit 1
+fi
+
+# Platform-specific configuration
+if [[ "$PLATFORM" == "google" ]]; then
+  CONTAINER_NAME="vexa-bot-google-hot"
+  PLATFORM_CONFIG="google_meet"
+  BOT_NAME="GoogleDebugBot"
+  CONNECTION_ID="google-hot-debug"
+  MEETING_ID="google-debug-meeting"
+  DEFAULT_URL="https://meet.google.com/kba-qqag-vpq"
+  ADMISSION_SCREENSHOT="bot-checkpoint-2-admitted.png"
+  REDIS_CHANNEL="bot_commands:google-hot-debug"
+else
+  CONTAINER_NAME="vexa-bot-teams-hot"
+  PLATFORM_CONFIG="teams"
+  BOT_NAME="TeamsDebugBot"
+  CONNECTION_ID="teams-hot-debug"
+  MEETING_ID="9327884808517"
+  DEFAULT_URL="https://teams.live.com/meet/9342205715849?p=1Tw4SOPN4ZfYgCKRcQ"
+  ADMISSION_SCREENSHOT="teams-status-startup.png"
+  REDIS_CHANNEL="bot_commands:teams-hot-debug"
+fi
+
 # Configuration
-CONTAINER_NAME="vexa-bot-google-hot"
 IMAGE_NAME="vexa-bot:test"
 SCREENSHOTS_DIR="/home/dima/dev/bot-storage/screenshots/run-$(date +%Y%m%d-%H%M%S)"
-MEETING_URL="${1:-https://meet.google.com/kba-qqag-vpq}"
+MEETING_URL="${2:-$DEFAULT_URL}"
 
-echo "🔥 Starting Google Meet Hot-Reload Debug"
+echo "🔥 Starting $PLATFORM Hot-Reload Debug"
 
 # Create screenshots directory for this run
 echo "📁 Creating screenshots directory: $SCREENSHOTS_DIR"
@@ -23,16 +56,15 @@ mkdir -p "$SCREENSHOTS_DIR"
 echo "🧹 Cleaning up existing container if present..."
 docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
 
-# NOTE: We do NOT rebuild the image here to avoid slow cycles.
-# Make sure the image exists (built once via google-debug-test.sh)
+# Make sure the image exists
 if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
-  echo "❌ Image $IMAGE_NAME not found. Build it once via google-debug-test.sh first."
+  echo "❌ Image $IMAGE_NAME not found. Build it once first."
   exit 1
 fi
 
 # Resolve paths
-ROOT_DIR="$(cd ../../.. && pwd)"                 # core root
-DIST_DIR="$ROOT_DIR/dist"                         # core/dist (built output)
+ROOT_DIR="$(cd ../.. && pwd)"              # core root
+DIST_DIR="$ROOT_DIR/dist"                  # core/dist (built output)
 
 # Ensure fresh code by rebuilding dist files
 echo "🔄 Rebuilding dist files to ensure fresh code..."
@@ -45,7 +77,7 @@ if [ ! -d "$DIST_DIR" ]; then
   exit 1
 fi
 
-echo "🤖 Running Google Meet bot container with bind mounts (hot-reload)..."
+echo "🤖 Running $PLATFORM bot container with bind mounts (hot-reload)..."
 
 # Start the bot container in the background
 docker run --rm --name "$CONTAINER_NAME" \
@@ -53,11 +85,11 @@ docker run --rm --name "$CONTAINER_NAME" \
   -v "$SCREENSHOTS_DIR:/app/storage/screenshots" \
   -v "$DIST_DIR:/app/dist" \
   -e BOT_CONFIG='{
-    "platform":"google_meet",
+    "platform":"'$PLATFORM_CONFIG'",
     "meetingUrl":"'$MEETING_URL'",
-    "botName":"GoogleDebugBot",
-    "connectionId":"google-hot-debug",
-    "nativeMeetingId":"google-debug-meeting",
+    "botName":"'$BOT_NAME'",
+    "connectionId":"'$CONNECTION_ID'",
+    "nativeMeetingId":"'$MEETING_ID'",
     "token":"debug-token",
     "redisUrl":"redis://redis:6379/0",
     "container_name":"'$CONTAINER_NAME'",
@@ -86,7 +118,7 @@ elapsed=0
 
 while [ $elapsed -lt $ADMISSION_TIMEOUT ]; do
   # Check if startup screenshot exists (indicates bot is admitted)
-  if [ -f "$SCREENSHOTS_DIR/bot-checkpoint-2-admitted.png" ]; then
+  if [ -f "$SCREENSHOTS_DIR/$ADMISSION_SCREENSHOT" ]; then
     echo "✅ Bot admitted to meeting! Found admission screenshot."
     break
   fi
@@ -115,7 +147,7 @@ sleep 5
 echo "📡 Sending Redis leave command for testing..."
 docker run --rm --network vexa_dev_vexa_default \
   redis:alpine redis-cli -h redis -p 6379 \
-  PUBLISH "bot_commands:google-hot-debug" '{"action":"leave"}'
+  PUBLISH "$REDIS_CHANNEL" '{"action":"leave"}'
 
 echo "⏳ Monitoring for graceful shutdown..."
 SHUTDOWN_TIMEOUT=30
@@ -156,7 +188,7 @@ cleanup_on_interrupt() {
     echo "📡 Sending 'leave' command via Redis..."
     docker run --rm --network vexa_dev_vexa_default \
       redis:alpine redis-cli -h redis -p 6379 \
-      PUBLISH "bot_commands:google-hot-debug" '{"action":"leave"}'
+      PUBLISH "$REDIS_CHANNEL" '{"action":"leave"}'
     
     echo "⏳ Monitoring for graceful shutdown..."
     SHUTDOWN_TIMEOUT=30
@@ -188,9 +220,9 @@ trap cleanup_on_interrupt INT
 echo "🧪 Verifying Redis connectivity..."
 docker run --rm --network vexa_dev_vexa_default redis:alpine redis-cli -h redis -p 6379 PING
 
-echo "🔎 Checking for subscriber on channel: bot_commands:google-hot-debug"
-NUMSUB=$(docker run --rm --network vexa_dev_vexa_default redis:alpine redis-cli -h redis -p 6379 PUBSUB NUMSUB "bot_commands:google-hot-debug" | awk 'NR==2{print $2}')
-echo "🔎 PUBSUB NUMSUB bot_commands:google-hot-debug => $NUMSUB"
+echo "🔎 Checking for subscriber on channel: $REDIS_CHANNEL"
+NUMSUB=$(docker run --rm --network vexa_dev_vexa_default redis:alpine redis-cli -h redis -p 6379 PUBSUB NUMSUB "$REDIS_CHANNEL" | awk 'NR==2{print $2}')
+echo "🔎 PUBSUB NUMSUB $REDIS_CHANNEL => $NUMSUB"
 
 if [ "${NUMSUB:-0}" -ge 1 ]; then
   echo "✅ Subscriber present - Redis command ready!"
