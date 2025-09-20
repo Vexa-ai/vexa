@@ -569,21 +569,16 @@ async def update_bot_config(
     internal_meeting_id = active_meeting.id
     logger.info(f"[DEBUG] Found active meeting record with internal ID: {internal_meeting_id}")
 
-    # 2. Find the LATEST session_uid (connectionId) for this meeting - CHANGED TO EARLIEST
-    # latest_session_stmt = select(MeetingSession.session_uid).where(
-    #     MeetingSession.meeting_id == internal_meeting_id
-    # ).order_by(MeetingSession.session_start_time.desc()).limit(1)
-    # --- Get the EARLIEST session for this meeting ID --- 
-    earliest_session_stmt = select(MeetingSession.session_uid).where(
+    # 2. Find the LATEST session_uid (connectionId) for this meeting
+    latest_session_stmt = select(MeetingSession.session_uid).where(
         MeetingSession.meeting_id == internal_meeting_id
-    ).order_by(MeetingSession.session_start_time.asc()).limit(1) # Order ASC, take first
+    ).order_by(MeetingSession.session_start_time.desc()).limit(1) # Order DESC, take most recent
 
-    session_result = await db.execute(earliest_session_stmt)
-    # Rename variable for clarity
-    original_session_uid = session_result.scalars().first() 
+    session_result = await db.execute(latest_session_stmt)
+    # Use the latest known session uid (matches current running bot container)
+    original_session_uid = session_result.scalars().first()
 
-    # ++ ADDED: Log the specific session UID found (changed var name) ++
-    logger.info(f"[DEBUG] Found earliest session UID (should be original connectionId) '{original_session_uid}' for meeting {internal_meeting_id}")
+    logger.info(f"[DEBUG] Selected latest session UID '{original_session_uid}' for meeting {internal_meeting_id} to receive reconfigure command")
     # +++++++++++++++++++++++++++++++++++++++++++++
 
     if not original_session_uid:

@@ -147,6 +147,10 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
         whisperLiveUrl: whisperUrlForBrowser
       }, true); // Enable stubborn mode for Google Meet
 
+      // Expose references for reconfiguration
+      (window as any).__vexaWhisperLiveService = whisperLiveService;
+      (window as any).__vexaBotConfig = botConfigData;
+
 
       await new Promise<void>((resolve, reject) => {
         try {
@@ -202,64 +206,74 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
             // Initialize WhisperLive WebSocket connection with simple reconnection wrapper
             const connectWhisper = async () => {
               try {
-                await whisperLiveService.connectToWhisperLive(
-                  botConfigData,
-                  (data: any) => {
-                const logFn = (window as any).logBot;
-                // Reduce log spam: log only important status changes and completed transcript segments
-                if (!data || typeof data !== 'object') {
-                  return;
-                }
-                if (data["status"] === "ERROR") {
-                  logFn(`Google Meet WebSocket Server Error: ${data["message"]}`);
-                  return;
-                }
-                if (data["status"] === "WAIT") {
-                  logFn(`Google Meet Server busy: ${data["message"]}`);
-                  return;
-                }
-                if (!whisperLiveService.isReady() && data["status"] === "SERVER_READY") {
-                  whisperLiveService.setServerReady(true);
-                  logFn("Google Meet Server is ready.");
-                  return;
-                }
-                if (data["language"]) {
-                  if (!(window as any).__vexaLangLogged) {
-                    (window as any).__vexaLangLogged = true;
-                    logFn(`Google Meet Language detected: ${data["language"]}`);
+                // Define callbacks so they can be reused for reconfiguration reconnects
+                const onMessage = (data: any) => {
+                  const logFn = (window as any).logBot;
+                  // Reduce log spam: log only important status changes and completed transcript segments
+                  if (!data || typeof data !== 'object') {
+                    return;
                   }
-                  // do not return; language can accompany segments
-                }
-                if (data["message"] === "DISCONNECT") {
-                  logFn("Google Meet Server requested disconnect.");
-                  whisperLiveService.close();
-                  return;
-                }
-                // Log only completed transcript segments, with deduplication
-                if (Array.isArray(data.segments)) {
-                  const completedTexts = data.segments
-                    .filter((s: any) => s && s.completed && s.text)
-                    .map((s: any) => s.text as string);
-                  if (completedTexts.length > 0) {
-                    const transcriptKey = completedTexts.join(' ').trim();
-                    if (transcriptKey && transcriptKey !== (window as any).__lastTranscript) {
-                      (window as any).__lastTranscript = transcriptKey;
-                      logFn(`Transcript: ${transcriptKey}`);
+                  if (data["status"] === "ERROR") {
+                    logFn(`Google Meet WebSocket Server Error: ${data["message"]}`);
+                    return;
+                  }
+                  if (data["status"] === "WAIT") {
+                    logFn(`Google Meet Server busy: ${data["message"]}`);
+                    return;
+                  }
+                  if (!whisperLiveService.isReady() && data["status"] === "SERVER_READY") {
+                    whisperLiveService.setServerReady(true);
+                    logFn("Google Meet Server is ready.");
+                    return;
+                  }
+                  if (data["language"]) {
+                    if (!(window as any).__vexaLangLogged) {
+                      (window as any).__vexaLangLogged = true;
+                      logFn(`Google Meet Language detected: ${data["language"]}`);
+                    }
+                    // do not return; language can accompany segments
+                  }
+                  if (data["message"] === "DISCONNECT") {
+                    logFn("Google Meet Server requested disconnect.");
+                    whisperLiveService.close();
+                    return;
+                  }
+                  // Log only completed transcript segments, with deduplication
+                  if (Array.isArray(data.segments)) {
+                    const completedTexts = data.segments
+                      .filter((s: any) => s && s.completed && s.text)
+                      .map((s: any) => s.text as string);
+                    if (completedTexts.length > 0) {
+                      const transcriptKey = completedTexts.join(' ').trim();
+                      if (transcriptKey && transcriptKey !== (window as any).__lastTranscript) {
+                        (window as any).__lastTranscript = transcriptKey;
+                        logFn(`Transcript: ${transcriptKey}`);
+                      }
                     }
                   }
-                }
-                  },
-                  (event: Event) => {
-                    (window as any).logBot(`[Google Meet Failover] WebSocket error. This will trigger retry logic.`);
-                  },
-                  async (event: CloseEvent) => {
-                    (window as any).logBot(`[Google Meet Failover] WebSocket connection closed. Code: ${event.code}, Reason: ${event.reason}. Attempting reconnect in 2s...`);
-                    try { whisperLiveService.setServerReady(false); } catch {}
-                    setTimeout(() => {
-                      // Best-effort reconnect; BrowserWhisperLiveService stubborn mode should also help
-                      connectWhisper().catch(() => {});
-                    }, 2000);
-                  }
+                };
+                const onError = (event: Event) => {
+                  (window as any).logBot(`[Google Meet Failover] WebSocket error. This will trigger retry logic.`);
+                };
+                const onClose = async (event: CloseEvent) => {
+                  (window as any).logBot(`[Google Meet Failover] WebSocket connection closed. Code: ${event.code}, Reason: ${event.reason}. Attempting reconnect in 2s...`);
+                  try { whisperLiveService.setServerReady(false); } catch {}
+                  setTimeout(() => {
+                    // Best-effort reconnect; BrowserWhisperLiveService stubborn mode should also help
+                    connectWhisper().catch(() => {});
+                  }, 2000);
+                };
+
+                // Save callbacks globally for reuse
+                (window as any).__vexaOnMessage = onMessage;
+                (window as any).__vexaOnError = onError;
+                (window as any).__vexaOnClose = onClose;
+
+                await whisperLiveService.connectToWhisperLive(
+                  (window as any).__vexaBotConfig,
+                  onMessage,
+                  onError,
+                  onClose
                 );
               } catch (e) {
                 (window as any).logBot(`Google Meet connect error: ${(e as any)?.message || e}. Retrying in 2s...`);
@@ -622,6 +636,31 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
           return reject(new Error("[Google Meet BOT Error] " + error.message));
         }
       });
+
+      // Define reconfiguration hook to update language/task and reconnect
+      (window as any).triggerWebSocketReconfigure = async (lang: string | null, task: string | null) => {
+        try {
+          const svc = (window as any).__vexaWhisperLiveService;
+          const cfg = (window as any).__vexaBotConfig || {};
+          if (!svc) {
+            (window as any).logBot?.('[Reconfigure] WhisperLive service not initialized.');
+            return;
+          }
+          cfg.language = lang;
+          cfg.task = task || 'transcribe';
+          (window as any).__vexaBotConfig = cfg;
+          try { svc.close(); } catch {}
+          await svc.connectToWhisperLive(
+            cfg,
+            (window as any).__vexaOnMessage,
+            (window as any).__vexaOnError,
+            (window as any).__vexaOnClose
+          );
+          (window as any).logBot?.(`[Reconfigure] Applied: language=${cfg.language}, task=${cfg.task}`);
+        } catch (e: any) {
+          (window as any).logBot?.(`[Reconfigure] Error applying new config: ${e?.message || e}`);
+        }
+      };
     },
     { 
       botConfigData: botConfig, 

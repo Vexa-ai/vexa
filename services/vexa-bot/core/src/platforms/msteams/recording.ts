@@ -79,6 +79,10 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
         whisperLiveUrl: whisperUrlForBrowser
       }, true); // Enable stubborn mode for Teams
 
+      // Expose references for reconfiguration
+      (window as any).__vexaWhisperLiveService = whisperLiveService;
+      (window as any).__vexaBotConfig = botConfigData;
+
       await new Promise<void>((resolve, reject) => {
         try {
           (window as any).logBot("Starting Teams recording process with new services.");
@@ -129,31 +133,39 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
               }
             });
 
-            // Initialize WhisperLive WebSocket connection
-            return await whisperLiveService.connectToWhisperLive(
-              botConfigData,
-              (data: any) => {
-                if (data["status"] === "ERROR") {
-                  (window as any).logBot(`Teams WebSocket Server Error: ${data["message"]}`);
-                } else if (data["status"] === "WAIT") {
-                  (window as any).logBot(`Teams Server busy: ${data["message"]}`);
-                } else if (!whisperLiveService.isReady() && data["status"] === "SERVER_READY") {
-                  whisperLiveService.setServerReady(true);
-                  (window as any).logBot("Teams Server is ready.");
-                } else if (data["language"]) {
-                  (window as any).logBot(`Teams Language detected: ${data["language"]}`);
-                } else if (data["message"] === "DISCONNECT") {
-                  (window as any).logBot("Teams Server requested disconnect.");
-                  whisperLiveService.close();
-                }
-              },
-              (event: Event) => {
-                (window as any).logBot(`[Teams Failover] WebSocket error. This will trigger retry logic.`);
-              },
-              async (event: CloseEvent) => {
-                (window as any).logBot(`[Teams Failover] WebSocket connection closed. Code: ${event.code}, Reason: ${event.reason}.`);
-                // Retry logic would be handled by WebSocketManager
+            // Initialize WhisperLive WebSocket connection with reusable callbacks
+            const onMessage = (data: any) => {
+              if (data["status"] === "ERROR") {
+                (window as any).logBot(`Teams WebSocket Server Error: ${data["message"]}`);
+              } else if (data["status"] === "WAIT") {
+                (window as any).logBot(`Teams Server busy: ${data["message"]}`);
+              } else if (!whisperLiveService.isReady() && data["status"] === "SERVER_READY") {
+                whisperLiveService.setServerReady(true);
+                (window as any).logBot("Teams Server is ready.");
+              } else if (data["language"]) {
+                (window as any).logBot(`Teams Language detected: ${data["language"]}`);
+              } else if (data["message"] === "DISCONNECT") {
+                (window as any).logBot("Teams Server requested disconnect.");
+                whisperLiveService.close();
               }
+            };
+            const onError = (event: Event) => {
+              (window as any).logBot(`[Teams Failover] WebSocket error. This will trigger retry logic.`);
+            };
+            const onClose = async (event: CloseEvent) => {
+              (window as any).logBot(`[Teams Failover] WebSocket connection closed. Code: ${event.code}, Reason: ${event.reason}.`);
+            };
+
+            // Save callbacks globally for reuse
+            (window as any).__vexaOnMessage = onMessage;
+            (window as any).__vexaOnError = onError;
+            (window as any).__vexaOnClose = onClose;
+
+            return await whisperLiveService.connectToWhisperLive(
+              (window as any).__vexaBotConfig,
+              onMessage,
+              onError,
+              onClose
             );
           }).then(() => {
             // Initialize Teams-specific speaker detection (browser context)
@@ -878,6 +890,31 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
           return reject(new Error("[Teams BOT Error] " + error.message));
         }
       });
+
+      // Define reconfiguration hook to update language/task and reconnect
+      (window as any).triggerWebSocketReconfigure = async (lang: string | null, task: string | null) => {
+        try {
+          const svc = (window as any).__vexaWhisperLiveService;
+          const cfg = (window as any).__vexaBotConfig || {};
+          if (!svc) {
+            (window as any).logBot?.('[Reconfigure] WhisperLive service not initialized.');
+            return;
+          }
+          cfg.language = lang;
+          cfg.task = task || 'transcribe';
+          (window as any).__vexaBotConfig = cfg;
+          try { svc.close(); } catch {}
+          await svc.connectToWhisperLive(
+            cfg,
+            (window as any).__vexaOnMessage,
+            (window as any).__vexaOnError,
+            (window as any).__vexaOnClose
+          );
+          (window as any).logBot?.(`[Reconfigure] Applied: language=${cfg.language}, task=${cfg.task}`);
+        } catch (e: any) {
+          (window as any).logBot?.(`[Reconfigure] Error applying new config: ${e?.message || e}`);
+        }
+      };
     },
     { 
       botConfigData: botConfig, 
