@@ -1,5 +1,6 @@
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import { log } from "./utils";
+import { callStatusChangeCallback, mapExitReasonToStatus } from "./services/unified-callback";
 import { chromium } from "playwright-extra";
 import { handleGoogleMeet, leaveGoogleMeet } from "./platforms/googlemeet";
 import { handleMicrosoftTeams, leaveMicrosoftTeams } from "./platforms/msteams";
@@ -7,8 +8,7 @@ import { browserArgs, userAgent } from "./constans";
 import { BotConfig } from "./types";
 import { createClient, RedisClientType } from 'redis';
 import { Page, Browser } from 'playwright-core';
-import * as http from 'http'; // ADDED: For HTTP callback
-import * as https from 'https'; // ADDED: For HTTPS callback (if needed)
+// HTTP imports removed - using unified callback service instead
 
 // Module-level variables to store current configuration
 let currentLanguage: string | null | undefined = null;
@@ -38,41 +38,7 @@ export function hasStopSignalReceived(): boolean {
 }
 // -----------------------------------
 
-// --- ADDED: Exit Reason Mapping Function ---
-function mapExitReasonToStatus(reason: string, exitCode: number): { status: string; reason?: string; stage?: string } {
-  if (exitCode === 0) {
-    // Successful exits (completed)
-    switch (reason) {
-      case "admission_failed":
-        return { status: "completed", reason: "awaiting_admission_timeout" };
-      case "self_initiated_leave":
-        return { status: "completed", reason: "stopped" };
-      case "left_alone":
-        return { status: "completed", reason: "left_alone" };
-      case "evicted":
-        return { status: "completed", reason: "evicted" };
-      default:
-        return { status: "completed", reason: "stopped" };
-    }
-  } else {
-    // Failed exits
-    switch (reason) {
-      case "teams_error":
-      case "google_meet_error":
-      case "zoom_error":
-        return { status: "failed", stage: "joining" };
-      case "post_join_setup_error":
-        return { status: "failed", stage: "joining" };
-      case "missing_meeting_url":
-        return { status: "failed", stage: "requested" };
-      case "validation_error":
-        return { status: "failed", stage: "requested" };
-      default:
-        return { status: "failed", stage: "active" };
-    }
-  }
-}
-// -----------------------------------------
+// Exit reason mapping function moved to services/unified-callback.ts
 
 // --- ADDED: Session Management Utilities ---
 /**
@@ -284,50 +250,28 @@ async function performGracefulLeave(
   const finalCallbackReason = reason;
 
   if (botManagerCallbackUrl && currentConnectionId) {
-    // Map exit reason to new status system
+    // Use unified callback for exit status
     const statusMapping = mapExitReasonToStatus(finalCallbackReason, finalCallbackExitCode);
     
-    log(`🔥 CALLBACK: EXIT (${statusMapping.status} status) - reason: ${finalCallbackReason}, exit_code: ${finalCallbackExitCode}`);
-    
-    const payload = JSON.stringify({
-      connection_id: currentConnectionId,
-      exit_code: finalCallbackExitCode,
-      reason: finalCallbackReason,
-      error_details: errorDetails || null,
-      platform_specific_error: errorDetails?.error_message || null,
-      // Add new status system fields
-      completion_reason: statusMapping.reason || null,
-      failure_stage: statusMapping.stage || null
-    });
+    const botConfig = {
+      botManagerCallbackUrl,
+      connectionId: currentConnectionId,
+      container_name: process.env.HOSTNAME || 'unknown'
+    };
 
     try {
-      log(`[Graceful Leave] Sending exit callback to ${botManagerCallbackUrl} with payload: ${payload}`);
-      const url = new URL(botManagerCallbackUrl);
-      const options: https.RequestOptions = { // Added type
-        method: 'POST',
-        hostname: url.hostname,
-        port: url.port || (url.protocol === 'https:' ? '443' : '80'),
-        path: url.pathname,
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(payload) // Assumes Buffer is available
-        }
-      };
-
-      const req = (url.protocol === 'https:' ? https : http).request(options, (res: http.IncomingMessage) => { // Added type
-        log(`[Graceful Leave] Bot-manager callback response status: ${res.statusCode}`);
-        res.on('data', () => { /* consume data */ });
-      });
-
-      req.on('error', (err: Error) => { // Added type
-        log(`[Graceful Leave] Error sending bot-manager callback: ${err.message}`);
-      });
-
-      req.write(payload);
-      req.end();
-      await new Promise(resolve => setTimeout(resolve, 500)); 
+      await callStatusChangeCallback(
+        botConfig,
+        statusMapping.status as any,
+        finalCallbackReason,
+        finalCallbackExitCode,
+        errorDetails,
+        statusMapping.completionReason,
+        statusMapping.failureStage
+      );
+      log(`[Graceful Leave] Unified exit callback sent successfully`);
     } catch (callbackError: any) {
-      log(`[Graceful Leave] Exception during bot-manager callback preparation: ${callbackError.message}`);
+      log(`[Graceful Leave] Error sending unified exit callback: ${callbackError.message}`);
     }
   } else {
     log("[Graceful Leave] Bot manager callback URL or Connection ID not configured. Cannot send exit status.");

@@ -144,6 +144,7 @@ async def update_meeting_status(
     return True
 
 from app.tasks.bot_exit_tasks import run_all_tasks
+from app.tasks.webhook_runner import run_status_webhook_task
 
 async def publish_meeting_status_change(meeting_id: int, new_status: str, redis_client: Optional[aioredis.Redis], platform: str, native_meeting_id: str):
     """Publish meeting status changes via Redis Pub/Sub on platform/native_id channel only."""
@@ -162,6 +163,31 @@ async def publish_meeting_status_change(meeting_id: int, new_status: str, redis_
         logger.info(f"Published meeting status change to '{channel}': {new_status}")
     except Exception as e:
         logger.error(f"Failed to publish meeting status change for meeting {meeting_id}: {e}")
+
+async def schedule_status_webhook_task(
+    meeting: Meeting, 
+    background_tasks: BackgroundTasks,
+    old_status: str,
+    new_status: str,
+    reason: Optional[str] = None,
+    transition_source: Optional[str] = None
+):
+    """Schedule a webhook task for meeting status changes."""
+    status_change_info = {
+        'old_status': old_status,
+        'new_status': new_status,
+        'reason': reason,
+        'timestamp': datetime.utcnow().isoformat(),
+        'transition_source': transition_source
+    }
+    
+    # Schedule the webhook task with status change information
+    background_tasks.add_task(
+        run_status_webhook_task,
+        meeting.id,
+        status_change_info
+    )
+    logger.info(f"Scheduled status webhook task for meeting {meeting.id} status change: {old_status} -> {new_status}")
 
 # Configure logging
 logging.basicConfig(
@@ -198,6 +224,20 @@ class BotExitCallbackPayload(BaseModel):
 class BotStartupCallbackPayload(BaseModel):
     connection_id: str = Field(..., description="The connection ID of the bot session.")
     container_id: str = Field(..., description="The container ID of the started bot.")
+
+class BotStatusChangePayload(BaseModel):
+    """Unified payload for all bot status change callbacks."""
+    connection_id: str = Field(..., description="The connection ID of the bot session.")
+    container_id: Optional[str] = Field(None, description="The container ID of the bot.")
+    status: MeetingStatus = Field(..., description="The new status of the meeting.")
+    reason: Optional[str] = Field(None, description="Reason for the status change.")
+    exit_code: Optional[int] = Field(None, description="Exit code if applicable.")
+    error_details: Optional[Dict[str, Any]] = Field(None, description="Detailed error information.")
+    platform_specific_error: Optional[str] = Field(None, description="Platform-specific error message.")
+    completion_reason: Optional[MeetingCompletionReason] = Field(None, description="Reason for completion if applicable.")
+    failure_stage: Optional[MeetingFailureStage] = Field(None, description="Stage where failure occurred if applicable.")
+    timestamp: Optional[str] = Field(None, description="Timestamp of the status change.")
+
 # --- --------------------------------------------- ---
 
 @app.on_event("startup")
@@ -1186,6 +1226,163 @@ async def bot_awaiting_admission_callback(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An internal error occurred while processing the bot awaiting admission callback."
+        )
+
+# --- UNIFIED CALLBACK ENDPOINT ---
+@app.post("/bots/internal/callback/status_change",
+          status_code=status.HTTP_200_OK,
+          summary="Unified callback for all bot status changes",
+          description="Handles all bot status changes (joining, awaiting_admission, active, completed, failed) with webhook notifications",
+          include_in_schema=False) # Hidden from public API docs
+async def bot_status_change_callback(
+    payload: BotStatusChangePayload,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Unified callback endpoint for all bot status changes.
+    
+    This endpoint handles:
+    - joining: Bot starts joining the meeting
+    - awaiting_admission: Bot is in waiting room
+    - active: Bot is admitted and active in meeting
+    - completed: Bot successfully completed the meeting
+    - failed: Bot failed for some reason
+    
+    All status changes trigger webhook notifications if user has webhook URL configured.
+    """
+    logger.info(f"Received unified bot status change callback: connection_id={payload.connection_id}, status={payload.status.value}, reason={payload.reason}")
+    
+    session_uid = payload.connection_id
+    new_status = payload.status
+    reason = payload.reason
+
+    try:
+        # Find the meeting session to get the meeting_id
+        session_stmt = select(MeetingSession).where(MeetingSession.session_uid == session_uid)
+        session_result = await db.execute(session_stmt)
+        meeting_session = session_result.scalars().first()
+
+        if not meeting_session:
+            logger.error(f"Bot status change callback: Could not find meeting session for connection_id {session_uid}")
+            return {"status": "error", "detail": f"Meeting session not found for connection_id: {session_uid}"}
+
+        meeting_id = meeting_session.meeting_id
+        logger.info(f"Bot status change callback: Found meeting_id {meeting_id} for connection_id {session_uid}")
+
+        # Get the full meeting object
+        meeting = await db.get(Meeting, meeting_id)
+        if not meeting:
+            logger.error(f"Bot status change callback: Could not find meeting {meeting_id}")
+            return {"status": "error", "detail": f"Meeting {meeting_id} not found"}
+
+        # Check if user stopped early (ignore transitions except for completed/failed)
+        if (meeting.data and isinstance(meeting.data, dict) and 
+            meeting.data.get("stop_requested") and 
+            new_status not in [MeetingStatus.COMPLETED, MeetingStatus.FAILED]):
+            logger.info(f"Bot status change callback: stop_requested set for meeting {meeting.id}. Ignoring {new_status.value} transition.")
+            return {"status": "ignored", "detail": "stop requested"}
+
+        old_status = meeting.status
+        
+        # Handle different status changes
+        if new_status == MeetingStatus.COMPLETED:
+            # Handle completion
+            success = await update_meeting_status(
+                meeting=meeting,
+                new_status=MeetingStatus.COMPLETED,
+                db=db,
+                completion_reason=payload.completion_reason
+            )
+            
+            if success:
+                meeting.end_time = datetime.utcnow()
+                await db.commit()
+                await db.refresh(meeting)
+                
+                # Schedule post-meeting tasks (including original webhook)
+                background_tasks.add_task(run_all_tasks, meeting.id)
+                
+        elif new_status == MeetingStatus.FAILED:
+            # Handle failure
+            success = await update_meeting_status(
+                meeting=meeting,
+                new_status=MeetingStatus.FAILED,
+                db=db,
+                failure_stage=payload.failure_stage,
+                error_details=str(payload.error_details) if payload.error_details else None
+            )
+            
+            if success:
+                meeting.end_time = datetime.utcnow()
+                
+                # Store detailed error information
+                if payload.error_details or payload.platform_specific_error:
+                    if not meeting.data:
+                        meeting.data = {}
+                    meeting.data["last_error"] = {
+                        "exit_code": payload.exit_code,
+                        "reason": payload.reason,
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "error_details": payload.error_details,
+                        "platform_specific_error": payload.platform_specific_error
+                    }
+                
+                await db.commit()
+                await db.refresh(meeting)
+                
+                # Schedule post-meeting tasks (including original webhook)
+                background_tasks.add_task(run_all_tasks, meeting.id)
+                
+        elif new_status == MeetingStatus.ACTIVE:
+            # Handle activation
+            if meeting.status in [MeetingStatus.REQUESTED.value, MeetingStatus.JOINING.value, MeetingStatus.AWAITING_ADMISSION.value, MeetingStatus.FAILED.value]:
+                success = await update_meeting_status(meeting, MeetingStatus.ACTIVE, db)
+                if success:
+                    meeting.bot_container_id = payload.container_id
+                    meeting.start_time = datetime.utcnow()
+                    await db.commit()
+                    await db.refresh(meeting)
+            elif meeting.status == MeetingStatus.ACTIVE.value:
+                # Container restarted but meeting was already active
+                meeting.bot_container_id = payload.container_id
+                await db.commit()
+                await db.refresh(meeting)
+                logger.info(f"Bot status change callback: Meeting {meeting_id} already active, updated container ID to {payload.container_id}")
+                return {"status": "container_updated", "meeting_id": meeting.id, "status": meeting.status}
+            else:
+                logger.warning(f"Bot status change callback: Meeting {meeting_id} has unexpected status '{meeting.status}', not updating to active")
+                return {"status": "warning", "detail": f"Meeting status '{meeting.status}' not updated to active"}
+                
+        else:
+            # Handle other status changes (joining, awaiting_admission)
+            success = await update_meeting_status(meeting, new_status, db)
+            if not success:
+                logger.error(f"Bot status change callback: Failed to update meeting {meeting_id} status to '{new_status.value}'")
+                return {"status": "error", "detail": "Failed to update meeting status"}
+
+        # Publish meeting status change via Redis Pub/Sub
+        if success or (new_status == MeetingStatus.ACTIVE and meeting.status == MeetingStatus.ACTIVE.value):
+            await publish_meeting_status_change(meeting.id, new_status.value, redis_client, meeting.platform, meeting.platform_specific_id)
+
+        # Schedule webhook task for status change (for all status changes)
+        await schedule_status_webhook_task(
+            meeting=meeting,
+            background_tasks=background_tasks,
+            old_status=old_status,
+            new_status=new_status.value,
+            reason=reason,
+            transition_source="bot_callback"
+        )
+
+        return {"status": "processed", "meeting_id": meeting.id, "status": meeting.status}
+
+    except Exception as e:
+        logger.error(f"Bot status change callback: An unexpected error occurred: {e}", exc_info=True)
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An internal error occurred while processing the bot status change callback."
         )
 
 # --- --------------------------------------------------------- ---
