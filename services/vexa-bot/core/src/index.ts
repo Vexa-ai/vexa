@@ -182,17 +182,35 @@ const handleRedisMessage = async (message: string, channel: string, page: Page |
               try {
                   await page.evaluate(
                       ([lang, task]) => {
-                          if (typeof (window as any).triggerWebSocketReconfigure === 'function') {
-                              (window as any).triggerWebSocketReconfigure(lang, task);
-                          } else {
-                              console.error('[Node Eval Error] triggerWebSocketReconfigure not found on window.');
-                              // Optionally log via exposed function if available
-                              (window as any).logBot?.('[Node Eval Error] triggerWebSocketReconfigure not found on window.');
+                          const tryApply = () => {
+                              const fn = (window as any).triggerWebSocketReconfigure;
+                              if (typeof fn === 'function') {
+                                  try {
+                                      fn(lang, task);
+                                  } catch (e: any) {
+                                      console.error('[Reconfigure] Error invoking triggerWebSocketReconfigure:', e?.message || e);
+                                  }
+                                  return true;
+                              }
+                              return false;
+                          };
+                          if (!tryApply()) {
+                              console.warn('[Reconfigure] triggerWebSocketReconfigure not ready. Retrying for up to 15s...');
+                              const start = Date.now();
+                              const intervalId = setInterval(() => {
+                                  if (tryApply() || (Date.now() - start) > 15000) {
+                                      clearInterval(intervalId);
+                                  }
+                              }, 500);
+                              try {
+                                  const ev = new CustomEvent('vexa:reconfigure', { detail: { lang, task } });
+                                  document.dispatchEvent(ev);
+                              } catch {}
                           }
                       },
                       [currentLanguage, currentTask] // Pass new config as argument array
                   );
-                  log("Sent reconfigure command to browser context via page.evaluate.");
+                  log("Sent reconfigure command to browser context (with retry if not yet ready).");
               } catch (evalError: any) {
                   log(`Error evaluating reconfiguration script in browser: ${evalError.message}`);
               }

@@ -66,6 +66,26 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
 
       // Use browser utility classes from the global bundle
       const { BrowserAudioService, BrowserWhisperLiveService } = (window as any).VexaBrowserUtils;
+
+      // --- Early reconfigure wiring (stub + event) ---
+      (window as any).__vexaPendingReconfigure = null;
+      if (typeof (window as any).triggerWebSocketReconfigure !== 'function') {
+        (window as any).triggerWebSocketReconfigure = async (lang: string | null, task: string | null) => {
+          (window as any).__vexaPendingReconfigure = { lang, task };
+          (window as any).logBot?.('[Reconfigure][Teams] Stub queued update; will apply when service is ready.');
+        };
+      }
+      try {
+        document.addEventListener('vexa:reconfigure', (ev: Event) => {
+          try {
+            const detail = (ev as CustomEvent).detail || {};
+            const { lang, task } = detail;
+            const fn = (window as any).triggerWebSocketReconfigure;
+            if (typeof fn === 'function') fn(lang, task);
+          } catch {}
+        });
+      } catch {}
+      // ---------------------------------------------
       
       const audioService = new BrowserAudioService({
         targetSampleRate: 16000,
@@ -892,7 +912,7 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
       });
 
       // Define reconfiguration hook to update language/task and reconnect
-      (window as any).triggerWebSocketReconfigure = async (lang: string | null, task: string | null) => {
+      ;(window as any).triggerWebSocketReconfigure = async (lang: string | null, task: string | null) => {
         try {
           const svc = (window as any).__vexaWhisperLiveService;
           const cfg = (window as any).__vexaBotConfig || {};
@@ -915,6 +935,13 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
           (window as any).logBot?.(`[Reconfigure] Error applying new config: ${e?.message || e}`);
         }
       };
+      try {
+        const pending = (window as any).__vexaPendingReconfigure;
+        if (pending && typeof (window as any).triggerWebSocketReconfigure === 'function') {
+          (window as any).triggerWebSocketReconfigure(pending.lang, pending.task);
+          (window as any).__vexaPendingReconfigure = null;
+        }
+      } catch {}
     },
     { 
       botConfigData: botConfig, 

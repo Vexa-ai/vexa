@@ -468,6 +468,15 @@ async def request_bot(
         asyncio.create_task(_record_session_start(meeting_id, connection_id))
         logger.info(f"Scheduled background task to record session start for meeting {meeting_id}, session {connection_id}")
 
+        # Persist (platform, native_meeting_id) -> current connectionId mapping in Redis for command routing
+        try:
+            if redis_client and connection_id:
+                mapping_key = f"bm:meeting:{req.platform.value}:{native_meeting_id}:current_uid"
+                await redis_client.set(mapping_key, connection_id, ex=24*60*60)
+                logger.info(f"[DEBUG] Stored current_uid mapping in Redis: {mapping_key} -> {connection_id}")
+        except Exception as e:
+            logger.warning(f"[DEBUG] Failed to store current_uid mapping in Redis: {e}")
+
         # REMOVED: Status update to 'active' - now handled by bot startup callback
         # Only set the container ID, keep status as 'requested' until bot confirms it's running
         logger.info(f"Setting container ID {container_id} for meeting {meeting_id} (status remains 'requested' until bot confirms startup)")
@@ -569,21 +578,29 @@ async def update_bot_config(
     internal_meeting_id = active_meeting.id
     logger.info(f"[DEBUG] Found active meeting record with internal ID: {internal_meeting_id}")
 
-    # 2. Find the LATEST session_uid (connectionId) for this meeting
-    latest_session_stmt = select(MeetingSession.session_uid).where(
-        MeetingSession.meeting_id == internal_meeting_id
-    ).order_by(MeetingSession.session_start_time.desc()).limit(1) # Order DESC, take most recent
-
-    session_result = await db.execute(latest_session_stmt)
-    # Use the latest known session uid (matches current running bot container)
-    original_session_uid = session_result.scalars().first()
-
-    logger.info(f"[DEBUG] Selected latest session UID '{original_session_uid}' for meeting {internal_meeting_id} to receive reconfigure command")
-    # +++++++++++++++++++++++++++++++++++++++++++++
+    # 2. Resolve current session_uid (connectionId) for this meeting
+    # Prefer Redis mapping written at launch; fallback to DB MeetingSession
+    original_session_uid: Optional[str] = None
+    try:
+        if redis_client:
+            mapping_key = f"bm:meeting:{platform.value}:{native_meeting_id}:current_uid"
+            cached_uid = await redis_client.get(mapping_key)
+            if isinstance(cached_uid, str) and cached_uid:
+                original_session_uid = cached_uid
+                logger.info(f"[DEBUG] Using current_uid from Redis mapping: {mapping_key} -> {original_session_uid}")
+    except Exception as e:
+        logger.warning(f"[DEBUG] Failed to read current_uid from Redis: {e}")
 
     if not original_session_uid:
-        logger.error(f"Active meeting {internal_meeting_id} found, but no associated session UID in MeetingSession table. Cannot send command.")
-        # This indicates an inconsistent state
+        latest_session_stmt = select(MeetingSession.session_uid).where(
+            MeetingSession.meeting_id == internal_meeting_id
+        ).order_by(MeetingSession.session_start_time.desc()).limit(1)
+        session_result = await db.execute(latest_session_stmt)
+        original_session_uid = session_result.scalars().first()
+        logger.info(f"[DEBUG] Selected latest session UID '{original_session_uid}' for meeting {internal_meeting_id} to receive reconfigure command")
+
+    if not original_session_uid:
+        logger.error(f"Active meeting {internal_meeting_id} found, but no associated session UID. Cannot send command.")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Meeting is active but session information is missing. Cannot process reconfiguration."

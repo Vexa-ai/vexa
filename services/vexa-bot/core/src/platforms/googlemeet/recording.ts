@@ -134,6 +134,27 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
       // Use browser utility classes from the global bundle
       const browserUtils = (window as any).VexaBrowserUtils;
       (window as any).logBot(`Browser utils available: ${Object.keys(browserUtils || {}).join(', ')}`);
+
+      // --- Early reconfigure wiring (stub + event) ---
+      // Queue reconfig requests until service is ready
+      (window as any).__vexaPendingReconfigure = null;
+      if (typeof (window as any).triggerWebSocketReconfigure !== 'function') {
+        (window as any).triggerWebSocketReconfigure = async (lang: string | null, task: string | null) => {
+          (window as any).__vexaPendingReconfigure = { lang, task };
+          (window as any).logBot?.('[Reconfigure] Stub queued update; will apply when service is ready.');
+        };
+      }
+      try {
+        document.addEventListener('vexa:reconfigure', (ev: Event) => {
+          try {
+            const detail = (ev as CustomEvent).detail || {};
+            const { lang, task } = detail;
+            const fn = (window as any).triggerWebSocketReconfigure;
+            if (typeof fn === 'function') fn(lang, task);
+          } catch {}
+        });
+      } catch {}
+      // ---------------------------------------------
       
       const audioService = new browserUtils.BrowserAudioService({
         targetSampleRate: 16000,
@@ -150,6 +171,34 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
       // Expose references for reconfiguration
       (window as any).__vexaWhisperLiveService = whisperLiveService;
       (window as any).__vexaBotConfig = botConfigData;
+
+      // Replace stub with real reconfigure implementation and apply any queued update
+      (window as any).triggerWebSocketReconfigure = async (lang: string | null, task: string | null) => {
+        try {
+          const svc = (window as any).__vexaWhisperLiveService;
+          const cfg = (window as any).__vexaBotConfig || {};
+          cfg.language = lang;
+          cfg.task = task || 'transcribe';
+          (window as any).__vexaBotConfig = cfg;
+          try { svc?.close(); } catch {}
+          await svc?.connectToWhisperLive(
+            cfg,
+            (window as any).__vexaOnMessage,
+            (window as any).__vexaOnError,
+            (window as any).__vexaOnClose
+          );
+          (window as any).logBot?.(`[Reconfigure] Applied: language=${cfg.language}, task=${cfg.task}`);
+        } catch (e: any) {
+          (window as any).logBot?.(`[Reconfigure] Error applying new config: ${e?.message || e}`);
+        }
+      };
+      try {
+        const pending = (window as any).__vexaPendingReconfigure;
+        if (pending && typeof (window as any).triggerWebSocketReconfigure === 'function') {
+          (window as any).triggerWebSocketReconfigure(pending.lang, pending.task);
+          (window as any).__vexaPendingReconfigure = null;
+        }
+      } catch {}
 
 
       await new Promise<void>((resolve, reject) => {
