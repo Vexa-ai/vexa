@@ -244,7 +244,7 @@ export class BrowserWhisperLiveService {
   private onCloseCallback: ((event: CloseEvent) => void) | null = null;
   private reconnectInterval: any = null;
   private retryCount: number = 0;
-  private maxRetries: number = 999999;
+  private maxRetries: number = Number.MAX_SAFE_INTEGER; // TRULY NEVER GIVE UP!
   private retryDelayMs: number = 2000;
   private stubbornMode: boolean = false;
 
@@ -385,14 +385,14 @@ export class BrowserWhisperLiveService {
     // Exponential backoff with max delay of 10 seconds
     const delay = Math.min(this.retryDelayMs * Math.pow(1.5, Math.min(this.retryCount, 10)), 10000);
     
-    (window as any).logBot(`[STUBBORN] 🔄 Starting STUBBORN reconnection in ${delay}ms (attempt ${this.retryCount + 1}/${this.maxRetries})...`);
+    (window as any).logBot(`[STUBBORN] 🔄 Starting STUBBORN reconnection in ${delay}ms (attempt ${this.retryCount + 1}/∞ - WE NEVER GIVE UP!)...`);
     
     this.reconnectInterval = setTimeout(async () => {
       this.reconnectInterval = null;
       this.retryCount++;
       
-      if (this.retryCount >= this.maxRetries) {
-        (window as any).logBot(`[STUBBORN] ❌ Max retries (${this.maxRetries}) reached. But we're STUBBORN - resetting counter and continuing!`);
+      if (this.retryCount >= 1000) { // Reset counter every 1000 attempts to prevent overflow
+        (window as any).logBot(`[STUBBORN] 🔄 Resetting retry counter after 1000 attempts. WE WILL NEVER GIVE UP! EVER!`);
         this.retryCount = 0; // Reset and keep going - NEVER GIVE UP!
       }
       

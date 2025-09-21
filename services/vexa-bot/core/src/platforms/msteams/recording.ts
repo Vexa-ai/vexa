@@ -26,12 +26,8 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
     whisperLiveUrl: process.env.WHISPER_LIVE_URL
   });
 
-  // Initialize WhisperLive connection
-  const whisperLiveUrl = await whisperLiveService.initialize();
-  if (!whisperLiveUrl) {
-    log("ERROR: Could not initialize WhisperLive service for Teams. Aborting recording.");
-    return;
-  }
+  // Initialize WhisperLive connection with STUBBORN reconnection - NEVER GIVES UP!
+  const whisperLiveUrl = await whisperLiveService.initializeWithStubbornReconnection("Teams");
 
   log(`[Node.js] Using WhisperLive URL for Teams: ${whisperLiveUrl}`);
   log("Starting Teams recording with WebSocket connection");

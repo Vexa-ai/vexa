@@ -342,6 +342,35 @@ export class WhisperLiveService {
   }
 
   /**
+   * Initialize WhisperLive connection with STUBBORN reconnection - NEVER GIVES UP!
+   * This method will keep retrying until a connection is established
+   */
+  async initializeWithStubbornReconnection(platform: string): Promise<string> {
+    let whisperLiveUrl = await this.initialize();
+    
+    // STUBBORN MODE: NEVER GIVE UP! Keep trying until we get a WhisperLive connection
+    let retryCount = 0;
+    while (!whisperLiveUrl) {
+      retryCount++;
+      const delay = Math.min(2000 * Math.pow(1.5, Math.min(retryCount, 10)), 10000); // Exponential backoff, max 10s
+      log(`[STUBBORN] ❌ Could not initialize WhisperLive service for ${platform} (attempt ${retryCount}). NEVER GIVING UP! Retrying in ${delay}ms...`);
+      
+      // Wait before retrying
+      await new Promise(resolve => setTimeout(resolve, delay));
+      
+      // Try again with the current service instance
+      whisperLiveUrl = await this.initialize();
+      
+      if (whisperLiveUrl) {
+        log(`[STUBBORN] ✅ WhisperLive service initialized successfully for ${platform} after ${retryCount} attempts!`);
+        break;
+      }
+    }
+    
+    return whisperLiveUrl;
+  }
+
+  /**
    * Generate UUID for session identification
    */
   private generateUUID(): string {

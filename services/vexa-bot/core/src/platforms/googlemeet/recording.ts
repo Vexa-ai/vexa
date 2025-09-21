@@ -21,12 +21,8 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
     whisperLiveUrl: process.env.WHISPER_LIVE_URL
   });
 
-  // Initialize WhisperLive connection
-  const whisperLiveUrl = await whisperLiveService.initialize();
-  if (!whisperLiveUrl) {
-    log("ERROR: Could not initialize WhisperLive service for Google Meet. Aborting recording.");
-    return;
-  }
+  // Initialize WhisperLive connection with STUBBORN reconnection - NEVER GIVES UP!
+  const whisperLiveUrl = await whisperLiveService.initializeWithStubbornReconnection("Google Meet");
 
   log(`[Node.js] Using WhisperLive URL for Google Meet: ${whisperLiveUrl}`);
   log("Starting Google Meet recording with WebSocket connection");
