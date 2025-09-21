@@ -226,7 +226,10 @@ async def delete_meeting(
     api_key: str = Depends(get_api_key)
 ) -> Dict[str, Any]:
     """
-    Permanently delete a meeting and all its associated transcripts.
+    Purge transcripts and anonymize meeting data for finalized meetings.
+    
+    Only works for meetings in completed or failed states. Deletes all transcripts
+    but preserves meeting and session records for telemetry.
     
     Args:
         meeting_id: The unique identifier of the meeting
@@ -235,7 +238,8 @@ async def delete_meeting(
     Returns:
         JSON with confirmation message
     
-    Warning: This action cannot be undone.
+    Raises:
+        409 Conflict: If meeting is not in a finalized state.
     """
     url = f"{BASE_URL}/meetings/{meeting_platform}/{meeting_id}"
     return await make_request("DELETE", url, api_key)

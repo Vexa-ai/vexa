@@ -19,7 +19,8 @@ from shared_models.schemas import (
     Platform,
     TranscriptionSegment,
     MeetingUpdate,
-    MeetingCreate
+    MeetingCreate,
+    MeetingStatus
 )
 
 from config import IMMUTABILITY_THRESHOLD
@@ -420,7 +421,7 @@ async def update_meeting_data(
     return MeetingResponse.from_orm(meeting)
 
 @router.delete("/meetings/{platform}/{native_meeting_id}",
-              summary="Delete meeting and its transcripts",
+              summary="Delete meeting transcripts and anonymize meeting data",
               dependencies=[Depends(get_current_user)])
 async def delete_meeting(
     platform: Platform,
@@ -429,7 +430,13 @@ async def delete_meeting(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Deletes the latest meeting matching the platform and native ID, along with all its transcripts."""
+    """
+    Purges transcripts and anonymizes meeting data for finalized meetings.
+    
+    Only allows deletion for meetings in finalized states (completed, failed).
+    Deletes all transcripts but preserves meeting and session records for telemetry.
+    Scrubs PII from meeting record while keeping telemetry data.
+    """
     
     stmt = select(Meeting).where(
         Meeting.user_id == current_user.id,
@@ -447,7 +454,22 @@ async def delete_meeting(
         )
     
     internal_meeting_id = meeting.id
-    logger.info(f"[API] User {current_user.id} deleting meeting {internal_meeting_id}")
+    
+    # Check if already redacted (idempotency)
+    if meeting.data and meeting.data.get('redacted'):
+        logger.info(f"[API] Meeting {internal_meeting_id} already redacted, returning success")
+        return {"message": f"Meeting {platform.value}/{native_meeting_id} transcripts already deleted and data anonymized"}
+    
+    # Check if meeting is in finalized state
+    finalized_states = {MeetingStatus.COMPLETED.value, MeetingStatus.FAILED.value}
+    if meeting.status not in finalized_states:
+        logger.warning(f"[API] User {current_user.id} attempted to delete non-finalized meeting {internal_meeting_id} (status: {meeting.status})")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Meeting not finalized; cannot delete transcripts. Current status: {meeting.status}"
+        )
+    
+    logger.info(f"[API] User {current_user.id} purging transcripts and anonymizing meeting {internal_meeting_id}")
     
     # Delete transcripts from PostgreSQL
     stmt_transcripts = select(Transcription).where(Transcription.meeting_id == internal_meeting_id)
@@ -457,28 +479,37 @@ async def delete_meeting(
     for transcript in transcripts:
         await db.delete(transcript)
     
-    # Delete meeting sessions
-    stmt_sessions = select(MeetingSession).where(MeetingSession.meeting_id == internal_meeting_id)
-    result_sessions = await db.execute(stmt_sessions)
-    sessions = result_sessions.scalars().all()
-    
-    for session in sessions:
-        await db.delete(session)
-    
-    # Delete transcript segments from Redis
+    # Delete transcript segments from Redis and remove from active meetings
     redis_c = getattr(request.app.state, 'redis_client', None)
     if redis_c:
         try:
             hash_key = f"meeting:{internal_meeting_id}:segments"
-            await redis_c.delete(hash_key)
-            logger.debug(f"[API] Deleted Redis hash {hash_key}")
+            # Use pipeline for atomic operations
+            async with redis_c.pipeline(transaction=True) as pipe:
+                pipe.delete(hash_key)
+                pipe.srem("active_meetings", str(internal_meeting_id))
+                results = await pipe.execute()
+            logger.debug(f"[API] Deleted Redis hash {hash_key} and removed from active_meetings")
         except Exception as e:
             logger.error(f"[API] Failed to delete Redis data for meeting {internal_meeting_id}: {e}")
     
-    # Delete the meeting record
-    await db.delete(meeting)
+    # Scrub PII from meeting record while preserving telemetry
+    original_data = meeting.data or {}
+    
+    # Keep only telemetry fields
+    telemetry_fields = {'status_transition', 'completion_reason', 'error', 'diagnostics'}
+    scrubbed_data = {k: v for k, v in original_data.items() if k in telemetry_fields}
+    
+    # Add redaction marker for idempotency
+    scrubbed_data['redacted'] = True
+    
+    # Update meeting record with scrubbed data
+    meeting.platform_specific_id = None  # Clear native meeting ID (this makes constructed_meeting_url return None)
+    meeting.data = scrubbed_data
+    
+    # Note: We keep Meeting and MeetingSession records for telemetry
     await db.commit()
     
-    logger.info(f"[API] Successfully deleted meeting {internal_meeting_id} and all its data")
+    logger.info(f"[API] Successfully purged transcripts and anonymized meeting {internal_meeting_id}")
     
-    return {"message": f"Meeting {platform.value}/{native_meeting_id} and all its transcripts have been deleted"} 
+    return {"message": f"Meeting {platform.value}/{native_meeting_id} transcripts deleted and data anonymized"} 

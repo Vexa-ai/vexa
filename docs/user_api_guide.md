@@ -266,16 +266,19 @@ The default limit is **one (1) concurrently running bot** per user account. If y
       }'
     ```
 
-### Delete Meeting and Transcripts
+### Delete Meeting Transcripts and Anonymize Data
 
 *   **Endpoint:** `DELETE /meetings/{platform}/{native_meeting_id}`
-*   **Description:** Permanently deletes a meeting and all its associated transcripts. **This action cannot be undone.**
+*   **Description:** Purges transcripts and anonymizes meeting data for finalized meetings. Only works for meetings in `completed` or `failed` states. Deletes all transcripts but preserves meeting and session records for telemetry purposes. Scrubs PII while keeping status transitions and completion reasons.
 *   **Path Parameters:**
     *   `platform`: (string) The platform of the meeting.
     *   `native_meeting_id`: (string) The unique identifier of the meeting.
 *   **Headers:**
     *   `X-API-Key: YOUR_API_KEY_HERE`
 *   **Response:** Returns a confirmation message.
+*   **Error Responses:**
+    *   `404 Not Found`: Meeting not found.
+    *   `409 Conflict`: Meeting not finalized (not in completed or failed state).
 *   **Python Example:**
     ```python
     # imports, HEADERS, meeting_id, meeting_platform as ABOVE

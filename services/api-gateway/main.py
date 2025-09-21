@@ -333,11 +333,11 @@ async def update_meeting_data_proxy(platform: Platform, native_meeting_id: str, 
 
 @app.delete("/meetings/{platform}/{native_meeting_id}",
             tags=["Transcriptions"],
-            summary="Delete meeting and its transcripts",
-            description="Deletes a specific meeting and all its associated transcripts. This action cannot be undone.",
+            summary="Delete meeting transcripts and anonymize data",
+            description="Purges transcripts and anonymizes meeting data for finalized meetings. Only works for completed or failed meetings. Preserves meeting records for telemetry.",
             dependencies=[Depends(api_key_scheme)])
 async def delete_meeting_proxy(platform: Platform, native_meeting_id: str, request: Request):
-    """Forward request to Transcription Collector to delete meeting and its transcripts."""
+    """Forward request to Transcription Collector to purge transcripts and anonymize meeting data."""
     url = f"{TRANSCRIPTION_COLLECTOR_URL}/meetings/{platform.value}/{native_meeting_id}"
     return await forward_request(app.state.http_client, "DELETE", url, request)
 
