@@ -67,14 +67,8 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
       // Use browser utility classes from the global bundle
       const { BrowserAudioService, BrowserWhisperLiveService } = (window as any).VexaBrowserUtils;
 
-      // --- Early reconfigure wiring (stub + event) ---
+      // --- Early reconfigure wiring (event listener only) ---
       (window as any).__vexaPendingReconfigure = null;
-      if (typeof (window as any).triggerWebSocketReconfigure !== 'function') {
-        (window as any).triggerWebSocketReconfigure = async (lang: string | null, task: string | null) => {
-          (window as any).__vexaPendingReconfigure = { lang, task };
-          (window as any).logBot?.('[Reconfigure][Teams] Stub queued update; will apply when service is ready.');
-        };
-      }
       try {
         document.addEventListener('vexa:reconfigure', (ev: Event) => {
           try {
@@ -102,6 +96,43 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
       // Expose references for reconfiguration
       (window as any).__vexaWhisperLiveService = whisperLiveService;
       (window as any).__vexaBotConfig = botConfigData;
+
+      // Replace with real reconfigure implementation and apply any queued update
+      (window as any).triggerWebSocketReconfigure = async (lang: string | null, task: string | null) => {
+        try {
+          const svc = (window as any).__vexaWhisperLiveService;
+          const cfg = (window as any).__vexaBotConfig || {};
+          if (!svc) {
+            // Service not ready yet, queue the update
+            (window as any).__vexaPendingReconfigure = { lang, task };
+            (window as any).logBot?.('[Reconfigure] WhisperLive service not ready; queued for later.');
+            return;
+          }
+          cfg.language = lang;
+          cfg.task = task || 'transcribe';
+          (window as any).__vexaBotConfig = cfg;
+          
+          // Update the service's config and force reconnect via socket close (stubborn will handle reconnection)
+          svc.botConfigData = cfg;
+          try { 
+            (window as any).logBot?.(`[Reconfigure] Closing connection to force reconnect with: language=${cfg.language}, task=${cfg.task}`);
+            if (svc.socket) {
+              svc.socket.close(1000, 'Reconfiguration requested');
+            }
+          } catch {}
+          
+          (window as any).logBot?.(`[Reconfigure] Applied: language=${cfg.language}, task=${cfg.task}`);
+        } catch (e: any) {
+          (window as any).logBot?.(`[Reconfigure] Error applying new config: ${e?.message || e}`);
+        }
+      };
+      try {
+        const pending = (window as any).__vexaPendingReconfigure;
+        if (pending && typeof (window as any).triggerWebSocketReconfigure === 'function') {
+          (window as any).triggerWebSocketReconfigure(pending.lang, pending.task);
+          (window as any).__vexaPendingReconfigure = null;
+        }
+      } catch {}
 
       await new Promise<void>((resolve, reject) => {
         try {
@@ -911,30 +942,6 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
         }
       });
 
-      // Define reconfiguration hook to update language/task and reconnect
-      ;(window as any).triggerWebSocketReconfigure = async (lang: string | null, task: string | null) => {
-        try {
-          const svc = (window as any).__vexaWhisperLiveService;
-          const cfg = (window as any).__vexaBotConfig || {};
-          if (!svc) {
-            (window as any).logBot?.('[Reconfigure] WhisperLive service not initialized.');
-            return;
-          }
-          cfg.language = lang;
-          cfg.task = task || 'transcribe';
-          (window as any).__vexaBotConfig = cfg;
-          try { svc.close(); } catch {}
-          await svc.connectToWhisperLive(
-            cfg,
-            (window as any).__vexaOnMessage,
-            (window as any).__vexaOnError,
-            (window as any).__vexaOnClose
-          );
-          (window as any).logBot?.(`[Reconfigure] Applied: language=${cfg.language}, task=${cfg.task}`);
-        } catch (e: any) {
-          (window as any).logBot?.(`[Reconfigure] Error applying new config: ${e?.message || e}`);
-        }
-      };
       try {
         const pending = (window as any).__vexaPendingReconfigure;
         if (pending && typeof (window as any).triggerWebSocketReconfigure === 'function') {
