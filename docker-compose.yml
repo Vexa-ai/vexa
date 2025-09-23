@@ -62,6 +62,7 @@ services:
       - DB_PASSWORD=postgres
       - DOCKER_HOST=unix://var/run/docker.sock
       - DEVICE_TYPE=${DEVICE_TYPE}
+      - WHISPER_LIVE_URL=ws://traefik:8081/ws  # Traefik entrypoint for WS
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     init: true
@@ -102,12 +103,15 @@ services:
       - WL_SERVER_WARMUP_S=${WL_SERVER_WARMUP_S:-60}
       # VAD filter - most permissive to catch hallucinations during silence
       - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD:-0}
+      - CONSUL_ENABLE=${CONSUL_ENABLE:-true}
+      - CONSUL_HTTP_ADDR=${CONSUL_HTTP_ADDR:-http://consul:8500}
+      - WL_REDIS_DISCOVERY_ENABLED=${WL_REDIS_DISCOVERY_ENABLED:-false}
     command: --port 9090 --backend faster_whisper --faster_whisper_custom_model_path ${WHISPER_MODEL_SIZE}
     expose:
       - "9090" #use for transcription web socket
       - "9091" #use for health check
     deploy:
-      replicas: 1
+      replicas: 4
       resources:
         reservations:
           devices:
@@ -118,6 +122,31 @@ services:
     depends_on:
       transcription-collector:
         condition: service_started
+    networks:
+      - vexa_default
+  consul:
+    image: hashicorp/consul:1.16
+    command: agent -dev -client=0.0.0.0
+    ports:
+      - "8502:8500"
+    networks:
+      - vexa_default
+    restart: unless-stopped
+
+  traefik:
+    image: traefik:v3.1
+    command:
+      - --api.dashboard=true
+      - --api.insecure=true
+      - --entrypoints.web.address=:8081
+      - --providers.consulcatalog=true
+      - --providers.consulcatalog.endpoint.address=consul:8500
+      - --providers.consulcatalog.exposedbydefault=false
+      - --accesslog=true
+      - --accesslog.format=json
+    ports:
+      - "8082:8080"
+      - "8081:8081"
     networks:
       - vexa_default
     restart: unless-stopped

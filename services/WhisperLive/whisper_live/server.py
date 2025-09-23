@@ -623,8 +623,8 @@ class TranscriptionServer:
             self.config_max_clients = 10
         logging.info(f"CONFIG: max_clients set to {self.config_max_clients} (env WL_MAX_CLIENTS)")
 
-        # --- WL Scaling: publish live session count & heartbeat ---
-        self._wl_redis = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"))
+        # --- WL discovery / addressing ---
+        self._wl_redis = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"), decode_responses=True)
         self._listen_port = int(os.getenv("WL_LISTEN_PORT", os.getenv("PORT", "9090")))
         # Prefer Nomad alloc-id for stable grouping; fall back to HOSTNAME or random uuid
         self._alloc_id = os.getenv("NOMAD_ALLOC_ID", os.getenv("HOSTNAME", str(uuid.uuid4())[:8]))
@@ -659,7 +659,19 @@ class TranscriptionServer:
         logging.info(f"🌐 WEBSOCKET URL CONFIGURED: {self._ws_url}")
         logging.info(f"📡 THIS URL WILL BE REGISTERED TO REDIS: {self._ws_url}")
         self._metric_stop_evt = threading.Event()
-        threading.Thread(target=self._metric_heartbeat, daemon=True).start()
+        # Gate legacy Redis discovery with WL_REDIS_DISCOVERY_ENABLED
+        self._redis_discovery_enabled = os.getenv("WL_REDIS_DISCOVERY_ENABLED", "false").strip().lower() in ("1","true","yes","on")
+        if self._redis_discovery_enabled:
+            threading.Thread(target=self._metric_heartbeat, daemon=True).start()
+        
+        # Initialize Consul configuration
+        self._consul_enabled = os.getenv("CONSUL_ENABLE", "false").strip().lower() in ("1", "true", "yes", "on")
+        if self._consul_enabled:
+            self._consul_http_addr = os.getenv("CONSUL_HTTP_ADDR", "http://consul:8500")
+            # Make service ID stable per ip:port to avoid duplicates across restarts
+            safe_ip = self._pod_ip.replace('.', '-')
+            self._consul_service_id = f"whisperlive-{safe_ip}-{self._listen_port}"
+            logging.info(f"🔍 CONSUL ENABLED: {self._consul_http_addr}, service_id={self._consul_service_id}")
         # Register OS signal handlers to gracefully deregister on shutdown
         try:
             self._register_signal_handlers()
@@ -684,6 +696,8 @@ class TranscriptionServer:
 
     def _publish_sessions_metric(self):
         """Update wl:rank sorted-set score and wl:hb:<url> heartbeat key."""
+        if not getattr(self, "_redis_discovery_enabled", False):
+            return
         try:
             current = len(self.client_manager.clients) if self.client_manager else 0
             pipe = self._wl_redis.pipeline()
@@ -696,14 +710,21 @@ class TranscriptionServer:
 
     def _scrub_stale_servers(self):
         """Remove wl:rank members that do not have a live heartbeat."""
+        if not getattr(self, "_redis_discovery_enabled", False):
+            return
         try:
             members = self._wl_redis.zrange("wl:rank", 0, -1)
             if not members:
                 return
+            removed = 0
             pipe = self._wl_redis.pipeline()
             for url in members:
-                if not self._wl_redis.exists(f"wl:hb:{url}"):
-                    pipe.zrem("wl:rank", url)
+                url_str = url if isinstance(url, str) else str(url)
+                if not self._wl_redis.exists(f"wl:hb:{url_str}"):
+                    pipe.zrem("wl:rank", url_str)
+                    removed += 1
+            if removed:
+                logging.info(f"WL_SCRUB: Removed {removed} stale wl:rank members without heartbeats")
             pipe.execute()
         except Exception as exc:
             logging.warning(f"WhisperLive scrub encountered an error: {exc}")
@@ -726,15 +747,16 @@ class TranscriptionServer:
             self._metric_stop_evt.set()
         except Exception:
             pass
-        try:
-            if hasattr(self, "_ws_url") and self._ws_url:
-                pipe = self._wl_redis.pipeline()
-                pipe.zrem("wl:rank", self._ws_url)
-                pipe.delete(f"wl:hb:{self._ws_url}")
-                pipe.execute()
-                logging.info(f"DEREGISTERED WhisperLive server from Redis (signal {signum}): {self._ws_url}")
-        except Exception as exc:
-            logging.warning(f"Failed to deregister WhisperLive server on shutdown: {exc}")
+        if getattr(self, "_redis_discovery_enabled", False):
+            try:
+                if hasattr(self, "_ws_url") and self._ws_url:
+                    pipe = self._wl_redis.pipeline()
+                    pipe.zrem("wl:rank", self._ws_url)
+                    pipe.delete(f"wl:hb:{self._ws_url}")
+                    pipe.execute()
+                    logging.info(f"DEREGISTERED WhisperLive server from Redis (signal {signum}): {self._ws_url}")
+            except Exception as exc:
+                logging.warning(f"Failed to deregister WhisperLive server on shutdown: {exc}")
 
     def initialize_client(
         self, websocket, options, faster_whisper_custom_model_path,
@@ -1062,6 +1084,12 @@ class TranscriptionServer:
             self.start_health_check_server(host, 9091)
 
         logger.info(f"SERVER_START: host={host}, port={port}, backend={self.backend.value}, single_model={single_model}")
+        # Consul self-registration (if enabled)
+        try:
+            if getattr(self, "_consul_enabled", False):
+                self._consul_register_service()
+        except Exception as e:
+            logging.warning(f"CONSUL_REGISTER failed: {e}")
         
         with serve(
             functools.partial(
@@ -1077,9 +1105,10 @@ class TranscriptionServer:
             self.is_healthy = True # WebSocket server is up
             logger.info(f"SERVER_RUNNING: WhisperLive server running on {host}:{port} with health check on {host}:9091/health and max_clients={self.config_max_clients}")
             
-            # Immediately publish to Redis so clients can discover this server
+            # Immediately publish to Redis (legacy mode only)
             self._publish_sessions_metric()
-            logger.info(f"REDIS_PUBLISH: Server published to Redis immediately on startup")
+            if getattr(self, "_redis_discovery_enabled", False):
+                logger.info(f"REDIS_PUBLISH: Server published to Redis immediately on startup")
             
             # Start self-monitoring thread
             if self.self_monitor_thread is None:
@@ -1089,6 +1118,70 @@ class TranscriptionServer:
                 logger.info(f"SELF_MONITOR: Started self-monitoring thread. Interval: {self.health_monitor_interval}s, Max Streak: {self.max_unhealthy_streak}")
 
             server.serve_forever()
+
+    # --- Consul helpers ---
+    def _consul_register_service(self):
+        if not getattr(self, "_consul_enabled", False):
+            return
+        # Before registering, dedupe any older registrations for the same ip:port
+        try:
+            import urllib.request as _urllib_request
+            import json as _json
+            with _urllib_request.urlopen(f"{self._consul_http_addr}/v1/agent/services", timeout=3) as resp:
+                services = _json.loads(resp.read().decode("utf-8"))
+            for sid, s in services.items():
+                if s.get("Service") == "whisperlive" and s.get("Address") == self._pod_ip and int(s.get("Port", 0)) == int(self._listen_port) and sid != self._consul_service_id:
+                    try:
+                        _urllib_request.urlopen(_urllib_request.Request(f"{self._consul_http_addr}/v1/agent/service/deregister/{sid}", method="PUT"), timeout=3)
+                        logging.info(f"CONSUL_DEDUP: Deregistered duplicate service {sid} for {self._pod_ip}:{self._listen_port}")
+                    except Exception as _e:
+                        logging.warning(f"CONSUL_DEDUP failed for {sid}: {_e}")
+        except Exception as _e:
+            logging.warning(f"CONSUL_DEDUP scan failed: {_e}")
+        service_payload = {
+            "Name": "whisperlive",
+            "ID": self._consul_service_id,
+            "Address": self._pod_ip,
+            "Port": int(self._listen_port),
+          "Tags": [
+              "websocket",
+              "vexa",
+              "traefik.enable=true",
+              "traefik.http.routers.whisperlive.rule=PathPrefix(`/ws`)",
+              "traefik.http.routers.whisperlive.service=whisperlive",
+              f"traefik.http.services.whisperlive.loadbalancer.server.port={self._listen_port}"
+          ],
+            "Checks": [
+                {
+                    "Name": "whisperlive-health",
+                    "HTTP": f"http://{self._pod_ip}:9091/health",
+                    "Interval": "10s",
+                    "Timeout": "2s",
+                    "DeregisterCriticalServiceAfter": "1m"
+                }
+            ]
+        }
+        data = json.dumps(service_payload).encode("utf-8")
+        url = f"{self._consul_http_addr}/v1/agent/service/register"
+        import urllib.request as _urllib_request
+        req = _urllib_request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="PUT")
+        with _urllib_request.urlopen(req, timeout=3) as resp:
+            if resp.status not in (200, 204):
+                raise RuntimeError(f"Consul register HTTP {resp.status}")
+        logging.info(f"CONSUL_REGISTERED: {self._consul_service_id} at {self._pod_ip}:{self._listen_port}")
+
+    def _consul_deregister_service(self):
+        if not getattr(self, "_consul_enabled", False):
+            return
+        url = f"{self._consul_http_addr}/v1/agent/service/deregister/{self._consul_service_id}"
+        import urllib.request as _urllib_request
+        req = _urllib_request.Request(url, method="PUT")
+        try:
+            with _urllib_request.urlopen(req, timeout=3) as resp:
+                if resp.status not in (200, 204):
+                    logging.warning(f"CONSUL_DEREGISTER non-2xx: {resp.status}")
+        except Exception as e:
+            logging.warning(f"CONSUL_DEREGISTER failed: {e}")
 
     def _self_monitor(self):
         """Periodically checks internal health and exits if persistently unhealthy."""
@@ -1321,6 +1414,60 @@ class TranscriptionServer:
                         self.send_header('Content-type', 'text/plain')
                         self.end_headers()
                         self.wfile.write(f"Service Unavailable: {', '.join(unhealthy_reasons)}".encode('utf-8'))
+                
+                elif self.path == '/metrics':
+                    # Provide JSON metrics for load monitoring
+                    import json
+                    import hashlib
+                    
+                    # Handle case where transcription_server_instance is None
+                    if self.transcription_server_instance is None:
+                        current_sessions = 0
+                        max_clients = 10
+                        server_id = 'unknown'
+                        uid_list = []
+                        token_hashes = []
+                    else:
+                        current_sessions = len(self.transcription_server_instance.client_manager.clients)
+                        max_clients = getattr(self.transcription_server_instance, 'max_clients', 10)
+                        server_id = getattr(self.transcription_server_instance, '_consul_service_id', 'unknown')
+                        # Collect current client UIDs and token hashes for deduplication across servers
+                        try:
+                            uid_list = [
+                                getattr(client, 'client_uid', None)
+                                for client in self.transcription_server_instance.client_manager.clients.values()
+                                if client is not None
+                            ]
+                            raw_tokens = [
+                                getattr(client, 'token', None)
+                                for client in self.transcription_server_instance.client_manager.clients.values()
+                                if client is not None
+                            ]
+                            token_hashes = [
+                                hashlib.sha1(t.encode('utf-8')).hexdigest()[:16]
+                                for t in raw_tokens if isinstance(t, str) and len(t) > 0
+                            ]
+                        except Exception:
+                            uid_list = []
+                            token_hashes = []
+                    
+                    metrics = {
+                        "current_sessions": current_sessions,
+                        "max_clients": max_clients,
+                        "load_percentage": (current_sessions / max_clients * 100) if max_clients > 0 else 0,
+                        "server_healthy": server_websocket_healthy,
+                        "redis_healthy": redis_healthy,
+                        "server_id": server_id,
+                        "active_uid_count": len([u for u in uid_list if u]),
+                        "active_token_count": len(set(token_hashes)),
+                        "active_token_hashes": token_hashes,
+                        "timestamp": time.time()
+                    }
+                    
+                    self.send_response(200)
+                    self.send_header('Content-type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps(metrics).encode('utf-8'))
                 else:
                     self.send_response(404)
                     self.send_header('Content-type', 'text/plain')

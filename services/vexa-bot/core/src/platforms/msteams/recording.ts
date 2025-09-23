@@ -21,8 +21,6 @@ import {
 export async function startTeamsRecording(page: Page, botConfig: BotConfig): Promise<void> {
   // Initialize WhisperLive service on Node.js side
   const whisperLiveService = new WhisperLiveService({
-    redisUrl: botConfig.redisUrl,
-    maxClients: parseInt(process.env.WL_MAX_CLIENTS || '10', 10),
     whisperLiveUrl: process.env.WHISPER_LIVE_URL
   });
 

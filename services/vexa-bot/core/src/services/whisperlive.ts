@@ -1,10 +1,7 @@
-import { createClient, RedisClientType } from 'redis';
 import { log } from '../utils';
 import { BotConfig } from '../types';
 
 export interface WhisperLiveConfig {
-  redisUrl: string;
-  maxClients?: number;
   whisperLiveUrl?: string;
 }
 
@@ -13,7 +10,6 @@ export interface WhisperLiveConnection {
   isServerReady: boolean;
   sessionUid: string;
   allocatedServerUrl: string | null;
-  redisClient: any; // Simplified to avoid Redis type conflicts
 }
 
 export class WhisperLiveService {
@@ -25,29 +21,19 @@ export class WhisperLiveService {
   }
 
   /**
-   * Initialize Redis connection and allocate a WhisperLive server
+   * Initialize WhisperLive URL via LB (Traefik/Consul)
    */
   async initialize(): Promise<string | null> {
     try {
-      // Create Redis client
-      const redisClient = createClient({ url: this.config.redisUrl });
-      await redisClient.connect();
-      
-      // Allocate server
-      const allocatedUrl = await this.allocateServer(redisClient);
-      
-      if (!allocatedUrl) {
-        await redisClient.quit();
-        return null;
-      }
+      const allocatedUrl = this.config.whisperLiveUrl || (process.env.WHISPER_LIVE_URL as string) || null;
+      if (!allocatedUrl) return null;
 
       // Store connection info
       this.connection = {
         socket: null,
         isServerReady: false,
         sessionUid: this.generateUUID(),
-        allocatedServerUrl: allocatedUrl,
-        redisClient
+        allocatedServerUrl: allocatedUrl
       };
 
       return allocatedUrl;
@@ -230,73 +216,15 @@ export class WhisperLiveService {
    */
   async getNextCandidate(failedUrl: string | null): Promise<string | null> {
     log(`[WhisperLive] getNextCandidate called. Failed URL: ${failedUrl}`);
-    
-    if (failedUrl && this.connection?.redisClient) {
-      try {
-        // Deallocate the failed server
-        await this.deallocateServer(failedUrl);
-        // Remove from registry
-        await this.connection.redisClient.zRem("wl:rank", failedUrl);
-      } catch (error: any) {
-        log(`[WhisperLive] Error handling failed candidate: ${error.message}`);
-      }
-    }
-    
-    // Get next available server
-    return await this.allocateServer(this.connection?.redisClient || createClient({ url: this.config.redisUrl }));
+    return this.connection?.allocatedServerUrl || this.config.whisperLiveUrl || (process.env.WHISPER_LIVE_URL as string) || null;
   }
 
-  /**
-   * Atomically allocate a WhisperLive server using Redis Lua script
-   */
-  private async allocateServer(redisClient: any): Promise<string | null> {
-    const maxClients = this.config.maxClients || 10;
-    // Heartbeat-aware, non-incrementing allocator. Server enforces capacity and returns WAIT.
-    const luaScript = `
-      local max = tonumber(ARGV[1])
-      local servers = redis.call('ZRANGE', 'wl:rank', 0, -1, 'WITHSCORES')
-      if #servers == 0 then return nil end
-      for i = 1, #servers, 2 do
-        local url = servers[i]
-        local score = tonumber(servers[i + 1])
-        if redis.call('EXISTS', 'wl:hb:' .. url) == 0 then
-          -- purge dead entries on the fly
-          redis.call('ZREM', 'wl:rank', url)
-        elseif score < max then
-          return url
-        end
-      end
-      return nil
-    `;
-    try {
-      log("[WhisperLive] Selecting server using heartbeat-aware Lua script...");
-      const allocatedUrl = await redisClient.eval(luaScript, { keys: [], arguments: [maxClients.toString()] }) as string | null;
-      if (allocatedUrl) {
-        log(`[WhisperLive] Selected server: ${allocatedUrl} (maxClients=${maxClients})`);
-      } else {
-        log(`[WhisperLive] No live servers under capacity (maxClients=${maxClients})`);
-      }
-      return allocatedUrl;
-    } catch (error: any) {
-      log(`[WhisperLive] Error selecting server: ${error.message}`);
-      return null;
-    }
-  }
+  // Legacy allocator removed; selection handled by external load balancer
 
   /**
    * Deallocate a WhisperLive server (decrement its score)
    */
-  private async deallocateServer(serverUrl: string): Promise<void> {
-    if (!this.connection?.redisClient) return;
-    
-    try {
-      log(`[WhisperLive] Deallocating server: ${serverUrl}`);
-      await this.connection.redisClient.zIncrBy("wl:rank", -1, serverUrl);
-      log(`[WhisperLive] Successfully deallocated server: ${serverUrl}`);
-    } catch (error: any) {
-      log(`[WhisperLive] Error deallocating server: ${error.message}`);
-    }
-  }
+  // Legacy deallocator removed
 
   /**
    * Check if server is ready
@@ -328,14 +256,6 @@ export class WhisperLiveService {
     if (this.connection?.socket) {
       this.connection.socket.close();
       this.connection.socket = null;
-    }
-
-    if (this.connection?.redisClient) {
-      try {
-        await this.connection.redisClient.quit();
-      } catch (error: any) {
-        log(`[WhisperLive] Error closing Redis connection: ${error.message}`);
-      }
     }
 
     this.connection = null;
