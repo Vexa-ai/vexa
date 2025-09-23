@@ -33,8 +33,28 @@ import threading
 import redis
 import uuid
 
-# Setup basic logging
-logging.basicConfig(level=logging.INFO)
+# Setup basic logging (env-driven)
+_WL_LOG_LEVEL = os.getenv("WL_LOG_LEVEL", "INFO").strip().upper()
+try:
+    logging.basicConfig(level=getattr(logging, _WL_LOG_LEVEL, logging.INFO))
+except Exception:
+    logging.basicConfig(level=logging.INFO)
+
+# Env-driven logging flags
+_def_bool = lambda v: str(v).strip().lower() in ("1", "true", "yes", "on")
+WL_LOG_TRANSCRIPTS = _def_bool(os.getenv("WL_LOG_TRANSCRIPTS", "false"))
+WL_LOG_TRANSCRIPT_SUMMARY = _def_bool(os.getenv("WL_LOG_TRANSCRIPT_SUMMARY", "true"))
+WL_LOG_HALLUCINATIONS = _def_bool(os.getenv("WL_LOG_HALLUCINATIONS", "false"))
+WL_LOG_CONTROL_EVENTS = _def_bool(os.getenv("WL_LOG_CONTROL_EVENTS", "false"))
+WL_LOG_SPEAKER_EVENTS = _def_bool(os.getenv("WL_LOG_SPEAKER_EVENTS", "false"))
+WL_LOG_SPEAKER_PUBLISH = _def_bool(os.getenv("WL_LOG_SPEAKER_PUBLISH", "false"))
+
+# Suppress external chatter
+_FW_LEVEL = os.getenv("WL_FAST_WHISPER_LOG_LEVEL", "WARNING").strip().upper()
+try:
+    logging.getLogger("faster_whisper").setLevel(getattr(logging, _FW_LEVEL, logging.WARNING))
+except Exception:
+    pass
 
 # Add file logging for transcription data
 LOG_DIR = "transcription_logs"
@@ -274,9 +294,10 @@ class TranscriptionCollectorClient:
             )
             
             if result:
-                uid = redis_message_payload.get('uid', 'N/A')
-                event_type = redis_message_payload.get('event_type', 'N/A')
-                logging.info(f"Published speaker event ({event_type}) for UID {uid} to {self.speaker_events_stream_key}")
+                if WL_LOG_SPEAKER_PUBLISH:
+                    uid = redis_message_payload.get('uid', 'N/A')
+                    event_type = redis_message_payload.get('event_type', 'N/A')
+                    logging.info(f"Published speaker event ({event_type}) for UID {uid} to {self.speaker_events_stream_key}")
                 return True
             else:
                 uid = redis_message_payload.get('uid', 'N/A')
@@ -795,7 +816,8 @@ class TranscriptionServer:
                 control_message = json.loads(frame_data)
                 message_type = control_message.get("type", "unknown")
                 
-                logging.info(f"Received control message type: {message_type}")
+                if WL_LOG_CONTROL_EVENTS:
+                    logging.info(f"Received control message type: {message_type}")
                 
                 if message_type == "speaker_activity":
                     # CORRECTED DISPATCH: Route "speaker_activity" to the new handler
@@ -1351,8 +1373,8 @@ class TranscriptionServer:
             control_message = json.loads(message)
             message_type = control_message.get("type")
             
-            # Log with client UID if available
-            logging.info(f"Received control message type: {message_type} from UID {client.uid if client else 'N/A'}")
+            if WL_LOG_CONTROL_EVENTS:
+                logging.info(f"Received control message type: {message_type} from UID {client.uid if client else 'N/A'}")
 
             if message_type == "speaker_event": 
                 # This path might be for older/different speaker events or specific debug.
@@ -1397,9 +1419,10 @@ class TranscriptionServer:
         participant_name = event_payload.get('participant_name', 'N/A')
         relative_ts = event_payload.get('relative_client_timestamp_ms', 'N/A')
         
-        logging.info(
-            f"Processing Speaker Activity Update for UID {uid_for_log}: Type='{event_type}', Name='{participant_name}', RelativeTs={relative_ts}ms (Client on record: {client.client_uid if client else 'N/A_CLIENT_FALLBACK'})" # CORRECTED
-        )
+        if WL_LOG_SPEAKER_EVENTS:
+            logging.info(
+                f"Processing Speaker Activity Update for UID {uid_for_log}: Type='{event_type}', Name='{participant_name}', RelativeTs={relative_ts}ms (Client on record: {client.client_uid if client else 'N/A_CLIENT_FALLBACK'})"
+            )
 
         if client.collector_client:  # CORRECTED: changed from collector_client_ref to collector_client
             # The event_payload is what Vexa Bot sends.
@@ -1718,30 +1741,41 @@ class ServeClientBase(object):
                     session_uid=self.client_uid
                 )
             
-            # Log the transcription data to file with more detailed formatting
-            formatted_segments = []
-            for i, segment in enumerate(segments):
-                if 'start' in segment and 'end' in segment:
-                    formatted_segments.append(
-                        f"[{i}] ({segment.get('start', 'N/A')}-{segment.get('end', 'N/A')}) "
-                        f"[{'COMPLETE' if segment.get('completed', False) else 'PARTIAL'}]: "
-                        f"\"{segment.get('text', '')}\""
+            # Logging: summary by default; full text only if WL_LOG_TRANSCRIPTS=true
+            try:
+                total = len(segments)
+                completed = sum(1 for s in segments if s.get('completed'))
+                last = segments[-1] if total else {}
+                last_range = f"{last.get('start','N/A')}-{last.get('end','N/A')}" if last else "N/A"
+                last_completed = bool(last.get('completed')) if last else None
+                lang = last.get('language') if last else None
+                if WL_LOG_TRANSCRIPTS:
+                    formatted_segments = []
+                    for i, segment in enumerate(segments):
+                        if 'start' in segment and 'end' in segment:
+                            formatted_segments.append(
+                                f"[{i}] ({segment.get('start', 'N/A')}-{segment.get('end', 'N/A')}) "
+                                f"[{'COMPLETE' if segment.get('completed', False) else 'PARTIAL'}]: "
+                                f"\"{segment.get('text', '')}\""
+                            )
+                        else:
+                            formatted_segments.append(f"[{i}]: \"{segment.get('text', '')}\"")
+                    logger.info(
+                        f"TRANSCRIPTION_FULL: client={self.client_uid}, platform={self.platform}, meeting_id={self.meeting_id}, count={total}\n" +
+                        "\n".join(formatted_segments)
                     )
-                else:
-                    formatted_segments.append(f"[{i}]: \"{segment.get('text', '')}\"")
-                    
-            logger.info(f"TRANSCRIPTION: client={self.client_uid}, platform={self.platform}, meeting_url={self.meeting_url}, token={self.token}, meeting_id={self.meeting_id}, segments=\n" + "\n".join(formatted_segments))
+                elif WL_LOG_TRANSCRIPT_SUMMARY:
+                    logger.info(
+                        f"TX_SUMMARY: client={self.client_uid}, platform={self.platform}, meeting_id={self.meeting_id}, count={total}, completed={completed}, last={last_range}, last_completed={last_completed}, lang={lang}"
+                    )
+            except Exception:
+                pass
             # Update server-level last transcription timestamp for circuit breaker
             try:
-                # Access the parent TranscriptionServer via collector_client if available
-                # We do not have a direct reference here; use global update via Redis ping thread owner
-                # Instead, use a lightweight process-wide marker
                 from time import time as _now
-                # Store on the TranscriptionServer instance through the collector reference if possible
                 if self.collector_client and hasattr(self.collector_client, 'server_ref') and self.collector_client.server_ref:
                     self.collector_client.server_ref.server_last_transcription_ts = _now()
                 else:
-                    # Fallback: set a module-level variable; self-monitor reads instance field primarily
                     globals().setdefault('_WL_SERVER_LAST_TX', 0)
                     globals()['_WL_SERVER_LAST_TX'] = _now()
             except Exception:
@@ -1889,7 +1923,7 @@ class ServeClientTensorRT(ServeClientBase):
         """
         if ServeClientTensorRT.SINGLE_MODEL:
             ServeClientTensorRT.SINGLE_MODEL_LOCK.acquire()
-        logging.info(f"[WhisperTensorRT:] Processing audio with duration: {input_bytes.shape[0] / self.RATE}")
+        logging.debug(f"[WhisperTensorRT:] Processing audio with duration: {input_bytes.shape[0] / self.RATE}")
         mel, duration = self.transcriber.log_mel_spectrogram(input_bytes)
         last_segment = self.transcriber.transcribe(
             mel,
@@ -1964,7 +1998,7 @@ class ServeClientTensorRT(ServeClientBase):
 
             try:
                 input_sample = input_bytes.copy()
-                logging.info(f"[WhisperTensorRT:] Processing audio with duration: {duration}")
+                logging.debug(f"[WhisperTensorRT:] Processing audio with duration: {duration}")
                 self.transcribe_audio(input_sample)
 
             except Exception as e:
@@ -2040,7 +2074,8 @@ class ServeClientTensorRT(ServeClientBase):
                 if filtered_text is None:
                     # Log and skip this segment if it's a hallucination
                     try:
-                        logger.info(f'HALLUCINATION_FILTERED: "{text_}"')
+                        if WL_LOG_HALLUCINATIONS:
+                            logger.info(f'HALLUCINATION_FILTERED: "{text_}"')
                     except Exception:
                         pass
                     continue
@@ -2081,7 +2116,8 @@ class ServeClientTensorRT(ServeClientBase):
             else:
                 # Log and skip this segment if it's a hallucination
                 try:
-                    logger.info(f'HALLUCINATION_FILTERED: "{segments[-1].text}"')
+                    if WL_LOG_HALLUCINATIONS:
+                        logger.info(f'HALLUCINATION_FILTERED: "{segments[-1].text}"')
                 except Exception:
                     pass
                 last_segment = None
@@ -2124,7 +2160,8 @@ class ServeClientTensorRT(ServeClientBase):
                 else:
                     # Log filtered repeated hallucination
                     try:
-                        logger.info(f'HALLUCINATION_FILTERED: "{self.current_out}"')
+                        if WL_LOG_HALLUCINATIONS:
+                            logger.info(f'HALLUCINATION_FILTERED: "{self.current_out}"')
                     except Exception:
                         pass
             self.current_out = ''
@@ -2499,7 +2536,8 @@ class ServeClientFasterWhisper(ServeClientBase):
                 if filtered_text is None:
                     # Log and skip this segment if it's a hallucination
                     try:
-                        logger.info(f'HALLUCINATION_FILTERED: "{text_}"')
+                        if WL_LOG_HALLUCINATIONS:
+                            logger.info(f'HALLUCINATION_FILTERED: "{text_}"')
                     except Exception:
                         pass
                     continue
@@ -2540,7 +2578,8 @@ class ServeClientFasterWhisper(ServeClientBase):
             else:
                 # Log and skip this segment if it's a hallucination
                 try:
-                    logger.info(f'HALLUCINATION_FILTERED: "{segments[-1].text}"')
+                    if WL_LOG_HALLUCINATIONS:
+                        logger.info(f'HALLUCINATION_FILTERED: "{segments[-1].text}"')
                 except Exception:
                     pass
                 last_segment = None
@@ -2583,7 +2622,8 @@ class ServeClientFasterWhisper(ServeClientBase):
                 else:
                     # Log filtered repeated hallucination
                     try:
-                        logger.info(f'HALLUCINATION_FILTERED: "{self.current_out}"')
+                        if WL_LOG_HALLUCINATIONS:
+                            logger.info(f'HALLUCINATION_FILTERED: "{self.current_out}"')
                     except Exception:
                         pass
             self.current_out = ''

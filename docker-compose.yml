@@ -107,7 +107,7 @@ services:
       - "9090" #use for transcription web socket
       - "9091" #use for health check
     deploy:
-      replicas: 3
+      replicas: 1
       resources:
         reservations:
           devices:
