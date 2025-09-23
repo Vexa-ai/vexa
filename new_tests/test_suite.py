@@ -387,13 +387,18 @@ class TestSuite:
                         from datetime import datetime
                         import pandas as pd
                         
-                        # Parse the last segment time
-                        last_segment_time = segments[-1]['absolute_start_time']
-                        segment_dt = pd.to_datetime(last_segment_time)
+                        # Parse the last segment time and duration
+                        last_segment = segments[-1]
+                        last_segment_time = last_segment['absolute_start_time']
+                        segment_start_dt = pd.to_datetime(last_segment_time)
                         
-                        # Calculate latency from current time
+                        # Calculate segment end time (start + duration)
+                        segment_duration = last_segment.get('end_time', 0) - last_segment.get('start_time', 0)
+                        segment_end_dt = segment_start_dt + pd.Timedelta(seconds=segment_duration)
+                        
+                        # Calculate latency from current time to segment completion
                         current_time = pd.Timestamp.now(tz='UTC')
-                        latency_seconds = (current_time - segment_dt).total_seconds()
+                        latency_seconds = (current_time - segment_end_dt).total_seconds()
                         
                         row['transcription_latency'] = latency_seconds
                     except Exception as e:
