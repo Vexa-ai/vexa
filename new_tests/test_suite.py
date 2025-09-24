@@ -110,6 +110,57 @@ class TestSuite:
         print(f"Successfully created {len(self.users)} users")
         return self.users
     
+    def add_users(self, additional_users: int) -> List[VexaClient]:
+        """
+        Add additional users during runtime without affecting existing users.
+        
+        Args:
+            additional_users: Number of additional users to create
+            
+        Returns:
+            List of newly created VexaClient instances
+        """
+        if not self.admin_client:
+            raise Exception("Admin API key required for user creation. Set admin_api_key in constructor.")
+        
+        if additional_users <= 0:
+            raise ValueError("additional_users must be greater than 0")
+        
+        print(f"Adding {additional_users} additional users...")
+        new_users = []
+        start_index = len(self.users)
+        
+        for i in range(additional_users):
+            try:
+                # Create user with unique email using current user count as base
+                user_data = self.admin_client.create_user_and_set_id(
+                    email=f"test_user_{start_index + i}_{random.randint(1000, 9999)}@example.com",
+                    name=f"Test User {start_index + i}",
+                    max_concurrent_bots=2  # Allow multiple bots per user
+                )
+                
+                # Create API token for the user
+                token_info = self.admin_client.create_token()
+                user_api_key = token_info['token']
+                
+                # Create user client
+                user_client = VexaClient(
+                    base_url=self.base_url,
+                    api_key=user_api_key,
+                    user_id=user_data['id']
+                )
+                
+                self.users.append(user_client)
+                new_users.append(user_client)
+                print(f"Added user {start_index + i + 1}: {user_data['email']}")
+                
+            except Exception as e:
+                print(f"Failed to create additional user {start_index + i + 1}: {e}")
+                raise
+        
+        print(f"Successfully added {len(new_users)} users. Total users: {len(self.users)}")
+        return new_users
+    
     def create_random_mapping(self, meeting_urls: List[str]) -> Dict[int, str]:
         """
         Create a random mapping of users to meetings.
@@ -146,6 +197,53 @@ class TestSuite:
         print(f"Created mapping: {self.user_meeting_mapping}")
         return self.user_meeting_mapping
     
+    def extend_mapping(self, meeting_urls: List[str]) -> Dict[int, str]:
+        """
+        Extend the existing user-meeting mapping for newly added users.
+        
+        Args:
+            meeting_urls: List of meeting URLs to distribute among new users
+            
+        Returns:
+            Updated dictionary mapping user_index -> meeting_url
+        """
+        if not self.users:
+            raise Exception("No users created. Call create_users() first.")
+        
+        if not self.user_meeting_mapping:
+            raise Exception("No existing mapping found. Call create_random_mapping() first.")
+        
+        # Find users that don't have mappings yet
+        existing_mapped_users = set(self.user_meeting_mapping.keys())
+        all_user_indices = set(range(len(self.users)))
+        unmapped_users = all_user_indices - existing_mapped_users
+        
+        if not unmapped_users:
+            print("All users already have meeting mappings")
+            return self.user_meeting_mapping
+        
+        print(f"Extending mapping for {len(unmapped_users)} unmapped users with {len(meeting_urls)} meetings...")
+        
+        # Create mapping for unmapped users
+        available_meetings = meeting_urls.copy()
+        
+        for user_index in sorted(unmapped_users):
+            if available_meetings:
+                # Randomly select a meeting for this user
+                meeting_url = random.choice(available_meetings)
+                self.user_meeting_mapping[user_index] = meeting_url
+                
+                # Optionally remove the meeting to avoid duplicates
+                # (comment out the next line if you want to allow multiple users per meeting)
+                available_meetings.remove(meeting_url)
+            else:
+                # If we run out of meetings, cycle through them
+                meeting_url = random.choice(meeting_urls)
+                self.user_meeting_mapping[user_index] = meeting_url
+        
+        print(f"Extended mapping: {self.user_meeting_mapping}")
+        return self.user_meeting_mapping
+    
     def create_bots(self, bot_name_prefix: str = "TestBot") -> List[Bot]:
         """
         Create Bot instances based on the user-meeting mapping.
@@ -175,6 +273,62 @@ class TestSuite:
         print(f"Successfully created {len(self.bots)} bots")
         return self.bots
     
+    def add_bots(self, meeting_urls: List[str], bot_name_prefix: str = "TestBot") -> List[Bot]:
+        """
+        Create additional Bot instances for newly added users during runtime.
+        
+        Args:
+            meeting_urls: List of meeting URLs to distribute among new users
+            bot_name_prefix: Prefix for bot names
+            
+        Returns:
+            List of newly created Bot instances
+        """
+        if not self.users:
+            raise Exception("No users created. Call create_users() first.")
+        
+        # Extend the mapping for new users
+        self.extend_mapping(meeting_urls)
+        
+        # Find users that don't have bots yet
+        existing_bot_users = set()
+        for bot in self.bots:
+            # Extract user index from bot_id (assuming format "prefix_index")
+            try:
+                user_index = int(bot.bot_id.split('_')[-1])
+                existing_bot_users.add(user_index)
+            except (ValueError, IndexError):
+                continue
+        
+        # Find unmapped users that need bots
+        unmapped_users = set()
+        for user_index in self.user_meeting_mapping.keys():
+            if user_index not in existing_bot_users:
+                unmapped_users.add(user_index)
+        
+        if not unmapped_users:
+            print("All users already have bots")
+            return []
+        
+        print(f"Creating {len(unmapped_users)} additional bots...")
+        new_bots = []
+        
+        for user_index in sorted(unmapped_users):
+            if user_index in self.user_meeting_mapping:
+                user_client = self.users[user_index]
+                meeting_url = self.user_meeting_mapping[user_index]
+                bot = Bot(
+                    user_client=user_client,
+                    meeting_url=meeting_url,
+                    bot_id=f"{bot_name_prefix}_{user_index}"
+                )
+                self.bots.append(bot)
+                new_bots.append(bot)
+                print(f"Created additional bot {bot.bot_id} for user {user_index} -> {meeting_url}")
+        
+        print(f"Successfully created {len(new_bots)} additional bots. Total bots: {len(self.bots)}")
+        return new_bots
+    
     def start_all_bots(self, language: str = 'en', task: str = 'transcribe') -> List[Dict[str, Any]]:
         """
         Start all bots by calling create() on each one.
@@ -203,6 +357,104 @@ class TestSuite:
         
         print(f"Successfully started {len([r for r in results if 'error' not in r])} bots")
         return results
+    
+    def start_new_bots(self, new_bots: List[Bot], language: str = 'en', task: str = 'transcribe') -> List[Dict[str, Any]]:
+        """
+        Start only the newly created bots.
+        
+        Args:
+            new_bots: List of newly created Bot instances
+            language: Language code for transcription
+            task: Transcription task
+            
+        Returns:
+            List of meeting info dictionaries from bot creation
+        """
+        if not new_bots:
+            print("No new bots to start")
+            return []
+        
+        print(f"Starting {len(new_bots)} new bots...")
+        results = []
+        
+        for bot in new_bots:
+            try:
+                meeting_info = bot.create(language=language, task=task)
+                results.append(meeting_info)
+                print(f"Started new bot {bot.bot_id}")
+            except Exception as e:
+                print(f"Failed to start new bot {bot.bot_id}: {e}")
+                results.append({'error': str(e)})
+        
+        print(f"Successfully started {len([r for r in results if 'error' not in r])} new bots")
+        return results
+    
+    def scale_to_users(self, target_users: int, meeting_urls: List[str], bot_name_prefix: str = "TestBot") -> Dict[str, Any]:
+        """
+        Scale the test suite to a target number of users, creating additional users and bots as needed.
+        
+        Args:
+            target_users: Target total number of users
+            meeting_urls: List of meeting URLs to distribute among users
+            bot_name_prefix: Prefix for bot names
+            
+        Returns:
+            Dictionary with scaling results and statistics
+        """
+        if target_users <= 0:
+            raise ValueError("target_users must be greater than 0")
+        
+        current_users = len(self.users)
+        
+        if target_users < current_users:
+            print(f"Warning: Target users ({target_users}) is less than current users ({current_users})")
+            print("This method only adds users/bots, it doesn't remove them")
+            return {
+                'users_added': 0,
+                'bots_added': 0,
+                'total_users': current_users,
+                'total_bots': len(self.bots),
+                'action': 'no_change',
+                'warning': f'Target ({target_users}) < current ({current_users})'
+            }
+        
+        # Check if we need to add users
+        users_to_add = max(0, target_users - current_users)
+        
+        # Check if we need to add bots (even if user count matches)
+        current_bots = len(self.bots)
+        bots_needed = target_users  # Each user should have one bot
+        
+        if users_to_add == 0 and current_bots >= bots_needed:
+            print(f"Already at target of {target_users} users with {current_bots} bots")
+            return {
+                'users_added': 0,
+                'bots_added': 0,
+                'total_users': current_users,
+                'total_bots': current_bots,
+                'action': 'no_change'
+            }
+        
+        print(f"Scaling from {current_users} users to {target_users} users (+{users_to_add})")
+        print(f"Current bots: {current_bots}, Target bots: {bots_needed}")
+        
+        # Add users if needed
+        new_users = []
+        if users_to_add > 0:
+            new_users = self.add_users(users_to_add)
+        
+        # Add bots for users that don't have them
+        new_bots = self.add_bots(meeting_urls, bot_name_prefix)
+        
+        return {
+            'users_added': len(new_users),
+            'bots_added': len(new_bots),
+            'total_users': len(self.users),
+            'total_bots': len(self.bots),
+            'action': 'scaled_up' if (len(new_users) > 0 or len(new_bots) > 0) else 'no_change',
+            'new_users': new_users,
+            'new_bots': new_bots
+        }
     
     def stop_all_bots(self) -> List[Dict[str, str]]:
         """
