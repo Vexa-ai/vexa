@@ -7,7 +7,8 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "tsc",
+    "build": "tsc && node build-browser-utils.js",
+    "build-browser": "node build-browser-utils.js",
     "dev": "tsx src/index.ts"
   },
   "keywords": [],
@@ -15,7 +16,7 @@
   "license": "ISC",
   "dependencies": {
     "@types/uuid": "^10.0.0",
-    "playwright": "^1.55.0",
+    "playwright": "^1.55.1",
     "playwright-extra": "^4.3.6",
     "puppeteer": "^24.4.0",
     "puppeteer-extra": "^3.3.6",

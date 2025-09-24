@@ -1,5 +1,5 @@
 # --- Build Stage ---
-FROM mcr.microsoft.com/playwright:v1.55.0-jammy AS base
+FROM mcr.microsoft.com/playwright:v1.55.1-jammy AS base
 
 # Install required OS dependencies (e.g., for Xvfb and other utilities)
 RUN apt-get update && apt-get install -y \
@@ -23,8 +23,8 @@ RUN npm install -g typescript
 # Copy the rest of the application source code
 COPY . .
 
-# Build the TypeScript code
-RUN tsc
+# Build the TypeScript code and browser utilities bundle
+RUN npm run build
 
 # Install Playwright dependencies (if not already installed via npm)
 RUN npx playwright install-deps && npx playwright install --with-deps
@@ -33,7 +33,7 @@ RUN npx playwright install-deps && npx playwright install --with-deps
 RUN npx playwright install msedge
 
 # --- Runtime Stage ---
-FROM mcr.microsoft.com/playwright:v1.55.0-jammy AS runtime
+FROM mcr.microsoft.com/playwright:v1.55.1-jammy AS runtime
 
 # Set working directory
 WORKDIR /app

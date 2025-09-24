@@ -12,5 +12,11 @@ export const browserArgs = [
   "--use-fake-ui-for-media-stream",
   "--use-file-for-fake-video-capture=/dev/null",
   "--use-file-for-fake-audio-capture=/dev/null",
-  "--allow-running-insecure-content"
+  "--allow-running-insecure-content",
+  "--disable-web-security",
+  "--disable-features=VizDisplayCompositor",
+  "--ignore-certificate-errors",
+  "--ignore-ssl-errors",
+  "--ignore-certificate-errors-spki-list",
+  "--disable-site-isolation-trials"
 ];
