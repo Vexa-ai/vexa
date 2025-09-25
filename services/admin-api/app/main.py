@@ -13,8 +13,11 @@ from sqlalchemy import func
 from pydantic import BaseModel, HttpUrl
 
 # Import shared models and schemas
-from shared_models.models import User, APIToken, Base, Meeting # Import Base for init_db and Meeting
-from shared_models.schemas import UserCreate, UserResponse, TokenResponse, UserDetailResponse, UserBase, UserUpdate, MeetingResponse # Import UserBase for update and UserUpdate schema
+from shared_models.models import User, APIToken, Base, Meeting, Transcription, MeetingSession # Import Base for init_db and Meeting
+from shared_models.schemas import (UserCreate, UserResponse, TokenResponse, UserDetailResponse, UserBase, UserUpdate, MeetingResponse,
+                                 UserTableResponse, MeetingTableResponse, MeetingSessionResponse, TranscriptionStats, 
+                                 MeetingPerformanceMetrics, MeetingTelematicsResponse, UserMeetingStats, 
+                                 UserUsagePatterns, UserAnalyticsResponse) # Import analytics schemas
 
 # Database utilities (needs to be created)
 from shared_models.database import get_db, init_db # New import
@@ -362,6 +365,200 @@ async def list_meetings_with_users(
     ]
         
     return PaginatedMeetingUserStatResponse(total=total, items=response_items)
+
+# --- Analytics Endpoints ---
+@admin_router.get("/analytics/users",
+                  response_model=List[UserTableResponse],
+                  summary="Get users table structure without sensitive data")
+async def get_users_table(
+    skip: int = 0, 
+    limit: int = 1000,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Returns user table data for analytics without exposing sensitive information.
+    Excludes: data JSONB field, API tokens
+    """
+    result = await db.execute(select(User).offset(skip).limit(limit))
+    users = result.scalars().all()
+    return [UserTableResponse.from_orm(u) for u in users]
+
+@admin_router.get("/analytics/meetings",
+                  response_model=List[MeetingTableResponse], 
+                  summary="Get meetings table structure without sensitive data")
+async def get_meetings_table(
+    skip: int = 0,
+    limit: int = 1000, 
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Returns meeting table data for analytics without exposing sensitive information.
+    Excludes: data JSONB field, transcriptions content
+    """
+    result = await db.execute(select(Meeting).offset(skip).limit(limit))
+    meetings = result.scalars().all()
+    return [MeetingTableResponse.from_orm(m) for m in meetings]
+
+@admin_router.get("/analytics/meetings/{meeting_id}/telematics",
+                  response_model=MeetingTelematicsResponse,
+                  summary="Get detailed telematics data for a specific meeting")
+async def get_meeting_telematics(
+    meeting_id: int,
+    include_transcriptions: bool = False,
+    include_sessions: bool = True,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Returns comprehensive telematics data for a specific meeting including:
+    - Meeting metadata and status
+    - Session information
+    - Transcription statistics (optional)
+    - Performance metrics
+    """
+    # Get the meeting
+    result = await db.execute(select(Meeting).where(Meeting.id == meeting_id))
+    meeting = result.scalars().first()
+    
+    if not meeting:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting not found")
+    
+    # Get sessions if requested
+    sessions = []
+    if include_sessions:
+        sessions_result = await db.execute(
+            select(MeetingSession).where(MeetingSession.meeting_id == meeting_id)
+        )
+        sessions = sessions_result.scalars().all()
+    
+    # Calculate transcription stats if requested
+    transcription_stats = None
+    if include_transcriptions:
+        transcriptions_result = await db.execute(
+            select(Transcription).where(Transcription.meeting_id == meeting_id)
+        )
+        transcriptions = transcriptions_result.scalars().all()
+        
+        if transcriptions:
+            total_duration = sum(t.end_time - t.start_time for t in transcriptions)
+            unique_speakers = len(set(t.speaker for t in transcriptions if t.speaker))
+            languages_detected = list(set(t.language for t in transcriptions if t.language))
+            
+            transcription_stats = TranscriptionStats(
+                total_transcriptions=len(transcriptions),
+                total_duration=total_duration,
+                unique_speakers=unique_speakers,
+                languages_detected=languages_detected
+            )
+    
+    # Calculate performance metrics
+    performance_metrics = None
+    if meeting.start_time and meeting.end_time:
+        total_duration = (meeting.end_time - meeting.start_time).total_seconds()
+        performance_metrics = MeetingPerformanceMetrics(
+            total_duration=total_duration,
+            # Additional metrics can be calculated from meeting.data if available
+            join_time=meeting.data.get('join_time') if meeting.data else None,
+            admission_time=meeting.data.get('admission_time') if meeting.data else None,
+            bot_uptime=meeting.data.get('bot_uptime') if meeting.data else None
+        )
+    
+    return MeetingTelematicsResponse(
+        meeting=MeetingResponse.from_orm(meeting),
+        sessions=[MeetingSessionResponse.from_orm(s) for s in sessions],
+        transcription_stats=transcription_stats,
+        performance_metrics=performance_metrics
+    )
+
+@admin_router.get("/analytics/users/{user_id}/details",
+                  response_model=UserAnalyticsResponse,
+                  summary="Get comprehensive user analytics data including full user record")
+async def get_user_details(
+    user_id: int,
+    include_meetings: bool = True,
+    include_tokens: bool = False,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Returns full user record with analytics data including:
+    - Complete user profile information (including data JSONB field)
+    - Meeting statistics and history
+    - Usage patterns
+    - API token information (optional)
+    """
+    # Get the user with tokens if requested
+    query = select(User)
+    if include_tokens:
+        query = query.options(selectinload(User.api_tokens))
+    
+    result = await db.execute(query.where(User.id == user_id))
+    user = result.scalars().first()
+    
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    
+    # Calculate meeting stats
+    meetings_result = await db.execute(select(Meeting).where(Meeting.user_id == user_id))
+    meetings = meetings_result.scalars().all()
+    
+    total_meetings = len(meetings)
+    completed_meetings = len([m for m in meetings if m.status == 'completed'])
+    failed_meetings = len([m for m in meetings if m.status == 'failed'])
+    active_meetings = len([m for m in meetings if m.status in ['requested', 'joining', 'awaiting_admission', 'active']])
+    
+    # Calculate duration stats
+    completed_with_duration = [m for m in meetings if m.status == 'completed' and m.start_time and m.end_time]
+    total_duration = sum((m.end_time - m.start_time).total_seconds() for m in completed_with_duration) if completed_with_duration else None
+    average_duration = total_duration / len(completed_with_duration) if completed_with_duration else None
+    
+    meeting_stats = UserMeetingStats(
+        total_meetings=total_meetings,
+        completed_meetings=completed_meetings,
+        failed_meetings=failed_meetings,
+        active_meetings=active_meetings,
+        total_duration=total_duration,
+        average_duration=average_duration
+    )
+    
+    # Calculate usage patterns
+    if meetings:
+        # Most used platform
+        platform_counts = {}
+        for meeting in meetings:
+            platform_counts[meeting.platform] = platform_counts.get(meeting.platform, 0) + 1
+        most_used_platform = max(platform_counts, key=platform_counts.get) if platform_counts else None
+        
+        # Meetings per day (based on creation date)
+        days_since_first = (datetime.utcnow() - min(m.created_at for m in meetings)).days + 1
+        meetings_per_day = total_meetings / days_since_first if days_since_first > 0 else 0
+        
+        # Peak usage hours
+        hour_counts = {}
+        for meeting in meetings:
+            hour = meeting.created_at.hour
+            hour_counts[hour] = hour_counts.get(hour, 0) + 1
+        peak_usage_hours = sorted(hour_counts.keys(), key=lambda h: hour_counts[h], reverse=True)[:3]
+        
+        # Last activity
+        last_activity = max(m.created_at for m in meetings)
+    else:
+        most_used_platform = None
+        meetings_per_day = 0.0
+        peak_usage_hours = []
+        last_activity = None
+    
+    usage_patterns = UserUsagePatterns(
+        most_used_platform=most_used_platform,
+        meetings_per_day=meetings_per_day,
+        peak_usage_hours=peak_usage_hours,
+        last_activity=last_activity
+    )
+    
+    return UserAnalyticsResponse(
+        user=UserDetailResponse.from_orm(user),
+        meeting_stats=meeting_stats,
+        usage_patterns=usage_patterns,
+        api_tokens=[TokenResponse.from_orm(t) for t in user.api_tokens] if include_tokens else None
+    )
 
 # App events
 @app.on_event("startup")

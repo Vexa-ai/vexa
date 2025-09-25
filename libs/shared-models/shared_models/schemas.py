@@ -570,4 +570,90 @@ class BotStatus(BaseModel):
 
 class BotStatusResponse(BaseModel):
     running_bots: List[BotStatus]
-# --- END Bot Status Schemas --- 
+# --- END Bot Status Schemas ---
+
+# --- Analytics Schemas ---
+class UserTableResponse(BaseModel):
+    """User data for analytics table - excludes sensitive fields"""
+    id: int
+    email: str
+    name: Optional[str]
+    image_url: Optional[str]
+    created_at: datetime
+    max_concurrent_bots: int
+    # Excludes: data, api_tokens
+
+    class Config:
+        orm_mode = True
+
+class MeetingTableResponse(BaseModel):
+    """Meeting data for analytics table - excludes sensitive fields"""
+    id: int
+    user_id: int
+    platform: Platform
+    native_meeting_id: Optional[str]
+    status: MeetingStatus
+    start_time: Optional[datetime]
+    end_time: Optional[datetime]
+    created_at: datetime
+    updated_at: datetime
+    # Excludes: data, transcriptions, sessions
+
+    class Config:
+        orm_mode = True
+        use_enum_values = True
+
+class MeetingSessionResponse(BaseModel):
+    """Meeting session data for telematics"""
+    id: int
+    meeting_id: int
+    session_uid: str
+    session_start_time: datetime
+
+    class Config:
+        orm_mode = True
+
+class TranscriptionStats(BaseModel):
+    """Transcription statistics for a meeting"""
+    total_transcriptions: int
+    total_duration: float
+    unique_speakers: int
+    languages_detected: List[str]
+
+class MeetingPerformanceMetrics(BaseModel):
+    """Performance metrics for a meeting"""
+    join_time: Optional[float]  # seconds to join
+    admission_time: Optional[float]  # seconds to get admitted
+    total_duration: Optional[float]  # meeting duration in seconds
+    bot_uptime: Optional[float]  # bot uptime in seconds
+
+class MeetingTelematicsResponse(BaseModel):
+    """Comprehensive telematics data for a specific meeting"""
+    meeting: MeetingResponse
+    sessions: List[MeetingSessionResponse]
+    transcription_stats: Optional[TranscriptionStats]
+    performance_metrics: Optional[MeetingPerformanceMetrics]
+
+class UserMeetingStats(BaseModel):
+    """User meeting statistics"""
+    total_meetings: int
+    completed_meetings: int
+    failed_meetings: int
+    active_meetings: int
+    total_duration: Optional[float]  # total meeting duration in seconds
+    average_duration: Optional[float]  # average meeting duration in seconds
+
+class UserUsagePatterns(BaseModel):
+    """User usage patterns"""
+    most_used_platform: Optional[str]
+    meetings_per_day: float
+    peak_usage_hours: List[int]  # hours of day (0-23)
+    last_activity: Optional[datetime]
+
+class UserAnalyticsResponse(BaseModel):
+    """Comprehensive user analytics data including full user record"""
+    user: UserDetailResponse  # This includes the data field
+    meeting_stats: UserMeetingStats
+    usage_patterns: UserUsagePatterns
+    api_tokens: Optional[List[TokenResponse]]  # Optional for security
+# --- END Analytics Schemas --- 
