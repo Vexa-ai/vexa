@@ -3,7 +3,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from pydantic import BaseModel
 from sqlalchemy import select, and_, func, distinct, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -214,32 +214,56 @@ async def get_transcript_by_native_id(
     platform: Platform,
     native_meeting_id: str,
     request: Request, # Added for redis_client access
+    meeting_id: Optional[int] = Query(None, description="Optional specific database meeting ID. If provided, returns that exact meeting. If not provided, returns the latest meeting for the platform/native_meeting_id combination."),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Retrieves the meeting details and transcript segments for a meeting specified by its platform and native ID.
-    Finds the *latest* matching meeting record for the user.
+    
+    Behavior:
+    - If meeting_id is provided: Returns the exact meeting with that database ID (must belong to user and match platform/native_meeting_id)
+    - If meeting_id is not provided: Returns the latest matching meeting record for the user (backward compatible behavior)
+    
     Combines data from both PostgreSQL (immutable segments) and Redis Hashes (mutable segments).
     """
-    logger.debug(f"[API] User {current_user.id} requested transcript for {platform.value} / {native_meeting_id}")
+    logger.debug(f"[API] User {current_user.id} requested transcript for {platform.value} / {native_meeting_id}, meeting_id={meeting_id}")
     redis_c = getattr(request.app.state, 'redis_client', None)
     
-    #TODO: here we want to get a union of the meeting for platform/native meeting id instead of just the latest
-    stmt_meeting = select(Meeting).where(
-        Meeting.user_id == current_user.id,
-        Meeting.platform == platform.value,
-        Meeting.platform_specific_id == native_meeting_id
-    ).order_by(Meeting.created_at.desc())
+    if meeting_id is not None:
+        # Get specific meeting by database ID
+        # Validate it belongs to user and matches platform/native_meeting_id for consistency
+        stmt_meeting = select(Meeting).where(
+            Meeting.id == meeting_id,
+            Meeting.user_id == current_user.id,
+            Meeting.platform == platform.value,
+            Meeting.platform_specific_id == native_meeting_id
+        )
+        logger.debug(f"[API] Looking for specific meeting ID {meeting_id} with platform/native validation")
+    else:
+        # Get latest meeting by platform/native_meeting_id (default behavior)
+        stmt_meeting = select(Meeting).where(
+            Meeting.user_id == current_user.id,
+            Meeting.platform == platform.value,
+            Meeting.platform_specific_id == native_meeting_id
+        ).order_by(Meeting.created_at.desc())
+        logger.debug(f"[API] Looking for latest meeting for platform/native_id")
 
     result_meeting = await db.execute(stmt_meeting)
     meeting = result_meeting.scalars().first()
     
     if not meeting:
-        logger.warning(f"[API] No meeting found for user {current_user.id}, platform '{platform.value}', native ID '{native_meeting_id}'")
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Meeting not found for platform {platform.value} and ID {native_meeting_id}"
-        )
+        if meeting_id is not None:
+            logger.warning(f"[API] No meeting found for user {current_user.id}, platform '{platform.value}', native ID '{native_meeting_id}', meeting_id '{meeting_id}'")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Meeting not found for platform {platform.value}, ID {native_meeting_id}, and meeting_id {meeting_id}"
+            )
+        else:
+            logger.warning(f"[API] No meeting found for user {current_user.id}, platform '{platform.value}', native ID '{native_meeting_id}'")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Meeting not found for platform {platform.value} and ID {native_meeting_id}"
+            )
 
     internal_meeting_id = meeting.id
     logger.debug(f"[API] Found meeting record ID {internal_meeting_id}, fetching segments...")
