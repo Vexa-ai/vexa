@@ -1,6 +1,6 @@
 # Vexa Deployment Guide
 
-Real-time meeting transcription with OpenAI Whisper. Get up and running in minutes.
+Real-time Google Meet and Microsoft Teams transcription API. Get up and running in minutes.
 
 ## Quick Start
 
