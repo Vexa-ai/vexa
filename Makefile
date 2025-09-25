@@ -1,4 +1,4 @@
-.PHONY: all setup submodules env force-env download-model build-bot-image build up down ps logs test migrate makemigrations init-db stamp-db migrate-or-init
+.PHONY: all setup submodules env force-env download-model build-bot-image build up down ps logs test test-api test-setup migrate makemigrations init-db stamp-db migrate-or-init
 
 # Default target: Sets up everything and starts the services
 all: setup-env build-bot-image build up migrate-or-init test
@@ -231,7 +231,60 @@ test: check_docker
 		echo "    Admin API: http://localhost:8057/docs"; \
 	fi
 	@chmod +x run_vexa_interaction.sh
-	@./run_vexa_interaction.sh
+	@echo "---> Running test script..."
+	@if [ -n "$(MEETING_ID)" ]; then \
+		echo "---> Using provided meeting ID: $(MEETING_ID)"; \
+		./run_vexa_interaction.sh "$(MEETING_ID)"; \
+	else \
+		echo "---> No meeting ID provided. Use 'make test MEETING_ID=abc-defg-hij' to test with a specific meeting."; \
+		echo "---> Running in interactive mode..."; \
+		./run_vexa_interaction.sh; \
+	fi
+
+# Quick API connectivity test (no user interaction required)
+test-api: check_docker
+	@echo "---> Running API connectivity test..."
+	@API_PORT=18056; \
+	ADMIN_PORT=18057; \
+	if [ -f .env ]; then \
+		API_PORT=$$(grep -E '^[[:space:]]*API_GATEWAY_HOST_PORT=' .env | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo "18056"); \
+		ADMIN_PORT=$$(grep -E '^[[:space:]]*ADMIN_API_HOST_PORT=' .env | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo "18057"); \
+	fi; \
+	echo "---> Testing API Gateway connectivity at http://localhost:$$API_PORT/docs..."; \
+	if curl -s -f "http://localhost:$$API_PORT/docs" > /dev/null; then \
+		echo "✅ API Gateway is responding"; \
+	else \
+		echo "❌ API Gateway is not responding"; \
+		exit 1; \
+	fi; \
+	echo "---> Testing Admin API connectivity at http://localhost:$$ADMIN_PORT/docs..."; \
+	if curl -s -f "http://localhost:$$ADMIN_PORT/docs" > /dev/null; then \
+		echo "✅ Admin API is responding"; \
+	else \
+		echo "❌ Admin API is not responding"; \
+		exit 1; \
+	fi; \
+	echo "---> API connectivity test passed! ✅"
+
+# Test system setup without requiring meeting ID
+test-setup: check_docker
+	@echo "---> Testing Vexa system setup..."
+	@echo "---> API Documentation URLs:"
+	@if [ -f .env ]; then \
+		API_PORT=$$(grep -E '^[[:space:]]*API_GATEWAY_HOST_PORT=' .env | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//'); \
+		ADMIN_PORT=$$(grep -E '^[[:space:]]*ADMIN_API_HOST_PORT=' .env | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//'); \
+		[ -z "$$API_PORT" ] && API_PORT=8056; \
+		[ -z "$$ADMIN_PORT" ] && ADMIN_PORT=8057; \
+		echo "    Main API:  http://localhost:$$API_PORT/docs"; \
+		echo "    Admin API: http://localhost:$$ADMIN_PORT/docs"; \
+	else \
+		echo "    Main API:  http://localhost:8056/docs"; \
+		echo "    Admin API: http://localhost:8057/docs"; \
+	fi
+	@echo "---> Testing API connectivity..."
+	@make test-api
+	@echo "---> System setup test completed! ✅"
+	@echo "---> Ready for live testing. Use 'make test MEETING_ID=your-meeting-id' when ready."
 
 # --- Database Migration Commands ---
 
