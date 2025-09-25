@@ -239,14 +239,7 @@ async def start_bot_container(
         "HostConfig": {
             "NetworkMode": DOCKER_NETWORK,
             "AutoRemove": True,
-            "Mounts": [
-                {
-                    "Type": "bind",
-                    "Source": "/home/dima/dev/bot-storage",
-                    "Target": "/app/storage",
-                    "ReadOnly": False
-                }
-            ]
+            "Mounts": []
         },
     }
 
