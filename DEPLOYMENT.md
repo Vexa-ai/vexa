@@ -72,8 +72,8 @@ sudo systemctl restart docker
 
 # Deploy
 git clone https://github.com/Vexa-ai/vexa.git && cd vexa
-make all              # CPU (tiny model)
-# make all TARGET=gpu # GPU (medium model)
+# make all              # CPU (tiny model)
+make all TARGET=gpu # GPU (medium model)
 ```
 
 **macOS (CPU only):**
