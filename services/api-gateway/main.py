@@ -387,15 +387,15 @@ async def websocket_multiplex(ws: WebSocket):
     sub_tasks: Dict[Tuple[str, str], asyncio.Task] = {}
     subscribed_meetings: Set[Tuple[str, str]] = set()
 
-    async def subscribe_meeting(platform: str, native_id: str):
-        key = (platform, native_id)
+    async def subscribe_meeting(platform: str, native_id: str, user_id: str, meeting_id: str):
+        key = (platform, native_id, user_id)
         if key in subscribed_meetings:
             return
         subscribed_meetings.add(key)
         channels = [
-            f"tc:meeting:{platform}:{native_id}:mutable",
-            f"tc:meeting:{platform}:{native_id}:finalized",
-            f"bm:meeting:{platform}:{native_id}:status",
+            f"tc:meeting:{user_id}:{platform}:{native_id}:mutable",
+            f"tc:meeting:{user_id}:{platform}:{native_id}:finalized",
+            f"bm:meeting:{user_id}:{platform}:{native_id}:status",
         ]
 
         async def fan_in(channel_names: List[str]):
@@ -419,8 +419,8 @@ async def websocket_multiplex(ws: WebSocket):
 
         sub_tasks[key] = asyncio.create_task(fan_in(channels))
 
-    async def unsubscribe_meeting(platform: str, native_id: str):
-        key = (platform, native_id)
+    async def unsubscribe_meeting(platform: str, native_id: str, user_id: str):
+        key = (platform, native_id, user_id)
         task = sub_tasks.pop(key, None)
         if task:
             task.cancel()
@@ -475,8 +475,9 @@ async def websocket_multiplex(ws: WebSocket):
                     subscribed: List[Dict[str, str]] = []
                     for item in authorized:
                         plat = item.get("platform"); nid = item.get("native_id")
-                        if plat and nid:
-                            await subscribe_meeting(plat, nid)
+                        user_id = item.get("user_id"); meeting_id = item.get("meeting_id")
+                        if plat and nid and user_id and meeting_id:
+                            await subscribe_meeting(plat, nid, user_id, meeting_id)
                             subscribed.append({"platform": plat, "native_id": nid})
                     await ws.send_text(json.dumps({"type": "subscribed", "meetings": subscribed}))
                 except Exception as e:
@@ -499,8 +500,20 @@ async def websocket_multiplex(ws: WebSocket):
                     if not plat or not nid:
                         errors.append(f"meetings[{idx}] missing 'platform' or 'native_id'")
                         continue
-                    await unsubscribe_meeting(plat, nid)
-                    unsubscribed.append({"platform": plat, "native_id": nid})
+                    
+                    # Find the subscription key that matches platform and native_id
+                    # Since we now use (platform, native_id, user_id) as key, we need to find it
+                    matching_key = None
+                    for key in subscribed_meetings:
+                        if key[0] == plat and key[1] == nid:
+                            matching_key = key
+                            break
+                    
+                    if matching_key:
+                        await unsubscribe_meeting(plat, nid, matching_key[2])
+                        unsubscribed.append({"platform": plat, "native_id": nid})
+                    else:
+                        errors.append(f"meetings[{idx}] not currently subscribed")
 
                 if errors and not unsubscribed:
                     await ws.send_text(json.dumps({"type": "error", "error": "invalid_unsubscribe_payload", "details": errors}))

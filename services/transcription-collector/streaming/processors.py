@@ -314,7 +314,7 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                         "payload": {"segments": updated_segments},
                         "ts": datetime.now(timezone.utc).isoformat()
                     }
-                    channel = f"tc:meeting:{platform_val}:{native_meeting_id}:mutable"
+                    channel = f"tc:meeting:{user.id}:{platform_val}:{native_meeting_id}:mutable"
                     await redis_c.publish(channel, json.dumps(event_payload))
                 except Exception as pub_err:
                     logger.error(f"Failed to publish mutable transcript update for meeting {internal_meeting_id}: {pub_err}")

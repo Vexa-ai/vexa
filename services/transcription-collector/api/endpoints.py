@@ -43,6 +43,7 @@ class WsAuthorizeSubscribeRequest(BaseModel):
 class WsAuthorizeSubscribeResponse(BaseModel):
     authorized: List[Dict[str, str]]
     errors: List[str] = []
+    user_id: Optional[int] = None  # Include user_id for channel isolation
 
 
 async def _get_full_transcript_segments(
@@ -320,9 +321,14 @@ async def ws_authorize_subscribe(
             errors.append(f"meetings[{idx}] not authorized or not found for user")
             continue
 
-        authorized.append({"platform": platform_value, "native_id": native_id})
+        authorized.append({
+            "platform": platform_value, 
+            "native_id": native_id,
+            "user_id": str(current_user.id),
+            "meeting_id": str(meeting.id)
+        })
 
-    return WsAuthorizeSubscribeResponse(authorized=authorized, errors=errors)
+    return WsAuthorizeSubscribeResponse(authorized=authorized, errors=errors, user_id=current_user.id)
 
 
 @router.get("/internal/transcripts/{meeting_id}",
