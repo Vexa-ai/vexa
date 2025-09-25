@@ -199,16 +199,31 @@ else
 fi
 
 # --- 3. Request Google Meet ID ---
-while true; do
-    read -p "Enter the Google Meet ID (e.g., abc-defg-hij): " GOOGLE_MEET_ID
-    # Basic validation for meet ID format (3 letters - 4 letters - 3 letters)
-    if [[ "$GOOGLE_MEET_ID" =~ ^[a-zA-Z]{3}-[a-zA-Z]{4}-[a-zA-Z]{3}$ ]]; then
-        MEETING_ID_TO_STOP="$GOOGLE_MEET_ID" # Set for trap
-        break
-    else
-        echo_warn "Invalid Google Meet ID format. Please use 'xxx-yyyy-zzz' (e.g., abc-defg-hij)."
-    fi
-done
+if [[ -n "$1" ]]; then
+    # If meeting ID provided as command line argument
+    GOOGLE_MEET_ID="$1"
+    echo_info "Using provided Google Meet ID: $GOOGLE_MEET_ID"
+else
+    # Interactive input
+    while true; do
+        read -p "Enter the Google Meet ID (e.g., abc-defg-hij): " GOOGLE_MEET_ID
+        # Basic validation for meet ID format (3 letters - 4 letters - 3 letters)
+        if [[ "$GOOGLE_MEET_ID" =~ ^[a-zA-Z]{3}-[a-zA-Z]{4}-[a-zA-Z]{3}$ ]]; then
+            break
+        else
+            echo_warn "Invalid Google Meet ID format. Please use 'xxx-yyyy-zzz' (e.g., abc-defg-hij)."
+        fi
+    done
+fi
+
+# Validate the meeting ID format
+if [[ "$GOOGLE_MEET_ID" =~ ^[a-zA-Z]{3}-[a-zA-Z]{4}-[a-zA-Z]{3}$ ]]; then
+    MEETING_ID_TO_STOP="$GOOGLE_MEET_ID" # Set for trap
+    echo_info "Valid Google Meet ID: $GOOGLE_MEET_ID"
+else
+    echo_error "Invalid Google Meet ID format: $GOOGLE_MEET_ID. Expected format: xxx-yyyy-zzz"
+    exit 1
+fi
 
 # --- 4. Send Bot to Meeting ---
 echo_info "Requesting bot '$BOT_NAME' for Google Meet ID: $GOOGLE_MEET_ID"
@@ -274,18 +289,29 @@ while true; do
         "$BASE_URL/transcripts/$PLATFORM/$GOOGLE_MEET_ID")
 
     if [[ "$JQ_INSTALLED" == true ]]; then
-        CURRENT_TRANSCRIPTS=$(echo "$GET_TRANSCRIPT_RESPONSE" | jq -r '.segments // []')
+        # Check if response is valid JSON before parsing
+        if echo "$GET_TRANSCRIPT_RESPONSE" | jq empty 2>/dev/null; then
+            CURRENT_TRANSCRIPTS=$(echo "$GET_TRANSCRIPT_RESPONSE" | jq -r '.segments // []')
+            NEW_SEGMENT_COUNT=$(echo "$CURRENT_TRANSCRIPTS" | jq 'length // 0')
 
-        NEW_SEGMENT_COUNT=$(echo "$CURRENT_TRANSCRIPTS" | jq 'length // 0')
-
-        if [[ "$NEW_SEGMENT_COUNT" -gt "$LAST_TRANSCRIPT_COUNT" ]]; then
-            echo_info "--- New Transcript Segments ($PLATFORM/$GOOGLE_MEET_ID) ---"
-            jq -r --argjson last_count "$LAST_TRANSCRIPT_COUNT" '.[$last_count:] | .[] | ("Speaker " + (.speaker // "unknown") + ": " + .text)' <<< "$CURRENT_TRANSCRIPTS"
-            LAST_TRANSCRIPT_COUNT=$NEW_SEGMENT_COUNT
-            echo "---------------------------------------"
-        elif [[ "$GET_TRANSCRIPT_RESPONSE" == *"not found"* || "$GET_TRANSCRIPT_RESPONSE" == *"NotFoundError"* ]]; then
-            echo_warn "Meeting or transcript not found for $PLATFORM/$GOOGLE_MEET_ID. Bot may have stopped or not started properly."
-            # Consider breaking loop or specific error handling here
+            if [[ "$NEW_SEGMENT_COUNT" -gt "$LAST_TRANSCRIPT_COUNT" ]]; then
+                echo_info "--- New Transcript Segments ($PLATFORM/$GOOGLE_MEET_ID) ---"
+                jq -r --argjson last_count "$LAST_TRANSCRIPT_COUNT" '.[$last_count:] | .[] | ("Speaker " + (.speaker // "unknown") + ": " + .text)' <<< "$CURRENT_TRANSCRIPTS"
+                LAST_TRANSCRIPT_COUNT=$NEW_SEGMENT_COUNT
+                echo "---------------------------------------"
+            elif [[ "$GET_TRANSCRIPT_RESPONSE" == *"not found"* || "$GET_TRANSCRIPT_RESPONSE" == *"NotFoundError"* ]]; then
+                echo_warn "Meeting or transcript not found for $PLATFORM/$GOOGLE_MEET_ID. Bot may have stopped or not started properly."
+            fi
+        else
+            # Response is not valid JSON, likely an error message
+            if [[ "$GET_TRANSCRIPT_RESPONSE" == *"Invalid API token"* ]]; then
+                echo_error "Invalid API token. Please check your authentication."
+                break
+            elif [[ "$GET_TRANSCRIPT_RESPONSE" == *"Internal Server Error"* ]]; then
+                echo_warn "Server error occurred. Response: $GET_TRANSCRIPT_RESPONSE"
+            else
+                echo_warn "Invalid JSON response: $GET_TRANSCRIPT_RESPONSE"
+            fi
         fi
     else
         # Basic output if jq is not available

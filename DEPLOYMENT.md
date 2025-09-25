@@ -1,117 +1,128 @@
-# Quick start: Local Deployment and Testing
+# Vexa Deployment Guide
 
-Instructions for setting up, running, and testing the Vexa system locally using Docker Compose and Make.
+Real-time meeting transcription with OpenAI Whisper. Get up and running in minutes.
 
-[3 min video tutorial](https://www.youtube.com/watch?v=bHMIByieVek)
+## Quick Start
 
-## Prerequisites (Ubuntu/Debian)
+**TL;DR - Try these in order:**
 
-Before running Vexa, ensure you have the following installed on your Ubuntu system:
-
-### Required Dependencies
+### 1. If you have an established development machine
+Try running directly - this might work instantly:
 ```bash
-# Update package list
-sudo apt update
+git clone https://github.com/Vexa-ai/vexa.git && cd vexa
+make all  # CPU laptop (whisper tiny model - good for development)
+```
+or 
 
-# Install Python (ensure "python" command works) and venv support
-sudo apt install -y python3 python3-pip python-is-python3 python3-venv
+```bash
+git clone https://github.com/Vexa-ai/vexa.git && cd vexa
+make all TARGET=gpu # GPU machine (whisper medium model - much better quality)
+```
 
-# Install Make and Git
-sudo apt install -y make git
+**What `make all` does:**
+- Builds all Docker images (takes some time at the first run)
+- Spins up all containers
+- Runs database migrations (if nesessary)
+- Starts a simple test to verify everything works
 
-# Install the latest Docker Engine (includes docker compose v2)
-# Remove older packages (safe if not present)
+If you change code later, just run `make all` again - it rebuilds what's needed and skips the rest.
+
+### 2. If you're on a fresh GPU VM in the cloud
+**Automated setup** - Tested on Vultr `vcg-a16-6c-64g-16vram`
+
+Sets up everything for you on a fresh VM:
+```bash
+git clone https://github.com/Vexa-ai/vexa.git && cd vexa
+sudo ./fresh_setup.sh --gpu    # or --cpu for CPU-only hosts
+make all TARGET=gpu             # or make all for CPU
+```
+
+
+### 3. Manual setup (if the above don't work)
+**For fresh GPU virtual machines or custom setups:**
+
+**Ubuntu/Debian:**
+```bash
+# Prerequisites
+sudo apt update && sudo apt install -y \
+  python3 python3-pip python-is-python3 python3-venv \
+  make git curl jq ca-certificates gnupg
+
+# Docker Engine + Compose v2
 sudo apt remove -y docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc || true
-
-# Dependencies for Docker repo
-sudo apt install -y ca-certificates curl gnupg
 sudo install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-sudo apt update
-
-# Install Docker Engine + Compose V2 plugin
-sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-
-# Start and enable Docker service
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
+  sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+  https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt update && sudo apt install -y \
+  docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 sudo systemctl enable --now docker
 
-# Optional: allow current user to run docker without sudo (relogin required)
-sudo usermod -aG docker $USER
+# GPU only (requires NVIDIA drivers: nvidia-smi must work)
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
+  sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt update && sudo apt install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
 
-# Verify versions
-docker --version
-docker compose version
+# Deploy
+git clone https://github.com/Vexa-ai/vexa.git && cd vexa
+make all              # CPU (tiny model)
+# make all TARGET=gpu # GPU (medium model)
 ```
 
-
-### Verify installation
-Run the following to verify all prerequisites are present:
+**macOS (CPU only):**
+Install Docker Desktop, then:
 ```bash
-python --version
-make --version
-docker --version
-docker compose version
+git clone https://github.com/Vexa-ai/vexa.git && cd vexa
+make all
 ```
 
-### Quick Start with Make
+## Testing
 
+Once deployed, services are available at:
+- **API docs:** http://localhost:18056/docs
+- **Admin API:** http://localhost:18057/docs
 
-1.  **For CPU (Tiny Model, Slower Performance - Good for local tests/development):**
-   this will use 'whisper tiny' model, which can run on CPU.
-    ```bash
-    git clone https://github.com/Vexa-ai/vexa
-    cd vexa
-    make all
-    ```
-    This command (among other things) uses `env-example.cpu` defaults for `.env` if not present.
-    It also creates a local Python virtual environment (`.venv`) to download the Whisper model
-    into `./hub` so Docker can reuse the cache. No system-wide Python packages are installed.
-
-2.  **For GPU (Medium Model, Faster Performance - Requires NVIDIA GPU & Toolkit):**
-    this will use 'whisper medium' model, which is good enough to run on GPU.
-    ```bash
-    git clone https://github.com/Vexa-ai/vexa
-    cd vexa
-    make all TARGET=gpu
-    ```
-    This uses `env-example.gpu` defaults for `.env` if not present.
-    Like CPU mode, model artifacts are cached under `./hub` via a local `.venv`.
-
-
-What to expect during testing:
-1. Test user and its token are created
-2. You will be asked for a meeting ID
-3. Provide the `xxx-xxxx-xxx` from your running meeting (`https://meet.google.com/xxx-xxxx-xxx`)
-4. Bot is sent to the meeting you provided 
-5. Wait about 10 sec for the bot to join the meeting
-6. Let the bot into the conference
-7. Start speaking
-8. Wait for the transcripts to appear. 
-
-Did it work? Tell us! 💬 [Join Discord Community!](https://discord.gg/Ga9duGkVz9)
- 
-
-
-
-The transcription latency can is higher and quality might be lower  when running locally in CPU mode, since you don't have a device to run bigger model quickly. But this is usually enough for development and testing
-
-
-
-
-
-### API Documentation that is running behind the hood
-
-API docs (Swagger/OpenAPI) are available at (ports are configurable in `.env`):
-
-```
-Main API docs:  http://localhost:8056/docs
-Admin API docs: http://localhost:8057/docs
+**Live meeting test:**
+```bash
+make test MEETING_ID=abc-defg-hij  # Use your Google Meet ID (xxx-xxxx-xxx format)
 ```
 
-**Managing Services:**
-- `make ps`: Show container status.
-- `make logs`: Tail logs (or `make logs SERVICE=<service_name>`).
-- `make down`: Stop all services.
-- `make clean`: Stop services and remove volumes.
+What to expect:
+1. Bot joins your Google Meet
+2. Admit the bot when prompted
+3. Start speaking to see real-time transcripts
 
+## Tested Environments
+
+- **CPU:** Mac Pro (Docker Desktop)
+- **GPU:** Fresh Vultr A16 VM (vcg-a16-6c-64g-16vram)
+
+## Management Commands
+
+```bash
+make ps        # Show container status
+make logs      # View logs
+make down      # Stop services
+make test-api  # Quick API connectivity test
+```
+
+## Troubleshooting
+
+**GPU Issues:**
+- **"unknown device" error:** Ensure NVIDIA drivers work (`nvidia-smi`) and Container Toolkit is configured
+- **Bot creation fails:** Check `docker-compose.yml` has correct `device_ids` (usually `"0"`)
+
+**Test Issues:**
+- **JSON parsing errors:** Use valid Google Meet ID format (`xxx-xxxx-xxx`) and admit bot to meeting
+- **Bot doesn't join:** Check firewall settings and meeting permissions
+
+---
+
+**Need help?** Join our [Discord Community](https://discord.gg/Ga9duGkVz9) | **Video tutorial:** [3-minute setup guide](https://www.youtube.com/watch?v=bHMIByieVek)
