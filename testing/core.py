@@ -9,11 +9,10 @@ from IPython.display import clear_output, display
 # Load environment variables
 load_dotenv()
 
-def create_user_client(user_api_key=None, base_url="http://localhost:18056", max_concurrent_bots=1):
+def create_user_client(user_api_key=None, base_url="http://localhost:18056", max_concurrent_bots=1, admin_api_key=None):
     """Create a VexaClient instance for a user."""
     if user_api_key is None:
-        admin_token = os.getenv('ADMIN_API_TOKEN')
-        admin_client = VexaClient(base_url=base_url, admin_key=admin_token)
+        admin_client = VexaClient(base_url=base_url, admin_key=admin_api_key)
         
         new_user = admin_client.create_user(
             email=f"{random.randint(1, 1000000)}@example.com", 
