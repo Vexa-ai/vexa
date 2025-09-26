@@ -16,6 +16,10 @@ from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 import pandas as pd
 
+import sys
+import os
+# Use the fixed PyPI client
+sys.path.insert(0, '/Users/dmitriygrankin/dev/vexa-pypi-client')
 from vexa_client import VexaClient
 from bot import Bot
 
@@ -565,7 +569,7 @@ class TestSuite:
         
         Args:
             max_workers: Maximum number of concurrent threads
-            
+        
         Returns:
             List of stop confirmation messages
         """
@@ -601,10 +605,13 @@ class TestSuite:
     
     # Monitoring/polling removed; snapshots are computed on demand
     
-    def snapshot(self) -> Dict[str, Any]:
+    def snapshot(self, max_workers: int = 5) -> Dict[str, Any]:
         """
-        Take a snapshot of current bot states.
+        Take a snapshot of current bot states using threading for API calls.
         
+        Args:
+            max_workers: Maximum number of concurrent threads for API calls
+            
         Returns:
             Dictionary with current bot states and metadata
         """
@@ -614,7 +621,8 @@ class TestSuite:
             'bots': []
         }
         
-        for bot in self.bots:
+        def get_bot_snapshot(bot):
+            """Get snapshot data for a single bot."""
             try:
                 bot_stats = bot.get_stats()
                 
@@ -653,18 +661,27 @@ class TestSuite:
                     except Exception as e:
                         status_transitions = {'error': str(e)}
                 
-                bot_snapshot = {
+                return {
                     **bot_stats,
                     'transcript': transcript_data,
                     'status_transitions': status_transitions
                 }
-                snapshot_data['bots'].append(bot_snapshot)
                 
             except Exception as e:
-                snapshot_data['bots'].append({
+                return {
                     'bot_id': bot.bot_id,
                     'error': str(e)
-                })
+                }
+        
+        # Use threading to get bot snapshots concurrently
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all bot snapshot tasks
+            future_to_bot = {executor.submit(get_bot_snapshot, bot): bot for bot in self.bots}
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_bot):
+                bot_snapshot = future.result()
+                snapshot_data['bots'].append(bot_snapshot)
         
         return snapshot_data
     
@@ -723,7 +740,7 @@ class TestSuite:
                     'detected_languages': list(languages) if languages else [],
                     'languages_count': len(languages)
                 })
-            
+                
             # Compute baseline t0 and status transition durations
             # t0 preference: created_at if present else first transition timestamp
             transitions = bot_data.get('status_transitions') or []
@@ -788,12 +805,36 @@ class TestSuite:
             row['status_transitions_count'] = len(transitions) if transitions else 0
             row['completion_reason'] = transitions[-1].get('completion_reason') if transitions else None
             
-            # Transcription latency: from t0 to first transcript start
+            # Active to first transcript latency
             first_segment_time = row.get('first_segment_time')
-            if t0 is not None and first_segment_time:
+            if active_ts is not None and first_segment_time:
                 try:
                     first_dt = pd.to_datetime(first_segment_time)
-                    row['transcription_latency'] = (first_dt - t0).total_seconds()
+                    # Make active_ts timezone-aware to match first_dt
+                    if active_ts.tz is None and first_dt.tz is not None:
+                        active_ts = active_ts.tz_localize('UTC')
+                    elif active_ts.tz is not None and first_dt.tz is None:
+                        first_dt = first_dt.tz_localize('UTC')
+                    row['active_to_first_transcript'] = (first_dt - active_ts).total_seconds()
+                except Exception:
+                    row['active_to_first_transcript'] = None
+            else:
+                row['active_to_first_transcript'] = None
+            
+            # Transcription latency: last segment end minus time when transcript was requested
+            # Use created_at as the time when transcript was requested
+            last_segment_end_time = row.get('last_segment_end_time')
+            created_at = bot_data.get('created_at')
+            if created_at and last_segment_end_time:
+                try:
+                    created_dt = pd.to_datetime(created_at)
+                    last_end_dt = pd.to_datetime(last_segment_end_time)
+                    # Make timezones consistent
+                    if created_dt.tz is None and last_end_dt.tz is not None:
+                        created_dt = created_dt.tz_localize('UTC')
+                    elif created_dt.tz is not None and last_end_dt.tz is None:
+                        last_end_dt = last_end_dt.tz_localize('UTC')
+                    row['transcription_latency'] = (pd.Timestamp.now(tz='UTC') - last_end_dt).total_seconds()
                 except Exception:
                     row['transcription_latency'] = None
             else:
@@ -803,15 +844,18 @@ class TestSuite:
         
         return rows
     
-    def get_latest_dataframe(self) -> pd.DataFrame:
+    def get_latest_dataframe(self, max_workers: int = 5) -> pd.DataFrame:
         """
         Get the latest monitoring data as a pandas DataFrame.
         
+        Args:
+            max_workers: Maximum number of concurrent threads for API calls
+            
         Returns:
             DataFrame with latest bot states
         """
         # Compute a fresh snapshot on demand
-        snapshot = self.snapshot()
+        snapshot = self.snapshot(max_workers=max_workers)
         rows = self.parse_for_pandas(snapshot)
         return pd.DataFrame(rows)
     
@@ -932,14 +976,17 @@ class TestSuite:
         
         return ", ".join(formatted_langs)
     
-    def get_status_summary_dataframe(self) -> pd.DataFrame:
+    def get_status_summary_dataframe(self, max_workers: int = 5) -> pd.DataFrame:
         """
         Get a DataFrame focused on status transitions and bot states.
         
+        Args:
+            max_workers: Maximum number of concurrent threads for API calls
+            
         Returns:
             DataFrame with status-focused columns
         """
-        df = self.get_latest_dataframe()
+        df = self.get_latest_dataframe(max_workers=max_workers)
         
         if df.empty:
             return df
@@ -951,7 +998,7 @@ class TestSuite:
         
         # Add formatted languages
         df['languages_formatted'] = df['detected_languages'].apply(
-            lambda x: self.format_languages(x) if pd.notna(x) and x else "No languages detected"
+            lambda x: self.format_languages(x) if pd.notna(x) and (isinstance(x, list) and len(x) > 0) else "No languages detected"
         )
         
         # Add latency column: last_transition_time - t0
@@ -968,7 +1015,7 @@ class TestSuite:
         status_cols = [
             'bot_id', 'platform', 'meeting_status', 'current_status', 'created',
             'segments_count', 'detected_languages', 'languages_count', 'languages_formatted',
-            'transcription_latency', 'latency',
+            'transcription_latency', 'active_to_first_transcript', 'latency',
             'time_0_to_requested', 'time_requested_to_joining',
             'time_joining_to_awaiting_admission', 'time_awaiting_admission_to_active',
             'last_segment_time', 'last_segment_end_time', 'last_transition_time',

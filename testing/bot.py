@@ -13,6 +13,10 @@ import pandas as pd
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Dict, Any, List
+import sys
+import os
+# Use the fixed PyPI client
+sys.path.insert(0, '/Users/dmitriygrankin/dev/vexa-pypi-client')
 from vexa_client import VexaClient
 from vexa_client.vexa import parse_url
 from core import get_transcript
@@ -70,7 +74,7 @@ class Bot:
             )
         
         try:
-            with ThreadPoolExecutor(max_workers=1) as executor:
+            with ThreadPoolExecutor(max_workers=3) as executor:
                 future = executor.submit(_create_bot)
                 self.meeting_info = future.result()
             self.created = True
@@ -95,7 +99,7 @@ class Bot:
             )
         
         try:
-            with ThreadPoolExecutor(max_workers=1) as executor:
+            with ThreadPoolExecutor(max_workers=3) as executor:
                 future = executor.submit(_get_transcript)
                 transcript = future.result()
             
@@ -141,7 +145,7 @@ class Bot:
             )
         
         try:
-            with ThreadPoolExecutor(max_workers=1) as executor:
+            with ThreadPoolExecutor(max_workers=3) as executor:
                 future = executor.submit(_get_meeting_status)
                 return future.result()
         except Exception as e:
@@ -165,7 +169,7 @@ class Bot:
             )
         
         try:
-            with ThreadPoolExecutor(max_workers=1) as executor:
+            with ThreadPoolExecutor(max_workers=3) as executor:
                 future = executor.submit(_stop_bot)
                 result = future.result()
             self.created = False
@@ -196,7 +200,7 @@ class Bot:
             )
         
         try:
-            with ThreadPoolExecutor(max_workers=1) as executor:
+            with ThreadPoolExecutor(max_workers=3) as executor:
                 future = executor.submit(_update_config)
                 return future.result()
         except Exception as e:
