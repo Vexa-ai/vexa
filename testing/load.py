@@ -5,19 +5,59 @@ This class provides:
 - User creation and management
 - Random user-meeting mapping
 - Bot lifecycle management
-- Background monitoring capabilities
 - Snapshot and pandas integration for notebook use
 """
 
 import time
 import random
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 import pandas as pd
 
 from vexa_client import VexaClient
 from bot import Bot
+
+
+def create_thread_safe_session():
+    """
+    Create a thread-safe requests session with proper SSL handling.
+    
+    Returns:
+        requests.Session with thread-safe configuration
+    """
+    import requests
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.retry import Retry
+    
+    session = requests.Session()
+    
+    # Configure retry strategy
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+    )
+    
+    # Create adapter with retry strategy
+    adapter = HTTPAdapter(
+        max_retries=retry_strategy,
+        pool_connections=10,
+        pool_maxsize=20
+    )
+    
+    # Mount adapter for both HTTP and HTTPS
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    
+    # Set headers
+    session.headers.update({
+        'User-Agent': 'Vexa-TestSuite/1.0',
+        'Connection': 'close'  # Prevent connection reuse issues
+    })
+    
+    return session
 
 
 class TestSuite:
@@ -35,23 +75,23 @@ class TestSuite:
     def __init__(self, 
                  base_url: str = "http://localhost:18056",
                  admin_api_key: Optional[str] = None,
-                 poll_interval: float = 2.0):
+                 use_thread_safe_sessions: bool = True):
         """
         Initialize the TestSuite.
         
         Args:
             base_url: Base URL for the Vexa API
             admin_api_key: Admin API key for user creation
-            poll_interval: Interval between monitoring polls (seconds)
+            use_thread_safe_sessions: Whether to use thread-safe session management
         """
         self.base_url = base_url
         self.admin_api_key = admin_api_key
-        self.poll_interval = poll_interval
+        self.use_thread_safe_sessions = use_thread_safe_sessions
         
         # Initialize admin client if API key provided
         self.admin_client = None
         if admin_api_key:
-            self.admin_client = VexaClient(
+            self.admin_client = self._create_vexa_client(
                 base_url=base_url,
                 admin_key=admin_api_key
             )
@@ -60,9 +100,26 @@ class TestSuite:
         self.users: List[VexaClient] = []
         self.bots: List[Bot] = []
         self.user_meeting_mapping: Dict[int, str] = {}  # user_index -> meeting_url
-        self.monitoring = False
-        self.monitor_thread = None
-        self.polls: List[Dict[str, Any]] = []  # Store all poll data with timestamps
+    
+    def _create_vexa_client(self, base_url: str, api_key: Optional[str] = None, 
+                           admin_key: Optional[str] = None, user_id: Optional[str] = None) -> VexaClient:
+        """
+        Create a VexaClient instance.
+        
+        Args:
+            base_url: Base URL for the Vexa API
+            api_key: User API key
+            admin_key: Admin API key
+            user_id: User ID (not used by VexaClient constructor)
+            
+        Returns:
+            VexaClient instance
+        """
+        return VexaClient(
+            base_url=base_url,
+            api_key=api_key,
+            admin_key=admin_key
+        )
         
     def create_users(self, num_users: int) -> List[VexaClient]:
         """
@@ -94,7 +151,7 @@ class TestSuite:
                 user_api_key = token_info['token']
                 
                 # Create user client
-                user_client = VexaClient(
+                user_client = self._create_vexa_client(
                     base_url=self.base_url,
                     api_key=user_api_key,
                     user_id=user_data['id']
@@ -144,7 +201,7 @@ class TestSuite:
                 user_api_key = token_info['token']
                 
                 # Create user client
-                user_client = VexaClient(
+                user_client = self._create_vexa_client(
                     base_url=self.base_url,
                     api_key=user_api_key,
                     user_id=user_data['id']
@@ -329,13 +386,16 @@ class TestSuite:
         print(f"Successfully created {len(new_bots)} additional bots. Total bots: {len(self.bots)}")
         return new_bots
     
-    def start_all_bots(self, language: str = 'en', task: str = 'transcribe') -> List[Dict[str, Any]]:
+    def start_all_bots(self, language: str = 'en', task: str = 'transcribe', max_workers: int = 5, 
+                      distribution_seconds: float = 0.0) -> List[Dict[str, Any]]:
         """
-        Start all bots by calling create() on each one.
+        Start all bots by calling create() on each one using threading with random time distribution.
         
         Args:
             language: Language code for transcription
             task: Transcription task
+            max_workers: Maximum number of concurrent threads
+            distribution_seconds: Random delay range in seconds (0.0 = no delay, 5.0 = 0-5s random delay)
             
         Returns:
             List of meeting info dictionaries from bot creation
@@ -343,29 +403,52 @@ class TestSuite:
         if not self.bots:
             raise Exception("No bots created. Call create_bots() first.")
         
-        print(f"Starting {len(self.bots)} bots...")
+        if distribution_seconds > 0:
+            print(f"Starting {len(self.bots)} bots using {max_workers} threads with {distribution_seconds}s random distribution...")
+        else:
+            print(f"Starting {len(self.bots)} bots using {max_workers} threads...")
+        
         results = []
         
-        for bot in self.bots:
+        def start_bot_with_delay(bot):
             try:
+                # Add random delay if distribution_seconds > 0
+                if distribution_seconds > 0:
+                    delay = random.uniform(0, distribution_seconds)
+                    time.sleep(delay)
+                    print(f"Started bot {bot.bot_id} (after {delay:.2f}s delay)")
+                else:
+                    print(f"Started bot {bot.bot_id}")
+                
                 meeting_info = bot.create(language=language, task=task)
-                results.append(meeting_info)
-                print(f"Started bot {bot.bot_id}")
+                return {'bot_id': bot.bot_id, 'result': meeting_info}
             except Exception as e:
                 print(f"Failed to start bot {bot.bot_id}: {e}")
-                results.append({'error': str(e)})
+                return {'bot_id': bot.bot_id, 'error': str(e)}
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all bot start tasks
+            future_to_bot = {executor.submit(start_bot_with_delay, bot): bot for bot in self.bots}
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_bot):
+                result = future.result()
+                results.append(result.get('result', result.get('error')))
         
         print(f"Successfully started {len([r for r in results if 'error' not in r])} bots")
         return results
     
-    def start_new_bots(self, new_bots: List[Bot], language: str = 'en', task: str = 'transcribe') -> List[Dict[str, Any]]:
+    def start_new_bots(self, new_bots: List[Bot], language: str = 'en', task: str = 'transcribe', max_workers: int = 5,
+                      distribution_seconds: float = 0.0) -> List[Dict[str, Any]]:
         """
-        Start only the newly created bots.
+        Start only the newly created bots using threading with random time distribution.
         
         Args:
             new_bots: List of newly created Bot instances
             language: Language code for transcription
             task: Transcription task
+            max_workers: Maximum number of concurrent threads
+            distribution_seconds: Random delay range in seconds (0.0 = no delay, 5.0 = 0-5s random delay)
             
         Returns:
             List of meeting info dictionaries from bot creation
@@ -374,17 +457,37 @@ class TestSuite:
             print("No new bots to start")
             return []
         
-        print(f"Starting {len(new_bots)} new bots...")
+        if distribution_seconds > 0:
+            print(f"Starting {len(new_bots)} new bots using {max_workers} threads with {distribution_seconds}s random distribution...")
+        else:
+            print(f"Starting {len(new_bots)} new bots using {max_workers} threads...")
+        
         results = []
         
-        for bot in new_bots:
+        def start_bot_with_delay(bot):
             try:
+                # Add random delay if distribution_seconds > 0
+                if distribution_seconds > 0:
+                    delay = random.uniform(0, distribution_seconds)
+                    time.sleep(delay)
+                    print(f"Started new bot {bot.bot_id} (after {delay:.2f}s delay)")
+                else:
+                    print(f"Started new bot {bot.bot_id}")
+                
                 meeting_info = bot.create(language=language, task=task)
-                results.append(meeting_info)
-                print(f"Started new bot {bot.bot_id}")
+                return {'bot_id': bot.bot_id, 'result': meeting_info}
             except Exception as e:
                 print(f"Failed to start new bot {bot.bot_id}: {e}")
-                results.append({'error': str(e)})
+                return {'bot_id': bot.bot_id, 'error': str(e)}
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all bot start tasks
+            future_to_bot = {executor.submit(start_bot_with_delay, bot): bot for bot in new_bots}
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_bot):
+                result = future.result()
+                results.append(result.get('result', result.get('error')))
         
         print(f"Successfully started {len([r for r in results if 'error' not in r])} new bots")
         return results
@@ -456,71 +559,47 @@ class TestSuite:
             'new_bots': new_bots
         }
     
-    def stop_all_bots(self) -> List[Dict[str, str]]:
+    def stop_all_bots(self, max_workers: int = 5) -> List[Dict[str, str]]:
         """
-        Stop all running bots.
+        Stop all running bots using threading.
         
+        Args:
+            max_workers: Maximum number of concurrent threads
+            
         Returns:
             List of stop confirmation messages
         """
         if not self.bots:
             raise Exception("No bots created.")
         
-        print(f"Stopping {len(self.bots)} bots...")
+        print(f"Stopping {len(self.bots)} bots using {max_workers} threads...")
         results = []
         
-        for bot in self.bots:
+        def stop_bot(bot):
             try:
                 if bot.created:
                     result = bot.stop()
-                    results.append(result)
                     print(f"Stopped bot {bot.bot_id}")
+                    return {'bot_id': bot.bot_id, 'result': result}
                 else:
                     print(f"Bot {bot.bot_id} was not running")
-                    results.append({'message': 'Bot was not running'})
+                    return {'bot_id': bot.bot_id, 'result': {'message': 'Bot was not running'}}
             except Exception as e:
                 print(f"Failed to stop bot {bot.bot_id}: {e}")
-                results.append({'error': str(e)})
+                return {'bot_id': bot.bot_id, 'error': str(e)}
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all bot stop tasks
+            future_to_bot = {executor.submit(stop_bot, bot): bot for bot in self.bots}
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_bot):
+                result = future.result()
+                results.append(result.get('result', result.get('error')))
         
         return results
     
-    def start_monitoring(self) -> None:
-        """
-        Start background monitoring of all bots.
-        Records actual timestamps in polls[] for latency calculations.
-        """
-        if self.monitoring:
-            print("Monitoring already running")
-            return
-        
-        print("Starting background monitoring...")
-        self.monitoring = True
-        self.monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
-        self.monitor_thread.start()
-        print("Background monitoring started")
-    
-    def stop_monitoring(self) -> None:
-        """Stop background monitoring."""
-        if not self.monitoring:
-            print("Monitoring not running")
-            return
-        
-        print("Stopping background monitoring...")
-        self.monitoring = False
-        if self.monitor_thread:
-            self.monitor_thread.join(timeout=5)
-        print("Background monitoring stopped")
-    
-    def _monitor_loop(self) -> None:
-        """Internal monitoring loop that runs in background thread."""
-        while self.monitoring:
-            try:
-                poll_data = self.snapshot()
-                self.polls.append(poll_data)
-                time.sleep(self.poll_interval)
-            except Exception as e:
-                print(f"Error in monitoring loop: {e}")
-                time.sleep(self.poll_interval)
+    # Monitoring/polling removed; snapshots are computed on demand
     
     def snapshot(self) -> Dict[str, Any]:
         """
@@ -546,11 +625,22 @@ class TestSuite:
                 if bot.created:
                     try:
                         transcript = bot.get_transcript()
+                        segments = transcript.get('segments', [])
+                        # Compute first/last segment absolute times using provided absolute timestamps only
+                        first_segment_time = None
+                        last_segment_start_time = None
+                        last_segment_end_time = None
+                        if segments:
+                            first_segment_time = segments[0].get('absolute_start_time')
+                            last_segment_start_time = segments[-1].get('absolute_start_time')
+                            last_segment_end_time = segments[-1].get('absolute_end_time')
                         transcript_data = {
-                            'segments': transcript.get('segments', []),
-                            'segments_count': len(transcript.get('segments', [])),
-                            'has_transcript': len(transcript.get('segments', [])) > 0,
-                            'last_segment_time': transcript.get('segments', [{}])[-1].get('absolute_start_time') if transcript.get('segments') else None
+                            'segments': segments,
+                            'segments_count': len(segments),
+                            'has_transcript': len(segments) > 0,
+                            'first_segment_time': first_segment_time,
+                            'last_segment_time': last_segment_start_time,
+                            'last_segment_end_time': last_segment_end_time
                         }
                     except Exception as e:
                         transcript_data = {'error': str(e)}
@@ -589,9 +679,8 @@ class TestSuite:
             List of dictionaries suitable for pandas DataFrame
         """
         if snapshot_data is None:
-            if not self.polls:
-                return []
-            snapshot_data = self.polls[-1]
+            # Compute a fresh snapshot if none provided
+            snapshot_data = self.snapshot()
         
         rows = []
         for bot_data in snapshot_data['bots']:
@@ -627,48 +716,88 @@ class TestSuite:
                 row.update({
                     'segments_count': len(segments),
                     'has_transcript': len(segments) > 0,
-                    'last_segment_time': segments[-1].get('absolute_start_time') if segments else None,
+                    'first_segment_time': transcript.get('first_segment_time'),
+                    'last_segment_time': transcript.get('last_segment_time'),
+                    'last_segment_end_time': transcript.get('last_segment_end_time'),
                     'transcript_error': transcript.get('error'),
                     'detected_languages': list(languages) if languages else [],
                     'languages_count': len(languages)
                 })
-                
-                # Calculate transcription latency if we have segments
-                if segments and segments[-1].get('absolute_start_time'):
-                    try:
-                        from datetime import datetime
-                        import pandas as pd
-                        
-                        # Parse the last segment time and duration
-                        last_segment = segments[-1]
-                        last_segment_time = last_segment['absolute_start_time']
-                        segment_start_dt = pd.to_datetime(last_segment_time)
-                        
-                        # Calculate segment end time (start + duration)
-                        segment_duration = last_segment.get('end_time', 0) - last_segment.get('start_time', 0)
-                        segment_end_dt = segment_start_dt + pd.Timedelta(seconds=segment_duration)
-                        
-                        # Calculate latency from current time to segment completion
-                        current_time = pd.Timestamp.now(tz='UTC')
-                        latency_seconds = (current_time - segment_end_dt).total_seconds()
-                        
-                        row['transcription_latency'] = latency_seconds
-                    except Exception as e:
-                        row['transcription_latency'] = None
-                else:
-                    row['transcription_latency'] = None
             
-            # Add status transition data if available
-            if bot_data.get('status_transitions'):
-                transitions = bot_data['status_transitions']
-                row.update({
-                    'status_transitions_count': len(transitions),
-                    'current_status': transitions[-1]['to'] if transitions else None,
-                    'initial_status': transitions[0]['from'] if transitions else None,
-                    'last_transition_time': transitions[-1]['timestamp'] if transitions else None,
-                    'completion_reason': transitions[-1].get('completion_reason') if transitions else None,
-                    'status_transitions': transitions  # Keep full data for detailed analysis
-                })
+            # Compute baseline t0 and status transition durations
+            # t0 preference: created_at if present else first transition timestamp
+            transitions = bot_data.get('status_transitions') or []
+            t0 = None
+            try:
+                import pandas as pd
+                if bot_data.get('created_at'):
+                    t0 = pd.to_datetime(bot_data['created_at'])
+                elif transitions:
+                    first_ts = transitions[0].get('timestamp')
+                    t0 = pd.to_datetime(first_ts) if first_ts else None
+            except Exception:
+                t0 = None
+            row['t0'] = t0.isoformat() if t0 is not None else None
+            
+            # Determine milestone timestamps
+            joining_ts = None
+            awaiting_admission_ts = None
+            active_ts = None
+            requested_ts = None
+            try:
+                for tr in transitions:
+                    to_state = tr.get('to')
+                    ts = tr.get('timestamp')
+                    ts_dt = pd.to_datetime(ts) if ts else None
+                    if to_state == 'joining' and joining_ts is None:
+                        joining_ts = ts_dt
+                        # If the first transition is from requested, infer requested at created_at
+                        if tr.get('from') == 'requested' and bot_data.get('created_at'):
+                            requested_ts = pd.to_datetime(bot_data['created_at'])
+                    elif to_state == 'awaiting_admission' and awaiting_admission_ts is None:
+                        awaiting_admission_ts = ts_dt
+                    elif to_state == 'active' and active_ts is None:
+                        active_ts = ts_dt
+            except Exception:
+                pass
+            
+            # Compute durations in seconds
+            def diff_seconds(a, b):
+                try:
+                    if a is None or b is None:
+                        return None
+                    return (b - a).total_seconds()
+                except Exception:
+                    return None
+            
+            row['time_0_to_requested'] = diff_seconds(t0, requested_ts) if requested_ts is not None else (0.0 if t0 is not None and requested_ts is None and transitions and transitions[0].get('from') == 'requested' else None)
+            row['time_requested_to_joining'] = diff_seconds(requested_ts, joining_ts)
+            row['time_joining_to_awaiting_admission'] = diff_seconds(joining_ts, awaiting_admission_ts)
+            row['time_awaiting_admission_to_active'] = diff_seconds(awaiting_admission_ts, active_ts)
+            
+            # Current/last status
+            if transitions:
+                row['current_status'] = transitions[-1].get('to')
+                row['initial_status'] = transitions[0].get('from')
+                row['last_transition_time'] = transitions[-1].get('timestamp')
+            else:
+                row['current_status'] = bot_data.get('meeting_status')
+                row['initial_status'] = None
+                row['last_transition_time'] = None
+            row['status_transitions'] = transitions if transitions else None
+            row['status_transitions_count'] = len(transitions) if transitions else 0
+            row['completion_reason'] = transitions[-1].get('completion_reason') if transitions else None
+            
+            # Transcription latency: from t0 to first transcript start
+            first_segment_time = row.get('first_segment_time')
+            if t0 is not None and first_segment_time:
+                try:
+                    first_dt = pd.to_datetime(first_segment_time)
+                    row['transcription_latency'] = (first_dt - t0).total_seconds()
+                except Exception:
+                    row['transcription_latency'] = None
+            else:
+                row['transcription_latency'] = None
             
             rows.append(row)
         
@@ -681,32 +810,14 @@ class TestSuite:
         Returns:
             DataFrame with latest bot states
         """
-        if not self.polls:
-            return pd.DataFrame()
-        
-        rows = self.parse_for_pandas()
+        # Compute a fresh snapshot on demand
+        snapshot = self.snapshot()
+        rows = self.parse_for_pandas(snapshot)
         return pd.DataFrame(rows)
-    
-    def get_all_dataframe(self) -> pd.DataFrame:
-        """
-        Get all monitoring data as a pandas DataFrame.
-        
-        Returns:
-            DataFrame with all historical bot states
-        """
-        all_rows = []
-        for poll in self.polls:
-            rows = self.parse_for_pandas(poll)
-            all_rows.extend(rows)
-        
-        return pd.DataFrame(all_rows)
     
     def cleanup(self) -> None:
         """Clean up all resources (stop monitoring, stop bots, etc.)."""
         print("Cleaning up TestSuite...")
-        
-        # Stop monitoring
-        self.stop_monitoring()
         
         # Stop all bots
         if self.bots:
@@ -725,19 +836,18 @@ class TestSuite:
             'total_users': len(self.users),
             'total_bots': len(self.bots),
             'created_bots': len([b for b in self.bots if b.created]),
-            'monitoring_active': self.monitoring,
-            'total_polls': len(self.polls),
             'user_meeting_mapping': self.user_meeting_mapping
         }
-        
-        if self.polls:
-            latest_poll = self.polls[-1]
-            summary['latest_poll_time'] = latest_poll['datetime']
+        # Calculate a quick snapshot-based metric
+        try:
+            snap = self.snapshot()
+            summary['latest_snapshot_time'] = snap.get('datetime')
             summary['bots_with_transcripts'] = len([
-                b for b in latest_poll['bots'] 
+                b for b in snap.get('bots', [])
                 if b.get('transcript', {}).get('has_transcript', False)
             ])
-        
+        except Exception:
+            pass
         return summary
     
     def format_status_transitions(self, transitions: List[Dict[str, Any]]) -> str:
@@ -844,13 +954,25 @@ class TestSuite:
             lambda x: self.format_languages(x) if pd.notna(x) and x else "No languages detected"
         )
         
+        # Add latency column: last_transition_time - t0
+        df['latency'] = pd.to_datetime(df['last_transition_time']) - pd.to_datetime(df['t0'])
+        
+        # Convert all timestamp columns to datetime
+        timestamp_cols = ['t0', 'created_at', 'end_time', 'first_transcript_time', 'last_transcript_time', 
+                         'first_segment_time', 'last_segment_time', 'last_segment_end_time', 'last_transition_time']
+        for col in timestamp_cols:
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col])
+        
         # Select relevant columns for status monitoring
         status_cols = [
-            'bot_id', 'platform', 'created', 'current_status', 'initial_status',
-            'status_transitions_count', 'completion_reason', 'status_flow',
-            'segments_count', 'has_transcript', 'last_transition_time',
-            'detected_languages', 'languages_count', 'languages_formatted',
-            'transcription_latency', 'last_segment_time'
+            'bot_id', 'platform', 'meeting_status', 'current_status', 'created',
+            'segments_count', 'detected_languages', 'languages_count', 'languages_formatted',
+            'transcription_latency', 'latency',
+            'time_0_to_requested', 'time_requested_to_joining',
+            'time_joining_to_awaiting_admission', 'time_awaiting_admission_to_active',
+            'last_segment_time', 'last_segment_end_time', 'last_transition_time',
+            'status_transitions_count', 'completion_reason', 'status_flow'
         ]
         
         # Only include columns that exist
