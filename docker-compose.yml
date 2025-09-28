@@ -111,12 +111,12 @@ services:
       - "9090" #use for transcription web socket
       - "9091" #use for health check
     deploy:
-      replicas: 2
+      replicas: 1
       resources:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["0"] # Ensure this is configurable or correct for your setup
+              device_ids: ["3"] # Ensure this is configurable or correct for your setup
               capabilities: [gpu]
     init: true
     depends_on:

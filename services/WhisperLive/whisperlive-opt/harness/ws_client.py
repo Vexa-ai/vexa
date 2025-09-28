@@ -284,6 +284,18 @@ class WhisperLiveClient:
                                 self.metrics.transcript_events_list.append(event)
                                 self.metrics.window_events.append(event)
                                 
+                                # Real-time transcript logging
+                                status = "[FINAL]" if is_final else "[PARTIAL]"
+                                timing = ""
+                                if event.start_time and event.end_time:
+                                    try:
+                                        start = float(event.start_time)
+                                        end = float(event.end_time)
+                                        timing = f"({start:.3f}-{end:.3f})"
+                                    except (ValueError, TypeError):
+                                        timing = f"({event.start_time}-{event.end_time})"
+                                print(f"🎤 {self.conn_id} {status} {timing}: \"{text}\"")
+                                
                                 # Estimate latency (rough approximation)
                                 if self.metrics.last_frame_sent > 0:
                                     latency = event.timestamp - self.metrics.last_frame_sent

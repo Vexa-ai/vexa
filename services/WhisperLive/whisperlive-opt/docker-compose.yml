@@ -20,8 +20,9 @@ services:
       - "9090:9090"
     environment:
       - WL_LOG_LEVEL=INFO
-      - WL_LOG_TRANSCRIPTS=false
+      - WL_LOG_TRANSCRIPTS=true
       - WL_LOG_TRANSCRIPT_SUMMARY=true
+      - CUDA_VISIBLE_DEVICES=2
       # Server parameters can be set via environment variables
       - WL_COMPUTE_TYPE=float16
       - WL_BEAM_SIZE=1

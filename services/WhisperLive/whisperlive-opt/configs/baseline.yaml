@@ -19,7 +19,7 @@ run:
   concurrency: 2                  # Number of concurrent connections (optimal from previous tests)
   frame_ms: 20                    # Audio frame size in milliseconds
   warmup_s: 2                     # Warmup duration in seconds (reduced for faster testing)
-  run_s: 10                       # Main test duration in seconds (reduced for faster testing)
+  run_s: 60                       # Main test duration in seconds (reduced for faster testing)
   cooldown_s: 2                   # Cooldown duration in seconds (reduced for faster testing)
   repeat_audio: true              # Repeat audio samples if needed
   shuffle_audio: true             # Shuffle audio sample order
@@ -43,7 +43,7 @@ quality:
 
 # Advanced settings
 advanced:
-  max_concurrent_connections: 10  # Max concurrent client connections
+  max_concurrent_connections: 1000  # Max concurrent client connections
   connection_jitter_ms: 100       # Jitter between connection starts (ms)
   metrics_sample_rate: 1.0        # Metrics sampling rate (Hz)
   steady_state_window: 20         # Steady state detection window (seconds)
