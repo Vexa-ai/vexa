@@ -6,6 +6,8 @@ transcription, and voice activity detection behavior. Modifying these values
 allows for fine-tuning the server's performance and transcription latency.
 """
 
+import os
+
 # Audio Buffer Settings
 # ---------------------
 # These settings control the behavior of the server's audio buffer. The server
@@ -83,4 +85,15 @@ SHOW_PREV_OUT_THRESH_S = 5
 # If there has been no speech for this duration (in seconds), an empty string is
 # added to the transcript. This helps to visually represent a pause in the
 # conversation.
-ADD_PAUSE_THRESH_S = 3 
+ADD_PAUSE_THRESH_S = 3
+
+
+# Transcription Model Settings
+# ----------------------------
+# These settings control the behavior of the Whisper transcription model.
+
+# Beam size for decoding. A smaller value (1) uses greedy decoding for faster
+# processing, while larger values (5) use beam search for potentially better
+# quality but slower processing. For real-time applications, beam_size=1 is
+# recommended for optimal performance.
+BEAM_SIZE = 1 # default 5

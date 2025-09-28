@@ -18,6 +18,8 @@ import tokenizers
 
 from tqdm import tqdm
 
+from . import settings
+
 from faster_whisper.audio import decode_audio, pad_or_trim
 from faster_whisper.feature_extractor import FeatureExtractor
 from faster_whisper.tokenizer import _LANGUAGE_CODES, Tokenizer
@@ -260,7 +262,7 @@ class BatchedInferencePipeline:
         language: Optional[str] = None,
         task: str = "transcribe",
         log_progress: bool = False,
-        beam_size: int = 5,
+        beam_size: int = settings.BEAM_SIZE,
         best_of: int = 5,
         patience: float = 1,
         length_penalty: float = 1,
@@ -717,7 +719,7 @@ class WhisperModel:
         language: Optional[str] = None,
         task: str = "transcribe",
         log_progress: bool = False,
-        beam_size: int = 5,
+        beam_size: int = settings.BEAM_SIZE,
         best_of: int = 5,
         patience: float = 1,
         length_penalty: float = 1,
