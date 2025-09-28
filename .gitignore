@@ -133,3 +133,13 @@ hub/
 
 # Image files
 *.png
+
+# WhisperLive optimization outputs
+data/
+results/
+test_data/
+*.wav
+*.webm
+*.mp4
+*.txt
+manifest.csv

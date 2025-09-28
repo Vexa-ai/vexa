@@ -1,0 +1,48 @@
+# Docker Configuration for WhisperLive Optimization Testing
+# Optimized for containerized deployment
+
+server:
+  ws_url: "ws://whisperlive-server:9090/ws"  # Docker service name
+  # auth_header: "X-API-Key: your-api-key-here"  # Optional
+  language: "en"
+  model: "small"
+  # Server parameters are set via docker-compose environment variables
+  # WL_COMPUTE_TYPE=float16
+  # WL_BEAM_SIZE=1
+  # WL_NUM_WORKERS=4
+  # WL_MIN_AUDIO_S=1.0
+  # WL_VAD_ONSET=0.5
+  # WL_VAD_NO_SPEECH_THRESH=0.5
+
+run:
+  concurrency: 32                 # Number of concurrent connections
+  frame_ms: 20                    # Audio frame size in milliseconds
+  warmup_s: 20                    # Warmup duration in seconds
+  run_s: 120                      # Main test duration in seconds
+  cooldown_s: 10                  # Cooldown duration in seconds
+  repeat_audio: true              # Repeat audio samples if needed
+  shuffle_audio: true             # Shuffle audio sample order
+  per_conn_seed: true             # Use fixed seed for reproducibility
+
+data:
+  manifest: "data/manifest.csv"   # Path to audio manifest file
+
+metrics:
+  lambda: 0.5                     # Penalty weight for standard deviation
+  latency_slo: 2.0               # Latency SLO threshold in seconds
+  drop_slo: 0.02                 # Drop rate SLO threshold (2%)
+  gpu_sample_s: 1.0              # GPU metrics sampling interval
+
+quality:
+  enable_simple: true             # Enable simple text quality metrics
+  enable_llm: false              # Enable LLM judge assessment
+  llm_provider: "openai"         # LLM provider (openai, anthropic)
+  llm_model: "gpt-4o-mini"       # LLM model to use
+  judge_prompt_path: "configs/judge_prompt.md"  # Path to judge prompt template
+
+# Docker-specific settings
+docker:
+  network_mode: "whisperlive-network"  # Docker network name
+  wait_for_server: true               # Wait for server to be ready
+  server_timeout: 60                  # Server startup timeout (seconds)
+  health_check_interval: 5            # Health check interval (seconds)

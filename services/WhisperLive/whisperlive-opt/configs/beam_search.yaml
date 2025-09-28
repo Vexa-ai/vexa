@@ -1,0 +1,51 @@
+# Beam Search Configuration for WhisperLive Optimization Testing
+# Optimized for quality with beam_size=5, best_of=5
+
+server:
+  ws_url: "ws://localhost:9090/ws"
+  # auth_header: "X-API-Key: your-api-key-here"  # Optional
+  language: "en"
+  model: "small"
+  # Beam search parameters (set via environment variables)
+  # compute_type: "float16"        # Higher precision for better quality
+  # beam_size: 5                   # Beam search with 5 beams
+  # best_of: 5                     # Select best from 5 candidates
+  # temperature: 0.0               # Deterministic output
+  # num_workers: 2                 # Fewer workers to avoid resource contention
+  # min_audio_s: 2.0              # Longer minimum for better context
+  # vad_onset: 0.6                # Less sensitive VAD for stability
+  # vad_no_speech_thresh: 0.3     # Conservative VAD thresholds
+
+run:
+  concurrency: 16                 # Lower concurrency for beam search
+  frame_ms: 20                    # Audio frame size in milliseconds
+  warmup_s: 30                    # Longer warmup for beam search
+  run_s: 120                      # Main test duration in seconds
+  cooldown_s: 15                  # Longer cooldown
+  repeat_audio: true              # Repeat audio samples if needed
+  shuffle_audio: true             # Shuffle audio sample order
+  per_conn_seed: true             # Use fixed seed for reproducibility
+
+data:
+  manifest: "data/manifest.csv"   # Path to audio manifest file
+
+metrics:
+  lambda: 0.7                     # Higher penalty weight for beam search
+  latency_slo: 3.0               # More lenient latency SLO for beam search
+  drop_slo: 0.03                 # More lenient drop rate SLO (3%)
+  gpu_sample_s: 1.0              # GPU metrics sampling interval
+
+quality:
+  enable_simple: true             # Enable simple text quality metrics
+  enable_llm: true               # Enable LLM judge assessment for quality
+  llm_provider: "openai"         # LLM provider (openai, anthropic)
+  llm_model: "gpt-4o-mini"       # LLM model to use
+  judge_prompt_path: "configs/judge_prompt.md"  # Path to judge prompt template
+
+# Advanced settings for beam search
+advanced:
+  max_concurrent_connections: 5   # Lower concurrency for beam search
+  connection_jitter_ms: 200       # More jitter for stability
+  metrics_sample_rate: 0.5        # Lower sampling rate for beam search
+  steady_state_window: 30         # Longer steady state window
+  steady_state_threshold: 0.02    # Lower threshold for beam search

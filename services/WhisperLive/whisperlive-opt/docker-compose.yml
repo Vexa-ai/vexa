@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  # Redis service for WhisperLive
+  redis:
+    image: redis:7-alpine
+    container_name: whisperlive-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - whisperlive-network
+
+  # WhisperLive GPU Server
+  whisperlive-server:
+    build:
+      context: ../
+      dockerfile: docker/Dockerfile.gpu
+    container_name: whisperlive-server
+    ports:
+      - "9090:9090"
+    environment:
+      - WL_LOG_LEVEL=INFO
+      - WL_LOG_TRANSCRIPTS=false
+      - WL_LOG_TRANSCRIPT_SUMMARY=true
+      # Server parameters can be set via environment variables
+      - WL_COMPUTE_TYPE=float16
+      - WL_BEAM_SIZE=1
+      - WL_NUM_WORKERS=4
+      - WL_MIN_AUDIO_S=1.0
+      # Redis configuration
+      - REDIS_STREAM_URL=redis://redis:6379/0
+      - REDIS_URL=redis://redis:6379/0
+      # Disable Redis monitoring for testing
+      - WL_DISABLE_SELF_MONITOR=true
+      # Use GPU 0 (like in main system)
+      - CUDA_VISIBLE_DEVICES=0
+    volumes:
+      - whisperlive_models:/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    networks:
+      - whisperlive-network
+    depends_on:
+      - redis
+    command: ["python", "run_server.py", "--port", "9090", "--backend", "faster_whisper", "--vad_onset", "0.1", "--vad_no_speech_thresh", "0.3", "--min_audio_s", "0.5"]
+
+  # Optimization Harness
+  whisperlive-optimizer:
+    build:
+      context: ./
+      dockerfile: Dockerfile
+    container_name: whisperlive-optimizer
+    volumes:
+      - ./data:/app/data
+      - ./results:/app/results
+      - ./configs:/app/configs
+      - ./scripts:/app/scripts
+      - ./cache:/app/cache
+    environment:
+      - WHISPER_SERVER_URL=ws://whisperlive-server:9090/ws
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    networks:
+      - whisperlive-network
+    depends_on:
+      - whisperlive-server
+      - redis
+    profiles:
+      - optimizer
+
+  # Development environment with both services
+  whisperlive-dev:
+    extends:
+      service: whisperlive-server
+    container_name: whisperlive-dev
+    profiles:
+      - dev
+
+volumes:
+  whisperlive_models:
+    driver: local
+
+networks:
+  whisperlive-network:
+    driver: bridge

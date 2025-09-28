@@ -1,0 +1,78 @@
+# Parameter Sweep Configuration for WhisperLive Optimization Testing
+# Sweeps num_workers parameter to find optimal value
+
+# Base configuration (applied to all runs)
+base_config:
+  server:
+    ws_url: "ws://localhost:9090/ws"
+    language: "en"
+    model: "small"
+    # compute_type: "float16"
+    # beam_size: 1
+    # min_audio_s: 1.0
+    # vad_onset: 0.5
+    # vad_no_speech_thresh: 0.5
+
+  run:
+    concurrency: 32
+    frame_ms: 20
+    warmup_s: 20
+    run_s: 120
+    cooldown_s: 10
+    repeat_audio: true
+    shuffle_audio: true
+    per_conn_seed: true
+
+  data:
+    manifest: "data/manifest.csv"
+
+  metrics:
+    lambda: 0.5
+    latency_slo: 2.0
+    drop_slo: 0.02
+    gpu_sample_s: 1.0
+
+  quality:
+    enable_simple: true
+    enable_llm: false
+    llm_provider: "openai"
+    llm_model: "gpt-4o-mini"
+    judge_prompt_path: "configs/judge_prompt.md"
+
+# Parameter sweep definition
+sweep:
+  parameter: "num_workers"
+  values: [1, 2, 4, 6, 8, 12]
+  description: "Number of worker threads for parallel processing"
+  
+  # Alternative sweep configurations:
+  # parameter: "beam_size"
+  # values: [1, 2, 3, 4, 5]
+  # description: "Beam search size"
+  
+  # parameter: "compute_type"
+  # values: ["float16", "int8_float16", "int8"]
+  # description: "Computation precision"
+  
+  # parameter: "min_audio_s"
+  # values: [0.5, 1.0, 1.5, 2.0, 3.0]
+  # description: "Minimum audio length for transcription"
+
+# Sweep execution settings
+execution:
+  restart_server_between_runs: true    # Restart WhisperLive server between parameter values
+  server_restart_delay: 5.0           # Delay in seconds before starting next run
+  max_concurrent_runs: 1              # Run parameter values sequentially
+  timeout_per_run: 600                # Timeout per run in seconds (10 minutes)
+  
+  # Results aggregation
+  aggregate_results: true             # Create summary table of all runs
+  rank_by_metric: "composite_score"   # Primary metric for ranking (composite_score, throughput, quality)
+  secondary_metrics: ["throughput", "latency_p95", "quality_score"]  # Secondary metrics to display
+  
+# Output settings
+output:
+  results_dir: "results/sweep_num_workers"
+  summary_format: "markdown"          # markdown, csv, json
+  include_individual_results: true    # Keep individual run results
+  generate_plots: false               # Generate performance plots (requires matplotlib)
