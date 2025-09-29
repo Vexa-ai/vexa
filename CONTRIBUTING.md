@@ -3,7 +3,7 @@ Contributor License Agreement (CLA)
 To ensure that all contributions are legally clean and consistent with the Apache License 2.0
 , Vexa requires every contributor (individuals and corporations) to sign a Contributor License Agreement (CLA) before their first contribution is merged.
 
-Individuals: please review and sign the [Individual CLA](LA/Individual_CLA.md)
+Individuals: please review and sign the [Individual CLA](CLA/Individual_CLA.md)
 .
 
 Corporations: if you are contributing on behalf of your employer, please have an authorized representative review and sign the [Corporate CLA](CLA/Corporate_CLA.md)
