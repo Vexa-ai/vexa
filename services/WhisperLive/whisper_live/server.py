@@ -657,12 +657,8 @@ class TranscriptionServer:
         
         self._ws_url = f"ws://{self._pod_ip}:{self._listen_port}/ws"
         logging.info(f"🌐 WEBSOCKET URL CONFIGURED: {self._ws_url}")
-        logging.info(f"📡 THIS URL WILL BE REGISTERED TO REDIS: {self._ws_url}")
+        logging.info(f"🌐 WhisperLive WebSocket URL: {self._ws_url}")
         self._metric_stop_evt = threading.Event()
-        # Gate legacy Redis discovery with WL_REDIS_DISCOVERY_ENABLED
-        self._redis_discovery_enabled = os.getenv("WL_REDIS_DISCOVERY_ENABLED", "false").strip().lower() in ("1","true","yes","on")
-        if self._redis_discovery_enabled:
-            threading.Thread(target=self._metric_heartbeat, daemon=True).start()
         
         # Initialize Consul configuration
         self._consul_enabled = os.getenv("CONSUL_ENABLE", "false").strip().lower() in ("1", "true", "yes", "on")
@@ -679,55 +675,53 @@ class TranscriptionServer:
             logging.warning(f"Failed to register shutdown handlers: {exc}")
         # --- End WL Scaling block ---
 
-    # --- WL Scaling helper methods (class level) ---
-    def _metric_heartbeat(self):
-        """Background timer that refreshes Redis score + heartbeat every 15 s."""
-        scrub_every_n = 4  # ~60s if interval is 15s
-        tick = 0
-        while not self._metric_stop_evt.is_set():
-            self._publish_sessions_metric()
+    # --- Connection cleanup helper methods ---
+    def _cleanup_stale_connections(self):
+        """Remove stale WebSocket connections that are no longer active."""
+        if not self.client_manager:
+            return
+        
+        stale_websockets = []
+        for websocket in list(self.client_manager.clients.keys()):
             try:
-                if tick % scrub_every_n == 0:
-                    self._scrub_stale_servers()
-            except Exception as exc:
-                logging.warning(f"WhisperLive metric scrub failed: {exc}")
-            tick += 1
-            self._metric_stop_evt.wait(15)
+                # Check if websocket is still open
+                if hasattr(websocket, 'closed') and websocket.closed:
+                    stale_websockets.append(websocket)
+                    continue
+                    
+                # Check connection timeout
+                if self.client_manager.is_client_timeout(websocket):
+                    stale_websockets.append(websocket)
+                    continue
+                    
+            except Exception as e:
+                logging.warning(f"Error checking websocket health, marking as stale: {e}")
+                stale_websockets.append(websocket)
+        
+        # Remove stale connections
+        removed_count = 0
+        for websocket in stale_websockets:
+            try:
+                client = self.client_manager.clients.get(websocket)
+                client_uid = client.client_uid if client else 'unknown'
+                logging.info(f"Removing stale connection: {client_uid}")
+                self.client_manager.remove_client(websocket)
+                removed_count += 1
+            except Exception as e:
+                logging.warning(f"Error removing stale connection: {e}")
+        
+        if removed_count > 0:
+            logging.info(f"Cleaned up {removed_count} stale connections")
 
-    def _publish_sessions_metric(self):
-        """Update wl:rank sorted-set score and wl:hb:<url> heartbeat key."""
-        if not getattr(self, "_redis_discovery_enabled", False):
-            return
-        try:
-            current = len(self.client_manager.clients) if self.client_manager else 0
-            pipe = self._wl_redis.pipeline()
-            pipe.zadd("wl:rank", {self._ws_url: current})
-            pipe.setex(f"wl:hb:{self._ws_url}", 35, 1)
-            pipe.execute()
-        except Exception as exc:
-            logging.warning(f"WhisperLive metric publish failed: {exc}")
-    # --- End WL Scaling helper methods ---
-
-    def _scrub_stale_servers(self):
-        """Remove wl:rank members that do not have a live heartbeat."""
-        if not getattr(self, "_redis_discovery_enabled", False):
-            return
-        try:
-            members = self._wl_redis.zrange("wl:rank", 0, -1)
-            if not members:
-                return
-            removed = 0
-            pipe = self._wl_redis.pipeline()
-            for url in members:
-                url_str = url if isinstance(url, str) else str(url)
-                if not self._wl_redis.exists(f"wl:hb:{url_str}"):
-                    pipe.zrem("wl:rank", url_str)
-                    removed += 1
-            if removed:
-                logging.info(f"WL_SCRUB: Removed {removed} stale wl:rank members without heartbeats")
-            pipe.execute()
-        except Exception as exc:
-            logging.warning(f"WhisperLive scrub encountered an error: {exc}")
+    def _periodic_cleanup(self):
+        """Periodically clean up stale connections every 30 seconds."""
+        while not self._metric_stop_evt.is_set():
+            try:
+                self._cleanup_stale_connections()
+            except Exception as e:
+                logging.warning(f"Error in periodic cleanup: {e}")
+            self._metric_stop_evt.wait(30)  # Check every 30 seconds
+    # --- End connection cleanup methods ---
 
     def _register_signal_handlers(self):
         import signal
@@ -742,21 +736,25 @@ class TranscriptionServer:
         signal.signal(signal.SIGINT, _handler)
 
     def _on_shutdown(self, signum):
-        """Gracefully stop heartbeat thread and deregister from Redis."""
+        """Gracefully clean up connections and deregister from Consul."""
         try:
             self._metric_stop_evt.set()
         except Exception:
             pass
-        if getattr(self, "_redis_discovery_enabled", False):
-            try:
-                if hasattr(self, "_ws_url") and self._ws_url:
-                    pipe = self._wl_redis.pipeline()
-                    pipe.zrem("wl:rank", self._ws_url)
-                    pipe.delete(f"wl:hb:{self._ws_url}")
-                    pipe.execute()
-                    logging.info(f"DEREGISTERED WhisperLive server from Redis (signal {signum}): {self._ws_url}")
-            except Exception as exc:
-                logging.warning(f"Failed to deregister WhisperLive server on shutdown: {exc}")
+        
+        # Clean up any remaining connections
+        try:
+            if self.client_manager:
+                remaining_clients = len(self.client_manager.clients)
+                if remaining_clients > 0:
+                    logging.info(f"Cleaning up {remaining_clients} remaining connections on shutdown")
+                    for websocket in list(self.client_manager.clients.keys()):
+                        try:
+                            self.client_manager.remove_client(websocket)
+                        except Exception as e:
+                            logging.warning(f"Error cleaning up connection on shutdown: {e}")
+        except Exception as exc:
+            logging.warning(f"Failed to clean up connections on shutdown: {exc}")
 
     def initialize_client(
         self, websocket, options, faster_whisper_custom_model_path,
@@ -807,8 +805,7 @@ class TranscriptionServer:
                 server_options=self.server_options
             )
         self.client_manager.add_client(websocket, client)
-        # Update Redis metric after new client joins
-        self._publish_sessions_metric()
+        logging.info(f"Added client {client.client_uid}, total clients: {len(self.client_manager.clients)}")
 
     def get_audio_from_websocket(self, websocket):
         """
@@ -1091,6 +1088,9 @@ class TranscriptionServer:
         except Exception as e:
             logging.warning(f"CONSUL_REGISTER failed: {e}")
         
+        # Start periodic connection cleanup
+        threading.Thread(target=self._periodic_cleanup, daemon=True).start()
+        
         with serve(
             functools.partial(
                 self.recv_audio,
@@ -1105,10 +1105,8 @@ class TranscriptionServer:
             self.is_healthy = True # WebSocket server is up
             logger.info(f"SERVER_RUNNING: WhisperLive server running on {host}:{port} with health check on {host}:9091/health and max_clients={self.config_max_clients}")
             
-            # Immediately publish to Redis (legacy mode only)
-            self._publish_sessions_metric()
-            if getattr(self, "_redis_discovery_enabled", False):
-                logger.info(f"REDIS_PUBLISH: Server published to Redis immediately on startup")
+            # Server started successfully
+            logging.info(f"WhisperLive server started successfully on {host}:{port}")
             
             # Start self-monitoring thread
             if self.self_monitor_thread is None:
@@ -1352,10 +1350,13 @@ class TranscriptionServer:
         Args:
             websocket: The websocket associated with the client to be cleaned up.
         """
-        if self.client_manager.get_client(websocket):
+        client = self.client_manager.get_client(websocket)
+        if client:
+            client_uid = client.client_uid if hasattr(client, 'client_uid') else 'unknown'
             self.client_manager.remove_client(websocket)
-        # Update Redis metric after client leaves
-        self._publish_sessions_metric()
+            logging.info(f"Removed client {client_uid}, remaining clients: {len(self.client_manager.clients)}")
+        else:
+            logging.warning("Attempted to cleanup websocket that was not found in client_manager")
 
     def start_health_check_server(self, host, port):
         """Start a simple HTTP server for health checks.
