@@ -3,6 +3,10 @@ from pydantic import BaseModel, Field, EmailStr, validator
 from datetime import datetime
 from enum import Enum, auto
 import re # Import re for native ID validation
+import logging # Import logging for status validation warnings
+
+# Setup logger for status validation warnings
+logger = logging.getLogger(__name__)
 
 # --- Language Codes from faster-whisper ---
 # These are the accepted language codes from the faster-whisper library
@@ -401,6 +405,20 @@ class MeetingResponse(BaseModel): # Not inheriting from MeetingBase anymore to a
     created_at: datetime
     updated_at: datetime
 
+    @validator('status', pre=True)
+    def normalize_status(cls, v):
+        """Normalize invalid status values to valid enum values"""
+        if isinstance(v, str):
+            # Try to use the value as-is first
+            try:
+                return MeetingStatus(v)
+            except ValueError:
+                # For unknown status values, default to 'completed' as a safe fallback
+                logger.warning("Unknown meeting status '%s' → completed", v)
+                return MeetingStatus.COMPLETED
+        
+        return v
+
     @validator('data')
     def validate_status_data(cls, v, values):
         """Validate that status-related data is consistent with meeting status."""
@@ -606,6 +624,20 @@ class MeetingTableResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     # Excludes: data, transcriptions, sessions
+
+    @validator('status', pre=True)
+    def normalize_status(cls, v):
+        """Normalize invalid status values to valid enum values"""
+        if isinstance(v, str):
+            # Try to use the value as-is first
+            try:
+                return MeetingStatus(v)
+            except ValueError:
+                # For unknown status values, default to 'completed' as a safe fallback
+                logger.warning("Unknown meeting status '%s' → completed", v)
+                return MeetingStatus.COMPLETED
+        
+        return v
 
     class Config:
         orm_mode = True
