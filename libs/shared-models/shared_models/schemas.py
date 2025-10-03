@@ -233,33 +233,16 @@ class Platform(str, Enum):
                      return f"https://meet.google.com/{native_id}"
                 else:
                      return None # Invalid ID format
-            elif platform == Platform.ZOOM:
-                # Basic validation for Zoom meeting ID (numeric) and optional password
-                # Example: "1234567890" or "1234567890?pwd=xyz"
-                match = re.fullmatch(r"^(\d{9,11})(?:\?pwd=(.+))?$", native_id)
-                if match:
-                    zoom_id = match.group(1)
-                    pwd = match.group(2) or passcode  # Use passcode parameter if provided
-                    url = f"https://*.zoom.us/j/{zoom_id}" # Domain might vary, use wildcard? Or require specific domain?
-                    if pwd:
-                        url += f"?pwd={pwd}"
-                    return url
-                else:
-                    return None # Invalid ID format
             elif platform == Platform.TEAMS:
                 # Teams meeting ID (numeric) and optional passcode
-                if native_id.startswith(('https://teams.microsoft.com', 'https://teams.live.com')):
-                    # Already a full Teams URL - return as-is
-                    return native_id
+                # Only accept numeric meeting IDs, not full URLs
+                if re.fullmatch(r"^\d{10,15}$", native_id):
+                    url = f"https://teams.live.com/meet/{native_id}"
+                    if passcode:
+                        url += f"?p={passcode}"
+                    return url
                 else:
-                    # Parse meeting ID (numeric)
-                    if re.fullmatch(r"^\d{10,15}$", native_id):
-                        url = f"https://teams.live.com/meet/{native_id}"
-                        if passcode:
-                            url += f"?p={passcode}"
-                        return url
-                    else:
-                        return None # Invalid Teams ID format
+                    return None # Invalid Teams ID format - must be numeric only
             else:
                 return None # Unknown platform
         except ValueError:
@@ -314,8 +297,8 @@ class UserUpdate(BaseModel):
 # --- Meeting Schemas --- 
 
 class MeetingBase(BaseModel):
-    platform: Platform = Field(..., description="Platform identifier (e.g., 'google_meet', 'zoom')")
-    native_meeting_id: str = Field(..., description="The native meeting identifier (e.g., 'abc-defg-hij' for Google Meet, '1234567890?pwd=xyz' for Zoom)")
+    platform: Platform = Field(..., description="Platform identifier (e.g., 'google_meet', 'teams')")
+    native_meeting_id: str = Field(..., description="The native meeting identifier (e.g., 'abc-defg-hij' for Google Meet, '1234567890' for Teams)")
     # meeting_url field removed
 
     @validator('platform', pre=True) # pre=True allows validating string before enum conversion
@@ -332,11 +315,11 @@ class MeetingBase(BaseModel):
 
 class MeetingCreate(BaseModel):
     platform: Platform
-    native_meeting_id: str = Field(..., description="The platform-specific ID for the meeting (e.g., Google Meet code, Zoom ID)")
+    native_meeting_id: str = Field(..., description="The platform-specific ID for the meeting (e.g., Google Meet code, Teams ID)")
     bot_name: Optional[str] = Field(None, description="Optional name for the bot in the meeting")
     language: Optional[str] = Field(None, description="Optional language code for transcription (e.g., 'en', 'es')")
     task: Optional[str] = Field(None, description="Optional task for the transcription model (e.g., 'transcribe', 'translate')")
-    passcode: Optional[str] = Field(None, description="Optional passcode for the meeting (Teams and Zoom only)")
+    passcode: Optional[str] = Field(None, description="Optional passcode for the meeting (Teams only)")
 
     @validator('platform')
     def platform_must_be_valid(cls, v):
@@ -359,10 +342,6 @@ class MeetingCreate(BaseModel):
                 # Teams passcode validation (alphanumeric, reasonable length)
                 if not re.match(r'^[A-Za-z0-9]{8,20}$', v):
                     raise ValueError("Teams passcode must be 8-20 alphanumeric characters")
-            elif platform == Platform.ZOOM:
-                # Zoom passcode validation (numeric, 6-10 digits)
-                if not re.match(r'^\d{6,10}$', v):
-                    raise ValueError("Zoom passcode must be 6-10 digits")
         return v
 
     @validator('language')
@@ -377,6 +356,35 @@ class MeetingCreate(BaseModel):
         """Validate that the task is one of the allowed tasks."""
         if v is not None and v != "" and v not in ALLOWED_TASKS:
             raise ValueError(f"Invalid task '{v}'. Must be one of: {sorted(ALLOWED_TASKS)}")
+        return v
+
+    @validator('native_meeting_id')
+    def validate_native_meeting_id(cls, v, values):
+        """Validate that the native meeting ID matches the expected format for the platform."""
+        if not v or not v.strip():
+            raise ValueError("native_meeting_id cannot be empty")
+        
+        platform = values.get('platform')
+        if not platform:
+            return v  # Let platform validator handle this case
+        
+        platform = Platform(platform)
+        native_id = v.strip()
+        
+        if platform == Platform.GOOGLE_MEET:
+            # Google Meet format: abc-defg-hij
+            if not re.fullmatch(r"^[a-z]{3}-[a-z]{4}-[a-z]{3}$", native_id):
+                raise ValueError("Google Meet ID must be in format 'abc-defg-hij' (lowercase letters only)")
+        
+        elif platform == Platform.TEAMS:
+            # Teams format: numeric ID only (10-15 digits)
+            if not re.fullmatch(r"^\d{10,15}$", native_id):
+                raise ValueError("Teams meeting ID must be 10-15 digits only (not a full URL)")
+            
+            # Explicitly reject full URLs
+            if native_id.startswith(('http://', 'https://', 'teams.microsoft.com', 'teams.live.com')):
+                raise ValueError("Teams meeting ID must be the numeric ID only (e.g., '9399697580372'), not a full URL")
+        
         return v
 
 class MeetingResponse(BaseModel): # Not inheriting from MeetingBase anymore to avoid duplicate fields if DB model is used directly
