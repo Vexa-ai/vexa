@@ -2,32 +2,120 @@
   <img src="assets/logodark.svg" alt="Vexa Logo" width="40"/>
 </p>
 
-  [![Run Locally](https://img.shields.io/badge/Docker-Run_Locally-2496ED?style=flat-square&logo=docker&logoColor=white)](DEPLOYMENT.md) [![Self Hosted](https://img.shields.io/badge/Server-Self_Hosted-2EA44F?style=flat-square&logo=serverless&logoColor=white)](DEPLOYMENT.md)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Discord](https://img.shields.io/badge/Discord-join-5865F2.svg)](https://discord.gg/Ga9duGkVz9)
+[![Open Source](https://img.shields.io/badge/Open%20Source-Yes-black.svg)](https://github.com/Vexa-ai/vexa)
 
-# Vexa: API for **Real-Time Meeting Transcription**
+# Vexa — Real-Time Meeting Transcription API (Meet & Teams) + WebSocket
 
-<p align="center">
-  <b>🚀 Help us reach 1500 stars! 🚀</b><br>
-  <b>Current: <img src="https://img.shields.io/github/stars/Vexa-ai/vexa?style=social" /> → Goal: 1500 ⭐️</b><br>
-  <a href="https://github.com/Vexa-ai/vexa/stargazers">
+**Vexa** drops a bot into your online meeting and streams transcripts to your apps in real time.  
+- **Platforms:** Google Meet **and Microsoft Teams**  
+- **Transport:** REST **or WebSocket (sub-second)**  
+- **Run it your way:** Open source & self-hostable, or use the hosted API.
 
-💬 [Join Discord Community!](https://discord.gg/Ga9duGkVz9)
+👉 **Website / Quickstart:** https://vexa.ai/get-started  
+👉 **Self-host guide:** [DEPLOYMENT.md](DEPLOYMENT.md)
 
-Vexa is an API for **real-time meeting transcription** using **meeting bots** and direct **streaming from web/mobile apps**. It extracts knowledge from various platforms including:
+---
 
-- **Google Meet**
-- **Zoom** (coming soon)
-- **Microsoft Teams** (coming soon)
+## What's new in v0.6
 
-It serves as an **privacy-first**, **open source** alternative to `recall.ai`.
+- **Microsoft Teams support** (alongside Google Meet)
+- **WebSocket streaming** for efficient sub-second delivery
+- Reliability & joining improvements from real-world usage
 
-It focuses on doing one job well: **clean, private, real-time transcription under your control so you can safely build on top**.
+> See full release notes: https://github.com/Vexa-ai/vexa/releases
 
-## News (31 August 2025)
+---
 
-- **MCP server for agents (new microservice):** Full Vexa API access from any MCP-capable agent (Claude Desktop, Cursor, etc.). See `services/mcp`. Built with https://github.com/tadata-org/fastpi_mcp
-- **Hallucination filtering:** Greatly reduced hallucinations in selected languages. Contributions welcome — add phrases to `services/WhisperLive/hallucinations/` for your language.
-- **Google Meet UI updates:** Bot adjusted to the latest Google Meet UI changes for reliable joining and capture.
+## Quickstart (Hosted)
+
+> Get an API key in minutes at https://vexa.ai/get-started
+
+### 1) Create a bot for **Microsoft Teams**
+```bash
+# POST /bots
+curl -X POST https://<API_HOST>/bots \
+  -H "Authorization: Bearer <API_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "platform": "microsoft_teams",
+    "meeting_url": "<TEAMS_MEETING_URL>",
+    "language": "en"
+  }'
+```
+
+### 2) Or create a bot for **Google Meet**
+
+```bash
+curl -X POST https://<API_HOST>/bots \
+  -H "Authorization: Bearer <API_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "platform": "google_meet",
+    "meeting_url": "<MEET_URL>",
+    "language": "en"
+  }'
+```
+
+### 3) Stream transcripts over **WebSocket** (sub-second)
+
+```js
+// Minimal example; replace placeholders with real values
+const url = "wss://<API_HOST>/ws/transcripts?bot_id=<BOT_ID>&token=<API_TOKEN>";
+const ws = new WebSocket(url);
+
+ws.onopen = () => console.log("WS connected");
+ws.onmessage = (evt) => {
+  const msg = JSON.parse(evt.data); // {type: "partial"|"final", ts, text, speaker? ...}
+  console.log(msg.type, msg.text);
+};
+ws.onclose = () => console.log("WS closed");
+ws.onerror = (e) => console.error("WS error", e);
+```
+
+### 4) (Optional) Poll over REST
+
+```bash
+curl -H "Authorization: Bearer <API_TOKEN>" \
+  "https://<API_HOST>/transcripts/<platform>/<native_meeting_id>"
+```
+
+---
+
+## Quickstart (Self-Host)
+
+Open-source, privacy-first self-hosting with Docker Compose / Nomad.
+
+```bash
+git clone https://github.com/Vexa-ai/vexa.git
+cd vexa
+cp env-example.cpu .env  # or env-example.gpu
+make all                 # builds & starts services locally
+```
+
+* Full guide: [DEPLOYMENT.md](DEPLOYMENT.md)
+* Then use the same API calls as the hosted quickstart (pointing to your host).
+
+---
+
+## Who this is for
+
+* **Enterprises (Self-host):** Data sovereignty & control; deploy on your infra.
+* **SMB / Teams using hosted API:** Fastest path from meeting to transcript.
+* **n8n & indie builders:** Zero/low-code automations powered by real-time transcripts.
+
+  * n8n tutorial: https://vexa.ai/blog/google-meet-transcription-n8n-workflow
+
+---
+
+## Roadmap (short)
+
+* Zoom support (public preview next)
+* Docs polish for WS message schema, retry/back-pressure examples
+* Latency methodology & benchmarks blog
+
+> For issues and progress, see https://github.com/Vexa-ai/vexa/issues
 
 ## Build on Top. In Hours, Not Months
 
@@ -51,76 +139,6 @@ Furthermore, with our **n8n integration** (see [Projects Built with Vexa](BUILT-
 - [transcription-collector](./services/transcription-collector): Processes and stores transcription segments
 - [Database models](./libs/shared-models/shared_models/models.py): Data structures for storing meeting information
 
-## Public Hosted API
-
-> 🔑 Get your API key at [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo) to try Vexa instantly.
-
-> 🚀 Read [DEPLOYMENT.md](DEPLOYMENT.md) for self-hosting and local run with single `make all` on CPU even on laptop or on your GPU server.
-
-The Vexa API is **publicly available** at [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo) with **self-service access** - get your API key in just 3 clicks and have everything running in under 5 minutes.
-
-### Key features in this release:
-
-- **Instant API Access**: Self-service API keys available directly from [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo)
-- **Google Meet Bot Integration**: Programmatically send bots to join and transcribe meetings
-- **Real-Time Transcription**: Access meeting transcripts as they happen through the API
-- **Real-Time Translation**: Change the language of transcription to get instant translations across 99 languages
-
-## API Capabilities
-
-## Simple API Integration
-
-**Set up and running in under 5 minutes**
-
-Get your API key in 3 clicks at [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo) and start using the API immediately.
-
-### Create a meeting bot
-
-```bash
-# POST /bots
-curl -X POST https://gateway.dev.vexa.ai/bots \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: YOUR_API_KEY" \
-  -d '{
-    "native_meeting_id": "xxx-xxxx-xxx",
-    "platform": "google_meet"
-  }'
-```
-
-### Retrieve meeting transcript
-
-```bash
-# GET /transcripts/{platform}/{native_meeting_id}
-# Example assumes native_meeting_id is derived from the meeting URL
-curl -H "X-API-Key: YOUR_CLIENT_API_KEY" \
-  https://gateway.dev.vexa.ai/transcripts/google_meet/xxx-xxxx-xxx
-```
-
-```json
-{
-  "data": {
-    "meeting_id": "meet_abc123",
-    "transcripts": [
-      {
-        "time": "00:01:15",
-        "speaker": "John Smith",
-        "text": "Let's discuss the quarterly results."
-      },
-      {
-        "time": "00:01:23",
-        "speaker": "Sarah Johnson",
-        "text": "The Q3 revenue exceeded our projections by 15%."
-      },
-      {
-        "time": "00:01:42",
-        "speaker": "Michael Chen",
-        "text": "Customer acquisition costs decreased by 12% from last quarter."
-      }
-    ]
-  }
-}
-```
-
 ## Projects Built with Vexa
 
 To see examples of projects built using the Vexa API, including our example client and other community contributions, please see the [BUILT-WITH-VEXA.md](BUILT-WITH-VEXA.md) file.
@@ -137,13 +155,14 @@ To see examples of projects built using the Vexa API, including our example clie
 
 - **Public API**: Fully available with self-service API keys at [www.vexa.ai](https://www.vexa.ai/?utm_source=github&utm_medium=readme&utm_campaign=vexa_repo)
 - **Google Meet Bot:** Fully operational bot for joining Google Meet calls
+- **Microsoft Teams Bot:** Supported in v0.6
 - **Real-time Transcription:** Low-latency, multilingual transcription service is live
 - **Real-time Translation:** Instant translation between 99 supported languages
+- **WebSocket Streaming:** Sub-second transcript delivery via WebSocket API
 - **Pending:** Speaker identification is under development
 
 ## Coming Next
 
-- **Microsoft Teams Bot:** Integration for automated meeting attendance (June 2025)
 - **Zoom Bot:** Integration for automated meeting attendance (July 2025)
 - **Direct Streaming:** Ability to stream audio directly from web/mobile apps
 - **Real-time LLM Processing:** Enhancements for transcript readability and features
@@ -185,6 +204,11 @@ Contributors are welcome! Join our community and help shape Vexa's future. Here'
 
 We look forward to your contributions!
 
+## Contributing & License
+
+We ❤️ contributions. Join our Discord and open issues/PRs.
+Licensed under **Apache-2.0** — see [LICENSE](LICENSE).
+
 ## Project Links
 
 - 🌐 [Vexa Website](https://vexa.ai)
@@ -195,11 +219,5 @@ We look forward to your contributions!
 [![Meet Founder](https://img.shields.io/badge/LinkedIn-Dmitry_Grankin-0A66C2?style=flat-square&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/dmitry-grankin/)
 
 [![Join Discord](https://img.shields.io/badge/Discord-Community-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/Ga9duGkVz9)
-
-## License
-
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-
-Vexa is licensed under the **Apache License, Version 2.0**. See [LICENSE](LICENSE) for the full license text.
 
 The Vexa name and logo are trademarks of **Vexa.ai Inc**.
