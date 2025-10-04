@@ -28,6 +28,7 @@
 - **Run it your way:** Open source & self-hostable, or use the hosted API.
 
 👉 **Hosted (start in 5 minutes):** https://vexa.ai
+
 👉 **Self-host guide:** [DEPLOYMENT.md](DEPLOYMENT.md)
 
 ---
