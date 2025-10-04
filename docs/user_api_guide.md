@@ -119,6 +119,7 @@ The default limit is **one (1) concurrently running bot** per user account. If y
 
 *   **Endpoint:** `GET /transcripts/{platform}/{native_meeting_id}`
 *   **Description:** Retrieves the meeting transcript. This provides **real-time** transcription data and can be called **during or after** the meeting has concluded.
+*   **Note:** For live meetings, consider using WebSocket connections instead of frequent polling for better efficiency and lower latency. WebSocket connections provide efficient, low-latency transcript updates compared to polling REST endpoints, and avoid the overhead of repeated HTTP requests. See the WebSocket documentation for real-time transcript updates.
 *   **Path Parameters:**
     *   `platform`: (string) The platform of the meeting (`google_meet` or `teams`).
     *   `native_meeting_id`: (string) The unique identifier of the meeting. **Use the exact same value you provided when requesting the bot**:
