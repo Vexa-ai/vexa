@@ -288,7 +288,7 @@ async def run_websocket_validator(api_base: str, ws_url: str, api_key: str, plat
     print(f"{Colors.BOLD}🔌 Connecting to WebSocket...{Colors.END}")
     
     try:
-        async with websockets.connect(ws_url, extra_headers=headers, ping_interval=None) as ws:
+        async with websockets.connect(ws_url, additional_headers=headers, ping_interval=None) as ws:
             print(f"{Colors.GREEN}✓ WebSocket connected{Colors.END}")
             
             # Step 3: Subscribe to meeting for live transcript updates
