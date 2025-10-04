@@ -154,6 +154,8 @@ download-model:
 	@. .venv/bin/activate && python -m pip install --upgrade pip >/dev/null 2>&1 || true
 	@echo "---> Installing Python requirements into venv (this may take a while)..."
 	@. .venv/bin/activate && pip install --no-cache-dir -r requirements.txt
+	@echo "---> Ensuring websockets is up to date..."
+	@. .venv/bin/activate && pip install --upgrade websockets
 	@echo "---> Downloading Whisper model (this may take a while)..."
 	@. .venv/bin/activate && python download_model.py
 

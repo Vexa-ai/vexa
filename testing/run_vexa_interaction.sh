@@ -310,12 +310,20 @@ echo_info "Using WebSocket URL: $WS_URL"
 echo_info "Running real-time transcription client..."
 
 # Run the Python real-time transcription client in background
-python3 "$SCRIPT_PATH" \
-    --api-base "$BASE_URL" \
-    --ws-url "$WS_URL" \
-    --api-key "$USER_API_KEY" \
-    --platform "$PLATFORM" \
-    --native-id "$GOOGLE_MEET_ID" &
+# Use the virtual environment's Python to ensure websockets is available
+if [ -f ".venv/bin/python" ]; then
+    echo_info "Using virtual environment Python..."
+    .venv/bin/python "$SCRIPT_PATH" \
+        --api-base "$BASE_URL" \
+        --ws-url "$WS_URL" \
+        --api-key "$USER_API_KEY" \
+        --platform "$PLATFORM" \
+        --native-id "$GOOGLE_MEET_ID" &
+else
+    echo_error "Virtual environment not found at .venv/bin/python"
+    echo_error "Please run 'make setup-env' first to create the virtual environment"
+    exit 1
+fi
 
 # Store the PID for cleanup
 TRANSCRIPTION_PID=$!
