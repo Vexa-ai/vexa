@@ -30,6 +30,11 @@ if ! command -v curl &> /dev/null; then
     exit 1
 fi
 
+if ! command -v python3 &> /dev/null; then
+    echo_error "python3 is not installed. Please install Python 3 to use real-time transcription."
+    exit 1
+fi
+
 if ! command -v jq &> /dev/null; then
     echo_warn "jq is not installed. JSON parsing will be basic and less robust."
     echo_warn "It is highly recommended to install jq: sudo apt-get install jq (or similar for your OS)"
@@ -103,8 +108,18 @@ MEETING_ID_TO_STOP=""
 USER_API_KEY_FOR_STOP=""
 
 function stop_the_bot() {
+    echo_info "\nStopping transcription client and bot..."
+    
+    # Stop the Python transcription client if it's running
+    if [[ -n "$TRANSCRIPTION_PID" ]]; then
+        echo_info "Stopping real-time transcription client (PID: $TRANSCRIPTION_PID)..."
+        kill "$TRANSCRIPTION_PID" 2>/dev/null
+        wait "$TRANSCRIPTION_PID" 2>/dev/null
+    fi
+    
+    # Stop the bot
     if [[ -n "$MEETING_ID_TO_STOP" && -n "$USER_API_KEY_FOR_STOP" ]]; then
-        echo_info "\nAttempting to stop the bot for meeting $MEETING_ID_TO_STOP..."
+        echo_info "Stopping bot for meeting $MEETING_ID_TO_STOP..."
         STOP_RESPONSE=$(curl -s -X DELETE \
             -H "Content-Type: application/json" \
             -H "X-API-Key: $USER_API_KEY_FOR_STOP" \
@@ -266,57 +281,47 @@ fi
 # --- Wait for bot admission and provide user instructions ---
 echo_info "Bot '$BOT_NAME' has been requested for Google Meet ID: $GOOGLE_MEET_ID"
 echo_warn "Please admit the bot into your Google Meet session now."
-echo_warn "Polling for transcripts will begin shortly."
+echo_warn "Real-time transcription will begin shortly."
 
 COUNTDOWN_SECONDS=10
-echo_info "Starting transcript polling in:"
+echo_info "Starting real-time transcription in:"
 for i in $(seq $COUNTDOWN_SECONDS -1 1); do
     echo -ne "$i... "
     sleep 1
 done
 echo "GO!"
 
-# --- 5. Poll for Transcripts --- 
-echo_info "Starting to poll for transcripts for $PLATFORM/$GOOGLE_MEET_ID... Press Ctrl+C to stop."
-LAST_TRANSCRIPT_COUNT=0
+# --- 5. Start Real-time Transcription --- 
+echo_info "Starting real-time WebSocket transcription for $PLATFORM/$GOOGLE_MEET_ID... Press Ctrl+C to stop."
 
-while true; do
-    # Use BASE_URL for user actions
-    # Corrected endpoint to match vexa_client.py: /transcripts/{platform}/{native_meeting_id}
-    GET_TRANSCRIPT_RESPONSE=$(curl -s -X GET \
-        -H "Content-Type: application/json" \
-        -H "X-API-Key: $USER_API_KEY" \
-        "$BASE_URL/transcripts/$PLATFORM/$GOOGLE_MEET_ID")
+# Python dependency already checked above
 
-    if [[ "$JQ_INSTALLED" == true ]]; then
-        # Check if response is valid JSON before parsing
-        if echo "$GET_TRANSCRIPT_RESPONSE" | jq empty 2>/dev/null; then
-            CURRENT_TRANSCRIPTS=$(echo "$GET_TRANSCRIPT_RESPONSE" | jq -r '.segments // []')
-            NEW_SEGMENT_COUNT=$(echo "$CURRENT_TRANSCRIPTS" | jq 'length // 0')
+# Check if the real-time transcription script exists
+SCRIPT_PATH="testing/ws_realtime_transcription.py"
+if [[ ! -f "$SCRIPT_PATH" ]]; then
+    echo_error "Real-time transcription script not found at $SCRIPT_PATH"
+    exit 1
+fi
 
-            if [[ "$NEW_SEGMENT_COUNT" -gt "$LAST_TRANSCRIPT_COUNT" ]]; then
-                echo_info "--- New Transcript Segments ($PLATFORM/$GOOGLE_MEET_ID) ---"
-                jq -r --argjson last_count "$LAST_TRANSCRIPT_COUNT" '.[$last_count:] | .[] | ("Speaker " + (.speaker // "unknown") + ": " + .text)' <<< "$CURRENT_TRANSCRIPTS"
-                LAST_TRANSCRIPT_COUNT=$NEW_SEGMENT_COUNT
-                echo "---------------------------------------"
-            elif [[ "$GET_TRANSCRIPT_RESPONSE" == *"not found"* || "$GET_TRANSCRIPT_RESPONSE" == *"NotFoundError"* ]]; then
-                echo_warn "Meeting or transcript not found for $PLATFORM/$GOOGLE_MEET_ID. Bot may have stopped or not started properly."
-            fi
-        else
-            # Response is not valid JSON, likely an error message
-            if [[ "$GET_TRANSCRIPT_RESPONSE" == *"Invalid API token"* ]]; then
-                echo_error "Invalid API token. Please check your authentication."
-                break
-            elif [[ "$GET_TRANSCRIPT_RESPONSE" == *"Internal Server Error"* ]]; then
-                echo_warn "Server error occurred. Response: $GET_TRANSCRIPT_RESPONSE"
-            else
-                echo_warn "Invalid JSON response: $GET_TRANSCRIPT_RESPONSE"
-            fi
-        fi
-    else
-        # Basic output if jq is not available
-        echo "Raw transcript response ($PLATFORM/$GOOGLE_MEET_ID): $GET_TRANSCRIPT_RESPONSE"
-    fi
-    
-    sleep 5 # Poll every 5 seconds
-done 
+# Construct WebSocket URL from base URL
+WS_URL="${BASE_URL/http/ws}/ws"
+
+echo_info "Using WebSocket URL: $WS_URL"
+echo_info "Running real-time transcription client..."
+
+# Run the Python real-time transcription client in background
+python3 "$SCRIPT_PATH" \
+    --api-base "$BASE_URL" \
+    --ws-url "$WS_URL" \
+    --api-key "$USER_API_KEY" \
+    --platform "$PLATFORM" \
+    --native-id "$GOOGLE_MEET_ID" &
+
+# Store the PID for cleanup
+TRANSCRIPTION_PID=$!
+
+echo_info "Real-time transcription client started (PID: $TRANSCRIPTION_PID)"
+echo_info "Press Ctrl+C to stop the transcription client and bot."
+
+# Wait for the transcription client to complete or be interrupted
+wait $TRANSCRIPTION_PID 

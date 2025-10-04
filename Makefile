@@ -230,15 +230,15 @@ test: check_docker
 		echo "    Main API:  http://localhost:8056/docs"; \
 		echo "    Admin API: http://localhost:8057/docs"; \
 	fi
-	@chmod +x run_vexa_interaction.sh
+	@chmod +x testing/run_vexa_interaction.sh
 	@echo "---> Running test script..."
 	@if [ -n "$(MEETING_ID)" ]; then \
 		echo "---> Using provided meeting ID: $(MEETING_ID)"; \
-		./run_vexa_interaction.sh "$(MEETING_ID)"; \
+		./testing/run_vexa_interaction.sh "$(MEETING_ID)"; \
 	else \
 		echo "---> No meeting ID provided. Use 'make test MEETING_ID=abc-defg-hij' to test with a specific meeting."; \
 		echo "---> Running in interactive mode..."; \
-		./run_vexa_interaction.sh; \
+		./testing/run_vexa_interaction.sh; \
 	fi
 
 # Quick API connectivity test (no user interaction required)
