@@ -234,6 +234,20 @@ test: check_docker
 	fi
 	@chmod +x testing/run_vexa_interaction.sh
 	@echo "---> Running test script..."
+	@# Check if running in CPU mode and display warning
+	@if [ -f .env ]; then \
+		DEVICE_TYPE=$$(grep -E '^[[:space:]]*DEVICE_TYPE=' .env | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//'); \
+		WHISPER_MODEL=$$(grep -E '^[[:space:]]*WHISPER_MODEL_SIZE=' .env | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//'); \
+		if [ "$$DEVICE_TYPE" = "cpu" ] || [ "$$DEVICE_TYPE" = "" ]; then \
+			echo ""; \
+			echo "⚠️  WARNING: Running in CPU mode with $$WHISPER_MODEL model"; \
+			echo "   • This configuration is for DEVELOPMENT ONLY"; \
+			echo "   • Transcriptions will have LOW QUALITY and HIGH LATENCY"; \
+			echo "   • NOT suitable for production use"; \
+			echo "   • To experience Vexa's full potential, run on GPU with: make all TARGET=gpu"; \
+			echo ""; \
+		fi; \
+	fi
 	@if [ -n "$(MEETING_ID)" ]; then \
 		echo "---> Using provided meeting ID: $(MEETING_ID)"; \
 		./testing/run_vexa_interaction.sh "$(MEETING_ID)"; \
