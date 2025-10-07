@@ -10,6 +10,7 @@ import redis.asyncio as aioredis
 import asyncio
 import json
 import httpx
+from dependency_injector.wiring import Provide
 
 # Local imports - Remove unused ones
 # from app.database.models import init_db # Using local init_db now
@@ -28,6 +29,7 @@ from sqlalchemy import and_, desc
 from datetime import datetime # For start_time
 
 from app.tasks.bot_exit_tasks import run_all_tasks
+from app.adapters.logging.standard_logger import StandardLogger
 
 # Configure logging
 logging.basicConfig(
@@ -73,6 +75,25 @@ class BotExitCallbackPayload(BaseModel):
 async def startup_event():
     global redis_client # <-- Add global reference
     logger.info("Starting up Bot Manager...")
+    
+    # Initialize dependency injection container
+    try:
+        from app.startup import initialize_application, validate_dependency_injection
+        logger.info("Initializing dependency injection container...")
+        testing_mode = os.getenv("DI_TESTING_MODE", "false").lower() == "true"
+        initialize_application(testing=testing_mode)
+        logger.info(f"Dependency injection container initialized successfully (testing={testing_mode})")
+        
+        # Validate that all wired modules have properly resolved dependencies
+        logger.info("Validating dependency injection wiring...")
+        validate_dependency_injection()
+        logger.info("✓ Dependency injection validation passed - all modules properly wired")
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize or validate dependency injection: {e}", exc_info=True)
+        logger.error("APPLICATION STARTUP FAILED: Dependency injection system is not working correctly")
+        raise RuntimeError(f"Dependency injection startup validation failed: {e}") from e
+    
     # await init_db() # Removed - Admin API should handle this
     # await init_redis() # Removed redis init if not used elsewhere
     try:
@@ -97,8 +118,16 @@ async def startup_event():
 async def shutdown_event():
     global redis_client # <-- Add global reference
     logger.info("Shutting down Bot Manager...")
-    # await close_redis() # Removed redis close if not used
-
+    
+    # Shutdown dependency injection container
+    try:
+        from app.startup import shutdown_application
+        logger.info("Shutting down dependency injection container...")
+        shutdown_application()
+        logger.info("Dependency injection container shut down.")
+    except Exception as e:
+        logger.error(f"Error shutting down dependency injection container: {e}", exc_info=True)
+    
     # --- ADD Redis Client Closing ---
     if redis_client:
         logger.info("Closing Redis connection...")
@@ -639,6 +668,7 @@ async def bot_exit_callback(
 
         # ALWAYS schedule post-meeting tasks, regardless of exit code
         logger.info(f"Bot exit callback: Scheduling post-meeting tasks for meeting {meeting.id}.")
+        # Let run_all_tasks use its own DI logger, don't pass one manually
         background_tasks.add_task(run_all_tasks, meeting.id)
 
         # If the bot exited with an error, it might not have cleaned itself up.

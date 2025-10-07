@@ -8,6 +8,7 @@ import time
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 import asyncio
+from app.adapters.logging.standard_logger import StandardLogger
 
 # Explicitly import the exceptions from requests
 from requests.exceptions import RequestException, ConnectionError, HTTPError

@@ -1,4 +1,4 @@
-.PHONY: all setup submodules env force-env download-model build-bot-image build up down ps logs test migrate makemigrations init-db stamp-db migrate-or-init
+.PHONY: all setup submodules env force-env download-model build-bot-image build up down ps logs test test-bot-manager test-services replay-end-of-meeting migrate makemigrations init-db stamp-db migrate-or-init
 
 # Default target: Sets up everything and starts the services
 all: setup-env build-bot-image build up migrate-or-init
@@ -224,6 +224,43 @@ test: check_docker
 	fi
 	@chmod +x run_vexa_interaction.sh
 	@./run_vexa_interaction.sh
+
+# Run unit tests for individual services
+test-bot-manager:
+	@echo "---> Running bot-manager tests... $(pytest-args)"
+	@cd services/bot-manager && python -m pytest tests/ $(pytest-args)
+
+test-bot-manager-verbose: pytest-args:="-p no:sugar"
+# Run unit tests for individual services
+test-bot-manager-verbose: test-bot-manager 
+	@echo "---> Done running $@ $(pytest-args)..."
+
+# Run all service tests
+test-services: test-bot-manager
+	@echo "---> All service tests completed."
+
+# Replay end-of-meeting scenarios for debugging and testing
+replay-end-of-meeting:
+ifndef SESSION_ID
+	@echo "ERROR: SESSION_ID is required. Usage: make replay-end-of-meeting SESSION_ID=session-abc123 [DRY_RUN=true]"
+	@exit 1
+else ifndef DB_HOST
+	@echo "ERROR: DB_HOST env variable is required."
+	@exit 1
+else ifndef DB_NAME
+	@echo "ERROR: DB_NAME env variable is required."
+	@exit 1
+# else ifndef DB_PASSWORD
+# 	@echo "ERROR: DB_PASSWORD env variable is required."
+# 	@exit 1
+endif
+	@echo "---> Replaying end-of-meeting scenario for session: $(SESSION_ID)"
+	@if [ "$(DRY_RUN)" = "true" ]; then \
+		echo "---> DRY RUN MODE: Mocking webhooks and displaying payload"; \
+	else \
+		echo "---> LIVE MODE: Using real webhook delivery"; \
+	fi
+	@cd services/bot-manager && DRY_RUN=$(DRY_RUN) DEBUG=httpx,e2e.tests* LOG_LEVEL=DEBUG pytest -m e2e tests/e2e/test_end_of_meeting.py::TestEndOfMeeting::test_end_of_meeting_by_session_id -s --disable-warnings --log-http
 
 # --- Database Migration Commands ---
 

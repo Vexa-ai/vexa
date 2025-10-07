@@ -25,7 +25,8 @@ DATABASE_URL_SYNC = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{
 # Use pool settings appropriate for async connections
 engine = create_async_engine(
     DATABASE_URL, 
-    echo=os.environ.get("LOG_LEVEL", "INFO").upper() == "DEBUG",
+    # echo=os.environ.get("LOG_LEVEL", "INFO").upper() == "DEBUG",
+    echo=False,
     pool_size=10, # Example pool size
     max_overflow=20 # Example overflow
 )
