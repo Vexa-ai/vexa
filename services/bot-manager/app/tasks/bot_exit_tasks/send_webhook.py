@@ -17,6 +17,8 @@ async def run(
     """
     logger.info(f"Executing send_webhook task for meeting {meeting.id}")
 
+    logger.debug(f"🔍 Meeting: {meeting}")
+
     # The user should be loaded on the meeting object already by the task runner
     user = meeting.user
     if not user:
@@ -59,7 +61,7 @@ async def run(
             'end_time': meeting.end_time.isoformat() if meeting.end_time else None,
             'data': data,
             'created_at': meeting.created_at.isoformat() if meeting.created_at else None,
-            'updated_at': meeting.updated_at.isoformat() if meeting.updated_at else None,
+            # 'updated_at': meeting.updated_at.isoformat() if meeting.updated_at else None,
             'participants': data.get('participants', []),
         }
 
