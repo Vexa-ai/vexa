@@ -29,7 +29,7 @@
 
 👉 **Hosted (start in 5 minutes):** https://vexa.ai
 
-👉 **Self-host guide:** [DEPLOYMENT.md](docs/deployment.md)
+👉 **Self-host guide:** [docs/deployment.md](docs/deployment.md)
 
 ---
 
@@ -53,7 +53,7 @@ make all            # CPU by default (Whisper tiny) — good for development
 # make all TARGET=gpu    # (Whisper medium) — recommended for production quality
 ```
 
-* Full guide: [DEPLOYMENT.md](docs/deployment.md)
+* Full guide: [docs/deployment.md](docs/deployment.md)
 * For self-hosted API key: follow `vexa/nbs/0_basic_test.ipynb`
 
 ## 1. Send bot to meeting:
