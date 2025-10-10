@@ -4,6 +4,10 @@ This directory contains comprehensive documentation for Vexa self-hosted deploym
 
 ## Available Documentation
 
+### Setup & Deployment
+
+- **[Deployment Guide](deployment.md)** - Complete setup and deployment instructions for self-hosted Vexa
+
 ### User Guides
 
 - **[Self-Hosted Management Guide](self-hosted-management.md)** - Complete guide for managing users and API tokens in self-hosted Vexa deployments
@@ -28,7 +32,7 @@ Interactive Jupyter notebooks for testing and development are located in the `..
 
 ## Getting Started
 
-1. **Deploy Vexa**: Follow the [Deployment Guide](../DEPLOYMENT.md)
+1. **Deploy Vexa**: Follow the [Deployment Guide](deployment.md) to get Vexa running
 2. **Manage Users**: Read the [Self-Hosted Management Guide](self-hosted-management.md)
 3. **Use the API**: See [User API Guide](user_api_guide.md) and [WebSocket Guide](websocket.md)
 

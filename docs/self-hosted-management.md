@@ -12,6 +12,8 @@ Essential user and token management for self-hosted Vexa deployments.
 pip install vexa-client
 ```
 
+**Before starting**, ensure Vexa services are running - see the [Deployment Guide](deployment.md) for setup instructions.
+
 Admin endpoints use `/admin/` prefix with `X-Admin-API-Key` header.
 
 ## 1. Create User
@@ -271,7 +273,7 @@ curl -X DELETE http://localhost:18056/admin/tokens/1 \
 ## Reference Links
 
 - **API Gateway Docs**: http://localhost:18056/docs
-- **Deployment Guide**: [DEPLOYMENT.md](../DEPLOYMENT.md)
+- **Deployment Guide**: [deployment.md](deployment.md)
 - **Notebooks**: `nbs/manage_users.ipynb`, `nbs/0_basic_test.ipynb`
 
 ## Getting Help
