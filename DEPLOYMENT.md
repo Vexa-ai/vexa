@@ -113,6 +113,18 @@ make down      # Stop services
 make test-api  # Quick API connectivity test
 ```
 
+## Managing Self-Hosted Vexa
+
+For detailed guidance on managing users and API tokens in your self-hosted deployment, see:
+
+**[Self-Hosted Management Guide](docs/self-hosted-management.md)**
+
+This guide covers:
+- Creating and managing users
+- Generating and revoking API tokens
+- Updating user settings (bot limits, etc.)
+- Complete workflow examples with curl and Python
+
 ## Troubleshooting
 
 **GPU Issues:**

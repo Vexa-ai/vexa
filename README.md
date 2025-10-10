@@ -163,7 +163,9 @@ For **security-minded companies**, Vexa offers complete **self-deployment** opti
 
 To run Vexa locally on your own infrastructure, the primary command you'll use after cloning the repository is `make all`. This command sets up the environment (CPU by default, or GPU if specified), builds all necessary Docker images, and starts the services.
 
-Detailed instructions: [Local Deployment and Testing Guide](DEPLOYMENT.md).
+**Deployment & Management Guides:**
+- [Local Deployment and Testing Guide](DEPLOYMENT.md)
+- [Self-Hosted Management Guide](docs/self-hosted-management.md) - Managing users and API tokens
 
 ## Contributing
 
