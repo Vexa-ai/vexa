@@ -113,7 +113,7 @@ await runMeetingFlow("google_meet", botConfig, page, gracefulLeave, {
 - Shared flow races recording against a removal promise; errors propagate into reasons
 
 ## Redis Control & Callbacks
-- Subscribes to `bot_commands:<connectionId>` (e.g., `bot_commands:google-hot-debug`)
+- Subscribes to `bot_commands:meeting:<meeting_id>` for control-plane commands (reconfigure/leave)
 - Supports `{"action":"leave"}` to trigger graceful shutdown
 - Lifecycle callbacks: `callJoiningCallback`, `callAwaitingAdmissionCallback`, `callStartupCallback`, `callLeaveCallback`
 

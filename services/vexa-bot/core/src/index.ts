@@ -83,7 +83,7 @@ export function calculateRelativeTimestamp(sessionStartTimeMs: number | null): n
 export function createSessionControlMessage(
   event: string,
   sessionUid: string,
-  botConfig: { token: string; platform: string; nativeMeetingId: string }
+  botConfig: { token: string; platform: string; meeting_id: number; nativeMeetingId: string }
 ) {
   return {
     type: "session_control",
@@ -91,9 +91,9 @@ export function createSessionControlMessage(
       event: event,
       uid: sessionUid,
       client_timestamp_ms: Date.now(),
-      token: botConfig.token,
+      token: botConfig.token,  // MeetingToken (HS256 JWT)
       platform: botConfig.platform,
-      meeting_id: botConfig.nativeMeetingId
+      meeting_id: botConfig.meeting_id
     }
   };
 }
@@ -107,7 +107,7 @@ export function createSpeakerActivityMessage(
   participantId: string,
   relativeTimestampMs: number,
   sessionUid: string,
-  botConfig: { token: string; platform: string; nativeMeetingId: string; meetingUrl: string | null }
+  botConfig: { token: string; platform: string; meeting_id: number; nativeMeetingId: string; meetingUrl: string | null }
 ) {
   return {
     type: "speaker_activity",
@@ -117,9 +117,9 @@ export function createSpeakerActivityMessage(
       participant_id_meet: participantId,
       relative_client_timestamp_ms: relativeTimestampMs,
       uid: sessionUid,
-      token: botConfig.token,
+      token: botConfig.token,  // MeetingToken (HS256 JWT)
       platform: botConfig.platform,
-      meeting_id: botConfig.nativeMeetingId,
+      meeting_id: botConfig.meeting_id,
       meeting_url: botConfig.meetingUrl
     }
   };
@@ -136,6 +136,14 @@ const handleRedisMessage = async (message: string, channel: string, page: Page |
   // --- ADDED: Implement reconfigure command handling --- 
   try {
       const command = JSON.parse(message);
+      
+      // Validate this command is for us (fail-fast)
+      const meetingId = (globalThis as any).botConfig?.meeting_id;
+      if (command.meeting_id && command.meeting_id !== meetingId) {
+        log(`⚠️ Ignoring command for different meeting: ${command.meeting_id} (ours: ${meetingId})`);
+        return;
+      }
+      
       if (command.action === 'reconfigure') {
           log(`Processing reconfigure command: Lang=${command.language}, Task=${command.task}`);
 
@@ -326,6 +334,9 @@ async function performGracefulLeave(
 // --- ------------------------------------------------------------ ---
 
 export async function runBot(botConfig: BotConfig): Promise<void> {
+  // Store botConfig globally for command validation
+  (globalThis as any).botConfig = botConfig;
+  
   // --- UPDATED: Parse and store config values ---
   currentLanguage = botConfig.language;
   currentTask = botConfig.task || 'transcribe';
@@ -339,8 +350,16 @@ export async function runBot(botConfig: BotConfig): Promise<void> {
 
   log(`Starting bot for ${platform} with URL: ${meetingUrl}, name: ${botName}, language: ${currentLanguage}, task: ${currentTask}, connectionId: ${currentConnectionId}`);
 
+  // Fail fast: meeting_id must be present for control-plane commands
+  const meetingId = botConfig.meeting_id;
+  if (meetingId === undefined || meetingId === null) {
+    log("ERROR: BOT_CONFIG missing required meeting_id. Exiting.");
+    process.exit(2);
+    return;
+  }
+
   // --- ADDED: Redis Client Setup and Subscription ---
-  if (currentRedisUrl && currentConnectionId) {
+  if (currentRedisUrl && meetingId !== undefined && meetingId !== null) {
     log("Setting up Redis subscriber...");
     try {
       redisSubscriber = createClient({ url: currentRedisUrl });
@@ -356,7 +375,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {
       await redisSubscriber.connect();
       log(`Connected to Redis at ${currentRedisUrl}`);
 
-      const commandChannel = `bot_commands:${currentConnectionId}`;
+      const commandChannel = `bot_commands:meeting:${meetingId}`;
       // Pass the page object when subscribing
       // ++ MODIFIED: Add logging inside subscribe callback ++
       await redisSubscriber.subscribe(commandChannel, (message, channel) => {
@@ -373,7 +392,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {
       redisSubscriber = null; // Ensure client is null if setup failed
     }
   } else {
-    log("Redis URL or Connection ID missing, skipping Redis setup.");
+    log("Redis URL or meeting_id missing, skipping Redis setup.");
   }
   // -------------------------------------------------
 
