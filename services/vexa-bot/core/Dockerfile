@@ -1,5 +1,5 @@
 # --- Build Stage ---
-FROM mcr.microsoft.com/playwright:v1.55.1-jammy AS base
+FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS base
 
 # Install required OS dependencies (e.g., for Xvfb and other utilities)
 RUN apt-get update && apt-get install -y \
@@ -33,7 +33,7 @@ RUN npx playwright install-deps && npx playwright install --with-deps
 RUN npx playwright install msedge
 
 # --- Runtime Stage ---
-FROM mcr.microsoft.com/playwright:v1.55.1-jammy AS runtime
+FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS runtime
 
 # Set working directory
 WORKDIR /app
