@@ -97,8 +97,8 @@ export class WhisperLiveService {
       model: null, // Let server use WHISPER_MODEL_SIZE from environment
       use_vad: false,
       platform: botConfig.platform,
-      token: botConfig.token,
-      meeting_id: botConfig.nativeMeetingId,
+      token: botConfig.token,  // MeetingToken (HS256 JWT)
+      meeting_id: botConfig.meeting_id,
       meeting_url: botConfig.meetingUrl || null,
     };
 

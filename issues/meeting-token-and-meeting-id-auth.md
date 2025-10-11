@@ -136,36 +136,33 @@ Example claims:
 
 ---
 
-### Migration Plan
+### Implementation (Mandatory; no flags)
 
 - **Bot-manager**
   - Mint MeetingToken (HS256) using `ADMIN_TOKEN`.
   - Pass `meeting_id` + `meeting_token` to bot; stop passing user API token.
-  - Publish commands to `bot_commands:meeting:{meeting_id}`.
+  - Publish commands ONLY to `bot_commands:meeting:{meeting_id}`.
   - Remove `(platform,native_meeting_id) → current_uid` Redis mapping.
 
 - **vexa-bot**
   - Send `meeting_id` + `meeting_token` in WhisperLive initial config.
   - Subscribe to `bot_commands:meeting:{meeting_id}`.
   - Validate `meeting_id` in command payloads before acting.
+  - Fail fast if `meeting_id` missing in config.
 
 - **WhisperLive**
-  - Treat token as opaque; forward it in `session_start` (and optionally per message for stateless mode).
+  - Treat token as opaque; forward it in `session_start` (and per message if stateless).
+  - Require `uid`, `meeting_id`, `token`, `platform`, `meeting_url` on initial config; else respond ERROR and close.
   - Include `meeting_id` on all messages.
 
 - **transcription-collector**
   - Verify JWT (HS256) with `ADMIN_TOKEN`.
   - Enforce claims and required fields; cache by `meeting_id`.
-  - Optional: enable per-message MAC verification in stateful mode.
-  - Eliminate per-message DB lookups (optionally keep a one-time DB check at first message if desired).
-
-- **Cutover**
-  - Feature flag for token mode: `MEETING_TOKEN_MODE = hs256|off`.
-  - Staged rollout: support both command channels temporarily if needed; prefer atomic cutover for simplicity.
+  - Eliminate per-message DB lookups; optional per-message MAC later.
 
 ---
 
-### Testing
+### Testing (Fail-Fast enforced)
 
 - **Unit**: token mint/verify; claim validation; meeting-id channel generation; command validation in bot.
 - **Integration**: bot launch → WS → Redis → collector store; reconfigure and leave using meeting-id channels.
@@ -174,12 +171,12 @@ Example claims:
 
 ---
 
-### Acceptance Criteria
+### Acceptance Criteria (No Backward Compatibility)
 
 - **No raw user tokens** leave bot-manager.
 - **Collector** processes valid messages without per-message DB lookups.
 - **Commands** addressed to `bot_commands:meeting:{meeting_id}` work (reconfigure/leave).
-- **Docs** updated; related session UID mapping removed.
+- **Docs** updated; session UID mapping removed; meeting-only channels mandatory; missing fields cause immediate errors.
 
 ---
 

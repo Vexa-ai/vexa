@@ -1,6 +1,9 @@
 import logging
 import json
 import uuid
+import os
+import hmac
+import base64
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List, Tuple
 
@@ -19,25 +22,56 @@ from mapping.speaker_mapper import get_speaker_mapping_for_segment, STATUS_UNKNO
 
 logger = logging.getLogger(__name__)
 
-async def get_user_by_token(token: str, db: AsyncSession) -> User:
-    """Validates an API token and returns the associated User or raises ValueError."""
-    if not token:
-        raise ValueError("Missing API token") 
-    
-    result = await db.execute(
-        select(User).join(APIToken).where(APIToken.token == token)
-    )
-    user = result.scalars().first()
-    
-    if not user:
-        logger.warning(f"Invalid API token provided: {token[:5]}...")
-        raise ValueError(f"Invalid API token") 
-    return user
+def _b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 
-async def process_session_start_event(message_id: str, stream_data: Dict[str, Any], db: AsyncSession, user: User, meeting: Meeting) -> bool:
+def _b64url_decode(data: str) -> bytes:
+    padding = '=' * (-len(data) % 4)
+    return base64.urlsafe_b64decode(data + padding)
+
+def verify_meeting_token(token: str) -> Optional[dict]:
+    try:
+        if not token:
+            return None
+        secret = os.environ.get("ADMIN_TOKEN") or os.environ.get("ADMIN_API_TOKEN")
+        if not secret:
+            logger.error("ADMIN_TOKEN not set; cannot verify MeetingToken")
+            return None
+        parts = token.split('.')
+        if len(parts) != 3:
+            return None
+        header_b64, payload_b64, signature_b64 = parts
+        header_json = _b64url_decode(header_b64)
+        payload_json = _b64url_decode(payload_b64)
+        header = json.loads(header_json)
+        payload = json.loads(payload_json)
+        if header.get('alg') != 'HS256' or header.get('typ') != 'JWT':
+            return None
+        signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
+        expected_sig = hmac.new(secret.encode("utf-8"), signing_input, digestmod='sha256').digest()
+        expected_b64 = _b64url_encode(expected_sig)
+        if not hmac.compare_digest(expected_b64, signature_b64):
+            return None
+        # Basic claims checks
+        now = int(datetime.now(timezone.utc).timestamp())
+        if 'exp' in payload and int(payload['exp']) < now:
+            return None
+        if payload.get('aud') != 'transcription-collector' or payload.get('iss') != 'bot-manager':
+            return None
+        if payload.get('scope') != 'transcribe:write':
+            return None
+        if 'meeting_id' not in payload:
+            return None
+        return payload
+    except Exception as e:
+        logger.warning(f"MeetingToken verification failed: {e}")
+        return None
+
+async def process_session_start_event(message_id: str, stream_data: Dict[str, Any], db: AsyncSession, user: Optional[User], meeting: Meeting, redis_c: aioredis.Redis) -> bool:
     """Processes a session_start event.
     
     Updates the MeetingSession database record with the accurate start time.
+    Caches session start time in Redis for fast absolute timestamp computation.
     Uses pre-fetched user and meeting objects.
     
     Returns True if processing is considered complete (can be ACKed), 
@@ -82,6 +116,15 @@ async def process_session_start_event(message_id: str, stream_data: Dict[str, An
             logger.info(f"Created new session {session_uid} for meeting_id {meeting.id} with start time {start_timestamp}")
         
         await db.commit()
+        
+        # 4. Cache session start time in Redis for fast lookup during transcription
+        try:
+            session_start_cache_key = f"meeting_session:{session_uid}:start"
+            await redis_c.set(session_start_cache_key, start_timestamp.isoformat(), ex=7200)  # 2 hour TTL
+            logger.info(f"Cached session start time in Redis: {session_start_cache_key}")
+        except Exception as redis_err:
+            logger.warning(f"Failed to cache session start time in Redis for session {session_uid}: {redis_err}")
+        
         logger.info(f"Successfully processed session_start event for meeting {meeting.id}, session {session_uid}")
         return True
 
@@ -114,33 +157,25 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
 
         async with async_session_local() as db:
             try:
-                # Common fields for both event types
+                # Verify MeetingToken and extract claims
                 token = stream_data.get('token')
-                platform_val = stream_data.get('platform')
-                native_meeting_id = stream_data.get('meeting_id')
-
-                if not all([token, platform_val, native_meeting_id]):
-                    logger.warning(f"Message {message_id} (type: {message_type}) missing common required fields (token, platform, meeting_id). Skipping. Payload: {payload_json[:200]}...")
+                claims = verify_meeting_token(token)
+                if not claims:
+                    logger.warning(f"Message {message_id} (type: {message_type}) failed MeetingToken verification. Skipping.")
                     return True
 
-                user = await get_user_by_token(token, db)
-                
-                stmt_meeting = select(Meeting).where(
-                    Meeting.user_id == user.id,
-                    Meeting.platform == platform_val,
-                    Meeting.platform_specific_id == native_meeting_id
-                ).order_by(Meeting.created_at.desc())
-                result_meeting = await db.execute(stmt_meeting)
-                meeting = result_meeting.scalars().first()
-
-                if not meeting:
-                    logger.warning(f"Meeting lookup failed for message {message_id}: No meeting found for user {user.id}, platform '{platform_val}', native ID '{native_meeting_id}'")
-                    return True
-                internal_meeting_id = meeting.id
+                internal_meeting_id = int(claims.get('meeting_id'))
+                platform_val = claims.get('platform') or stream_data.get('platform')
+                native_meeting_id = claims.get('native_meeting_id') or stream_data.get('meeting_id')
 
                 # Process different message types
                 if message_type == "session_start":
-                    return await process_session_start_event(message_id, stream_data, db, user, meeting) 
+                    # Fetch meeting by id for session creation (rare path; acceptable DB hit)
+                    meeting = await db.get(Meeting, internal_meeting_id)
+                    if not meeting:
+                        logger.warning(f"Session start for unknown meeting_id {internal_meeting_id}. Skipping.")
+                        return True
+                    return await process_session_start_event(message_id, stream_data, db, None, meeting, redis_c) 
                 elif message_type == "transcription":
                     pass # Continue with transcription processing
                 elif message_type == "session_end": # NEW: Handle session_end for cleanup
@@ -150,12 +185,13 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                         return True # Cannot process without UID, but ack
                     
                     speaker_event_key = f"{REDIS_SPEAKER_EVENT_KEY_PREFIX}:{session_uid}"
+                    session_start_cache_key = f"meeting_session:{session_uid}:start"
                     try:
-                        deleted_count = await redis_c.delete(speaker_event_key)
-                        logger.info(f"Processed session_end for UID '{session_uid}'. Deleted speaker events key '{speaker_event_key}' from Redis (count: {deleted_count}).")
+                        deleted_count = await redis_c.delete(speaker_event_key, session_start_cache_key)
+                        logger.info(f"Processed session_end for UID '{session_uid}'. Deleted speaker events and session start cache from Redis (count: {deleted_count}).")
                         # Note: MeetingSession.session_end_utc is not updated here due to no DB model changes allowed.
                     except redis.exceptions.RedisError as e_redis:
-                        logger.error(f"Redis error deleting speaker events for UID '{session_uid}' on session_end: {e_redis}")
+                        logger.error(f"Redis error deleting keys for UID '{session_uid}' on session_end: {e_redis}")
                         return False # Retryable Redis error
                     return True # Successfully processed session_end
                 else:
@@ -179,19 +215,41 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
             segment_count = 0
             hash_key = f"meeting:{internal_meeting_id}:segments"
             segments_to_store = {}
+            changed_segments = []  # Track which segments actually changed
             session_uid_from_payload = stream_data.get('uid')
             # Resolve session start time for absolute UTC timestamp computation
             session_start_utc = None
             try:
                 if session_uid_from_payload:
-                    stmt_session_time = select(MeetingSession).where(
-                        MeetingSession.meeting_id == meeting.id,
-                        MeetingSession.session_uid == session_uid_from_payload
-                    )
-                    result_session_time = await db.execute(stmt_session_time)
-                    session_row = result_session_time.scalars().first()
-                    if session_row and getattr(session_row, 'session_start_time', None):
-                        session_start_utc = session_row.session_start_time
+                    # Try Redis cache first for fast lookup
+                    session_start_cache_key = f"meeting_session:{session_uid_from_payload}:start"
+                    cached_start = await redis_c.get(session_start_cache_key)
+                    if cached_start:
+                        try:
+                            cached_str = cached_start if isinstance(cached_start, str) else cached_start.decode('utf-8')
+                            if cached_str.endswith('Z'):
+                                cached_str = cached_str[:-1]
+                            session_start_utc = datetime.fromisoformat(cached_str).replace(tzinfo=timezone.utc)
+                            logger.debug(f"[Msg {message_id}/Meet {internal_meeting_id}] Loaded session start from Redis cache for UID {session_uid_from_payload}")
+                        except Exception as cache_parse_err:
+                            logger.warning(f"[Msg {message_id}/Meet {internal_meeting_id}] Failed to parse cached session start: {cache_parse_err}")
+                    
+                    # Fallback to DB if not in cache
+                    if not session_start_utc:
+                        stmt_session_time = select(MeetingSession).where(
+                            MeetingSession.meeting_id == internal_meeting_id,
+                            MeetingSession.session_uid == session_uid_from_payload
+                        )
+                        result_session_time = await db.execute(stmt_session_time)
+                        session_row = result_session_time.scalars().first()
+                        if session_row and getattr(session_row, 'session_start_time', None):
+                            session_start_utc = session_row.session_start_time
+                            # Cache it for next time
+                            try:
+                                await redis_c.set(session_start_cache_key, session_start_utc.isoformat(), ex=7200)
+                                logger.debug(f"[Msg {message_id}/Meet {internal_meeting_id}] Loaded session start from DB and cached for UID {session_uid_from_payload}")
+                            except Exception:
+                                pass
             except Exception as _sess_err:
                 logger.warning(f"[Msg {message_id}/Meet {internal_meeting_id}] Unable to resolve session start time for UID {session_uid_from_payload}: {_sess_err}")
 
@@ -244,6 +302,18 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                     logger.warning(f"[Msg {message_id}/Meet {internal_meeting_id}/Seg {start_time_key}] No session_uid_from_payload. Cannot map speakers.")
                     mapping_status = STATUS_UNKNOWN
 
+                 # Compute absolute UTC timestamps if session start time is known
+                 abs_start_iso = None
+                 abs_end_iso = None
+                 if session_start_utc is not None:
+                     try:
+                         abs_start_dt = session_start_utc + timedelta(seconds=start_time_float)
+                         abs_end_dt = session_start_utc + timedelta(seconds=end_time_float)
+                         abs_start_iso = abs_start_dt.isoformat()
+                         abs_end_iso = abs_end_dt.isoformat()
+                     except Exception as _abs_err:
+                         logger.debug(f"[Msg {message_id}/Meet {internal_meeting_id}] Failed to compute absolute times: {_abs_err}")
+                 
                  segment_redis_data = {
                      "text": text_content,
                      "end_time": end_time_float,
@@ -253,17 +323,54 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                      "speaker": mapped_speaker_name,
                      "speaker_mapping_status": mapping_status
                  }
-                 # Compute absolute UTC timestamps if session start time is known
-                 if session_start_utc is not None:
-                     try:
-                         abs_start_dt = session_start_utc + timedelta(seconds=start_time_float)
-                         abs_end_dt = session_start_utc + timedelta(seconds=end_time_float)
-                         segment_redis_data["absolute_start_time"] = abs_start_dt.isoformat()
-                         segment_redis_data["absolute_end_time"] = abs_end_dt.isoformat()
-                     except Exception as _abs_err:
-                         logger.debug(f"[Msg {message_id}/Meet {internal_meeting_id}] Failed to compute absolute times: {_abs_err}")
+                 if abs_start_iso:
+                     segment_redis_data["absolute_start_time"] = abs_start_iso
+                 if abs_end_iso:
+                     segment_redis_data["absolute_end_time"] = abs_end_iso
+                 
+                 # Change-only publishing: compare with existing segment
+                 try:
+                     existing_json = await redis_c.hget(hash_key, start_time_key)
+                     if existing_json:
+                         existing_data = json.loads(existing_json)
+                         # Normalize fields for comparison (render-relevant only)
+                         existing_norm = {
+                             "text": existing_data.get("text"),
+                             "speaker": existing_data.get("speaker"),
+                             "language": existing_data.get("language"),
+                             "end_time": round(float(existing_data.get("end_time", 0)), 3),
+                             "absolute_start_time": existing_data.get("absolute_start_time"),
+                             "absolute_end_time": existing_data.get("absolute_end_time")
+                         }
+                         new_norm = {
+                             "text": text_content,
+                             "speaker": mapped_speaker_name,
+                             "language": language_content,
+                             "end_time": round(end_time_float, 3),
+                             "absolute_start_time": abs_start_iso,
+                             "absolute_end_time": abs_end_iso
+                         }
+                         if existing_norm == new_norm:
+                             # No change; skip HSET and don't include in changed_segments
+                             logger.debug(f"[Msg {message_id}/Meet {internal_meeting_id}/Seg {start_time_key}] No change detected, skipping.")
+                             continue
+                 except Exception as _cmp_err:
+                     logger.debug(f"[Msg {message_id}/Meet {internal_meeting_id}] Change comparison failed: {_cmp_err}; treating as changed")
+                 
+                 # Store and mark as changed
                  segments_to_store[start_time_key] = json.dumps(segment_redis_data)
                  segment_count += 1
+                 changed_segments.append({
+                     "start": start_time_float,
+                     "text": text_content,
+                     "end_time": end_time_float,
+                     "language": language_content,
+                     "speaker": mapped_speaker_name,
+                     "session_uid": session_uid_from_payload,
+                     "speaker_mapping_status": mapping_status,
+                     "absolute_start_time": abs_start_iso,
+                     "absolute_end_time": abs_end_iso
+                 })
             
             if segment_count > 0:
                 try:
@@ -283,41 +390,23 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                 except Exception as pipe_err:
                      logger.error(f"Unexpected pipeline error storing segments for message {message_id}: {pipe_err}", exc_info=True)
                      return False
-                # Publish mutable transcript update via Redis Pub/Sub (quick win)
-                try:
-                    updated_segments = []
-                    for k, v in segments_to_store.items():
-                        try:
-                            seg_dict = json.loads(v)
-                        except Exception:
-                            seg_dict = {"raw": v}
-                        # include numeric start for convenience
-                        try:
-                            seg_start = float(k)
-                        except Exception:
-                            seg_start = k
-                        
-                        # Ensure absolute UTC time fields are included for WebSocket
-                        segment_with_times = {"start": seg_start, **seg_dict}
-                        
-                        # Add absolute time fields if they exist in the stored segment
-                        if 'absolute_start_time' in seg_dict:
-                            segment_with_times['absolute_start_time'] = seg_dict['absolute_start_time']
-                        if 'absolute_end_time' in seg_dict:
-                            segment_with_times['absolute_end_time'] = seg_dict['absolute_end_time']
-                        
-                        updated_segments.append(segment_with_times)
-
-                    event_payload = {
-                        "type": "transcript.mutable",
-                        "meeting": {"platform": platform_val, "native_id": native_meeting_id},
-                        "payload": {"segments": updated_segments},
-                        "ts": datetime.now(timezone.utc).isoformat()
-                    }
-                    channel = f"tc:meeting:{user.id}:{platform_val}:{native_meeting_id}:mutable"
-                    await redis_c.publish(channel, json.dumps(event_payload))
-                except Exception as pub_err:
-                    logger.error(f"Failed to publish mutable transcript update for meeting {internal_meeting_id}: {pub_err}")
+                
+                # Publish mutable transcript update via Redis Pub/Sub (change-only)
+                if changed_segments:
+                    try:
+                        event_payload = {
+                            "type": "transcript.mutable",
+                            "meeting": {"id": internal_meeting_id},
+                            "payload": {"segments": changed_segments},
+                            "ts": datetime.now(timezone.utc).isoformat()
+                        }
+                        channel = f"tc:meeting:{internal_meeting_id}:mutable"
+                        await redis_c.publish(channel, json.dumps(event_payload))
+                        logger.info(f"Published {len(changed_segments)} changed segments to {channel}")
+                    except Exception as pub_err:
+                        logger.error(f"Failed to publish mutable transcript update for meeting {internal_meeting_id}: {pub_err}")
+                else:
+                    logger.debug(f"No changed segments to publish for meeting {internal_meeting_id} from message {message_id}")
             else:
                 logger.info(f"No valid segments found in message {message_id} for meeting {internal_meeting_id} to store in Redis.")
             return True
