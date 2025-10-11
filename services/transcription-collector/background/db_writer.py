@@ -203,14 +203,9 @@ async def process_redis_to_postgres(redis_c: aioredis.Redis, local_transcription
                                     meet_row = None
                                 if meet_row and meet_row.platform and meet_row.platform_specific_id:
                                     try:
-                                        payload = {
-                                            "type": "transcript.finalized",
-                                            "meeting": {"platform": meet_row.platform, "native_id": meet_row.platform_specific_id},
-                                            "payload": {"segments": segs},
-                                            "ts": datetime.now(timezone.utc).isoformat()
-                                        }
-                                        channel = f"tc:meeting:{meet_row.user_id}:{meet_row.platform}:{meet_row.platform_specific_id}:finalized"
-                                        await redis_c.publish(channel, json.dumps(payload))
+                                        # Do not publish finalized frames anymore; clients ignore them.
+                                        # Keep DB persistence only.
+                                        pass
                                     except Exception as _pub_err:
                                         logger.error(f"Failed to publish finalized segments for meeting {m_id}: {_pub_err}")
                         except Exception as pub_err:

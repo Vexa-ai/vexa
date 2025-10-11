@@ -114,7 +114,7 @@ Live transcript segments that may be updated.
 ```json
 {
   "type": "transcript.mutable",
-  "meeting": {"platform": "google_meet", "native_id": "kzj-grsa-cqf"},
+  "meeting": {"id": 12345},
   "payload": {
     "segments": [
       {
@@ -138,12 +138,7 @@ Live transcript segments that may be updated.
 **Note**: Additional fields like `session_uid`, `speaker_mapping_status`, and relative timing (`start`, `end_time`) may be present but are not required for basic transcript processing.
 
 #### `transcript.finalized`
-Finalized transcript segments that won't change.
-
-
-```
-
-**Note**: `transcript.finalized` messages are currently not used by the algorithm and are ignored. Only `transcript.mutable` messages are processed for live transcript updates.
+**DEPRECATED**: No longer emitted. `transcript.finalized` messages are not used by clients. Only `transcript.mutable` messages are processed for live transcript updates. Use the REST API endpoint to fetch the complete, stable transcript.
 
 #### `meeting.status`
 Meeting status updates.
