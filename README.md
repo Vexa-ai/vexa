@@ -150,7 +150,6 @@ The Vexa API provides powerful abstractions and a clear separation of concerns, 
 - **Real-time Transcription:** Low-latency, multilingual transcription service is live
 - **Real-time Translation:** Instant translation between 100 supported languages
 - **WebSocket Streaming:** Sub-second transcript delivery via WebSocket API
-- **Pending:** Speaker identification is under development
 
 ## Coming Next
 
