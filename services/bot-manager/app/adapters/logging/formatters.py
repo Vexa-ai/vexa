@@ -175,7 +175,10 @@ class ColorLognameFormatter(logging.Formatter):
         super().__init__(fmt, *args, **kwargs)
         self.namespace = namespace
         # Assign a consistent color based on namespace hash
-        self.color = COLORS[hash(namespace) % len(COLORS)]
+        # import hashlib
+        # color_index = int(hashlib.sha1(namespace.encode()).hexdigest(), 16) % len(COLORS)
+        color_index = hash(namespace) % len(COLORS)
+        self.color = COLORS[color_index]
 
     def _should_use_color(self) -> bool:
         """Determine if colored output should be used.

@@ -2,8 +2,8 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from shared_models.models import Meeting, MeetingSession, User
 from sqlalchemy import select
+from pprint import pformat
 from dependency_injector.wiring import inject, Provide
-
 from app.core.protocols.logger_protocol import LoggerProtocol
 
 @inject
@@ -17,7 +17,7 @@ async def run(
     """
     logger.info(f"Executing send_webhook task for meeting {meeting.id}")
 
-    logger.debug(f"🔍 Meeting: {meeting}")
+    logger.debug(f"🔍 Meeting: {pformat(vars(meeting), indent=2)}")
 
     # The user should be loaded on the meeting object already by the task runner
     user = meeting.user

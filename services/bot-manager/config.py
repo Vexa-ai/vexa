@@ -20,5 +20,6 @@ monkey_patch_loggers([
         'sqlalchemy.pool.impl.AsyncAdaptedQueuePool',
         'bot_manager.docker_utils',
         'httpx',
+        'httpcore',
         'bot_manager'
 ])

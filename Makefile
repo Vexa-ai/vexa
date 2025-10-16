@@ -240,6 +240,7 @@ test-services: test-bot-manager
 	@echo "---> All service tests completed."
 
 # Replay end-of-meeting scenarios for debugging and testing
+replay-end-of-meeting: DEBUG?="httpx,e2e.tests*"
 replay-end-of-meeting:
 ifndef SESSION_ID
 	@echo "ERROR: SESSION_ID is required. Usage: make replay-end-of-meeting SESSION_ID=session-abc123 [DRY_RUN=true]"
@@ -260,7 +261,7 @@ endif
 	else \
 		echo "---> LIVE MODE: Using real webhook delivery"; \
 	fi
-	@cd services/bot-manager && DRY_RUN=$(DRY_RUN) DEBUG=httpx,e2e.tests* LOG_LEVEL=DEBUG pytest -m e2e tests/e2e/test_end_of_meeting.py::TestEndOfMeeting::test_end_of_meeting_by_session_id -s --disable-warnings --log-http
+	@cd services/bot-manager && DRY_RUN=$(DRY_RUN) DEBUG=$(DEBUG) LOG_LEVEL=DEBUG pytest -m e2e tests/e2e/test_end_of_meeting.py::TestEndOfMeeting::test_end_of_meeting_by_session_id -s --disable-warnings --log-http
 
 # --- Database Migration Commands ---
 

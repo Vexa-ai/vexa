@@ -51,6 +51,11 @@ class StandardLogger(LoggerProtocol):
                 prefix = enabled_ns[:-1]
                 if self.name.startswith(prefix):
                     return True
+            elif enabled_ns.startswith('*'):
+                # Wildcard matching (e.g., "bot:*" matches "bot:webhook")
+                prefix = enabled_ns[1]
+                if self.name.__contains__(prefix):
+                    return True
         
         return False
         
