@@ -415,11 +415,21 @@ export async function runBot(botConfig: BotConfig): Promise<void> {
       ]
     });
     
-    // Create context with simple permissions (exactly like simple-bot.js)
+    // Create context with CSP bypass to allow script injection (like Google Meet)
     const context = await browserInstance.newContext({
       permissions: ['microphone', 'camera'],
-      ignoreHTTPSErrors: true
+      ignoreHTTPSErrors: true,
+      bypassCSP: true
     });
+    
+    // Pre-inject browser utils before any page scripts (affects current + future navigations)
+    try {
+      await context.addInitScript({
+        path: require('path').join(__dirname, 'browser-utils.global.js'),
+      });
+    } catch (e) {
+      log(`Warning: context.addInitScript failed: ${(e as any)?.message || e}`);
+    }
     
     page = await context.newPage();
   } else {

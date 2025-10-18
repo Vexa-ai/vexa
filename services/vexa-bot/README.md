@@ -123,18 +123,36 @@ await runMeetingFlow("google_meet", botConfig, page, gracefulLeave, {
 
 ## Development & Debugging
 
-Hot‑reload debug runner (unified):
+Hot Dev Kit (local Makefile):
 
 ```bash
-cd vexa/services/vexa-bot/core/src/platforms
-./hot-debug.sh google https://meet.google.com/abc-def-ghi
-./hot-debug.sh teams  https://teams.live.com/meet/123456789
+cd vexa/services/vexa-bot
+
+# Setup (once) - builds image + creates dist/ for hot-reload
+make build
+
+# Run hot debug - auto-detects platform from URL
+make test MEETING_URL='https://teams.live.com/meet/9367932910098?p=zy8eNwmCHoLrdJ6WwZ'
+
+# Edit code workflow:
+# 1. Edit TypeScript files
+# 2. make rebuild        (fast ~10s, updates dist/)
+# 3. Restart bot         (Ctrl+C + rerun make test)
+
+# Control the running bot
+make publish-leave                    # Graceful leave
+make publish DATA='{"action":"..."}'  # Custom command
 ```
 
+Why hot-reload is faster:
+- `make build` = full Docker rebuild (~60s) - only needed once or when changing dependencies
+- `make rebuild` = just TypeScript→JavaScript (~10s) - use this when editing code
+- The bot container bind-mounts `dist/`, so it picks up your changes without rebuilding the image!
+
 Notes:
-- The script rebuilds `core/dist` automatically and runs the container with bind‑mounted `dist/`
-- Screenshots saved to `/home/dima/dev/bot-storage/screenshots/run-<timestamp>`
-- Sends a Redis leave command automatically to test graceful shutdown
+- Screenshots saved to `debug/screenshots/run-<timestamp>` (repo-relative)
+- Single hot-bot identity: channel `bot_commands:hot-debug`, container `vexa-bot-hot`
+- No local `node_modules` needed (uses Docker)
 
 Build only:
 
