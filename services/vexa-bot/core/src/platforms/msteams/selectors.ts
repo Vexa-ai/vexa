@@ -223,19 +223,13 @@ export const teamsSpeakingIndicators: string[] = [
 
 // Teams removal/error state indicators
 export const teamsRemovalIndicators: string[] = [
-  // Removal messages
+  // Strong removal/error messages
   'text="You\'ve been removed from this meeting"',
   'text*="You\'ve been removed from this meeting"',
   'text="You have been removed from this meeting"',
   'text*="You have been removed from this meeting"',
   'text="Removed from meeting"',
   'text*="Removed from meeting"',
-  
-  // Removal buttons
-  'button:has-text("Rejoin")',
-  'button:has-text("Dismiss")',
-  'button[aria-label*="Rejoin"]',
-  'button[aria-label*="Dismiss"]',
   
   // Error states
   'text="Meeting ended"',

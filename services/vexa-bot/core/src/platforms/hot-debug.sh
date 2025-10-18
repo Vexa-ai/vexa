@@ -1,56 +1,74 @@
 #!/bin/bash
 
-# Unified Platform Hot-Reload Debug Script
-# Runs bot containers with bind mounts so you can live-edit code
-# without rebuilding the image. Supports both Google Meet and Teams.
-#
+# Unified Platform Hot-Reload Debug Script (URL-only)
 # Usage:
-#   ./hot-debug.sh google [meeting-url]
-#   ./hot-debug.sh teams [meeting-url]
+#   ./hot-debug.sh <meeting-url>   # auto-detects platform from URL
 
 set -e
 
-# Check platform argument
-PLATFORM="${1}"
-if [[ "$PLATFORM" != "google" && "$PLATFORM" != "teams" ]]; then
-  echo "❌ Usage: $0 <google|teams> [meeting-url]"
-  echo "   Examples:"
-  echo "     $0 google https://meet.google.com/abc-defg-hij"
-  echo "     $0 teams https://teams.live.com/meet/123456789"
+# Resolve paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || (cd "$SCRIPT_DIR/../../../.." && pwd))"
+DEBUG_DIR="$REPO_ROOT/debug"
+mkdir -p "$DEBUG_DIR"
+
+echo "📍 REPO_ROOT: $REPO_ROOT"
+echo "📍 DEBUG_DIR: $DEBUG_DIR"
+
+# Require URL and auto-detect platform
+if [[ -z "$1" ]]; then
+  echo "❌ Usage: $0 <meeting-url>"
   exit 1
 fi
 
-# Platform-specific configuration
+MEETING_URL="$1"
+case "$MEETING_URL" in
+  *"meet.google.com"*) PLATFORM="google" ;;
+  *"teams.live.com"*|*"microsoft.com"*) PLATFORM="teams" ;;
+  *)
+    echo "❌ Cannot detect platform from URL:"
+    echo "    $MEETING_URL"
+    echo "   Expected domains: meet.google.com or teams.live.com"
+    exit 1
+    ;;
+esac
+
+# Single hot-bot identity (assumes one hot bot at a time)
+CONTAINER_NAME="${CONTAINER_NAME:-vexa-bot-hot}"
+CONNECTION_ID="${CONNECTION_ID:-hot-debug}"
+REDIS_CHANNEL="${REDIS_CHANNEL:-bot_commands:hot-debug}"
+BOT_NAME="${BOT_NAME:-HotDebugBot}"
+
+# Platform-specific minor details and extract meeting ID from URL
 if [[ "$PLATFORM" == "google" ]]; then
-  CONTAINER_NAME="vexa-bot-google-hot"
   PLATFORM_CONFIG="google_meet"
-  BOT_NAME="GoogleDebugBot"
-  CONNECTION_ID="google-hot-debug"
-  MEETING_ID="google-debug-meeting"
-  DEFAULT_URL="https://meet.google.com/kba-qqag-vpq"
   ADMISSION_SCREENSHOT="bot-checkpoint-2-admitted.png"
-  REDIS_CHANNEL="bot_commands:google-hot-debug"
+  # Extract Google Meet code (e.g., abc-defg-hij from meet.google.com/abc-defg-hij)
+  MEETING_ID=$(echo "$MEETING_URL" | sed -n 's|.*meet.google.com/\([^?]*\).*|\1|p')
+  [ -z "$MEETING_ID" ] && MEETING_ID="google-hot-debug-$(date +%s)"
 else
-  CONTAINER_NAME="vexa-bot-teams-hot"
   PLATFORM_CONFIG="teams"
-  BOT_NAME="TeamsDebugBot"
-  CONNECTION_ID="teams-hot-debug"
-  MEETING_ID="9327884808517"
-  DEFAULT_URL="https://teams.live.com/meet/9342205715849?p=1Tw4SOPN4ZfYgCKRcQ"
   ADMISSION_SCREENSHOT="teams-status-startup.png"
-  REDIS_CHANNEL="bot_commands:teams-hot-debug"
+  # Extract Teams meeting ID (e.g., 9367932910098 from teams.live.com/meet/9367932910098)
+  MEETING_ID=$(echo "$MEETING_URL" | sed -n 's|.*meet/\([0-9]*\).*|\1|p')
+  [ -z "$MEETING_ID" ] && MEETING_ID="teams-hot-debug-$(date +%s)"
 fi
 
 # Configuration
 IMAGE_NAME="vexa-bot:test"
-SCREENSHOTS_DIR="/home/dima/dev/bot-storage/screenshots/run-$(date +%Y%m%d-%H%M%S)"
-MEETING_URL="${2:-$DEFAULT_URL}"
+DOCKER_NETWORK="${DOCKER_NETWORK:-vexa_dev_vexa_default}"
+
+# Resolve core/dist for bind mount
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"  # core root
+DIST_DIR="$ROOT_DIR/dist"                    # core/dist (built output)
+
+# Run directory (repo-relative debug/)
+RUN_DIR="$DEBUG_DIR/screenshots/run-$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$RUN_DIR"
+SCREENSHOTS_DIR="$RUN_DIR"
 
 echo "🔥 Starting $PLATFORM Hot-Reload Debug"
-
-# Create screenshots directory for this run
-echo "📁 Creating screenshots directory: $SCREENSHOTS_DIR"
-mkdir -p "$SCREENSHOTS_DIR"
+echo "📸 Screenshots: $SCREENSHOTS_DIR"
 
 # Clean up any existing container
 echo "🧹 Cleaning up existing container if present..."
@@ -58,51 +76,40 @@ docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
 
 # Make sure the image exists
 if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
-  echo "❌ Image $IMAGE_NAME not found. Build it once first."
+  echo "❌ Image $IMAGE_NAME not found. Build it once first: make build"
   exit 1
 fi
 
-# Resolve paths
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"  # core root
-DIST_DIR="$ROOT_DIR/dist"                    # core/dist (built output)
-
-# Ensure fresh code by rebuilding dist files
-echo "🔄 Rebuilding dist files to ensure fresh code..."
-echo "📍 ROOT_DIR: $ROOT_DIR"
-cd "$ROOT_DIR"
-npm run build
-echo "✅ Dist files rebuilt"
-
+# Check if dist exists (rebuild manually if needed: make rebuild)
 if [ ! -d "$DIST_DIR" ]; then
-  echo "❌ Dist directory not found at $DIST_DIR after rebuild."
+  echo "❌ Dist directory not found at $DIST_DIR"
+  echo "    Run 'make rebuild' or 'cd core && npm run build' first"
   exit 1
 fi
 
 echo "🤖 Running $PLATFORM bot container with bind mounts (hot-reload)..."
-
-# Start the bot container in the background
 docker run --rm --name "$CONTAINER_NAME" \
-  --network vexa_dev_vexa_default \
+  --network "$DOCKER_NETWORK" \
   -v "$SCREENSHOTS_DIR:/app/storage/screenshots" \
   -v "$DIST_DIR:/app/dist" \
   -e BOT_CONFIG='{
-    "platform":"'$PLATFORM_CONFIG'",
-    "meetingUrl":"'$MEETING_URL'",
-    "botName":"'$BOT_NAME'",
-    "connectionId":"'$CONNECTION_ID'",
-    "nativeMeetingId":"'$MEETING_ID'",
+    "platform":"'"$PLATFORM_CONFIG"'",
+    "meetingUrl":"'"$MEETING_URL"'",
+    "botName":"'"$BOT_NAME"'",
+    "connectionId":"'"$CONNECTION_ID"'",
+    "nativeMeetingId":"'"$MEETING_ID"'",
     "token":"debug-token",
     "redisUrl":"redis://redis:6379/0",
-    "container_name":"'$CONTAINER_NAME'",
+    "container_name":"'"$CONTAINER_NAME"'",
     "automaticLeave":{
       "waitingRoomTimeout":300000,
       "noOneJoinedTimeout":600000,
       "everyoneLeftTimeout":120000
     }
   }' \
-  -e WHISPER_LIVE_URL="ws://whisperlive:9090" \
+  -e WHISPER_LIVE_URL="ws://whisperlive.internal/ws" \
   -e WL_MAX_CLIENTS="10" \
+  -e LOG_LEVEL="DEBUG" \
   --cap-add=SYS_ADMIN \
   --shm-size=2g \
   "$IMAGE_NAME" &
@@ -111,27 +118,29 @@ BOT_PID=$!
 
 echo "🚀 Bot container started with PID: $BOT_PID"
 echo "⏳ Waiting for bot to join and be admitted to the meeting..."
-
-# Wait for bot to be admitted (check for startup callback or screenshots)
 echo "📸 Monitoring for bot admission..."
-ADMISSION_TIMEOUT=30  # 30 seconds timeout
-ADMISSION_CHECK_INTERVAL=5  # Check every 5 seconds
+
+ADMISSION_TIMEOUT=30
+ADMISSION_CHECK_INTERVAL=5
 elapsed=0
 
 while [ $elapsed -lt $ADMISSION_TIMEOUT ]; do
-  # Check if startup screenshot exists (indicates bot is admitted)
   if [ -f "$SCREENSHOTS_DIR/$ADMISSION_SCREENSHOT" ]; then
     echo "✅ Bot admitted to meeting! Found admission screenshot."
     break
   fi
-  
-  # Check if container is still running
+
   if ! docker ps --format "table {{.Names}}" | grep -q "$CONTAINER_NAME"; then
     echo "❌ Bot container stopped unexpectedly before admission"
+    echo "📋 Bot logs:"
+    docker logs "$CONTAINER_NAME" 2>&1 || echo "(Container already removed)"
+    echo ""
+    echo "📸 Screenshots directory: $SCREENSHOTS_DIR"
+    ls -la "$SCREENSHOTS_DIR" 2>/dev/null || echo "  (empty or not accessible)"
     wait $BOT_PID
     exit 1
   fi
-  
+
   echo "⏳ Still waiting for admission... (${elapsed}s elapsed)"
   sleep $ADMISSION_CHECK_INTERVAL
   elapsed=$((elapsed + ADMISSION_CHECK_INTERVAL))
@@ -141,13 +150,19 @@ if [ $elapsed -ge $ADMISSION_TIMEOUT ]; then
   echo "⏰ Timeout waiting for bot admission. Proceeding with Redis command test anyway..."
 fi
 
+# Persist state for convenience commands
+STATE_FILE="$DEBUG_DIR/current.json"
+cat > "$STATE_FILE" <<EOF
+{ "platform": "$PLATFORM", "meetingUrl": "$MEETING_URL", "connectionId": "$CONNECTION_ID", "channel": "$REDIS_CHANNEL", "container": "$CONTAINER_NAME", "network": "$DOCKER_NETWORK", "screenshots": "$SCREENSHOTS_DIR" }
+EOF
+
 echo ""
 echo "🎯 Bot is now active! Testing automatic graceful leave..."
 echo "⏳ Waiting 5 seconds then triggering graceful leave for testing..."
 sleep 5
 
 echo "📡 Sending Redis leave command for testing..."
-docker run --rm --network vexa_dev_vexa_default \
+docker run --rm --network "$DOCKER_NETWORK" \
   redis:alpine redis-cli -h redis -p 6379 \
   PUBLISH "$REDIS_CHANNEL" '{"action":"leave"}'
 
@@ -172,7 +187,6 @@ if [ $shutdown_elapsed -ge $SHUTDOWN_TIMEOUT ]; then
 fi
 
 echo "🎉 Automatic graceful leave test completed!"
-cleanup_and_exit 0
 
 # Cleanup function
 cleanup_and_exit() {
@@ -186,9 +200,8 @@ cleanup_on_interrupt() {
     echo ""
     echo "🛑 Interrupt received! Sending Redis leave command..."
     
-    # Send Redis leave command
     echo "📡 Sending 'leave' command via Redis..."
-    docker run --rm --network vexa_dev_vexa_default \
+    docker run --rm --network "$DOCKER_NETWORK" \
       redis:alpine redis-cli -h redis -p 6379 \
       PUBLISH "$REDIS_CHANNEL" '{"action":"leave"}'
     
@@ -220,10 +233,10 @@ cleanup_on_interrupt() {
 trap cleanup_on_interrupt INT
 
 echo "🧪 Verifying Redis connectivity..."
-docker run --rm --network vexa_dev_vexa_default redis:alpine redis-cli -h redis -p 6379 PING
+docker run --rm --network "$DOCKER_NETWORK" redis:alpine redis-cli -h redis -p 6379 PING
 
 echo "🔎 Checking for subscriber on channel: $REDIS_CHANNEL"
-NUMSUB=$(docker run --rm --network vexa_dev_vexa_default redis:alpine redis-cli -h redis -p 6379 PUBSUB NUMSUB "$REDIS_CHANNEL" | awk 'NR==2{print $2}')
+NUMSUB=$(docker run --rm --network "$DOCKER_NETWORK" redis:alpine redis-cli -h redis -p 6379 PUBSUB NUMSUB "$REDIS_CHANNEL" | awk 'NR==2{print $2}')
 echo "🔎 PUBSUB NUMSUB $REDIS_CHANNEL => $NUMSUB"
 
 if [ "${NUMSUB:-0}" -ge 1 ]; then
