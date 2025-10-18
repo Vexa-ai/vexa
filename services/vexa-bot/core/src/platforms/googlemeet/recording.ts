@@ -2,6 +2,7 @@ import { Page } from "playwright";
 import { log } from "../../utils";
 import { BotConfig } from "../../types";
 import { WhisperLiveService } from "../../services/whisperlive";
+import { ensureBrowserUtils } from "../../utils/injection";
 import {
   googleParticipantSelectors,
   googleSpeakingClassNames,
@@ -25,88 +26,7 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
   log(`[Node.js] Using WhisperLive URL for Google Meet: ${whisperLiveUrl}`);
   log("Starting Google Meet recording with WebSocket connection");
 
-  // Load browser utility classes from the bundled global file
-  try {
-    await page.addScriptTag({
-      path: require('path').join(__dirname, '../../browser-utils.global.js'),
-    });
-  } catch (error: any) {
-    log(`Warning: Could not load browser utils via addScriptTag: ${error.message}`);
-    log("Attempting alternative loading method...");
-    
-    // Alternative: Load script content and evaluate it
-    const fs = require('fs');
-    const path = require('path');
-    const scriptPath = path.join(__dirname, '../../browser-utils.global.js');
-    
-    try {
-      const scriptContent = fs.readFileSync(scriptPath, 'utf8');
-      await page.evaluate(async (script) => {
-        try {
-          // Use Trusted Types to inject inline script text, or fallback to Blob URL
-          const injectWithTrustedTypes = () => {
-            const policy = (window as any).trustedTypes?.createPolicy('vexaPolicy', {
-              createScript: (s: string) => s,
-              createScriptURL: (s: string) => s
-            });
-            const scriptEl = document.createElement('script');
-            if (policy) {
-              // Assign TrustedScript to text to satisfy Meet's Trusted Types policy
-              (scriptEl as any).text = policy.createScript(script);
-              document.head.appendChild(scriptEl);
-              return Promise.resolve();
-            }
-            return Promise.reject(new Error('Trusted Types not available'));
-          };
-
-          const injectWithBlobUrl = () => new Promise<void>((resolve, reject) => {
-            try {
-              const blob = new Blob([script], { type: 'text/javascript' });
-              const url = URL.createObjectURL(blob);
-              const policy = (window as any).trustedTypes?.createPolicy('vexaPolicy', {
-                createScriptURL: (u: string) => u
-              });
-              const scriptEl = document.createElement('script');
-              // If Trusted Types enforced for src, use policy-created URL
-              const finalUrl = policy ? (policy as any).createScriptURL(url) : url;
-              (scriptEl as any).src = finalUrl as any;
-              scriptEl.onload = () => {
-                resolve();
-              };
-              scriptEl.onerror = (e) => {
-                reject(new Error('Failed to load browser utils via blob URL'));
-              };
-              document.head.appendChild(scriptEl);
-            } catch (err) {
-              reject(err as any);
-            }
-          });
-
-          // Try Trusted Types inline first, then fallback to blob URL
-          try {
-            await injectWithTrustedTypes();
-          } catch {
-            await injectWithBlobUrl();
-          }
-
-          // Verify availability on window
-          const utils = (window as any).VexaBrowserUtils;
-          if (!utils) {
-            console.error('VexaBrowserUtils not found after injection');
-          } else {
-            console.log('VexaBrowserUtils loaded keys:', Object.keys(utils));
-          }
-        } catch (error) {
-          console.error('Error injecting browser utils script:', (error as any)?.message || error);
-          throw error;
-        }
-      }, scriptContent);
-      log("Browser utils loaded and available as window.VexaBrowserUtils");
-    } catch (evalError: any) {
-      log(`Error loading browser utils via evaluate: ${evalError.message}`);
-      throw new Error(`Failed to load browser utilities: ${evalError.message}`);
-    }
-  }
+  await ensureBrowserUtils(page, require('path').join(__dirname, '../../browser-utils.global.js'));
 
   // Pass the necessary config fields and the resolved URL into the page context
   await page.evaluate(

@@ -2,6 +2,7 @@ import { Page } from "playwright";
 import { log } from "../../utils";
 import { BotConfig } from "../../types";
 import { WhisperLiveService } from "../../services/whisperlive";
+import { ensureBrowserUtils } from "../../utils/injection";
 import {
   teamsParticipantSelectors,
   teamsSpeakingClassNames,
@@ -30,92 +31,7 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
   log(`[Node.js] Using WhisperLive URL for Teams: ${whisperLiveUrl}`);
   log("Starting Teams recording with WebSocket connection");
 
-  // Load browser utility classes (aligned with Google Meet)
-  const utilsAlreadyLoaded = await page.evaluate(() => !!(window as any).VexaBrowserUtils);
-  if (!utilsAlreadyLoaded) {
-    try {
-      // Fast path: with bypassCSP this should succeed
-      await page.addScriptTag({
-        path: require('path').join(__dirname, '../../browser-utils.global.js'),
-      });
-    } catch (error: any) {
-      log(`Warning: Could not load browser utils via addScriptTag: ${error.message}`);
-      log("Attempting alternative loading method...");
-      const fs = require('fs');
-      const path = require('path');
-      const scriptPath = path.join(__dirname, '../../browser-utils.global.js');
-      
-      try {
-        const scriptContent = fs.readFileSync(scriptPath, 'utf8');
-        await page.evaluate(async (script) => {
-          try {
-            const injectWithTrustedTypes = () => {
-              const factory = (window as any).trustedTypes;
-              if (!factory || typeof factory.createPolicy !== 'function') {
-                return Promise.reject(new Error('Trusted Types not available'));
-              }
-              const policy = factory.createPolicy('vexaPolicy', {
-                createScript: (s: string) => s,
-                createScriptURL: (s: string) => s
-              } as any);
-              const scriptEl = document.createElement('script');
-              (scriptEl as any).text = (policy as any).createScript(script);
-              document.head.appendChild(scriptEl);
-              return Promise.resolve();
-            };
-
-            const injectWithBlobUrl = () => new Promise<void>((resolve, reject) => {
-              try {
-                const blob = new Blob([script], { type: 'text/javascript' });
-                const url = URL.createObjectURL(blob);
-                let finalUrl: any = url;
-                try {
-                  const factory = (window as any).trustedTypes;
-                  if (factory && typeof factory.createPolicy === 'function') {
-                    const policy = factory.createPolicy('vexaPolicy', {
-                      createScriptURL: (u: string) => u
-                    } as any);
-                    if (policy && typeof (policy as any).createScriptURL === 'function') {
-                      finalUrl = (policy as any).createScriptURL(url);
-                    }
-                  }
-                } catch (_) {
-                  finalUrl = url; // fallback to plain blob URL
-                }
-                const scriptEl = document.createElement('script');
-                (scriptEl as any).src = finalUrl;
-                scriptEl.onload = () => resolve();
-                scriptEl.onerror = () => reject(new Error('Failed to load browser utils via blob URL'));
-                document.head.appendChild(scriptEl);
-              } catch (err) {
-                reject(err as any);
-              }
-            });
-
-            try {
-              await injectWithTrustedTypes();
-            } catch {
-              await injectWithBlobUrl();
-            }
-
-            const utils = (window as any).VexaBrowserUtils;
-            if (!utils) {
-              console.error('VexaBrowserUtils not found after injection');
-            } else {
-              console.log('VexaBrowserUtils loaded keys:', Object.keys(utils));
-            }
-          } catch (e) {
-            console.error('Error injecting browser utils script:', (e as any)?.message || e);
-            throw e;
-          }
-        }, scriptContent);
-        log("Browser utils loaded and available as window.VexaBrowserUtils");
-      } catch (evalError: any) {
-        log(`Error loading browser utils via evaluate: ${evalError.message}`);
-        throw new Error(`Failed to load browser utilities: ${evalError.message}`);
-      }
-    }
-  }
+  await ensureBrowserUtils(page, require('path').join(__dirname, '../../browser-utils.global.js'));
 
   // Pass the necessary config fields and the resolved URL into the page context
   await page.evaluate(
