@@ -107,7 +107,7 @@ docker run --rm --name "$CONTAINER_NAME" \
       "everyoneLeftTimeout":120000
     }
   }' \
-  -e WHISPER_LIVE_URL="ws://whisperlive.internal/ws" \
+  -e WHISPER_LIVE_URL="ws://whisperlive:9090" \
   -e WL_MAX_CLIENTS="10" \
   -e LOG_LEVEL="DEBUG" \
   --cap-add=SYS_ADMIN \
