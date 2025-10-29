@@ -420,6 +420,114 @@ const startRecording = async (
 
               let sessionAudioStartTimeMs: number | null = null; // ADDED: For relative speaker timestamps
 
+              // Speech activity tracking variables for intelligent meeting end detection
+              let meetingHasHadSpeech = false; // Tracks if anyone has spoken during the meeting
+              let lastSpeechTime: number | null = null; // Timestamp of last speech activity
+              let spokenSpeakers = new Set<string>(); // Names of people who have spoken
+              let silenceCountdown = 0; // Countdown timer in seconds (0 = not active)
+              let meetingJoinTime = Date.now(); // When bot joined the meeting
+              let isInSilenceCountdown = false; // Flag to prevent multiple countdown starts
+
+              function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
+                if (a.size !== b.size) return false;
+                for (const x of a) if (!b.has(x)) return false;
+                return true;
+              }
+
+              // Intelligent meeting end detection logic
+              const shouldLeaveMeeting = (
+                participantCount: number
+              ): { shouldLeave: boolean; reason: string } => {
+                const now = Date.now();
+                const timeSinceJoin = now - meetingJoinTime;
+
+                // Case 1: Dead meeting detection (never had speech)
+                if (!meetingHasHadSpeech) {
+                  const deadMeetingTimeoutMs = 5 * 60 * 1000; // 5 minutes
+                  if (timeSinceJoin > deadMeetingTimeoutMs) {
+                    return {
+                      shouldLeave: true,
+                      reason:
+                        "Dead meeting - no speech for 5 minutes after joining",
+                    };
+                  }
+                  return {
+                    shouldLeave: false,
+                    reason: "Waiting for first speech activity",
+                  };
+                }
+
+                // Case 2: Meeting had speech, now checking for end conditions
+                if (!lastSpeechTime) {
+                  return {
+                    shouldLeave: false,
+                    reason: "No speech timing data available",
+                  };
+                }
+
+                const timeSinceLastSpeech = now - lastSpeechTime;
+                const twoMinutesMs = 2 * 60 * 1000;
+
+                // Case 3: Recent speech activity - meeting is active
+                if (timeSinceLastSpeech < twoMinutesMs) {
+                  return {
+                    shouldLeave: false,
+                    reason: `Recent speech activity (${Math.round(
+                      timeSinceLastSpeech / 1000
+                    )}s ago)`,
+                  };
+                }
+
+                // Case 4: No speech for 2+ minutes, check remaining participants
+                const remainingParticipants = new Set(
+                  Array.from(activeParticipants.values()).map((p) => p.name)
+                );
+                const silentParticipants = new Set(
+                  Array.from(remainingParticipants).filter(
+                    (name) => !spokenSpeakers.has(name)
+                  )
+                );
+
+                // If all remaining participants have never spoken, start/continue countdown
+                if (
+                  setsEqual(silentParticipants, remainingParticipants) &&
+                  remainingParticipants.size > 0
+                ) {
+                  if (!isInSilenceCountdown) {
+                    // Start countdown
+                    isInSilenceCountdown = true;
+                    silenceCountdown = 180; // 3 minutes in seconds
+                    (window as any).logBot(
+                      `🕐 Starting 3-minute countdown - all ${remainingParticipants.size} remaining participants are silent`
+                    );
+                  }
+
+                  // Continue countdown
+                  if (silenceCountdown > 0) {
+                    return {
+                      shouldLeave: false,
+                      reason: `Silence countdown: ${Math.round(
+                        silenceCountdown
+                      )}s remaining`,
+                    };
+                  } else {
+                    return {
+                      shouldLeave: true,
+                      reason:
+                        "Silence countdown completed - meeting appears ended",
+                    };
+                  }
+                }
+
+                // Case 5: Some remaining participants have spoken before - keep waiting
+                return {
+                  shouldLeave: false,
+                  reason: `Some participants (${
+                    remainingParticipants.size - silentParticipants.size
+                  }/${remainingParticipants.size}) have spoken before`,
+                };
+              };
+
               const setupWebSocket = () => {
                 try {
                   if (socket) {
@@ -520,14 +628,73 @@ const startRecording = async (
                       }
                     } else {
                       // --- ADDED: Collect transcription segments for SRT ---
+                      const transcriptionData = data["segments"] || data;
                       botCallbacks?.onTranscriptionSegmentsReceived(
-                        data["segments"] || data
+                        transcriptionData
                       );
+
+                      // Process speech activity for intelligent meeting end detection
+                      processSpeechActivity(transcriptionData);
 
                       (window as any).logBot(
                         `Transcription: ${JSON.stringify(data)}`
                       );
                     }
+                  };
+
+                  // Helper function to process speech activity from transcription data
+                  const processSpeechActivity = (transcriptionData: any) => {
+                    // Handle both single segment and array of segments
+                    const segments = Array.isArray(transcriptionData)
+                      ? transcriptionData
+                      : transcriptionData.segments || [transcriptionData];
+
+                    segments.forEach((segment: any) => {
+                      const segmentDuration = segment.end - segment.start;
+                      const minimumDuration = 2.0;
+
+                      // Check if segment has meaningful duration (instead of text content)
+                      if (segmentDuration >= minimumDuration) {
+                        // Mark that meeting has had someone speaking
+                        if (!meetingHasHadSpeech) {
+                          meetingHasHadSpeech = true;
+                          (window as any).logBot(
+                            "🎤 First speech detected in meeting - speech tracking now active"
+                          );
+                        }
+
+                        // Update last speech time
+                        lastSpeechTime = Date.now();
+
+                        // Track speaker history (if speaker info available)
+                        if (segment.speaker) {
+                          const speakerName = segment.speaker.toString();
+                          if (!spokenSpeakers.has(speakerName)) {
+                            spokenSpeakers.add(speakerName);
+                            (window as any).logBot(
+                              `📝 New speaker detected: ${speakerName} ${segmentDuration.toFixed(
+                                1
+                              )}s`
+                            );
+                          }
+                        }
+
+                        // Reset silence countdown if we were in one
+                        if (isInSilenceCountdown) {
+                          isInSilenceCountdown = false;
+                          silenceCountdown = 0;
+                          (window as any).logBot(
+                            "🔄 Speech detected - resetting silence countdown"
+                          );
+                        }
+                      } else if (segmentDuration > 0) {
+                        (window as any).logBot(
+                          `🔇 Short segment ignored: ${segmentDuration.toFixed(
+                            1
+                          )}s (speaker: ${segment.speaker || "unknown"})`
+                        );
+                      }
+                    });
                   };
 
                   socket.onerror = (event) => {
@@ -1317,36 +1484,88 @@ const startRecording = async (
                   }
                 }
 
-                // FIXED: Correct logic for tracking alone time
+                // Intelligent meeting end detection
+                const meetingEndDecision = shouldLeaveMeeting(count);
+
+                // CRITICAL: Handle "alone in meeting" case first (preserve existing behavior)
                 if (count <= 1) {
-                  // Bot is 1, so count <= 1 means bot is alone
-                  aloneTime += 5; // It's a 5-second interval
-                } else {
-                  // Someone else is here, so reset the timer.
+                  // Bot is alone - use original logic for immediate response
+                  aloneTime += 5; // Keep existing aloneTime tracking
+
+                  if (aloneTime >= 10) {
+                    (window as any).logBot(
+                      "Meeting ended or bot has been alone for 10 seconds. Stopping recorder..."
+                    );
+                    clearInterval(checkInterval);
+                    recorder.disconnect();
+                    (window as any).triggerNodeGracefulLeave();
+                    resolve();
+                    return;
+                  }
+
+                  // Log countdown if timer has started
                   if (aloneTime > 0) {
                     (window as any).logBot(
-                      "Another participant joined. Resetting alone timer."
+                      `Bot has been alone for ${aloneTime} seconds. Will leave in ${
+                        10 - aloneTime
+                      } more seconds.`
                     );
                   }
-                  aloneTime = 0;
+                  return; // Skip new speech-based logic when alone
                 }
 
-                if (aloneTime >= 10) {
-                  // If bot has been alone for 10 seconds...
+                // NEW: Apply speech-based logic only when other participants are present
+
+                // Update silence countdown if active
+                if (isInSilenceCountdown && silenceCountdown > 0) {
+                  silenceCountdown -= 5; // Subtract 5 seconds (interval duration)
+                }
+
+                // Handle new participants joining during countdown
+                if (count > activeParticipants.size) {
                   (window as any).logBot(
-                    "Meeting ended or bot has been alone for 10 seconds. Stopping recorder..."
+                    `New participant detected - updating participant tracking (${activeParticipants.size} → ${count})`
+                  );
+
+                  // Reset countdown if we were in one (new participant might speak)
+                  if (isInSilenceCountdown) {
+                    isInSilenceCountdown = false;
+                    silenceCountdown = 0;
+                    (window as any).logBot(
+                      "🔄 New participant joined - resetting silence countdown"
+                    );
+                  }
+
+                  // Update activeParticipants size for next comparison
+                  // Note: The actual participant data will be updated by the observer logic
+                }
+
+                // Enhanced debug logging for speech activity
+                const debugInfo = {
+                  participants: count,
+                  hasHadSpeech: meetingHasHadSpeech,
+                  lastSpeechTime: lastSpeechTime
+                    ? Math.round((Date.now() - lastSpeechTime) / 1000)
+                    : "never",
+                  spokenSpeakers: Array.from(spokenSpeakers),
+                  silenceCountdown: silenceCountdown,
+                  isInCountdown: isInSilenceCountdown,
+                  decision: meetingEndDecision.reason,
+                };
+
+                (window as any).logBot(
+                  `🎯 Meeting Debug: ${JSON.stringify(debugInfo, null, 2)}`
+                );
+
+                // Decide whether to leave
+                if (meetingEndDecision.shouldLeave) {
+                  (window as any).logBot(
+                    `🚪 Leaving meeting: ${meetingEndDecision.reason}`
                   );
                   clearInterval(checkInterval);
                   recorder.disconnect();
                   (window as any).triggerNodeGracefulLeave();
                   resolve();
-                } else if (aloneTime > 0) {
-                  // Log countdown if timer has started
-                  (window as any).logBot(
-                    `Bot has been alone for ${aloneTime} seconds. Will leave in ${
-                      10 - aloneTime
-                    } more seconds.`
-                  );
                 }
               }, 5000);
 
