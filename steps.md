@@ -76,20 +76,20 @@ let isInSilenceCountdown = false; // Flag to prevent multiple countdown starts
 ```typescript
 // Helper function to process speech activity from transcription data
 const processSpeechActivity = (transcriptionData: any) => {
-  // Handle both single segment and array of segments
+// Handle both single segment and array of segments
   const segments = Array.isArray(transcriptionData)
     ? transcriptionData
     : transcriptionData.segments || [transcriptionData];
 
-  segments.forEach((segment: any) => {
-    if (segment.text && segment.text.trim().length > 0) {
-      // Mark that meeting has had speech
-      if (!meetingHasHadSpeech) {
-        meetingHasHadSpeech = true;
+segments.forEach((segment: any) => {
+if (segment.text && segment.text.trim().length > 0) {
+// Mark that meeting has had speech
+if (!meetingHasHadSpeech) {
+meetingHasHadSpeech = true;
         (window as any).logBot(
           "🎤 First speech detected in meeting - speech tracking now active"
         );
-      }
+}
 
       // Update last speech time
       lastSpeechTime = Date.now();
@@ -112,7 +112,7 @@ const processSpeechActivity = (transcriptionData: any) => {
         );
       }
     }
-  });
+});
 };
 ```
 

@@ -68,7 +68,7 @@ services:
       - DEVICE_TYPE=${DEVICE_TYPE}
       - WHISPER_LIVE_URL=ws://whisperlive.internal/ws
       - RECORDING_VOLUME_PATH=/app/recordings
-      - RECORDING_BIND_SOURCE=/data/vexa/recordings
+      - RECORDING_BIND_SOURCE=${WORKING_DIR:-.}data/vexa/recordings
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${WORKING_DIR:-.}/data/vexa/recordings:/app/recordings
