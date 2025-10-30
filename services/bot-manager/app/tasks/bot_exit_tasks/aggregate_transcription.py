@@ -1,11 +1,16 @@
-import logging
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from shared_models.models import Meeting
+from dependency_injector.wiring import inject, Provide
 
-logger = logging.getLogger(__name__)
+from app.core.protocols.logger_protocol import LoggerProtocol
 
-async def run(meeting: Meeting, db: AsyncSession):
+@inject
+async def run(
+    meeting: Meeting, 
+    db: AsyncSession,
+    logger: LoggerProtocol = Provide["logging.transcription_logger"]
+):
     """
     Fetches transcription data from the transcription-collector service,
     aggregates participant and language information, and updates the meeting record.
@@ -73,9 +78,13 @@ async def run(meeting: Meeting, db: AsyncSession):
                 logger.info(f"No new participants or languages to aggregate for meeting {meeting_id}")
 
         else:
-            logger.error(f"Failed to get transcript from collector for meeting {meeting_id}. Status: {response.status_code}, Body: {response.text}")
+            error_msg = f"Failed to get transcript from collector for meeting {meeting_id}. Status: {response.status_code}, Body: {response.text}"
+            logger.error(error_msg)
+            raise Exception(f"Transcription collector returned error: {response.status_code}")
 
     except httpx.RequestError as exc:
-        logger.error(f"An error occurred while requesting transcript for meeting {meeting_id} from {exc.request.url!r}: {exc}", exc_info=True)
+        logger.error(f"An error occurred while requesting transcript for meeting {meeting_id} from {exc.request.url!r}: {exc}")
+        raise Exception(f"Failed to connect to transcription collector: {exc}")
     except Exception as e:
-        logger.error(f"Failed to process and aggregate data for meeting {meeting_id}: {e}", exc_info=True) 
+        logger.error(f"Failed to process and aggregate data for meeting {meeting_id}: {e}")
+        raise Exception(f"Transcription aggregation failed: {e}") 

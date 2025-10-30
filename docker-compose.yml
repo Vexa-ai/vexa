@@ -57,7 +57,8 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - BOT_IMAGE_NAME=${BOT_IMAGE_NAME:-vexa-bot:dev}
       - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa_default
-      - LOG_LEVEL=DEBUG
+      - LOG_LEVEL=INFO
+      - DEBUG=*
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_NAME=vexa
@@ -72,6 +73,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${WORKING_DIR:-.}/data/vexa/recordings:/app/recordings
     init: true
+    tty: true
     depends_on:
       redis:
         condition: service_started

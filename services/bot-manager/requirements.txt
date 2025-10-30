@@ -22,4 +22,7 @@ aiosqlite # If using sqlite async (often for testing)
 # asyncpg # Alternative async PostgreSQL driver
 
 # Added for bot limit check - REMOVED
-# docker 
+# docker
+
+# Dependency injection container
+dependency-injector==4.41.0
