@@ -197,6 +197,14 @@ await redisSubscriber.subscribe(commandChannel, handleRedisMessage);
 log(`Subscribed to meeting-specific channel: ${commandChannel}`);
 ```
 
+### 1.1 Fail-Fast Requirements (Mandatory)
+
+- Bot MUST exit on startup if `meeting_id` is missing in `BOT_CONFIG`.
+- Bot MUST ignore any command where `command.meeting_id !== botConfig.meeting_id`.
+- Bot-manager MUST publish ONLY to `bot_commands:meeting:{meeting.id}` and include `meeting_id` in every payload.
+- WhisperLive MUST reject the initial WS config if any of `uid`, `platform`, `meeting_url`, `token`, or `meeting_id` is missing; respond with ERROR and close the socket.
+- No session-UID addressing anywhere; no dual-publish/subscribe. Meeting channel is the only control-plane channel.
+
 ### 2. Bot-Manager Publishing (`bot-manager/app/main.py:659-681`)
 
 **Current:**
@@ -413,7 +421,7 @@ After:  "Could not find meeting 12345"
 
 ## What Doesn't Change
 
-✅ WhisperLive may still generate internal UIDs on reconnection (implementation detail only)  
+✅ The WS session UID is client-provided and may change on reconnection (ephemeral, data-plane only). The server does not auto-generate UIDs when missing; missing UID causes an immediate connection error.  
 ✅ Core reconfiguration logic remains the same (close → stubborn reconnect → new config)  
 ✅ Meeting uniqueness constraint still enforced at database level
 
@@ -455,7 +463,7 @@ After:  "Could not find meeting 12345"
 - [ ] Update deployment notes
 - [ ] Document the addressing scheme change
 
-**Backward Compatibility Note**: Could support both channel formats temporarily during migration if needed, but cleanest to do atomic cutover since it's internal communication.
+**Compatibility**: No backward compatibility. Session-based channels and Redis mappings are removed; meeting-only addressing is mandatory.
 
 ---
 

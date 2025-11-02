@@ -2,7 +2,7 @@ export type BotConfig = {
   platform: "google_meet" | "zoom" | "teams",
   meetingUrl: string | null,
   botName: string,
-  token: string,
+  token: string,  // MeetingToken (HS256 JWT)
   connectionId: string,
   nativeMeetingId: string,
   language?: string | null,
@@ -15,6 +15,6 @@ export type BotConfig = {
     everyoneLeftTimeout: number
   },
   reconnectionIntervalMs?: number,
-  meeting_id?: number,
+  meeting_id: number,  // Required, not optional
   botManagerCallbackUrl?: string;
 }
