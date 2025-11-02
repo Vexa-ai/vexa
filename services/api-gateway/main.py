@@ -393,9 +393,8 @@ async def websocket_multiplex(ws: WebSocket):
             return
         subscribed_meetings.add(key)
         channels = [
-            f"tc:meeting:{user_id}:{platform}:{native_id}:mutable",
-            f"tc:meeting:{user_id}:{platform}:{native_id}:finalized",
-            f"bm:meeting:{user_id}:{platform}:{native_id}:status",
+            f"tc:meeting:{meeting_id}:mutable",  # Meeting-ID based channel
+            f"bm:meeting:{meeting_id}:status",  # Meeting-ID based channel (consistent)
         ]
 
         async def fan_in(channel_names: List[str]):

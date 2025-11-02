@@ -2,6 +2,7 @@ import { Page } from "playwright";
 import { log } from "../../utils";
 import { BotConfig } from "../../types";
 import { WhisperLiveService } from "../../services/whisperlive";
+import { ensureBrowserUtils } from "../../utils/injection";
 import {
   teamsParticipantSelectors,
   teamsSpeakingClassNames,
@@ -30,10 +31,7 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
   log(`[Node.js] Using WhisperLive URL for Teams: ${whisperLiveUrl}`);
   log("Starting Teams recording with WebSocket connection");
 
-  // Load browser utility classes from the bundled global file
-  await page.addScriptTag({
-    path: require('path').join(__dirname, '../../browser-utils.global.js'),
-  });
+  await ensureBrowserUtils(page, require('path').join(__dirname, '../../browser-utils.global.js'));
 
   // Pass the necessary config fields and the resolved URL into the page context
   await page.evaluate(

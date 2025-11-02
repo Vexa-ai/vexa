@@ -181,13 +181,27 @@ async def start_bot_container(
     connection_id = str(uuid.uuid4())
     logger.info(f"Generated unique connectionId for bot session: {connection_id}")
 
+    # Mint MeetingToken (HS256) - import at top of file if not present
+    from app.main import mint_meeting_token
+    try:
+        meeting_token = mint_meeting_token(
+            meeting_id=meeting_id,
+            user_id=user_id,
+            platform=platform,
+            native_meeting_id=native_meeting_id,
+            ttl_seconds=7200  # 2 hours
+        )
+    except Exception as token_err:
+        logger.error(f"Failed to mint MeetingToken for meeting {meeting_id}: {token_err}", exc_info=True)
+        return None, None
+    
     # Construct BOT_CONFIG JSON - Include new fields
     bot_config_data = {
         "meeting_id": meeting_id,
         "platform": platform,
         "meetingUrl": meeting_url,
         "botName": bot_name,
-        "token": user_token,
+        "token": meeting_token,  # MeetingToken (HS256 JWT)
         "nativeMeetingId": native_meeting_id,
         "connectionId": connection_id,
         "language": language,

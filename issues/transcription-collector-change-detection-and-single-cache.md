@@ -1,7 +1,7 @@
 ---
 title: Transcription Collector Simplification (Change-Only Mutable Publishing, Single Redis Cache)
 type: Architecture Decision & Implementation Plan
-status: Proposed
+status: Approved
 priority: High
 components: [transcription-collector, api-gateway]
 created: 2025-10-11
@@ -76,7 +76,7 @@ Adopt a single-cache, change-only publishing model with guaranteed absolute time
 5. If changed:
    - HSET `meeting:{meeting_id}:segments` only for changed keys.
    - SADD `active_meetings` and EXPIRE the Hash.
-   - Publish `transcript.mutable` with only changed segments to `tc:meeting:{user_id}:{platform}:{native_id}:mutable` (or `tc:meeting:{meeting_id}:mutable` after meeting-id refactor).
+   - Publish `transcript.mutable` with only changed segments to `tc:meeting:{meeting_id}:mutable`.
 6. If identical: do nothing (no HSET, no publish).
 
 ### Persistence (Immutable, Batched)
@@ -121,14 +121,18 @@ This ensures bounded memory via TTLs and explicit cleanup.
 
 ---
 
-## Compatibility with Related ADRs
+## Compatibility with Related ADRs (Meeting-only; Fail-Fast)
 
-- Meeting-ID addressing (see `bot-reconfiguration-identity-mismatch.md`): compatible and recommended; channels can be migrated to `tc:meeting:{meeting_id}:mutable`.
-- MeetingToken (HS256) (see `meeting-token-and-meeting-id-auth.md`): removes per-message DB lookups; collector verifies tokens and extracts `meeting_id` directly.
+- Meeting-ID addressing (see `bot-reconfiguration-identity-mismatch.md`): mandatory; the only WS publish channel is `tc:meeting:{meeting_id}:mutable`.
+- MeetingToken (HS256) (see `meeting-token-and-meeting-id-auth.md`): mandatory; collector verifies tokens and extracts `meeting_id` directly.
+
+### Fail-Fast Requirements
+- Reject ingestion if `meeting_id` or MeetingToken is missing/invalid.
+- Require `session_uid` on `session_start` and `transcription` for absolute timing and provenance; if missing on `session_start`, NACK; if missing on `transcription`, accept but log warning and skip absolute-time mapping for those segments.
 
 ---
 
-## Implementation Plan
+## Implementation Plan (Mandatory; No Flags)
 
 1. Change-only publishing in `streaming/processors.py`
    - Add normalized comparison against current Hash value; HSET and publish only when different.
@@ -140,7 +144,7 @@ This ensures bounded memory via TTLs and explicit cleanup.
    - Keep final speaker remap, filter/dedup, batch insert, and HDEL.
    - Remove `transcript.finalized` publish.
 4. Keep `active_meetings` index and cleanup when empty.
-5. Optional (follow-up): migrate WS channels to meeting-id addressing; adopt MeetingToken verification.
+5. WS channels are meeting-id only; MeetingToken verification enabled by default.
 
 ---
 

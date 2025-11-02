@@ -64,6 +64,20 @@ async def start_bot_container(
     # Concurrency limit is now checked in request_bot (fast-fail). Keep minimal here.
 
     connection_id = str(uuid.uuid4())
+    
+    # Mint MeetingToken (HS256)
+    from app.main import mint_meeting_token
+    try:
+        meeting_token = mint_meeting_token(
+            meeting_id=meeting_id,
+            user_id=user_id,
+            platform=platform,
+            native_meeting_id=native_meeting_id,
+            ttl_seconds=7200  # 2 hours
+        )
+    except Exception as token_err:
+        logger.error(f"Failed to mint MeetingToken for meeting {meeting_id}: {token_err}", exc_info=True)
+        return None, None
 
     meta: Dict[str, str] = {
         "user_id": str(user_id),
@@ -71,7 +85,7 @@ async def start_bot_container(
         "meeting_url": meeting_url or "",
         "platform": platform,
         "bot_name": bot_name or "",
-        "user_token": user_token or "",
+        "user_token": meeting_token,  # MeetingToken (HS256 JWT)
         "native_meeting_id": native_meeting_id,
         "connection_id": connection_id,
         "language": language or "",
