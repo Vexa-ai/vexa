@@ -195,14 +195,42 @@ const startRecording = async (
 
   log("Starting actual recording with WebSocket connection");
 
+  // Read exit logic configuration from environment variables (with fallbacks)
+  const exitLogicConfig = {
+    speechActivationThresholdSeconds: process.env
+      .SPEECH_ACTIVATION_THRESHOLD_SECONDS
+      ? parseInt(process.env.SPEECH_ACTIVATION_THRESHOLD_SECONDS, 10)
+      : 5,
+    deadMeetingTimeoutSeconds: process.env.DEAD_MEETING_TIMEOUT_SECONDS
+      ? parseInt(process.env.DEAD_MEETING_TIMEOUT_SECONDS, 10)
+      : 5 * 60,
+    absoluteSilenceTimeoutSeconds: process.env.ABSOLUTE_SILENCE_TIMEOUT_SECONDS
+      ? parseInt(process.env.ABSOLUTE_SILENCE_TIMEOUT_SECONDS, 10)
+      : 10 * 60,
+    recentSpeechThresholdSeconds: process.env.RECENT_SPEECH_THRESHOLD_SECONDS
+      ? parseInt(process.env.RECENT_SPEECH_THRESHOLD_SECONDS, 10)
+      : 2 * 60,
+    silentParticipantsCountdownSeconds: process.env
+      .SILENT_PARTICIPANTS_COUNTDOWN_SECONDS
+      ? parseInt(process.env.SILENT_PARTICIPANTS_COUNTDOWN_SECONDS, 10)
+      : 3 * 60,
+  };
+
   // Pass the necessary config fields and the resolved URL into the page context. Inisde page.evalute we have the browser context.
   //All code inside page.evalute executes as javascript running in the browser.
   await page.evaluate(
     async (pageArgs: {
       botConfigData: BotConfig;
       whisperUrlForBrowser: string;
+      exitLogicConfig: {
+        speechActivationThresholdSeconds: number;
+        deadMeetingTimeoutSeconds: number;
+        absoluteSilenceTimeoutSeconds: number;
+        recentSpeechThresholdSeconds: number;
+        silentParticipantsCountdownSeconds: number;
+      };
     }) => {
-      const { botConfigData, whisperUrlForBrowser } = pageArgs;
+      const { botConfigData, whisperUrlForBrowser, exitLogicConfig } = pageArgs;
       // Destructure from botConfigData as needed
       const {
         meetingUrl,
@@ -423,15 +451,167 @@ const startRecording = async (
               // Speech activity tracking variables for intelligent meeting end detection
               let meetingHasHadSpeech = false; // Tracks if anyone has spoken during the meeting
               let lastSpeechTime: number | null = null; // Timestamp of last speech activity
-              let spokenSpeakers = new Set<string>(); // Names of people who have spoken
-              let silenceCountdown = 0; // Countdown timer in seconds (0 = not active)
+              let spokenSpeakers = new Set<string>(); // Participant IDs of people who have spoken (to handle name capitalization variations)
+              let silenceCountdown = 0; // Case 4 countdown timer in seconds (0 = not active)
               let meetingJoinTime = Date.now(); // When bot joined the meeting
               let isInSilenceCountdown = false; // Flag to prevent multiple countdown starts
+              let currentlySpeakingParticipants = new Set<string>(); // Names of participants currently speaking (from SPEAKER_START events)
+              let speakerDurationCollector = new Map<string, number>(); // Speaker ID -> accumulated speaking duration in seconds
+              let processedSegments = new Set<string>(); // Track processed segments to avoid double-counting (key: "startSec,endSec")
+              let activeSpeakerStarts = new Map<string, number>(); // Speaker ID -> SPEAKER_START timestamp (ms) for currently speaking participants
+              let speakerIdToNameMap = new Map<string, string>(); // Speaker ID -> name (persistent, never cleared, to show names even after participants leave)
+
+              // Local storage for speaker events with timestamps (for time-based overlap matching)
+              interface SpeakerEvent {
+                event_type: "SPEAKER_START" | "SPEAKER_END";
+                participant_name: string;
+                participant_id_meet: string;
+                relative_client_timestamp_ms: number;
+              }
+              let localSpeakerEvents: SpeakerEvent[] = []; // Array of events sorted by timestamp
+
+              // Configuration: Minimum accumulated speaking duration (in seconds) required to mark meeting as having had speech
+              const SPEECH_ACTIVATION_THRESHOLD_SECONDS =
+                exitLogicConfig.speechActivationThresholdSeconds;
+
+              // Configuration: Timeout (in seconds) for dead meeting detection (no speech detected after bot joins)
+              const DEAD_MEETING_TIMEOUT_SECONDS =
+                exitLogicConfig.deadMeetingTimeoutSeconds;
+
+              // Configuration: Absolute silence timeout (in seconds) - if no speech for this long, leave regardless of participants
+              const ABSOLUTE_SILENCE_TIMEOUT_SECONDS =
+                exitLogicConfig.absoluteSilenceTimeoutSeconds;
+
+              // Configuration: Recent speech threshold (in seconds) - if speech occurred within this time, meeting is considered active
+              const RECENT_SPEECH_THRESHOLD_SECONDS =
+                exitLogicConfig.recentSpeechThresholdSeconds;
+
+              // Configuration: Silent participants countdown (in seconds) - Case 4 countdown duration when all remaining participants are silent
+              const SILENT_PARTICIPANTS_COUNTDOWN_SECONDS =
+                exitLogicConfig.silentParticipantsCountdownSeconds;
+
+              // Configuration: Buffer time (in ms) for fetching speaker events around segment time range
+              const SPEAKER_EVENT_BUFFER_MS = 500;
 
               function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
                 if (a.size !== b.size) return false;
                 for (const x of a) if (!b.has(x)) return false;
                 return true;
+              }
+
+              // Check if set A is a subset of set B (all elements of A are in B)
+              function isSubset<T>(subset: Set<T>, superset: Set<T>): boolean {
+                for (const x of subset) {
+                  if (!superset.has(x)) return false;
+                }
+                return true;
+              }
+
+              // Helper function to get speaker name from ID using activeParticipants map
+              function getSpeakerNameFromId(speakerId: string): string | null {
+                const participant = activeParticipants.get(speakerId);
+                return participant ? participant.name : null;
+              }
+
+              // Time-based overlap matching function (similar to speaker_mapper.py)
+              function mapSpeakerToSegment(
+                segmentStartMs: number,
+                segmentEndMs: number
+              ): { speakerName: string | null; speakerId: string | null } {
+                if (
+                  !sessionAudioStartTimeMs ||
+                  localSpeakerEvents.length === 0
+                ) {
+                  return { speakerName: null, speakerId: null };
+                }
+
+                // Find candidate speakers whose active periods overlap with the segment
+                const candidateSpeakers = new Map<string, SpeakerEvent>(); // participant_id -> last START event
+
+                // Filter events in the relevant time range
+                const minTime = segmentStartMs - SPEAKER_EVENT_BUFFER_MS;
+                const maxTime = segmentEndMs + SPEAKER_EVENT_BUFFER_MS;
+
+                for (const event of localSpeakerEvents) {
+                  const eventTs = event.relative_client_timestamp_ms;
+
+                  // Skip events outside our time range
+                  if (eventTs < minTime || eventTs > maxTime) continue;
+
+                  if (event.event_type === "SPEAKER_START") {
+                    // If START is before or at segment end, could be speaking during segment
+                    if (eventTs <= segmentEndMs) {
+                      candidateSpeakers.set(event.participant_id_meet, event);
+                    }
+                  } else if (event.event_type === "SPEAKER_END") {
+                    // If END is before segment starts, remove from candidates
+                    if (
+                      eventTs < segmentStartMs &&
+                      candidateSpeakers.has(event.participant_id_meet)
+                    ) {
+                      candidateSpeakers.delete(event.participant_id_meet);
+                    }
+                  }
+                }
+
+                // Calculate overlap for each candidate
+                const activeSpeakers: Array<{
+                  name: string;
+                  id: string;
+                  overlapDuration: number;
+                }> = [];
+
+                for (const [
+                  participantId,
+                  startEvent,
+                ] of candidateSpeakers.entries()) {
+                  const startTs = startEvent.relative_client_timestamp_ms;
+
+                  // Find corresponding END event (or use segment end as default)
+                  let endTs = segmentEndMs; // Default to segment end if no END event found
+                  for (const event of localSpeakerEvents) {
+                    if (
+                      (event.participant_id_meet === participantId ||
+                        event.participant_name === participantId) &&
+                      event.event_type === "SPEAKER_END" &&
+                      event.relative_client_timestamp_ms >= startTs
+                    ) {
+                      endTs = event.relative_client_timestamp_ms;
+                      break;
+                    }
+                  }
+
+                  // Calculate overlap
+                  const overlapStart = Math.max(startTs, segmentStartMs);
+                  const overlapEnd = Math.min(endTs, segmentEndMs);
+
+                  if (overlapStart < overlapEnd) {
+                    activeSpeakers.push({
+                      name: startEvent.participant_name,
+                      id: participantId,
+                      overlapDuration: overlapEnd - overlapStart,
+                    });
+                  }
+                }
+
+                // Select speaker with longest overlap (or single speaker if only one)
+                if (activeSpeakers.length === 0) {
+                  return { speakerName: null, speakerId: null };
+                } else if (activeSpeakers.length === 1) {
+                  return {
+                    speakerName: activeSpeakers[0].name,
+                    speakerId: activeSpeakers[0].id,
+                  };
+                } else {
+                  // Multiple speakers - choose the one with longest overlap
+                  activeSpeakers.sort(
+                    (a, b) => b.overlapDuration - a.overlapDuration
+                  );
+                  return {
+                    speakerName: activeSpeakers[0].name,
+                    speakerId: activeSpeakers[0].id,
+                  };
+                }
               }
 
               // Intelligent meeting end detection logic
@@ -443,17 +623,17 @@ const startRecording = async (
 
                 // Case 1: Dead meeting detection (never had speech)
                 if (!meetingHasHadSpeech) {
-                  const deadMeetingTimeoutMs = 5 * 60 * 1000; // 5 minutes
-                  if (timeSinceJoin > deadMeetingTimeoutMs) {
+                  if (timeSinceJoin > DEAD_MEETING_TIMEOUT_SECONDS * 1000) {
                     return {
                       shouldLeave: true,
                       reason:
-                        "Dead meeting - no speech for 5 minutes after joining",
+                        "Dead meeting - no speech detected since bot joined",
                     };
                   }
                   return {
                     shouldLeave: false,
-                    reason: "Waiting for first speech activity",
+                    reason:
+                      "Waiting for first speech activity to activate meeting",
                   };
                 }
 
@@ -461,44 +641,61 @@ const startRecording = async (
                 if (!lastSpeechTime) {
                   return {
                     shouldLeave: false,
-                    reason: "No speech timing data available",
+                    reason: "Meeting had speech but timing data unavailable",
                   };
                 }
 
                 const timeSinceLastSpeech = now - lastSpeechTime;
-                const twoMinutesMs = 2 * 60 * 1000;
+                const recentSpeechThresholdMs =
+                  RECENT_SPEECH_THRESHOLD_SECONDS * 1000;
+                const absoluteSilenceTimeoutMs =
+                  ABSOLUTE_SILENCE_TIMEOUT_SECONDS * 1000;
 
                 // Case 3: Recent speech activity - meeting is active
-                if (timeSinceLastSpeech < twoMinutesMs) {
+                if (timeSinceLastSpeech < recentSpeechThresholdMs) {
                   return {
                     shouldLeave: false,
-                    reason: `Recent speech activity (${Math.round(
+                    reason: `Meeting is active - speech detected ${Math.round(
                       timeSinceLastSpeech / 1000
-                    )}s ago)`,
+                    )} seconds ago`,
+                  };
+                }
+
+                // Case 3.5: Absolute silence check - if no speech for 10+ minutes, leave immediately
+                // (meeting became dead even though it had speech before)
+                if (timeSinceLastSpeech >= absoluteSilenceTimeoutMs) {
+                  return {
+                    shouldLeave: true,
+                    reason: `Absolute silence timeout - no speech for ${Math.round(
+                      timeSinceLastSpeech / 1000 / 60
+                    )} minutes (meeting became inactive)`,
                   };
                 }
 
                 // Case 4: No speech for 2+ minutes, check remaining participants
-                const remainingParticipants = new Set(
-                  Array.from(activeParticipants.values()).map((p) => p.name)
+                // Use participant IDs to avoid name capitalization issues
+                const remainingParticipantIds = new Set(
+                  activeParticipants.keys()
                 );
-                const silentParticipants = new Set(
-                  Array.from(remainingParticipants).filter(
-                    (name) => !spokenSpeakers.has(name)
+                const silentParticipantIds = new Set(
+                  Array.from(remainingParticipantIds).filter(
+                    (participantId) => !spokenSpeakers.has(participantId)
                   )
                 );
 
                 // If all remaining participants have never spoken, start/continue countdown
+                // Check if remainingParticipantIds is a subset of silentParticipantIds
+                // (some silent participants may have already left)
                 if (
-                  setsEqual(silentParticipants, remainingParticipants) &&
-                  remainingParticipants.size > 0
+                  isSubset(remainingParticipantIds, silentParticipantIds) &&
+                  remainingParticipantIds.size > 0
                 ) {
                   if (!isInSilenceCountdown) {
                     // Start countdown
                     isInSilenceCountdown = true;
-                    silenceCountdown = 180; // 3 minutes in seconds
+                    silenceCountdown = SILENT_PARTICIPANTS_COUNTDOWN_SECONDS;
                     (window as any).logBot(
-                      `🕐 Starting 3-minute countdown - all ${remainingParticipants.size} remaining participants are silent`
+                      `🕐 Starting 3-minute countdown - all ${remainingParticipantIds.size} remaining participants are silent`
                     );
                   }
 
@@ -506,7 +703,7 @@ const startRecording = async (
                   if (silenceCountdown > 0) {
                     return {
                       shouldLeave: false,
-                      reason: `Silence countdown: ${Math.round(
+                      reason: `All remaining participants are silent - countdown: ${Math.round(
                         silenceCountdown
                       )}s remaining`,
                     };
@@ -514,7 +711,7 @@ const startRecording = async (
                     return {
                       shouldLeave: true,
                       reason:
-                        "Silence countdown completed - meeting appears ended",
+                        "Silence countdown completed - all remaining participants are silent, meeting appears ended",
                     };
                   }
                 }
@@ -522,9 +719,11 @@ const startRecording = async (
                 // Case 5: Some remaining participants have spoken before - keep waiting
                 return {
                   shouldLeave: false,
-                  reason: `Some participants (${
-                    remainingParticipants.size - silentParticipants.size
-                  }/${remainingParticipants.size}) have spoken before`,
+                  reason: `Waiting for previously speaking participants - ${
+                    remainingParticipantIds.size - silentParticipantIds.size
+                  } of ${
+                    remainingParticipantIds.size
+                  } remaining participants have spoken before`,
                 };
               };
 
@@ -580,7 +779,7 @@ const startRecording = async (
                         uid: currentSessionUid, // <-- Use NEWLY generated UUID
                         language: currentWsLanguage || null, // <-- Use browser-scope variable
                         task: currentWsTask || "transcribe", // <-- Use browser-scope variable
-                        model: "medium", // Keep default or make configurable if needed
+                        model: "tiny", // Keep default or make configurable if needed
                         use_vad: true, // Keep default or make configurable if needed
                         platform: platform, // From config
                         token: token, // From config
@@ -629,9 +828,22 @@ const startRecording = async (
                     } else {
                       // --- ADDED: Collect transcription segments for SRT ---
                       const transcriptionData = data["segments"] || data;
-                      botCallbacks?.onTranscriptionSegmentsReceived(
-                        transcriptionData
+                      (window as any).logBot(
+                        `[DEBUG] Calling processSpeechActivity with type=${
+                          Array.isArray(transcriptionData)
+                            ? "array"
+                            : typeof transcriptionData
+                        }`
                       );
+
+                      (window as any).logBot(
+                        `[DEBUG] Transcription data: ${JSON.stringify(
+                          transcriptionData
+                        )}`
+                      );
+                      // botCallbacks?.onTranscriptionSegmentsReceived(
+                      //   transcriptionData
+                      // );
 
                       // Process speech activity for intelligent meeting end detection
                       processSpeechActivity(transcriptionData);
@@ -642,56 +854,105 @@ const startRecording = async (
                     }
                   };
 
-                  // Helper function to process speech activity from transcription data
+                  // Helper function to process transcription segments for speaker identification
+                  // Note: Durations are calculated from SPEAKER_START/SPEAKER_END events, not from segments
+                  // Segments are only used to identify which speaker said what (via mapSpeakerToSegment)
                   const processSpeechActivity = (transcriptionData: any) => {
                     // Handle both single segment and array of segments
                     const segments = Array.isArray(transcriptionData)
                       ? transcriptionData
                       : transcriptionData.segments || [transcriptionData];
 
+                    (window as any).logBot(
+                      `[DEBUG] processSpeechActivity: segmentsCount=${segments.length}`
+                    );
+
                     segments.forEach((segment: any) => {
-                      const segmentDuration = segment.end - segment.start;
-                      const minimumDuration = 2.0;
+                      const startSec = Number(segment.start);
+                      const endSec = Number(segment.end);
 
-                      // Check if segment has meaningful duration (instead of text content)
-                      if (segmentDuration >= minimumDuration) {
-                        // Mark that meeting has had someone speaking
-                        if (!meetingHasHadSpeech) {
-                          meetingHasHadSpeech = true;
+                      if (
+                        !Number.isFinite(startSec) ||
+                        !Number.isFinite(endSec) ||
+                        !sessionAudioStartTimeMs
+                      ) {
+                        if (!sessionAudioStartTimeMs) {
                           (window as any).logBot(
-                            "🎤 First speech detected in meeting - speech tracking now active"
+                            `[DEBUG] Skipping segment: sessionAudioStartTimeMs not set yet`
+                          );
+                        } else {
+                          (window as any).logBot(
+                            `[DEBUG] Skipping segment with non-numeric times: start=${segment.start}, end=${segment.end}`
                           );
                         }
+                        return;
+                      }
 
-                        // Update last speech time
-                        lastSpeechTime = Date.now();
+                      const segmentDuration = endSec - startSec;
 
-                        // Track speaker history (if speaker info available)
-                        if (segment.speaker) {
-                          const speakerName = segment.speaker.toString();
-                          if (!spokenSpeakers.has(speakerName)) {
-                            spokenSpeakers.add(speakerName);
-                            (window as any).logBot(
-                              `📝 New speaker detected: ${speakerName} ${segmentDuration.toFixed(
-                                1
-                              )}s`
-                            );
-                          }
-                        }
+                      // Skip segments with zero or negative duration
+                      if (segmentDuration <= 0) {
+                        return;
+                      }
 
-                        // Reset silence countdown if we were in one
-                        if (isInSilenceCountdown) {
-                          isInSilenceCountdown = false;
-                          silenceCountdown = 0;
-                          (window as any).logBot(
-                            "🔄 Speech detected - resetting silence countdown"
-                          );
-                        }
-                      } else if (segmentDuration > 0) {
+                      // Skip incomplete segments - they may be extended in later messages
+                      // Only process completed segments to avoid double-counting when they get extended
+                      if (segment.completed === false) {
+                        return;
+                      }
+
+                      // Check if we've already processed this segment (WhisperLive sends cumulative segments)
+                      const segmentKey = `${startSec},${endSec}`;
+                      if (processedSegments.has(segmentKey)) {
+                        // Already processed, skip to avoid double-counting
+                        return;
+                      }
+
+                      // Mark this segment as processed
+                      processedSegments.add(segmentKey);
+
+                      // Convert segment times from seconds (relative to WhisperLive start) to milliseconds (relative to sessionAudioStartTimeMs)
+                      // WhisperLive timestamps start from 0 when audio stream begins
+                      // We need to align them with our sessionAudioStartTimeMs reference
+                      const segmentStartMs = startSec * 1000;
+                      const segmentEndMs = endSec * 1000;
+
+                      // Use time-based overlap matching to identify speaker
+                      const speakerMapping = mapSpeakerToSegment(
+                        segmentStartMs,
+                        segmentEndMs
+                      );
+
+                      const speakerName = speakerMapping.speakerName;
+                      const speakerId = speakerMapping.speakerId;
+
+                      // Update last speech time (note: durations are now calculated from SPEAKER_START/SPEAKER_END events)
+                      lastSpeechTime = Date.now();
+
+                      // Log segment processing (segments used for speaker identification via mapSpeakerToSegment;
+                      // durations are calculated from SPEAKER_START/SPEAKER_END events)
+                      if (speakerName && speakerId) {
                         (window as any).logBot(
-                          `🔇 Short segment ignored: ${segmentDuration.toFixed(
+                          `📄 Segment processed: ${speakerName} (ID: ${speakerId}) - Duration: ${segmentDuration.toFixed(
                             1
-                          )}s (speaker: ${segment.speaker || "unknown"})`
+                          )}s (timestamps handled by SPEAKER_START/SPEAKER_END)`
+                        );
+                      } else {
+                        (window as any).logBot(
+                          `⚠️ Could not identify speaker for segment (duration: ${segmentDuration.toFixed(
+                            1
+                          )}s, start=${startSec.toFixed(
+                            2
+                          )}s, end=${endSec.toFixed(2)}s)`
+                        );
+                      }
+
+                      // Reset silence countdown if we were in one
+                      if (isInSilenceCountdown) {
+                        isInSilenceCountdown = false;
+                        silenceCountdown = 0;
+                        (window as any).logBot(
+                          "🔄 Speech detected (segment) - resetting silence countdown"
                         );
                       }
                     });
@@ -1058,6 +1319,139 @@ const startRecording = async (
                 const participantId = getParticipantId(participantElement);
                 const participantName = getParticipantName(participantElement);
 
+                // Store event locally for time-based overlap matching (only if we have valid participant info)
+                if (participantId && participantName) {
+                  const localEvent: SpeakerEvent = {
+                    event_type: eventType as "SPEAKER_START" | "SPEAKER_END",
+                    participant_name: participantName,
+                    participant_id_meet: participantId,
+                    relative_client_timestamp_ms: relativeTimestampMs,
+                  };
+                  localSpeakerEvents.push(localEvent);
+                  // Keep events sorted by timestamp for efficient querying
+                  localSpeakerEvents.sort(
+                    (a, b) =>
+                      a.relative_client_timestamp_ms -
+                      b.relative_client_timestamp_ms
+                  );
+
+                  // Calculate speaker duration from SPEAKER_START/SPEAKER_END events
+                  if (eventType === "SPEAKER_START") {
+                    // Store start timestamp for this speaker
+                    activeSpeakerStarts.set(participantId, relativeTimestampMs);
+                    (window as any).logBot(
+                      `📊 SPEAKER_START tracked: ${participantName} (ID: ${participantId}) at ${relativeTimestampMs}ms`
+                    );
+                  } else if (eventType === "SPEAKER_END") {
+                    // Find matching START event and calculate duration
+                    const startTimestampMs =
+                      activeSpeakerStarts.get(participantId);
+                    if (startTimestampMs !== undefined) {
+                      // Calculate duration in seconds
+                      const durationSeconds =
+                        (relativeTimestampMs - startTimestampMs) / 1000;
+
+                      // Only add positive durations (avoid errors from out-of-order events)
+                      if (durationSeconds > 0) {
+                        // Accumulate duration for this speaker
+                        const currentDuration =
+                          speakerDurationCollector.get(participantId) || 0;
+                        const newDuration = currentDuration + durationSeconds;
+                        speakerDurationCollector.set(
+                          participantId,
+                          newDuration
+                        );
+
+                        // Add speaker ID to spokenSpeakers set (using ID to handle name capitalization variations)
+                        if (!spokenSpeakers.has(participantId)) {
+                          spokenSpeakers.add(participantId);
+                          (window as any).logBot(
+                            `📝 New speaker detected: ${participantName} (ID: ${participantId}, ${durationSeconds.toFixed(
+                              1
+                            )}s)`
+                          );
+                        }
+
+                        // Store ID -> name mapping persistently (so we can show name even after participant leaves)
+                        speakerIdToNameMap.set(participantId, participantName);
+
+                        // Update last speech time
+                        lastSpeechTime = Date.now();
+
+                        // Log duration accumulation
+                        (window as any).logBot(
+                          `📊 SPEAKER_END: ${participantName} (ID: ${participantId}) at ${relativeTimestampMs}ms`
+                        );
+                        (window as any).logBot(
+                          `⏱️ Speaker duration: ${participantName} (ID: ${participantId}) - Segment: ${durationSeconds.toFixed(
+                            1
+                          )}s | Total: ${newDuration.toFixed(1)}s`
+                        );
+
+                        // Check if any speaker has accumulated enough speech duration
+                        // This marks the meeting as having had meaningful speech activity
+                        if (!meetingHasHadSpeech) {
+                          // Check if current speaker just reached threshold
+                          if (
+                            newDuration >= SPEECH_ACTIVATION_THRESHOLD_SECONDS
+                          ) {
+                            meetingHasHadSpeech = true;
+                            (window as any).logBot(
+                              `🎤 Meeting has had speech: ${participantName} reached ${newDuration.toFixed(
+                                1
+                              )}s (${SPEECH_ACTIVATION_THRESHOLD_SECONDS}s threshold) - speech tracking now active`
+                            );
+                          } else {
+                            // Check all speakers to see if any has reached threshold
+                            for (const [
+                              id,
+                              duration,
+                            ] of speakerDurationCollector.entries()) {
+                              if (
+                                duration >= SPEECH_ACTIVATION_THRESHOLD_SECONDS
+                              ) {
+                                const participant = activeParticipants.get(id);
+                                const speakerDisplayName = participant
+                                  ? participant.name
+                                  : `Unknown (${id})`;
+                                meetingHasHadSpeech = true;
+                                (window as any).logBot(
+                                  `🎤 Meeting has had speech: ${speakerDisplayName} reached ${duration.toFixed(
+                                    1
+                                  )}s (${SPEECH_ACTIVATION_THRESHOLD_SECONDS}s threshold) - speech tracking now active`
+                                );
+                                break;
+                              }
+                            }
+                          }
+                        }
+
+                        // Reset silence countdown if active (speech detected)
+                        if (isInSilenceCountdown) {
+                          isInSilenceCountdown = false;
+                          silenceCountdown = 0;
+                          (window as any).logBot(
+                            "🔄 Speech detected (SPEAKER_END) - resetting silence countdown"
+                          );
+                        }
+                      } else {
+                        (window as any).logBot(
+                          `⚠️ Invalid duration calculated: ${durationSeconds.toFixed(
+                            1
+                          )}s for ${participantName} (END: ${relativeTimestampMs}ms, START: ${startTimestampMs}ms)`
+                        );
+                      }
+
+                      // Remove from active speakers
+                      activeSpeakerStarts.delete(participantId);
+                    } else {
+                      (window as any).logBot(
+                        `⚠️ SPEAKER_END without matching START for ${participantName} (ID: ${participantId})`
+                      );
+                    }
+                  }
+                }
+
                 // Send speaker event via WebSocket if connected
                 if (socket && socket.readyState === WebSocket.OPEN) {
                   const speakerEventMessage = {
@@ -1113,6 +1507,8 @@ const startRecording = async (
                       `🎤 SPEAKER_START: ${participantName} (ID: ${participantId})`
                     );
                     sendSpeakerEvent("SPEAKER_START", participantElement);
+                    // Track this participant as currently speaking
+                    currentlySpeakingParticipants.add(participantName);
                   }
                   speakingStates.set(participantId, "speaking");
                 } else if (isNowVisiblySilent) {
@@ -1121,6 +1517,8 @@ const startRecording = async (
                       `🔇 SPEAKER_END: ${participantName} (ID: ${participantId})`
                     );
                     sendSpeakerEvent("SPEAKER_END", participantElement);
+                    // Remove this participant from currently speaking
+                    currentlySpeakingParticipants.delete(participantName);
                   }
                   speakingStates.set(participantId, "silent");
                 }
@@ -1262,8 +1660,26 @@ const startRecording = async (
                             `🗑️ Removed observer for: ${participantName} (ID: ${participantId})`
                           );
 
+                          // Remove participant from currently speaking tracking
+                          currentlySpeakingParticipants.delete(participantName);
+
+                          // Clean up activeSpeakerStarts if participant was removed mid-speech
+                          // (The synthetic SPEAKER_END above will also handle this, but this is a safety cleanup)
+                          if (participantId) {
+                            if (activeSpeakerStarts.has(participantId)) {
+                              (window as any).logBot(
+                                `⚠️ Participant ${
+                                  participantName || "Unknown"
+                                } removed while speaking (no matching SPEAKER_END) - cleaning up activeSpeakerStarts`
+                              );
+                              activeSpeakerStarts.delete(participantId);
+                            }
+                          }
+
                           // NEW: Remove participant from our central map
-                          activeParticipants.delete(participantId);
+                          if (participantId) {
+                            activeParticipants.delete(participantId);
+                          }
                         }
                       }
                     });
@@ -1590,6 +2006,17 @@ const startRecording = async (
                   // Note: The actual participant data will be updated by the observer logic
                 }
 
+                // Build duration summary with speaker names (using persistent map to show names even after participants leave)
+                const durationSummary: Record<string, number> = {};
+                speakerDurationCollector.forEach((duration, speakerId) => {
+                  // First try persistent map, then activeParticipants, then fallback to ID
+                  const displayName =
+                    speakerIdToNameMap.get(speakerId) ||
+                    activeParticipants.get(speakerId)?.name ||
+                    `Unknown (${speakerId})`;
+                  durationSummary[displayName] = duration;
+                });
+
                 // Enhanced debug logging for speech activity
                 const debugInfo = {
                   participants: count,
@@ -1597,7 +2024,11 @@ const startRecording = async (
                   lastSpeechTime: lastSpeechTime
                     ? Math.round((Date.now() - lastSpeechTime) / 1000)
                     : "never",
-                  spokenSpeakers: Array.from(spokenSpeakers),
+                  spokenSpeakers: Array.from(spokenSpeakers).map((id) => {
+                    const participant = activeParticipants.get(id);
+                    return participant ? `${participant.name} (${id})` : id;
+                  }),
+                  speakerDurations: durationSummary, // Total speaking duration per speaker (in seconds)
                   silenceCountdown: silenceCountdown,
                   isInCountdown: isInSilenceCountdown,
                   decision: meetingEndDecision.reason,
@@ -1649,7 +2080,11 @@ const startRecording = async (
         }
       });
     },
-    { botConfigData: botConfig, whisperUrlForBrowser: whisperLiveUrlFromEnv }
+    {
+      botConfigData: botConfig,
+      whisperUrlForBrowser: whisperLiveUrlFromEnv,
+      exitLogicConfig: exitLogicConfig,
+    }
   ); // Pass arguments to page.evaluate
 };
 

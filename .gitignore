@@ -133,3 +133,6 @@ hub/
 
 # Recordings
 recordings/
+
+# node modules
+node_modules/
