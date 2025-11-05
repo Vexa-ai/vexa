@@ -31,9 +31,46 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
   log("Starting Teams recording with WebSocket connection");
 
   // Load browser utility classes from the bundled global file
-  await page.addScriptTag({
-    path: require('path').join(__dirname, '../../browser-utils.global.js'),
-  });
+  // Teams site enforces Trusted Types, so we need to handle script injection carefully
+  try {
+    await page.addScriptTag({
+      path: require('path').join(__dirname, '../../browser-utils.global.js'),
+    });
+  } catch (error: any) {
+    log(`Warning: Could not load browser utils via addScriptTag: ${error.message}`);
+    log("Attempting alternative loading method with Trusted Types support...");
+    
+    // Alternative: Load script content and evaluate it with Trusted Types handling
+    const fs = require('fs');
+    const path = require('path');
+    const scriptPath = path.join(__dirname, '../../browser-utils.global.js');
+    
+    try {
+      const scriptContent = fs.readFileSync(scriptPath, 'utf8');
+      await page.evaluate(async (script: string) => {
+        try {
+          // Teams doesn't allow creating custom Trusted Types policies, so we use Function constructor
+          // which can bypass Trusted Types restrictions by executing code directly
+          const fn = new Function(script);
+          fn();
+          
+          // Verify availability on window
+          const utils = (window as any).VexaBrowserUtils;
+          if (!utils) {
+            throw new Error('VexaBrowserUtils not found after Function constructor execution');
+          }
+          console.log('VexaBrowserUtils loaded successfully via Function constructor, keys:', Object.keys(utils));
+        } catch (error) {
+          console.error('Error injecting browser utils script:', (error as any)?.message || error);
+          throw error;
+        }
+      }, scriptContent);
+      log("Browser utils loaded and available as window.VexaBrowserUtils");
+    } catch (evalError: any) {
+      log(`Error loading browser utils via evaluate: ${evalError.message}`);
+      throw new Error(`Failed to load browser utilities: ${evalError.message}`);
+    }
+  }
 
   // Pass the necessary config fields and the resolved URL into the page context
   await page.evaluate(
