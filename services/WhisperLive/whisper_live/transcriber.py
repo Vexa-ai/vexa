@@ -1748,6 +1748,11 @@ class WhisperModel:
     ) -> Tuple[str, float, List[Tuple[str, float]]]:
         """
         Use Whisper to detect the language of the input audio or features.
+        
+        Improved algorithm that aggregates probabilities across all segments and uses
+        weighted scoring based on both average probability and consistency (number of
+        segments where the language was detected). This provides more robust language
+        detection, especially for noisy audio or mixed-language content.
 
         Arguments:
             audio: Input audio signal, must be a 1D float array sampled at 16khz.
@@ -1758,14 +1763,19 @@ class WhisperModel:
                 without speech. This step is using the Silero VAD model.
             vad_parameters: Dictionary of Silero VAD parameters or VadOptions class (see available
                 parameters and default values in the class `VadOptions`).
-            language_detection_threshold: If the maximum probability of the language tokens is
-                higher than this value, the language is detected.
-            language_detection_segments: Number of segments to consider for the language detection.
+            language_detection_threshold: Threshold for early stopping. If the average probability
+                of the top language across processed segments exceeds this value (after at least
+                2 segments), detection stops early. After 3+ segments, a slightly lower threshold
+                (threshold - 0.1, min 0.4) is used for early stopping.
+            language_detection_segments: Maximum number of segments to consider for the language
+                detection. The algorithm may stop earlier if high confidence is achieved.
 
         Returns:
-            language: Detected language.
-            languege_probability: Probability of the detected language.
-            all_language_probs: List of tuples with all language names and probabilities.
+            language: Detected language code (e.g., 'en', 'ru', 'es').
+            language_probability: Average probability of the detected language across all segments
+                where it was detected, or weighted score if multiple segments were processed.
+            all_language_probs: List of tuples with all language names and probabilities from
+                the last processed segment.
         """
         assert (
             audio is not None or features is not None
@@ -1786,7 +1796,15 @@ class WhisperModel:
             ..., : language_detection_segments * self.feature_extractor.nb_max_frames
         ]
 
-        detected_language_info = {}
+        # Aggregate language probabilities across all segments
+        # Key: language code, Value: list of probabilities from all segments
+        language_prob_aggregator = {}
+        # Store all language probabilities from the last segment for return value
+        all_language_probs = None
+        segments_processed = 0
+        language = None
+        language_probability = None
+        
         for i in range(0, features.shape[-1], self.feature_extractor.nb_max_frames):
             encoder_output = self.encode(
                 pad_or_trim(features[..., i : i + self.feature_extractor.nb_max_frames])
@@ -1795,20 +1813,66 @@ class WhisperModel:
             results = self.model.detect_language(encoder_output)[0]
 
             # Parse language names to strip out markers
-            all_language_probs = [(token[2:-2], prob) for (token, prob) in results]
-            # Get top language token and probability
-            language, language_probability = all_language_probs[0]
-            if language_probability > language_detection_threshold:
-                break
-            detected_language_info.setdefault(language, []).append(language_probability)
-        else:
-            # If no language detected for all segments, the majority vote of the highest
-            # projected languages for all segments is used to determine the language.
-            language = max(
-                detected_language_info,
-                key=lambda lang: len(detected_language_info[lang]),
-            )
-            language_probability = max(detected_language_info[language])
+            segment_language_probs = [(token[2:-2], prob) for (token, prob) in results]
+            all_language_probs = segment_language_probs
+            
+            # Aggregate probabilities for all languages in this segment
+            for lang, prob in segment_language_probs:
+                if lang not in language_prob_aggregator:
+                    language_prob_aggregator[lang] = []
+                language_prob_aggregator[lang].append(prob)
+            
+            segments_processed += 1
+            
+            # Calculate weighted average probability for top language so far
+            if language_prob_aggregator:
+                # Calculate average probability for each language
+                lang_avg_probs = {
+                    lang: sum(probs) / len(probs) 
+                    for lang, probs in language_prob_aggregator.items()
+                }
+                # Get the language with highest average probability
+                top_lang = max(lang_avg_probs, key=lang_avg_probs.get)
+                top_lang_avg_prob = lang_avg_probs[top_lang]
+                
+                # Early stopping: if we have high confidence and enough segments
+                # Use a slightly lower threshold for early stopping with multiple segments
+                early_stop_threshold = language_detection_threshold
+                if segments_processed >= 3:
+                    # After 3 segments, allow early stop with slightly lower threshold
+                    early_stop_threshold = max(0.4, language_detection_threshold - 0.1)
+                
+                if top_lang_avg_prob > early_stop_threshold and segments_processed >= 2:
+                    # Check if top language is consistently detected
+                    top_lang_count = len(language_prob_aggregator[top_lang])
+                    if top_lang_count >= 2 and top_lang_avg_prob > early_stop_threshold:
+                        language = top_lang
+                        language_probability = top_lang_avg_prob
+                        break
+        
+        # If we didn't break early, determine language from aggregated results
+        if language is None:
+            if not language_prob_aggregator:
+                # Fallback: use the top language from the last segment
+                if all_language_probs:
+                    language, language_probability = all_language_probs[0]
+                else:
+                    language, language_probability = "en", 0.0
+            else:
+                # Calculate weighted average probability for each language
+                # Weight by both average probability and consistency (number of detections)
+                lang_scores = {}
+                for lang, probs in language_prob_aggregator.items():
+                    avg_prob = sum(probs) / len(probs)
+                    # Combine average probability with consistency weight
+                    # More segments with this language = higher confidence
+                    consistency_weight = min(1.0, len(probs) / 3.0)  # Normalize to max 3 segments
+                    lang_scores[lang] = avg_prob * (0.7 + 0.3 * consistency_weight)
+                
+                # Select language with highest combined score
+                language = max(lang_scores, key=lang_scores.get)
+                # Return the average probability for the selected language
+                language_probability = sum(language_prob_aggregator[language]) / len(language_prob_aggregator[language])
 
         return language, language_probability, all_language_probs
 
