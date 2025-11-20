@@ -98,6 +98,7 @@ docker run --rm --name "$CONTAINER_NAME" \
     "botName":"'"$BOT_NAME"'",
     "connectionId":"'"$CONNECTION_ID"'",
     "nativeMeetingId":"'"$MEETING_ID"'",
+    "meeting_id":999,
     "token":"debug-token",
     "redisUrl":"redis://redis:6379/0",
     "container_name":"'"$CONTAINER_NAME"'",

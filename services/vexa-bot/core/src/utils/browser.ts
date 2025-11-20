@@ -39,7 +39,6 @@ export class BrowserAudioService {
       const mediaElements = Array.from(
         document.querySelectorAll("audio, video")
       ).filter((el: any) => 
-        !el.paused && 
         el.srcObject instanceof MediaStream && 
         el.srcObject.getAudioTracks().length > 0
       ) as HTMLMediaElement[];
