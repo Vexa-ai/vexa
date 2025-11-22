@@ -264,6 +264,34 @@ export const teamsCameraButtonSelectors: string[] = [
   'button[aria-label*="Turn on camera"]'
 ];
 
+// Teams audio option selectors (pre-join screen)
+export const teamsComputerAudioRadioSelectors: string[] = [
+  'radio[aria-label*="Computer audio"]',
+  'radio:has-text("Computer audio")',
+  '[role="radio"][aria-label*="Computer audio"]'
+];
+
+export const teamsDontUseAudioRadioSelectors: string[] = [
+  'radio[aria-label*="Don\'t use audio"]',
+  'radio:has-text("Don\'t use audio")',
+  '[role="radio"][aria-label*="Don\'t use audio"]'
+];
+
+// Teams speaker toggle selectors
+export const teamsSpeakerEnableSelectors: string[] = [
+  'button[aria-label*="Turn speaker on"]',
+  'button[aria-label*="Speaker is off"]',
+  'button:has-text("Turn speaker on")',
+  'button:has-text("Speaker is off")'
+];
+
+export const teamsSpeakerDisableSelectors: string[] = [
+  'button[aria-label*="Turn speaker off"]',
+  'button[aria-label*="Speaker is on"]',
+  'button:has-text("Turn speaker off")',
+  'button:has-text("Speaker is on")'
+];
+
 export const teamsNameInputSelectors: string[] = [
   'input[placeholder*="name"]',
   'input[placeholder*="Name"]',
