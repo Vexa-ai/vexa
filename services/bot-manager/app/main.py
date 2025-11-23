@@ -763,8 +763,7 @@ async def stop_bot(
 
     logger.info(f"Received stop request for {platform_value}/{native_meeting_id} from user {current_user.id}")
 
-    # 1. Find the latest meeting - allow stopping from any status
-    #    This allows explicit stopping regardless of current state
+    # 1. Find all meetings matching the criteria
     stmt = select(Meeting).where(
         Meeting.user_id == current_user.id,
         Meeting.platform == platform_value,
@@ -772,100 +771,109 @@ async def stop_bot(
     ).order_by(desc(Meeting.created_at))
 
     result = await db.execute(stmt)
-    meeting = result.scalars().first()
+    all_meetings = result.scalars().all()
 
-    if not meeting:
+    if not all_meetings:
         logger.warning(f"Stop request: No meeting found for {platform_value}/{native_meeting_id} for user {current_user.id}")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No meeting found to stop.")
 
-    # Handle already completed or failed meetings
-    if meeting.status in [MeetingStatus.COMPLETED.value, MeetingStatus.FAILED.value]:
+    # Filter to non-terminal meetings
+    non_terminal_meetings = [
+        m for m in all_meetings 
+        if m.status not in [MeetingStatus.COMPLETED.value, MeetingStatus.FAILED.value]
+    ]
+
+    # If all meetings are terminal, return idempotent response
+    if not non_terminal_meetings:
+        meeting = all_meetings[0]
         logger.info(f"Stop request: Meeting {meeting.id} already in terminal state '{meeting.status}'. Returning 202 idempotently.")
         return {"message": f"Meeting already {meeting.status}."}
 
-    # Handle meetings without container ID - can be in any non-terminal status
-    if not meeting.bot_container_id:
-        logger.info(f"Stop request: Meeting {meeting.id} has no container ID (status: {meeting.status}). Finalizing immediately.")
-        success = await update_meeting_status(
-            meeting, 
-            MeetingStatus.COMPLETED, 
-            db,
-            completion_reason=MeetingCompletionReason.STOPPED
-        )
-        if success:
-            await publish_meeting_status_change(meeting.id, MeetingStatus.COMPLETED.value, redis_client, platform_value, native_meeting_id, meeting.user_id)
-        # Schedule post-meeting tasks even if it never became active
-        logger.info(f"Scheduling post-meeting tasks for meeting {meeting.id} (no container case).")
-        background_tasks.add_task(run_all_tasks, meeting.id)
-        return {"message": "Stop request accepted; meeting finalized (no running container)."}
+    # Process each non-terminal meeting (same logic as before, just in a loop)
+    for meeting in non_terminal_meetings:
+        # Handle meetings without container ID - can be in any non-terminal status
+        if not meeting.bot_container_id:
+            logger.info(f"Stop request: Meeting {meeting.id} has no container ID (status: {meeting.status}). Finalizing immediately.")
+            success = await update_meeting_status(
+                meeting, 
+                MeetingStatus.COMPLETED, 
+                db,
+                completion_reason=MeetingCompletionReason.STOPPED
+            )
+            if success:
+                await publish_meeting_status_change(meeting.id, MeetingStatus.COMPLETED.value, redis_client, platform_value, native_meeting_id, meeting.user_id)
+            # Schedule post-meeting tasks even if it never became active
+            logger.info(f"Scheduling post-meeting tasks for meeting {meeting.id} (no container case).")
+            background_tasks.add_task(run_all_tasks, meeting.id)
+            continue
 
-    logger.info(f"Found meeting {meeting.id} (status: {meeting.status}) with container {meeting.bot_container_id} for stop request.")
+        logger.info(f"Found meeting {meeting.id} (status: {meeting.status}) with container {meeting.bot_container_id} for stop request.")
 
-    # --- SIMPLE FAST-PATH: If very recent and pre-active, finalize immediately and kill container ---
-    try:
-        seconds_since_created = (datetime.utcnow() - meeting.created_at).total_seconds() if meeting.created_at else None
-    except Exception:
-        seconds_since_created = None
-    if meeting.status in [MeetingStatus.REQUESTED.value, MeetingStatus.JOINING.value, MeetingStatus.AWAITING_ADMISSION.value] and (seconds_since_created is not None and seconds_since_created < 5):
-        logger.info(f"Stop request: Meeting {meeting.id} is pre-active and started {seconds_since_created:.2f}s ago. Finalizing immediately and stopping container.")
-        # Mark stop intent to ignore late callbacks
-        if meeting.data is None:
-            meeting.data = {}
-        meeting.data["stop_requested"] = True
-        await db.commit()
-        # Stop container ASAP (no delay) in background
-        background_tasks.add_task(_delayed_container_stop, meeting.bot_container_id, meeting.id, 0)
-        # Finalize meeting now
-        success = await update_meeting_status(
-            meeting,
-            MeetingStatus.COMPLETED,
-            db,
-            completion_reason=MeetingCompletionReason.STOPPED
-        )
-        if success:
-            await publish_meeting_status_change(meeting.id, MeetingStatus.COMPLETED.value, redis_client, platform_value, native_meeting_id, meeting.user_id)
-        # Schedule post-meeting tasks
-        background_tasks.add_task(run_all_tasks, meeting.id)
-        return {"message": "Stop request accepted; meeting finalized immediately (pre-active)."}
-
-    # 2. Publish 'leave' command via Redis Pub/Sub (meeting-based addressing)
-    if not redis_client:
-        logger.error("Redis client not available. Cannot send leave command.")
-        # Proceed with delayed stop, but log the failure to command the bot.
-        # Don't raise an error here, as we still want to stop the container eventually.
-    else:
+        # --- SIMPLE FAST-PATH: If very recent and pre-active, finalize immediately and kill container ---
         try:
-            command_channel = f"bot_commands:meeting:{meeting.id}"
-            payload = json.dumps({"action": "leave", "meeting_id": meeting.id})
-            logger.info(f"Publishing leave command to Redis channel '{command_channel}': {payload}")
-            await redis_client.publish(command_channel, payload)
-            logger.info(f"Successfully published leave command for meeting {meeting.id}.")
-        except Exception as e:
-            logger.error(f"Failed to publish leave command to Redis channel {command_channel}: {e}", exc_info=True)
-            # Log error but continue with delayed stop
+            seconds_since_created = (datetime.utcnow() - meeting.created_at).total_seconds() if meeting.created_at else None
+        except Exception:
+            seconds_since_created = None
+        if meeting.status in [MeetingStatus.REQUESTED.value, MeetingStatus.JOINING.value, MeetingStatus.AWAITING_ADMISSION.value] and (seconds_since_created is not None and seconds_since_created < 5):
+            logger.info(f"Stop request: Meeting {meeting.id} is pre-active and started {seconds_since_created:.2f}s ago. Finalizing immediately and stopping container.")
+            # Mark stop intent to ignore late callbacks
+            if meeting.data is None:
+                meeting.data = {}
+            meeting.data["stop_requested"] = True
+            await db.commit()
+            # Stop container ASAP (no delay) in background
+            background_tasks.add_task(_delayed_container_stop, meeting.bot_container_id, meeting.id, 0)
+            # Finalize meeting now
+            success = await update_meeting_status(
+                meeting,
+                MeetingStatus.COMPLETED,
+                db,
+                completion_reason=MeetingCompletionReason.STOPPED
+            )
+            if success:
+                await publish_meeting_status_change(meeting.id, MeetingStatus.COMPLETED.value, redis_client, platform_value, native_meeting_id, meeting.user_id)
+            # Schedule post-meeting tasks
+            background_tasks.add_task(run_all_tasks, meeting.id)
+            continue
 
-    # 4. Schedule delayed container stop task
-    logger.info(f"Scheduling delayed stop task for container {meeting.bot_container_id} (meeting {meeting.id}).")
-    # Pass container_id, meeting_id, and delay
-    background_tasks.add_task(_delayed_container_stop, meeting.bot_container_id, meeting.id, 30) 
+        # 2. Publish 'leave' command via Redis Pub/Sub (meeting-based addressing)
+        if not redis_client:
+            logger.error("Redis client not available. Cannot send leave command.")
+            # Proceed with delayed stop, but log the failure to command the bot.
+            # Don't raise an error here, as we still want to stop the container eventually.
+        else:
+            try:
+                command_channel = f"bot_commands:meeting:{meeting.id}"
+                payload = json.dumps({"action": "leave", "meeting_id": meeting.id})
+                logger.info(f"Publishing leave command to Redis channel '{command_channel}': {payload}")
+                await redis_client.publish(command_channel, payload)
+                logger.info(f"Successfully published leave command for meeting {meeting.id}.")
+            except Exception as e:
+                logger.error(f"Failed to publish leave command to Redis channel {command_channel}: {e}", exc_info=True)
+                # Log error but continue with delayed stop
 
-    # 5. Update Meeting status (Consider 'stopping' or keep 'active')
-    # Option A: Keep 'active' - relies on collector/other process to detect actual stop
-    # Update status to indicate stop intent
-    # Note: We don't have a 'stopping' status in the new system
-    # The bot will transition directly to 'completed' or 'failed' via callback
-    logger.info(f"Stop request accepted for meeting {meeting.id}. Bot will transition to completed/failed via callback.")
-    # Optionally clear container ID here or when stop is confirmed?
-    # meeting.bot_container_id = None 
-    # Don't set end_time here, let the stop confirmation (or lack thereof) handle it.
-    await db.commit()
-    logger.info(f"Meeting {meeting.id} status updated.")
+        # 4. Schedule delayed container stop task
+        logger.info(f"Scheduling delayed stop task for container {meeting.bot_container_id} (meeting {meeting.id}).")
+        # Pass container_id, meeting_id, and delay
+        background_tasks.add_task(_delayed_container_stop, meeting.bot_container_id, meeting.id, 30) 
 
-    # 5.1. Publish meeting status change via Redis Pub/Sub
-    await publish_meeting_status_change(meeting.id, 'stopping', redis_client, platform_value, native_meeting_id, meeting.user_id)
+        # 5. Update Meeting status (Consider 'stopping' or keep 'active')
+        # Option A: Keep 'active' - relies on collector/other process to detect actual stop
+        # Update status to indicate stop intent
+        # Note: We don't have a 'stopping' status in the new system
+        # The bot will transition directly to 'completed' or 'failed' via callback
+        logger.info(f"Stop request accepted for meeting {meeting.id}. Bot will transition to completed/failed via callback.")
+        # Optionally clear container ID here or when stop is confirmed?
+        # meeting.bot_container_id = None 
+        # Don't set end_time here, let the stop confirmation (or lack thereof) handle it.
+        await db.commit()
+        logger.info(f"Meeting {meeting.id} status updated.")
+
+        # 5.1. Publish meeting status change via Redis Pub/Sub
+        await publish_meeting_status_change(meeting.id, 'stopping', redis_client, platform_value, native_meeting_id, meeting.user_id)
+        logger.info(f"Stop request for meeting {meeting.id} accepted. Leave command sent, delayed stop scheduled.")
 
     # 6. Return 202 Accepted
-    logger.info(f"Stop request for meeting {meeting.id} accepted. Leave command sent, delayed stop scheduled.")
     return {"message": "Stop request accepted and is being processed."}
 
 # --- NEW Endpoint: Get Running Bot Status --- 
