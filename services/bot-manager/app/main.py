@@ -320,9 +320,13 @@ async def shutdown_event():
     logger.info("Docker Client closed.")
 
 # --- ADDED: Delayed Stop Task ---
-async def _delayed_container_stop(container_id: str, delay_seconds: int = 30):
-    """Waits for a delay, then attempts to stop the container synchronously in a thread."""
-    logger.info(f"[Delayed Stop] Task started for container {container_id}. Waiting {delay_seconds}s before stopping.")
+async def _delayed_container_stop(container_id: str, meeting_id: int, delay_seconds: int = 30):
+    """
+    Waits for a delay, then attempts to stop the container synchronously in a thread.
+    After stopping, checks if meeting is still ACTIVE and finalizes it if needed.
+    This ensures meetings are always finalized when stop_bot is called, even if callbacks are missed.
+    """
+    logger.info(f"[Delayed Stop] Task started for container {container_id} (meeting {meeting_id}). Waiting {delay_seconds}s before stopping.")
     await asyncio.sleep(delay_seconds)
     logger.info(f"[Delayed Stop] Delay finished for {container_id}. Attempting synchronous stop...")
     try:
@@ -332,6 +336,59 @@ async def _delayed_container_stop(container_id: str, delay_seconds: int = 30):
         logger.info(f"[Delayed Stop] Successfully stopped container {container_id}.")
     except Exception as e:
         logger.error(f"[Delayed Stop] Error stopping container {container_id}: {e}", exc_info=True)
+    
+    # Safety finalizer: Check if meeting is still ACTIVE and finalize if needed
+    # This ensures meetings are always finalized when stop_bot is called
+    try:
+        # Wait a short grace period for any pending callbacks to arrive
+        grace_period = 1  # seconds
+        logger.info(f"[Delayed Stop] Waiting {grace_period}s grace period for pending callbacks before finalizing meeting {meeting_id}...")
+        await asyncio.sleep(grace_period)
+        
+        # Check meeting status in a new DB session
+        async with async_session_local() as db:
+            meeting = await db.get(Meeting, meeting_id)
+            if not meeting:
+                logger.warning(f"[Delayed Stop] Meeting {meeting_id} not found in DB. Cannot finalize.")
+                return
+            
+            # Only finalize if meeting is NOT in a terminal state (completed or failed)
+            # This ensures we don't overwrite failed meetings with completed status
+            terminal_states = [MeetingStatus.COMPLETED.value, MeetingStatus.FAILED.value]
+            if meeting.status not in terminal_states:
+                logger.warning(f"[Delayed Stop] Meeting {meeting_id} still in non-terminal state '{meeting.status}' after container stop. Finalizing to COMPLETED (callback missed).")
+                success = await update_meeting_status(
+                    meeting,
+                    MeetingStatus.COMPLETED,
+                    db,
+                    completion_reason=MeetingCompletionReason.STOPPED,
+                    transition_reason="delayed_stop_finalizer",
+                    transition_metadata={"container_id": container_id, "finalized_by": "delayed_stop"}
+                )
+                if success:
+                    # Publish status change
+                    global redis_client
+                    if redis_client:
+                        await publish_meeting_status_change(
+                            meeting.id,
+                            MeetingStatus.COMPLETED.value,
+                            redis_client,
+                            meeting.platform,
+                            meeting.platform_specific_id,
+                            meeting.user_id
+                        )
+                    
+                    # Schedule post-meeting tasks
+                    # Note: We can't use background_tasks here since we're in a background task
+                    # So we'll run it in the background using asyncio.create_task
+                    asyncio.create_task(run_all_tasks(meeting.id))
+                    logger.info(f"[Delayed Stop] Meeting {meeting_id} finalized to COMPLETED and post-meeting tasks scheduled.")
+                else:
+                    logger.error(f"[Delayed Stop] Failed to finalize meeting {meeting_id} to COMPLETED.")
+            else:
+                logger.info(f"[Delayed Stop] Meeting {meeting_id} already in terminal state '{meeting.status}'. No finalization needed.")
+    except Exception as e:
+        logger.error(f"[Delayed Stop] Error during safety finalizer for meeting {meeting_id}: {e}", exc_info=True)
 # --- ------------------------ ---
 
 @app.get("/", include_in_schema=False)
@@ -757,7 +814,7 @@ async def stop_bot(
         meeting.data["stop_requested"] = True
         await db.commit()
         # Stop container ASAP (no delay) in background
-        background_tasks.add_task(_delayed_container_stop, meeting.bot_container_id, 0)
+        background_tasks.add_task(_delayed_container_stop, meeting.bot_container_id, meeting.id, 0)
         # Finalize meeting now
         success = await update_meeting_status(
             meeting,
@@ -789,8 +846,8 @@ async def stop_bot(
 
     # 4. Schedule delayed container stop task
     logger.info(f"Scheduling delayed stop task for container {meeting.bot_container_id} (meeting {meeting.id}).")
-    # Pass container_id and delay
-    background_tasks.add_task(_delayed_container_stop, meeting.bot_container_id, 30) 
+    # Pass container_id, meeting_id, and delay
+    background_tasks.add_task(_delayed_container_stop, meeting.bot_container_id, meeting.id, 30) 
 
     # 5. Update Meeting status (Consider 'stopping' or keep 'active')
     # Option A: Keep 'active' - relies on collector/other process to detect actual stop
@@ -968,7 +1025,7 @@ async def bot_exit_callback(
         # Schedule a delayed stop as a safeguard.
         if exit_code != 0 and meeting.bot_container_id:
             logger.warning(f"Bot exit callback: Scheduling delayed stop for container {meeting.bot_container_id} of failed meeting {meeting.id}.")
-            background_tasks.add_task(_delayed_container_stop, meeting.bot_container_id, delay_seconds=10)
+            background_tasks.add_task(_delayed_container_stop, meeting.bot_container_id, meeting.id, 10)
 
         return {"status": "callback processed", "meeting_id": meeting.id, "final_status": meeting.status}
 
