@@ -58,39 +58,86 @@ export async function callStatusChangeCallback(
     return;
   }
 
-  try {
-    // Convert the callback URL to the unified endpoint
-    const baseUrl = botConfig.botManagerCallbackUrl.replace('/exited', '/status_change');
-    
-    const payload: UnifiedCallbackPayload = {
-      connection_id: botConfig.connectionId,
-      container_id: botConfig.container_name,
-      status: status,
-      reason: reason,
-      exit_code: exitCode,
-      error_details: errorDetails,
-      completion_reason: completionReason,
-      failure_stage: failureStage,
-      timestamp: new Date().toISOString()
-    };
+  // Retry logic: try up to 3 times with exponential backoff
+  const maxRetries = 3;
+  const baseDelay = 1000; // 1 second
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    let timeoutId: NodeJS.Timeout | null = null;
+    try {
+      // Convert the callback URL to the unified endpoint
+      const baseUrl = botConfig.botManagerCallbackUrl.replace('/exited', '/status_change');
+      
+      const payload: UnifiedCallbackPayload = {
+        connection_id: botConfig.connectionId,
+        container_id: botConfig.container_name,
+        status: status,
+        reason: reason,
+        exit_code: exitCode,
+        error_details: errorDetails,
+        completion_reason: completionReason,
+        failure_stage: failureStage,
+        timestamp: new Date().toISOString()
+      };
 
-    log(`Sending unified status change callback to ${baseUrl} with payload: ${JSON.stringify(payload)}`);
+      log(`Sending unified status change callback to ${baseUrl} (attempt ${attempt + 1}/${maxRetries})`);
 
-    const response = await fetch(baseUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload)
-    });
+      // Add timeout: 5 seconds max
+      const controller = new AbortController();
+      timeoutId = setTimeout(() => controller.abort(), 5000);
 
-    if (response.ok) {
-      log(`${status} status change callback sent successfully`);
-    } else {
-      log(`${status} status change callback failed with status: ${response.status}`);
+      const response = await fetch(baseUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+
+      if (timeoutId) clearTimeout(timeoutId);
+
+      if (response.ok) {
+        // Read and validate response body
+        const responseBody = await response.json();
+        if (responseBody.status === 'processed' || responseBody.status === 'ok' || responseBody.status === 'container_updated') {
+          log(`${status} status change callback sent and processed successfully`);
+          return; // Success, exit retry loop
+        } else {
+          log(`Callback returned unexpected status: ${responseBody.status}, detail: ${responseBody.detail || 'none'}`);
+          // If not last attempt, retry
+          if (attempt < maxRetries - 1) {
+            const delay = baseDelay * Math.pow(2, attempt);
+            log(`Retrying in ${delay}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          }
+        }
+      } else {
+        const errorText = await response.text().catch(() => 'Unable to read error response');
+        log(`Callback failed with HTTP ${response.status}: ${errorText}`);
+        // If not last attempt, retry
+        if (attempt < maxRetries - 1) {
+          const delay = baseDelay * Math.pow(2, attempt);
+          log(`Retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+      }
+    } catch (error: any) {
+      if (timeoutId) clearTimeout(timeoutId);
+      const isTimeout = error.name === 'AbortError';
+      log(`Callback attempt ${attempt + 1} failed: ${isTimeout ? 'timeout after 5s' : error.message}`);
+      
+      // If not last attempt, retry
+      if (attempt < maxRetries - 1) {
+        const delay = baseDelay * Math.pow(2, attempt);
+        log(`Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else {
+        log(`All ${maxRetries} callback attempts failed. Bot-manager may not have received the status change.`);
+      }
     }
-  } catch (error: any) {
-    log(`Error sending ${status} status change callback: ${error.message}`);
   }
 }
 
