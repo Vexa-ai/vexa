@@ -40,7 +40,7 @@ check_docker:
 # Create .env file from example
 env:
 ifndef TARGET
-	$(info TARGET not set. Defaulting to cpu. Use 'make env TARGET=cpu' or 'make env TARGET=gpu')
+	$(info TARGET not set. Defaulting to cpu. Use 'make env TARGET=cpu' or 'make env TARGET=gpu' or 'make env TARGET=groq')
 	$(eval TARGET := cpu)
 endif
 	@echo "---> Checking .env file for TARGET=$(TARGET)..."
@@ -85,15 +85,40 @@ endif
 		fi; \
 		cp env-example.gpu .env; \
 		echo "*** .env file created from env-example.gpu. Please review it. ***"; \
+	elif [ "$(TARGET)" = "groq" ]; then \
+		if [ ! -f env-example.groq ]; then \
+			echo "env-example.groq not found. Creating default one."; \
+			echo "ADMIN_API_TOKEN=token" > env-example.groq; \
+			echo "LANGUAGE_DETECTION_SEGMENTS=10" >> env-example.groq; \
+			echo "VAD_FILTER_THRESHOLD=0.5" >> env-example.groq; \
+			echo "WHISPER_MODEL_SIZE=medium" >> env-example.groq; \
+			echo "DEVICE_TYPE=groq" >> env-example.groq; \
+			echo "BOT_IMAGE_NAME=vexa-bot:dev" >> env-example.groq; \
+			echo "# WhisperLive Configuration" >> env-example.groq; \
+			echo "WL_MAX_CLIENTS=10" >> env-example.groq; \
+			echo "# Groq API Configuration" >> env-example.groq; \
+			echo "GROQ_API_KEY=your_groq_api_key_here" >> env-example.groq; \
+			echo "GROQ_MODEL=whisper-large-v3-turbo" >> env-example.groq; \
+			echo "# Exposed Host Ports" >> env-example.groq; \
+			echo "API_GATEWAY_HOST_PORT=8056" >> env-example.groq; \
+			echo "ADMIN_API_HOST_PORT=8057" >> env-example.groq; \
+			echo "TRAEFIK_WEB_HOST_PORT=9090" >> env-example.groq; \
+			echo "TRAEFIK_DASHBOARD_HOST_PORT=8085" >> env-example.groq; \
+			echo "TRANSCRIPTION_COLLECTOR_HOST_PORT=8123" >> env-example.groq; \
+			echo "POSTGRES_HOST_PORT=5438" >> env-example.groq; \
+		fi; \
+		cp env-example.groq .env; \
+		echo "*** .env file created from env-example.groq. Please review it. ***"; \
+		echo "*** IMPORTANT: Set GROQ_API_KEY in .env file with your Groq API key. ***"; \
 	else \
-		echo "Error: TARGET must be 'cpu' or 'gpu'. Usage: make env TARGET=<cpu|gpu>"; \
+		echo "Error: TARGET must be 'cpu', 'gpu', or 'groq'. Usage: make env TARGET=<cpu|gpu|groq>"; \
 		exit 1; \
 	fi
 
 # Force create .env file from example (overwrite existing)
 force-env:
 ifndef TARGET
-	$(info TARGET not set. Defaulting to cpu. Use 'make force-env TARGET=cpu' or 'make force-env TARGET=gpu')
+	$(info TARGET not set. Defaulting to cpu. Use 'make force-env TARGET=cpu' or 'make force-env TARGET=gpu' or 'make force-env TARGET=groq')
 	$(eval TARGET := cpu)
 endif
 	@echo "---> Creating .env file for TARGET=$(TARGET) (forcing overwrite)..."
@@ -135,8 +160,33 @@ endif
 		fi; \
 		cp env-example.gpu .env; \
 		echo "*** .env file created from env-example.gpu. Please review it. ***"; \
+	elif [ "$(TARGET)" = "groq" ]; then \
+		if [ ! -f env-example.groq ]; then \
+			echo "env-example.groq not found. Creating default one."; \
+			echo "ADMIN_API_TOKEN=token" > env-example.groq; \
+			echo "LANGUAGE_DETECTION_SEGMENTS=10" >> env-example.groq; \
+			echo "VAD_FILTER_THRESHOLD=0.5" >> env-example.groq; \
+			echo "WHISPER_MODEL_SIZE=medium" >> env-example.groq; \
+			echo "DEVICE_TYPE=groq" >> env-example.groq; \
+			echo "BOT_IMAGE_NAME=vexa-bot:dev" >> env-example.groq; \
+			echo "# WhisperLive Configuration" >> env-example.groq; \
+			echo "WL_MAX_CLIENTS=10" >> env-example.groq; \
+			echo "# Groq API Configuration" >> env-example.groq; \
+			echo "GROQ_API_KEY=your_groq_api_key_here" >> env-example.groq; \
+			echo "GROQ_MODEL=whisper-large-v3-turbo" >> env-example.groq; \
+			echo "# Exposed Host Ports" >> env-example.groq; \
+			echo "API_GATEWAY_HOST_PORT=8056" >> env-example.groq; \
+			echo "ADMIN_API_HOST_PORT=8057" >> env-example.groq; \
+			echo "TRAEFIK_WEB_HOST_PORT=9090" >> env-example.groq; \
+			echo "TRAEFIK_DASHBOARD_HOST_PORT=8085" >> env-example.groq; \
+			echo "TRANSCRIPTION_COLLECTOR_HOST_PORT=8123" >> env-example.groq; \
+			echo "POSTGRES_HOST_PORT=5438" >> env-example.groq; \
+		fi; \
+		cp env-example.groq .env; \
+		echo "*** .env file created from env-example.groq. Please review it. ***"; \
+		echo "*** IMPORTANT: Set GROQ_API_KEY in .env file with your Groq API key. ***"; \
 	else \
-		echo "Error: TARGET must be 'cpu' or 'gpu'. Usage: make force-env TARGET=<cpu|gpu>"; \
+		echo "Error: TARGET must be 'cpu', 'gpu', or 'groq'. Usage: make force-env TARGET=<cpu|gpu|groq>"; \
 		exit 1; \
 	fi
 
@@ -185,6 +235,9 @@ build: check_docker
 	elif [ "$(TARGET)" = "gpu" ]; then \
 		echo "---> Building with 'gpu' profile (includes whisperlive GPU)..."; \
 		docker compose --profile gpu build; \
+	elif [ "$(TARGET)" = "groq" ]; then \
+		echo "---> Building with 'groq' profile (includes whisperlive-groq)..."; \
+		docker compose --profile groq build; \
 	else \
 		echo "---> TARGET not explicitly set, defaulting to CPU mode. 'whisperlive' (GPU) will not be built."; \
 		docker compose --profile cpu build; \
@@ -199,6 +252,9 @@ up: check_docker
 	elif [ "$(TARGET)" = "gpu" ]; then \
 		echo "---> Starting services for GPU. This will start 'whisperlive' (for GPU) and other default services. 'whisperlive-cpu' (profile=cpu) will not be started."; \
 		docker compose --profile gpu up -d; \
+	elif [ "$(TARGET)" = "groq" ]; then \
+		echo "---> Starting services for Groq. This will start 'whisperlive-groq' along with other default services."; \
+		docker compose --profile groq up -d; \
 	else \
 		echo "---> TARGET not explicitly set, defaulting to CPU mode. 'whisperlive' (GPU) will not be started."; \
 		docker compose --profile cpu up -d; \

@@ -201,6 +201,50 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # Groq API version of WhisperLive
+  whisperlive-groq:
+    profiles: ["groq"]
+    build:
+      context: .
+      dockerfile: services/WhisperLive/Dockerfile.cpu
+    volumes:
+      - ./hub:/root/.cache/huggingface/hub
+      - ./services/WhisperLive/models:/app/models
+    environment:
+      - REDIS_STREAM_URL=redis://redis:6379/0/transcription_segments
+      - TRANSCRIPTION_COLLECTOR_URL=redis://redis:6379/0/transcription_segments
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_STREAM_NAME=transcription_segments
+      - LANGUAGE_DETECTION_SEGMENTS=${LANGUAGE_DETECTION_SEGMENTS}
+      - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD}
+      - DEVICE_TYPE=groq
+      - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}
+      - WL_MAX_CLIENTS=${WL_MAX_CLIENTS}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_MODEL=${GROQ_MODEL:-whisper-large-v3-turbo}
+      - CONSUL_ENABLE=${CONSUL_ENABLE:-true}
+      - CONSUL_HTTP_ADDR=${CONSUL_HTTP_ADDR:-http://consul:8500}
+    deploy:
+      replicas: 1
+    command: --port 9090 --backend groq
+    expose:
+      - "9090" #use for transcription web socket
+      - "9091" #use for health check
+    init: true
+    depends_on:
+      transcription-collector:
+        condition: service_started
+    networks:
+      - vexa_default
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 
 
 
