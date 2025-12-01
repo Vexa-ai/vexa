@@ -14,14 +14,14 @@ from faster_whisper import WhisperModel
 
 # Get model configuration from environment variables with fallbacks
 model_size: Literal["tiny", "base", "small", "medium", "large-v1", "large-v2", "large-v3", "large", "distil-small", "distil-medium", "distil-large"] = os.getenv('WHISPER_MODEL_SIZE', 'tiny')
-device: Literal["cpu", "cuda", "auto", "groq"] = os.getenv('DEVICE_TYPE', 'cuda')
+device: Literal["cpu", "cuda", "auto", "remote"] = os.getenv('DEVICE_TYPE', 'cuda')
 compute_type: Literal["int8", "float16", "default"] = "default"  # Keep default for stability
 
-# Skip model download for Groq since it uses remote API
-if device == "groq":
-    print(f"Skipping local model download for Groq backend.")
-    print(f"Groq API will be used for transcription (model: {os.getenv('GROQ_MODEL', 'whisper-large-v3-turbo')})")
-    print(f"Make sure GROQ_API_KEY is set in your .env file.")
+# Skip model download for remote backends since they use remote API
+if device == "remote":
+    print(f"Skipping local model download for remote backend.")
+    print(f"Remote API will be used for transcription (model: {os.getenv('REMOTE_TRANSCRIBER_MODEL', 'whisper-v3-turbo')})")
+    print(f"Make sure REMOTE_TRANSCRIBER_API_KEY and REMOTE_TRANSCRIBER_URL are set in your .env file.")
     exit(0)
 
 print(f"Downloading Whisper model with configuration:")
