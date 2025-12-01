@@ -25,11 +25,11 @@ except Exception:
     WhisperTRTLLM = None
 
 try:
-    from whisper_live.groq_transcriber import GroqTranscriber
-    GROQ_AVAILABLE = True
+    from whisper_live.remote_transcriber import RemoteTranscriber
+    REMOTE_AVAILABLE = True
 except Exception:
-    GROQ_AVAILABLE = False
-    GroqTranscriber = None
+    REMOTE_AVAILABLE = False
+    RemoteTranscriber = None
 
 # Import for health check HTTP server
 import http.server
@@ -529,7 +529,7 @@ class ClientManager:
 class BackendType(Enum):
     FASTER_WHISPER = "faster_whisper"
     TENSORRT = "tensorrt"
-    GROQ = "groq"
+    REMOTE = "remote"
 
     @staticmethod
     def valid_types() -> List[str]:
@@ -545,8 +545,8 @@ class BackendType(Enum):
     def is_tensorrt(self) -> bool:
         return self == BackendType.TENSORRT
 
-    def is_groq(self) -> bool:
-        return self == BackendType.GROQ
+    def is_remote(self) -> bool:
+        return self == BackendType.REMOTE
 
 
 class TranscriptionServer:
@@ -796,16 +796,16 @@ class TranscriptionServer:
                 collector_client_ref=self.collector_client,
                 server_options=self.server_options
             )
-        # groq client
-        elif backend.is_groq():
+        # remote client
+        elif backend.is_remote():
             # Get model from options or env, handling None case
-            groq_model = options.get("model") or os.getenv("GROQ_MODEL", "whisper-large-v3-turbo")
-            client = ServeClientGroq(
+            remote_model = options.get("model") or os.getenv("REMOTE_TRANSCRIBER_MODEL")
+            client = ServeClientRemote(
                 websocket,
                 language=options.get("language"),
                 task=options.get("task", "transcribe"),
                 client_uid=options.get("uid"),
-                model=groq_model,
+                model=remote_model,
                 initial_prompt=options.get("initial_prompt"),
                 vad_parameters=options.get("vad_parameters"),
                 use_vad=options.get("use_vad", True),
@@ -2821,10 +2821,10 @@ class ServeClientFasterWhisper(ServeClientBase):
         return last_segment
 
 
-class ServeClientGroq(ServeClientBase):
+class ServeClientRemote(ServeClientBase):
 
     def __init__(self, websocket, task="transcribe", language=None, 
-                 client_uid=None, model="whisper-large-v3-turbo", initial_prompt=None, 
+                 client_uid=None, model=None, initial_prompt=None, 
                  vad_parameters=None, use_vad=True, 
                  platform=None, meeting_url=None, token=None, meeting_id=None,
                  collector_client_ref: Optional[TranscriptionCollectorClient] = None,
@@ -2833,10 +2833,10 @@ class ServeClientGroq(ServeClientBase):
                          collector_client_ref=collector_client_ref, server_options=server_options)
         
         # Log the critical parameters
-        logging.info(f"Initializing Groq client {client_uid} with platform={platform}, meeting_url={meeting_url}, token={token}")
+        logging.info(f"Initializing Remote client {client_uid} with platform={platform}, meeting_url={meeting_url}, token={token}")
 
-        # Ensure model is set, fallback to env var or default
-        self.model = model or os.getenv("GROQ_MODEL", "whisper-large-v3-turbo")
+        # Ensure model is set, fallback to env var
+        self.model = model or os.getenv("REMOTE_TRANSCRIBER_MODEL")
         self.language = language
         self.task = task
         self.initial_prompt = initial_prompt
@@ -2848,12 +2848,12 @@ class ServeClientGroq(ServeClientBase):
         self.same_output_threshold = server_options.get("same_output_threshold", 10)
         self.end_time_for_same_output = None
 
-        if not GROQ_AVAILABLE:
-            logging.error("Groq is not available. Please install groq package and set GROQ_API_KEY.")
+        if not REMOTE_AVAILABLE:
+            logging.error("Remote transcriber is not available. Please install requests package and set REMOTE_TRANSCRIBER_* environment variables.")
             self.websocket.send(json.dumps({
                 "uid": self.client_uid,
                 "status": "ERROR",
-                "message": "Groq backend is not available. Please install groq package and set GROQ_API_KEY."
+                "message": "Remote backend is not available. Please install requests package and set REMOTE_TRANSCRIBER_* environment variables."
             }))
             self.websocket.close()
             return
@@ -2862,11 +2862,11 @@ class ServeClientGroq(ServeClientBase):
             # Create a new transcriber for each client to enable concurrent requests
             self.create_model()
         except Exception as e:
-            logging.error(f"Failed to initialize Groq transcriber: {e}")
+            logging.error(f"Failed to initialize Remote transcriber: {e}")
             self.websocket.send(json.dumps({
                 "uid": self.client_uid,
                 "status": "ERROR",
-                "message": f"Failed to initialize Groq transcriber: {str(e)}"
+                "message": f"Failed to initialize Remote transcriber: {str(e)}"
             }))
             self.websocket.close()
             return
@@ -2881,28 +2881,40 @@ class ServeClientGroq(ServeClientBase):
                 {
                     "uid": self.client_uid,
                     "message": self.SERVER_READY,
-                    "backend": "groq"
+                    "backend": "remote"
                 }
             )
         )
 
     def create_model(self):
         """
-        Instantiates a new Groq transcriber.
+        Instantiates a new Remote transcriber.
         """
-        api_key = os.getenv("GROQ_API_KEY")
-        if not api_key:
-            raise ValueError("GROQ_API_KEY environment variable is not set")
+        api_url = os.getenv("REMOTE_TRANSCRIBER_URL")
+        api_key = (os.getenv("REMOTE_TRANSCRIBER_API_KEY") or "").strip()
+        model = self.model or os.getenv("REMOTE_TRANSCRIBER_MODEL")
         
-        self.transcriber = GroqTranscriber(
+        if not api_url:
+            raise ValueError("REMOTE_TRANSCRIBER_URL environment variable is not set")
+        if not api_key:
+            raise ValueError("REMOTE_TRANSCRIBER_API_KEY environment variable is not set")
+        if not model:
+            raise ValueError("REMOTE_TRANSCRIBER_MODEL environment variable is not set")
+        
+        # Log masked API key for debugging
+        api_key_masked = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) > 8 else "***"
+        logging.debug(f"Creating RemoteTranscriber with API key: {api_key_masked}, URL: {api_url}, Model: {model}")
+        
+        self.transcriber = RemoteTranscriber(
+            api_url=api_url,
             api_key=api_key,
-            model=self.model,
+            model=model,
             sampling_rate=self.RATE,
         )
 
     def transcribe_audio(self, input_sample):
         """
-        Transcribes the provided audio sample using Groq API.
+        Transcribes the provided audio sample using Remote API.
 
         Args:
             input_sample (np.array): The audio chunk to be transcribed. This should be a NumPy
@@ -2981,9 +2993,9 @@ class ServeClientGroq(ServeClientBase):
         transcribed segments to the client via a WebSocket connection.
 
         If the client's language is not detected, it waits for 30 seconds of audio input to make a language prediction.
-        It utilizes the Groq API to transcribe the audio, continuously processing and streaming results. Segments
+        It utilizes the Remote API to transcribe the audio, continuously processing and streaming results. Segments
         are sent to the client in real-time, and a history of segments is maintained to provide context.Pauses in speech
-        (no output from Groq) are handled by showing the previous output for a set duration. A blank segment is added if
+        (no output from Remote API) are handled by showing the previous output for a set duration. A blank segment is added if
         there is no speech for a specified duration to indicate a pause.
 
         Raises:
@@ -3049,7 +3061,7 @@ class ServeClientGroq(ServeClientBase):
 
     def update_segments(self, segments, duration):
         """
-        Processes the segments from Groq API. Appends all the segments to the list
+        Processes the segments from Remote API. Appends all the segments to the list
         except for the last segment assuming that it is incomplete.
 
         Updates the ongoing transcript with transcribed segments, including their start and end times.
@@ -3061,7 +3073,7 @@ class ServeClientGroq(ServeClientBase):
         last processed segment, allowing it to be sent to the client for real-time updates.
 
         Args:
-            segments(Iterable[Segment]) : iterable of segments as returned by Groq API
+            segments(Iterable[Segment]) : iterable of segments as returned by Remote API
             duration(float): duration of the current chunk
 
         Returns:

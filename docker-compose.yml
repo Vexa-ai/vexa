@@ -195,15 +195,10 @@ services:
       - vexa_default
     # Don't auto-start CPU version, users can manually start it
     restart: unless-stopped
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
 
-  # Groq API version of WhisperLive
-  whisperlive-groq:
-    profiles: ["groq"]
+  # Remote API version of WhisperLive
+  whisperlive-remote:
+    profiles: ["remote"]
     build:
       context: .
       dockerfile: services/WhisperLive/Dockerfile.cpu
@@ -219,16 +214,19 @@ services:
       - REDIS_STREAM_NAME=transcription_segments
       - LANGUAGE_DETECTION_SEGMENTS=${LANGUAGE_DETECTION_SEGMENTS}
       - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD}
-      - DEVICE_TYPE=groq
+      - DEVICE_TYPE=remote
       - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}
       - WL_MAX_CLIENTS=${WL_MAX_CLIENTS}
-      - GROQ_API_KEY=${GROQ_API_KEY}
-      - GROQ_MODEL=${GROQ_MODEL:-whisper-large-v3-turbo}
+      - REMOTE_TRANSCRIBER_URL=${REMOTE_TRANSCRIBER_URL}
+      - REMOTE_TRANSCRIBER_API_KEY=${REMOTE_TRANSCRIBER_API_KEY}
+      - REMOTE_TRANSCRIBER_MODEL=${REMOTE_TRANSCRIBER_MODEL}
+      - REMOTE_TRANSCRIBER_TEMPERATURE=${REMOTE_TRANSCRIBER_TEMPERATURE:-0}
+      - REMOTE_TRANSCRIBER_VAD_MODEL=${REMOTE_TRANSCRIBER_VAD_MODEL}
       - CONSUL_ENABLE=${CONSUL_ENABLE:-true}
       - CONSUL_HTTP_ADDR=${CONSUL_HTTP_ADDR:-http://consul:8500}
     deploy:
       replicas: 1
-    command: --port 9090 --backend groq
+    command: --port 9090 --backend remote
     expose:
       - "9090" #use for transcription web socket
       - "9091" #use for health check
@@ -239,14 +237,6 @@ services:
     networks:
       - vexa_default
     restart: unless-stopped
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-
-
 
   transcription-collector:
     build:

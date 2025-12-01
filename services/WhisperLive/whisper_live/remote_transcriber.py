@@ -1,8 +1,9 @@
 """
-Groq API transcriber wrapper for WhisperLive.
+Remote API transcriber wrapper for WhisperLive.
 
-This module provides a GroqTranscriber class that wraps Groq's speech-to-text API,
+This module provides a RemoteTranscriber class that wraps any HTTP-based speech-to-text API,
 converting it to match the interface of the local WhisperModel for seamless integration.
+Supports configurable endpoints like Fireworks.ai, Groq, etc.
 """
 
 import os
@@ -10,15 +11,9 @@ import tempfile
 import wave
 import logging
 import time
+import requests
 from typing import BinaryIO, Iterable, List, Optional, Tuple, Union
 import numpy as np
-
-try:
-    from groq import Groq
-    GROQ_AVAILABLE = True
-except ImportError:
-    GROQ_AVAILABLE = False
-    logging.warning("Groq package not available. Install with: pip install groq")
 
 from .transcriber import Segment, TranscriptionInfo, TranscriptionOptions, VadOptions
 
@@ -58,6 +53,34 @@ LANGUAGE_NAME_TO_CODE = {
     "tagalog": "tl",
 }
 
+
+def _to_float(value, default=None):
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _clamp_probability(value):
+    """
+    Clamp probability value to [0.0, 1.0] range.
+    For Fireworks API, no_speech_prob values > 1.0 are clamped to 1.0.
+    Note: Fireworks API may return no_speech_prob in a different format than local Whisper.
+    """
+    try:
+        val = float(value)
+        # Handle log probabilities or values > 1.0 by clamping
+        if val > 1.0:
+            # If value > 1.0, it might be a log probability or different scale
+            # For now, clamp to 1.0, but this might need adjustment based on API behavior
+            return 1.0
+        return max(0.0, min(1.0, val))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def normalize_language_code(language: Optional[str]) -> Optional[str]:
     """
     Convert language name (e.g., "English") to ISO-639-1 code (e.g., "en").
@@ -76,50 +99,71 @@ def normalize_language_code(language: Optional[str]) -> Optional[str]:
     return LANGUAGE_NAME_TO_CODE.get(language_lower, language_lower)
 
 
-class GroqTranscriber:
+class RemoteTranscriber:
     """
-    Wrapper for Groq API transcription that matches WhisperModel interface.
+    Wrapper for remote HTTP API transcription that matches WhisperModel interface.
     
-    Converts audio numpy arrays to temporary WAV files and calls Groq API
+    Converts audio numpy arrays to temporary WAV files and calls remote HTTP API
     with retry logic, then converts responses to Segment format.
     """
     
     def __init__(
         self,
+        api_url: Optional[str] = None,
         api_key: Optional[str] = None,
-        model: str = "whisper-large-v3-turbo",
+        model: Optional[str] = None,
+        temperature: Optional[str] = None,
+        vad_model: Optional[str] = None,
+        timestamp_granularities: Optional[str] = None,
         sampling_rate: int = 16000,
     ):
         """
-        Initialize Groq transcriber.
+        Initialize remote transcriber.
         
         Args:
-            api_key: Groq API key. If None, reads from GROQ_API_KEY env var.
-            model: Groq model to use (whisper-large-v3-turbo or whisper-large-v3).
+            api_url: API endpoint URL. If None, reads from REMOTE_TRANSCRIBER_URL env var.
+            api_key: API key for authentication. If None, reads from REMOTE_TRANSCRIBER_API_KEY env var.
+            model: Model name. If None, reads from REMOTE_TRANSCRIBER_MODEL env var.
+            temperature: Temperature parameter. If None, reads from REMOTE_TRANSCRIBER_TEMPERATURE env var, defaults to "0".
+            vad_model: VAD model name. If None, reads from REMOTE_TRANSCRIBER_VAD_MODEL env var.
             sampling_rate: Audio sampling rate (default 16000 Hz).
         """
-        if not GROQ_AVAILABLE:
-            raise RuntimeError(
-                "Groq package is not installed. Install with: pip install groq"
+        self.api_url = api_url or os.getenv("REMOTE_TRANSCRIBER_URL")
+        if not self.api_url:
+            raise ValueError(
+                "Remote transcriber URL not provided. Set REMOTE_TRANSCRIBER_URL environment variable "
+                "or pass api_url parameter."
             )
         
-        self.api_key = api_key or os.getenv("GROQ_API_KEY")
+        self.api_key = (api_key or os.getenv("REMOTE_TRANSCRIBER_API_KEY") or "").strip()
         if not self.api_key:
             raise ValueError(
-                "Groq API key not provided. Set GROQ_API_KEY environment variable "
+                "Remote transcriber API key not provided. Set REMOTE_TRANSCRIBER_API_KEY environment variable "
                 "or pass api_key parameter."
             )
+        # Log masked API key for debugging (first 4 and last 4 chars)
+        api_key_masked = f"{self.api_key[:4]}...{self.api_key[-4:]}" if len(self.api_key) > 8 else "***"
         
-        self.model = model
+        self.model = model or os.getenv("REMOTE_TRANSCRIBER_MODEL")
+        if not self.model:
+            raise ValueError(
+                "Remote transcriber model not provided. Set REMOTE_TRANSCRIBER_MODEL environment variable "
+                "or pass model parameter."
+            )
+        
+        # Hardcode response format to verbose_json
+        self.response_format = "verbose_json"
+        self.temperature = temperature or os.getenv("REMOTE_TRANSCRIBER_TEMPERATURE", "0")
+        self.vad_model = vad_model or os.getenv("REMOTE_TRANSCRIBER_VAD_MODEL")
+        # Request only segment timestamps (no word-level precision needed)
+        self.timestamp_granularities = "segment"
         self.sampling_rate = sampling_rate
-        self.client = Groq(api_key=self.api_key)
         
         # Retry configuration
         self.max_retries = 3
         self.initial_retry_delay = 1.0  # seconds
         self.max_retry_delay = 10.0  # seconds
         
-        logger.info(f"Initialized GroqTranscriber with model={model}")
     
     def _numpy_to_wav_file(self, audio: np.ndarray, temp_dir: Optional[str] = None) -> str:
         """
@@ -155,7 +199,7 @@ class GroqTranscriber:
         
         return temp_path
     
-    def _call_groq_api(
+    def _call_remote_api(
         self,
         audio_file_path: str,
         language: Optional[str] = None,
@@ -163,41 +207,79 @@ class GroqTranscriber:
         task: str = "transcribe",
     ) -> dict:
         """
-        Call Groq API with retry logic.
+        Call remote HTTP API with retry logic.
         
         Args:
             audio_file_path: Path to audio file.
             language: Language code (ISO-639-1) or None for auto-detect.
             prompt: Optional prompt for context/spelling.
-            task: "transcribe" or "translate" (translate only supports 'en').
+            task: "transcribe" or "translate".
             
         Returns:
-            Groq API response as dict.
+            API response as dict.
         """
         retry_count = 0
         last_exception = None
         
+        # Prepare headers
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        
+        # Prepare form data
+        data = {
+            "model": self.model,
+            "temperature": self.temperature,
+        }
+        
+        if self.vad_model:
+            data["vad_model"] = self.vad_model
+        
+        if language:
+            data["language"] = language
+        
+        if prompt:
+            data["prompt"] = prompt
+        
+        if task == "translate":
+            data["task"] = task
+        
+        # Add response_format if supported (some APIs may ignore this)
+        if self.response_format:
+            data["response_format"] = self.response_format
+        
+        if self.timestamp_granularities:
+            data["timestamp_granularities"] = self.timestamp_granularities
+        
+        # Log request details (masked)
+        auth_header_masked = f"Bearer {self.api_key[:4]}...{self.api_key[-4:]}" if len(self.api_key) > 8 else "Bearer ***"
+        
         while retry_count <= self.max_retries:
             try:
                 with open(audio_file_path, "rb") as audio_file:
-                    response = self.client.audio.transcriptions.create(
-                        file=audio_file,
-                        model=self.model,
-                        language=language,
-                        prompt=prompt,
-                        response_format="verbose_json",
-                        timestamp_granularities=["word", "segment"],
-                        temperature=0.0,
+                    files = {"file": audio_file}
+                    response = requests.post(
+                        self.api_url,
+                        headers=headers,
+                        files=files,
+                        data=data,
+                        timeout=60.0,  # 60 second timeout
                     )
                 
-                # Convert response to dict if needed
-                if hasattr(response, 'model_dump'):
-                    return response.model_dump()
-                elif hasattr(response, 'dict'):
-                    return response.dict()
+                response.raise_for_status()
+                
+                # Parse response based on format
+                if self.response_format == "verbose_json" or self.response_format == "json":
+                    result = response.json()
+                    return result
                 else:
-                    # Assume it's already a dict or has __dict__
-                    return dict(response) if not isinstance(response, dict) else response
+                    # Simple text response - wrap in dict format
+                    text = response.text.strip()
+                    if text.startswith("{") or text.startswith("["):
+                        # Try to parse as JSON anyway
+                        result = response.json()
+                        return result
+                    else:
+                        # Plain text response
+                        return {"text": text}
                     
             except Exception as e:
                 last_exception = e
@@ -210,27 +292,32 @@ class GroqTranscriber:
                         self.max_retry_delay
                     )
                     logger.warning(
-                        f"Groq API call failed (attempt {retry_count}/{self.max_retries}): {e}. "
+                        f"Remote API call failed (attempt {retry_count}/{self.max_retries}): {e}. "
                         f"Retrying in {delay:.1f}s..."
                     )
                     time.sleep(delay)
                 else:
-                    logger.error(f"Groq API call failed after {self.max_retries} retries: {e}")
+                    logger.error(f"Remote API call failed after {self.max_retries} retries: {e}")
                     raise
         
         # Should not reach here, but just in case
-        raise last_exception or RuntimeError("Groq API call failed")
+        raise last_exception or RuntimeError("Remote API call failed")
     
-    def _groq_response_to_segments(
+    def _response_to_segments(
         self,
-        groq_response: dict,
+        api_response: dict,
         segment_id_start: int = 0,
     ) -> List[Segment]:
         """
-        Convert Groq API response to Segment objects.
+        Convert API response to Segment objects.
+        
+        Supports multiple response formats:
+        - verbose_json: Full response with segments array
+        - json: JSON with segments or text
+        - text: Simple text response
         
         Args:
-            groq_response: Groq API response dict.
+            api_response: API response dict.
             segment_id_start: Starting ID for segments.
             
         Returns:
@@ -238,58 +325,95 @@ class GroqTranscriber:
         """
         segments = []
         
-        # Groq returns segments in the response
-        groq_segments = groq_response.get("segments", [])
+        # Check if response has segments array (verbose_json format)
+        api_segments = api_response.get("segments", [])
         
-        if not groq_segments:
+        
+        if not api_segments:
             # If no segments, check if there's just text
-            text = groq_response.get("text", "")
+            text = api_response.get("text", "")
             if text.strip():
                 # Create a single segment
-                duration = groq_response.get("duration", 0.0)
+                duration = api_response.get("duration", 0.0)
+                # Handle no_speech_prob: if text exists, speech was detected
+                raw_no_speech_prob = api_response.get("no_speech_prob", 0.0)
+                clamped_prob = _clamp_probability(raw_no_speech_prob)
+                if clamped_prob >= 1.0:
+                    # Text exists but no_speech_prob is high - likely inverted or wrong scale
+                    clamped_prob = 0.1
+                
                 segments.append(Segment(
                     id=segment_id_start,
                     seek=0,
                     start=0.0,
-                    end=duration,
+                    end=duration if duration > 0 else len(text) * 0.1,  # Estimate if no duration
                     text=text,
-                    tokens=groq_response.get("tokens", []),
-                    avg_logprob=groq_response.get("avg_logprob", -0.5),
-                    compression_ratio=groq_response.get("compression_ratio", 1.0),
-                    no_speech_prob=groq_response.get("no_speech_prob", 0.0),
+                    tokens=api_response.get("tokens", []),
+                    avg_logprob=api_response.get("avg_logprob", -0.5),
+                    compression_ratio=api_response.get("compression_ratio", 1.0),
+                    no_speech_prob=clamped_prob,
                     words=None,  # Will be populated if word timestamps available
-                    temperature=0.0,
+                    temperature=float(self.temperature),
                 ))
             return segments
         
         # Process each segment
-        for idx, groq_seg in enumerate(groq_segments):
-            # Extract word timestamps if available
+        for idx, api_seg in enumerate(api_segments):
+            # Word-level timestamps not used - set to None
             words = None
-            if "words" in groq_seg:
-                from .transcriber import Word
-                words = [
-                    Word(
-                        start=w.get("start", 0.0),
-                        end=w.get("end", 0.0),
-                        word=w.get("word", ""),
-                        probability=w.get("probability", 0.0),
-                    )
-                    for w in groq_seg["words"]
-                ]
+            
+            # Determine best available timestamps
+            start = api_seg.get("audio_start")
+            end = api_seg.get("audio_end")
+            
+            if start is None:
+                start = api_seg.get("start", 0.0)
+            if end is None:
+                end = api_seg.get("end")
+            
+            start = _to_float(start, default=0.0)
+            end = _to_float(end, default=None)
+            
+            if end is None or end <= start:
+                seg_duration = _to_float(api_seg.get("duration"), default=None)
+                if seg_duration and seg_duration > 0:
+                    end = start + seg_duration
+            
+            if end is None or end <= start:
+                total_duration = _to_float(api_response.get("duration"), default=None)
+                if total_duration and total_duration > 0:
+                    # Cap to total duration if provided, otherwise just extend slightly
+                    end = min(total_duration, start + total_duration) if start > 0 else total_duration
+                else:
+                    end = start + 0.5  # fallback to half-second span to keep segments valid
+            
+            if end is None or end <= start:
+                end = start + 0.5
+            
+            # Handle no_speech_prob: Fireworks API may return values > 1.0 or use inverted logic
+            # If text is present and non-empty, assume speech was detected (no_speech_prob should be low)
+            raw_no_speech_prob = api_seg.get("no_speech_prob", 0.0)
+            clamped_prob = _clamp_probability(raw_no_speech_prob)
+            
+            # If Fireworks returns no_speech_prob >= 1.0 but segment has text,
+            # it likely means speech WAS detected (inverted logic or different scale)
+            # Set to a low value to prevent filtering out valid segments
+            if clamped_prob >= 1.0 and api_seg.get("text", "").strip():
+                # Segment has text, so speech was detected - use low no_speech_prob
+                clamped_prob = 0.1
             
             segment = Segment(
                 id=segment_id_start + idx,
-                seek=groq_seg.get("seek", 0),
-                start=groq_seg.get("start", 0.0),
-                end=groq_seg.get("end", 0.0),
-                text=groq_seg.get("text", ""),
-                tokens=groq_seg.get("tokens", []),
-                avg_logprob=groq_seg.get("avg_logprob", -0.5),
-                compression_ratio=groq_seg.get("compression_ratio", 1.0),
-                no_speech_prob=groq_seg.get("no_speech_prob", 0.0),
+                seek=api_seg.get("seek", 0),
+                start=start,
+                end=end,
+                text=api_seg.get("text", ""),
+                tokens=api_seg.get("tokens", []),
+                avg_logprob=api_seg.get("avg_logprob", -0.5),
+                compression_ratio=api_seg.get("compression_ratio", 1.0),
+                no_speech_prob=clamped_prob,
                 words=words,
-                temperature=0.0,
+                temperature=float(self.temperature),
             )
             segments.append(segment)
         
@@ -334,10 +458,10 @@ class GroqTranscriber:
         language_detection_segments: int = 10,
     ) -> Tuple[Iterable[Segment], TranscriptionInfo]:
         """
-        Transcribe audio using Groq API.
+        Transcribe audio using remote HTTP API.
         
         This method matches the signature of WhisperModel.transcribe() for compatibility.
-        Many parameters are ignored as Groq API handles them internally.
+        Many parameters are ignored as remote API handles them internally.
         
         Args:
             audio: Audio input (numpy array, file path, or file-like object).
@@ -347,7 +471,7 @@ class GroqTranscriber:
             Other parameters: Ignored (kept for compatibility).
             
         Returns:
-            Tuple of (segments generator, TranscriptionInfo).
+            Tuple of (segments list, TranscriptionInfo).
         """
         # Convert audio to numpy array if needed
         if isinstance(audio, np.ndarray):
@@ -391,8 +515,8 @@ class GroqTranscriber:
             if isinstance(initial_prompt, str):
                 prompt_str = initial_prompt
             elif isinstance(initial_prompt, Iterable):
-                # Token IDs - can't use directly with Groq
-                logger.warning("Token ID prompts not supported by Groq API, ignoring")
+                # Token IDs - can't use directly with remote API
+                logger.warning("Token ID prompts not supported by remote API, ignoring")
         
         # Create temporary WAV file
         temp_file = None
@@ -402,8 +526,8 @@ class GroqTranscriber:
             # Normalize language code before API call
             normalized_language = normalize_language_code(language)
             
-            # Call Groq API
-            groq_response = self._call_groq_api(
+            # Call remote API
+            api_response = self._call_remote_api(
                 audio_file_path=temp_file,
                 language=normalized_language,
                 prompt=prompt_str,
@@ -411,12 +535,12 @@ class GroqTranscriber:
             )
             
             # Convert to segments
-            segments = self._groq_response_to_segments(groq_response)
+            segments = self._response_to_segments(api_response)
             
             # Extract language info and normalize to ISO code
-            groq_language = groq_response.get("language")
-            detected_language = normalize_language_code(language or groq_language or "en")
-            language_probability = 1.0  # Groq doesn't provide probability
+            api_language = api_response.get("language")
+            detected_language = normalize_language_code(language or api_language or "en")
+            language_probability = 1.0  # Remote API may not provide probability
             
             # Calculate duration
             duration = len(audio_array) / self.sampling_rate

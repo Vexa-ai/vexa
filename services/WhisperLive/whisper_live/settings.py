@@ -49,7 +49,7 @@ CLIP_RETAIN_S = 5
 # The minimum duration of audio (in seconds) that must be present in the buffer
 # before it is sent to the transcription model. A smaller value can lead to
 # lower latency but may result in less accurate, fragmented transcriptions.
-MIN_AUDIO_S = 1.0
+MIN_AUDIO_S = 10.0
 
 
 # Voice Activity Detection (VAD) Settings
