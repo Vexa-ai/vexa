@@ -32,8 +32,13 @@ DB_PORT = os.environ.get("DB_PORT", "5432")
 DB_NAME = os.environ.get("DB_NAME", "vexa")
 DB_USER = os.environ.get("DB_USER", "postgres")
 DB_PASSWORD = os.environ.get("DB_PASSWORD", "postgres")
+# SSL mode: disable, allow, prefer, require, verify-ca, verify-full
+# For Supabase and most remote databases, use "require" or "prefer"
+DB_SSL_MODE = os.environ.get("DB_SSL_MODE", "prefer")
 
-DATABASE_URL_SYNC = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+# Build connection URL with SSL support
+ssl_params = f"?sslmode={DB_SSL_MODE}" if DB_SSL_MODE else ""
+DATABASE_URL_SYNC = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}{ssl_params}"
 
 # Set the database URL
 config.set_main_option('sqlalchemy.url', DATABASE_URL_SYNC)

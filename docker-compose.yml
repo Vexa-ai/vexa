@@ -31,17 +31,15 @@ services:
     ports:
       - "${ADMIN_API_HOST_PORT:-8057}:8001"
     environment:
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_NAME=vexa
-      - DB_USER=postgres
-      - DB_PASSWORD=postgres
+      - DB_HOST=${DB_HOST:-postgres}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_NAME=${DB_NAME:-vexa}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-postgres}
+      - DB_SSL_MODE=${DB_SSL_MODE:-prefer}
       - ADMIN_API_TOKEN=${ADMIN_API_TOKEN}
       - LOG_LEVEL=DEBUG
     init: true
-    depends_on:
-      postgres:
-        condition: service_healthy
     networks:
       - vexa_default
     restart: unless-stopped
@@ -55,11 +53,12 @@ services:
       - BOT_IMAGE_NAME=${BOT_IMAGE_NAME:-vexa-bot:dev}
       - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa_default
       - LOG_LEVEL=DEBUG
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_NAME=vexa
-      - DB_USER=postgres
-      - DB_PASSWORD=postgres
+      - DB_HOST=${DB_HOST:-postgres}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_NAME=${DB_NAME:-vexa}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-postgres}
+      - DB_SSL_MODE=${DB_SSL_MODE:-prefer}
       - DOCKER_HOST=unix://var/run/docker.sock
       - DEVICE_TYPE=${DEVICE_TYPE}
       - WHISPER_LIVE_URL=ws://traefik:8081/ws  # Traefik entrypoint for WS
@@ -70,8 +69,6 @@ services:
     depends_on:
       redis:
         condition: service_started
-      postgres:
-        condition: service_healthy
     networks:
       - vexa_default
     restart: unless-stopped
@@ -248,11 +245,12 @@ services:
       - ./alembic.ini:/app/alembic.ini
       - ./libs/shared-models/alembic:/app/alembic
     environment:
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_NAME=vexa
-      - DB_USER=postgres
-      - DB_PASSWORD=postgres
+      - DB_HOST=${DB_HOST:-postgres}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_NAME=${DB_NAME:-vexa}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-postgres}
+      - DB_SSL_MODE=${DB_SSL_MODE:-prefer}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_STREAM_NAME=transcription_segments
@@ -269,8 +267,6 @@ services:
     depends_on:
       redis:
         condition: service_started
-      postgres:
-        condition: service_healthy
     networks:
       - vexa_default
     restart: unless-stopped
@@ -301,25 +297,6 @@ services:
     networks:
       - vexa_default
     restart: unless-stopped
-
-  postgres:
-    image: postgres:15-alpine
-    environment:
-      - POSTGRES_DB=vexa
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d vexa"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    networks:
-      - vexa_default
-    restart: unless-stopped
-    ports:
-      - "${POSTGRES_HOST_PORT:-5438}:5432"
 
 volumes:
   redis-data:

@@ -109,6 +109,15 @@ endif
 			echo "TRAEFIK_DASHBOARD_HOST_PORT=8085" >> env-example.remote; \
 			echo "TRANSCRIPTION_COLLECTOR_HOST_PORT=8123" >> env-example.remote; \
 			echo "POSTGRES_HOST_PORT=5438" >> env-example.remote; \
+			echo "# Remote Database Configuration" >> env-example.remote; \
+			echo "# Set REMOTE_DB=true to use remote PostgreSQL instead of local Docker postgres" >> env-example.remote; \
+			echo "# When REMOTE_DB=true: Uncomment and set the remote database credentials below" >> env-example.remote; \
+			echo "REMOTE_DB=false" >> env-example.remote; \
+			echo "# DB_HOST=your-remote-db-host" >> env-example.remote; \
+			echo "# DB_PORT=5432" >> env-example.remote; \
+			echo "# DB_NAME=your-db-name" >> env-example.remote; \
+			echo "# DB_USER=your-db-user" >> env-example.remote; \
+			echo "# DB_PASSWORD=your-db-password" >> env-example.remote; \
 		fi; \
 		cp env-example.remote .env; \
 		echo "*** .env file created from env-example.remote. Please review it. ***"; \
@@ -187,6 +196,15 @@ endif
 			echo "TRAEFIK_DASHBOARD_HOST_PORT=8085" >> env-example.remote; \
 			echo "TRANSCRIPTION_COLLECTOR_HOST_PORT=8123" >> env-example.remote; \
 			echo "POSTGRES_HOST_PORT=5438" >> env-example.remote; \
+			echo "# Remote Database Configuration" >> env-example.remote; \
+			echo "# Set REMOTE_DB=true to use remote PostgreSQL instead of local Docker postgres" >> env-example.remote; \
+			echo "# When REMOTE_DB=true: Uncomment and set the remote database credentials below" >> env-example.remote; \
+			echo "REMOTE_DB=false" >> env-example.remote; \
+			echo "# DB_HOST=your-remote-db-host" >> env-example.remote; \
+			echo "# DB_PORT=5432" >> env-example.remote; \
+			echo "# DB_NAME=your-db-name" >> env-example.remote; \
+			echo "# DB_USER=your-db-user" >> env-example.remote; \
+			echo "# DB_PASSWORD=your-db-password" >> env-example.remote; \
 		fi; \
 		cp env-example.remote .env; \
 		echo "*** .env file created from env-example.remote. Please review it. ***"; \
@@ -235,49 +253,97 @@ build-bot-image: check_docker
 # Build Docker Compose service images
 build: check_docker
 	@echo "---> Building Docker images..."
-	@if [ "$(TARGET)" = "cpu" ]; then \
+	@REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
+	COMPOSE_FILES="-f docker-compose.yml"; \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		COMPOSE_FILES="$$COMPOSE_FILES -f docker-compose.local-db.yml"; \
+		echo "---> Using local database configuration"; \
+	else \
+		echo "---> Using remote database configuration"; \
+	fi; \
+	if [ "$(TARGET)" = "cpu" ]; then \
 		echo "---> Building with 'cpu' profile (includes whisperlive-cpu)..."; \
-		docker compose --profile cpu build; \
+		docker compose $$COMPOSE_FILES --profile cpu build; \
 	elif [ "$(TARGET)" = "gpu" ]; then \
 		echo "---> Building with 'gpu' profile (includes whisperlive GPU)..."; \
-		docker compose --profile gpu build; \
+		docker compose $$COMPOSE_FILES --profile gpu build; \
 	elif [ "$(TARGET)" = "remote" ] || [ "$(TARGET)" = "provider" ]; then \
 		echo "---> Building with 'remote' profile (includes whisperlive-remote)..."; \
-		docker compose --profile remote build; \
+		docker compose $$COMPOSE_FILES --profile remote build; \
 	else \
 		echo "---> TARGET not explicitly set, defaulting to CPU mode. 'whisperlive' (GPU) will not be built."; \
-		docker compose --profile cpu build; \
+		docker compose $$COMPOSE_FILES --profile cpu build; \
 	fi
 
 # Start services in detached mode
 up: check_docker
 	@echo "---> Starting Docker Compose services..."
-	@if [ "$(TARGET)" = "cpu" ]; then \
+	@REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
+	COMPOSE_FILES="-f docker-compose.yml"; \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		COMPOSE_FILES="$$COMPOSE_FILES -f docker-compose.local-db.yml"; \
+		echo "---> Using local database (postgres service will be started)"; \
+	else \
+		echo "---> Using remote database (postgres service will NOT be started)"; \
+	fi; \
+	if [ "$(TARGET)" = "cpu" ]; then \
 		echo "---> Activating 'cpu' profile to start whisperlive-cpu along with other services..."; \
-		docker compose --profile cpu up -d; \
+		docker compose $$COMPOSE_FILES --profile cpu up -d; \
 	elif [ "$(TARGET)" = "gpu" ]; then \
 		echo "---> Starting services for GPU. This will start 'whisperlive' (for GPU) and other default services. 'whisperlive-cpu' (profile=cpu) will not be started."; \
-		docker compose --profile gpu up -d; \
+		docker compose $$COMPOSE_FILES --profile gpu up -d; \
 	elif [ "$(TARGET)" = "remote" ] || [ "$(TARGET)" = "provider" ]; then \
 		echo "---> Starting services for Remote. This will start 'whisperlive-remote' along with other default services."; \
-		docker compose --profile remote up -d; \
+		docker compose $$COMPOSE_FILES --profile remote up -d; \
 	else \
 		echo "---> TARGET not explicitly set, defaulting to CPU mode. 'whisperlive' (GPU) will not be started."; \
-		docker compose --profile cpu up -d; \
+		docker compose $$COMPOSE_FILES --profile cpu up -d; \
+	fi; \
+	# Verify postgres container state matches REMOTE_DB setting \
+	sleep 2; \
+	if [ "$$REMOTE_DB" = "true" ]; then \
+		if docker compose $$COMPOSE_FILES ps -q postgres 2>/dev/null | grep -q .; then \
+			echo "WARNING: postgres container is running but REMOTE_DB=true. This should not happen."; \
+			exit 1; \
+		else \
+			echo "✓ Verified: postgres container is NOT running (as expected with REMOTE_DB=true)"; \
+		fi; \
+	else \
+		if docker compose $$COMPOSE_FILES ps -q postgres 2>/dev/null | grep -q .; then \
+			echo "✓ Verified: postgres container is running (as expected with REMOTE_DB=false)"; \
+		else \
+			echo "WARNING: postgres container is NOT running but REMOTE_DB=false. This should not happen."; \
+			exit 1; \
+		fi; \
 	fi
 
 # Stop services
 down: check_docker
 	@echo "---> Stopping Docker Compose services..."
-	@docker compose down
+	@REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
+	COMPOSE_FILES="-f docker-compose.yml"; \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		COMPOSE_FILES="$$COMPOSE_FILES -f docker-compose.local-db.yml"; \
+	fi; \
+	docker compose $$COMPOSE_FILES down
 
 # Show container status
 ps: check_docker
-	@docker compose ps
+	@REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
+	COMPOSE_FILES="-f docker-compose.yml"; \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		COMPOSE_FILES="$$COMPOSE_FILES -f docker-compose.local-db.yml"; \
+	fi; \
+	docker compose $$COMPOSE_FILES ps
 
 # Tail logs for all services
 logs:
-	@docker compose logs -f
+	@REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
+	COMPOSE_FILES="-f docker-compose.yml"; \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		COMPOSE_FILES="$$COMPOSE_FILES -f docker-compose.local-db.yml"; \
+	fi; \
+	docker compose $$COMPOSE_FILES logs -f
 
 # Run the interaction test script
 test: check_docker
@@ -371,56 +437,92 @@ test-setup: check_docker
 migrate-or-init: check_docker
 	@echo "---> Starting smart database migration/initialization..."; \
 	set -e; \
-	if ! docker compose ps -q postgres | grep -q .; then \
-		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
-		exit 1; \
+	REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
+	COMPOSE_FILES="-f docker-compose.yml"; \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		COMPOSE_FILES="$$COMPOSE_FILES -f docker-compose.local-db.yml"; \
 	fi; \
-	echo "---> Waiting for database to be ready..."; \
-	count=0; \
-	while ! docker compose exec -T postgres pg_isready -U postgres -d vexa -q; do \
-		if [ $$count -ge 12 ]; then \
-			echo "ERROR: Database did not become ready in 60 seconds."; \
+	DB_HOST=$$(grep -E '^[[:space:]]*DB_HOST=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo "postgres"); \
+	DB_PORT=$$(grep -E '^[[:space:]]*DB_PORT=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo "5432"); \
+	DB_NAME=$$(grep -E '^[[:space:]]*DB_NAME=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo "vexa"); \
+	DB_USER=$$(grep -E '^[[:space:]]*DB_USER=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo "postgres"); \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		if ! docker compose $$COMPOSE_FILES ps -q postgres | grep -q .; then \
+			echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
 			exit 1; \
 		fi; \
-		echo "Database not ready, waiting 5 seconds..."; \
-		sleep 5; \
-		count=$$((count+1)); \
-	done; \
-	echo "---> Database is ready. Checking its state..."; \
-	if docker compose exec -T postgres psql -U postgres -d vexa -t -c "SELECT 1 FROM information_schema.tables WHERE table_name = 'alembic_version';" | grep -q 1; then \
-		echo "STATE: Alembic-managed database detected."; \
-		echo "ACTION: Running standard migrations to catch up to 'head'..."; \
-		$(MAKE) migrate; \
-	elif docker compose exec -T postgres psql -U postgres -d vexa -t -c "SELECT 1 FROM information_schema.tables WHERE table_name = 'meetings';" | grep -q 1; then \
-		echo "STATE: Legacy (non-Alembic) database detected."; \
-		echo "ACTION: Stamping at 'base' and migrating to 'head' to bring it under Alembic control..."; \
-		docker compose exec -T transcription-collector alembic -c /app/alembic.ini stamp base; \
-		$(MAKE) migrate; \
+		echo "---> Waiting for local database to be ready..."; \
+		count=0; \
+		while ! docker compose $$COMPOSE_FILES exec -T postgres pg_isready -U $$DB_USER -d $$DB_NAME -q; do \
+			if [ $$count -ge 12 ]; then \
+				echo "ERROR: Database did not become ready in 60 seconds."; \
+				exit 1; \
+			fi; \
+			echo "Database not ready, waiting 5 seconds..."; \
+			sleep 5; \
+			count=$$((count+1)); \
+		done; \
+		echo "---> Database is ready. Checking its state..."; \
+		if docker compose $$COMPOSE_FILES exec -T postgres psql -U $$DB_USER -d $$DB_NAME -t -c "SELECT 1 FROM information_schema.tables WHERE table_name = 'alembic_version';" | grep -q 1; then \
+			echo "STATE: Alembic-managed database detected."; \
+			echo "ACTION: Running standard migrations to catch up to 'head'..."; \
+			$(MAKE) migrate; \
+		elif docker compose $$COMPOSE_FILES exec -T postgres psql -U $$DB_USER -d $$DB_NAME -t -c "SELECT 1 FROM information_schema.tables WHERE table_name = 'meetings';" | grep -q 1; then \
+			echo "STATE: Legacy (non-Alembic) database detected."; \
+			echo "ACTION: Stamping at 'base' and migrating to 'head' to bring it under Alembic control..."; \
+			docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini stamp base; \
+			$(MAKE) migrate; \
+		else \
+			echo "STATE: Fresh, empty database detected."; \
+			echo "ACTION: Creating schema directly from models and stamping at revision dc59a1c03d1f..."; \
+			docker compose $$COMPOSE_FILES exec -T transcription-collector python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db())"; \
+			docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini stamp dc59a1c03d1f; \
+		fi; \
 	else \
-		echo "STATE: Fresh, empty database detected."; \
-		echo "ACTION: Creating schema directly from models and stamping at revision dc59a1c03d1f..."; \
-		docker compose exec -T transcription-collector python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db())"; \
-		docker compose exec -T transcription-collector alembic -c /app/alembic.ini stamp dc59a1c03d1f; \
+		echo "---> Using remote database at $$DB_HOST:$$DB_PORT"; \
+		echo "---> Checking database connection..."; \
+		if ! docker compose $$COMPOSE_FILES exec -T transcription-collector python -c "import asyncio; import asyncpg; async def test(): conn = await asyncpg.connect(host='$$DB_HOST', port=$$DB_PORT, user='$$DB_USER', database='$$DB_NAME', password='$$(grep -E \"^[[:space:]]*DB_PASSWORD=\" .env | cut -d= -f2-)'); await conn.close(); asyncio.run(test())" 2>/dev/null; then \
+			echo "WARNING: Could not connect to remote database. Proceeding with migration anyway..."; \
+		fi; \
+		echo "---> Checking database state via transcription-collector..."; \
+		if docker compose $$COMPOSE_FILES exec -T transcription-collector python -c "import asyncio; import asyncpg; async def check(): conn = await asyncpg.connect(host='$$DB_HOST', port=$$DB_PORT, user='$$DB_USER', database='$$DB_NAME', password='$$(grep -E \"^[[:space:]]*DB_PASSWORD=\" .env | cut -d= -f2-)'); result = await conn.fetchval(\"SELECT 1 FROM information_schema.tables WHERE table_name = 'alembic_version'\"); await conn.close(); return result; print('Alembic-managed' if asyncio.run(check()) else 'Not Alembic-managed')" 2>/dev/null | grep -q "Alembic-managed"; then \
+			echo "STATE: Alembic-managed database detected."; \
+			echo "ACTION: Running standard migrations to catch up to 'head'..."; \
+			$(MAKE) migrate; \
+		else \
+			echo "STATE: Database state unknown or fresh. Running migrations..."; \
+			$(MAKE) migrate; \
+		fi; \
 	fi; \
 	echo "---> Smart database migration/initialization complete!"
 
 # Apply all pending migrations to bring database to latest version
 migrate: check_docker
 	@echo "---> Applying database migrations..."
-	@if ! docker compose ps postgres | grep -q "Up"; then \
-		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
-		exit 1; \
-	fi
-	@# Preflight: if currently at dc59a1c03d1f and users.data already exists, stamp next revision
-	@current_version=$$(docker compose exec -T transcription-collector alembic -c /app/alembic.ini current 2>/dev/null | grep -E '^[a-f0-9]{12}' | head -1 || echo ""); \
-	if [ "$$current_version" = "dc59a1c03d1f" ]; then \
-		if docker compose exec -T postgres psql -U postgres -d vexa -t -c "SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'data';" | grep -q 1; then \
-			echo "---> Preflight: detected existing column users.data. Stamping 5befe308fa8b..."; \
-			docker compose exec -T transcription-collector alembic -c /app/alembic.ini stamp 5befe308fa8b; \
+	@REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		if ! docker compose -f docker-compose.yml -f docker-compose.local-db.yml ps postgres | grep -q "Up"; then \
+			echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
+			exit 1; \
 		fi; \
+		DB_USER=$$(grep -E '^[[:space:]]*DB_USER=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo "postgres"); \
+		DB_NAME=$$(grep -E '^[[:space:]]*DB_NAME=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo "vexa"); \
+		current_version=$$(docker compose -f docker-compose.yml -f docker-compose.local-db.yml exec -T transcription-collector alembic -c /app/alembic.ini current 2>/dev/null | grep -E '^[a-f0-9]{12}' | head -1 || echo ""); \
+		if [ "$$current_version" = "dc59a1c03d1f" ]; then \
+			if docker compose -f docker-compose.yml -f docker-compose.local-db.yml exec -T postgres psql -U $$DB_USER -d $$DB_NAME -t -c "SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'data';" | grep -q 1; then \
+				echo "---> Preflight: detected existing column users.data. Stamping 5befe308fa8b..."; \
+				docker compose -f docker-compose.yml -f docker-compose.local-db.yml exec -T transcription-collector alembic -c /app/alembic.ini stamp 5befe308fa8b; \
+			fi; \
+		fi; \
+		echo "---> Running alembic upgrade head..."; \
+		docker compose -f docker-compose.yml -f docker-compose.local-db.yml exec -T transcription-collector alembic -c /app/alembic.ini upgrade head; \
+	else \
+		DB_HOST=$$(grep -E '^[[:space:]]*DB_HOST=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo "postgres"); \
+		DB_PORT=$$(grep -E '^[[:space:]]*DB_PORT=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo "5432"); \
+		echo "---> Using remote database at $$DB_HOST:$$DB_PORT"; \
+		echo "---> Running alembic upgrade head..."; \
+		docker compose -f docker-compose.yml exec -T transcription-collector alembic -c /app/alembic.ini upgrade head; \
 	fi
-	@echo "---> Running alembic upgrade head..."
-	@docker compose exec -T transcription-collector alembic -c /app/alembic.ini upgrade head
 
 # Create a new migration file based on model changes
 makemigrations: check_docker
@@ -430,39 +532,59 @@ makemigrations: check_docker
 		exit 1; \
 	fi
 	@echo "---> Creating new migration: $(M)"
-	@if ! docker compose ps postgres | grep -q "Up"; then \
-		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
-		exit 1; \
+	@REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
+	COMPOSE_FILES="-f docker-compose.yml"; \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		COMPOSE_FILES="$$COMPOSE_FILES -f docker-compose.local-db.yml"; \
+		if ! docker compose $$COMPOSE_FILES ps postgres | grep -q "Up"; then \
+			echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
+			exit 1; \
+		fi; \
 	fi
-	@docker compose exec -T transcription-collector alembic -c /app/alembic.ini revision --autogenerate -m "$(M)"
+	@docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini revision --autogenerate -m "$(M)"
 
 # Initialize the database (first time setup) - creates tables and stamps with latest revision
 init-db: check_docker
 	@echo "---> Initializing database and stamping with Alembic..."
-	docker compose run --rm transcription-collector python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db())"
-	docker compose run --rm transcription-collector alembic -c /app/alembic.ini stamp head
+	@REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
+	COMPOSE_FILES="-f docker-compose.yml"; \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		COMPOSE_FILES="$$COMPOSE_FILES -f docker-compose.local-db.yml"; \
+	fi; \
+	docker compose $$COMPOSE_FILES run --rm transcription-collector python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db())"
+	docker compose $$COMPOSE_FILES run --rm transcription-collector alembic -c /app/alembic.ini stamp head
 	@echo "---> Database initialized and stamped."
 
 # Stamp existing database with current version (for existing installations)
 stamp-db: check_docker
 	@echo "---> Stamping existing database with current migration version..."
-	@if ! docker compose ps postgres | grep -q "Up"; then \
-		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
-		exit 1; \
+	@REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
+	COMPOSE_FILES="-f docker-compose.yml"; \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		COMPOSE_FILES="$$COMPOSE_FILES -f docker-compose.local-db.yml"; \
+		if ! docker compose $$COMPOSE_FILES ps postgres | grep -q "Up"; then \
+			echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
+			exit 1; \
+		fi; \
 	fi
-	@docker compose exec -T transcription-collector alembic -c /app/alembic.ini stamp head
+	@docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini stamp head
 	@echo "---> Database stamped successfully!"
 
 # Show current migration status
 migration-status: check_docker
 	@echo "---> Checking migration status..."
-	@if ! docker compose ps postgres | grep -q "Up"; then \
-		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
-		exit 1; \
+	@REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
+	COMPOSE_FILES="-f docker-compose.yml"; \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		COMPOSE_FILES="$$COMPOSE_FILES -f docker-compose.local-db.yml"; \
+		if ! docker compose $$COMPOSE_FILES ps postgres | grep -q "Up"; then \
+			echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
+			exit 1; \
+		fi; \
 	fi
 	@echo "---> Current database version:"
-	@docker compose exec -T transcription-collector alembic -c /app/alembic.ini current
+	@docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini current
 	@echo "---> Migration history:"
-	@docker compose exec -T transcription-collector alembic -c /app/alembic.ini history --verbose
+	@docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini history --verbose
 
 # --- End Database Migration Commands ---
