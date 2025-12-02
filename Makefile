@@ -474,24 +474,28 @@ migrate-or-init: check_docker
 			$(MAKE) migrate; \
 		else \
 			echo "STATE: Fresh, empty database detected."; \
-			echo "ACTION: Creating schema directly from models and stamping at revision dc59a1c03d1f..."; \
+			echo "ACTION: Creating schema directly from models and stamping at current revision..."; \
 			docker compose $$COMPOSE_FILES exec -T transcription-collector python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db())"; \
-			docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini stamp dc59a1c03d1f; \
+			docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini stamp head; \
 		fi; \
 	else \
 		echo "---> Using remote database at $$DB_HOST:$$DB_PORT"; \
-		echo "---> Checking database connection..."; \
-		if ! docker compose $$COMPOSE_FILES exec -T transcription-collector python -c "import asyncio; import asyncpg; async def test(): conn = await asyncpg.connect(host='$$DB_HOST', port=$$DB_PORT, user='$$DB_USER', database='$$DB_NAME', password='$$(grep -E \"^[[:space:]]*DB_PASSWORD=\" .env | cut -d= -f2-)'); await conn.close(); asyncio.run(test())" 2>/dev/null; then \
-			echo "WARNING: Could not connect to remote database. Proceeding with migration anyway..."; \
-		fi; \
 		echo "---> Checking database state via transcription-collector..."; \
-		if docker compose $$COMPOSE_FILES exec -T transcription-collector python -c "import asyncio; import asyncpg; async def check(): conn = await asyncpg.connect(host='$$DB_HOST', port=$$DB_PORT, user='$$DB_USER', database='$$DB_NAME', password='$$(grep -E \"^[[:space:]]*DB_PASSWORD=\" .env | cut -d= -f2-)'); result = await conn.fetchval(\"SELECT 1 FROM information_schema.tables WHERE table_name = 'alembic_version'\"); await conn.close(); return result; print('Alembic-managed' if asyncio.run(check()) else 'Not Alembic-managed')" 2>/dev/null | grep -q "Alembic-managed"; then \
+		DB_STATE=$$(docker compose $$COMPOSE_FILES exec -T transcription-collector python /app/libs/shared-models/check_db_state.py 2>/dev/null || echo "fresh"); \
+		if [ "$$DB_STATE" = "alembic" ]; then \
 			echo "STATE: Alembic-managed database detected."; \
 			echo "ACTION: Running standard migrations to catch up to 'head'..."; \
 			$(MAKE) migrate; \
-		else \
-			echo "STATE: Database state unknown or fresh. Running migrations..."; \
+		elif [ "$$DB_STATE" = "legacy" ]; then \
+			echo "STATE: Legacy (non-Alembic) database detected."; \
+			echo "ACTION: Stamping at 'base' and migrating to 'head' to bring it under Alembic control..."; \
+			docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini stamp base; \
 			$(MAKE) migrate; \
+		else \
+			echo "STATE: Fresh, empty database detected."; \
+			echo "ACTION: Creating schema directly from models and stamping at current revision..."; \
+			docker compose $$COMPOSE_FILES exec -T transcription-collector python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db())"; \
+			docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini stamp head; \
 		fi; \
 	fi; \
 	echo "---> Smart database migration/initialization complete!"

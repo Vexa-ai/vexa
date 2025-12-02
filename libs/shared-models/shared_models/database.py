@@ -70,6 +70,10 @@ connect_args = {}
 if asyncpg_ssl is not None:
     connect_args["ssl"] = asyncpg_ssl
 
+# Disable prepared statement caching for pgbouncer compatibility
+# This is required when using pgbouncer in transaction or statement pooling mode
+connect_args["statement_cache_size"] = 0
+
 engine = create_async_engine(
     DATABASE_URL,
     connect_args=connect_args,
