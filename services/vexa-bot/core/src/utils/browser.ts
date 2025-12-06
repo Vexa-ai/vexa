@@ -34,22 +34,81 @@ export class BrowserAudioService {
     this.config = config;
   }
 
-  async findMediaElements(retries: number = 5, delay: number = 2000): Promise<HTMLMediaElement[]> {
+  async findMediaElements(retries: number = 10, delay: number = 3000): Promise<HTMLMediaElement[]> {
     for (let i = 0; i < retries; i++) {
-      const mediaElements = Array.from(
-        document.querySelectorAll("audio, video")
-      ).filter((el: any) => 
-        el.srcObject instanceof MediaStream && 
-        el.srcObject.getAudioTracks().length > 0
-      ) as HTMLMediaElement[];
+      // Get all media elements
+      const allMediaElements = Array.from(document.querySelectorAll("audio, video")) as HTMLMediaElement[];
+      (window as any).logBot(`[Audio] Attempt ${i + 1}/${retries}: Found ${allMediaElements.length} total media elements in DOM`);
+      
+      // Filter for active media elements with proper checks
+      const mediaElements = allMediaElements.filter((el: any) => {
+        // Check if element has srcObject
+        if (!el.srcObject) {
+          return false;
+        }
+        
+        // Check if srcObject is a MediaStream
+        if (!(el.srcObject instanceof MediaStream)) {
+          return false;
+        }
+        
+        // Check if MediaStream has audio tracks
+        const audioTracks = el.srcObject.getAudioTracks();
+        if (audioTracks.length === 0) {
+          return false;
+        }
+        
+        // Check if element is not paused (like Node.js version)
+        if (el.paused) {
+          (window as any).logBot(`[Audio] Element found but is paused (readyState: ${el.readyState})`);
+          return false;
+        }
+        
+        // Check readyState - prefer elements that have loaded metadata or more
+        // 0 = HAVE_NOTHING, 1 = HAVE_METADATA, 2 = HAVE_CURRENT_DATA, 3 = HAVE_FUTURE_DATA, 4 = HAVE_ENOUGH_DATA
+        if (el.readyState < 1) {
+          (window as any).logBot(`[Audio] Element found but readyState is ${el.readyState} (HAVE_NOTHING)`);
+          return false;
+        }
+        
+        // Check if audio tracks are enabled
+        const hasEnabledTracks = audioTracks.some((track: MediaStreamTrack) => track.enabled && !track.muted);
+        if (!hasEnabledTracks) {
+          (window as any).logBot(`[Audio] Element found but all audio tracks are disabled or muted`);
+          return false;
+        }
+        
+        return true;
+      });
 
       if (mediaElements.length > 0) {
-        (window as any).logBot(`Found ${mediaElements.length} active media elements with audio tracks after ${i + 1} attempt(s).`);
+        (window as any).logBot(`✅ Found ${mediaElements.length} active media elements with audio tracks after ${i + 1} attempt(s).`);
+        // Log details about found elements
+        mediaElements.forEach((el: any, idx: number) => {
+          const tracks = el.srcObject.getAudioTracks();
+          (window as any).logBot(`  Element ${idx + 1}: paused=${el.paused}, readyState=${el.readyState}, tracks=${tracks.length}, enabled=${tracks.filter((t: MediaStreamTrack) => t.enabled).length}`);
+        });
         return mediaElements;
       }
-      (window as any).logBot(`[Audio] No active media elements found. Retrying in ${delay}ms... (Attempt ${i + 2}/${retries})`);
+      
+      // Enhanced diagnostic logging
+      if (allMediaElements.length > 0) {
+        (window as any).logBot(`[Audio] Found ${allMediaElements.length} media elements but none are active. Details:`);
+        allMediaElements.forEach((el: any, idx: number) => {
+          const hasSrcObject = !!el.srcObject;
+          const isMediaStream = el.srcObject instanceof MediaStream;
+          const audioTracks = isMediaStream ? el.srcObject.getAudioTracks().length : 0;
+          (window as any).logBot(`  Element ${idx + 1}: paused=${el.paused}, readyState=${el.readyState}, hasSrcObject=${hasSrcObject}, isMediaStream=${isMediaStream}, audioTracks=${audioTracks}`);
+        });
+      } else {
+        (window as any).logBot(`[Audio] No media elements found in DOM at all`);
+      }
+      
+      (window as any).logBot(`[Audio] Retrying in ${delay}ms... (Attempt ${i + 2}/${retries})`);
       await new Promise(resolve => setTimeout(resolve, delay));
     }
+    
+    (window as any).logBot(`❌ No active media elements found after ${retries} attempts`);
     return [];
   }
 

@@ -241,6 +241,12 @@ async function performGracefulLeave(
          platformLeaveSuccess = true; // Or false if page closure itself is the "action"
       }
       log(`[Graceful Leave] Platform leave/close attempt result: ${platformLeaveSuccess}`);
+      
+      // If leave was successful, wait a bit longer before closing to ensure Teams processes the leave
+      if (platformLeaveSuccess === true) {
+        log("[Graceful Leave] Leave action successful. Waiting 2 more seconds before cleanup...");
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
     } catch (leaveError: any) {
       log(`[Graceful Leave] Error during platform leave/close attempt: ${leaveError.message}`);
       platformLeaveSuccess = false;
