@@ -9,11 +9,11 @@ export type MeetingStatus =
 
 export type CompletionReason = 
   | "stopped"
+  | "validation_error"
   | "awaiting_admission_timeout"
+  | "awaiting_admission_rejected"
   | "left_alone"
-  | "evicted"
-  | "removed_by_admin"
-  | "admission_rejected_by_admin";
+  | "evicted";
 
 export type FailureStage = 
   | "requested"
@@ -160,9 +160,9 @@ export function mapExitReasonToStatus(
       case "evicted":
         return { status: "completed", completionReason: "evicted" };
       case "removed_by_admin":
-        return { status: "completed", completionReason: "removed_by_admin" };
+        return { status: "completed", completionReason: "evicted" };
       case "admission_rejected_by_admin":
-        return { status: "completed", completionReason: "admission_rejected_by_admin" };
+        return { status: "completed", completionReason: "awaiting_admission_rejected" };
       default:
         return { status: "completed", completionReason: "stopped" };
     }

@@ -54,11 +54,15 @@ export const googleRejectionIndicators: string[] = [
   'text="Invalid meeting"',
   'text="Meeting link expired"',
   
-  // Error dialog indicators
-  '[role="dialog"]:has-text("not found")',
-  '[role="alertdialog"]:has-text("not found")',
-  '[role="dialog"]:has-text("ended")',
-  '[role="alertdialog"]:has-text("ended")',
+  // Error dialog indicators (more specific to avoid false positives)
+  '[role="dialog"]:has-text("Meeting not found")',
+  '[role="alertdialog"]:has-text("Meeting not found")',
+  '[role="dialog"]:has-text("meeting not found")',
+  '[role="alertdialog"]:has-text("meeting not found")',
+  '[role="dialog"]:has-text("Meeting has ended")',
+  '[role="alertdialog"]:has-text("Meeting has ended")',
+  '[role="dialog"]:has-text("meeting has ended")',
+  '[role="alertdialog"]:has-text("meeting has ended")',
   
   // Retry/error buttons
   'button:has-text("Try again")',
