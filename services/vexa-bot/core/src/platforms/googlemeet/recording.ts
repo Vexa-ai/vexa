@@ -119,8 +119,15 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
         try {
           (window as any).logBot("Starting Google Meet recording process with new services.");
           
-          // Find and create combined audio stream
-          audioService.findMediaElements().then(async (mediaElements: HTMLMediaElement[]) => {
+          // Wait a bit for media elements to initialize after admission, then start the chain
+          (async () => {
+            // Wait 2 seconds for media elements to initialize after admission
+            (window as any).logBot("Waiting 2 seconds for media elements to initialize after admission...");
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            // Find and create combined audio stream with enhanced retry logic
+            // Use 10 retries with 3s delay = 30s total wait time
+            audioService.findMediaElements(10, 3000).then(async (mediaElements: HTMLMediaElement[]) => {
             if (mediaElements.length === 0) {
               reject(
                 new Error(
@@ -594,6 +601,7 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
           }).catch((err: any) => {
             reject(err);
           });
+          })(); // Close async IIFE
 
         } catch (error: any) {
           return reject(new Error("[Google Meet BOT Error] " + error.message));

@@ -2,7 +2,7 @@
 IMAGE_NAME ?= vexa-bot:test
 MEETING_URL ?=
 DOCKER_NETWORK ?= vexa_dev_vexa_default
-HOT_CHANNEL := bot_commands:hot-debug
+HOT_CHANNEL := bot_commands:meeting:999
 
 .PHONY: build rebuild test publish publish-leave
 
