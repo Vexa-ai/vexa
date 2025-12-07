@@ -29,6 +29,7 @@ load_dotenv()
 ADMIN_API_URL = os.getenv("ADMIN_API_URL")
 BOT_MANAGER_URL = os.getenv("BOT_MANAGER_URL")
 TRANSCRIPTION_COLLECTOR_URL = os.getenv("TRANSCRIPTION_COLLECTOR_URL")
+MCP_URL = os.getenv("MCP_URL", "http://mcp:18888")
 
 # --- Validation at startup ---
 if not all([ADMIN_API_URL, BOT_MANAGER_URL, TRANSCRIPTION_COLLECTOR_URL]):
@@ -364,6 +365,105 @@ async def forward_admin_request(request: Request, path: str):
     admin_path = f"/admin/{path}" 
     url = f"{ADMIN_API_URL}{admin_path}"
     return await forward_request(app.state.http_client, request.method, url, request)
+
+# --- MCP Routes ---
+# Following FastAPI-MCP best practices:
+# - Example 04: Separate server deployment (MCP service runs separately)
+# - Example 08: Auth token passthrough via Authorization header
+# The MCP service handles MCP protocol, gateway just forwards requests
+@app.api_route("/mcp", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+               tags=["MCP"],
+               summary="Forward MCP requests to MCP service",
+               description="Forwards requests to the separate MCP service. MCP protocol endpoint for Model Context Protocol.")
+async def forward_mcp_root(request: Request):
+    """Forward MCP root endpoint requests to the separate MCP service."""
+    url = f"{MCP_URL}/mcp"
+    
+    # Build headers following MCP transport protocol requirements
+    # MCP expects Authorization header (per Example 08)
+    headers = {}
+    
+    # Auth: Convert X-API-Key to Authorization if needed (MCP expects Authorization)
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+    if auth_header:
+        headers["Authorization"] = auth_header
+    else:
+        x_api_key = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
+        if x_api_key:
+            headers["Authorization"] = x_api_key
+    
+    # MCP transport protocol: GET requires text/event-stream, others use application/json
+    if request.method == "GET":
+        headers["Accept"] = "text/event-stream"
+    else:
+        headers["Accept"] = "application/json"
+        if request.method in ["POST", "PUT", "PATCH"]:
+            headers["Content-Type"] = "application/json"
+    
+    # Preserve other headers (excluding hop-by-hop headers)
+    excluded = {"host", "content-length", "transfer-encoding", "accept", "authorization", "x-api-key"}
+    for k, v in request.headers.items():
+        if k.lower() not in excluded:
+            headers[k] = v
+    
+    content = await request.body()
+    
+    try:
+        resp = await app.state.http_client.request(
+            request.method, url, headers=headers,
+            params=dict(request.query_params) or None,
+            content=content
+        )
+        return Response(content=resp.content, status_code=resp.status_code, headers=dict(resp.headers))
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=503, detail=f"MCP service unavailable: {exc}")
+
+
+@app.api_route("/mcp/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+               tags=["MCP"],
+               summary="Forward MCP path requests",
+               description="Forwards MCP requests with paths to the separate MCP service.")
+async def forward_mcp_path(request: Request, path: str):
+    """Forward MCP path requests to the separate MCP service."""
+    url = f"{MCP_URL}/mcp/{path}"
+    
+    # Same header handling as root endpoint
+    headers = {}
+    
+    # Auth: Convert X-API-Key to Authorization if needed
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+    if auth_header:
+        headers["Authorization"] = auth_header
+    else:
+        x_api_key = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
+        if x_api_key:
+            headers["Authorization"] = x_api_key
+    
+    # MCP transport protocol
+    if request.method == "GET":
+        headers["Accept"] = "text/event-stream"
+    else:
+        headers["Accept"] = "application/json"
+        if request.method in ["POST", "PUT", "PATCH"]:
+            headers["Content-Type"] = "application/json"
+    
+    # Preserve other headers
+    excluded = {"host", "content-length", "transfer-encoding", "accept", "authorization", "x-api-key"}
+    for k, v in request.headers.items():
+        if k.lower() not in excluded:
+            headers[k] = v
+    
+    content = await request.body()
+    
+    try:
+        resp = await app.state.http_client.request(
+            request.method, url, headers=headers,
+            params=dict(request.query_params) or None,
+            content=content
+        )
+        return Response(content=resp.content, status_code=resp.status_code, headers=dict(resp.headers))
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=503, detail=f"MCP service unavailable: {exc}")
 
 # --- Removed internal ID resolution and full transcript fetching from Gateway ---
 
