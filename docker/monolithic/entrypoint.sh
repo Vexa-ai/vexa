@@ -1,0 +1,256 @@
+#!/bin/bash
+# =============================================================================
+# Vexa Monolithic - Container Entrypoint
+# =============================================================================
+# This script initializes the monolithic Vexa container:
+# 1. Waits for external services (PostgreSQL, Redis)
+# 2. Runs database migrations
+# 3. Starts all services via supervisord
+# =============================================================================
+
+set -e
+
+echo "=============================================="
+echo "  Vexa Monolithic - Starting Container"
+echo "=============================================="
+echo ""
+
+# -----------------------------------------------------------------------------
+# Environment Setup
+# -----------------------------------------------------------------------------
+
+# Set defaults for environment variables
+
+# Redis configuration - supports REDIS_URL or individual vars
+if [ -n "$REDIS_URL" ]; then
+    # Parse REDIS_URL into individual vars
+    # Format: redis://[user:password@]host:port[/db]
+    REDIS_URL_NO_SCHEME="${REDIS_URL#*://}"
+    # Check if there's auth (contains @)
+    if [[ "$REDIS_URL_NO_SCHEME" == *"@"* ]]; then
+        REDIS_AUTH="${REDIS_URL_NO_SCHEME%%@*}"
+        REDIS_HOSTPORTDB="${REDIS_URL_NO_SCHEME#*@}"
+        # Parse user and password
+        if [[ "$REDIS_AUTH" == *":"* ]]; then
+            export REDIS_USER="${REDIS_AUTH%%:*}"
+            export REDIS_PASSWORD="${REDIS_AUTH#*:}"
+        else
+            export REDIS_USER="$REDIS_AUTH"
+            export REDIS_PASSWORD=""
+        fi
+    else
+        REDIS_HOSTPORTDB="$REDIS_URL_NO_SCHEME"
+        export REDIS_USER=""
+        export REDIS_PASSWORD=""
+    fi
+    # Parse host:port
+    REDIS_HOSTPORT="${REDIS_HOSTPORTDB%%/*}"
+    export REDIS_HOST="${REDIS_HOSTPORT%%:*}"
+    export REDIS_PORT="${REDIS_HOSTPORT#*:}"
+else
+    export REDIS_HOST="${REDIS_HOST:-localhost}"
+    export REDIS_PORT="${REDIS_PORT:-6379}"
+    export REDIS_USER=""
+    export REDIS_PASSWORD=""
+    export REDIS_URL="redis://${REDIS_HOST}:${REDIS_PORT}/0"
+fi
+
+# Database configuration - supports DATABASE_URL or individual vars
+export DB_HOST="${DB_HOST:-localhost}"
+export DB_PORT="${DB_PORT:-5432}"
+export DB_NAME="${DB_NAME:-vexa}"
+export DB_USER="${DB_USER:-postgres}"
+export DB_PASSWORD="${DB_PASSWORD:-}"
+
+# Build DATABASE_URL if not provided directly, OR parse it if provided
+if [ -z "$DATABASE_URL" ]; then
+    if [ -n "$DB_PASSWORD" ]; then
+        export DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
+    else
+        export DATABASE_URL="postgresql://${DB_USER}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
+    fi
+else
+    # Fix postgres:// to postgresql:// (SQLAlchemy requirement)
+    export DATABASE_URL="${DATABASE_URL/postgres:\/\//postgresql:\/\/}"
+
+    # Parse DATABASE_URL into individual vars (required by shared_models)
+    # Format: postgresql://user:password@host:port/dbname?params
+    # Remove query params first
+    DB_URL_BASE="${DATABASE_URL%%\?*}"
+    # Extract components using parameter expansion
+    DB_URL_NO_SCHEME="${DB_URL_BASE#*://}"
+    # Get user:password@host:port/dbname
+    DB_USERPASS="${DB_URL_NO_SCHEME%%@*}"
+    DB_HOSTPORTDB="${DB_URL_NO_SCHEME#*@}"
+    # Parse user and password
+    if [[ "$DB_USERPASS" == *":"* ]]; then
+        export DB_USER="${DB_USERPASS%%:*}"
+        export DB_PASSWORD="${DB_USERPASS#*:}"
+    else
+        export DB_USER="$DB_USERPASS"
+    fi
+    # Parse host:port/dbname
+    DB_HOSTPORT="${DB_HOSTPORTDB%%/*}"
+    export DB_NAME="${DB_HOSTPORTDB#*/}"
+    export DB_HOST="${DB_HOSTPORT%%:*}"
+    export DB_PORT="${DB_HOSTPORT#*:}"
+fi
+
+export LOG_LEVEL="${LOG_LEVEL:-info}"
+export DEVICE_TYPE="${DEVICE_TYPE:-cpu}"
+export WHISPER_MODEL_SIZE="${WHISPER_MODEL_SIZE:-tiny}"
+export DISPLAY="${DISPLAY:-:99}"
+
+echo "Configuration:"
+echo "  - Redis URL: ${REDIS_URL}"
+echo "  - Database URL: ${DATABASE_URL}"
+echo "  - Whisper Model: ${WHISPER_MODEL_SIZE}"
+echo "  - Device Type: ${DEVICE_TYPE}"
+echo "  - Log Level: ${LOG_LEVEL}"
+echo ""
+
+# -----------------------------------------------------------------------------
+# Wait for PostgreSQL
+# -----------------------------------------------------------------------------
+
+if [ -n "$DB_HOST" ] && [ "$DB_HOST" != "localhost" ]; then
+    echo "Waiting for PostgreSQL at ${DB_HOST}:${DB_PORT}..."
+
+    max_attempts=30
+    attempt=0
+
+    while [ $attempt -lt $max_attempts ]; do
+        if pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -q 2>/dev/null; then
+            echo "PostgreSQL is ready!"
+            break
+        fi
+
+        attempt=$((attempt + 1))
+        echo "  Attempt $attempt/$max_attempts - PostgreSQL not ready, waiting..."
+        sleep 2
+    done
+
+    if [ $attempt -eq $max_attempts ]; then
+        echo "WARNING: Could not connect to PostgreSQL after $max_attempts attempts"
+        echo "         Services may fail to start properly"
+    fi
+    echo ""
+fi
+
+# -----------------------------------------------------------------------------
+# Wait for Redis
+# -----------------------------------------------------------------------------
+
+if [ -n "$REDIS_HOST" ] && [ "$REDIS_HOST" != "localhost" ]; then
+    echo "Waiting for Redis at ${REDIS_HOST}:${REDIS_PORT}..."
+
+    max_attempts=30
+    attempt=0
+
+    # Build redis-cli command with optional auth
+    REDIS_CLI_CMD="redis-cli -h $REDIS_HOST -p $REDIS_PORT"
+    if [ -n "$REDIS_PASSWORD" ]; then
+        REDIS_CLI_CMD="$REDIS_CLI_CMD -a $REDIS_PASSWORD --no-auth-warning"
+    fi
+
+    while [ $attempt -lt $max_attempts ]; do
+        if $REDIS_CLI_CMD ping 2>/dev/null | grep -q PONG; then
+            echo "Redis is ready!"
+            break
+        fi
+
+        attempt=$((attempt + 1))
+        echo "  Attempt $attempt/$max_attempts - Redis not ready, waiting..."
+        sleep 2
+    done
+
+    if [ $attempt -eq $max_attempts ]; then
+        echo "WARNING: Could not connect to Redis after $max_attempts attempts"
+        echo "         Services may fail to start properly"
+    fi
+    echo ""
+fi
+
+# -----------------------------------------------------------------------------
+# Database Migrations
+# -----------------------------------------------------------------------------
+
+echo "Checking database migrations..."
+cd /app/transcription-collector
+
+# Check if database is accessible and run migrations
+if pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -q 2>/dev/null; then
+    # Check if alembic_version table exists (database is managed by alembic)
+    if PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
+        -t -c "SELECT 1 FROM information_schema.tables WHERE table_name = 'alembic_version';" 2>/dev/null | grep -q 1; then
+        echo "  Alembic-managed database detected, running migrations..."
+        alembic -c /app/alembic.ini upgrade head || {
+            echo "  WARNING: Migration failed, database may already be up to date"
+        }
+    elif PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
+        -t -c "SELECT 1 FROM information_schema.tables WHERE table_name = 'meetings';" 2>/dev/null | grep -q 1; then
+        echo "  Legacy database detected, stamping and migrating..."
+        alembic -c /app/alembic.ini stamp base || true
+        alembic -c /app/alembic.ini upgrade head || {
+            echo "  WARNING: Migration failed"
+        }
+    else
+        echo "  Fresh database detected, initializing schema..."
+        python3 -c "
+import asyncio
+from shared_models.database import init_db
+asyncio.run(init_db())
+print('Database schema initialized')
+" || {
+            echo "  WARNING: Schema initialization failed"
+        }
+        # Stamp with the latest migration
+        alembic -c /app/alembic.ini stamp head 2>/dev/null || true
+    fi
+else
+    echo "  WARNING: Database not accessible, skipping migrations"
+fi
+
+cd /app
+echo ""
+
+# -----------------------------------------------------------------------------
+# Create Required Directories
+# -----------------------------------------------------------------------------
+
+echo "Creating required directories..."
+mkdir -p /var/log/supervisor
+mkdir -p /var/log/vexa-bots
+mkdir -p /var/run
+echo "  Done"
+echo ""
+
+# -----------------------------------------------------------------------------
+# Verify Bot Script
+# -----------------------------------------------------------------------------
+
+echo "Verifying bot script..."
+if [ -f "/app/vexa-bot/dist/docker.js" ]; then
+    echo "  Bot script found at /app/vexa-bot/dist/docker.js"
+else
+    echo "  WARNING: Bot script not found!"
+    echo "  Bot functionality may not work properly"
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Start Services
+# -----------------------------------------------------------------------------
+
+echo "=============================================="
+echo "  Starting Vexa Services via Supervisor"
+echo "=============================================="
+echo ""
+echo "Service Endpoints:"
+echo "  - API Gateway:    http://localhost:8056"
+echo "  - Admin API:      http://localhost:8057"
+echo "  - API Docs:       http://localhost:8056/docs"
+echo ""
+
+# Execute the command passed to the container (supervisord by default)
+exec "$@"
