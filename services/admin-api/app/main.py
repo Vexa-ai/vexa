@@ -44,11 +44,11 @@ class PaginatedMeetingUserStatResponse(BaseModel):
     items: List[MeetingUserStat]
 
 # Security - Reuse logic from bot-manager/auth.py for admin token verification
-API_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", auto_error=False) # Use a distinct header
-USER_API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False) # For user-facing endpoints
+ADMIN_API_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", auto_error=False, description="Admin API key for administrative operations") # Use a distinct header
+USER_API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False, description="User API key for user operations") # For user-facing endpoints
 ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN") # Read from environment
 
-async def verify_admin_token(admin_api_key: str = Security(API_KEY_HEADER)):
+async def verify_admin_token(admin_api_key: str = Security(ADMIN_API_KEY_HEADER)):
     """Dependency to verify the admin API token."""
     if not ADMIN_API_TOKEN:
         logger.error("CRITICAL: ADMIN_API_TOKEN environment variable not set!")
