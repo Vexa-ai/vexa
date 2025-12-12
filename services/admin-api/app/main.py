@@ -43,8 +43,10 @@ class PaginatedMeetingUserStatResponse(BaseModel):
     total: int
     items: List[MeetingUserStat]
 
-# Security - Reuse logic from bot-manager/auth.py for admin token verification
-ADMIN_API_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", auto_error=False, description="Admin API key for administrative operations") # Use a distinct header
+from fastapi.openapi.models import SecurityRequirement
+
+# Security - Define distinct API key headers with custom security schemes
+ADMIN_API_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", auto_error=False, description="Admin API key for administrative operations")
 USER_API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False, description="User API key for user operations") # For user-facing endpoints
 ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN") # Read from environment
 
