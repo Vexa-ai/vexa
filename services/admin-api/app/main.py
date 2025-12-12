@@ -29,8 +29,97 @@ logging.basicConfig(
 )
 logger = logging.getLogger("admin_api")
 
+# Custom OpenAPI schema with proper security definitions
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = get_openapi(
+        title="Vexa Admin API",
+        version="1.0.0",
+        routes=app.routes,
+    )
+
+    # Define the security schemes explicitly
+    if "components" not in openapi_schema:
+        openapi_schema["components"] = {}
+
+    if "securitySchemes" not in openapi_schema["components"]:
+        openapi_schema["components"]["securitySchemes"] = {}
+
+    # Add the admin API key security scheme
+    openapi_schema["components"]["securitySchemes"]["AdminApiKey"] = {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Admin-API-Key",
+        "description": "Admin API key for administrative operations"
+    }
+
+    # Add the user API key security scheme
+    openapi_schema["components"]["securitySchemes"]["UserApiKey"] = {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "User API key for user operations"
+    }
+
+    # Apply the correct security to admin paths
+    for path, path_item in openapi_schema["paths"].items():
+        if path.startswith("/admin"):
+            # For admin endpoints, apply the admin API key security
+            path_item["get"] = path_item.get("get", {})
+            if path_item["get"].get("tags") == ["Admin"]:
+                path_item["get"]["security"] = [{"AdminApiKey": []}]
+
+            path_item["post"] = path_item.get("post", {})
+            if path_item["post"].get("tags") == ["Admin"]:
+                path_item["post"]["security"] = [{"AdminApiKey": []}]
+
+            path_item["put"] = path_item.get("put", {})
+            if path_item["put"].get("tags") == ["Admin"]:
+                path_item["put"]["security"] = [{"AdminApiKey": []}]
+
+            path_item["patch"] = path_item.get("patch", {})
+            if path_item["patch"].get("tags") == ["Admin"]:
+                path_item["patch"]["security"] = [{"AdminApiKey": []}]
+
+            path_item["delete"] = path_item.get("delete", {})
+            if path_item["delete"].get("tags") == ["Admin"]:
+                path_item["delete"]["security"] = [{"AdminApiKey": []}]
+
+    # Apply the correct security to user paths
+    for path, path_item in openapi_schema["paths"].items():
+        if path.startswith("/user"):
+            # For user endpoints, apply the user API key security
+            path_item["get"] = path_item.get("get", {})
+            if path_item["get"].get("tags") == ["User"]:
+                path_item["get"]["security"] = [{"UserApiKey": []}]
+
+            path_item["post"] = path_item.get("post", {})
+            if path_item["post"].get("tags") == ["User"]:
+                path_item["post"]["security"] = [{"UserApiKey": []}]
+
+            path_item["put"] = path_item.get("put", {})
+            if path_item["put"].get("tags") == ["User"]:
+                path_item["put"]["security"] = [{"UserApiKey": []}]
+
+            path_item["patch"] = path_item.get("patch", {})
+            if path_item["patch"].get("tags") == ["User"]:
+                path_item["patch"]["security"] = [{"UserApiKey": []}]
+
+            path_item["delete"] = path_item.get("delete", {})
+            if path_item["delete"].get("tags") == ["User"]:
+                path_item["delete"]["security"] = [{"UserApiKey": []}]
+
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
 # App initialization
 app = FastAPI(title="Vexa Admin API")
+app.openapi = custom_openapi
+
+# Import get_openapi here to make sure it's available
+from fastapi.openapi.utils import get_openapi
 
 # --- Pydantic Schemas for new endpoint ---
 class WebhookUpdate(BaseModel):
@@ -43,12 +132,14 @@ class PaginatedMeetingUserStatResponse(BaseModel):
     total: int
     items: List[MeetingUserStat]
 
-# Security - Reuse logic from bot-manager/auth.py for admin token verification
-API_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", auto_error=False) # Use a distinct header
-USER_API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False) # For user-facing endpoints
+from fastapi.openapi.models import SecurityRequirement
+
+# Security - Define distinct API key headers with custom security schemes
+ADMIN_API_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", auto_error=False, description="Admin API key for administrative operations")
+USER_API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False, description="User API key for user operations") # For user-facing endpoints
 ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN") # Read from environment
 
-async def verify_admin_token(admin_api_key: str = Security(API_KEY_HEADER)):
+async def verify_admin_token(admin_api_key: str = Security(ADMIN_API_KEY_HEADER)):
     """Dependency to verify the admin API token."""
     if not ADMIN_API_TOKEN:
         logger.error("CRITICAL: ADMIN_API_TOKEN environment variable not set!")
