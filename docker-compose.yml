@@ -62,7 +62,7 @@ services:
       - DB_PASSWORD=postgres
       - DOCKER_HOST=unix://var/run/docker.sock
       - DEVICE_TYPE=${DEVICE_TYPE}
-      - WHISPER_LIVE_URL=ws://traefik:8081/ws  # Traefik entrypoint for WS
+      - WHISPER_LIVE_URL=ws://traefik:8081/ws # Traefik entrypoint for WS
       - ADMIN_TOKEN=${ADMIN_API_TOKEN}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -116,9 +116,9 @@ services:
       resources:
         reservations:
           devices:
-            - driver: nvidia
-              device_ids: ["3"] # Ensure this is configurable or correct for your setup
-              capabilities: [gpu]
+            devices:
+              - driver: nvidia
+                capabilities: [gpu]
     init: true
     depends_on:
       transcription-collector:
@@ -156,7 +156,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
 
   # CPU version of WhisperLive for users without GPU
   whisperlive-cpu:
@@ -200,9 +199,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
-
-
 
   transcription-collector:
     build:
