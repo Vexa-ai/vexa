@@ -4,9 +4,10 @@
 # =============================================================================
 # This script initializes the monolithic Vexa container:
 # 1. Detects and validates GPU (if GPU build)
-# 2. Waits for external services (PostgreSQL, Redis)
-# 3. Runs database migrations
-# 4. Starts all services via supervisord
+# 2. Configures Redis (embedded by default, or external via REDIS_URL)
+# 3. Waits for external services (PostgreSQL, and Redis if external)
+# 4. Runs database migrations
+# 5. Starts all services via supervisord
 # =============================================================================
 
 set -e
@@ -158,10 +159,13 @@ detect_gpu
 
 # Set defaults for environment variables
 
-# Redis configuration - supports REDIS_URL or individual vars
+# Redis configuration - embedded by default, or external via REDIS_URL
 if [ -n "$REDIS_URL" ]; then
-    # Parse REDIS_URL into individual vars
+    # External Redis - parse REDIS_URL into individual vars
     # Format: redis://[user:password@]host:port[/db]
+    echo "Using external Redis: $REDIS_URL"
+    export REDIS_EMBEDDED="false"
+
     REDIS_URL_NO_SCHEME="${REDIS_URL#*://}"
     # Check if there's auth (contains @)
     if [[ "$REDIS_URL_NO_SCHEME" == *"@"* ]]; then
@@ -185,11 +189,14 @@ if [ -n "$REDIS_URL" ]; then
     export REDIS_HOST="${REDIS_HOSTPORT%%:*}"
     export REDIS_PORT="${REDIS_HOSTPORT#*:}"
 else
-    export REDIS_HOST="${REDIS_HOST:-localhost}"
-    export REDIS_PORT="${REDIS_PORT:-6379}"
+    # Embedded Redis - runs inside the container
+    echo "Using embedded Redis (localhost:6379)"
+    export REDIS_EMBEDDED="true"
+    export REDIS_HOST="localhost"
+    export REDIS_PORT="6379"
     export REDIS_USER=""
     export REDIS_PASSWORD=""
-    export REDIS_URL="redis://${REDIS_HOST}:${REDIS_PORT}/0"
+    export REDIS_URL="redis://localhost:6379/0"
 fi
 
 # Database configuration - supports DATABASE_URL or individual vars
@@ -245,7 +252,11 @@ if [ "$DEVICE_TYPE" = "cuda" ] && [ "$WHISPER_MODEL_SIZE" = "tiny" ]; then
 fi
 
 echo "Configuration:"
-echo "  - Redis: ${REDIS_HOST}:${REDIS_PORT}"
+if [ "$REDIS_EMBEDDED" = "true" ]; then
+echo "  - Redis: embedded (localhost:6379)"
+else
+echo "  - Redis: external (${REDIS_HOST}:${REDIS_PORT})"
+fi
 echo "  - Database: ${DB_HOST}:${DB_PORT}/${DB_NAME}"
 echo "  - Whisper Model: ${WHISPER_MODEL_SIZE}"
 echo "  - Device Type: ${DEVICE_TYPE}"
@@ -281,11 +292,11 @@ if [ -n "$DB_HOST" ] && [ "$DB_HOST" != "localhost" ]; then
 fi
 
 # -----------------------------------------------------------------------------
-# Wait for Redis
+# Wait for Redis (only for external Redis)
 # -----------------------------------------------------------------------------
 
-if [ -n "$REDIS_HOST" ] && [ "$REDIS_HOST" != "localhost" ]; then
-    echo "Waiting for Redis at ${REDIS_HOST}:${REDIS_PORT}..."
+if [ "$REDIS_EMBEDDED" = "false" ]; then
+    echo "Waiting for external Redis at ${REDIS_HOST}:${REDIS_PORT}..."
 
     max_attempts=30
     attempt=0
@@ -298,7 +309,7 @@ if [ -n "$REDIS_HOST" ] && [ "$REDIS_HOST" != "localhost" ]; then
 
     while [ $attempt -lt $max_attempts ]; do
         if $REDIS_CLI_CMD ping 2>/dev/null | grep -q PONG; then
-            echo "Redis is ready!"
+            echo "External Redis is ready!"
             break
         fi
 
@@ -308,9 +319,12 @@ if [ -n "$REDIS_HOST" ] && [ "$REDIS_HOST" != "localhost" ]; then
     done
 
     if [ $attempt -eq $max_attempts ]; then
-        echo "WARNING: Could not connect to Redis after $max_attempts attempts"
+        echo "WARNING: Could not connect to external Redis after $max_attempts attempts"
         echo "         Services may fail to start properly"
     fi
+    echo ""
+else
+    echo "Embedded Redis will be started by supervisor"
     echo ""
 fi
 

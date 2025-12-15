@@ -20,6 +20,9 @@
 # CPU (default - works everywhere):
 #   docker build -f Dockerfile.monolithic -t vexa-monolithic .
 #
+# With embedded Redis (default) - only PostgreSQL needed:
+#   docker run -e DATABASE_URL="postgresql://..." vexa-monolithic
+#
 # GPU with CUDA 12.4 (default GPU - recommended, driver 550+):
 #   docker build -f Dockerfile.monolithic --build-arg DEVICE=gpu -t vexa-monolithic:gpu .
 #
@@ -36,19 +39,25 @@
 # RUN EXAMPLES
 # =============================================================================
 #
-# CPU:
+# CPU (with embedded Redis - simplest):
 #   docker run -d \
 #     -p 8056:8056 -p 8057:8057 \
 #     -e DATABASE_URL="postgresql://..." \
-#     -e REDIS_URL="redis://..." \
 #     -e ADMIN_API_TOKEN="your-secret-token" \
 #     vexa-monolithic
 #
-# GPU:
+# CPU (with external Redis - optional):
+#   docker run -d \
+#     -p 8056:8056 -p 8057:8057 \
+#     -e DATABASE_URL="postgresql://..." \
+#     -e REDIS_URL="redis://external-redis:6379/0" \
+#     -e ADMIN_API_TOKEN="your-secret-token" \
+#     vexa-monolithic
+#
+# GPU (with embedded Redis):
 #   docker run -d --gpus all \
 #     -p 8056:8056 -p 8057:8057 \
 #     -e DATABASE_URL="postgresql://..." \
-#     -e REDIS_URL="redis://..." \
 #     -e ADMIN_API_TOKEN="your-secret-token" \
 #     -e WHISPER_MODEL_SIZE=medium \
 #     vexa-monolithic:gpu
@@ -133,6 +142,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     supervisor \
     # Database clients (for health checks and migrations)
     postgresql-client \
+    # Redis server (embedded) and client tools
+    redis-server \
     redis-tools \
     # Utilities
     curl \
@@ -164,7 +175,8 @@ RUN mkdir -p \
     /app/shared-models \
     /app/alembic \
     /var/log/supervisor \
-    /var/log/vexa-bots
+    /var/log/vexa-bots \
+    /data/redis
 
 # -----------------------------------------------------------------------------
 # Python Dependencies Stage
@@ -323,7 +335,7 @@ ENV DB_HOST=localhost \
     DB_NAME=vexa \
     DB_USER=postgres
 
-# Redis defaults (should be overridden)
+# Redis defaults (embedded by default, can use external via REDIS_URL)
 ENV REDIS_HOST=localhost \
     REDIS_PORT=6379
 

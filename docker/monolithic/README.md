@@ -2,15 +2,35 @@
 
 All-in-one Docker deployment for platforms without Docker socket access (EasyPanel, Dokploy, Railway, Render, etc.).
 
+**Key features:**
+- Single container with all services
+- **Embedded Redis** (no external Redis required by default)
+- Only needs PostgreSQL as external dependency
+- Optional GPU support for faster transcription
+
 ## Quick Start
 
-### CPU Version (Default)
+### CPU Version (Default - Simplest Setup)
 
 ```bash
 # Build the image
 docker build -f Dockerfile.monolithic -t vexa-monolithic .
 
-# Run with external Redis & PostgreSQL
+# Run with just PostgreSQL (Redis is embedded!)
+docker run -d \
+  --name vexa \
+  -p 8056:8056 \
+  -p 8057:8057 \
+  -e DATABASE_URL="postgresql://user:pass@host:5432/vexa" \
+  -e ADMIN_API_TOKEN="your-secret-admin-token" \
+  vexa-monolithic
+```
+
+### With External Redis (Optional)
+
+If you prefer to use an external Redis server (for high-availability, persistence, etc.):
+
+```bash
 docker run -d \
   --name vexa \
   -p 8056:8056 \
@@ -34,14 +54,13 @@ docker build -f Dockerfile.monolithic --build-arg DEVICE=gpu --build-arg CUDA_VE
 # Build for RTX 5000 series (Blackwell) - RTX 5070/5080/5090
 docker build -f Dockerfile.monolithic --build-arg DEVICE=gpu --build-arg CUDA_VERSION=12.8 -t vexa-monolithic:gpu-blackwell .
 
-# Run with GPU acceleration
+# Run with GPU acceleration (Redis embedded by default)
 docker run -d \
   --name vexa \
   --gpus all \
   -p 8056:8056 \
   -p 8057:8057 \
   -e DATABASE_URL="postgresql://user:pass@host:5432/vexa" \
-  -e REDIS_URL="redis://:password@host:6379/0" \
   -e ADMIN_API_TOKEN="your-secret-admin-token" \
   -e WHISPER_MODEL_SIZE=medium \
   vexa-monolithic:gpu
@@ -76,18 +95,26 @@ docker run -d \
 │  │     :9090       │  Stream   │         :8123           │     │
 │  │   (CPU/GPU)     │           └─────────────────────────┘     │
 │  └─────────────────┘                                           │
+│                          │                                      │
+│                          ▼                                      │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │           Redis (embedded, :6379)                        │   │
+│  │    Streams, Pub/Sub, Key-Value for service communication │   │
+│  └─────────────────────────────────────────────────────────┘   │
 │                                                                 │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │                    Xvfb (:99)                            │   │
 │  │              Virtual Display for Browsers                │   │
 │  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
-                    │                         │
-                    ▼                         ▼
-             ┌──────────┐              ┌──────────┐
-             │  Redis   │              │ Postgres │
-             │(external)│              │(external)│
-             └──────────┘              └──────────┘
+                              │
+                              ▼
+                       ┌──────────┐
+                       │ Postgres │
+                       │(external)│
+                       └──────────┘
+
+Alternative: Use REDIS_URL to connect to external Redis instead of embedded.
 ```
 
 **Key difference from standard deployment:** Instead of spawning Docker containers for bots, the monolithic version uses a **process orchestrator** that spawns bots as Node.js child processes within the same container.
@@ -219,16 +246,32 @@ docker run --gpus all ...
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `DATABASE_URL` | PostgreSQL connection URL | `postgresql://user:pass@host:5432/vexa` |
-| `REDIS_URL` | Redis connection URL | `redis://:password@host:6379/0` |
 | `ADMIN_API_TOKEN` | Secret token for admin operations | `your-secret-token-here` |
 
 ### Optional
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `REDIS_URL` | embedded | External Redis URL (if not set, uses embedded Redis) |
 | `WHISPER_MODEL_SIZE` | `tiny` | Whisper model size (see below) |
 | `LOG_LEVEL` | `info` | Logging level (debug, info, warning, error) |
 | `DEVICE_TYPE` | auto | Device type (`cpu` or `cuda`, auto-detected for GPU builds) |
+
+### Redis Configuration
+
+**By default, Redis is embedded** in the container and requires no configuration.
+
+To use an external Redis server (for high-availability, persistence, or shared state):
+
+```bash
+# Via URL
+-e REDIS_URL="redis://:password@host:6379/0"
+
+# Or via individual variables
+-e REDIS_HOST=redis.example.com
+-e REDIS_PORT=6379
+-e REDIS_PASSWORD=your-redis-password
+```
 
 ### Alternative Configuration (Individual Variables)
 
@@ -241,11 +284,6 @@ DB_PORT=5432
 DB_NAME=vexa
 DB_USER=postgres
 DB_PASSWORD=your-password
-
-# Redis
-REDIS_HOST=redis.example.com
-REDIS_PORT=6379
-REDIS_PASSWORD=your-redis-password
 ```
 
 ## Whisper Model Selection
@@ -271,7 +309,6 @@ REDIS_PASSWORD=your-redis-password
 docker run -d --gpus all \
   -e WHISPER_MODEL_SIZE=medium \
   -e DATABASE_URL="..." \
-  -e REDIS_URL="..." \
   -e ADMIN_API_TOKEN="..." \
   vexa-monolithic:gpu
 ```
@@ -291,7 +328,6 @@ docker run -d \
   -v vexa-models:/root/.cache/huggingface \
   -v vexa-logs:/var/log/vexa-bots \
   -e DATABASE_URL="..." \
-  -e REDIS_URL="..." \
   -e ADMIN_API_TOKEN="..." \
   vexa-monolithic:gpu
 ```
@@ -308,8 +344,8 @@ docker run -d \
 1. Create a new **App** from Git repository or Docker image
 2. Configure environment variables:
    - `DATABASE_URL` → Use EasyPanel PostgreSQL service URL
-   - `REDIS_URL` → Use EasyPanel Redis service URL
    - `ADMIN_API_TOKEN` → Generate a secure token
+   - `REDIS_URL` → (Optional) Use EasyPanel Redis service URL, or leave empty for embedded Redis
 3. Expose ports: `8056` (API), `8057` (Admin)
 4. Optional: Add persistent volumes for models and logs
 
@@ -318,13 +354,13 @@ docker run -d \
 1. Create a new **Application** → Docker deployment
 2. Use `Dockerfile.monolithic` or pre-built image
 3. Set environment variables in Dokploy's env section
-4. Configure Redis and PostgreSQL services in Dokploy
+4. Only PostgreSQL is required (Redis is embedded by default)
 
 ### Railway / Render
 
 1. Deploy from GitHub with `Dockerfile.monolithic`
-2. Add PostgreSQL and Redis as managed services
-3. Configure environment variables using service URLs
+2. Add PostgreSQL as managed service (Redis is embedded)
+3. Configure `DATABASE_URL` and `ADMIN_API_TOKEN`
 4. Set exposed port to `8056`
 
 ## Management
@@ -352,6 +388,7 @@ docker exec vexa supervisorctl status
 
 Output:
 ```
+vexa-core:redis                  RUNNING   pid 122, uptime 0:05:00  (embedded, or STOPPED if using external)
 vexa-core:admin-api              RUNNING   pid 123, uptime 0:05:00
 vexa-core:api-gateway            RUNNING   pid 124, uptime 0:05:00
 vexa-core:bot-manager            RUNNING   pid 125, uptime 0:05:00
@@ -481,7 +518,7 @@ docker exec vexa env | grep REDIS
 The monolithic deployment adds the following without modifying core service code:
 
 **New Files:**
-- `Dockerfile.monolithic` - All-in-one container build (CPU/GPU)
+- `Dockerfile.monolithic` - All-in-one container build (CPU/GPU) with embedded Redis
 - `docker/monolithic/*` - Configuration files
 - `services/bot-manager/app/orchestrators/process.py` - Process-based bot spawner
 
@@ -489,5 +526,10 @@ The monolithic deployment adds the following without modifying core service code
 - `services/bot-manager/app/orchestrators/__init__.py` - Loads process orchestrator when `ORCHESTRATOR=process`
 - `services/transcription-collector/config.py` - Added `REDIS_PASSWORD` support
 - `services/transcription-collector/main.py` - Password parameter in Redis connection
+
+**Key Features:**
+- **Embedded Redis** - No external Redis required by default (256MB memory limit)
+- **Optional external Redis** - Set `REDIS_URL` to use your own Redis server
+- **Auto-detection** - Container automatically uses embedded or external Redis
 
 All changes are **backwards compatible** and don't affect standard Docker Compose deployment.
