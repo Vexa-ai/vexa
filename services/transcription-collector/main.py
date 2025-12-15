@@ -23,6 +23,7 @@ from config import (
     LOG_LEVEL,
     REDIS_HOST,
     REDIS_PORT,
+    REDIS_PASSWORD,
     REDIS_SPEAKER_EVENTS_STREAM_NAME,
     REDIS_SPEAKER_EVENTS_CONSUMER_GROUP
 )
@@ -62,6 +63,7 @@ async def startup():
     temp_redis_client = aioredis.Redis(
         host=REDIS_HOST,
         port=REDIS_PORT,
+        password=REDIS_PASSWORD,
         db=0,
         decode_responses=True
     )
