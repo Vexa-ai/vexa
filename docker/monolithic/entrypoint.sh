@@ -215,7 +215,8 @@ if [ -z "$DATABASE_URL" ]; then
     fi
 else
     # Fix postgres:// to postgresql:// (SQLAlchemy requirement)
-    export DATABASE_URL="${DATABASE_URL/postgres:\/\//postgresql:\/\/}"
+    DATABASE_URL=$(echo "$DATABASE_URL" | sed 's|^postgres://|postgresql://|')
+    export DATABASE_URL
 
     # Parse DATABASE_URL into individual vars (required by shared_models)
     # Format: postgresql://user:password@host:port/dbname?params
