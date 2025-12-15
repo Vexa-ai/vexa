@@ -220,7 +220,19 @@ else
 
     # Parse DATABASE_URL into individual vars (required by shared_models)
     # Format: postgresql://user:password@host:port/dbname?params
-    # Remove query params first
+
+    # Extract query params (everything after ?) and parse sslmode
+    if [[ "$DATABASE_URL" == *"?"* ]]; then
+        DB_QUERY_PARAMS="${DATABASE_URL#*\?}"
+        # Extract sslmode from query params
+        if [[ "$DB_QUERY_PARAMS" == *"sslmode="* ]]; then
+            DB_SSL_MODE_RAW="${DB_QUERY_PARAMS#*sslmode=}"
+            export DB_SSL_MODE="${DB_SSL_MODE_RAW%%&*}"
+            echo "  Extracted DB_SSL_MODE=$DB_SSL_MODE from DATABASE_URL"
+        fi
+    fi
+
+    # Remove query params for parsing host/port/etc
     DB_URL_BASE="${DATABASE_URL%%\?*}"
     # Extract components using parameter expansion
     DB_URL_NO_SCHEME="${DB_URL_BASE#*://}"
