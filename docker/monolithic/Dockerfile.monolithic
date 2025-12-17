@@ -18,11 +18,11 @@
 #
 # Run:
 #   docker run -d \
-#     -p 8056:8056 -p 8057:8057 \
-#     -e REDIS_HOST=your-redis-host \
-#     -e DB_HOST=your-postgres-host \
-#     -e DB_PASSWORD=your-password \
+#     -p 8056:8056 \
+#     -e DATABASE_URL="postgresql://user:pass@host:5432/vexa" \
 #     -e ADMIN_API_TOKEN=your-secret-token \
+#     -e REMOTE_TRANSCRIBER_URL="http://localhost:8083/v1/audio/transcriptions" \
+#     -e REMOTE_TRANSCRIBER_API_KEY=your-api-key \
 #     vexa-monolithic
 #
 # =============================================================================
@@ -56,6 +56,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Database clients (for health checks and migrations)
     postgresql-client \
     redis-tools \
+    # Redis server (for monolithic deployment)
+    redis-server \
     # Utilities
     curl \
     wget \
@@ -75,7 +77,9 @@ RUN mkdir -p \
     /app/shared-models \
     /app/alembic \
     /var/log/supervisor \
-    /var/log/vexa-bots
+    /var/log/vexa-bots \
+    /var/lib/redis \
+    /var/run/redis
 
 # -----------------------------------------------------------------------------
 # Python Dependencies Stage
@@ -177,7 +181,8 @@ ENV ORCHESTRATOR=process \
 
 # WhisperLive configuration
 ENV WHISPER_LIVE_URL=ws://localhost:9090 \
-    DEVICE_TYPE=cpu \
+    DEVICE_TYPE=remote \
+    WHISPER_BACKEND=remote \
     WHISPER_MODEL_SIZE=tiny \
     CONSUL_ENABLE=false
 
@@ -195,9 +200,14 @@ ENV DB_HOST=localhost \
     DB_NAME=vexa \
     DB_USER=postgres
 
-# Redis defaults (should be overridden)
+# Redis defaults (for internal Redis server)
 ENV REDIS_HOST=localhost \
-    REDIS_PORT=6379
+    REDIS_PORT=6379 \
+    REDIS_PASSWORD=""
+
+# Remote transcription defaults
+ENV REMOTE_TRANSCRIBER_MODEL="whisper-1" \
+    REMOTE_TRANSCRIBER_TEMPERATURE="0"
 
 # -----------------------------------------------------------------------------
 # Ports

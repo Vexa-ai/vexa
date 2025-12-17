@@ -2,26 +2,32 @@
 
 All-in-one Docker deployment for platforms without Docker socket access (EasyPanel, Dokploy, Railway, Render, etc.).
 
+**Note:** This deployment includes Redis server inside the container. Only PostgreSQL needs to be provided externally.
+
 ## Quick Start
 
 ```bash
 # Build the image
 docker build -f Dockerfile.monolithic -t vexa-monolithic .
 
-# Run with external Redis & PostgreSQL
+# Run with internal Redis & external PostgreSQL (default: remote transcription)
 docker run -d \
   --name vexa \
   -p 8056:8056 \
-  -p 8057:8057 \
   -e DATABASE_URL="postgresql://user:pass@host:5432/vexa" \
-  -e REDIS_URL="redis://:password@host:6379/0" \
   -e ADMIN_API_TOKEN="your-secret-admin-token" \
+  -e REMOTE_TRANSCRIBER_URL="http://localhost:8083/v1/audio/transcriptions" \
+  -e REMOTE_TRANSCRIBER_API_KEY="your-api-key" \
   vexa-monolithic
 ```
 
-**Endpoints:**
-- API Gateway: `http://localhost:8056/docs`
-- Admin API: `http://localhost:8057/docs`
+**API Access:** `http://localhost:8056/docs` (includes Admin API routes at `/admin/*`)
+
+**Notes:**
+- Redis runs internally on `localhost:6379` by default. To use an external Redis, set `REDIS_HOST` to your Redis server address.
+- Default transcription mode is `remote` - requires `REMOTE_TRANSCRIBER_URL` and `REMOTE_TRANSCRIBER_API_KEY`.
+- If transcription service uses Docker service names (e.g., `transcription-lb`), add `--network transcription-network` to the docker run command.
+- If transcription service is accessible via host port (e.g., `localhost:8083`), no network flag needed.
 
 ## Architecture
 
@@ -57,7 +63,7 @@ docker run -d \
                     ▼                         ▼
              ┌──────────┐              ┌──────────┐
              │  Redis   │              │ Postgres │
-             │(external)│              │(external)│
+             │(internal)│              │(external)│
              └──────────┘              └──────────┘
 ```
 
@@ -70,16 +76,37 @@ docker run -d \
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `DATABASE_URL` | PostgreSQL connection URL | `postgresql://user:pass@host:5432/vexa` |
-| `REDIS_URL` | Redis connection URL | `redis://:password@host:6379/0` |
 | `ADMIN_API_TOKEN` | Secret token for admin operations | `your-secret-token-here` |
 
 ### Optional
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `WHISPER_MODEL_SIZE` | `tiny` | Whisper model size (see below) |
+| `REDIS_HOST` | `localhost` | Redis host (use `localhost` for internal Redis, or external hostname) |
+| `REDIS_PORT` | `6379` | Redis port |
+| `REDIS_URL` | Auto-generated | Full Redis URL (auto-generated from host/port if not provided) |
+| `DEVICE_TYPE` | `remote` | Device type: `remote` (default), `cpu` (for local faster-whisper) |
+| `WHISPER_BACKEND` | `remote` | WhisperLive backend: `remote` (default), `faster_whisper` (for local CPU) |
+| `WHISPER_MODEL_SIZE` | `tiny` | Whisper model size (only used for `faster_whisper` backend) |
 | `LOG_LEVEL` | `info` | Logging level (debug, info, warning, error) |
-| `DEVICE_TYPE` | `cpu` | Device type (cpu only in monolithic) |
+| `REMOTE_TRANSCRIBER_URL` | (required) | Remote transcription API URL |
+| `REMOTE_TRANSCRIBER_API_KEY` | (required) | API key for remote transcription service |
+| `REMOTE_TRANSCRIBER_TEMPERATURE` | `0` | Temperature parameter for remote transcription |
+
+### Redis Configuration
+
+**Internal Redis (Default):**
+- Redis server runs inside the container on `localhost:6379`
+- No configuration needed - works out of the box
+- Data persists in `/var/lib/redis` (use volumes for persistence)
+
+**External Redis:**
+```bash
+# Use external Redis by setting REDIS_HOST
+-e REDIS_HOST=redis.example.com
+-e REDIS_PORT=6379
+-e REDIS_PASSWORD=your-password  # Optional
+```
 
 ### Alternative Configuration (Individual Variables)
 
@@ -92,8 +119,9 @@ DB_PORT=5432
 DB_NAME=vexa
 DB_USER=postgres
 DB_PASSWORD=your-password
+DB_SSL_MODE=disable  # Use "disable" for local PostgreSQL
 
-# Redis
+# Redis (only needed for external Redis)
 REDIS_HOST=redis.example.com
 REDIS_PORT=6379
 REDIS_PASSWORD=your-redis-password
@@ -109,16 +137,22 @@ REDIS_PASSWORD=your-redis-password
 | `large` | ~3GB | Best | Slowest | High-quality requirements |
 
 ```bash
-# Example: Use medium model for better transcription quality
+# Example: Use CPU mode with local faster-whisper (instead of remote)
 docker run -d \
+  --name vexa \
+  -p 8056:8056 \
+  -e DEVICE_TYPE=cpu \
+  -e WHISPER_BACKEND=faster_whisper \
   -e WHISPER_MODEL_SIZE=medium \
   -e DATABASE_URL="..." \
-  -e REDIS_URL="..." \
   -e ADMIN_API_TOKEN="..." \
   vexa-monolithic
 ```
 
-**Note:** Models are downloaded on first use. Larger models require more RAM and CPU.
+**Note:** 
+- Default mode is `remote` transcription (requires `REMOTE_TRANSCRIBER_URL` and `REMOTE_TRANSCRIBER_API_KEY`)
+- For local CPU transcription, set `DEVICE_TYPE=cpu` and `WHISPER_BACKEND=faster_whisper`
+- Models are downloaded on first use for local CPU mode. Larger models require more RAM and CPU.
 
 ## Persistent Storage (Volumes)
 
@@ -128,45 +162,55 @@ For production deployments, mount volumes to persist data:
 docker run -d \
   --name vexa \
   -p 8056:8056 \
-  -p 8057:8057 \
-  -v vexa-models:/root/.cache/huggingface \
   -v vexa-logs:/var/log/vexa-bots \
   -e DATABASE_URL="..." \
-  -e REDIS_URL="..." \
   -e ADMIN_API_TOKEN="..." \
+  -e REMOTE_TRANSCRIBER_URL="http://localhost:8083/v1/audio/transcriptions" \
+  -e REMOTE_TRANSCRIBER_API_KEY="your-api-key" \
   vexa-monolithic
 ```
 
 | Volume | Path | Description |
 |--------|------|-------------|
-| `vexa-models` | `/root/.cache/huggingface` | Downloaded Whisper models (avoid re-downloading) |
 | `vexa-logs` | `/var/log/vexa-bots` | Bot process logs |
+
+**Note:** Model volumes are only needed for local CPU mode (`WHISPER_BACKEND=faster_whisper`). Remote transcription mode doesn't require model storage.
 
 ## Platform-Specific Deployment
 
 ### EasyPanel
 
 1. Create a new **App** from Git repository or Docker image
-2. Configure environment variables:
+2. Expose port: `8056` (API Gateway)
+3. Configure environment variables:
    - `DATABASE_URL` → Use EasyPanel PostgreSQL service URL
-   - `REDIS_URL` → Use EasyPanel Redis service URL
    - `ADMIN_API_TOKEN` → Generate a secure token
-3. Expose ports: `8056` (API), `8057` (Admin)
-4. Optional: Add persistent volumes for models and logs
+   - `REMOTE_TRANSCRIBER_URL` → Your transcription service URL (e.g., `http://transcription-service.example.com/v1/audio/transcriptions`)
+   - `REMOTE_TRANSCRIBER_API_KEY` → Your transcription service API key
+4. Optional: Add persistent volumes for logs
 
 ### Dokploy
 
 1. Create a new **Application** → Docker deployment
 2. Use `Dockerfile.monolithic` or pre-built image
-3. Set environment variables in Dokploy's env section
-4. Configure Redis and PostgreSQL services in Dokploy
+3. Expose port: `8056` (API Gateway)
+4. Set environment variables in Dokploy's env section:
+   - `DATABASE_URL` → PostgreSQL service URL
+   - `ADMIN_API_TOKEN` → Generate a secure token
+   - `REMOTE_TRANSCRIBER_URL` → Your transcription service URL (public URL or Docker service name)
+   - `REMOTE_TRANSCRIBER_API_KEY` → Your transcription service API key
+5. Configure PostgreSQL service in Dokploy
 
 ### Railway / Render
 
 1. Deploy from GitHub with `Dockerfile.monolithic`
-2. Add PostgreSQL and Redis as managed services
-3. Configure environment variables using service URLs
-4. Set exposed port to `8056`
+2. Set exposed port to `8056`
+3. Add PostgreSQL as managed service
+4. Configure environment variables:
+   - `DATABASE_URL` → PostgreSQL service URL
+   - `ADMIN_API_TOKEN` → Generate a secure token
+   - `REMOTE_TRANSCRIBER_URL` → Your transcription service URL (public URL)
+   - `REMOTE_TRANSCRIBER_API_KEY` → Your transcription service API key
 
 ## Management
 
@@ -213,14 +257,21 @@ docker exec vexa supervisorctl restart vexa-core:bot-manager
 ### Create a User and Get API Key
 
 ```bash
-# Create user (via Admin API)
-curl -X POST "http://localhost:8057/users" \
-  -H "X-Admin-Token: your-admin-token" \
+# Create user (via Admin API through API Gateway)
+curl -X POST "http://localhost:8056/admin/users" \
+  -H "X-Admin-API-Key: your-admin-token" \
   -H "Content-Type: application/json" \
   -d '{"email": "test@example.com", "name": "Test User"}'
 
+# Response includes user info:
+# {"id": 1, "email": "test@example.com", "name": "Test User", ...}
+
+# Generate API token for the user
+curl -X POST "http://localhost:8056/admin/users/1/tokens" \
+  -H "X-Admin-API-Key: your-admin-token"
+
 # Response includes API key:
-# {"id": 1, "email": "test@example.com", "api_key": "vx_abc123..."}
+# {"user_id": 1, "id": 1, "token": "vx_abc123...", ...}
 ```
 
 ### Start a Bot
@@ -252,7 +303,10 @@ curl "http://localhost:8056/transcripts/google_meet/abc-defg-hij" \
 | **Bot Spawning** | Docker containers | Node.js processes |
 | **Docker Socket** | Required | Not required |
 | **Traefik/Consul** | Included | Not needed |
-| **GPU Support** | Yes | No (CPU only) |
+| **Redis** | External container | Internal (included) |
+| **PostgreSQL** | External container | External (required) |
+| **Transcription** | GPU/CPU/Remote | Remote (default) or CPU |
+| **GPU Support** | Yes | No (uses remote transcription service) |
 | **Scaling** | Horizontal | Vertical |
 | **Max Concurrent Bots** | Unlimited* | 3-5 recommended |
 | **Complexity** | Higher | Lower |
@@ -260,10 +314,12 @@ curl "http://localhost:8056/transcripts/google_meet/abc-defg-hij" \
 
 ## Limitations
 
-- **CPU Only:** GPU acceleration not supported in monolithic mode
+- **Remote Transcription Default:** Uses remote transcription service (requires `REMOTE_TRANSCRIBER_URL` and `REMOTE_TRANSCRIBER_API_KEY`)
+- **Local CPU Mode:** Available but slower - set `DEVICE_TYPE=cpu` and `WHISPER_BACKEND=faster_whisper`
 - **Concurrent Bots:** Recommended max 3-5 (shared CPU/RAM)
 - **Process Isolation:** Less isolated than container-per-bot
-- **Model Size:** Larger models may be slow on limited resources
+- **Model Size:** Only relevant for local CPU mode - larger models require more RAM and CPU
+- **Redis Persistence:** Internal Redis data is ephemeral unless volumes are mounted
 
 ## Troubleshooting
 

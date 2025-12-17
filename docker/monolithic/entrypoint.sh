@@ -22,7 +22,16 @@ echo ""
 # Set defaults for environment variables
 
 # Redis configuration - supports REDIS_URL or individual vars
-if [ -n "$REDIS_URL" ]; then
+# If REDIS_HOST is localhost or not set, use internal Redis server
+USE_INTERNAL_REDIS=false
+if [ -z "$REDIS_HOST" ] || [ "$REDIS_HOST" = "localhost" ] || [ "$REDIS_HOST" = "127.0.0.1" ]; then
+    USE_INTERNAL_REDIS=true
+    export REDIS_HOST="localhost"
+    export REDIS_PORT="${REDIS_PORT:-6379}"
+    export REDIS_USER=""
+    export REDIS_PASSWORD=""
+    export REDIS_URL="redis://localhost:${REDIS_PORT}/0"
+elif [ -n "$REDIS_URL" ]; then
     # Parse REDIS_URL into individual vars
     # Format: redis://[user:password@]host:port[/db]
     REDIS_URL_NO_SCHEME="${REDIS_URL#*://}"
@@ -97,7 +106,8 @@ else
 fi
 
 export LOG_LEVEL="${LOG_LEVEL:-info}"
-export DEVICE_TYPE="${DEVICE_TYPE:-cpu}"
+export DEVICE_TYPE="${DEVICE_TYPE:-remote}"
+export WHISPER_BACKEND="${WHISPER_BACKEND:-remote}"
 export WHISPER_MODEL_SIZE="${WHISPER_MODEL_SIZE:-tiny}"
 export DISPLAY="${DISPLAY:-:99}"
 
@@ -138,11 +148,23 @@ if [ -n "$DB_HOST" ] && [ "$DB_HOST" != "localhost" ]; then
 fi
 
 # -----------------------------------------------------------------------------
-# Wait for Redis
+# Setup Internal Redis (if using localhost)
 # -----------------------------------------------------------------------------
 
-if [ -n "$REDIS_HOST" ] && [ "$REDIS_HOST" != "localhost" ]; then
-    echo "Waiting for Redis at ${REDIS_HOST}:${REDIS_PORT}..."
+if [ "$USE_INTERNAL_REDIS" = "true" ]; then
+    echo "Using internal Redis server (will be started by supervisor)..."
+    echo "  Setting up Redis data directory..."
+    mkdir -p /var/lib/redis
+    mkdir -p /var/run/redis
+    chmod 755 /var/lib/redis
+    chmod 755 /var/run/redis
+    echo "  Redis will start automatically via supervisor"
+    echo ""
+else
+    # -----------------------------------------------------------------------------
+    # Wait for External Redis
+    # -----------------------------------------------------------------------------
+    echo "Waiting for external Redis at ${REDIS_HOST}:${REDIS_PORT}..."
 
     max_attempts=30
     attempt=0
@@ -222,6 +244,10 @@ echo "Creating required directories..."
 mkdir -p /var/log/supervisor
 mkdir -p /var/log/vexa-bots
 mkdir -p /var/run
+mkdir -p /var/lib/redis
+mkdir -p /var/run/redis
+chmod 755 /var/lib/redis
+chmod 755 /var/run/redis
 echo "  Done"
 echo ""
 
