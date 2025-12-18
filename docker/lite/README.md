@@ -356,7 +356,7 @@ docker exec vexa env | grep REDIS
 | `Dockerfile.lite` | Main Dockerfile (in repo root) |
 | `docker/lite/supervisord.conf` | Supervisor configuration |
 | `docker/lite/entrypoint.sh` | Container initialization |
-| `docker/lite/requirements-lite.txt` | Python dependencies |
+| `docker/lite/requirements.txt` | Python dependencies |
 | `services/bot-manager/app/orchestrators/process.py` | Process orchestrator |
 
 ## Changes from Open Source Project
