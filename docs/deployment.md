@@ -83,11 +83,51 @@ git clone https://github.com/Vexa-ai/vexa.git && cd vexa
 make all
 ```
 
+### 4. Lite Deployment (Single Container, No GPU)
+
+**New in v0.7:** Deploy Vexa as a single Docker container with no GPU requirements. The transcription work is moved outside the container, making it perfect for serverless providers or lightweight deployments.
+
+**Key benefits:**
+- Single stateless container - no permanent data
+- No GPU requirements - transcription is handled externally
+- Easy to deploy locally or in any serverless provider
+- Connect to external database and transcription service
+
+**Quick start with hosted transcription:**
+
+```bash
+# 1. Set up database (PostgreSQL)
+docker network create vexa-network
+docker run -d \
+  --name vexa-postgres \
+  --network vexa-network \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=your_password \
+  -e POSTGRES_DB=vexa \
+  -p 5432:5432 \
+  postgres:latest
+
+# 2. Run Vexa Lite container
+docker run -d \
+  --name vexa \
+  --network vexa-network \
+  -p 8056:8056 \
+  -e DATABASE_URL="postgresql://postgres:your_password@vexa-postgres:5432/vexa" \
+  -e ADMIN_API_TOKEN="your-secret-admin-token" \
+  -e TRANSCRIBER_URL="https://transcription.vexa.ai/v1/audio/transcriptions" \
+  -e TRANSCRIBER_API_KEY="your-api-key" \
+  vexaai/vexa-lite:latest
+```
+
+**API available at:** `http://localhost:8056`
+
+For complete lite deployment guide with all configuration options (local/remote database, local/remote transcription), see [docker/lite/DEPLOYMENT_GUIDE.md](../docker/lite/DEPLOYMENT_GUIDE.md).
+
 ## Testing
 
 Once deployed, services are available at:
-- **API docs:** http://localhost:18056/docs
-- **Admin API:** http://localhost:18057/docs
+- **API docs:** http://localhost:18056/docs (full stack) or http://localhost:8056/docs (lite)
+- **Admin API:** http://localhost:18057/docs (full stack only)
 
 **Live meeting test:**
 ```bash
