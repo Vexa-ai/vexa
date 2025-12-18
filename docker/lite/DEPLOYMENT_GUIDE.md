@@ -53,14 +53,14 @@ docker run -d \
   -e ADMIN_API_TOKEN="test-token" \
   -e TRANSCRIBER_URL="https://transcription-gateway.dev.vexa.ai/v1/audio/transcriptions" \
   -e TRANSCRIBER_API_KEY="cczM1VUk7FXaw6EwMrwMVdTwhqIiYAdmFVvUG1uF" \
-  vexa-lite:latest
+  vexaai/vexa-lite:latest
 
 
 
   2. remote trnanscription / remote database
 
 
-  docker run -d --name vexa-supabase -p 8060:8056 -e DATABASE_URL="postgresql://postgres.fghfjzpqncuawqurtxwb:FRkb3ff6SQPsw4rE@aws-1-eu-west-1.pooler.supabase.com:5432/postgres" -e DB_SSL_MODE="require" -e ADMIN_API_TOKEN="test-token" -e TRANSCRIBER_URL="https://transcription-gateway.dev.vexa.ai/v1/audio/transcriptions" -e TRANSCRIBER_API_KEY="cczM1VUk7FXaw6EwMrwMVdTwhqIiYAdmFVvUG1uF" vexa-lite:latest
+  docker run -d --name vexa-supabase -p 8060:8056 -e DATABASE_URL="postgresql://postgres.fghfjzpqncuawqurtxwb:FRkb3ff6SQPsw4rE@aws-1-eu-west-1.pooler.supabase.com:5432/postgres" -e DB_SSL_MODE="require" -e ADMIN_API_TOKEN="test-token" -e TRANSCRIBER_URL="https://transcription-gateway.dev.vexa.ai/v1/audio/transcriptions" -e TRANSCRIBER_API_KEY="cczM1VUk7FXaw6EwMrwMVdTwhqIiYAdmFVvUG1uF" vexaai/vexa-lite:latest
 
 
 
@@ -70,8 +70,13 @@ docker run -d \
 
   docker network create vexa-network
 
-cd vexa/services/transcription-service/
-(base) dima@bbb:~/dev/vexa/services/transcription-service$ docker compose up -d
+cd services/transcription-service/
+
+# For CPU (testing/development):
+docker compose -f docker-compose.cpu.yml up -d
+
+# For GPU (production - requires NVIDIA GPU):
+# docker compose up -d
 
 
 docker run -d \
@@ -83,7 +88,7 @@ docker run -d \
   -e ADMIN_API_TOKEN="test-token" \
   -e TRANSCRIBER_URL="http://host.docker.internal:8083/v1/audio/transcriptions" \
   -e TRANSCRIBER_API_KEY="transcription_service_secret_token_12345" \
-  vexa-lite:latest
+  vexaai/vexa-lite:latest
 
 
 
