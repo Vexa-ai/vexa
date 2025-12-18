@@ -86,11 +86,11 @@ RUN mkdir -p \
 # -----------------------------------------------------------------------------
 
 # Copy requirements files first
-COPY docker/lite/requirements-lite.txt /tmp/requirements-lite.txt
+COPY docker/lite/requirements.txt /tmp/requirements.txt
 COPY services/WhisperLive/requirements/server.txt /tmp/requirements-whisperlive.txt
 
 # Install consolidated Python dependencies for all services
-RUN pip3 install --no-cache-dir -r /tmp/requirements-lite.txt
+RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
 
 # WhisperLive dependencies (CPU version)
 # Note: openai-whisper and onnxruntime GPU versions are excluded
