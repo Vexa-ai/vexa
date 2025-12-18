@@ -2890,16 +2890,22 @@ class ServeClientRemote(ServeClientBase):
         """
         Instantiates a new Remote transcriber.
         """
-        api_url = os.getenv("REMOTE_TRANSCRIBER_URL")
-        api_key = (os.getenv("REMOTE_TRANSCRIBER_API_KEY") or "").strip()
-        model = self.model or os.getenv("REMOTE_TRANSCRIBER_MODEL")
+        api_url = os.getenv("TRANSCRIBER_URL") or os.getenv("REMOTE_TRANSCRIBER_URL")
+        api_key = (os.getenv("TRANSCRIBER_API_KEY") or os.getenv("REMOTE_TRANSCRIBER_API_KEY") or "").strip()
+        # Model parameter is required by API but ignored by transcription service (uses its own configured model)
+        # Use a placeholder value since the service doesn't actually use this parameter
+        model = self.model or os.getenv("REMOTE_TRANSCRIBER_MODEL") or "default"
         
         if not api_url:
-            raise ValueError("REMOTE_TRANSCRIBER_URL environment variable is not set")
+            raise ValueError(
+                "TRANSCRIBER_URL (or REMOTE_TRANSCRIBER_URL) environment variable is not set. "
+                "This is required to connect to the remote transcription service."
+            )
         if not api_key:
-            raise ValueError("REMOTE_TRANSCRIBER_API_KEY environment variable is not set")
-        if not model:
-            raise ValueError("REMOTE_TRANSCRIBER_MODEL environment variable is not set")
+            raise ValueError(
+                "TRANSCRIBER_API_KEY (or REMOTE_TRANSCRIBER_API_KEY) environment variable is not set. "
+                "This is required to authenticate with the remote transcription service."
+            )
         
         # Log masked API key for debugging
         api_key_masked = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) > 8 else "***"

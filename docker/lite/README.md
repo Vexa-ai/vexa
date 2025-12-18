@@ -1,4 +1,4 @@
-# Vexa Monolithic Deployment
+# Vexa Lite Deployment
 
 All-in-one Docker deployment for platforms without Docker socket access (EasyPanel, Dokploy, Railway, Render, etc.).
 
@@ -8,7 +8,7 @@ All-in-one Docker deployment for platforms without Docker socket access (EasyPan
 
 ```bash
 # Build the image
-docker build -f Dockerfile.monolithic -t vexa-monolithic .
+docker build -f Dockerfile.lite -t vexa-lite .
 
 # Run with internal Redis & external PostgreSQL (default: remote transcription)
 docker run -d \
@@ -18,7 +18,7 @@ docker run -d \
   -e ADMIN_API_TOKEN="your-secret-admin-token" \
   -e REMOTE_TRANSCRIBER_URL="http://localhost:8083/v1/audio/transcriptions" \
   -e REMOTE_TRANSCRIBER_API_KEY="your-api-key" \
-  vexa-monolithic
+  vexa-lite
 ```
 
 **API Access:** `http://localhost:8056/docs` (includes Admin API routes at `/admin/*`)
@@ -33,7 +33,7 @@ docker run -d \
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    Monolithic Container                         │
+│                    Lite Container                         │
 │                                                                 │
 │  ┌─────────────┐  ┌─────────────┐  ┌──────────────┐            │
 │  │ API Gateway │  │  Admin API  │  │ Bot Manager  │            │
@@ -67,7 +67,7 @@ docker run -d \
              └──────────┘              └──────────┘
 ```
 
-**Key difference from standard deployment:** Instead of spawning Docker containers for bots, the monolithic version uses a **process orchestrator** that spawns bots as Node.js child processes within the same container.
+**Key difference from standard deployment:** Instead of spawning Docker containers for bots, the Lite version uses a **process orchestrator** that spawns bots as Node.js child processes within the same container.
 
 ## Environment Variables
 
@@ -146,7 +146,7 @@ docker run -d \
   -e WHISPER_MODEL_SIZE=medium \
   -e DATABASE_URL="..." \
   -e ADMIN_API_TOKEN="..." \
-  vexa-monolithic
+  vexa-lite
 ```
 
 **Note:** 
@@ -167,7 +167,7 @@ docker run -d \
   -e ADMIN_API_TOKEN="..." \
   -e REMOTE_TRANSCRIBER_URL="http://localhost:8083/v1/audio/transcriptions" \
   -e REMOTE_TRANSCRIBER_API_KEY="your-api-key" \
-  vexa-monolithic
+  vexa-lite
 ```
 
 | Volume | Path | Description |
@@ -192,7 +192,7 @@ docker run -d \
 ### Dokploy
 
 1. Create a new **Application** → Docker deployment
-2. Use `Dockerfile.monolithic` or pre-built image
+2. Use `Dockerfile.lite` or pre-built image
 3. Expose port: `8056` (API Gateway)
 4. Set environment variables in Dokploy's env section:
    - `DATABASE_URL` → PostgreSQL service URL
@@ -203,7 +203,7 @@ docker run -d \
 
 ### Railway / Render
 
-1. Deploy from GitHub with `Dockerfile.monolithic`
+1. Deploy from GitHub with `Dockerfile.lite`
 2. Set exposed port to `8056`
 3. Add PostgreSQL as managed service
 4. Configure environment variables:
@@ -297,7 +297,7 @@ curl "http://localhost:8056/transcripts/google_meet/abc-defg-hij" \
 
 ## Comparison with Standard Deployment
 
-| Feature | Standard (Docker Compose) | Monolithic |
+| Feature | Standard (Docker Compose) | Lite |
 |---------|---------------------------|------------|
 | **Services** | Multiple containers | Single container |
 | **Bot Spawning** | Docker containers | Node.js processes |
@@ -353,19 +353,19 @@ docker exec vexa env | grep REDIS
 
 | File | Description |
 |------|-------------|
-| `Dockerfile.monolithic` | Main Dockerfile (in repo root) |
-| `docker/monolithic/supervisord.conf` | Supervisor configuration |
-| `docker/monolithic/entrypoint.sh` | Container initialization |
-| `docker/monolithic/requirements-monolithic.txt` | Python dependencies |
+| `Dockerfile.lite` | Main Dockerfile (in repo root) |
+| `docker/lite/supervisord.conf` | Supervisor configuration |
+| `docker/lite/entrypoint.sh` | Container initialization |
+| `docker/lite/requirements-lite.txt` | Python dependencies |
 | `services/bot-manager/app/orchestrators/process.py` | Process orchestrator |
 
 ## Changes from Open Source Project
 
-The monolithic deployment adds the following without modifying core service code:
+The Lite deployment adds the following without modifying core service code:
 
 **New Files:**
-- `Dockerfile.monolithic` - All-in-one container build
-- `docker/monolithic/*` - Configuration files
+- `Dockerfile.lite` - All-in-one container build
+- `docker/lite/*` - Configuration files
 - `services/bot-manager/app/orchestrators/process.py` - Process-based bot spawner
 
 **Minimal Modifications:**

@@ -1,5 +1,5 @@
 # =============================================================================
-# Vexa Monolithic - All-in-One Docker Image
+# Vexa Lite - All-in-One Docker Image
 # =============================================================================
 #
 # This Dockerfile creates a single container with all Vexa services:
@@ -14,16 +14,16 @@
 # where Docker socket access is not available.
 #
 # Build:
-#   docker build -f Dockerfile.monolithic -t vexa-monolithic .
+#   docker build -f Dockerfile.lite -t vexa-lite .
 #
 # Run:
 #   docker run -d \
-#     -p 8056:8056 \
-#     -e DATABASE_URL="postgresql://user:pass@host:5432/vexa" \
+#     -p 8056:8056 -p 8057:8057 \
+#     -e REDIS_HOST=your-redis-host \
+#     -e DB_HOST=your-postgres-host \
+#     -e DB_PASSWORD=your-password \
 #     -e ADMIN_API_TOKEN=your-secret-token \
-#     -e REMOTE_TRANSCRIBER_URL="http://localhost:8083/v1/audio/transcriptions" \
-#     -e REMOTE_TRANSCRIBER_API_KEY=your-api-key \
-#     vexa-monolithic
+#     vexa-lite
 #
 # =============================================================================
 
@@ -56,7 +56,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Database clients (for health checks and migrations)
     postgresql-client \
     redis-tools \
-    # Redis server (for monolithic deployment)
+    # Redis server (for internal Redis)
     redis-server \
     # Utilities
     curl \
@@ -86,11 +86,11 @@ RUN mkdir -p \
 # -----------------------------------------------------------------------------
 
 # Copy requirements files first
-COPY docker/monolithic/requirements-monolithic.txt /tmp/requirements-monolithic.txt
+COPY docker/lite/requirements-lite.txt /tmp/requirements-lite.txt
 COPY services/WhisperLive/requirements/server.txt /tmp/requirements-whisperlive.txt
 
 # Install consolidated Python dependencies for all services
-RUN pip3 install --no-cache-dir -r /tmp/requirements-monolithic.txt
+RUN pip3 install --no-cache-dir -r /tmp/requirements-lite.txt
 
 # WhisperLive dependencies (CPU version)
 # Note: openai-whisper and onnxruntime GPU versions are excluded
@@ -163,10 +163,10 @@ WORKDIR /app
 # -----------------------------------------------------------------------------
 
 # Supervisor configuration
-COPY docker/monolithic/supervisord.conf /etc/supervisor/conf.d/vexa.conf
+COPY docker/lite/supervisord.conf /etc/supervisor/conf.d/vexa.conf
 
 # Entrypoint script
-COPY docker/monolithic/entrypoint.sh /entrypoint.sh
+COPY docker/lite/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # -----------------------------------------------------------------------------
@@ -181,8 +181,7 @@ ENV ORCHESTRATOR=process \
 
 # WhisperLive configuration
 ENV WHISPER_LIVE_URL=ws://localhost:9090 \
-    DEVICE_TYPE=remote \
-    WHISPER_BACKEND=remote \
+    DEVICE_TYPE=cpu \
     WHISPER_MODEL_SIZE=tiny \
     CONSUL_ENABLE=false
 
@@ -200,14 +199,9 @@ ENV DB_HOST=localhost \
     DB_NAME=vexa \
     DB_USER=postgres
 
-# Redis defaults (for internal Redis server)
+# Redis defaults (should be overridden)
 ENV REDIS_HOST=localhost \
-    REDIS_PORT=6379 \
-    REDIS_PASSWORD=""
-
-# Remote transcription defaults
-ENV REMOTE_TRANSCRIBER_MODEL="whisper-1" \
-    REMOTE_TRANSCRIBER_TEMPERATURE="0"
+    REDIS_PORT=6379
 
 # -----------------------------------------------------------------------------
 # Ports
