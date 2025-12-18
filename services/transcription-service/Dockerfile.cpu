@@ -10,10 +10,7 @@ WORKDIR /app
 
 # Copy requirements and install
 COPY requirements.txt .
-# Install PyTorch CPU version (required by faster-whisper)
-# Use pip install without CUDA support for CPU-only
-RUN pip3 install --no-cache-dir torch==2.1.0+cpu torchvision==0.16.0+cpu torchaudio==2.1.0+cpu --index-url https://download.pytorch.org/whl/cpu || \
-    pip3 install --no-cache-dir torch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0
+# faster-whisper uses CTranslate2 which has CPU support built-in (no PyTorch needed)
 RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Copy application

@@ -142,4 +142,5 @@ test_data/
 *.webm
 *.mp4
 *.txt
+!**/requirements.txt
 manifest.csv
