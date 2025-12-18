@@ -1,0 +1,82 @@
+version: '3.8'
+
+# CPU-only version for testing without GPU
+services:
+  # Nginx load balancer
+  transcription-api:
+    image: nginx:alpine
+    container_name: transcription-lb-cpu
+    ports:
+      - "8083:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - transcription-worker-1
+      - transcription-worker-2
+      - transcription-worker-3
+    restart: unless-stopped
+    networks:
+      - transcription-net
+      - vexa-network
+
+  # Worker 1 (CPU)
+  transcription-worker-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.cpu
+    container_name: transcription-worker-1-cpu
+    environment:
+      - WORKER_ID=1
+      - MODEL_SIZE=${MODEL_SIZE:-medium}
+      - DEVICE=cpu
+      - COMPUTE_TYPE=int8
+      - CPU_THREADS=${CPU_THREADS:-0}
+    volumes:
+      - ./models:/app/models
+    restart: unless-stopped
+    networks:
+      - transcription-net
+
+  # Worker 2 (CPU)
+  transcription-worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.cpu
+    container_name: transcription-worker-2-cpu
+    environment:
+      - WORKER_ID=2
+      - MODEL_SIZE=${MODEL_SIZE:-medium}
+      - DEVICE=cpu
+      - COMPUTE_TYPE=int8
+      - CPU_THREADS=${CPU_THREADS:-0}
+    volumes:
+      - ./models:/app/models
+    restart: unless-stopped
+    networks:
+      - transcription-net
+
+  # Worker 3 (CPU)
+  transcription-worker-3:
+    build:
+      context: .
+      dockerfile: Dockerfile.cpu
+    container_name: transcription-worker-3-cpu
+    environment:
+      - WORKER_ID=3
+      - MODEL_SIZE=${MODEL_SIZE:-medium}
+      - DEVICE=cpu
+      - COMPUTE_TYPE=int8
+      - CPU_THREADS=${CPU_THREADS:-0}
+    volumes:
+      - ./models:/app/models
+    restart: unless-stopped
+    networks:
+      - transcription-net
+
+networks:
+  transcription-net:
+    driver: bridge
+  vexa-network:
+    external: true
+    name: vexa-network
+
