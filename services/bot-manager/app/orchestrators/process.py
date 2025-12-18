@@ -1,7 +1,7 @@
 """Process orchestrator implementation.
 
 This module provides an alternative orchestrator that spawns bots as child
-Node.js processes instead of Docker containers. Designed for monolithic
+Node.js processes instead of Docker containers. Designed for Lite
 (all-in-one) deployments where Docker socket access is unavailable.
 
 Activate with ORCHESTRATOR=process environment variable.
@@ -41,7 +41,7 @@ BOT_SCRIPT_PATH = os.getenv("BOT_SCRIPT_PATH", "/app/vexa-bot/dist/docker.js")
 # Working directory for the bot process
 BOT_WORKING_DIR = os.getenv("BOT_WORKING_DIR", "/app/vexa-bot")
 
-# WhisperLive URL (direct connection, no Traefik in monolithic mode)
+# WhisperLive URL (direct connection, no Traefik in Lite mode)
 WHISPER_LIVE_URL = os.getenv("WHISPER_LIVE_URL", "ws://localhost:9090")
 
 # Redis URL from environment
@@ -53,7 +53,7 @@ PROCESS_LOGS_DIR = os.getenv("PROCESS_LOGS_DIR", "/var/log/vexa-bots")
 # X11 display for headless browser
 DISPLAY = os.getenv("DISPLAY", ":99")
 
-# Bot manager callback URL (localhost in monolithic mode)
+# Bot manager callback URL (localhost in Lite mode)
 BOT_CALLBACK_BASE_URL = os.getenv("BOT_CALLBACK_BASE_URL", "http://localhost:8080")
 
 # ---------------------------------------------------------------------------

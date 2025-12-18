@@ -1,8 +1,8 @@
 #!/bin/bash
 # =============================================================================
-# Vexa Monolithic - Container Entrypoint
+# Vexa Lite - Container Entrypoint
 # =============================================================================
-# This script initializes the monolithic Vexa container:
+# This script initializes the Vexa Lite container:
 # 1. Waits for external services (PostgreSQL, Redis)
 # 2. Runs database migrations
 # 3. Starts all services via supervisord
@@ -11,7 +11,7 @@
 set -e
 
 echo "=============================================="
-echo "  Vexa Monolithic - Starting Container"
+echo "  Vexa Lite - Starting Container"
 echo "=============================================="
 echo ""
 
@@ -103,7 +103,17 @@ else
     export DB_NAME="${DB_HOSTPORTDB#*/}"
     export DB_HOST="${DB_HOSTPORT%%:*}"
     export DB_PORT="${DB_HOSTPORT#*:}"
+    
+    # Extract sslmode from DATABASE_URL if present
+    if [[ "$DATABASE_URL" == *"sslmode="* ]]; then
+        SSL_MODE_PARAM="${DATABASE_URL##*sslmode=}"
+        SSL_MODE_PARAM="${SSL_MODE_PARAM%%&*}"
+        export DB_SSL_MODE="$SSL_MODE_PARAM"
+    fi
 fi
+
+# Export DB_SSL_MODE: use provided value or default to "disable"
+export DB_SSL_MODE="${DB_SSL_MODE:-disable}"
 
 export LOG_LEVEL="${LOG_LEVEL:-info}"
 export DEVICE_TYPE="${DEVICE_TYPE:-remote}"
@@ -114,6 +124,7 @@ export DISPLAY="${DISPLAY:-:99}"
 echo "Configuration:"
 echo "  - Redis URL: ${REDIS_URL}"
 echo "  - Database URL: ${DATABASE_URL}"
+echo "  - Database SSL Mode: ${DB_SSL_MODE}"
 echo "  - Whisper Model: ${WHISPER_MODEL_SIZE}"
 echo "  - Device Type: ${DEVICE_TYPE}"
 echo "  - Log Level: ${LOG_LEVEL}"
@@ -261,6 +272,150 @@ if [ -f "/app/vexa-bot/dist/docker.js" ]; then
 else
     echo "  WARNING: Bot script not found!"
     echo "  Bot functionality may not work properly"
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Verify Database Connection
+# -----------------------------------------------------------------------------
+
+echo "Verifying database connection..."
+if pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -q 2>/dev/null; then
+    # Test actual database connection with a simple query
+    if PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
+        -c "SELECT 1;" >/dev/null 2>&1; then
+        echo "  ✅ Database connection successful"
+    else
+        echo "  ❌ ERROR: Cannot connect to database '$DB_NAME'"
+        echo "     Connection parameters: $DB_USER@$DB_HOST:$DB_PORT"
+        echo "     Please verify DATABASE_URL and database credentials"
+        exit 1
+    fi
+else
+    echo "  ❌ ERROR: PostgreSQL server at $DB_HOST:$DB_PORT is not reachable"
+    echo "     Please ensure PostgreSQL is running and accessible"
+    exit 1
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Verify Transcription Service
+# -----------------------------------------------------------------------------
+
+echo "Verifying transcription service..."
+TRANSCRIBER_URL="${TRANSCRIBER_URL:-${REMOTE_TRANSCRIBER_URL:-}}"
+if [ -z "$TRANSCRIBER_URL" ]; then
+    echo "  ❌ ERROR: TRANSCRIBER_URL (or REMOTE_TRANSCRIBER_URL) is not set"
+    echo "     This is required for transcription functionality"
+    exit 1
+fi
+
+TRANSCRIBER_API_KEY="${TRANSCRIBER_API_KEY:-${REMOTE_TRANSCRIBER_API_KEY:-}}"
+if [ -z "$TRANSCRIBER_API_KEY" ]; then
+    echo "  ❌ ERROR: TRANSCRIBER_API_KEY (or REMOTE_TRANSCRIBER_API_KEY) is not set"
+    echo "     This is required for transcription service authentication"
+    exit 1
+fi
+
+# Extract base URL (remove path)
+# Handle both http://host:port/path and https://host:port/path
+if [[ "$TRANSCRIBER_URL" =~ ^(https?://[^/]+) ]]; then
+    BASE_URL="${BASH_REMATCH[1]}"
+else
+    echo "  ❌ ERROR: Invalid TRANSCRIBER_URL format: $TRANSCRIBER_URL"
+    echo "     Expected format: http://host:port/path or https://host:port/path"
+    exit 1
+fi
+
+# Use curl to check service availability and API key
+if ! command -v curl >/dev/null 2>&1; then
+    echo "  ❌ ERROR: curl is not available - cannot verify transcription service"
+    echo "     URL configured: $TRANSCRIBER_URL"
+    exit 1
+fi
+
+# Try health endpoint first (usually doesn't require auth, but we'll try with auth too)
+HEALTH_URL="${BASE_URL}/health"
+if [[ "$TRANSCRIBER_URL" == *"/health"* ]]; then
+    HEALTH_URL="$TRANSCRIBER_URL"
+fi
+
+# Check if service is reachable (try health endpoint without auth first)
+SERVICE_REACHABLE=false
+if curl -s -f --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; then
+    SERVICE_REACHABLE=true
+elif curl -s -f --max-time 5 "$BASE_URL" >/dev/null 2>&1; then
+    SERVICE_REACHABLE=true
+fi
+
+if [ "$SERVICE_REACHABLE" = "false" ]; then
+    echo "  ❌ ERROR: Cannot reach transcription service at $BASE_URL"
+    echo "     Please ensure the transcription service is running and accessible"
+    exit 1
+fi
+
+# Verify API key by making an authenticated request
+# Try health endpoint with auth, or if that fails, try a minimal API call
+API_KEY_VALID=false
+HTTP_CODE=0
+
+# Try health endpoint with Authorization header
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
+    -H "Authorization: Bearer ${TRANSCRIBER_API_KEY}" \
+    "$HEALTH_URL" 2>/dev/null)
+
+# Health endpoint might not require auth, so check if we get 200 or 401/403
+if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
+    # If we get 401/403, it means service is reachable but auth might be required
+    # If we get 200, service is working
+    API_KEY_VALID=true
+fi
+
+# If health endpoint doesn't validate auth, try the actual transcription endpoint
+# Send a minimal valid request to verify API key
+if [ "$API_KEY_VALID" = "false" ] || [ "$HTTP_CODE" = "200" ]; then
+    # Create a minimal test file for the request
+    TEST_FILE=$(mktemp)
+    echo "test" > "$TEST_FILE"
+    
+    # Try a minimal request to the transcription endpoint to verify API key
+    # We expect either 200 (success) or 400/422 (bad request, but auth passed)
+    # vs 401/403 (auth failed) or connection error
+    TRANS_RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" --max-time 5 \
+        -X POST \
+        -H "Authorization: Bearer ${TRANSCRIBER_API_KEY}" \
+        -F "file=@${TEST_FILE}" \
+        -F "model=test" \
+        "$TRANSCRIBER_URL" 2>/dev/null)
+    
+    TRANS_HTTP_CODE=$(echo "$TRANS_RESPONSE" | grep "HTTP_CODE" | cut -d: -f2)
+    TRANS_BODY=$(echo "$TRANS_RESPONSE" | grep -v "HTTP_CODE")
+    
+    # Clean up temp file
+    rm -f "$TEST_FILE"
+    
+    # If we get 400/422, check if it's an auth error or just invalid request
+    if [ "$TRANS_HTTP_CODE" = "401" ] || [ "$TRANS_HTTP_CODE" = "403" ]; then
+        echo "  ❌ ERROR: Invalid transcription service API key"
+        echo "     Please verify TRANSCRIBER_API_KEY is correct"
+        exit 1
+    elif echo "$TRANS_BODY" | grep -qi "invalid.*token\|invalid.*api.*key\|forbidden\|unauthorized"; then
+        echo "  ❌ ERROR: Invalid transcription service API key"
+        echo "     Please verify TRANSCRIBER_API_KEY is correct"
+        exit 1
+    elif [ "$TRANS_HTTP_CODE" = "400" ] || [ "$TRANS_HTTP_CODE" = "422" ] || [ "$TRANS_HTTP_CODE" = "200" ]; then
+        # 400/422 with invalid request format is OK - means auth passed
+        # 200 means success
+        API_KEY_VALID=true
+    fi
+fi
+
+if [ "$API_KEY_VALID" = "true" ]; then
+    echo "  ✅ Transcription service is reachable and API key is valid"
+else
+    echo "  ❌ ERROR: Cannot verify transcription service API key"
+    echo "     Service is reachable but authentication verification failed"
+    exit 1
 fi
 echo ""
 

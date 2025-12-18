@@ -6,7 +6,7 @@ based on the ORCHESTRATOR environment variable.
 Supported orchestrators:
 - docker (default): Uses Docker socket to spawn bot containers
 - nomad: Uses HashiCorp Nomad to dispatch parameterized jobs
-- process: Spawns bots as local Node.js processes (for monolithic deployments)
+- process: Spawns bots as local Node.js processes (for Lite deployments)
 """
 import os
 import importlib
