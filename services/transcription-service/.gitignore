@@ -1,0 +1,32 @@
+# Models and assets
+models/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Environment
+.env
+.env.local
+
+# Test files (keep test audio in tests/ folder)
+tests/temp_*.mp3
+tests/*.mp3
+# Keep tests/test_audio.wav - it's needed for testing

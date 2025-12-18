@@ -1,0 +1,131 @@
+version: '3.8'
+
+services:
+  # Nginx load balancer - Single entry point
+  transcription-api:
+    image: nginx:alpine
+    container_name: transcription-lb
+    ports:
+      - "8083:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - transcription-worker-1
+      - transcription-worker-2
+      - transcription-worker-3
+    restart: unless-stopped
+    networks:
+      - transcription-net
+      - vexa-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/lb-status"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Worker 1
+  transcription-worker-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: transcription-worker-1
+    environment:
+      - WORKER_ID=1
+      - MODEL_SIZE=${MODEL_SIZE:-large-v3-turbo}
+      - DEVICE=${DEVICE:-cuda}
+      - COMPUTE_TYPE=${COMPUTE_TYPE:-int8}
+      - CPU_THREADS=${CPU_THREADS:-0}
+      - API_TOKEN=${API_TOKEN:-}
+    volumes:
+      - ./models:/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    networks:
+      - transcription-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Worker 2
+  transcription-worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: transcription-worker-2
+    environment:
+      - WORKER_ID=2
+      - MODEL_SIZE=${MODEL_SIZE:-large-v3-turbo}
+      - DEVICE=${DEVICE:-cuda}
+      - COMPUTE_TYPE=${COMPUTE_TYPE:-int8}
+      - CPU_THREADS=${CPU_THREADS:-0}
+      - API_TOKEN=${API_TOKEN:-}
+    volumes:
+      - ./models:/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    networks:
+      - transcription-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Worker 3
+  transcription-worker-3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: transcription-worker-3
+    environment:
+      - WORKER_ID=3
+      - MODEL_SIZE=${MODEL_SIZE:-large-v3-turbo}
+      - DEVICE=${DEVICE:-cuda}
+      - COMPUTE_TYPE=${COMPUTE_TYPE:-int8}
+      - CPU_THREADS=${CPU_THREADS:-0}
+      - API_TOKEN=${API_TOKEN:-}
+    volumes:
+      - ./models:/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    networks:
+      - transcription-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+networks:
+  transcription-net:
+    driver: bridge
+  vexa-network:
+    external: true
+    name: vexa-network
+
+volumes:
+  models:
+

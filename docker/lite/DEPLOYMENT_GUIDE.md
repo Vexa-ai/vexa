@@ -19,6 +19,79 @@ Transcription service: you can self host the service or just grab an API key fro
 
 The full Docker Compose Vexa deployment is available as well, though significantly updated with transcription moved to a separate service.
 
+
+YOu can run with 
+
+- local transcription
+- remote transcription
+
+- local database
+- remote database
+
+
+1. remote trnascription / local database
+
+docker network create vexa-network
+
+docker run -d \
+  --name vexa-postgres\
+  --network vexa-network \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=testpass \
+  -e POSTGRES_DB=vexa \
+  -p 5432:5432 \
+  -v postgres-test-data:/var/lib/postgresql \
+  --restart unless-stopped \
+  postgres:latest
+
+
+docker run -d \
+  --name vexa \
+  --network vexa-network \
+  -p 8060:8056 \
+  -e DATABASE_URL="postgresql://postgres:testpass@vexa-postgres:5432/vexa" \
+  -e ADMIN_API_TOKEN="test-token" \
+  -e TRANSCRIBER_URL="https://transcription-gateway.dev.vexa.ai/v1/audio/transcriptions" \
+  -e TRANSCRIBER_API_KEY="cczM1VUk7FXaw6EwMrwMVdTwhqIiYAdmFVvUG1uF" \
+  vexa-lite:latest
+
+
+
+  2. remote trnanscription / remote database
+
+
+  docker run -d --name vexa-supabase -p 8060:8056 -e DATABASE_URL="postgresql://postgres.fghfjzpqncuawqurtxwb:FRkb3ff6SQPsw4rE@aws-1-eu-west-1.pooler.supabase.com:5432/postgres" -e DB_SSL_MODE="require" -e ADMIN_API_TOKEN="test-token" -e TRANSCRIBER_URL="https://transcription-gateway.dev.vexa.ai/v1/audio/transcriptions" -e TRANSCRIBER_API_KEY="cczM1VUk7FXaw6EwMrwMVdTwhqIiYAdmFVvUG1uF" vexa-lite:latest
+
+
+
+
+
+  3. local transcription / local database
+
+  docker network create vexa-network
+
+cd vexa/services/transcription-service/
+(base) dima@bbb:~/dev/vexa/services/transcription-service$ docker compose up -d
+
+
+docker run -d \
+  --name vexa \
+  --network vexa-network \
+  --add-host=host.docker.internal:host-gateway \
+  -p 8060:8056 \
+  -e DATABASE_URL="postgresql://postgres:testpass@vexa-postgres:5432/vexa" \
+  -e ADMIN_API_TOKEN="test-token" \
+  -e TRANSCRIBER_URL="http://host.docker.internal:8083/v1/audio/transcriptions" \
+  -e TRANSCRIBER_API_KEY="transcription_service_secret_token_12345" \
+  vexa-lite:latest
+
+
+
+
+
+
+
+
 ## 1. Get Transcription API Key
 
 ### Option A: Use Hosted Service
