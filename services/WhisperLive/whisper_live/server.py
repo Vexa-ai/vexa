@@ -627,12 +627,16 @@ class TranscriptionServer:
             f"stall={self.server_speaker_no_tx_stall_s}s, speaker_window={self.speaker_active_window_s}s, warmup={self.server_warmup_s}s"
         )
 
-        # --- Capacity configuration (WL_MAX_CLIENTS, default 10) ---
-        try:
-            self.config_max_clients = int(os.getenv("WL_MAX_CLIENTS", "10"))
-        except Exception:
-            self.config_max_clients = 10
-        logging.info(f"CONFIG: max_clients set to {self.config_max_clients} (env WL_MAX_CLIENTS)")
+        # --- Capacity configuration (WL_MAX_CLIENTS, default 10, or 1000 for remote mode) ---
+        is_remote = os.getenv("WHISPER_BACKEND", "").lower() == "remote" or os.getenv("REMOTE_TRANSCRIBER_MODEL")
+        if is_remote:
+            self.config_max_clients = 1000
+        else:
+            try:
+                self.config_max_clients = int(os.getenv("WL_MAX_CLIENTS", "10"))
+            except Exception:
+                self.config_max_clients = 10
+        logging.info(f"CONFIG: max_clients={self.config_max_clients} (remote_mode={is_remote})")
 
         # --- WL discovery / addressing ---
         self._wl_redis = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"), decode_responses=True)
@@ -1104,6 +1108,12 @@ class TranscriptionServer:
         self.trt_multilingual = trt_multilingual
         self.single_model = single_model
         self.server_options = server_options or {}
+        
+        # Remote mode always overrides to 1000, regardless of env var
+        if self.backend.is_remote():
+            self.config_max_clients = 1000
+            wl_max_clients_env = os.getenv("WL_MAX_CLIENTS")
+            logging.info(f"CONFIG: Updated max_clients to 1000 for remote backend (overriding WL_MAX_CLIENTS={wl_max_clients_env if wl_max_clients_env else 'not set'})")
 
         # For the health check, we need to know if Redis is being used.
         # This is inferred from the presence of the REDIS_STREAM_URL env var.
