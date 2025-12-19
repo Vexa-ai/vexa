@@ -24,108 +24,40 @@ You can configure Vexa Lite with different combinations of database and transcri
 
 ---
 
-## Step 1: Choose Transcription Service
-
-### Option A: Use Hosted Transcription Service (Recommended)
-
-Get your API key from [vexa.ai](https://vexa.ai):
-
-- `TRANSCRIBER_URL`: `https://transcription.vexa.ai/v1/audio/transcriptions`
-- `TRANSCRIBER_API_KEY`: Your API key from vexa.ai
-
-**Benefits:** GPU-free, better scalability, managed infrastructure
-
-### Option B: Self-Host Transcription Service
-
-Run the transcription service locally for on-premise data processing:
-
-See [services/transcription-service/README.md](../services/transcription-service/README.md) for setup instructions.
-
-- `TRANSCRIBER_URL`: `http://host.docker.internal:8083/v1/audio/transcriptions` (when running locally)
-- `TRANSCRIBER_API_KEY`: Your transcription service API key
-
-**Benefits:** Complete data sovereignty, all processing on-premise
-
----
-
-## Step 2: Choose Database
-
-### Option A: Use Hosted Database (Recommended for Production)
-
-#### Using Supabase
-
-1. Create a project at [supabase.com](https://supabase.com)
-2. Go to **Settings** → **Database**
-3. Copy the connection pooler URL
-
-Example connection string format:
-```
-postgresql://postgres.your_project_id:password@aws-0-us-west-2.pooler.supabase.com:5432/postgres
-```
-
-Set `DATABASE_URL` to your connection string and `DB_SSL_MODE=require`.
-
-**Benefits:** Managed backups, high availability, production-ready
-
-### Option B: Run Local PostgreSQL
-
-Perfect for development or when you need everything on-premise:
-
-```bash
-# Create network (if not exists)
-docker network create vexa-network 2>/dev/null || true
-
-# Start PostgreSQL
-docker run -d \
-  --name vexa-postgres \
-  --network vexa-network \
-  -e POSTGRES_USER=postgres \
-  -e POSTGRES_PASSWORD=your_password \
-  -e POSTGRES_DB=vexa \
-  -p 5432:5432 \
-  postgres:latest
-```
-
-Connection string: `postgresql://postgres:your_password@vexa-postgres:5432/vexa`
-
-**Note:** When using local PostgreSQL, Vexa container must be on the same Docker network (`vexa-network`).
-
-**Benefits:** Faster start, no external dependencies, full control
-
----
-
-## Step 3: Run Vexa Lite Container
-
-### Basic Example
-
-```bash
-docker run -d \
-  --name vexa \
-  -p 8056:8056 \
-  -e DATABASE_URL="postgresql://user:pass@host:5432/vexa" \
-  -e ADMIN_API_TOKEN="your-secret-admin-token" \
-  -e TRANSCRIBER_URL="https://transcription.example.com/v1/audio/transcriptions" \
-  -e TRANSCRIBER_API_KEY="token" \
-  vexaai/vexa-lite:latest
-```
-
-**API available at:** `http://localhost:8056`
-
----
-
 ## Complete Setup Examples
 
 ### Example 1: Remote Database + Remote Transcription
 
 **Best for:** Production deployments, fastest setup
 
+**Pros:** `gpu-free` `serverless ready` `managed backups` `production ready` `scalable` 
+
+**Cons:** `external services` `ongoing costs`
+
+**Setup steps:**
+
+1. **Create Supabase database:**
+   - Create a new project at [supabase.com](https://supabase.com)
+   - On the project page, click **Connect** button
+   - Select method: **Session pooler**
+   - Copy your connection string (example format):
+     ```
+     postgresql://postgres.your_project_id:[YOUR-PASSWORD]@aws-1-eu-west-1.pooler.supabase.com:5432/postgres
+     ```
+   - Replace `[YOUR-PASSWORD]` with your actual database password
+
+2. **Get transcription API key:**
+   - Get your API key from [vexa.ai](https://vexa.ai)
+   - `TRANSCRIBER_URL` = `https://transcription.vexa.ai/v1/audio/transcriptions`
+
+3. **Run Vexa Lite:**
 ```bash
 docker run -d \
   --name vexa \
   -p 8056:8056 \
   -e DATABASE_URL="postgresql://postgres.your_project_id:password@aws-0-us-west-2.pooler.supabase.com:5432/postgres" \
   -e DB_SSL_MODE="require" \
-  -e ADMIN_API_TOKEN="your-secret-admin-token" \
+  -e ADMIN_API_TOKEN="your-admin-token" \
   -e TRANSCRIBER_URL="https://transcription.vexa.ai/v1/audio/transcriptions" \
   -e TRANSCRIBER_API_KEY="your-api-key" \
   vexaai/vexa-lite:latest
@@ -137,11 +69,19 @@ docker run -d \
 
 **Best for:** Development, quick testing
 
-```bash
-# 1. Create network
-docker network create vexa-network
+**Pros:** `gpu free` `fast start`  `dev friendly` `lower cost`
 
-# 2. Start PostgreSQL
+**Cons:** `no managed backups` `external transcription` `local db management`
+
+**Setup steps:**
+
+1. **Create network:**
+```bash
+docker network create vexa-network
+```
+
+2. **Start PostgreSQL:**
+```bash
 docker run -d \
   --name vexa-postgres \
   --network vexa-network \
@@ -150,18 +90,26 @@ docker run -d \
   -e POSTGRES_DB=vexa \
   -p 5432:5432 \
   postgres:latest
+```
 
-# 3. Start Vexa Lite
+3. **Get transcription API key:**
+   - Get your API key from [vexa.ai](https://vexa.ai)
+   - `TRANSCRIBER_URL` = `https://transcription.vexa.ai/v1/audio/transcriptions`
+
+4. **Run Vexa Lite:**
+```bash
 docker run -d \
   --name vexa \
   --network vexa-network \
   -p 8056:8056 \
   -e DATABASE_URL="postgresql://postgres:your_password@vexa-postgres:5432/vexa" \
-  -e ADMIN_API_TOKEN="your-secret-admin-token" \
+  -e ADMIN_API_TOKEN="your-admin-token" \
   -e TRANSCRIBER_URL="https://transcription.vexa.ai/v1/audio/transcriptions" \
   -e TRANSCRIBER_API_KEY="your-api-key" \
   vexaai/vexa-lite:latest
 ```
+
+**Note:** Vexa container must use `--network vexa-network` to connect to local PostgreSQL.
 
 ---
 
@@ -169,19 +117,37 @@ docker run -d \
 
 **Best for:** Maximum privacy with managed database
 
+**Pros:** `managed backups` `high availability` `on premise transcription` `production db`
+
+**Cons:** `gpu required` `complex setup` `transcription management`
+
+**Setup steps:**
+
+1. **Create Supabase database:**
+   - Create a new project at [supabase.com](https://supabase.com)
+   - On the project page, click **Connect** button
+   - Select method: **Session pooler**
+   - Copy your connection string (example format):
+     ```
+     postgresql://postgres.your_project_id:[YOUR-PASSWORD]@aws-1-eu-west-1.pooler.supabase.com:5432/postgres
+     ```
+   - Replace `[YOUR-PASSWORD]` with your actual database password
+
+2. **Start transcription service:**
 ```bash
-# 1. Start transcription service (see services/transcription-service/README.md)
 cd services/transcription-service/
 docker compose -f docker-compose.cpu.yml up -d
+```
 
-# 2. Start Vexa Lite
+3. **Run Vexa Lite:**
+```bash
 docker run -d \
   --name vexa \
   --add-host=host.docker.internal:host-gateway \
   -p 8056:8056 \
   -e DATABASE_URL="postgresql://postgres.your_project_id:password@aws-0-us-west-2.pooler.supabase.com:5432/postgres" \
   -e DB_SSL_MODE="require" \
-  -e ADMIN_API_TOKEN="your-secret-admin-token" \
+  -e ADMIN_API_TOKEN="your-admin-token" \
   -e TRANSCRIBER_URL="http://host.docker.internal:8083/v1/audio/transcriptions" \
   -e TRANSCRIBER_API_KEY="your-transcription-api-key" \
   vexaai/vexa-lite:latest
@@ -195,11 +161,19 @@ docker run -d \
 
 **Best for:** Complete self-hosting, full data sovereignty
 
-```bash
-# 1. Create network
-docker network create vexa-network
+**Pros:** `data sovereignty` `no external deps` `full control`
 
-# 2. Start PostgreSQL
+**Cons:** `gpu required` `self maintenance` `complex setup` `higher infra`
+
+**Setup steps:**
+
+1. **Create network:**
+```bash
+docker network create vexa-network
+```
+
+2. **Start PostgreSQL:**
+```bash
 docker run -d \
   --name vexa-postgres \
   --network vexa-network \
@@ -208,23 +182,29 @@ docker run -d \
   -e POSTGRES_DB=vexa \
   -p 5432:5432 \
   postgres:latest
+```
 
-# 3. Start transcription service (see services/transcription-service/README.md)
+3. **Start transcription service:**
+```bash
 cd services/transcription-service/
 docker compose -f docker-compose.cpu.yml up -d
+```
 
-# 4. Start Vexa Lite
+4. **Run Vexa Lite:**
+```bash
 docker run -d \
   --name vexa \
   --network vexa-network \
   --add-host=host.docker.internal:host-gateway \
   -p 8056:8056 \
   -e DATABASE_URL="postgresql://postgres:your_password@vexa-postgres:5432/vexa" \
-  -e ADMIN_API_TOKEN="your-secret-admin-token" \
+  -e ADMIN_API_TOKEN="your-admin-token" \
   -e TRANSCRIBER_URL="http://host.docker.internal:8083/v1/audio/transcriptions" \
   -e TRANSCRIBER_API_KEY="your-transcription-api-key" \
   vexaai/vexa-lite:latest
 ```
+
+**Note:** Vexa container must use `--network vexa-network` to connect to local PostgreSQL, and `--add-host=host.docker.internal:host-gateway` to access the transcription service.
 
 ---
 
@@ -242,6 +222,6 @@ docker run -d \
 
 ## Next Steps
 
-- Get your API key: See [docs/self-hosted-management.md](self-hosted-management.md)
+
 - Test the deployment: Follow `nbs/0_basic_test.ipynb`
-- Full Docker Compose setup: See [docs/deployment.md](deployment.md)
+

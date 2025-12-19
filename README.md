@@ -84,32 +84,30 @@ Just grab your API key at [https://vexa.ai/dashboard/api-keys](https://vexa.ai/d
 
 ### Option 2: Self-host with Lite Container (Single Container, No GPU)
 
+Compact Vexa that depends on external database and transcription service.
+
 ```bash
 docker run -d \
   --name vexa \
   -p 8056:8056 \
-  -e DATABASE_URL="postgresql://user:pass@host:5432/vexa" \
-  -e ADMIN_API_TOKEN="your-secret-admin-token" \
-  -e TRANSCRIBER_URL="https://transcription.example.com/v1/audio/transcriptions" \
-  -e TRANSCRIBER_API_KEY="token" \
+  -e DATABASE_URL="postgresql://user:pass@host/vexa" \
+  -e ADMIN_API_TOKEN="your-admin-token" \
+  -e TRANSCRIBER_URL="https://transcription.service" \
+  -e TRANSCRIBER_API_KEY="transcriber-token" \
   vexaai/vexa-lite:latest
 ```
 
 **Deployment options:** Mix and match based on your needs:
 
 **Transcription service:**
-
-1. Get [API key for hosted transcription service](https://vexa.ai) (faster, GPU-free)
-   or
-2. [Self-host transcription service](services/transcription-service/README.md)
+- **Get API key for hosted transcription service** (faster, GPU-free)
+- **Self-host transcription service** (process data on-premise)
 
 **Database:**
+- **Connect remote database** (Good practice for production)
+- **Setup local database** (Faster start)
 
-1. [Connect remote database](docker/lite/DEPLOYMENT_GUIDE.md#option-a-use-hosted-database) — Good practice for production
-   or
-2. [Setup local database](docker/lite/DEPLOYMENT_GUIDE.md#option-b-run-local-postgresql) (Faster start)
-
-📖 **For detailed setup instructions and examples for each configuration**, see [docker/lite/DEPLOYMENT_GUIDE.md](docker/lite/DEPLOYMENT_GUIDE.md)
+📖 **For complete setup examples with all 4 configurations**, see [docs/vexa-lite-deployment.md#complete-setup-examples](docs/vexa-lite-deployment.md#complete-setup-examples)
 
 ### Option 3: Self-host with Docker Compose
 
