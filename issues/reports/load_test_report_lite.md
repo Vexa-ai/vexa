@@ -2,6 +2,8 @@
 
 **Based on load testing:** December 18, 2025
 
+**Test Configuration:** This load testing was performed using the [`docker/lite`](../docker/lite/) deployment configuration. The lite deployment runs all services (API Gateway, Bot Manager, transcription services, and bot processes) within a single container, with bots spawned as Node.js child processes rather than separate Docker containers. See the [`docker/lite/README.md`](../docker/lite/README.md) for deployment details.
+
 ## Observed Scaling Data
 
 | Bots | Total RAM | Chrome RAM | CPU % | Load Avg |
