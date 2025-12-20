@@ -48,7 +48,7 @@ You can configure Vexa Lite with different combinations of database and transcri
 
 2. **Get transcription API key:**
 
-   - Get your API key from [https://staging.vexa.ai/dashboard/trasncription](https://staging.vexa.ai/dashboard/trasncription)
+   - Get your API key from [https://staging.vexa.ai/dashboard/transcription](https://staging.vexa.ai/dashboard/transcription)
    - `TRANSCRIBER_URL` = `https://transcription.vexa.ai/v1/audio/transcriptions`
 
 3. **Run Vexa Lite:**
@@ -94,7 +94,7 @@ docker run -d \
 ```
 
 3. **Get transcription API key:**
-   - Get your API key from [https://staging.vexa.ai/dashboard/trasncription](https://staging.vexa.ai/dashboard/trasncription)
+   - Get your API key from [https://staging.vexa.ai/dashboard/transcription](https://staging.vexa.ai/dashboard/transcription)
    - `TRANSCRIBER_URL` = `https://transcription.vexa.ai/v1/audio/transcriptions`
 
 4. **Run Vexa Lite:**
