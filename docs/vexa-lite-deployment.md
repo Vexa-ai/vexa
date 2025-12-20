@@ -139,6 +139,8 @@ cd services/transcription-service/
 docker compose -f docker-compose.cpu.yml up -d
 ```
 
+   For detailed setup instructions, configuration options, and troubleshooting, see [`services/transcription-service/README.md`](../services/transcription-service/README.md).
+
 3. **Run Vexa Lite:**
 ```bash
 docker run -d \
@@ -189,6 +191,8 @@ docker run -d \
 cd services/transcription-service/
 docker compose -f docker-compose.cpu.yml up -d
 ```
+
+   For detailed setup instructions, configuration options, and troubleshooting, see [`services/transcription-service/README.md`](../services/transcription-service/README.md).
 
 4. **Run Vexa Lite:**
 ```bash

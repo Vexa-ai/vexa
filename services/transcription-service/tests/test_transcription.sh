@@ -8,6 +8,11 @@ API_URL="${API_URL:-http://localhost:8083}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEST_AUDIO="${TEST_AUDIO:-$SCRIPT_DIR/test_audio.wav}"
 
+# Try to load API_TOKEN from .env file if not set
+if [ -z "$API_TOKEN" ] && [ -f "$SCRIPT_DIR/../.env" ]; then
+    API_TOKEN=$(grep "^API_TOKEN=" "$SCRIPT_DIR/../.env" | cut -d'=' -f2 | tr -d '"' | tr -d "'" | xargs)
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -100,11 +105,18 @@ echo ""
 # Test 4: Transcription API Call
 print_test "Test 4: Transcription API Call"
 print_info "Sending audio file to transcription endpoint..."
-TRANSCRIPTION_RESPONSE=$(curl -s --max-time 90 -X POST "$API_URL/v1/audio/transcriptions" \
-    -F "file=@$TEST_AUDIO" \
-    -F "model=whisper-1" \
-    -F "response_format=verbose_json" \
-    -F "timestamp_granularities=segment" 2>&1)
+
+# Build curl command with API token if available
+CURL_CMD="curl -s --max-time 90 -X POST \"$API_URL/v1/audio/transcriptions\""
+if [ -n "$API_TOKEN" ]; then
+    CURL_CMD="$CURL_CMD -H \"X-API-Key: $API_TOKEN\""
+    print_info "Using API token for authentication"
+else
+    print_info "No API token configured - request may fail if service requires authentication"
+fi
+CURL_CMD="$CURL_CMD -F \"file=@$TEST_AUDIO\" -F \"model=whisper-1\" -F \"response_format=verbose_json\" -F \"timestamp_granularities=segment\""
+
+TRANSCRIPTION_RESPONSE=$(eval $CURL_CMD 2>&1)
 
 if [ -z "$TRANSCRIPTION_RESPONSE" ]; then
     print_fail "Transcription endpoint returned empty response"
