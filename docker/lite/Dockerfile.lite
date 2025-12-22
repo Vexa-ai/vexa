@@ -9,6 +9,7 @@
 # - Transcription Collector
 # - WhisperLive (CPU-based transcription)
 # - Vexa Bot (Node.js/Playwright)
+# - MCP Service (port 18888)
 #
 # Designed for simple deployments on platforms like EasyPanel, Dokploy, etc.
 # where Docker socket access is not available.
@@ -18,7 +19,7 @@
 #
 # Run:
 #   docker run -d \
-#     -p 8056:8056 -p 8057:8057 \
+#     -p 8056:8056 \
 #     -e REDIS_HOST=your-redis-host \
 #     -e DB_HOST=your-postgres-host \
 #     -e DB_PASSWORD=your-password \
@@ -36,7 +37,9 @@ FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS base
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Using --fix-missing to handle transient hash mismatches from Ubuntu repos
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends --fix-missing \
     # Python 3.10+
     python3 \
     python3-pip \
@@ -74,6 +77,7 @@ RUN mkdir -p \
     /app/transcription-collector \
     /app/whisperlive \
     /app/vexa-bot \
+    /app/mcp \
     /app/shared-models \
     /app/alembic \
     /var/log/supervisor \
@@ -88,9 +92,13 @@ RUN mkdir -p \
 # Copy requirements files first
 COPY docker/lite/requirements.txt /tmp/requirements.txt
 COPY services/WhisperLive/requirements/server.txt /tmp/requirements-whisperlive.txt
+COPY services/mcp/requirements.txt /tmp/requirements-mcp.txt
 
 # Install consolidated Python dependencies for all services
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
+
+# MCP service dependencies
+RUN pip3 install --no-cache-dir -r /tmp/requirements-mcp.txt
 
 # WhisperLive dependencies (CPU version)
 # Note: openai-whisper and onnxruntime GPU versions are excluded
@@ -108,7 +116,7 @@ RUN rm -f /tmp/requirements-*.txt
 COPY libs/shared-models /app/shared-models
 
 # Add shared_models to Python path (more reliable than pip install)
-ENV PYTHONPATH="/app/shared-models:${PYTHONPATH}"
+ENV PYTHONPATH="/app/shared-models${PYTHONPATH:+:${PYTHONPATH}}"
 
 # Verify shared_models is importable
 RUN python3 -c "import shared_models; print(f'shared_models found at: {shared_models.__file__}')" \
@@ -132,6 +140,9 @@ COPY services/transcription-collector/ /app/transcription-collector/
 
 # WhisperLive
 COPY services/WhisperLive/ /app/whisperlive/
+
+# MCP Service
+COPY services/mcp/ /app/mcp/
 
 # Alembic migrations
 COPY alembic.ini /app/alembic.ini
@@ -207,11 +218,10 @@ ENV REDIS_HOST=localhost \
 # Ports
 # -----------------------------------------------------------------------------
 
-# API Gateway (main entry point)
+# API Gateway (main entry point - routes all services)
+# Note: Admin API (8057) and MCP Service (18888) are internal only
+# and accessed through the API Gateway at port 8056
 EXPOSE 8056
-
-# Admin API
-EXPOSE 8057
 
 # -----------------------------------------------------------------------------
 # Health Check
