@@ -620,7 +620,7 @@ async def request_bot(
         logger.info(f"Successfully set container ID for meeting {meeting_id}. Status remains 'requested' until bot startup callback.")
 
         logger.info(f"Successfully started bot container {container_id} for meeting {meeting_id}")
-        return MeetingResponse.from_orm(current_meeting_for_bot_launch)
+        return MeetingResponse.model_validate(current_meeting_for_bot_launch)
 
     except HTTPException as http_exc:
         logger.warning(f"HTTPException occurred during bot startup for meeting {meeting_id}: {http_exc.status_code} - {http_exc.detail}")
