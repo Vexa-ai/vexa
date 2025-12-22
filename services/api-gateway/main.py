@@ -29,16 +29,17 @@ load_dotenv()
 ADMIN_API_URL = os.getenv("ADMIN_API_URL")
 BOT_MANAGER_URL = os.getenv("BOT_MANAGER_URL")
 TRANSCRIPTION_COLLECTOR_URL = os.getenv("TRANSCRIPTION_COLLECTOR_URL")
-MCP_URL = os.getenv("MCP_URL", "http://mcp:18888")
+MCP_URL = os.getenv("MCP_URL")
 
 # --- Validation at startup ---
-if not all([ADMIN_API_URL, BOT_MANAGER_URL, TRANSCRIPTION_COLLECTOR_URL]):
+if not all([ADMIN_API_URL, BOT_MANAGER_URL, TRANSCRIPTION_COLLECTOR_URL, MCP_URL]):
     missing_vars = [
         var_name
         for var_name, var_value in {
             "ADMIN_API_URL": ADMIN_API_URL,
             "BOT_MANAGER_URL": BOT_MANAGER_URL,
             "TRANSCRIPTION_COLLECTOR_URL": TRANSCRIPTION_COLLECTOR_URL,
+            "MCP_URL": MCP_URL,
         }.items()
         if not var_value
     ]
