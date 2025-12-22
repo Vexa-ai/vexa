@@ -98,7 +98,9 @@ COPY services/mcp/requirements.txt /tmp/requirements-mcp.txt
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
 
 # MCP service dependencies
-RUN pip3 install --no-cache-dir -r /tmp/requirements-mcp.txt
+# Note: fastapi-mcp requires pydantic>=2.0.0, so we upgrade pydantic here
+RUN pip3 install --no-cache-dir --upgrade pydantic>=2.0.0 && \
+    pip3 install --no-cache-dir -r /tmp/requirements-mcp.txt
 
 # WhisperLive dependencies (CPU version)
 # Note: openai-whisper and onnxruntime GPU versions are excluded

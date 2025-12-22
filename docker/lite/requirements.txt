@@ -64,7 +64,9 @@ aiodocker>=0.21.0
 # -----------------------------------------------------------------------------
 # MCP Service
 # -----------------------------------------------------------------------------
-fastapi-mcp
+# Note: fastapi-mcp is installed separately via requirements-mcp.txt
+# It requires pydantic>=2.0.0, which conflicts with the main requirements
+# that use pydantic v1 for compatibility with the rest of the Vexa codebase
 
 # -----------------------------------------------------------------------------
 # Utilities
