@@ -144,12 +144,9 @@ class RemoteTranscriber:
         # Log masked API key for debugging (first 4 and last 4 chars)
         api_key_masked = f"{self.api_key[:4]}...{self.api_key[-4:]}" if len(self.api_key) > 8 else "***"
         
-        self.model = model or os.getenv("REMOTE_TRANSCRIBER_MODEL")
-        if not self.model:
-            raise ValueError(
-                "Remote transcriber model not provided. Set REMOTE_TRANSCRIBER_MODEL environment variable "
-                "or pass model parameter."
-            )
+        # Model is required by API format but ignored by transcription-service (uses its own MODEL_SIZE)
+        # Default to "default" if not provided
+        self.model = model or os.getenv("REMOTE_TRANSCRIBER_MODEL") or "default"
         
         # Hardcode response format to verbose_json
         self.response_format = "verbose_json"
@@ -265,7 +262,6 @@ class RemoteTranscriber:
                     )
                 
                 response.raise_for_status()
-                
                 # Parse response based on format
                 if self.response_format == "verbose_json" or self.response_format == "json":
                     result = response.json()

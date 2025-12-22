@@ -125,6 +125,15 @@ async def set_user_webhook(
     db.add(user)
     await db.commit()
     await db.refresh(user)
+    
+    # Fix: Ensure created_at is never None before validation
+    if user.created_at is None:
+        # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
+        user.created_at = datetime.utcnow().replace(tzinfo=None)
+        logger.warning(f"created_at was None for user {user.id}, setting to current time")
+        db.add(user)
+        await db.commit()
+    
     logger.info(f"Updated webhook URL for user {user.email}")
     
     return UserResponse.model_validate(user)
@@ -150,6 +159,13 @@ async def create_user(user_in: UserCreate, response: Response, db: AsyncSession 
 
     if existing_user:
         logger.info(f"Found existing user: {existing_user.email} (ID: {existing_user.id})")
+        # Fix: Ensure created_at is never None before validation
+        if existing_user.created_at is None:
+            # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
+            existing_user.created_at = datetime.utcnow().replace(tzinfo=None)
+            logger.warning(f"created_at was None for user {existing_user.id}, setting to current time")
+            db.add(existing_user)
+            await db.commit()
         response.status_code = status.HTTP_200_OK
         return UserResponse.model_validate(existing_user)
 
@@ -164,6 +180,14 @@ async def create_user(user_in: UserCreate, response: Response, db: AsyncSession 
     await db.commit()
     await db.refresh(db_user)
     logger.info(f"Admin created user: {db_user.email} (ID: {db_user.id})")
+    # Fix: Set created_at if it's None (server_default may not be loaded after refresh)
+    # This happens because server_default values aren't always loaded by refresh()
+    if db_user.created_at is None:
+        # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
+        db_user.created_at = datetime.utcnow().replace(tzinfo=None)
+        logger.warning(f"created_at was None for user {db_user.id}, setting to current time")
+        db.add(db_user)
+        await db.commit()
     return UserResponse.model_validate(db_user)
 
 @admin_router.get("/users", 
@@ -172,6 +196,21 @@ async def create_user(user_in: UserCreate, response: Response, db: AsyncSession 
 async def list_users(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).offset(skip).limit(limit))
     users = result.scalars().all()
+    
+    # Fix: Ensure created_at is never None before validation
+    needs_commit = False
+    for user in users:
+        if user.created_at is None:
+            # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
+            user.created_at = datetime.utcnow().replace(tzinfo=None)
+            logger.warning(f"created_at was None for user {user.id}, setting to current time")
+            db.add(user)
+            needs_commit = True
+    
+    # Commit any fixes we made
+    if needs_commit:
+        await db.commit()
+    
     return [UserResponse.model_validate(u) for u in users]
 
 @admin_router.get("/users/email/{user_email}",
@@ -191,6 +230,14 @@ async def get_user_by_email(user_email: str, db: AsyncSession = Depends(get_db))
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
+
+    # Fix: Ensure created_at is never None before validation
+    if user.created_at is None:
+        # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
+        user.created_at = datetime.utcnow().replace(tzinfo=None)
+        logger.warning(f"created_at was None for user {user.id}, setting to current time")
+        db.add(user)
+        await db.commit()
 
     # Return the user object. Pydantic will handle serialization using UserDetailResponse.
     return user
@@ -213,6 +260,14 @@ async def get_user(user_id: int, db: AsyncSession = Depends(get_db)):
             status_code=status.HTTP_404_NOT_FOUND, 
             detail="User not found"
         )
+    
+    # Fix: Ensure created_at is never None before validation
+    if user.created_at is None:
+        # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
+        user.created_at = datetime.utcnow().replace(tzinfo=None)
+        logger.warning(f"created_at was None for user {user.id}, setting to current time")
+        db.add(user)
+        await db.commit()
         
     # Return the user object. Pydantic will handle serialization using UserDetailResponse.
     return user
@@ -286,6 +341,14 @@ async def update_user(user_id: int, user_update: UserUpdate, db: AsyncSession = 
     else:
         logger.info(f"Admin attempted update for user ID: {user_id}, but no changes detected.")
 
+    # Fix: Ensure created_at is never None before validation
+    if db_user.created_at is None:
+        # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
+        db_user.created_at = datetime.utcnow().replace(tzinfo=None)
+        logger.warning(f"created_at was None for user {db_user.id}, setting to current time")
+        db.add(db_user)
+        await db.commit()
+
     return UserResponse.model_validate(db_user)
 
 @admin_router.post("/users/{user_id}/tokens", 
@@ -299,7 +362,19 @@ async def create_token_for_user(user_id: int, db: AsyncSession = Depends(get_db)
     
     token_value = generate_secure_token()
     # Use the APIToken model from shared_models
-    db_token = APIToken(token=token_value, user_id=user_id)
+    # Fix: Set created_at and is_active before commit since server_default may not work
+    # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
+    db_token = APIToken(
+        token=token_value, 
+        user_id=user_id,
+        created_at=datetime.utcnow().replace(tzinfo=None)
+    )
+    # Set is_active if the column exists (database has it but model may not)
+    if hasattr(db_token, 'is_active'):
+        db_token.is_active = True
+    else:
+        # If model doesn't have is_active, set it via raw SQL attribute
+        setattr(db_token, 'is_active', True)
     db.add(db_token)
     await db.commit()
     await db.refresh(db_token)
@@ -381,6 +456,21 @@ async def get_users_table(
     """
     result = await db.execute(select(User).offset(skip).limit(limit))
     users = result.scalars().all()
+    
+    # Fix: Ensure created_at is never None before validation
+    needs_commit = False
+    for user in users:
+        if user.created_at is None:
+            # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
+            user.created_at = datetime.utcnow().replace(tzinfo=None)
+            logger.warning(f"created_at was None for user {user.id}, setting to current time")
+            db.add(user)
+            needs_commit = True
+    
+    # Commit any fixes we made
+    if needs_commit:
+        await db.commit()
+    
     return [UserTableResponse.model_validate(u) for u in users]
 
 @admin_router.get("/analytics/meetings",
@@ -495,6 +585,14 @@ async def get_user_details(
     
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    
+    # Fix: Ensure created_at is never None before validation
+    if user.created_at is None:
+        # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
+        user.created_at = datetime.utcnow().replace(tzinfo=None)
+        logger.warning(f"created_at was None for user {user.id}, setting to current time")
+        db.add(user)
+        await db.commit()
     
     # Calculate meeting stats
     meetings_result = await db.execute(select(Meeting).where(Meeting.user_id == user_id))
