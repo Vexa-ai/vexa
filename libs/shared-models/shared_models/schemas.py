@@ -1,5 +1,5 @@
 from typing import List, Optional, Dict, Tuple, Any
-from pydantic import BaseModel, Field, EmailStr, validator
+from pydantic import BaseModel, Field, EmailStr, field_validator, ValidationInfo
 from datetime import datetime
 from enum import Enum, auto
 import re # Import re for native ID validation
@@ -270,7 +270,7 @@ class UserResponse(UserBase):
     max_concurrent_bots: int = Field(..., description="Maximum number of concurrent bots allowed for the user")
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class TokenBase(BaseModel):
     user_id: int
@@ -284,7 +284,7 @@ class TokenResponse(TokenBase):
     created_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class UserDetailResponse(UserResponse):
     api_tokens: List[TokenResponse] = []
@@ -305,7 +305,8 @@ class MeetingBase(BaseModel):
     native_meeting_id: str = Field(..., description="The native meeting identifier (e.g., 'abc-defg-hij' for Google Meet, '1234567890' for Teams)")
     # meeting_url field removed
 
-    @validator('platform', pre=True) # pre=True allows validating string before enum conversion
+    @field_validator('platform', mode='before') # mode='before' allows validating string before enum conversion
+    @classmethod
     def validate_platform_str(cls, v):
         """Validate that the platform string is one of the supported platforms"""
         try:
@@ -325,7 +326,8 @@ class MeetingCreate(BaseModel):
     task: Optional[str] = Field(None, description="Optional task for the transcription model (e.g., 'transcribe', 'translate')")
     passcode: Optional[str] = Field(None, description="Optional passcode for the meeting (Teams only)")
 
-    @validator('platform')
+    @field_validator('platform')
+    @classmethod
     def platform_must_be_valid(cls, v):
         """Validate that the platform is one of the supported platforms"""
         try:
@@ -335,11 +337,12 @@ class MeetingCreate(BaseModel):
             supported = ', '.join([p.value for p in Platform])
             raise ValueError(f"Invalid platform '{v}'. Must be one of: {supported}")
 
-    @validator('passcode')
-    def validate_passcode(cls, v, values):
+    @field_validator('passcode')
+    @classmethod
+    def validate_passcode(cls, v, info: ValidationInfo):
         """Validate passcode usage based on platform"""
         if v is not None and v != "":
-            platform = values.get('platform')
+            platform = info.data.get('platform') if info.data else None
             if platform == Platform.GOOGLE_MEET:
                 raise ValueError("Passcode is not supported for Google Meet meetings")
             elif platform == Platform.TEAMS:
@@ -348,27 +351,30 @@ class MeetingCreate(BaseModel):
                     raise ValueError("Teams passcode must be 8-20 alphanumeric characters")
         return v
 
-    @validator('language')
+    @field_validator('language')
+    @classmethod
     def validate_language(cls, v):
         """Validate that the language code is one of the accepted language codes."""
         if v is not None and v != "" and v not in ACCEPTED_LANGUAGE_CODES:
             raise ValueError(f"Invalid language code '{v}'. Must be one of: {sorted(ACCEPTED_LANGUAGE_CODES)}")
         return v
 
-    @validator('task')
+    @field_validator('task')
+    @classmethod
     def validate_task(cls, v):
         """Validate that the task is one of the allowed tasks."""
         if v is not None and v != "" and v not in ALLOWED_TASKS:
             raise ValueError(f"Invalid task '{v}'. Must be one of: {sorted(ALLOWED_TASKS)}")
         return v
 
-    @validator('native_meeting_id')
-    def validate_native_meeting_id(cls, v, values):
+    @field_validator('native_meeting_id')
+    @classmethod
+    def validate_native_meeting_id(cls, v, info: ValidationInfo):
         """Validate that the native meeting ID matches the expected format for the platform."""
         if not v or not v.strip():
             raise ValueError("native_meeting_id cannot be empty")
         
-        platform = values.get('platform')
+        platform = info.data.get('platform') if info.data else None
         if not platform:
             return v  # Let platform validator handle this case
         
@@ -405,7 +411,8 @@ class MeetingResponse(BaseModel): # Not inheriting from MeetingBase anymore to a
     created_at: datetime
     updated_at: datetime
 
-    @validator('status', pre=True)
+    @field_validator('status', mode='before')
+    @classmethod
     def normalize_status(cls, v):
         """Normalize invalid status values to valid enum values"""
         if isinstance(v, str):
@@ -419,13 +426,14 @@ class MeetingResponse(BaseModel): # Not inheriting from MeetingBase anymore to a
         
         return v
 
-    @validator('data')
-    def validate_status_data(cls, v, values):
+    @field_validator('data')
+    @classmethod
+    def validate_status_data(cls, v, info: ValidationInfo):
         """Validate that status-related data is consistent with meeting status."""
         if v is None:
             return v
             
-        status = values.get('status')
+        status = info.data.get('status') if info.data else None
         if not status:
             return v
             
@@ -444,7 +452,7 @@ class MeetingResponse(BaseModel): # Not inheriting from MeetingBase anymore to a
         return v
 
     class Config:
-        orm_mode = True
+        from_attributes = True
         use_enum_values = True # Serialize Platform enum to its string value
 
 # --- Meeting Update Schema ---
@@ -455,7 +463,8 @@ class MeetingDataUpdate(BaseModel):
     languages: Optional[List[str]] = Field(None, description="List of language codes detected/used in the meeting")
     notes: Optional[str] = Field(None, description="Meeting notes or description")
 
-    @validator('languages')
+    @field_validator('languages')
+    @classmethod
     def validate_languages(cls, v):
         """Validate that all language codes in the list are accepted faster-whisper codes."""
         if v is not None:
@@ -474,14 +483,16 @@ class MeetingConfigUpdate(BaseModel):
     language: Optional[str] = Field(None, description="New language code (e.g., 'en', 'es')")
     task: Optional[str] = Field(None, description="New task ('transcribe' or 'translate')")
 
-    @validator('language')
+    @field_validator('language')
+    @classmethod
     def validate_language(cls, v):
         """Validate that the language code is one of the accepted faster-whisper codes."""
         if v is not None and v != "" and v not in ACCEPTED_LANGUAGE_CODES:
             raise ValueError(f"Invalid language code '{v}'. Must be one of: {sorted(ACCEPTED_LANGUAGE_CODES)}")
         return v
 
-    @validator('task')
+    @field_validator('task')
+    @classmethod
     def validate_task(cls, v):
         """Validate that the task is one of the allowed tasks."""
         if v is not None and v != "" and v not in ALLOWED_TASKS:
@@ -501,7 +512,8 @@ class TranscriptionSegment(BaseModel):
     absolute_start_time: Optional[datetime] = Field(None, description="Absolute start timestamp of the segment (UTC)")
     absolute_end_time: Optional[datetime] = Field(None, description="Absolute end timestamp of the segment (UTC)")
 
-    @validator('language')
+    @field_validator('language')
+    @classmethod
     def validate_language(cls, v):
         """Validate that the language code is one of the accepted faster-whisper codes."""
         if v is not None and v != "" and v not in ACCEPTED_LANGUAGE_CODES:
@@ -509,8 +521,8 @@ class TranscriptionSegment(BaseModel):
         return v
 
     class Config:
-        orm_mode = True
-        allow_population_by_field_name = True # Allow using both alias and field name
+        from_attributes = True
+        populate_by_name = True # Allow using both alias and field name
 
 # --- WebSocket Schema (NEW - Represents data from WhisperLive) ---
 
@@ -523,7 +535,8 @@ class WhisperLiveData(BaseModel):
     meeting_id: str # Native Meeting ID (string, e.g., 'abc-xyz-pqr')
     segments: List[TranscriptionSegment]
 
-    @validator('platform', pre=True)
+    @field_validator('platform', mode='before')
+    @classmethod
     def validate_whisperlive_platform_str(cls, v):
         """Validate that the platform string is one of the supported platforms"""
         try:
@@ -548,7 +561,7 @@ class TranscriptionResponse(BaseModel): # Doesn't inherit MeetingResponse to avo
     segments: List[TranscriptionSegment] = Field(..., description="List of transcript segments")
 
     class Config:
-        orm_mode = True # Allows creation from ORM models (e.g., joined query result)
+        from_attributes = True # Allows creation from ORM models (e.g., joined query result)
         use_enum_values = True
 
 # --- Utility Schemas --- 
@@ -578,7 +591,8 @@ class BotStatus(BaseModel):
     labels: Optional[Dict[str, str]] = None
     meeting_id_from_name: Optional[str] = None # Example auxiliary info
 
-    @validator('normalized_status')
+    @field_validator('normalized_status')
+    @classmethod
     def validate_normalized_status(cls, v):
         if v is None:
             return v
@@ -610,7 +624,7 @@ class UserTableResponse(BaseModel):
     # Excludes: data, api_tokens
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class MeetingTableResponse(BaseModel):
     """Meeting data for analytics table - excludes sensitive fields"""
@@ -625,7 +639,8 @@ class MeetingTableResponse(BaseModel):
     updated_at: datetime
     # Excludes: data, transcriptions, sessions
 
-    @validator('status', pre=True)
+    @field_validator('status', mode='before')
+    @classmethod
     def normalize_status(cls, v):
         """Normalize invalid status values to valid enum values"""
         if isinstance(v, str):
@@ -640,7 +655,7 @@ class MeetingTableResponse(BaseModel):
         return v
 
     class Config:
-        orm_mode = True
+        from_attributes = True
         use_enum_values = True
 
 class MeetingSessionResponse(BaseModel):
@@ -651,7 +666,7 @@ class MeetingSessionResponse(BaseModel):
     session_start_time: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class TranscriptionStats(BaseModel):
     """Transcription statistics for a meeting"""

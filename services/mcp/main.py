@@ -101,7 +101,7 @@ async def request_meeting_bot(
     Note: After a successful request, it typically takes about 10 seconds for the bot to join the meeting.
     """
     url = f"{BASE_URL}/bots"
-    payload = data.dict()
+    payload = data.model_dump()
     return await make_request("POST", url, api_key, payload)
 
 
@@ -158,7 +158,7 @@ async def update_bot_config(
         JSON indicating whether the update request was accepted
     """
     url = f"{BASE_URL}/bots/{meeting_platform}/{meeting_id}/config"
-    return await make_request("PUT", url, api_key, data.dict())
+    return await make_request("PUT", url, api_key, data.model_dump())
 
 
 @app.delete("/bot/{meeting_platform}/{meeting_id}", operation_id="stop_bot")
@@ -215,7 +215,7 @@ async def update_meeting_data(
         JSON with the updated meeting record
     """
     url = f"{BASE_URL}/meetings/{meeting_platform}/{meeting_id}"
-    payload = {"data": {k: v for k, v in data.dict().items() if v is not None}}
+    payload = {"data": {k: v for k, v in data.model_dump().items() if v is not None}}
     return await make_request("PATCH", url, api_key, payload)
 
 
