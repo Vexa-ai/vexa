@@ -21,11 +21,12 @@ docker run -d \
   vexa-lite
 ```
 
-**API Access:** `http://localhost:8056/docs` (includes Admin API routes at `/admin/*`)
+**API Access:** 
+- API Gateway: `http://localhost:8056/docs` (includes Admin API routes at `/admin/*` and MCP at `/mcp`)
 
 **Notes:**
 - Redis runs internally on `localhost:6379` by default. To use an external Redis, set `REDIS_HOST` to your Redis server address.
-- Default transcription mode is `remote` - requires `REMOTE_TRANSCRIBER_URL` and `REMOTE_TRANSCRIBER_API_KEY`.
+- Default transcription mode is `remote` - WhisperLive calls an external transcription service via `REMOTE_TRANSCRIBER_URL` and `REMOTE_TRANSCRIBER_API_KEY`.
 - If transcription service uses Docker service names (e.g., `transcription-lb`), add `--network transcription-network` to the docker run command.
 - If transcription service is accessible via host port (e.g., `localhost:8083`), no network flag needed.
 
@@ -35,10 +36,14 @@ docker run -d \
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Lite Container                         │
 │                                                                 │
-│  ┌─────────────┐  ┌─────────────┐  ┌──────────────┐            │
-│  │ API Gateway │  │  Admin API  │  │ Bot Manager  │            │
-│  │   :8056     │  │    :8057    │  │    :8080     │            │
-│  └─────────────┘  └─────────────┘  └──────┬───────┘            │
+│  ┌─────────────┐  ┌─────────────┐  ┌──────────────┐  ┌──────┐ │
+│  │ API Gateway │  │  Admin API  │  │ Bot Manager  │  │ MCP  │ │
+│  │   :8056     │  │    :8057    │  │    :8080     │  │:18888│ │
+│  │  (external) │  │  (internal) │  │  (internal)  │  │(int.)│ │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬───────┘  └──┬───┘ │
+│         │                │                 │             │     │
+│         └────────────────┴─────────────────┴─────────────┘     │
+│                    (routes: /admin/*, /mcp, /bots, /transcripts)│
 │                                           │                     │
 │                                    spawns processes             │
 │                                           ↓                     │
@@ -52,19 +57,27 @@ docker run -d \
 │  ┌─────────────────┐           ┌─────────────────────────┐     │
 │  │   WhisperLive   │──Redis───▶│ Transcription Collector │     │
 │  │     :9090       │  Stream   │         :8123           │     │
-│  └─────────────────┘           └─────────────────────────┘     │
-│                                                                 │
+│  └────────┬────────┘           └─────────────────────────┘     │
+│           │                                                      │
+│           │ (calls remote transcription service)                 │
+│           │                                                      │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │                    Xvfb (:99)                            │   │
 │  │              Virtual Display for Browsers                │   │
 │  └─────────────────────────────────────────────────────────┘   │
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │                    Redis Server                          │   │
+│  │                    :6379 (internal)                    │   │
+│  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
-                    │                         │
-                    ▼                         ▼
-             ┌──────────┐              ┌──────────┐
-             │  Redis   │              │ Postgres │
-             │(internal)│              │(external)│
-             └──────────┘              └──────────┘
+                    │              │
+                    ▼              ▼
+             ┌──────────────┐  ┌──────────┐
+             │ Transcription │  │ Postgres │
+             │   Service     │  │(external)│
+             │   (remote)     │  │          │
+             └──────────────┘  └──────────┘
 ```
 
 **Key difference from standard deployment:** Instead of spawning Docker containers for bots, the Lite version uses a **process orchestrator** that spawns bots as Node.js child processes within the same container.
@@ -92,6 +105,7 @@ docker run -d \
 | `REMOTE_TRANSCRIBER_URL` | (required) | Remote transcription API URL |
 | `REMOTE_TRANSCRIBER_API_KEY` | (required) | API key for remote transcription service |
 | `REMOTE_TRANSCRIBER_TEMPERATURE` | `0` | Temperature parameter for remote transcription |
+| `API_GATEWAY_URL` | `http://localhost:8056` | API Gateway URL (used by MCP service) |
 
 ### Redis Configuration
 
@@ -181,7 +195,7 @@ docker run -d \
 ### EasyPanel
 
 1. Create a new **App** from Git repository or Docker image
-2. Expose port: `8056` (API Gateway)
+2. Expose port: `8056` (API Gateway - routes all services including Admin API and MCP)
 3. Configure environment variables:
    - `DATABASE_URL` → Use EasyPanel PostgreSQL service URL
    - `ADMIN_API_TOKEN` → Generate a secure token
@@ -193,7 +207,7 @@ docker run -d \
 
 1. Create a new **Application** → Docker deployment
 2. Use `Dockerfile.lite` or pre-built image
-3. Expose port: `8056` (API Gateway)
+3. Expose port: `8056` (API Gateway - routes all services including Admin API and MCP)
 4. Set environment variables in Dokploy's env section:
    - `DATABASE_URL` → PostgreSQL service URL
    - `ADMIN_API_TOKEN` → Generate a secure token
@@ -204,7 +218,7 @@ docker run -d \
 ### Railway / Render
 
 1. Deploy from GitHub with `Dockerfile.lite`
-2. Set exposed port to `8056`
+2. Set exposed port: `8056` (API Gateway - routes all services including Admin API and MCP)
 3. Add PostgreSQL as managed service
 4. Configure environment variables:
    - `DATABASE_URL` → PostgreSQL service URL
@@ -243,6 +257,7 @@ vexa-core:bot-manager            RUNNING   pid 125, uptime 0:05:00
 vexa-core:transcription-collector RUNNING   pid 126, uptime 0:05:00
 vexa-core:whisperlive            RUNNING   pid 127, uptime 0:05:00
 vexa-core:xvfb                   RUNNING   pid 128, uptime 0:05:00
+vexa-core:mcp                    RUNNING   pid 129, uptime 0:05:00
 ```
 
 ### Restart a Service
@@ -294,6 +309,46 @@ curl -X POST "http://localhost:8056/bots" \
 curl "http://localhost:8056/transcripts/google_meet/abc-defg-hij" \
   -H "X-API-Key: vx_abc123..."
 ```
+
+### Using MCP Service (Model Context Protocol)
+
+The MCP service provides a Model Context Protocol interface for Claude Desktop, Cursor, and other MCP-compatible clients. The MCP service is accessible through the API Gateway.
+
+**Configure Claude Desktop:**
+
+1. Open Claude Desktop Settings → Developer → Edit Config
+2. Add the following configuration:
+
+```json
+{
+  "mcpServers": {
+    "Vexa": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "http://localhost:8056/mcp",
+        "--header",
+        "Authorization:${VEXA_API_KEY}"
+      ],
+      "env": {
+        "VEXA_API_KEY": "your-api-key-here"
+      }
+    }
+  }
+}
+```
+
+3. Replace `your-api-key-here` with your Vexa API key
+4. Restart Claude Desktop
+
+**For remote deployments**, replace `http://localhost:8056/mcp` with your public gateway URL (e.g., `https://vexa-lite.fly.dev/mcp`).
+
+**MCP Endpoints:**
+- MCP Protocol: `http://localhost:8056/mcp` (via API Gateway)
+- All MCP requests are routed through the API Gateway on port 8056
+
+See `services/mcp/README.md` for detailed MCP setup instructions.
 
 ## Comparison with Standard Deployment
 
@@ -358,6 +413,7 @@ docker exec vexa env | grep REDIS
 | `docker/lite/entrypoint.sh` | Container initialization |
 | `docker/lite/requirements.txt` | Python dependencies |
 | `services/bot-manager/app/orchestrators/process.py` | Process orchestrator |
+| `services/mcp/` | MCP service (Model Context Protocol) |
 
 ## Changes from Open Source Project
 
@@ -367,6 +423,9 @@ The Lite deployment adds the following without modifying core service code:
 - `Dockerfile.lite` - All-in-one container build
 - `docker/lite/*` - Configuration files
 - `services/bot-manager/app/orchestrators/process.py` - Process-based bot spawner
+
+**Included Services:**
+- MCP Service (`services/mcp/`) - Model Context Protocol service for Claude/Cursor integration
 
 **Minimal Modifications:**
 - `services/bot-manager/app/orchestrators/__init__.py` - Loads process orchestrator when `ORCHESTRATOR=process`
