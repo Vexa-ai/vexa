@@ -1662,6 +1662,9 @@ class ServeClientBase(object):
                  collector_client_ref: Optional[TranscriptionCollectorClient] = None,
                  server_options: Optional[dict] = None):
         self.websocket = websocket
+        # Track whether language was explicitly provided (not None)
+        # This helps optimize language detection when language is not provided
+        self.language_provided = language is not None
         self.language = language
         self.task = task
         self.client_uid = client_uid or str(uuid.uuid4())
@@ -2415,7 +2418,13 @@ class ServeClientFasterWhisper(ServeClientBase):
         logging.info(f"Initializing FasterWhisper client {client_uid} with platform={platform}, meeting_url={meeting_url}, token={token}")
 
         self.model_size_or_path = model
-        self.language = "en" if self.model_size_or_path.endswith("en") else language
+        # If model is English-only, auto-set language to "en" (this counts as provided)
+        if self.model_size_or_path.endswith("en"):
+            self.language = "en"
+            self.language_provided = True  # Model-based language is considered "provided"
+        else:
+            self.language = language
+            # language_provided is already set in base class based on original language parameter
         self.task = task
         self.initial_prompt = initial_prompt
 
@@ -2547,13 +2556,17 @@ class ServeClientFasterWhisper(ServeClientBase):
         """
         if ServeClientFasterWhisper.SINGLE_MODEL:
             ServeClientFasterWhisper.SINGLE_MODEL_LOCK.acquire()
+        # Reduce language detection segments if language was not provided to speed up first transcription
+        # Default is 10 segments (300 seconds), reduce to 1-2 segments (30-60 seconds) when auto-detecting
+        language_detection_segments = 1 if not self.language_provided else int(os.getenv('LANGUAGE_DETECTION_SEGMENTS', '10'))
         result, info = self.transcriber.transcribe(
             input_sample,
             initial_prompt=self.initial_prompt,
             language=self.language,
             task=self.task,
             vad_filter=self.use_vad,
-            vad_parameters=self.vad_parameters if self.use_vad else None)
+            vad_parameters=self.vad_parameters if self.use_vad else None,
+            language_detection_segments=language_detection_segments)
         if ServeClientFasterWhisper.SINGLE_MODEL:
             ServeClientFasterWhisper.SINGLE_MODEL_LOCK.release()
 
@@ -2643,7 +2656,9 @@ class ServeClientFasterWhisper(ServeClientBase):
                 input_sample = input_bytes.copy()
                 result = self.transcribe_audio(input_sample)
 
-                if result is None or self.language is None:
+                # Only block on language detection if language was not provided initially
+                # If language was provided, we can send transcription immediately
+                if result is None or (not self.language_provided and self.language is None):
                     self.timestamp_offset += duration
                     time.sleep(0.25)    # wait for voice activity, result is None when no voice activity
                     continue
@@ -2941,13 +2956,17 @@ class ServeClientRemote(ServeClientBase):
             includes the transcribed text.
         """
         # Each client has its own transcriber instance, so no lock needed for concurrent requests
+        # Reduce language detection segments if language was not provided to speed up first transcription
+        # Default is 10 segments (300 seconds), reduce to 1-2 segments (30-60 seconds) when auto-detecting
+        language_detection_segments = 1 if not self.language_provided else int(os.getenv('LANGUAGE_DETECTION_SEGMENTS', '10'))
         result, info = self.transcriber.transcribe(
             input_sample,
             initial_prompt=self.initial_prompt,
             language=self.language,
             task=self.task,
             vad_filter=self.use_vad,
-            vad_parameters=self.vad_parameters if self.use_vad else None)
+            vad_parameters=self.vad_parameters if self.use_vad else None,
+            language_detection_segments=language_detection_segments)
 
         if self.language is None and info is not None:
             self.set_language(info)
@@ -3035,7 +3054,9 @@ class ServeClientRemote(ServeClientBase):
                 input_sample = input_bytes.copy()
                 result = self.transcribe_audio(input_sample)
 
-                if result is None or self.language is None:
+                # Only block on language detection if language was not provided initially
+                # If language was provided, we can send transcription immediately
+                if result is None or (not self.language_provided and self.language is None):
                     self.timestamp_offset += duration
                     time.sleep(0.25)    # wait for voice activity, result is None when no voice activity
                     continue
