@@ -1,7 +1,8 @@
 .PHONY: all setup submodules env force-env setup-transcription-service-env download-model build-bot-image build build-transcription-service up up-transcription-service down down-transcription-service ps logs test test-api test-setup migrate makemigrations init-db stamp-db migrate-or-init
 
 # Default target: Sets up everything and starts the services
-all: setup-env build-bot-image build up migrate-or-init test
+# Note: build-bot-image is included as a dependency of build
+all: setup-env build up migrate-or-init test
 
 # Target to set up only the environment without Docker
 # Ensure .env is created based on TARGET *before* other setup steps
@@ -397,7 +398,7 @@ build-transcription-service: check_docker
 	fi
 
 # Build Docker Compose service images
-build: check_docker build-transcription-service
+build: check_docker build-bot-image build-transcription-service
 	@echo "---> Building Docker images..."
 	@REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
 	COMPOSE_FILES="-f docker-compose.yml"; \
