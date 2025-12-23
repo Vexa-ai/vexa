@@ -362,19 +362,12 @@ async def create_token_for_user(user_id: int, db: AsyncSession = Depends(get_db)
     
     token_value = generate_secure_token()
     # Use the APIToken model from shared_models
-    # Fix: Set created_at and is_active before commit since server_default may not work
     # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
     db_token = APIToken(
         token=token_value, 
         user_id=user_id,
         created_at=datetime.utcnow().replace(tzinfo=None)
     )
-    # Set is_active if the column exists (database has it but model may not)
-    if hasattr(db_token, 'is_active'):
-        db_token.is_active = True
-    else:
-        # If model doesn't have is_active, set it via raw SQL attribute
-        setattr(db_token, 'is_active', True)
     db.add(db_token)
     await db.commit()
     await db.refresh(db_token)
