@@ -7,7 +7,7 @@ import io
 import time
 import logging
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any, Tuple
 import numpy as np
 import soundfile as sf
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends, Request
@@ -35,7 +35,7 @@ DEVICE = os.getenv("DEVICE", "cuda")
 # Compute type optimization: Use INT8 for optimal VRAM efficiency
 # Research shows: large-v3-turbo + INT8 = ~2.1 GB VRAM (validated)
 # Provides 50-60% VRAM reduction with minimal accuracy loss (~1-2% WER increase)
-COMPUTE_TYPE_ENV = os.getenv("COMPUTE_TYPE", "").lower()
+COMPUTE_TYPE_ENV = os.getenv("COMPUTE_TYPE", "").strip().lower()
 if COMPUTE_TYPE_ENV:
     COMPUTE_TYPE = COMPUTE_TYPE_ENV
 else:
@@ -44,6 +44,72 @@ else:
 
 # CPU threads configuration (for CPU mode optimization)
 CPU_THREADS = int(os.getenv("CPU_THREADS", "0"))  # 0 = auto-detect
+
+# Quality / decoding parameters (optional)
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name, None)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "y", "on")
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, None)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning(f"Invalid int env {name}={raw!r}, using default {default}")
+        return default
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name, None)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning(f"Invalid float env {name}={raw!r}, using default {default}")
+        return default
+
+# WhisperLive-inspired defaults (can be overridden via env)
+BEAM_SIZE = _env_int("BEAM_SIZE", 5)
+BEST_OF = _env_int("BEST_OF", 5)
+COMPRESSION_RATIO_THRESHOLD = _env_float("COMPRESSION_RATIO_THRESHOLD", 2.4)
+LOG_PROB_THRESHOLD = _env_float("LOG_PROB_THRESHOLD", -1.0)
+NO_SPEECH_THRESHOLD = _env_float("NO_SPEECH_THRESHOLD", 0.6)
+CONDITION_ON_PREVIOUS_TEXT = _env_bool("CONDITION_ON_PREVIOUS_TEXT", True)
+PROMPT_RESET_ON_TEMPERATURE = _env_float("PROMPT_RESET_ON_TEMPERATURE", 0.5)
+
+# VAD parameters
+VAD_FILTER = _env_bool("VAD_FILTER", True)
+VAD_FILTER_THRESHOLD = _env_float("VAD_FILTER_THRESHOLD", 0.5)
+VAD_MIN_SILENCE_DURATION_MS = _env_int("VAD_MIN_SILENCE_DURATION_MS", 160)
+
+# Temperature fallback chain
+USE_TEMPERATURE_FALLBACK = _env_bool("USE_TEMPERATURE_FALLBACK", False)
+TEMPERATURE_FALLBACK_CHAIN = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+
+def _looks_like_silence(segments: List[Dict[str, Any]]) -> bool:
+    """Heuristic: treat as silence if all segments look like no-speech."""
+    if not segments:
+        return True
+    for s in segments:
+        if not (
+            float(s.get("no_speech_prob", 0.0)) > NO_SPEECH_THRESHOLD
+            and float(s.get("avg_logprob", 0.0)) < LOG_PROB_THRESHOLD
+        ):
+            return False
+    return True
+
+def _looks_like_hallucination(segments: List[Dict[str, Any]]) -> bool:
+    """Heuristic: reject segments that look like hallucinations / low-confidence."""
+    for s in segments:
+        if float(s.get("compression_ratio", 0.0)) > COMPRESSION_RATIO_THRESHOLD:
+            return True
+        if float(s.get("avg_logprob", 0.0)) < LOG_PROB_THRESHOLD:
+            return True
+    return False
 
 # API Token Authentication
 API_TOKEN = os.getenv("API_TOKEN", "").strip()
@@ -92,6 +158,15 @@ async def startup_event():
     global model
     logger.info(f"Worker {WORKER_ID} starting up...")
     logger.info(f"Device: {DEVICE}, Model: {MODEL_SIZE}, Compute: {COMPUTE_TYPE}")
+    logger.info(
+        "Quality params - "
+        f"beam_size={BEAM_SIZE}, best_of={BEST_OF}, "
+        f"cond_prev_text={CONDITION_ON_PREVIOUS_TEXT}, "
+        f"compression_ratio_threshold={COMPRESSION_RATIO_THRESHOLD}, "
+        f"log_prob_threshold={LOG_PROB_THRESHOLD}, "
+        f"no_speech_threshold={NO_SPEECH_THRESHOLD}, "
+        f"vad_filter={VAD_FILTER}"
+    )
     
     try:
         # Build model initialization parameters
@@ -186,56 +261,97 @@ async def transcribe_audio(
         # Ensure audio is contiguous array
         audio_array = np.ascontiguousarray(audio_array, dtype=np.float32)
         
-        # Transcribe
-        temp_value = float(temperature) if temperature else 0.0
-        logger.info(f"Worker {WORKER_ID} starting transcription - temp: {temp_value}, language: {language}")
-        
-        segments_list, info = model.transcribe(
-            audio_array,
-            language=language,
-            task=task,
-            initial_prompt=prompt,
-            temperature=temp_value,
-            vad_filter=True,
-            word_timestamps=False
+        # Transcribe (with optional temperature fallback)
+        requested_temp = float(temperature) if temperature else 0.0
+        temps = TEMPERATURE_FALLBACK_CHAIN if USE_TEMPERATURE_FALLBACK else [requested_temp]
+
+        logger.info(
+            f"Worker {WORKER_ID} starting transcription - requested_temp: {requested_temp}, "
+            f"temps: {temps}, language: {language}, task: {task}, vad_filter: {VAD_FILTER}"
         )
-        logger.info(f"Worker {WORKER_ID} transcription completed - language: {info.language}")
-        
-        # Convert segments to list (faster-whisper returns generator)
-        segments = []
-        for idx, segment in enumerate(segments_list):
-            segments.append({
-                "id": idx,
-                "seek": 0,
-                "start": segment.start,
-                "end": segment.end,
-                "text": segment.text,
-                "tokens": [],  # Not needed for PoC
-                "temperature": temp_value,
-                "avg_logprob": segment.avg_logprob,
-                "compression_ratio": segment.compression_ratio,
-                "no_speech_prob": segment.no_speech_prob,
-                # Add audio_ fields that RemoteTranscriber looks for
-                "audio_start": segment.start,
-                "audio_end": segment.end,
-            })
-        
-        # Build full transcript text
-        full_text = " ".join([s["text"].strip() for s in segments])
-        
-        # Calculate duration
-        duration = segments[-1]["end"] if segments else 0.0
+
+        best: Optional[Tuple[str, str, float, List[Dict[str, Any]]]] = None
+        last_info = None
+        last_segments: List[Dict[str, Any]] = []
+
+        for t in temps:
+            segments_list, info = model.transcribe(
+                audio_array,
+                language=language,
+                task=task,
+                initial_prompt=prompt,
+                temperature=t,
+                beam_size=BEAM_SIZE,
+                best_of=BEST_OF,
+                compression_ratio_threshold=COMPRESSION_RATIO_THRESHOLD,
+                log_prob_threshold=LOG_PROB_THRESHOLD,
+                no_speech_threshold=NO_SPEECH_THRESHOLD,
+                condition_on_previous_text=CONDITION_ON_PREVIOUS_TEXT,
+                prompt_reset_on_temperature=PROMPT_RESET_ON_TEMPERATURE,
+                vad_filter=VAD_FILTER,
+                vad_parameters={
+                    "threshold": VAD_FILTER_THRESHOLD,
+                    "min_silence_duration_ms": VAD_MIN_SILENCE_DURATION_MS,
+                },
+                word_timestamps=False,
+            )
+            last_info = info
+
+            # Convert segments to list (faster-whisper returns generator)
+            segments: List[Dict[str, Any]] = []
+            for idx, segment in enumerate(segments_list):
+                segments.append({
+                    "id": idx,
+                    "seek": 0,
+                    "start": segment.start,
+                    "end": segment.end,
+                    "text": segment.text,
+                    "tokens": [],  # Not needed for PoC
+                    "temperature": t,
+                    "avg_logprob": segment.avg_logprob,
+                    "compression_ratio": segment.compression_ratio,
+                    "no_speech_prob": segment.no_speech_prob,
+                    # Add audio_ fields that RemoteTranscriber looks for
+                    "audio_start": segment.start,
+                    "audio_end": segment.end,
+                })
+            last_segments = segments
+
+            if _looks_like_silence(segments):
+                best = ("", info.language, 0.0, [])
+                logger.info(f"Worker {WORKER_ID} detected silence (temp={t})")
+                break
+
+            if not _looks_like_hallucination(segments):
+                full_text = " ".join([s["text"].strip() for s in segments]).strip()
+                duration = segments[-1]["end"] if segments else 0.0
+                best = (full_text, info.language, duration, segments)
+                logger.info(f"Worker {WORKER_ID} accepted transcription (temp={t})")
+                break
+            else:
+                logger.info(f"Worker {WORKER_ID} rejected transcription as hallucination/low-confidence (temp={t})")
+
+        if best is None:
+            # Fall back to last attempt (even if it looks low-quality) to preserve backward behavior.
+            info = last_info
+            segments = last_segments
+            full_text = " ".join([s["text"].strip() for s in segments]).strip()
+            duration = segments[-1]["end"] if segments else 0.0
+            best = (full_text, info.language if info else (language or "unknown"), duration, segments)
+
+        full_text, detected_language, duration, segments = best
+        logger.info(f"Worker {WORKER_ID} transcription completed - language: {detected_language}")
         
         processing_time = time.time() - start_time
         logger.info(
             f"Worker {WORKER_ID} completed in {processing_time:.2f}s - "
-            f"Duration: {duration:.2f}s, Segments: {len(segments)}, Language: {info.language}"
+            f"Duration: {duration:.2f}s, Segments: {len(segments)}, Language: {detected_language}"
         )
         
         # Return format expected by Vexa RemoteTranscriber
         response = {
             "text": full_text,
-            "language": info.language,
+            "language": detected_language,
             "duration": duration,
             "segments": segments,
         }
