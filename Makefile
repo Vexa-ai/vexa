@@ -71,6 +71,85 @@ setup-transcription-service-env:
 		fi; \
 		echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:68\",\"message\":\"Generated new API_TOKEN\",\"data\":{\"token_len\":$$(echo -n \"$$NEW_TOKEN\" | wc -c)},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
 		echo "*** Generated and set API_TOKEN in services/transcription-service/.env ***"; \
+	fi; \
+	MAKE_TARGET=$${TARGET:-cpu}; \
+	echo "---> Configuring DEVICE and COMPUTE_TYPE based on TARGET=$$MAKE_TARGET..."; \
+	if [ "$$MAKE_TARGET" = "gpu" ]; then \
+		python3 -c " \
+import re; \
+file_path = 'services/transcription-service/.env'; \
+with open(file_path, 'r') as f: \
+    lines = f.readlines(); \
+device_set = False; \
+compute_set = False; \
+new_lines = []; \
+for i, line in enumerate(lines): \
+    if re.match(r'^DEVICE=', line): \
+        new_lines.append('DEVICE=cuda\n'); \
+        device_set = True; \
+    elif re.match(r'^COMPUTE_TYPE=', line): \
+        new_lines.append('COMPUTE_TYPE=float16\n'); \
+        compute_set = True; \
+    else: \
+        new_lines.append(line); \
+        if '# Device configuration' in line and not device_set: \
+            new_lines.append('DEVICE=cuda\n'); \
+            device_set = True; \
+        elif '# Compute type (optimization)' in line and not compute_set: \
+            new_lines.append('COMPUTE_TYPE=float16\n'); \
+            compute_set = True; \
+if not device_set: \
+    for idx, ln in enumerate(new_lines): \
+        if '# Device configuration' in ln: \
+            new_lines.insert(idx + 1, 'DEVICE=cuda\n'); \
+            break; \
+if not compute_set: \
+    for idx, ln in enumerate(new_lines): \
+        if '# Compute type (optimization)' in ln: \
+            new_lines.insert(idx + 1, 'COMPUTE_TYPE=float16\n'); \
+            break; \
+with open(file_path, 'w') as f: \
+    f.writelines(new_lines); \
+"; \
+		echo "*** Set DEVICE=cuda and COMPUTE_TYPE=float16 for GPU mode ***"; \
+	elif [ "$$MAKE_TARGET" = "cpu" ]; then \
+		python3 -c " \
+import re; \
+file_path = 'services/transcription-service/.env'; \
+with open(file_path, 'r') as f: \
+    lines = f.readlines(); \
+device_set = False; \
+compute_set = False; \
+new_lines = []; \
+for i, line in enumerate(lines): \
+    if re.match(r'^DEVICE=', line): \
+        new_lines.append('DEVICE=cpu\n'); \
+        device_set = True; \
+    elif re.match(r'^COMPUTE_TYPE=', line): \
+        new_lines.append('COMPUTE_TYPE=int8\n'); \
+        compute_set = True; \
+    else: \
+        new_lines.append(line); \
+        if '# Device configuration' in line and not device_set: \
+            new_lines.append('DEVICE=cpu\n'); \
+            device_set = True; \
+        elif '# Compute type (optimization)' in line and not compute_set: \
+            new_lines.append('COMPUTE_TYPE=int8\n'); \
+            compute_set = True; \
+if not device_set: \
+    for idx, ln in enumerate(new_lines): \
+        if '# Device configuration' in ln: \
+            new_lines.insert(idx + 1, 'DEVICE=cpu\n'); \
+            break; \
+if not compute_set: \
+    for idx, ln in enumerate(new_lines): \
+        if '# Compute type (optimization)' in ln: \
+            new_lines.insert(idx + 1, 'COMPUTE_TYPE=int8\n'); \
+            break; \
+with open(file_path, 'w') as f: \
+    f.writelines(new_lines); \
+"; \
+		echo "*** Set DEVICE=cpu and COMPUTE_TYPE=int8 for CPU mode ***"; \
 	fi
 
 # Create .env file from example
