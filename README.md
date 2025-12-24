@@ -50,41 +50,33 @@
 | **Real-time transcription** | Sub-second transcript delivery during the call |
 | **Multilingual** | 100+ languages via Whisper (transcription + translation) |
 | **API-first** | REST API + WebSocket streaming for integrations |
+| **Storage** | Persist transcripts + meeting metadata in your database |
+| **Multi-user** | Team-ready: users, API keys/tokens, admin operations |
 | **Self-hostable** | Run on your infra for complete data sovereignty |
-| **User interfaces** | Open-source frontends (currently: **[Vexa Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)**) |
+| **User interfaces** | Open-source frontends (currently: **[Vexa Dashboard](https://github.com/DmitriyG228/Vexa-Dashboard)**) |
 
 ### How it works
 
-```mermaid
-flowchart LR
-  UI[Your app / UI] -->|REST: create bot| API[Vexa API]
-  API --> BOT[Meeting bot]
-  BOT --> MEET[Google Meet / Teams]
-  BOT -->|Audio| TR[Transcription]
-  TR --> DB[(Database)]
-  API -. WebSocket: real-time transcripts .-> UI
-```
-
-<details>
-<summary>Text version</summary>
-
-```text
-Your app / UI  ->  Vexa API  ->  Meeting bot  ->  Google Meet / Teams
-                     |
-                     +-> Transcription -> Database
-                     +-> WebSocket stream -> Your app / UI
-```
-</details>
+<p align="center">
+  <img src="assets/product-diagram.png" alt="How Vexa Works" width="100%"/>
+</p>
 
 ### Who it's for
 
 | You are... | You want... |
 |---|---|
-| **Teams / Enterprises** | Self-hosted transcription with strict privacy requirements |
+| **Enterprises** | Self-hosted transcription with strict privacy requirements |
+| **Small & medium teams** | Simple deployment (Vexa Lite) with an open-source UI |
 | **Developers** | Build meeting products (assistants, automations, analytics) on top of the API |
 | **Automation builders** | Integrate with tools like n8n via webhooks / APIs |
 
 ---
+
+## Build on Top. In Hours, Not Months
+
+**Build powerful meeting assistants (like Otter.ai, Fireflies.ai, Fathom) for your startup, internal use, or custom integrations.**
+
+The Vexa API provides powerful abstractions and a clear separation of concerns, enabling you to build sophisticated applications on top with a safe and enjoyable coding experience.
 
 ## 🛡️ Built for Data Sovereignty
 
@@ -138,7 +130,7 @@ Vexa Lite is a single-container deployment perfect for teams who want:
 - **Self-hosted multiuser service** - Multiple users, API tokens, and team management
 - **Quick deployment** on any platform - Single container, easy to deploy
 - **No GPU required** - Transcription runs externally
-- **Choose your frontend** - Pick from open-source user interfaces like [Vexa Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)
+- **Choose your frontend** - Pick from open-source user interfaces like [Vexa Dashboard](https://github.com/DmitriyG228/Vexa-Dashboard)
 - **Production-ready** - Stateless, scalable, serverless-friendly
 
 **Quick start:**
@@ -158,7 +150,7 @@ docker run -d \
   - ✅ **Fly.io** - Implemented
   - 🚧 **Railway, Render, etc.** - To be added (contribute by adding your platform of choice!)
 - 📖 **Complete setup guide**: [Vexa Lite Deployment Guide](docs/vexa-lite-deployment.md) - All 4 configurations (local/remote database, local/remote transcription)
-- 🎨 **Frontend options**: Choose from open-source user interfaces like [Vexa Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)
+- 🎨 **Frontend options**: Choose from open-source user interfaces like [Vexa Dashboard](https://github.com/DmitriyG228/Vexa-Dashboard)
 
 ### Option 3: Docker Compose - For Development
 
@@ -248,11 +240,7 @@ Note: Meeting IDs are user-provided (Google Meet code like `xxx-xxxx-xxx` or Tea
 
 > For issues and progress, join our [Discord](https://discord.gg/Ga9duGkVz9).
 
-## Build on Top. In Hours, Not Months
-
-**Build powerful meeting assistants (like Otter.ai, Fireflies.ai, Fathom) for your startup, internal use, or custom integrations.**
-
-The Vexa API provides powerful abstractions and a clear separation of concerns, enabling you to build sophisticated applications on top with a safe and enjoyable coding experience.
+## Architecture
 
 <p align="center">
   <img src="assets/simplified_flow.png" alt="Vexa Architecture Flow" width="100%"/>
@@ -279,7 +267,7 @@ The Vexa API provides powerful abstractions and a clear separation of concerns, 
 - **WebSocket streaming** - Sub-second transcript delivery via WebSocket
 - **Multiuser support** - User management, API tokens, and team features
 - **Self-hostable** - Full control over your data and infrastructure
-- **Open-source frontends** - Choose from user interfaces like [Vexa Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)
+- **Open-source frontends** - Choose from user interfaces like [Vexa Dashboard](https://github.com/DmitriyG228/Vexa-Dashboard)
 
 **Deployment & Management Guides:**
 - [Local Deployment and Testing Guide](docs/deployment.md)
@@ -290,10 +278,8 @@ The Vexa API provides powerful abstractions and a clear separation of concerns, 
 
 Vexa is part of an ecosystem of open-source tools:
 
-### 🚀 [Vexa Lite Deploy](https://github.com/Vexa-ai/vexa-lite-deploy)
-One-click deployment configurations for Vexa Lite on various platforms (Fly.io, Railway, Render, etc.). Perfect for quick deployments without GPU requirements.
 
-### 🎨 [Vexa Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)
+### 🎨 [Vexa Dashboard](https://github.com/DmitriyG228/Vexa-Dashboard)
 100% open-source web interface for Vexa. Join meetings, view transcripts, manage users, and more. Self-host everything with no cloud dependencies.
 
 ## Contributing
@@ -337,7 +323,7 @@ Licensed under **Apache-2.0** — see [LICENSE](LICENSE).
 This is the main Vexa repository containing the core API and services. For related projects:
 
 - **[vexa-lite-deploy](https://github.com/Vexa-ai/vexa-lite-deploy)** - Deployment configurations for Vexa Lite
-- **[Vexa-Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)** - Web UI for managing Vexa instances (first in a planned series of UI applications)
+- **[Vexa-Dashboard](https://github.com/DmitriyG228/Vexa-Dashboard)** - Web UI for managing Vexa instances (first in a planned series of UI applications)
 
 [![Meet Founder](https://img.shields.io/badge/LinkedIn-Dmitry_Grankin-0A66C2?style=flat-square&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/dmitry-grankin/)
 
