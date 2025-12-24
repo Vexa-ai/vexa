@@ -1,0 +1,29 @@
+FROM python:3.10-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy requirements and install
+COPY requirements.txt .
+# faster-whisper uses CTranslate2 which has CPU support built-in (no PyTorch needed)
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# Copy application
+COPY main.py .
+
+# Create models directory
+RUN mkdir -p /app/models
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+EXPOSE 8000
+
+CMD ["python3", "main.py"]
+

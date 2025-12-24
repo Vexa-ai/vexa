@@ -1,7 +1,8 @@
-.PHONY: all setup submodules env force-env download-model build-bot-image build up down ps logs test test-api test-setup migrate makemigrations init-db stamp-db migrate-or-init
+.PHONY: all setup submodules env force-env setup-transcription-service-env download-model build-bot-image build build-transcription-service up up-transcription-service down down-transcription-service ps logs test test-api test-setup migrate makemigrations init-db stamp-db migrate-or-init
 
 # Default target: Sets up everything and starts the services
-all: setup-env build-bot-image build up migrate-or-init test
+# Note: build-bot-image is included as a dependency of build
+all: setup-env build up migrate-or-init test
 
 # Target to set up only the environment without Docker
 # Ensure .env is created based on TARGET *before* other setup steps
@@ -37,10 +38,124 @@ check_docker:
 # Include .env file if it exists for environment variables 
 -include .env
 
+# Database Configuration:
+# REMOTE_DB flag controls database connection:
+#   - REMOTE_DB=false (default): Uses local Docker postgres container
+#   - REMOTE_DB=true: Uses external database (requires DB_HOST, DB_PORT, etc. in .env)
+# When REMOTE_DB=true, the postgres service is NOT started and external DB credentials must be configured.
+
+# Ensure transcription-service/.env exists with API_TOKEN
+setup-transcription-service-env:
+	@echo "---> Ensuring transcription-service/.env exists..."
+	@echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:48\",\"message\":\"setup-transcription-service-env started\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log
+	@if [ ! -f services/transcription-service/.env ]; then \
+		if [ -f services/transcription-service/.env.example ]; then \
+			cp services/transcription-service/.env.example services/transcription-service/.env; \
+			echo "*** Created services/transcription-service/.env from .env.example ***"; \
+		else \
+			echo "# API Token for securing the service" > services/transcription-service/.env; \
+			echo "API_TOKEN=$$(openssl rand -hex 16)" >> services/transcription-service/.env; \
+			echo "*** Created services/transcription-service/.env with generated API_TOKEN ***"; \
+		fi; \
+	fi; \
+	TRANSCRIPTION_API_TOKEN=$$(grep -E '^[[:space:]]*API_TOKEN=' services/transcription-service/.env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo ""); \
+	echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:59\",\"message\":\"Read API_TOKEN from transcription-service/.env\",\"data\":{\"token_found\":$$([ -n \"$$TRANSCRIPTION_API_TOKEN\" ] && echo true || echo false),\"token_len\":$$(echo -n \"$$TRANSCRIPTION_API_TOKEN\" | wc -c),\"is_placeholder\":$$([ \"$$TRANSCRIPTION_API_TOKEN\" = \"your_secure_token_here\" ] && echo true || echo false)},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
+	if [ -z "$$TRANSCRIPTION_API_TOKEN" ] || [ "$$TRANSCRIPTION_API_TOKEN" = "your_secure_token_here" ]; then \
+		echo "---> Generating secure API_TOKEN for transcription-service..."; \
+		NEW_TOKEN=$$(openssl rand -hex 16); \
+		if grep -q "^API_TOKEN=" services/transcription-service/.env 2>/dev/null; then \
+			sed -i.bak "s/^API_TOKEN=.*/API_TOKEN=$$NEW_TOKEN/" services/transcription-service/.env; \
+			rm -f services/transcription-service/.env.bak; \
+		else \
+			echo "API_TOKEN=$$NEW_TOKEN" >> services/transcription-service/.env; \
+		fi; \
+		echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:68\",\"message\":\"Generated new API_TOKEN\",\"data\":{\"token_len\":$$(echo -n \"$$NEW_TOKEN\" | wc -c)},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
+		echo "*** Generated and set API_TOKEN in services/transcription-service/.env ***"; \
+	fi; \
+	MAKE_TARGET=$${TARGET:-cpu}; \
+	echo "---> Configuring DEVICE and COMPUTE_TYPE based on TARGET=$$MAKE_TARGET..."; \
+	if [ "$$MAKE_TARGET" = "gpu" ]; then \
+		python3 -c " \
+import re; \
+file_path = 'services/transcription-service/.env'; \
+with open(file_path, 'r') as f: \
+    lines = f.readlines(); \
+device_set = False; \
+compute_set = False; \
+new_lines = []; \
+for i, line in enumerate(lines): \
+    if re.match(r'^DEVICE=', line): \
+        new_lines.append('DEVICE=cuda\n'); \
+        device_set = True; \
+    elif re.match(r'^COMPUTE_TYPE=', line): \
+        new_lines.append('COMPUTE_TYPE=float16\n'); \
+        compute_set = True; \
+    else: \
+        new_lines.append(line); \
+        if '# Device configuration' in line and not device_set: \
+            new_lines.append('DEVICE=cuda\n'); \
+            device_set = True; \
+        elif '# Compute type (optimization)' in line and not compute_set: \
+            new_lines.append('COMPUTE_TYPE=float16\n'); \
+            compute_set = True; \
+if not device_set: \
+    for idx, ln in enumerate(new_lines): \
+        if '# Device configuration' in ln: \
+            new_lines.insert(idx + 1, 'DEVICE=cuda\n'); \
+            break; \
+if not compute_set: \
+    for idx, ln in enumerate(new_lines): \
+        if '# Compute type (optimization)' in ln: \
+            new_lines.insert(idx + 1, 'COMPUTE_TYPE=float16\n'); \
+            break; \
+with open(file_path, 'w') as f: \
+    f.writelines(new_lines); \
+"; \
+		echo "*** Set DEVICE=cuda and COMPUTE_TYPE=float16 for GPU mode ***"; \
+	elif [ "$$MAKE_TARGET" = "cpu" ]; then \
+		python3 -c " \
+import re; \
+file_path = 'services/transcription-service/.env'; \
+with open(file_path, 'r') as f: \
+    lines = f.readlines(); \
+device_set = False; \
+compute_set = False; \
+new_lines = []; \
+for i, line in enumerate(lines): \
+    if re.match(r'^DEVICE=', line): \
+        new_lines.append('DEVICE=cpu\n'); \
+        device_set = True; \
+    elif re.match(r'^COMPUTE_TYPE=', line): \
+        new_lines.append('COMPUTE_TYPE=int8\n'); \
+        compute_set = True; \
+    else: \
+        new_lines.append(line); \
+        if '# Device configuration' in line and not device_set: \
+            new_lines.append('DEVICE=cpu\n'); \
+            device_set = True; \
+        elif '# Compute type (optimization)' in line and not compute_set: \
+            new_lines.append('COMPUTE_TYPE=int8\n'); \
+            compute_set = True; \
+if not device_set: \
+    for idx, ln in enumerate(new_lines): \
+        if '# Device configuration' in ln: \
+            new_lines.insert(idx + 1, 'DEVICE=cpu\n'); \
+            break; \
+if not compute_set: \
+    for idx, ln in enumerate(new_lines): \
+        if '# Compute type (optimization)' in ln: \
+            new_lines.insert(idx + 1, 'COMPUTE_TYPE=int8\n'); \
+            break; \
+with open(file_path, 'w') as f: \
+    f.writelines(new_lines); \
+"; \
+		echo "*** Set DEVICE=cpu and COMPUTE_TYPE=int8 for CPU mode ***"; \
+	fi
+
 # Create .env file from example
-env:
+env: setup-transcription-service-env
 ifndef TARGET
-	$(info TARGET not set. Defaulting to cpu. Use 'make env TARGET=cpu' or 'make env TARGET=gpu')
+	$(info TARGET not set. Defaulting to cpu. Use 'make env TARGET=cpu' or 'make env TARGET=gpu' or 'make env TARGET=remote')
 	$(eval TARGET := cpu)
 endif
 	@echo "---> Checking .env file for TARGET=$(TARGET)..."
@@ -53,18 +168,46 @@ endif
 			echo "ADMIN_API_TOKEN=token" > env-example.cpu; \
 			echo "LANGUAGE_DETECTION_SEGMENTS=10" >> env-example.cpu; \
 			echo "VAD_FILTER_THRESHOLD=0.5" >> env-example.cpu; \
-			echo "WHISPER_MODEL_SIZE=tiny" >> env-example.cpu; \
-			echo "DEVICE_TYPE=cpu" >> env-example.cpu; \
+			echo "DEVICE_TYPE=remote" >> env-example.cpu; \
 			echo "BOT_IMAGE_NAME=vexa-bot:dev" >> env-example.cpu; \
+			echo "# Remote Transcriber API Configuration" >> env-example.cpu; \
+			echo "REMOTE_TRANSCRIBER_URL=http://transcription-lb-cpu:80/v1/audio/transcriptions" >> env-example.cpu; \
+			TRANSCRIPTION_API_TOKEN=$$(grep -E '^[[:space:]]*API_TOKEN=' services/transcription-service/.env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo ""); \
+			if [ -n "$$TRANSCRIPTION_API_TOKEN" ]; then \
+				echo "REMOTE_TRANSCRIBER_API_KEY=$$TRANSCRIPTION_API_TOKEN" >> env-example.cpu; \
+			else \
+				echo "REMOTE_TRANSCRIBER_API_KEY=" >> env-example.cpu; \
+			fi; \
 			echo "# Exposed Host Ports" >> env-example.cpu; \
 			echo "API_GATEWAY_HOST_PORT=8056" >> env-example.cpu; \
 			echo "ADMIN_API_HOST_PORT=8057" >> env-example.cpu; \
-			echo "TRAEFIK_WEB_HOST_PORT=9090" >> env-example.cpu; \
-			echo "TRAEFIK_DASHBOARD_HOST_PORT=8085" >> env-example.cpu; \
 			echo "TRANSCRIPTION_COLLECTOR_HOST_PORT=8123" >> env-example.cpu; \
 			echo "POSTGRES_HOST_PORT=5438" >> env-example.cpu; \
+			echo "# Remote Database Configuration" >> env-example.cpu; \
+			echo "# Set REMOTE_DB=true to use remote PostgreSQL instead of local Docker postgres" >> env-example.cpu; \
+			echo "REMOTE_DB=false" >> env-example.cpu; \
+			echo "# Docker-compose compatibility (not used in remote mode)" >> env-example.cpu; \
+			echo "WHISPER_MODEL_SIZE=" >> env-example.cpu; \
+			echo "WL_MAX_CLIENTS=" >> env-example.cpu; \
 		fi; \
 		cp env-example.cpu .env; \
+		TRANSCRIPTION_API_TOKEN=$$(grep -E '^[[:space:]]*API_TOKEN=' services/transcription-service/.env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo ""); \
+		echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:111\",\"message\":\"Syncing API key to .env (CPU)\",\"data\":{\"token_found\":$$([ -n \"$$TRANSCRIPTION_API_KEY\" ] && echo true || echo false),\"token_len\":$$(echo -n \"$$TRANSCRIPTION_API_TOKEN\" | wc -c)},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
+		if [ -n "$$TRANSCRIPTION_API_TOKEN" ]; then \
+			if grep -q "^REMOTE_TRANSCRIBER_API_KEY=" .env 2>/dev/null; then \
+				sed -i.bak "s|^REMOTE_TRANSCRIBER_API_KEY=.*|REMOTE_TRANSCRIBER_API_KEY=$$TRANSCRIPTION_API_TOKEN|" .env; \
+				rm -f .env.bak; \
+				echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:115\",\"message\":\"Updated existing REMOTE_TRANSCRIBER_API_KEY\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
+			else \
+				echo "REMOTE_TRANSCRIBER_API_KEY=$$TRANSCRIPTION_API_TOKEN" >> .env; \
+				echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:118\",\"message\":\"Added REMOTE_TRANSCRIBER_API_KEY to .env\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
+			fi; \
+			SYNCED_KEY=$$(grep -E '^[[:space:]]*REMOTE_TRANSCRIBER_API_KEY=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo ""); \
+			echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:121\",\"message\":\"Verified synced key in .env\",\"data\":{\"key_synced\":$$([ \"$$SYNCED_KEY\" = \"$$TRANSCRIPTION_API_TOKEN\" ] && echo true || echo false),\"synced_key_len\":$$(echo -n \"$$SYNCED_KEY\" | wc -c)},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
+			echo "*** Synced REMOTE_TRANSCRIBER_API_KEY from transcription-service/.env ***"; \
+		else \
+			echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:124\",\"message\":\"WARNING: No API_TOKEN found to sync\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
+		fi; \
 		echo "*** .env file created from env-example.cpu. Please review it. ***"; \
 	elif [ "$(TARGET)" = "gpu" ]; then \
 		if [ ! -f env-example.gpu ]; then \
@@ -72,28 +215,84 @@ endif
 			echo "ADMIN_API_TOKEN=token" > env-example.gpu; \
 			echo "LANGUAGE_DETECTION_SEGMENTS=10" >> env-example.gpu; \
 			echo "VAD_FILTER_THRESHOLD=0.5" >> env-example.gpu; \
-			echo "WHISPER_MODEL_SIZE=medium" >> env-example.gpu; \
-			echo "DEVICE_TYPE=cuda" >> env-example.gpu; \
+			echo "DEVICE_TYPE=remote" >> env-example.gpu; \
 			echo "BOT_IMAGE_NAME=vexa-bot:dev" >> env-example.gpu; \
+			echo "# Remote Transcriber API Configuration" >> env-example.gpu; \
+			echo "REMOTE_TRANSCRIBER_URL=http://transcription-lb:80/v1/audio/transcriptions" >> env-example.gpu; \
+			TRANSCRIPTION_API_TOKEN=$$(grep -E '^[[:space:]]*API_TOKEN=' services/transcription-service/.env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo ""); \
+			if [ -n "$$TRANSCRIPTION_API_TOKEN" ]; then \
+				echo "REMOTE_TRANSCRIBER_API_KEY=$$TRANSCRIPTION_API_TOKEN" >> env-example.gpu; \
+			else \
+				echo "REMOTE_TRANSCRIBER_API_KEY=" >> env-example.gpu; \
+			fi; \
 			echo "# Exposed Host Ports" >> env-example.gpu; \
 			echo "API_GATEWAY_HOST_PORT=8056" >> env-example.gpu; \
 			echo "ADMIN_API_HOST_PORT=8057" >> env-example.gpu; \
-			echo "TRAEFIK_WEB_HOST_PORT=9090" >> env-example.gpu; \
-			echo "TRAEFIK_DASHBOARD_HOST_PORT=8085" >> env-example.gpu; \
 			echo "TRANSCRIPTION_COLLECTOR_HOST_PORT=8123" >> env-example.gpu; \
 			echo "POSTGRES_HOST_PORT=5438" >> env-example.gpu; \
+			echo "# Remote Database Configuration" >> env-example.gpu; \
+			echo "# Set REMOTE_DB=true to use remote PostgreSQL instead of local Docker postgres" >> env-example.gpu; \
+			echo "REMOTE_DB=false" >> env-example.gpu; \
+			echo "# Docker-compose compatibility (not used in remote mode)" >> env-example.gpu; \
+			echo "WHISPER_MODEL_SIZE=" >> env-example.gpu; \
+			echo "WL_MAX_CLIENTS=" >> env-example.gpu; \
 		fi; \
 		cp env-example.gpu .env; \
+		TRANSCRIPTION_API_TOKEN=$$(grep -E '^[[:space:]]*API_TOKEN=' services/transcription-service/.env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo ""); \
+		if [ -n "$$TRANSCRIPTION_API_TOKEN" ]; then \
+			if grep -q "^REMOTE_TRANSCRIBER_API_KEY=" .env 2>/dev/null; then \
+				sed -i.bak "s|^REMOTE_TRANSCRIBER_API_KEY=.*|REMOTE_TRANSCRIBER_API_KEY=$$TRANSCRIPTION_API_TOKEN|" .env; \
+				rm -f .env.bak; \
+			else \
+				echo "REMOTE_TRANSCRIBER_API_KEY=$$TRANSCRIPTION_API_TOKEN" >> .env; \
+			fi; \
+			echo "*** Synced REMOTE_TRANSCRIBER_API_KEY from transcription-service/.env ***"; \
+		fi; \
 		echo "*** .env file created from env-example.gpu. Please review it. ***"; \
+	elif [ "$(TARGET)" = "remote" ] || [ "$(TARGET)" = "provider" ]; then \
+		if [ ! -f env-example.remote ]; then \
+			echo "env-example.remote not found. Creating default one."; \
+			echo "ADMIN_API_TOKEN=token" > env-example.remote; \
+			echo "LANGUAGE_DETECTION_SEGMENTS=10" >> env-example.remote; \
+			echo "VAD_FILTER_THRESHOLD=0.5" >> env-example.remote; \
+			echo "WHISPER_MODEL_SIZE=medium" >> env-example.remote; \
+			echo "DEVICE_TYPE=remote" >> env-example.remote; \
+			echo "BOT_IMAGE_NAME=vexa-bot:dev" >> env-example.remote; \
+			echo "# WhisperLive Configuration" >> env-example.remote; \
+			echo "WL_MAX_CLIENTS=10" >> env-example.remote; \
+			echo "# Remote Transcriber API Configuration" >> env-example.remote; \
+			echo "REMOTE_TRANSCRIBER_URL=https://audio-turbo.api.fireworks.ai/v1/audio/transcriptions" >> env-example.remote; \
+			echo "REMOTE_TRANSCRIBER_API_KEY=your_api_key_here" >> env-example.remote; \
+			echo "REMOTE_TRANSCRIBER_MODEL=whisper-v3-turbo" >> env-example.remote; \
+			echo "REMOTE_TRANSCRIBER_TEMPERATURE=0" >> env-example.remote; \
+			echo "REMOTE_TRANSCRIBER_VAD_MODEL=silero" >> env-example.remote; \
+			echo "# Exposed Host Ports" >> env-example.remote; \
+			echo "API_GATEWAY_HOST_PORT=8056" >> env-example.remote; \
+			echo "ADMIN_API_HOST_PORT=8057" >> env-example.remote; \
+			echo "TRANSCRIPTION_COLLECTOR_HOST_PORT=8123" >> env-example.remote; \
+			echo "POSTGRES_HOST_PORT=5438" >> env-example.remote; \
+			echo "# Remote Database Configuration" >> env-example.remote; \
+			echo "# Set REMOTE_DB=true to use remote PostgreSQL instead of local Docker postgres" >> env-example.remote; \
+			echo "# When REMOTE_DB=true: Uncomment and set the remote database credentials below" >> env-example.remote; \
+			echo "REMOTE_DB=false" >> env-example.remote; \
+			echo "# DB_HOST=your-remote-db-host" >> env-example.remote; \
+			echo "# DB_PORT=5432" >> env-example.remote; \
+			echo "# DB_NAME=your-db-name" >> env-example.remote; \
+			echo "# DB_USER=your-db-user" >> env-example.remote; \
+			echo "# DB_PASSWORD=your-db-password" >> env-example.remote; \
+		fi; \
+		cp env-example.remote .env; \
+		echo "*** .env file created from env-example.remote. Please review it. ***"; \
+		echo "*** IMPORTANT: Set REMOTE_TRANSCRIBER_API_KEY in .env file with your API key. ***"; \
 	else \
-		echo "Error: TARGET must be 'cpu' or 'gpu'. Usage: make env TARGET=<cpu|gpu>"; \
+		echo "Error: TARGET must be 'cpu', 'gpu', 'remote', or 'provider'. Usage: make env TARGET=<cpu|gpu|remote|provider>"; \
 		exit 1; \
 	fi
 
 # Force create .env file from example (overwrite existing)
-force-env:
+force-env: setup-transcription-service-env
 ifndef TARGET
-	$(info TARGET not set. Defaulting to cpu. Use 'make force-env TARGET=cpu' or 'make force-env TARGET=gpu')
+	$(info TARGET not set. Defaulting to cpu. Use 'make force-env TARGET=cpu' or 'make force-env TARGET=gpu' or 'make force-env TARGET=remote')
 	$(eval TARGET := cpu)
 endif
 	@echo "---> Creating .env file for TARGET=$(TARGET) (forcing overwrite)..."
@@ -103,18 +302,46 @@ endif
 			echo "ADMIN_API_TOKEN=token" > env-example.cpu; \
 			echo "LANGUAGE_DETECTION_SEGMENTS=10" >> env-example.cpu; \
 			echo "VAD_FILTER_THRESHOLD=0.5" >> env-example.cpu; \
-			echo "WHISPER_MODEL_SIZE=tiny" >> env-example.cpu; \
-			echo "DEVICE_TYPE=cpu" >> env-example.cpu; \
+			echo "DEVICE_TYPE=remote" >> env-example.cpu; \
 			echo "BOT_IMAGE_NAME=vexa-bot:dev" >> env-example.cpu; \
+			echo "# Remote Transcriber API Configuration" >> env-example.cpu; \
+			echo "REMOTE_TRANSCRIBER_URL=http://transcription-lb-cpu:80/v1/audio/transcriptions" >> env-example.cpu; \
+			TRANSCRIPTION_API_TOKEN=$$(grep -E '^[[:space:]]*API_TOKEN=' services/transcription-service/.env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo ""); \
+			if [ -n "$$TRANSCRIPTION_API_TOKEN" ]; then \
+				echo "REMOTE_TRANSCRIBER_API_KEY=$$TRANSCRIPTION_API_TOKEN" >> env-example.cpu; \
+			else \
+				echo "REMOTE_TRANSCRIBER_API_KEY=" >> env-example.cpu; \
+			fi; \
 			echo "# Exposed Host Ports" >> env-example.cpu; \
 			echo "API_GATEWAY_HOST_PORT=8056" >> env-example.cpu; \
 			echo "ADMIN_API_HOST_PORT=8057" >> env-example.cpu; \
-			echo "TRAEFIK_WEB_HOST_PORT=9090" >> env-example.cpu; \
-			echo "TRAEFIK_DASHBOARD_HOST_PORT=8085" >> env-example.cpu; \
 			echo "TRANSCRIPTION_COLLECTOR_HOST_PORT=8123" >> env-example.cpu; \
 			echo "POSTGRES_HOST_PORT=5438" >> env-example.cpu; \
+			echo "# Remote Database Configuration" >> env-example.cpu; \
+			echo "# Set REMOTE_DB=true to use remote PostgreSQL instead of local Docker postgres" >> env-example.cpu; \
+			echo "REMOTE_DB=false" >> env-example.cpu; \
+			echo "# Docker-compose compatibility (not used in remote mode)" >> env-example.cpu; \
+			echo "WHISPER_MODEL_SIZE=" >> env-example.cpu; \
+			echo "WL_MAX_CLIENTS=" >> env-example.cpu; \
 		fi; \
 		cp env-example.cpu .env; \
+		TRANSCRIPTION_API_TOKEN=$$(grep -E '^[[:space:]]*API_TOKEN=' services/transcription-service/.env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo ""); \
+		echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:111\",\"message\":\"Syncing API key to .env (CPU)\",\"data\":{\"token_found\":$$([ -n \"$$TRANSCRIPTION_API_KEY\" ] && echo true || echo false),\"token_len\":$$(echo -n \"$$TRANSCRIPTION_API_TOKEN\" | wc -c)},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
+		if [ -n "$$TRANSCRIPTION_API_TOKEN" ]; then \
+			if grep -q "^REMOTE_TRANSCRIBER_API_KEY=" .env 2>/dev/null; then \
+				sed -i.bak "s|^REMOTE_TRANSCRIBER_API_KEY=.*|REMOTE_TRANSCRIBER_API_KEY=$$TRANSCRIPTION_API_TOKEN|" .env; \
+				rm -f .env.bak; \
+				echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:115\",\"message\":\"Updated existing REMOTE_TRANSCRIBER_API_KEY\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
+			else \
+				echo "REMOTE_TRANSCRIBER_API_KEY=$$TRANSCRIPTION_API_TOKEN" >> .env; \
+				echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:118\",\"message\":\"Added REMOTE_TRANSCRIBER_API_KEY to .env\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
+			fi; \
+			SYNCED_KEY=$$(grep -E '^[[:space:]]*REMOTE_TRANSCRIBER_API_KEY=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo ""); \
+			echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:121\",\"message\":\"Verified synced key in .env\",\"data\":{\"key_synced\":$$([ \"$$SYNCED_KEY\" = \"$$TRANSCRIPTION_API_TOKEN\" ] && echo true || echo false),\"synced_key_len\":$$(echo -n \"$$SYNCED_KEY\" | wc -c)},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
+			echo "*** Synced REMOTE_TRANSCRIBER_API_KEY from transcription-service/.env ***"; \
+		else \
+			echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:124\",\"message\":\"WARNING: No API_TOKEN found to sync\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
+		fi; \
 		echo "*** .env file created from env-example.cpu. Please review it. ***"; \
 	elif [ "$(TARGET)" = "gpu" ]; then \
 		if [ ! -f env-example.gpu ]; then \
@@ -122,21 +349,77 @@ endif
 			echo "ADMIN_API_TOKEN=token" > env-example.gpu; \
 			echo "LANGUAGE_DETECTION_SEGMENTS=10" >> env-example.gpu; \
 			echo "VAD_FILTER_THRESHOLD=0.5" >> env-example.gpu; \
-			echo "WHISPER_MODEL_SIZE=medium" >> env-example.gpu; \
-			echo "DEVICE_TYPE=cuda" >> env-example.gpu; \
+			echo "DEVICE_TYPE=remote" >> env-example.gpu; \
 			echo "BOT_IMAGE_NAME=vexa-bot:dev" >> env-example.gpu; \
+			echo "# Remote Transcriber API Configuration" >> env-example.gpu; \
+			echo "REMOTE_TRANSCRIBER_URL=http://transcription-lb:80/v1/audio/transcriptions" >> env-example.gpu; \
+			TRANSCRIPTION_API_TOKEN=$$(grep -E '^[[:space:]]*API_TOKEN=' services/transcription-service/.env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo ""); \
+			if [ -n "$$TRANSCRIPTION_API_TOKEN" ]; then \
+				echo "REMOTE_TRANSCRIBER_API_KEY=$$TRANSCRIPTION_API_TOKEN" >> env-example.gpu; \
+			else \
+				echo "REMOTE_TRANSCRIBER_API_KEY=" >> env-example.gpu; \
+			fi; \
 			echo "# Exposed Host Ports" >> env-example.gpu; \
 			echo "API_GATEWAY_HOST_PORT=8056" >> env-example.gpu; \
 			echo "ADMIN_API_HOST_PORT=8057" >> env-example.gpu; \
-			echo "TRAEFIK_WEB_HOST_PORT=9090" >> env-example.gpu; \
-			echo "TRAEFIK_DASHBOARD_HOST_PORT=8085" >> env-example.gpu; \
 			echo "TRANSCRIPTION_COLLECTOR_HOST_PORT=8123" >> env-example.gpu; \
 			echo "POSTGRES_HOST_PORT=5438" >> env-example.gpu; \
+			echo "# Remote Database Configuration" >> env-example.gpu; \
+			echo "# Set REMOTE_DB=true to use remote PostgreSQL instead of local Docker postgres" >> env-example.gpu; \
+			echo "REMOTE_DB=false" >> env-example.gpu; \
+			echo "# Docker-compose compatibility (not used in remote mode)" >> env-example.gpu; \
+			echo "WHISPER_MODEL_SIZE=" >> env-example.gpu; \
+			echo "WL_MAX_CLIENTS=" >> env-example.gpu; \
 		fi; \
 		cp env-example.gpu .env; \
+		TRANSCRIPTION_API_TOKEN=$$(grep -E '^[[:space:]]*API_TOKEN=' services/transcription-service/.env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo ""); \
+		if [ -n "$$TRANSCRIPTION_API_TOKEN" ]; then \
+			if grep -q "^REMOTE_TRANSCRIBER_API_KEY=" .env 2>/dev/null; then \
+				sed -i.bak "s|^REMOTE_TRANSCRIBER_API_KEY=.*|REMOTE_TRANSCRIBER_API_KEY=$$TRANSCRIPTION_API_TOKEN|" .env; \
+				rm -f .env.bak; \
+			else \
+				echo "REMOTE_TRANSCRIBER_API_KEY=$$TRANSCRIPTION_API_TOKEN" >> .env; \
+			fi; \
+			echo "*** Synced REMOTE_TRANSCRIBER_API_KEY from transcription-service/.env ***"; \
+		fi; \
 		echo "*** .env file created from env-example.gpu. Please review it. ***"; \
+	elif [ "$(TARGET)" = "remote" ] || [ "$(TARGET)" = "provider" ]; then \
+		if [ ! -f env-example.remote ]; then \
+			echo "env-example.remote not found. Creating default one."; \
+			echo "ADMIN_API_TOKEN=token" > env-example.remote; \
+			echo "LANGUAGE_DETECTION_SEGMENTS=10" >> env-example.remote; \
+			echo "VAD_FILTER_THRESHOLD=0.5" >> env-example.remote; \
+			echo "WHISPER_MODEL_SIZE=medium" >> env-example.remote; \
+			echo "DEVICE_TYPE=remote" >> env-example.remote; \
+			echo "BOT_IMAGE_NAME=vexa-bot:dev" >> env-example.remote; \
+			echo "# WhisperLive Configuration" >> env-example.remote; \
+			echo "WL_MAX_CLIENTS=10" >> env-example.remote; \
+			echo "# Remote Transcriber API Configuration" >> env-example.remote; \
+			echo "REMOTE_TRANSCRIBER_URL=https://audio-turbo.api.fireworks.ai/v1/audio/transcriptions" >> env-example.remote; \
+			echo "REMOTE_TRANSCRIBER_API_KEY=your_api_key_here" >> env-example.remote; \
+			echo "REMOTE_TRANSCRIBER_MODEL=whisper-v3-turbo" >> env-example.remote; \
+			echo "REMOTE_TRANSCRIBER_TEMPERATURE=0" >> env-example.remote; \
+			echo "REMOTE_TRANSCRIBER_VAD_MODEL=silero" >> env-example.remote; \
+			echo "# Exposed Host Ports" >> env-example.remote; \
+			echo "API_GATEWAY_HOST_PORT=8056" >> env-example.remote; \
+			echo "ADMIN_API_HOST_PORT=8057" >> env-example.remote; \
+			echo "TRANSCRIPTION_COLLECTOR_HOST_PORT=8123" >> env-example.remote; \
+			echo "POSTGRES_HOST_PORT=5438" >> env-example.remote; \
+			echo "# Remote Database Configuration" >> env-example.remote; \
+			echo "# Set REMOTE_DB=true to use remote PostgreSQL instead of local Docker postgres" >> env-example.remote; \
+			echo "# When REMOTE_DB=true: Uncomment and set the remote database credentials below" >> env-example.remote; \
+			echo "REMOTE_DB=false" >> env-example.remote; \
+			echo "# DB_HOST=your-remote-db-host" >> env-example.remote; \
+			echo "# DB_PORT=5432" >> env-example.remote; \
+			echo "# DB_NAME=your-db-name" >> env-example.remote; \
+			echo "# DB_USER=your-db-user" >> env-example.remote; \
+			echo "# DB_PASSWORD=your-db-password" >> env-example.remote; \
+		fi; \
+		cp env-example.remote .env; \
+		echo "*** .env file created from env-example.remote. Please review it. ***"; \
+		echo "*** IMPORTANT: Set REMOTE_TRANSCRIBER_API_KEY in .env file with your API key. ***"; \
 	else \
-		echo "Error: TARGET must be 'cpu' or 'gpu'. Usage: make force-env TARGET=<cpu|gpu>"; \
+		echo "Error: TARGET must be 'cpu', 'gpu', 'remote', or 'provider'. Usage: make force-env TARGET=<cpu|gpu|remote|provider>"; \
 		exit 1; \
 	fi
 
@@ -176,46 +459,142 @@ build-bot-image: check_docker
 		docker build -t $(BOT_IMAGE_NAME) -f services/vexa-bot/core/Dockerfile ./services/vexa-bot/core; \
 	fi
 
-# Build Docker Compose service images
-build: check_docker
-	@echo "---> Building Docker images..."
+# Build transcription-service based on TARGET
+build-transcription-service: check_docker
+	@echo "---> Building transcription-service..."
+	@echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"Makefile:304\",\"message\":\"build-transcription-service started\",\"data\":{\"target\":\"$(TARGET)\"},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log
 	@if [ "$(TARGET)" = "cpu" ]; then \
-		echo "---> Building with 'cpu' profile (includes whisperlive-cpu)..."; \
-		docker compose --profile cpu build; \
+		echo "---> Building transcription-service in CPU mode..."; \
+		echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"Makefile:307\",\"message\":\"Building transcription-service CPU mode\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
+		cd services/transcription-service && docker compose -f docker-compose.cpu.yml build; \
 	elif [ "$(TARGET)" = "gpu" ]; then \
-		echo "---> Building with 'gpu' profile (includes whisperlive GPU)..."; \
-		docker compose --profile gpu build; \
+		echo "---> Building transcription-service in GPU mode..."; \
+		echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"Makefile:311\",\"message\":\"Building transcription-service GPU mode\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
+		cd services/transcription-service && docker compose build; \
 	else \
-		echo "---> TARGET not explicitly set, defaulting to CPU mode. 'whisperlive' (GPU) will not be built."; \
-		docker compose --profile cpu build; \
+		echo "---> TARGET not set or invalid. Skipping transcription-service build."; \
+		echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"Makefile:314\",\"message\":\"Skipping transcription-service build (invalid TARGET)\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
 	fi
 
-# Start services in detached mode
-up: check_docker
-	@echo "---> Starting Docker Compose services..."
-	@if [ "$(TARGET)" = "cpu" ]; then \
-		echo "---> Activating 'cpu' profile to start whisperlive-cpu along with other services..."; \
-		docker compose --profile cpu up -d; \
-	elif [ "$(TARGET)" = "gpu" ]; then \
-		echo "---> Starting services for GPU. This will start 'whisperlive' (for GPU) and other default services. 'whisperlive-cpu' (profile=cpu) will not be started."; \
-		docker compose --profile gpu up -d; \
+# Build Docker Compose service images
+build: check_docker build-bot-image build-transcription-service
+	@echo "---> Building Docker images..."
+	@REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
+	COMPOSE_FILES="-f docker-compose.yml"; \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		COMPOSE_FILES="$$COMPOSE_FILES -f docker-compose.local-db.yml"; \
+		echo "---> Using local database configuration"; \
 	else \
-		echo "---> TARGET not explicitly set, defaulting to CPU mode. 'whisperlive' (GPU) will not be started."; \
-		docker compose --profile cpu up -d; \
+		echo "---> Using remote database configuration"; \
+	fi; \
+	if [ "$(TARGET)" = "cpu" ]; then \
+		echo "---> Building with 'remote' profile (includes whisperlive-remote for remote transcription via transcription-service)..."; \
+		docker compose $$COMPOSE_FILES --profile remote build; \
+	elif [ "$(TARGET)" = "gpu" ]; then \
+		echo "---> Building with 'remote' profile (includes whisperlive-remote for remote transcription via transcription-service)..."; \
+		docker compose $$COMPOSE_FILES --profile remote build; \
+	elif [ "$(TARGET)" = "remote" ] || [ "$(TARGET)" = "provider" ]; then \
+		echo "---> Building with 'remote' profile (includes whisperlive-remote)..."; \
+		docker compose $$COMPOSE_FILES --profile remote build; \
+	else \
+		echo "---> TARGET not explicitly set, defaulting to remote profile."; \
+		docker compose $$COMPOSE_FILES --profile remote build; \
+	fi
+
+# Start transcription-service based on TARGET
+up-transcription-service: check_docker
+	@echo "---> Starting transcription-service..."
+	@echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"Makefile:342\",\"message\":\"up-transcription-service started\",\"data\":{\"target\":\"$(TARGET)\"},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log
+	@if [ "$(TARGET)" = "cpu" ]; then \
+		echo "---> Starting transcription-service in CPU mode..."; \
+		echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"Makefile:345\",\"message\":\"Starting transcription-service CPU mode\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
+		cd services/transcription-service && docker compose -f docker-compose.cpu.yml up -d; \
+		echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"Makefile:347\",\"message\":\"transcription-service CPU started\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
+	elif [ "$(TARGET)" = "gpu" ]; then \
+		echo "---> Starting transcription-service in GPU mode..."; \
+		echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"Makefile:350\",\"message\":\"Starting transcription-service GPU mode\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
+		cd services/transcription-service && docker compose up -d; \
+		echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"Makefile:352\",\"message\":\"transcription-service GPU started\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
+	else \
+		echo "---> TARGET not set or invalid. Skipping transcription-service."; \
+		echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"Makefile:355\",\"message\":\"Skipping transcription-service (invalid TARGET)\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
+	fi
+
+# Stop transcription-service (handles both CPU and GPU modes)
+down-transcription-service: check_docker
+	@echo "---> Stopping transcription-service..."
+	@cd services/transcription-service && docker compose -f docker-compose.cpu.yml down 2>/dev/null || true
+	@cd services/transcription-service && docker compose down 2>/dev/null || true
+
+# Start services in detached mode
+up: check_docker up-transcription-service
+	@echo "---> Starting Docker Compose services..."
+	@REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
+	COMPOSE_FILES="-f docker-compose.yml"; \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		COMPOSE_FILES="$$COMPOSE_FILES -f docker-compose.local-db.yml"; \
+		echo "---> Using local database (postgres service will be started)"; \
+	else \
+		echo "---> Using remote database (postgres service will NOT be started)"; \
+	fi; \
+	if [ "$(TARGET)" = "cpu" ]; then \
+		echo "---> Activating 'remote' profile to start whisperlive-remote (for remote transcription via transcription-service in CPU mode)..."; \
+		docker compose $$COMPOSE_FILES --profile remote up -d; \
+	elif [ "$(TARGET)" = "gpu" ]; then \
+		echo "---> Starting services for GPU. This will start 'whisperlive-remote' (for remote transcription via transcription-service in GPU mode) and other default services."; \
+		docker compose $$COMPOSE_FILES --profile remote up -d; \
+	elif [ "$(TARGET)" = "remote" ] || [ "$(TARGET)" = "provider" ]; then \
+		echo "---> Starting services for Remote. This will start 'whisperlive-remote' along with other default services."; \
+		docker compose $$COMPOSE_FILES --profile remote up -d; \
+	else \
+		echo "---> TARGET not explicitly set, defaulting to remote profile."; \
+		docker compose $$COMPOSE_FILES --profile remote up -d; \
+	fi; \
+	# Verify postgres container state matches REMOTE_DB setting \
+	sleep 2; \
+	if [ "$$REMOTE_DB" = "true" ]; then \
+		if docker compose $$COMPOSE_FILES ps -q postgres 2>/dev/null | grep -q .; then \
+			echo "WARNING: postgres container is running but REMOTE_DB=true. This should not happen."; \
+			exit 1; \
+		else \
+			echo "✓ Verified: postgres container is NOT running (as expected with REMOTE_DB=true)"; \
+		fi; \
+	else \
+		if docker compose $$COMPOSE_FILES ps -q postgres 2>/dev/null | grep -q .; then \
+			echo "✓ Verified: postgres container is running (as expected with REMOTE_DB=false)"; \
+		else \
+			echo "WARNING: postgres container is NOT running but REMOTE_DB=false. This should not happen."; \
+			exit 1; \
+		fi; \
 	fi
 
 # Stop services
-down: check_docker
+down: check_docker down-transcription-service
 	@echo "---> Stopping Docker Compose services..."
-	@docker compose down
+	@REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
+	COMPOSE_FILES="-f docker-compose.yml"; \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		COMPOSE_FILES="$$COMPOSE_FILES -f docker-compose.local-db.yml"; \
+	fi; \
+	docker compose $$COMPOSE_FILES down
 
 # Show container status
 ps: check_docker
-	@docker compose ps
+	@REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
+	COMPOSE_FILES="-f docker-compose.yml"; \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		COMPOSE_FILES="$$COMPOSE_FILES -f docker-compose.local-db.yml"; \
+	fi; \
+	docker compose $$COMPOSE_FILES ps
 
 # Tail logs for all services
 logs:
-	@docker compose logs -f
+	@REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
+	COMPOSE_FILES="-f docker-compose.yml"; \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		COMPOSE_FILES="$$COMPOSE_FILES -f docker-compose.local-db.yml"; \
+	fi; \
+	docker compose $$COMPOSE_FILES logs -f
 
 # Run the interaction test script
 test: check_docker
@@ -309,56 +688,96 @@ test-setup: check_docker
 migrate-or-init: check_docker
 	@echo "---> Starting smart database migration/initialization..."; \
 	set -e; \
-	if ! docker compose ps -q postgres | grep -q .; then \
-		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
-		exit 1; \
+	REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
+	COMPOSE_FILES="-f docker-compose.yml"; \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		COMPOSE_FILES="$$COMPOSE_FILES -f docker-compose.local-db.yml"; \
 	fi; \
-	echo "---> Waiting for database to be ready..."; \
-	count=0; \
-	while ! docker compose exec -T postgres pg_isready -U postgres -d vexa -q; do \
-		if [ $$count -ge 12 ]; then \
-			echo "ERROR: Database did not become ready in 60 seconds."; \
+	DB_HOST=$$(grep -E '^[[:space:]]*DB_HOST=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo "postgres"); \
+	DB_PORT=$$(grep -E '^[[:space:]]*DB_PORT=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo "5432"); \
+	DB_NAME=$$(grep -E '^[[:space:]]*DB_NAME=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo "vexa"); \
+	DB_USER=$$(grep -E '^[[:space:]]*DB_USER=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo "postgres"); \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		if ! docker compose $$COMPOSE_FILES ps -q postgres | grep -q .; then \
+			echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
 			exit 1; \
 		fi; \
-		echo "Database not ready, waiting 5 seconds..."; \
-		sleep 5; \
-		count=$$((count+1)); \
-	done; \
-	echo "---> Database is ready. Checking its state..."; \
-	if docker compose exec -T postgres psql -U postgres -d vexa -t -c "SELECT 1 FROM information_schema.tables WHERE table_name = 'alembic_version';" | grep -q 1; then \
-		echo "STATE: Alembic-managed database detected."; \
-		echo "ACTION: Running standard migrations to catch up to 'head'..."; \
-		$(MAKE) migrate; \
-	elif docker compose exec -T postgres psql -U postgres -d vexa -t -c "SELECT 1 FROM information_schema.tables WHERE table_name = 'meetings';" | grep -q 1; then \
-		echo "STATE: Legacy (non-Alembic) database detected."; \
-		echo "ACTION: Stamping at 'base' and migrating to 'head' to bring it under Alembic control..."; \
-		docker compose exec -T transcription-collector alembic -c /app/alembic.ini stamp base; \
-		$(MAKE) migrate; \
+		echo "---> Waiting for local database to be ready..."; \
+		count=0; \
+		while ! docker compose $$COMPOSE_FILES exec -T postgres pg_isready -U $$DB_USER -d $$DB_NAME -q; do \
+			if [ $$count -ge 12 ]; then \
+				echo "ERROR: Database did not become ready in 60 seconds."; \
+				exit 1; \
+			fi; \
+			echo "Database not ready, waiting 5 seconds..."; \
+			sleep 5; \
+			count=$$((count+1)); \
+		done; \
+		echo "---> Database is ready. Checking its state..."; \
+		if docker compose $$COMPOSE_FILES exec -T postgres psql -U $$DB_USER -d $$DB_NAME -t -c "SELECT 1 FROM information_schema.tables WHERE table_name = 'alembic_version';" | grep -q 1; then \
+			echo "STATE: Alembic-managed database detected."; \
+			echo "ACTION: Running standard migrations to catch up to 'head'..."; \
+			$(MAKE) migrate; \
+		elif docker compose $$COMPOSE_FILES exec -T postgres psql -U $$DB_USER -d $$DB_NAME -t -c "SELECT 1 FROM information_schema.tables WHERE table_name = 'meetings';" | grep -q 1; then \
+			echo "STATE: Legacy (non-Alembic) database detected."; \
+			echo "ACTION: Stamping at 'base' and migrating to 'head' to bring it under Alembic control..."; \
+			docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini stamp base; \
+			$(MAKE) migrate; \
+		else \
+			echo "STATE: Fresh, empty database detected."; \
+			echo "ACTION: Creating schema directly from models and stamping at current revision..."; \
+			docker compose $$COMPOSE_FILES exec -T transcription-collector python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db())"; \
+			docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini stamp head; \
+		fi; \
 	else \
-		echo "STATE: Fresh, empty database detected."; \
-		echo "ACTION: Creating schema directly from models and stamping at revision dc59a1c03d1f..."; \
-		docker compose exec -T transcription-collector python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db())"; \
-		docker compose exec -T transcription-collector alembic -c /app/alembic.ini stamp dc59a1c03d1f; \
+		echo "---> Using remote database at $$DB_HOST:$$DB_PORT"; \
+		echo "---> Checking database state via transcription-collector..."; \
+		DB_STATE=$$(docker compose $$COMPOSE_FILES exec -T transcription-collector python /app/libs/shared-models/check_db_state.py 2>/dev/null || echo "fresh"); \
+		if [ "$$DB_STATE" = "alembic" ]; then \
+			echo "STATE: Alembic-managed database detected."; \
+			echo "ACTION: Running standard migrations to catch up to 'head'..."; \
+			$(MAKE) migrate; \
+		elif [ "$$DB_STATE" = "legacy" ]; then \
+			echo "STATE: Legacy (non-Alembic) database detected."; \
+			echo "ACTION: Stamping at 'base' and migrating to 'head' to bring it under Alembic control..."; \
+			docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini stamp base; \
+			$(MAKE) migrate; \
+		else \
+			echo "STATE: Fresh, empty database detected."; \
+			echo "ACTION: Creating schema directly from models and stamping at current revision..."; \
+			docker compose $$COMPOSE_FILES exec -T transcription-collector python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db())"; \
+			docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini stamp head; \
+		fi; \
 	fi; \
 	echo "---> Smart database migration/initialization complete!"
 
 # Apply all pending migrations to bring database to latest version
 migrate: check_docker
 	@echo "---> Applying database migrations..."
-	@if ! docker compose ps postgres | grep -q "Up"; then \
-		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
-		exit 1; \
-	fi
-	@# Preflight: if currently at dc59a1c03d1f and users.data already exists, stamp next revision
-	@current_version=$$(docker compose exec -T transcription-collector alembic -c /app/alembic.ini current 2>/dev/null | grep -E '^[a-f0-9]{12}' | head -1 || echo ""); \
-	if [ "$$current_version" = "dc59a1c03d1f" ]; then \
-		if docker compose exec -T postgres psql -U postgres -d vexa -t -c "SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'data';" | grep -q 1; then \
-			echo "---> Preflight: detected existing column users.data. Stamping 5befe308fa8b..."; \
-			docker compose exec -T transcription-collector alembic -c /app/alembic.ini stamp 5befe308fa8b; \
+	@REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		if ! docker compose -f docker-compose.yml -f docker-compose.local-db.yml ps postgres | grep -q "Up"; then \
+			echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
+			exit 1; \
 		fi; \
+		DB_USER=$$(grep -E '^[[:space:]]*DB_USER=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo "postgres"); \
+		DB_NAME=$$(grep -E '^[[:space:]]*DB_NAME=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo "vexa"); \
+		current_version=$$(docker compose -f docker-compose.yml -f docker-compose.local-db.yml exec -T transcription-collector alembic -c /app/alembic.ini current 2>/dev/null | grep -E '^[a-f0-9]{12}' | head -1 || echo ""); \
+		if [ "$$current_version" = "dc59a1c03d1f" ]; then \
+			if docker compose -f docker-compose.yml -f docker-compose.local-db.yml exec -T postgres psql -U $$DB_USER -d $$DB_NAME -t -c "SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'data';" | grep -q 1; then \
+				echo "---> Preflight: detected existing column users.data. Stamping 5befe308fa8b..."; \
+				docker compose -f docker-compose.yml -f docker-compose.local-db.yml exec -T transcription-collector alembic -c /app/alembic.ini stamp 5befe308fa8b; \
+			fi; \
+		fi; \
+		echo "---> Running alembic upgrade head..."; \
+		docker compose -f docker-compose.yml -f docker-compose.local-db.yml exec -T transcription-collector alembic -c /app/alembic.ini upgrade head; \
+	else \
+		DB_HOST=$$(grep -E '^[[:space:]]*DB_HOST=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo "postgres"); \
+		DB_PORT=$$(grep -E '^[[:space:]]*DB_PORT=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo "5432"); \
+		echo "---> Using remote database at $$DB_HOST:$$DB_PORT"; \
+		echo "---> Running alembic upgrade head..."; \
+		docker compose -f docker-compose.yml exec -T transcription-collector alembic -c /app/alembic.ini upgrade head; \
 	fi
-	@echo "---> Running alembic upgrade head..."
-	@docker compose exec -T transcription-collector alembic -c /app/alembic.ini upgrade head
 
 # Create a new migration file based on model changes
 makemigrations: check_docker
@@ -368,39 +787,59 @@ makemigrations: check_docker
 		exit 1; \
 	fi
 	@echo "---> Creating new migration: $(M)"
-	@if ! docker compose ps postgres | grep -q "Up"; then \
-		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
-		exit 1; \
+	@REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
+	COMPOSE_FILES="-f docker-compose.yml"; \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		COMPOSE_FILES="$$COMPOSE_FILES -f docker-compose.local-db.yml"; \
+		if ! docker compose $$COMPOSE_FILES ps postgres | grep -q "Up"; then \
+			echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
+			exit 1; \
+		fi; \
 	fi
-	@docker compose exec -T transcription-collector alembic -c /app/alembic.ini revision --autogenerate -m "$(M)"
+	@docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini revision --autogenerate -m "$(M)"
 
 # Initialize the database (first time setup) - creates tables and stamps with latest revision
 init-db: check_docker
 	@echo "---> Initializing database and stamping with Alembic..."
-	docker compose run --rm transcription-collector python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db())"
-	docker compose run --rm transcription-collector alembic -c /app/alembic.ini stamp head
+	@REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
+	COMPOSE_FILES="-f docker-compose.yml"; \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		COMPOSE_FILES="$$COMPOSE_FILES -f docker-compose.local-db.yml"; \
+	fi; \
+	docker compose $$COMPOSE_FILES run --rm transcription-collector python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db())"
+	docker compose $$COMPOSE_FILES run --rm transcription-collector alembic -c /app/alembic.ini stamp head
 	@echo "---> Database initialized and stamped."
 
 # Stamp existing database with current version (for existing installations)
 stamp-db: check_docker
 	@echo "---> Stamping existing database with current migration version..."
-	@if ! docker compose ps postgres | grep -q "Up"; then \
-		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
-		exit 1; \
+	@REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
+	COMPOSE_FILES="-f docker-compose.yml"; \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		COMPOSE_FILES="$$COMPOSE_FILES -f docker-compose.local-db.yml"; \
+		if ! docker compose $$COMPOSE_FILES ps postgres | grep -q "Up"; then \
+			echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
+			exit 1; \
+		fi; \
 	fi
-	@docker compose exec -T transcription-collector alembic -c /app/alembic.ini stamp head
+	@docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini stamp head
 	@echo "---> Database stamped successfully!"
 
 # Show current migration status
 migration-status: check_docker
 	@echo "---> Checking migration status..."
-	@if ! docker compose ps postgres | grep -q "Up"; then \
-		echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
-		exit 1; \
+	@REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
+	COMPOSE_FILES="-f docker-compose.yml"; \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		COMPOSE_FILES="$$COMPOSE_FILES -f docker-compose.local-db.yml"; \
+		if ! docker compose $$COMPOSE_FILES ps postgres | grep -q "Up"; then \
+			echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
+			exit 1; \
+		fi; \
 	fi
 	@echo "---> Current database version:"
-	@docker compose exec -T transcription-collector alembic -c /app/alembic.ini current
+	@docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini current
 	@echo "---> Migration history:"
-	@docker compose exec -T transcription-collector alembic -c /app/alembic.ini history --verbose
+	@docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini history --verbose
 
 # --- End Database Migration Commands ---

@@ -1,0 +1,240 @@
+# =============================================================================
+# Vexa Lite - All-in-One Docker Image
+# =============================================================================
+#
+# This Dockerfile creates a single container with all Vexa services:
+# - API Gateway (port 8056)
+# - Admin API (port 8057)
+# - Bot Manager (with process orchestrator)
+# - Transcription Collector
+# - WhisperLive (CPU-based transcription)
+# - Vexa Bot (Node.js/Playwright)
+# - MCP Service (port 18888)
+#
+# Designed for simple deployments on platforms like EasyPanel, Dokploy, etc.
+# where Docker socket access is not available.
+#
+# Build:
+#   docker build -f Dockerfile.lite -t vexa-lite .
+#
+# Run:
+#   docker run -d \
+#     -p 8056:8056 \
+#     -e REDIS_HOST=your-redis-host \
+#     -e DB_HOST=your-postgres-host \
+#     -e DB_PASSWORD=your-password \
+#     -e ADMIN_API_TOKEN=your-secret-token \
+#     vexa-lite
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Base Image: Playwright with browsers pre-installed
+# -----------------------------------------------------------------------------
+FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS base
+
+# Avoid prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+# Using --fix-missing to handle transient hash mismatches from Ubuntu repos
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends --fix-missing \
+    # Python 3.10+
+    python3 \
+    python3-pip \
+    python3-venv \
+    python3-dev \
+    # Build tools (needed for some Python packages)
+    build-essential \
+    gcc \
+    g++ \
+    # Audio/Video processing
+    xvfb \
+    pulseaudio \
+    ffmpeg \
+    libsndfile1 \
+    # Process management
+    supervisor \
+    # Database clients (for health checks and migrations)
+    postgresql-client \
+    redis-tools \
+    # Redis server (for internal Redis)
+    redis-server \
+    # Utilities
+    curl \
+    wget \
+    git \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create directory structure
+WORKDIR /app
+RUN mkdir -p \
+    /app/api-gateway \
+    /app/admin-api \
+    /app/bot-manager \
+    /app/transcription-collector \
+    /app/whisperlive \
+    /app/vexa-bot \
+    /app/mcp \
+    /app/shared-models \
+    /app/alembic \
+    /var/log/supervisor \
+    /var/log/vexa-bots \
+    /var/lib/redis \
+    /var/run/redis
+
+# -----------------------------------------------------------------------------
+# Python Dependencies Stage
+# -----------------------------------------------------------------------------
+
+# Copy requirements files first
+COPY docker/lite/requirements.txt /tmp/requirements.txt
+COPY services/WhisperLive/requirements/server.txt /tmp/requirements-whisperlive.txt
+COPY services/mcp/requirements.txt /tmp/requirements-mcp.txt
+
+# Install consolidated Python dependencies for all services
+RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
+
+# MCP service dependencies
+# Note: fastapi-mcp requires pydantic>=2.0.0, so we upgrade pydantic here
+RUN pip3 install --no-cache-dir --upgrade pydantic>=2.0.0 && \
+    pip3 install --no-cache-dir -r /tmp/requirements-mcp.txt
+
+# WhisperLive dependencies (CPU version)
+# Note: openai-whisper and onnxruntime GPU versions are excluded
+RUN sed -i '/openai-whisper/d' /tmp/requirements-whisperlive.txt || true \
+    && sed -i '/onnxruntime==/d' /tmp/requirements-whisperlive.txt || true \
+    && pip3 install --no-cache-dir -r /tmp/requirements-whisperlive.txt \
+    && pip3 install --no-cache-dir onnxruntime \
+    && pip3 install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu \
+    && pip3 install --no-cache-dir 'faster-whisper[cpu]'
+
+# Clean up requirements files
+RUN rm -f /tmp/requirements-*.txt
+
+# Copy shared library
+COPY libs/shared-models /app/shared-models
+
+# Add shared_models to Python path (more reliable than pip install)
+ENV PYTHONPATH="/app/shared-models${PYTHONPATH:+:${PYTHONPATH}}"
+
+# Verify shared_models is importable
+RUN python3 -c "import shared_models; print(f'shared_models found at: {shared_models.__file__}')" \
+    && python3 -c "from shared_models.models import User, Meeting; print('Models imported successfully')"
+
+# -----------------------------------------------------------------------------
+# Application Code
+# -----------------------------------------------------------------------------
+
+# API Gateway
+COPY services/api-gateway/ /app/api-gateway/
+
+# Admin API
+COPY services/admin-api/ /app/admin-api/
+
+# Bot Manager (including the new process orchestrator)
+COPY services/bot-manager/app/ /app/bot-manager/app/
+
+# Transcription Collector
+COPY services/transcription-collector/ /app/transcription-collector/
+
+# WhisperLive
+COPY services/WhisperLive/ /app/whisperlive/
+
+# MCP Service
+COPY services/mcp/ /app/mcp/
+
+# Alembic migrations
+COPY alembic.ini /app/alembic.ini
+COPY libs/shared-models/alembic/ /app/alembic/
+
+# -----------------------------------------------------------------------------
+# Node.js Bot Build
+# -----------------------------------------------------------------------------
+
+# Copy vexa-bot source
+COPY services/vexa-bot/core/ /app/vexa-bot/
+
+# Build the bot
+WORKDIR /app/vexa-bot
+RUN npm ci --omit=dev 2>/dev/null || npm install \
+    && npm run build
+
+# Install additional browsers for Teams support
+RUN npx playwright install msedge --with-deps || true
+
+# Ensure browser-utils is built
+RUN node build-browser-utils.js || true
+
+# Return to app directory
+WORKDIR /app
+
+# -----------------------------------------------------------------------------
+# Configuration Files
+# -----------------------------------------------------------------------------
+
+# Supervisor configuration
+COPY docker/lite/supervisord.conf /etc/supervisor/conf.d/vexa.conf
+
+# Entrypoint script
+COPY docker/lite/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# -----------------------------------------------------------------------------
+# Environment Variables (defaults)
+# -----------------------------------------------------------------------------
+
+# Orchestrator configuration
+ENV ORCHESTRATOR=process \
+    BOT_SCRIPT_PATH=/app/vexa-bot/dist/docker.js \
+    BOT_WORKING_DIR=/app/vexa-bot \
+    BOT_CALLBACK_BASE_URL=http://localhost:8080
+
+# WhisperLive configuration
+ENV WHISPER_LIVE_URL=ws://localhost:9090 \
+    DEVICE_TYPE=cpu \
+    WHISPER_MODEL_SIZE=tiny \
+    CONSUL_ENABLE=false
+
+# Display for headless browsers
+ENV DISPLAY=:99
+
+# Logging
+ENV LOG_LEVEL=info \
+    PYTHONUNBUFFERED=1
+
+# Database defaults (should be overridden)
+# Note: DB_PASSWORD must be provided at runtime via -e flag
+ENV DB_HOST=localhost \
+    DB_PORT=5432 \
+    DB_NAME=vexa \
+    DB_USER=postgres
+
+# Redis defaults (should be overridden)
+ENV REDIS_HOST=localhost \
+    REDIS_PORT=6379
+
+# -----------------------------------------------------------------------------
+# Ports
+# -----------------------------------------------------------------------------
+
+# API Gateway (main entry point - routes all services)
+# Note: Admin API (8057) and MCP Service (18888) are internal only
+# and accessed through the API Gateway at port 8056
+EXPOSE 8056
+
+# -----------------------------------------------------------------------------
+# Health Check
+# -----------------------------------------------------------------------------
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+    CMD curl -sf http://localhost:8056/docs > /dev/null || exit 1
+
+# -----------------------------------------------------------------------------
+# Entrypoint
+# -----------------------------------------------------------------------------
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["supervisord", "-n", "-c", "/etc/supervisor/conf.d/vexa.conf"]

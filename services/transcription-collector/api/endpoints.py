@@ -205,7 +205,7 @@ async def get_meetings(
     stmt = select(Meeting).where(Meeting.user_id == current_user.id).order_by(Meeting.created_at.desc())
     result = await db.execute(stmt)
     meetings = result.scalars().all()
-    return MeetingListResponse(meetings=[MeetingResponse.from_orm(m) for m in meetings])
+    return MeetingListResponse(meetings=[MeetingResponse.model_validate(m) for m in meetings])
     
 @router.get("/transcripts/{platform}/{native_meeting_id}",
             response_model=TranscriptionResponse,
@@ -273,8 +273,8 @@ async def get_transcript_by_native_id(
     
     logger.info(f"[API Meet {internal_meeting_id}] Merged and sorted into {len(sorted_segments)} total segments.")
     
-    meeting_details = MeetingResponse.from_orm(meeting)
-    response_data = meeting_details.dict()
+    meeting_details = MeetingResponse.model_validate(meeting)
+    response_data = meeting_details.model_dump()
     response_data["segments"] = sorted_segments
     return TranscriptionResponse(**response_data)
 
@@ -391,8 +391,8 @@ async def update_meeting_data(
     try:
         if hasattr(meeting_update.data, 'dict'):
             # meeting_update.data is a MeetingDataUpdate pydantic object
-            update_data = meeting_update.data.dict(exclude_unset=True)
-            logger.debug(f"[API] Extracted update_data via .dict(): {update_data}")
+            update_data = meeting_update.data.model_dump(exclude_unset=True)
+            logger.debug(f"[API] Extracted update_data via .model_dump(): {update_data}")
         else:
             # Fallback: meeting_update.data is already a dict
             update_data = meeting_update.data
@@ -448,7 +448,7 @@ async def update_meeting_data(
     
     logger.debug(f"[API] Meeting.data after commit and refresh: {meeting.data}")
     
-    return MeetingResponse.from_orm(meeting)
+    return MeetingResponse.model_validate(meeting)
 
 @router.delete("/meetings/{platform}/{native_meeting_id}",
               summary="Delete meeting transcripts and anonymize meeting data",
