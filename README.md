@@ -63,7 +63,7 @@ At [vexa.ai](https://vexa.ai) — just grab API key
 *<small style="color: #999;">Ready to integrate</small>*
 
 
-## 🎉 What's new in v0.7 (18 Dec 2025)
+## 🎉 What's new in v0.7 (pre-release)
 
 - **Vexa Lite:** run Vexa as a **single Docker container** (`vexaai/vexa-lite:latest`)
 - **Optional external transcription:** point Lite to an external service to avoid GPU requirements
