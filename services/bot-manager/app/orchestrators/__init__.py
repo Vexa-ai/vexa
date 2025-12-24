@@ -1,3 +1,13 @@
+"""Orchestrator module loader.
+
+This module dynamically loads the appropriate orchestrator implementation
+based on the ORCHESTRATOR environment variable.
+
+Supported orchestrators:
+- docker (default): Uses Docker socket to spawn bot containers
+- nomad: Uses HashiCorp Nomad to dispatch parameterized jobs
+- process: Spawns bots as local Node.js processes (for Lite deployments)
+"""
 import os
 import importlib
 import logging
@@ -5,7 +15,16 @@ import logging
 logger = logging.getLogger("bot_manager.orchestrator_loader")
 
 _orchestrator = os.getenv("ORCHESTRATOR", "docker").lower()
-module_name = "app.orchestrators.nomad" if _orchestrator == "nomad" else "app.orchestrators.docker"
+
+# Select the appropriate orchestrator module based on ORCHESTRATOR env var
+if _orchestrator == "nomad":
+    module_name = "app.orchestrators.nomad"
+elif _orchestrator == "process":
+    module_name = "app.orchestrators.process"
+else:
+    # Default to Docker orchestrator
+    module_name = "app.orchestrators.docker"
+
 logger.info(f"Using '{_orchestrator}' orchestrator module: {module_name}")
 
 # Dynamically import the concrete module

@@ -333,6 +333,9 @@ export const teamsParticipantIdSelectors: string[] = [
   '[data-user-id]'
 ];
 
+// Primary hangup button selector (most reliable)
+export const teamsPrimaryHangupButtonSelector = '#hangup-button';
+
 // Teams comprehensive leave selectors (stateless - covers all scenarios)
 export const teamsLeaveSelectors: string[] = [
   // WORKING SELECTORS FIRST - confirmed from logs

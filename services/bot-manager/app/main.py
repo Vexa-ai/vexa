@@ -62,7 +62,15 @@ async def update_meeting_status(
     Returns:
         True if status was updated, False if transition was invalid
     """
-    current_status = MeetingStatus(meeting.status)
+    # Normalize invalid status values to valid enum (safety net for any legacy data)
+    try:
+        current_status = MeetingStatus(meeting.status)
+    except ValueError:
+        # Handle any invalid status values (e.g., legacy 'error' status)
+        logger.warning(f"Invalid meeting status '{meeting.status}' for meeting {meeting.id}, normalizing to 'failed'")
+        current_status = MeetingStatus.FAILED
+        meeting.status = MeetingStatus.FAILED.value
+        await db.commit()
     
     # Validate transition
     if not is_valid_status_transition(current_status, new_status):
@@ -556,9 +564,9 @@ async def request_bot(
     if invalid_fields:
         logger.error(f"Preflight validation failed. Invalid fields: {invalid_fields}")
         try:
-            current_meeting_for_bot_launch.status = 'error'
+            current_meeting_for_bot_launch.status = MeetingStatus.FAILED.value
             await db.commit()
-            await publish_meeting_status_change(meeting_id, 'error', redis_client, req.platform.value, native_meeting_id, current_user.id)
+            await publish_meeting_status_change(meeting_id, MeetingStatus.FAILED.value, redis_client, req.platform.value, native_meeting_id, current_user.id)
         except Exception as _:
             pass
         raise HTTPException(
@@ -590,9 +598,9 @@ async def request_bot(
             if not connection_id: error_msg += " Connection ID not generated/returned."
             logger.error(f"{error_msg} for meeting {meeting_id}")
             
-            current_meeting_for_bot_launch.status = 'error'
+            current_meeting_for_bot_launch.status = MeetingStatus.FAILED.value
             await db.commit()
-            await publish_meeting_status_change(meeting_id, 'error', redis_client, req.platform.value, native_meeting_id, current_user.id)
+            await publish_meeting_status_change(meeting_id, MeetingStatus.FAILED.value, redis_client, req.platform.value, native_meeting_id, current_user.id)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"status": "error", "message": error_msg, "meeting_id": meeting_id}
@@ -612,20 +620,20 @@ async def request_bot(
         logger.info(f"Successfully set container ID for meeting {meeting_id}. Status remains 'requested' until bot startup callback.")
 
         logger.info(f"Successfully started bot container {container_id} for meeting {meeting_id}")
-        return MeetingResponse.from_orm(current_meeting_for_bot_launch)
+        return MeetingResponse.model_validate(current_meeting_for_bot_launch)
 
     except HTTPException as http_exc:
         logger.warning(f"HTTPException occurred during bot startup for meeting {meeting_id}: {http_exc.status_code} - {http_exc.detail}")
         try:
             # Fetch again or use current_meeting_for_bot_launch if it's the correct one to update
             meeting_to_update = await db.get(Meeting, meeting_id) # Re-fetch to be safe with session state
-            if meeting_to_update and meeting_to_update.status not in ['error', 'failed', 'completed']: 
-                 logger.warning(f"Updating meeting {meeting_id} status to 'error' due to HTTPException {http_exc.status_code}.")
-                 meeting_to_update.status = 'error'
+            if meeting_to_update and meeting_to_update.status not in [MeetingStatus.FAILED.value, MeetingStatus.COMPLETED.value]: 
+                 logger.warning(f"Updating meeting {meeting_id} status to 'failed' due to HTTPException {http_exc.status_code}.")
+                 meeting_to_update.status = MeetingStatus.FAILED.value
                  if container_id: 
                      meeting_to_update.bot_container_id = container_id
                  await db.commit()
-                 await publish_meeting_status_change(meeting_id, 'error', redis_client, req.platform.value, native_meeting_id, current_user.id)
+                 await publish_meeting_status_change(meeting_id, MeetingStatus.FAILED.value, redis_client, req.platform.value, native_meeting_id, current_user.id)
             elif not meeting_to_update:
                 logger.error(f"Could not find meeting {meeting_id} to update status to error after HTTPException.")
         except Exception as db_err:
@@ -636,13 +644,13 @@ async def request_bot(
         logger.error(f"Unexpected exception occurred during bot startup process for meeting {meeting_id} (after DB creation): {e}", exc_info=True)
         try:
             meeting_to_update = await db.get(Meeting, meeting_id) # Re-fetch
-            if meeting_to_update and meeting_to_update.status not in ['error', 'failed', 'completed']:
-                 logger.warning(f"Updating meeting {meeting_id} status to 'error' due to unexpected exception.")
-                 meeting_to_update.status = 'error'
+            if meeting_to_update and meeting_to_update.status not in [MeetingStatus.FAILED.value, MeetingStatus.COMPLETED.value]:
+                 logger.warning(f"Updating meeting {meeting_id} status to 'failed' due to unexpected exception.")
+                 meeting_to_update.status = MeetingStatus.FAILED.value
                  if container_id:
                      meeting_to_update.bot_container_id = container_id
                  await db.commit()
-                 await publish_meeting_status_change(meeting_id, 'error', redis_client, req.platform.value, native_meeting_id, current_user.id)
+                 await publish_meeting_status_change(meeting_id, MeetingStatus.FAILED.value, redis_client, req.platform.value, native_meeting_id, current_user.id)
             elif not meeting_to_update:
                 logger.error(f"Could not find meeting {meeting_id} to update status to error after unexpected exception.")
         except Exception as db_err:

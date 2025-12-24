@@ -1,0 +1,69 @@
+# Models and assets
+models/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+.venv-quality/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# Test files and generated datasets
+tests/temp_*.mp3
+tests/*.mp3
+tests/quality_dataset/
+tests/quality_dataset_*/
+tests/*/audio/
+tests/*/manifest.jsonl
+tests/*/test_results.db
+
+# Keep tests/test_audio.wav - it's needed for testing
+!tests/test_audio.wav
+
+# Docker
+.dockerignore
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+
+# OS files
+Thumbs.db
+.DS_Store

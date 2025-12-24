@@ -1,7 +1,7 @@
-fastapi==0.95.1
-uvicorn[standard]==0.22.0
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
 httpx==0.24.0
-pydantic==1.10.7
+pydantic>=2.0.0
 python-dotenv==1.0.0
 # Documentation
 pyyaml==6.0

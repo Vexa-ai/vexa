@@ -1,0 +1,50 @@
+# Local database override file
+# This file extends docker-compose.yml to add the postgres service
+# and postgres dependencies for services that need it.
+# Use with: docker compose -f docker-compose.yml -f docker-compose.local-db.yml
+
+services:
+  # Postgres service for local database
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_DB=${DB_NAME:-vexa}
+      - POSTGRES_USER=${DB_USER:-postgres}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-vexa}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - vexa_default
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_HOST_PORT:-5438}:5432"
+
+  # Add postgres dependency to admin-api
+  # Note: Docker Compose merges depends_on, so this adds to existing dependencies
+  admin-api:
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Add postgres dependency to bot-manager
+  # Note: Docker Compose merges depends_on, so this adds to existing dependencies
+  bot-manager:
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Add postgres dependency to transcription-collector
+  # Note: Docker Compose merges depends_on, so this adds to existing dependencies
+  transcription-collector:
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+

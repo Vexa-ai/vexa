@@ -125,9 +125,18 @@ async def set_user_webhook(
     db.add(user)
     await db.commit()
     await db.refresh(user)
+    
+    # Fix: Ensure created_at is never None before validation
+    if user.created_at is None:
+        # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
+        user.created_at = datetime.utcnow().replace(tzinfo=None)
+        logger.warning(f"created_at was None for user {user.id}, setting to current time")
+        db.add(user)
+        await db.commit()
+    
     logger.info(f"Updated webhook URL for user {user.email}")
     
-    return UserResponse.from_orm(user)
+    return UserResponse.model_validate(user)
 
 # --- Admin Endpoints (Copied and adapted from bot-manager/admin.py) --- 
 @admin_router.post("/users",
@@ -150,10 +159,17 @@ async def create_user(user_in: UserCreate, response: Response, db: AsyncSession 
 
     if existing_user:
         logger.info(f"Found existing user: {existing_user.email} (ID: {existing_user.id})")
+        # Fix: Ensure created_at is never None before validation
+        if existing_user.created_at is None:
+            # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
+            existing_user.created_at = datetime.utcnow().replace(tzinfo=None)
+            logger.warning(f"created_at was None for user {existing_user.id}, setting to current time")
+            db.add(existing_user)
+            await db.commit()
         response.status_code = status.HTTP_200_OK
-        return UserResponse.from_orm(existing_user)
+        return UserResponse.model_validate(existing_user)
 
-    user_data = user_in.dict()
+    user_data = user_in.model_dump()
     db_user = User(
         email=user_data['email'],
         name=user_data.get('name'),
@@ -164,7 +180,15 @@ async def create_user(user_in: UserCreate, response: Response, db: AsyncSession 
     await db.commit()
     await db.refresh(db_user)
     logger.info(f"Admin created user: {db_user.email} (ID: {db_user.id})")
-    return UserResponse.from_orm(db_user)
+    # Fix: Set created_at if it's None (server_default may not be loaded after refresh)
+    # This happens because server_default values aren't always loaded by refresh()
+    if db_user.created_at is None:
+        # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
+        db_user.created_at = datetime.utcnow().replace(tzinfo=None)
+        logger.warning(f"created_at was None for user {db_user.id}, setting to current time")
+        db.add(db_user)
+        await db.commit()
+    return UserResponse.model_validate(db_user)
 
 @admin_router.get("/users", 
             response_model=List[UserResponse], # Use List import
@@ -172,7 +196,22 @@ async def create_user(user_in: UserCreate, response: Response, db: AsyncSession 
 async def list_users(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).offset(skip).limit(limit))
     users = result.scalars().all()
-    return [UserResponse.from_orm(u) for u in users]
+    
+    # Fix: Ensure created_at is never None before validation
+    needs_commit = False
+    for user in users:
+        if user.created_at is None:
+            # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
+            user.created_at = datetime.utcnow().replace(tzinfo=None)
+            logger.warning(f"created_at was None for user {user.id}, setting to current time")
+            db.add(user)
+            needs_commit = True
+    
+    # Commit any fixes we made
+    if needs_commit:
+        await db.commit()
+    
+    return [UserResponse.model_validate(u) for u in users]
 
 @admin_router.get("/users/email/{user_email}",
             response_model=UserResponse, # Changed from UserDetailResponse
@@ -191,6 +230,14 @@ async def get_user_by_email(user_email: str, db: AsyncSession = Depends(get_db))
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
+
+    # Fix: Ensure created_at is never None before validation
+    if user.created_at is None:
+        # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
+        user.created_at = datetime.utcnow().replace(tzinfo=None)
+        logger.warning(f"created_at was None for user {user.id}, setting to current time")
+        db.add(user)
+        await db.commit()
 
     # Return the user object. Pydantic will handle serialization using UserDetailResponse.
     return user
@@ -213,6 +260,14 @@ async def get_user(user_id: int, db: AsyncSession = Depends(get_db)):
             status_code=status.HTTP_404_NOT_FOUND, 
             detail="User not found"
         )
+    
+    # Fix: Ensure created_at is never None before validation
+    if user.created_at is None:
+        # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
+        user.created_at = datetime.utcnow().replace(tzinfo=None)
+        logger.warning(f"created_at was None for user {user.id}, setting to current time")
+        db.add(user)
+        await db.commit()
         
     # Return the user object. Pydantic will handle serialization using UserDetailResponse.
     return user
@@ -237,7 +292,7 @@ async def update_user(user_id: int, user_update: UserUpdate, db: AsyncSession = 
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     # Get the update data, excluding unset fields to only update provided values
-    update_data = user_update.dict(exclude_unset=True)
+    update_data = user_update.model_dump(exclude_unset=True)
     print(f"=== Raw update_data: {update_data} ===")
     logger.info(f"Admin PATCH for user {user_id}. Raw update_data: {update_data}")
 
@@ -286,7 +341,15 @@ async def update_user(user_id: int, user_update: UserUpdate, db: AsyncSession = 
     else:
         logger.info(f"Admin attempted update for user ID: {user_id}, but no changes detected.")
 
-    return UserResponse.from_orm(db_user)
+    # Fix: Ensure created_at is never None before validation
+    if db_user.created_at is None:
+        # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
+        db_user.created_at = datetime.utcnow().replace(tzinfo=None)
+        logger.warning(f"created_at was None for user {db_user.id}, setting to current time")
+        db.add(db_user)
+        await db.commit()
+
+    return UserResponse.model_validate(db_user)
 
 @admin_router.post("/users/{user_id}/tokens", 
              response_model=TokenResponse,
@@ -299,13 +362,18 @@ async def create_token_for_user(user_id: int, db: AsyncSession = Depends(get_db)
     
     token_value = generate_secure_token()
     # Use the APIToken model from shared_models
-    db_token = APIToken(token=token_value, user_id=user_id)
+    # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
+    db_token = APIToken(
+        token=token_value, 
+        user_id=user_id,
+        created_at=datetime.utcnow().replace(tzinfo=None)
+    )
     db.add(db_token)
     await db.commit()
     await db.refresh(db_token)
     logger.info(f"Admin created token for user {user_id} ({user.email})")
     # Use TokenResponse for consistency with schema definition (datetime object)
-    return TokenResponse.from_orm(db_token)
+    return TokenResponse.model_validate(db_token)
 
 @admin_router.delete("/tokens/{token_id}", 
                 status_code=status.HTTP_204_NO_CONTENT,
@@ -359,7 +427,7 @@ async def list_meetings_with_users(
     response_items = [
         MeetingUserStat(
             **meeting.__dict__,
-            user=UserResponse.from_orm(meeting.user)
+            user=UserResponse.model_validate(meeting.user)
         )
         for meeting in meetings if meeting.user
     ]
@@ -381,7 +449,22 @@ async def get_users_table(
     """
     result = await db.execute(select(User).offset(skip).limit(limit))
     users = result.scalars().all()
-    return [UserTableResponse.from_orm(u) for u in users]
+    
+    # Fix: Ensure created_at is never None before validation
+    needs_commit = False
+    for user in users:
+        if user.created_at is None:
+            # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
+            user.created_at = datetime.utcnow().replace(tzinfo=None)
+            logger.warning(f"created_at was None for user {user.id}, setting to current time")
+            db.add(user)
+            needs_commit = True
+    
+    # Commit any fixes we made
+    if needs_commit:
+        await db.commit()
+    
+    return [UserTableResponse.model_validate(u) for u in users]
 
 @admin_router.get("/analytics/meetings",
                   response_model=List[MeetingTableResponse], 
@@ -397,7 +480,7 @@ async def get_meetings_table(
     """
     result = await db.execute(select(Meeting).offset(skip).limit(limit))
     meetings = result.scalars().all()
-    return [MeetingTableResponse.from_orm(m) for m in meetings]
+    return [MeetingTableResponse.model_validate(m) for m in meetings]
 
 @admin_router.get("/analytics/meetings/{meeting_id}/telematics",
                   response_model=MeetingTelematicsResponse,
@@ -463,8 +546,8 @@ async def get_meeting_telematics(
         )
     
     return MeetingTelematicsResponse(
-        meeting=MeetingResponse.from_orm(meeting),
-        sessions=[MeetingSessionResponse.from_orm(s) for s in sessions],
+        meeting=MeetingResponse.model_validate(meeting),
+        sessions=[MeetingSessionResponse.model_validate(s) for s in sessions],
         transcription_stats=transcription_stats,
         performance_metrics=performance_metrics
     )
@@ -495,6 +578,14 @@ async def get_user_details(
     
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    
+    # Fix: Ensure created_at is never None before validation
+    if user.created_at is None:
+        # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
+        user.created_at = datetime.utcnow().replace(tzinfo=None)
+        logger.warning(f"created_at was None for user {user.id}, setting to current time")
+        db.add(user)
+        await db.commit()
     
     # Calculate meeting stats
     meetings_result = await db.execute(select(Meeting).where(Meeting.user_id == user_id))
@@ -554,10 +645,10 @@ async def get_user_details(
     )
     
     return UserAnalyticsResponse(
-        user=UserDetailResponse.from_orm(user),
+        user=UserDetailResponse.model_validate(user),
         meeting_stats=meeting_stats,
         usage_patterns=usage_patterns,
-        api_tokens=[TokenResponse.from_orm(t) for t in user.api_tokens] if include_tokens else None
+        api_tokens=[TokenResponse.model_validate(t) for t in user.api_tokens] if include_tokens else None
     )
 
 # App events

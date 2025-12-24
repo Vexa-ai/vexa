@@ -1,4 +1,5 @@
 import logging
+import os
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from shared_models.models import Meeting
@@ -14,8 +15,13 @@ async def run(meeting: Meeting, db: AsyncSession):
     logger.info(f"Starting transcription aggregation for meeting {meeting_id}")
 
     try:
-        # The collector service is internal, so we can use its service name
-        collector_url = f"http://transcription-collector:8000/internal/transcripts/{meeting_id}"
+        # Use environment variable for URL, with fallback for docker-compose (separate containers)
+        # In docker lite setup, this should be set to http://localhost:8123
+        collector_base_url = os.getenv(
+            "TRANSCRIPTION_COLLECTOR_URL", 
+            "http://transcription-collector:8000"  # Fallback for docker-compose setup
+        )
+        collector_url = f"{collector_base_url}/internal/transcripts/{meeting_id}"
         
         async with httpx.AsyncClient() as client:
             logger.info(f"Calling transcription-collector for meeting {meeting_id} at {collector_url}")

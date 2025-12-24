@@ -24,6 +24,13 @@ except Exception:
     TENSORRT_AVAILABLE = False
     WhisperTRTLLM = None
 
+try:
+    from whisper_live.remote_transcriber import RemoteTranscriber
+    REMOTE_AVAILABLE = True
+except Exception:
+    REMOTE_AVAILABLE = False
+    RemoteTranscriber = None
+
 # Import for health check HTTP server
 import http.server
 import socketserver
@@ -522,6 +529,7 @@ class ClientManager:
 class BackendType(Enum):
     FASTER_WHISPER = "faster_whisper"
     TENSORRT = "tensorrt"
+    REMOTE = "remote"
 
     @staticmethod
     def valid_types() -> List[str]:
@@ -536,6 +544,9 @@ class BackendType(Enum):
 
     def is_tensorrt(self) -> bool:
         return self == BackendType.TENSORRT
+
+    def is_remote(self) -> bool:
+        return self == BackendType.REMOTE
 
 
 class TranscriptionServer:
@@ -616,12 +627,9 @@ class TranscriptionServer:
             f"stall={self.server_speaker_no_tx_stall_s}s, speaker_window={self.speaker_active_window_s}s, warmup={self.server_warmup_s}s"
         )
 
-        # --- Capacity configuration (WL_MAX_CLIENTS, default 10) ---
-        try:
-            self.config_max_clients = int(os.getenv("WL_MAX_CLIENTS", "10"))
-        except Exception:
-            self.config_max_clients = 10
-        logging.info(f"CONFIG: max_clients set to {self.config_max_clients} (env WL_MAX_CLIENTS)")
+        # --- Capacity configuration (WL_MAX_CLIENTS) ---
+        # Will be set in run() method based on backend type
+        self.config_max_clients = 10  # Default, will be overridden in run() if remote
 
         # --- WL discovery / addressing ---
         self._wl_redis = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"), decode_responses=True)
@@ -778,6 +786,26 @@ class TranscriptionServer:
                 client_uid=options.get("uid"),
                 model=self.whisper_tensorrt_path,
                 single_model=self.single_model,
+                platform=options.get("platform"),
+                meeting_url=options.get("meeting_url"),
+                token=options.get("token"),
+                meeting_id=options.get("meeting_id"),
+                collector_client_ref=self.collector_client,
+                server_options=self.server_options
+            )
+        # remote client
+        elif backend.is_remote():
+            # Get model from options or env, handling None case
+            remote_model = options.get("model") or os.getenv("REMOTE_TRANSCRIBER_MODEL")
+            client = ServeClientRemote(
+                websocket,
+                language=options.get("language"),
+                task=options.get("task", "transcribe"),
+                client_uid=options.get("uid"),
+                model=remote_model,
+                initial_prompt=options.get("initial_prompt"),
+                vad_parameters=options.get("vad_parameters"),
+                use_vad=options.get("use_vad", True),
                 platform=options.get("platform"),
                 meeting_url=options.get("meeting_url"),
                 token=options.get("token"),
@@ -1073,6 +1101,18 @@ class TranscriptionServer:
         self.trt_multilingual = trt_multilingual
         self.single_model = single_model
         self.server_options = server_options or {}
+        
+        # Set max_clients based on backend type
+        if self.backend.is_remote():
+            # Remote mode always uses 1000 max clients (hardcoded for scalability)
+            self.config_max_clients = 1000
+            logging.info("CONFIG: max_clients=1000 (hardcoded for remote backend)")
+        else:
+            try:
+                self.config_max_clients = int(os.getenv("WL_MAX_CLIENTS", "10"))
+            except Exception:
+                self.config_max_clients = 10
+            logging.info(f"CONFIG: max_clients={self.config_max_clients}")
 
         # For the health check, we need to know if Redis is being used.
         # This is inferred from the presence of the REDIS_STREAM_URL env var.
@@ -1622,6 +1662,9 @@ class ServeClientBase(object):
                  collector_client_ref: Optional[TranscriptionCollectorClient] = None,
                  server_options: Optional[dict] = None):
         self.websocket = websocket
+        # Track whether language was explicitly provided (not None)
+        # This helps optimize language detection when language is not provided
+        self.language_provided = language is not None
         self.language = language
         self.task = task
         self.client_uid = client_uid or str(uuid.uuid4())
@@ -2375,7 +2418,13 @@ class ServeClientFasterWhisper(ServeClientBase):
         logging.info(f"Initializing FasterWhisper client {client_uid} with platform={platform}, meeting_url={meeting_url}, token={token}")
 
         self.model_size_or_path = model
-        self.language = "en" if self.model_size_or_path.endswith("en") else language
+        # If model is English-only, auto-set language to "en" (this counts as provided)
+        if self.model_size_or_path.endswith("en"):
+            self.language = "en"
+            self.language_provided = True  # Model-based language is considered "provided"
+        else:
+            self.language = language
+            # language_provided is already set in base class based on original language parameter
         self.task = task
         self.initial_prompt = initial_prompt
 
@@ -2507,13 +2556,17 @@ class ServeClientFasterWhisper(ServeClientBase):
         """
         if ServeClientFasterWhisper.SINGLE_MODEL:
             ServeClientFasterWhisper.SINGLE_MODEL_LOCK.acquire()
+        # Reduce language detection segments if language was not provided to speed up first transcription
+        # Default is 10 segments (300 seconds), reduce to 1-2 segments (30-60 seconds) when auto-detecting
+        language_detection_segments = 1 if not self.language_provided else int(os.getenv('LANGUAGE_DETECTION_SEGMENTS', '10'))
         result, info = self.transcriber.transcribe(
             input_sample,
             initial_prompt=self.initial_prompt,
             language=self.language,
             task=self.task,
             vad_filter=self.use_vad,
-            vad_parameters=self.vad_parameters if self.use_vad else None)
+            vad_parameters=self.vad_parameters if self.use_vad else None,
+            language_detection_segments=language_detection_segments)
         if ServeClientFasterWhisper.SINGLE_MODEL:
             ServeClientFasterWhisper.SINGLE_MODEL_LOCK.release()
 
@@ -2603,7 +2656,9 @@ class ServeClientFasterWhisper(ServeClientBase):
                 input_sample = input_bytes.copy()
                 result = self.transcribe_audio(input_sample)
 
-                if result is None or self.language is None:
+                # Only block on language detection if language was not provided initially
+                # If language was provided, we can send transcription immediately
+                if result is None or (not self.language_provided and self.language is None):
                     self.timestamp_offset += duration
                     time.sleep(0.25)    # wait for voice activity, result is None when no voice activity
                     continue
@@ -2788,6 +2843,422 @@ class ServeClientFasterWhisper(ServeClientBase):
                 self.timestamp_offset += offset
 
         return last_segment
+
+
+class ServeClientRemote(ServeClientBase):
+
+    def __init__(self, websocket, task="transcribe", language=None, 
+                 client_uid=None, model=None, initial_prompt=None, 
+                 vad_parameters=None, use_vad=True, 
+                 platform=None, meeting_url=None, token=None, meeting_id=None,
+                 collector_client_ref: Optional[TranscriptionCollectorClient] = None,
+                 server_options: Optional[dict] = None):
+        super().__init__(websocket, language, task, client_uid, platform, meeting_url, token, meeting_id,
+                         collector_client_ref=collector_client_ref, server_options=server_options)
+        
+        # Log the critical parameters
+        logging.info(f"Initializing Remote client {client_uid} with platform={platform}, meeting_url={meeting_url}, token={token}")
+
+        # Ensure model is set, fallback to env var
+        self.model = model or os.getenv("REMOTE_TRANSCRIBER_MODEL")
+        self.language = language
+        self.task = task
+        self.initial_prompt = initial_prompt
+
+        server_options = server_options or {}
+        self.min_audio_s = server_options.get("min_audio_s", 1.0)
+        self.vad_parameters = vad_parameters or {"onset": server_options.get("vad_onset", 0.5)}
+        self.no_speech_thresh = server_options.get("vad_no_speech_thresh", 0.45)
+        self.same_output_threshold = server_options.get("same_output_threshold", 10)
+        self.end_time_for_same_output = None
+
+        if not REMOTE_AVAILABLE:
+            logging.error("Remote transcriber is not available. Please install requests package and set REMOTE_TRANSCRIBER_* environment variables.")
+            self.websocket.send(json.dumps({
+                "uid": self.client_uid,
+                "status": "ERROR",
+                "message": "Remote backend is not available. Please install requests package and set REMOTE_TRANSCRIBER_* environment variables."
+            }))
+            self.websocket.close()
+            return
+
+        try:
+            # Create a new transcriber for each client to enable concurrent requests
+            self.create_model()
+        except Exception as e:
+            logging.error(f"Failed to initialize Remote transcriber: {e}")
+            self.websocket.send(json.dumps({
+                "uid": self.client_uid,
+                "status": "ERROR",
+                "message": f"Failed to initialize Remote transcriber: {str(e)}"
+            }))
+            self.websocket.close()
+            return
+
+        self.use_vad = use_vad
+
+        # threading
+        self.trans_thread = threading.Thread(target=self.speech_to_text)
+        self.trans_thread.start()
+        self.websocket.send(
+            json.dumps(
+                {
+                    "uid": self.client_uid,
+                    "message": self.SERVER_READY,
+                    "backend": "remote"
+                }
+            )
+        )
+
+    def create_model(self):
+        """
+        Instantiates a new Remote transcriber.
+        """
+        api_url = os.getenv("TRANSCRIBER_URL") or os.getenv("REMOTE_TRANSCRIBER_URL")
+        api_key = (os.getenv("TRANSCRIBER_API_KEY") or os.getenv("REMOTE_TRANSCRIBER_API_KEY") or "").strip()
+        # Model parameter is required by API but ignored by transcription service (uses its own configured model)
+        # Use a placeholder value since the service doesn't actually use this parameter
+        model = self.model or os.getenv("REMOTE_TRANSCRIBER_MODEL") or "default"
+        
+        if not api_url:
+            raise ValueError(
+                "TRANSCRIBER_URL (or REMOTE_TRANSCRIBER_URL) environment variable is not set. "
+                "This is required to connect to the remote transcription service."
+            )
+        if not api_key:
+            raise ValueError(
+                "TRANSCRIBER_API_KEY (or REMOTE_TRANSCRIBER_API_KEY) environment variable is not set. "
+                "This is required to authenticate with the remote transcription service."
+            )
+        
+        # Log masked API key for debugging
+        api_key_masked = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) > 8 else "***"
+        logging.debug(f"Creating RemoteTranscriber with API key: {api_key_masked}, URL: {api_url}, Model: {model}")
+        
+        self.transcriber = RemoteTranscriber(
+            api_url=api_url,
+            api_key=api_key,
+            model=model,
+            sampling_rate=self.RATE,
+        )
+
+    def transcribe_audio(self, input_sample):
+        """
+        Transcribes the provided audio sample using Remote API.
+
+        Args:
+            input_sample (np.array): The audio chunk to be transcribed. This should be a NumPy
+                                    array representing the audio data.
+
+        Returns:
+            The transcription result from the transcriber. The exact format of this result
+            depends on the implementation of the `transcriber.transcribe` method but typically
+            includes the transcribed text.
+        """
+        # Each client has its own transcriber instance, so no lock needed for concurrent requests
+        # Reduce language detection segments if language was not provided to speed up first transcription
+        # Default is 10 segments (300 seconds), reduce to 1-2 segments (30-60 seconds) when auto-detecting
+        language_detection_segments = 1 if not self.language_provided else int(os.getenv('LANGUAGE_DETECTION_SEGMENTS', '10'))
+        result, info = self.transcriber.transcribe(
+            input_sample,
+            initial_prompt=self.initial_prompt,
+            language=self.language,
+            task=self.task,
+            vad_filter=self.use_vad,
+            vad_parameters=self.vad_parameters if self.use_vad else None,
+            language_detection_segments=language_detection_segments)
+
+        if self.language is None and info is not None:
+            self.set_language(info)
+        return result
+
+    def get_previous_output(self):
+        """
+        Retrieves previously generated transcription outputs if no new transcription is available
+        from the current audio chunks.
+
+        Checks the time since the last transcription output and, if it is within a specified
+        threshold, returns the most recent segments of transcribed text. It also manages
+        adding a pause (blank segment) to indicate a significant gap in speech based on a defined
+        threshold.
+
+        Returns:
+            segments (list): A list of transcription segments. This may include the most recent
+                            transcribed text segments or a blank segment to indicate a pause
+                            in speech.
+        """
+        segments = []
+        if self.t_start is None:
+            self.t_start = time.time()
+        if time.time() - self.t_start < self.show_prev_out_thresh:
+            segments = self.prepare_segments()
+
+        # add a blank if there is no speech for 3 seconds
+        if len(self.text) and self.text[-1] != '':
+            if time.time() - self.t_start > self.add_pause_thresh:
+                self.text.append('')
+        return segments
+
+    def handle_transcription_output(self, result, duration):
+        """
+        Handle the transcription output, updating the transcript and sending data to the client.
+
+        Args:
+            result (str): The result from whisper inference i.e. the list of segments.
+            duration (float): Duration of the transcribed audio chunk.
+        """
+        segments = []
+        if len(result):
+            self.t_start = None
+            last_segment = self.update_segments(result, duration)
+            segments = self.prepare_segments(last_segment)
+        else:
+            # show previous output if there is pause i.e. no output from whisper
+            segments = self.get_previous_output()
+
+        if len(segments):
+            self.send_transcription_to_client(segments)
+
+    def speech_to_text(self):
+        """
+        Process an audio stream in an infinite loop, continuously transcribing the speech.
+
+        This method continuously receives audio frames, performs real-time transcription, and sends
+        transcribed segments to the client via a WebSocket connection.
+
+        If the client's language is not detected, it waits for 30 seconds of audio input to make a language prediction.
+        It utilizes the Remote API to transcribe the audio, continuously processing and streaming results. Segments
+        are sent to the client in real-time, and a history of segments is maintained to provide context.Pauses in speech
+        (no output from Remote API) are handled by showing the previous output for a set duration. A blank segment is added if
+        there is no speech for a specified duration to indicate a pause.
+
+        Raises:
+            Exception: If there is an issue with audio processing or WebSocket communication.
+
+        """
+        while True:
+            if self.exit:
+                logging.info("Exiting speech to text thread")
+                break
+
+            if self.frames_np is None:
+                continue
+
+            self.clip_audio_if_no_valid_segment()
+
+            input_bytes, duration = self.get_audio_chunk_for_processing()
+            if duration < self.min_audio_s:
+                time.sleep(0.1)     # wait for audio chunks to arrive
+                continue
+            try:
+                input_sample = input_bytes.copy()
+                result = self.transcribe_audio(input_sample)
+
+                # Only block on language detection if language was not provided initially
+                # If language was provided, we can send transcription immediately
+                if result is None or (not self.language_provided and self.language is None):
+                    self.timestamp_offset += duration
+                    time.sleep(0.25)    # wait for voice activity, result is None when no voice activity
+                    continue
+                self.handle_transcription_output(result, duration)
+
+            except Exception as e:
+                logging.error(f"[ERROR]: Failed to transcribe audio chunk: {e}")
+                time.sleep(0.01)
+
+    def format_segment(self, start, end, text, completed=False, language=None):
+        """
+        Formats a transcription segment with precise start and end times alongside the transcribed text.
+
+        Args:
+            start (float): The start time of the transcription segment in seconds.
+            end (float): The end time of the transcription segment in seconds.
+            text (str): The transcribed text corresponding to the segment.
+            completed (bool): Whether the segment is completed or partial.
+            language (str): The detected language for this segment.
+
+        Returns:
+            dict: A dictionary representing the formatted transcription segment, including
+                'start' and 'end' times as strings with three decimal places, the 'text'
+                of the transcription, 'completed' status, and 'language' if provided.
+        """
+        segment = {
+            'start': "{:.3f}".format(start),
+            'end': "{:.3f}".format(end),
+            'text': text,
+            'completed': completed
+        }
+        
+        # Add language if provided
+        if language is not None:
+            segment['language'] = language
+            
+        return segment
+
+    def update_segments(self, segments, duration):
+        """
+        Processes the segments from Remote API. Appends all the segments to the list
+        except for the last segment assuming that it is incomplete.
+
+        Updates the ongoing transcript with transcribed segments, including their start and end times.
+        Complete segments are appended to the transcript in chronological order. Incomplete segments
+        (assumed to be the last one) are processed to identify repeated content. If the same incomplete
+        segment is seen multiple times, it updates the offset and appends the segment to the transcript.
+        A threshold is used to detect repeated content and ensure it is only included once in the transcript.
+        The timestamp offset is updated based on the duration of processed segments. The method returns the
+        last processed segment, allowing it to be sent to the client for real-time updates.
+
+        Args:
+            segments(Iterable[Segment]) : iterable of segments as returned by Remote API
+            duration(float): duration of the current chunk
+
+        Returns:
+            dict or None: The last processed segment with its start time, end time, and transcribed text.
+                     Returns None if there are no valid segments to process.
+        """
+        # Convert iterable to list if needed
+        segments_list = list(segments) if not isinstance(segments, list) else segments
+        
+        offset = None
+        self.current_out = ''
+        last_segment = None
+
+        # process complete segments
+        if len(segments_list) > 1 and segments_list[-1].no_speech_prob <= self.no_speech_thresh:
+            for i, s in enumerate(segments_list[:-1]):
+                text_ = s.text
+
+                # Update circuit-breaker timestamp BEFORE filtering, so hallucinations still count as activity
+                try:
+                    if self.collector_client and hasattr(self.collector_client, 'server_ref') and self.collector_client.server_ref:
+                        self.collector_client.server_ref.server_last_transcription_ts = time.time()
+                except Exception:
+                    pass
+
+                # Apply hallucination filter
+                filtered_text = self._filter_hallucinations(text_)
+                if filtered_text is None:
+                    # Log and skip this segment if it's a hallucination
+                    try:
+                        if WL_LOG_HALLUCINATIONS:
+                            logger.info(f'HALLUCINATION_FILTERED: "{text_}"')
+                    except Exception:
+                        pass
+                    continue
+                
+                self.text.append(filtered_text)
+                with self.lock:
+                    start, end = self.timestamp_offset + s.start, self.timestamp_offset + min(duration, s.end)
+
+                if start >= end:
+                    continue
+                if s.no_speech_prob > self.no_speech_thresh:
+                    continue
+
+                self.transcript.append(self.format_segment(start, end, filtered_text, completed=True, language=self.language))
+                offset = min(duration, s.end)
+
+        # only process the last segment if it satisfies the no_speech_thresh
+        if len(segments_list) > 0 and segments_list[-1].no_speech_prob <= self.no_speech_thresh:
+            # Update circuit-breaker timestamp BEFORE filtering for the last (partial) segment
+            try:
+                if self.collector_client and hasattr(self.collector_client, 'server_ref') and self.collector_client.server_ref:
+                    self.collector_client.server_ref.server_last_transcription_ts = time.time()
+            except Exception:
+                pass
+
+            # Apply hallucination filter to the current output
+            filtered_current_out = self._filter_hallucinations(segments_list[-1].text)
+            if filtered_current_out is not None:
+                self.current_out += filtered_current_out
+                with self.lock:
+                    last_segment = self.format_segment(
+                        self.timestamp_offset + segments_list[-1].start,
+                        self.timestamp_offset + min(duration, segments_list[-1].end),
+                        self.current_out,
+                        completed=False,
+                        language=self.language
+                    )
+            else:
+                # Log and skip this segment if it's a hallucination
+                try:
+                    if WL_LOG_HALLUCINATIONS:
+                        logger.info(f'HALLUCINATION_FILTERED: "{segments_list[-1].text}"')
+                except Exception:
+                    pass
+                last_segment = None
+
+        if self.current_out.strip() == self.prev_out.strip() and self.current_out != '':
+            self.same_output_count += 1
+
+            # if we remove the audio because of same output on the nth reptition we might remove the 
+            # audio thats not yet transcribed so, capturing the time when it was repeated for the first time
+            if self.end_time_for_same_output is None:
+                self.end_time_for_same_output = segments_list[-1].end if segments_list else duration
+            time.sleep(0.1)     # wait for some voice activity just in case there is an unitended pause from the speaker for better punctuations.
+        else:
+            self.same_output_count = 0
+            self.end_time_for_same_output = None
+
+        # if same incomplete segment is seen multiple times then update the offset
+        # and append the segment to the list
+        if self.same_output_count > self.same_output_threshold:
+            if not len(self.text) or self.text[-1].strip().lower() != self.current_out.strip().lower():
+                # Update circuit-breaker timestamp BEFORE filtering repeated incomplete output
+                try:
+                    if self.collector_client and hasattr(self.collector_client, 'server_ref') and self.collector_client.server_ref:
+                        self.collector_client.server_ref.server_last_transcription_ts = time.time()
+                except Exception:
+                    pass
+                
+                # Apply hallucination filter
+                filtered_current_out = self._filter_hallucinations(self.current_out)
+                if filtered_current_out is not None:
+                    self.text.append(filtered_current_out)
+                    with self.lock:
+                        start, end = self.timestamp_offset, self.timestamp_offset + min(duration, self.end_time_for_same_output or duration)
+                    if start < end:
+                        self.transcript.append(self.format_segment(start, end, filtered_current_out, completed=True, language=self.language))
+                    offset = min(duration, self.end_time_for_same_output or duration)
+                else:
+                    # Log filtered repeated hallucination
+                    try:
+                        if WL_LOG_HALLUCINATIONS:
+                            logger.info(f'HALLUCINATION_FILTERED: "{self.current_out}"')
+                    except Exception:
+                        pass
+            self.current_out = ''
+            offset = min(duration, self.end_time_for_same_output) if self.end_time_for_same_output else duration
+            self.same_output_count = 0
+            last_segment = None
+            self.end_time_for_same_output = None
+        else:
+            self.prev_out = self.current_out
+
+        # update offset
+        if offset is not None:
+            with self.lock:
+                self.timestamp_offset += offset
+
+        return last_segment
+
+    def set_language(self, info):
+        """
+        Sets the language for the client based on transcription info.
+
+        Args:
+            info: TranscriptionInfo object containing language information.
+        """
+        if info and hasattr(info, 'language'):
+            self.language = info.language
+            lang_prob = getattr(info, 'language_probability', 1.0)
+            self.websocket.send(json.dumps({
+                "uid": self.client_uid,
+                "language": self.language,
+                "language_prob": lang_prob
+            }))
+            logger.info(f"LANGUAGE_DETECTION: client={self.client_uid}, language={self.language}, confidence={lang_prob:.4f}")
+
 
 # Add the missing TranscriptionBuffer class
 class TranscriptionBuffer:

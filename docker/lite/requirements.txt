@@ -1,0 +1,75 @@
+# =============================================================================
+# Vexa Monolithic - Consolidated Python Dependencies
+# =============================================================================
+#
+# This file merges dependencies from all Vexa Python services with resolved
+# version conflicts. It's designed for the monolithic deployment where all
+# services run in the same Python environment.
+#
+# Conflicts resolved:
+# - redis: bot-manager (<5.0.0) vs api-gateway (5.0.6) -> using 5.0.6
+# - fastapi: api-gateway (0.95.1) vs transcription-collector (>=0.100.0) -> using latest
+# - pydantic: api-gateway pins 1.10.7, but fastapi>=0.100 needs pydantic v2 -> using v2
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Web Framework
+# -----------------------------------------------------------------------------
+# Note: fastapi<0.100.0 for pydantic v1 compatibility (Vexa uses v1 syntax)
+fastapi>=0.95.0,<0.100.0
+uvicorn[standard]>=0.22.0
+python-multipart>=0.0.6
+
+# -----------------------------------------------------------------------------
+# Data Validation & Serialization
+# -----------------------------------------------------------------------------
+# Note: Vexa codebase uses pydantic v1 syntax, keep v1 for compatibility
+pydantic>=1.10.0,<2.0.0
+email-validator>=2.0.0
+pyyaml>=6.0
+
+# -----------------------------------------------------------------------------
+# Database
+# -----------------------------------------------------------------------------
+SQLAlchemy[asyncio]>=2.0.0
+psycopg2-binary>=2.9.0
+asyncpg>=0.27.0
+databases[asyncpg]>=0.5.0
+aiosqlite>=0.19.0
+alembic>=1.12.0
+
+# -----------------------------------------------------------------------------
+# Redis & Task Queue
+# -----------------------------------------------------------------------------
+redis>=5.0.0
+celery>=5.3.0
+
+# -----------------------------------------------------------------------------
+# HTTP Clients
+# -----------------------------------------------------------------------------
+httpx>=0.24.0
+requests>=2.31.0
+
+# -----------------------------------------------------------------------------
+# WebSockets
+# -----------------------------------------------------------------------------
+websockets>=11.0.3
+
+# -----------------------------------------------------------------------------
+# Docker (for aiodocker compatibility in bot-manager)
+# -----------------------------------------------------------------------------
+aiodocker>=0.21.0
+
+# -----------------------------------------------------------------------------
+# MCP Service
+# -----------------------------------------------------------------------------
+# Note: fastapi-mcp is installed separately via requirements-mcp.txt
+# It requires pydantic>=2.0.0, which conflicts with the main requirements
+# that use pydantic v1 for compatibility with the rest of the Vexa codebase
+
+# -----------------------------------------------------------------------------
+# Utilities
+# -----------------------------------------------------------------------------
+python-dotenv>=1.0.0
+requests_unixsocket>=0.3.0
