@@ -40,7 +40,7 @@ Interactive Jupyter notebooks for testing and development are located in the `..
 ## Related Repositories
 
 - **[vexa-lite-deploy](https://github.com/Vexa-ai/vexa-lite-deploy)** - One-click deployment configurations for Vexa Lite
-- **[Vexa Dashboard](https://github.com/DmitriyG228/Vexa-Dashboard)** - Web interface for managing Vexa instances
+- **[Vexa Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)** - Web interface for managing Vexa instances
 
 ## Support
 
