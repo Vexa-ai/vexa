@@ -53,7 +53,7 @@
 | **Storage** | Persist transcripts + meeting metadata in your database |
 | **Multi-user** | Team-ready: users, API keys/tokens, admin operations |
 | **Self-hostable** | Run on your infra for complete data sovereignty |
-| **User interfaces** | Open-source frontends (currently: **[Vexa Dashboard](https://github.com/DmitriyG228/Vexa-Dashboard)**) |
+| **User interfaces** | Open-source frontends (currently: **[Vexa Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)**) |
 
 ### How it works
 
@@ -130,7 +130,7 @@ Vexa Lite is a single-container deployment perfect for teams who want:
 - **Self-hosted multiuser service** - Multiple users, API tokens, and team management
 - **Quick deployment** on any platform - Single container, easy to deploy
 - **No GPU required** - Transcription runs externally
-- **Choose your frontend** - Pick from open-source user interfaces like [Vexa Dashboard](https://github.com/DmitriyG228/Vexa-Dashboard)
+- **Choose your frontend** - Pick from open-source user interfaces like [Vexa Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)
 - **Production-ready** - Stateless, scalable, serverless-friendly
 
 **Quick start:**
@@ -150,7 +150,7 @@ docker run -d \
   - ✅ **Fly.io** - Implemented
   - 🚧 **Railway, Render, etc.** - To be added (contribute by adding your platform of choice!)
 - 📖 **Complete setup guide**: [Vexa Lite Deployment Guide](docs/vexa-lite-deployment.md) - All 4 configurations (local/remote database, local/remote transcription)
-- 🎨 **Frontend options**: Choose from open-source user interfaces like [Vexa Dashboard](https://github.com/DmitriyG228/Vexa-Dashboard)
+- 🎨 **Frontend options**: Choose from open-source user interfaces like [Vexa Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)
 
 ### Option 3: Docker Compose - For Development
 
@@ -267,7 +267,7 @@ Note: Meeting IDs are user-provided (Google Meet code like `xxx-xxxx-xxx` or Tea
 - **WebSocket streaming** - Sub-second transcript delivery via WebSocket
 - **Multiuser support** - User management, API tokens, and team features
 - **Self-hostable** - Full control over your data and infrastructure
-- **Open-source frontends** - Choose from user interfaces like [Vexa Dashboard](https://github.com/DmitriyG228/Vexa-Dashboard)
+- **Open-source frontends** - Choose from user interfaces like [Vexa Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)
 
 **Deployment & Management Guides:**
 - [Local Deployment and Testing Guide](docs/deployment.md)
@@ -279,7 +279,7 @@ Note: Meeting IDs are user-provided (Google Meet code like `xxx-xxxx-xxx` or Tea
 Vexa is part of an ecosystem of open-source tools:
 
 
-### 🎨 [Vexa Dashboard](https://github.com/DmitriyG228/Vexa-Dashboard)
+### 🎨 [Vexa Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)
 100% open-source web interface for Vexa. Join meetings, view transcripts, manage users, and more. Self-host everything with no cloud dependencies.
 
 ## Contributing
@@ -323,7 +323,7 @@ Licensed under **Apache-2.0** — see [LICENSE](LICENSE).
 This is the main Vexa repository containing the core API and services. For related projects:
 
 - **[vexa-lite-deploy](https://github.com/Vexa-ai/vexa-lite-deploy)** - Deployment configurations for Vexa Lite
-- **[Vexa-Dashboard](https://github.com/DmitriyG228/Vexa-Dashboard)** - Web UI for managing Vexa instances (first in a planned series of UI applications)
+- **[Vexa-Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)** - Web UI for managing Vexa instances (first in a planned series of UI applications)
 
 [![Meet Founder](https://img.shields.io/badge/LinkedIn-Dmitry_Grankin-0A66C2?style=flat-square&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/dmitry-grankin/)
 
