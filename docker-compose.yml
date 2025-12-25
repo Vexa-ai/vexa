@@ -12,6 +12,9 @@ services:
       - TRANSCRIPTION_COLLECTOR_URL=http://transcription-collector:8000
       - MCP_URL=http://mcp:18888
       - REDIS_URL=redis://redis:6379/0
+      # Used to generate public share URLs for ChatGPT "Read from <url>" flows
+      - PUBLIC_BASE_URL=https://share.dev.vexa.ai
+      - TRANSCRIPT_SHARE_TTL_SECONDS=900
       - LOG_LEVEL=DEBUG
     init: true
     depends_on:

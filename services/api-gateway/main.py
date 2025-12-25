@@ -11,7 +11,8 @@ from pydantic import BaseModel, Field
 from typing import Dict, Any, List, Optional, Set, Tuple
 import asyncio
 import redis.asyncio as aioredis
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+import secrets
 
 # Import schemas for documentation
 from shared_models.schemas import (
@@ -30,6 +31,11 @@ ADMIN_API_URL = os.getenv("ADMIN_API_URL")
 BOT_MANAGER_URL = os.getenv("BOT_MANAGER_URL")
 TRANSCRIPTION_COLLECTOR_URL = os.getenv("TRANSCRIPTION_COLLECTOR_URL")
 MCP_URL = os.getenv("MCP_URL")
+
+# Public share-link settings (for "ChatGPT read from URL" flows)
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")  # Optional override, e.g. https://api.vexa.ai
+TRANSCRIPT_SHARE_TTL_SECONDS = int(os.getenv("TRANSCRIPT_SHARE_TTL_SECONDS", "900"))  # 15 min
+TRANSCRIPT_SHARE_TTL_MAX_SECONDS = int(os.getenv("TRANSCRIPT_SHARE_TTL_MAX_SECONDS", "86400"))  # 24h max
 
 # --- Validation at startup ---
 if not all([ADMIN_API_URL, BOT_MANAGER_URL, TRANSCRIPTION_COLLECTOR_URL, MCP_URL]):
@@ -304,6 +310,239 @@ async def get_transcript_proxy(platform: Platform, native_meeting_id: str, reque
     """Forward request to Transcription Collector to get a transcript."""
     url = f"{TRANSCRIPTION_COLLECTOR_URL}/transcripts/{platform.value}/{native_meeting_id}"
     return await forward_request(app.state.http_client, "GET", url, request)
+
+
+# --- Public Transcript Share Links (no API integration needed by client) ---
+class TranscriptShareResponse(BaseModel):
+    share_id: str
+    url: str
+    expires_at: datetime
+    expires_in_seconds: int
+
+
+def _format_ts(seconds: float) -> str:
+    """Format seconds into HH:MM:SS (or MM:SS) for readability."""
+    try:
+        s = int(seconds)
+    except Exception:
+        s = 0
+    h = s // 3600
+    m = (s % 3600) // 60
+    sec = s % 60
+    if h > 0:
+        return f"{h:02d}:{m:02d}:{sec:02d}"
+    return f"{m:02d}:{sec:02d}"
+
+
+def _best_base_url(request: Request) -> str:
+    # Prefer explicit override for deployments where internal host differs from public host.
+    if PUBLIC_BASE_URL:
+        return PUBLIC_BASE_URL.rstrip("/")
+
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+    return f"{proto}://{host}".rstrip("/")
+
+
+@app.post(
+    "/transcripts/{platform}/{native_meeting_id}/share",
+    tags=["Transcriptions"],
+    summary="Create a short-lived public URL for a transcript (for ChatGPT 'Read from URL')",
+    description="Mints a random, short-lived share URL that anyone can read (no auth). Intended for passing transcript content to ChatGPT via a link.",
+    response_model=TranscriptShareResponse,
+    dependencies=[Depends(api_key_scheme)],
+)
+async def create_transcript_share(
+    platform: Platform,
+    native_meeting_id: str,
+    request: Request,
+    meeting_id: Optional[int] = None,
+    ttl_seconds: Optional[int] = None,
+):
+    # Clamp TTL
+    ttl = ttl_seconds or TRANSCRIPT_SHARE_TTL_SECONDS
+    if ttl < 60:
+        ttl = 60
+    if ttl > TRANSCRIPT_SHARE_TTL_MAX_SECONDS:
+        ttl = TRANSCRIPT_SHARE_TTL_MAX_SECONDS
+
+    # Fetch transcript from transcription-collector (auth required)
+    api_key = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
+    if not api_key:
+        raise HTTPException(status_code=401, detail="Missing X-API-Key")
+
+    url = f"{TRANSCRIPTION_COLLECTOR_URL}/transcripts/{platform.value}/{native_meeting_id}"
+    params: Dict[str, Any] = {}
+    if meeting_id is not None:
+        params["meeting_id"] = meeting_id
+
+    try:
+        resp = await app.state.http_client.get(url, headers={"X-API-Key": api_key}, params=params or None)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Failed to reach transcription service: {e}")
+
+    if resp.status_code != 200:
+        # Proxy error through
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+    data = resp.json()
+    segments = data.get("segments") or []
+
+    # Build a plain-text payload
+    lines: List[str] = []
+    lines.append("MEETING TRANSCRIPT")
+    lines.append("")
+    lines.append(f"Platform: {data.get('platform')}")
+    lines.append(f"Meeting ID: {data.get('native_meeting_id')}")
+    if data.get("start_time"):
+        lines.append(f"Start: {data.get('start_time')}")
+    if data.get("end_time"):
+        lines.append(f"End: {data.get('end_time')}")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    for seg in segments:
+        try:
+            # Use absolute timestamp if available, otherwise fall back to relative
+            abs_start = seg.get("absolute_start_time")
+            if abs_start:
+                # Format ISO datetime to readable format: "2025-12-25T12:47:21" -> "2025-12-25 12:47:21"
+                try:
+                    dt_obj = datetime.fromisoformat(abs_start.replace("Z", "+00:00"))
+                    timestamp = dt_obj.strftime("%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    timestamp = abs_start  # Fallback to raw value if parsing fails
+            else:
+                # Fallback to relative timestamp
+                timestamp = _format_ts(float(seg.get("start_time") or seg.get("start") or 0))
+            speaker = (seg.get("speaker") or "Unknown").strip() if isinstance(seg.get("speaker"), str) or seg.get("speaker") else "Unknown"
+            text = (seg.get("text") or "").strip()
+            if not text:
+                continue
+            lines.append(f"[{timestamp}] {speaker}: {text}")
+        except Exception:
+            continue
+
+    # Store share metadata in Redis (not the transcript itself - we'll fetch fresh on each request)
+    share_id = secrets.token_urlsafe(16)
+    redis_key = f"share:transcript:{share_id}"
+    share_metadata = {
+        "platform": platform.value,
+        "native_meeting_id": native_meeting_id,
+        "meeting_id": meeting_id,
+        "api_key": api_key,  # Store API key to fetch fresh transcript
+    }
+    try:
+        await app.state.redis.set(redis_key, json.dumps(share_metadata), ex=ttl)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Failed to store share token: {e}")
+
+    base = _best_base_url(request)
+    public_url = f"{base}/public/transcripts/{share_id}.txt"
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl)
+
+    return TranscriptShareResponse(
+        share_id=share_id,
+        url=public_url,
+        expires_at=expires_at,
+        expires_in_seconds=ttl,
+    )
+
+
+@app.get(
+    "/public/transcripts/{share_id}.txt",
+    tags=["Transcriptions"],
+    summary="Public transcript share (text)",
+    description="Publicly accessible transcript content for a short-lived share ID. Fetches fresh transcript on each request. No auth. Intended for ChatGPT 'Read from URL'.",
+)
+async def get_public_transcript_share(share_id: str, request: Request):
+    redis_key = f"share:transcript:{share_id}"
+    try:
+        metadata_json = await app.state.redis.get(redis_key)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Failed to read share token: {e}")
+
+    if not metadata_json:
+        raise HTTPException(status_code=404, detail="Share link expired or not found")
+
+    try:
+        metadata = json.loads(metadata_json)
+        platform = metadata.get("platform")
+        native_meeting_id = metadata.get("native_meeting_id")
+        meeting_id = metadata.get("meeting_id")
+        api_key = metadata.get("api_key")
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        raise HTTPException(status_code=500, detail=f"Invalid share metadata: {e}")
+
+    # Fetch fresh transcript from transcription-collector
+    url = f"{TRANSCRIPTION_COLLECTOR_URL}/transcripts/{platform}/{native_meeting_id}"
+    params: Dict[str, Any] = {}
+    if meeting_id is not None:
+        params["meeting_id"] = meeting_id
+
+    try:
+        resp = await app.state.http_client.get(
+            url, 
+            headers={"X-API-Key": api_key}, 
+            params=params or None,
+            timeout=30.0  # 30 second timeout for transcript fetch
+        )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Transcript fetch timeout")
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Failed to reach transcription service: {e}")
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail=f"Failed to fetch transcript: {resp.text}")
+
+    data = resp.json()
+    segments = data.get("segments") or []
+
+    # Build a plain-text payload (same format as when creating share)
+    lines: List[str] = []
+    lines.append("MEETING TRANSCRIPT")
+    lines.append("")
+    lines.append(f"Platform: {data.get('platform')}")
+    lines.append(f"Meeting ID: {data.get('native_meeting_id')}")
+    if data.get("start_time"):
+        lines.append(f"Start: {data.get('start_time')}")
+    if data.get("end_time"):
+        lines.append(f"End: {data.get('end_time')}")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    for seg in segments:
+        try:
+            # Use absolute timestamp if available, otherwise fall back to relative
+            abs_start = seg.get("absolute_start_time")
+            if abs_start:
+                # Format ISO datetime to readable format: "2025-12-25T12:47:21" -> "2025-12-25 12:47:21"
+                try:
+                    dt_obj = datetime.fromisoformat(abs_start.replace("Z", "+00:00"))
+                    timestamp = dt_obj.strftime("%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    timestamp = abs_start  # Fallback to raw value if parsing fails
+            else:
+                # Fallback to relative timestamp
+                timestamp = _format_ts(float(seg.get("start_time") or seg.get("start") or 0))
+            speaker = (seg.get("speaker") or "Unknown").strip() if isinstance(seg.get("speaker"), str) or seg.get("speaker") else "Unknown"
+            text = (seg.get("text") or "").strip()
+            if not text:
+                continue
+            lines.append(f"[{timestamp}] {speaker}: {text}")
+        except Exception:
+            continue
+
+    transcript_text = "\n".join(lines).strip() + "\n"
+
+    headers = {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        "X-Robots-Tag": "noindex, nofollow, noarchive",
+    }
+    return Response(content=transcript_text, status_code=200, headers=headers)
 
 @app.patch("/meetings/{platform}/{native_meeting_id}",
            tags=["Transcriptions"],
