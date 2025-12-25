@@ -2897,6 +2897,12 @@ class ServeClientRemote(ServeClientBase):
 
         self.use_vad = use_vad
 
+        # Load management: one-in-flight request per stream
+        self.transcription_lock = threading.Lock()  # Protects in-flight request state
+        self.transcription_in_flight = False  # True when a request is being processed
+        self.pending_audio_chunk = None  # Stores latest audio chunk if request is in-flight
+        self.pending_audio_duration = 0.0  # Duration of pending chunk
+
         # threading
         self.trans_thread = threading.Thread(target=self.speech_to_text)
         self.trans_thread.start()
@@ -3032,6 +3038,10 @@ class ServeClientRemote(ServeClientBase):
         (no output from Remote API) are handled by showing the previous output for a set duration. A blank segment is added if
         there is no speech for a specified duration to indicate a pause.
 
+        Load management: Only one transcription request is in-flight at a time per stream. If new audio
+        arrives while a request is processing, it replaces the pending chunk (coalescing) to always
+        transcribe the latest audio window.
+
         Raises:
             Exception: If there is an issue with audio processing or WebSocket communication.
 
@@ -3050,21 +3060,58 @@ class ServeClientRemote(ServeClientBase):
             if duration < self.min_audio_s:
                 time.sleep(0.1)     # wait for audio chunks to arrive
                 continue
-            try:
-                input_sample = input_bytes.copy()
-                result = self.transcribe_audio(input_sample)
-
-                # Only block on language detection if language was not provided initially
-                # If language was provided, we can send transcription immediately
-                if result is None or (not self.language_provided and self.language is None):
-                    self.timestamp_offset += duration
-                    time.sleep(0.25)    # wait for voice activity, result is None when no voice activity
+            
+            # Load management: Check if a request is already in-flight
+            with self.transcription_lock:
+                if self.transcription_in_flight:
+                    # Coalesce: Replace pending chunk with latest audio (always transcribe freshest window)
+                    self.pending_audio_chunk = input_bytes.copy()
+                    self.pending_audio_duration = duration
+                    logging.debug(f"Request in-flight, coalescing audio chunk (duration={duration:.2f}s)")
+                    time.sleep(0.1)  # Wait briefly before checking again
                     continue
-                self.handle_transcription_output(result, duration)
+                
+                # Mark as in-flight and store the chunk we're about to process
+                self.transcription_in_flight = True
+                current_chunk = input_bytes.copy()
+                current_duration = duration
+            
+            # Process chunks in a loop to handle coalesced audio
+            while True:
+                try:
+                    result = self.transcribe_audio(current_chunk)
 
-            except Exception as e:
-                logging.error(f"[ERROR]: Failed to transcribe audio chunk: {e}")
-                time.sleep(0.01)
+                    # Only block on language detection if language was not provided initially
+                    # If language was provided, we can send transcription immediately
+                    if result is None or (not self.language_provided and self.language is None):
+                        self.timestamp_offset += current_duration
+                        time.sleep(0.25)    # wait for voice activity, result is None when no voice activity
+                    else:
+                        self.handle_transcription_output(result, current_duration)
+                    
+                    # Check if new audio arrived while we were processing
+                    with self.transcription_lock:
+                        if self.pending_audio_chunk is not None:
+                            # New audio arrived - process it immediately (coalescing worked)
+                            logging.debug(f"Processing coalesced audio chunk (duration={self.pending_audio_duration:.2f}s)")
+                            current_chunk = self.pending_audio_chunk
+                            current_duration = self.pending_audio_duration
+                            self.pending_audio_chunk = None
+                            self.pending_audio_duration = 0.0
+                            # Keep in_flight=True, continue loop to process coalesced chunk
+                        else:
+                            # No new audio, clear in-flight flag and exit loop
+                            self.transcription_in_flight = False
+                            break  # Exit loop, will get fresh audio on next iteration
+
+                except Exception as e:
+                    logging.error(f"[ERROR]: Failed to transcribe audio chunk: {e}")
+                    with self.transcription_lock:
+                        self.transcription_in_flight = False
+                        self.pending_audio_chunk = None
+                        self.pending_audio_duration = 0.0
+                    time.sleep(0.1)  # Brief backoff on error
+                    break  # Exit loop on error
 
     def format_segment(self, start, end, text, completed=False, language=None):
         """
