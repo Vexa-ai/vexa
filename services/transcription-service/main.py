@@ -6,6 +6,8 @@ import os
 import io
 import time
 import logging
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 import numpy as np
@@ -151,6 +153,22 @@ app = FastAPI(
 # Global model instance
 model: Optional[WhisperModel] = None
 
+# Load management: Global concurrency limit and bounded queue
+# These settings control how many transcription requests can be processed concurrently
+MAX_CONCURRENT_TRANSCRIPTIONS = _env_int("MAX_CONCURRENT_TRANSCRIPTIONS", 2)  # Max concurrent model calls
+MAX_QUEUE_SIZE = _env_int("MAX_QUEUE_SIZE", 10)  # Max requests waiting in queue
+
+# Semaphore to limit concurrent transcriptions (protects GPU/CPU from overload)
+transcription_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TRANSCRIPTIONS)
+
+# Thread pool for running blocking transcription calls
+transcription_executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_TRANSCRIPTIONS)
+
+# Queue to track waiting requests (for 429/503 responses when full)
+# We use a simple counter since FastAPI doesn't have a built-in queue
+waiting_requests = 0
+waiting_requests_lock = asyncio.Lock()
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -231,14 +249,38 @@ async def transcribe_audio(
     - Accepts multipart/form-data with audio file
     - Returns verbose_json format with segments
     - Includes timing, language, and segment details
+    
+    Load management:
+    - Limits concurrent transcriptions to prevent GPU/CPU overload
+    - Returns 429/503 when queue is full to signal backpressure
     """
     if not requested_model:
         raise HTTPException(status_code=400, detail="Model parameter is required")
     
-    start_time = time.time()
-    logger.info(f"Worker {WORKER_ID} received transcription request - filename: {file.filename}, content_type: {file.content_type}")
+    # Load management: Check queue size before accepting request
+    async with waiting_requests_lock:
+        global waiting_requests
+        if waiting_requests >= MAX_QUEUE_SIZE:
+            logger.warning(
+                f"Worker {WORKER_ID} queue full ({waiting_requests}/{MAX_QUEUE_SIZE}). "
+                f"Rejecting request with 503."
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Service temporarily overloaded. Please retry later.",
+                headers={"Retry-After": "5"}
+            )
+        waiting_requests += 1
     
     try:
+        # Acquire semaphore (blocks if MAX_CONCURRENT_TRANSCRIPTIONS is reached)
+        await transcription_semaphore.acquire()
+        
+        async with waiting_requests_lock:
+            waiting_requests -= 1
+        
+        start_time = time.time()
+        logger.info(f"Worker {WORKER_ID} received transcription request - filename: {file.filename}, content_type: {file.content_type}")
         # Read audio file
         audio_bytes = await file.read()
         logger.info(f"Worker {WORKER_ID} read {len(audio_bytes)} bytes of audio data")
@@ -275,25 +317,31 @@ async def transcribe_audio(
         last_segments: List[Dict[str, Any]] = []
 
         for t in temps:
-            segments_list, info = model.transcribe(
-                audio_array,
-                language=language,
-                task=task,
-                initial_prompt=prompt,
-                temperature=t,
-                beam_size=BEAM_SIZE,
-                best_of=BEST_OF,
-                compression_ratio_threshold=COMPRESSION_RATIO_THRESHOLD,
-                log_prob_threshold=LOG_PROB_THRESHOLD,
-                no_speech_threshold=NO_SPEECH_THRESHOLD,
-                condition_on_previous_text=CONDITION_ON_PREVIOUS_TEXT,
-                prompt_reset_on_temperature=PROMPT_RESET_ON_TEMPERATURE,
-                vad_filter=VAD_FILTER,
-                vad_parameters={
-                    "threshold": VAD_FILTER_THRESHOLD,
-                    "min_silence_duration_ms": VAD_MIN_SILENCE_DURATION_MS,
-                },
-                word_timestamps=False,
+            # Run blocking transcription in thread pool to avoid blocking event loop
+            def _transcribe_sync():
+                return model.transcribe(
+                    audio_array,
+                    language=language,
+                    task=task,
+                    initial_prompt=prompt,
+                    temperature=t,
+                    beam_size=BEAM_SIZE,
+                    best_of=BEST_OF,
+                    compression_ratio_threshold=COMPRESSION_RATIO_THRESHOLD,
+                    log_prob_threshold=LOG_PROB_THRESHOLD,
+                    no_speech_threshold=NO_SPEECH_THRESHOLD,
+                    condition_on_previous_text=CONDITION_ON_PREVIOUS_TEXT,
+                    prompt_reset_on_temperature=PROMPT_RESET_ON_TEMPERATURE,
+                    vad_filter=VAD_FILTER,
+                    vad_parameters={
+                        "threshold": VAD_FILTER_THRESHOLD,
+                        "min_silence_duration_ms": VAD_MIN_SILENCE_DURATION_MS,
+                    },
+                    word_timestamps=False,
+                )
+            
+            segments_list, info = await asyncio.get_event_loop().run_in_executor(
+                transcription_executor, _transcribe_sync
             )
             last_info = info
 
@@ -360,9 +408,15 @@ async def transcribe_audio(
         
         return response
         
+    except HTTPException:
+        # Re-raise HTTP exceptions (429, 503, etc.)
+        raise
     except Exception as e:
         logger.error(f"Worker {WORKER_ID} transcription failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # Always release semaphore, even on error
+        transcription_semaphore.release()
 
 
 @app.get("/")

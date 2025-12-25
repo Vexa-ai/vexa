@@ -298,6 +298,28 @@ class RemoteTranscriber:
                     files=files,
                     data=data,
                 )
+                
+                # Handle rate limiting and overload responses
+                if response.status_code == 429:  # Too Many Requests
+                    retry_after = int(response.headers.get("Retry-After", "5"))
+                    logger.warning(
+                        f"Rate limited (429) - Retry-After: {retry_after}s. "
+                        f"Backing off for {retry_after}s..."
+                    )
+                    time.sleep(retry_after)
+                    # Don't increment retry_count for 429 - it's a temporary overload
+                    continue
+                
+                if response.status_code == 503:  # Service Unavailable
+                    retry_after = int(response.headers.get("Retry-After", "10"))
+                    logger.warning(
+                        f"Service overloaded (503) - Retry-After: {retry_after}s. "
+                        f"Backing off for {retry_after}s..."
+                    )
+                    time.sleep(retry_after)
+                    # Don't increment retry_count for 503 - it's a temporary overload
+                    continue
+                
                 response.raise_for_status()
                 
                 # Parse response
@@ -312,6 +334,31 @@ class RemoteTranscriber:
                     else:
                         return {"text": text}
                     
+            except httpx.HTTPStatusError as e:
+                # Handle HTTP errors (but not 429/503 which are handled above)
+                if e.response.status_code in (429, 503):
+                    # Shouldn't reach here, but handle just in case
+                    retry_after = int(e.response.headers.get("Retry-After", "10"))
+                    logger.warning(f"HTTP {e.response.status_code} - backing off for {retry_after}s...")
+                    time.sleep(retry_after)
+                    continue
+                last_exception = e
+                retry_count += 1
+                
+                if retry_count <= self.max_retries:
+                    # Exponential backoff
+                    delay = min(
+                        self.initial_retry_delay * (2 ** (retry_count - 1)),
+                        self.max_retry_delay
+                    )
+                    logger.warning(
+                        f"Remote API call failed (attempt {retry_count}/{self.max_retries}): {e}. "
+                        f"Retrying in {delay:.1f}s..."
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(f"Remote API call failed after {self.max_retries} retries: {e}")
+                    raise
             except Exception as e:
                 last_exception = e
                 retry_count += 1

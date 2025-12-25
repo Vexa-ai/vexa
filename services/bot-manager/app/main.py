@@ -298,7 +298,7 @@ async def startup_event():
     # --- ADD Redis Client Initialization ---
     try:
         logger.info(f"Connecting to Redis at {REDIS_URL}...")
-        redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
+        redis_client = await aioredis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
         await redis_client.ping() # Verify connection
         logger.info("Successfully connected to Redis.")
     except Exception as e:
