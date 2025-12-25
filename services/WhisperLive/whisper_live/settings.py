@@ -49,7 +49,9 @@ CLIP_RETAIN_S = 5
 # The minimum duration of audio (in seconds) that must be present in the buffer
 # before it is sent to the transcription model. A smaller value can lead to
 # lower latency but may result in less accurate, fragmented transcriptions.
-MIN_AUDIO_S = 10.0
+# Can be overridden via MIN_AUDIO_S environment variable.
+# Default reduced from 10.0s to 2.0s for better real-time performance.
+MIN_AUDIO_S = float(os.getenv("MIN_AUDIO_S", "2.0"))
 
 
 # Voice Activity Detection (VAD) Settings

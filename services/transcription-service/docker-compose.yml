@@ -4,7 +4,7 @@ services:
   # Nginx load balancer - Single entry point
   transcription-api:
     image: nginx:alpine
-    container_name: transcription-lb
+    # Avoid fixed container names so multiple dev stacks don't conflict.
     ports:
       - "8083:80"
     volumes:
@@ -15,8 +15,12 @@ services:
       # - transcription-worker-3
     restart: unless-stopped
     networks:
-      - transcription-net
-      - vexa-network
+      transcription-net:
+      vexa-network:
+        aliases:
+          - transcription-lb-dev
+          # Note: We use 'transcription-lb-dev' to avoid conflicts with production 'transcription-lb'
+          # Update REMOTE_TRANSCRIBER_URL in dev .env to use 'transcription-lb-dev' instead
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/lb-status"]
       interval: 10s
@@ -28,7 +32,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: transcription-worker-1
+    # Avoid fixed container names so multiple dev stacks don't conflict.
     environment:
       - WORKER_ID=1
       - MODEL_SIZE=${MODEL_SIZE:-large-v3-turbo}

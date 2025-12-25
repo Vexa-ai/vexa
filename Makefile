@@ -75,80 +75,10 @@ setup-transcription-service-env:
 	MAKE_TARGET=$${TARGET:-cpu}; \
 	echo "---> Configuring DEVICE and COMPUTE_TYPE based on TARGET=$$MAKE_TARGET..."; \
 	if [ "$$MAKE_TARGET" = "gpu" ]; then \
-		python3 -c " \
-import re; \
-file_path = 'services/transcription-service/.env'; \
-with open(file_path, 'r') as f: \
-    lines = f.readlines(); \
-device_set = False; \
-compute_set = False; \
-new_lines = []; \
-for i, line in enumerate(lines): \
-    if re.match(r'^DEVICE=', line): \
-        new_lines.append('DEVICE=cuda\n'); \
-        device_set = True; \
-    elif re.match(r'^COMPUTE_TYPE=', line): \
-        new_lines.append('COMPUTE_TYPE=float16\n'); \
-        compute_set = True; \
-    else: \
-        new_lines.append(line); \
-        if '# Device configuration' in line and not device_set: \
-            new_lines.append('DEVICE=cuda\n'); \
-            device_set = True; \
-        elif '# Compute type (optimization)' in line and not compute_set: \
-            new_lines.append('COMPUTE_TYPE=float16\n'); \
-            compute_set = True; \
-if not device_set: \
-    for idx, ln in enumerate(new_lines): \
-        if '# Device configuration' in ln: \
-            new_lines.insert(idx + 1, 'DEVICE=cuda\n'); \
-            break; \
-if not compute_set: \
-    for idx, ln in enumerate(new_lines): \
-        if '# Compute type (optimization)' in ln: \
-            new_lines.insert(idx + 1, 'COMPUTE_TYPE=float16\n'); \
-            break; \
-with open(file_path, 'w') as f: \
-    f.writelines(new_lines); \
-"; \
+		python3 scripts/update_transcription_service_env.py --file services/transcription-service/.env --device cuda --compute-type float16; \
 		echo "*** Set DEVICE=cuda and COMPUTE_TYPE=float16 for GPU mode ***"; \
 	elif [ "$$MAKE_TARGET" = "cpu" ]; then \
-		python3 -c " \
-import re; \
-file_path = 'services/transcription-service/.env'; \
-with open(file_path, 'r') as f: \
-    lines = f.readlines(); \
-device_set = False; \
-compute_set = False; \
-new_lines = []; \
-for i, line in enumerate(lines): \
-    if re.match(r'^DEVICE=', line): \
-        new_lines.append('DEVICE=cpu\n'); \
-        device_set = True; \
-    elif re.match(r'^COMPUTE_TYPE=', line): \
-        new_lines.append('COMPUTE_TYPE=int8\n'); \
-        compute_set = True; \
-    else: \
-        new_lines.append(line); \
-        if '# Device configuration' in line and not device_set: \
-            new_lines.append('DEVICE=cpu\n'); \
-            device_set = True; \
-        elif '# Compute type (optimization)' in line and not compute_set: \
-            new_lines.append('COMPUTE_TYPE=int8\n'); \
-            compute_set = True; \
-if not device_set: \
-    for idx, ln in enumerate(new_lines): \
-        if '# Device configuration' in ln: \
-            new_lines.insert(idx + 1, 'DEVICE=cpu\n'); \
-            break; \
-if not compute_set: \
-    for idx, ln in enumerate(new_lines): \
-        if '# Compute type (optimization)' in ln: \
-            new_lines.insert(idx + 1, 'COMPUTE_TYPE=int8\n'); \
-            break; \
-with open(file_path, 'w') as f: \
-    f.writelines(new_lines); \
-"; \
+		python3 scripts/update_transcription_service_env.py --file services/transcription-service/.env --device cpu --compute-type int8; \
 		echo "*** Set DEVICE=cpu and COMPUTE_TYPE=int8 for CPU mode ***"; \
 	fi
 
@@ -697,6 +627,8 @@ migrate-or-init: check_docker
 	DB_PORT=$$(grep -E '^[[:space:]]*DB_PORT=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo "5432"); \
 	DB_NAME=$$(grep -E '^[[:space:]]*DB_NAME=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo "vexa"); \
 	DB_USER=$$(grep -E '^[[:space:]]*DB_USER=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo "postgres"); \
+	[ -n "$$DB_NAME" ] || DB_NAME="vexa"; \
+	[ -n "$$DB_USER" ] || DB_USER="postgres"; \
 	if [ "$$REMOTE_DB" != "true" ]; then \
 		if ! docker compose $$COMPOSE_FILES ps -q postgres | grep -q .; then \
 			echo "ERROR: PostgreSQL container is not running. Please run 'make up' first."; \
@@ -714,39 +646,34 @@ migrate-or-init: check_docker
 			count=$$((count+1)); \
 		done; \
 		echo "---> Database is ready. Checking its state..."; \
-		if docker compose $$COMPOSE_FILES exec -T postgres psql -U $$DB_USER -d $$DB_NAME -t -c "SELECT 1 FROM information_schema.tables WHERE table_name = 'alembic_version';" | grep -q 1; then \
+		# If alembic_version exists but contains an unknown/stale revision, repair it by updating the alembic_version row (no schema drops). \
+		docker compose $$COMPOSE_FILES exec -T transcription-collector python /app/libs/shared-models/fix_alembic_version.py --repair-stale; \
+		HAS_ALEMBIC_TABLE=$$(docker compose $$COMPOSE_FILES exec -T postgres psql -U $$DB_USER -d $$DB_NAME -t -c "SELECT 1 FROM information_schema.tables WHERE table_name = 'alembic_version';" 2>/dev/null | tr -d '[:space:]' || echo ""); \
+		if [ "$$HAS_ALEMBIC_TABLE" = "1" ]; then \
 			echo "STATE: Alembic-managed database detected."; \
 			echo "ACTION: Running standard migrations to catch up to 'head'..."; \
 			$(MAKE) migrate; \
-		elif docker compose $$COMPOSE_FILES exec -T postgres psql -U $$DB_USER -d $$DB_NAME -t -c "SELECT 1 FROM information_schema.tables WHERE table_name = 'meetings';" | grep -q 1; then \
-			echo "STATE: Legacy (non-Alembic) database detected."; \
-			echo "ACTION: Stamping at 'base' and migrating to 'head' to bring it under Alembic control..."; \
-			docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini stamp base; \
-			$(MAKE) migrate; \
 		else \
-			echo "STATE: Fresh, empty database detected."; \
-			echo "ACTION: Creating schema directly from models and stamping at current revision..."; \
+			echo "STATE: No alembic_version table detected (fresh or legacy DB)."; \
+			echo "ACTION: Ensuring schema exists (create missing tables) and stamping to current head revision..."; \
 			docker compose $$COMPOSE_FILES exec -T transcription-collector python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db())"; \
-			docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini stamp head; \
+			docker compose $$COMPOSE_FILES exec -T transcription-collector python /app/libs/shared-models/fix_alembic_version.py --create-if-missing; \
 		fi; \
 	else \
 		echo "---> Using remote database at $$DB_HOST:$$DB_PORT"; \
 		echo "---> Checking database state via transcription-collector..."; \
 		DB_STATE=$$(docker compose $$COMPOSE_FILES exec -T transcription-collector python /app/libs/shared-models/check_db_state.py 2>/dev/null || echo "fresh"); \
+		# Always repair stale alembic_version rows (no schema drops). \
+		docker compose $$COMPOSE_FILES exec -T transcription-collector python /app/libs/shared-models/fix_alembic_version.py --repair-stale; \
 		if [ "$$DB_STATE" = "alembic" ]; then \
 			echo "STATE: Alembic-managed database detected."; \
 			echo "ACTION: Running standard migrations to catch up to 'head'..."; \
 			$(MAKE) migrate; \
-		elif [ "$$DB_STATE" = "legacy" ]; then \
-			echo "STATE: Legacy (non-Alembic) database detected."; \
-			echo "ACTION: Stamping at 'base' and migrating to 'head' to bring it under Alembic control..."; \
-			docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini stamp base; \
-			$(MAKE) migrate; \
 		else \
-			echo "STATE: Fresh, empty database detected."; \
-			echo "ACTION: Creating schema directly from models and stamping at current revision..."; \
+			echo "STATE: Fresh or legacy DB detected."; \
+			echo "ACTION: Ensuring schema exists (create missing tables) and stamping to current head revision..."; \
 			docker compose $$COMPOSE_FILES exec -T transcription-collector python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db())"; \
-			docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini stamp head; \
+			docker compose $$COMPOSE_FILES exec -T transcription-collector python /app/libs/shared-models/fix_alembic_version.py --create-if-missing; \
 		fi; \
 	fi; \
 	echo "---> Smart database migration/initialization complete!"
@@ -762,6 +689,10 @@ migrate: check_docker
 		fi; \
 		DB_USER=$$(grep -E '^[[:space:]]*DB_USER=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo "postgres"); \
 		DB_NAME=$$(grep -E '^[[:space:]]*DB_NAME=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo "vexa"); \
+		[ -n "$$DB_USER" ] || DB_USER="postgres"; \
+		[ -n "$$DB_NAME" ] || DB_NAME="vexa"; \
+		# Repair stale alembic_version rows before running any alembic command (avoids "Can't locate revision ..." failures). \
+		docker compose -f docker-compose.yml -f docker-compose.local-db.yml exec -T transcription-collector python /app/libs/shared-models/fix_alembic_version.py --repair-stale; \
 		current_version=$$(docker compose -f docker-compose.yml -f docker-compose.local-db.yml exec -T transcription-collector alembic -c /app/alembic.ini current 2>/dev/null | grep -E '^[a-f0-9]{12}' | head -1 || echo ""); \
 		if [ "$$current_version" = "dc59a1c03d1f" ]; then \
 			if docker compose -f docker-compose.yml -f docker-compose.local-db.yml exec -T postgres psql -U $$DB_USER -d $$DB_NAME -t -c "SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'data';" | grep -q 1; then \
