@@ -158,6 +158,12 @@ model: Optional[WhisperModel] = None
 MAX_CONCURRENT_TRANSCRIPTIONS = _env_int("MAX_CONCURRENT_TRANSCRIPTIONS", 2)  # Max concurrent model calls
 MAX_QUEUE_SIZE = _env_int("MAX_QUEUE_SIZE", 10)  # Max requests waiting in queue
 
+# Backpressure strategy:
+# - If FAIL_FAST_WHEN_BUSY=true, we do NOT wait in a queue; we immediately return 503 so callers
+#   (e.g. WhisperLive) can keep buffering and submit a newer/larger window later.
+FAIL_FAST_WHEN_BUSY = _env_bool("FAIL_FAST_WHEN_BUSY", True)
+BUSY_RETRY_AFTER_S = _env_int("BUSY_RETRY_AFTER_S", 1)
+
 # Semaphore to limit concurrent transcriptions (protects GPU/CPU from overload)
 transcription_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TRANSCRIPTIONS)
 
@@ -260,6 +266,14 @@ async def transcribe_audio(
     # Load management: Check queue size before accepting request
     async with waiting_requests_lock:
         global waiting_requests
+        # Fail-fast mode: don't accept work we can't start immediately.
+        # This avoids "processing the first chunk" (small/old) and lets upstream buffer/coalesce.
+        if FAIL_FAST_WHEN_BUSY and (transcription_semaphore.locked() or waiting_requests > 0):
+            raise HTTPException(
+                status_code=503,
+                detail="Service busy. Please retry later.",
+                headers={"Retry-After": str(max(1, BUSY_RETRY_AFTER_S))},
+            )
         if waiting_requests >= MAX_QUEUE_SIZE:
             logger.warning(
                 f"Worker {WORKER_ID} queue full ({waiting_requests}/{MAX_QUEUE_SIZE}). "
@@ -268,7 +282,7 @@ async def transcribe_audio(
             raise HTTPException(
                 status_code=503,
                 detail="Service temporarily overloaded. Please retry later.",
-                headers={"Retry-After": "5"}
+                headers={"Retry-After": str(max(1, BUSY_RETRY_AFTER_S))}
             )
         waiting_requests += 1
     

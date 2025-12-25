@@ -177,6 +177,13 @@ MODEL_SIZE=large-v3-turbo     # Whisper model size (default: large-v3-turbo)
 DEVICE=cuda                    # Device: cuda or cpu (default: cuda)
 COMPUTE_TYPE=int8              # Compute type: int8, float16, float32 (default: int8)
 CPU_THREADS=4                  # CPU threads (0 = auto-detect, default: 0)
+
+# Load management / backpressure
+# Recommended for WhisperLive streaming: FAIL_FAST_WHEN_BUSY=true (prefer latest buffered audio)
+MAX_CONCURRENT_TRANSCRIPTIONS=2 # Max concurrent model calls per worker
+MAX_QUEUE_SIZE=10               # Max waiting requests (ignored when FAIL_FAST_WHEN_BUSY=true)
+FAIL_FAST_WHEN_BUSY=true        # Return 503 immediately if busy (lets upstream keep buffering/coalescing)
+BUSY_RETRY_AFTER_S=1            # Retry-After header value (seconds) on 503
 ```
 
 ### Recommended Configurations

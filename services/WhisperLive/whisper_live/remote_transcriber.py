@@ -20,6 +20,17 @@ from .transcriber import Segment, TranscriptionInfo, TranscriptionOptions, VadOp
 
 logger = logging.getLogger(__name__)
 
+# Busy/overload signal from remote API. We intentionally bubble this up so the caller
+# (WhisperLive server) can keep buffering and transcribe the *latest* audio window
+# instead of blocking on retries for an older chunk.
+class RemoteTranscriberOverloaded(RuntimeError):
+    def __init__(self, status_code: int, retry_after_s: float = 0.0, detail: str = ""):
+        self.status_code = int(status_code)
+        self.retry_after_s = float(retry_after_s or 0.0)
+        self.detail = detail or ""
+        super().__init__(f"Remote transcriber overloaded (HTTP {self.status_code}, retry_after={self.retry_after_s}s): {self.detail}")
+
+
 # Language name to ISO-639-1 code mapping
 LANGUAGE_NAME_TO_CODE = {
     "english": "en",
@@ -299,26 +310,20 @@ class RemoteTranscriber:
                     data=data,
                 )
                 
-                # Handle rate limiting and overload responses
-                if response.status_code == 429:  # Too Many Requests
-                    retry_after = int(response.headers.get("Retry-After", "5"))
-                    logger.warning(
-                        f"Rate limited (429) - Retry-After: {retry_after}s. "
-                        f"Backing off for {retry_after}s..."
+                # IMPORTANT: Don't block inside this call on overload/busy.
+                # WhisperLive already buffers/coalesces audio; we want the caller to keep
+                # accumulating and then transcribe the latest window.
+                if response.status_code in (429, 503):
+                    retry_after_raw = response.headers.get("Retry-After", "1")
+                    try:
+                        retry_after = float(retry_after_raw)
+                    except Exception:
+                        retry_after = 1.0
+                    raise RemoteTranscriberOverloaded(
+                        status_code=response.status_code,
+                        retry_after_s=retry_after,
+                        detail=response.text[:500] if response.text else "",
                     )
-                    time.sleep(retry_after)
-                    # Don't increment retry_count for 429 - it's a temporary overload
-                    continue
-                
-                if response.status_code == 503:  # Service Unavailable
-                    retry_after = int(response.headers.get("Retry-After", "10"))
-                    logger.warning(
-                        f"Service overloaded (503) - Retry-After: {retry_after}s. "
-                        f"Backing off for {retry_after}s..."
-                    )
-                    time.sleep(retry_after)
-                    # Don't increment retry_count for 503 - it's a temporary overload
-                    continue
                 
                 response.raise_for_status()
                 
@@ -336,12 +341,17 @@ class RemoteTranscriber:
                     
             except httpx.HTTPStatusError as e:
                 # Handle HTTP errors (but not 429/503 which are handled above)
-                if e.response.status_code in (429, 503):
-                    # Shouldn't reach here, but handle just in case
-                    retry_after = int(e.response.headers.get("Retry-After", "10"))
-                    logger.warning(f"HTTP {e.response.status_code} - backing off for {retry_after}s...")
-                    time.sleep(retry_after)
-                    continue
+                if e.response is not None and e.response.status_code in (429, 503):
+                    retry_after_raw = e.response.headers.get("Retry-After", "1")
+                    try:
+                        retry_after = float(retry_after_raw)
+                    except Exception:
+                        retry_after = 1.0
+                    raise RemoteTranscriberOverloaded(
+                        status_code=e.response.status_code,
+                        retry_after_s=retry_after,
+                        detail=e.response.text[:500] if e.response.text else "",
+                    )
                 last_exception = e
                 retry_count += 1
                 
@@ -359,6 +369,10 @@ class RemoteTranscriber:
                 else:
                     logger.error(f"Remote API call failed after {self.max_retries} retries: {e}")
                     raise
+            except RemoteTranscriberOverloaded:
+                # Bubble up overload so the caller can keep buffering/coalescing
+                # instead of blocking on retries for an older chunk.
+                raise
             except Exception as e:
                 last_exception = e
                 retry_count += 1

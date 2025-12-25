@@ -4,6 +4,7 @@ import threading
 import json
 import functools
 import logging
+import hashlib
 from enum import Enum
 from typing import List, Optional
 import datetime
@@ -25,11 +26,12 @@ except Exception:
     WhisperTRTLLM = None
 
 try:
-    from whisper_live.remote_transcriber import RemoteTranscriber
+    from whisper_live.remote_transcriber import RemoteTranscriber, RemoteTranscriberOverloaded
     REMOTE_AVAILABLE = True
 except Exception:
     REMOTE_AVAILABLE = False
     RemoteTranscriber = None
+    RemoteTranscriberOverloaded = None
 
 # Import for health check HTTP server
 import http.server
@@ -111,6 +113,11 @@ class TranscriptionCollectorClient:
         
         # Track session_uids for which we've published session_start events
         self.session_starts_published = set()
+
+        # Dedupe repeated identical transcript payloads per session_uid.
+        # This prevents Redis stream spam and downstream lag (which looks like a "stuck" pipeline).
+        self._last_transcription_digest_by_uid = {}
+        self._last_transcription_digest_lock = threading.Lock()
         
         # Connect on initialization 
         self.connect()
@@ -351,6 +358,12 @@ class TranscriptionCollectorClient:
                 # Remove from published starts if present, as session is now considered ended
                 if session_uid in self.session_starts_published:
                     self.session_starts_published.remove(session_uid)
+                # Clear dedupe state for this session
+                try:
+                    with self._last_transcription_digest_lock:
+                        self._last_transcription_digest_by_uid.pop(session_uid, None)
+                except Exception:
+                    pass
                 return True
             else:
                 logging.error(f"Failed to publish session_end for UID {session_uid} to {self.stream_key}")
@@ -401,10 +414,23 @@ class TranscriptionCollectorClient:
                 "segments": segments, 
                 "uid": session_uid
             }
-            
+
+            # Dedupe identical payloads per session_uid (skip publish if unchanged)
+            payload_json = None
+            try:
+                payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+                digest = hashlib.sha1(payload_json.encode("utf-8")).hexdigest()
+                with self._last_transcription_digest_lock:
+                    prev = self._last_transcription_digest_by_uid.get(session_uid)
+                    if prev == digest:
+                        return True
+                    self._last_transcription_digest_by_uid[session_uid] = digest
+            except Exception:
+                payload_json = None
+
             message = {
                 # Per current structure, the whole payload is JSON dumped into one field
-                "payload": json.dumps(payload) 
+                "payload": payload_json or json.dumps(payload)
             }
             
             result = self.redis_client.xadd(
@@ -3105,6 +3131,19 @@ class ServeClientRemote(ServeClientBase):
                             break  # Exit loop, will get fresh audio on next iteration
 
                 except Exception as e:
+                    # Treat remote overload as a normal backpressure signal (not an error):
+                    # release the in-flight flag so the outer loop can keep buffering and
+                    # we can attempt again with a newer/larger audio window.
+                    if RemoteTranscriberOverloaded is not None and isinstance(e, RemoteTranscriberOverloaded):
+                        retry_after = getattr(e, "retry_after_s", 0.5) or 0.5
+                        logging.info(f"Remote transcriber overloaded; backing off {retry_after:.2f}s (HTTP {getattr(e, 'status_code', '??')})")
+                        with self.transcription_lock:
+                            self.transcription_in_flight = False
+                            self.pending_audio_chunk = None
+                            self.pending_audio_duration = 0.0
+                        time.sleep(min(float(retry_after), 2.0))
+                        break
+
                     logging.error(f"[ERROR]: Failed to transcribe audio chunk: {e}")
                     with self.transcription_lock:
                         self.transcription_in_flight = False
