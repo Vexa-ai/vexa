@@ -7,13 +7,14 @@ Supports configurable endpoints like Fireworks.ai, Groq, etc.
 """
 
 import os
+import io
 import tempfile
 import wave
 import logging
 import time
-import requests
 from typing import BinaryIO, Iterable, List, Optional, Tuple, Union
 import numpy as np
+import httpx
 
 from .transcriber import Segment, TranscriptionInfo, TranscriptionOptions, VadOptions
 
@@ -103,8 +104,9 @@ class RemoteTranscriber:
     """
     Wrapper for remote HTTP API transcription that matches WhisperModel interface.
     
-    Converts audio numpy arrays to temporary WAV files and calls remote HTTP API
-    with retry logic, then converts responses to Segment format.
+    Converts audio numpy arrays to WAV bytes in memory and calls remote HTTP API
+    with retry logic and connection pooling, then converts responses to Segment format.
+    Optimized for real-time performance with reduced latency.
     """
     
     def __init__(
@@ -161,6 +163,42 @@ class RemoteTranscriber:
         self.initial_retry_delay = 1.0  # seconds
         self.max_retry_delay = 10.0  # seconds
         
+        # Create HTTP client with connection pooling for better performance
+        self.http_client = httpx.Client(
+            timeout=httpx.Timeout(60.0),
+            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+            http2=False,  # Disable HTTP/2 for compatibility
+        )
+    
+    def _numpy_to_wav_bytes(self, audio: np.ndarray) -> bytes:
+        """
+        Convert numpy audio array to WAV file bytes in memory.
+        
+        Args:
+            audio: Audio array (float32, normalized to [-1, 1]).
+            
+        Returns:
+            WAV file bytes.
+        """
+        # Ensure audio is float32 and in valid range
+        if audio.dtype != np.float32:
+            audio = audio.astype(np.float32)
+        
+        # Clamp to valid range
+        audio = np.clip(audio, -1.0, 1.0)
+        
+        # Convert to int16 PCM
+        audio_int16 = (audio * 32767).astype(np.int16)
+        
+        # Create WAV file in memory
+        wav_buffer = io.BytesIO()
+        with wave.open(wav_buffer, 'wb') as wav_file:
+            wav_file.setnchannels(1)  # Mono
+            wav_file.setsampwidth(2)  # 16-bit
+            wav_file.setframerate(self.sampling_rate)
+            wav_file.writeframes(audio_int16.tobytes())
+        
+        return wav_buffer.getvalue()
     
     def _numpy_to_wav_file(self, audio: np.ndarray, temp_dir: Optional[str] = None) -> str:
         """
@@ -198,7 +236,7 @@ class RemoteTranscriber:
     
     def _call_remote_api(
         self,
-        audio_file_path: str,
+        audio_bytes: bytes,
         language: Optional[str] = None,
         prompt: Optional[str] = None,
         task: str = "transcribe",
@@ -207,7 +245,7 @@ class RemoteTranscriber:
         Call remote HTTP API with retry logic.
         
         Args:
-            audio_file_path: Path to audio file.
+            audio_bytes: Audio file bytes (WAV format).
             language: Language code (ISO-639-1) or None for auto-detect.
             prompt: Optional prompt for context/spelling.
             task: "transcribe" or "translate".
@@ -251,30 +289,27 @@ class RemoteTranscriber:
         
         while retry_count <= self.max_retries:
             try:
-                with open(audio_file_path, "rb") as audio_file:
-                    files = {"file": audio_file}
-                    response = requests.post(
-                        self.api_url,
-                        headers=headers,
-                        files=files,
-                        data=data,
-                        timeout=60.0,  # 60 second timeout
-                    )
+                # Use in-memory file upload for better performance
+                files = {"file": ("audio.wav", audio_bytes, "audio/wav")}
                 
+                response = self.http_client.post(
+                    self.api_url,
+                    headers=headers,
+                    files=files,
+                    data=data,
+                )
                 response.raise_for_status()
-                # Parse response based on format
+                
+                # Parse response
                 if self.response_format == "verbose_json" or self.response_format == "json":
                     result = response.json()
                     return result
                 else:
-                    # Simple text response - wrap in dict format
                     text = response.text.strip()
                     if text.startswith("{") or text.startswith("["):
-                        # Try to parse as JSON anyway
                         result = response.json()
                         return result
                     else:
-                        # Plain text response
                         return {"text": text}
                     
             except Exception as e:
@@ -514,80 +549,78 @@ class RemoteTranscriber:
                 # Token IDs - can't use directly with remote API
                 logger.warning("Token ID prompts not supported by remote API, ignoring")
         
-        # Create temporary WAV file
-        temp_file = None
-        try:
-            temp_file = self._numpy_to_wav_file(audio_array)
-            
-            # Normalize language code before API call
-            normalized_language = normalize_language_code(language)
-            
-            # Call remote API
-            api_response = self._call_remote_api(
-                audio_file_path=temp_file,
-                language=normalized_language,
-                prompt=prompt_str,
-                task=task,
-            )
-            
-            # Convert to segments
-            segments = self._response_to_segments(api_response)
-            
-            # Extract language info and normalize to ISO code
-            api_language = api_response.get("language")
-            detected_language = normalize_language_code(language or api_language or "en")
-            language_probability = 1.0  # Remote API may not provide probability
-            
-            # Calculate duration
-            duration = len(audio_array) / self.sampling_rate
-            duration_after_vad = duration  # VAD is handled client-side
-            
-            # Create TranscriptionInfo
-            info = TranscriptionInfo(
-                language=detected_language,
-                language_probability=language_probability,
-                duration=duration,
-                duration_after_vad=duration_after_vad,
-                all_language_probs=None,
-                transcription_options=TranscriptionOptions(
-                    beam_size=beam_size,
-                    best_of=best_of,
-                    patience=patience,
-                    length_penalty=length_penalty,
-                    repetition_penalty=repetition_penalty,
-                    no_repeat_ngram_size=no_repeat_ngram_size,
-                    log_prob_threshold=log_prob_threshold,
-                    no_speech_threshold=no_speech_threshold,
-                    compression_ratio_threshold=compression_ratio_threshold,
-                    condition_on_previous_text=condition_on_previous_text,
-                    prompt_reset_on_temperature=prompt_reset_on_temperature,
-                    temperatures=[temperature] if isinstance(temperature, (int, float)) else list(temperature),
-                    initial_prompt=initial_prompt,
-                    prefix=prefix,
-                    suppress_blank=suppress_blank,
-                    suppress_tokens=suppress_tokens,
-                    without_timestamps=without_timestamps,
-                    max_initial_timestamp=max_initial_timestamp,
-                    word_timestamps=word_timestamps,
-                    prepend_punctuations=prepend_punctuations,
-                    append_punctuations=append_punctuations,
-                    multilingual=multilingual,
-                    max_new_tokens=max_new_tokens,
-                    clip_timestamps=clip_timestamps,
-                    hallucination_silence_threshold=hallucination_silence_threshold,
-                    hotwords=hotwords,
-                ),
-                vad_options=vad_parameters if isinstance(vad_parameters, VadOptions) else VadOptions() if vad_parameters is None else VadOptions(**vad_parameters),
-            )
-            
-            # Return segments as a list (not iterator) to avoid len() issues
-            return segments, info
-            
-        finally:
-            # Clean up temporary file
-            if temp_file and os.path.exists(temp_file):
-                try:
-                    os.remove(temp_file)
-                except Exception as e:
-                    logger.warning(f"Failed to remove temporary file {temp_file}: {e}")
+        # Convert audio to WAV bytes in memory (no temp file I/O)
+        audio_wav_bytes = self._numpy_to_wav_bytes(audio_array)
+        
+        # Normalize language code before API call
+        normalized_language = normalize_language_code(language)
+        
+        # Call remote API with in-memory audio bytes
+        api_response = self._call_remote_api(
+            audio_bytes=audio_wav_bytes,
+            language=normalized_language,
+            prompt=prompt_str,
+            task=task,
+        )
+        
+        # Convert to segments
+        segments = self._response_to_segments(api_response)
+        
+        # Extract language info and normalize to ISO code
+        api_language = api_response.get("language")
+        detected_language = normalize_language_code(language or api_language or "en")
+        language_probability = 1.0  # Remote API may not provide probability
+        
+        # Calculate duration
+        duration = len(audio_array) / self.sampling_rate
+        duration_after_vad = duration  # VAD is handled client-side
+        
+        # Create TranscriptionInfo
+        info = TranscriptionInfo(
+            language=detected_language,
+            language_probability=language_probability,
+            duration=duration,
+            duration_after_vad=duration_after_vad,
+            all_language_probs=None,
+            transcription_options=TranscriptionOptions(
+                beam_size=beam_size,
+                best_of=best_of,
+                patience=patience,
+                length_penalty=length_penalty,
+                repetition_penalty=repetition_penalty,
+                no_repeat_ngram_size=no_repeat_ngram_size,
+                log_prob_threshold=log_prob_threshold,
+                no_speech_threshold=no_speech_threshold,
+                compression_ratio_threshold=compression_ratio_threshold,
+                condition_on_previous_text=condition_on_previous_text,
+                prompt_reset_on_temperature=prompt_reset_on_temperature,
+                temperatures=[temperature] if isinstance(temperature, (int, float)) else list(temperature),
+                initial_prompt=initial_prompt,
+                prefix=prefix,
+                suppress_blank=suppress_blank,
+                suppress_tokens=suppress_tokens,
+                without_timestamps=without_timestamps,
+                max_initial_timestamp=max_initial_timestamp,
+                word_timestamps=word_timestamps,
+                prepend_punctuations=prepend_punctuations,
+                append_punctuations=append_punctuations,
+                multilingual=multilingual,
+                max_new_tokens=max_new_tokens,
+                clip_timestamps=clip_timestamps,
+                hallucination_silence_threshold=hallucination_silence_threshold,
+                hotwords=hotwords,
+            ),
+            vad_options=vad_parameters if isinstance(vad_parameters, VadOptions) else VadOptions() if vad_parameters is None else VadOptions(**vad_parameters),
+        )
+        
+        # Return segments as a list (not iterator) to avoid len() issues
+        return segments, info
+    
+    def __del__(self):
+        """Clean up HTTP client on destruction."""
+        if hasattr(self, 'http_client'):
+            try:
+                self.http_client.close()
+            except Exception:
+                pass
 
