@@ -92,6 +92,7 @@ def get_valid_status_transitions() -> Dict[MeetingStatus, List[MeetingStatus]]:
         ],
         MeetingStatus.JOINING: [
             MeetingStatus.AWAITING_ADMISSION,
+            MeetingStatus.ACTIVE,  # Allow direct transition when bot is immediately admitted (no waiting room)
             MeetingStatus.FAILED,
             MeetingStatus.COMPLETED,
             MeetingStatus.STOPPING,

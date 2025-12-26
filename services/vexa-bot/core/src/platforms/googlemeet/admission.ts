@@ -31,7 +31,9 @@ export async function checkForGoogleRejection(page: Page): Promise<boolean> {
 }
 
 // Helper function to check for any visible and enabled admission indicators
+// Returns true only if at least 2 indicators are found (to reduce false positives)
 export async function checkForGoogleAdmissionIndicators(page: Page): Promise<boolean> {
+  const foundSelectors: string[] = [];
   for (const selector of googleInitialAdmissionIndicators) {
     try {
       const element = page.locator(selector).first();
@@ -39,16 +41,31 @@ export async function checkForGoogleAdmissionIndicators(page: Page): Promise<boo
       if (isVisible) {
         const isDisabled = await element.getAttribute('aria-disabled');
         if (isDisabled !== 'true') {
-          log(`✅ Found Google Meet admission indicator: ${selector}`);
-          return true;
+          foundSelectors.push(selector);log(`✅ Found Google Meet admission indicator: ${selector}`);
         }
       }
     } catch (error) {
       // Continue to next selector if this one fails
       continue;
     }
+  }// CRITICAL: Require at least 2 indicators to reduce false positives
+  // Single indicator (like "Leave call" button) can appear in waiting room UI
+  if (foundSelectors.length >= 2) {
+    log(`✅ Multiple admission indicators found (${foundSelectors.length}), confirming admission`);
+    return true;
+  }
+  if (foundSelectors.length === 1) {
+    log(`⚠️ Only one admission indicator found (${foundSelectors[0]}), rejecting as likely false positive`);
+    // Reject single indicator to prevent false positives
+    return false;
   }
   return false;
+}
+
+// Silent admission check (doesn't send callbacks) - used for verification
+export async function checkForGoogleAdmissionSilent(page: Page): Promise<boolean> {
+  // Just check indicators without sending any callbacks
+  return await checkForGoogleAdmissionIndicators(page);
 }
 
 // Helper function to check for waiting room indicators
@@ -95,13 +112,17 @@ export async function waitForGoogleMeetingAdmission(
       await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-2-admitted.png', fullPage: true });
       log("📸 Screenshot taken: Bot confirmed already admitted to meeting");
       
-      // --- Call awaiting admission callback even for immediate admission ---
+      // #region agent log
       try {
-        await callAwaitingAdmissionCallback(botConfig);
-        log("Awaiting admission callback sent successfully (immediate admission)");
-      } catch (callbackError: any) {
-        log(`Warning: Failed to send awaiting admission callback: ${callbackError.message}. Continuing...`);
-      }
+        await fetch('http://127.0.0.1:7242/ingest/a89f31ed-bb1b-47a2-9c8c-c03467b63bbc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'googlemeet/admission.ts:108',message:'Bot immediately admitted - skipping awaiting_admission callback',data:{immediately_admitted:true},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      } catch {}
+      // #endregion
+      
+      // CRITICAL FIX: When bot is immediately admitted, skip awaiting_admission callback
+      // The bot should go directly from "joining" -> "active", not "joining" -> "awaiting_admission" -> "active"
+      // Sending awaiting_admission here causes a race condition where the callback arrives before
+      // the "joining" callback is processed, causing REQUESTED -> AWAITING_ADMISSION (invalid transition)
+      log("Bot immediately admitted - skipping awaiting_admission callback to avoid race condition");
       
       log("Successfully admitted to the Google Meet meeting - no waiting room required");
       return true;
@@ -120,6 +141,11 @@ export async function waitForGoogleMeetingAdmission(
       // Take screenshot when waiting room indicator found
       await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-4-waiting-room.png', fullPage: true });
       log("📸 Screenshot taken: Bot confirmed in waiting room");
+      
+      // CRITICAL: Wait a moment to ensure "joining" callback is processed before sending "awaiting_admission"
+      // This prevents race condition where awaiting_admission arrives before joining is processed
+      log("Waiting 1 second to ensure joining callback is processed before sending awaiting_admission...");
+      await new Promise(resolve => setTimeout(resolve, 1000));
       
       // --- Call awaiting admission callback to notify bot-manager that bot is waiting ---
       try {
@@ -140,6 +166,14 @@ export async function waitForGoogleMeetingAdmission(
       const startTime = Date.now();
       
       while (Date.now() - startTime < timeout) {
+        // CRITICAL: Check for meeting ended/user left while waiting
+        const { checkForGoogleRemoval } = await import("./removal");
+        const isRemoved = await checkForGoogleRemoval(page);
+        if (isRemoved) {
+          log("🚨 Meeting ended or user left while bot was waiting for admission");
+          throw new Error("Meeting ended or user left while waiting for admission");
+        }
+        
         // Check if we're still in waiting room using visibility
         const stillWaiting = await checkForWaitingRoomIndicators(page);
         
@@ -181,6 +215,14 @@ export async function waitForGoogleMeetingAdmission(
       const checkInterval = 2000;
       const startTime = Date.now();
       while (Date.now() - startTime < timeout) {
+        // CRITICAL: Check for meeting ended/user left while polling
+        const { checkForGoogleRemoval } = await import("./removal");
+        const isRemoved = await checkForGoogleRemoval(page);
+        if (isRemoved) {
+          log("🚨 Meeting ended or user left while bot was polling for admission");
+          throw new Error("Meeting ended or user left while waiting for admission");
+        }
+        
         // Rejection check first
         const isRejected = await checkForGoogleRejection(page);
         if (isRejected) {

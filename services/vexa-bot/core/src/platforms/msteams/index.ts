@@ -4,7 +4,7 @@ import { runMeetingFlow, PlatformStrategies } from "../shared/meetingFlow";
 
 // Import modular functions
 import { joinMicrosoftTeams } from "./join";
-import { waitForTeamsMeetingAdmission } from "./admission";
+import { waitForTeamsMeetingAdmission, checkForTeamsAdmissionSilent } from "./admission";
 import { startTeamsRecording } from "./recording";
 import { prepareForRecording, leaveMicrosoftTeams } from "./leave";
 import { startTeamsRemovalMonitor } from "./removal";
@@ -18,6 +18,7 @@ export async function handleMicrosoftTeams(
   const strategies: PlatformStrategies = {
     join: joinMicrosoftTeams,
     waitForAdmission: waitForTeamsMeetingAdmission,
+    checkAdmissionSilent: checkForTeamsAdmissionSilent,
     prepare: prepareForRecording,
     startRecording: startTeamsRecording,
     startRemovalMonitor: startTeamsRemovalMonitor,

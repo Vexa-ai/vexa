@@ -1399,7 +1399,8 @@ class TranscriptionServer:
                 after detecting no voice activity for more than three consecutive frames, it also triggers the
                 end-of-speech (EOS) flag for the client.
         """
-        if not self.vad_detector(frame_np):
+        vad_result = self.vad_detector(frame_np)
+        if not vad_result:
             self.no_voice_activity_chunks += 1
             if self.no_voice_activity_chunks > 3:
                 client = self.client_manager.get_client(websocket)
@@ -3220,6 +3221,7 @@ class ServeClientRemote(ServeClientBase):
                         self.collector_client.server_ref.server_last_transcription_ts = time.time()
                 except Exception:
                     pass
+
 
                 # Apply hallucination filter
                 filtered_text = self._filter_hallucinations(text_)

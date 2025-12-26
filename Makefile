@@ -47,7 +47,6 @@ check_docker:
 # Ensure transcription-service/.env exists with API_TOKEN
 setup-transcription-service-env:
 	@echo "---> Ensuring transcription-service/.env exists..."
-	@echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:48\",\"message\":\"setup-transcription-service-env started\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log
 	@if [ ! -f services/transcription-service/.env ]; then \
 		if [ -f services/transcription-service/.env.example ]; then \
 			cp services/transcription-service/.env.example services/transcription-service/.env; \
@@ -59,7 +58,6 @@ setup-transcription-service-env:
 		fi; \
 	fi; \
 	TRANSCRIPTION_API_TOKEN=$$(grep -E '^[[:space:]]*API_TOKEN=' services/transcription-service/.env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo ""); \
-	echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:59\",\"message\":\"Read API_TOKEN from transcription-service/.env\",\"data\":{\"token_found\":$$([ -n \"$$TRANSCRIPTION_API_TOKEN\" ] && echo true || echo false),\"token_len\":$$(echo -n \"$$TRANSCRIPTION_API_TOKEN\" | wc -c),\"is_placeholder\":$$([ \"$$TRANSCRIPTION_API_TOKEN\" = \"your_secure_token_here\" ] && echo true || echo false)},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
 	if [ -z "$$TRANSCRIPTION_API_TOKEN" ] || [ "$$TRANSCRIPTION_API_TOKEN" = "your_secure_token_here" ]; then \
 		echo "---> Generating secure API_TOKEN for transcription-service..."; \
 		NEW_TOKEN=$$(openssl rand -hex 16); \
@@ -69,7 +67,6 @@ setup-transcription-service-env:
 		else \
 			echo "API_TOKEN=$$NEW_TOKEN" >> services/transcription-service/.env; \
 		fi; \
-		echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:68\",\"message\":\"Generated new API_TOKEN\",\"data\":{\"token_len\":$$(echo -n \"$$NEW_TOKEN\" | wc -c)},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
 		echo "*** Generated and set API_TOKEN in services/transcription-service/.env ***"; \
 	fi; \
 	MAKE_TARGET=$${TARGET:-cpu}; \
@@ -122,21 +119,15 @@ endif
 		fi; \
 		cp env-example.cpu .env; \
 		TRANSCRIPTION_API_TOKEN=$$(grep -E '^[[:space:]]*API_TOKEN=' services/transcription-service/.env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo ""); \
-		echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:111\",\"message\":\"Syncing API key to .env (CPU)\",\"data\":{\"token_found\":$$([ -n \"$$TRANSCRIPTION_API_KEY\" ] && echo true || echo false),\"token_len\":$$(echo -n \"$$TRANSCRIPTION_API_TOKEN\" | wc -c)},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
 		if [ -n "$$TRANSCRIPTION_API_TOKEN" ]; then \
 			if grep -q "^REMOTE_TRANSCRIBER_API_KEY=" .env 2>/dev/null; then \
 				sed -i.bak "s|^REMOTE_TRANSCRIBER_API_KEY=.*|REMOTE_TRANSCRIBER_API_KEY=$$TRANSCRIPTION_API_TOKEN|" .env; \
 				rm -f .env.bak; \
-				echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:115\",\"message\":\"Updated existing REMOTE_TRANSCRIBER_API_KEY\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
 			else \
 				echo "REMOTE_TRANSCRIBER_API_KEY=$$TRANSCRIPTION_API_TOKEN" >> .env; \
-				echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:118\",\"message\":\"Added REMOTE_TRANSCRIBER_API_KEY to .env\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
 			fi; \
 			SYNCED_KEY=$$(grep -E '^[[:space:]]*REMOTE_TRANSCRIBER_API_KEY=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo ""); \
-			echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:121\",\"message\":\"Verified synced key in .env\",\"data\":{\"key_synced\":$$([ \"$$SYNCED_KEY\" = \"$$TRANSCRIPTION_API_TOKEN\" ] && echo true || echo false),\"synced_key_len\":$$(echo -n \"$$SYNCED_KEY\" | wc -c)},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
 			echo "*** Synced REMOTE_TRANSCRIBER_API_KEY from transcription-service/.env ***"; \
-		else \
-			echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:124\",\"message\":\"WARNING: No API_TOKEN found to sync\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
 		fi; \
 		echo "*** .env file created from env-example.cpu. Please review it. ***"; \
 	elif [ "$(TARGET)" = "gpu" ]; then \
@@ -256,21 +247,15 @@ endif
 		fi; \
 		cp env-example.cpu .env; \
 		TRANSCRIPTION_API_TOKEN=$$(grep -E '^[[:space:]]*API_TOKEN=' services/transcription-service/.env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo ""); \
-		echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:111\",\"message\":\"Syncing API key to .env (CPU)\",\"data\":{\"token_found\":$$([ -n \"$$TRANSCRIPTION_API_KEY\" ] && echo true || echo false),\"token_len\":$$(echo -n \"$$TRANSCRIPTION_API_TOKEN\" | wc -c)},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
 		if [ -n "$$TRANSCRIPTION_API_TOKEN" ]; then \
 			if grep -q "^REMOTE_TRANSCRIBER_API_KEY=" .env 2>/dev/null; then \
 				sed -i.bak "s|^REMOTE_TRANSCRIBER_API_KEY=.*|REMOTE_TRANSCRIBER_API_KEY=$$TRANSCRIPTION_API_TOKEN|" .env; \
 				rm -f .env.bak; \
-				echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:115\",\"message\":\"Updated existing REMOTE_TRANSCRIBER_API_KEY\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
 			else \
 				echo "REMOTE_TRANSCRIBER_API_KEY=$$TRANSCRIPTION_API_TOKEN" >> .env; \
-				echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:118\",\"message\":\"Added REMOTE_TRANSCRIBER_API_KEY to .env\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
 			fi; \
 			SYNCED_KEY=$$(grep -E '^[[:space:]]*REMOTE_TRANSCRIBER_API_KEY=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' || echo ""); \
-			echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:121\",\"message\":\"Verified synced key in .env\",\"data\":{\"key_synced\":$$([ \"$$SYNCED_KEY\" = \"$$TRANSCRIPTION_API_TOKEN\" ] && echo true || echo false),\"synced_key_len\":$$(echo -n \"$$SYNCED_KEY\" | wc -c)},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
 			echo "*** Synced REMOTE_TRANSCRIBER_API_KEY from transcription-service/.env ***"; \
-		else \
-			echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"A\",\"location\":\"Makefile:124\",\"message\":\"WARNING: No API_TOKEN found to sync\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
 		fi; \
 		echo "*** .env file created from env-example.cpu. Please review it. ***"; \
 	elif [ "$(TARGET)" = "gpu" ]; then \
@@ -392,18 +377,14 @@ build-bot-image: check_docker
 # Build transcription-service based on TARGET
 build-transcription-service: check_docker
 	@echo "---> Building transcription-service..."
-	@echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"Makefile:304\",\"message\":\"build-transcription-service started\",\"data\":{\"target\":\"$(TARGET)\"},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log
 	@if [ "$(TARGET)" = "cpu" ]; then \
 		echo "---> Building transcription-service in CPU mode..."; \
-		echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"Makefile:307\",\"message\":\"Building transcription-service CPU mode\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
 		cd services/transcription-service && docker compose -f docker-compose.cpu.yml build; \
 	elif [ "$(TARGET)" = "gpu" ]; then \
 		echo "---> Building transcription-service in GPU mode..."; \
-		echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"Makefile:311\",\"message\":\"Building transcription-service GPU mode\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
 		cd services/transcription-service && docker compose build; \
 	else \
 		echo "---> TARGET not set or invalid. Skipping transcription-service build."; \
-		echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"Makefile:314\",\"message\":\"Skipping transcription-service build (invalid TARGET)\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
 	fi
 
 # Build Docker Compose service images
@@ -434,20 +415,14 @@ build: check_docker build-bot-image build-transcription-service
 # Start transcription-service based on TARGET
 up-transcription-service: check_docker
 	@echo "---> Starting transcription-service..."
-	@echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"Makefile:342\",\"message\":\"up-transcription-service started\",\"data\":{\"target\":\"$(TARGET)\"},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log
 	@if [ "$(TARGET)" = "cpu" ]; then \
 		echo "---> Starting transcription-service in CPU mode..."; \
-		echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"Makefile:345\",\"message\":\"Starting transcription-service CPU mode\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
 		cd services/transcription-service && docker compose -f docker-compose.cpu.yml up -d; \
-		echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"Makefile:347\",\"message\":\"transcription-service CPU started\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
 	elif [ "$(TARGET)" = "gpu" ]; then \
 		echo "---> Starting transcription-service in GPU mode..."; \
-		echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"Makefile:350\",\"message\":\"Starting transcription-service GPU mode\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
 		cd services/transcription-service && docker compose up -d; \
-		echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"Makefile:352\",\"message\":\"transcription-service GPU started\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
 	else \
 		echo "---> TARGET not set or invalid. Skipping transcription-service."; \
-		echo "{\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\",\"location\":\"Makefile:355\",\"message\":\"Skipping transcription-service (invalid TARGET)\",\"data\":{},\"timestamp\":$$(date +%s000)}" >> /home/dima/dev/.cursor/debug.log; \
 	fi
 
 # Stop transcription-service (handles both CPU and GPU modes)

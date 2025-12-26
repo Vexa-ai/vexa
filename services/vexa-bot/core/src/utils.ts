@@ -12,9 +12,7 @@ export async function callStartupCallback(botConfig: any): Promise<void> {
   await callStatusChangeCallback(botConfig, "active");
 }
 
-export async function callJoiningCallback(botConfig: any): Promise<void> {
-  await callStatusChangeCallback(botConfig, "joining");
-}
+export async function callJoiningCallback(botConfig: any): Promise<void> {await callStatusChangeCallback(botConfig, "joining");}
 
 export async function callAwaitingAdmissionCallback(botConfig: any): Promise<void> {
   await callStatusChangeCallback(botConfig, "awaiting_admission");
