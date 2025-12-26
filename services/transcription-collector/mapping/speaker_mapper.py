@@ -265,6 +265,45 @@ async def get_speaker_mapping_for_segment(
             max=fetch_end_ms,
             withscores=True
         )
+
+        # --- Debug-mode instrumentation (docker logs; no PII) ---
+        # #region agent log
+        try:
+            # Check if there are late speaker events beyond our buffer window.
+            # This helps validate whether POST_SEGMENT_SPEAKER_EVENT_FETCH_MS is too small.
+            late_min = fetch_end_ms
+            late_max = segment_end_ms + 3000  # 3s after segment end
+            if late_max > late_min:
+                late_events_raw = await redis_c.zrangebyscore(
+                    speaker_event_key,
+                    min=late_min,
+                    max=late_max,
+                    withscores=False
+                )
+                if late_events_raw:
+                    # Summarize by event_type and unique participant ids (hashed-ish by suffix/prefix)
+                    counts: Dict[str, int] = {}
+                    ids: set[str] = set()
+                    for ev in late_events_raw[:50]:  # cap for safety
+                        try:
+                            ev_str = ev.decode("utf-8") if isinstance(ev, (bytes, bytearray)) else str(ev)
+                            obj = json.loads(ev_str)
+                            et = str(obj.get("event_type") or "unknown")
+                            counts[et] = counts.get(et, 0) + 1
+                            pid = obj.get("participant_id_meet") or obj.get("participant_name") or ""
+                            pid = str(pid)
+                            if pid:
+                                ids.add(pid[:8])
+                        except Exception:
+                            counts["unparseable"] = counts.get("unparseable", 0) + 1
+                    logger.info(
+                        f"{context_log_msg} [DiagLateEvents] UID:{session_uid[:8]} "
+                        f"segEnd={segment_end_ms:.0f}ms bufferEnd={fetch_end_ms:.0f}ms lateCount={len(late_events_raw)} "
+                        f"types={counts} participantIdPrefixes={sorted(list(ids))[:5]}"
+                    )
+        except Exception as _diag_err:
+            logger.debug(f"{context_log_msg} [DiagLateEvents] failed: {_diag_err}")
+        # #endregion
         
         speaker_events_for_mapper: List[Tuple[str, float]] = []
         for event_data, score_ms in speaker_events_raw:

@@ -4,7 +4,7 @@ import { runMeetingFlow, PlatformStrategies } from "../shared/meetingFlow";
 
 // Import modular functions
 import { joinGoogleMeeting } from "./join";
-import { waitForGoogleMeetingAdmission } from "./admission";
+import { waitForGoogleMeetingAdmission, checkForGoogleAdmissionSilent } from "./admission";
 import { startGoogleRecording } from "./recording";
 import { prepareForRecording, leaveGoogleMeet } from "./leave";
 import { startGoogleRemovalMonitor } from "./removal";
@@ -22,6 +22,7 @@ export async function handleGoogleMeet(
       await joinGoogleMeeting(page, botConfig.meetingUrl!, botConfig.botName, botConfig);
     },
     waitForAdmission: waitForGoogleMeetingAdmission,
+    checkAdmissionSilent: checkForGoogleAdmissionSilent,
     prepare: prepareForRecording,
     startRecording: startGoogleRecording,
     startRemovalMonitor: startGoogleRemovalMonitor,

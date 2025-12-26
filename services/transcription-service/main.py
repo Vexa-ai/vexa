@@ -7,6 +7,7 @@ import io
 import time
 import logging
 import asyncio
+import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
@@ -384,7 +385,9 @@ async def transcribe_audio(
                 logger.info(f"Worker {WORKER_ID} detected silence (temp={t})")
                 break
 
-            if not _looks_like_hallucination(segments):
+            is_hallucination = _looks_like_hallucination(segments)
+
+            if not is_hallucination:
                 full_text = " ".join([s["text"].strip() for s in segments]).strip()
                 duration = segments[-1]["end"] if segments else 0.0
                 best = (full_text, info.language, duration, segments)

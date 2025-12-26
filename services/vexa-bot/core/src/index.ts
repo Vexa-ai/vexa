@@ -339,8 +339,7 @@ async function performGracefulLeave(
 // We will define the actual exposed function inside runBot where 'page' is in scope.
 // --- ------------------------------------------------------------ ---
 
-export async function runBot(botConfig: BotConfig): Promise<void> {
-  // Store botConfig globally for command validation
+export async function runBot(botConfig: BotConfig): Promise<void> {// Store botConfig globally for command validation
   (globalThis as any).botConfig = botConfig;
   
   // --- UPDATED: Parse and store config values ---

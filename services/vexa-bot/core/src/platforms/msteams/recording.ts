@@ -87,6 +87,7 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
 
       // Expose references for reconfiguration
       (window as any).__vexaWhisperLiveService = whisperLiveService;
+      (window as any).__vexaAudioService = audioService;
       (window as any).__vexaBotConfig = botConfigData;
 
       // Replace with real reconfigure implementation and apply any queued update
@@ -104,16 +105,35 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
           cfg.task = task || 'transcribe';
           (window as any).__vexaBotConfig = cfg;
           
-          // Update the service's config and force reconnect via socket close (stubborn will handle reconnection)
-          svc.botConfigData = cfg;
+          // Close existing connection to establish new session from scratch
+          (window as any).logBot?.(`[Reconfigure] Closing existing connection to establish new session...`);
           try { 
-            (window as any).logBot?.(`[Reconfigure] Closing connection to force reconnect with: language=${cfg.language}, task=${cfg.task}`);
-            if (svc.socket) {
-              svc.socket.close(1000, 'Reconfiguration requested');
+            // Use closeForReconfigure to prevent auto-reconnect during manual reconfigure
+            if (svc?.closeForReconfigure) {
+              svc.closeForReconfigure();
+            } else {
+              svc.close();
             }
-          } catch {}
+            // Reset audio service session start time so speaker events use new session timestamps
+            const audioSvc = (window as any).__vexaAudioService;
+            if (audioSvc?.resetSessionStartTime) {
+              audioSvc.resetSessionStartTime();
+            }
+            // Wait a brief moment to ensure socket is fully closed
+            await new Promise(resolve => setTimeout(resolve, 100));
+          } catch (closeErr: any) {
+            (window as any).logBot?.(`[Reconfigure] Error closing connection: ${closeErr?.message || closeErr}`);
+          }
           
-          (window as any).logBot?.(`[Reconfigure] Applied: language=${cfg.language}, task=${cfg.task}`);
+          // Reconnect with new config - this will generate a new session_uid
+          (window as any).logBot?.(`[Reconfigure] Reconnecting with new config: language=${cfg.language}, task=${cfg.task}`);
+          await svc.connectToWhisperLive(
+            cfg,
+            (window as any).__vexaOnMessage,
+            (window as any).__vexaOnError,
+            (window as any).__vexaOnClose
+          );
+          (window as any).logBot?.(`[Reconfigure] Successfully reconnected with new session. Language=${cfg.language}, Task=${cfg.task}`);
         } catch (e: any) {
           (window as any).logBot?.(`[Reconfigure] Error applying new config: ${e?.message || e}`);
         }

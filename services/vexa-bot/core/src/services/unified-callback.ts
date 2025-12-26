@@ -45,16 +45,13 @@ export async function callStatusChangeCallback(
   errorDetails?: any,
   completionReason?: CompletionReason,
   failureStage?: FailureStage
-): Promise<void> {
-  log(`🔥 UNIFIED CALLBACK: ${status.toUpperCase()} - reason: ${reason || 'none'}`);
+): Promise<void> {log(`🔥 UNIFIED CALLBACK: ${status.toUpperCase()} - reason: ${reason || 'none'}`);
   
-  if (!botConfig.botManagerCallbackUrl) {
-    log("Warning: No bot manager callback URL configured. Cannot send status change callback.");
+  if (!botConfig.botManagerCallbackUrl) {log("Warning: No bot manager callback URL configured. Cannot send status change callback.");
     return;
   }
 
-  if (!botConfig.connectionId) {
-    log("Warning: No connection ID configured. Cannot send status change callback.");
+  if (!botConfig.connectionId) {log("Warning: No connection ID configured. Cannot send status change callback.");
     return;
   }
 
@@ -100,11 +97,9 @@ export async function callStatusChangeCallback(
       if (response.ok) {
         // Read and validate response body
         const responseBody = await response.json();
-        if (responseBody.status === 'processed' || responseBody.status === 'ok' || responseBody.status === 'container_updated') {
-          log(`${status} status change callback sent and processed successfully`);
+        if (responseBody.status === 'processed' || responseBody.status === 'ok' || responseBody.status === 'container_updated') {log(`${status} status change callback sent and processed successfully`);
           return; // Success, exit retry loop
-        } else {
-          log(`Callback returned unexpected status: ${responseBody.status}, detail: ${responseBody.detail || 'none'}`);
+        } else {log(`Callback returned unexpected status: ${responseBody.status}, detail: ${responseBody.detail || 'none'}`);
           // If not last attempt, retry
           if (attempt < maxRetries - 1) {
             const delay = baseDelay * Math.pow(2, attempt);
@@ -114,8 +109,7 @@ export async function callStatusChangeCallback(
           }
         }
       } else {
-        const errorText = await response.text().catch(() => 'Unable to read error response');
-        log(`Callback failed with HTTP ${response.status}: ${errorText}`);
+        const errorText = await response.text().catch(() => 'Unable to read error response');log(`Callback failed with HTTP ${response.status}: ${errorText}`);
         // If not last attempt, retry
         if (attempt < maxRetries - 1) {
           const delay = baseDelay * Math.pow(2, attempt);
@@ -126,16 +120,14 @@ export async function callStatusChangeCallback(
       }
     } catch (error: any) {
       if (timeoutId) clearTimeout(timeoutId);
-      const isTimeout = error.name === 'AbortError';
-      log(`Callback attempt ${attempt + 1} failed: ${isTimeout ? 'timeout after 5s' : error.message}`);
+      const isTimeout = error.name === 'AbortError';log(`Callback attempt ${attempt + 1} failed: ${isTimeout ? 'timeout after 5s' : error.message}`);
       
       // If not last attempt, retry
       if (attempt < maxRetries - 1) {
         const delay = baseDelay * Math.pow(2, attempt);
         log(`Retrying in ${delay}ms...`);
         await new Promise(resolve => setTimeout(resolve, delay));
-      } else {
-        log(`All ${maxRetries} callback attempts failed. Bot-manager may not have received the status change.`);
+      } else {log(`All ${maxRetries} callback attempts failed. Bot-manager may not have received the status change.`);
       }
     }
   }
