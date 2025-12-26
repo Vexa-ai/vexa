@@ -3325,6 +3325,12 @@ class ServeClientRemote(ServeClientBase):
         if offset is not None:
             with self.lock:
                 self.timestamp_offset += offset
+        else:
+            # CRITICAL FIX: If offset is None (all segments filtered out due to silence/hallucinations),
+            # we MUST still advance timestamp_offset by duration to prevent getting stuck processing
+            # the same audio chunk repeatedly. This fixes lag after prolonged silence periods.
+            with self.lock:
+                self.timestamp_offset += duration
 
         return last_segment
 
