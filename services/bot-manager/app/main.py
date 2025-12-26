@@ -1540,10 +1540,44 @@ async def reconcile_meetings_and_containers():
                     # Meeting has no container ID - skip (might be in REQUESTED state)
                     continue
                 
-                # Check if container actually exists and is running
-                container_exists = await verify_container_running(meeting.bot_container_id)
+                # Check if container/process actually exists and is running
+                try:
+                    container_exists = await verify_container_running(meeting.bot_container_id)
+                except Exception as e:
+                    # Error during verification - log but don't mark as zombie
+                    # This could happen if orchestrator is unavailable or misconfigured
+                    logger.error(
+                        f"[Reconciliation] Error verifying container/process {meeting.bot_container_id} "
+                        f"for meeting {meeting.id}: {e}. Skipping this meeting."
+                    )
+                    continue
+                
                 if not container_exists:
-                    logger.warning(f"[Reconciliation] ZOMBIE MEETING detected: Meeting {meeting.id} (status: {meeting.status}, container: {meeting.bot_container_id}) has no running container. Finalizing...")
+                    # Additional safety check: if container_id looks like a container name (not a PID),
+                    # and we couldn't find it, check if there are any running processes at all
+                    # This prevents false positives when the registry is empty but processes are running
+                    is_likely_name = not meeting.bot_container_id.isdigit()
+                    
+                    if is_likely_name:
+                        # For container names, be more conservative - check if any processes are running
+                        # If registry is empty but meeting is active, might be a timing issue
+                        try:
+                            all_running = await get_running_bots_status(meeting.user_id)
+                            if len(all_running) > 0:
+                                logger.warning(
+                                    f"[Reconciliation] Meeting {meeting.id} has container name '{meeting.bot_container_id}' "
+                                    f"not found in registry, but {len(all_running)} processes are running. "
+                                    f"Skipping zombie detection to avoid false positive."
+                                )
+                                continue
+                        except Exception as e:
+                            logger.error(f"[Reconciliation] Error checking running bots for safety check: {e}")
+                    
+                    logger.warning(
+                        f"[Reconciliation] ZOMBIE MEETING detected: Meeting {meeting.id} "
+                        f"(status: {meeting.status}, container/process: {meeting.bot_container_id}) "
+                        f"has no running container/process. Finalizing..."
+                    )
                     
                     # Finalize the meeting
                     success = await update_meeting_status(
@@ -1552,7 +1586,11 @@ async def reconcile_meetings_and_containers():
                         db,
                         completion_reason=MeetingCompletionReason.STOPPED,
                         transition_reason="reconciliation_zombie_meeting",
-                        transition_metadata={"detected_by": "reconciliation_task", "original_status": meeting.status}
+                        transition_metadata={
+                            "detected_by": "reconciliation_task",
+                            "original_status": meeting.status,
+                            "container_id": meeting.bot_container_id
+                        }
                     )
                     
                     if success:
@@ -1567,7 +1605,10 @@ async def reconcile_meetings_and_containers():
                         zombie_meetings_fixed += 1
                         logger.info(f"[Reconciliation] Fixed zombie meeting {meeting.id}")
                     else:
-                        logger.error(f"[Reconciliation] Failed to finalize zombie meeting {meeting.id}")
+                        logger.error(
+                            f"[Reconciliation] Failed to finalize zombie meeting {meeting.id} "
+                            f"(status transition may be invalid)"
+                        )
             
             await db.commit()
             
