@@ -303,12 +303,32 @@ echo ""
 # -----------------------------------------------------------------------------
 
 echo "Verifying transcription service..."
-TRANSCRIBER_URL="${TRANSCRIBER_URL:-${REMOTE_TRANSCRIBER_URL:-}}"
-if [ -z "$TRANSCRIBER_URL" ]; then
-    echo "  ❌ ERROR: TRANSCRIBER_URL (or REMOTE_TRANSCRIBER_URL) is not set"
-    echo "     This is required for transcription functionality"
-    exit 1
-fi
+if [ "${SKIP_TRANSCRIPTION_CHECK:-false}" = "true" ]; then
+    echo "  ⚠️ Skipping transcription service verification (SKIP_TRANSCRIPTION_CHECK=true)"
+    echo "     Ensuring minimal variables are set..."
+    
+    # Still check for URL presence as it's critical, but don't ping it
+    TRANSCRIBER_URL="${TRANSCRIBER_URL:-${REMOTE_TRANSCRIBER_URL:-}}"
+    if [ -z "$TRANSCRIBER_URL" ]; then
+        echo "  ❌ ERROR: TRANSCRIBER_URL (or REMOTE_TRANSCRIBER_URL) is not set"
+        exit 1
+    fi
+    
+    TRANSCRIBER_API_KEY="${TRANSCRIBER_API_KEY:-${REMOTE_TRANSCRIBER_API_KEY:-}}"
+    if [ -z "$TRANSCRIBER_API_KEY" ]; then
+         echo "  ❌ ERROR: TRANSCRIBER_API_KEY (or REMOTE_TRANSCRIBER_API_KEY) is not set"
+         exit 1
+    fi
+    
+    echo "  ✅ Transcription configuration presence verified (connectivity check skipped)"
+else
+    # Standard verification logic
+    TRANSCRIBER_URL="${TRANSCRIBER_URL:-${REMOTE_TRANSCRIBER_URL:-}}"
+    if [ -z "$TRANSCRIBER_URL" ]; then
+        echo "  ❌ ERROR: TRANSCRIBER_URL (or REMOTE_TRANSCRIBER_URL) is not set"
+        echo "     This is required for transcription functionality"
+        exit 1
+    fi
 
 TRANSCRIBER_API_KEY="${TRANSCRIBER_API_KEY:-${REMOTE_TRANSCRIBER_API_KEY:-}}"
 if [ -z "$TRANSCRIBER_API_KEY" ]; then
