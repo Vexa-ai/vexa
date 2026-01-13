@@ -105,9 +105,11 @@ services:
       - WL_SERVER_WARMUP_S=${WL_SERVER_WARMUP_S:-60}
       # VAD filter - most permissive to catch hallucinations during silence
       - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD:-0}
+      # Minimum audio duration (seconds) before triggering transcription - lower = lower latency
+      - MIN_AUDIO_S=${MIN_AUDIO_S:-2.0}
       - CONSUL_ENABLE=false
       - WL_REDIS_DISCOVERY_ENABLED=false
-    command: --port 9090 --backend faster_whisper --faster_whisper_custom_model_path ${WHISPER_MODEL_SIZE}
+    command: --port 9090 --backend faster_whisper --faster_whisper_custom_model_path ${WHISPER_MODEL_SIZE} --min_audio_s ${MIN_AUDIO_S:-2.0}
     expose:
       - "9090" #use for transcription web socket
       - "9091" #use for health check
@@ -143,13 +145,15 @@ services:
       - REDIS_STREAM_NAME=transcription_segments
       - LANGUAGE_DETECTION_SEGMENTS=${LANGUAGE_DETECTION_SEGMENTS}
       - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD}
+      # Minimum audio duration (seconds) before triggering transcription - lower = lower latency
+      - MIN_AUDIO_S=${MIN_AUDIO_S:-2.0}
       - DEVICE_TYPE=cpu
       - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}
       - WL_MAX_CLIENTS=${WL_MAX_CLIENTS}
       - CONSUL_ENABLE=false
     deploy:
       replicas: 1
-    command: --port 9090 --backend faster_whisper --faster_whisper_custom_model_path ${WHISPER_MODEL_SIZE}
+    command: --port 9090 --backend faster_whisper --faster_whisper_custom_model_path ${WHISPER_MODEL_SIZE} --min_audio_s ${MIN_AUDIO_S:-2.0}
     expose:
       - "9090" #use for transcription web socket
       - "9091" #use for health check
@@ -180,6 +184,10 @@ services:
       - REDIS_STREAM_NAME=transcription_segments
       - LANGUAGE_DETECTION_SEGMENTS=${LANGUAGE_DETECTION_SEGMENTS}
       - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD}
+      # Minimum audio duration (seconds) before triggering transcription - lower = lower latency
+      - MIN_AUDIO_S=${MIN_AUDIO_S:-2.0}
+      # Reconfirmation threshold - lower values reduce latency by reconfirming segments faster
+      - SAME_OUTPUT_THRESHOLD=${SAME_OUTPUT_THRESHOLD:-3}
       - DEVICE_TYPE=remote
       - REMOTE_TRANSCRIBER_URL=${REMOTE_TRANSCRIBER_URL}
       - REMOTE_TRANSCRIBER_API_KEY=${REMOTE_TRANSCRIBER_API_KEY}

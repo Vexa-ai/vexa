@@ -2457,6 +2457,7 @@ class ServeClientFasterWhisper(ServeClientBase):
 
         server_options = server_options or {}
         self.min_audio_s = server_options.get("min_audio_s", 1.0)
+        logging.info(f"FasterWhisper client {client_uid}: min_audio_s={self.min_audio_s} (server_options had: {server_options.get('min_audio_s', 'NOT SET')})")
         self.vad_parameters = vad_parameters or {"onset": server_options.get("vad_onset", 0.5)}
         self.no_speech_thresh = server_options.get("vad_no_speech_thresh", 0.45)
         self.same_output_threshold = server_options.get("same_output_threshold", 10)
@@ -2641,6 +2642,9 @@ class ServeClientFasterWhisper(ServeClientBase):
             self.t_start = None
             last_segment = self.update_segments(result, duration)
             segments = self.prepare_segments(last_segment)
+            # Log when segments are updated (especially partial segments that get reevaluated)
+            if last_segment and not last_segment.get('completed', True):
+                logging.info(f"SEGMENT_UPDATE: client={self.client_uid}, partial_segment={last_segment.get('text', '')[:50]}, start={last_segment.get('start')}, end={last_segment.get('end')}")
         else:
             # show previous output if there is pause i.e. no output from whisper
             segments = self.get_previous_output()
@@ -2894,9 +2898,44 @@ class ServeClientRemote(ServeClientBase):
 
         server_options = server_options or {}
         self.min_audio_s = server_options.get("min_audio_s", 1.0)
+        self.same_output_threshold = server_options.get("same_output_threshold", 3)
+        
+        # Rate limiting: minimum time between requests per connection
+        from whisper_live import settings
+        # Use getattr with default in case settings doesn't have this attribute (backward compatibility)
+        # Support both old MAX_TRANSCRIPTION_FREQUENCY_HZ (Hz) and new MIN_TIME_BETWEEN_REQUESTS_S (seconds)
+        if hasattr(settings, 'MIN_TIME_BETWEEN_REQUESTS_S'):
+            default_min_time = getattr(settings, 'MIN_TIME_BETWEEN_REQUESTS_S', 1.0)
+        elif hasattr(settings, 'MAX_TRANSCRIPTION_FREQUENCY_HZ'):
+            # Backward compatibility: convert Hz to seconds
+            default_frequency_hz = getattr(settings, 'MAX_TRANSCRIPTION_FREQUENCY_HZ', 2.0)
+            default_min_time = 1.0 / default_frequency_hz if default_frequency_hz > 0 else 0.0
+        else:
+            default_min_time = 1.0
+        
+        # Check server_options for either old or new parameter name
+        min_time = server_options.get("min_time_between_requests_s", 
+                                     server_options.get("max_transcription_frequency_hz", None))
+        if min_time is None:
+            self.min_time_between_requests = default_min_time
+        else:
+            # If value is <= 1.0, it might be Hz (old format) - convert to seconds
+            # If value is > 1.0, it's already in seconds (new format)
+            if min_time > 0 and min_time <= 1.0:
+                # Old format: Hz -> convert to seconds
+                self.min_time_between_requests = 1.0 / min_time
+            else:
+                # New format: already in seconds, use directly
+                self.min_time_between_requests = min_time
+        
+        self.last_transcription_time = 0.0  # Track when last transcription request completed
+        
+        logging.info(f"Remote client {client_uid}: min_audio_s={self.min_audio_s} (server_options had: {server_options.get('min_audio_s', 'NOT SET')})")
+        logging.info(f"Remote client {client_uid}: same_output_threshold={self.same_output_threshold} (server_options had: {server_options.get('same_output_threshold', 'NOT SET')})")
+        logging.info(f"Remote client {client_uid}: min_time_between_requests={self.min_time_between_requests:.3f}s (max {1.0/self.min_time_between_requests:.2f} requests/second)")
+        
         self.vad_parameters = vad_parameters or {"onset": server_options.get("vad_onset", 0.5)}
         self.no_speech_thresh = server_options.get("vad_no_speech_thresh", 0.45)
-        self.same_output_threshold = server_options.get("same_output_threshold", 10)
         self.end_time_for_same_output = None
 
         if not REMOTE_AVAILABLE:
@@ -2924,11 +2963,14 @@ class ServeClientRemote(ServeClientBase):
 
         self.use_vad = use_vad
 
-        # Load management: one-in-flight request per stream
+        # Load management: one-in-flight request per stream (LIFO approach)
         self.transcription_lock = threading.Lock()  # Protects in-flight request state
         self.transcription_in_flight = False  # True when a request is being processed
-        self.pending_audio_chunk = None  # Stores latest audio chunk if request is in-flight
-        self.pending_audio_duration = 0.0  # Duration of pending chunk
+
+        # Sending policy: do NOT resend the whole transcript window each time.
+        # We only send deltas (new completed segments + latest partial) to avoid "queueing" behavior.
+        self._last_sent_completed_idx = 0
+        self._last_sent_partial_fingerprint = None
 
         # threading
         self.trans_thread = threading.Thread(target=self.speech_to_text)
@@ -3040,34 +3082,64 @@ class ServeClientRemote(ServeClientBase):
             result (str): The result from whisper inference i.e. the list of segments.
             duration (float): Duration of the transcribed audio chunk.
         """
-        segments = []
+        # IMPORTANT:
+        # - We send only deltas (not the entire last-N window) to avoid spamming downstream.
+        # - A "no segments" result from remote backend is treated like silence; we do not
+        #   resend previous output here.
         if len(result):
             self.t_start = None
             last_segment = self.update_segments(result, duration)
-            segments = self.prepare_segments(last_segment)
-        else:
-            # show previous output if there is pause i.e. no output from whisper
-            segments = self.get_previous_output()
 
-        if len(segments):
-            self.send_transcription_to_client(segments)
+            # New completed segments since last send
+            new_completed = []
+            if self._last_sent_completed_idx < len(self.transcript):
+                new_completed = self.transcript[self._last_sent_completed_idx:].copy()
+                self._last_sent_completed_idx = len(self.transcript)
+
+            # Build delta payload: new completed + latest partial (if any)
+            segments_to_send = new_completed
+            if last_segment:
+                # Avoid duplicating a completed segment that was appended to transcript.
+                if not last_segment.get("completed", False):
+                    # Dedupe: do not resend an identical partial segment over and over.
+                    text = (last_segment.get("text") or "").strip()
+                    start = last_segment.get("start")
+                    end = last_segment.get("end")
+                    fingerprint = (start, end, text, False)
+
+                    if fingerprint != self._last_sent_partial_fingerprint:
+                        segments_to_send = segments_to_send + [last_segment]
+                        self._last_sent_partial_fingerprint = fingerprint
+                        logging.info(
+                            f"SEGMENT_UPDATE: client={self.client_uid}, partial_segment={text[:50]}, "
+                            f"start={start}, end={end}"
+                        )
+                    else:
+                        logging.debug(
+                            f"SEGMENT_UPDATE: client={self.client_uid}, skipped identical partial "
+                            f"(start={start}, end={end}, text={text[:30]})"
+                        )
+
+            if segments_to_send:
+                self.send_transcription_to_client(segments_to_send)
+        else:
+            # No output (common when remote VAD removes everything): don't spam previous output
+            # and let the buffer advancement logic in speech_to_text move us forward.
+            if self.t_start is None:
+                self.t_start = time.time()
 
     def speech_to_text(self):
         """
         Process an audio stream in an infinite loop, continuously transcribing the speech.
 
+        LIFO (Last-In, First-Out) approach:
+        - Only one transcription request is in-flight at a time
+        - Wait for response before processing next chunk
+        - After each response, ALWAYS get the LATEST audio from buffer (not sequential)
+        - This ensures we always transcribe the most recent audio, discarding older queued chunks
+
         This method continuously receives audio frames, performs real-time transcription, and sends
         transcribed segments to the client via a WebSocket connection.
-
-        If the client's language is not detected, it waits for 30 seconds of audio input to make a language prediction.
-        It utilizes the Remote API to transcribe the audio, continuously processing and streaming results. Segments
-        are sent to the client in real-time, and a history of segments is maintained to provide context.Pauses in speech
-        (no output from Remote API) are handled by showing the previous output for a set duration. A blank segment is added if
-        there is no speech for a specified duration to indicate a pause.
-
-        Load management: Only one transcription request is in-flight at a time per stream. If new audio
-        arrives while a request is processing, it replaces the pending chunk (coalescing) to always
-        transcribe the latest audio window.
 
         Raises:
             Exception: If there is an issue with audio processing or WebSocket communication.
@@ -3079,79 +3151,133 @@ class ServeClientRemote(ServeClientBase):
                 break
 
             if self.frames_np is None:
+                time.sleep(0.1)
                 continue
 
-            self.clip_audio_if_no_valid_segment()
-
-            input_bytes, duration = self.get_audio_chunk_for_processing()
-            if duration < self.min_audio_s:
-                time.sleep(0.1)     # wait for audio chunks to arrive
-                continue
-            
-            # Load management: Check if a request is already in-flight
+            # LIFO: Wait for any in-flight request to complete
+            # The in-flight request will process the latest audio after it receives response
             with self.transcription_lock:
                 if self.transcription_in_flight:
-                    # Coalesce: Replace pending chunk with latest audio (always transcribe freshest window)
-                    self.pending_audio_chunk = input_bytes.copy()
-                    self.pending_audio_duration = duration
-                    logging.debug(f"Request in-flight, coalescing audio chunk (duration={duration:.2f}s)")
+                    # Request is in-flight - wait for it to complete
+                    logging.debug("LIFO: Request in-flight, waiting for response...")
                     time.sleep(0.1)  # Wait briefly before checking again
                     continue
                 
-                # Mark as in-flight and store the chunk we're about to process
+                # No request in-flight - get the LATEST audio from buffer (LIFO: always latest, not sequential)
+                self.clip_audio_if_no_valid_segment()
+                latest_input_bytes, latest_duration = self.get_audio_chunk_for_processing()
+                
+                if latest_duration < self.min_audio_s:
+                    # Not enough audio yet, wait for more
+                    time.sleep(0.1)
+                    continue
+                
+                # Mark as in-flight (we'll get latest audio after rate limit wait)
                 self.transcription_in_flight = True
-                current_chunk = input_bytes.copy()
-                current_duration = duration
             
-            # Process chunks in a loop to handle coalesced audio
-            while True:
-                try:
-                    result = self.transcribe_audio(current_chunk)
-
-                    # Only block on language detection if language was not provided initially
-                    # If language was provided, we can send transcription immediately
-                    if result is None or (not self.language_provided and self.language is None):
-                        self.timestamp_offset += current_duration
-                        time.sleep(0.25)    # wait for voice activity, result is None when no voice activity
-                    else:
-                        self.handle_transcription_output(result, current_duration)
+            # Rate limiting: ensure we don't exceed max requests per second
+            # Simple check before making the request - wait if needed
+            if self.min_time_between_requests > 0:
+                current_time = time.time()
+                time_since_last = current_time - self.last_transcription_time
+                if time_since_last < self.min_time_between_requests:
+                    wait_time = self.min_time_between_requests - time_since_last
+                    logging.info(f"RATE_LIMIT: Waiting {wait_time:.3f}s before next transcription request (last was {time_since_last:.3f}s ago, min interval is {self.min_time_between_requests:.3f}s)")
+                    time.sleep(wait_time)
                     
-                    # Check if new audio arrived while we were processing
+                    # After waiting, re-fetch the LATEST audio from buffer (LIFO: always get freshest audio)
+                    # New audio may have accumulated during the wait
                     with self.transcription_lock:
-                        if self.pending_audio_chunk is not None:
-                            # New audio arrived - process it immediately (coalescing worked)
-                            logging.debug(f"Processing coalesced audio chunk (duration={self.pending_audio_duration:.2f}s)")
-                            current_chunk = self.pending_audio_chunk
-                            current_duration = self.pending_audio_duration
-                            self.pending_audio_chunk = None
-                            self.pending_audio_duration = 0.0
-                            # Keep in_flight=True, continue loop to process coalesced chunk
+                        self.clip_audio_if_no_valid_segment()
+                        latest_input_bytes, latest_duration = self.get_audio_chunk_for_processing()
+                        if latest_duration >= self.min_audio_s:
+                            current_chunk = latest_input_bytes.copy()
+                            current_duration = latest_duration
+                            logging.info(f"LIFO: After rate limit wait, processing latest audio chunk (duration={latest_duration:.2f}s)")
                         else:
-                            # No new audio, clear in-flight flag and exit loop
+                            # Not enough audio after wait, clear in-flight flag and continue
+                            logging.debug(f"LIFO: After rate limit wait, not enough audio (duration={latest_duration:.2f}s < min={self.min_audio_s:.2f}s)")
                             self.transcription_in_flight = False
-                            break  # Exit loop, will get fresh audio on next iteration
-
-                except Exception as e:
-                    # Treat remote overload as a normal backpressure signal (not an error):
-                    # release the in-flight flag so the outer loop can keep buffering and
-                    # we can attempt again with a newer/larger audio window.
-                    if RemoteTranscriberOverloaded is not None and isinstance(e, RemoteTranscriberOverloaded):
-                        retry_after = getattr(e, "retry_after_s", 0.5) or 0.5
-                        logging.info(f"Remote transcriber overloaded; backing off {retry_after:.2f}s (HTTP {getattr(e, 'status_code', '??')})")
-                        with self.transcription_lock:
+                            continue
+                else:
+                    # No wait needed, use the audio we already fetched
+                    with self.transcription_lock:
+                        self.clip_audio_if_no_valid_segment()
+                        latest_input_bytes, latest_duration = self.get_audio_chunk_for_processing()
+                        if latest_duration >= self.min_audio_s:
+                            current_chunk = latest_input_bytes.copy()
+                            current_duration = latest_duration
+                            logging.info(f"LIFO: Processing latest audio chunk (duration={latest_duration:.2f}s)")
+                        else:
+                            # Not enough audio, clear in-flight flag and continue
+                            logging.debug(f"LIFO: Not enough audio (duration={latest_duration:.2f}s < min={self.min_audio_s:.2f}s)")
                             self.transcription_in_flight = False
-                            self.pending_audio_chunk = None
-                            self.pending_audio_duration = 0.0
-                        time.sleep(min(float(retry_after), 2.0))
-                        break
+                            continue
+            
+            # Process the chunk and wait for response
+            try:
+                result = self.transcribe_audio(current_chunk)
+                
+                # Update last request time when request completes
+                self.last_transcription_time = time.time()
 
+                # ALGORITHM A: VAD silence detection - cut buffer when no voice activity
+                # Only block on language detection if language was not provided initially
+                # If language was provided, we can send transcription immediately
+                if result is None or (not self.language_provided and self.language is None):
+                    # VAD silence: cut buffer by current_duration
+                    with self.lock:
+                        self.timestamp_offset += current_duration
+                    logging.info(f"ALGORITHM_A: VAD silence detected (result=None or language=None), cutting buffer by {current_duration:.3f}s")
+                    time.sleep(0.25)    # wait for voice activity, result is None when no voice activity
+                else:
+                    # If the remote backend returns an empty list of segments, treat as "silence".
+                    # ALGORITHM A: VAD silence - cut buffer when no segments returned
+                    try:
+                        if hasattr(result, "__len__") and len(result) == 0:
+                            with self.lock:
+                                self.timestamp_offset += current_duration
+                            logging.info(f"ALGORITHM_A: VAD silence detected (empty segments), cutting buffer by {current_duration:.3f}s")
+                            time.sleep(0.25)
+                        else:
+                            # Process transcription result (may advance buffer if completed segments or threshold reached)
+                            self.handle_transcription_output(result, current_duration)
+                    except Exception:
+                        # If result isn't well-formed, fall back to existing handler.
+                        self.handle_transcription_output(result, current_duration)
+                
+                # LIFO: After response received, ALWAYS get the LATEST audio from buffer
+                # This ensures we process the most recent audio, discarding any older chunks
+                # Note: get_audio_chunk_for_processing uses self.lock, not transcription_lock, so safe to call
+                self.clip_audio_if_no_valid_segment()
+                latest_input_bytes, latest_duration = self.get_audio_chunk_for_processing()
+                
+                # Check if there's new audio to process
+                with self.transcription_lock:
+                    if latest_duration >= self.min_audio_s:
+                        # New audio available - will be processed on next iteration (LIFO: latest is most important)
+                        logging.info(f"LIFO: Response received, latest audio available (duration={latest_duration:.2f}s), will process on next iteration")
+                        # Clear in-flight flag so next iteration processes the latest audio
+                        self.transcription_in_flight = False
+                    else:
+                        # No new audio available, clear in-flight flag
+                        logging.debug(f"LIFO: Response received, no new audio available (duration={latest_duration:.2f}s < min={self.min_audio_s:.2f}s)")
+                        self.transcription_in_flight = False
+
+            except Exception as e:
+                # Treat remote overload as a normal backpressure signal (not an error):
+                # release the in-flight flag so we can attempt again with a newer/larger audio window.
+                if RemoteTranscriberOverloaded is not None and isinstance(e, RemoteTranscriberOverloaded):
+                    retry_after = getattr(e, "retry_after_s", 0.5) or 0.5
+                    logging.info(f"Remote transcriber overloaded; backing off {retry_after:.2f}s (HTTP {getattr(e, 'status_code', '??')})")
+                    with self.transcription_lock:
+                        self.transcription_in_flight = False
+                    time.sleep(min(float(retry_after), 2.0))
+                else:
                     logging.error(f"[ERROR]: Failed to transcribe audio chunk: {e}")
                     with self.transcription_lock:
                         self.transcription_in_flight = False
-                        self.pending_audio_chunk = None
-                        self.pending_audio_duration = 0.0
                     time.sleep(0.1)  # Brief backoff on error
-                    break  # Exit loop on error
 
     def format_segment(self, start, end, text, completed=False, language=None):
         """
@@ -3244,6 +3370,7 @@ class ServeClientRemote(ServeClientBase):
                     continue
 
                 self.transcript.append(self.format_segment(start, end, filtered_text, completed=True, language=self.language))
+                # Advance by the end of the last complete segment
                 offset = min(duration, s.end)
 
         # only process the last segment if it satisfies the no_speech_thresh
@@ -3306,7 +3433,14 @@ class ServeClientRemote(ServeClientBase):
                     with self.lock:
                         start, end = self.timestamp_offset, self.timestamp_offset + min(duration, self.end_time_for_same_output or duration)
                     if start < end:
-                        self.transcript.append(self.format_segment(start, end, filtered_current_out, completed=True, language=self.language))
+                        # Create completed segment and add to transcript
+                        completed_segment = self.format_segment(start, end, filtered_current_out, completed=True, language=self.language)
+                        self.transcript.append(completed_segment)
+                        # Return the completed segment so it's sent to client immediately
+                        # This ensures the dashboard sees the segment transition from partial to completed
+                        last_segment = completed_segment
+                        logging.info(f"SAME_OUTPUT_THRESHOLD: client={self.client_uid}, completed_segment={filtered_current_out[:50]}, start={start:.3f}, end={end:.3f}, count={self.same_output_count}")
+                    # Advance by the reconfirmed segment end time
                     offset = min(duration, self.end_time_for_same_output or duration)
                 else:
                     # Log filtered repeated hallucination
@@ -3315,24 +3449,38 @@ class ServeClientRemote(ServeClientBase):
                             logger.info(f'HALLUCINATION_FILTERED: "{self.current_out}"')
                     except Exception:
                         pass
+                    last_segment = None
+            else:
+                # Text is the same as last completed segment, don't add duplicate
+                last_segment = None
             self.current_out = ''
-            offset = min(duration, self.end_time_for_same_output) if self.end_time_for_same_output else duration
+            # Advance by the reconfirmed segment end time, or full duration if not set
+            if self.end_time_for_same_output:
+                offset = min(duration, self.end_time_for_same_output)
+            else:
+                offset = duration
             self.same_output_count = 0
-            last_segment = None
             self.end_time_for_same_output = None
         else:
             self.prev_out = self.current_out
 
-        # update offset
+        # ALGORITHM A: Only advance/cut buffer when:
+        # 1. Completed segments were added (offset set at line 3296)
+        # 2. SAME_OUTPUT_THRESHOLD confirmed (offset set at lines 3366, 3380-3383)
+        # 3. VAD silence is handled separately in speech_to_text() (line 3155)
+        # 
+        # If offset is None, we do NOT advance - this means:
+        # - No completed segments
+        # - SAME_OUTPUT_THRESHOLD not reached
+        # - Buffer stays as-is, will be re-transcribed on next iteration with more audio
         if offset is not None:
             with self.lock:
                 self.timestamp_offset += offset
+                threshold_reached = self.same_output_count > self.same_output_threshold
+                logging.debug(f"ALGORITHM_A: Advanced timestamp_offset by {offset:.3f}s (reason={'SAME_OUTPUT_THRESHOLD' if threshold_reached else 'completed_segments'})")
         else:
-            # CRITICAL FIX: If offset is None (all segments filtered out due to silence/hallucinations),
-            # we MUST still advance timestamp_offset by duration to prevent getting stuck processing
-            # the same audio chunk repeatedly. This fixes lag after prolonged silence periods.
-            with self.lock:
-                self.timestamp_offset += duration
+            # No advancement - buffer will accumulate more audio and be re-transcribed
+            logging.debug(f"ALGORITHM_A: No offset advancement (no completed segments, threshold not reached, buffer will accumulate)")
 
         return last_segment
 

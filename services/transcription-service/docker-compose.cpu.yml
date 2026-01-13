@@ -16,8 +16,11 @@ services:
       # - transcription-worker-3
     restart: unless-stopped
     networks:
-      - transcription-net
-      - vexa-network
+      transcription-net:
+      vexa-network:
+        aliases:
+          - transcription-service
+          # Alias for vexa docker compose to connect to this dev transcription service
 
   # Worker 1 (CPU)
   transcription-worker-1:
