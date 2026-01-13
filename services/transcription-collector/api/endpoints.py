@@ -98,6 +98,7 @@ async def _get_full_transcript_segments(
                     language=segment.language,
                     speaker=segment.speaker,
                     created_at=segment.created_at,
+                    completed=True,
                     absolute_start_time=absolute_start_time,
                     absolute_end_time=absolute_end_time
                 )
@@ -133,6 +134,7 @@ async def _get_full_transcript_segments(
                     text=segment_data['text'],
                     language=segment_data.get('language'),
                     speaker=segment_data.get('speaker'),
+                    completed=bool(segment_data.get("completed", False)),
                     absolute_start_time=absolute_start_time,
                     absolute_end_time=absolute_end_time
                 )

@@ -63,6 +63,14 @@ if __name__ == "__main__":
         os.environ["OMP_NUM_THREADS"] = str(args.omp_num_threads)
 
     from whisper_live.server import TranscriptionServer
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Log the min_audio_s value to verify it's being passed correctly
+    logger.info(f"Starting WhisperLive server with min_audio_s={args.min_audio_s} (from env: {os.getenv('MIN_AUDIO_S', 'NOT SET')})")
+    # Log the same_output_threshold value to verify it's being passed correctly
+    logger.info(f"Starting WhisperLive server with same_output_threshold={args.same_output_threshold} (from env: {os.getenv('SAME_OUTPUT_THRESHOLD', 'NOT SET')})")
+    
     server = TranscriptionServer()
     server.run(
         "0.0.0.0",

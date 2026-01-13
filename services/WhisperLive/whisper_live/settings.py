@@ -49,9 +49,23 @@ CLIP_RETAIN_S = 5
 # The minimum duration of audio (in seconds) that must be present in the buffer
 # before it is sent to the transcription model. A smaller value can lead to
 # lower latency but may result in less accurate, fragmented transcriptions.
-# Can be overridden via MIN_AUDIO_S environment variable.
-# Set to 10.0s to reduce request frequency and prevent API spamming under load.
-MIN_AUDIO_S = float(os.getenv("MIN_AUDIO_S", "10.0"))
+# Set to 1.0s for low latency transcription.
+MIN_AUDIO_S = 1
+
+# Minimum Time Between Transcription Requests
+# -------------------------------------------
+# This setting limits how frequently the transcription service can be called
+# per connection, preventing overload and ensuring fair resource usage.
+
+# Minimum time (in seconds) between transcription requests per connection.
+# This rate limit ensures we don't hammer the transcription service even if
+# audio accumulates quickly. For example:
+# - 0.1 = minimum 0.1 seconds between requests (max 10 requests per second)
+# - 1.0 = minimum 1.0 seconds between requests (max 1 request per second)
+# - 2.0 = minimum 2.0 seconds between requests (max 1 request per 2 seconds)
+# - 10.0 = minimum 10.0 seconds between requests (max 1 request per 10 seconds)
+# Set to 10.0 for max 1 request per 10 seconds (10s minimum between requests).
+MIN_TIME_BETWEEN_REQUESTS_S = 0.1
 
 
 # Voice Activity Detection (VAD) Settings
@@ -77,7 +91,9 @@ VAD_NO_SPEECH_THRESH = 0.9
 # If the transcription model produces the exact same output this many times in a
 # row, it's considered to be "stuck." This is a safeguard to prevent repetitive
 # outputs under certain conditions.
-SAME_OUTPUT_THRESHOLD = 10
+# Lower values (3-5) reduce latency by reconfirming segments faster.
+# Set to 3 for low latency transcription.
+SAME_OUTPUT_THRESHOLD = 5
 
 # If there's a pause in speech (i.e., Whisper produces no new text), the server
 # will continue to send the previously transcribed segments to the client for this

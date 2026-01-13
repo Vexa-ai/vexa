@@ -265,6 +265,9 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                      end_time_float = float(segment['end'])
                      text_content = segment.get('text') or ""
                      language_content = segment.get('language')
+                     # WhisperLive provides this; we must propagate it so the UI can observe
+                     # partial -> completed transitions (e.g., SAME_OUTPUT_THRESHOLD confirmation).
+                     completed_content = bool(segment.get('completed', False))
                  except (ValueError, TypeError) as time_err:
                      logger.warning(f"[Msg {message_id}/Meet {internal_meeting_id}] Skipping segment {i} invalid time format: {time_err} - Segment: {segment}")
                      continue
@@ -318,6 +321,7 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                      "text": text_content,
                      "end_time": end_time_float,
                      "language": language_content,
+                     "completed": completed_content,
                      "updated_at": datetime.now(timezone.utc).isoformat(), 
                      "session_uid": session_uid_from_payload,
                      "speaker": mapped_speaker_name,
@@ -338,6 +342,7 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                              "text": existing_data.get("text"),
                              "speaker": existing_data.get("speaker"),
                              "language": existing_data.get("language"),
+                             "completed": bool(existing_data.get("completed", False)),
                              "end_time": round(float(existing_data.get("end_time", 0)), 3),
                              "absolute_start_time": existing_data.get("absolute_start_time"),
                              "absolute_end_time": existing_data.get("absolute_end_time")
@@ -346,6 +351,7 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                              "text": text_content,
                              "speaker": mapped_speaker_name,
                              "language": language_content,
+                             "completed": completed_content,
                              "end_time": round(end_time_float, 3),
                              "absolute_start_time": abs_start_iso,
                              "absolute_end_time": abs_end_iso
@@ -365,6 +371,7 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                      "text": text_content,
                      "end_time": end_time_float,
                      "language": language_content,
+                     "completed": completed_content,
                      "speaker": mapped_speaker_name,
                      "session_uid": session_uid_from_payload,
                      "speaker_mapping_status": mapping_status,
