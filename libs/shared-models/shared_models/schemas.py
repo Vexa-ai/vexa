@@ -508,7 +508,7 @@ class TranscriptionSegment(BaseModel):
     end_time: float = Field(..., alias='end')     # Add alias
     text: str
     language: Optional[str]
-    created_at: Optional[datetime]
+    created_at: Optional[datetime] = Field(default=None)
     speaker: Optional[str] = None
     # WhisperLive marks segments as completed/partial. This is important for real-time UI updates
     # (e.g., to show when a partial segment becomes "confirmed" via SAME_OUTPUT_THRESHOLD).

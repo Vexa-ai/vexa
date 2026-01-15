@@ -357,9 +357,16 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                              "absolute_end_time": abs_end_iso
                          }
                          if existing_norm == new_norm:
-                             # No change; skip HSET and don't include in changed_segments
-                             logger.debug(f"[Msg {message_id}/Meet {internal_meeting_id}/Seg {start_time_key}] No change detected, skipping.")
-                             continue
+                            # No change; skip HSET and don't include in changed_segments
+                            # BUT: Always store partial segments (completed=False) even if unchanged for GET endpoint consistency
+                            if not completed_content:
+                                # Partial segment: always store even if unchanged for GET endpoint
+                                # Don't continue - fall through to store it
+                                pass
+                            else:
+                                # Completed segment unchanged: skip storing
+                                logger.debug(f"[Msg {message_id}/Meet {internal_meeting_id}/Seg {start_time_key}] Completed segment unchanged, skipping.")
+                                continue
                  except Exception as _cmp_err:
                      logger.debug(f"[Msg {message_id}/Meet {internal_meeting_id}] Change comparison failed: {_cmp_err}; treating as changed")
                  
