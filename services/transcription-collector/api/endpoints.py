@@ -128,19 +128,59 @@ async def _get_full_transcript_segments(
                 relative_start_time = float(start_time_str)
                 absolute_start_time = session_start + timedelta(seconds=relative_start_time)
                 absolute_end_time = session_start + timedelta(seconds=segment_data['end_time'])
-                segment_obj = TranscriptionSegment(
-                    start_time=relative_start_time,
-                    end_time=segment_data['end_time'],
-                    text=segment_data['text'],
-                    language=segment_data.get('language'),
-                    speaker=segment_data.get('speaker'),
-                    completed=bool(segment_data.get("completed", False)),
-                    absolute_start_time=absolute_start_time,
-                    absolute_end_time=absolute_end_time
-                )
+                # Parse created_at from updated_at if available, otherwise use None
+                # Pydantic v2 requires Optional fields to be explicitly set, even if None
+                created_at_value = None
+                if 'updated_at' in segment_data and segment_data.get('updated_at'):
+                    try:
+                        updated_at_str = segment_data['updated_at']
+                        if updated_at_str.endswith('Z'):
+                            updated_at_str = updated_at_str[:-1] + '+00:00'
+                        created_at_value = datetime.fromisoformat(updated_at_str)
+                    except (ValueError, TypeError) as parse_err:
+                        logger.debug(f"Failed to parse updated_at '{segment_data.get('updated_at')}' as datetime: {parse_err}")
+                        created_at_value = None
+                
+                # Create segment object using model_validate with dict to ensure defaults are applied
+                try:
+                    segment_dict = {
+                        'start_time': relative_start_time,
+                        'end_time': segment_data['end_time'],
+                        'text': segment_data['text'],
+                        'language': segment_data.get('language'),
+                        'speaker': segment_data.get('speaker'),
+                        'completed': bool(segment_data.get("completed", False)),
+                        'absolute_start_time': absolute_start_time,
+                        'absolute_end_time': absolute_end_time
+                    }
+                    # Only add created_at if we have a value, let the default handle None
+                    if created_at_value is not None:
+                        segment_dict['created_at'] = created_at_value
+                    
+                    segment_obj = TranscriptionSegment.model_validate(segment_dict)
+                except Exception as validation_err:
+                    logger.error(f"[_get_full_transcript_segments] Validation error creating segment {start_time_str} for meeting {internal_meeting_id}: {validation_err}", exc_info=True)
+                    # Skip this segment if validation fails
+                    continue
+                # Merge logic: Always include partial segments from Redis (they're the current active state)
+                # If a completed segment exists in PostgreSQL with the same key, Redis partial takes precedence
+                # because it represents the current state of an active transcription
+                existing_segment_tuple = merged_segments_with_abs_time.get(start_time_str)
+                if existing_segment_tuple:
+                    existing_segment = existing_segment_tuple[1]
+                    # If existing is completed and new is partial, prefer the partial (it's the current active state)
+                    # This ensures GET endpoint always shows the latest partial segments
+                    if existing_segment.completed and not segment_obj.completed:
+                        # Replace with partial - it's the current state
+                        pass
+                    # If both are same completion status, Redis is more recent, so use it
+                # Always add Redis segments (they're the current state)
                 merged_segments_with_abs_time[start_time_str] = (absolute_start_time, segment_obj)
         except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
-            logger.error(f"[_get_full_transcript_segments] Error parsing Redis segment {start_time_str} for meeting {internal_meeting_id}: {e}")
+            logger.error(f"[_get_full_transcript_segments] Error parsing Redis segment {start_time_str} for meeting {internal_meeting_id}: {e}", exc_info=True)
+        except Exception as e:
+            # Catch Pydantic ValidationError and other exceptions
+            logger.error(f"[_get_full_transcript_segments] Unexpected error parsing Redis segment {start_time_str} for meeting {internal_meeting_id}: {e}", exc_info=True)
 
     # 5. Sort based on calculated absolute time and return
     sorted_segment_tuples = sorted(merged_segments_with_abs_time.values(), key=lambda item: item[0])

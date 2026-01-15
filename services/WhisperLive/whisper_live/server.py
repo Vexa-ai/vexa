@@ -3101,7 +3101,8 @@ class ServeClientRemote(ServeClientBase):
             if last_segment:
                 # Avoid duplicating a completed segment that was appended to transcript.
                 if not last_segment.get("completed", False):
-                    # Dedupe: do not resend an identical partial segment over and over.
+                    # For partial segments: always include in Redis to ensure GET endpoint has current state
+                    # The fingerprint check is for logging/debugging, but we always send to maintain Redis consistency
                     text = (last_segment.get("text") or "").strip()
                     start = last_segment.get("start")
                     end = last_segment.get("end")
@@ -3115,8 +3116,11 @@ class ServeClientRemote(ServeClientBase):
                             f"start={start}, end={end}"
                         )
                     else:
+                        # Partial segment unchanged, but still send to Redis for GET endpoint consistency
+                        # This ensures the GET transcript endpoint always sees the latest partial segment
+                        segments_to_send = segments_to_send + [last_segment]
                         logging.debug(
-                            f"SEGMENT_UPDATE: client={self.client_uid}, skipped identical partial "
+                            f"SEGMENT_UPDATE: client={self.client_uid}, sending unchanged partial to Redis "
                             f"(start={start}, end={end}, text={text[:30]})"
                         )
 
