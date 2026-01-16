@@ -2,6 +2,8 @@
 
 Deploy Vexa as a single Docker container with no GPU requirements. Vexa Lite is a stateless container that connects to external database and transcription services.
 
+> 🚀 **One-click platform deployments**: For platform-specific deployment guides (Fly.io, Railway, Render, etc.), see the [vexa-lite-deploy repository](https://github.com/Vexa-ai/vexa-lite-deploy).
+
 ## Overview
 
 **Why Vexa Lite?**
@@ -227,6 +229,13 @@ docker run -d \
 
 ## Next Steps
 
-
 - Test the deployment: Follow `nbs/0_basic_test.ipynb`
+
+## Platform-Specific Deployments
+
+For one-click deployment configurations on specific platforms (Fly.io, Railway, Render, Google Cloud Run, AWS, etc.), see the **[vexa-lite-deploy repository](https://github.com/Vexa-ai/vexa-lite-deploy)**. It provides:
+- Platform-specific configuration files
+- Step-by-step deployment guides
+- Environment variable templates
+- Troubleshooting tips for each platform
 

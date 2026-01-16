@@ -271,6 +271,14 @@ export class BrowserAudioService {
     return this.processor?.sessionAudioStartTimeMs || null;
   }
 
+  resetSessionStartTime(): void {
+    if (this.processor) {
+      const oldTime = this.processor.sessionAudioStartTimeMs;
+      this.processor.sessionAudioStartTimeMs = null;
+      (window as any).logBot(`[Audio] Reset session audio start time: ${oldTime} -> null (will be set on next audio chunk)`);
+    }
+  }
+
   disconnect(): void {
     if (this.processor) {
       try {
@@ -305,6 +313,7 @@ export class BrowserWhisperLiveService {
   private maxRetries: number = Number.MAX_SAFE_INTEGER; // TRULY NEVER GIVE UP!
   private retryDelayMs: number = 2000;
   private stubbornMode: boolean = false;
+  private isManualReconnect: boolean = false; // Flag to prevent auto-reconnect during manual reconfigure
 
   constructor(config: any, stubbornMode: boolean = false) {
     this.whisperLiveUrl = config.whisperLiveUrl;
@@ -411,21 +420,32 @@ export class BrowserWhisperLiveService {
       };
 
       this.socket.onerror = (event) => {
-        (window as any).logBot(`[STUBBORN] ❌ WebSocket ERROR. Will start stubborn reconnection...`);
+        (window as any).logBot(`[STUBBORN] ❌ WebSocket ERROR. Manual reconnect: ${this.isManualReconnect}`);
         if (this.onErrorCallback) {
           this.onErrorCallback(event);
         }
-        this.startStubbornReconnection();
+        // Only start stubborn reconnection if not manual reconnect
+        if (!this.isManualReconnect) {
+          this.startStubbornReconnection();
+        } else {
+          (window as any).logBot(`[STUBBORN] Skipping auto-reconnect on error (manual reconfigure in progress)`);
+        }
       };
 
       this.socket.onclose = (event) => {
-        (window as any).logBot(`[STUBBORN] ❌ WebSocket CLOSED. Code: ${event.code}, Reason: "${event.reason}". WILL RECONNECT NO MATTER WHAT!`);
+        (window as any).logBot(`[STUBBORN] ❌ WebSocket CLOSED. Code: ${event.code}, Reason: "${event.reason}". Manual reconnect: ${this.isManualReconnect}`);
         this.isServerReady = false;
         this.socket = null;
         if (this.onCloseCallback) {
           this.onCloseCallback(event);
         }
-        this.startStubbornReconnection();
+        // Only start stubborn reconnection if not manual reconnect
+        if (!this.isManualReconnect) {
+          this.startStubbornReconnection();
+        } else {
+          (window as any).logBot(`[STUBBORN] Skipping auto-reconnect (manual reconfigure in progress)`);
+          this.isManualReconnect = false; // Reset flag
+        }
       };
 
       return this.socket;
@@ -583,9 +603,20 @@ export class BrowserWhisperLiveService {
   close(): void {
     (window as any).logBot(`[STUBBORN] 🛑 Closing WebSocket and stopping reconnection...`);
     this.clearReconnectInterval();
+    // Clear currentUid to ensure a new session is created on next connection
+    const oldUid = this.currentUid;
+    this.currentUid = null;
+    (window as any).logBot(`[STUBBORN] Cleared session UID: ${oldUid} -> null`);
     if (this.socket) {
       this.socket.close();
       this.socket = null;
     }
+  }
+
+  // Method to close and prepare for manual reconnect (prevents auto-reconnect)
+  closeForReconfigure(): void {
+    this.isManualReconnect = true;
+    (window as any).logBot(`[STUBBORN] 🛑 Closing for manual reconfigure (will not auto-reconnect)...`);
+    this.close();
   }
 }

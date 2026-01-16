@@ -2,11 +2,16 @@
 
 Real-time Google Meet and Microsoft Teams transcription API. Get up and running in minutes.
 
+> 💡 **For end users**: If you want quick deployment on your platform of choice with user interfaces, see [Vexa Lite Deployment Guide](vexa-lite-deployment.md) and [vexa-lite-deploy repository](https://github.com/Vexa-ai/vexa-lite-deploy).  
+> 💻 **For developers**: This guide covers the full Docker Compose setup for development.
+
 ## Quick Start
 
 **TL;DR - Try these in order:**
 
 ### 1. If you have an established development machine
+**Docker Compose setup for development** - All services wrapped in `docker-compose.yml` with Makefile convenience commands.
+
 Try running directly - this might work instantly:
 ```bash
 git clone https://github.com/Vexa-ai/vexa.git && cd vexa
@@ -21,11 +26,13 @@ make all TARGET=gpu # GPU machine (whisper medium model - much better quality)
 
 **What `make all` does:**
 - Builds all Docker images (takes some time at the first run)
-- Spins up all containers
-- Runs database migrations (if nesessary)
+- Spins up all containers (API, bots, transcription services, database)
+- Runs database migrations (if necessary)
 - Starts a simple test to verify everything works
 
 If you change code later, just run `make all` again - it rebuilds what's needed and skips the rest.
+
+> 💡 **Note**: This is the **development setup**. For production deployments, see [Vexa Lite Deployment Guide](vexa-lite-deployment.md).
 
 ### 2. If you're on a fresh GPU VM in the cloud
 **Automated setup** - Tested on Vultr `vcg-a16-6c-64g-16vram`
@@ -83,15 +90,15 @@ git clone https://github.com/Vexa-ai/vexa.git && cd vexa
 make all
 ```
 
-### 4. Lite Deployment (Single Container, No GPU)
+### 4. Vexa Lite - For Users (Production Deployment)
 
-**New in v0.7:** Deploy Vexa as a single Docker container with no GPU requirements. The transcription work is moved outside the container, making it perfect for serverless providers or lightweight deployments.
+**For end users who want quick deployment on their platform of choice.**
 
-**Key benefits:**
-- Single stateless container - no permanent data
-- No GPU requirements - transcription is handled externally
-- Easy to deploy locally or in any serverless provider
-- Connect to external database and transcription service
+Vexa Lite is a single-container deployment that:
+- Runs as a single Docker container (no multi-service orchestration)
+- Requires no GPU (transcription runs externally)
+- Perfect for serverless providers and production deployments
+- Works with a variety of open-source user interfaces
 
 **Quick start with hosted transcription:**
 
@@ -121,7 +128,6 @@ docker run -d \
 
 **API available at:** `http://localhost:8056`
 
-For complete lite deployment guide with all configuration options (local/remote database, local/remote transcription), see [docker/lite/DEPLOYMENT_GUIDE.md](../docker/lite/DEPLOYMENT_GUIDE.md).
 
 ## Testing
 

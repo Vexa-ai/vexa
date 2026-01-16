@@ -141,3 +141,11 @@ def is_likely_silence(
     return not has_speech or speech_ratio < min_speech_ratio
 
 
+
+
+
+
+
+
+
+

@@ -22,7 +22,10 @@ from .config import BOT_IMAGE_NAME, REDIS_URL
 from app.orchestrators import (
     get_socket_session, close_docker_client, start_bot_container,
     stop_bot_container, _record_session_start, get_running_bots_status,
+    verify_container_running,
 )
+# Note: get_running_bots_status and verify_container_running are abstracted
+# and work for both Docker containers and process orchestrator (Lite setup)
 from shared_models.database import init_db, get_db, async_session_local
 from shared_models.models import User, Meeting, MeetingSession, Transcription # <--- ADD MeetingSession and Transcription import
 from shared_models.schemas import (
@@ -73,8 +76,17 @@ async def update_meeting_status(
         await db.commit()
     
     # Validate transition
+    # #region agent log
+    try:
+        with open('/home/dima/dev/.cursor/debug.log', 'a') as f:
+            import json
+            f.write(json.dumps({"location": "bot-manager/main.py:79", "message": "Validating status transition", "data": {"meeting_id": meeting.id, "current_status": current_status.value, "new_status": new_status.value}, "timestamp": __import__('time').time(), "sessionId": "debug-session", "runId": "run1", "hypothesisId": "D"}) + "\n")
+    except: pass
+    # #endregion
+    
     if not is_valid_status_transition(current_status, new_status):
         logger.warning(f"Invalid status transition from '{current_status.value}' to '{new_status.value}' for meeting {meeting.id}")
+        logger.error(f"[DEBUG] Invalid transition: current='{current_status.value}', requested='{new_status.value}', meeting_id={meeting.id}")
         return False
     
     # Update status
@@ -146,8 +158,12 @@ async def update_meeting_status(
 
     # Assign back the rebuilt data object so SQLAlchemy marks JSONB as changed
     meeting.data = current_data
+    try:
+        await db.commit()
+    except Exception as commit_error:
+        await db.rollback()
+        raise
     
-    await db.commit()
     await db.refresh(meeting)
     
     logger.info(f"Meeting {meeting.id} status updated from '{old_status}' to '{new_status.value}'")
@@ -298,7 +314,7 @@ async def startup_event():
     # --- ADD Redis Client Initialization ---
     try:
         logger.info(f"Connecting to Redis at {REDIS_URL}...")
-        redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
+        redis_client = await aioredis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
         await redis_client.ping() # Verify connection
         logger.info("Successfully connected to Redis.")
     except Exception as e:
@@ -307,6 +323,11 @@ async def startup_event():
     # --------------------------------------
 
     logger.info("Database, Docker Client (attempted), and Redis Client (attempted) initialized.")
+    
+    # Start reconciliation scheduler
+    logger.info("[Startup] Starting reconciliation scheduler...")
+    asyncio.create_task(start_reconciliation_scheduler())
+    logger.info("[Startup] Reconciliation scheduler started")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -438,15 +459,14 @@ async def request_bot(
         Meeting.user_id == current_user.id,
         Meeting.platform == req.platform.value,
         Meeting.platform_specific_id == native_meeting_id,
-        Meeting.status.in_(['requested', 'active']) # Do NOT block on 'stopping' to allow immediate new bot
+        Meeting.status.in_(['requested', 'joining', 'awaiting_admission', 'active']) # Block on all non-terminal states (excluding 'stopping' to allow immediate new bot after stop)
     ).order_by(desc(Meeting.created_at)).limit(1) # Get the latest one if multiple somehow exist
     
     result = await db.execute(existing_meeting_stmt)
     existing_meeting = result.scalars().first()
-
     if existing_meeting:
         logger.info(f"Found existing meeting record {existing_meeting.id} with status '{existing_meeting.status}' for user {current_user.id}, platform '{req.platform.value}', native ID '{native_meeting_id}'.")
-        # Enforce DB-only uniqueness: if there's any requested/active meeting, reject immediately.
+        # Enforce DB-only uniqueness: if there's any non-terminal meeting (requested/joining/awaiting_admission/active), reject immediately.
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"An active or requested meeting already exists for this platform and meeting ID. Platform: {req.platform.value}, Native Meeting ID: {native_meeting_id}"
@@ -590,6 +610,7 @@ async def request_bot(
             language=req.language,
             task=req.task
         )
+        container_start_time = datetime.utcnow()
         logger.info(f"Call to start_bot_container completed. Container ID: {container_id}, Connection ID: {connection_id}")
 
         if not container_id or not connection_id:
@@ -626,7 +647,7 @@ async def request_bot(
         logger.warning(f"HTTPException occurred during bot startup for meeting {meeting_id}: {http_exc.status_code} - {http_exc.detail}")
         try:
             # Fetch again or use current_meeting_for_bot_launch if it's the correct one to update
-            meeting_to_update = await db.get(Meeting, meeting_id) # Re-fetch to be safe with session state
+            meeting_to_update = await db.get(Meeting, meeting_id)  # Re-fetch to be safe with session state
             if meeting_to_update and meeting_to_update.status not in [MeetingStatus.FAILED.value, MeetingStatus.COMPLETED.value]: 
                  logger.warning(f"Updating meeting {meeting_id} status to 'failed' due to HTTPException {http_exc.status_code}.")
                  meeting_to_update.status = MeetingStatus.FAILED.value
@@ -769,9 +790,7 @@ async def stop_bot(
     user_token, current_user = auth_data
     platform_value = platform.value
 
-    logger.info(f"Received stop request for {platform_value}/{native_meeting_id} from user {current_user.id}")
-
-    # 1. Find all meetings matching the criteria
+    logger.info(f"Received stop request for {platform_value}/{native_meeting_id} from user {current_user.id}")# 1. Find all meetings matching the criteria
     stmt = select(Meeting).where(
         Meeting.user_id == current_user.id,
         Meeting.platform == platform_value,
@@ -865,17 +884,19 @@ async def stop_bot(
         # Pass container_id, meeting_id, and delay
         background_tasks.add_task(_delayed_container_stop, meeting.bot_container_id, meeting.id, 30) 
 
-        # 5. Update Meeting status (Consider 'stopping' or keep 'active')
-        # Option A: Keep 'active' - relies on collector/other process to detect actual stop
-        # Update status to indicate stop intent
-        # Note: We don't have a 'stopping' status in the new system
-        # The bot will transition directly to 'completed' or 'failed' via callback
-        logger.info(f"Stop request accepted for meeting {meeting.id}. Bot will transition to completed/failed via callback.")
-        # Optionally clear container ID here or when stop is confirmed?
-        # meeting.bot_container_id = None 
-        # Don't set end_time here, let the stop confirmation (or lack thereof) handle it.
-        await db.commit()
-        logger.info(f"Meeting {meeting.id} status updated.")
+        # 5. Update Meeting status to STOPPING immediately (source of truth)
+        # This allows users to immediately request a new bot after stopping
+        old_status = meeting.status
+        success = await update_meeting_status(
+            meeting,
+            MeetingStatus.STOPPING,
+            db,
+            transition_reason="User requested stop"
+        )
+        if success:
+            logger.info(f"Stop request accepted for meeting {meeting.id}. Status updated from '{old_status}' to 'stopping'. Bot will transition to completed/failed via callback.")
+        else:
+            logger.warning(f"Stop request: Failed to update meeting {meeting.id} status to 'stopping' (invalid transition from '{old_status}'). Proceeding anyway.")
 
         # 5.1. Publish meeting status change via Redis Pub/Sub
         await publish_meeting_status_change(meeting.id, 'stopping', redis_client, platform_value, native_meeting_id, meeting.user_id)
@@ -1131,7 +1152,7 @@ async def bot_startup_callback(
         if meeting.status == MeetingStatus.ACTIVE.value and old_status != MeetingStatus.ACTIVE.value:
             await publish_meeting_status_change(meeting.id, MeetingStatus.ACTIVE.value, redis_client, meeting.platform, meeting.platform_specific_id, meeting.user_id)
 
-        return {"status": "startup processed", "meeting_id": meeting.id, "status": meeting.status}
+        return {"status": "startup processed", "meeting_id": meeting.id, "meeting_status": meeting.status}
 
     except Exception as e:
         logger.error(f"Bot startup callback: An unexpected error occurred: {e}", exc_info=True)
@@ -1190,20 +1211,20 @@ async def bot_joining_callback(
             logger.info(f"Bot joining callback: stop_requested set for meeting {meeting.id}. Ignoring joining transition.")
             return {"status": "ignored", "detail": "stop requested"}
 
+        old_status = meeting.status
         # Update meeting status to joining
         success = await update_meeting_status(
             meeting=meeting,
             new_status=MeetingStatus.JOINING,
             db=db
         )
-
         if success:
             logger.info(f"Bot joining callback: Successfully updated meeting {meeting.id} status to 'joining'")
             # Publish status change to Redis
             await publish_meeting_status_change(meeting.id, MeetingStatus.JOINING.value, redis_client, meeting.platform, meeting.platform_specific_id, meeting.user_id)
             # No manual transition writes here; update_meeting_status already recorded the transition
 
-        return {"status": "joining processed", "meeting_id": meeting.id, "status": meeting.status}
+        return {"status": "joining processed", "meeting_id": meeting.id, "meeting_status": meeting.status}
 
     except Exception as e:
         logger.error(f"Bot joining callback: An unexpected error occurred: {e}", exc_info=True)
@@ -1275,7 +1296,7 @@ async def bot_awaiting_admission_callback(
             await publish_meeting_status_change(meeting.id, MeetingStatus.AWAITING_ADMISSION.value, redis_client, meeting.platform, meeting.platform_specific_id, meeting.user_id)
             # No manual transition writes here; update_meeting_status already recorded the transition
 
-        return {"status": "awaiting_admission processed", "meeting_id": meeting.id, "status": meeting.status}
+        return {"status": "awaiting_admission processed", "meeting_id": meeting.id, "meeting_status": meeting.status}
 
     except Exception as e:
         logger.error(f"Bot awaiting admission callback: An unexpected error occurred: {e}", exc_info=True)
@@ -1314,6 +1335,14 @@ async def bot_status_change_callback(
     new_status = payload.status
     reason = payload.reason
 
+    # #region agent log
+    try:
+        with open('/home/dima/dev/.cursor/debug.log', 'a') as f:
+            import json
+            f.write(json.dumps({"location": "bot-manager/main.py:1320", "message": "Unified callback received", "data": {"connection_id": session_uid, "new_status": new_status.value, "reason": reason}, "timestamp": __import__('time').time(), "sessionId": "debug-session", "runId": "run1", "hypothesisId": "A"}) + "\n")
+    except: pass
+    # #endregion
+
     try:
         # Find the meeting session to get the meeting_id
         session_stmt = select(MeetingSession).where(MeetingSession.session_uid == session_uid)
@@ -1327,11 +1356,15 @@ async def bot_status_change_callback(
         meeting_id = meeting_session.meeting_id
         logger.info(f"Bot status change callback: Found meeting_id {meeting_id} for connection_id {session_uid}")
 
-        # Get the full meeting object
+        # Get the full meeting object and refresh to ensure we have latest status
         meeting = await db.get(Meeting, meeting_id)
         if not meeting:
             logger.error(f"Bot status change callback: Could not find meeting {meeting_id}")
             return {"status": "error", "detail": f"Meeting {meeting_id} not found"}
+        
+        # Refresh meeting to get latest status from database
+        await db.refresh(meeting)
+        logger.info(f"[DEBUG] Bot status change callback: Meeting {meeting_id} current status='{meeting.status}', requested status='{new_status.value}'")
 
         # Check if user stopped early (ignore transitions except for completed/failed)
         if (meeting.data and isinstance(meeting.data, dict) and 
@@ -1343,6 +1376,7 @@ async def bot_status_change_callback(
         old_status = meeting.status
         
         # Handle different status changes
+        success = None  # Initialize success variable
         if new_status == MeetingStatus.COMPLETED:
             # Handle completion
             success = await update_meeting_status(
@@ -1406,16 +1440,41 @@ async def bot_status_change_callback(
                 await db.commit()
                 await db.refresh(meeting)
                 logger.info(f"Bot status change callback: Meeting {meeting_id} already active, updated container ID to {payload.container_id}")
-                return {"status": "container_updated", "meeting_id": meeting.id, "status": meeting.status}
+                return {"status": "container_updated", "meeting_id": meeting.id, "meeting_status": meeting.status}
             else:
                 logger.warning(f"Bot status change callback: Meeting {meeting_id} has unexpected status '{meeting.status}', not updating to active")
+                success = False
                 return {"status": "warning", "detail": f"Meeting status '{meeting.status}' not updated to active"}
                 
         else:
             # Handle other status changes (joining, awaiting_admission)
+            # #region agent log
+            try:
+                with open('/home/dima/dev/.cursor/debug.log', 'a') as f:
+                    import json
+                    f.write(json.dumps({"location": "bot-manager/main.py:1423", "message": "Before update_meeting_status", "data": {"meeting_id": meeting_id, "old_status": meeting.status, "new_status": new_status.value}, "timestamp": __import__('time').time(), "sessionId": "debug-session", "runId": "run1", "hypothesisId": "B"}) + "\n")
+            except: pass
+            # #endregion
+            
             success = await update_meeting_status(meeting, new_status, db)
+            
+            # #region agent log
+            try:
+                with open('/home/dima/dev/.cursor/debug.log', 'a') as f:
+                    import json
+                    f.write(json.dumps({"location": "bot-manager/main.py:1429", "message": "After update_meeting_status", "data": {"meeting_id": meeting_id, "success": success, "meeting_status": meeting.status}, "timestamp": __import__('time').time(), "sessionId": "debug-session", "runId": "run1", "hypothesisId": "B"}) + "\n")
+            except: pass
+            # #endregion
+            
             if not success:
                 logger.error(f"Bot status change callback: Failed to update meeting {meeting_id} status to '{new_status.value}'")
+                # #region agent log
+                try:
+                    with open('/home/dima/dev/.cursor/debug.log', 'a') as f:
+                        import json
+                        f.write(json.dumps({"location": "bot-manager/main.py:1435", "message": "Status update failed", "data": {"meeting_id": meeting_id, "old_status": old_status, "new_status": new_status.value}, "timestamp": __import__('time').time(), "sessionId": "debug-session", "runId": "run1", "hypothesisId": "C"}) + "\n")
+                except: pass
+                # #endregion
                 return {"status": "error", "detail": "Failed to update meeting status"}
 
         # Publish meeting status change via Redis Pub/Sub
@@ -1432,7 +1491,7 @@ async def bot_status_change_callback(
             transition_source="bot_callback"
         )
 
-        return {"status": "processed", "meeting_id": meeting.id, "status": meeting.status}
+        return {"status": "processed", "meeting_id": meeting.id, "meeting_status": meeting.status}
 
     except Exception as e:
         logger.error(f"Bot status change callback: An unexpected error occurred: {e}", exc_info=True)
@@ -1441,6 +1500,197 @@ async def bot_status_change_callback(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An internal error occurred while processing the bot status change callback."
         )
+
+# --- RECONCILIATION TASK: Detect and fix zombie meetings and orphan containers ---
+async def reconcile_meetings_and_containers():
+    """
+    Periodic reconciliation task to detect and fix:
+    1. Zombie meetings: ACTIVE/STOPPING/JOINING/AWAITING_ADMISSION but container doesn't exist
+    2. Orphan containers: Container running but meeting is COMPLETED/FAILED
+    
+    This ensures no situation where:
+    - No container but zombie bot participant in meeting
+    - Stopped bot but container still running
+    """
+    logger.info("[Reconciliation] Starting reconciliation task...")
+    zombie_meetings_fixed = 0
+    orphan_containers_killed = 0
+    
+    try:
+        async with async_session_local() as db:
+            # --- PART 1: Find zombie meetings (non-terminal but no container) ---
+            non_terminal_statuses = [
+                MeetingStatus.ACTIVE.value,
+                MeetingStatus.STOPPING.value,
+                MeetingStatus.JOINING.value,
+                MeetingStatus.AWAITING_ADMISSION.value,
+                MeetingStatus.REQUESTED.value
+            ]
+            
+            stmt = select(Meeting).where(
+                Meeting.status.in_(non_terminal_statuses)
+            )
+            result = await db.execute(stmt)
+            non_terminal_meetings = result.scalars().all()
+            
+            logger.info(f"[Reconciliation] Found {len(non_terminal_meetings)} non-terminal meetings to check")
+            
+            for meeting in non_terminal_meetings:
+                if not meeting.bot_container_id:
+                    # Meeting has no container ID - skip (might be in REQUESTED state)
+                    continue
+                
+                # Check if container/process actually exists and is running
+                try:
+                    container_exists = await verify_container_running(meeting.bot_container_id)
+                except Exception as e:
+                    # Error during verification - log but don't mark as zombie
+                    # This could happen if orchestrator is unavailable or misconfigured
+                    logger.error(
+                        f"[Reconciliation] Error verifying container/process {meeting.bot_container_id} "
+                        f"for meeting {meeting.id}: {e}. Skipping this meeting."
+                    )
+                    continue
+                
+                if not container_exists:
+                    # Additional safety check: if container_id looks like a container name (not a PID),
+                    # and we couldn't find it, check if there are any running processes at all
+                    # This prevents false positives when the registry is empty but processes are running
+                    is_likely_name = not meeting.bot_container_id.isdigit()
+                    
+                    if is_likely_name:
+                        # For container names, be more conservative - check if any processes are running
+                        # If registry is empty but meeting is active, might be a timing issue
+                        try:
+                            all_running = await get_running_bots_status(meeting.user_id)
+                            if len(all_running) > 0:
+                                logger.warning(
+                                    f"[Reconciliation] Meeting {meeting.id} has container name '{meeting.bot_container_id}' "
+                                    f"not found in registry, but {len(all_running)} processes are running. "
+                                    f"Skipping zombie detection to avoid false positive."
+                                )
+                                continue
+                        except Exception as e:
+                            logger.error(f"[Reconciliation] Error checking running bots for safety check: {e}")
+                    
+                    logger.warning(
+                        f"[Reconciliation] ZOMBIE MEETING detected: Meeting {meeting.id} "
+                        f"(status: {meeting.status}, container/process: {meeting.bot_container_id}) "
+                        f"has no running container/process. Finalizing..."
+                    )
+                    
+                    # Finalize the meeting
+                    success = await update_meeting_status(
+                        meeting,
+                        MeetingStatus.COMPLETED,
+                        db,
+                        completion_reason=MeetingCompletionReason.STOPPED,
+                        transition_reason="reconciliation_zombie_meeting",
+                        transition_metadata={
+                            "detected_by": "reconciliation_task",
+                            "original_status": meeting.status,
+                            "container_id": meeting.bot_container_id
+                        }
+                    )
+                    
+                    if success:
+                        await publish_meeting_status_change(
+                            meeting.id, 
+                            MeetingStatus.COMPLETED.value, 
+                            redis_client, 
+                            meeting.platform, 
+                            meeting.platform_specific_id, 
+                            meeting.user_id
+                        )
+                        zombie_meetings_fixed += 1
+                        logger.info(f"[Reconciliation] Fixed zombie meeting {meeting.id}")
+                    else:
+                        logger.error(
+                            f"[Reconciliation] Failed to finalize zombie meeting {meeting.id} "
+                            f"(status transition may be invalid)"
+                        )
+            
+            await db.commit()
+            
+            # --- PART 2: Find orphan containers/processes (running but meeting is terminal) ---
+            # Get all running bots using the abstracted orchestrator function
+            # This works for both Docker containers and process orchestrator (Lite setup)
+            all_running_bots = []
+            try:
+                # Get all unique user IDs from ALL meetings (not just non-terminal)
+                # This ensures we catch orphan containers/processes even if user has no active meetings
+                async with async_session_local() as db_users:
+                    user_stmt = select(Meeting.user_id).distinct()
+                    user_result = await db_users.execute(user_stmt)
+                    user_ids = [row[0] for row in user_result.all()]
+                
+                logger.info(f"[Reconciliation] Checking running bots for {len(user_ids)} users")
+                
+                # For each user, get their running bots
+                for user_id in user_ids:
+                    try:
+                        user_bots = await get_running_bots_status(user_id)
+                        all_running_bots.extend(user_bots)
+                    except Exception as e:
+                        logger.error(f"[Reconciliation] Error getting running bots for user {user_id}: {e}", exc_info=True)
+            except Exception as e:
+                logger.error(f"[Reconciliation] Error listing running bots: {e}", exc_info=True)
+            
+            logger.info(f"[Reconciliation] Found {len(all_running_bots)} running bots to check")
+            
+            # Check each bot's meeting status
+            async with async_session_local() as db2:
+                for bot_info in all_running_bots:
+                    container_id = bot_info.get('container_id')
+                    # Try to get meeting_id from labels or from the bot_info dict
+                    labels = bot_info.get('labels', {})
+                    meeting_id_str = labels.get('vexa.meeting_id') or bot_info.get('meeting_id_from_name')
+                    
+                    if not meeting_id_str:
+                        continue
+                    
+                    try:
+                        meeting_id = int(meeting_id_str)
+                    except (ValueError, TypeError):
+                        continue
+                    
+                    meeting = await db2.get(Meeting, meeting_id)
+                    if not meeting:
+                        # Container has meeting_id label but meeting doesn't exist - kill container
+                        logger.warning(f"[Reconciliation] ORPHAN CONTAINER detected: Container {container_id} has meeting_id {meeting_id} but meeting doesn't exist. Killing container...")
+                        try:
+                            stop_bot_container(container_id)
+                            orphan_containers_killed += 1
+                            logger.info(f"[Reconciliation] Killed orphan container {container_id}")
+                        except Exception as e:
+                            logger.error(f"[Reconciliation] Failed to kill orphan container {container_id}: {e}")
+                        continue
+                    
+                    # Check if meeting is in terminal state
+                    terminal_states = [MeetingStatus.COMPLETED.value, MeetingStatus.FAILED.value]
+                    if meeting.status in terminal_states:
+                        logger.warning(f"[Reconciliation] ORPHAN CONTAINER detected: Container {container_id} is running but meeting {meeting_id} is {meeting.status}. Killing container...")
+                        try:
+                            stop_bot_container(container_id)
+                            orphan_containers_killed += 1
+                            logger.info(f"[Reconciliation] Killed orphan container {container_id} for terminal meeting {meeting_id}")
+                        except Exception as e:
+                            logger.error(f"[Reconciliation] Failed to kill orphan container {container_id}: {e}")
+            
+            logger.info(f"[Reconciliation] Reconciliation complete: {zombie_meetings_fixed} zombie meetings fixed, {orphan_containers_killed} orphan containers killed")
+    except Exception as e:
+        logger.error(f"[Reconciliation] Error during reconciliation: {e}", exc_info=True)
+
+# Schedule reconciliation task to run periodically (every 5 minutes)
+async def start_reconciliation_scheduler():
+    """Start periodic reconciliation task"""
+    while True:
+        try:
+            await asyncio.sleep(300)  # Run every 5 minutes
+            await reconcile_meetings_and_containers()
+        except Exception as e:
+            logger.error(f"[Reconciliation Scheduler] Error: {e}", exc_info=True)
+            await asyncio.sleep(60)  # Wait 1 minute before retrying on error
 
 # --- --------------------------------------------------------- ---
 
