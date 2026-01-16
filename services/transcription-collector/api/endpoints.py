@@ -1,5 +1,6 @@
 import logging
 import json
+import string
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Tuple
 
@@ -98,6 +99,7 @@ async def _get_full_transcript_segments(
                     language=segment.language,
                     speaker=segment.speaker,
                     created_at=segment.created_at,
+                    completed=True,
                     absolute_start_time=absolute_start_time,
                     absolute_end_time=absolute_end_time
                 )
@@ -127,24 +129,65 @@ async def _get_full_transcript_segments(
                 relative_start_time = float(start_time_str)
                 absolute_start_time = session_start + timedelta(seconds=relative_start_time)
                 absolute_end_time = session_start + timedelta(seconds=segment_data['end_time'])
-                segment_obj = TranscriptionSegment(
-                    start_time=relative_start_time,
-                    end_time=segment_data['end_time'],
-                    text=segment_data['text'],
-                    language=segment_data.get('language'),
-                    speaker=segment_data.get('speaker'),
-                    absolute_start_time=absolute_start_time,
-                    absolute_end_time=absolute_end_time
-                )
+                # Parse created_at from updated_at if available, otherwise use None
+                # Pydantic v2 requires Optional fields to be explicitly set, even if None
+                created_at_value = None
+                if 'updated_at' in segment_data and segment_data.get('updated_at'):
+                    try:
+                        updated_at_str = segment_data['updated_at']
+                        if updated_at_str.endswith('Z'):
+                            updated_at_str = updated_at_str[:-1] + '+00:00'
+                        created_at_value = datetime.fromisoformat(updated_at_str)
+                    except (ValueError, TypeError) as parse_err:
+                        logger.debug(f"Failed to parse updated_at '{segment_data.get('updated_at')}' as datetime: {parse_err}")
+                        created_at_value = None
+                
+                # Create segment object using model_validate with dict to ensure defaults are applied
+                try:
+                    segment_dict = {
+                        'start_time': relative_start_time,
+                        'end_time': segment_data['end_time'],
+                        'text': segment_data['text'],
+                        'language': segment_data.get('language'),
+                        'speaker': segment_data.get('speaker'),
+                        'completed': bool(segment_data.get("completed", False)),
+                        'absolute_start_time': absolute_start_time,
+                        'absolute_end_time': absolute_end_time
+                    }
+                    # Only add created_at if we have a value, let the default handle None
+                    if created_at_value is not None:
+                        segment_dict['created_at'] = created_at_value
+                    
+                    segment_obj = TranscriptionSegment.model_validate(segment_dict)
+                except Exception as validation_err:
+                    logger.error(f"[_get_full_transcript_segments] Validation error creating segment {start_time_str} for meeting {internal_meeting_id}: {validation_err}", exc_info=True)
+                    # Skip this segment if validation fails
+                    continue
+                # Merge logic: Always include partial segments from Redis (they're the current active state)
+                # If a completed segment exists in PostgreSQL with the same key, Redis partial takes precedence
+                # because it represents the current state of an active transcription
+                existing_segment_tuple = merged_segments_with_abs_time.get(start_time_str)
+                if existing_segment_tuple:
+                    existing_segment = existing_segment_tuple[1]
+                    # If existing is completed and new is partial, prefer the partial (it's the current active state)
+                    # This ensures GET endpoint always shows the latest partial segments
+                    if existing_segment.completed and not segment_obj.completed:
+                        # Replace with partial - it's the current state
+                        pass
+                    # If both are same completion status, Redis is more recent, so use it
+                # Always add Redis segments (they're the current state)
                 merged_segments_with_abs_time[start_time_str] = (absolute_start_time, segment_obj)
         except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
-            logger.error(f"[_get_full_transcript_segments] Error parsing Redis segment {start_time_str} for meeting {internal_meeting_id}: {e}")
+            logger.error(f"[_get_full_transcript_segments] Error parsing Redis segment {start_time_str} for meeting {internal_meeting_id}: {e}", exc_info=True)
+        except Exception as e:
+            # Catch Pydantic ValidationError and other exceptions
+            logger.error(f"[_get_full_transcript_segments] Unexpected error parsing Redis segment {start_time_str} for meeting {internal_meeting_id}: {e}", exc_info=True)
 
     # 5. Sort based on calculated absolute time and return
     sorted_segment_tuples = sorted(merged_segments_with_abs_time.values(), key=lambda item: item[0])
     segments = [segment_obj for abs_time, segment_obj in sorted_segment_tuples]
     
-    # 6. Deduplicate overlapping segments with identical text
+    # 6. Deduplicate overlapping segments (both identical and different text)
     deduped: List[TranscriptionSegment] = []
     for seg in segments:
         if not deduped:
@@ -155,14 +198,85 @@ async def _get_full_transcript_segments(
         same_text = (seg.text or "").strip() == (last.text or "").strip()
         overlaps = max(seg.start_time, last.start_time) < min(seg.end_time, last.end_time)
 
-        if same_text and overlaps:
-            # If current is fully inside last → drop current
-            if seg.start_time >= last.start_time and seg.end_time <= last.end_time:
-                continue
-            # If current fully contains last → replace with current
-            if seg.start_time <= last.start_time and seg.end_time >= last.end_time:
-                deduped[-1] = seg
-                continue
+        if overlaps:
+            # Check if one segment is fully contained within another
+            seg_fully_inside_last = seg.start_time >= last.start_time and seg.end_time <= last.end_time
+            last_fully_inside_seg = last.start_time >= seg.start_time and last.end_time <= seg.end_time
+            
+            if same_text:
+                # Same text: prefer the outer/longer segment
+                if seg_fully_inside_last:
+                    # Current is fully inside last → drop current
+                    logger.debug(f"[Dedup Meet {internal_meeting_id}] Dropping segment '{seg.text}' ({seg.start_time}-{seg.end_time}) - fully contained in '{last.text}' ({last.start_time}-{last.end_time})")
+                    continue
+                if last_fully_inside_seg:
+                    # Last is fully inside current → replace with current
+                    logger.debug(f"[Dedup Meet {internal_meeting_id}] Replacing segment '{last.text}' ({last.start_time}-{last.end_time}) with '{seg.text}' ({seg.start_time}-{seg.end_time})")
+                    deduped[-1] = seg
+                    continue
+            else:
+                # Different text: prefer the longer/outer segment
+                if seg_fully_inside_last:
+                    # Current is fully inside last → drop current (prefer outer segment)
+                    logger.debug(f"[Dedup Meet {internal_meeting_id}] Dropping segment '{seg.text}' ({seg.start_time}-{seg.end_time}) - fully contained in '{last.text}' ({last.start_time}-{last.end_time})")
+                    continue
+                if last_fully_inside_seg:
+                    # Last is fully inside current → replace with current (prefer outer segment)
+                    logger.debug(f"[Dedup Meet {internal_meeting_id}] Replacing segment '{last.text}' ({last.start_time}-{last.end_time}) with '{seg.text}' ({seg.start_time}-{seg.end_time})")
+                    deduped[-1] = seg
+                    continue
+                
+                # Partial-overlap heuristics (no full containment):
+                # - "expansion": current is a longer revision that contains the previous text -> replace previous with current
+                # - "tail-repeat": current is a tiny suffix/echo already present in previous -> drop current
+                if not seg_fully_inside_last and not last_fully_inside_seg:
+                    seg_text_norm = (seg.text or "").strip().lower()
+                    last_text_norm = (last.text or "").strip().lower()
+                    seg_text_clean = seg_text_norm.rstrip(string.punctuation).strip()
+                    last_text_clean = last_text_norm.rstrip(string.punctuation).strip()
+
+                    seg_duration = seg.end_time - seg.start_time
+                    last_duration = last.end_time - last.start_time
+                    overlap_start = max(seg.start_time, last.start_time)
+                    overlap_end = min(seg.end_time, last.end_time)
+                    overlap_duration = overlap_end - overlap_start
+                    overlap_ratio_seg = overlap_duration / seg_duration if seg_duration > 0 else 0
+                    overlap_ratio_last = overlap_duration / last_duration if last_duration > 0 else 0
+
+                    # Expansion: last text appears inside seg text, and seg is "more complete" -> replace last with seg.
+                    # This fixes cases like:
+                    #   last="It was a milestone." (partial) then seg="It was a milestone to get ..." (completed)
+                    seg_expands_last = (
+                        bool(last_text_clean)
+                        and bool(seg_text_clean)
+                        and last_text_clean in seg_text_clean
+                        and len(seg_text_clean) > len(last_text_clean)
+                    )
+                    last_completed = bool(getattr(last, "completed", False))
+                    seg_completed = bool(getattr(seg, "completed", False))
+                    if seg_expands_last and overlap_ratio_last >= 0.5 and (seg_completed or not last_completed):
+                        logger.debug(
+                            f"[Dedup Meet {internal_meeting_id}] Replacing shorter/partial segment '{last.text}' "
+                            f"({last.start_time}-{last.end_time}, overlap={overlap_ratio_last:.1%}) with expansion '{seg.text}' "
+                            f"({seg.start_time}-{seg.end_time})"
+                        )
+                        deduped[-1] = seg
+                        continue
+
+                    # Tail-repeat: seg text already appears in last text, and seg is tiny -> drop seg.
+                    seg_is_tail_repeat = bool(seg_text_clean) and (
+                        seg_text_clean in last_text_clean or seg_text_clean in last_text_norm
+                    )
+                    if seg_is_tail_repeat:
+                        seg_word_count = len(seg_text_clean.split())
+                        # Drop if: tiny segment (<=2 words, <1.5s) and overlaps at least a bit (>=25% of seg)
+                        if seg_duration < 1.5 and seg_word_count <= 2 and overlap_ratio_seg >= 0.25:
+                            logger.debug(
+                                f"[Dedup Meet {internal_meeting_id}] Dropping tail-repeat fragment '{seg.text}' "
+                                f"({seg.start_time}-{seg.end_time}, {seg_duration:.2f}s, {seg_word_count} words, overlap={overlap_ratio_seg:.1%}) "
+                                f"- already present in '{last.text}' ({last.start_time}-{last.end_time})"
+                            )
+                            continue
 
         deduped.append(seg)
 

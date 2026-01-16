@@ -2,7 +2,7 @@
 # -e ../../libs/shared-models
 fastapi
 uvicorn[standard]
-redis>=4.0.0,<5.0.0
+redis>=5.0.0
 # docker>=6.0.0,<7.0.0 # REMOVED - No longer needed for counting
 python-dotenv
 # pydantic==1.10.7 # Now handled by shared-models

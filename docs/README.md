@@ -7,6 +7,7 @@ This directory contains comprehensive documentation for Vexa self-hosted deploym
 ### Setup & Deployment
 
 - **[Deployment Guide](deployment.md)** - Complete setup and deployment instructions for self-hosted Vexa
+- **[Vexa Lite Deployment Guide](vexa-lite-deployment.md)** - Single container deployment (no GPU required)
 
 ### User Guides
 
@@ -32,9 +33,14 @@ Interactive Jupyter notebooks for testing and development are located in the `..
 
 ## Getting Started
 
-1. **Deploy Vexa**: Follow the [Deployment Guide](deployment.md) to get Vexa running
+1. **Deploy Vexa**: Follow the [Deployment Guide](deployment.md) for full stack, or [Vexa Lite Deployment Guide](vexa-lite-deployment.md) for single container
 2. **Manage Users**: Read the [Self-Hosted Management Guide](self-hosted-management.md)
 3. **Use the API**: See [User API Guide](user_api_guide.md) and [WebSocket Guide](websocket.md)
+
+## Related Repositories
+
+- **[vexa-lite-deploy](https://github.com/Vexa-ai/vexa-lite-deploy)** - One-click deployment configurations for Vexa Lite
+- **[Vexa Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)** - Web interface for managing Vexa instances
 
 ## Support
 

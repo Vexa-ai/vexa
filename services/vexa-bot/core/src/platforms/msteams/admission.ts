@@ -52,6 +52,12 @@ export async function checkForAdmissionIndicators(page: Page): Promise<boolean> 
   return false;
 }
 
+// Silent admission check (doesn't send callbacks) - used for verification
+export async function checkForTeamsAdmissionSilent(page: Page): Promise<boolean> {
+  // Just check indicators without sending any callbacks
+  return await checkForAdmissionIndicators(page);
+}
+
 export async function waitForTeamsMeetingAdmission(
   page: Page,
   timeout: number,
@@ -85,12 +91,17 @@ export async function waitForTeamsMeetingAdmission(
     if (initialLeaveButtonFound && !initialLobbyTextVisible && !initialJoinNowButtonVisible) {
       log(`Found Teams admission indicator: visible Leave button - Bot is already admitted to the meeting!`);
       
+      // #region agent log
       try {
-        await callAwaitingAdmissionCallback(botConfig);
-        log("Awaiting admission callback sent successfully (immediate admission)");
-      } catch (callbackError: any) {
-        log(`Warning: Failed to send awaiting admission callback: ${callbackError.message}. Continuing...`);
-      }
+        await fetch('http://127.0.0.1:7242/ingest/a89f31ed-bb1b-47a2-9c8c-c03467b63bbc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'msteams/admission.ts:92',message:'Bot immediately admitted - skipping awaiting_admission callback',data:{immediately_admitted:true},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      } catch {}
+      // #endregion
+      
+      // CRITICAL FIX: When bot is immediately admitted, skip awaiting_admission callback
+      // The bot should go directly from "joining" -> "active", not "joining" -> "awaiting_admission" -> "active"
+      // Sending awaiting_admission here causes a race condition where the callback arrives before
+      // the "joining" callback is processed, causing REQUESTED -> AWAITING_ADMISSION (invalid transition)
+      log("Bot immediately admitted - skipping awaiting_admission callback to avoid race condition");
       
       log("Successfully admitted to the Teams meeting - no waiting room required");
       return true;
@@ -118,6 +129,11 @@ export async function waitForTeamsMeetingAdmission(
     
     if (waitingLobbyTextVisible || waitingJoinNowButtonVisible) {
       log(`Found Teams waiting room indicator: lobby text or Join now button visible - Bot is still in waiting room`);
+      
+      // CRITICAL: Wait a moment to ensure "joining" callback is processed before sending "awaiting_admission"
+      // This prevents race condition where awaiting_admission arrives before joining is processed
+      log("Waiting 1 second to ensure joining callback is processed before sending awaiting_admission...");
+      await new Promise(resolve => setTimeout(resolve, 1000));
       
       // --- Call awaiting admission callback to notify bot-manager that bot is waiting ---
       try {

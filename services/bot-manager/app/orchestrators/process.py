@@ -408,34 +408,108 @@ async def get_running_bots_status(user_id: int) -> List[Dict[str, Any]]:
 async def verify_container_running(container_id: str) -> bool:
     """Verify if a bot process is still running.
 
+    This function checks both the in-memory registry and the actual system process
+    to handle cases where the registry is empty (e.g., after container restart).
+    
+    Supports both PID (numeric string) and container/process name lookup.
+
     Args:
-        container_id: The process ID (PID) as a string
+        container_id: The process ID (PID) as a string, or container/process name
 
     Returns:
         True if process exists and is running, False otherwise
     """
-    if container_id not in _active_processes:
-        logger.debug(f"Process {container_id} not in registry")
+    # Try to parse as PID first
+    is_pid = False
+    pid = None
+    try:
+        pid = int(container_id)
+        is_pid = True
+    except (ValueError, TypeError):
+        # Not a PID - might be a container/process name
+        pass
+
+    # First, check if process is in our registry by PID
+    if is_pid and container_id in _active_processes:
+        proc: subprocess.Popen = _active_processes[container_id]["process"]
+        is_running = _process_is_alive(proc)
+
+        if not is_running:
+            # Clean up dead process
+            logger.debug(f"Process {container_id} is dead, removing from registry")
+            async with _registry_lock:
+                if container_id in _active_processes:
+                    # Close log handle
+                    log_handle = _active_processes[container_id].get("log_handle")
+                    if log_handle:
+                        try:
+                            log_handle.close()
+                        except Exception:
+                            pass
+                    del _active_processes[container_id]
+
+        return is_running
+
+    # If not found by PID, try to find by process_name (container name)
+    if not is_pid:
+        async with _registry_lock:
+            for registered_pid, process_info in _active_processes.items():
+                if process_info.get("process_name") == container_id:
+                    # Found by name - check if the process is alive
+                    proc: subprocess.Popen = process_info["process"]
+                    is_running = _process_is_alive(proc)
+                    
+                    if not is_running:
+                        # Clean up dead process
+                        logger.debug(f"Process {registered_pid} (name: {container_id}) is dead, removing from registry")
+                        log_handle = process_info.get("log_handle")
+                        if log_handle:
+                            try:
+                                log_handle.close()
+                            except Exception:
+                                pass
+                        del _active_processes[registered_pid]
+                    
+                    logger.debug(f"Found process {registered_pid} by name '{container_id}', running: {is_running}")
+                    return is_running
+        
+        # Not found in registry by name - log available processes for debugging
+        async with _registry_lock:
+            registered_names = [info.get("process_name") for info in _active_processes.values()]
+            logger.warning(
+                f"Process/container '{container_id}' not found in registry. "
+                f"Registered processes: {registered_names}"
+            )
         return False
 
-    proc: subprocess.Popen = _active_processes[container_id]["process"]
-    is_running = _process_is_alive(proc)
-
-    if not is_running:
-        # Clean up dead process
-        logger.debug(f"Process {container_id} is dead, removing from registry")
-        async with _registry_lock:
-            if container_id in _active_processes:
-                # Close log handle
-                log_handle = _active_processes[container_id].get("log_handle")
-                if log_handle:
-                    try:
-                        log_handle.close()
-                    except Exception:
-                        pass
-                del _active_processes[container_id]
-
-    return is_running
+    # Process not in registry but we have a PID - check if it actually exists in the system
+    # This handles the case where the container restarted and registry was lost
+    # but the process is still running (though this is unlikely for child processes)
+    try:
+        # os.kill(pid, 0) doesn't kill the process, just checks if it exists
+        # Raises ProcessLookupError if process doesn't exist
+        # Raises PermissionError if we don't have permission (but process exists)
+        os.kill(pid, 0)
+        # Process exists - but it's not in our registry
+        # This could happen if:
+        # 1. Container restarted and registry was lost (but process survived - unlikely)
+        # 2. Process was started outside our orchestrator
+        # For reconciliation purposes, if the process exists, we consider it running
+        logger.info(f"Process {container_id} exists in system but not in registry (possible container restart)")
+        return True
+    except ProcessLookupError:
+        # Process doesn't exist
+        logger.debug(f"Process {container_id} not found in system")
+        return False
+    except PermissionError:
+        # Process exists but we don't have permission to signal it
+        # This means the process is running
+        logger.debug(f"Process {container_id} exists but permission denied (process is running)")
+        return True
+    except Exception as e:
+        # Other errors - log and assume not running to be safe
+        logger.warning(f"Error checking process {container_id}: {e}")
+        return False
 
 
 # ---------------------------------------------------------------------------

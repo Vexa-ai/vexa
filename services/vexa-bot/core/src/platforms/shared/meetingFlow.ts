@@ -36,6 +36,7 @@ function generateReasonTokens(platform: string): {
 export type PlatformStrategies = {
   join: (page: Page, botConfig: BotConfig) => Promise<void>;
   waitForAdmission: (page: Page, timeoutMs: number, botConfig: BotConfig) => Promise<AdmissionResult>;
+  checkAdmissionSilent: (page: Page) => Promise<boolean>; // Silent check without callbacks
   prepare: (page: Page, botConfig: BotConfig) => Promise<void>;
   startRecording: (page: Page, botConfig: BotConfig) => Promise<void>;
   startRemovalMonitor: (page: Page, onRemoval?: () => void | Promise<void>) => () => void;
@@ -120,10 +121,30 @@ export async function runMeetingFlow(
       return;
     }
 
-    // Startup callback
+    // CRITICAL: If bot was immediately admitted, ensure AWAITING_ADMISSION state is processed before ACTIVE
+    // The waitForAdmission function sends AWAITING_ADMISSION callback when immediately admitted,
+    // but we need to wait a moment for the state machine to process that transition before sending ACTIVE
+    log("Bot admitted - ensuring AWAITING_ADMISSION state is processed before sending ACTIVE...");
+    await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second for state transition
+    
+    // Startup callback (sends ACTIVE status)
     try {
       await callStartupCallback(botConfig);
-    } catch {}
+      
+      // CRITICAL: Verify bot is still in meeting after callback (prevent false positives)
+      // Use silent check to avoid sending AWAITING_ADMISSION callback again
+      log("Verifying bot is still in meeting after ACTIVE callback...");
+      const stillAdmitted = await strategies.checkAdmissionSilent(page);
+      if (!stillAdmitted) {
+        log("🚨 Bot is NOT in meeting after ACTIVE callback - false positive detected!");
+        await gracefulLeaveFunction(page, 0, "admission_false_positive");
+        return;
+      }
+      log("✅ Bot verified to be in meeting after ACTIVE callback");
+    } catch (error: any) {
+      log(`Error during startup callback or verification: ${error?.message || String(error)}`);
+      // Continue to recording phase even if callback/verification fails
+    }
 
     // Removal monitoring + recording race
     let signalRemoval: (() => void) | null = null;

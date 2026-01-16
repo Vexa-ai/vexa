@@ -4,7 +4,7 @@ VAD_FILTER_THRESHOLD=0.5
 DEVICE_TYPE=remote
 BOT_IMAGE_NAME=vexa-bot:dev
 # Remote Transcriber API Configuration
-REMOTE_TRANSCRIBER_URL=http://transcription-lb-cpu:80/v1/audio/transcriptions
+REMOTE_TRANSCRIBER_URL=http://transcription-service:80/v1/audio/transcriptions
 REMOTE_TRANSCRIBER_API_KEY=IUB8g9384bpfoiwnoig
 # Exposed Host Ports
 API_GATEWAY_HOST_PORT=8056

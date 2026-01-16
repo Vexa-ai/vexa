@@ -92,6 +92,7 @@ def get_valid_status_transitions() -> Dict[MeetingStatus, List[MeetingStatus]]:
         ],
         MeetingStatus.JOINING: [
             MeetingStatus.AWAITING_ADMISSION,
+            MeetingStatus.ACTIVE,  # Allow direct transition when bot is immediately admitted (no waiting room)
             MeetingStatus.FAILED,
             MeetingStatus.COMPLETED,
             MeetingStatus.STOPPING,
@@ -507,8 +508,11 @@ class TranscriptionSegment(BaseModel):
     end_time: float = Field(..., alias='end')     # Add alias
     text: str
     language: Optional[str]
-    created_at: Optional[datetime]
+    created_at: Optional[datetime] = Field(default=None)
     speaker: Optional[str] = None
+    # WhisperLive marks segments as completed/partial. This is important for real-time UI updates
+    # (e.g., to show when a partial segment becomes "confirmed" via SAME_OUTPUT_THRESHOLD).
+    completed: Optional[bool] = None
     absolute_start_time: Optional[datetime] = Field(None, description="Absolute start timestamp of the segment (UTC)")
     absolute_end_time: Optional[datetime] = Field(None, description="Absolute end timestamp of the segment (UTC)")
 
