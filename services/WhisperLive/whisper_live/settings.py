@@ -65,7 +65,7 @@ MIN_AUDIO_S = 1
 # - 2.0 = minimum 2.0 seconds between requests (max 1 request per 2 seconds)
 # - 10.0 = minimum 10.0 seconds between requests (max 1 request per 10 seconds)
 # Set to 10.0 for max 1 request per 10 seconds (10s minimum between requests).
-MIN_TIME_BETWEEN_REQUESTS_S = 0.1
+MIN_TIME_BETWEEN_REQUESTS_S = 0.5
 
 
 # Voice Activity Detection (VAD) Settings
@@ -82,6 +82,18 @@ VAD_ONSET = 0.5
 # The threshold for the VAD to decide that there is no speech in an audio
 # chunk. This is used by the Whisper model's internal VAD.
 VAD_NO_SPEECH_THRESH = 0.9
+
+# Maximum duration of a speech segment in seconds before it is split. If None,
+# the value will be set to the model's chunk_length (typically 30 seconds for
+# Whisper models). Setting a smaller value will create shorter segments, which
+# can improve latency but may reduce transcription quality for long utterances.
+VAD_MAX_SPEECH_DURATION_S = None
+
+# Minimum duration of silence in milliseconds required to split segments. A
+# smaller value will split segments more aggressively on shorter pauses, while
+# a larger value requires longer silences before splitting. Default is 160ms.
+# This affects how VAD breaks continuous speech into segments for transcription.
+VAD_MIN_SILENCE_DURATION_MS = 2
 
 
 # Transcription Output Management

@@ -407,9 +407,13 @@ class BatchedInferencePipeline:
                     vad_threshold_env = float(os.getenv('VAD_FILTER_THRESHOLD', '0.5'))
                     print(f"[WhisperLive Transcriber] VAD parameters not provided, using threshold from env: {vad_threshold_env}") # Added log
                     
+                    # Use settings for VAD segment length parameters
+                    max_speech_duration = settings.VAD_MAX_SPEECH_DURATION_S if settings.VAD_MAX_SPEECH_DURATION_S is not None else chunk_length
+                    min_silence_duration = settings.VAD_MIN_SILENCE_DURATION_MS
+                    
                     vad_parameters = VadOptions(
-                        max_speech_duration_s=chunk_length,
-                        min_silence_duration_ms=160,
+                        max_speech_duration_s=max_speech_duration,
+                        min_silence_duration_ms=min_silence_duration,
                         threshold=vad_threshold_env,  # *** Use the env var here ***
                     )
                 elif isinstance(vad_parameters, dict):
@@ -422,8 +426,16 @@ class BatchedInferencePipeline:
                         print(f"[WhisperLive Transcriber] Using VAD threshold from provided dict: {vad_parameters['threshold']}") # Added log
 
                     # Ensure VadOptions is created from the possibly updated dict
+                    # Use settings for max_speech_duration if not already in dict
+                    if 'max_speech_duration_s' not in vad_parameters:
+                        max_speech_duration = settings.VAD_MAX_SPEECH_DURATION_S if settings.VAD_MAX_SPEECH_DURATION_S is not None else chunk_length
+                        vad_parameters['max_speech_duration_s'] = max_speech_duration
+                    # Use settings for min_silence_duration if not already in dict
+                    if 'min_silence_duration_ms' not in vad_parameters:
+                        vad_parameters['min_silence_duration_ms'] = settings.VAD_MIN_SILENCE_DURATION_MS
+                    
                     vad_parameters = VadOptions(
-                        **vad_parameters, max_speech_duration_s=chunk_length
+                        **vad_parameters
                     )
                 # If vad_parameters is already VadOptions, use its threshold
                 elif isinstance(vad_parameters, VadOptions):
@@ -853,8 +865,25 @@ class WhisperModel:
 
         if vad_filter and clip_timestamps == "0":
             if vad_parameters is None:
-                vad_parameters = VadOptions()
+                # Use settings for VAD segment length parameters
+                default_chunk_length = self.feature_extractor.chunk_length
+                max_speech_duration = settings.VAD_MAX_SPEECH_DURATION_S if settings.VAD_MAX_SPEECH_DURATION_S is not None else default_chunk_length
+                min_silence_duration = settings.VAD_MIN_SILENCE_DURATION_MS
+                
+                vad_parameters = VadOptions(
+                    max_speech_duration_s=max_speech_duration,
+                    min_silence_duration_ms=min_silence_duration,
+                )
             elif isinstance(vad_parameters, dict):
+                # Use settings for max_speech_duration if not already in dict
+                if 'max_speech_duration_s' not in vad_parameters:
+                    default_chunk_length = self.feature_extractor.chunk_length
+                    max_speech_duration = settings.VAD_MAX_SPEECH_DURATION_S if settings.VAD_MAX_SPEECH_DURATION_S is not None else default_chunk_length
+                    vad_parameters['max_speech_duration_s'] = max_speech_duration
+                # Use settings for min_silence_duration if not already in dict
+                if 'min_silence_duration_ms' not in vad_parameters:
+                    vad_parameters['min_silence_duration_ms'] = settings.VAD_MIN_SILENCE_DURATION_MS
+                
                 vad_parameters = VadOptions(**vad_parameters)
             speech_chunks = get_speech_timestamps(audio, vad_parameters)
             audio_chunks, chunks_metadata = collect_chunks(audio, speech_chunks)
