@@ -47,5 +47,7 @@ def get_transcript(client, platform, native_meeting_id, tail=10, duration=10):
             clear_output()
             display(df.sort_values('absolute_start_time').tail(tail))
             time.sleep(1)
+
+        return df
     except Exception as e:
         print(e)
