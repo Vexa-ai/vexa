@@ -41,7 +41,7 @@ If you're running Vexa on your own infrastructure, you need to create a user and
     * **Google Meet**: Meeting code in format `xxx-xxxx-xxx` (e.g., "abc-defg-hij")
     * **Teams**: **Only the numeric meeting ID** (10-15 digits). Extract this from your Teams URL. For example, from `https://teams.live.com/meet/9366473044740?p=xxx`, use `"9366473044740"`.
   * `passcode`: (string, required for Teams) Meeting passcode. **Required for Microsoft Teams meetings**. Extract this from the `?p=` parameter in your Teams URL. For example, from `https://teams.live.com/meet/9366473044740?p=waw4q9dPAvdIG3aknh`, use `"waw4q9dPAvdIG3aknh"`. Not used for Google Meet.
-  * `language`: (string, optional) The desired transcription language code (e.g., "en", "es"). If omitted, the language spoken at the beginning of the meeting will be automatically detected once, and transcription will continue in that language (translating if necessary). To change the language mid-meeting, use the 'Update Bot Configuration' endpoint.
+  * `language`: (string, optional) The desired transcription language code (e.g., "en", "es"). The language codes (currently 100) used in Vexa are based on the ISO 639-1 and ISO 639-3 standards. For more details, see the ISO 639 [specification on Wikipedia](https://en.wikipedia.org/wiki/ISO_639). If omitted, the language spoken at the beginning of the meeting will be automatically detected once, and transcription will continue in that language (translating if necessary). To change the language mid-meeting, use the 'Update Bot Configuration' endpoint.
   * `bot_name`: (string, optional) A custom name for the bot. This is the name the bot will use when appearing in the meeting.
 * **Response:** Returns details about the requested bot instance and meeting record.
 * **Note:** After a successful API response, it typically takes about 10 seconds for the bot to request entry into the meeting.
@@ -180,7 +180,7 @@ If you're running Vexa on your own infrastructure, you need to create a user and
 ### Update Bot Configuration
 
 * **Endpoint:** `PUT /bots/{platform}/{native_meeting_id}/config`
-* **Description:** Updates the configuration of an active bot (e.g., changing the language).
+* **Description:** Updates the configuration of an active bot (e.g., changing the language, for details on language codes see [request bot section](#request-a-bot-for-a-meeting)) 
 * **Path Parameters:**
   * `platform`: (string) The platform of the meeting (`google_meet` or `teams`).
   * `native_meeting_id`: (string) The identifier of the meeting with the active bot. **Use the exact same value you provided when requesting the bot**:
@@ -306,7 +306,7 @@ If you're running Vexa on your own infrastructure, you need to create a user and
   * `data`: (object, required) Container for meeting metadata
     * `name`: (string, optional) Meeting name/title
     * `participants`: (array, optional) List of participant names
-    * `languages`: (array, optional) List of language codes detected/used in the meeting
+    * `languages`: (array, optional) List of language codes (for details on language codes see [request bot section](#request-a-bot-for-a-meeting)) detected/used in the meeting
     * `notes`: (string, optional) Meeting notes or description
 * **Response:** Returns the updated meeting record.
 * **Python Example:**
