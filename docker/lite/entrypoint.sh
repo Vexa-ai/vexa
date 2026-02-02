@@ -101,8 +101,12 @@ else
     # Parse host:port/dbname
     DB_HOSTPORT="${DB_HOSTPORTDB%%/*}"
     export DB_NAME="${DB_HOSTPORTDB#*/}"
-    export DB_HOST="${DB_HOSTPORT%%:*}"
-    export DB_PORT="${DB_HOSTPORT#*:}"
+    if [[ "$DB_HOSTPORT" == *":"* ]]; then
+        export DB_HOST="${DB_HOSTPORT%%:*}"
+        export DB_PORT="${DB_HOSTPORT#*:}"
+    else
+        export DB_HOST="$DB_HOSTPORT"
+    fi
     
     # Extract sslmode from DATABASE_URL if present
     if [[ "$DATABASE_URL" == *"sslmode="* ]]; then
