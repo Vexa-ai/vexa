@@ -1,6 +1,6 @@
 ---
 name: Bug report
-description: Something isn't working as expected
+about: Something isn't working as expected
 title: "[Bug] "
 labels: ["type: bug"]
 assignees: []
