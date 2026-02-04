@@ -1,0 +1,6 @@
+# Issue template chooser: contributors must pick a type when opening an issue.
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Discord community
+    url: https://discord.gg/Ga9duGkVz9
+    about: Ask questions and discuss ideas
