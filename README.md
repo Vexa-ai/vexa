@@ -284,6 +284,8 @@ Vexa is part of an ecosystem of open-source tools:
 
 ## Contributing
 
+We use **GitHub Issues** as our main feedback channel. New issues are triaged within **72 hours** (you'll get a label + short response). Not every feature will be implemented, but every issue will be acknowledged. Look for **`good-first-issue`** if you want to contribute.
+
 Contributors are welcome! Join our community and help shape Vexa's future. Here's how to get involved:
 
 1. **Understand Our Direction**:

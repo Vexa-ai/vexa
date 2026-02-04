@@ -1,4 +1,14 @@
-Contributor License Agreement (CLA)
+## GitHub Issues
+
+We use GitHub Issues as our main feedback channel.
+
+- **New issues are triaged within 72 hours.** Triage means: label + short comment (accepted / needs more info / won't fix).
+- Not every feature will be implemented, but every issue will be acknowledged.
+- Look for **`good-first-issue`** if you want to contribute.
+
+---
+
+## Contributor License Agreement (CLA)
 
 To ensure that all contributions are legally clean and consistent with the Apache License 2.0
 , Vexa requires every contributor (individuals and corporations) to sign a Contributor License Agreement (CLA) before their first contribution is merged.
