@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest an idea or improvement
+title: "[Feature] "
+labels: ["type: feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      placeholder: Describe the problem or need
+    validations:
+      required: true
+  - type: input
+    id: who-benefits
+    attributes:
+      label: Who benefits?
+      placeholder: e.g. self-hosters, API consumers, dashboard users
+    validations:
+      required: false
+  - type: textarea
+    id: solution
+    attributes:
+      label: Rough idea of solution (optional)
+      placeholder: If you have a suggestion, outline it briefly
+    validations:
+      required: false
