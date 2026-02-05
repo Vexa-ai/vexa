@@ -441,6 +441,7 @@ else
     echo "     Service is reachable but authentication verification failed"
     exit 1
 fi
+fi
 echo ""
 
 # -----------------------------------------------------------------------------
