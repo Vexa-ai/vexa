@@ -1,0 +1,53 @@
+services:
+  postgres:
+    container_name: vexa-postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-vexa}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_USER: ${DB_USER:-postgres}
+    image: postgres:latest
+    networks:
+      - vexa-network
+    volumes:
+      - vexa-data:/var/lib/postgresql
+  vexa-dashboard:
+    container_name: vexa-dashboard
+    depends_on:
+      - postgres
+    environment:
+      VEXA_ADMIN_API_KEY: ${ADMIN_API_TOKEN}
+      VEXA_API_URL: http://vexa-lite:8056
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_FROM: ${SMTP_FROM}
+    image: synapsr/vexa-dashboard
+    networks:
+      - vexa-network
+    ports:
+      - '3000:3000'
+    restart: unless-stopped
+  vexa-lite:
+    container_name: vexa
+    depends_on:
+      - postgres
+    environment:
+      ADMIN_API_TOKEN: ${ADMIN_API_TOKEN}
+      DATABASE_URL: >-
+        postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@vexa-postgres:5432/${DB_NAME:-vexa}
+      TRANSCRIBER_API_KEY: ${TRANSCRIBER_API_KEY}
+      TRANSCRIBER_URL: ${TRANSCRIBER_URL}
+      TRANSCRIBER_PROVIDER: ${TRANSCRIBER_PROVIDER:-Vexa}
+      SKIP_TRANSCRIPTION_CHECK: ${SKIP_TRANSCRIPTION_CHECK:-false}
+    build:
+       context: .
+       dockerfile: docker/lite/Dockerfile.lite
+    networks:
+      - vexa-network
+    ports:
+      - '8056:8056'
+volumes:
+  vexa-data: 
+networks:
+  vexa-network:

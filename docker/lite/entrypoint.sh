@@ -101,12 +101,8 @@ else
     # Parse host:port/dbname
     DB_HOSTPORT="${DB_HOSTPORTDB%%/*}"
     export DB_NAME="${DB_HOSTPORTDB#*/}"
-    if [[ "$DB_HOSTPORT" == *":"* ]]; then
-        export DB_HOST="${DB_HOSTPORT%%:*}"
-        export DB_PORT="${DB_HOSTPORT#*:}"
-    else
-        export DB_HOST="$DB_HOSTPORT"
-    fi
+    export DB_HOST="${DB_HOSTPORT%%:*}"
+    export DB_PORT="${DB_HOSTPORT#*:}"
     
     # Extract sslmode from DATABASE_URL if present
     if [[ "$DATABASE_URL" == *"sslmode="* ]]; then
@@ -323,7 +319,19 @@ if [ "${SKIP_TRANSCRIPTION_CHECK:-false}" = "true" ]; then
          echo "  ❌ ERROR: TRANSCRIBER_API_KEY (or REMOTE_TRANSCRIBER_API_KEY) is not set"
          exit 1
     fi
-    
+if [[ "$TRANSCRIBER_URL" =~ ^(https?://[^/]+) ]]; then
+    BASE_URL="${BASH_REMATCH[1]}"
+else
+    echo "  ❌ ERROR: Invalid TRANSCRIBER_URL format: $TRANSCRIBER_URL"
+    echo "     Expected format: http://host:port/path or https://host:port/path"
+    exit 1
+fi    
+HEALTH_URL="${BASE_URL}/health"
+if [[ "$TRANSCRIBER_URL" == *"/health"* ]]; then
+    HEALTH_URL="$TRANSCRIBER_URL"
+fi
+SERVICE_REACHABLE=true
+
     echo "  ✅ Transcription configuration presence verified (connectivity check skipped)"
 else
     # Standard verification logic
@@ -376,6 +384,7 @@ if [ "$SERVICE_REACHABLE" = "false" ]; then
     echo "  ❌ ERROR: Cannot reach transcription service at $BASE_URL"
     echo "     Please ensure the transcription service is running and accessible"
     exit 1
+fi
 fi
 
 # Verify API key by making an authenticated request
@@ -440,7 +449,6 @@ else
     echo "  ❌ ERROR: Cannot verify transcription service API key"
     echo "     Service is reachable but authentication verification failed"
     exit 1
-fi
 fi
 echo ""
 

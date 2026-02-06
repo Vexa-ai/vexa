@@ -142,8 +142,11 @@ docker run -d \
   -e ADMIN_API_TOKEN="your-admin-token" \
   -e TRANSCRIBER_URL="https://transcription.service" \
   -e TRANSCRIBER_API_KEY="transcriber-token" \
+  -e TRANSCRIBER_PROVIDER="Vexa" \
   vexaai/vexa-lite:latest
 ```
+
+> Set `TRANSCRIBER_PROVIDER` to `Vexa` (default) or `Mistral`. For Mistral, use `TRANSCRIBER_URL=https://api.mistral.ai/v1/audio/transcriptions` with your Mistral API key.
 
 **Deployment options:**
 - 🚀 **One-click platform deployments**: [vexa-lite-deploy repository](https://github.com/Vexa-ai/vexa-lite-deploy)

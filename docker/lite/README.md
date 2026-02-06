@@ -105,20 +105,8 @@ docker run -d \
 | `REMOTE_TRANSCRIBER_URL` | (required) | Remote transcription API URL |
 | `REMOTE_TRANSCRIBER_API_KEY` | (required) | API key for remote transcription service |
 | `REMOTE_TRANSCRIBER_TEMPERATURE` | `0` | Temperature parameter for remote transcription |
-| `SKIP_TRANSCRIPTION_CHECK` | `false` | If `true`, skips the startup connectivity check to the transcription service. **Only relevant when using an external (non‑Vexa) Whisper‑compatible transcription service** that does not expose a `/health` or root URL returning 2xx (e.g. some third‑party/OVH gateways). The Vexa transcription service (developed in this stack) exposes `/health` and does not need this. The container still requires `REMOTE_TRANSCRIBER_URL` and `REMOTE_TRANSCRIBER_API_KEY` to be set. |
+| `TRANSCRIBER_PROVIDER` | `Vexa` | Transcription provider: `Vexa` (default) or `Mistral` (uses Mistral Voxtral API) |
 | `API_GATEWAY_URL` | `http://localhost:8056` | API Gateway URL (used by MCP service) |
-
-### External transcription services without health endpoint
-
-At startup, the Lite entrypoint verifies that the transcription service is reachable by requesting `BASE_URL/health` (or the root URL if that fails). It uses `curl -f`, so any HTTP 4xx or 5xx (e.g. **404**) causes the check to fail and the container to exit with "Cannot reach transcription service".
-
-This applies **only when you use an external (outside) Whisper‑compatible transcription service**—not the Vexa transcription service developed in this stack, which exposes `/health` and works with the default check. If your **external** service does not expose a `/health` or root endpoint that returns 2xx (e.g. some third‑party or proxy gateways that only serve the transcription path), set:
-
-```bash
--e SKIP_TRANSCRIPTION_CHECK=true
-```
-
-With this set, the entrypoint only checks that `REMOTE_TRANSCRIBER_URL` (or `TRANSCRIBER_URL`) and `REMOTE_TRANSCRIBER_API_KEY` (or `TRANSCRIBER_API_KEY`) are non-empty; it does not perform the connectivity or API-key request.
 
 ### Redis Configuration
 
@@ -390,10 +378,6 @@ See `services/mcp/README.md` for detailed MCP setup instructions.
 - **Redis Persistence:** Internal Redis data is ephemeral unless volumes are mounted
 
 ## Troubleshooting
-
-### "Cannot reach transcription service" at startup
-
-The entrypoint checks reachability by requesting the transcription service's `/health` (or root) URL. If that returns 404 or another non-2xx, the container exits with this error. This only affects **external** Whisper-compatible services that don't expose such an endpoint; the Vexa transcription service in this stack has `/health` and does not need a workaround. **Fix for external services:** set `SKIP_TRANSCRIPTION_CHECK=true`. See [External transcription services without health endpoint](#external-transcription-services-without-health-endpoint) above.
 
 ### Bot Fails to Start
 

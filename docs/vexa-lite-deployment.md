@@ -223,6 +223,7 @@ docker run -d \
 | `ADMIN_API_TOKEN` | Yes | Secret token for admin operations | `your-secret-admin-token` |
 | `TRANSCRIBER_URL` | Yes | Transcription service endpoint | `https://transcription.example.com/v1/audio/transcriptions` |
 | `TRANSCRIBER_API_KEY` | Yes | API key for transcription service | `your-api-key` |
+| `TRANSCRIBER_PROVIDER` | Optional | Transcription provider: `Vexa` (default) or `Mistral` | `Mistral` |
 | `DB_SSL_MODE` | Optional | SSL mode for database connection | `require` (for Supabase) |
 
 ---

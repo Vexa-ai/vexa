@@ -36,7 +36,9 @@ Scope:
   - `timestamp_offset`: “how far we have *confirmed/cut* the audio”.
 
 4) **Remote HTTP transcriber** (remote backend only)
-- `ServeClientRemote` constructs a `RemoteTranscriber` (`whisper_live/remote_transcriber.py`).
+- `ServeClientRemote` constructs a `RemoteTranscriber` based on `TRANSCRIBER_PROVIDER`:
+  - `Vexa` (default) — uses `whisper_live/remote_transcriber.py` (Vexa/Fireworks-compatible API).
+  - `Mistral` — uses `whisper_live/remote_transcriber_mistral.py` (Mistral Voxtral API).
 - WhisperLive sends audio (WAV bytes) to `TRANSCRIBER_URL` / `REMOTE_TRANSCRIBER_URL`.
 - Responses are converted into Whisper-like `Segment` objects.
 
