@@ -1,5 +1,5 @@
 from typing import List, Optional, Dict, Tuple, Any
-from pydantic import BaseModel, Field, EmailStr, field_validator, ValidationInfo
+from pydantic import BaseModel, Field, EmailStr, field_serializer, field_validator, ValidationInfo
 from datetime import datetime
 from enum import Enum, auto
 import re # Import re for native ID validation
@@ -269,6 +269,13 @@ class UserResponse(UserBase):
     id: int
     created_at: datetime
     max_concurrent_bots: int = Field(..., description="Maximum number of concurrent bots allowed for the user")
+
+    @field_serializer('data')
+    def exclude_webhook_secret(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Exclude webhook_secret from API responses for security."""
+        if data is None:
+            return None
+        return {k: v for k, v in data.items() if k != 'webhook_secret'}
 
     class Config:
         from_attributes = True

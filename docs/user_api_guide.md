@@ -396,20 +396,22 @@ If you're running Vexa on your own infrastructure, you need to create a user and
 ### Set User Webhook URL
 
 * **Endpoint:** `PUT /user/webhook`
-* **Description:** Sets a webhook URL for the authenticated user. When events occur (e.g., a meeting finishes processing), a POST request with the meeting data will be sent to this URL.
+* **Description:** Sets a webhook URL for the authenticated user. When events occur (e.g., a meeting finishes processing), a POST request with the meeting data will be sent to this URL. Webhook URLs must target public internet addresses; internal or private network URLs are rejected for security (SSRF prevention).
 * **Headers:**
   * `Content-Type: application/json`
   * `X-API-Key: YOUR_API_KEY_HERE`
-* **Request Body:** A JSON object containing the webhook URL:
-  * `webhook_url`: (string, required) The full URL to which Vexa should send webhook notifications.
-* **Response:** Returns the updated user record.
+* **Request Body:** A JSON object containing:
+  * `webhook_url`: (string, required) The full URL to which Vexa should send webhook notifications. Must use `http://` or `https://` and cannot target localhost, private IPs, or internal hostnames.
+  * `webhook_secret`: (string, optional) If provided, Vexa adds `Authorization: Bearer <secret>` to outgoing webhook requests. Useful for authenticating webhooks to services like OpenClaw. The secret is never returned in API responses. Omit this field to leave an existing secret unchanged when updating only the URL (backward compatible).
+* **Response:** Returns the updated user record. The `webhook_secret` (if set) is never included in the response.
 * **Python Example:**
   ```python
   # imports, HEADERS from previous examples
 
   set_webhook_url = f"{BASE_URL}/user/webhook"
   webhook_payload = {
-      "webhook_url": "https://your-service.com/webhook-receiver"
+      "webhook_url": "https://your-service.com/webhook-receiver",
+      "webhook_secret": "optional-shared-secret-for-auth-header"  # optional
   }
 
   response = requests.put(set_webhook_url, headers=HEADERS, json=webhook_payload)
@@ -422,7 +424,8 @@ If you're running Vexa on your own infrastructure, you need to create a user and
     -H 'Content-Type: application/json' \
     -H 'X-API-Key: YOUR_API_KEY_HERE' \
     -d '{
-      "webhook_url": "https://your-service.com/webhook-receiver"
+      "webhook_url": "https://your-service.com/webhook-receiver",
+      "webhook_secret": "optional-shared-secret-for-auth-header"
     }'
   ```
 
