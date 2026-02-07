@@ -2,8 +2,21 @@ import logging
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from shared_models.models import Meeting, User
+from shared_models.webhook_url import validate_webhook_url
+from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _build_webhook_headers(user_data: Optional[dict]) -> dict:
+    """Build headers for webhook request, including Authorization if webhook_secret is set."""
+    headers = {'Content-Type': 'application/json'}
+    if user_data and isinstance(user_data, dict):
+        secret = user_data.get('webhook_secret')
+        if secret and isinstance(secret, str) and secret.strip():
+            headers['Authorization'] = f'Bearer {secret.strip()}'
+    return headers
+
 
 async def run(meeting: Meeting, db: AsyncSession):
     """
@@ -25,6 +38,13 @@ async def run(meeting: Meeting, db: AsyncSession):
             logger.info(f"No webhook URL configured for user {user.email} (meeting {meeting.id})")
             return
 
+        # SSRF defense: validate URL before sending (catches pre-patch or admin-set URLs)
+        try:
+            validate_webhook_url(webhook_url)
+        except ValueError as e:
+            logger.warning(f"Webhook URL validation failed for meeting {meeting.id}: {e}. Skipping.")
+            return
+
         # Prepare the webhook payload
         payload = {
             'id': meeting.id,
@@ -41,14 +61,17 @@ async def run(meeting: Meeting, db: AsyncSession):
             'updated_at': meeting.updated_at.isoformat() if meeting.updated_at else None,
         }
 
-        # Send the webhook
-        async with httpx.AsyncClient() as client:
+        headers = _build_webhook_headers(user.data)
+
+        # Send the webhook (follow_redirects=True for backward compatibility with
+        # receivers that use redirects; URL validated at storage and send time)
+        async with httpx.AsyncClient(follow_redirects=True) as client:
             logger.info(f"Sending webhook to {webhook_url} for meeting {meeting.id}")
             response = await client.post(
                 webhook_url,
                 json=payload,
                 timeout=30.0,
-                headers={'Content-Type': 'application/json'}
+                headers=headers
             )
             
             if response.status_code >= 200 and response.status_code < 300:

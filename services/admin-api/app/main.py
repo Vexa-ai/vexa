@@ -7,10 +7,10 @@ from fastapi.security import APIKeyHeader
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload, attributes
-from typing import List # Import List for response model
+from typing import List, Optional  # Import List for response model
 from datetime import datetime # Import datetime
 from sqlalchemy import func
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl
 
 # Import shared models and schemas
 from shared_models.models import User, APIToken, Base, Meeting, Transcription, MeetingSession # Import Base for init_db and Meeting
@@ -20,7 +20,8 @@ from shared_models.schemas import (UserCreate, UserResponse, TokenResponse, User
                                  UserUsagePatterns, UserAnalyticsResponse) # Import analytics schemas
 
 # Database utilities (needs to be created)
-from shared_models.database import get_db, init_db # New import
+from shared_models.database import get_db, init_db  # New import
+from shared_models.webhook_url import validate_webhook_url
 
 # Logging configuration
 logging.basicConfig(
@@ -35,6 +36,7 @@ app = FastAPI(title="Vexa Admin API")
 # --- Pydantic Schemas for new endpoint ---
 class WebhookUpdate(BaseModel):
     webhook_url: HttpUrl
+    webhook_secret: Optional[str] = Field(None, max_length=512)
 
 class MeetingUserStat(MeetingResponse): # Inherit from MeetingResponse to get meeting fields
     user: UserResponse # Embed UserResponse
@@ -106,18 +108,35 @@ def generate_secure_token(length=40):
              summary="Set user webhook URL",
              description="Set a webhook URL for the authenticated user to receive notifications.")
 async def set_user_webhook(
-    webhook_update: WebhookUpdate, 
-    user: User = Depends(get_current_user), 
+    webhook_update: WebhookUpdate,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Updates the webhook_url for the currently authenticated user.
-    The URL is stored in the user's 'data' JSONB field.
+    Updates the webhook_url and optional webhook_secret for the currently authenticated user.
+    Stored in the user's 'data' JSONB field.
     """
+    # SSRF validation: block internal/private URLs
+    try:
+        validate_webhook_url(str(webhook_update.webhook_url))
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        ) from e
+
     if user.data is None:
         user.data = {}
-    
+
     user.data['webhook_url'] = str(webhook_update.webhook_url)
+
+    # Only update webhook_secret when explicitly provided (backward compatible: clients
+    # that only send webhook_url leave existing secret unchanged)
+    if 'webhook_secret' in webhook_update.model_dump(exclude_unset=True):
+        if webhook_update.webhook_secret is None or webhook_update.webhook_secret.strip() == '':
+            user.data.pop('webhook_secret', None)
+        else:
+            user.data['webhook_secret'] = webhook_update.webhook_secret.strip()
 
     # Flag the 'data' field as modified for SQLAlchemy to detect the change
     attributes.flag_modified(user, "data")
@@ -125,7 +144,7 @@ async def set_user_webhook(
     db.add(user)
     await db.commit()
     await db.refresh(user)
-    
+
     # Fix: Ensure created_at is never None before validation
     if user.created_at is None:
         # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
@@ -133,9 +152,9 @@ async def set_user_webhook(
         logger.warning(f"created_at was None for user {user.id}, setting to current time")
         db.add(user)
         await db.commit()
-    
+
     logger.info(f"Updated webhook URL for user {user.email}")
-    
+
     return UserResponse.model_validate(user)
 
 # --- Admin Endpoints (Copied and adapted from bot-manager/admin.py) --- 
