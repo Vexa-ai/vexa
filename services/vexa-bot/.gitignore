@@ -1,4 +1,21 @@
+# Dependencies
 /node_modules
 /core/node_modules
-/core/dist
 /cli/node_modules
+
+# Build outputs
+/core/dist
+/build
+
+# Native addon build artifacts
+*.node
+
+# Zoom SDK (large binaries - download separately)
+# Source code in platforms/zoom/ should NOT be ignored
+core/src/platforms/zoom/native/zoom_meeting_sdk/libmeetingsdk.so
+core/src/platforms/zoom/native/zoom_meeting_sdk/qt_libs/
+core/src/platforms/zoom/native/zoom_meeting_sdk/*.so
+
+# Environment files
+.env
+.env.local

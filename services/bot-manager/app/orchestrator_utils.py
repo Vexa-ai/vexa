@@ -239,6 +239,21 @@ async def start_bot_container(
         f"LOG_LEVEL={os.getenv('LOG_LEVEL', 'INFO').upper()}",
     ]
 
+    # Add Zoom-specific environment variables if platform is Zoom
+    if platform == "zoom":
+        zoom_client_id = os.getenv("ZOOM_CLIENT_ID")
+        zoom_client_secret = os.getenv("ZOOM_CLIENT_SECRET")
+
+        if not zoom_client_id or not zoom_client_secret:
+            logger.error("CRITICAL: ZOOM_CLIENT_ID and ZOOM_CLIENT_SECRET are required for Zoom bots but not set in environment")
+            raise ValueError("ZOOM_CLIENT_ID and ZOOM_CLIENT_SECRET environment variables are required for Zoom platform")
+
+        environment.extend([
+            f"ZOOM_CLIENT_ID={zoom_client_id}",
+            f"ZOOM_CLIENT_SECRET={zoom_client_secret}",
+        ])
+        logger.info("Added Zoom SDK credentials to bot environment")
+
     # Ensure absolute path for URL encoding here as well
     socket_path_relative = DOCKER_HOST.split('//', 1)[1]
     socket_path_abs = f"/{socket_path_relative}"
