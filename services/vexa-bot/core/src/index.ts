@@ -4,6 +4,7 @@ import { callStatusChangeCallback, mapExitReasonToStatus } from "./services/unif
 import { chromium } from "playwright-extra";
 import { handleGoogleMeet, leaveGoogleMeet } from "./platforms/googlemeet";
 import { handleMicrosoftTeams, leaveMicrosoftTeams } from "./platforms/msteams";
+import { handleZoom, leaveZoom } from "./platforms/zoom";
 import { browserArgs, userAgent } from "./constans";
 import { BotConfig } from "./types";
 import { createClient, RedisClientType } from 'redis';
@@ -226,19 +227,26 @@ async function performGracefulLeave(
   log(`[Graceful Leave] Initiating graceful shutdown sequence... Reason: ${reason}, Exit Code: ${exitCode}`);
 
   let platformLeaveSuccess = false;
-  if (page && !page.isClosed()) { // Only attempt platform leave if page is valid
+
+  // Handle SDK-based platforms (Zoom) separately - they don't use Playwright page
+  if (currentPlatform === "zoom") {
+    try {
+      log("[Graceful Leave] Attempting Zoom SDK cleanup...");
+      platformLeaveSuccess = await leaveZoom(null); // Zoom doesn't use page
+    } catch (error: any) {
+      log(`[Graceful Leave] Zoom cleanup error: ${error.message}`);
+      platformLeaveSuccess = false;
+    }
+  } else if (page && !page.isClosed()) { // Browser-based platforms (Google Meet, Teams)
     try {
       log("[Graceful Leave] Attempting platform-specific leave...");
-      // Assuming currentPlatform is set appropriately, or determine it if needed
-      if (currentPlatform === "google_meet") { // Add platform check if you have other platform handlers
+      if (currentPlatform === "google_meet") {
          platformLeaveSuccess = await leaveGoogleMeet(page);
       } else if (currentPlatform === "teams") {
          platformLeaveSuccess = await leaveMicrosoftTeams(page);
       } else {
          log(`[Graceful Leave] No platform-specific leave defined for ${currentPlatform}. Page will be closed.`);
-         // If no specific leave, we still consider it "handled" to proceed with cleanup.
-         // The exitCode passed to this function will determine the callback's exitCode.
-         platformLeaveSuccess = true; // Or false if page closure itself is the "action"
+         platformLeaveSuccess = true;
       }
       log(`[Graceful Leave] Platform leave/close attempt result: ${platformLeaveSuccess}`);
       
@@ -496,8 +504,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     if (botConfig.platform === "google_meet") {
       await handleGoogleMeet(botConfig, page, performGracefulLeave);
     } else if (botConfig.platform === "zoom") {
-      log("Zoom platform not yet implemented.");
-      await performGracefulLeave(page, 1, "platform_not_implemented");
+      await handleZoom(botConfig, page, performGracefulLeave);
     } else if (botConfig.platform === "teams") {
       await handleMicrosoftTeams(botConfig, page, performGracefulLeave);
     } else {
