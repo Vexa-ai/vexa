@@ -89,6 +89,15 @@ export class ZoomSDKManager {
     });
   }
 
+  async joinAudio(): Promise<void> {
+    if (this.isStubMode) {
+      console.log('[Zoom SDK Stub] Join audio called');
+      return;
+    }
+
+    this.sdk.joinAudio();
+  }
+
   async startRecording(onAudioData: (buffer: Buffer, sampleRate: number) => void): Promise<void> {
     if (this.isStubMode) {
       console.log('[Zoom SDK Stub] Start recording called');

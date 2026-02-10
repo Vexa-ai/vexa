@@ -3,10 +3,12 @@ import { BotConfig } from '../../../types';
 import { WhisperLiveService } from '../../../services/whisperlive';
 import { getSDKManager } from './join';
 import { log } from '../../../utils';
+import { spawn, ChildProcess } from 'child_process';
 
 let whisperLive: WhisperLiveService | null = null;
 let whisperSocket: WebSocket | null = null;
 let recordingStopResolver: (() => void) | null = null;
+let parecordProcess: ChildProcess | null = null;
 
 export async function startZoomRecording(page: Page | null, botConfig: BotConfig): Promise<void> {
   log('[Zoom] Starting audio recording and WhisperLive connection');
@@ -49,23 +51,41 @@ export async function startZoomRecording(page: Page | null, botConfig: BotConfig
 
     log('[Zoom] WhisperLive connected successfully');
 
-    // Start SDK audio capture with callback to send to WhisperLive
-    await sdkManager.startRecording((buffer: Buffer, sampleRate: number) => {
-      if (whisperLive) {
-        // Convert PCM Int16 buffer to Float32Array
-        const float32 = bufferToFloat32(buffer);
-        whisperLive.sendAudioData(float32);
+    // Start SDK audio capture with callback to send to WhisperLive.
+    // If SDK returns NO_PERMISSION (raw data license required), fall back to PulseAudio capture.
+    let sdkRecordingSucceeded = false;
+    try {
+      await sdkManager.startRecording((buffer: Buffer, sampleRate: number) => {
+        if (whisperLive) {
+          const float32 = bufferToFloat32(buffer);
+          whisperLive.sendAudioData(float32);
+        }
+      });
+      log('[Zoom] SDK raw audio recording started, streaming to WhisperLive');
+      sdkRecordingSucceeded = true;
+    } catch (recordingError: any) {
+      const msg = recordingError?.message ?? String(recordingError);
+      const isNoPermission = msg.includes('12') || msg.includes('NO_PERMISSION') || msg.includes('No permission');
+      if (isNoPermission) {
+        log('[Zoom] SDK raw audio not available (license missing). Falling back to PulseAudio capture...');
+        // Fall back to PulseAudio capture from the null sink monitor
+        try {
+          await startPulseAudioCapture(whisperLive);
+          log('[Zoom] PulseAudio capture started successfully');
+        } catch (paError) {
+          log(`[Zoom] PulseAudio capture failed: ${paError}. Staying in meeting without transcription.`);
+        }
+      } else {
+        log(`[Zoom] Error starting SDK recording: ${msg}. Staying in meeting without transcription.`);
       }
-    });
-
-    log('[Zoom] Recording started, streaming to WhisperLive at 16kHz');
+    }
 
     // Block until stopZoomRecording() is called (meeting ends or bot is removed)
     await new Promise<void>((resolve) => {
       recordingStopResolver = resolve;
     });
   } catch (error) {
-    log(`[Zoom] Error starting recording: ${error}`);
+    log(`[Zoom] Error in recording setup: ${error}`);
     throw error;
   }
 }
@@ -78,6 +98,13 @@ export async function stopZoomRecording(): Promise<void> {
     if (recordingStopResolver) {
       recordingStopResolver();
       recordingStopResolver = null;
+    }
+
+    // Stop PulseAudio capture if running
+    if (parecordProcess) {
+      log('[Zoom] Stopping PulseAudio capture...');
+      parecordProcess.kill('SIGTERM');
+      parecordProcess = null;
     }
 
     const sdkManager = getSDKManager();
@@ -107,4 +134,70 @@ function bufferToFloat32(buffer: Buffer): Float32Array {
   }
 
   return float32;
+}
+
+/**
+ * Start PulseAudio capture from the zoom_sink monitor.
+ * Captures raw PCM audio and forwards to WhisperLive.
+ */
+async function startPulseAudioCapture(whisperLive: WhisperLiveService | null): Promise<void> {
+  if (!whisperLive) {
+    throw new Error('WhisperLive service not initialized');
+  }
+
+  return new Promise((resolve, reject) => {
+    // Spawn parecord to capture from zoom_sink monitor
+    // Output: raw PCM Int16LE, 16kHz, mono
+    parecordProcess = spawn('parecord', [
+      '--raw',
+      '--format=s16le',
+      '--rate=16000',
+      '--channels=1',
+      '--device=zoom_sink.monitor'
+    ]);
+
+    if (!parecordProcess || !parecordProcess.stdout) {
+      reject(new Error('Failed to start parecord process'));
+      return;
+    }
+
+    let started = false;
+
+    // Forward captured audio to WhisperLive
+    parecordProcess.stdout.on('data', (chunk: Buffer) => {
+      if (!started) {
+        log('[Zoom] PulseAudio capture receiving audio data');
+        started = true;
+        resolve();
+      }
+      if (whisperLive) {
+        const float32 = bufferToFloat32(chunk);
+        whisperLive.sendAudioData(float32);
+      }
+    });
+
+    parecordProcess.stderr?.on('data', (data: Buffer) => {
+      log(`[Zoom] parecord stderr: ${data.toString()}`);
+    });
+
+    parecordProcess.on('error', (error: Error) => {
+      log(`[Zoom] parecord process error: ${error.message}`);
+      if (!started) {
+        reject(error);
+      }
+    });
+
+    parecordProcess.on('exit', (code: number | null, signal: string | null) => {
+      log(`[Zoom] parecord exited: code=${code}, signal=${signal}`);
+      parecordProcess = null;
+    });
+
+    // Resolve after a short delay even if no data yet (optimistic)
+    setTimeout(() => {
+      if (!started) {
+        log('[Zoom] PulseAudio capture started (waiting for audio data)');
+        resolve();
+      }
+    }, 1000);
+  });
 }

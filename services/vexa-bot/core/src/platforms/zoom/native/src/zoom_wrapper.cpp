@@ -25,6 +25,7 @@
 #include "zoom_sdk_raw_data_def.h"
 #include "rawdata/zoom_rawdata_api.h"
 #include "rawdata/rawdata_audio_helper_interface.h"
+#include "meeting_service_components/meeting_audio_interface.h"
 
 // Global Qt application (runs on Node.js main thread)
 static QCoreApplication* g_qtApp = nullptr;
@@ -162,6 +163,7 @@ private:
     Napi::Value Initialize(const Napi::CallbackInfo& info);
     Napi::Value Authenticate(const Napi::CallbackInfo& info);
     Napi::Value JoinMeeting(const Napi::CallbackInfo& info);
+    Napi::Value JoinAudio(const Napi::CallbackInfo& info);
     Napi::Value LeaveMeeting(const Napi::CallbackInfo& info);
     Napi::Value StartRecording(const Napi::CallbackInfo& info);
     Napi::Value StopRecording(const Napi::CallbackInfo& info);
@@ -173,6 +175,7 @@ private:
     // SDK objects
     IAuthService*               authService_    = nullptr;
     IMeetingService*            meetingService_ = nullptr;
+    IMeetingAudioController*    audioController_ = nullptr;
     IZoomSDKAudioRawDataHelper* audioHelper_    = nullptr;
 
     // Event handlers
@@ -218,6 +221,7 @@ Napi::Object ZoomSDKNode::Init(Napi::Env env, Napi::Object exports) {
         InstanceMethod("initialize",      &ZoomSDKNode::Initialize),
         InstanceMethod("authenticate",    &ZoomSDKNode::Authenticate),
         InstanceMethod("joinMeeting",     &ZoomSDKNode::JoinMeeting),
+        InstanceMethod("joinAudio",       &ZoomSDKNode::JoinAudio),
         InstanceMethod("leaveMeeting",    &ZoomSDKNode::LeaveMeeting),
         InstanceMethod("startRecording",  &ZoomSDKNode::StartRecording),
         InstanceMethod("stopRecording",   &ZoomSDKNode::StopRecording),
@@ -349,6 +353,38 @@ Napi::Value ZoomSDKNode::JoinMeeting(const Napi::CallbackInfo& info) {
         return env.Undefined();
     }
 
+    return env.Undefined();
+}
+
+Napi::Value ZoomSDKNode::JoinAudio(const Napi::CallbackInfo& info) {
+    std::cout << "[ZoomSDK] JoinAudio - joining VoIP" << std::endl;
+    Napi::Env env = info.Env();
+
+    if (!meetingService_) {
+        Napi::Error::New(env, "Meeting service not initialized")
+            .ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    // Get audio controller
+    audioController_ = meetingService_->GetMeetingAudioController();
+    if (!audioController_) {
+        std::cerr << "[ZoomSDK] GetMeetingAudioController failed" << std::endl;
+        Napi::Error::New(env, "Failed to get audio controller")
+            .ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    // Join VoIP audio
+    SDKError err = audioController_->JoinVoip();
+    if (err != SDKERR_SUCCESS) {
+        std::cerr << "[ZoomSDK] JoinVoip failed: " << (int)err << std::endl;
+        Napi::Error::New(env, "JoinVoip failed: " + std::to_string((int)err))
+            .ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    std::cout << "[ZoomSDK] Successfully joined VoIP audio" << std::endl;
     return env.Undefined();
 }
 

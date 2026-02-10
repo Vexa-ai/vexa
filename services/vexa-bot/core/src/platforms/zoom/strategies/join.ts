@@ -31,6 +31,10 @@ export async function joinZoomMeeting(page: Page | null, botConfig: BotConfig): 
     // Join meeting
     await sdkManager.joinMeeting(botConfig.meetingUrl!);
     log('[Zoom] Successfully joined meeting');
+
+    // Join VoIP audio to enable audio reception
+    await sdkManager.joinAudio();
+    log('[Zoom] Successfully joined VoIP audio');
   } catch (error) {
     log(`[Zoom] Error during join: ${error}`);
     throw error;
