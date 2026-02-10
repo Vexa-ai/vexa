@@ -15,13 +15,15 @@ export async function handleMicrosoftTeams(
   gracefulLeaveFunction: (page: Page | null, exitCode: number, reason: string, errorDetails?: any) => Promise<void>
 ): Promise<void> {
   
+  // Microsoft Teams is browser-based, so page is always non-null
+  // Cast to satisfy PlatformStrategies interface which supports SDK-based platforms (Page | null)
   const strategies: PlatformStrategies = {
-    join: joinMicrosoftTeams,
-    waitForAdmission: waitForTeamsMeetingAdmission,
-    checkAdmissionSilent: checkForTeamsAdmissionSilent,
-    prepare: prepareForRecording,
-    startRecording: startTeamsRecording,
-    startRemovalMonitor: startTeamsRemovalMonitor,
+    join: joinMicrosoftTeams as any,
+    waitForAdmission: waitForTeamsMeetingAdmission as any,
+    checkAdmissionSilent: checkForTeamsAdmissionSilent as any,
+    prepare: prepareForRecording as any,
+    startRecording: startTeamsRecording as any,
+    startRemovalMonitor: startTeamsRemovalMonitor as any,
     leave: leaveMicrosoftTeams
   };
 
