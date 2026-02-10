@@ -12,9 +12,15 @@
 
 # Zoom SDK (large binaries - download separately)
 # Source code in platforms/zoom/ should NOT be ignored
-core/src/platforms/zoom/native/zoom_meeting_sdk/libmeetingsdk.so
+core/src/platforms/zoom/native/zoom_meeting_sdk/libmeetingsdk.so*
 core/src/platforms/zoom/native/zoom_meeting_sdk/qt_libs/
-core/src/platforms/zoom/native/zoom_meeting_sdk/*.so
+core/src/platforms/zoom/native/zoom_meeting_sdk/*.so*
+core/src/platforms/zoom/native/zoom_meeting_sdk/cpthost
+core/src/platforms/zoom/native/zoom_meeting_sdk/diagnostic/
+core/src/platforms/zoom/native/zoom_meeting_sdk/imjs/
+# Keep headers and docs
+!core/src/platforms/zoom/native/zoom_meeting_sdk/h/
+!core/src/platforms/zoom/native/zoom_meeting_sdk/*.md
 
 # Environment files
 .env

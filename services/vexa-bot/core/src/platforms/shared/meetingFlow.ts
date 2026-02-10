@@ -46,7 +46,7 @@ export type PlatformStrategies = {
 export async function runMeetingFlow(
   platform: string,
   botConfig: BotConfig,
-  page: Page,
+  page: Page | null,
   gracefulLeaveFunction: (page: Page | null, exitCode: number, reason: string, errorDetails?: any) => Promise<void>,
   strategies: PlatformStrategies
 ): Promise<void> {
