@@ -10,7 +10,7 @@
     "build:all": "npm run build:native && npm run build"
   },
   "dependencies": {
-    "node-addon-api": "^7.0.0"
+    "node-addon-api": "^7.1.1"
   },
   "devDependencies": {
     "@types/node": "^22.15.30",
