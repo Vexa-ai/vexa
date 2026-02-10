@@ -8,10 +8,32 @@ fi
 # Start a virtual framebuffer in the background
 Xvfb :99 -screen 0 1920x1080x24 &
 
+# Set up PulseAudio for Zoom SDK audio capture
+echo "[Entrypoint] Starting PulseAudio daemon..."
+pulseaudio --start --log-target=syslog 2>/dev/null || true
+sleep 1
+
+# Create a null sink for Zoom SDK audio output
+echo "[Entrypoint] Creating PulseAudio null sink for audio capture..."
+pactl load-module module-null-sink sink_name=zoom_sink sink_properties=device.description="ZoomAudioSink" 2>/dev/null || true
+
+# Configure ALSA to route through PulseAudio
+echo "[Entrypoint] Configuring ALSA to use PulseAudio..."
+mkdir -p /root
+cat > /root/.asoundrc <<'ALSA_EOF'
+pcm.!default {
+    type pulse
+}
+ctl.!default {
+    type pulse
+}
+ALSA_EOF
+
 # Ensure browser utils bundle exists (defensive in case of stale layer pulls)
-if [ ! -f "/app/dist/browser-utils.global.js" ]; then
+BROWSER_UTILS="/app/vexa-bot/core/dist/browser-utils.global.js"
+if [ ! -f "$BROWSER_UTILS" ]; then
   echo "[Entrypoint] browser-utils.global.js missing; regenerating..."
-  node /app/build-browser-utils.js || echo "[Entrypoint] Failed to regenerate browser-utils.global.js"
+  (cd /app/vexa-bot/core && node build-browser-utils.js) || echo "[Entrypoint] Failed to regenerate browser-utils.global.js"
 fi
 
 # Finally, run the bot using the built production wrapper
