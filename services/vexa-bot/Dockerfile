@@ -1,7 +1,7 @@
 # ==============================================================================
 # Stage 1: Build native addon (Zoom SDK wrapper)
 # ==============================================================================
-FROM node:20-bullseye AS native-builder
+FROM --platform=linux/amd64 node:20-bullseye AS native-builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \

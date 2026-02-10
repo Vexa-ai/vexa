@@ -132,13 +132,14 @@ class AudioEventHandler : public IMeetingAudioCtrlEvent {
 public:
     Napi::ThreadSafeFunction tsfSpeaker_;
 
-    void onUserActiveAudioChange(lstActiveAudioUser lstAudioUsers) override {
-        if (!tsfSpeaker_) return;
+    void onUserActiveAudioChange(IList<unsigned int>* plstActiveAudio) override {
+        if (!tsfSpeaker_ || !plstActiveAudio) return;
 
         // Convert SDK user list to vector for thread-safe callback
         std::vector<unsigned int> activeUserIds;
-        for (int i = 0; i < lstAudioUsers.count(); i++) {
-            activeUserIds.push_back(lstAudioUsers.at(i));
+        int count = plstActiveAudio->GetCount();
+        for (int i = 0; i < count; i++) {
+            activeUserIds.push_back(plstActiveAudio->GetItem(i));
         }
 
         // Call JavaScript callback via ThreadSafeFunction
@@ -153,10 +154,11 @@ public:
         );
     }
 
-    // Other audio events (no-ops for now)
-    void onUserAudioStatusChange(IList<IUserAudioStatus*>*) override {}
+    // Other audio events (all pure virtual methods must be implemented)
+    void onUserAudioStatusChange(IList<IUserAudioStatus*>*, const zchar_t* = nullptr) override {}
     void onHostRequestStartAudio(IRequestStartAudioHandler*) override {}
-    void onActiveSpeakerVideoUserChanged(unsigned int) override {}
+    void onJoin3rdPartyTelephonyAudio(const zchar_t*) override {}
+    void onMuteOnEntryStatusChange(bool) override {}
 };
 
 // ============================================================
