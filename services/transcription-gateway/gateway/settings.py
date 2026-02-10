@@ -1,20 +1,31 @@
 import os
 
-# WebSocket server
-WS_HOST = os.environ.get("TRANSCRIPTION_GATEWAY_WS_HOST", "0.0.0.0")
-WS_PORT = int(os.environ.get("TRANSCRIPTION_GATEWAY_WS_PORT", "9090"))
+DEFAULT_AWS_REGION = "us-east-1"
+DEFAULT_AWS_ACCESS_KEY_ID = ""
+DEFAULT_AWS_SECRET_ACCESS_KEY = ""
+DEFAULT_DEFAULT_LANGUAGE = "en-US"
+DEFAULT_LOG_LEVEL = "INFO"
+DEFAULT_REDIS_URL = "redis://redis:6379/0"
+DEFAULT_REDIS_STREAM_NAME = "transcription_segments"
+DEFAULT_REDIS_SPEAKER_EVENTS_STREAM_NAME = "speaker_events_relative"
+DEFAULT_WS_HOST = "0.0.0.0"
+DEFAULT_WS_PORT = 9090
 
-# Redis (same stream as transcription-collector consumes)
-REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
-REDIS_STREAM_NAME = os.environ.get("REDIS_STREAM_NAME", "transcription_segments")
+AWS_REGION = os.environ.get("AWS_REGION", DEFAULT_AWS_REGION)
+AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", DEFAULT_AWS_ACCESS_KEY_ID)
+AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", DEFAULT_AWS_SECRET_ACCESS_KEY)
+DEFAULT_LANGUAGE = os.environ.get("DEFAULT_LANGUAGE", DEFAULT_DEFAULT_LANGUAGE)
+LOG_LEVEL = os.environ.get("LOG_LEVEL", DEFAULT_LOG_LEVEL).upper()
+REDIS_URL = os.environ.get("REDIS_URL", DEFAULT_REDIS_URL)
+REDIS_STREAM_NAME = os.environ.get("REDIS_STREAM_NAME", DEFAULT_REDIS_STREAM_NAME)
 REDIS_SPEAKER_EVENTS_STREAM_NAME = os.environ.get(
-    "REDIS_SPEAKER_EVENTS_STREAM_NAME", "speaker_events_relative"
+    "REDIS_SPEAKER_EVENTS_STREAM_NAME", DEFAULT_REDIS_SPEAKER_EVENTS_STREAM_NAME
 )
+WS_HOST = os.environ.get("TRANSCRIPTION_GATEWAY_WS_HOST", DEFAULT_WS_HOST)
+WS_PORT = int(os.environ.get("TRANSCRIPTION_GATEWAY_WS_PORT", DEFAULT_WS_PORT))
 
-# AWS Transcribe
-AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
-AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "")
-AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
-DEFAULT_LANGUAGE = os.environ.get("DEFAULT_LANGUAGE", "en-US")
 
-LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+
+
+
+

@@ -15,7 +15,11 @@ from gateway.settings import WS_HOST, WS_PORT
 from gateway.transcriber import push_speaker_event, push_to_redis, run_aws_transcribe_session
 
 logger = logging.getLogger(__name__)
-
+PING_INTERVAL_SEC = 20
+PING_TIMEOUT_SEC = 20
+CLOSE_TIMEOUT_SEC = 5
+MAX_MESSAGE_SIZE_BYTES = 2 ** 20 
+INVALID_JSON_PREVIEW_LENGTH = 200
 
 async def handle_client(ws: WebSocketServerProtocol) -> None:
     """Handle one bot WebSocket connection: config then audio; run AWS Transcribe and push to Redis."""
@@ -35,7 +39,7 @@ async def handle_client(ws: WebSocketServerProtocol) -> None:
                 try:
                     data = json.loads(raw)
                 except json.JSONDecodeError:
-                    logger.debug("Invalid JSON from client: %s", raw[:200])
+                    logger.debug("Invalid JSON from client: %s", raw[:INVALID_JSON_PREVIEW_LENGTH])
                     continue
 
                 if "uid" in data and "token" in data:
@@ -113,10 +117,10 @@ async def main() -> None:
         handle_client,
         WS_HOST,
         WS_PORT,
-        ping_interval=20,
-        ping_timeout=20,
-        close_timeout=5,
-        max_size=2**20,
+        ping_interval=PING_INTERVAL_SEC,
+        ping_timeout=PING_TIMEOUT_SEC,
+        close_timeout=CLOSE_TIMEOUT_SEC,
+        max_size=MAX_MESSAGE_SIZE_BYTES,
     ):
         logger.debug("Transcription gateway (AWS Transcribe) listening on ws://%s:%s", WS_HOST, WS_PORT)
         await asyncio.Future()

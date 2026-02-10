@@ -22,17 +22,30 @@ from gateway.utils import float32_to_pcm16, language_from_config
 logger = logging.getLogger(__name__)
 
 
+STREAM_PAYLOAD_FIELD = "payload"
+TRANSCRIPTION_STREAM_MAXLEN = 10000
+SPEAKER_EVENTS_STREAM_MAXLEN = 5000
+SAMPLE_RATE_HZ = 16000
+MEDIA_ENCODING = "pcm"
+DEFAULT_SEGMENT_OFFSET_SEC = 0.0
+DEFAULT_END_OFFSET_SEC = 1
+TIME_ROUND_DECIMALS = 3
+NANOSECONDS_TO_SECONDS = 1e-9
+TYPE_TRANSCRIPTION = "transcription"
+STATUS_SERVER_READY = "SERVER_READY"
+STATUS_ERROR = "ERROR"
+
 async def push_to_redis(redis: aioredis.Redis, payload: Dict[str, Any]) -> None:
     """Push a message to the transcription_segments stream (collector-compatible format)."""
     payload_json = json.dumps(payload)
-    await redis.xadd(REDIS_STREAM_NAME, {"payload": payload_json}, maxlen=10000)
+    await redis.xadd(REDIS_STREAM_NAME, {STREAM_PAYLOAD_FIELD: payload_json}, maxlen=TRANSCRIPTION_STREAM_MAXLEN)
     logger.debug("Pushed to Redis stream %s", REDIS_STREAM_NAME)
 
 
 async def push_speaker_event(redis: aioredis.Redis, event: Dict[str, Any]) -> None:
     """Push speaker event to speaker_events stream."""
     payload_json = json.dumps(event)
-    await redis.xadd(REDIS_SPEAKER_EVENTS_STREAM_NAME, {"payload": payload_json}, maxlen=5000)
+    await redis.xadd(REDIS_SPEAKER_EVENTS_STREAM_NAME, {STREAM_PAYLOAD_FIELD: payload_json}, maxlen=SPEAKER_EVENTS_STREAM_MAXLEN)
     logger.debug("Pushed speaker event to Redis")
 
 
@@ -65,7 +78,7 @@ async def run_aws_transcribe_session(
     class RedisHandler(TranscriptResultStreamHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            self._segment_offset_sec = 0.0
+            self._segment_offset_sec = DEFAULT_SEGMENT_OFFSET_SEC
 
         async def handle_transcript_event(self, transcript_event: TranscriptEvent):
             results = transcript_event.transcript.results
@@ -81,12 +94,12 @@ async def run_aws_transcribe_session(
                 start = result.start_time if hasattr(result, "start_time") and result.start_time else 0
                 end = result.end_time if hasattr(result, "end_time") and result.end_time else start + 1
                 if hasattr(start, "seconds"):
-                    start = start.seconds + start.nanos * 1e-9
+                    start = start.seconds + start.nanos * NANOSECONDS_TO_SECONDS    
                 if hasattr(end, "seconds"):
-                    end = end.seconds + end.nanos * 1e-9
+                    end = end.seconds + end.nanos * NANOSECONDS_TO_SECONDS
                 segments.append({
-                    "start": round(start, 3),
-                    "end": round(end, 3),
+                    "start": round(start, TIME_ROUND_DECIMALS),
+                    "end": round(end, TIME_ROUND_DECIMALS),
                     "text": alt.transcript.strip(),
                     "language": language_code.split("-")[0] if language_code else None,
                     "completed": not getattr(result, "is_partial", True),
@@ -94,7 +107,7 @@ async def run_aws_transcribe_session(
             if not segments:
                 return
             payload = {
-                "type": "transcription",
+                "type": TYPE_TRANSCRIPTION,
                 "uid": uid,
                 "token": token,
                 "platform": platform,
@@ -108,8 +121,8 @@ async def run_aws_transcribe_session(
         client = TranscribeStreamingClient(region=AWS_REGION)
         stream = await client.start_stream_transcription(
             language_code=language_code,
-            media_sample_rate_hz=16000,
-            media_encoding="pcm",
+            media_sample_rate_hz=SAMPLE_RATE_HZ,
+            media_encoding=MEDIA_ENCODING,
         )
 
         async def write_audio():
@@ -134,7 +147,7 @@ async def run_aws_transcribe_session(
             except Exception as e:
                 logger.debug("read_transcript error: %s", e)
 
-        await ws.send(json.dumps({"status": "SERVER_READY"}))
+        await ws.send(json.dumps({"status": STATUS_SERVER_READY}))
         writer = asyncio.create_task(write_audio())
         reader = asyncio.create_task(read_transcript())
         try:
@@ -150,6 +163,6 @@ async def run_aws_transcribe_session(
     except Exception as e:
         logger.debug("AWS Transcribe session error: %s", e)
         try:
-            await ws.send(json.dumps({"status": "ERROR", "message": str(e)}))
+            await ws.send(json.dumps({"status": STATUS_ERROR, "message": str(e)}))
         except Exception:
             pass
