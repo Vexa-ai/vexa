@@ -6,6 +6,7 @@ import {
   teamsJoinButtonSelectors,
   teamsCameraButtonSelectors,
   teamsNameInputSelectors,
+  teamsPasscodeInputSelectors,
   teamsComputerAudioRadioSelectors,
   teamsDontUseAudioRadioSelectors,
   teamsSpeakerEnableSelectors,
@@ -99,10 +100,10 @@ export async function joinMicrosoftTeams(page: Page, botConfig: BotConfig): Prom
     }
   });
 
-  // Step 1: Navigate to Teams meeting
+  // Step 1: Navigate to Teams meeting (allow extra time for teams.live.com)
   log(`Step 1: Navigating to Teams meeting: ${botConfig.meetingUrl}`);
-  await page.goto(botConfig.meetingUrl!, { waitUntil: 'networkidle', timeout: 30000 });
-  await page.waitForTimeout(500);
+  await page.goto(botConfig.meetingUrl!, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.waitForTimeout(2000);
   
   try {
     await callJoiningCallback(botConfig);
@@ -111,10 +112,28 @@ export async function joinMicrosoftTeams(page: Page, botConfig: BotConfig): Prom
     log(`Warning: Failed to send joining callback: ${callbackError.message}. Continuing with join process...`);
   }
 
+  // Step 1.5: Fill passcode if required and we have it
+  if (botConfig.passcode && botConfig.passcode.trim()) {
+    log("Step 1.5: Looking for passcode input...");
+    try {
+      for (const sel of teamsPasscodeInputSelectors) {
+        const input = page.locator(sel).first();
+        if (await input.isVisible().catch(() => false)) {
+          await input.fill(botConfig.passcode.trim(), { timeout: 5000 });
+          log("✅ Passcode entered");
+          await page.waitForTimeout(500);
+          break;
+        }
+      }
+    } catch (e: any) {
+      log(`ℹ️ Passcode input not found or not needed: ${e?.message ?? e}`);
+    }
+  }
+
   log("Step 2: Looking for continue button...");
   try {
     const continueButton = page.locator(teamsContinueButtonSelectors[0]).first();
-    await continueButton.waitFor({ timeout: 10000 });
+    await continueButton.waitFor({ timeout: 15000 });
     await continueButton.click();
     log("✅ Clicked continue button");
     await page.waitForTimeout(500);
@@ -125,7 +144,7 @@ export async function joinMicrosoftTeams(page: Page, botConfig: BotConfig): Prom
   log("Step 3: Looking for join button...");
   try {
     const joinButton = page.locator(teamsJoinButtonSelectors[0]).first();
-    await joinButton.waitFor({ timeout: 10000 });
+    await joinButton.waitFor({ timeout: 15000 });
     await joinButton.click();
     log("✅ Clicked join button");
     await page.waitForTimeout(500);
@@ -214,7 +233,7 @@ export async function joinMicrosoftTeams(page: Page, botConfig: BotConfig): Prom
   log("Step 6: Looking for final join button...");
   try {
     const finalJoinButton = page.locator(teamsJoinButtonSelectors.join(', ')).first();
-    await finalJoinButton.waitFor({ timeout: 10000 });
+    await finalJoinButton.waitFor({ timeout: 20000 });
     await finalJoinButton.click();
     log("✅ Clicked final join button");
     await page.waitForTimeout(1000);

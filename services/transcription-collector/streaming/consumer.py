@@ -25,7 +25,7 @@ async def claim_stale_messages(redis_c: aioredis.Redis):
     acked_claim_count = 0
     error_claim_count = 0
 
-    logger.info(f"Starting stale message check (consumer: {CONSUMER_NAME}, idle > {PENDING_MSG_TIMEOUT_MS}ms).")
+    logger.debug(f"Starting stale message check (consumer: {CONSUMER_NAME}, idle > {PENDING_MSG_TIMEOUT_MS}ms).")
 
     try:
         while True:
@@ -55,7 +55,7 @@ async def claim_stale_messages(redis_c: aioredis.Redis):
                     break
             
             stale_message_ids = [msg['message_id'] for msg in stale_candidates]
-            logger.info(f"Found {len(stale_message_ids)} potentially stale message(s) to claim: {stale_message_ids}")
+            logger.debug(f"Found {len(stale_message_ids)} potentially stale message(s) to claim: {stale_message_ids}")
 
             if stale_message_ids:
                 claimed_messages = await redis_c.xclaim(
@@ -69,7 +69,7 @@ async def claim_stale_messages(redis_c: aioredis.Redis):
                 messages_claimed_now = len(claimed_messages)
                 messages_claimed_total += messages_claimed_now
                 if messages_claimed_now > 0:
-                    logger.info(f"Successfully claimed {messages_claimed_now} stale message(s): {[msg[0].decode('utf-8') for msg in claimed_messages]}")
+                    logger.debug(f"Successfully claimed {messages_claimed_now} stale message(s): {[msg[0].decode('utf-8') for msg in claimed_messages]}")
 
                 for message_id_bytes, message_data_bytes in claimed_messages:
                     message_id_str = message_id_bytes.decode('utf-8') if isinstance(message_id_bytes, bytes) else message_id_bytes
@@ -81,35 +81,35 @@ async def claim_stale_messages(redis_c: aioredis.Redis):
                         # Need to decode
                         message_data_decoded = {k.decode('utf-8'): v.decode('utf-8') for k, v in message_data_bytes.items()}
                     
-                    logger.info(f"Processing claimed stale message {message_id_str}...")
+                    logger.debug(f"Processing claimed stale message {message_id_str}...")
                     processed_claim_count += 1
                     try:
                         success = await process_stream_message(message_id_str, message_data_decoded, redis_c)
                         if success:
-                            logger.info(f"Successfully processed claimed stale message {message_id_str}. Acknowledging.")
+                            logger.debug(f"Successfully processed claimed stale message {message_id_str}. Acknowledging.")
                             await redis_c.xack(REDIS_STREAM_NAME, REDIS_CONSUMER_GROUP, message_id_str)
                             acked_claim_count += 1
                         else:
-                            logger.warning(f"Processing failed for claimed stale message {message_id_str}. Not acknowledging.")
+                            logger.debug(f"Processing failed for claimed stale message {message_id_str}. Not acknowledging.")
                             error_claim_count += 1
                     except Exception as e:
-                        logger.error(f"Error processing claimed stale message {message_id_str}: {e}", exc_info=True)
+                        logger.debug(f"Error processing claimed stale message {message_id_str}: {e}", exc_info=True)
                         error_claim_count += 1
             
             if not stale_candidates or len(pending_details) < 100: # Break if no stale candidates or if we didn't get a full batch of pending messages
                 break
 
     except redis.exceptions.RedisError as e:
-        logger.error(f"Redis error during stale message claiming: {e}", exc_info=True)
+        logger.debug(f"Redis error during stale message claiming: {e}", exc_info=True)
     except Exception as e:
-        logger.error(f"Unexpected error during stale message claiming: {e}", exc_info=True)
+        logger.debug(f"Unexpected error during stale message claiming: {e}", exc_info=True)
 
-    logger.info(f"Stale message check finished. Total claimed: {messages_claimed_total}, Processed: {processed_claim_count}, Acked: {acked_claim_count}, Errors: {error_claim_count}")
+    logger.debug(f"Stale message check finished. Total claimed: {messages_claimed_total}, Processed: {processed_claim_count}, Acked: {acked_claim_count}, Errors: {error_claim_count}")
 
 async def consume_redis_stream(redis_c: aioredis.Redis):
     """Background task to consume transcription segments from Redis Stream."""
     last_processed_id = '>' 
-    logger.info(f"Starting main consumer loop for '{CONSUMER_NAME}', reading new messages ('>')...")
+    logger.debug(f"Starting main consumer loop for '{CONSUMER_NAME}', reading new messages ('>')...")
 
     while True:
         try:
@@ -144,7 +144,7 @@ async def consume_redis_stream(redis_c: aioredis.Redis):
                     try:
                         should_ack = await process_stream_message(message_id_str, message_data_decoded, redis_c)
                     except Exception as e:
-                        logger.error(f"Critical error during process_stream_message call for {message_id_str}: {e}", exc_info=True)
+                        logger.debug(f"Critical error during process_stream_message call for {message_id_str}: {e}", exc_info=True)
                         should_ack = False
                     if should_ack:
                         message_ids_to_ack.append(message_id_str)
@@ -154,16 +154,16 @@ async def consume_redis_stream(redis_c: aioredis.Redis):
                         await redis_c.xack(REDIS_STREAM_NAME, REDIS_CONSUMER_GROUP, *message_ids_to_ack)
                         logger.debug(f"Acknowledged {len(message_ids_to_ack)}/{processed_count} messages: {message_ids_to_ack}")
                     except Exception as e:
-                        logger.error(f"Failed to acknowledge messages {message_ids_to_ack}: {e}", exc_info=True)
+                        logger.debug(f"Failed to acknowledge messages {message_ids_to_ack}: {e}", exc_info=True)
         
         except asyncio.CancelledError:
-            logger.info("Redis Stream consumer task cancelled.")
+            logger.debug("Redis Stream consumer task cancelled.")
             break
         except redis.exceptions.ConnectionError as e:
-            logger.error(f"Redis connection error in stream consumer: {e}. Retrying after delay...", exc_info=True)
+            logger.debug(f"Redis connection error in stream consumer: {e}. Retrying after delay...", exc_info=True)
             await asyncio.sleep(5)
         except Exception as e:
-            logger.error(f"Unhandled error in Redis Stream consumer loop: {e}", exc_info=True)
+            logger.debug(f"Unhandled error in Redis Stream consumer loop: {e}", exc_info=True)
             await asyncio.sleep(5) 
 
 async def consume_speaker_events_stream(redis_c: aioredis.Redis):
@@ -172,7 +172,7 @@ async def consume_speaker_events_stream(redis_c: aioredis.Redis):
     # Stale message claiming for this stream is not implemented here, but could be added similarly to claim_stale_messages.
     consumer_name_speaker = f"{CONSUMER_NAME}-speaker"
     last_processed_id = '>' 
-    logger.info(f"Starting speaker event consumer loop for '{consumer_name_speaker}', reading new messages ('>')...")
+    logger.debug(f"Starting speaker event consumer loop for '{consumer_name_speaker}', reading new messages ('>')...")
 
     while True:
         try:
@@ -202,7 +202,7 @@ async def consume_speaker_events_stream(redis_c: aioredis.Redis):
                                                 v.decode('utf-8') if isinstance(v, bytes) else v 
                                                 for k, v in message_data_bytes.items()}
                     else:
-                        logger.error(f"[SpeakerConsumer] Unexpected message_data_bytes format for {message_id_str}: {type(message_data_bytes)}")
+                        logger.debug(f"[SpeakerConsumer] Unexpected message_data_bytes format for {message_id_str}: {type(message_data_bytes)}")
                         continue # Skip this message
 
                     should_ack = False
@@ -211,7 +211,7 @@ async def consume_speaker_events_stream(redis_c: aioredis.Redis):
                         # Pass the already decoded dictionary directly
                         should_ack = await process_speaker_event_message(message_id_str, message_data_decoded, redis_c)
                     except Exception as e:
-                        logger.error(f"[SpeakerConsumer] Critical error during process_speaker_event_message call for {message_id_str}: {e}", exc_info=True)
+                        logger.debug(f"[SpeakerConsumer] Critical error during process_speaker_event_message call for {message_id_str}: {e}", exc_info=True)
                         should_ack = False # Ensure it's false on error
                     
                     if should_ack:
@@ -222,14 +222,14 @@ async def consume_speaker_events_stream(redis_c: aioredis.Redis):
                         await redis_c.xack(REDIS_SPEAKER_EVENTS_STREAM_NAME, REDIS_SPEAKER_EVENTS_CONSUMER_GROUP, *message_ids_to_ack)
                         logger.debug(f"[SpeakerConsumer] Acknowledged {len(message_ids_to_ack)}/{processed_count} speaker event messages: {message_ids_to_ack}")
                     except Exception as e:
-                        logger.error(f"[SpeakerConsumer] Failed to acknowledge speaker event messages {message_ids_to_ack}: {e}", exc_info=True)
+                        logger.debug(f"[SpeakerConsumer] Failed to acknowledge speaker event messages {message_ids_to_ack}: {e}", exc_info=True)
         
         except asyncio.CancelledError:
-            logger.info("[SpeakerConsumer] Speaker Events Redis Stream consumer task cancelled.")
+            logger.debug("[SpeakerConsumer] Speaker Events Redis Stream consumer task cancelled.")
             break
         except redis.exceptions.ConnectionError as e:
-            logger.error(f"[SpeakerConsumer] Redis connection error in speaker event stream consumer: {e}. Retrying after delay...", exc_info=True)
+            logger.debug(f"[SpeakerConsumer] Redis connection error in speaker event stream consumer: {e}. Retrying after delay...", exc_info=True)
             await asyncio.sleep(5)
         except Exception as e:
-            logger.error(f"[SpeakerConsumer] Unhandled error in Speaker Events Redis Stream consumer loop: {e}", exc_info=True)
+            logger.debug(f"[SpeakerConsumer] Unhandled error in Speaker Events Redis Stream consumer loop: {e}", exc_info=True)
             await asyncio.sleep(5) 

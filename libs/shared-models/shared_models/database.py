@@ -103,16 +103,16 @@ async def get_db() -> AsyncSession:
 # --- Initialization Function --- 
 async def init_db():
     """Creates database tables based on shared models' metadata."""
-    logger.info(f"Initializing database tables at {DB_HOST}:{DB_PORT}/{DB_NAME}")
+    logger.debug(f"Initializing database tables at {DB_HOST}:{DB_PORT}/{DB_NAME}")
     try:
         async with engine.begin() as conn:
             # This relies on all SQLAlchemy models being imported 
             # somewhere before this runs, so Base.metadata is populated.
             # Add checkfirst=True to prevent errors if tables already exist
             await conn.run_sync(Base.metadata.create_all, checkfirst=True)
-        logger.info("Database tables checked/created successfully.")
+        logger.debug("Database tables checked/created successfully.")
     except Exception as e:
-        logger.error(f"Error initializing database tables: {e}", exc_info=True)
+        logger.debug(f"Error initializing database tables: {e}", exc_info=True)
         raise 
 
 # --- DANGEROUS: Recreate Function ---
@@ -121,24 +121,24 @@ async def recreate_db():
     DANGEROUS: Drops all tables and recreates them based on shared models' metadata.
     THIS WILL RESULT IN COMPLETE DATA LOSS. USE WITH EXTREME CAUTION.
     """
-    logger.warning(f"!!! DANGEROUS OPERATION: Dropping and recreating all tables in {DB_NAME} at {DB_HOST}:{DB_PORT} !!!")
+    logger.debug(f"!!! DANGEROUS OPERATION: Dropping and recreating all tables in {DB_NAME} at {DB_HOST}:{DB_PORT} !!!")
     try:
         async with engine.begin() as conn:
             # Instead of drop_all, use raw SQL to drop the schema with cascade
-            logger.warning("Dropping public schema with CASCADE...")
+            logger.debug("Dropping public schema with CASCADE...")
             await conn.execute(text("DROP SCHEMA public CASCADE;"))
-            logger.warning("Public schema dropped.")
-            logger.info("Recreating public schema...")
+            logger.debug("Public schema dropped.")
+            logger.debug("Recreating public schema...")
             await conn.execute(text("CREATE SCHEMA public;"))
             # Optional: Grant permissions if needed (often handled by default roles)
             # await conn.execute(text("GRANT ALL ON SCHEMA public TO public;")) 
             # await conn.execute(text("GRANT ALL ON SCHEMA public TO postgres;")) 
-            logger.info("Public schema recreated.")
+            logger.debug("Public schema recreated.")
             
-            logger.info("Recreating all tables based on models...")
+            logger.debug("Recreating all tables based on models...")
             await conn.run_sync(Base.metadata.create_all)
-            logger.info("All tables recreated successfully.")
-        logger.warning(f"!!! DANGEROUS OPERATION COMPLETE for {DB_NAME} at {DB_HOST}:{DB_PORT} !!!")
+            logger.debug("All tables recreated successfully.")
+        logger.debug(f"!!! DANGEROUS OPERATION COMPLETE for {DB_NAME} at {DB_HOST}:{DB_PORT} !!!")
     except Exception as e:
-        logger.error(f"Error recreating database tables: {e}", exc_info=True)
+        logger.debug(f"Error recreating database tables: {e}", exc_info=True)
         raise 

@@ -31,6 +31,7 @@ ${browserUtilsContent}
   var utils = module.exports || {};
   window.VexaBrowserUtils = {
     BrowserAudioService: utils.BrowserAudioService,
+    BrowserTranscriberService: utils.BrowserTranscriberService,
     BrowserWhisperLiveService: utils.BrowserWhisperLiveService,
     generateBrowserUUID: utils.generateBrowserUUID
   };
@@ -59,7 +60,8 @@ fs.writeFileSync(outputPath, browserBundleContent);
 console.log(`✅ Browser utilities bundle created: ${outputPath}`);
 console.log('📦 Bundle includes:');
 console.log('  - BrowserAudioService');
-console.log('  - BrowserWhisperLiveService');
+console.log('  - BrowserTranscriberService');
+console.log('  - BrowserWhisperLiveService (deprecated alias)');
 console.log('  - generateBrowserUUID');
 console.log('  - window.VexaBrowserUtils');
 console.log('  - window.performLeaveAction');

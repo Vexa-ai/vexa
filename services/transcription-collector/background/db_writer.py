@@ -46,7 +46,7 @@ async def process_redis_to_postgres(redis_c: aioredis.Redis, local_transcription
     3. Store passing segments in PostgreSQL 
     4. Remove processed segments from Redis Hashes
     """
-    logger.info("Background Redis-to-PostgreSQL processor started")
+    logger.debug("Background Redis-to-PostgreSQL processor started")
     
     while True:
         try:
@@ -87,7 +87,7 @@ async def process_redis_to_postgres(redis_c: aioredis.Redis, local_transcription
                                 segment_data = json.loads(segment_json)
                                 segment_session_uid = segment_data.get("session_uid")
                                 if 'updated_at' not in segment_data:
-                                     logger.warning(f"Segment {start_time_str} in meeting {meeting_id} hash is missing 'updated_at'. Skipping immutability check.")
+                                     logger.debug(f"Segment {start_time_str} in meeting {meeting_id} hash is missing 'updated_at'. Skipping immutability check.")
                                      continue 
                                 
                                 # Handle 'Z' suffix in timestamps
@@ -131,11 +131,11 @@ async def process_redis_to_postgres(redis_c: aioredis.Redis, local_transcription
                                             segment_data["speaker_mapping_status"] = mapping_status
                                             await redis_c.hset(hash_key, start_time_str, json.dumps(segment_data))
 
-                                            logger.info(
+                                            logger.debug(
                                                 f"[FinalMap] Meeting {meeting_id} segment {start_time_str} remapped to '{mapped_speaker_name}' with status {mapping_status}"
                                             )
                                         except Exception as map_err:
-                                            logger.error(
+                                            logger.debug(
                                                 f"[FinalMap] Error remapping speaker for meeting {meeting_id} segment {start_time_str}: {map_err}",
                                                 exc_info=True,
                                             )
@@ -152,7 +152,7 @@ async def process_redis_to_postgres(redis_c: aioredis.Redis, local_transcription
                                     # Fix inverted timestamps before filtering
                                     if segment_end_time_float < segment_start_time_float:
                                         segment_start_time_float, segment_end_time_float = segment_end_time_float, segment_start_time_float
-                                        logger.warning(f"[FinalMap] Corrected inverted segment times for meet {meeting_id}, start={segment_start_time_float}, end={segment_end_time_float}")
+                                        logger.debug(f"[FinalMap] Corrected inverted segment times for meet {meeting_id}, start={segment_start_time_float}, end={segment_end_time_float}")
                                     
                                     if local_transcription_filter.filter_segment(
                                         segment_data['text'], 
@@ -173,16 +173,16 @@ async def process_redis_to_postgres(redis_c: aioredis.Redis, local_transcription
                                         batch_to_store.append(new_transcription)
                                     segments_to_delete_from_redis.setdefault(meeting_id, set()).add(start_time_str)
                             except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
-                                logger.error(f"Error processing segment {start_time_str} from hash for meeting {meeting_id}: {e}")
+                                logger.debug(f"Error processing segment {start_time_str} from hash for meeting {meeting_id}: {e}")
                                 segments_to_delete_from_redis.setdefault(meeting_id, set()).add(start_time_str)
                     except Exception as e:
-                        logger.error(f"Error processing meeting {meeting_id_str} in Redis-to-PG task: {e}", exc_info=True)
+                        logger.debug(f"Error processing meeting {meeting_id_str} in Redis-to-PG task: {e}", exc_info=True)
                 
                 if batch_to_store:
                     try:
                         db.add_all(batch_to_store)
                         await db.commit()
-                        logger.info(f"Stored {len(batch_to_store)} segments to PostgreSQL from {len(segments_to_delete_from_redis)} meetings")
+                        logger.debug(f"Stored {len(batch_to_store)} segments to PostgreSQL from {len(segments_to_delete_from_redis)} meetings")
                         # Publish finalized segments per meeting via Redis Pub/Sub
                         try:
                             # Group by meeting for channel fan-out
@@ -207,9 +207,9 @@ async def process_redis_to_postgres(redis_c: aioredis.Redis, local_transcription
                                         # Keep DB persistence only.
                                         pass
                                     except Exception as _pub_err:
-                                        logger.error(f"Failed to publish finalized segments for meeting {m_id}: {_pub_err}")
+                                        logger.debug(f"Failed to publish finalized segments for meeting {m_id}: {_pub_err}")
                         except Exception as pub_err:
-                            logger.error(f"Failed to publish finalized segments: {pub_err}")
+                            logger.debug(f"Failed to publish finalized segments: {pub_err}")
                         
                         for meeting_id, start_times in segments_to_delete_from_redis.items():
                             if start_times:
@@ -217,17 +217,17 @@ async def process_redis_to_postgres(redis_c: aioredis.Redis, local_transcription
                                 await redis_c.hdel(hash_key, *start_times)
                                 logger.debug(f"Deleted {len(start_times)} processed segments for meeting {meeting_id} from Redis Hash")
                     except Exception as e:
-                        logger.error(f"Error committing batch to PostgreSQL: {e}", exc_info=True)
+                        logger.debug(f"Error committing batch to PostgreSQL: {e}", exc_info=True)
                         await db.rollback()
                 else:
                     logger.debug("No segments ready for PostgreSQL storage this interval.")
         
         except asyncio.CancelledError:
-            logger.info("Redis-to-PostgreSQL processor task cancelled")
+            logger.debug("Redis-to-PostgreSQL processor task cancelled")
             break
         except redis.exceptions.ConnectionError as e:
-             logger.error(f"Redis connection error in Redis-to-PG task: {e}. Retrying after delay...", exc_info=True)
+             logger.debug(f"Redis connection error in Redis-to-PG task: {e}. Retrying after delay...", exc_info=True)
              await asyncio.sleep(5) 
         except Exception as e:
-            logger.error(f"Unhandled error in Redis-to-PostgreSQL processor: {e}", exc_info=True)
+            logger.debug(f"Unhandled error in Redis-to-PostgreSQL processor: {e}", exc_info=True)
             await asyncio.sleep(BACKGROUND_TASK_INTERVAL) 

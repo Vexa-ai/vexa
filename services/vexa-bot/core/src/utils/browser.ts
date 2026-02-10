@@ -296,11 +296,12 @@ export class BrowserAudioService {
 }
 
 /**
- * Browser-compatible WhisperLiveService for browser context
- * Supports both simple and stubborn reconnection modes
+ * Browser-compatible TranscriberService for browser context.
+ * Connects to transcription-gateway or any compatible WebSocket backend.
+ * Supports both simple and stubborn reconnection modes.
  */
-export class BrowserWhisperLiveService {
-  private whisperLiveUrl: string;
+export class BrowserTranscriberService {
+  private transcriberWsUrl: string;
   private socket: WebSocket | null = null;
   private isServerReady: boolean = false;
   private botConfigData: any;
@@ -310,17 +311,17 @@ export class BrowserWhisperLiveService {
   private onCloseCallback: ((event: CloseEvent) => void) | null = null;
   private reconnectInterval: any = null;
   private retryCount: number = 0;
-  private maxRetries: number = Number.MAX_SAFE_INTEGER; // TRULY NEVER GIVE UP!
+  private maxRetries: number = Number.MAX_SAFE_INTEGER;
   private retryDelayMs: number = 2000;
   private stubbornMode: boolean = false;
-  private isManualReconnect: boolean = false; // Flag to prevent auto-reconnect during manual reconfigure
+  private isManualReconnect: boolean = false;
 
   constructor(config: any, stubbornMode: boolean = false) {
-    this.whisperLiveUrl = config.whisperLiveUrl;
+    this.transcriberWsUrl = config.transcriberWsUrl || config.whisperLiveUrl || "";
     this.stubbornMode = stubbornMode;
   }
 
-  async connectToWhisperLive(
+  async connectToTranscriber(
     botConfigData: any,
     onMessage: (data: any) => void,
     onError: (error: Event) => void,
@@ -341,11 +342,11 @@ export class BrowserWhisperLiveService {
 
   private async simpleConnection(): Promise<WebSocket | null> {
     try {
-      this.socket = new WebSocket(this.whisperLiveUrl);
+      this.socket = new WebSocket(this.transcriberWsUrl);
       
       this.socket.onopen = () => {
         this.currentUid = generateBrowserUUID();
-        (window as any).logBot(`[Failover] WebSocket connection opened successfully to ${this.whisperLiveUrl}. New UID: ${this.currentUid}. Lang: ${this.botConfigData.language}, Task: ${this.botConfigData.task}`);
+        (window as any).logBot(`[Failover] WebSocket connection opened successfully to ${this.transcriberWsUrl}. New UID: ${this.currentUid}. Lang: ${this.botConfigData.language}, Task: ${this.botConfigData.task}`);
         
         const configPayload = {
           uid: this.currentUid,
@@ -375,19 +376,19 @@ export class BrowserWhisperLiveService {
 
       return this.socket;
     } catch (error: any) {
-      (window as any).logBot(`[WhisperLive] Connection error: ${error.message}`);
+      (window as any).logBot(`[Transcriber] Connection error: ${error.message}`);
       return null;
     }
   }
 
   private async attemptConnection(): Promise<WebSocket | null> {
     try {
-      (window as any).logBot(`[STUBBORN] 🚀 Connecting to WhisperLive with NEVER-GIVE-UP reconnection: ${this.whisperLiveUrl} (attempt ${this.retryCount + 1})`);
+      (window as any).logBot(`[Transcriber] Connecting with reconnection: ${this.transcriberWsUrl} (attempt ${this.retryCount + 1})`);
       
-      this.socket = new WebSocket(this.whisperLiveUrl);
+      this.socket = new WebSocket(this.transcriberWsUrl);
       
       this.socket.onopen = (event) => {
-        (window as any).logBot(`[STUBBORN] ✅ WebSocket CONNECTED to ${this.whisperLiveUrl}! Retry count reset from ${this.retryCount}.`);
+        (window as any).logBot(`[Transcriber] WebSocket CONNECTED to ${this.transcriberWsUrl}. Retry count reset from ${this.retryCount}.`);
         this.retryCount = 0; // Reset on successful connection
         this.clearReconnectInterval(); // Stop any ongoing reconnection attempts
         this.isServerReady = false; // Will be set to true when SERVER_READY received
@@ -420,7 +421,7 @@ export class BrowserWhisperLiveService {
       };
 
       this.socket.onerror = (event) => {
-        (window as any).logBot(`[STUBBORN] ❌ WebSocket ERROR. Manual reconnect: ${this.isManualReconnect}`);
+        (window as any).logBot(`[Transcriber] WebSocket ERROR. Manual reconnect: ${this.isManualReconnect}`);
         if (this.onErrorCallback) {
           this.onErrorCallback(event);
         }
@@ -428,12 +429,12 @@ export class BrowserWhisperLiveService {
         if (!this.isManualReconnect) {
           this.startStubbornReconnection();
         } else {
-          (window as any).logBot(`[STUBBORN] Skipping auto-reconnect on error (manual reconfigure in progress)`);
+          (window as any).logBot(`[Transcriber] Skipping auto-reconnect on error (manual reconfigure in progress)`);
         }
       };
 
       this.socket.onclose = (event) => {
-        (window as any).logBot(`[STUBBORN] ❌ WebSocket CLOSED. Code: ${event.code}, Reason: "${event.reason}". Manual reconnect: ${this.isManualReconnect}`);
+        (window as any).logBot(`[Transcriber] WebSocket CLOSED. Code: ${event.code}, Reason: "${event.reason}". Manual reconnect: ${this.isManualReconnect}`);
         this.isServerReady = false;
         this.socket = null;
         if (this.onCloseCallback) {
@@ -443,14 +444,14 @@ export class BrowserWhisperLiveService {
         if (!this.isManualReconnect) {
           this.startStubbornReconnection();
         } else {
-          (window as any).logBot(`[STUBBORN] Skipping auto-reconnect (manual reconfigure in progress)`);
-          this.isManualReconnect = false; // Reset flag
+          (window as any).logBot(`[Transcriber] Skipping auto-reconnect (manual reconfigure in progress)`);
+          this.isManualReconnect = false;
         }
       };
 
       return this.socket;
     } catch (error: any) {
-      (window as any).logBot(`[STUBBORN] ❌ Connection creation error: ${error.message}. WILL KEEP TRYING!`);
+      (window as any).logBot(`[Transcriber] Connection creation error: ${error.message}. Retrying...`);
       this.startStubbornReconnection();
       return null;
     }
@@ -464,22 +465,22 @@ export class BrowserWhisperLiveService {
     // Exponential backoff with max delay of 10 seconds
     const delay = Math.min(this.retryDelayMs * Math.pow(1.5, Math.min(this.retryCount, 10)), 10000);
     
-    (window as any).logBot(`[STUBBORN] 🔄 Starting STUBBORN reconnection in ${delay}ms (attempt ${this.retryCount + 1}/∞ - WE NEVER GIVE UP!)...`);
+    (window as any).logBot(`[Transcriber] Starting reconnection in ${delay}ms (attempt ${this.retryCount + 1})...`);
     
     this.reconnectInterval = setTimeout(async () => {
       this.reconnectInterval = null;
       this.retryCount++;
       
-      if (this.retryCount >= 1000) { // Reset counter every 1000 attempts to prevent overflow
-        (window as any).logBot(`[STUBBORN] 🔄 Resetting retry counter after 1000 attempts. WE WILL NEVER GIVE UP! EVER!`);
-        this.retryCount = 0; // Reset and keep going - NEVER GIVE UP!
+      if (this.retryCount >= 1000) {
+        (window as any).logBot(`[Transcriber] Resetting retry counter after 1000 attempts.`);
+        this.retryCount = 0;
       }
       
       if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-        (window as any).logBot(`[STUBBORN] 🔄 Attempting reconnection (retry ${this.retryCount})...`);
+        (window as any).logBot(`[Transcriber] Attempting reconnection (retry ${this.retryCount})...`);
         await this.attemptConnection();
       } else {
-        (window as any).logBot(`[STUBBORN] ✅ Connection already restored!`);
+        (window as any).logBot(`[Transcriber] Connection already restored.`);
       }
     }, delay);
   }
@@ -497,11 +498,10 @@ export class BrowserWhisperLiveService {
     }
 
     try {
-      // Send Float32Array directly as WhisperLive expects (matching google_old.ts approach)
       this.socket.send(audioData);
       return true;
     } catch (error: any) {
-      (window as any).logBot(`[WhisperLive] Error sending audio data: ${error.message}`);
+      (window as any).logBot(`[Transcriber] Error sending audio data: ${error.message}`);
       return false;
     }
   }
@@ -524,7 +524,7 @@ export class BrowserWhisperLiveService {
       this.socket.send(JSON.stringify(meta));
       return true;
     } catch (error: any) {
-      (window as any).logBot(`[WhisperLive] Error sending audio metadata: ${error.message}`);
+      (window as any).logBot(`[Transcriber] Error sending audio metadata: ${error.message}`);
       return false;
     }
   }
@@ -553,7 +553,7 @@ export class BrowserWhisperLiveService {
       this.socket.send(JSON.stringify(speakerEventMessage));
       return true;
     } catch (error: any) {
-      (window as any).logBot(`[WhisperLive] Error sending speaker event: ${error.message}`);
+      (window as any).logBot(`[Transcriber] Error sending speaker event: ${error.message}`);
       return false;
     }
   }
@@ -583,7 +583,7 @@ export class BrowserWhisperLiveService {
       this.socket.send(JSON.stringify(sessionControlMessage));
       return true;
     } catch (error: any) {
-      (window as any).logBot(`[WhisperLive] Error sending session control: ${error.message}`);
+      (window as any).logBot(`[Transcriber] Error sending session control: ${error.message}`);
       return false;
     }
   }
@@ -601,22 +601,23 @@ export class BrowserWhisperLiveService {
   }
 
   close(): void {
-    (window as any).logBot(`[STUBBORN] 🛑 Closing WebSocket and stopping reconnection...`);
+    (window as any).logBot(`[Transcriber] Closing WebSocket and stopping reconnection.`);
     this.clearReconnectInterval();
-    // Clear currentUid to ensure a new session is created on next connection
     const oldUid = this.currentUid;
     this.currentUid = null;
-    (window as any).logBot(`[STUBBORN] Cleared session UID: ${oldUid} -> null`);
+    (window as any).logBot(`[Transcriber] Cleared session UID: ${oldUid} -> null`);
     if (this.socket) {
       this.socket.close();
       this.socket = null;
     }
   }
 
-  // Method to close and prepare for manual reconnect (prevents auto-reconnect)
   closeForReconfigure(): void {
     this.isManualReconnect = true;
-    (window as any).logBot(`[STUBBORN] 🛑 Closing for manual reconfigure (will not auto-reconnect)...`);
+    (window as any).logBot(`[Transcriber] Closing for manual reconfigure (will not auto-reconnect).`);
     this.close();
   }
 }
+
+/** @deprecated Use BrowserTranscriberService. Kept for backward compatibility during migration. */
+export const BrowserWhisperLiveService = BrowserTranscriberService;

@@ -43,6 +43,9 @@ else
     JQ_INSTALLED=true
 fi
 
+# --- Prerequisites reminder ---
+echo_info "Prerequisites: .env with ADMIN_API_TOKEN; stack running (e.g. make up); bot image built (make build-bot-image) so the bot can join."
+
 # --- Read .env file for ADMIN_API_TOKEN and HOST PORTS ---
 ADMIN_TOKEN=""
 if [ -f ".env" ]; then
@@ -101,7 +104,10 @@ echo_info "Effective ADMIN_API_URL: $ADMIN_API_URL"
 USER_EMAIL="testuser$(date +%s)@example.com"
 USER_NAME="Test User $(date +%s)"
 BOT_NAME="VexaFirstTestBot"
-PLATFORM="google_meet"
+# PLATFORM and NATIVE_MEETING_ID (and optionally PASSCODE for Teams) set below from args or interactive input
+PLATFORM=""
+NATIVE_MEETING_ID=""
+PASSCODE=""
 
 # --- Function to stop the bot --- 
 MEETING_ID_TO_STOP=""
@@ -213,65 +219,146 @@ else
     echo_info "API Token likely created. Parsed Key: $USER_API_KEY (Install jq for better parsing)"
 fi
 
-# --- 3. Request Google Meet ID ---
-if [[ -n "$1" ]]; then
-    # If meeting ID provided as command line argument
-    GOOGLE_MEET_ID="$1"
-    echo_info "Using provided Google Meet ID: $GOOGLE_MEET_ID"
+# --- 3. Platform and Meeting ID (and optional passcode for Teams) ---
+# Usage: ./run_vexa_interaction.sh
+#        ./run_vexa_interaction.sh <meeting_id>                    # default platform: google_meet
+#        ./run_vexa_interaction.sh <platform> <meeting_id>         # e.g. teams 12345678901234
+#        ./run_vexa_interaction.sh <platform> <meeting_id> <passcode>  # Teams with passcode
+if [[ -n "$2" ]]; then
+    # Two or three args: platform and meeting ID (and optional passcode)
+    PLATFORM="$1"
+    NATIVE_MEETING_ID="$2"
+    if [[ -n "$3" ]]; then
+        PASSCODE="$3"
+        echo_info "Using provided platform: $PLATFORM, meeting ID: $NATIVE_MEETING_ID, passcode: ****"
+    else
+        echo_info "Using provided platform: $PLATFORM, meeting ID: $NATIVE_MEETING_ID"
+    fi
+elif [[ -n "$1" ]]; then
+    # One arg: meeting ID only (backward compatible, default to Google Meet)
+    PLATFORM="google_meet"
+    NATIVE_MEETING_ID="$1"
+    echo_info "Using provided meeting ID (platform: $PLATFORM): $NATIVE_MEETING_ID"
 else
-    # Interactive input
+    # Interactive: ask for platform, then meeting ID (and passcode for Teams)
+    echo_info "Supported platforms: google_meet, teams"
     while true; do
-        read -p "Enter the Google Meet ID (e.g., abc-defg-hij): " GOOGLE_MEET_ID
-        # Basic validation for meet ID format (3 letters - 4 letters - 3 letters)
-        if [[ "$GOOGLE_MEET_ID" =~ ^[a-zA-Z]{3}-[a-zA-Z]{4}-[a-zA-Z]{3}$ ]]; then
+        read -p "Enter platform (google_meet or teams): " PLATFORM
+        PLATFORM=$(echo "$PLATFORM" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+        if [[ "$PLATFORM" == "google_meet" || "$PLATFORM" == "teams" ]]; then
             break
-        else
-            echo_warn "Invalid Google Meet ID format. Please use 'xxx-yyyy-zzz' (e.g., abc-defg-hij)."
         fi
+        echo_warn "Invalid platform. Please enter 'google_meet' or 'teams'."
     done
+    if [[ "$PLATFORM" == "google_meet" ]]; then
+        while true; do
+            read -p "Enter the Google Meet ID (e.g., abc-defg-hij): " NATIVE_MEETING_ID
+            NATIVE_MEETING_ID=$(echo "$NATIVE_MEETING_ID" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+            if [[ "$NATIVE_MEETING_ID" =~ ^[a-z]{3}-[a-z]{4}-[a-z]{3}$ ]]; then
+                break
+            fi
+            echo_warn "Invalid Google Meet ID format. Please use 'xxx-yyyy-zzz' (e.g., abc-defg-hij)."
+        done
+    else
+        # teams
+        while true; do
+            read -p "Enter the Teams meeting ID (10-15 digits, e.g., 9399697580372): " NATIVE_MEETING_ID
+            NATIVE_MEETING_ID=$(echo "$NATIVE_MEETING_ID" | tr -d ' ')
+            if [[ "$NATIVE_MEETING_ID" =~ ^[0-9]{10,15}$ ]]; then
+                break
+            fi
+            echo_warn "Invalid Teams meeting ID. Please use 10-15 digits only."
+        done
+        read -p "Enter Teams passcode (optional, 8-20 alphanumeric; press Enter to skip): " PASSCODE
+        PASSCODE=$(echo "$PASSCODE" | tr -d ' ')
+        if [[ -z "$PASSCODE" ]]; then
+            PASSCODE=""
+        fi
+    fi
+    echo_info "Platform: $PLATFORM, Meeting ID: $NATIVE_MEETING_ID"
 fi
 
-# Validate the meeting ID format
-if [[ "$GOOGLE_MEET_ID" =~ ^[a-zA-Z]{3}-[a-zA-Z]{4}-[a-zA-Z]{3}$ ]]; then
-    MEETING_ID_TO_STOP="$GOOGLE_MEET_ID" # Set for trap
-    echo_info "Valid Google Meet ID: $GOOGLE_MEET_ID"
+# Validate per platform
+if [[ "$PLATFORM" == "google_meet" ]]; then
+    NATIVE_MEETING_ID=$(echo "$NATIVE_MEETING_ID" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+    if [[ ! "$NATIVE_MEETING_ID" =~ ^[a-z]{3}-[a-z]{4}-[a-z]{3}$ ]]; then
+        echo_error "Invalid Google Meet ID format: $NATIVE_MEETING_ID. Expected format: xxx-yyyy-zzz"
+        exit 1
+    fi
+elif [[ "$PLATFORM" == "teams" ]]; then
+    NATIVE_MEETING_ID=$(echo "$NATIVE_MEETING_ID" | tr -d ' ')
+    if [[ ! "$NATIVE_MEETING_ID" =~ ^[0-9]{10,15}$ ]]; then
+        echo_error "Invalid Teams meeting ID: $NATIVE_MEETING_ID. Expected 10-15 digits."
+        exit 1
+    fi
+    if [[ -n "$PASSCODE" && ! "$PASSCODE" =~ ^[A-Za-z0-9]{8,20}$ ]]; then
+        echo_error "Invalid Teams passcode (must be 8-20 alphanumeric characters)."
+        exit 1
+    fi
 else
-    echo_error "Invalid Google Meet ID format: $GOOGLE_MEET_ID. Expected format: xxx-yyyy-zzz"
+    echo_error "Unsupported platform: $PLATFORM. Use google_meet or teams."
     exit 1
 fi
 
+MEETING_ID_TO_STOP="$NATIVE_MEETING_ID"
+echo_info "Valid meeting ID for $PLATFORM: $NATIVE_MEETING_ID"
+
 # --- 4. Send Bot to Meeting ---
-echo_info "Requesting bot '$BOT_NAME' for Google Meet ID: $GOOGLE_MEET_ID"
-REQUEST_BOT_PAYLOAD=$(cat <<-END
+echo_info "Requesting bot '$BOT_NAME' for $PLATFORM meeting: $NATIVE_MEETING_ID"
+if [[ -n "$PASSCODE" ]]; then
+    REQUEST_BOT_PAYLOAD=$(cat <<-END
 {
   "platform": "$PLATFORM",
-  "native_meeting_id": "$GOOGLE_MEET_ID",
+  "native_meeting_id": "$NATIVE_MEETING_ID",
+  "bot_name": "$BOT_NAME",
+  "passcode": "$PASSCODE"
+}
+END
+)
+else
+    REQUEST_BOT_PAYLOAD=$(cat <<-END
+{
+  "platform": "$PLATFORM",
+  "native_meeting_id": "$NATIVE_MEETING_ID",
   "bot_name": "$BOT_NAME"
 }
 END
 )
+fi
 
-# Use BASE_URL for user actions
-REQUEST_BOT_RESPONSE=$(curl -s -X POST \
+# Use BASE_URL for user actions; capture HTTP status and body
+REQUEST_BOT_HTTP_CODE=$(curl -s -o /tmp/vexa_bot_request.json -w "%{http_code}" -X POST \
     -H "Content-Type: application/json" \
     -H "X-API-Key: $USER_API_KEY" \
     -d "$REQUEST_BOT_PAYLOAD" \
     "$BASE_URL/bots")
+REQUEST_BOT_RESPONSE=$(cat /tmp/vexa_bot_request.json 2>/dev/null || echo "{}")
 
 MEETING_UUID=""
+if [[ "$REQUEST_BOT_HTTP_CODE" != "201" && "$REQUEST_BOT_HTTP_CODE" != "200" ]]; then
+    echo_error "Bot request failed with HTTP $REQUEST_BOT_HTTP_CODE."
+    echo_error "Response body: $REQUEST_BOT_RESPONSE"
+    echo_error "Common causes: (1) Bot image not built - run: make build-bot-image"
+    echo_error "  (2) Postgres not running - use: make up (or docker compose -f docker-compose.yml -f docker-compose.local-db.yml up -d)"
+    echo_error "  (3) Docker not available to bot-manager (4) Invalid/duplicate meeting (5) Auth or DB error."
+    echo_error "Check bot-manager logs: docker compose logs bot-manager --tail 100"
+    exit 1
+fi
 if [[ "$JQ_INSTALLED" == true ]]; then
-    BOT_REQUEST_MSG=$(echo "$REQUEST_BOT_RESPONSE" | jq -r .message)
-    MEETING_UUID=$(echo "$REQUEST_BOT_RESPONSE" | jq -r .meeting_uuid) # Assuming the response contains meeting_uuid or similar
-    echo_info "Bot request response: $BOT_REQUEST_MSG"
+    BOT_ID=$(echo "$REQUEST_BOT_RESPONSE" | jq -r .id)
+    BOT_STATUS=$(echo "$REQUEST_BOT_RESPONSE" | jq -r .status)
+    MEETING_UUID=$(echo "$REQUEST_BOT_RESPONSE" | jq -r '.meeting_uuid // .id')
+    echo_info "Bot request response: meeting_id=${BOT_ID}, status=${BOT_STATUS}"
     if [[ "$MEETING_UUID" == "null" || -z "$MEETING_UUID" ]]; then
-       echo_warn "Could not get a meeting_uuid from bot request response. Transcript polling might rely on platform/native_meeting_id only."
-       echo_warn "Bot request raw response: $REQUEST_BOT_RESPONSE"
+        MEETING_UUID="$BOT_ID"
+    fi
+    if [[ "$BOT_ID" != "null" && -n "$BOT_ID" ]]; then
+        echo_info "Meeting record ID (for transcript polling): $MEETING_UUID"
     else
-        echo_info "Meeting UUID: $MEETING_UUID"
+        echo_warn "Bot request may have failed. Raw response: $REQUEST_BOT_RESPONSE"
     fi
 else
     echo_info "Bot request raw response: $REQUEST_BOT_RESPONSE"
-    # Attempt basic parse for meeting_uuid if needed by transcript endpoint, though client uses platform/native_id
 fi
 
 # Check if the bot request was successful enough to proceed (e.g. status code was 2xx)
@@ -279,9 +366,13 @@ fi
 # We'll assume if USER_API_KEY is set and GOOGLE_MEET_ID is set, the request was likely sent.
 
 # --- Wait for bot admission and provide user instructions ---
-echo_info "Bot '$BOT_NAME' has been requested for Google Meet ID: $GOOGLE_MEET_ID"
-echo_warn "Please admit the bot into your Google Meet session now."
+echo_info "Bot '$BOT_NAME' has been requested for $PLATFORM meeting: $NATIVE_MEETING_ID"
+echo_warn "Please admit the bot into your $PLATFORM session now."
 echo_warn "Real-time transcription will begin shortly."
+if [[ "$PLATFORM" == "teams" ]]; then
+  echo_warn "If the bot does not appear in the meeting, check bot-manager logs (container start + Teams join). Ensure Docker is running and BOT_IMAGE is built if using Docker."
+fi
+echo_info "If you see no live transcript: unmute the bot in Participants, speak, and see docs/troubleshooting-live-transcript.md"
 
 COUNTDOWN_SECONDS=10
 echo_info "Starting real-time transcription in:"
@@ -292,7 +383,7 @@ done
 echo "GO!"
 
 # --- 5. Start Real-time Transcription --- 
-echo_info "Starting real-time WebSocket transcription for $PLATFORM/$GOOGLE_MEET_ID... Press Ctrl+C to stop."
+echo_info "Starting real-time WebSocket transcription for $PLATFORM/$NATIVE_MEETING_ID... Press Ctrl+C to stop."
 
 # Python dependency already checked above
 
@@ -310,20 +401,24 @@ echo_info "Using WebSocket URL: $WS_URL"
 echo_info "Running real-time transcription client..."
 
 # Run the Python real-time transcription client in background
-# Use the virtual environment's Python to ensure websockets is available
+# Prefer .venv if present; otherwise use system python3 (pip install websockets if needed)
+PYTHON_CMD=""
 if [ -f ".venv/bin/python" ]; then
+    PYTHON_CMD=".venv/bin/python"
     echo_info "Using virtual environment Python..."
-    .venv/bin/python "$SCRIPT_PATH" \
-        --api-base "$BASE_URL" \
-        --ws-url "$WS_URL" \
-        --api-key "$USER_API_KEY" \
-        --platform "$PLATFORM" \
-        --native-id "$GOOGLE_MEET_ID" &
+elif command -v python3 &> /dev/null; then
+    PYTHON_CMD="python3"
+    echo_warn "No .venv found; using system python3. Install dependencies with: pip install websockets httpx"
 else
-    echo_error "Virtual environment not found at .venv/bin/python"
-    echo_error "Please run 'make setup-env' first to create the virtual environment"
+    echo_error "No Python found. Create a venv with 'python3 -m venv .venv && .venv/bin/pip install websockets httpx' or install python3."
     exit 1
 fi
+$PYTHON_CMD "$SCRIPT_PATH" \
+    --api-base "$BASE_URL" \
+    --ws-url "$WS_URL" \
+    --api-key "$USER_API_KEY" \
+    --platform "$PLATFORM" \
+    --native-id "$NATIVE_MEETING_ID" &
 
 # Store the PID for cleanup
 TRANSCRIPTION_PID=$!

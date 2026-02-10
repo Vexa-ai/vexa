@@ -22,27 +22,27 @@ async def run(meeting: Meeting, db: AsyncSession):
     """
     Sends a webhook with the completed meeting details to a user-configured URL.
     """
-    logger.info(f"Executing send_webhook task for meeting {meeting.id}")
+    logger.debug(f"Executing send_webhook task for meeting {meeting.id}")
 
     try:
         # The user should be loaded on the meeting object already by the task runner
         user = meeting.user
         if not user:
-            logger.error(f"Could not find user on meeting object {meeting.id}")
+            logger.debug(f"Could not find user on meeting object {meeting.id}")
             return
 
         # Check if user has a webhook URL configured
         webhook_url = user.data.get('webhook_url') if user.data and isinstance(user.data, dict) else None
 
         if not webhook_url:
-            logger.info(f"No webhook URL configured for user {user.email} (meeting {meeting.id})")
+            logger.debug(f"No webhook URL configured for user {user.email} (meeting {meeting.id})")
             return
 
         # SSRF defense: validate URL before sending (catches pre-patch or admin-set URLs)
         try:
             validate_webhook_url(webhook_url)
         except ValueError as e:
-            logger.warning(f"Webhook URL validation failed for meeting {meeting.id}: {e}. Skipping.")
+            logger.debug(f"Webhook URL validation failed for meeting {meeting.id}: {e}. Skipping.")
             return
 
         # Prepare the webhook payload
@@ -66,7 +66,7 @@ async def run(meeting: Meeting, db: AsyncSession):
         # Send the webhook (follow_redirects=True for backward compatibility with
         # receivers that use redirects; URL validated at storage and send time)
         async with httpx.AsyncClient(follow_redirects=True) as client:
-            logger.info(f"Sending webhook to {webhook_url} for meeting {meeting.id}")
+            logger.debug(f"Sending webhook to {webhook_url} for meeting {meeting.id}")
             response = await client.post(
                 webhook_url,
                 json=payload,
@@ -75,11 +75,11 @@ async def run(meeting: Meeting, db: AsyncSession):
             )
             
             if response.status_code >= 200 and response.status_code < 300:
-                logger.info(f"Successfully sent webhook for meeting {meeting.id} to {webhook_url}")
+                logger.debug(f"Successfully sent webhook for meeting {meeting.id} to {webhook_url}")
             else:
-                logger.warning(f"Webhook for meeting {meeting.id} returned status {response.status_code}: {response.text}")
+                logger.debug(f"Webhook for meeting {meeting.id} returned status {response.status_code}: {response.text}")
 
     except httpx.RequestError as e:
-        logger.error(f"Failed to send webhook for meeting {meeting.id}: {e}")
+        logger.debug(f"Failed to send webhook for meeting {meeting.id}: {e}")
     except Exception as e:
-        logger.error(f"Unexpected error sending webhook for meeting {meeting.id}: {e}", exc_info=True) 
+        logger.debug(f"Unexpected error sending webhook for meeting {meeting.id}: {e}", exc_info=True) 

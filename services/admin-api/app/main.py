@@ -7,12 +7,12 @@ from fastapi.security import APIKeyHeader
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload, attributes
-from typing import List, Optional  # Import List for response model
-from datetime import datetime # Import datetime
+from typing import List, Optional  
+from datetime import datetime 
 from sqlalchemy import func
 from pydantic import BaseModel, Field, HttpUrl
 
-# Import shared models and schemas
+
 from shared_models.models import User, APIToken, Base, Meeting, Transcription, MeetingSession # Import Base for init_db and Meeting
 from shared_models.schemas import (UserCreate, UserResponse, TokenResponse, UserDetailResponse, UserBase, UserUpdate, MeetingResponse,
                                  UserTableResponse, MeetingTableResponse, MeetingSessionResponse, TranscriptionStats, 
@@ -53,19 +53,19 @@ ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN") # Read from environment
 async def verify_admin_token(admin_api_key: str = Security(API_KEY_HEADER)):
     """Dependency to verify the admin API token."""
     if not ADMIN_API_TOKEN:
-        logger.error("CRITICAL: ADMIN_API_TOKEN environment variable not set!")
+        logger.debug("CRITICAL: ADMIN_API_TOKEN environment variable not set!")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Admin authentication is not configured on the server."
         )
     
     if not admin_api_key or admin_api_key != ADMIN_API_TOKEN:
-        logger.warning(f"Invalid admin token provided.")
+        logger.debug(f"Invalid admin token provided.")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid or missing admin token."
         )
-    logger.info("Admin token verified successfully.")
+    logger.debug("Admin token verified successfully.")
     # No need to return anything, just raises exception on failure 
 
 async def get_current_user(api_key: str = Security(USER_API_KEY_HEADER), db: AsyncSession = Depends(get_db)) -> User:
@@ -149,11 +149,11 @@ async def set_user_webhook(
     if user.created_at is None:
         # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
         user.created_at = datetime.utcnow().replace(tzinfo=None)
-        logger.warning(f"created_at was None for user {user.id}, setting to current time")
+        logger.debug(f"created_at was None for user {user.id}, setting to current time")
         db.add(user)
         await db.commit()
 
-    logger.info(f"Updated webhook URL for user {user.email}")
+    logger.debug(f"Updated webhook URL for user {user.email}")
 
     return UserResponse.model_validate(user)
 
@@ -177,12 +177,12 @@ async def create_user(user_in: UserCreate, response: Response, db: AsyncSession 
     existing_user = result.scalars().first()
 
     if existing_user:
-        logger.info(f"Found existing user: {existing_user.email} (ID: {existing_user.id})")
+        logger.debug(f"Found existing user: {existing_user.email} (ID: {existing_user.id})")
         # Fix: Ensure created_at is never None before validation
         if existing_user.created_at is None:
             # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
             existing_user.created_at = datetime.utcnow().replace(tzinfo=None)
-            logger.warning(f"created_at was None for user {existing_user.id}, setting to current time")
+            logger.debug(f"created_at was None for user {existing_user.id}, setting to current time")
             db.add(existing_user)
             await db.commit()
         response.status_code = status.HTTP_200_OK
@@ -198,13 +198,13 @@ async def create_user(user_in: UserCreate, response: Response, db: AsyncSession 
     db.add(db_user)
     await db.commit()
     await db.refresh(db_user)
-    logger.info(f"Admin created user: {db_user.email} (ID: {db_user.id})")
+    logger.debug(f"Admin created user: {db_user.email} (ID: {db_user.id})")
     # Fix: Set created_at if it's None (server_default may not be loaded after refresh)
     # This happens because server_default values aren't always loaded by refresh()
     if db_user.created_at is None:
         # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
         db_user.created_at = datetime.utcnow().replace(tzinfo=None)
-        logger.warning(f"created_at was None for user {db_user.id}, setting to current time")
+        logger.debug(f"created_at was None for user {db_user.id}, setting to current time")
         db.add(db_user)
         await db.commit()
     return UserResponse.model_validate(db_user)
@@ -222,7 +222,7 @@ async def list_users(skip: int = 0, limit: int = 100, db: AsyncSession = Depends
         if user.created_at is None:
             # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
             user.created_at = datetime.utcnow().replace(tzinfo=None)
-            logger.warning(f"created_at was None for user {user.id}, setting to current time")
+            logger.debug(f"created_at was None for user {user.id}, setting to current time")
             db.add(user)
             needs_commit = True
     
@@ -254,7 +254,7 @@ async def get_user_by_email(user_email: str, db: AsyncSession = Depends(get_db))
     if user.created_at is None:
         # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
         user.created_at = datetime.utcnow().replace(tzinfo=None)
-        logger.warning(f"created_at was None for user {user.id}, setting to current time")
+        logger.debug(f"created_at was None for user {user.id}, setting to current time")
         db.add(user)
         await db.commit()
 
@@ -284,7 +284,7 @@ async def get_user(user_id: int, db: AsyncSession = Depends(get_db)):
     if user.created_at is None:
         # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
         user.created_at = datetime.utcnow().replace(tzinfo=None)
-        logger.warning(f"created_at was None for user {user.id}, setting to current time")
+        logger.debug(f"created_at was None for user {user.id}, setting to current time")
         db.add(user)
         await db.commit()
         
@@ -313,7 +313,7 @@ async def update_user(user_id: int, user_update: UserUpdate, db: AsyncSession = 
     # Get the update data, excluding unset fields to only update provided values
     update_data = user_update.model_dump(exclude_unset=True)
     print(f"=== Raw update_data: {update_data} ===")
-    logger.info(f"Admin PATCH for user {user_id}. Raw update_data: {update_data}")
+    logger.debug(f"Admin PATCH for user {user_id}. Raw update_data: {update_data}")
 
     # Prevent changing email via this endpoint (if desired)
     if 'email' in update_data and update_data['email'] != db_user.email:
@@ -326,7 +326,7 @@ async def update_user(user_id: int, user_update: UserUpdate, db: AsyncSession = 
     if 'data' in update_data:
         new_data = update_data.pop('data')  # Remove from update_data to handle separately
         if new_data is not None:
-            logger.info(f"Admin updating data field for user ID: {user_id}. Current: {db_user.data}, New: {new_data}")
+            logger.debug(f"Admin updating data field for user ID: {user_id}. Current: {db_user.data}, New: {new_data}")
             
             # Replace the data field entirely (rather than merging)
             db_user.data = new_data
@@ -334,37 +334,37 @@ async def update_user(user_id: int, user_update: UserUpdate, db: AsyncSession = 
             # Flag the 'data' field as modified for SQLAlchemy to detect the change
             attributes.flag_modified(db_user, "data")
             updated = True
-            logger.info(f"Admin updated data field for user ID: {user_id}")
+            logger.debug(f"Admin updated data field for user ID: {user_id}")
     else:
-        logger.info(f"Admin PATCH for user {user_id}: 'data' not in update_data keys: {list(update_data.keys())}")
+        logger.debug(f"Admin PATCH for user {user_id}: 'data' not in update_data keys: {list(update_data.keys())}")
 
     # Update the remaining user object attributes
     for key, value in update_data.items():
         if hasattr(db_user, key) and getattr(db_user, key) != value:
             setattr(db_user, key, value)
             updated = True
-            logger.info(f"Admin updated {key} for user ID: {user_id}")
+            logger.debug(f"Admin updated {key} for user ID: {user_id}")
 
-    logger.info(f"Admin update for user ID: {user_id}, updated: {updated}")
+    logger.debug(f"Admin update for user ID: {user_id}, updated: {updated}")
 
     # If any changes were made, commit them
     if updated:
         try:
             await db.commit()
             await db.refresh(db_user)
-            logger.info(f"Admin updated user ID: {user_id}")
+            logger.debug(f"Admin updated user ID: {user_id}")
         except Exception as e: # Catch potential DB errors (e.g., constraints)
             await db.rollback()
-            logger.error(f"Error updating user {user_id}: {e}")
+            logger.debug(f"Error updating user {user_id}: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update user.")
     else:
-        logger.info(f"Admin attempted update for user ID: {user_id}, but no changes detected.")
+        logger.debug(f"Admin attempted update for user ID: {user_id}, but no changes detected.")
 
     # Fix: Ensure created_at is never None before validation
     if db_user.created_at is None:
         # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
         db_user.created_at = datetime.utcnow().replace(tzinfo=None)
-        logger.warning(f"created_at was None for user {db_user.id}, setting to current time")
+        logger.debug(f"created_at was None for user {db_user.id}, setting to current time")
         db.add(db_user)
         await db.commit()
 
@@ -390,7 +390,7 @@ async def create_token_for_user(user_id: int, db: AsyncSession = Depends(get_db)
     db.add(db_token)
     await db.commit()
     await db.refresh(db_token)
-    logger.info(f"Admin created token for user {user_id} ({user.email})")
+    logger.debug(f"Admin created token for user {user_id} ({user.email})")
     # Use TokenResponse for consistency with schema definition (datetime object)
     return TokenResponse.model_validate(db_token)
 
@@ -411,7 +411,7 @@ async def delete_token(token_id: int, db: AsyncSession = Depends(get_db)):
     # Delete the token
     await db.delete(db_token)
     await db.commit()
-    logger.info(f"Admin deleted token ID: {token_id}")
+    logger.debug(f"Admin deleted token ID: {token_id}")
     # No body needed for 204 response
     return 
 
@@ -475,7 +475,7 @@ async def get_users_table(
         if user.created_at is None:
             # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
             user.created_at = datetime.utcnow().replace(tzinfo=None)
-            logger.warning(f"created_at was None for user {user.id}, setting to current time")
+            logger.debug(f"created_at was None for user {user.id}, setting to current time")
             db.add(user)
             needs_commit = True
     
@@ -602,7 +602,7 @@ async def get_user_details(
     if user.created_at is None:
         # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
         user.created_at = datetime.utcnow().replace(tzinfo=None)
-        logger.warning(f"created_at was None for user {user.id}, setting to current time")
+        logger.debug(f"created_at was None for user {user.id}, setting to current time")
         db.add(user)
         await db.commit()
     
@@ -673,7 +673,7 @@ async def get_user_details(
 # App events
 @app.on_event("startup")
 async def startup_event():
-    logger.info("Admin API starting up. Skipping automatic DB initialization.")
+    logger.debug("Admin API starting up. Skipping automatic DB initialization.")
     # The 'migrate-or-init' Makefile target is now responsible for all DB setup.
     # await init_db()
     pass

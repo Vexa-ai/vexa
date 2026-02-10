@@ -23,10 +23,10 @@ class TranscriptionService:
                     user = User(id=user_id, name=name, email=email)
                     session.add(user)
                     await session.commit()
-                    logger.info(f"Created user: {user_id}")
+                    logger.debug(f"Created user: {user_id}")
                 return user
             except SQLAlchemyError as e:
-                logger.error(f"Error getting/creating user: {e}")
+                logger.debug(f"Error getting/creating user: {e}")
                 raise
     
     @staticmethod
@@ -46,11 +46,11 @@ class TranscriptionService:
             )
             session.add(meeting)
             session.commit()
-            logger.info(f"Created meeting: {meeting_id} for user: {user_id}")
+            logger.debug(f"Created meeting: {meeting_id} for user: {user_id}")
             return meeting
         except SQLAlchemyError as e:
             session.rollback()
-            logger.error(f"Error creating meeting: {e}")
+            logger.debug(f"Error creating meeting: {e}")
             raise
         finally:
             session.close()
@@ -64,13 +64,13 @@ class TranscriptionService:
             if meeting:
                 meeting.end_time = datetime.utcnow()
                 session.commit()
-                logger.info(f"Ended meeting: {meeting_id}")
+                logger.debug(f"Ended meeting: {meeting_id}")
                 return meeting
-            logger.warning(f"Meeting not found: {meeting_id}")
+            logger.debug(f"Meeting not found: {meeting_id}")
             return None
         except SQLAlchemyError as e:
             session.rollback()
-            logger.error(f"Error ending meeting: {e}")
+            logger.debug(f"Error ending meeting: {e}")
             raise
         finally:
             session.close()
@@ -83,7 +83,7 @@ class TranscriptionService:
             # Check if meeting exists
             meeting = session.query(Meeting).filter_by(id=meeting_id).first()
             if not meeting:
-                logger.warning(f"Meeting not found: {meeting_id}, cannot add transcription")
+                logger.debug(f"Meeting not found: {meeting_id}, cannot add transcription")
                 return None
             
             # Create transcription
@@ -96,11 +96,11 @@ class TranscriptionService:
             )
             session.add(transcription)
             session.commit()
-            logger.info(f"Added transcription to meeting: {meeting_id}")
+            logger.debug(f"Added transcription to meeting: {meeting_id}")
             return transcription
         except SQLAlchemyError as e:
             session.rollback()
-            logger.error(f"Error adding transcription: {e}")
+            logger.debug(f"Error adding transcription: {e}")
             raise
         finally:
             session.close()
@@ -132,7 +132,7 @@ class TranscriptionService:
             
             return result
         except SQLAlchemyError as e:
-            logger.error(f"Error retrieving transcriptions: {e}")
+            logger.debug(f"Error retrieving transcriptions: {e}")
             raise
         finally:
             session.close()
@@ -155,7 +155,7 @@ class TranscriptionService:
             
             return result
         except SQLAlchemyError as e:
-            logger.error(f"Error retrieving user meetings: {e}")
+            logger.debug(f"Error retrieving user meetings: {e}")
             raise
         finally:
             session.close() 

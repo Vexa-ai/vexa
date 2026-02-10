@@ -29,7 +29,7 @@ async def get_current_user(api_key: str = Security(api_key_header),
     token_user = result.first()
 
     if not token_user:
-        logger.warning(f"Invalid API token provided: {api_key[:10]}...")
+        logger.debug(f"Invalid API token provided: {api_key[:10]}...")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid API token"

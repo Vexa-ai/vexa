@@ -298,6 +298,17 @@ export const teamsNameInputSelectors: string[] = [
   'input[type="text"]'
 ];
 
+// Teams meeting passcode input (pre-join / lobby)
+export const teamsPasscodeInputSelectors: string[] = [
+  'input[placeholder*="passcode"]',
+  'input[placeholder*="Passcode"]',
+  'input[aria-label*="passcode"]',
+  'input[aria-label*="Passcode"]',
+  'input[id*="passcode"]',
+  'input[name*="passcode"]',
+  'input[type="password"]'
+];
+
 // Teams meeting container selectors
 export const teamsMeetingContainerSelectors: string[] = [
   '[role="main"]',

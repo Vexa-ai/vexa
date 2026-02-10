@@ -31,7 +31,7 @@ def monitor_bot_containers():
             label_selector="app=bot"
         )
         
-        logger.info(f"Monitoring {len(pod_list.items)} bot containers")
+        logger.debug(f"Monitoring {len(pod_list.items)} bot containers")
         
         # Check pod statuses
         for pod in pod_list.items:
@@ -43,23 +43,23 @@ def monitor_bot_containers():
             creation_time = pod.metadata.creation_timestamp
             age = datetime.now(creation_time.tzinfo) - creation_time
             
-            logger.info(f"Bot: {pod_name}, Status: {status}, Age: {age}")
+            logger.debug(f"Bot: {pod_name}, Status: {status}, Age: {age}")
             
             # Check for failed pods and restart them
             if status == "Failed":
-                logger.warning(f"Detected failed pod: {pod_name}. Restarting...")
+                logger.debug(f"Detected failed pod: {pod_name}. Restarting...")
                 k8s_client.delete_bot_pod(user_id, meeting_id)
                 k8s_client.create_bot_pod(user_id, meeting_id)
-                logger.info(f"Restarted failed pod: {pod_name}")
+                logger.debug(f"Restarted failed pod: {pod_name}")
             
             # Clean up completed pods that are older than 1 hour
             if status == "Succeeded" and age > timedelta(hours=1):
-                logger.info(f"Cleaning up old succeeded pod: {pod_name}")
+                logger.debug(f"Cleaning up old succeeded pod: {pod_name}")
                 k8s_client.delete_bot_pod(user_id, meeting_id)
         
         return {"status": "success", "pods_monitored": len(pod_list.items)}
     except Exception as e:
-        logger.error(f"Error during bot monitoring: {e}")
+        logger.debug(f"Error during bot monitoring: {e}")
         return {"status": "error", "message": str(e)}
 
 @celery_app.task
@@ -89,11 +89,11 @@ def clean_idle_bots(idle_threshold_minutes=30):
             age = datetime.now(creation_time.tzinfo) - creation_time
             
             if age > timedelta(minutes=idle_threshold_minutes):
-                logger.info(f"Cleaning up idle pod: {pod_name}, Age: {age}")
+                logger.debug(f"Cleaning up idle pod: {pod_name}, Age: {age}")
                 k8s_client.delete_bot_pod(user_id, meeting_id)
                 cleaned_count += 1
         
         return {"status": "success", "pods_cleaned": cleaned_count}
     except Exception as e:
-        logger.error(f"Error during idle bot cleanup: {e}")
+        logger.debug(f"Error during idle bot cleanup: {e}")
         return {"status": "error", "message": str(e)} 

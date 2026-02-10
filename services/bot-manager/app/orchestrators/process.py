@@ -41,8 +41,8 @@ BOT_SCRIPT_PATH = os.getenv("BOT_SCRIPT_PATH", "/app/vexa-bot/dist/docker.js")
 # Working directory for the bot process
 BOT_WORKING_DIR = os.getenv("BOT_WORKING_DIR", "/app/vexa-bot")
 
-# WhisperLive URL (direct connection, no Traefik in Lite mode)
-WHISPER_LIVE_URL = os.getenv("WHISPER_LIVE_URL", "ws://localhost:9090")
+# Transcriber WebSocket URL (transcription-gateway or compatible backend)
+TRANSCRIBER_WS_URL = os.getenv("TRANSCRIBER_WS_URL") or os.getenv("WHISPER_LIVE_URL", "ws://localhost:9090")
 
 # Redis URL from environment
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -120,11 +120,11 @@ def _terminate_process_group(pid: int, timeout: int = 10) -> bool:
                 os.kill(pid, 0)
                 time.sleep(0.5)
             except ProcessLookupError:
-                logger.info(f"Process {pid} terminated gracefully")
+                logger.debug(f"Process {pid} terminated gracefully")
                 return True
 
         # Force kill if still alive
-        logger.warning(f"Process {pid} did not terminate gracefully, sending SIGKILL")
+        logger.debug(f"Process {pid} did not terminate gracefully, sending SIGKILL")
         os.killpg(pgid, signal.SIGKILL)
         return True
 
@@ -132,10 +132,10 @@ def _terminate_process_group(pid: int, timeout: int = 10) -> bool:
         logger.debug(f"Process {pid} already terminated")
         return True
     except PermissionError as e:
-        logger.error(f"Permission denied terminating process {pid}: {e}")
+        logger.debug(f"Permission denied terminating process {pid}: {e}")
         return False
     except Exception as e:
-        logger.error(f"Error terminating process {pid}: {e}", exc_info=True)
+        logger.debug(f"Error terminating process {pid}: {e}", exc_info=True)
         return False
 
 
@@ -166,7 +166,8 @@ async def start_bot_container(
     user_token: str,
     native_meeting_id: str,
     language: Optional[str],
-    task: Optional[str]
+    task: Optional[str],
+    passcode: Optional[str] = None,
 ) -> Optional[Tuple[str, str]]:
     """Start a bot as a Node.js child process.
 
@@ -191,7 +192,7 @@ async def start_bot_container(
     connection_id = str(uuid.uuid4())
     process_name = f"vexa-bot-{meeting_id}-{uuid.uuid4().hex[:8]}"
 
-    logger.info(
+    logger.debug(
         f"Starting bot process for meeting {meeting_id} "
         f"(platform={platform}, connection_id={connection_id})"
     )
@@ -207,7 +208,7 @@ async def start_bot_container(
             ttl_seconds=7200  # 2 hours
         )
     except Exception as e:
-        logger.error(f"Failed to mint MeetingToken for meeting {meeting_id}: {e}", exc_info=True)
+        logger.debug(f"Failed to mint MeetingToken for meeting {meeting_id}: {e}", exc_info=True)
         return None, None
 
     # Build BOT_CONFIG JSON (same structure as Docker orchestrator)
@@ -230,6 +231,8 @@ async def start_bot_container(
         },
         "botManagerCallbackUrl": f"{BOT_CALLBACK_BASE_URL}/bots/internal/callback/exited"
     }
+    if passcode:
+        bot_config["passcode"] = passcode
 
     # Remove None values from config
     bot_config = {k: v for k, v in bot_config.items() if v is not None}
@@ -239,7 +242,8 @@ async def start_bot_container(
     # Prepare environment for the bot process
     env = os.environ.copy()
     env["BOT_CONFIG"] = json.dumps(bot_config)
-    env["WHISPER_LIVE_URL"] = WHISPER_LIVE_URL
+    env["TRANSCRIBER_WS_URL"] = TRANSCRIBER_WS_URL
+    env["WHISPER_LIVE_URL"] = TRANSCRIBER_WS_URL
     env["DISPLAY"] = DISPLAY
     env["LOG_LEVEL"] = os.getenv("LOG_LEVEL", "INFO")
     # Ensure Node.js can find modules
@@ -250,13 +254,13 @@ async def start_bot_container(
     try:
         logs_path.mkdir(parents=True, exist_ok=True)
     except Exception as e:
-        logger.warning(f"Could not create logs directory: {e}")
+        logger.debug(f"Could not create logs directory: {e}")
 
     log_file = logs_path / f"{process_name}.log"
 
     # Verify bot script exists
     if not Path(BOT_SCRIPT_PATH).exists():
-        logger.error(f"Bot script not found at {BOT_SCRIPT_PATH}")
+        logger.debug(f"Bot script not found at {BOT_SCRIPT_PATH}")
         return None, None
 
     try:
@@ -290,7 +294,7 @@ async def start_bot_container(
                 "log_file": str(log_file)
             }
 
-        logger.info(
+        logger.debug(
             f"Successfully started bot process: PID={process_id}, "
             f"meeting={meeting_id}, name={process_name}"
         )
@@ -298,13 +302,13 @@ async def start_bot_container(
         return process_id, connection_id
 
     except FileNotFoundError as e:
-        logger.error(f"Node.js or bot script not found: {e}")
+        logger.debug(f"Node.js or bot script not found: {e}")
         return None, None
     except PermissionError as e:
-        logger.error(f"Permission denied starting bot process: {e}")
+        logger.debug(f"Permission denied starting bot process: {e}")
         return None, None
     except Exception as e:
-        logger.error(f"Unexpected error starting bot process: {e}", exc_info=True)
+        logger.debug(f"Unexpected error starting bot process: {e}", exc_info=True)
         return None, None
 
 
@@ -319,18 +323,18 @@ def stop_bot_container(container_id: str) -> bool:
     Returns:
         True if process was stopped or already dead, False on error
     """
-    logger.info(f"Stopping bot process {container_id}")
+    logger.debug(f"Stopping bot process {container_id}")
 
     # Check if process is in our registry
     if container_id not in _active_processes:
-        logger.warning(f"Process {container_id} not in registry")
+        logger.debug(f"Process {container_id} not in registry")
         # Try to terminate anyway if it's a valid PID
         try:
             pid = int(container_id)
             os.kill(pid, 0)  # Check if exists
             return _terminate_process_group(pid)
         except (ValueError, ProcessLookupError, PermissionError):
-            logger.info(f"Process {container_id} not found or already stopped")
+            logger.debug(f"Process {container_id} not found or already stopped")
             return True
 
     proc_info = _active_processes[container_id]
@@ -340,7 +344,7 @@ def stop_bot_container(container_id: str) -> bool:
         if _process_is_alive(proc):
             success = _terminate_process_group(proc.pid)
         else:
-            logger.info(f"Process {container_id} already stopped")
+            logger.debug(f"Process {container_id} already stopped")
             success = True
 
         # Close log file handle
@@ -358,7 +362,7 @@ def stop_bot_container(container_id: str) -> bool:
         return success
 
     except Exception as e:
-        logger.error(f"Error stopping process {container_id}: {e}", exc_info=True)
+        logger.debug(f"Error stopping process {container_id}: {e}", exc_info=True)
         return False
 
 
@@ -401,7 +405,7 @@ async def get_running_bots_status(user_id: int) -> List[Dict[str, Any]]:
                 "meeting_id_from_name": str(info["meeting_id"])
             })
 
-    logger.info(f"Found {len(result)} running bots for user {user_id}")
+    logger.debug(f"Found {len(result)} running bots for user {user_id}")
     return result
 
 
@@ -476,7 +480,7 @@ async def verify_container_running(container_id: str) -> bool:
         # Not found in registry by name - log available processes for debugging
         async with _registry_lock:
             registered_names = [info.get("process_name") for info in _active_processes.values()]
-            logger.warning(
+            logger.debug(
                 f"Process/container '{container_id}' not found in registry. "
                 f"Registered processes: {registered_names}"
             )
@@ -495,7 +499,7 @@ async def verify_container_running(container_id: str) -> bool:
         # 1. Container restarted and registry was lost (but process survived - unlikely)
         # 2. Process was started outside our orchestrator
         # For reconciliation purposes, if the process exists, we consider it running
-        logger.info(f"Process {container_id} exists in system but not in registry (possible container restart)")
+        logger.debug(f"Process {container_id} exists in system but not in registry (possible container restart)")
         return True
     except ProcessLookupError:
         # Process doesn't exist
@@ -508,7 +512,7 @@ async def verify_container_running(container_id: str) -> bool:
         return True
     except Exception as e:
         # Other errors - log and assume not running to be safe
-        logger.warning(f"Error checking process {container_id}: {e}")
+        logger.debug(f"Error checking process {container_id}: {e}")
         return False
 
 

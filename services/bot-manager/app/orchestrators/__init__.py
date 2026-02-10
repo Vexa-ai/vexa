@@ -25,7 +25,7 @@ else:
     # Default to Docker orchestrator
     module_name = "app.orchestrators.docker"
 
-logger.info(f"Using '{_orchestrator}' orchestrator module: {module_name}")
+logger.debug(f"Using '{_orchestrator}' orchestrator module: {module_name}")
 
 # Dynamically import the concrete module
 mod = importlib.import_module(module_name)

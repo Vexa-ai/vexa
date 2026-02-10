@@ -1,32 +1,31 @@
-import logging
 import json
+import logging
 import string
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Dict, Tuple
+from typing import Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
-from pydantic import BaseModel
-from sqlalchemy import select, and_, func, distinct, text
-from sqlalchemy.ext.asyncio import AsyncSession
 import redis.asyncio as aioredis
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel
+from sqlalchemy import and_, distinct, func, select, text
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from shared_models.database import get_db
-from shared_models.models import User, Meeting, Transcription, MeetingSession
-from shared_models.schemas import (
-    HealthResponse,
-    MeetingResponse,
-    MeetingListResponse,
-    TranscriptionResponse,
-    Platform,
-    TranscriptionSegment,
-    MeetingUpdate,
-    MeetingCreate,
-    MeetingStatus
-)
-
+from api.auth import get_current_user
 from config import IMMUTABILITY_THRESHOLD
 from filters import TranscriptionFilter
-from api.auth import get_current_user
+from shared_models.database import get_db
+from shared_models.models import Meeting, MeetingSession, Transcription, User
+from shared_models.schemas import (
+    HealthResponse,
+    MeetingCreate,
+    MeetingListResponse,
+    MeetingResponse,
+    MeetingStatus,
+    MeetingUpdate,
+    Platform,
+    TranscriptionResponse,
+    TranscriptionSegment,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -63,7 +62,7 @@ async def _get_full_transcript_segments(
     sessions = result_sessions.scalars().all()
     session_times: Dict[str, datetime] = {session.session_uid: session.session_start_time for session in sessions}
     if not session_times:
-        logger.warning(f"[_get_full_transcript_segments] No session start times found in DB for meeting {internal_meeting_id}.")
+        logger.debug(f"[_get_full_transcript_segments] No session start times found in DB for meeting {internal_meeting_id}.")
 
     # 2. Fetch transcript segments from PostgreSQL (immutable segments)
     stmt_transcripts = select(Transcription).where(Transcription.meeting_id == internal_meeting_id)
@@ -77,7 +76,7 @@ async def _get_full_transcript_segments(
         try:
             redis_segments_raw = await redis_c.hgetall(hash_key)
         except Exception as e:
-            logger.error(f"[_get_full_transcript_segments] Failed to fetch from Redis hash {hash_key}: {e}", exc_info=True)
+            logger.debug(f"[_get_full_transcript_segments] Failed to fetch from Redis hash {hash_key}: {e}", exc_info=True)
 
     # 4. Calculate absolute times and merge segments
     merged_segments_with_abs_time: Dict[str, Tuple[datetime, TranscriptionSegment]] = {}
@@ -105,9 +104,9 @@ async def _get_full_transcript_segments(
                 )
                 merged_segments_with_abs_time[key] = (absolute_start_time, segment_obj)
             except Exception as calc_err:
-                 logger.error(f"[API Meet {internal_meeting_id}] Error calculating absolute time for DB segment {key} (UID: {session_uid}): {calc_err}")
+                 logger.debug(f"[API Meet {internal_meeting_id}] Error calculating absolute time for DB segment {key} (UID: {session_uid}): {calc_err}")
         else:
-            logger.warning(f"[API Meet {internal_meeting_id}] Missing session UID ({session_uid}) or start time for DB segment {key}. Cannot calculate absolute time.")
+            logger.debug(f"[API Meet {internal_meeting_id}] Missing session UID ({session_uid}) or start time for DB segment {key}. Cannot calculate absolute time.")
 
     for start_time_str, segment_json in redis_segments_raw.items():
         try:
@@ -160,7 +159,7 @@ async def _get_full_transcript_segments(
                     
                     segment_obj = TranscriptionSegment.model_validate(segment_dict)
                 except Exception as validation_err:
-                    logger.error(f"[_get_full_transcript_segments] Validation error creating segment {start_time_str} for meeting {internal_meeting_id}: {validation_err}", exc_info=True)
+                    logger.debug(f"[_get_full_transcript_segments] Validation error creating segment {start_time_str} for meeting {internal_meeting_id}: {validation_err}", exc_info=True)
                     # Skip this segment if validation fails
                     continue
                 # Merge logic: Always include partial segments from Redis (they're the current active state)
@@ -178,10 +177,10 @@ async def _get_full_transcript_segments(
                 # Always add Redis segments (they're the current state)
                 merged_segments_with_abs_time[start_time_str] = (absolute_start_time, segment_obj)
         except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
-            logger.error(f"[_get_full_transcript_segments] Error parsing Redis segment {start_time_str} for meeting {internal_meeting_id}: {e}", exc_info=True)
+            logger.debug(f"[_get_full_transcript_segments] Error parsing Redis segment {start_time_str} for meeting {internal_meeting_id}: {e}", exc_info=True)
         except Exception as e:
             # Catch Pydantic ValidationError and other exceptions
-            logger.error(f"[_get_full_transcript_segments] Unexpected error parsing Redis segment {start_time_str} for meeting {internal_meeting_id}: {e}", exc_info=True)
+            logger.debug(f"[_get_full_transcript_segments] Unexpected error parsing Redis segment {start_time_str} for meeting {internal_meeting_id}: {e}", exc_info=True)
 
     # 5. Sort based on calculated absolute time and return
     sorted_segment_tuples = sorted(merged_segments_with_abs_time.values(), key=lambda item: item[0])
@@ -368,13 +367,13 @@ async def get_transcript_by_native_id(
     
     if not meeting:
         if meeting_id is not None:
-            logger.warning(f"[API] No meeting found for user {current_user.id}, platform '{platform.value}', native ID '{native_meeting_id}', meeting_id '{meeting_id}'")
+            logger.debug(f"[API] No meeting found for user {current_user.id}, platform '{platform.value}', native ID '{native_meeting_id}', meeting_id '{meeting_id}'")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Meeting not found for platform {platform.value}, ID {native_meeting_id}, and meeting_id {meeting_id}"
             )
         else:
-            logger.warning(f"[API] No meeting found for user {current_user.id}, platform '{platform.value}', native ID '{native_meeting_id}'")
+            logger.debug(f"[API] No meeting found for user {current_user.id}, platform '{platform.value}', native ID '{native_meeting_id}'")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Meeting not found for platform {platform.value} and ID {native_meeting_id}"
@@ -385,7 +384,7 @@ async def get_transcript_by_native_id(
 
     sorted_segments = await _get_full_transcript_segments(internal_meeting_id, db, redis_c)
     
-    logger.info(f"[API Meet {internal_meeting_id}] Merged and sorted into {len(sorted_segments)} total segments.")
+    logger.debug(f"[API Meet {internal_meeting_id}] Merged and sorted into {len(sorted_segments)} total segments.")
     
     meeting_details = MeetingResponse.model_validate(meeting)
     response_data = meeting_details.model_dump()
@@ -481,7 +480,7 @@ async def update_meeting_data(
 ):
     """Updates the user-editable data (name, participants, languages, notes) for the latest meeting matching the platform and native ID."""
     
-    logger.info(f"[API] User {current_user.id} updating meeting {platform.value}/{native_meeting_id}")
+    logger.debug(f"[API] User {current_user.id} updating meeting {platform.value}/{native_meeting_id}")
     logger.debug(f"[API] Raw meeting_update object: {meeting_update}")
     logger.debug(f"[API] meeting_update.data type: {type(meeting_update.data)}")
     logger.debug(f"[API] meeting_update.data content: {meeting_update.data}")
@@ -554,7 +553,7 @@ async def update_meeting_data(
     from sqlalchemy.orm import attributes
     attributes.flag_modified(meeting, "data")
     
-    logger.info(f"[API] Updated fields: {', '.join(updated_fields) if updated_fields else 'none'}")
+    logger.debug(f"[API] Updated fields: {', '.join(updated_fields) if updated_fields else 'none'}")
     logger.debug(f"[API] Final meeting.data after update: {meeting.data}")
 
     await db.commit()
@@ -601,19 +600,19 @@ async def delete_meeting(
     
     # Check if already redacted (idempotency)
     if meeting.data and meeting.data.get('redacted'):
-        logger.info(f"[API] Meeting {internal_meeting_id} already redacted, returning success")
+        logger.debug(f"[API] Meeting {internal_meeting_id} already redacted, returning success")
         return {"message": f"Meeting {platform.value}/{native_meeting_id} transcripts already deleted and data anonymized"}
     
     # Check if meeting is in finalized state
     finalized_states = {MeetingStatus.COMPLETED.value, MeetingStatus.FAILED.value}
     if meeting.status not in finalized_states:
-        logger.warning(f"[API] User {current_user.id} attempted to delete non-finalized meeting {internal_meeting_id} (status: {meeting.status})")
+        logger.debug(f"[API] User {current_user.id} attempted to delete non-finalized meeting {internal_meeting_id} (status: {meeting.status})")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Meeting not finalized; cannot delete transcripts. Current status: {meeting.status}"
         )
     
-    logger.info(f"[API] User {current_user.id} purging transcripts and anonymizing meeting {internal_meeting_id}")
+    logger.debug(f"[API] User {current_user.id} purging transcripts and anonymizing meeting {internal_meeting_id}")
     
     # Delete transcripts from PostgreSQL
     stmt_transcripts = select(Transcription).where(Transcription.meeting_id == internal_meeting_id)
@@ -635,7 +634,7 @@ async def delete_meeting(
                 results = await pipe.execute()
             logger.debug(f"[API] Deleted Redis hash {hash_key} and removed from active_meetings")
         except Exception as e:
-            logger.error(f"[API] Failed to delete Redis data for meeting {internal_meeting_id}: {e}")
+            logger.debug(f"[API] Failed to delete Redis data for meeting {internal_meeting_id}: {e}")
     
     # Scrub PII from meeting record while preserving telemetry
     original_data = meeting.data or {}
@@ -654,6 +653,6 @@ async def delete_meeting(
     # Note: We keep Meeting and MeetingSession records for telemetry
     await db.commit()
     
-    logger.info(f"[API] Successfully purged transcripts and anonymized meeting {internal_meeting_id}")
+    logger.debug(f"[API] Successfully purged transcripts and anonymized meeting {internal_meeting_id}")
     
     return {"message": f"Meeting {platform.value}/{native_meeting_id} transcripts deleted and data anonymized"} 

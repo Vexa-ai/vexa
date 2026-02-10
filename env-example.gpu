@@ -1,8 +1,7 @@
 # ============================================================================
 # Vexa Configuration - GPU Mode
 # ============================================================================
-# This configuration uses whisperlive-remote with transcription-service
-# running in GPU mode. Recommended for production use.
+# Uses transcription-gateway (real-time) and transcription-service (HTTP batch).
 # ============================================================================
 
 # ----------------------------------------------------------------------------
@@ -12,36 +11,34 @@ ADMIN_API_TOKEN=token
 # Change this to a secure token in production!
 
 # ----------------------------------------------------------------------------
-# WhisperLive Configuration
+# Transcriber & transcription-service
 # ----------------------------------------------------------------------------
-# DEVICE_TYPE=remote means whisperlive-remote will use transcription-service
 DEVICE_TYPE=remote
-# Note: WHISPER_MODEL_SIZE is not used in remote mode - model is configured in transcription-service
-
 LANGUAGE_DETECTION_SEGMENTS=10
-# Number of segments to analyze before detecting language
-
 VAD_FILTER_THRESHOLD=0.5
-# Voice Activity Detection threshold (0.0-1.0)
-# Lower = more permissive (catches more speech, may include noise)
-# Higher = more strict (fewer false positives, may miss quiet speech)
 
-# Note: WL_MAX_CLIENTS is automatically set to 1000 for remote mode (hardcoded in WhisperLive)
-# No need to configure it - remote mode always uses high capacity
-# These are included for docker-compose compatibility (not used in remote mode):
+# Transcriber WebSocket (bot -> transcription-gateway)
+TRANSCRIBER_WS_URL=ws://transcription-gateway:9090
+
+# AWS (transcription-gateway + transcription-service when backend=aws)
+AWS_REGION=us-east-1
+# AWS_ACCESS_KEY_ID=your_key
+# AWS_SECRET_ACCESS_KEY=your_secret
+
+# Transcription service: aws (default) or whisper
+TRANSCRIPTION_BACKEND=aws
+AWS_TRANSCRIPTION_INPUT_BUCKET=your-vexa-transcribe-input-bucket
+# For Whisper backend: TRANSCRIPTION_BACKEND=whisper (no bucket needed)
+
+# Legacy (docker-compose compatibility)
 WHISPER_MODEL_SIZE=
 WL_MAX_CLIENTS=
 
 # ----------------------------------------------------------------------------
-# Remote Transcription Service Configuration
+# Remote Transcriber API (HTTP batch; must match transcription-service API_TOKEN)
 # ----------------------------------------------------------------------------
-# Transcription service runs in GPU mode (docker-compose.yml)
 REMOTE_TRANSCRIBER_URL=http://transcription-service:80/v1/audio/transcriptions
-# API endpoint for transcription-service (GPU mode load balancer)
-
 REMOTE_TRANSCRIBER_API_KEY=
-# API key for transcription-service authentication
-# Should match API_TOKEN in services/transcription-service/.env
 # If empty, service will accept all requests (not recommended for production)
 
 

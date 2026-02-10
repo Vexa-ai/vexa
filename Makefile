@@ -1,4 +1,4 @@
-.PHONY: all setup submodules env force-env setup-transcription-service-env build-bot-image build build-transcription-service up up-transcription-service down down-transcription-service ps logs test test-api test-setup migrate makemigrations init-db stamp-db migrate-or-init migration-status
+.PHONY: all setup submodules env force-env setup-transcription-service-env build-bot-image build build-transcription-service up up-transcription-service down down-transcription-service ps logs logs-transcript test test-api test-setup migrate makemigrations init-db stamp-db migrate-or-init migration-status
 
 # Default target: Sets up everything and starts the services
 all: setup-env build up migrate-or-init test
@@ -215,7 +215,7 @@ build: check_docker build-bot-image build-transcription-service
 	if [ "$$REMOTE_DB" != "true" ]; then \
 		COMPOSE_FILES="$$COMPOSE_FILES -f docker-compose.local-db.yml"; \
 	fi; \
-	docker compose $$COMPOSE_FILES --profile remote build
+	docker compose $$COMPOSE_FILES build
 
 # Start transcription-service based on TRANSCRIPTION
 up-transcription-service: check_docker
@@ -246,7 +246,7 @@ up: check_docker
 		echo "Creating vexa-network..."; \
 		docker network create vexa-network || true; \
 	fi; \
-	docker compose $$COMPOSE_FILES --profile remote up -d; \
+	docker compose $$COMPOSE_FILES up -d; \
 	sleep 3; \
 	if [ "$$REMOTE_DB" = "true" ]; then \
 		if docker compose $$COMPOSE_FILES ps -q postgres 2>/dev/null | grep -q .; then \
@@ -287,6 +287,23 @@ logs:
 		COMPOSE_FILES="$$COMPOSE_FILES -f docker-compose.local-db.yml"; \
 	fi; \
 	docker compose $$COMPOSE_FILES logs -f
+
+# Tail logs for live transcript pipeline (transcription-gateway, transcription-collector, api-gateway WebSocket)
+logs-transcript:
+	@REMOTE_DB=$$(grep -E '^[[:space:]]*REMOTE_DB=' .env 2>/dev/null | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' | tr '[:upper:]' '[:lower:]' || echo "false"); \
+	COMPOSE_FILES="-f docker-compose.yml"; \
+	if [ "$$REMOTE_DB" != "true" ]; then \
+		COMPOSE_FILES="$$COMPOSE_FILES -f docker-compose.local-db.yml"; \
+	fi; \
+	docker compose $$COMPOSE_FILES logs -f transcription-gateway transcription-collector api-gateway
+
+# Verify AWS credentials and Transcribe Streaming for the transcription-gateway (uses .env)
+check-aws-transcribe:
+	docker compose run --rm transcription-gateway python check_aws.py
+
+# Sort Python imports: stdlib, third party, internal (requires: pip install isort)
+sort-imports:
+	isort services/ libs/ scripts/ testing/ monitor_allocation.py
 
 # Run the interaction test script
 test: check_docker

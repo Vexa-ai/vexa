@@ -57,7 +57,7 @@ def get_socket_session(max_retries=3, delay=2):
     """Initializes and returns a requests_unixsocket session with retries."""
     global unix_socket_session
     if unix_socket_session is None:
-        logger.info(f"Attempting to initialize requests_unixsocket session for {DOCKER_HOST}...")
+        logger.debug(f"Attempting to initialize requests_unixsocket session for {DOCKER_HOST}...")
         retries = 0
         # Extract socket path correctly AND ensure it's absolute
         socket_path_relative = DOCKER_HOST.split('//', 1)[1]
@@ -85,27 +85,27 @@ def get_socket_session(max_retries=3, delay=2):
                 response.raise_for_status() # Raise HTTPError for bad responses
                 version_data = response.json()
                 api_version = version_data.get('ApiVersion')
-                logger.info(f"requests_unixsocket session initialized. Docker API version: {api_version}")
+                logger.debug(f"requests_unixsocket session initialized. Docker API version: {api_version}")
                 unix_socket_session = temp_session # Assign only on success
                 return unix_socket_session
 
             except FileNotFoundError as e:
                  # Log the actual exception message which now includes the absolute path
-                 logger.warning(f"Attempt {retries+1}/{max_retries}: {e}. Retrying in {delay}s...")
+                 logger.debug(f"Attempt {retries+1}/{max_retries}: {e}. Retrying in {delay}s...")
             except ConnectionError as e:
-                 logger.warning(f"Attempt {retries+1}/{max_retries}: Socket connection error ({e}). Is Docker running? Retrying in {delay}s...")
+                 logger.debug(f"Attempt {retries+1}/{max_retries}: Socket connection error ({e}). Is Docker running? Retrying in {delay}s...")
             except HTTPError as e:
-                logger.error(f"Attempt {retries+1}/{max_retries}: HTTP error communicating with Docker socket: {e}", exc_info=True)
+                logger.debug(f"Attempt {retries+1}/{max_retries}: HTTP error communicating with Docker socket: {e}", exc_info=True)
                  # Don't retry on HTTP errors like 4xx/5xx immediately, might be persistent issue
                 break
             except Exception as e:
-                logger.error(f"Attempt {retries+1}/{max_retries}: Failed to initialize requests_unixsocket session: {e}", exc_info=True)
+                logger.debug(f"Attempt {retries+1}/{max_retries}: Failed to initialize requests_unixsocket session: {e}", exc_info=True)
 
             retries += 1
             if retries < max_retries:
                 time.sleep(delay)
             else:
-                logger.error(f"Failed to connect to Docker socket at {DOCKER_HOST} after {max_retries} attempts.")
+                logger.debug(f"Failed to connect to Docker socket at {DOCKER_HOST} after {max_retries} attempts.")
                 unix_socket_session = None
                 raise DockerConnectionError(f"Could not connect to Docker socket after {max_retries} attempts.")
 
@@ -115,11 +115,11 @@ def close_docker_client(): # Keep name for compatibility in main.py
     """Closes the requests_unixsocket session."""
     global unix_socket_session
     if unix_socket_session:
-        logger.info("Closing requests_unixsocket session.")
+        logger.debug("Closing requests_unixsocket session.")
         try:
             unix_socket_session.close()
         except Exception as e:
-            logger.warning(f"Error closing requests_unixsocket session: {e}")
+            logger.debug(f"Error closing requests_unixsocket session: {e}")
         unix_socket_session = None
 
 # Helper async function to record session start
@@ -133,9 +133,9 @@ async def _record_session_start(meeting_id: int, session_uid: str):
             )
             db_session.add(new_session)
             await db_session.commit()
-            logger.info(f"Recorded start for session {session_uid} for meeting {meeting_id}")
+            logger.debug(f"Recorded start for session {session_uid} for meeting {meeting_id}")
     except Exception as db_err:
-        logger.error(f"Failed to record session start for session {session_uid}, meeting {meeting_id}: {db_err}", exc_info=True)
+        logger.debug(f"Failed to record session start for session {session_uid}, meeting {meeting_id}: {db_err}", exc_info=True)
         # Log error but allow the main function to continue
 
 # Make the function async
@@ -148,7 +148,8 @@ async def start_bot_container(
     user_token: str,
     native_meeting_id: str,
     language: Optional[str],
-    task: Optional[str]
+    task: Optional[str],
+    passcode: Optional[str] = None,
 ) -> Optional[tuple[str, str]]:
     """
     Starts a vexa-bot container via requests_unixsocket AFTER checking user limit.
@@ -172,14 +173,14 @@ async def start_bot_container(
     # --- Original start_bot_container logic (using requests_unixsocket) --- 
     session = get_socket_session()
     if not session:
-        logger.error("Cannot start bot container, requests_unixsocket session not available.")
+        logger.debug("Cannot start bot container, requests_unixsocket session not available.")
         return None, None
 
     container_name = f"vexa-bot-{meeting_id}-{uuid.uuid4().hex[:8]}"
     if not bot_name:
         bot_name = f"VexaBot-{uuid.uuid4().hex[:6]}"
     connection_id = str(uuid.uuid4())
-    logger.info(f"Generated unique connectionId for bot session: {connection_id}")
+    logger.debug(f"Generated unique connectionId for bot session: {connection_id}")
 
     # Mint MeetingToken (HS256) - import at top of file if not present
     from app.main import mint_meeting_token
@@ -192,7 +193,7 @@ async def start_bot_container(
             ttl_seconds=7200  # 2 hours
         )
     except Exception as token_err:
-        logger.error(f"Failed to mint MeetingToken for meeting {meeting_id}: {token_err}", exc_info=True)
+        logger.debug(f"Failed to mint MeetingToken for meeting {meeting_id}: {token_err}", exc_info=True)
         return None, None
     
     # Construct BOT_CONFIG JSON - Include new fields
@@ -215,29 +216,28 @@ async def start_bot_container(
         },
         "botManagerCallbackUrl": f"http://bot-manager:8080/bots/internal/callback/exited"
     }
+    if passcode:
+        bot_config_data["passcode"] = passcode
     # Remove keys with None values before serializing
     cleaned_config_data = {k: v for k, v in bot_config_data.items() if v is not None}
     bot_config_json = json.dumps(cleaned_config_data)
 
     logger.debug(f"Bot config: {bot_config_json}") # Log the full config
 
-    # Get the WhisperLive URL from bot-manager's own environment.
-    # This is set in docker-compose.yml to ws://whisperlive.internal/ws to go through Traefik.
-    whisper_live_url_for_bot = os.getenv('WHISPER_LIVE_URL')
+    # Transcriber WebSocket URL (e.g. transcription-gateway or compatible backend).
+    transcriber_ws_url = os.getenv('TRANSCRIBER_WS_URL') or os.getenv('WHISPER_LIVE_URL')
+    if not transcriber_ws_url:
+        logger.debug("TRANSCRIBER_WS_URL and WHISPER_LIVE_URL are not set. Bot will not be able to connect to a transcriber until one is configured.")
 
-    if not whisper_live_url_for_bot:
-        # This should ideally not happen if docker-compose.yml is correctly configured.
-        logger.error("CRITICAL: WHISPER_LIVE_URL is not set in bot-manager's environment. Falling back to default, but this should be fixed in docker-compose.yml for bot-manager service.")
-        whisper_live_url_for_bot = 'ws://whisperlive.internal/ws' # Fallback, but log an error.
+    logger.debug(f"Passing TRANSCRIBER_WS_URL to bot: {transcriber_ws_url or '(not set)'}")
 
-    logger.info(f"Passing WHISPER_LIVE_URL to bot: {whisper_live_url_for_bot}")
-
-    # These are the environment variables passed to the Node.js process  of the vexa-bot started by your entrypoint.sh.
     environment = [
         f"BOT_CONFIG={bot_config_json}",
-        f"WHISPER_LIVE_URL={whisper_live_url_for_bot}", # Use the URL from bot-manager's env
         f"LOG_LEVEL={os.getenv('LOG_LEVEL', 'INFO').upper()}",
     ]
+    if transcriber_ws_url:
+        environment.append(f"TRANSCRIBER_WS_URL={transcriber_ws_url}")
+        environment.append(f"WHISPER_LIVE_URL={transcriber_ws_url}")
 
     # Ensure absolute path for URL encoding here as well
     socket_path_relative = DOCKER_HOST.split('//', 1)[1]
@@ -261,40 +261,47 @@ async def start_bot_container(
 
     container_id = None # Initialize container_id
     try:
-        logger.info(f"Attempting to create bot container '{container_name}' ({BOT_IMAGE_NAME}) via socket ({socket_url_base})...")
+        logger.debug(f"Attempting to create bot container '{container_name}' ({BOT_IMAGE_NAME}) via socket ({socket_url_base})...")
         response = session.post(create_url, json=create_payload)
-        response.raise_for_status()
+        if not response.ok:
+            err_body = response.text
+            logger.debug(
+                "Docker container create failed. status=%s body=%s. "
+                "Ensure image exists: make build-bot-image or docker build -t %s -f services/vexa-bot/core/Dockerfile ./services/vexa-bot/core",
+                response.status_code, err_body, BOT_IMAGE_NAME
+            )
+            return None, None
         container_info = response.json()
         container_id = container_info.get('Id')
 
         if not container_id:
-            logger.error(f"Failed to create container: No ID in response: {container_info}")
+            logger.debug(f"Failed to create container: No ID in response: {container_info}")
             return None, None
 
-        logger.info(f"Container {container_id} created. Starting...")
+        logger.debug(f"Container {container_id} created. Starting...")
 
         start_url = start_url_template.format(container_id)
         response = session.post(start_url)
 
         if response.status_code != 204:
-            logger.error(f"Failed to start container {container_id}. Status: {response.status_code}, Response: {response.text}")
+            logger.debug(f"Failed to start container {container_id}. Status: {response.status_code}, Response: {response.text}")
             # Consider removing the created container if start fails?
             return None, None
 
-        logger.info(f"Successfully started container {container_id} for meeting: {meeting_id}")
+        logger.debug(f"Successfully started container {container_id} for meeting: {meeting_id}")
         
         # *** REMOVED Session Recording Call - To be handled by caller ***
         # try:
         #     asyncio.run(_record_session_start(meeting_id, connection_id))
         # except RuntimeError as e:
-        #     logger.error(f"Error running async session recording: {e}. Session start NOT recorded.")
+        #     logger.debug(f"Error running async session recording: {e}. Session start NOT recorded.")
 
         return container_id, connection_id # Return both values
 
     except RequestException as e:
-        logger.error(f"HTTP error communicating with Docker socket: {e}", exc_info=True)
+        logger.debug(f"HTTP error communicating with Docker socket: {e}", exc_info=True)
     except Exception as e:
-        logger.error(f"Unexpected error starting container via socket: {e}", exc_info=True)
+        logger.debug(f"Unexpected error starting container via socket: {e}", exc_info=True)
 
     # Clean up created container if start failed or exception occurred before returning container_id
     # This requires careful handling to avoid race conditions if another process is managing it.
@@ -307,7 +314,7 @@ def stop_bot_container(container_id: str) -> bool:
     """Stops a container using its ID via requests_unixsocket."""
     session = get_socket_session()
     if not session:
-        logger.error(f"Cannot stop container {container_id}, requests_unixsocket session not available.")
+        logger.debug(f"Cannot stop container {container_id}, requests_unixsocket session not available.")
         return False
 
     # Ensure absolute path for URL encoding here as well
@@ -320,36 +327,36 @@ def stop_bot_container(container_id: str) -> bool:
     # Since AutoRemove=True, we don't need a separate remove call
 
     try:
-        logger.info(f"Attempting to stop container {container_id} via socket ({stop_url})...") # Log stop URL
+        logger.debug(f"Attempting to stop container {container_id} via socket ({stop_url})...") # Log stop URL
         # Send POST request to stop the container. Docker waits for it to stop.
         # Timeout can be added via query param `t` (e.g., ?t=10 for 10 seconds)
         response = session.post(f"{stop_url}?t=10") 
         
         # Check status code: 204 No Content (success), 304 Not Modified (already stopped), 404 Not Found
         if response.status_code == 204:
-            logger.info(f"Successfully sent stop command to container {container_id}.")
+            logger.debug(f"Successfully sent stop command to container {container_id}.")
             return True
         elif response.status_code == 304:
-            logger.warning(f"Container {container_id} was already stopped.")
+            logger.debug(f"Container {container_id} was already stopped.")
             return True
         elif response.status_code == 404:
-            logger.warning(f"Container {container_id} not found, assuming already stopped/removed.")
+            logger.debug(f"Container {container_id} not found, assuming already stopped/removed.")
             return True 
         else:
             # Raise exception for other errors (like 500)
-            logger.error(f"Error stopping container {container_id}. Status: {response.status_code}, Body: {response.text}")
+            logger.debug(f"Error stopping container {container_id}. Status: {response.status_code}, Body: {response.text}")
             response.raise_for_status()
             return False # Should not be reached if raise_for_status() works
 
     except RequestException as e:
         # Handle 404 specifically if raise_for_status() doesn't catch it as expected
         if hasattr(e, 'response') and e.response is not None and e.response.status_code == 404:
-            logger.warning(f"Container {container_id} not found (exception check), assuming already stopped/removed.")
+            logger.debug(f"Container {container_id} not found (exception check), assuming already stopped/removed.")
             return True
-        logger.error(f"HTTP error stopping container {container_id}: {e}", exc_info=True)
+        logger.debug(f"HTTP error stopping container {container_id}: {e}", exc_info=True)
         return False
     except Exception as e:
-        logger.error(f"Unexpected error stopping container {container_id}: {e}", exc_info=True)
+        logger.debug(f"Unexpected error stopping container {container_id}: {e}", exc_info=True)
         return False 
 
 # --- ADDED: Get Running Bot Status --- 
@@ -358,7 +365,7 @@ async def get_running_bots_status(user_id: int) -> List[Dict[str, Any]]:
     """Gets status of RUNNING bot containers for a user using labels via socket API, including DB lookup for meeting details."""
     session = get_socket_session()
     if not session:
-        logger.error("[Bot Status] Cannot get status, requests_unixsocket session not available.")
+        logger.debug("[Bot Status] Cannot get status, requests_unixsocket session not available.")
         return [] 
         
     bots_status = []
@@ -382,13 +389,13 @@ async def get_running_bots_status(user_id: int) -> List[Dict[str, Any]]:
         response.raise_for_status()
         
         running_containers = response.json()
-        logger.info(f"[Bot Status] Found {len(running_containers)} running containers for user {user_id}")
+        logger.debug(f"[Bot Status] Found {len(running_containers)} running containers for user {user_id}")
 
     except RequestException as sock_err:
-        logger.error(f"[Bot Status] Failed to list containers via socket API for user {user_id}: {sock_err}", exc_info=True)
+        logger.debug(f"[Bot Status] Failed to list containers via socket API for user {user_id}: {sock_err}", exc_info=True)
         return [] # Return empty on error listing containers
     except Exception as e:
-        logger.error(f"[Bot Status] Unexpected error listing containers for user {user_id}: {e}", exc_info=True)
+        logger.debug(f"[Bot Status] Unexpected error listing containers for user {user_id}: {e}", exc_info=True)
         return []
         
     # Perform DB lookups asynchronously for each container
@@ -414,7 +421,7 @@ async def get_running_bots_status(user_id: int) -> List[Dict[str, Any]]:
                       # Try converting to int for DB lookup
                       meeting_id_int = int(meeting_id_from_name)
             except (ValueError, IndexError, Exception) as parse_err:
-                 logger.warning(f"[Bot Status] Could not parse meeting ID from container name '{name}': {parse_err}")
+                 logger.debug(f"[Bot Status] Could not parse meeting ID from container name '{name}': {parse_err}")
                  meeting_id_int = None # Ensure it's None if parsing fails
             
             # If we have a valid meeting ID, query the DB
@@ -426,9 +433,9 @@ async def get_running_bots_status(user_id: int) -> List[Dict[str, Any]]:
                         native_meeting_id = meeting.platform_specific_id
                         logger.debug(f"[Bot Status] Found DB details for meeting {meeting_id_int}: platform={platform}, native_id={native_meeting_id}")
                     else:
-                        logger.warning(f"[Bot Status] No meeting found in DB for ID {meeting_id_int} parsed from container '{name}'")
+                        logger.debug(f"[Bot Status] No meeting found in DB for ID {meeting_id_int} parsed from container '{name}'")
                 except Exception as db_err:
-                    logger.error(f"[Bot Status] DB error fetching meeting {meeting_id_int}: {db_err}", exc_info=True)
+                    logger.debug(f"[Bot Status] DB error fetching meeting {meeting_id_int}: {db_err}", exc_info=True)
             
             # Map a normalized status from Docker's human string
             normalized_status = None
@@ -463,7 +470,7 @@ async def verify_container_running(container_id: str) -> bool:
     """Verify if a container exists and is running via the Docker socket API."""
     session = get_socket_session() # Assumes get_socket_session() is defined in this file
     if not session:
-        logger.error(f"[Verify Container] Cannot verify container {container_id}, requests_unixsocket session not available.")
+        logger.debug(f"[Verify Container] Cannot verify container {container_id}, requests_unixsocket session not available.")
         return False # Or raise an exception, depending on desired error handling
 
     # Construct the correct base URL for socket requests
@@ -490,22 +497,22 @@ async def verify_container_running(container_id: str) -> bool:
         response = await loop.run_in_executor(None, session.get, inspect_url)
 
         if response.status_code == 404:
-            logger.info(f"[Verify Container] Container {container_id} not found (404).")
+            logger.debug(f"[Verify Container] Container {container_id} not found (404).")
             return False
         
         response.raise_for_status() # Raise an exception for other bad status codes (500, etc.)
         
         container_info = response.json()
         is_running = container_info.get('State', {}).get('Running', False)
-        logger.info(f"[Verify Container] Container {container_id} found. Running: {is_running}")
+        logger.debug(f"[Verify Container] Container {container_id} found. Running: {is_running}")
         return is_running
         
     except requests.exceptions.RequestException as e: # Catching requests-specific exceptions
         if hasattr(e, 'response') and e.response is not None and e.response.status_code == 404:
-             logger.warning(f"[Verify Container] Container {container_id} not found during request (exception check).")
+             logger.debug(f"[Verify Container] Container {container_id} not found during request (exception check).")
              return False
-        logger.error(f"[Verify Container] HTTP error inspecting container {container_id}: {e}", exc_info=True)
+        logger.debug(f"[Verify Container] HTTP error inspecting container {container_id}: {e}", exc_info=True)
         return False # Treat HTTP errors (other than 404) as "not verifiable" or "not running"
     except Exception as e:
-        logger.error(f"[Verify Container] Unexpected error inspecting container {container_id}: {e}", exc_info=True)
+        logger.debug(f"[Verify Container] Unexpected error inspecting container {container_id}: {e}", exc_info=True)
         return False # Treat other errors as "not verifiable" or "not running"

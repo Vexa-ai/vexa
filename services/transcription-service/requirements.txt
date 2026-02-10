@@ -1,6 +1,8 @@
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 python-multipart>=0.0.6
-faster-whisper>=1.0.0
 soundfile>=0.12.0
 numpy>=1.21.0,<2.0.0
+boto3>=1.34.0
+# Optional: only needed when TRANSCRIPTION_BACKEND=whisper
+faster-whisper>=1.0.0

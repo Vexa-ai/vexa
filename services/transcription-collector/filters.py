@@ -45,33 +45,33 @@ class TranscriptionFilter:
             # Add additional patterns from config
             if hasattr(config, 'ADDITIONAL_FILTER_PATTERNS'):
                 self.patterns.extend(config.ADDITIONAL_FILTER_PATTERNS)
-                logger.info(f"Added {len(config.ADDITIONAL_FILTER_PATTERNS)} patterns from config")
+                logger.debug(f"Added {len(config.ADDITIONAL_FILTER_PATTERNS)} patterns from config")
             
             # Set minimum character length
             if hasattr(config, 'MIN_CHARACTER_LENGTH'):
                 self.min_character_length = config.MIN_CHARACTER_LENGTH
-                logger.info(f"Set minimum character length to {self.min_character_length}")
+                logger.debug(f"Set minimum character length to {self.min_character_length}")
             
             # Set minimum real words
             if hasattr(config, 'MIN_REAL_WORDS'):
                 self.min_real_words = config.MIN_REAL_WORDS
-                logger.info(f"Set minimum real words to {self.min_real_words}")
+                logger.debug(f"Set minimum real words to {self.min_real_words}")
             
             # Add custom filter functions
             if hasattr(config, 'CUSTOM_FILTERS'):
                 self.custom_filters.extend(config.CUSTOM_FILTERS)
-                logger.info(f"Added {len(config.CUSTOM_FILTERS)} custom filter functions")
+                logger.debug(f"Added {len(config.CUSTOM_FILTERS)} custom filter functions")
             
             # Add stopwords
             if hasattr(config, 'STOPWORDS'):
                 self.stopwords = config.STOPWORDS
-                logger.info(f"Loaded stopwords for {len(config.STOPWORDS)} languages")
+                logger.debug(f"Loaded stopwords for {len(config.STOPWORDS)} languages")
                 
-            logger.info("Successfully loaded filter configuration")
+            logger.debug("Successfully loaded filter configuration")
         except ImportError:
-            logger.warning("No filter_config.py found, using default settings")
+            logger.debug("No filter_config.py found, using default settings")
         except Exception as e:
-            logger.error(f"Error loading filter configuration: {e}")
+            logger.debug(f"Error loading filter configuration: {e}")
     
     def add_custom_filter(self, filter_function):
         """
@@ -197,7 +197,7 @@ class TranscriptionFilter:
                     logger.debug(f"Text filtered by custom filter {custom_filter.__name__} for MeetingID {meeting_id}: '{original_text_for_logging}'")
                     return False
             except Exception as e:
-                logger.error(f"Error in custom filter {custom_filter.__name__} for MeetingID {meeting_id}: {e}")
+                logger.debug(f"Error in custom filter {custom_filter.__name__} for MeetingID {meeting_id}: {e}")
         
         # If all filters pass, add to cache for this meeting and return True
         current_meeting_cache.append({'text': text, 'start': start_time, 'end': end_time}) # Add stripped text to cache

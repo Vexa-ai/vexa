@@ -17,4 +17,6 @@ export type BotConfig = {
   reconnectionIntervalMs?: number,
   meeting_id: number,  // Required, not optional
   botManagerCallbackUrl?: string;
+  /** Teams (and others): meeting passcode when required to join */
+  passcode?: string | null;
 }

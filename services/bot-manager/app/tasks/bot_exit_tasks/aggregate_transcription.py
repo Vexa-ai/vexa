@@ -12,7 +12,7 @@ async def run(meeting: Meeting, db: AsyncSession):
     aggregates participant and language information, and updates the meeting record.
     """
     meeting_id = meeting.id
-    logger.info(f"Starting transcription aggregation for meeting {meeting_id}")
+    logger.debug(f"Starting transcription aggregation for meeting {meeting_id}")
 
     try:
         # Use environment variable for URL, with fallback for docker-compose (separate containers)
@@ -24,15 +24,15 @@ async def run(meeting: Meeting, db: AsyncSession):
         collector_url = f"{collector_base_url}/internal/transcripts/{meeting_id}"
         
         async with httpx.AsyncClient() as client:
-            logger.info(f"Calling transcription-collector for meeting {meeting_id} at {collector_url}")
+            logger.debug(f"Calling transcription-collector for meeting {meeting_id} at {collector_url}")
             response = await client.get(collector_url, timeout=30.0) # Increased timeout
         
         if response.status_code == 200:
             transcription_segments = response.json()
-            logger.info(f"Received {len(transcription_segments)} segments from collector for meeting {meeting_id}")
+            logger.debug(f"Received {len(transcription_segments)} segments from collector for meeting {meeting_id}")
             
             if not transcription_segments:
-                logger.info(f"No transcription segments returned for meeting {meeting_id}. Nothing to aggregate.")
+                logger.debug(f"No transcription segments returned for meeting {meeting_id}. Nothing to aggregate.")
                 return
 
             unique_speakers = set()
@@ -71,17 +71,17 @@ async def run(meeting: Meeting, db: AsyncSession):
                 if data_changed:
                     meeting.data = existing_data
                     # The caller is responsible for the commit
-                    logger.info(f"Auto-aggregated data for meeting {meeting_id}: {aggregated_data}")
+                    logger.debug(f"Auto-aggregated data for meeting {meeting_id}: {aggregated_data}")
                 else:
-                    logger.info(f"Data for 'participants' and 'languages' already exists in meeting {meeting_id}. No update performed.")
+                    logger.debug(f"Data for 'participants' and 'languages' already exists in meeting {meeting_id}. No update performed.")
 
             else:
-                logger.info(f"No new participants or languages to aggregate for meeting {meeting_id}")
+                logger.debug(f"No new participants or languages to aggregate for meeting {meeting_id}")
 
         else:
-            logger.error(f"Failed to get transcript from collector for meeting {meeting_id}. Status: {response.status_code}, Body: {response.text}")
+            logger.debug(f"Failed to get transcript from collector for meeting {meeting_id}. Status: {response.status_code}, Body: {response.text}")
 
     except httpx.RequestError as exc:
-        logger.error(f"An error occurred while requesting transcript for meeting {meeting_id} from {exc.request.url!r}: {exc}", exc_info=True)
+        logger.debug(f"An error occurred while requesting transcript for meeting {meeting_id} from {exc.request.url!r}: {exc}", exc_info=True)
     except Exception as e:
-        logger.error(f"Failed to process and aggregate data for meeting {meeting_id}: {e}", exc_info=True) 
+        logger.debug(f"Failed to process and aggregate data for meeting {meeting_id}: {e}", exc_info=True) 

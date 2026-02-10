@@ -18,7 +18,7 @@ This document describes the system design and implementation of the platform‑a
   - Each platform exports a handler entrypoint (`googlemeet/index.ts`, `msteams/index.ts`) that wires strategies into `runMeetingFlow`
 - Browser‑side helpers (injected bundle): `browser-utils.global.js` (built into `dist/`)
   - `BrowserAudioService`: captures and mixes media stream(s)
-  - `BrowserWhisperLiveService`: WebSocket to WhisperLive with stubborn reconnection
+  - `BrowserTranscriberService`: WebSocket to transcription-gateway (or compatible backend) with reconnection
   - Exposes `window.performLeaveAction()` for platform‑specific leave UX
 
 ## Repository Structure (core)
@@ -59,7 +59,7 @@ core/
    - `waitForAdmission()` resolves admitted or returns structured timeouts/rejection
 4) Startup: `callStartupCallback()` once admitted
 5) Recording + Removal Race:
-   - `startRecording()` begins streaming audio and events to WhisperLive
+   - `startRecording()` begins streaming audio and events to the transcriber backend
    - `startRemovalMonitor()` signals if the bot is removed; flow races and exits correctly
 6) Leave/Teardown: always call provided `gracefulLeaveFunction()` with reason
 
@@ -102,8 +102,9 @@ await runMeetingFlow("google_meet", botConfig, page, gracefulLeave, {
 });
 ```
 
-## WhisperLive Integration
-- Uses `BrowserWhisperLiveService` in the browser with NEVER‑GIVE‑UP reconnection (“stubborn mode”)
+## Transcriber Integration
+- Uses `BrowserTranscriberService` in the browser with reconnection
+- Connects to a transcription-gateway or compatible WebSocket backend (see `TRANSCRIBER_WS_URL`)
 - Sends initial config with platform, connectionId, meeting URL/ID
 - Gates audio until server signals ready; supports diagnostics logs
 
@@ -119,7 +120,7 @@ await runMeetingFlow("google_meet", botConfig, page, gracefulLeave, {
 
 ## Configuration (BotConfig)
 - Key fields: `platform`, `meetingUrl`, `botName`, `connectionId`, `redisUrl`, `automaticLeave` timeouts
-- Environment: `WHISPER_LIVE_URL`, `WL_MAX_CLIENTS`
+- Environment: `TRANSCRIBER_WS_URL` (or `WHISPER_LIVE_URL` for backward compatibility)
 
 ## Development & Debugging
 

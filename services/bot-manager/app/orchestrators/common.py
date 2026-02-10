@@ -22,28 +22,28 @@ async def enforce_user_concurrency_limit(
     """
     user = await TranscriptionService.get_or_create_user(user_id)
     if not user:
-        logger.error(f"User with ID {user_id} not found during limit check.")
+        logger.debug(f"User with ID {user_id} not found during limit check.")
         raise HTTPException(status_code=404, detail=f"User {user_id} not found.")
 
     try:
         current_bot_count = await count_running_bots_for_user()
     except Exception as e:  # noqa: BLE001
-        logger.error(
+        logger.debug(
             f"Failed to count running bots for user {user_id}: {e}", exc_info=True
         )
         raise HTTPException(status_code=500, detail="Failed to verify current bot count.")
 
     user_limit = getattr(user, "max_concurrent_bots", None)
-    logger.info(
+    logger.debug(
         f"[Limit Check] User {user_id}: running/pending bots={current_bot_count}, limit={user_limit}"
     )
 
     if user_limit is None:
-        logger.error(f"User {user_id} missing 'max_concurrent_bots' attribute.")
+        logger.debug(f"User {user_id} missing 'max_concurrent_bots' attribute.")
         raise HTTPException(status_code=500, detail="User configuration error: Bot limit not set.")
 
     if current_bot_count >= int(user_limit):
-        logger.warning(
+        logger.debug(
             f"User {user_id} reached bot limit ({user_limit}). Rejecting new launch."
         )
         raise HTTPException(
@@ -51,7 +51,7 @@ async def enforce_user_concurrency_limit(
             detail=f"User has reached the maximum concurrent bot limit ({user_limit}).",
         )
 
-    logger.info(
+    logger.debug(
         f"[Limit Check] User {user_id} under limit ({current_bot_count}/{user_limit})."
     )
 
@@ -70,10 +70,10 @@ async def count_user_active_bots(user_id: int) -> int:
                 )
             )
             count = result.scalar_one() if hasattr(result, 'scalar_one') else result.scalar() or 0
-            logger.info(f"[Seat Count] User {user_id}: active/requested meetings (excluding 'stopping') = {count}")
+            logger.debug(f"[Seat Count] User {user_id}: active/requested meetings (excluding 'stopping') = {count}")
             return int(count)
     except Exception as e:
-        logger.warning(f"[Seat Count] Fallback due to DB error for user {user_id}: {e}")
+        logger.debug(f"[Seat Count] Fallback due to DB error for user {user_id}: {e}")
         # Fallback conservatively to 0 so we don't block users due to a read error
         return 0
 

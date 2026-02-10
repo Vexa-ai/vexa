@@ -250,8 +250,8 @@ Note: Meeting IDs are user-provided (Google Meet code like `xxx-xxxx-xxx` or Tea
 - [mcp](./services/mcp): Provides MCP-capable agents with Vexa as a toolkit
 - [bot-manager](./services/bot-manager): Handles bot lifecycle management
 - [vexa-bot](./services/vexa-bot): The bot that joins meetings and captures audio
-- [WhisperLive](./services/WhisperLive): Real-time audio transcription service (uses transcription-service as backend in remote mode)
-- [transcription-service](./services/transcription-service): Basic transcription service (WhisperLive uses it as a real-time wrapper)
+- [transcription-gateway](./services/transcription-gateway): WebSocket gateway that accepts bot audio and transcribes via **AWS Transcribe Streaming**. Pushes segments to Redis for the transcription-collector. Set `TRANSCRIBER_WS_URL=ws://transcription-gateway:9090` and AWS credentials to use it.
+- [transcription-service](./services/transcription-service): Optional HTTP transcription service (e.g. Whisper). Bots use the transcriber backend at `TRANSCRIBER_WS_URL` for real-time streaming (default: transcription-gateway with AWS Transcribe).
 - [transcription-collector](./services/transcription-collector): Processes and stores transcription segments
 - [Database models](./libs/shared-models/shared_models/models.py): Data structures for storing meeting information
 

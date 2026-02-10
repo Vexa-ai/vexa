@@ -30,6 +30,25 @@ services:
       - vexa_default
     restart: unless-stopped
 
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_DB=${DB_NAME:-vexa}
+      - POSTGRES_USER=${DB_USER:-postgres}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-vexa}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - vexa_default
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_HOST_PORT:-5438}:5432"
+
   admin-api:
     build:
       context: .
@@ -46,6 +65,9 @@ services:
       - ADMIN_API_TOKEN=${ADMIN_API_TOKEN}
       - LOG_LEVEL=DEBUG
     init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - vexa_default
     restart: unless-stopped
@@ -57,7 +79,7 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - BOT_IMAGE_NAME=${BOT_IMAGE_NAME:-vexa-bot:dev}
-      - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa_default
+      - DOCKER_NETWORK=${DOCKER_NETWORK:-${COMPOSE_PROJECT_NAME:-vexa_dev}_vexa_default}
       - LOG_LEVEL=DEBUG
       - DB_HOST=${DB_HOST:-postgres}
       - DB_PORT=${DB_PORT:-5432}
@@ -67,7 +89,8 @@ services:
       - DB_SSL_MODE=${DB_SSL_MODE:-disable}
       - DOCKER_HOST=unix://var/run/docker.sock
       - DEVICE_TYPE=${DEVICE_TYPE}
-      - WHISPER_LIVE_URL=ws://whisperlive-remote:9090/ws  # Direct connection to whisperlive-remote
+      - TRANSCRIBER_WS_URL=${TRANSCRIBER_WS_URL:-ws://transcription-gateway:9090}
+      - WHISPER_LIVE_URL=${WHISPER_LIVE_URL:-}
       - ADMIN_TOKEN=${ADMIN_API_TOKEN}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -76,138 +99,33 @@ services:
     depends_on:
       redis:
         condition: service_started
+      postgres:
+        condition: service_healthy
     networks:
       - vexa_default
     restart: unless-stopped
 
-  whisperlive:
-    profiles: ["gpu"]
+  transcription-gateway:
     build:
       context: .
-      dockerfile: services/WhisperLive/Dockerfile.project
-    volumes:
-      - ./hub:/root/.cache/huggingface/hub
-      - ./services/WhisperLive/models:/app/models
-    environment:
-      # Use Redis Stream URL instead of WebSocket URL
-      - REDIS_STREAM_URL=redis://redis:6379/0/transcription_segments
-      # Keep the old URL for backward compatibility
-      - TRANSCRIPTION_COLLECTOR_URL=redis://redis:6379/0/transcription_segments
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_DB=0
-      - REDIS_STREAM_NAME=transcription_segments
-      - LANGUAGE_DETECTION_SEGMENTS=${LANGUAGE_DETECTION_SEGMENTS}
-      - DEVICE_TYPE=${DEVICE_TYPE}
-      - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}
-      - WL_MAX_CLIENTS=${WL_MAX_CLIENTS}
-      # Server-level speaker-based circuit breaker
-      - WL_USE_SPEAKER_GROUND_TRUTH=${WL_USE_SPEAKER_GROUND_TRUTH:-true}
-      - WL_SERVER_SPEAKER_NO_TX_STALL_S=${WL_SERVER_SPEAKER_NO_TX_STALL_S:-30}
-      - WL_SPEAKER_ACTIVE_WINDOW_S=${WL_SPEAKER_ACTIVE_WINDOW_S:-8}
-      - WL_SERVER_WARMUP_S=${WL_SERVER_WARMUP_S:-60}
-      # VAD filter - most permissive to catch hallucinations during silence
-      - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD:-0}
-      # Minimum audio duration (seconds) before triggering transcription - lower = lower latency
-      - MIN_AUDIO_S=${MIN_AUDIO_S:-2.0}
-      - CONSUL_ENABLE=false
-      - WL_REDIS_DISCOVERY_ENABLED=false
-    command: --port 9090 --backend faster_whisper --faster_whisper_custom_model_path ${WHISPER_MODEL_SIZE} --min_audio_s ${MIN_AUDIO_S:-2.0}
+      dockerfile: services/transcription-gateway/Dockerfile
     expose:
-      - "9090" #use for transcription web socket
-      - "9091" #use for health check
-    deploy:
-      replicas: 1
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["3"] # Ensure this is configurable or correct for your setup
-              capabilities: [gpu]
+      - "9090"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_STREAM_NAME=transcription_segments
+      - REDIS_SPEAKER_EVENTS_STREAM_NAME=speaker_events_relative
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - DEFAULT_LANGUAGE=${DEFAULT_LANGUAGE:-en-US}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     init: true
     depends_on:
-      transcription-collector:
+      redis:
         condition: service_started
     networks:
       - vexa_default
-  # CPU version of WhisperLive for users without GPU
-  whisperlive-cpu:
-    profiles: ["cpu"]
-    build:
-      context: .
-      dockerfile: services/WhisperLive/Dockerfile.cpu
-    volumes:
-      - ./hub:/root/.cache/huggingface/hub
-      - ./services/WhisperLive/models:/app/models
-    environment:
-      - REDIS_STREAM_URL=redis://redis:6379/0/transcription_segments
-      - TRANSCRIPTION_COLLECTOR_URL=redis://redis:6379/0/transcription_segments
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_DB=0
-      - REDIS_STREAM_NAME=transcription_segments
-      - LANGUAGE_DETECTION_SEGMENTS=${LANGUAGE_DETECTION_SEGMENTS}
-      - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD}
-      # Minimum audio duration (seconds) before triggering transcription - lower = lower latency
-      - MIN_AUDIO_S=${MIN_AUDIO_S:-2.0}
-      - DEVICE_TYPE=cpu
-      - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}
-      - WL_MAX_CLIENTS=${WL_MAX_CLIENTS}
-      - CONSUL_ENABLE=false
-    deploy:
-      replicas: 1
-    command: --port 9090 --backend faster_whisper --faster_whisper_custom_model_path ${WHISPER_MODEL_SIZE} --min_audio_s ${MIN_AUDIO_S:-2.0}
-    expose:
-      - "9090" #use for transcription web socket
-      - "9091" #use for health check
-    init: true
-    depends_on:
-      transcription-collector:
-        condition: service_started
-    networks:
-      - vexa_default
-    # Don't auto-start CPU version, users can manually start it
-    restart: unless-stopped
-
-  # Remote API version of WhisperLive
-  whisperlive-remote:
-    profiles: ["remote"]
-    build:
-      context: .
-      dockerfile: services/WhisperLive/Dockerfile.cpu
-    volumes:
-      - ./hub:/root/.cache/huggingface/hub
-      - ./services/WhisperLive/models:/app/models
-    environment:
-      - REDIS_STREAM_URL=redis://redis:6379/0/transcription_segments
-      - TRANSCRIPTION_COLLECTOR_URL=redis://redis:6379/0/transcription_segments
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_DB=0
-      - REDIS_STREAM_NAME=transcription_segments
-      - LANGUAGE_DETECTION_SEGMENTS=${LANGUAGE_DETECTION_SEGMENTS}
-      - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD}
-      # Minimum audio duration (seconds) before triggering transcription - lower = lower latency
-      - MIN_AUDIO_S=${MIN_AUDIO_S:-2.0}
-      # Reconfirmation threshold - lower values reduce latency by reconfirming segments faster
-      - SAME_OUTPUT_THRESHOLD=${SAME_OUTPUT_THRESHOLD:-3}
-      - DEVICE_TYPE=remote
-      - REMOTE_TRANSCRIBER_URL=${REMOTE_TRANSCRIBER_URL}
-      - REMOTE_TRANSCRIBER_API_KEY=${REMOTE_TRANSCRIBER_API_KEY}
-      - CONSUL_ENABLE=false
-    deploy:
-      replicas: 1
-    command: --port 9090 --backend remote
-    expose:
-      - "9090" #use for transcription web socket
-      - "9091" #use for health check
-    init: true
-    depends_on:
-      transcription-collector:
-        condition: service_started
-    networks:
-      - vexa_default
-      - vexa-network
     restart: unless-stopped
 
   transcription-collector:
@@ -242,6 +160,8 @@ services:
     depends_on:
       redis:
         condition: service_started
+      postgres:
+        condition: service_healthy
     networks:
       - vexa_default
     restart: unless-stopped

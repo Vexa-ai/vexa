@@ -1,0 +1,5 @@
+[tool.isort]
+profile = "black"
+sections = ["FUTURE", "STDLIB", "THIRDPARTY", "FIRSTPARTY", "LOCALFOLDER"]
+known_first_party = ["app", "shared_models", "config", "filters", "mapping", "api", "streaming", "background"]
+line_length = 100

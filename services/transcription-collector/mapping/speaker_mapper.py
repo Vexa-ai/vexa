@@ -87,7 +87,7 @@ def map_speaker_to_segment(
             event['relative_client_timestamp_ms'] = timestamp # Ensure timestamp is part of the event dict
             parsed_events.append(event)
         except json.JSONDecodeError:
-            logger.warning(f"Failed to parse speaker event JSON: {event_json}")
+            logger.debug(f"Failed to parse speaker event JSON: {event_json}")
             continue
     
     if not parsed_events:
@@ -113,7 +113,7 @@ def map_speaker_to_segment(
         participant_name = event.get("participant_name", "unknown")
 
         if not participant_id:
-            logger.warning(f"[MapSpeaker] Event at {event_ts:.0f}ms missing both participant_id_meet and participant_name: {event}")
+            logger.debug(f"[MapSpeaker] Event at {event_ts:.0f}ms missing both participant_id_meet and participant_name: {event}")
             continue
 
         if event["event_type"] == "SPEAKER_START":
@@ -204,13 +204,13 @@ def map_speaker_to_segment(
             logger.debug(f"[MapSpeaker] {participant_name} does NOT overlap with segment (overlap_start >= overlap_end)")
 
     if not active_speakers_in_segment:
-        logger.warning(f"[MapSpeaker] No active speakers found for segment [{segment_start_ms:.0f}ms, {segment_end_ms:.0f}ms] - returning UNKNOWN")
+        logger.debug(f"[MapSpeaker] No active speakers found for segment [{segment_start_ms:.0f}ms, {segment_end_ms:.0f}ms] - returning UNKNOWN")
         mapping_status = STATUS_UNKNOWN
     elif len(active_speakers_in_segment) == 1:
         active_speaker_name = active_speakers_in_segment[0]["name"]
         active_participant_id = active_speakers_in_segment[0]["id"]
         mapping_status = STATUS_MAPPED
-        logger.info(f"[MapSpeaker] MAPPED segment [{segment_start_ms:.0f}ms, {segment_end_ms:.0f}ms] to {active_speaker_name} (ID: {active_participant_id})")
+        logger.debug(f"[MapSpeaker] MAPPED segment [{segment_start_ms:.0f}ms, {segment_end_ms:.0f}ms] to {active_speaker_name} (ID: {active_participant_id})")
     else:
         # Multiple speakers overlap. Prioritize by longest overlap.
         # If overlaps are equal, could use other heuristics (e.g. latest start). For now, longest.
@@ -218,7 +218,7 @@ def map_speaker_to_segment(
         active_speaker_name = active_speakers_in_segment[0]["name"]
         active_participant_id = active_speakers_in_segment[0]["id"]
         mapping_status = STATUS_MULTIPLE
-        logger.info(f"[MapSpeaker] MULTIPLE speakers for segment [{segment_start_ms:.0f}ms, {segment_end_ms:.0f}ms]. Selected {active_speaker_name} (overlap: {active_speakers_in_segment[0]['overlap_duration']:.0f}ms) over {len(active_speakers_in_segment)-1} other(s)")
+        logger.debug(f"[MapSpeaker] MULTIPLE speakers for segment [{segment_start_ms:.0f}ms, {segment_end_ms:.0f}ms]. Selected {active_speaker_name} (overlap: {active_speakers_in_segment[0]['overlap_duration']:.0f}ms) over {len(active_speakers_in_segment)-1} other(s)")
 
     return {
         "speaker_name": active_speaker_name,
@@ -240,7 +240,7 @@ async def get_speaker_mapping_for_segment(
     then maps them to determine the speaker.
     """
     if not session_uid:
-        logger.warning(f"{context_log_msg} No session_uid provided. Cannot map speakers.")
+        logger.debug(f"{context_log_msg} No session_uid provided. Cannot map speakers.")
         return {"speaker_name": None, "participant_id_meet": None, "status": STATUS_UNKNOWN}
 
     mapped_speaker_name: Optional[str] = None
@@ -296,7 +296,7 @@ async def get_speaker_mapping_for_segment(
                                 ids.add(pid[:8])
                         except Exception:
                             counts["unparseable"] = counts.get("unparseable", 0) + 1
-                    logger.info(
+                    logger.debug(
                         f"{context_log_msg} [DiagLateEvents] UID:{session_uid[:8]} "
                         f"segEnd={segment_end_ms:.0f}ms bufferEnd={fetch_end_ms:.0f}ms lateCount={len(late_events_raw)} "
                         f"types={counts} participantIdPrefixes={sorted(list(ids))[:5]}"
@@ -313,7 +313,7 @@ async def get_speaker_mapping_for_segment(
             elif isinstance(event_data, str):
                 event_json_str = event_data
             else:
-                logger.warning(f"{context_log_msg} UID:{session_uid} Seg:{segment_start_ms}-{segment_end_ms} Unexpected speaker event data type from Redis: {type(event_data)}. Skipping this event.")
+                logger.debug(f"{context_log_msg} UID:{session_uid} Seg:{segment_start_ms}-{segment_end_ms} Unexpected speaker event data type from Redis: {type(event_data)}. Skipping this event.")
                 continue
             speaker_events_for_mapper.append((event_json_str, float(score_ms)))
 
@@ -338,13 +338,13 @@ async def get_speaker_mapping_for_segment(
         mapping_status = mapping_result.get("status", STATUS_ERROR)
         
         if mapping_status != STATUS_NO_SPEAKER_EVENTS: # Avoid double logging if no events
-             logger.info(f"{log_prefix_detail} Result: Name='{mapped_speaker_name}', Status='{mapping_status}'")
+             logger.debug(f"{log_prefix_detail} Result: Name='{mapped_speaker_name}', Status='{mapping_status}'")
 
     except redis.exceptions.RedisError as re:
-        logger.error(f"{context_log_msg} UID:{session_uid} Seg:{segment_start_ms}-{segment_end_ms} Redis error fetching/processing speaker events: {re}", exc_info=True)
+        logger.debug(f"{context_log_msg} UID:{session_uid} Seg:{segment_start_ms}-{segment_end_ms} Redis error fetching/processing speaker events: {re}", exc_info=True)
         mapping_status = STATUS_ERROR 
     except Exception as map_err:
-        logger.error(f"{context_log_msg} UID:{session_uid} Seg:{segment_start_ms}-{segment_end_ms} Speaker mapping error: {map_err}", exc_info=True)
+        logger.debug(f"{context_log_msg} UID:{session_uid} Seg:{segment_start_ms}-{segment_end_ms} Speaker mapping error: {map_err}", exc_info=True)
         mapping_status = STATUS_ERROR
     
     return {

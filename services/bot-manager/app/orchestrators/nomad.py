@@ -55,7 +55,8 @@ async def start_bot_container(
     user_token: str,
     native_meeting_id: str,
     language: Optional[str],
-    task: Optional[str]
+    task: Optional[str],
+    passcode: Optional[str] = None,
 ) -> Optional[Tuple[str, str]]:
     """Dispatch a parameterised *vexa-bot* Nomad job.
 
@@ -76,7 +77,7 @@ async def start_bot_container(
             ttl_seconds=7200  # 2 hours
         )
     except Exception as token_err:
-        logger.error(f"Failed to mint MeetingToken for meeting {meeting_id}: {token_err}", exc_info=True)
+        logger.debug(f"Failed to mint MeetingToken for meeting {meeting_id}: {token_err}", exc_info=True)
         return None, None
 
     meta: Dict[str, str] = {
@@ -91,6 +92,8 @@ async def start_bot_container(
         "language": language or "",
         "task": task or "",
     }
+    if passcode:
+        meta["passcode"] = passcode
 
     # Nomad job dispatch endpoint
     url = f"{NOMAD_ADDR}/v1/job/{BOT_JOB_NAME}/dispatch"
@@ -100,7 +103,7 @@ async def start_bot_container(
         "Meta": meta
     }
 
-    logger.info(
+    logger.debug(
         f"Dispatching Nomad job '{BOT_JOB_NAME}' for meeting {meeting_id} with meta {meta} -> {url}"
     )
 
@@ -111,11 +114,11 @@ async def start_bot_container(
             data = resp.json()
             dispatched_id = data.get("DispatchedJobID") or data.get("EvaluationID")
             if not dispatched_id:
-                logger.warning(
+                logger.debug(
                     "Nomad dispatch response missing DispatchedJobID; full response: %s", data
                 )
                 dispatched_id = f"unknown-{uuid.uuid4()}"
-            logger.info(
+            logger.debug(
                 "Successfully dispatched Nomad job. Dispatch ID=%s, connection_id=%s",
                 dispatched_id,
                 connection_id,
@@ -129,14 +132,14 @@ async def start_bot_container(
                 error_details = error_body
         except Exception:
             pass
-        logger.error(
+        logger.debug(
             "HTTP %s error dispatching Nomad job to %s: %s. Response body: %s",
             e.response.status_code, NOMAD_ADDR, e, error_details
         )
     except httpx.HTTPError as e:
-        logger.error("HTTP error talking to Nomad at %s: %s", NOMAD_ADDR, e)
+        logger.debug("HTTP error talking to Nomad at %s: %s", NOMAD_ADDR, e)
     except Exception as e:  # noqa: BLE001
-        logger.exception("Unexpected error dispatching Nomad job: %s", e)
+        logger.debug("Unexpected error dispatching Nomad job: %s", e)
 
     return None, None
 
@@ -146,7 +149,7 @@ def stop_bot_container(container_id: str) -> bool:
 
     Uses the Nomad API to stop the job allocation.
     """
-    logger.info(f"Stopping Nomad allocation {container_id}")
+    logger.debug(f"Stopping Nomad allocation {container_id}")
     
     try:
         # Use requests for synchronous operation
@@ -156,28 +159,28 @@ def stop_bot_container(container_id: str) -> bool:
         url = f"{NOMAD_ADDR}/v1/allocation/{container_id}/stop"
         resp = requests.post(url, timeout=10)
         if resp.status_code == 200:
-            logger.info(f"Successfully stopped allocation {container_id}")
+            logger.debug(f"Successfully stopped allocation {container_id}")
             return True
         if resp.status_code == 404:
-            logger.warning(f"Allocation {container_id} not found as allocation. Falling back to job deregister.")
+            logger.debug(f"Allocation {container_id} not found as allocation. Falling back to job deregister.")
         else:
-            logger.warning(f"Allocation stop returned HTTP {resp.status_code}. Falling back to job deregister for {container_id}.")
+            logger.debug(f"Allocation stop returned HTTP {resp.status_code}. Falling back to job deregister for {container_id}.")
 
         # Fallback: treat container_id as job ID and deregister with purge
         try:
             job_url = f"{NOMAD_ADDR}/v1/job/{container_id}/deregister?purge=true"
             job_resp = requests.post(job_url, timeout=10)
             if job_resp.status_code in (200, 202, 404):
-                logger.info(f"Job deregister fallback for {container_id} returned HTTP {job_resp.status_code}.")
+                logger.debug(f"Job deregister fallback for {container_id} returned HTTP {job_resp.status_code}.")
                 return True
-            logger.error(f"Job deregister fallback failed for {container_id}: HTTP {job_resp.status_code}")
+            logger.debug(f"Job deregister fallback failed for {container_id}: HTTP {job_resp.status_code}")
             return False
         except Exception as e:
-            logger.error(f"Error during job deregister fallback for {container_id}: {e}")
+            logger.debug(f"Error during job deregister fallback for {container_id}: {e}")
             return False
             
     except Exception as e:
-        logger.error(f"Error stopping allocation {container_id}: {e}")
+        logger.debug(f"Error stopping allocation {container_id}: {e}")
     return False
 
 
@@ -187,7 +190,7 @@ async def get_running_bots_status(user_id: int) -> List[Dict[str, Any]]:
     Queries the Nomad API to find all running vexa-bot jobs and filters them
     by the user_id in the job metadata.
     """
-    logger.info(f"Querying Nomad for running bots for user {user_id}")
+    logger.debug(f"Querying Nomad for running bots for user {user_id}")
     
     try:
         # Query Nomad for all running vexa-bot jobs
@@ -262,18 +265,18 @@ async def get_running_bots_status(user_id: int) -> List[Dict[str, Any]]:
                         logger.debug(f"Found running bot: {bot_status}")
                         
                 except Exception as detail_error:
-                    logger.warning(f"Failed to get details for job {job_id}: {detail_error}")
+                    logger.debug(f"Failed to get details for job {job_id}: {detail_error}")
                     continue
             
-            logger.info(f"Found {len(running_bots)} running bots for user {user_id}")
+            logger.debug(f"Found {len(running_bots)} running bots for user {user_id}")
             return running_bots
             
     except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP {e.response.status_code} error querying Nomad jobs: {e}")
+        logger.debug(f"HTTP {e.response.status_code} error querying Nomad jobs: {e}")
     except httpx.HTTPError as e:
-        logger.error(f"HTTP error talking to Nomad at {NOMAD_ADDR}: {e}")
+        logger.debug(f"HTTP error talking to Nomad at {NOMAD_ADDR}: {e}")
     except Exception as e:
-        logger.exception(f"Unexpected error querying Nomad for running bots: {e}")
+        logger.debug(f"Unexpected error querying Nomad for running bots: {e}")
     
     # Return empty list on any error
     return []
@@ -306,13 +309,13 @@ async def verify_container_running(container_id: str) -> bool:
         if e.response.status_code == 404:
             logger.debug(f"Allocation {container_id} not found (404), not running")
             return False
-        logger.warning(f"HTTP {e.response.status_code} error checking allocation {container_id}: {e}")
+        logger.debug(f"HTTP {e.response.status_code} error checking allocation {container_id}: {e}")
         return False
     except httpx.HTTPError as e:
-        logger.warning(f"HTTP error checking allocation {container_id}: {e}")
+        logger.debug(f"HTTP error checking allocation {container_id}: {e}")
         return False
     except Exception as e:
-        logger.warning(f"Unexpected error checking allocation {container_id}: {e}")
+        logger.debug(f"Unexpected error checking allocation {container_id}: {e}")
         return False
 
 # Alias for shared function – import lazily to avoid circulars

@@ -429,7 +429,7 @@ class MeetingResponse(BaseModel): # Not inheriting from MeetingBase anymore to a
                 return MeetingStatus(v)
             except ValueError:
                 # For unknown status values, default to 'completed' as a safe fallback
-                logger.warning("Unknown meeting status '%s' → completed", v)
+                logger.debug("Unknown meeting status '%s' → completed", v)
                 return MeetingStatus.COMPLETED
         
         return v
@@ -660,7 +660,7 @@ class MeetingTableResponse(BaseModel):
                 return MeetingStatus(v)
             except ValueError:
                 # For unknown status values, default to 'completed' as a safe fallback
-                logger.warning("Unknown meeting status '%s' → completed", v)
+                logger.debug("Unknown meeting status '%s' → completed", v)
                 return MeetingStatus.COMPLETED
         
         return v
