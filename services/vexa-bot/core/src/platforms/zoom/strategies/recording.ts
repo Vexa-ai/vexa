@@ -9,6 +9,8 @@ let whisperLive: WhisperLiveService | null = null;
 let whisperSocket: WebSocket | null = null;
 let recordingStopResolver: (() => void) | null = null;
 let parecordProcess: ChildProcess | null = null;
+let audioSessionStartTime: number | null = null;
+let activeSpeakers = new Set<number>();  // Currently active speaker user IDs
 
 export async function startZoomRecording(page: Page | null, botConfig: BotConfig): Promise<void> {
   log('[Zoom] Starting audio recording and WhisperLive connection');
@@ -80,6 +82,16 @@ export async function startZoomRecording(page: Page | null, botConfig: BotConfig
       }
     }
 
+    // Set audio session start time for relative timestamps
+    audioSessionStartTime = Date.now();
+    log(`[Zoom] Audio session start time: ${audioSessionStartTime}`);
+
+    // Register speaker change callback
+    await sdkManager.onActiveSpeakerChange((activeUserIds: number[]) => {
+      handleActiveSpeakerChange(activeUserIds, sdkManager, whisperLive, botConfig);
+    });
+    log('[Zoom] Speaker detection initialized');
+
     // Block until stopZoomRecording() is called (meeting ends or bot is removed)
     await new Promise<void>((resolve) => {
       recordingStopResolver = resolve;
@@ -94,6 +106,10 @@ export async function stopZoomRecording(): Promise<void> {
   log('[Zoom] Stopping recording');
 
   try {
+    // Reset speaker state
+    audioSessionStartTime = null;
+    activeSpeakers.clear();
+
     // Unblock startZoomRecording's blocking wait
     if (recordingStopResolver) {
       recordingStopResolver();
@@ -200,4 +216,59 @@ async function startPulseAudioCapture(whisperLive: WhisperLiveService | null): P
       }
     }, 1000);
   });
+}
+
+/**
+ * Handle active speaker changes from Zoom SDK.
+ * Tracks which users started/stopped speaking and sends events to WhisperLive.
+ */
+function handleActiveSpeakerChange(
+  activeUserIds: number[],
+  sdkManager: any,
+  whisperLive: WhisperLiveService | null,
+  botConfig: BotConfig
+): void {
+  if (!whisperLive || !audioSessionStartTime) {
+    return;
+  }
+
+  const currentSpeakers = new Set(activeUserIds);
+  const relativeTimestampMs = Date.now() - audioSessionStartTime;
+
+  // Find users who started speaking (new in currentSpeakers, not in activeSpeakers)
+  for (const userId of currentSpeakers) {
+    if (!activeSpeakers.has(userId)) {
+      const userInfo = sdkManager.getUserInfo(userId);
+      if (userInfo) {
+        log(`🎤 [Zoom] SPEAKER_START: ${userInfo.userName} (ID: ${userId})`);
+        whisperLive.sendSpeakerEvent(
+          'SPEAKER_START',
+          userInfo.userName,
+          String(userId),
+          relativeTimestampMs,
+          botConfig
+        );
+      }
+    }
+  }
+
+  // Find users who stopped speaking (in activeSpeakers, not in currentSpeakers)
+  for (const userId of activeSpeakers) {
+    if (!currentSpeakers.has(userId)) {
+      const userInfo = sdkManager.getUserInfo(userId);
+      if (userInfo) {
+        log(`🔇 [Zoom] SPEAKER_END: ${userInfo.userName} (ID: ${userId})`);
+        whisperLive.sendSpeakerEvent(
+          'SPEAKER_END',
+          userInfo.userName,
+          String(userId),
+          relativeTimestampMs,
+          botConfig
+        );
+      }
+    }
+  }
+
+  // Update active speakers set
+  activeSpeakers = currentSpeakers;
 }

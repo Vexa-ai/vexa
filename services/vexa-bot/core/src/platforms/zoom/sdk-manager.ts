@@ -98,6 +98,30 @@ export class ZoomSDKManager {
     this.sdk.joinAudio();
   }
 
+  async onActiveSpeakerChange(callback: (activeUserIds: number[]) => void): Promise<void> {
+    if (this.isStubMode) {
+      console.log('[Zoom SDK Stub] Speaker change callback registered');
+      return;
+    }
+
+    this.sdk.onActiveSpeakerChange(callback);
+    console.log('[Zoom SDK] Speaker change callback registered');
+  }
+
+  getUserInfo(userId: number): { userId: number; userName: string; isHost: boolean } | null {
+    if (this.isStubMode) {
+      return { userId, userName: `Stub User ${userId}`, isHost: false };
+    }
+
+    try {
+      const userInfo = this.sdk.getUserInfo(userId);
+      return userInfo;
+    } catch (error) {
+      console.log(`[Zoom SDK] Failed to get user info for ${userId}: ${error}`);
+      return null;
+    }
+  }
+
   async startRecording(onAudioData: (buffer: Buffer, sampleRate: number) => void): Promise<void> {
     if (this.isStubMode) {
       console.log('[Zoom SDK Stub] Start recording called');

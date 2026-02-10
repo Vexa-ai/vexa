@@ -26,6 +26,7 @@
 #include "rawdata/zoom_rawdata_api.h"
 #include "rawdata/rawdata_audio_helper_interface.h"
 #include "meeting_service_components/meeting_audio_interface.h"
+#include "meeting_service_components/meeting_participants_ctrl_interface.h"
 
 // Global Qt application (runs on Node.js main thread)
 static QCoreApplication* g_qtApp = nullptr;
@@ -125,6 +126,40 @@ public:
 };
 
 // ============================================================
+// Audio Event Handler (for speaker detection)
+// ============================================================
+class AudioEventHandler : public IMeetingAudioCtrlEvent {
+public:
+    Napi::ThreadSafeFunction tsfSpeaker_;
+
+    void onUserActiveAudioChange(lstActiveAudioUser lstAudioUsers) override {
+        if (!tsfSpeaker_) return;
+
+        // Convert SDK user list to vector for thread-safe callback
+        std::vector<unsigned int> activeUserIds;
+        for (int i = 0; i < lstAudioUsers.count(); i++) {
+            activeUserIds.push_back(lstAudioUsers.at(i));
+        }
+
+        // Call JavaScript callback via ThreadSafeFunction
+        tsfSpeaker_.NonBlockingCall(
+            [activeUserIds](Napi::Env env, Napi::Function jsCallback) {
+                Napi::Array arr = Napi::Array::New(env, activeUserIds.size());
+                for (size_t i = 0; i < activeUserIds.size(); i++) {
+                    arr[i] = Napi::Number::New(env, activeUserIds[i]);
+                }
+                jsCallback.Call({ arr });
+            }
+        );
+    }
+
+    // Other audio events (no-ops for now)
+    void onUserAudioStatusChange(IList<IUserAudioStatus*>*) override {}
+    void onHostRequestStartAudio(IRequestStartAudioHandler*) override {}
+    void onActiveSpeakerVideoUserChanged(unsigned int) override {}
+};
+
+// ============================================================
 // Audio Raw Data Delegate
 // ============================================================
 class AudioDelegate : public IZoomSDKAudioRawDataDelegate {
@@ -171,6 +206,8 @@ private:
     Napi::Value OnAuthResult(const Napi::CallbackInfo& info);
     Napi::Value OnMeetingStatus(const Napi::CallbackInfo& info);
     Napi::Value OnAudioData(const Napi::CallbackInfo& info);
+    Napi::Value OnActiveSpeakerChange(const Napi::CallbackInfo& info);
+    Napi::Value GetUserInfo(const Napi::CallbackInfo& info);
 
     // SDK objects
     IAuthService*               authService_    = nullptr;
@@ -182,6 +219,7 @@ private:
     AuthEventHandler    authHandler_;
     MeetingEventHandler meetingHandler_;
     AudioDelegate       audioDelegate_;
+    AudioEventHandler   audioEventHandler_;
 
     bool initialized_ = false;
 
@@ -226,9 +264,11 @@ Napi::Object ZoomSDKNode::Init(Napi::Env env, Napi::Object exports) {
         InstanceMethod("startRecording",  &ZoomSDKNode::StartRecording),
         InstanceMethod("stopRecording",   &ZoomSDKNode::StopRecording),
         InstanceMethod("cleanup",         &ZoomSDKNode::Cleanup),
-        InstanceMethod("onAuthResult",    &ZoomSDKNode::OnAuthResult),
-        InstanceMethod("onMeetingStatus", &ZoomSDKNode::OnMeetingStatus),
-        InstanceMethod("onAudioData",     &ZoomSDKNode::OnAudioData),
+        InstanceMethod("onAuthResult",           &ZoomSDKNode::OnAuthResult),
+        InstanceMethod("onMeetingStatus",        &ZoomSDKNode::OnMeetingStatus),
+        InstanceMethod("onAudioData",            &ZoomSDKNode::OnAudioData),
+        InstanceMethod("onActiveSpeakerChange",  &ZoomSDKNode::OnActiveSpeakerChange),
+        InstanceMethod("getUserInfo",            &ZoomSDKNode::GetUserInfo),
     });
     exports.Set("ZoomSDK", func);
     return exports;
@@ -488,6 +528,63 @@ Napi::Value ZoomSDKNode::OnAudioData(const Napi::CallbackInfo& info) {
     audioDelegate_.tsf_ = Napi::ThreadSafeFunction::New(
         env, info[0].As<Napi::Function>(), "audioCallback", 0, 1);
     return env.Undefined();
+}
+
+Napi::Value ZoomSDKNode::OnActiveSpeakerChange(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsFunction()) {
+        Napi::TypeError::New(env, "Expected function").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    // Create ThreadSafeFunction for speaker events
+    audioEventHandler_.tsfSpeaker_ = Napi::ThreadSafeFunction::New(
+        env, info[0].As<Napi::Function>(), "speakerCallback", 0, 1
+    );
+
+    // Register event handler with audio controller
+    if (audioController_) {
+        audioController_->SetEvent(&audioEventHandler_);
+        std::cout << "[ZoomSDK] Speaker event handler registered" << std::endl;
+    } else {
+        std::cerr << "[ZoomSDK] Audio controller not available for speaker events" << std::endl;
+    }
+
+    return env.Undefined();
+}
+
+Napi::Value ZoomSDKNode::GetUserInfo(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsNumber()) {
+        Napi::TypeError::New(env, "Expected user ID (number)").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    unsigned int userId = info[0].As<Napi::Number>().Uint32Value();
+
+    if (!meetingService_) {
+        Napi::Error::New(env, "Meeting service not available").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    IMeetingParticipantsController* participantsCtrl =
+        meetingService_->GetMeetingParticipantsController();
+    if (!participantsCtrl) {
+        Napi::Error::New(env, "Participants controller not available").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    IUserInfo* userInfo = participantsCtrl->GetUserByUserID(userId);
+    if (!userInfo) {
+        return env.Null();  // User not found (may have left)
+    }
+
+    Napi::Object result = Napi::Object::New(env);
+    result.Set("userId", Napi::Number::New(env, userId));
+    result.Set("userName", Napi::String::New(env, userInfo->GetUserName() ? userInfo->GetUserName() : "Unknown"));
+    result.Set("isHost", Napi::Boolean::New(env, userInfo->IsHost()));
+
+    return result;
 }
 
 // Module initialization
