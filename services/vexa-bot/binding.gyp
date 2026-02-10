@@ -6,7 +6,8 @@
     ],
     "include_dirs": [
       "<!@(node -p \"require('node-addon-api').include\")",
-      "core/src/platforms/zoom/native/zoom_meeting_sdk/h"
+      "core/src/platforms/zoom/native/zoom_meeting_sdk/h",
+      "<!@(pkg-config --cflags-only-I Qt5Core 2>/dev/null | tr ' ' '\\n' | sed 's/^-I//')"
     ],
     "libraries": [
     ],
@@ -26,7 +27,9 @@
           "-L<(module_root_dir)/core/src/platforms/zoom/native/zoom_meeting_sdk",
           "-lmeetingsdk",
           "-lpthread",
-          "-Wl,-rpath,'$$ORIGIN/core/src/platforms/zoom/native/zoom_meeting_sdk'"
+          "<!@(pkg-config --libs Qt5Core 2>/dev/null)",
+          "-Wl,-rpath,$$ORIGIN/../../core/src/platforms/zoom/native/zoom_meeting_sdk",
+          "-Wl,-rpath,$$ORIGIN/../../core/src/platforms/zoom/native/zoom_meeting_sdk/qt_libs"
         ]
       }]
     ]

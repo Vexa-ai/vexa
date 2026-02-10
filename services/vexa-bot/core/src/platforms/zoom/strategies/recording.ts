@@ -6,6 +6,7 @@ import { log } from '../../../utils';
 
 let whisperLive: WhisperLiveService | null = null;
 let whisperSocket: WebSocket | null = null;
+let recordingStopResolver: (() => void) | null = null;
 
 export async function startZoomRecording(page: Page | null, botConfig: BotConfig): Promise<void> {
   log('[Zoom] Starting audio recording and WhisperLive connection');
@@ -58,6 +59,11 @@ export async function startZoomRecording(page: Page | null, botConfig: BotConfig
     });
 
     log('[Zoom] Recording started, streaming to WhisperLive at 16kHz');
+
+    // Block until stopZoomRecording() is called (meeting ends or bot is removed)
+    await new Promise<void>((resolve) => {
+      recordingStopResolver = resolve;
+    });
   } catch (error) {
     log(`[Zoom] Error starting recording: ${error}`);
     throw error;
@@ -68,6 +74,12 @@ export async function stopZoomRecording(): Promise<void> {
   log('[Zoom] Stopping recording');
 
   try {
+    // Unblock startZoomRecording's blocking wait
+    if (recordingStopResolver) {
+      recordingStopResolver();
+      recordingStopResolver = null;
+    }
+
     const sdkManager = getSDKManager();
     await sdkManager.stopRecording();
 

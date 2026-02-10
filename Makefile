@@ -190,12 +190,12 @@ build-bot-image: check_docker
 	@if [ -f .env ]; then \
 		ENV_BOT_IMAGE_NAME=$$(grep BOT_IMAGE_NAME .env | cut -d= -f2); \
 		if [ -n "$$ENV_BOT_IMAGE_NAME" ]; then \
-			docker build -t $$ENV_BOT_IMAGE_NAME -f services/vexa-bot/core/Dockerfile ./services/vexa-bot/core; \
+			docker build --platform linux/amd64 -t $$ENV_BOT_IMAGE_NAME -f services/vexa-bot/Dockerfile ./services/vexa-bot; \
 		else \
-			docker build -t $(BOT_IMAGE_NAME) -f services/vexa-bot/core/Dockerfile ./services/vexa-bot/core; \
+			docker build --platform linux/amd64 -t $(BOT_IMAGE_NAME) -f services/vexa-bot/Dockerfile ./services/vexa-bot; \
 		fi; \
 	else \
-		docker build -t $(BOT_IMAGE_NAME) -f services/vexa-bot/core/Dockerfile ./services/vexa-bot/core; \
+		docker build --platform linux/amd64 -t $(BOT_IMAGE_NAME) -f services/vexa-bot/Dockerfile ./services/vexa-bot; \
 	fi
 
 # Build transcription-service based on TRANSCRIPTION

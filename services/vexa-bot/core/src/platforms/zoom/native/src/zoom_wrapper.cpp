@@ -1,20 +1,164 @@
 /**
- * Simplified Zoom SDK wrapper - stub implementation
- * This version compiles without the actual Zoom SDK for initial testing
+ * Zoom Meeting SDK N-API wrapper
+ * Uses libmeetingsdk.so (Linux x86_64)
  */
 
 #include <napi.h>
 #include <iostream>
 #include <string>
+#include <vector>
+#include <stdint.h>
+#include <cstring>
 
-namespace vexazoom {
+// Qt event loop (required for Zoom SDK async callbacks on Linux)
+#include <QCoreApplication>
+#include <QEventLoop>
 
-class ZoomSDK : public Napi::ObjectWrap<ZoomSDK> {
+// libuv (to hook into Node.js event loop for Qt event pumping)
+#include <uv.h>
+
+// Zoom SDK headers
+#include "zoom_sdk.h"
+#include "auth_service_interface.h"
+#include "meeting_service_interface.h"
+#include "zoom_sdk_def.h"
+#include "zoom_sdk_raw_data_def.h"
+#include "rawdata/zoom_rawdata_api.h"
+#include "rawdata/rawdata_audio_helper_interface.h"
+
+// Global Qt application (runs on Node.js main thread)
+static QCoreApplication* g_qtApp = nullptr;
+static uv_idle_t g_uvIdle;
+static bool g_idleStarted = false;
+
+// Called by libuv on each event loop iteration - pumps Qt events
+static void pumpQtEvents(uv_idle_t* /*handle*/) {
+    if (g_qtApp) {
+        g_qtApp->processEvents(QEventLoop::AllEvents, 5);
+    }
+}
+
+static void ensureQtApp(Napi::Env /*env*/) {
+    if (g_qtApp) return;
+    static int argc = 0;
+    g_qtApp = new QCoreApplication(argc, nullptr);
+    // Register libuv idle handler to pump Qt events on every Node.js tick.
+    // uv_default_loop() is the same loop Node.js uses on the main thread.
+    uv_loop_t* loop = uv_default_loop();
+    if (loop && !g_idleStarted) {
+        uv_idle_init(loop, &g_uvIdle);
+        uv_idle_start(&g_uvIdle, pumpQtEvents);
+        // Unref so the idle handle doesn't prevent process exit
+        uv_unref((uv_handle_t*)&g_uvIdle);
+        g_idleStarted = true;
+    }
+    std::cout << "[ZoomSDK] Qt event pumping via libuv idle registered" << std::endl;
+}
+
+using namespace ZOOMSDK;
+
+// ============================================================
+// Auth Event Handler
+// ============================================================
+class AuthEventHandler : public IAuthServiceEvent {
+public:
+    Napi::ThreadSafeFunction tsf_;
+
+    void onAuthenticationReturn(AuthResult ret) override {
+        if (!tsf_) return;
+        int code = (int)ret;
+        bool success = (ret == AUTHRET_SUCCESS);
+        tsf_.NonBlockingCall([code, success](Napi::Env env, Napi::Function jsCallback) {
+            Napi::Object result = Napi::Object::New(env);
+            result.Set("success", Napi::Boolean::New(env, success));
+            result.Set("code", Napi::Number::New(env, code));
+            jsCallback.Call({result});
+        });
+    }
+
+    void onLoginReturnWithReason(LOGINSTATUS, IAccountInfo*, LoginFailReason) override {}
+    void onLogout() override {}
+    void onZoomIdentityExpired() override {}
+    void onZoomAuthIdentityExpired() override {}
+};
+
+// ============================================================
+// Meeting Event Handler
+// ============================================================
+class MeetingEventHandler : public IMeetingServiceEvent {
+public:
+    Napi::ThreadSafeFunction tsf_;
+
+    void onMeetingStatusChanged(MeetingStatus status, int iResult) override {
+        if (!tsf_) return;
+        int statusInt = (int)status;
+        int code = iResult;
+        tsf_.NonBlockingCall([statusInt, code](Napi::Env env, Napi::Function jsCallback) {
+            Napi::Object result = Napi::Object::New(env);
+            const char* statusStr = "unknown";
+            switch ((MeetingStatus)statusInt) {
+                case MEETING_STATUS_IDLE:             statusStr = "idle"; break;
+                case MEETING_STATUS_CONNECTING:       statusStr = "connecting"; break;
+                case MEETING_STATUS_WAITINGFORHOST:   statusStr = "waiting_for_host"; break;
+                case MEETING_STATUS_INMEETING:        statusStr = "in_meeting"; break;
+                case MEETING_STATUS_DISCONNECTING:    statusStr = "disconnecting"; break;
+                case MEETING_STATUS_RECONNECTING:     statusStr = "reconnecting"; break;
+                case MEETING_STATUS_FAILED:           statusStr = "failed"; break;
+                case MEETING_STATUS_ENDED:            statusStr = "ended"; break;
+                case MEETING_STATUS_IN_WAITING_ROOM:  statusStr = "waiting_room"; break;
+                default: statusStr = "unknown"; break;
+            }
+            result.Set("status", Napi::String::New(env, statusStr));
+            result.Set("code", Napi::Number::New(env, code));
+            jsCallback.Call({result});
+        });
+    }
+
+    void onMeetingStatisticsWarningNotification(StatisticsWarningType) override {}
+    void onMeetingParameterNotification(const MeetingParameter*) override {}
+    void onSuspendParticipantsActivities() override {}
+    void onAICompanionActiveChangeNotice(bool) override {}
+    void onMeetingTopicChanged(const zchar_t*) override {}
+    void onMeetingFullToWatchLiveStream(const zchar_t*) override {}
+    void onUserNetworkStatusChanged(MeetingComponentType, ConnectionQuality, unsigned int, bool) override {}
+};
+
+// ============================================================
+// Audio Raw Data Delegate
+// ============================================================
+class AudioDelegate : public IZoomSDKAudioRawDataDelegate {
+public:
+    Napi::ThreadSafeFunction tsf_;
+
+    void onMixedAudioRawDataReceived(AudioRawData* data) override {
+        if (!tsf_ || !data) return;
+        unsigned int len = data->GetBufferLen();
+        if (len == 0) return;
+        unsigned int sampleRate = data->GetSampleRate();
+        // Copy data before returning (SDK-owned pointer)
+        std::vector<char> buffer(data->GetBuffer(), data->GetBuffer() + len);
+        tsf_.NonBlockingCall([buf = std::move(buffer), sampleRate](Napi::Env env, Napi::Function jsCallback) mutable {
+            Napi::Buffer<char> nodeBuf = Napi::Buffer<char>::Copy(env, buf.data(), buf.size());
+            jsCallback.Call({nodeBuf, Napi::Number::New(env, (double)sampleRate)});
+        });
+    }
+
+    void onOneWayAudioRawDataReceived(AudioRawData*, uint32_t) override {}
+    void onShareAudioRawDataReceived(AudioRawData*, uint32_t) override {}
+    void onOneWayInterpreterAudioRawDataReceived(AudioRawData*, const zchar_t*) override {}
+};
+
+// ============================================================
+// Main ZoomSDK Node.js class
+// ============================================================
+class ZoomSDKNode : public Napi::ObjectWrap<ZoomSDKNode> {
 public:
     static Napi::Object Init(Napi::Env env, Napi::Object exports);
-    ZoomSDK(const Napi::CallbackInfo& info);
+    ZoomSDKNode(const Napi::CallbackInfo& info);
+    ~ZoomSDKNode();
 
 private:
+    // N-API methods
     Napi::Value Initialize(const Napi::CallbackInfo& info);
     Napi::Value Authenticate(const Napi::CallbackInfo& info);
     Napi::Value JoinMeeting(const Napi::CallbackInfo& info);
@@ -22,131 +166,297 @@ private:
     Napi::Value StartRecording(const Napi::CallbackInfo& info);
     Napi::Value StopRecording(const Napi::CallbackInfo& info);
     Napi::Value Cleanup(const Napi::CallbackInfo& info);
-    Napi::Value CanStartRawRecording(const Napi::CallbackInfo& info);
-    Napi::Value RequestRecordingPrivilege(const Napi::CallbackInfo& info);
     Napi::Value OnAuthResult(const Napi::CallbackInfo& info);
     Napi::Value OnMeetingStatus(const Napi::CallbackInfo& info);
     Napi::Value OnAudioData(const Napi::CallbackInfo& info);
-    Napi::Value OnRecordingPrivilegeChanged(const Napi::CallbackInfo& info);
 
-    Napi::FunctionReference authCallback_;
-    Napi::FunctionReference statusCallback_;
-    Napi::FunctionReference audioCallback_;
-    Napi::FunctionReference privilegeCallback_;
+    // SDK objects
+    IAuthService*               authService_    = nullptr;
+    IMeetingService*            meetingService_ = nullptr;
+    IZoomSDKAudioRawDataHelper* audioHelper_    = nullptr;
+
+    // Event handlers
+    AuthEventHandler    authHandler_;
+    MeetingEventHandler meetingHandler_;
+    AudioDelegate       audioDelegate_;
+
+    bool initialized_ = false;
+
+    // String storage (must outlive SDK calls)
+    std::string jwtStorage_;
+    std::string meetingNumStorage_;
+    std::string displayNameStorage_;
+    std::string passwordStorage_;
 };
 
-Napi::Object ZoomSDK::Init(Napi::Env env, Napi::Object exports) {
-    Napi::Function func = DefineClass(env, "ZoomSDK", {
-        InstanceMethod("initialize", &ZoomSDK::Initialize),
-        InstanceMethod("authenticate", &ZoomSDK::Authenticate),
-        InstanceMethod("joinMeeting", &ZoomSDK::JoinMeeting),
-        InstanceMethod("leaveMeeting", &ZoomSDK::LeaveMeeting),
-        InstanceMethod("startRecording", &ZoomSDK::StartRecording),
-        InstanceMethod("stopRecording", &ZoomSDK::StopRecording),
-        InstanceMethod("cleanup", &ZoomSDK::Cleanup),
-        InstanceMethod("canStartRawRecording", &ZoomSDK::CanStartRawRecording),
-        InstanceMethod("requestRecordingPrivilege", &ZoomSDK::RequestRecordingPrivilege),
-        InstanceMethod("onAuthResult", &ZoomSDK::OnAuthResult),
-        InstanceMethod("onMeetingStatus", &ZoomSDK::OnMeetingStatus),
-        InstanceMethod("onAudioData", &ZoomSDK::OnAudioData),
-        InstanceMethod("onRecordingPrivilegeChanged", &ZoomSDK::OnRecordingPrivilegeChanged)
-    });
-
-    Napi::FunctionReference* constructor = new Napi::FunctionReference();
-    *constructor = Napi::Persistent(func);
-    exports.Set("ZoomSDK", func);
-
-    return exports;
-}
-
-ZoomSDK::ZoomSDK(const Napi::CallbackInfo& info) : Napi::ObjectWrap<ZoomSDK>(info) {
+ZoomSDKNode::ZoomSDKNode(const Napi::CallbackInfo& info)
+    : Napi::ObjectWrap<ZoomSDKNode>(info) {
     std::cout << "[ZoomSDK] Constructor" << std::endl;
 }
 
-Napi::Value ZoomSDK::Initialize(const Napi::CallbackInfo& info) {
+ZoomSDKNode::~ZoomSDKNode() {
+    if (audioHelper_) {
+        audioHelper_->unSubscribe();
+        audioHelper_ = nullptr;
+    }
+    if (meetingService_) {
+        DestroyMeetingService(meetingService_);
+        meetingService_ = nullptr;
+    }
+    if (authService_) {
+        DestroyAuthService(authService_);
+        authService_ = nullptr;
+    }
+    if (initialized_) {
+        CleanUPSDK();
+        initialized_ = false;
+    }
+}
+
+Napi::Object ZoomSDKNode::Init(Napi::Env env, Napi::Object exports) {
+    Napi::Function func = DefineClass(env, "ZoomSDK", {
+        InstanceMethod("initialize",      &ZoomSDKNode::Initialize),
+        InstanceMethod("authenticate",    &ZoomSDKNode::Authenticate),
+        InstanceMethod("joinMeeting",     &ZoomSDKNode::JoinMeeting),
+        InstanceMethod("leaveMeeting",    &ZoomSDKNode::LeaveMeeting),
+        InstanceMethod("startRecording",  &ZoomSDKNode::StartRecording),
+        InstanceMethod("stopRecording",   &ZoomSDKNode::StopRecording),
+        InstanceMethod("cleanup",         &ZoomSDKNode::Cleanup),
+        InstanceMethod("onAuthResult",    &ZoomSDKNode::OnAuthResult),
+        InstanceMethod("onMeetingStatus", &ZoomSDKNode::OnMeetingStatus),
+        InstanceMethod("onAudioData",     &ZoomSDKNode::OnAudioData),
+    });
+    exports.Set("ZoomSDK", func);
+    return exports;
+}
+
+Napi::Value ZoomSDKNode::Initialize(const Napi::CallbackInfo& info) {
     std::cout << "[ZoomSDK] Initialize" << std::endl;
-    return info.Env().Undefined();
+    Napi::Env env = info.Env();
+
+    // Ensure Qt event loop is running before initializing SDK
+    ensureQtApp(env);
+
+    InitParam initParam = {};
+    initParam.strWebDomain       = "https://zoom.us";
+    initParam.enableLogByDefault = true;
+    initParam.uiLogFileSize      = 5;
+    // Enable raw audio data capture
+    initParam.rawdataOpts.enableRawdataIntermediateMode = false;
+    initParam.rawdataOpts.audioRawdataMemoryMode = ZoomSDKRawDataMemoryModeStack;
+
+    SDKError err = InitSDK(initParam);
+    if (err != SDKERR_SUCCESS) {
+        std::cerr << "[ZoomSDK] InitSDK failed: " << (int)err << std::endl;
+        Napi::Error::New(env, "InitSDK failed: " + std::to_string((int)err))
+            .ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    err = CreateAuthService(&authService_);
+    if (err != SDKERR_SUCCESS) {
+        std::cerr << "[ZoomSDK] CreateAuthService failed: " << (int)err << std::endl;
+        Napi::Error::New(env, "CreateAuthService failed: " + std::to_string((int)err))
+            .ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+    authService_->SetEvent(&authHandler_);
+
+    err = CreateMeetingService(&meetingService_);
+    if (err != SDKERR_SUCCESS) {
+        std::cerr << "[ZoomSDK] CreateMeetingService failed: " << (int)err << std::endl;
+        Napi::Error::New(env, "CreateMeetingService failed: " + std::to_string((int)err))
+            .ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+    meetingService_->SetEvent(&meetingHandler_);
+
+    initialized_ = true;
+    std::cout << "[ZoomSDK] Initialized successfully" << std::endl;
+    return env.Undefined();
 }
 
-Napi::Value ZoomSDK::Authenticate(const Napi::CallbackInfo& info) {
+Napi::Value ZoomSDKNode::Authenticate(const Napi::CallbackInfo& info) {
     std::cout << "[ZoomSDK] Authenticate" << std::endl;
-    // Simulate auth success callback
-    if (!authCallback_.IsEmpty()) {
-        Napi::Object result = Napi::Object::New(info.Env());
-        result.Set("success", Napi::Boolean::New(info.Env(), true));
-        authCallback_.Call({result});
+    Napi::Env env = info.Env();
+
+    if (info.Length() < 1 || !info[0].IsObject()) {
+        Napi::TypeError::New(env, "Expected object with jwt field")
+            .ThrowAsJavaScriptException();
+        return env.Undefined();
     }
-    return info.Env().Undefined();
+
+    Napi::Object opts = info[0].As<Napi::Object>();
+    jwtStorage_ = opts.Get("jwt").As<Napi::String>().Utf8Value();
+
+    AuthContext authCtx = {};
+    authCtx.jwt_token = jwtStorage_.c_str();
+
+    SDKError err = authService_->SDKAuth(authCtx);
+    if (err != SDKERR_SUCCESS) {
+        std::cerr << "[ZoomSDK] SDKAuth failed: " << (int)err << std::endl;
+        Napi::Error::New(env, "SDKAuth failed: " + std::to_string((int)err))
+            .ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    return env.Undefined();
 }
 
-Napi::Value ZoomSDK::JoinMeeting(const Napi::CallbackInfo& info) {
+Napi::Value ZoomSDKNode::JoinMeeting(const Napi::CallbackInfo& info) {
     std::cout << "[ZoomSDK] JoinMeeting" << std::endl;
-    // Simulate meeting join success
-    if (!statusCallback_.IsEmpty()) {
-        Napi::Object result = Napi::Object::New(info.Env());
-        result.Set("status", Napi::String::New(info.Env(), "in_meeting"));
-        result.Set("code", Napi::Number::New(info.Env(), 0));
-        statusCallback_.Call({result});
+    Napi::Env env = info.Env();
+
+    if (info.Length() < 1 || !info[0].IsObject()) {
+        Napi::TypeError::New(env, "Expected object").ThrowAsJavaScriptException();
+        return env.Undefined();
     }
-    return info.Env().Undefined();
+
+    Napi::Object opts = info[0].As<Napi::Object>();
+    meetingNumStorage_  = opts.Get("meetingNumber").As<Napi::String>().Utf8Value();
+    displayNameStorage_ = opts.Get("displayName").As<Napi::String>().Utf8Value();
+    passwordStorage_    = "";
+    if (opts.Has("password") && !opts.Get("password").IsNull()
+            && opts.Get("password").IsString()) {
+        passwordStorage_ = opts.Get("password").As<Napi::String>().Utf8Value();
+    }
+
+    JoinParam joinParam = {};
+    joinParam.userType = SDK_UT_WITHOUT_LOGIN;
+
+    JoinParam4WithoutLogin& param = joinParam.param.withoutloginuserJoin;
+    param = {};
+    try {
+        param.meetingNumber = (UINT64)std::stoull(meetingNumStorage_);
+    } catch (...) {
+        Napi::Error::New(env, "Invalid meeting number: " + meetingNumStorage_)
+            .ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+    param.userName                  = displayNameStorage_.c_str();
+    param.psw                       = passwordStorage_.empty() ? nullptr : passwordStorage_.c_str();
+    param.isVideoOff                = true;
+    param.isAudioOff                = false;
+    param.eAudioRawdataSamplingRate = AudioRawdataSamplingRate_32K;
+    param.isAudioRawDataStereo      = false;
+    param.isMyVoiceInMix            = false;
+
+    SDKError err = meetingService_->Join(joinParam);
+    if (err != SDKERR_SUCCESS) {
+        std::cerr << "[ZoomSDK] Join failed: " << (int)err << std::endl;
+        Napi::Error::New(env, "Join failed: " + std::to_string((int)err))
+            .ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    return env.Undefined();
 }
 
-Napi::Value ZoomSDK::LeaveMeeting(const Napi::CallbackInfo& info) {
+Napi::Value ZoomSDKNode::LeaveMeeting(const Napi::CallbackInfo& info) {
     std::cout << "[ZoomSDK] LeaveMeeting" << std::endl;
-    return info.Env().Undefined();
-}
-
-Napi::Value ZoomSDK::StartRecording(const Napi::CallbackInfo& info) {
-    std::cout << "[ZoomSDK] StartRecording" << std::endl;
-    return info.Env().Undefined();
-}
-
-Napi::Value ZoomSDK::StopRecording(const Napi::CallbackInfo& info) {
-    std::cout << "[ZoomSDK] StopRecording" << std::endl;
-    return info.Env().Undefined();
-}
-
-Napi::Value ZoomSDK::Cleanup(const Napi::CallbackInfo& info) {
-    std::cout << "[ZoomSDK] Cleanup" << std::endl;
-    return info.Env().Undefined();
-}
-
-Napi::Value ZoomSDK::CanStartRawRecording(const Napi::CallbackInfo& info) {
-    return Napi::Boolean::New(info.Env(), true);
-}
-
-Napi::Value ZoomSDK::RequestRecordingPrivilege(const Napi::CallbackInfo& info) {
-    std::cout << "[ZoomSDK] RequestRecordingPrivilege" << std::endl;
-    if (!privilegeCallback_.IsEmpty()) {
-        privilegeCallback_.Call({Napi::Boolean::New(info.Env(), true)});
+    if (meetingService_) {
+        meetingService_->Leave(LEAVE_MEETING);
     }
     return info.Env().Undefined();
 }
 
-Napi::Value ZoomSDK::OnAuthResult(const Napi::CallbackInfo& info) {
-    authCallback_ = Napi::Persistent(info[0].As<Napi::Function>());
+Napi::Value ZoomSDKNode::StartRecording(const Napi::CallbackInfo& info) {
+    std::cout << "[ZoomSDK] StartRecording" << std::endl;
+    Napi::Env env = info.Env();
+
+    audioHelper_ = GetAudioRawdataHelper();
+    if (!audioHelper_) {
+        std::cerr << "[ZoomSDK] GetAudioRawdataHelper returned null" << std::endl;
+        Napi::Error::New(env, "GetAudioRawdataHelper failed")
+            .ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    SDKError err = audioHelper_->subscribe(&audioDelegate_);
+    if (err != SDKERR_SUCCESS) {
+        std::cerr << "[ZoomSDK] Audio subscribe failed: " << (int)err << std::endl;
+        Napi::Error::New(env, "Audio subscribe failed: " + std::to_string((int)err))
+            .ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    std::cout << "[ZoomSDK] Audio recording started" << std::endl;
+    return env.Undefined();
+}
+
+Napi::Value ZoomSDKNode::StopRecording(const Napi::CallbackInfo& info) {
+    std::cout << "[ZoomSDK] StopRecording" << std::endl;
+    if (audioHelper_) {
+        audioHelper_->unSubscribe();
+        audioHelper_ = nullptr;
+    }
     return info.Env().Undefined();
 }
 
-Napi::Value ZoomSDK::OnMeetingStatus(const Napi::CallbackInfo& info) {
-    statusCallback_ = Napi::Persistent(info[0].As<Napi::Function>());
+Napi::Value ZoomSDKNode::Cleanup(const Napi::CallbackInfo& info) {
+    std::cout << "[ZoomSDK] Cleanup" << std::endl;
+    if (audioHelper_) {
+        audioHelper_->unSubscribe();
+        audioHelper_ = nullptr;
+    }
+    if (meetingService_) {
+        DestroyMeetingService(meetingService_);
+        meetingService_ = nullptr;
+    }
+    if (authService_) {
+        DestroyAuthService(authService_);
+        authService_ = nullptr;
+    }
+    if (initialized_) {
+        CleanUPSDK();
+        initialized_ = false;
+    }
+    if (g_qtApp) {
+        g_qtApp->quit();
+    }
     return info.Env().Undefined();
 }
 
-Napi::Value ZoomSDK::OnAudioData(const Napi::CallbackInfo& info) {
-    audioCallback_ = Napi::Persistent(info[0].As<Napi::Function>());
-    return info.Env().Undefined();
+Napi::Value ZoomSDKNode::OnAuthResult(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsFunction()) {
+        Napi::TypeError::New(env, "Expected function").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+    authHandler_.tsf_ = Napi::ThreadSafeFunction::New(
+        env, info[0].As<Napi::Function>(), "authCallback", 0, 1);
+    return env.Undefined();
 }
 
-Napi::Value ZoomSDK::OnRecordingPrivilegeChanged(const Napi::CallbackInfo& info) {
-    privilegeCallback_ = Napi::Persistent(info[0].As<Napi::Function>());
-    return info.Env().Undefined();
+Napi::Value ZoomSDKNode::OnMeetingStatus(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsFunction()) {
+        Napi::TypeError::New(env, "Expected function").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+    // Release previous TSF if exists
+    if (meetingHandler_.tsf_) {
+        meetingHandler_.tsf_.Release();
+    }
+    meetingHandler_.tsf_ = Napi::ThreadSafeFunction::New(
+        env, info[0].As<Napi::Function>(), "statusCallback", 0, 1);
+    return env.Undefined();
 }
 
-} // namespace vexazoom
-
-Napi::Object Init(Napi::Env env, Napi::Object exports) {
-    return vexazoom::ZoomSDK::Init(env, exports);
+Napi::Value ZoomSDKNode::OnAudioData(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsFunction()) {
+        Napi::TypeError::New(env, "Expected function").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+    audioDelegate_.tsf_ = Napi::ThreadSafeFunction::New(
+        env, info[0].As<Napi::Function>(), "audioCallback", 0, 1);
+    return env.Undefined();
 }
 
-NODE_API_MODULE(zoom_sdk_wrapper, Init)
+// Module initialization
+Napi::Object InitModule(Napi::Env env, Napi::Object exports) {
+    return ZoomSDKNode::Init(env, exports);
+}
+
+NODE_API_MODULE(zoom_sdk_wrapper, InitModule)
