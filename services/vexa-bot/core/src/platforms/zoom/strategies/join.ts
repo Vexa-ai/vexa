@@ -1,12 +1,15 @@
 import { Page } from 'playwright';
 import { BotConfig } from '../../../types';
 import { ZoomSDKManager } from '../sdk-manager';
-import { log } from '../../../utils';
+import { log, callJoiningCallback } from '../../../utils';
 
 let sdkManager: ZoomSDKManager | null = null;
 
 export async function joinZoomMeeting(page: Page | null, botConfig: BotConfig): Promise<void> {
   log(`[Zoom] Initializing SDK and joining meeting: ${botConfig.meetingUrl}`);
+
+  // Signal "joining" so bot-manager transitions: requested → joining → active
+  await callJoiningCallback(botConfig);
 
   // Validate environment variables
   const clientId = process.env.ZOOM_CLIENT_ID;
