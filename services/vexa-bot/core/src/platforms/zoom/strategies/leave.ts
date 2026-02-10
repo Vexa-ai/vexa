@@ -1,5 +1,6 @@
 import { Page } from 'playwright';
-import { BotConfig, LeaveReason } from '../../../types';
+import { BotConfig } from '../../../types';
+import { LeaveReason } from '../../shared/meetingFlow';
 import { getSDKManager } from './join';
 import { stopZoomRecording } from './recording';
 import { log } from '../../../utils';

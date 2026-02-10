@@ -5,6 +5,7 @@ import { getSDKManager } from './join';
 import { log } from '../../../utils';
 
 let whisperLive: WhisperLiveService | null = null;
+let whisperSocket: WebSocket | null = null;
 
 export async function startZoomRecording(page: Page | null, botConfig: BotConfig): Promise<void> {
   log('[Zoom] Starting audio recording and WhisperLive connection');
@@ -12,22 +13,47 @@ export async function startZoomRecording(page: Page | null, botConfig: BotConfig
   const sdkManager = getSDKManager();
 
   try {
-    // Initialize WhisperLive connection
-    const whisperLiveUrl = process.env.WHISPER_LIVE_URL;
+    // Initialize WhisperLive service
+    whisperLive = new WhisperLiveService({
+      whisperLiveUrl: process.env.WHISPER_LIVE_URL
+    });
+
+    // Initialize connection
+    const whisperLiveUrl = await whisperLive.initialize();
     if (!whisperLiveUrl) {
-      throw new Error('[Zoom] WHISPER_LIVE_URL environment variable is required');
+      throw new Error('[Zoom] Failed to initialize WhisperLive URL');
+    }
+    log(`[Zoom] WhisperLive URL initialized: ${whisperLiveUrl}`);
+
+    // Connect to WhisperLive with event handlers
+    whisperSocket = await whisperLive.connectToWhisperLive(
+      botConfig,
+      (data: any) => {
+        // Handle incoming messages (transcriptions, etc.)
+        if (data.message === 'SERVER_READY') {
+          log('[Zoom] WhisperLive server ready');
+        }
+      },
+      (error: Event) => {
+        log(`[Zoom] WhisperLive error: ${error}`);
+      },
+      (event: CloseEvent) => {
+        log(`[Zoom] WhisperLive connection closed: ${event.code} ${event.reason}`);
+      }
+    );
+
+    if (!whisperSocket) {
+      throw new Error('[Zoom] Failed to connect to WhisperLive');
     }
 
-    whisperLive = new WhisperLiveService(whisperLiveUrl, botConfig);
-    await whisperLive.connect();
-    log('[Zoom] WhisperLive connected');
+    log('[Zoom] WhisperLive connected successfully');
 
     // Start SDK audio capture with callback to send to WhisperLive
     await sdkManager.startRecording((buffer: Buffer, sampleRate: number) => {
       if (whisperLive) {
         // Convert PCM Int16 buffer to Float32Array
         const float32 = bufferToFloat32(buffer);
-        whisperLive.sendAudioChunk(float32);
+        whisperLive.sendAudioData(float32);
       }
     });
 
@@ -45,10 +71,12 @@ export async function stopZoomRecording(): Promise<void> {
     const sdkManager = getSDKManager();
     await sdkManager.stopRecording();
 
-    if (whisperLive) {
-      await whisperLive.disconnect();
-      whisperLive = null;
+    if (whisperSocket) {
+      whisperSocket.close();
+      whisperSocket = null;
     }
+
+    whisperLive = null;
 
     log('[Zoom] Recording stopped');
   } catch (error) {
