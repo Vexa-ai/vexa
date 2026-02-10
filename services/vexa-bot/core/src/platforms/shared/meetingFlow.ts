@@ -34,12 +34,12 @@ function generateReasonTokens(platform: string): {
 }
 
 export type PlatformStrategies = {
-  join: (page: Page, botConfig: BotConfig) => Promise<void>;
-  waitForAdmission: (page: Page, timeoutMs: number, botConfig: BotConfig) => Promise<AdmissionResult>;
-  checkAdmissionSilent: (page: Page) => Promise<boolean>; // Silent check without callbacks
-  prepare: (page: Page, botConfig: BotConfig) => Promise<void>;
-  startRecording: (page: Page, botConfig: BotConfig) => Promise<void>;
-  startRemovalMonitor: (page: Page, onRemoval?: () => void | Promise<void>) => () => void;
+  join: (page: Page | null, botConfig: BotConfig) => Promise<void>;
+  waitForAdmission: (page: Page | null, timeoutMs: number, botConfig: BotConfig) => Promise<AdmissionResult>;
+  checkAdmissionSilent: (page: Page | null) => Promise<boolean>; // Silent check without callbacks
+  prepare: (page: Page | null, botConfig: BotConfig) => Promise<void>;
+  startRecording: (page: Page | null, botConfig: BotConfig) => Promise<void>;
+  startRemovalMonitor: (page: Page | null, onRemoval?: () => void | Promise<void>) => () => void;
   leave: (page: Page | null, botConfig?: BotConfig, reason?: LeaveReason) => Promise<boolean>;
 };
 
@@ -106,16 +106,18 @@ export async function runMeetingFlow(
         return;
       }
 
-      // Attempt stateless leave before graceful exit
-      try {
-        const result = await page.evaluate(async () => {
-          if (typeof (window as any).performLeaveAction === "function") {
-            return await (window as any).performLeaveAction();
-          }
-          return false;
-        });
-        if (result) log("✅ Successfully performed graceful leave during admission timeout");
-      } catch {}
+      // Attempt stateless leave before graceful exit (browser-based platforms only)
+      if (page) {
+        try {
+          const result = await page.evaluate(async () => {
+            if (typeof (window as any).performLeaveAction === "function") {
+              return await (window as any).performLeaveAction();
+            }
+            return false;
+          });
+          if (result) log("✅ Successfully performed graceful leave during admission timeout");
+        } catch {}
+      }
 
       await gracefulLeaveFunction(page, 0, decision.reason || "admission_timeout");
       return;
