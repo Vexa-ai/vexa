@@ -1,4 +1,10 @@
 #!/bin/bash
+# Set up Zoom SDK library paths
+SDK_LIB_DIR="/app/vexa-bot/core/src/platforms/zoom/native/zoom_meeting_sdk"
+if [ -f "${SDK_LIB_DIR}/libmeetingsdk.so" ]; then
+  export LD_LIBRARY_PATH="${SDK_LIB_DIR}:${SDK_LIB_DIR}/qt_libs:${SDK_LIB_DIR}/qt_libs/Qt/lib:${LD_LIBRARY_PATH}"
+fi
+
 # Start a virtual framebuffer in the background
 Xvfb :99 -screen 0 1920x1080x24 &
 

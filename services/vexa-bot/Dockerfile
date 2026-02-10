@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     cmake \
     python3 \
     libssl-dev \
+    qtbase5-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app/vexa-bot
@@ -81,7 +82,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
     pulseaudio \
     xserver-xephyr \
-    libssl1.1 \
+    libssl3 \
+    libxcb-xtest0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy workspace package files (for runtime dependencies)

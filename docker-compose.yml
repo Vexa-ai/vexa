@@ -69,6 +69,8 @@ services:
       - DEVICE_TYPE=${DEVICE_TYPE}
       - WHISPER_LIVE_URL=ws://whisperlive-remote:9090/ws  # Direct connection to whisperlive-remote
       - ADMIN_TOKEN=${ADMIN_API_TOKEN}
+      - ZOOM_CLIENT_ID=${ZOOM_CLIENT_ID:-6gMe9aY8R8OG1pqsmTFBBg}
+      - ZOOM_CLIENT_SECRET=${ZOOM_CLIENT_SECRET:-mN9cMR039CnNvsE8TGSifduK11k7C6g8}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ../.cursor:/app/.cursor
