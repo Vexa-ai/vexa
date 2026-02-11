@@ -14,10 +14,7 @@ Use this page as the entry point for setup, operations, and API usage.
 
 ## Platform and Integration Docs
 
-- [Zoom App Setup](zoom-app-setup.md): Zoom app configuration (OAuth, Meeting SDK, app review)
-- [Zoom App Submission Data](zoom-app-submission-data.md): templates/checklist for app review forms
-- [Zoom Basic Info Snapshot](zoom-basic-info-snapshot.md): pre-filled app profile fields
-- [Zoom Architecture Diagram](zoom-architecture-diagram.md): Zoom integration flow
+- [Zoom Integration Setup](zoom-app-setup.md): Zoom app configuration (OAuth, Meeting SDK, scopes, OBF flow)
 - [ChatGPT Transcript Share Links](chatgpt-transcript-share-links.md): shared transcript URL behavior
 
 ## Notebooks (`../nbs`)
@@ -34,7 +31,7 @@ Use this page as the entry point for setup, operations, and API usage.
 2. Create users/tokens with [Self-Hosted Management Guide](self-hosted-management.md).
 3. Integrate REST endpoints via [User API Guide](user_api_guide.md).
 4. Add live updates with [WebSocket Guide](websocket.md).
-5. If needed, configure Zoom with [Zoom App Setup](zoom-app-setup.md).
+5. If needed, configure Zoom with [Zoom Integration Setup](zoom-app-setup.md).
 
 ## Support
 
