@@ -148,7 +148,8 @@ async def start_bot_container(
     user_token: str,
     native_meeting_id: str,
     language: Optional[str],
-    task: Optional[str]
+    task: Optional[str],
+    zoom_obf_token: Optional[str] = None
 ) -> Optional[tuple[str, str]]:
     """
     Starts a vexa-bot container via requests_unixsocket AFTER checking user limit.
@@ -206,6 +207,7 @@ async def start_bot_container(
         "connectionId": connection_id,
         "language": language,
         "task": task,
+        "obfToken": zoom_obf_token if platform == "zoom" else None,
         "redisUrl": REDIS_URL,
         "container_name": container_name,  # ADDED: Container name for identification
         "automaticLeave": {

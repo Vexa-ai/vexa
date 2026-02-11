@@ -17,7 +17,7 @@
   &nbsp;&nbsp;&nbsp;&nbsp;•&nbsp;&nbsp;&nbsp;&nbsp;
   <img height="24" src="assets/microsoft-teams.svg" alt="Microsoft Teams" style="vertical-align: middle; margin-right: 10px;"/> <strong style="font-size: 1em; font-weight: 600;">Microsoft Teams</strong>
   &nbsp;&nbsp;&nbsp;&nbsp;•&nbsp;&nbsp;&nbsp;&nbsp;
-  <img height="24" src="assets/icons8-zoom.svg" alt="Zoom" style="vertical-align: middle; margin-right: 10px;"/> <strong style="font-size: 1em; font-weight: 600;">Zoom</strong> <sub style="font-size: 0.7em; color: #999; font-weight: normal; margin-left: 4px;">(soon)</sub>
+  <img height="24" src="assets/icons8-zoom.svg" alt="Zoom" style="vertical-align: middle; margin-right: 10px;"/> <strong style="font-size: 1em; font-weight: 600;">Zoom</strong>
 </p>
 
 <p align="center" style="margin: 1.75em 0 1.25em 0;">
@@ -29,9 +29,10 @@
 </p>
 
 <p align="center">
-  <a href="#-whats-new-in-v07-18-dec-2025">What’s new</a> •
+  <a href="#whats-new">What’s new</a> •
   <a href="#quickstart">Quickstart</a> •
   <a href="#2-get-transcripts">API</a> •
+  <a href="docs/README.md">Docs</a> •
   <a href="#roadmap">Roadmap</a> •
   <a href="https://discord.gg/Ga9duGkVz9">Discord</a>
 </p>
@@ -40,13 +41,13 @@
 
 ## What is Vexa?
 
-**Vexa** is an open-source, self-hostable API for real-time meeting transcription. It automatically joins Google Meet and Microsoft Teams meetings, captures audio, and provides real-time transcriptions via REST API and WebSocket.
+**Vexa** is an open-source, self-hostable API for real-time meeting transcription. It automatically joins Google Meet, Microsoft Teams, and Zoom meetings, captures audio, and provides real-time transcriptions via REST API and WebSocket.
 
 ### At a glance
 
 | Capability | What it means |
 |---|---|
-| **Meeting bots** | Automatically joins Google Meet + Microsoft Teams meetings |
+| **Meeting bots** | Automatically joins Google Meet, Microsoft Teams, and Zoom meetings |
 | **Real-time transcription** | Sub-second transcript delivery during the call |
 | **Multilingual** | 100+ languages via Whisper (transcription + translation) |
 | **API-first** | REST API + WebSocket streaming for integrations |
@@ -102,6 +103,8 @@ Self-host Vexa, but plug into external transcription service
 At [vexa.ai](https://vexa.ai) — just grab API key  
 *<small style="color: #999;">Ready to integrate</small>*
 
+
+<a id="whats-new"></a>
 
 ## 🎉 What's new in v0.7 (pre-release)
 
@@ -161,9 +164,10 @@ All services are saved in `docker-compose.yml` and wrapped in a Makefile for con
 ```bash
 git clone https://github.com/Vexa-ai/vexa.git
 cd vexa
-make all            # CPU by default (Whisper tiny) — good for development
-# For GPU:
-# make all TARGET=gpu    # (Whisper medium) — recommended for production quality
+make all                         # Default: remote transcription (GPU-free)
+# For local transcription:
+# make all TRANSCRIPTION=cpu     # CPU local transcription
+# make all TRANSCRIPTION=gpu     # GPU local transcription
 ```
 
 **What `make all` does:**
@@ -180,14 +184,20 @@ For enterprise orchestration platforms, contact [vexa.ai](https://vexa.ai)
 
 ## 1. Send bot to meeting:
 
-`API_HOST` for hosted version is `https://api.cloud.vexa.ai`
-`API_HOST` for self-hosted lite container is `http://localhost:8056`
-`API_HOST` for self-hosted full stack (default) is `http://localhost:18056`
+Set `API_BASE` to your deployment:
+
+- Hosted: `https://api.cloud.vexa.ai`
+- Self-hosted Lite: `http://localhost:8056`
+- Self-hosted full stack (default): `http://localhost:8056`
+
+```bash
+export API_BASE="http://localhost:8056"
+```
 
 ### Request a bot for Microsoft Teams
 
 ```bash
-curl -X POST https://<API_HOST>/bots \
+curl -X POST "$API_BASE/bots" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: <API_KEY>" \
   -d '{
@@ -200,7 +210,7 @@ curl -X POST https://<API_HOST>/bots \
 ### Or request a bot for Google Meet
 
 ```bash
-curl -X POST https://<API_HOST>/bots \
+curl -X POST "$API_BASE/bots" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: <API_KEY>" \
   -d '{
@@ -215,7 +225,7 @@ curl -X POST https://<API_HOST>/bots \
 
 ```bash
 curl -H "X-API-Key: <API_KEY>" \
-  "https://<API_HOST>/transcripts/<platform>/<native_meeting_id>"
+  "$API_BASE/transcripts/<platform>/<native_meeting_id>"
 ```
 
 For real-time streaming (sub‑second), see the [WebSocket guide](docs/websocket.md).
@@ -236,7 +246,7 @@ Note: Meeting IDs are user-provided (Google Meet code like `xxx-xxxx-xxx` or Tea
 
 ## Roadmap
 
-* Zoom support (coming soon)
+* Continued Zoom reliability and UX improvements
 
 > For issues and progress, join our [Discord](https://discord.gg/Ga9duGkVz9).
 
@@ -263,6 +273,7 @@ Note: Meeting IDs are user-provided (Google Meet code like `xxx-xxxx-xxx` or Tea
 - **Real-time translation** across all 100 supported languages
 - **Google Meet integration** - Automatically join and transcribe Google Meet calls
 - **Microsoft Teams integration** - Automatically join and transcribe Teams meetings
+- **Zoom integration** - Automatically join and transcribe Zoom meetings
 - **REST API** - Complete API for managing bots, users, and transcripts
 - **WebSocket streaming** - Sub-second transcript delivery via WebSocket
 - **Multiuser support** - User management, API tokens, and team features
@@ -308,9 +319,6 @@ Contributors are welcome! Join our community and help shape Vexa's future. Here'
 
 We look forward to your contributions!
 
-## Contributing & License
-
-We ❤️ contributions. Join our Discord and open issues/PRs.
 Licensed under **Apache-2.0** — see [LICENSE](LICENSE).
 
 ## Project Links

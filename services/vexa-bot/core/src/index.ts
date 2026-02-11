@@ -411,22 +411,33 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
 
   // Simple browser setup like simple-bot.js
   if (botConfig.platform === "teams") {
-    log("Using MS Edge browser for Teams platform (simple-bot.js approach)");
-    // Launch browser in headless mode with Edge channel with insecure WebSocket support
-    browserInstance = await chromium.launch({ 
-      headless: false,
-      channel: 'msedge',
-      args: [
-        '--disable-web-security',
-        '--disable-features=VizDisplayCompositor',
-        '--allow-running-insecure-content',
-        '--ignore-certificate-errors',
-        '--ignore-ssl-errors',
-        '--ignore-certificate-errors-spki-list',
-        '--disable-site-isolation-trials',
-        '--disable-features=VizDisplayCompositor'
-      ]
-    });
+    const teamsLaunchArgs = [
+      '--disable-web-security',
+      '--disable-features=VizDisplayCompositor',
+      '--allow-running-insecure-content',
+      '--ignore-certificate-errors',
+      '--ignore-ssl-errors',
+      '--ignore-certificate-errors-spki-list',
+      '--disable-site-isolation-trials',
+      '--disable-features=VizDisplayCompositor'
+    ];
+
+    try {
+      log("Using MS Edge browser for Teams platform");
+      // Preferred path: Edge channel
+      browserInstance = await chromium.launch({
+        headless: false,
+        channel: 'msedge',
+        args: teamsLaunchArgs
+      });
+    } catch (edgeLaunchError: any) {
+      // Runtime guard: if Edge isn't installed in the image, don't crash the bot process.
+      log(`MS Edge launch failed for Teams (${edgeLaunchError?.message || edgeLaunchError}). Falling back to bundled Chromium.`);
+      browserInstance = await chromium.launch({
+        headless: false,
+        args: teamsLaunchArgs
+      });
+    }
     
     // Create context with CSP bypass to allow script injection (like Google Meet)
     const context = await browserInstance.newContext({

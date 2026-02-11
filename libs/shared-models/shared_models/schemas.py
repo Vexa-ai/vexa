@@ -342,6 +342,10 @@ class MeetingCreate(BaseModel):
     language: Optional[str] = Field(None, description="Optional language code for transcription (e.g., 'en', 'es')")
     task: Optional[str] = Field(None, description="Optional task for the transcription model (e.g., 'transcribe', 'translate')")
     passcode: Optional[str] = Field(None, description="Optional passcode for the meeting (Teams only)")
+    zoom_obf_token: Optional[str] = Field(
+        None,
+        description="Optional one-time Zoom OBF token. If omitted for Zoom meetings, the backend will mint one from the user's stored Zoom OAuth connection."
+    )
 
     @field_validator('platform')
     @classmethod
@@ -366,6 +370,16 @@ class MeetingCreate(BaseModel):
                 # Teams passcode validation (alphanumeric, reasonable length)
                 if not re.match(r'^[A-Za-z0-9]{8,20}$', v):
                     raise ValueError("Teams passcode must be 8-20 alphanumeric characters")
+        return v
+
+    @field_validator('zoom_obf_token')
+    @classmethod
+    def validate_zoom_obf_token(cls, v, info: ValidationInfo):
+        """Validate OBF token usage based on platform."""
+        if v is not None and v != "":
+            platform = info.data.get('platform') if info.data else None
+            if platform != Platform.ZOOM:
+                raise ValueError("zoom_obf_token is only supported for Zoom meetings")
         return v
 
     @field_validator('language')

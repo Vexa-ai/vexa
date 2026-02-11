@@ -15,13 +15,14 @@ Real-time Google Meet and Microsoft Teams transcription API. Get up and running 
 Try running directly - this might work instantly:
 ```bash
 git clone https://github.com/Vexa-ai/vexa.git && cd vexa
-make all  # CPU laptop (whisper tiny model - good for development)
+make all  # Default profile: remote transcription (GPU-free)
 ```
 or 
 
 ```bash
 git clone https://github.com/Vexa-ai/vexa.git && cd vexa
-make all TARGET=gpu # GPU machine (whisper medium model - much better quality)
+make all TRANSCRIPTION=cpu # Local CPU transcription
+# make all TRANSCRIPTION=gpu # Local GPU transcription
 ```
 
 **What `make all` does:**
@@ -41,7 +42,7 @@ Sets up everything for you on a fresh VM:
 ```bash
 git clone https://github.com/Vexa-ai/vexa.git && cd vexa
 sudo ./fresh_setup.sh --gpu    # or --cpu for CPU-only hosts
-make all TARGET=gpu             # or make all for CPU
+make all TRANSCRIPTION=gpu             # or: make all TRANSCRIPTION=cpu
 ```
 
 
@@ -80,7 +81,7 @@ sudo systemctl restart docker
 # Deploy
 git clone https://github.com/Vexa-ai/vexa.git && cd vexa
 # make all              # CPU (tiny model)
-make all TARGET=gpu # GPU (medium model)
+make all TRANSCRIPTION=gpu # GPU (medium model)
 ```
 
 **macOS (CPU only):**
@@ -132,8 +133,8 @@ docker run -d \
 ## Testing
 
 Once deployed, services are available at:
-- **API docs:** http://localhost:18056/docs (full stack) or http://localhost:8056/docs (lite)
-- **Admin API:** http://localhost:18057/docs (full stack only)
+- **API docs:** http://localhost:8056/docs
+- **Admin API:** http://localhost:8057/docs (full stack only)
 
 **Live meeting test:**
 ```bash

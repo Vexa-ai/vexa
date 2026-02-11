@@ -1,50 +1,43 @@
-# Vexa Documentation
+# Vexa Docs Index
 
-This directory contains comprehensive documentation for Vexa self-hosted deployments.
+Use this page as the entry point for setup, operations, and API usage.
 
-## Available Documentation
+## Fastest Paths
 
-### Setup & Deployment
+| Goal | Start Here |
+|---|---|
+| Run Vexa for local development | [Deployment Guide](deployment.md) |
+| Run Vexa Lite in production | [Vexa Lite Deployment Guide](vexa-lite-deployment.md) |
+| Manage users and API tokens | [Self-Hosted Management Guide](self-hosted-management.md) |
+| Integrate over REST | [User API Guide](user_api_guide.md) |
+| Stream live transcripts | [WebSocket Guide](websocket.md) |
 
-- **[Deployment Guide](deployment.md)** - Complete setup and deployment instructions for self-hosted Vexa
-- **[Vexa Lite Deployment Guide](vexa-lite-deployment.md)** - Single container deployment (no GPU required)
+## Platform and Integration Docs
 
-### User Guides
+- [Zoom App Setup](zoom-app-setup.md): Zoom app configuration (OAuth, Meeting SDK, app review)
+- [Zoom App Submission Data](zoom-app-submission-data.md): templates/checklist for app review forms
+- [Zoom Basic Info Snapshot](zoom-basic-info-snapshot.md): pre-filled app profile fields
+- [Zoom Architecture Diagram](zoom-architecture-diagram.md): Zoom integration flow
+- [ChatGPT Transcript Share Links](chatgpt-transcript-share-links.md): shared transcript URL behavior
 
-- **[Self-Hosted Management Guide](self-hosted-management.md)** - Complete guide for managing users and API tokens in self-hosted Vexa deployments
-  - User creation and management
-  - API token generation and revocation
-  - Complete workflow examples (curl + Python)
-  - Quick reference and troubleshooting
+## Notebooks (`../nbs`)
 
-- **[WebSocket Guide](websocket.md)** - Real-time transcript streaming via WebSocket
-  
-- **[User API Guide](user_api_guide.md)** - Complete REST API reference
+- `0_basic_test.ipynb`: end-to-end bot lifecycle smoke test
+- `1_load_tests.ipynb`: load testing scenarios
+- `2_bot_concurrency.ipynb`: concurrent bot behavior
+- `3_API_validation.ipynb`: API endpoint validation
+- `manage_users.ipynb`: user and token management examples
 
-## Example Notebooks
+## Typical Developer Flow
 
-Interactive Jupyter notebooks for testing and development are located in the `../nbs/` directory:
-
-- `0_basic_test.ipynb` - Complete bot lifecycle test
-- `1_load_tests.ipynb` - Load testing with multiple users
-- `2_bot_concurrency.ipynb` - Concurrent bot testing
-- `3_API_validation.ipynb` - API endpoint validation
-- `manage_users.ipynb` - User management examples
-
-## Getting Started
-
-1. **Deploy Vexa**: Follow the [Deployment Guide](deployment.md) for full stack, or [Vexa Lite Deployment Guide](vexa-lite-deployment.md) for single container
-2. **Manage Users**: Read the [Self-Hosted Management Guide](self-hosted-management.md)
-3. **Use the API**: See [User API Guide](user_api_guide.md) and [WebSocket Guide](websocket.md)
-
-## Related Repositories
-
-- **[vexa-lite-deploy](https://github.com/Vexa-ai/vexa-lite-deploy)** - One-click deployment configurations for Vexa Lite
-- **[Vexa Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)** - Web interface for managing Vexa instances
+1. Deploy locally with [Deployment Guide](deployment.md).
+2. Create users/tokens with [Self-Hosted Management Guide](self-hosted-management.md).
+3. Integrate REST endpoints via [User API Guide](user_api_guide.md).
+4. Add live updates with [WebSocket Guide](websocket.md).
+5. If needed, configure Zoom with [Zoom App Setup](zoom-app-setup.md).
 
 ## Support
 
-- **Discord**: https://discord.gg/Ga9duGkVz9
-- **GitHub Issues**: https://github.com/Vexa-ai/vexa/issues
-- **Website**: https://vexa.ai
-
+- Discord: https://discord.gg/Ga9duGkVz9
+- Issues: https://github.com/Vexa-ai/vexa/issues
+- Website: https://vexa.ai
