@@ -21,6 +21,7 @@ export async function joinZoomMeeting(page: Page | null, botConfig: BotConfig): 
 
   // Create SDK manager
   sdkManager = new ZoomSDKManager(botConfig);
+  sdkManager.ensureSdkAvailable();
 
   try {
     // Initialize SDK
