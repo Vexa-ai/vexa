@@ -3,10 +3,12 @@ import * as crypto from 'crypto';
 
 // Load native addon (built to /vexa/services/vexa-bot/build/Release/)
 let addon: any = null;
+let addonLoadError: unknown = null;
 
 try {
   addon = require('../../../../build/Release/zoom_sdk_wrapper');
 } catch (error) {
+  addonLoadError = error;
   console.warn('[Zoom SDK] Native addon not found. Running in stub mode.');
 }
 
@@ -38,6 +40,25 @@ export class ZoomSDKManager {
       enableLog: true,
       logSize: 10
     });
+  }
+
+  ensureSdkAvailable(): void {
+    if (!this.isStubMode) {
+      return;
+    }
+
+    const addonError =
+      addonLoadError instanceof Error ? addonLoadError.message : String(addonLoadError || 'unknown error');
+
+    throw new Error(
+      [
+        '[Zoom] Zoom SDK native addon is not available.',
+        'Expected native addon: services/vexa-bot/build/Release/zoom_sdk_wrapper.node',
+        'Expected SDK library: services/vexa-bot/core/src/platforms/zoom/native/zoom_meeting_sdk/libmeetingsdk.so',
+        'Zoom Meeting SDK binaries are proprietary and must be downloaded separately from Zoom.',
+        `Addon load error: ${addonError}`
+      ].join(' ')
+    );
   }
 
   async authenticate(clientId: string, clientSecret: string): Promise<void> {

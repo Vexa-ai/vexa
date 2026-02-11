@@ -38,6 +38,26 @@ Status callbacks are sent via HTTP POST to the bot-manager at each lifecycle sta
 | **MS Teams** | Browser automation | MS Edge (required) | RTCPeerConnection hook intercepts WebRTC audio tracks | Voice-level outline element + CSS class detection |
 | **Zoom** | Native SDK | None | SDK raw audio callback (fallback: PulseAudio capture) | SDK `onActiveSpeakerChange` callback |
 
+## Zoom SDK Licensing and Setup
+
+Zoom Meeting SDK binaries are not auto-downloaded by this repo. You must obtain them from Zoom and place them under:
+
+`core/src/platforms/zoom/native/zoom_meeting_sdk/`
+
+Important:
+
+- Zoom Meeting SDK is proprietary (not open source). We cannot redistribute SDK binaries in this open-source repository.
+- Because of Zoom SDK license restrictions, binaries must be downloaded directly from Zoom by each user/team.
+- Keep `libmeetingsdk.so`, `qt_libs/`, and other SDK binaries out of git (already enforced in `.gitignore`).
+- Each team/user should download the SDK from Zoom directly and accept Zoom's current API/SDK terms.
+- Native build may skip when SDK binaries are missing, but runtime now fails fast for Zoom with a clear "Zoom SDK native addon is not available" error.
+
+Quick check:
+
+```bash
+ls core/src/platforms/zoom/native/zoom_meeting_sdk/libmeetingsdk.so
+```
+
 ## Project Structure
 
 ```
