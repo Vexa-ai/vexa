@@ -84,7 +84,8 @@ export class ZoomSDKManager {
       this.sdk.joinMeeting({
         meetingNumber: meetingId,
         displayName: this.config.botName,
-        password: password || ''
+        password: password || '',
+        onBehalfToken: this.config.obfToken || ''
       });
     });
   }

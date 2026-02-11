@@ -38,7 +38,7 @@ Body: {
 
 Derive the WebSocket URL from your API base URL:
 - `https://api.example.com` → `wss://api.example.com/ws`
-- `http://localhost:18056` → `ws://localhost:18056/ws`
+- `http://localhost:8056` → `ws://localhost:8056/ws`
 
 ### Authentication
 
@@ -333,8 +333,8 @@ Server responds with `pong`. Recommended ping interval: 25 seconds.
 ## Environment Variables
 
 ```bash
-export API_BASE="http://localhost:18056"
-export WS_URL="ws://localhost:18056/ws"
+export API_BASE="http://localhost:8056"
+export WS_URL="ws://localhost:8056/ws"
 export API_KEY="your_api_key_here"
 ```
 
@@ -345,16 +345,16 @@ See the real-time transcription script for a complete implementation:
 ```bash
 # Basic usage
 python testing/ws_realtime_transcription.py \
-  --api-base http://localhost:18056 \
-  --ws-url ws://localhost:18056/ws \
+  --api-base http://localhost:8056 \
+  --ws-url ws://localhost:8056/ws \
   --api-key $API_KEY \
   --platform google_meet \
   --native-id kzj-grsa-cqf
 
 # Debug mode (show raw frames)
 python testing/ws_realtime_transcription.py \
-  --api-base http://localhost:18056 \
-  --ws-url ws://localhost:18056/ws \
+  --api-base http://localhost:8056 \
+  --ws-url ws://localhost:8056/ws \
   --api-key $API_KEY \
   --platform google_meet \
   --native-id kzj-grsa-cqf \

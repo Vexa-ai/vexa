@@ -3,6 +3,7 @@ export type BotConfig = {
   meetingUrl: string | null,
   botName: string,
   token: string,  // MeetingToken (HS256 JWT)
+  obfToken?: string,
   connectionId: string,
   nativeMeetingId: string,
   language?: string | null,

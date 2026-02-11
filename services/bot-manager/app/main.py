@@ -34,6 +34,14 @@ from shared_models.schemas import (
     is_valid_status_transition, get_status_source
 ) # Import new schemas, Platform, and status enums
 from app.auth import get_user_and_token # MODIFIED
+from app.zoom_obf import (
+    ZoomOBFError,
+    get_zoom_oauth_client_credentials,
+    get_zoom_refresh_token,
+    mint_zoom_obf_token,
+    refresh_zoom_access_token,
+    resolve_zoom_access_token_from_user_data,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import and_, desc, func
@@ -595,9 +603,68 @@ async def request_bot(
         )
 
     # 4. Start the bot container
+    zoom_obf_token_to_use: Optional[str] = None
     container_id = None
     connection_id = None
     try:
+        if req.platform.value == Platform.ZOOM.value:
+            direct_obf = (req.zoom_obf_token or "").strip()
+            if direct_obf:
+                zoom_obf_token_to_use = direct_obf
+                logger.info(f"Using direct zoom_obf_token for meeting {meeting_id}")
+            else:
+                try:
+                    access_token = resolve_zoom_access_token_from_user_data(current_user.data)
+
+                    # Refresh if absent/expired
+                    if not access_token:
+                        refresh_token = get_zoom_refresh_token(current_user.data)
+                        if not refresh_token:
+                            raise HTTPException(
+                                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail={
+                                    "status": "error",
+                                    "code": "ZOOM_AUTH_NOT_CONNECTED",
+                                    "message": "Zoom OAuth connection is missing for this user. Provide zoom_obf_token or connect Zoom OAuth first.",
+                                },
+                            )
+
+                        client_id, client_secret = get_zoom_oauth_client_credentials()
+                        refreshed = await refresh_zoom_access_token(refresh_token, client_id, client_secret)
+                        access_token = refreshed["access_token"]
+
+                        # Persist refreshed tokens into users.data
+                        user_data = dict(current_user.data) if isinstance(current_user.data, dict) else {}
+                        zoom_data = dict(user_data.get("zoom") or {})
+                        oauth_data = dict(zoom_data.get("oauth") or {})
+                        oauth_data.update({
+                            "access_token": refreshed["access_token"],
+                            "refresh_token": refreshed["refresh_token"],
+                            "expires_at": refreshed["expires_at"],
+                        })
+                        if refreshed.get("scope") is not None:
+                            oauth_data["scope"] = refreshed["scope"]
+                        zoom_data["oauth"] = oauth_data
+                        user_data["zoom"] = zoom_data
+                        current_user.data = user_data
+                        await db.commit()
+                        await db.refresh(current_user)
+
+                    zoom_obf_token_to_use = await mint_zoom_obf_token(access_token, native_meeting_id)
+                    logger.info(f"Minted Zoom OBF token for meeting {meeting_id}")
+
+                except ZoomOBFError as zoom_err:
+                    logger.error(f"Zoom OBF flow failed for meeting {meeting_id}: {zoom_err}")
+                    raise HTTPException(
+                        status_code=zoom_err.status_code,
+                        detail={
+                            "status": "error",
+                            "code": zoom_err.code,
+                            "message": str(zoom_err),
+                            "meeting_id": meeting_id,
+                        },
+                    )
+
         logger.info(f"Attempting to start bot container for meeting {meeting_id} (native: {native_meeting_id})...")
         container_id, connection_id = await start_bot_container(
             user_id=current_user.id,
@@ -608,7 +675,8 @@ async def request_bot(
             user_token=user_token,
             native_meeting_id=native_meeting_id,
             language=req.language,
-            task=req.task
+            task=req.task,
+            zoom_obf_token=zoom_obf_token_to_use
         )
         container_start_time = datetime.utcnow()
         logger.info(f"Call to start_bot_container completed. Container ID: {container_id}, Connection ID: {connection_id}")

@@ -65,7 +65,7 @@ RUN npx playwright install-deps && npx playwright install --with-deps
 
 # Install MS Edge for Teams support (x86_64 only)
 RUN arch=$(uname -m) && if [ "$arch" = "x86_64" ] || [ "$arch" = "amd64" ]; then \
-    npx playwright install msedge || true; \
+    cd /app/vexa-bot/core && npx playwright install msedge; \
     else \
     echo "Skipping msedge installation on $arch (not supported)"; \
     fi
@@ -103,7 +103,7 @@ COPY --from=ts-builder /app/vexa-bot/core/dist ./core/dist
 
 # Install MS Edge in runtime stage (x86_64 only)
 RUN arch=$(uname -m) && if [ "$arch" = "x86_64" ] || [ "$arch" = "amd64" ]; then \
-    npx playwright install msedge || true; \
+    cd /app/vexa-bot/core && npx playwright install msedge; \
     else \
     echo "Skipping msedge installation on $arch (not supported)"; \
     fi
