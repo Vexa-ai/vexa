@@ -50,3 +50,7 @@ LOCAL_STORAGE_FSYNC=true
 # S3_BUCKET=vexa-recordings
 # S3_ENDPOINT=
 # S3_SECURE=true
+
+# WhisperLive durable recording upload cadence
+WL_RECORDING_SNAPSHOT_SECONDS=20
+WL_RECORDING_UPLOAD_URL=http://bot-manager:8080/internal/recordings/upload

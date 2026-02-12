@@ -5,6 +5,7 @@ import json
 import functools
 import logging
 import hashlib
+import tempfile
 from pathlib import Path
 from enum import Enum
 from typing import List, Optional
@@ -42,6 +43,7 @@ import threading
 # Import Redis
 import redis
 import uuid
+import httpx
 
 # Setup basic logging (env-driven)
 _WL_LOG_LEVEL = os.getenv("WL_LOG_LEVEL", "INFO").strip().upper()
@@ -1751,6 +1753,7 @@ class ServeClientBase(object):
         self.wl_recording_fsync_seconds = max(0.0, float(server_options.get("wl_recording_fsync_seconds", 10.0)))
         self.wl_recording_rotate_seconds = max(1.0, float(server_options.get("wl_recording_rotate_seconds", 20.0)))
         self.wl_recording_rotate_bytes = max(1024, int(server_options.get("wl_recording_rotate_bytes", 16 * 1024 * 1024)))
+        self.wl_recording_snapshot_seconds = max(0.0, float(server_options.get("wl_recording_snapshot_seconds", 20.0)))
         self._recording_chunk_dir: Optional[Path] = None
         self._recording_chunk_handle = None
         self._recording_chunk_start_monotonic = 0.0
@@ -1760,6 +1763,9 @@ class ServeClientBase(object):
         self._recording_chunk_index = 0
         self._recording_manifest: List[dict] = []
         self._recording_finalized = False
+        self._recording_upload_in_flight = False
+        self._recording_upload_lock = threading.Lock()
+        self._recording_last_snapshot_upload_monotonic = 0.0
         self._init_recording_spool()
         
         # Send SERVER_READY message
@@ -1949,6 +1955,159 @@ class ServeClientBase(object):
         except Exception as e:
             logging.error(f"Failed finalizing WL recording spool for {self.client_uid}: {e}")
 
+    def _render_spool_to_wav(self) -> Optional[tuple[str, float]]:
+        """
+        Convert persisted float32le spool chunks to a temporary WAV file.
+        Returns tuple (wav_path, duration_seconds) on success.
+        """
+        if self._recording_chunk_dir is None or not self._recording_manifest:
+            return None
+        try:
+            tmp = tempfile.NamedTemporaryFile(
+                mode="wb",
+                suffix=".wav",
+                prefix=f"wl-{self.client_uid}-",
+                delete=False,
+            )
+            wav_path = tmp.name
+            tmp.close()
+
+            import wave
+
+            # Ensure currently-open chunk is visible to reader.
+            with self._recording_lock:
+                if self._recording_chunk_handle is not None:
+                    self._recording_chunk_handle.flush()
+
+            total_samples = 0
+            with wave.open(wav_path, "wb") as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)  # int16
+                wav_file.setframerate(self.RATE)
+
+                for chunk_meta in self._recording_manifest:
+                    chunk_name = chunk_meta.get("chunk")
+                    if not chunk_name:
+                        continue
+                    chunk_path = self._recording_chunk_dir / chunk_name
+                    if not chunk_path.exists():
+                        logging.warning(f"WL spool chunk missing for {self.client_uid}: {chunk_path}")
+                        continue
+
+                    raw = chunk_path.read_bytes()
+                    if not raw:
+                        continue
+                    frames_f32 = np.frombuffer(raw, dtype=np.float32)
+                    if frames_f32.size == 0:
+                        continue
+                    frames_i16 = np.clip(frames_f32, -1.0, 1.0)
+                    frames_i16 = (frames_i16 * 32767.0).astype(np.int16)
+                    wav_file.writeframes(frames_i16.tobytes())
+                    total_samples += int(frames_i16.size)
+
+            duration_seconds = (total_samples / float(self.RATE)) if total_samples > 0 else 0.0
+            if duration_seconds <= 0:
+                try:
+                    os.remove(wav_path)
+                except Exception:
+                    pass
+                return None
+            return wav_path, duration_seconds
+        except Exception as e:
+            logging.error(f"Failed to render WL spool to WAV for {self.client_uid}: {e}", exc_info=True)
+            return None
+
+    def _upload_recording_spool_to_bot_manager(self, is_final: bool):
+        """
+        Best-effort handoff: upload finalized recording to bot-manager internal endpoint.
+        """
+        upload_enabled = str(os.getenv("WL_RECORDING_UPLOAD_ENABLED", "true")).strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        if not upload_enabled:
+            return
+
+        upload_url = os.getenv(
+            "WL_RECORDING_UPLOAD_URL",
+            os.getenv("BOT_MANAGER_RECORDING_UPLOAD_URL", "http://bot-manager:8080/internal/recordings/upload"),
+        ).strip()
+        if not upload_url:
+            logging.warning(f"WL recording upload skipped for {self.client_uid}: upload URL is empty")
+            return
+
+        if not self.client_uid:
+            logging.warning("WL recording upload skipped: missing session UID")
+            return
+
+        rendered = self._render_spool_to_wav()
+        if not rendered:
+            logging.info(f"WL recording upload skipped for {self.client_uid}: no audio frames")
+            return
+
+        wav_path, duration_seconds = rendered
+        timeout_seconds = max(5.0, float(os.getenv("WL_RECORDING_UPLOAD_TIMEOUT_SECONDS", "180")))
+
+        try:
+            with open(wav_path, "rb") as wav_file:
+                files = {"file": (f"{self.client_uid}.wav", wav_file, "audio/wav")}
+                data = {
+                    "session_uid": self.client_uid,
+                    "media_type": "audio",
+                    "media_format": "wav",
+                    "sample_rate": str(self.RATE),
+                    "duration_seconds": str(round(duration_seconds, 3)),
+                    "is_final": "true" if is_final else "false",
+                }
+                with httpx.Client(timeout=timeout_seconds) as client:
+                    response = client.post(upload_url, files=files, data=data)
+                if response.status_code >= 400:
+                    logging.error(
+                        f"WL recording upload failed for {self.client_uid}: "
+                        f"status={response.status_code}, body={response.text[:500]}"
+                    )
+                else:
+                    logging.info(
+                        f"WL recording upload succeeded for {self.client_uid}: "
+                        f"status={response.status_code}, duration={duration_seconds:.2f}s, final={is_final}"
+                    )
+        except Exception as e:
+            logging.error(f"WL recording upload exception for {self.client_uid}: {e}", exc_info=True)
+        finally:
+            try:
+                os.remove(wav_path)
+            except Exception:
+                pass
+
+    def _start_snapshot_upload_if_due(self):
+        """
+        Upload periodic recording snapshots during the meeting.
+        This keeps object storage up to date while preserving existing in-memory realtime path.
+        """
+        if self.wl_recording_snapshot_seconds <= 0:
+            return
+        if self._recording_finalized:
+            return
+        now_mono = time.monotonic()
+        if (now_mono - self._recording_last_snapshot_upload_monotonic) < self.wl_recording_snapshot_seconds:
+            return
+        with self._recording_upload_lock:
+            if self._recording_upload_in_flight:
+                return
+            self._recording_upload_in_flight = True
+            self._recording_last_snapshot_upload_monotonic = now_mono
+
+        def _runner():
+            try:
+                self._upload_recording_spool_to_bot_manager(is_final=False)
+            finally:
+                with self._recording_upload_lock:
+                    self._recording_upload_in_flight = False
+
+        threading.Thread(target=_runner, daemon=True).start()
+
     def add_frames(self, frame_np):
         """
         Add audio frames to the ongoing audio stream buffer.
@@ -1980,6 +2139,7 @@ class ServeClientBase(object):
         else:
             self.frames_np = np.concatenate((self.frames_np, frame_np), axis=0)
         self.lock.release()
+        self._start_snapshot_upload_if_due()
 
     def clip_audio_if_no_valid_segment(self):
         """
@@ -2148,6 +2308,7 @@ class ServeClientBase(object):
         """
         logging.info("Cleaning up.")
         self._finalize_recording_spool()
+        self._upload_recording_spool_to_bot_manager(is_final=True)
         self.exit = True
 
     def forward_to_collector(self, segments):

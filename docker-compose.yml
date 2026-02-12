@@ -78,6 +78,12 @@ services:
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
       - MINIO_BUCKET=${MINIO_BUCKET:-vexa-recordings}
       - MINIO_SECURE=${MINIO_SECURE:-false}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - S3_BUCKET=${S3_BUCKET:-}
+      - S3_ENDPOINT=${S3_ENDPOINT:-}
+      - S3_SECURE=${S3_SECURE:-true}
       - LOCAL_STORAGE_DIR=${LOCAL_STORAGE_DIR:-/data/recordings}
       - LOCAL_STORAGE_FSYNC=${LOCAL_STORAGE_FSYNC:-true}
       - RECORDING_ENABLED=${RECORDING_ENABLED:-false}
@@ -130,6 +136,8 @@ services:
       - WL_RECORDING_FSYNC_SECONDS=${WL_RECORDING_FSYNC_SECONDS:-10}
       - WL_RECORDING_ROTATE_SECONDS=${WL_RECORDING_ROTATE_SECONDS:-20}
       - WL_RECORDING_ROTATE_BYTES=${WL_RECORDING_ROTATE_BYTES:-16777216}
+      - WL_RECORDING_SNAPSHOT_SECONDS=${WL_RECORDING_SNAPSHOT_SECONDS:-20}
+      - WL_RECORDING_UPLOAD_URL=${WL_RECORDING_UPLOAD_URL:-http://bot-manager:8080/internal/recordings/upload}
       - CONSUL_ENABLE=false
       - WL_REDIS_DISCOVERY_ENABLED=false
     command: >-
@@ -142,6 +150,7 @@ services:
       --wl_recording_fsync_seconds ${WL_RECORDING_FSYNC_SECONDS:-10}
       --wl_recording_rotate_seconds ${WL_RECORDING_ROTATE_SECONDS:-20}
       --wl_recording_rotate_bytes ${WL_RECORDING_ROTATE_BYTES:-16777216}
+      --wl_recording_snapshot_seconds ${WL_RECORDING_SNAPSHOT_SECONDS:-20}
     expose:
       - "9090" #use for transcription web socket
       - "9091" #use for health check
@@ -185,6 +194,8 @@ services:
       - WL_RECORDING_FSYNC_SECONDS=${WL_RECORDING_FSYNC_SECONDS:-10}
       - WL_RECORDING_ROTATE_SECONDS=${WL_RECORDING_ROTATE_SECONDS:-20}
       - WL_RECORDING_ROTATE_BYTES=${WL_RECORDING_ROTATE_BYTES:-16777216}
+      - WL_RECORDING_SNAPSHOT_SECONDS=${WL_RECORDING_SNAPSHOT_SECONDS:-20}
+      - WL_RECORDING_UPLOAD_URL=${WL_RECORDING_UPLOAD_URL:-http://bot-manager:8080/internal/recordings/upload}
       - DEVICE_TYPE=cpu
       - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}
       - WL_MAX_CLIENTS=${WL_MAX_CLIENTS}
@@ -201,6 +212,7 @@ services:
       --wl_recording_fsync_seconds ${WL_RECORDING_FSYNC_SECONDS:-10}
       --wl_recording_rotate_seconds ${WL_RECORDING_ROTATE_SECONDS:-20}
       --wl_recording_rotate_bytes ${WL_RECORDING_ROTATE_BYTES:-16777216}
+      --wl_recording_snapshot_seconds ${WL_RECORDING_SNAPSHOT_SECONDS:-20}
     expose:
       - "9090" #use for transcription web socket
       - "9091" #use for health check
@@ -243,6 +255,8 @@ services:
       - WL_RECORDING_FSYNC_SECONDS=${WL_RECORDING_FSYNC_SECONDS:-10}
       - WL_RECORDING_ROTATE_SECONDS=${WL_RECORDING_ROTATE_SECONDS:-20}
       - WL_RECORDING_ROTATE_BYTES=${WL_RECORDING_ROTATE_BYTES:-16777216}
+      - WL_RECORDING_SNAPSHOT_SECONDS=${WL_RECORDING_SNAPSHOT_SECONDS:-20}
+      - WL_RECORDING_UPLOAD_URL=${WL_RECORDING_UPLOAD_URL:-http://bot-manager:8080/internal/recordings/upload}
       # Reconfirmation threshold - lower values reduce latency by reconfirming segments faster
       - SAME_OUTPUT_THRESHOLD=${SAME_OUTPUT_THRESHOLD:-3}
       - SAME_OUTPUT_THRESHOLD_TIER2=${SAME_OUTPUT_THRESHOLD_TIER2:-2}
@@ -264,6 +278,7 @@ services:
       --wl_recording_fsync_seconds ${WL_RECORDING_FSYNC_SECONDS:-10}
       --wl_recording_rotate_seconds ${WL_RECORDING_ROTATE_SECONDS:-20}
       --wl_recording_rotate_bytes ${WL_RECORDING_ROTATE_BYTES:-16777216}
+      --wl_recording_snapshot_seconds ${WL_RECORDING_SNAPSHOT_SECONDS:-20}
       --same_output_threshold ${SAME_OUTPUT_THRESHOLD:-3}
       --same_output_threshold_tier2 ${SAME_OUTPUT_THRESHOLD_TIER2:-2}
     expose:
@@ -306,6 +321,18 @@ services:
       - REDIS_SEGMENT_TTL=3600
       - REDIS_CLEANUP_THRESHOLD=86400
       - LOG_LEVEL=DEBUG
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-minio}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
+      - MINIO_BUCKET=${MINIO_BUCKET:-vexa-recordings}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - S3_BUCKET=${S3_BUCKET:-}
+      - S3_ENDPOINT=${S3_ENDPOINT:-}
+      - S3_SECURE=${S3_SECURE:-true}
     init: true
     depends_on:
       redis:
