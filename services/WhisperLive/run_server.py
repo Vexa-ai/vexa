@@ -51,6 +51,7 @@ if __name__ == "__main__":
     parser.add_argument('--wl_recording_fsync_seconds', type=float, default=settings.WL_RECORDING_FSYNC_SECONDS)
     parser.add_argument('--wl_recording_rotate_seconds', type=float, default=settings.WL_RECORDING_ROTATE_SECONDS)
     parser.add_argument('--wl_recording_rotate_bytes', type=int, default=settings.WL_RECORDING_ROTATE_BYTES)
+    parser.add_argument('--wl_recording_snapshot_seconds', type=float, default=settings.WL_RECORDING_SNAPSHOT_SECONDS)
 
     # VAD settings
     parser.add_argument('--vad_onset', type=float, default=settings.VAD_ONSET)
@@ -81,6 +82,7 @@ if __name__ == "__main__":
     logger.info(f"Starting WhisperLive server with min_time_between_requests_s={args.min_time_between_requests_s} (from env: {os.getenv('MIN_TIME_BETWEEN_REQUESTS_S', 'NOT SET')})")
     logger.info(f"Starting WhisperLive server with min_time_between_requests_s_tier2={args.min_time_between_requests_s_tier2} (from env: {os.getenv('MIN_TIME_BETWEEN_REQUESTS_S_TIER2', 'NOT SET')})")
     logger.info(f"Starting WhisperLive server with wl_recording_dir={args.wl_recording_dir} (from env: {os.getenv('WL_RECORDING_DIR', 'NOT SET')})")
+    logger.info(f"Starting WhisperLive server with wl_recording_snapshot_seconds={args.wl_recording_snapshot_seconds} (from env: {os.getenv('WL_RECORDING_SNAPSHOT_SECONDS', 'NOT SET')})")
     # Log the same_output_threshold value to verify it's being passed correctly
     logger.info(f"Starting WhisperLive server with same_output_threshold={args.same_output_threshold} (from env: {os.getenv('SAME_OUTPUT_THRESHOLD', 'NOT SET')})")
     logger.info(f"Starting WhisperLive server with same_output_threshold_tier2={args.same_output_threshold_tier2} (from env: {os.getenv('SAME_OUTPUT_THRESHOLD_TIER2', 'NOT SET')})")
@@ -108,6 +110,7 @@ if __name__ == "__main__":
             "wl_recording_fsync_seconds": args.wl_recording_fsync_seconds,
             "wl_recording_rotate_seconds": args.wl_recording_rotate_seconds,
             "wl_recording_rotate_bytes": args.wl_recording_rotate_bytes,
+            "wl_recording_snapshot_seconds": args.wl_recording_snapshot_seconds,
             "vad_onset": args.vad_onset,
             "vad_no_speech_thresh": args.vad_no_speech_thresh,
             "same_output_threshold": args.same_output_threshold,

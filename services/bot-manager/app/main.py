@@ -346,6 +346,18 @@ def _new_recording_numeric_id() -> int:
     return int(uuid_lib.uuid4().int % 900000000000 + 100000000000)
 
 
+def _to_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return default
+
+
 def _normalize_meeting_recording(recording: Dict[str, Any], meeting_id: int) -> Dict[str, Any]:
     rec = dict(recording or {})
     rec["meeting_id"] = rec.get("meeting_id") or meeting_id
@@ -1697,6 +1709,7 @@ async def internal_upload_recording(
     media_format: str = Form(default="wav"),
     duration_seconds: Optional[float] = Form(default=None),
     sample_rate: Optional[int] = Form(default=None),
+    is_final: bool = Form(default=True),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -1717,6 +1730,8 @@ async def internal_upload_recording(
         media_format = metadata_obj.get("format", media_format)
         duration_seconds = metadata_obj.get("duration_seconds", duration_seconds)
         sample_rate = metadata_obj.get("sample_rate", sample_rate)
+        if "is_final" in metadata_obj:
+            is_final = _to_bool(metadata_obj.get("is_final"), default=True)
 
     if not session_uid:
         raise HTTPException(status_code=422, detail="session_uid is required")
@@ -1729,6 +1744,11 @@ async def internal_upload_recording(
     meeting_session = session_result.scalars().first()
 
     if not meeting_session:
+        if not is_final:
+            return {
+                "status": "pending",
+                "detail": f"Meeting session not ready yet: {session_uid}",
+            }
         raise HTTPException(status_code=404, detail=f"Meeting session not found: {session_uid}")
 
     meeting = await db.get(Meeting, meeting_session.meeting_id)
@@ -1743,7 +1763,22 @@ async def internal_upload_recording(
     logger.info(f"Read {file_size} bytes from uploaded file for session {session_uid}")
 
     use_meeting_data_mode = get_recording_metadata_mode() == "meeting_data"
+    meeting_data = dict(meeting.data or {}) if use_meeting_data_mode else {}
+    recordings = list(meeting_data.get("recordings") or []) if use_meeting_data_mode else []
+    existing_recording_payload = None
+    existing_recording_index = None
     legacy_recording_id = _new_recording_numeric_id() if use_meeting_data_mode else None
+    if use_meeting_data_mode:
+        for idx, rec in enumerate(recordings):
+            if (
+                isinstance(rec, dict)
+                and rec.get("session_uid") == session_uid
+                and rec.get("source") == RecordingSource.BOT.value
+            ):
+                existing_recording_payload = rec
+                existing_recording_index = idx
+                legacy_recording_id = rec.get("id") or legacy_recording_id
+                break
     recording = None
     if not use_meeting_data_mode:
         recording = Recording(
@@ -1781,18 +1816,24 @@ async def internal_upload_recording(
         raise HTTPException(status_code=500, detail="Failed to upload recording to storage")
 
     if get_recording_metadata_mode() == "meeting_data":
-        media_file_id = _new_recording_numeric_id()
-        meeting_data = dict(meeting.data or {})
-        recordings = list(meeting_data.get("recordings") or [])
+        existing_media = (
+            existing_recording_payload.get("media_files", [{}])[0]
+            if existing_recording_payload else {}
+        )
+        media_file_id = existing_media.get("id") or _new_recording_numeric_id()
+        created_at = (
+            existing_recording_payload.get("created_at")
+            if existing_recording_payload else datetime.utcnow().isoformat()
+        )
         recording_payload = {
             "id": legacy_recording_id,
             "meeting_id": meeting.id,
             "user_id": user_id,
             "session_uid": session_uid,
             "source": RecordingSource.BOT.value,
-            "status": RecordingStatus.COMPLETED.value,
-            "created_at": datetime.utcnow().isoformat(),
-            "completed_at": datetime.utcnow().isoformat(),
+            "status": RecordingStatus.COMPLETED.value if is_final else RecordingStatus.IN_PROGRESS.value,
+            "created_at": created_at,
+            "completed_at": datetime.utcnow().isoformat() if is_final else None,
             "media_files": [
                 {
                     "id": media_file_id,
@@ -1807,17 +1848,21 @@ async def internal_upload_recording(
                 }
             ],
         }
-        recordings.append(recording_payload)
+        if existing_recording_index is None:
+            recordings.append(recording_payload)
+        else:
+            recordings[existing_recording_index] = recording_payload
         meeting_data["recordings"] = recordings
         meeting.data = meeting_data
         attributes.flag_modified(meeting, "data")
         await db.commit()
-        asyncio.create_task(send_event_webhook(user_id, "recording.completed", {"recording": recording_payload}))
+        if is_final:
+            asyncio.create_task(send_event_webhook(user_id, "recording.completed", {"recording": recording_payload}))
         return {
             "recording_id": recording_payload["id"],
             "media_file_id": media_file_id,
             "storage_path": storage_path,
-            "status": RecordingStatus.COMPLETED.value,
+            "status": recording_payload["status"],
         }
 
     # Build metadata dict
