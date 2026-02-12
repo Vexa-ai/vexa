@@ -1,6 +1,8 @@
 import { Page } from 'playwright';
 import { BotConfig } from '../../../types';
 import { WhisperLiveService } from '../../../services/whisperlive';
+import { RecordingService } from '../../../services/recording';
+import { setActiveRecordingService } from '../../../index';
 import { getSDKManager } from './join';
 import { log } from '../../../utils';
 import { spawn, ChildProcess } from 'child_process';
@@ -11,6 +13,7 @@ let recordingStopResolver: (() => void) | null = null;
 let parecordProcess: ChildProcess | null = null;
 let audioSessionStartTime: number | null = null;
 let activeSpeakers = new Set<number>();  // Currently active speaker user IDs
+let recordingService: RecordingService | null = null;
 
 export async function startZoomRecording(page: Page | null, botConfig: BotConfig): Promise<void> {
   log('[Zoom] Starting audio recording and WhisperLive connection');
@@ -53,6 +56,15 @@ export async function startZoomRecording(page: Page | null, botConfig: BotConfig
 
     log('[Zoom] WhisperLive connected successfully');
 
+    // Initialize audio recording if enabled
+    if (botConfig.recordingEnabled) {
+      const sessionUid = botConfig.connectionId || `zoom_${Date.now()}`;
+      recordingService = new RecordingService(botConfig.meeting_id, sessionUid);
+      recordingService.start();
+      setActiveRecordingService(recordingService);
+      log('[Zoom] Audio recording service started');
+    }
+
     // Start SDK audio capture with callback to send to WhisperLive.
     // If SDK returns NO_PERMISSION (raw data license required), fall back to PulseAudio capture.
     let sdkRecordingSucceeded = false;
@@ -61,6 +73,10 @@ export async function startZoomRecording(page: Page | null, botConfig: BotConfig
         if (whisperLive) {
           const float32 = bufferToFloat32(buffer);
           whisperLive.sendAudioData(float32);
+          // Also capture for recording
+          if (recordingService) {
+            recordingService.appendChunk(float32);
+          }
         }
       });
       log('[Zoom] SDK raw audio recording started, streaming to WhisperLive');
@@ -133,10 +149,27 @@ export async function stopZoomRecording(): Promise<void> {
 
     whisperLive = null;
 
+    // Finalize the audio recording file
+    if (recordingService) {
+      try {
+        await recordingService.finalize();
+        log('[Zoom] Audio recording finalized');
+      } catch (err: any) {
+        log(`[Zoom] Error finalizing audio recording: ${err.message}`);
+      }
+    }
+
     log('[Zoom] Recording stopped');
   } catch (error) {
     log(`[Zoom] Error stopping recording: ${error}`);
   }
+}
+
+/**
+ * Get the RecordingService instance for upload handling in performGracefulLeave.
+ */
+export function getZoomRecordingService(): RecordingService | null {
+  return recordingService;
 }
 
 // Helper function to convert PCM Int16 buffer to Float32Array
@@ -189,6 +222,10 @@ async function startPulseAudioCapture(whisperLive: WhisperLiveService | null): P
       if (whisperLive) {
         const float32 = bufferToFloat32(chunk);
         whisperLive.sendAudioData(float32);
+        // Also capture for recording
+        if (recordingService) {
+          recordingService.appendPCMBuffer(chunk);
+        }
       }
     });
 

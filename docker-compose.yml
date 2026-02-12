@@ -71,6 +71,15 @@ services:
       - ADMIN_TOKEN=${ADMIN_API_TOKEN}
       - ZOOM_CLIENT_ID=${ZOOM_CLIENT_ID}
       - ZOOM_CLIENT_SECRET=${ZOOM_CLIENT_SECRET}
+      # Storage (recordings)
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-minio}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
+      - MINIO_BUCKET=${MINIO_BUCKET:-vexa-recordings}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - RECORDING_ENABLED=${RECORDING_ENABLED:-false}
+      - CAPTURE_MODES=${CAPTURE_MODES:-audio}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ../.cursor:/app/.cursor
@@ -240,6 +249,15 @@ services:
       - REDIS_SEGMENT_TTL=3600
       - REDIS_CLEANUP_THRESHOLD=86400
       - LOG_LEVEL=DEBUG
+      # Storage (recordings) — for transcription job file downloads
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-minio}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
+      - MINIO_BUCKET=${MINIO_BUCKET:-vexa-recordings}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      # Transcription service — for batch transcription jobs
+      - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-http://transcription-service:80}
     init: true
     depends_on:
       redis:
@@ -275,9 +293,42 @@ services:
       - vexa_default
     restart: unless-stopped
 
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-vexa-access-key}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-vexa-secret-key}
+    volumes:
+      - minio-data:/data
+    ports:
+      - "${MINIO_HOST_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
+    networks:
+      - vexa_default
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 5;
+      mc alias set vexa http://minio:9000 $${MINIO_ROOT_USER:-vexa-access-key} $${MINIO_ROOT_PASSWORD:-vexa-secret-key};
+      mc mb --ignore-existing vexa/${MINIO_BUCKET:-vexa-recordings};
+      exit 0;
+      "
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-vexa-access-key}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-vexa-secret-key}
+    networks:
+      - vexa_default
+
 volumes:
   redis-data:
   postgres-data:
+  minio-data:
 
 networks:
   vexa_default:

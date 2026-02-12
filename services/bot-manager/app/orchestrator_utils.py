@@ -22,7 +22,7 @@ from shared_models.schemas import Platform
 
 # ---> ADD Missing imports for _record_session_start
 from shared_models.database import async_session_local
-from shared_models.models import MeetingSession, Meeting
+from shared_models.models import MeetingSession, Meeting, User
 # <--- END ADD
 
 # ---> ADD Missing imports for check logic & session start
@@ -182,6 +182,16 @@ async def start_bot_container(
     connection_id = str(uuid.uuid4())
     logger.info(f"Generated unique connectionId for bot session: {connection_id}")
 
+    # Look up user-level recording config (falls back to env vars in bot_config_data)
+    user_recording_config = {}
+    try:
+        async with async_session_local() as db:
+            user = await db.get(User, user_id)
+            if user and user.data and isinstance(user.data, dict):
+                user_recording_config = user.data.get("recording_config", {})
+    except Exception as e:
+        logger.warning(f"Failed to load user recording config for user {user_id}: {e}")
+
     # Mint MeetingToken (HS256) - import at top of file if not present
     from app.main import mint_meeting_token
     try:
@@ -215,7 +225,10 @@ async def start_bot_container(
             "noOneJoinedTimeout": 120000,
             "everyoneLeftTimeout": 60000
         },
-        "botManagerCallbackUrl": f"http://bot-manager:8080/bots/internal/callback/exited"
+        "botManagerCallbackUrl": f"http://bot-manager:8080/bots/internal/callback/exited",
+        "recordingEnabled": user_recording_config.get("enabled", os.getenv("RECORDING_ENABLED", "false").lower() == "true"),
+        "captureModes": user_recording_config.get("capture_modes", os.getenv("CAPTURE_MODES", "audio").split(",")),
+        "recordingUploadUrl": f"http://bot-manager:8080/internal/recordings/upload"
     }
     # Remove keys with None values before serializing
     cleaned_config_data = {k: v for k, v in bot_config_data.items() if v is not None}

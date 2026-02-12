@@ -288,7 +288,69 @@ async def get_bots_status_proxy(request: Request):
     return await forward_request(app.state.http_client, "GET", url, request)
 # --- END Route for GET /bots/status ---
 
-# --- Transcription Collector Routes --- 
+# --- Recording Routes (proxy to Bot Manager) ---
+
+@app.get("/recordings",
+         tags=["Recordings"],
+         summary="List recordings for the authenticated user",
+         description="Returns a paginated list of recordings. Optionally filter by meeting_id.",
+         dependencies=[Depends(api_key_scheme)])
+async def list_recordings_proxy(request: Request):
+    """Forward request to Bot Manager to list recordings."""
+    url = f"{BOT_MANAGER_URL}/recordings"
+    return await forward_request(app.state.http_client, "GET", url, request)
+
+@app.get("/recordings/{recording_id}",
+         tags=["Recordings"],
+         summary="Get recording details",
+         description="Returns a single recording with its media files.",
+         dependencies=[Depends(api_key_scheme)])
+async def get_recording_proxy(recording_id: int, request: Request):
+    """Forward request to Bot Manager to get recording details."""
+    url = f"{BOT_MANAGER_URL}/recordings/{recording_id}"
+    return await forward_request(app.state.http_client, "GET", url, request)
+
+@app.get("/recordings/{recording_id}/media/{media_file_id}/download",
+         tags=["Recordings"],
+         summary="Get download URL for a media file",
+         description="Generates a presigned URL to download the specified media file.",
+         dependencies=[Depends(api_key_scheme)])
+async def download_media_proxy(recording_id: int, media_file_id: int, request: Request):
+    """Forward request to Bot Manager for presigned download URL."""
+    url = f"{BOT_MANAGER_URL}/recordings/{recording_id}/media/{media_file_id}/download"
+    return await forward_request(app.state.http_client, "GET", url, request)
+
+@app.delete("/recordings/{recording_id}",
+            tags=["Recordings"],
+            summary="Delete a recording",
+            description="Deletes a recording, its media files from storage, and all database rows.",
+            dependencies=[Depends(api_key_scheme)])
+async def delete_recording_proxy(recording_id: int, request: Request):
+    """Forward request to Bot Manager to delete a recording."""
+    url = f"{BOT_MANAGER_URL}/recordings/{recording_id}"
+    return await forward_request(app.state.http_client, "DELETE", url, request)
+
+@app.get("/recording-config",
+         tags=["Recordings"],
+         summary="Get recording configuration",
+         description="Returns the user's recording configuration.",
+         dependencies=[Depends(api_key_scheme)])
+async def get_recording_config_proxy(request: Request):
+    """Forward request to Bot Manager to get recording config."""
+    url = f"{BOT_MANAGER_URL}/recording-config"
+    return await forward_request(app.state.http_client, "GET", url, request)
+
+@app.put("/recording-config",
+         tags=["Recordings"],
+         summary="Update recording configuration",
+         description="Update the user's recording configuration (enable/disable, capture modes).",
+         dependencies=[Depends(api_key_scheme)])
+async def update_recording_config_proxy(request: Request):
+    """Forward request to Bot Manager to update recording config."""
+    url = f"{BOT_MANAGER_URL}/recording-config"
+    return await forward_request(app.state.http_client, "PUT", url, request)
+
+# --- Transcription Collector Routes ---
 @app.get("/meetings",
         tags=["Transcriptions"],
         summary="Get list of user's meetings",
@@ -311,6 +373,39 @@ async def get_transcript_proxy(platform: Platform, native_meeting_id: str, reque
     url = f"{TRANSCRIPTION_COLLECTOR_URL}/transcripts/{platform.value}/{native_meeting_id}"
     return await forward_request(app.state.http_client, "GET", url, request)
 
+
+# --- Transcription Job Routes (proxy to Transcription Collector) ---
+
+@app.post("/transcription-jobs",
+          tags=["Transcription Jobs"],
+          summary="Create a post-meeting transcription job",
+          description="Submit a recording for post-meeting transcription.",
+          status_code=status.HTTP_201_CREATED,
+          dependencies=[Depends(api_key_scheme)])
+async def create_transcription_job_proxy(request: Request):
+    """Forward request to Transcription Collector to create a transcription job."""
+    url = f"{TRANSCRIPTION_COLLECTOR_URL}/transcription-jobs"
+    return await forward_request(app.state.http_client, "POST", url, request)
+
+@app.get("/transcription-jobs",
+         tags=["Transcription Jobs"],
+         summary="List transcription jobs",
+         description="List transcription jobs for the authenticated user.",
+         dependencies=[Depends(api_key_scheme)])
+async def list_transcription_jobs_proxy(request: Request):
+    """Forward request to Transcription Collector to list transcription jobs."""
+    url = f"{TRANSCRIPTION_COLLECTOR_URL}/transcription-jobs"
+    return await forward_request(app.state.http_client, "GET", url, request)
+
+@app.get("/transcription-jobs/{job_id}",
+         tags=["Transcription Jobs"],
+         summary="Get transcription job details",
+         description="Get details of a specific transcription job.",
+         dependencies=[Depends(api_key_scheme)])
+async def get_transcription_job_proxy(job_id: int, request: Request):
+    """Forward request to Transcription Collector to get a transcription job."""
+    url = f"{TRANSCRIPTION_COLLECTOR_URL}/transcription-jobs/{job_id}"
+    return await forward_request(app.state.http_client, "GET", url, request)
 
 # --- Public Transcript Share Links (no API integration needed by client) ---
 class TranscriptShareResponse(BaseModel):

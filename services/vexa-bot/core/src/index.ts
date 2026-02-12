@@ -7,6 +7,7 @@ import { handleMicrosoftTeams, leaveMicrosoftTeams } from "./platforms/msteams";
 import { handleZoom, leaveZoom } from "./platforms/zoom";
 import { browserArgs, userAgent } from "./constans";
 import { BotConfig } from "./types";
+import { RecordingService } from "./services/recording";
 import { createClient, RedisClientType } from 'redis';
 import { Page, Browser } from 'playwright-core';
 // HTTP imports removed - using unified callback service instead
@@ -31,6 +32,14 @@ let redisSubscriber: RedisClientType | null = null;
 // --- ADDED: Browser instance ---
 let browserInstance: Browser | null = null;
 // -------------------------------
+
+// --- Recording service reference (set by platform handlers) ---
+let activeRecordingService: RecordingService | null = null;
+let currentBotConfig: BotConfig | null = null;
+export function setActiveRecordingService(svc: RecordingService | null): void {
+  activeRecordingService = svc;
+}
+// ----------------------------------------------------------
 
 // --- ADDED: Stop signal tracking ---
 let stopSignalReceived = false;
@@ -197,12 +206,13 @@ const handleRedisMessage = async (message: string, channel: string, page: Page |
         stopSignalReceived = true;
         // TODO: Implement leave logic (Phase 4)
         log("Received leave command");
-        if (!isShuttingDown && page && !page.isClosed()) { // Check flag and page state
+        if (!isShuttingDown) {
           // A command-initiated leave is a successful completion, not an error.
           // Exit with code 0 to signal success to Nomad and prevent restarts.
-          await performGracefulLeave(page, 0, "self_initiated_leave");
+          const pageForLeave = (page && !page.isClosed()) ? page : null;
+          await performGracefulLeave(pageForLeave, 0, "self_initiated_leave");
         } else {
-           log("Ignoring leave command: Already shutting down or page unavailable.")
+           log("Ignoring leave command: Already shutting down.")
         }
       }
   } catch (e: any) {
@@ -264,6 +274,20 @@ async function performGracefulLeave(
     // If the page is already gone, we can't perform a UI leave.
     // The provided exitCode and reason will dictate the callback.
     // If reason is 'admission_failed', exitCode would be 2, and platformLeaveSuccess is irrelevant.
+  }
+
+  // Upload recording if available
+  if (activeRecordingService && currentBotConfig?.recordingUploadUrl && currentBotConfig?.token) {
+    try {
+      log("[Graceful Leave] Uploading recording to bot-manager...");
+      await activeRecordingService.upload(currentBotConfig.recordingUploadUrl, currentBotConfig.token);
+      log("[Graceful Leave] Recording uploaded successfully.");
+    } catch (uploadError: any) {
+      log(`[Graceful Leave] Recording upload failed: ${uploadError.message}`);
+    } finally {
+      await activeRecordingService.cleanup();
+      activeRecordingService = null;
+    }
   }
 
   // Determine final exit code. If the initial intent was a successful exit (code 0),
@@ -357,6 +381,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
   currentConnectionId = botConfig.connectionId;
   botManagerCallbackUrl = botConfig.botManagerCallbackUrl || null; // ADDED: Get callback URL from botConfig
   currentPlatform = botConfig.platform; // Set currentPlatform here
+  currentBotConfig = botConfig; // Store full config for recording upload
 
   // Destructure other needed config values
   const { meetingUrl, platform, botName } = botConfig;
