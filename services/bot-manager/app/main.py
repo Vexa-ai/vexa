@@ -48,6 +48,7 @@ from app.zoom_obf import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import and_, desc, func
+from sqlalchemy.orm import attributes
 from datetime import datetime # For start_time
 
 # Delayed stop timeout for fallback container shutdown after stop command.
@@ -335,6 +336,61 @@ def get_storage_client():
     if _storage_client is None:
         _storage_client = create_storage_client()
     return _storage_client
+
+
+def get_recording_metadata_mode() -> str:
+    return os.getenv("RECORDING_METADATA_MODE", "meeting_data").strip().lower()
+
+
+def _new_recording_numeric_id() -> int:
+    return int(uuid_lib.uuid4().int % 900000000000 + 100000000000)
+
+
+def _normalize_meeting_recording(recording: Dict[str, Any], meeting_id: int) -> Dict[str, Any]:
+    rec = dict(recording or {})
+    rec["meeting_id"] = rec.get("meeting_id") or meeting_id
+    rec["source"] = rec.get("source") or RecordingSource.BOT.value
+    rec["status"] = rec.get("status") or RecordingStatus.COMPLETED.value
+    rec["media_files"] = rec.get("media_files") or []
+    return rec
+
+
+async def _list_meeting_data_recordings(
+    db: AsyncSession,
+    user_id: int,
+    meeting_id: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    stmt = select(Meeting).where(Meeting.user_id == user_id)
+    if meeting_id is not None:
+        stmt = stmt.where(Meeting.id == meeting_id)
+    result = await db.execute(stmt)
+    meetings = result.scalars().all()
+    recordings: List[Dict[str, Any]] = []
+    for meeting in meetings:
+        if not isinstance(meeting.data, dict):
+            continue
+        for rec in (meeting.data.get("recordings") or []):
+            if isinstance(rec, dict):
+                recordings.append(_normalize_meeting_recording(rec, meeting.id))
+    recordings.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+    return recordings
+
+
+async def _find_meeting_data_recording(
+    db: AsyncSession,
+    user_id: int,
+    recording_id: int,
+) -> tuple[Optional[Meeting], Optional[Dict[str, Any]]]:
+    stmt = select(Meeting).where(Meeting.user_id == user_id)
+    result = await db.execute(stmt)
+    meetings = result.scalars().all()
+    for meeting in meetings:
+        if not isinstance(meeting.data, dict):
+            continue
+        for rec in (meeting.data.get("recordings") or []):
+            if isinstance(rec, dict) and int(rec.get("id", -1)) == recording_id:
+                return meeting, _normalize_meeting_recording(rec, meeting.id)
+    return None, None
 # ----------------------------------
 
 class BotExitCallbackPayload(BaseModel):
@@ -1686,19 +1742,23 @@ async def internal_upload_recording(
     file_size = len(file_data)
     logger.info(f"Read {file_size} bytes from uploaded file for session {session_uid}")
 
-    # Create Recording row
-    recording = Recording(
-        meeting_id=meeting.id,
-        user_id=user_id,
-        session_uid=session_uid,
-        source="bot",
-        status="uploading",
-    )
-    db.add(recording)
-    await db.flush()  # get recording.id
+    use_meeting_data_mode = get_recording_metadata_mode() == "meeting_data"
+    legacy_recording_id = _new_recording_numeric_id() if use_meeting_data_mode else None
+    recording = None
+    if not use_meeting_data_mode:
+        recording = Recording(
+            meeting_id=meeting.id,
+            user_id=user_id,
+            session_uid=session_uid,
+            source="bot",
+            status="uploading",
+        )
+        db.add(recording)
+        await db.flush()  # get recording.id
+    storage_recording_id = legacy_recording_id if use_meeting_data_mode else recording.id
 
     # Upload to object storage
-    storage_path = f"recordings/{user_id}/{recording.id}/{session_uid}.{media_format}"
+    storage_path = f"recordings/{user_id}/{storage_recording_id}/{session_uid}.{media_format}"
     content_type_map = {
         "wav": "audio/wav",
         "webm": "video/webm",
@@ -1713,11 +1773,52 @@ async def internal_upload_recording(
         storage = get_storage_client()
         storage.upload_file(storage_path, file_data, content_type=content_type)
     except Exception as e:
-        logger.error(f"Storage upload failed for recording {recording.id}: {e}", exc_info=True)
-        recording.status = "failed"
-        recording.error_message = str(e)
-        await db.commit()
+        logger.error(f"Storage upload failed for session {session_uid}: {e}", exc_info=True)
+        if recording is not None:
+            recording.status = "failed"
+            recording.error_message = str(e)
+            await db.commit()
         raise HTTPException(status_code=500, detail="Failed to upload recording to storage")
+
+    if get_recording_metadata_mode() == "meeting_data":
+        media_file_id = _new_recording_numeric_id()
+        meeting_data = dict(meeting.data or {})
+        recordings = list(meeting_data.get("recordings") or [])
+        recording_payload = {
+            "id": legacy_recording_id,
+            "meeting_id": meeting.id,
+            "user_id": user_id,
+            "session_uid": session_uid,
+            "source": RecordingSource.BOT.value,
+            "status": RecordingStatus.COMPLETED.value,
+            "created_at": datetime.utcnow().isoformat(),
+            "completed_at": datetime.utcnow().isoformat(),
+            "media_files": [
+                {
+                    "id": media_file_id,
+                    "type": media_type,
+                    "format": media_format,
+                    "storage_path": storage_path,
+                    "storage_backend": os.environ.get("STORAGE_BACKEND", "minio"),
+                    "file_size_bytes": file_size,
+                    "duration_seconds": duration_seconds,
+                    "metadata": {"sample_rate": sample_rate} if sample_rate else {},
+                    "created_at": datetime.utcnow().isoformat(),
+                }
+            ],
+        }
+        recordings.append(recording_payload)
+        meeting_data["recordings"] = recordings
+        meeting.data = meeting_data
+        attributes.flag_modified(meeting, "data")
+        await db.commit()
+        asyncio.create_task(send_event_webhook(user_id, "recording.completed", {"recording": recording_payload}))
+        return {
+            "recording_id": recording_payload["id"],
+            "media_file_id": media_file_id,
+            "storage_path": storage_path,
+            "status": RecordingStatus.COMPLETED.value,
+        }
 
     # Build metadata dict
     file_metadata = {}
@@ -1781,6 +1882,12 @@ async def list_recordings(
 ):
     """List recordings owned by the authenticated user, with optional meeting_id filter."""
     token, user = auth
+    if get_recording_metadata_mode() == "meeting_data":
+        recordings = await _list_meeting_data_recordings(db, user.id, meeting_id=meeting_id)
+        page = recordings[offset:offset + limit]
+        return RecordingListResponse(
+            recordings=[RecordingResponse.model_validate(r) for r in page]
+        )
 
     stmt = select(Recording).where(Recording.user_id == user.id)
     if meeting_id is not None:
@@ -1809,6 +1916,11 @@ async def get_recording(
 ):
     """Get recording details including all media files."""
     token, user = auth
+    if get_recording_metadata_mode() == "meeting_data":
+        _meeting, rec = await _find_meeting_data_recording(db, user.id, recording_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="Recording not found")
+        return RecordingResponse.model_validate(rec)
 
     recording = await db.get(Recording, recording_id)
     if not recording:
@@ -1830,6 +1942,44 @@ async def download_media_file(
 ):
     """Generate a presigned URL to download a specific media file."""
     token, user = auth
+    if get_recording_metadata_mode() == "meeting_data":
+        _meeting, rec = await _find_meeting_data_recording(db, user.id, recording_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="Recording not found")
+        media_file = None
+        for mf in rec.get("media_files") or []:
+            if int(mf.get("id", -1)) == media_file_id:
+                media_file = mf
+                break
+        if media_file is None:
+            raise HTTPException(status_code=404, detail="Media file not found")
+        fmt = str(media_file.get("format", "bin")).lower()
+        media_type = str(media_file.get("type", "audio")).lower()
+        content_type_map = {
+            "wav": "audio/wav",
+            "webm": "video/webm" if media_type == "video" else "audio/webm",
+            "opus": "audio/opus",
+            "mp3": "audio/mpeg",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "png": "image/png",
+        }
+        content_type = content_type_map.get(fmt, "application/octet-stream")
+        try:
+            if media_file.get("storage_backend") == "local":
+                url = f"/recordings/{recording_id}/media/{media_file_id}/raw"
+            else:
+                storage = get_storage_client()
+                url = storage.get_presigned_url(media_file["storage_path"], expires=3600)
+        except Exception as e:
+            logger.error(f"Failed to generate download URL for media file {media_file_id}: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Failed to generate download URL")
+        return {
+            "download_url": url,
+            "filename": f"{recording_id}_{media_type}.{fmt}",
+            "content_type": content_type,
+            "file_size_bytes": media_file.get("file_size_bytes"),
+        }
 
     recording = await db.get(Recording, recording_id)
     if not recording or recording.user_id != user.id:
@@ -1888,6 +2038,45 @@ async def download_media_file_raw(
     Used primarily for local filesystem backend where presigned URLs are not available.
     """
     token, user = auth
+    if get_recording_metadata_mode() == "meeting_data":
+        _meeting, rec = await _find_meeting_data_recording(db, user.id, recording_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="Recording not found")
+        media_file = None
+        for mf in rec.get("media_files") or []:
+            if int(mf.get("id", -1)) == media_file_id:
+                media_file = mf
+                break
+        if media_file is None:
+            raise HTTPException(status_code=404, detail="Media file not found")
+        if media_file.get("storage_backend") != "local":
+            raise HTTPException(status_code=400, detail="Raw download endpoint is only supported for local storage backend")
+        fmt = str(media_file.get("format", "bin")).lower()
+        media_type = str(media_file.get("type", "audio")).lower()
+        content_type_map = {
+            "wav": "audio/wav",
+            "webm": "video/webm" if media_type == "video" else "audio/webm",
+            "opus": "audio/opus",
+            "mp3": "audio/mpeg",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "png": "image/png",
+        }
+        content_type = content_type_map.get(fmt, "application/octet-stream")
+        filename = f"{recording_id}_{media_type}.{fmt}"
+        try:
+            storage = get_storage_client()
+            data = storage.download_file(media_file["storage_path"])
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Media file content not found in storage")
+        except Exception as e:
+            logger.error(f"Failed raw media download for media file {media_file_id}: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Failed to read media file from storage")
+        return Response(
+            content=data,
+            media_type=content_type,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     recording = await db.get(Recording, recording_id)
     if not recording or recording.user_id != user.id:
@@ -1941,6 +2130,29 @@ async def delete_recording(
 ):
     """Delete a recording, its media files from storage, and all database rows."""
     token, user = auth
+    if get_recording_metadata_mode() == "meeting_data":
+        meeting, rec = await _find_meeting_data_recording(db, user.id, recording_id)
+        if meeting is None or rec is None:
+            raise HTTPException(status_code=404, detail="Recording not found")
+        storage = get_storage_client()
+        for mf in rec.get("media_files") or []:
+            path = mf.get("storage_path")
+            if not path:
+                continue
+            try:
+                storage.delete_file(path)
+            except Exception as e:
+                logger.warning(f"Failed to delete storage file {path}: {e}")
+        current_data = dict(meeting.data or {})
+        existing = list(current_data.get("recordings") or [])
+        current_data["recordings"] = [
+            r for r in existing
+            if not (isinstance(r, dict) and int(r.get("id", -1)) == recording_id)
+        ]
+        meeting.data = current_data
+        attributes.flag_modified(meeting, "data")
+        await db.commit()
+        return {"status": "deleted", "recording_id": recording_id}
 
     recording = await db.get(Recording, recording_id)
     if not recording or recording.user_id != user.id:

@@ -5,6 +5,7 @@ import json
 import functools
 import logging
 import hashlib
+from pathlib import Path
 from enum import Enum
 from typing import List, Optional
 import datetime
@@ -1741,6 +1742,25 @@ class ServeClientBase(object):
 
         # threading
         self.lock = threading.Lock()
+        self._recording_lock = threading.Lock()
+
+        # Durable recording spool (issue #112): write incoming float32 frames
+        # to persistent chunk files while keeping in-memory realtime flow intact.
+        self.wl_recording_dir = str(server_options.get("wl_recording_dir", "/tmp/wl-recordings")).strip()
+        self.wl_recording_flush_seconds = max(0.0, float(server_options.get("wl_recording_flush_seconds", 3.0)))
+        self.wl_recording_fsync_seconds = max(0.0, float(server_options.get("wl_recording_fsync_seconds", 10.0)))
+        self.wl_recording_rotate_seconds = max(1.0, float(server_options.get("wl_recording_rotate_seconds", 20.0)))
+        self.wl_recording_rotate_bytes = max(1024, int(server_options.get("wl_recording_rotate_bytes", 16 * 1024 * 1024)))
+        self._recording_chunk_dir: Optional[Path] = None
+        self._recording_chunk_handle = None
+        self._recording_chunk_start_monotonic = 0.0
+        self._recording_chunk_size_bytes = 0
+        self._recording_last_flush_monotonic = 0.0
+        self._recording_last_fsync_monotonic = 0.0
+        self._recording_chunk_index = 0
+        self._recording_manifest: List[dict] = []
+        self._recording_finalized = False
+        self._init_recording_spool()
         
         # Send SERVER_READY message
         ready_message = json.dumps({"status": self.SERVER_READY, "uid": self.client_uid})
@@ -1836,6 +1856,99 @@ class ServeClientBase(object):
     def handle_transcription_output(self):
         raise NotImplementedError
 
+    def _init_recording_spool(self):
+        if not self.wl_recording_dir:
+            return
+        try:
+            self._recording_chunk_dir = Path(self.wl_recording_dir) / self.client_uid
+            self._recording_chunk_dir.mkdir(parents=True, exist_ok=True)
+            self._open_new_recording_chunk()
+            logging.info(f"WL durable recording enabled for {self.client_uid}: {self._recording_chunk_dir}")
+        except Exception as e:
+            logging.error(f"Failed to initialize WL recording spool for {self.client_uid}: {e}")
+            self._recording_chunk_dir = None
+            self._recording_chunk_handle = None
+
+    def _open_new_recording_chunk(self):
+        if self._recording_chunk_dir is None:
+            return
+        now = int(time.time())
+        chunk_name = f"{now}_{self._recording_chunk_index:06d}.f32"
+        chunk_path = self._recording_chunk_dir / chunk_name
+        self._recording_chunk_handle = open(chunk_path, "ab")
+        self._recording_chunk_start_monotonic = time.monotonic()
+        self._recording_last_flush_monotonic = self._recording_chunk_start_monotonic
+        self._recording_last_fsync_monotonic = self._recording_chunk_start_monotonic
+        self._recording_chunk_size_bytes = 0
+        self._recording_manifest.append({"chunk": chunk_name, "created_at": datetime.datetime.utcnow().isoformat()})
+        self._recording_chunk_index += 1
+
+    def _rotate_recording_chunk_if_needed(self, now_mono: float):
+        if self._recording_chunk_handle is None:
+            return
+        age_s = now_mono - self._recording_chunk_start_monotonic
+        if self._recording_chunk_size_bytes >= self.wl_recording_rotate_bytes or age_s >= self.wl_recording_rotate_seconds:
+            try:
+                self._recording_chunk_handle.flush()
+                os.fsync(self._recording_chunk_handle.fileno())
+                self._recording_chunk_handle.close()
+            except Exception:
+                pass
+            self._open_new_recording_chunk()
+
+    def _append_to_recording_spool(self, frame_np: np.ndarray):
+        if self._recording_chunk_handle is None:
+            return
+        try:
+            payload = frame_np.astype(np.float32, copy=False).tobytes()
+            now_mono = time.monotonic()
+            with self._recording_lock:
+                self._rotate_recording_chunk_if_needed(now_mono)
+                if self._recording_chunk_handle is None:
+                    return
+                self._recording_chunk_handle.write(payload)
+                self._recording_chunk_size_bytes += len(payload)
+                if self.wl_recording_flush_seconds == 0 or (now_mono - self._recording_last_flush_monotonic) >= self.wl_recording_flush_seconds:
+                    self._recording_chunk_handle.flush()
+                    self._recording_last_flush_monotonic = now_mono
+                if self.wl_recording_fsync_seconds == 0 or (now_mono - self._recording_last_fsync_monotonic) >= self.wl_recording_fsync_seconds:
+                    os.fsync(self._recording_chunk_handle.fileno())
+                    self._recording_last_fsync_monotonic = now_mono
+        except Exception as e:
+            logging.error(f"Failed to append recording chunk for {self.client_uid}: {e}")
+
+    def _finalize_recording_spool(self):
+        if self._recording_finalized:
+            return
+        self._recording_finalized = True
+        if self._recording_chunk_dir is None:
+            return
+        try:
+            with self._recording_lock:
+                if self._recording_chunk_handle is not None:
+                    try:
+                        self._recording_chunk_handle.flush()
+                        os.fsync(self._recording_chunk_handle.fileno())
+                    finally:
+                        self._recording_chunk_handle.close()
+                        self._recording_chunk_handle = None
+
+            manifest_path = self._recording_chunk_dir / "manifest.json"
+            manifest = {
+                "session_uid": self.client_uid,
+                "rate": self.RATE,
+                "dtype": "float32",
+                "channels": 1,
+                "chunk_format": "f32le",
+                "chunks": self._recording_manifest,
+                "transcription_tier": self.transcription_tier,
+                "finalized_at": datetime.datetime.utcnow().isoformat(),
+            }
+            manifest_path.write_text(json.dumps(manifest, separators=(",", ":"), ensure_ascii=True))
+            logging.info(f"Finalized WL recording spool for {self.client_uid}: {manifest_path}")
+        except Exception as e:
+            logging.error(f"Failed finalizing WL recording spool for {self.client_uid}: {e}")
+
     def add_frames(self, frame_np):
         """
         Add audio frames to the ongoing audio stream buffer.
@@ -1852,6 +1965,7 @@ class ServeClientBase(object):
             frame_np (numpy.ndarray): The audio frame data as a NumPy array.
 
         """
+        self._append_to_recording_spool(frame_np)
         self.lock.acquire()
         if self.frames_np is not None and self.frames_np.shape[0] > self.max_buffer_s * self.RATE:
             self.frames_offset += self.discard_buffer_s
@@ -2033,6 +2147,7 @@ class ServeClientBase(object):
 
         """
         logging.info("Cleaning up.")
+        self._finalize_recording_spool()
         self.exit = True
 
     def forward_to_collector(self, segments):

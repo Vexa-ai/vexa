@@ -71,6 +71,16 @@ MIN_TIME_BETWEEN_REQUESTS_S = 0.5
 # Tier2 (deferred) pacing default.
 MIN_TIME_BETWEEN_REQUESTS_S_TIER2 = 20.0
 
+# Durable Recording Spool Settings
+# --------------------------------
+# Persist incoming float32 audio frames to disk as they arrive so recordings
+# survive bot/transcriber failures during the meeting.
+WL_RECORDING_DIR = os.getenv("WL_RECORDING_DIR", "/tmp/wl-recordings")
+WL_RECORDING_FLUSH_SECONDS = float(os.getenv("WL_RECORDING_FLUSH_SECONDS", "3"))
+WL_RECORDING_FSYNC_SECONDS = float(os.getenv("WL_RECORDING_FSYNC_SECONDS", "10"))
+WL_RECORDING_ROTATE_SECONDS = float(os.getenv("WL_RECORDING_ROTATE_SECONDS", "20"))
+WL_RECORDING_ROTATE_BYTES = int(os.getenv("WL_RECORDING_ROTATE_BYTES", str(16 * 1024 * 1024)))
+
 
 # Voice Activity Detection (VAD) Settings
 # ---------------------------------------
