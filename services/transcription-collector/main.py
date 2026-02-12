@@ -30,6 +30,7 @@ from config import (
 from api.endpoints import router as api_router
 from streaming.consumer import claim_stale_messages, consume_redis_stream, consume_speaker_events_stream
 from background.db_writer import process_redis_to_postgres
+from background.job_processor import process_transcription_jobs
 
 app = FastAPI(
     title="Transcription Collector",
@@ -54,10 +55,11 @@ transcription_filter = TranscriptionFilter()
 redis_to_pg_task = None
 stream_consumer_task = None
 speaker_stream_consumer_task = None
+transcription_job_task = None
 
 @app.on_event("startup")
 async def startup():
-    global redis_client, redis_to_pg_task, stream_consumer_task, speaker_stream_consumer_task, transcription_filter
+    global redis_client, redis_to_pg_task, stream_consumer_task, speaker_stream_consumer_task, transcription_job_task, transcription_filter
     
     logger.info(f"Connecting to Redis at {REDIS_HOST}:{REDIS_PORT}")
     temp_redis_client = aioredis.Redis(
@@ -119,11 +121,15 @@ async def startup():
     speaker_stream_consumer_task = asyncio.create_task(consume_speaker_events_stream(redis_client))
     logger.info(f"Speaker Events Redis Stream consumer task started (Stream: {REDIS_SPEAKER_EVENTS_STREAM_NAME}, Group: {REDIS_SPEAKER_EVENTS_CONSUMER_GROUP}, Consumer: {CONSUMER_NAME + '-speaker'})")
 
+    # Start post-meeting transcription job processor
+    transcription_job_task = asyncio.create_task(process_transcription_jobs())
+    logger.info("Transcription job processor task started")
+
 @app.on_event("shutdown")
 async def shutdown():
     logger.info("Application shutting down...")
     # Cancel background tasks
-    tasks_to_cancel = [redis_to_pg_task, stream_consumer_task, speaker_stream_consumer_task]
+    tasks_to_cancel = [redis_to_pg_task, stream_consumer_task, speaker_stream_consumer_task, transcription_job_task]
     for i, task in enumerate(tasks_to_cancel):
         if task and not task.done():
             task.cancel()

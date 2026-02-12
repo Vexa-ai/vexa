@@ -27,4 +27,6 @@ aiosqlite # If using sqlite async (often for testing)
 requests
 httpx
 psycopg2-binary
-aiodocker 
+aiodocker
+boto3  # MinIO/S3 storage for recordings
+python-multipart  # Required for UploadFile/Form handling

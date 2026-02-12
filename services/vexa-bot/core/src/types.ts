@@ -18,4 +18,7 @@ export type BotConfig = {
   reconnectionIntervalMs?: number,
   meeting_id: number,  // Required, not optional
   botManagerCallbackUrl?: string;
+  recordingEnabled?: boolean;
+  captureModes?: string[];  // e.g., ['audio'], ['audio', 'video'], ['audio', 'screenshots']
+  recordingUploadUrl?: string;  // bot-manager internal upload endpoint
 }

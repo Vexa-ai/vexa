@@ -11,4 +11,6 @@ alembic # Keep if using alembic for migrations here
 # databases[asyncpg] # Handled by shared-models
 # pydantic # Handled by shared-models
 # psycopg2-binary # Handled by shared-models
-email-validator # Added for Pydantic EmailStr support via shared-models 
+email-validator # Added for Pydantic EmailStr support via shared-models
+boto3  # MinIO/S3 storage for recordings
+httpx  # For calling transcription-service in batch jobs
