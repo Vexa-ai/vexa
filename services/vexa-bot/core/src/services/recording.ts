@@ -68,6 +68,9 @@ export class RecordingService {
   async writeBlob(data: Buffer, format: string = 'wav'): Promise<string> {
     const blobPath = path.join('/tmp', `recording_${this.meetingId}_${this.sessionUid}.${format}`);
     await fs.promises.writeFile(blobPath, data);
+    // Browser-based recordings may not use the default WAV path.
+    // Point uploads/cleanup to the actual written blob file.
+    this.filePath = blobPath;
     log(`[Recording] Wrote ${data.length} bytes blob to ${blobPath}`);
     this.isFinalized = true;
     return blobPath;
