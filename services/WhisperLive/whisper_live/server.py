@@ -799,6 +799,9 @@ class TranscriptionServer:
         """
         if options is None:
             options = {}
+        transcription_tier = str(options.get("transcription_tier", "realtime")).strip().lower()
+        if transcription_tier not in ("realtime", "deferred"):
+            transcription_tier = "realtime"
         backend_str = options.get("backend", self.backend)
         backend = BackendType(backend_str)
         
@@ -816,6 +819,7 @@ class TranscriptionServer:
                 meeting_url=options.get("meeting_url"),
                 token=options.get("token"),
                 meeting_id=options.get("meeting_id"),
+                transcription_tier=transcription_tier,
                 collector_client_ref=self.collector_client,
                 server_options=self.server_options
             )
@@ -836,6 +840,7 @@ class TranscriptionServer:
                 meeting_url=options.get("meeting_url"),
                 token=options.get("token"),
                 meeting_id=options.get("meeting_id"),
+                transcription_tier=transcription_tier,
                 collector_client_ref=self.collector_client,
                 server_options=self.server_options
             )
@@ -855,6 +860,7 @@ class TranscriptionServer:
                 meeting_url=options.get("meeting_url"),
                 token=options.get("token"),
                 meeting_id=options.get("meeting_id"),
+                transcription_tier=transcription_tier,
                 collector_client_ref=self.collector_client,
                 server_options=self.server_options
             )
@@ -1686,6 +1692,7 @@ class ServeClientBase(object):
 
     def __init__(self, websocket, language="en", task="transcribe", client_uid=None, 
                  platform=None, meeting_url=None, token=None, meeting_id=None,
+                 transcription_tier: str = "realtime",
                  collector_client_ref: Optional[TranscriptionCollectorClient] = None,
                  server_options: Optional[dict] = None):
         self.websocket = websocket
@@ -1699,6 +1706,8 @@ class ServeClientBase(object):
         self.meeting_url = meeting_url
         self.token = token
         self.meeting_id = meeting_id
+        normalized_tier = str(transcription_tier or "realtime").strip().lower()
+        self.transcription_tier = normalized_tier if normalized_tier in ("realtime", "deferred") else "realtime"
         self.collector_client = collector_client_ref # Store the passed collector client
         
         # Restore all the original instance variables that were deleted
@@ -2047,9 +2056,11 @@ class ServeClientTensorRT(ServeClientBase):
     def __init__(self, websocket, task="transcribe", multilingual=False, language=None, 
                  client_uid=None, model=None, single_model=False, 
                  platform=None, meeting_url=None, token=None, meeting_id=None,
+                 transcription_tier: str = "realtime",
                  collector_client_ref: Optional[TranscriptionCollectorClient] = None,
                  server_options: Optional[dict] = None):
         super().__init__(websocket, language, task, client_uid, platform, meeting_url, token, meeting_id,
+                         transcription_tier=transcription_tier,
                          collector_client_ref=collector_client_ref, server_options=server_options)
         self.eos = False
         
@@ -2430,9 +2441,11 @@ class ServeClientFasterWhisper(ServeClientBase):
                  client_uid=None, model="small.en", initial_prompt=None, 
                  vad_parameters=None, use_vad=True, single_model=False, 
                  platform=None, meeting_url=None, token=None, meeting_id=None,
+                 transcription_tier: str = "realtime",
                  collector_client_ref: Optional[TranscriptionCollectorClient] = None,
                  server_options: Optional[dict] = None):
         super().__init__(websocket, language, task, client_uid, platform, meeting_url, token, meeting_id,
+                         transcription_tier=transcription_tier,
                          collector_client_ref=collector_client_ref, server_options=server_options)
         self.model_sizes = [
             "tiny", "tiny.en", "base", "base.en", "small", "small.en",
@@ -2882,9 +2895,11 @@ class ServeClientRemote(ServeClientBase):
                  client_uid=None, model=None, initial_prompt=None, 
                  vad_parameters=None, use_vad=True, 
                  platform=None, meeting_url=None, token=None, meeting_id=None,
+                 transcription_tier: str = "realtime",
                  collector_client_ref: Optional[TranscriptionCollectorClient] = None,
                  server_options: Optional[dict] = None):
         super().__init__(websocket, language, task, client_uid, platform, meeting_url, token, meeting_id,
+                         transcription_tier=transcription_tier,
                          collector_client_ref=collector_client_ref, server_options=server_options)
         
         # Log the critical parameters
@@ -2897,8 +2912,9 @@ class ServeClientRemote(ServeClientBase):
         self.initial_prompt = initial_prompt
 
         server_options = server_options or {}
-        self.min_audio_s = server_options.get("min_audio_s", 1.0)
-        self.same_output_threshold = server_options.get("same_output_threshold", 3)
+        is_deferred_tier = self.transcription_tier == "deferred"
+        self.min_audio_s = server_options.get("min_audio_s_tier2", 20.0) if is_deferred_tier else server_options.get("min_audio_s", 1.0)
+        self.same_output_threshold = server_options.get("same_output_threshold_tier2", 2) if is_deferred_tier else server_options.get("same_output_threshold", 3)
         
         # Rate limiting: minimum time between requests per connection
         from whisper_live import settings
@@ -2927,11 +2943,15 @@ class ServeClientRemote(ServeClientBase):
             else:
                 # New format: already in seconds, use directly
                 self.min_time_between_requests = min_time
+        if is_deferred_tier:
+            tier2_min_time = server_options.get("min_time_between_requests_s_tier2", 20.0)
+            self.min_time_between_requests = float(tier2_min_time)
         
         self.last_transcription_time = 0.0  # Track when last transcription request completed
         
-        logging.info(f"Remote client {client_uid}: min_audio_s={self.min_audio_s} (server_options had: {server_options.get('min_audio_s', 'NOT SET')})")
-        logging.info(f"Remote client {client_uid}: same_output_threshold={self.same_output_threshold} (server_options had: {server_options.get('same_output_threshold', 'NOT SET')})")
+        logging.info(f"Remote client {client_uid}: transcription_tier={self.transcription_tier}")
+        logging.info(f"Remote client {client_uid}: min_audio_s={self.min_audio_s}")
+        logging.info(f"Remote client {client_uid}: same_output_threshold={self.same_output_threshold}")
         logging.info(f"Remote client {client_uid}: min_time_between_requests={self.min_time_between_requests:.3f}s (max {1.0/self.min_time_between_requests:.2f} requests/second)")
         
         self.vad_parameters = vad_parameters or {"onset": server_options.get("vad_onset", 0.5)}
@@ -3014,6 +3034,7 @@ class ServeClientRemote(ServeClientBase):
             api_url=api_url,
             api_key=api_key,
             model=model,
+            transcription_tier=self.transcription_tier,
             sampling_rate=self.RATE,
         )
 

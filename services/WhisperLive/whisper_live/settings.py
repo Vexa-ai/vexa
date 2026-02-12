@@ -51,6 +51,8 @@ CLIP_RETAIN_S = 5
 # lower latency but may result in less accurate, fragmented transcriptions.
 # Set to 1.0s for low latency transcription.
 MIN_AUDIO_S = 1
+# Tier2 (deferred) defaults: larger windows for lower service pressure.
+MIN_AUDIO_S_TIER2 = 20
 
 # Minimum Time Between Transcription Requests
 # -------------------------------------------
@@ -66,6 +68,8 @@ MIN_AUDIO_S = 1
 # - 10.0 = minimum 10.0 seconds between requests (max 1 request per 10 seconds)
 # Set to 10.0 for max 1 request per 10 seconds (10s minimum between requests).
 MIN_TIME_BETWEEN_REQUESTS_S = 0.5
+# Tier2 (deferred) pacing default.
+MIN_TIME_BETWEEN_REQUESTS_S_TIER2 = 20.0
 
 
 # Voice Activity Detection (VAD) Settings
@@ -106,6 +110,8 @@ VAD_MIN_SILENCE_DURATION_MS = 2
 # Lower values (3-5) reduce latency by reconfirming segments faster.
 # Set to 3 for low latency transcription.
 SAME_OUTPUT_THRESHOLD = 5
+# Tier2 (deferred) requires fewer reconfirmations before cursor advance.
+SAME_OUTPUT_THRESHOLD_TIER2 = 2
 
 # If there's a pause in speech (i.e., Whisper produces no new text), the server
 # will continue to send the previously transcribed segments to the client for this

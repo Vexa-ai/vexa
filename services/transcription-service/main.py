@@ -155,8 +155,9 @@ app = FastAPI(
 model: Optional[WhisperModel] = None
 
 # Load management: Global concurrency limit and bounded queue
-# These settings control how many transcription requests can be processed concurrently
-MAX_CONCURRENT_TRANSCRIPTIONS = _env_int("MAX_CONCURRENT_TRANSCRIPTIONS", 2)  # Max concurrent model calls
+# These settings control how many transcription requests can be processed concurrently.
+# MAX_ACTIVE_REQUESTS is the preferred name; MAX_CONCURRENT_TRANSCRIPTIONS is kept for compatibility.
+MAX_CONCURRENT_TRANSCRIPTIONS = _env_int("MAX_ACTIVE_REQUESTS", _env_int("MAX_CONCURRENT_TRANSCRIPTIONS", 2))
 MAX_QUEUE_SIZE = _env_int("MAX_QUEUE_SIZE", 10)  # Max requests waiting in queue
 
 # Backpressure strategy:
@@ -164,6 +165,7 @@ MAX_QUEUE_SIZE = _env_int("MAX_QUEUE_SIZE", 10)  # Max requests waiting in queue
 #   (e.g. WhisperLive) can keep buffering and submit a newer/larger window later.
 FAIL_FAST_WHEN_BUSY = _env_bool("FAIL_FAST_WHEN_BUSY", True)
 BUSY_RETRY_AFTER_S = _env_int("BUSY_RETRY_AFTER_S", 1)
+REALTIME_RESERVED_SLOTS = _env_int("REALTIME_RESERVED_SLOTS", 1)
 
 # Semaphore to limit concurrent transcriptions (protects GPU/CPU from overload)
 transcription_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TRANSCRIPTIONS)
@@ -175,6 +177,22 @@ transcription_executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_TRANSCRIP
 # We use a simple counter since FastAPI doesn't have a built-in queue
 waiting_requests = 0
 waiting_requests_lock = asyncio.Lock()
+
+# Active in-flight counters per tier for admission decisions.
+active_realtime_requests = 0
+active_deferred_requests = 0
+active_requests_lock = asyncio.Lock()
+
+
+def _normalize_transcription_tier(raw: Optional[str]) -> str:
+    tier = (raw or "realtime").strip().lower()
+    return tier if tier in ("realtime", "deferred") else "realtime"
+
+
+def _deferred_capacity_available(active_rt: int, active_df: int) -> bool:
+    deferred_limit = max(0, MAX_CONCURRENT_TRANSCRIPTIONS - REALTIME_RESERVED_SLOTS)
+    total_active = active_rt + active_df
+    return deferred_limit > 0 and active_df < deferred_limit and total_active < MAX_CONCURRENT_TRANSCRIPTIONS
 
 
 @app.on_event("startup")
@@ -246,6 +264,7 @@ async def transcribe_audio(
     prompt: Optional[str] = Form(None),
     response_format: str = Form("verbose_json"),
     timestamp_granularities: str = Form("segment"),
+    transcription_tier_form: Optional[str] = Form(None, alias="transcription_tier"),
     task: str = Form("transcribe"),
     _: bool = Depends(verify_api_token)
 ):
@@ -263,10 +282,28 @@ async def transcribe_audio(
     """
     if not requested_model:
         raise HTTPException(status_code=400, detail="Model parameter is required")
+    global waiting_requests, active_realtime_requests, active_deferred_requests
+
+    tier_from_header = request.headers.get("X-Transcription-Tier")
+    transcription_tier = _normalize_transcription_tier(transcription_tier_form or tier_from_header)
+
+    semaphore_acquired = False
+    waiting_counted = False
+    active_counted = False
     
     # Load management: Check queue size before accepting request
     async with waiting_requests_lock:
-        global waiting_requests
+        async with active_requests_lock:
+            current_active_rt = active_realtime_requests
+            current_active_df = active_deferred_requests
+
+        if transcription_tier == "deferred":
+            if not _deferred_capacity_available(current_active_rt, current_active_df):
+                raise HTTPException(
+                    status_code=503,
+                    detail="Deferred tier is out of capacity. Please retry later.",
+                    headers={"Retry-After": str(max(1, BUSY_RETRY_AFTER_S))},
+                )
         # Fail-fast mode: don't accept work we can't start immediately.
         # This avoids "processing the first chunk" (small/old) and lets upstream buffer/coalesce.
         if FAIL_FAST_WHEN_BUSY and (transcription_semaphore.locked() or waiting_requests > 0):
@@ -286,16 +323,30 @@ async def transcribe_audio(
                 headers={"Retry-After": str(max(1, BUSY_RETRY_AFTER_S))}
             )
         waiting_requests += 1
+        waiting_counted = True
     
     try:
         # Acquire semaphore (blocks if MAX_CONCURRENT_TRANSCRIPTIONS is reached)
         await transcription_semaphore.acquire()
+        semaphore_acquired = True
         
         async with waiting_requests_lock:
-            waiting_requests -= 1
+            if waiting_counted:
+                waiting_requests -= 1
+                waiting_counted = False
+
+        async with active_requests_lock:
+            if transcription_tier == "deferred":
+                active_deferred_requests += 1
+            else:
+                active_realtime_requests += 1
+            active_counted = True
         
         start_time = time.time()
-        logger.info(f"Worker {WORKER_ID} received transcription request - filename: {file.filename}, content_type: {file.content_type}")
+        logger.info(
+            f"Worker {WORKER_ID} received transcription request - "
+            f"tier={transcription_tier}, filename: {file.filename}, content_type: {file.content_type}"
+        )
         # Read audio file
         audio_bytes = await file.read()
         logger.info(f"Worker {WORKER_ID} read {len(audio_bytes)} bytes of audio data")
@@ -432,8 +483,22 @@ async def transcribe_audio(
         logger.error(f"Worker {WORKER_ID} transcription failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # Always release semaphore, even on error
-        transcription_semaphore.release()
+        # Keep counters and semaphore balanced even on early failures.
+        if active_counted:
+            async with active_requests_lock:
+                if transcription_tier == "deferred":
+                    active_deferred_requests = max(0, active_deferred_requests - 1)
+                else:
+                    active_realtime_requests = max(0, active_realtime_requests - 1)
+            active_counted = False
+
+        if waiting_counted:
+            async with waiting_requests_lock:
+                waiting_requests = max(0, waiting_requests - 1)
+            waiting_counted = False
+
+        if semaphore_acquired:
+            transcription_semaphore.release()
 
 
 @app.get("/")
@@ -459,4 +524,3 @@ if __name__ == "__main__":
         port=8000,
         log_level="info"
     )
-

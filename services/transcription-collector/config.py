@@ -30,9 +30,3 @@ API_KEY_NAME = "X-API-Key"
 REDIS_HOST = os.environ.get("REDIS_HOST", "redis")
 REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
 REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", None)
-
-# Post-meeting transcription service
-TRANSCRIPTION_SERVICE_URL = os.environ.get("TRANSCRIPTION_SERVICE_URL", "http://transcription-service:8001")
-
-# Storage configuration
-STORAGE_BACKEND = os.environ.get("STORAGE_BACKEND", "minio")

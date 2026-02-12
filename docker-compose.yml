@@ -78,11 +78,14 @@ services:
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
       - MINIO_BUCKET=${MINIO_BUCKET:-vexa-recordings}
       - MINIO_SECURE=${MINIO_SECURE:-false}
+      - LOCAL_STORAGE_DIR=${LOCAL_STORAGE_DIR:-/data/recordings}
+      - LOCAL_STORAGE_FSYNC=${LOCAL_STORAGE_FSYNC:-true}
       - RECORDING_ENABLED=${RECORDING_ENABLED:-false}
       - CAPTURE_MODES=${CAPTURE_MODES:-audio}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ../.cursor:/app/.cursor
+      - ${LOCAL_STORAGE_VOLUME_SOURCE:-recordings-data}:/data/recordings
     init: true
     depends_on:
       redis:
@@ -200,15 +203,28 @@ services:
       - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD}
       # Minimum audio duration (seconds) before triggering transcription - lower = lower latency
       - MIN_AUDIO_S=${MIN_AUDIO_S:-2.0}
+      # Tier2 (deferred) tuning
+      - MIN_AUDIO_S_TIER2=${MIN_AUDIO_S_TIER2:-20.0}
+      - MIN_TIME_BETWEEN_REQUESTS_S=${MIN_TIME_BETWEEN_REQUESTS_S:-0.5}
+      - MIN_TIME_BETWEEN_REQUESTS_S_TIER2=${MIN_TIME_BETWEEN_REQUESTS_S_TIER2:-20.0}
       # Reconfirmation threshold - lower values reduce latency by reconfirming segments faster
       - SAME_OUTPUT_THRESHOLD=${SAME_OUTPUT_THRESHOLD:-3}
+      - SAME_OUTPUT_THRESHOLD_TIER2=${SAME_OUTPUT_THRESHOLD_TIER2:-2}
       - DEVICE_TYPE=remote
       - REMOTE_TRANSCRIBER_URL=${REMOTE_TRANSCRIBER_URL}
       - REMOTE_TRANSCRIBER_API_KEY=${REMOTE_TRANSCRIBER_API_KEY}
       - CONSUL_ENABLE=false
     deploy:
       replicas: 1
-    command: --port 9090 --backend remote
+    command: >-
+      --port 9090
+      --backend remote
+      --min_audio_s ${MIN_AUDIO_S:-2.0}
+      --min_audio_s_tier2 ${MIN_AUDIO_S_TIER2:-20.0}
+      --min_time_between_requests_s ${MIN_TIME_BETWEEN_REQUESTS_S:-0.5}
+      --min_time_between_requests_s_tier2 ${MIN_TIME_BETWEEN_REQUESTS_S_TIER2:-20.0}
+      --same_output_threshold ${SAME_OUTPUT_THRESHOLD:-3}
+      --same_output_threshold_tier2 ${SAME_OUTPUT_THRESHOLD_TIER2:-2}
     expose:
       - "9090" #use for transcription web socket
       - "9091" #use for health check
@@ -249,15 +265,6 @@ services:
       - REDIS_SEGMENT_TTL=3600
       - REDIS_CLEANUP_THRESHOLD=86400
       - LOG_LEVEL=DEBUG
-      # Storage (recordings) — for transcription job file downloads
-      - STORAGE_BACKEND=${STORAGE_BACKEND:-minio}
-      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
-      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
-      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
-      - MINIO_BUCKET=${MINIO_BUCKET:-vexa-recordings}
-      - MINIO_SECURE=${MINIO_SECURE:-false}
-      # Transcription service — for batch transcription jobs
-      - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-http://transcription-service:80}
     init: true
     depends_on:
       redis:
@@ -329,6 +336,7 @@ volumes:
   redis-data:
   postgres-data:
   minio-data:
+  recordings-data:
 
 networks:
   vexa_default:

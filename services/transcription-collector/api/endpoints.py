@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import redis.asyncio as aioredis
 
 from shared_models.database import get_db, async_session_local
-from shared_models.models import User, Meeting, Transcription, MeetingSession, Recording, MediaFile, TranscriptionJob
+from shared_models.models import User, Meeting, Transcription, MeetingSession
 from shared_models.schemas import (
     HealthResponse,
     MeetingResponse,
@@ -22,13 +22,9 @@ from shared_models.schemas import (
     MeetingUpdate,
     MeetingCreate,
     MeetingStatus,
-    TranscriptionJobCreate,
-    TranscriptionJobResponse,
-    TranscriptionJobListResponse,
 )
-from shared_models.storage import create_storage_client
 
-from config import IMMUTABILITY_THRESHOLD, TRANSCRIPTION_SERVICE_URL
+from config import IMMUTABILITY_THRESHOLD
 from filters import TranscriptionFilter
 from api.auth import get_current_user
 
@@ -662,102 +658,3 @@ async def delete_meeting(
     
     return {"message": f"Meeting {platform.value}/{native_meeting_id} transcripts deleted and data anonymized"}
 
-
-# --- Transcription Job Endpoints ---
-
-@router.post("/transcription-jobs",
-             response_model=TranscriptionJobResponse,
-             status_code=status.HTTP_201_CREATED,
-             summary="Create a post-meeting transcription job",
-             dependencies=[Depends(get_current_user)])
-async def create_transcription_job(
-    payload: TranscriptionJobCreate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Submit a recording for post-meeting transcription.
-
-    Requires recording_id. The recording must belong to the authenticated user
-    and have status 'completed' with at least one audio media file.
-    """
-    if not payload.recording_id:
-        raise HTTPException(status_code=400, detail="recording_id is required")
-
-    # Verify recording exists, belongs to user, and is completed
-    recording = await db.get(Recording, payload.recording_id)
-    if not recording or recording.user_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Recording not found")
-    if recording.status != "completed":
-        raise HTTPException(status_code=400, detail=f"Recording status is '{recording.status}', must be 'completed'")
-
-    # Check for audio media file
-    stmt = select(MediaFile).where(
-        and_(MediaFile.recording_id == recording.id, MediaFile.type == "audio")
-    )
-    result = await db.execute(stmt)
-    audio_file = result.scalars().first()
-    if not audio_file:
-        raise HTTPException(status_code=400, detail="Recording has no audio media file")
-
-    # Create transcription job
-    job = TranscriptionJob(
-        recording_id=recording.id,
-        meeting_id=payload.meeting_id or recording.meeting_id,
-        user_id=current_user.id,
-        language=payload.language,
-        task=payload.task,
-        status="pending",
-    )
-    db.add(job)
-    await db.commit()
-    await db.refresh(job)
-
-    logger.info(f"Created transcription job {job.id} for recording {recording.id} (user {current_user.id})")
-
-    return TranscriptionJobResponse.model_validate(job)
-
-
-@router.get("/transcription-jobs",
-            response_model=TranscriptionJobListResponse,
-            summary="List transcription jobs for the authenticated user",
-            dependencies=[Depends(get_current_user)])
-async def list_transcription_jobs(
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
-    recording_id: Optional[int] = Query(default=None),
-    status_filter: Optional[str] = Query(default=None, alias="status"),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """List transcription jobs owned by the authenticated user."""
-    stmt = select(TranscriptionJob).where(TranscriptionJob.user_id == current_user.id)
-    if recording_id is not None:
-        stmt = stmt.where(TranscriptionJob.recording_id == recording_id)
-    if status_filter:
-        stmt = stmt.where(TranscriptionJob.status == status_filter)
-    stmt = stmt.order_by(TranscriptionJob.created_at.desc()).offset(offset).limit(limit)
-
-    result = await db.execute(stmt)
-    jobs = result.scalars().all()
-
-    return TranscriptionJobListResponse(
-        jobs=[TranscriptionJobResponse.model_validate(j) for j in jobs]
-    )
-
-
-@router.get("/transcription-jobs/{job_id}",
-            response_model=TranscriptionJobResponse,
-            summary="Get a single transcription job",
-            dependencies=[Depends(get_current_user)])
-async def get_transcription_job(
-    job_id: int,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Get details of a specific transcription job."""
-    job = await db.get(TranscriptionJob, job_id)
-    if not job or job.user_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Transcription job not found")
-
-    return TranscriptionJobResponse.model_validate(job)
