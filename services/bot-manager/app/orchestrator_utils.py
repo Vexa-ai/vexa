@@ -149,6 +149,7 @@ async def start_bot_container(
     native_meeting_id: str,
     language: Optional[str],
     task: Optional[str],
+    transcription_tier: Optional[str] = "realtime",
     zoom_obf_token: Optional[str] = None
 ) -> Optional[tuple[str, str]]:
     """
@@ -217,6 +218,7 @@ async def start_bot_container(
         "connectionId": connection_id,
         "language": language,
         "task": task,
+        "transcriptionTier": (transcription_tier or "realtime"),
         "obfToken": zoom_obf_token if platform == "zoom" else None,
         "redisUrl": REDIS_URL,
         "container_name": container_name,  # ADDED: Container name for identification

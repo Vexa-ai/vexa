@@ -1,5 +1,5 @@
 import uvicorn
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, UploadFile, File, Form, Query
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, UploadFile, File, Form, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import logging
@@ -733,6 +733,7 @@ async def request_bot(
             native_meeting_id=native_meeting_id,
             language=req.language,
             task=req.task,
+            transcription_tier=req.transcription_tier,
             zoom_obf_token=zoom_obf_token_to_use
         )
         container_start_time = datetime.utcnow()
@@ -1844,19 +1845,91 @@ async def download_media_file(
     if not media_file:
         raise HTTPException(status_code=404, detail="Media file not found")
 
+    content_type_map = {
+        "wav": "audio/wav",
+        "webm": "video/webm" if media_file.type == "video" else "audio/webm",
+        "opus": "audio/opus",
+        "mp3": "audio/mpeg",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+    }
+    content_type = content_type_map.get(media_file.format.lower(), "application/octet-stream")
+
     try:
-        storage = get_storage_client()
-        url = storage.get_presigned_url(media_file.storage_path, expires=3600)
+        if media_file.storage_backend == "local":
+            # For local backend, use authenticated API streaming endpoint instead of file:// URLs.
+            url = f"/recordings/{recording_id}/media/{media_file_id}/raw"
+        else:
+            storage = get_storage_client()
+            url = storage.get_presigned_url(media_file.storage_path, expires=3600)
     except Exception as e:
-        logger.error(f"Failed to generate presigned URL for media file {media_file_id}: {e}", exc_info=True)
+        logger.error(f"Failed to generate download URL for media file {media_file_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to generate download URL")
 
     return {
         "download_url": url,
         "filename": f"{media_file.recording_id}_{media_file.type}.{media_file.format}",
-        "content_type": f"{'audio' if media_file.type == 'audio' else 'video' if media_file.type == 'video' else 'image'}/{media_file.format}",
+        "content_type": content_type,
         "file_size_bytes": media_file.file_size_bytes,
     }
+
+
+@app.get("/recordings/{recording_id}/media/{media_file_id}/raw",
+         summary="Download media file content via API (local storage backend)")
+async def download_media_file_raw(
+    recording_id: int,
+    media_file_id: int,
+    auth: tuple = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Stream media bytes via authenticated API.
+    Used primarily for local filesystem backend where presigned URLs are not available.
+    """
+    token, user = auth
+
+    recording = await db.get(Recording, recording_id)
+    if not recording or recording.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    stmt = select(MediaFile).where(
+        and_(MediaFile.id == media_file_id, MediaFile.recording_id == recording_id)
+    )
+    result = await db.execute(stmt)
+    media_file = result.scalars().first()
+    if not media_file:
+        raise HTTPException(status_code=404, detail="Media file not found")
+
+    if media_file.storage_backend != "local":
+        raise HTTPException(status_code=400, detail="Raw download endpoint is only supported for local storage backend")
+
+    content_type_map = {
+        "wav": "audio/wav",
+        "webm": "video/webm" if media_file.type == "video" else "audio/webm",
+        "opus": "audio/opus",
+        "mp3": "audio/mpeg",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+    }
+    content_type = content_type_map.get(media_file.format.lower(), "application/octet-stream")
+    filename = f"{media_file.recording_id}_{media_file.type}.{media_file.format}"
+
+    try:
+        storage = get_storage_client()
+        data = storage.download_file(media_file.storage_path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Media file content not found in storage")
+    except Exception as e:
+        logger.error(f"Failed raw media download for media file {media_file_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to read media file from storage")
+
+    return Response(
+        content=data,
+        media_type=content_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.delete("/recordings/{recording_id}",

@@ -178,6 +178,45 @@ make all                         # Default: remote transcription (GPU-free)
 
 * Full guide: [docs/deployment.md](docs/deployment.md)
 
+### Recording storage (local and cloud)
+
+Vexa stores recording artifacts with a single logical key format:
+
+`recordings/<user_id>/<recording_id>/<session_uid>.<ext>`
+
+Choose backend with `STORAGE_BACKEND`:
+
+- `minio` (default): S3-compatible object storage (MinIO in Docker Compose).
+- `local`: filesystem storage for simple local setups.
+- `s3`: cloud object storage (AWS S3 and compatible providers).
+
+For Docker Compose local mode:
+
+```bash
+STORAGE_BACKEND=local
+LOCAL_STORAGE_DIR=/data/recordings
+LOCAL_STORAGE_FSYNC=true
+# Optional: use host bind instead of named volume, e.g. ./data/recordings
+# LOCAL_STORAGE_VOLUME_SOURCE=recordings-data
+```
+
+In this mode, recordings are persisted in the `recordings-data` Docker volume.
+
+For cloud S3 mode:
+
+```bash
+STORAGE_BACKEND=s3
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+S3_BUCKET=vexa-recordings
+# Optional for S3-compatible providers:
+# S3_ENDPOINT=https://s3.<provider>.com
+# S3_SECURE=true
+```
+
+For a full storage deployment matrix (Docker Compose, Lite, Kubernetes), see [`docs/recording-storage.md`](docs/recording-storage.md).
+
 ### Option 4: Hashicorp Nomad, Kubernetes, OpenShift
 
 For enterprise orchestration platforms, contact [vexa.ai](https://vexa.ai)

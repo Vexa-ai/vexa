@@ -167,6 +167,7 @@ async def start_bot_container(
     native_meeting_id: str,
     language: Optional[str],
     task: Optional[str],
+    transcription_tier: Optional[str] = "realtime",
     zoom_obf_token: Optional[str] = None
 ) -> Optional[Tuple[str, str]]:
     """Start a bot as a Node.js child process.
@@ -222,6 +223,7 @@ async def start_bot_container(
         "connectionId": connection_id,
         "language": language,
         "task": task or "transcribe",
+        "transcriptionTier": transcription_tier or "realtime",
         "obfToken": zoom_obf_token if platform == "zoom" else None,
         "redisUrl": REDIS_URL,
         "container_name": process_name,

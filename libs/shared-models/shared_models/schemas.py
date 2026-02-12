@@ -25,6 +25,9 @@ ACCEPTED_LANGUAGE_CODES = {
 # These are the tasks supported by WhisperLive
 ALLOWED_TASKS = {"transcribe", "translate"}
 
+# --- Allowed Transcription Tiers ---
+ALLOWED_TRANSCRIPTION_TIERS = {"realtime", "deferred"}
+
 # --- Meeting Status Definitions ---
 
 class MeetingStatus(str, Enum):
@@ -341,6 +344,10 @@ class MeetingCreate(BaseModel):
     bot_name: Optional[str] = Field(None, description="Optional name for the bot in the meeting")
     language: Optional[str] = Field(None, description="Optional language code for transcription (e.g., 'en', 'es')")
     task: Optional[str] = Field(None, description="Optional task for the transcription model (e.g., 'transcribe', 'translate')")
+    transcription_tier: Optional[str] = Field(
+        "realtime",
+        description="Transcription priority tier: 'realtime' (default) or 'deferred'"
+    )
     passcode: Optional[str] = Field(None, description="Optional passcode for the meeting (Teams only)")
     zoom_obf_token: Optional[str] = Field(
         None,
@@ -397,6 +404,19 @@ class MeetingCreate(BaseModel):
         if v is not None and v != "" and v not in ALLOWED_TASKS:
             raise ValueError(f"Invalid task '{v}'. Must be one of: {sorted(ALLOWED_TASKS)}")
         return v
+
+    @field_validator('transcription_tier')
+    @classmethod
+    def validate_transcription_tier(cls, v):
+        """Validate transcription tier."""
+        if v is None or v == "":
+            return "realtime"
+        normalized = str(v).strip().lower()
+        if normalized not in ALLOWED_TRANSCRIPTION_TIERS:
+            raise ValueError(
+                f"Invalid transcription_tier '{v}'. Must be one of: {sorted(ALLOWED_TRANSCRIPTION_TIERS)}"
+            )
+        return normalized
 
     @field_validator('native_meeting_id')
     @classmethod
@@ -790,7 +810,7 @@ class RecordingResponse(BaseModel):
     error_message: Optional[str] = None
     created_at: datetime
     completed_at: Optional[datetime] = None
-    media_files: List[MediaFileResponse] = []
+    media_files: List[MediaFileResponse] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
@@ -798,55 +818,4 @@ class RecordingResponse(BaseModel):
 
 class RecordingListResponse(BaseModel):
     recordings: List[RecordingResponse]
-
-# --- Transcription Job Schemas ---
-
-class TranscriptionJobStatus(str, Enum):
-    PENDING = "pending"
-    PROCESSING = "processing"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-class TranscriptionJobCreate(BaseModel):
-    recording_id: Optional[int] = Field(None, description="ID of an existing recording to transcribe")
-    meeting_id: Optional[int] = Field(None, description="Meeting to associate the transcription with")
-    language: Optional[str] = Field(None, description="Language code for transcription (e.g., 'en', 'es')")
-    task: str = Field(default="transcribe", description="Task: 'transcribe' or 'translate'")
-
-    @field_validator('language')
-    @classmethod
-    def validate_language(cls, v):
-        if v is not None and v != "" and v not in ACCEPTED_LANGUAGE_CODES:
-            raise ValueError(f"Invalid language code '{v}'. Must be one of: {sorted(ACCEPTED_LANGUAGE_CODES)}")
-        return v
-
-    @field_validator('task')
-    @classmethod
-    def validate_task(cls, v):
-        if v is not None and v != "" and v not in ALLOWED_TASKS:
-            raise ValueError(f"Invalid task '{v}'. Must be one of: {sorted(ALLOWED_TASKS)}")
-        return v
-
-class TranscriptionJobResponse(BaseModel):
-    id: int
-    recording_id: int
-    meeting_id: Optional[int] = None
-    user_id: int
-    language: Optional[str] = None
-    task: str
-    status: TranscriptionJobStatus
-    error_message: Optional[str] = None
-    progress: Optional[float] = None
-    segments_count: Optional[int] = None
-    session_uid: Optional[str] = None
-    created_at: datetime
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
-        use_enum_values = True
-
-class TranscriptionJobListResponse(BaseModel):
-    jobs: List[TranscriptionJobResponse]
-# --- END Recording & Transcription Job Schemas ---
+# --- END Recording Schemas ---

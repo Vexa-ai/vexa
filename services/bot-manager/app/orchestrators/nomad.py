@@ -56,6 +56,7 @@ async def start_bot_container(
     native_meeting_id: str,
     language: Optional[str],
     task: Optional[str],
+    transcription_tier: Optional[str] = "realtime",
     zoom_obf_token: Optional[str] = None
 ) -> Optional[Tuple[str, str]]:
     """Dispatch a parameterised *vexa-bot* Nomad job.
@@ -91,6 +92,7 @@ async def start_bot_container(
         "connection_id": connection_id,
         "language": language or "",
         "task": task or "",
+        "transcription_tier": transcription_tier or "realtime",
         "zoom_obf_token": (zoom_obf_token or "") if platform == "zoom" else "",
     }
 

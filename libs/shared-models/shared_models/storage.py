@@ -52,7 +52,7 @@ class MinIOStorageClient(StorageClient):
         access_key: Optional[str] = None,
         secret_key: Optional[str] = None,
         bucket: Optional[str] = None,
-        secure: bool = False,
+        secure: Optional[bool] = None,
     ):
         try:
             import boto3
@@ -60,20 +60,28 @@ class MinIOStorageClient(StorageClient):
         except ImportError:
             raise ImportError("boto3 is required for MinIO storage. Install it: pip install boto3")
 
-        self.endpoint = endpoint or os.environ.get("MINIO_ENDPOINT", "minio:9000")
-        self.access_key = access_key or os.environ.get("MINIO_ACCESS_KEY", "vexa-access-key")
-        self.secret_key = secret_key or os.environ.get("MINIO_SECRET_KEY", "vexa-secret-key")
+        self.endpoint = os.environ.get("MINIO_ENDPOINT", "minio:9000") if endpoint is None else endpoint
+        self.access_key = os.environ.get("MINIO_ACCESS_KEY", "vexa-access-key") if access_key is None else access_key
+        self.secret_key = os.environ.get("MINIO_SECRET_KEY", "vexa-secret-key") if secret_key is None else secret_key
         self.bucket = bucket or os.environ.get("MINIO_BUCKET", "vexa-recordings")
-        self.secure = secure or os.environ.get("MINIO_SECURE", "false").lower() == "true"
+        if secure is None:
+            self.secure = os.environ.get("MINIO_SECURE", "false").lower() == "true"
+        else:
+            self.secure = secure
+        self.region = os.environ.get("AWS_REGION", "us-east-1")
 
         protocol = "https" if self.secure else "http"
-        endpoint_url = f"{protocol}://{self.endpoint}"
+        if self.endpoint:
+            endpoint_url = self.endpoint if "://" in self.endpoint else f"{protocol}://{self.endpoint}"
+        else:
+            endpoint_url = None
 
         self.client = boto3.client(
             "s3",
             endpoint_url=endpoint_url,
-            aws_access_key_id=self.access_key,
-            aws_secret_access_key=self.secret_key,
+            aws_access_key_id=self.access_key or None,
+            aws_secret_access_key=self.secret_key or None,
+            region_name=self.region,
             config=BotoConfig(signature_version="s3v4"),
         )
         logger.info(f"MinIO storage client initialized: endpoint={endpoint_url}, bucket={self.bucket}")
@@ -119,20 +127,33 @@ class LocalStorageClient(StorageClient):
 
     def __init__(self, base_dir: Optional[str] = None):
         self.base_dir = base_dir or os.environ.get("LOCAL_STORAGE_DIR", "/tmp/vexa-recordings")
+        self.fsync_enabled = os.environ.get("LOCAL_STORAGE_FSYNC", "true").lower() == "true"
         os.makedirs(self.base_dir, exist_ok=True)
-        logger.info(f"Local storage client initialized: base_dir={self.base_dir}")
+        logger.info(f"Local storage client initialized: base_dir={self.base_dir}, fsync={self.fsync_enabled}")
 
-    def _full_path(self, path: str) -> str:
-        full = os.path.join(self.base_dir, path)
-        os.makedirs(os.path.dirname(full), exist_ok=True)
+    def _normalize_path(self, path: str) -> str:
+        # Normalize storage key and reject path traversal.
+        normalized = os.path.normpath(path.replace("\\", "/")).lstrip("/")
+        if normalized in ("", ".", "..") or normalized.startswith("../"):
+            raise ValueError(f"Invalid storage path: {path}")
+        return normalized
+
+    def _full_path(self, path: str, create_dirs: bool = False) -> str:
+        normalized = self._normalize_path(path)
+        full = os.path.join(self.base_dir, normalized)
+        if create_dirs:
+            os.makedirs(os.path.dirname(full), exist_ok=True)
         return full
 
     def upload_file(self, path: str, data: bytes, content_type: str = "application/octet-stream") -> str:
-        full_path = self._full_path(path)
+        full_path = self._full_path(path, create_dirs=True)
         with open(full_path, "wb") as f:
             f.write(data)
+            f.flush()
+            if self.fsync_enabled:
+                os.fsync(f.fileno())
         logger.info(f"Stored {len(data)} bytes to {full_path}")
-        return path
+        return self._normalize_path(path)
 
     def download_file(self, path: str) -> bytes:
         full_path = self._full_path(path)
@@ -157,8 +178,16 @@ def create_storage_client(backend: Optional[str] = None) -> StorageClient:
     """Factory function to create the appropriate storage client based on configuration."""
     backend = backend or os.environ.get("STORAGE_BACKEND", "minio")
 
-    if backend == "minio" or backend == "s3":
+    if backend == "minio":
         return MinIOStorageClient()
+    elif backend == "s3":
+        return MinIOStorageClient(
+            endpoint=os.environ.get("S3_ENDPOINT", ""),
+            access_key=os.environ.get("AWS_ACCESS_KEY_ID", ""),
+            secret_key=os.environ.get("AWS_SECRET_ACCESS_KEY", ""),
+            bucket=os.environ.get("S3_BUCKET", os.environ.get("MINIO_BUCKET", "vexa-recordings")),
+            secure=os.environ.get("S3_SECURE", "true").lower() == "true",
+        )
     elif backend == "local":
         return LocalStorageClient()
     else:
