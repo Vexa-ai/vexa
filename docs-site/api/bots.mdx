@@ -73,6 +73,29 @@ curl -X POST "$API_BASE/bots" \
   </Tab>
 </Tabs>
 
+### Response (201)
+
+Returns the created meeting record.
+
+```json
+{
+  "id": 16,
+  "user_id": 1,
+  "platform": "google_meet",
+  "native_meeting_id": "abc-defg-hij",
+  "constructed_meeting_url": "https://meet.google.com/abc-defg-hij",
+  "status": "requested",
+  "bot_container_id": null,
+  "start_time": null,
+  "end_time": null,
+  "data": {
+    "passcode": null
+  },
+  "created_at": "2026-02-13T20:10:00Z",
+  "updated_at": "2026-02-13T20:10:00Z"
+}
+```
+
 ## GET /bots/status
 
 List bots currently running under your API key.
@@ -80,6 +103,29 @@ List bots currently running under your API key.
 ```bash
 curl -H "X-API-Key: $API_KEY" \
   "$API_BASE/bots/status"
+```
+
+### Response (200)
+
+```json
+{
+  "running_bots": [
+    {
+      "container_id": "3f2f...9b1",
+      "container_name": "vexa-bot-google_meet-16",
+      "platform": "google_meet",
+      "native_meeting_id": "abc-defg-hij",
+      "status": "Up 2 minutes",
+      "normalized_status": "Up",
+      "created_at": "2026-02-13T20:10:10Z",
+      "labels": {
+        "vexa.user_id": "1",
+        "vexa.meeting_id": "16"
+      },
+      "meeting_id_from_name": "16"
+    }
+  ]
+}
 ```
 
 ## PUT `/bots/{platform}/{native_meeting_id}/config`
@@ -115,6 +161,14 @@ curl -X PUT "$API_BASE/bots/zoom/89055866087/config" \
   </Tab>
 </Tabs>
 
+### Response (202)
+
+```json
+{
+  "message": "Reconfiguration request accepted and sent to the bot."
+}
+```
+
 ## DELETE `/bots/{platform}/{native_meeting_id}`
 
 Stop a bot (remove it from the meeting).
@@ -144,3 +198,11 @@ curl -X DELETE \
 ```
   </Tab>
 </Tabs>
+
+### Response (202)
+
+```json
+{
+  "message": "Stop request accepted and is being processed."
+}
+```

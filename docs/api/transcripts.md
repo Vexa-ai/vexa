@@ -38,6 +38,61 @@ curl -H "X-API-Key: $API_KEY" \
   </Tab>
 </Tabs>
 
+### Response (200)
+
+Returns meeting metadata plus `segments[]`. If recording was enabled and captured, `recordings[]` is included for post-meeting playback.
+
+```json
+{
+  "id": 16,
+  "platform": "google_meet",
+  "native_meeting_id": "abc-defg-hij",
+  "constructed_meeting_url": "https://meet.google.com/abc-defg-hij",
+  "status": "completed",
+  "start_time": "2026-02-13T20:10:12Z",
+  "end_time": "2026-02-13T20:44:51Z",
+  "recordings": [
+    {
+      "id": 906238426347,
+      "meeting_id": 16,
+      "user_id": 1,
+      "session_uid": "d6e337d6-92cd-452f-b003-23c5498091ef",
+      "source": "bot",
+      "status": "completed",
+      "created_at": "2026-02-13T20:10:20Z",
+      "completed_at": "2026-02-13T20:44:55Z",
+      "media_files": [
+        {
+          "id": 906238426348,
+          "type": "audio",
+          "format": "wav",
+          "storage_backend": "s3",
+          "file_size_bytes": 1234567,
+          "duration_seconds": 2079.2,
+          "metadata": {
+            "sample_rate": 16000
+          },
+          "created_at": "2026-02-13T20:44:55Z"
+        }
+      ]
+    }
+  ],
+  "segments": [
+    {
+      "start_time": 0.0,
+      "end_time": 3.2,
+      "text": "Hello everyone.",
+      "language": "en",
+      "created_at": "2026-02-13T20:10:20Z",
+      "speaker": "Dmitriy",
+      "completed": true,
+      "absolute_start_time": "2026-02-13T20:10:20Z",
+      "absolute_end_time": "2026-02-13T20:10:23Z"
+    }
+  ]
+}
+```
+
 ## POST `/transcripts/{platform}/{native_meeting_id}/share`
 
 Create a public share link for a meeting transcript.
@@ -67,3 +122,14 @@ curl -X POST \
 ```
   </Tab>
 </Tabs>
+
+### Response (200)
+
+```json
+{
+  "share_id": "Cj3o9z0GZqf7Jd1wqYp3vQ",
+  "url": "https://api.vexa.ai/public/transcripts/Cj3o9z0GZqf7Jd1wqYp3vQ.txt",
+  "expires_at": "2026-02-13T21:10:00Z",
+  "expires_in_seconds": 3600
+}
+```

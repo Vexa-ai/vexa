@@ -12,6 +12,33 @@ curl -H "X-API-Key: $API_KEY" \
   "$API_BASE/meetings"
 ```
 
+### Response (200)
+
+```json
+{
+  "meetings": [
+    {
+      "id": 16,
+      "user_id": 1,
+      "platform": "google_meet",
+      "native_meeting_id": "abc-defg-hij",
+      "constructed_meeting_url": "https://meet.google.com/abc-defg-hij",
+      "status": "completed",
+      "bot_container_id": null,
+      "start_time": "2026-02-13T20:10:12Z",
+      "end_time": "2026-02-13T20:44:51Z",
+      "data": {
+        "name": "Weekly Standup",
+        "notes": "Discussed roadmap",
+        "completion_reason": "stopped"
+      },
+      "created_at": "2026-02-13T20:10:00Z",
+      "updated_at": "2026-02-13T20:44:51Z"
+    }
+  ]
+}
+```
+
 ## PATCH `/meetings/{platform}/{native_meeting_id}`
 
 Update meeting metadata (stored in `meeting.data`), commonly used for:
@@ -65,6 +92,30 @@ curl -X PATCH "$API_BASE/meetings/zoom/89055866087" \
   </Tab>
 </Tabs>
 
+### Response (200)
+
+Returns the updated meeting record.
+
+```json
+{
+  "id": 16,
+  "user_id": 1,
+  "platform": "google_meet",
+  "native_meeting_id": "abc-defg-hij",
+  "constructed_meeting_url": "https://meet.google.com/abc-defg-hij",
+  "status": "completed",
+  "bot_container_id": null,
+  "start_time": "2026-02-13T20:10:12Z",
+  "end_time": "2026-02-13T20:44:51Z",
+  "data": {
+    "name": "Weekly Standup",
+    "notes": "Discussed roadmap"
+  },
+  "created_at": "2026-02-13T20:10:00Z",
+  "updated_at": "2026-02-13T20:44:51Z"
+}
+```
+
 ## DELETE `/meetings/{platform}/{native_meeting_id}`
 
 Delete transcript data and recording artifacts (best-effort) and anonymize the meeting.
@@ -105,3 +156,13 @@ curl -X DELETE \
 If you want to delete just recordings (and keep transcript data), use:
 
 - `DELETE /recordings/{recording_id}` (see [`docs/api/recordings.md`](recordings))
+
+### Response (200)
+
+Returns a human-readable confirmation message. This operation is idempotent: deleting an already-redacted meeting returns success.
+
+```json
+{
+  "message": "Meeting google_meet/abc-defg-hij transcripts and recording artifacts deleted; meeting data anonymized"
+}
+```
