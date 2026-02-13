@@ -1,0 +1,51 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "Vexa",
+  "logo": {
+    "dark": "/logo-dark.svg",
+    "light": "/logo-light.svg"
+  },
+  "favicon": "/favicon.svg",
+  "colors": {
+    "primary": "#ffffff"
+  },
+  "navigation": [
+    {
+      "group": "Start Here",
+      "pages": [
+        "getting-started",
+        "vexa-lite-deployment",
+        "deployment",
+        "user_api_guide",
+        "websocket",
+        "ui-dashboard"
+      ]
+    },
+    {
+      "group": "Concepts",
+      "pages": ["concepts"]
+    },
+    {
+      "group": "Platforms",
+      "pages": [
+        "platforms/google-meet",
+        "platforms/microsoft-teams",
+        "platforms/zoom",
+        "zoom-app-setup"
+      ]
+    },
+    {
+      "group": "Ops",
+      "pages": ["recording-storage", "self-hosted-management"]
+    },
+    {
+      "group": "Security",
+      "pages": ["security", "troubleshooting"]
+    },
+    {
+      "group": "Integrations",
+      "pages": ["chatgpt-transcript-share-links"]
+    }
+  ]
+}
+
