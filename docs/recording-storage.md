@@ -71,7 +71,22 @@ For AWS, do not set `S3_ENDPOINT`.
 
 ## 4) Vexa Lite (single container)
 
-Lite defaults to local backend:
+Lite supports local backend, but for production you should keep compute stateless and use object storage (`s3`).
+
+Recommended (stateless, production):
+
+```env
+STORAGE_BACKEND=s3
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+S3_BUCKET=vexa-recordings
+# Optional for non-AWS providers:
+# S3_ENDPOINT=https://<provider-endpoint>
+# S3_SECURE=true
+```
+
+Local filesystem (testing only):
 
 ```env
 STORAGE_BACKEND=local

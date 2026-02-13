@@ -73,6 +73,7 @@ Headers: X-API-Key: YOUR_API_KEY
 **Response Format**:
 ```json
 {
+  "notes": "Optional meeting notes (from meeting.data.notes, if provided)",
   "segments": [
     {
       "text": "Hello everyone",
