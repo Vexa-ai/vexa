@@ -11,7 +11,7 @@ curl -H "X-API-Key: $API_KEY" \
   "$API_BASE/meetings"
 ```
 
-## PATCH /meetings/{platform}/{native_meeting_id}
+## PATCH `/meetings/{platform}/{native_meeting_id}`
 
 Update meeting metadata (stored in `meeting.data`), commonly used for:
 
@@ -64,7 +64,7 @@ curl -X PATCH "$API_BASE/meetings/zoom/89055866087" \
   </Tab>
 </Tabs>
 
-## DELETE /meetings/{platform}/{native_meeting_id}
+## DELETE `/meetings/{platform}/{native_meeting_id}`
 
 Delete transcript data and recording artifacts (best-effort) and anonymize the meeting.
 
@@ -73,7 +73,7 @@ Important semantics:
 - Only works for finalized meetings (`completed` or `failed`).
 - Deletion is **idempotent** (already-redacted meetings return success).
 - The meeting record remains for telemetry/usage tracking (with PII scrubbed).
-- After deletion, the original `native_meeting_id` is cleared, so you cannot retry by `{platform}/{native_meeting_id}` later.
+- After deletion, the original `native_meeting_id` is cleared, so you cannot retry by `/{platform}/{native_meeting_id}` later.
 
 <Tabs>
   <Tab title="Google Meet">
@@ -104,4 +104,3 @@ curl -X DELETE \
 If you want to delete just recordings (and keep transcript data), use:
 
 - `DELETE /recordings/{recording_id}` (see [`docs/api/recordings.md`](recordings.md))
-

@@ -6,7 +6,7 @@ For live meetings, prefer WebSockets:
 
 - [`docs/websocket.md`](../websocket.md)
 
-## GET /transcripts/{platform}/{native_meeting_id}
+## GET `/transcripts/{platform}/{native_meeting_id}`
 
 Fetch transcript segments (and meeting metadata) for a meeting.
 
@@ -38,7 +38,7 @@ curl -H "X-API-Key: $API_KEY" \
   </Tab>
 </Tabs>
 
-## POST /transcripts/{platform}/{native_meeting_id}/share
+## POST `/transcripts/{platform}/{native_meeting_id}/share`
 
 Create a public share link for a meeting transcript.
 
@@ -67,4 +67,3 @@ curl -X POST \
 ```
   </Tab>
 </Tabs>
-
