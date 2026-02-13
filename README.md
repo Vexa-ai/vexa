@@ -58,7 +58,7 @@
 ### How it works
 
 <p align="center">
-  <img src="assets/product-diagram.png" alt="How Vexa Works" width="100%"/>
+  <img src="assets/simplified_flow.png" alt="How Vexa Works" width="100%"/>
 </p>
 
 ### Who it's for
