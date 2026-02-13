@@ -260,6 +260,24 @@ curl -X POST "$API_BASE/bots" \
   }'
 ```
 
+### Or request a bot for Zoom
+
+```bash
+# From URL: https://us05web.zoom.us/j/89055866087?pwd=zxD41y7hQZCGJ3pkIbWaZq2K9a8Q1Y.1
+# Extract meeting ID and optional passcode separately.
+curl -X POST "$API_BASE/bots" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <API_KEY>" \
+  -d '{
+    "platform": "zoom",
+    "native_meeting_id": "89055866087",
+    "passcode": "zxD41y7hQZCGJ3pkIbWaZq2K9a8Q1Y.1",
+    "recording_enabled": true,
+    "transcribe_enabled": true,
+    "transcription_tier": "realtime"
+  }'
+```
+
 ## 2. Get transcripts:
 
 ### Get transcripts over REST

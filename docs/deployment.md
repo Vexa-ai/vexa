@@ -1,6 +1,8 @@
 # Vexa Deployment Guide
 
-Real-time Google Meet and Microsoft Teams transcription API. Get up and running in minutes.
+Real-time Google Meet, Microsoft Teams, and Zoom transcription API. Get up and running in minutes.
+
+Note: Zoom joins require additional configuration (Zoom Meeting SDK + OAuth/OBF). See [Zoom Integration Setup Guide](zoom-app-setup.md).
 
 > 💡 **For end users**: If you want quick deployment on your platform of choice with user interfaces, see [Vexa Lite Deployment Guide](vexa-lite-deployment.md) and [vexa-lite-deploy repository](https://github.com/Vexa-ai/vexa-lite-deploy).  
 > 💻 **For developers**: This guide covers the full Docker Compose setup for development.
