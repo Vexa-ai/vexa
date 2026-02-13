@@ -404,7 +404,7 @@ services:
           </CORSRule>
         </CORSConfiguration>
         XML
-        mc cors set vexa/${MINIO_BUCKET:-vexa-recordings} /tmp/cors.xml
+        mc cors set vexa/${MINIO_BUCKET:-vexa-recordings} /tmp/cors.xml || echo "minio cors set unsupported in this environment; continuing"
         mc anonymous set download vexa/${MINIO_BUCKET:-vexa-recordings} || true
         exit 0
     environment:
