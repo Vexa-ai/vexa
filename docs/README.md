@@ -11,6 +11,7 @@ Use this page as the entry point for setup, operations, and API usage.
 | Manage users and API tokens | [Self-Hosted Management Guide](self-hosted-management.md) |
 | Integrate over REST | [User API Guide](user_api_guide.md) |
 | Stream live transcripts | [WebSocket Guide](websocket.md) |
+| Configure recording storage + playback | [Recording Storage Modes](recording-storage.md) |
 
 ## Platform and Integration Docs
 
