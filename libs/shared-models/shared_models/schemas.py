@@ -620,6 +620,7 @@ class TranscriptionResponse(BaseModel): # Doesn't inherit MeetingResponse to avo
     start_time: Optional[datetime]
     end_time: Optional[datetime]
     recordings: List[Dict[str, Any]] = Field(default_factory=list, description="Recording metadata attached to the meeting (if available).")
+    notes: Optional[str] = Field(None, description="Meeting notes (from meeting data, if provided).")
     # ---
     segments: List[TranscriptionSegment] = Field(..., description="List of transcript segments")
 
