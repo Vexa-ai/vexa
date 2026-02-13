@@ -21,8 +21,9 @@ COPY binding.gyp ./
 # Copy Zoom SDK (if present) and native source
 COPY core/src/platforms/zoom/native/ ./core/src/platforms/zoom/native/
 
-# Install dependencies (including node-addon-api and node-gyp)
-RUN npm install
+# Install dependencies without triggering native postinstall hooks.
+# Native addon build is handled explicitly below on best-effort basis.
+RUN npm install --ignore-scripts
 
 # Build native addon (will skip if SDK not present)
 RUN npm run build:native || echo "[Build] Native addon build skipped (SDK not available)"
