@@ -1,4 +1,5 @@
 import logging
+import os
 import json
 import string
 from datetime import datetime, timedelta, timezone
@@ -33,11 +34,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _extract_storage_paths_from_meeting_data(data: Optional[Dict]) -> List[str]:
-    """Collect storage paths from meeting.data['recordings'] payload."""
-    paths: List[str] = []
+def _extract_storage_targets_from_meeting_data(data: Optional[Dict]) -> List[Tuple[str, str]]:
+    """Collect (storage_backend, storage_path) from meeting.data['recordings'] payload."""
+    targets: List[Tuple[str, str]] = []
     if not isinstance(data, dict):
-        return paths
+        return targets
 
     for rec in (data.get("recordings") or []):
         if not isinstance(rec, dict):
@@ -46,9 +47,14 @@ def _extract_storage_paths_from_meeting_data(data: Optional[Dict]) -> List[str]:
             if not isinstance(mf, dict):
                 continue
             path = mf.get("storage_path")
-            if isinstance(path, str) and path:
-                paths.append(path)
-    return paths
+            if not isinstance(path, str) or not path:
+                continue
+            backend = mf.get("storage_backend")
+            if not isinstance(backend, str) or not backend:
+                backend = os.getenv("STORAGE_BACKEND", "minio")
+            targets.append((str(backend).strip().lower(), path))
+
+    return targets
 
 
 async def _purge_recordings_for_meeting(
@@ -60,7 +66,10 @@ async def _purge_recordings_for_meeting(
     Delete recording DB rows and storage objects for a meeting.
     Handles both meeting.data metadata mode and normalized Recording model mode.
     """
-    storage_paths = set(_extract_storage_paths_from_meeting_data(meeting.data))
+    # backend -> set(paths)
+    targets_by_backend: Dict[str, set[str]] = {}
+    for backend, path in _extract_storage_targets_from_meeting_data(meeting.data):
+        targets_by_backend.setdefault(backend, set()).add(path)
 
     # Collect normalized recording rows/media paths and mark rows for deletion.
     # Some deployments still run in meeting_data-only mode without normalized recording tables.
@@ -82,28 +91,43 @@ async def _purge_recordings_for_meeting(
         await db.refresh(recording, ["media_files"])
         for media_file in (recording.media_files or []):
             if media_file.storage_path:
-                storage_paths.add(media_file.storage_path)
+                backend = (media_file.storage_backend or os.getenv("STORAGE_BACKEND", "minio")).strip().lower()
+                targets_by_backend.setdefault(backend, set()).add(media_file.storage_path)
         await db.delete(recording)
         model_recordings_deleted += 1
 
-    # Delete storage files best-effort.
     storage_files_deleted = 0
-    if storage_paths:
-        try:
-            storage = create_storage_client()
-            for path in storage_paths:
+    storage_files_targeted = sum(len(v) for v in targets_by_backend.values())
+    if storage_files_targeted:
+        # Delete storage files best-effort (by per-file backend).
+        clients: Dict[str, object] = {}
+
+        for backend in list(targets_by_backend.keys()):
+            if backend not in ("minio", "s3", "local"):
+                logger.warning(f"[API] Unknown storage backend '{backend}', defaulting to 'minio'")
+                targets_by_backend.setdefault("minio", set()).update(targets_by_backend.pop(backend))
+
+        for backend in targets_by_backend.keys():
+            try:
+                clients[backend] = create_storage_client(backend)
+            except Exception as e:
+                logger.warning(f"[API] Failed to initialize storage client for backend '{backend}': {e}")
+
+        for backend, paths in targets_by_backend.items():
+            client = clients.get(backend)
+            if client is None:
+                continue
+            for path in paths:
                 try:
-                    storage.delete_file(path)
+                    client.delete_file(path)
                     storage_files_deleted += 1
                 except Exception as e:
-                    logger.warning(f"[API] Failed deleting recording media from storage ({path}): {e}")
-        except Exception as e:
-            logger.warning(f"[API] Failed to initialize storage client for recording cleanup: {e}")
+                    logger.warning(f"[API] Failed deleting recording media from storage ({backend}:{path}): {e}")
 
     return {
         "model_recordings_deleted": model_recordings_deleted,
         "storage_files_deleted": storage_files_deleted,
-        "storage_files_targeted": len(storage_paths),
+        "storage_files_targeted": storage_files_targeted,
     }
 
 
