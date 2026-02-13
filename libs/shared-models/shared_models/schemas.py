@@ -348,6 +348,14 @@ class MeetingCreate(BaseModel):
         "realtime",
         description="Transcription priority tier: 'realtime' (default) or 'deferred'"
     )
+    recording_enabled: Optional[bool] = Field(
+        None,
+        description="Optional per-meeting override for recording persistence (true/false)."
+    )
+    transcribe_enabled: Optional[bool] = Field(
+        None,
+        description="Optional per-meeting override for transcription processing (true/false)."
+    )
     passcode: Optional[str] = Field(None, description="Optional passcode for the meeting (Teams only)")
     zoom_obf_token: Optional[str] = Field(
         None,

@@ -17,15 +17,19 @@ import {
 
 // Modified to use new services - Google Meet recording functionality
 export async function startGoogleRecording(page: Page, botConfig: BotConfig): Promise<void> {
-  // Initialize WhisperLive service on Node.js side
-  const whisperLiveService = new WhisperLiveService({
-    whisperLiveUrl: process.env.WHISPER_LIVE_URL
-  });
-
-  // Initialize WhisperLive connection with STUBBORN reconnection - NEVER GIVES UP!
-  const whisperLiveUrl = await whisperLiveService.initializeWithStubbornReconnection("Google Meet");
-
-  log(`[Node.js] Using WhisperLive URL for Google Meet: ${whisperLiveUrl}`);
+  const transcriptionEnabled = botConfig.transcribeEnabled !== false;
+  let whisperLiveService: WhisperLiveService | null = null;
+  let whisperLiveUrl: string | null = null;
+  if (transcriptionEnabled) {
+    whisperLiveService = new WhisperLiveService({
+      whisperLiveUrl: process.env.WHISPER_LIVE_URL
+    });
+    // Initialize WhisperLive connection with STUBBORN reconnection - NEVER GIVES UP!
+    whisperLiveUrl = await whisperLiveService.initializeWithStubbornReconnection("Google Meet");
+    log(`[Node.js] Using WhisperLive URL for Google Meet: ${whisperLiveUrl}`);
+  } else {
+    log("[Google Recording] Transcription disabled by config; running recording-only mode.");
+  }
   log("Starting Google Meet recording with WebSocket connection");
 
   const wantsAudioCapture =
@@ -75,7 +79,7 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
   await page.evaluate(
     async (pageArgs: {
       botConfigData: BotConfig;
-      whisperUrlForBrowser: string;
+      whisperUrlForBrowser: string | null;
       selectors: {
         participantSelectors: string[];
         speakingClasses: string[];
@@ -87,6 +91,7 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
       };
     }) => {
       const { botConfigData, whisperUrlForBrowser, selectors } = pageArgs;
+      const transcriptionEnabled = (botConfigData as any)?.transcribeEnabled !== false;
 
       // Use browser utility classes from the global bundle
       const browserUtils = (window as any).VexaBrowserUtils;
@@ -121,9 +126,11 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
       });
 
       // Use BrowserWhisperLiveService with stubborn mode to enable reconnection on Google Meet
-      const whisperLiveService = new browserUtils.BrowserWhisperLiveService({
-        whisperLiveUrl: whisperUrlForBrowser
-      }, true); // Enable stubborn mode for Google Meet
+      const whisperLiveService = transcriptionEnabled
+        ? new browserUtils.BrowserWhisperLiveService({
+            whisperLiveUrl: whisperUrlForBrowser as string
+          }, true) // Enable stubborn mode for Google Meet
+        : null;
 
       // Expose references for reconfiguration
       (window as any).__vexaWhisperLiveService = whisperLiveService;
@@ -240,6 +247,10 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
       (window as any).triggerWebSocketReconfigure = async (lang: string | null, task: string | null) => {
         try {
           const svc = (window as any).__vexaWhisperLiveService;
+          if (!transcriptionEnabled) {
+            (window as any).logBot?.('[Reconfigure] Ignored because transcription is disabled.');
+            return;
+          }
           const cfg = (window as any).__vexaBotConfig || {};
           cfg.language = lang;
           cfg.task = task || 'transcribe';
@@ -293,6 +304,7 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
           
           // Wait a bit for media elements to initialize after admission, then start the chain
           (async () => {
+            let degradedNoMedia = false;
             // Wait 2 seconds for media elements to initialize after admission
             (window as any).logBot("Waiting 2 seconds for media elements to initialize after admission...");
             await new Promise(resolve => setTimeout(resolve, 2000));
@@ -301,20 +313,23 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
             // Use 10 retries with 3s delay = 30s total wait time
             audioService.findMediaElements(10, 3000).then(async (mediaElements: HTMLMediaElement[]) => {
             if (mediaElements.length === 0) {
-              reject(
-                new Error(
-                  "[Google Meet BOT Error] No active media elements found after multiple retries. Ensure the Google Meet meeting media is playing."
-                )
+              degradedNoMedia = true;
+              (window as any).logBot(
+                "[Google Meet BOT Warning] No active media elements found after retries; " +
+                "continuing in degraded monitoring mode (session remains active)."
               );
-              return;
+              return undefined;
             }
 
             // Create combined audio stream
             return await audioService.createCombinedAudioStream(mediaElements);
           }).then(async (combinedStream: MediaStream | undefined) => {
             if (!combinedStream) {
-              reject(new Error("[Google Meet BOT Error] Failed to create combined audio stream"));
-              return;
+              if (!degradedNoMedia) {
+                reject(new Error("[Google Meet BOT Error] Failed to create combined audio stream"));
+                return;
+              }
+              return null;
             }
 
             if (isAudioRecordingEnabled) {
@@ -349,8 +364,14 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
             // Initialize audio processor
             return await audioService.initializeAudioProcessor(combinedStream);
           }).then(async (processor: any) => {
+            if (!processor) {
+              return null;
+            }
             // Setup audio data processing
             audioService.setupAudioDataProcessor(async (audioData: Float32Array, sessionStartTime: number | null) => {
+              if (!transcriptionEnabled || !whisperLiveService) {
+                return;
+              }
               // Only send after server ready (canonical Teams pattern)
               if (!whisperLiveService.isReady()) {
                 // Skip sending until server is ready
@@ -377,6 +398,9 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
 
             // Initialize WhisperLive WebSocket connection with simple reconnection wrapper
             const connectWhisper = async () => {
+              if (!transcriptionEnabled || !whisperLiveService) {
+                return;
+              }
               try {
                 // Define callbacks so they can be reused for reconfiguration reconnects
                 const onMessage = (data: any) => {
@@ -455,7 +479,9 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
             return await connectWhisper();
           }).then(() => {
             // Initialize Google-specific speaker detection (Teams-style with Google selectors)
-            (window as any).logBot("Initializing Google Meet speaker detection...");
+            if (!degradedNoMedia) {
+              (window as any).logBot("Initializing Google Meet speaker detection...");
+            }
 
             const initializeGoogleSpeakerDetection = (whisperLiveService: any, audioService: any, botConfigData: any) => {
               const selectorsTyped = selectors as any;
@@ -718,7 +744,9 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
               }, 500);
             };
 
-            initializeGoogleSpeakerDetection(whisperLiveService, audioService, botConfigData);
+            if (!degradedNoMedia && transcriptionEnabled && whisperLiveService) {
+              initializeGoogleSpeakerDetection(whisperLiveService, audioService, botConfigData);
+            }
 
             // Simple single-strategy participant extraction from main video area
             (window as any).logBot("Initializing simplified participant counting (main frame text scan)...");
@@ -790,7 +818,9 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                   );
                 }
                 audioService.disconnect();
-                whisperLiveService.close();
+                if (whisperLiveService) {
+                  whisperLiveService.close();
+                }
                 finish();
               };
 
@@ -913,5 +943,7 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
   );
   
   // After page.evaluate finishes, cleanup services
-  await whisperLiveService.cleanup();
+  if (whisperLiveService) {
+    await whisperLiveService.cleanup();
+  }
 }

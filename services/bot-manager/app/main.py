@@ -802,6 +802,8 @@ async def request_bot(
             language=req.language,
             task=req.task,
             transcription_tier=req.transcription_tier,
+            recording_enabled=req.recording_enabled,
+            transcribe_enabled=req.transcribe_enabled,
             zoom_obf_token=zoom_obf_token_to_use
         )
         container_start_time = datetime.utcnow()

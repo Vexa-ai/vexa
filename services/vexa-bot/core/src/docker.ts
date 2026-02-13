@@ -12,6 +12,7 @@ export const BotConfigSchema = z.object({
   nativeMeetingId: z.string(), // *** ADDED schema field ***
   language: z.string().nullish(), // Optional language
   task: z.string().nullish(),     // Optional task
+  transcribeEnabled: z.boolean().optional(),
   transcriptionTier: z.enum(["realtime", "deferred"]).optional(),
   redisUrl: z.string(),         // Required Redis URL
   container_name: z.string().optional(), // ADDED: Optional container name

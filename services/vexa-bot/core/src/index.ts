@@ -376,7 +376,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
   
   // --- UPDATED: Parse and store config values ---
   currentLanguage = botConfig.language;
-  currentTask = botConfig.task || 'transcribe';
+  currentTask = botConfig.transcribeEnabled === false ? null : (botConfig.task || 'transcribe');
   currentRedisUrl = botConfig.redisUrl;
   currentConnectionId = botConfig.connectionId;
   botManagerCallbackUrl = botConfig.botManagerCallbackUrl || null; // ADDED: Get callback URL from botConfig
@@ -386,7 +386,10 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
   // Destructure other needed config values
   const { meetingUrl, platform, botName } = botConfig;
 
-  log(`Starting bot for ${platform} with URL: ${meetingUrl}, name: ${botName}, language: ${currentLanguage}, task: ${currentTask}, connectionId: ${currentConnectionId}`);
+  log(
+    `Starting bot for ${platform} with URL: ${meetingUrl}, name: ${botName}, language: ${currentLanguage}, ` +
+    `task: ${currentTask}, transcribeEnabled: ${botConfig.transcribeEnabled !== false}, connectionId: ${currentConnectionId}`
+  );
 
   // Fail fast: meeting_id must be present for control-plane commands
   const meetingId = botConfig.meeting_id;
