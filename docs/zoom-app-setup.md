@@ -12,6 +12,20 @@ Zoom Meeting SDK -> PCM audio -> WhisperLive -> transcript output
 
 Zoom requires an authorized token path (OBF/ZAK/RTMS) for Meeting SDK apps joining meetings outside their own account starting **March 2, 2026**.
 
+## Important Caveats (Approval + Who You Can Join)
+
+### Marketplace approval takes time
+
+If you want your Zoom app to join meetings across other users/accounts, you generally need to submit it for Zoom Marketplace review and approval. This process can take weeks to months.
+
+### Before approval: expect "your meetings only"
+
+Before your Zoom app is approved (and depending on Zoom policy and account settings), you should assume you can reliably join only meetings created/hosted by you personally (the account that owns/authorizes the app). Use this for development and internal testing.
+
+### Hosted service status
+
+The hosted Vexa service Zoom app is **not approved** at the time of writing, so Zoom bots from the hosted service should be treated as limited to the authorizing user's own meetings until approval is complete.
+
 ## 1. Create and Configure the Zoom App
 
 1. Open [Zoom App Marketplace](https://marketplace.zoom.us/).
