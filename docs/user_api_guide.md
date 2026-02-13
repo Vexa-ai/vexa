@@ -37,12 +37,20 @@ If you're running Vexa on your own infrastructure, you need to create a user and
   * `platform`: (string, required) The meeting platform. Supported values:
     * `"google_meet"` - Google Meet meetings
     * `"teams"` - Microsoft Teams meetings
+    * `"zoom"` - Zoom meetings
   * `native_meeting_id`: (string, required) The unique identifier for the meeting. Format depends on platform:
     * **Google Meet**: Meeting code in format `xxx-xxxx-xxx` (e.g., "abc-defg-hij")
     * **Teams**: **Only the numeric meeting ID** (10-15 digits). Extract this from your Teams URL. For example, from `https://teams.live.com/meet/9366473044740?p=xxx`, use `"9366473044740"`.
+    * **Zoom**: **Only the numeric meeting ID** (10-11 digits). Extract this from your Zoom URL. For example, from `https://us05web.zoom.us/j/89055866087?pwd=...`, use `"89055866087"`.
   * `passcode`: (string, required for Teams) Meeting passcode. **Required for Microsoft Teams meetings**. Extract this from the `?p=` parameter in your Teams URL. For example, from `https://teams.live.com/meet/9366473044740?p=waw4q9dPAvdIG3aknh`, use `"waw4q9dPAvdIG3aknh"`. Not used for Google Meet.
+    * **Zoom**: Optional. If your Zoom URL includes `?pwd=...`, pass the value as `passcode`.
   * `language`: (string, optional) The desired transcription language code (e.g., "en", "es"). The language codes (currently 100) used in Vexa are based on the ISO 639-1 and ISO 639-3 standards. For more details, see the ISO 639 [specification on Wikipedia](https://en.wikipedia.org/wiki/ISO_639). If omitted, the language spoken at the beginning of the meeting will be automatically detected once, and transcription will continue in that language (translating if necessary). To change the language mid-meeting, use the 'Update Bot Configuration' endpoint.
   * `bot_name`: (string, optional) A custom name for the bot. This is the name the bot will use when appearing in the meeting.
+  * `recording_enabled`: (boolean, optional) Per-meeting override to enable/disable recording persistence.
+  * `transcribe_enabled`: (boolean, optional) Per-meeting override to enable/disable transcription processing.
+  * `transcription_tier`: (string, optional) `"realtime"` (default) or `"deferred"` (lower priority / less real-time pressure).
+  * `task`: (string, optional) `"transcribe"` (default) or `"translate"`.
+  * `zoom_obf_token`: (string, optional) One-time Zoom OBF token. If omitted for Zoom meetings, the backend may mint one from the user's stored Zoom OAuth connection (if configured).
 * **Response:** Returns details about the requested bot instance and meeting record.
 * **Note:** After a successful API response, it typically takes about 10 seconds for the bot to request entry into the meeting.
 * **Python Example (Google Meet):**
@@ -118,6 +126,24 @@ If you're running Vexa on your own infrastructure, you need to create a user and
       "passcode": "qxJanYOcdjN4d6UlGa",
       "language": "en",
       "bot_name": "MyMeetingBot"
+    }'
+  ```
+
+* **cURL Example (Zoom):**
+  ```bash
+  # From URL: https://us05web.zoom.us/j/89055866087?pwd=zxD41y7hQZCGJ3pkIbWaZq2K9a8Q1Y.1
+  # Extract meeting ID and optional passcode separately.
+  curl -X POST \
+    https://api.cloud.vexa.ai/bots \
+    -H 'Content-Type: application/json' \
+    -H 'X-API-Key: YOUR_API_KEY_HERE' \
+    -d '{
+      "platform": "zoom",
+      "native_meeting_id": "89055866087",
+      "passcode": "zxD41y7hQZCGJ3pkIbWaZq2K9a8Q1Y.1",
+      "recording_enabled": true,
+      "transcribe_enabled": true,
+      "transcription_tier": "realtime"
     }'
   ```
 
@@ -360,7 +386,7 @@ If you're running Vexa on your own infrastructure, you need to create a user and
 ### Delete Meeting Transcripts and Anonymize Data
 
 * **Endpoint:** `DELETE /meetings/{platform}/{native_meeting_id}`
-* **Description:** Purges transcripts and anonymizes meeting data for finalized meetings. Only works for meetings in `completed` or `failed` states. Deletes all transcripts but preserves meeting and session records for telemetry purposes. Scrubs PII while keeping status transitions and completion reasons.
+* **Description:** Purges transcripts and recording artifacts (if present) and anonymizes meeting data for finalized meetings. Only works for meetings in `completed` or `failed` states. Deletes transcript segments but preserves meeting and session records for telemetry purposes. Scrubs PII while keeping status transitions and completion reasons.
 * **Path Parameters:**
   * `platform`: (string) The platform of the meeting (`google_meet` or `teams`).
   * `native_meeting_id`: (string) The unique identifier of the meeting. **Use the exact same value you provided when requesting the bot**:
@@ -369,6 +395,9 @@ If you're running Vexa on your own infrastructure, you need to create a user and
 * **Headers:**
   * `X-API-Key: YOUR_API_KEY_HERE`
 * **Response:** Returns a confirmation message.
+* **Notes:**
+  * Deletion is **idempotent**: if the meeting is already anonymized (`data.redacted=true`), the endpoint returns success.
+  * After deletion, the meeting is anonymized and its `native_meeting_id` is cleared, so the same `{platform}/{native_meeting_id}` cannot be used to retry cleanup later. Ensure your delete request succeeds before relying on it for artifact cleanup.
 * **Error Responses:**
   * `404 Not Found`: Meeting not found.
   * `409 Conflict`: Meeting not finalized (not in completed or failed state).

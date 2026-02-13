@@ -109,10 +109,28 @@ Use `minio` (self-hosted) or `s3` (managed cloud) and keep bot-manager stateless
 
 - For object storage (`minio`/`s3`):
   - `/recordings/{id}/media/{media_id}/download` returns a presigned URL.
-- For local storage:
+  - `/recordings/{id}/media/{media_id}/raw` is also available as an authenticated streaming endpoint (useful for browser playback via a same-origin proxy to avoid CORS).
+- For local storage (`local`):
   - `/recordings/{id}/media/{media_id}/download` returns an authenticated API path:
     - `/recordings/{id}/media/{media_id}/raw`
-  - `/recordings/{id}/media/{media_id}/raw` streams bytes from local storage.
+  - `/recordings/{id}/media/{media_id}/raw` streams bytes from the local filesystem.
+
+### Browser playback notes
+
+`/recordings/{id}/media/{media_id}/raw` is designed to support in-browser playback:
+
+- `Content-Disposition: inline` (lets `<audio>` play it without forcing download)
+- `Range` requests (`206 Partial Content`) for seeking
+
+If you proxy audio through a frontend (e.g., Next.js), ensure the proxy forwards `Range` and returns the upstream response body without JSON parsing.
+
+### Operational note (Docker Compose)
+
+Changing `.env` values (e.g., switching `STORAGE_BACKEND`) requires recreating containers to apply updated environment variables:
+
+```bash
+docker compose up -d --force-recreate <service>
+```
 
 ## Durability notes
 

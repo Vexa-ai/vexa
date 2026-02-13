@@ -217,6 +217,8 @@ S3_BUCKET=vexa-recordings
 
 For a full storage deployment matrix (Docker Compose, Lite, Kubernetes), see [`docs/recording-storage.md`](docs/recording-storage.md).
 
+**Browser playback:** `/recordings/{recording_id}/media/{media_file_id}/raw` supports `Range` requests (`206`) for seeking and returns `Content-Disposition: inline` so `<audio>` playback works without forcing download.
+
 ### Option 4: Hashicorp Nomad, Kubernetes, OpenShift
 
 For enterprise orchestration platforms, contact [vexa.ai](https://vexa.ai)
