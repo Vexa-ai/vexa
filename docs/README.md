@@ -64,6 +64,7 @@ Zoom has extra constraints (OAuth + Meeting SDK + OBF token flow) and typically 
 
 ## Integrations
 
+- [Integrations](integrations.md)
 - [ChatGPT transcript share links](chatgpt-transcript-share-links.md)
 
 ## Support / Roadmap

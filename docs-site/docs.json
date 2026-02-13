@@ -46,7 +46,7 @@
           },
           {
             "group": "Integrations",
-            "pages": ["chatgpt-transcript-share-links"]
+            "pages": ["integrations", "chatgpt-transcript-share-links"]
           }
         ]
       },
