@@ -1,0 +1,26 @@
+# Integrations
+
+Vexa is designed to be easy to plug into your existing workflow.
+
+## Available now
+
+### ChatGPT
+
+<img src="/assets/integrations/chatgpt.svg" width="28" height="28" style={{ display: "inline-block", verticalAlign: "middle" }} alt="ChatGPT" />{" "}
+Share a transcript with a single URL and paste it into ChatGPT (or any LLM UI).
+
+- [ChatGPT transcript share links](chatgpt-transcript-share-links.md)
+
+### n8n
+
+<img src="/assets/integrations/n8n.svg" width="28" height="28" style={{ display: "inline-block", verticalAlign: "middle" }} alt="n8n" />{" "}
+Use webhooks + API calls to automate workflows from meetings and transcripts.
+
+- Tutorial: https://vexa.ai/blog/google-meet-transcription-n8n-workflow
+
+## General integration primitives
+
+- **REST API**: create bots, read transcripts, fetch recordings
+- **WebSocket**: stream transcript segments live
+- **Webhooks**: get notified when meetings complete
+

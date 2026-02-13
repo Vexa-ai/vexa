@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="ChatGPT">
+  <title>ChatGPT</title>
+  <circle cx="32" cy="32" r="30" fill="none" stroke="currentColor" stroke-width="4"/>
+  <path d="M18 26c0-6 6-10 14-10s14 4 14 10c0 5-4 8-9 9l-3 1c-7 1-10 3-10 7 0 4 4 6 10 6 6 0 10-2 12-5"
+        fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+</svg>

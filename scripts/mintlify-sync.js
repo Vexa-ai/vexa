@@ -19,6 +19,8 @@ const path = require("path");
 const ROOT = path.resolve(__dirname, "..");
 const SRC_DIR = path.join(ROOT, "docs");
 const OUT_DIR = path.join(ROOT, "docs-site");
+const SRC_ASSETS_DIR = path.join(SRC_DIR, "assets");
+const OUT_ASSETS_DIR = path.join(OUT_DIR, "assets");
 
 function ensureDir(p) {
   fs.mkdirSync(p, { recursive: true });
@@ -42,6 +44,16 @@ function walk(dir) {
     else out.push(abs);
   }
   return out;
+}
+
+function copyDir(src, dest) {
+  ensureDir(dest);
+  for (const ent of fs.readdirSync(src, { withFileTypes: true })) {
+    const s = path.join(src, ent.name);
+    const d = path.join(dest, ent.name);
+    if (ent.isDirectory()) copyDir(s, d);
+    else fs.copyFileSync(s, d);
+  }
 }
 
 function readUtf8(p) {
@@ -121,6 +133,12 @@ function main() {
     const src = readUtf8(abs);
     const out = hasFrontmatter(src) ? src : buildFrontmatter(src) + stripLeadingH1(src);
     writeFile(outAbs, out);
+  }
+
+  // Copy static assets (logos/images) for Mintlify rendering.
+  if (fs.existsSync(SRC_ASSETS_DIR)) {
+    fs.rmSync(OUT_ASSETS_DIR, { recursive: true, force: true });
+    copyDir(SRC_ASSETS_DIR, OUT_ASSETS_DIR);
   }
 
   console.log(`[mintlify-sync] synced ${mdFiles.length} markdown files into ${OUT_DIR}`);
