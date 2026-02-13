@@ -59,7 +59,7 @@
 ### How it works
 
 <p align="center">
-  <img src="assets/product-diagram.png" alt="How Vexa Works" width="100%"/>
+  <img src="assets/simplified_flow.png" alt="How Vexa Works" width="100%"/>
 </p>
 
 ### Who it's for
@@ -280,10 +280,6 @@ Note: Meeting IDs are user-provided (Google Meet code like `xxx-xxxx-xxx` or Tea
 > For issues and progress, join our [Discord](https://discord.gg/Ga9duGkVz9).
 
 ## Architecture
-
-<p align="center">
-  <img src="assets/simplified_flow.png" alt="Vexa Architecture Flow" width="100%"/>
-</p>
 
 - [api-gateway](./services/api-gateway): Routes API requests to appropriate services
 - [mcp](./services/mcp): Provides MCP-capable agents with Vexa as a toolkit
