@@ -106,12 +106,13 @@ At [vexa.ai](https://vexa.ai) — just grab API key
 
 <a id="whats-new"></a>
 
-## 🎉 What's new in v0.7 (pre-release)
+## 🎉 What's new in v0.8 (pre-release)
 
 - **Vexa Lite:** run Vexa as a **single Docker container** (`vexaai/vexa-lite:latest`)
 - **Optional external transcription:** point Lite to an external service to avoid GPU requirements
 - **Stateless by design:** all state lives in your DB → easy redeploy/scale
 - **Serverless-friendly:** minimal footprint, fewer moving parts, faster deployments
+- **Recordings + post-meeting playback:** recording artifacts can be stored in object storage and streamed for browser playback
 
 ---
 
@@ -177,44 +178,13 @@ make all                         # Default: remote transcription (GPU-free)
 
 ### Recording storage (local and cloud)
 
-Vexa stores recording artifacts with a single logical key format:
+Recording is implemented and supports local filesystem, MinIO, and cloud S3-compatible backends.
 
-`recordings/<user_id>/<recording_id>/<session_uid>.<ext>`
+See [`docs/recording-storage.md`](docs/recording-storage.md) for:
 
-Choose backend with `STORAGE_BACKEND`:
-
-- `minio` (default): S3-compatible object storage (MinIO in Docker Compose).
-- `local`: filesystem storage for simple local setups.
-- `s3`: cloud object storage (AWS S3 and compatible providers).
-
-For Docker Compose local mode:
-
-```bash
-STORAGE_BACKEND=local
-LOCAL_STORAGE_DIR=/data/recordings
-LOCAL_STORAGE_FSYNC=true
-# Optional: use host bind instead of named volume, e.g. ./data/recordings
-# LOCAL_STORAGE_VOLUME_SOURCE=recordings-data
-```
-
-In this mode, recordings are persisted in the `recordings-data` Docker volume.
-
-For cloud S3 mode:
-
-```bash
-STORAGE_BACKEND=s3
-AWS_REGION=us-east-1
-AWS_ACCESS_KEY_ID=...
-AWS_SECRET_ACCESS_KEY=...
-S3_BUCKET=vexa-recordings
-# Optional for S3-compatible providers:
-# S3_ENDPOINT=https://s3.<provider>.com
-# S3_SECURE=true
-```
-
-For a full storage deployment matrix (Docker Compose, Lite, Kubernetes), see [`docs/recording-storage.md`](docs/recording-storage.md).
-
-**Browser playback:** `/recordings/{recording_id}/media/{media_file_id}/raw` supports `Range` requests (`206`) for seeking and returns `Content-Disposition: inline` so `<audio>` playback works without forcing download.
+- Storage backends and environment variables (`STORAGE_BACKEND`)
+- Docker Compose / Lite / Kubernetes deployment notes
+- Browser playback details (`/recordings/{recording_id}/media/{media_file_id}/raw`, `Range`/`206`, `Content-Disposition: inline`)
 
 ### Option 4: Hashicorp Nomad, Kubernetes, OpenShift
 
