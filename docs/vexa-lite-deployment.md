@@ -223,9 +223,41 @@ docker run -d \
 | `ADMIN_API_TOKEN` | Yes | Secret token for admin operations | `your-secret-admin-token` |
 | `TRANSCRIBER_URL` | Yes | Transcription service endpoint | `https://transcription.example.com/v1/audio/transcriptions` |
 | `TRANSCRIBER_API_KEY` | Yes | API key for transcription service | `your-api-key` |
+| `STORAGE_BACKEND` | Optional | Recording storage backend: `local`, `minio`, or `s3` | `s3` |
+| `LOCAL_STORAGE_DIR` | Optional | Local recordings directory (when `STORAGE_BACKEND=local`) | `/var/lib/vexa/recordings` |
 | `DB_SSL_MODE` | Optional | SSL mode for database connection | `require` (for Supabase) |
 
 ---
+
+## Recording Storage (Recordings + Playback)
+
+Vexa Lite can store recording artifacts and expose them via the recordings API (for example, for post-meeting playback in a UI).
+
+Recommended (stateless deployments):
+
+- Use object storage and keep the VM/container stateless:
+  - `STORAGE_BACKEND=s3` (AWS S3 or S3-compatible providers)
+  - Set the required S3 environment variables (`AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_BUCKET`, and optional `S3_ENDPOINT`/`S3_SECURE` for non-AWS providers)
+
+Local filesystem (testing only):
+
+- If you use `STORAGE_BACKEND=local`, you must mount a volume at `LOCAL_STORAGE_DIR` or recordings will be lost when the container is replaced:
+
+```bash
+docker run -d \
+  --name vexa \
+  -p 8056:8056 \
+  -v vexa-recordings:/var/lib/vexa/recordings \
+  -e STORAGE_BACKEND=local \
+  -e LOCAL_STORAGE_DIR=/var/lib/vexa/recordings \
+  -e DATABASE_URL="postgresql://user:pass@host/vexa" \
+  -e ADMIN_API_TOKEN="your-admin-token" \
+  -e TRANSCRIBER_URL="https://transcription.service" \
+  -e TRANSCRIBER_API_KEY="transcriber-token" \
+  vexaai/vexa-lite:latest
+```
+
+For the full storage matrix (Docker Compose / Lite / Kubernetes) and playback endpoint behavior, see [`docs/recording-storage.md`](recording-storage.md).
 
 ## Next Steps
 
@@ -238,4 +270,3 @@ For one-click deployment configurations on specific platforms (Fly.io, Railway, 
 - Step-by-step deployment guides
 - Environment variable templates
 - Troubleshooting tips for each platform
-
