@@ -165,9 +165,6 @@ All services are saved in `docker-compose.yml` and wrapped in a Makefile for con
 git clone https://github.com/Vexa-ai/vexa.git
 cd vexa
 make all                         # Default: remote transcription (GPU-free)
-# For local transcription:
-# make all TRANSCRIPTION=cpu     # CPU local transcription
-# make all TRANSCRIPTION=gpu     # GPU local transcription
 ```
 
 **What `make all` does:**
