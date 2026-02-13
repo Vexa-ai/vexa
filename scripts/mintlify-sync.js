@@ -65,26 +65,21 @@ function stripMd(s) {
 
 function buildFrontmatter(md) {
   const title = stripMd(firstMatch(/^#\s+(.+)\s*$/m, md)) || "Vexa Docs";
-
-  // Crude description: first non-empty paragraph after H1.
-  const afterH1 = md.split(/^#\s+.+\s*$/m).slice(1).join("\n");
-  const para = stripMd(
-    (afterH1 || "")
-      .split("\n\n")
-      .map((p) => p.trim())
-      .find((p) => p && !p.startsWith(">") && !p.startsWith("```") && !p.startsWith("!["))
-      || ""
-  );
-  const description = para ? para.slice(0, 160) : "";
-
-  const lines = ["---", `title: "${title.replace(/"/g, '\\"')}"`];
-  if (description) lines.push(`description: "${description.replace(/"/g, '\\"')}"`);
-  lines.push("---", "");
+  // Mintlify renders `title` as the page H1. Our source markdown already has `# ...`,
+  // so we strip the leading H1 from the body during sync. We intentionally do not
+  // auto-inject `description` to avoid duplicating the first paragraph on every page.
+  const lines = ["---", `title: "${title.replace(/"/g, '\\"')}"`, "---", ""];
   return lines.join("\n");
 }
 
 function hasFrontmatter(md) {
   return md.startsWith("---\n");
+}
+
+function stripLeadingH1(md) {
+  // Remove only an H1 at the very top of the file (common pattern in docs/*).
+  // Mintlify will render the title from frontmatter as the visible page heading.
+  return md.replace(/^#\s+.+\r?\n(\r?\n)*/u, "");
 }
 
 function relToDocs(p) {
@@ -124,7 +119,7 @@ function main() {
     const rel = relToDocs(abs);
     const outAbs = toOutPath(rel);
     const src = readUtf8(abs);
-    const out = hasFrontmatter(src) ? src : buildFrontmatter(src) + src;
+    const out = hasFrontmatter(src) ? src : buildFrontmatter(src) + stripLeadingH1(src);
     writeFile(outAbs, out);
   }
 
