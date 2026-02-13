@@ -131,7 +131,10 @@ If you're running Vexa on your own infrastructure, you need to create a user and
 
 * **cURL Example (Zoom):**
   ```bash
-  # From URL: https://us05web.zoom.us/j/89055866087?pwd=zxD41y7hQZCGJ3pkIbWaZq2K9a8Q1Y.1
+  # Caveat: Zoom Meeting SDK apps typically require Marketplace approval to join other users' meetings.
+  # Before approval, expect you can reliably join only meetings created by you (the authorizing account).
+  #
+  # From URL: https://us05web.zoom.us/j/YOUR_MEETING_ID?pwd=YOUR_PWD
   # Extract meeting ID and optional passcode separately.
   curl -X POST \
     https://api.cloud.vexa.ai/bots \
@@ -139,8 +142,8 @@ If you're running Vexa on your own infrastructure, you need to create a user and
     -H 'X-API-Key: YOUR_API_KEY_HERE' \
     -d '{
       "platform": "zoom",
-      "native_meeting_id": "89055866087",
-      "passcode": "zxD41y7hQZCGJ3pkIbWaZq2K9a8Q1Y.1",
+      "native_meeting_id": "YOUR_MEETING_ID",
+      "passcode": "YOUR_PWD",
       "recording_enabled": true,
       "transcribe_enabled": true,
       "transcription_tier": "realtime"
