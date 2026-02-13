@@ -2156,8 +2156,6 @@ async def download_media_file_raw(
                 break
         if media_file is None:
             raise HTTPException(status_code=404, detail="Media file not found")
-        if media_file.get("storage_backend") != "local":
-            raise HTTPException(status_code=400, detail="Raw download endpoint is only supported for local storage backend")
         fmt = str(media_file.get("format", "bin")).lower()
         media_type = str(media_file.get("type", "audio")).lower()
         content_type_map = {
@@ -2192,9 +2190,6 @@ async def download_media_file_raw(
     media_file = result.scalars().first()
     if not media_file:
         raise HTTPException(status_code=404, detail="Media file not found")
-
-    if media_file.storage_backend != "local":
-        raise HTTPException(status_code=400, detail="Raw download endpoint is only supported for local storage backend")
 
     content_type_map = {
         "wav": "audio/wav",
