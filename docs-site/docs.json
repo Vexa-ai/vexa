@@ -9,6 +9,9 @@
   "colors": {
     "primary": "#ffffff"
   },
+  "contextual": {
+    "options": ["copy", "view", "chatgpt", "claude", "perplexity"]
+  },
   "navigation": {
     "tabs": [
       {
