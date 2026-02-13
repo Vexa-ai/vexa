@@ -1,5 +1,5 @@
 import uvicorn
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, UploadFile, File, Form, Query, Response
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, UploadFile, File, Form, Query, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import logging
@@ -2077,6 +2077,7 @@ async def download_media_file(
 async def download_media_file_raw(
     recording_id: int,
     media_file_id: int,
+    request: Request,
     auth: tuple = Depends(get_user_and_token),
     db: AsyncSession = Depends(get_db),
 ):
@@ -2085,6 +2086,65 @@ async def download_media_file_raw(
     Used primarily for local filesystem backend where presigned URLs are not available.
     """
     token, user = auth
+    def _parse_range_header(range_header: Optional[str], total_length: int) -> Optional[tuple[int, int]]:
+        if not range_header:
+            return None
+        if not range_header.startswith("bytes="):
+            raise HTTPException(status_code=416, detail="Invalid Range header")
+        spec = range_header[len("bytes="):].strip()
+        if "," in spec:
+            raise HTTPException(status_code=416, detail="Multiple ranges are not supported")
+        start_s, sep, end_s = spec.partition("-")
+        if sep != "-":
+            raise HTTPException(status_code=416, detail="Invalid Range header")
+        if start_s == "" and end_s == "":
+            raise HTTPException(status_code=416, detail="Invalid Range header")
+        if start_s == "":
+            suffix_len = int(end_s)
+            if suffix_len <= 0:
+                raise HTTPException(status_code=416, detail="Invalid Range header")
+            if suffix_len > total_length:
+                suffix_len = total_length
+            start = total_length - suffix_len
+            end = total_length - 1
+            return start, end
+        start = int(start_s)
+        if start < 0 or start >= total_length:
+            raise HTTPException(status_code=416, detail="Range start out of bounds")
+        if end_s == "":
+            end = total_length - 1
+        else:
+            end = int(end_s)
+            if end < start:
+                raise HTTPException(status_code=416, detail="Invalid Range header")
+            if end >= total_length:
+                end = total_length - 1
+        return start, end
+
+    def _build_media_response(payload: bytes, content_type: str, filename: str) -> Response:
+        total = len(payload)
+        range_header = request.headers.get("range")
+        base_headers = {
+            "Content-Disposition": f'inline; filename="{filename}"',
+            "Accept-Ranges": "bytes",
+        }
+        if not range_header:
+            return Response(content=payload, media_type=content_type, headers=base_headers)
+        try:
+            parsed = _parse_range_header(range_header, total)
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=416, detail="Invalid Range header")
+        if parsed is None:
+            return Response(content=payload, media_type=content_type, headers=base_headers)
+        start, end = parsed
+        chunk = payload[start:end + 1]
+        headers = dict(base_headers)
+        headers["Content-Range"] = f"bytes {start}-{end}/{total}"
+        headers["Content-Length"] = str(len(chunk))
+        return Response(content=chunk, media_type=content_type, status_code=206, headers=headers)
+
     if get_recording_metadata_mode() == "meeting_data":
         _meeting, rec = await _find_meeting_data_recording(db, user.id, recording_id)
         if rec is None:
@@ -2119,11 +2179,7 @@ async def download_media_file_raw(
         except Exception as e:
             logger.error(f"Failed raw media download for media file {media_file_id}: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Failed to read media file from storage")
-        return Response(
-            content=data,
-            media_type=content_type,
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
+        return _build_media_response(data, content_type, filename)
 
     recording = await db.get(Recording, recording_id)
     if not recording or recording.user_id != user.id:
@@ -2161,11 +2217,7 @@ async def download_media_file_raw(
         logger.error(f"Failed raw media download for media file {media_file_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to read media file from storage")
 
-    return Response(
-        content=data,
-        media_type=content_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+    return _build_media_response(data, content_type, filename)
 
 
 @app.delete("/recordings/{recording_id}",
