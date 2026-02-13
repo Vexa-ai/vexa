@@ -150,6 +150,8 @@ async def start_bot_container(
     language: Optional[str],
     task: Optional[str],
     transcription_tier: Optional[str] = "realtime",
+    recording_enabled: Optional[bool] = None,
+    transcribe_enabled: Optional[bool] = None,
     zoom_obf_token: Optional[str] = None
 ) -> Optional[tuple[str, str]]:
     """
@@ -229,9 +231,12 @@ async def start_bot_container(
         },
         "botManagerCallbackUrl": f"http://bot-manager:8080/bots/internal/callback/exited",
         "recordingEnabled": user_recording_config.get("enabled", os.getenv("RECORDING_ENABLED", "false").lower() == "true"),
+        "transcribeEnabled": True if transcribe_enabled is None else bool(transcribe_enabled),
         "captureModes": user_recording_config.get("capture_modes", os.getenv("CAPTURE_MODES", "audio").split(",")),
         "recordingUploadUrl": f"http://bot-manager:8080/internal/recordings/upload"
     }
+    if recording_enabled is not None:
+        bot_config_data["recordingEnabled"] = bool(recording_enabled)
     # Remove keys with None values before serializing
     cleaned_config_data = {k: v for k, v in bot_config_data.items() if v is not None}
     bot_config_json = json.dumps(cleaned_config_data)

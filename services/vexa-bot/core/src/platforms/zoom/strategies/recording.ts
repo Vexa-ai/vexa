@@ -19,42 +19,48 @@ export async function startZoomRecording(page: Page | null, botConfig: BotConfig
   log('[Zoom] Starting audio recording and WhisperLive connection');
 
   const sdkManager = getSDKManager();
+  const transcriptionEnabled = botConfig.transcribeEnabled !== false;
 
   try {
-    // Initialize WhisperLive service
-    whisperLive = new WhisperLiveService({
-      whisperLiveUrl: process.env.WHISPER_LIVE_URL
-    });
+    if (transcriptionEnabled) {
+      // Initialize WhisperLive service
+      whisperLive = new WhisperLiveService({
+        whisperLiveUrl: process.env.WHISPER_LIVE_URL
+      });
 
-    // Initialize connection
-    const whisperLiveUrl = await whisperLive.initialize();
-    if (!whisperLiveUrl) {
-      throw new Error('[Zoom] Failed to initialize WhisperLive URL');
-    }
-    log(`[Zoom] WhisperLive URL initialized: ${whisperLiveUrl}`);
-
-    // Connect to WhisperLive with event handlers
-    whisperSocket = await whisperLive.connectToWhisperLive(
-      botConfig,
-      (data: any) => {
-        // Handle incoming messages (transcriptions, etc.)
-        if (data.message === 'SERVER_READY') {
-          log('[Zoom] WhisperLive server ready');
-        }
-      },
-      (error: Event) => {
-        log(`[Zoom] WhisperLive error: ${error}`);
-      },
-      (event: CloseEvent) => {
-        log(`[Zoom] WhisperLive connection closed: ${event.code} ${event.reason}`);
+      // Initialize connection
+      const whisperLiveUrl = await whisperLive.initialize();
+      if (!whisperLiveUrl) {
+        throw new Error('[Zoom] Failed to initialize WhisperLive URL');
       }
-    );
+      log(`[Zoom] WhisperLive URL initialized: ${whisperLiveUrl}`);
 
-    if (!whisperSocket) {
-      throw new Error('[Zoom] Failed to connect to WhisperLive');
+      // Connect to WhisperLive with event handlers
+      whisperSocket = await whisperLive.connectToWhisperLive(
+        botConfig,
+        (data: any) => {
+          // Handle incoming messages (transcriptions, etc.)
+          if (data.message === 'SERVER_READY') {
+            log('[Zoom] WhisperLive server ready');
+          }
+        },
+        (error: Event) => {
+          log(`[Zoom] WhisperLive error: ${error}`);
+        },
+        (event: CloseEvent) => {
+          log(`[Zoom] WhisperLive connection closed: ${event.code} ${event.reason}`);
+        }
+      );
+
+      if (!whisperSocket) {
+        throw new Error('[Zoom] Failed to connect to WhisperLive');
+      }
+      log('[Zoom] WhisperLive connected successfully');
+    } else {
+      log('[Zoom] Transcription disabled by config; running recording-only mode.');
+      whisperLive = null;
+      whisperSocket = null;
     }
-
-    log('[Zoom] WhisperLive connected successfully');
 
     // Initialize audio recording if enabled
     if (botConfig.recordingEnabled) {
@@ -72,7 +78,9 @@ export async function startZoomRecording(page: Page | null, botConfig: BotConfig
       await sdkManager.startRecording((buffer: Buffer, sampleRate: number) => {
         if (whisperLive) {
           const float32 = bufferToFloat32(buffer);
-          whisperLive.sendAudioData(float32);
+          if (transcriptionEnabled && whisperLive) {
+            whisperLive.sendAudioData(float32);
+          }
           // Also capture for recording
           if (recordingService) {
             recordingService.appendChunk(float32);
@@ -190,10 +198,6 @@ function bufferToFloat32(buffer: Buffer): Float32Array {
  * Captures raw PCM audio and forwards to WhisperLive.
  */
 async function startPulseAudioCapture(whisperLive: WhisperLiveService | null): Promise<void> {
-  if (!whisperLive) {
-    throw new Error('WhisperLive service not initialized');
-  }
-
   return new Promise((resolve, reject) => {
     // Spawn parecord to capture from zoom_sink monitor
     // Output: raw PCM Int16LE, 16kHz, mono
@@ -226,6 +230,8 @@ async function startPulseAudioCapture(whisperLive: WhisperLiveService | null): P
         if (recordingService) {
           recordingService.appendPCMBuffer(chunk);
         }
+      } else if (recordingService) {
+        recordingService.appendPCMBuffer(chunk);
       }
     });
 

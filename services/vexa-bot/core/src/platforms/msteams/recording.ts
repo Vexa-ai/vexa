@@ -22,15 +22,19 @@ import {
 
 // Modified to use new services - Teams recording functionality
 export async function startTeamsRecording(page: Page, botConfig: BotConfig): Promise<void> {
-  // Initialize WhisperLive service on Node.js side
-  const whisperLiveService = new WhisperLiveService({
-    whisperLiveUrl: process.env.WHISPER_LIVE_URL
-  });
-
-  // Initialize WhisperLive connection with STUBBORN reconnection - NEVER GIVES UP!
-  const whisperLiveUrl = await whisperLiveService.initializeWithStubbornReconnection("Teams");
-
-  log(`[Node.js] Using WhisperLive URL for Teams: ${whisperLiveUrl}`);
+  const transcriptionEnabled = botConfig.transcribeEnabled !== false;
+  let whisperLiveService: WhisperLiveService | null = null;
+  let whisperLiveUrl: string | null = null;
+  if (transcriptionEnabled) {
+    whisperLiveService = new WhisperLiveService({
+      whisperLiveUrl: process.env.WHISPER_LIVE_URL
+    });
+    // Initialize WhisperLive connection with STUBBORN reconnection - NEVER GIVES UP!
+    whisperLiveUrl = await whisperLiveService.initializeWithStubbornReconnection("Teams");
+    log(`[Node.js] Using WhisperLive URL for Teams: ${whisperLiveUrl}`);
+  } else {
+    log("[Teams Recording] Transcription disabled by config; running recording-only mode.");
+  }
   log("Starting Teams recording with WebSocket connection");
 
   const wantsAudioCapture =
@@ -80,7 +84,7 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
   await page.evaluate(
     async (pageArgs: {
       botConfigData: BotConfig;
-      whisperUrlForBrowser: string;
+      whisperUrlForBrowser: string | null;
       selectors: {
         participantSelectors: string[];
         speakingClasses: string[];
@@ -97,6 +101,7 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
       };
     }) => {
       const { botConfigData, whisperUrlForBrowser, selectors } = pageArgs;
+      const transcriptionEnabled = (botConfigData as any)?.transcribeEnabled !== false;
       const selectorsTyped = selectors as any;
 
       // Use browser utility classes from the global bundle
@@ -124,9 +129,11 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
       });
 
       // Use BrowserWhisperLiveService with stubborn mode for Teams
-      const whisperLiveService = new BrowserWhisperLiveService({
-        whisperLiveUrl: whisperUrlForBrowser
-      }, true); // Enable stubborn mode for Teams
+      const whisperLiveService = transcriptionEnabled
+        ? new BrowserWhisperLiveService({
+            whisperLiveUrl: whisperUrlForBrowser as string
+          }, true) // Enable stubborn mode for Teams
+        : null;
 
       // Expose references for reconfiguration
       (window as any).__vexaWhisperLiveService = whisperLiveService;
@@ -243,6 +250,10 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
         try {
           const svc = (window as any).__vexaWhisperLiveService;
           const cfg = (window as any).__vexaBotConfig || {};
+          if (!transcriptionEnabled) {
+            (window as any).logBot?.('[Reconfigure] Ignored because transcription is disabled.');
+            return;
+          }
           if (!svc) {
             // Service not ready yet, queue the update
             (window as any).__vexaPendingReconfigure = { lang, task };
@@ -351,6 +362,9 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
           }).then(async (processor: any) => {
             // Setup audio data processing
             audioService.setupAudioDataProcessor(async (audioData: Float32Array, sessionStartTime: number | null) => {
+              if (!transcriptionEnabled || !whisperLiveService) {
+                return;
+              }
               // Only send after server ready
               if (!whisperLiveService.isReady()) {
                 return;
@@ -387,7 +401,9 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
                 (window as any).logBot(`Teams Language detected: ${data["language"]}`);
               } else if (data["message"] === "DISCONNECT") {
                 (window as any).logBot("Teams Server requested disconnect.");
-                whisperLiveService.close();
+                if (whisperLiveService) {
+                  whisperLiveService.close();
+                }
               }
             };
             const onError = (event: Event) => {
@@ -402,15 +418,20 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
             (window as any).__vexaOnError = onError;
             (window as any).__vexaOnClose = onClose;
 
-            return await whisperLiveService.connectToWhisperLive(
-              (window as any).__vexaBotConfig,
-              onMessage,
-              onError,
-              onClose
-            );
+            if (transcriptionEnabled && whisperLiveService) {
+              return await whisperLiveService.connectToWhisperLive(
+                (window as any).__vexaBotConfig,
+                onMessage,
+                onError,
+                onClose
+              );
+            }
+            return null;
           }).then(() => {
             // Initialize Teams-specific speaker detection (browser context)
-            (window as any).logBot("Initializing Teams speaker detection...");
+            if (transcriptionEnabled && whisperLiveService) {
+              (window as any).logBot("Initializing Teams speaker detection...");
+            }
             
             // Unified Teams speaker detection - NO FALLBACKS (signal-only approach)
             const initializeTeamsSpeakerDetection = (whisperLiveService: any, audioService: any, botConfigData: any) => {
@@ -1157,7 +1178,9 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
             };
 
             // Initialize Teams-specific speaker detection
-            initializeTeamsSpeakerDetection(whisperLiveService, audioService, botConfigData);
+            if (transcriptionEnabled && whisperLiveService) {
+              initializeTeamsSpeakerDetection(whisperLiveService, audioService, botConfigData);
+            }
             
             // Setup Teams meeting monitoring
             setupTeamsMeetingMonitoring(botConfigData, audioService, whisperLiveService, resolve);
@@ -1199,5 +1222,7 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
   );
   
   // After page.evaluate finishes, cleanup services
-  await whisperLiveService.cleanup();
+  if (whisperLiveService) {
+    await whisperLiveService.cleanup();
+  }
 }

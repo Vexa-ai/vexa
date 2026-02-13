@@ -8,6 +8,7 @@ export type BotConfig = {
   nativeMeetingId: string,
   language?: string | null,
   task?: string | null,
+  transcribeEnabled?: boolean,
   transcriptionTier?: "realtime" | "deferred",
   redisUrl: string,
   container_name?: string,
