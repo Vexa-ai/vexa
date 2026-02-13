@@ -156,7 +156,7 @@ docker run -d \
   vexaai/vexa-lite:latest
 ```
 
-For the full storage matrix (Docker Compose / Lite / Kubernetes) and playback endpoint behavior, see [`docs/recording-storage.md`](recording-storage.md).
+For the full storage matrix (Docker Compose / Lite / Kubernetes) and playback endpoint behavior, see [`recording-storage.md`](recording-storage.md).
 
 ## Next Steps
 

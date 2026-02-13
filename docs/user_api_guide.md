@@ -16,7 +16,7 @@ Hosted users can get an API key from:
 
 Self-hosted users can create users/tokens via:
 
-- [`docs/self-hosted-management.md`](self-hosted-management.md)
+- [`self-hosted-management.md`](self-hosted-management.md)
 
 ## Base URL
 
@@ -35,7 +35,7 @@ export API_KEY="YOUR_API_KEY_HERE"
 
 Examples (Meet/Teams/Zoom) are here:
 
-- [`docs/api/bots.md`](api/bots.md)
+- [`api/bots.md`](api/bots.md)
 
 ### 2) Read the transcript
 
@@ -43,7 +43,7 @@ Examples (Meet/Teams/Zoom) are here:
 
 Examples are here:
 
-- [`docs/api/transcripts.md`](api/transcripts.md)
+- [`api/transcripts.md`](api/transcripts.md)
 
 ### 3) Post-meeting playback (if a recording exists)
 
@@ -57,25 +57,25 @@ For browser playback, stream through the API:
 
 Full recordings reference:
 
-- [`docs/api/recordings.md`](api/recordings.md)
+- [`api/recordings.md`](api/recordings.md)
 
 ## Meeting Links & IDs (Important)
 
 Before you integrate, skim this once:
 
-- [`docs/meeting-ids.md`](meeting-ids.md)
+- [`meeting-ids.md`](meeting-ids.md)
 
 ## Reference
 
-- Bots: [`docs/api/bots.md`](api/bots.md)
-- Meetings: [`docs/api/meetings.md`](api/meetings.md)
-- Transcripts: [`docs/api/transcripts.md`](api/transcripts.md)
-- Recordings: [`docs/api/recordings.md`](api/recordings.md)
-- User settings (recording defaults, webhooks): [`docs/api/settings.md`](api/settings.md)
-- WebSocket (live streaming): [`docs/websocket.md`](websocket.md)
+- Bots: [`api/bots.md`](api/bots.md)
+- Meetings: [`api/meetings.md`](api/meetings.md)
+- Transcripts: [`api/transcripts.md`](api/transcripts.md)
+- Recordings: [`api/recordings.md`](api/recordings.md)
+- User settings (recording defaults, webhooks): [`api/settings.md`](api/settings.md)
+- WebSocket (live streaming): [`websocket.md`](websocket.md)
 
 Zoom caveats:
 
-- [`docs/platforms/zoom.md`](platforms/zoom.md)
-- [`docs/zoom-app-setup.md`](zoom-app-setup.md)
+- [`platforms/zoom.md`](platforms/zoom.md)
+- [`zoom-app-setup.md`](zoom-app-setup.md)
 

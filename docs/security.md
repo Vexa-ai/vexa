@@ -33,7 +33,7 @@ Testing only:
 
 Details:
 
-- [`docs/recording-storage.md`](recording-storage.md)
+- [`recording-storage.md`](recording-storage.md)
 
 ## Deletion Semantics
 
@@ -46,11 +46,11 @@ This means:
 
 API details:
 
-- [`docs/user_api_guide.md`](user_api_guide.md)
+- [`user_api_guide.md`](user_api_guide.md)
 
 ## Zoom Credentials Caveat
 
 Zoom integrations involve sensitive credentials (OAuth + SDK secrets). Follow:
 
-- [`docs/zoom-app-setup.md`](zoom-app-setup.md)
+- [`zoom-app-setup.md`](zoom-app-setup.md)
 

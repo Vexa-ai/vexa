@@ -14,12 +14,12 @@ If you're here, you likely want one of three things:
 ### 1) Fastest: Hosted API
 
 1. Get an API key: https://vexa.ai/dashboard/api-keys
-2. Send a bot to a meeting: [`POST /bots`](user_api_guide.md)
-3. Read transcripts: [`GET /transcripts/{platform}/{native_meeting_id}`](user_api_guide.md)
+2. Send a bot to a meeting: [`POST /bots`](user_api_guide)
+3. Read transcripts: [`GET /transcripts/{platform}/{native_meeting_id}`](user_api_guide)
 
 For low-latency live streaming, use WebSockets:
 
-- [WebSocket guide](websocket.md)
+- [WebSocket guide](websocket)
 
 ### 2) Production Self-Host (Vexa Lite)
 
@@ -30,43 +30,43 @@ Vexa Lite is a single container that connects to:
 
 Start here:
 
-- [Vexa Lite deployment](vexa-lite-deployment.md)
+- [Vexa Lite deployment](vexa-lite-deployment)
 
 ### 3) Local Development (Docker Compose)
 
 For contributors and local testing:
 
-- [Docker Compose (dev) deployment](deployment.md)
+- [Docker Compose (dev) deployment](deployment)
 
 ### 4) Dashboard UI (Playback)
 
 If you want a UI to join meetings and review history (including playback when recordings exist):
 
-- [Dashboard UI](ui-dashboard.md)
+- [Dashboard UI](ui-dashboard)
 
 ## Concepts That Matter
 
-- [Meeting links & IDs](meeting-ids.md): what to pass as `native_meeting_id` (and when `passcode` is required)
-- [Core concepts](concepts.md): bot/meeting/session model + timing semantics
-- [Recording storage](recording-storage.md): how artifacts are stored + playback notes (`Range`/`206`)
-- [Delete semantics](concepts.md#delete-semantics): what “delete” means and what remains for telemetry
+- [Meeting links & IDs](meeting-ids): what to pass as `native_meeting_id` (and when `passcode` is required)
+- [Core concepts](concepts): bot/meeting/session model + timing semantics
+- [Recording storage](recording-storage): how artifacts are stored + playback notes (`Range`/`206`)
+- [Delete semantics](concepts#delete-semantics): what “delete” means and what remains for telemetry
 
 ## Zoom (The Only Special Platform)
 
 Zoom has extra constraints (OAuth + Meeting SDK + OBF token flow) and typically Marketplace approval.
 
-- [Zoom limitations](platforms/zoom.md)
-- [Zoom app setup](zoom-app-setup.md)
+- [Zoom limitations](platforms/zoom)
+- [Zoom app setup](zoom-app-setup)
 
 ## Troubleshooting / Security
 
-- [Troubleshooting](troubleshooting.md)
-- [Security](security.md)
+- [Troubleshooting](troubleshooting)
+- [Security](security)
 
 ## Integrations
 
-- [Integrations](integrations.md)
-- [ChatGPT transcript share links](chatgpt-transcript-share-links.md)
+- [Integrations](integrations)
+- [ChatGPT transcript share links](chatgpt-transcript-share-links)
 
 ## Support / Roadmap
 
