@@ -19,13 +19,6 @@ Try running directly - this might work instantly:
 git clone https://github.com/Vexa-ai/vexa.git && cd vexa
 make all  # Default profile: remote transcription (GPU-free)
 ```
-or 
-
-```bash
-git clone https://github.com/Vexa-ai/vexa.git && cd vexa
-make all TRANSCRIPTION=cpu # Local CPU transcription
-# make all TRANSCRIPTION=gpu # Local GPU transcription
-```
 
 **What `make all` does:**
 - Builds all Docker images (takes some time at the first run)
@@ -44,7 +37,7 @@ Sets up everything for you on a fresh VM:
 ```bash
 git clone https://github.com/Vexa-ai/vexa.git && cd vexa
 sudo ./fresh_setup.sh --gpu    # or --cpu for CPU-only hosts
-make all TRANSCRIPTION=gpu             # or: make all TRANSCRIPTION=cpu
+make all
 ```
 
 
@@ -83,7 +76,7 @@ sudo systemctl restart docker
 # Deploy
 git clone https://github.com/Vexa-ai/vexa.git && cd vexa
 # make all              # CPU (tiny model)
-make all TRANSCRIPTION=gpu # GPU (medium model)
+make all
 ```
 
 **macOS (CPU only):**
