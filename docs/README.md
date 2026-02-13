@@ -1,23 +1,45 @@
-# Vexa Docs Index
+# Vexa Docs
 
-Use this page as the entry point for setup, operations, and API usage.
+This is the canonical entry point for Vexa setup, operations, and API usage.
 
-## Fastest Paths
+## Start Here
 
-| Goal | Start Here |
-|---|---|
-| End-to-end (deploy → token → bot → transcript → playback) | [Getting Started](getting-started.md) |
-| Run Vexa for local development | [Deployment Guide](deployment.md) |
-| Run Vexa Lite in production | [Vexa Lite Deployment Guide](vexa-lite-deployment.md) |
-| Manage users and API tokens | [Self-Hosted Management Guide](self-hosted-management.md) |
-| Integrate over REST | [User API Guide](user_api_guide.md) |
-| Stream live transcripts | [WebSocket Guide](websocket.md) |
-| Configure recording storage + playback | [Recording Storage Modes](recording-storage.md) |
-| Run the UI (Dashboard) | [Vexa Dashboard](ui-dashboard.md) |
+Pick the path that matches what you're doing:
 
-## Platform and Integration Docs
+- **End-to-end (deploy → token → bot → transcript → playback):** [Getting Started](getting-started.md)
+- **Self-host in production (recommended):** [Vexa Lite Deployment Guide](vexa-lite-deployment.md)
+- **Local development stack (Docker Compose):** [Deployment Guide](deployment.md)
+- **API-first integration:** [User API Guide](user_api_guide.md) + [WebSocket Guide](websocket.md)
 
-- [Zoom Integration Setup](zoom-app-setup.md): Zoom app configuration (OAuth, Meeting SDK, scopes, OBF flow)
+## Core Concepts
+
+- [Core Concepts](concepts.md): meeting/bot/session model, transcript timing semantics, recordings, delete semantics
+
+## Platforms
+
+- [Google Meet](platforms/google-meet.md)
+- [Microsoft Teams](platforms/microsoft-teams.md)
+- [Zoom](platforms/zoom.md)
+- [Zoom Integration Setup](zoom-app-setup.md): OAuth + Meeting SDK + OBF flow + approval caveats
+
+## Deployment and Operations
+
+- [Deployment Guide](deployment.md): full stack Docker Compose (dev)
+- [Vexa Lite Deployment Guide](vexa-lite-deployment.md): single container (prod self-host)
+- [Self-Hosted Management Guide](self-hosted-management.md): users + tokens + admin workflows
+- [Recording Storage Modes](recording-storage.md): local vs MinIO vs S3-compatible; playback and `Range`/`206` behavior
+
+## UI (Dashboard)
+
+- [Vexa Dashboard](ui-dashboard.md): run the UI and use post-meeting playback
+
+## Troubleshooting and Security
+
+- [Troubleshooting](troubleshooting.md)
+- [Security and Data Handling](security.md)
+
+## Misc / Integrations
+
 - [ChatGPT Transcript Share Links](chatgpt-transcript-share-links.md): shared transcript URL behavior
 
 ## Notebooks (`../nbs`)

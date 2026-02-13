@@ -26,6 +26,14 @@ If you're running Vexa on your own infrastructure, you need to create a user and
 
 ## API Endpoints
 
+Before integrating, skim:
+
+- [`docs/concepts.md`](concepts.md): meeting/bot/session model, transcript timing semantics, recordings
+- Platform notes:
+  - [`docs/platforms/google-meet.md`](platforms/google-meet.md)
+  - [`docs/platforms/microsoft-teams.md`](platforms/microsoft-teams.md)
+  - [`docs/platforms/zoom.md`](platforms/zoom.md) and [`docs/zoom-app-setup.md`](zoom-app-setup.md)
+
 ### Request a Bot for a Meeting
 
 * **Endpoint:** `POST /bots`
@@ -163,7 +171,9 @@ If you're running Vexa on your own infrastructure, you need to create a user and
     * **Zoom**: The numeric meeting ID only (10-11 digits), **not the full URL**
 * **Headers:**
   * `X-API-Key: YOUR_API_KEY_HERE`
-* **Response:** Returns the transcript data (meeting + segments). If recording was enabled and captured, the response also includes a `recordings` array.
+* **Response:** Returns the transcript data (meeting + segments).
+  * If you set meeting metadata via `PATCH /meetings/{platform}/{native_meeting_id}`, the transcript response also surfaces `notes` (from `meeting.data.notes`) for convenience.
+  * If recording was enabled and captured, the response also includes a `recordings` array.
 * **Python Example:**
   ```python
   # imports, HEADERS, meeting_id, meeting_platform as ABOVE
