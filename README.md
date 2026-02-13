@@ -108,11 +108,10 @@ At [vexa.ai](https://vexa.ai) — just grab API key
 
 ## 🎉 What's new in v0.8 (pre-release)
 
-- **Vexa Lite:** run Vexa as a **single Docker container** (`vexaai/vexa-lite:latest`)
-- **Optional external transcription:** point Lite to an external service to avoid GPU requirements
-- **Stateless by design:** all state lives in your DB → easy redeploy/scale
-- **Serverless-friendly:** minimal footprint, fewer moving parts, faster deployments
-- **Recordings + post-meeting playback:** recording artifacts can be stored in object storage and streamed for browser playback
+- **Zoom:** initial Zoom Meeting SDK support (requires Zoom app setup/approval; see docs)
+- **Recordings:** persist recording artifacts to S3-compatible storage (or local)
+- **Post-meeting playback:** stream recordings via `/recordings/.../raw` with `Range` seeking (`206`) + `Content-Disposition: inline`
+- **Delete semantics:** deleting a meeting also purges recording objects/artifacts (best-effort) before anonymizing the meeting
 
 ---
 
