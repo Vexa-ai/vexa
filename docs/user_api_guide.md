@@ -156,13 +156,14 @@ If you're running Vexa on your own infrastructure, you need to create a user and
 * **Description:** Retrieves the meeting transcript. This provides **real-time** transcription data and can be called **during or after** the meeting has concluded.
 * **Note:** For live meetings, consider using WebSocket connections instead of frequent polling for better efficiency and lower latency. WebSocket connections provide efficient, low-latency transcript updates compared to polling REST endpoints, and avoid the overhead of repeated HTTP requests. See the WebSocket documentation for real-time transcript updates.
 * **Path Parameters:**
-  * `platform`: (string) The platform of the meeting (`google_meet` or `teams`).
+  * `platform`: (string) The platform of the meeting (`google_meet`, `teams`, or `zoom`).
   * `native_meeting_id`: (string) The unique identifier of the meeting. **Use the exact same value you provided when requesting the bot**:
     * **Google Meet**: The meeting code (e.g., "abc-defg-hij")
     * **Teams**: The numeric meeting ID only (e.g., "9387167464734"), **not the full URL**
+    * **Zoom**: The numeric meeting ID only (10-11 digits), **not the full URL**
 * **Headers:**
   * `X-API-Key: YOUR_API_KEY_HERE`
-* **Response:** Returns the transcript data, typically including segments with speaker, timestamp, and text.
+* **Response:** Returns the transcript data (meeting + segments). If recording was enabled and captured, the response also includes a `recordings` array.
 * **Python Example:**
   ```python
   # imports, HEADERS, meeting_id, meeting_platform as ABOVE
@@ -183,6 +184,42 @@ If you're running Vexa on your own infrastructure, you need to create a user and
     https://api.cloud.vexa.ai/transcripts/teams/9387167464734 \
     -H 'X-API-Key: YOUR_API_KEY_HERE'
   ```
+
+### Access Recordings (Download/Playback)
+
+If recording is enabled and a recording was captured, `GET /transcripts/{platform}/{native_meeting_id}` includes a `recordings` array. Each recording contains `media_files` (typically an `audio` WAV file).
+
+Common flow:
+
+1. Call `GET /transcripts/{platform}/{native_meeting_id}` and read:
+   - `recordings[0].id` (recording ID)
+   - `recordings[0].media_files[0].id` (media file ID)
+2. Stream the bytes through the API (recommended for browser playback via same-origin proxy):
+   - `GET /recordings/{recording_id}/media/{media_file_id}/raw`
+3. Or request a presigned URL (object storage backends):
+   - `GET /recordings/{recording_id}/media/{media_file_id}/download`
+
+For storage and playback details (including `Range`/`206` seeking and `Content-Disposition: inline`), see [`docs/recording-storage.md`](recording-storage.md).
+
+### Recording Configuration (Per User)
+
+You can enable/disable recording by default (and set capture modes) for your bots:
+
+* **Endpoint:** `GET /recording-config`
+* **Endpoint:** `PUT /recording-config`
+
+Example:
+
+```bash
+curl -X PUT \
+  https://api.cloud.vexa.ai/recording-config \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: YOUR_API_KEY_HERE' \
+  -d '{
+    "enabled": true,
+    "capture_modes": ["audio"]
+  }'
+```
 
 ### Get Status of Running Bots
 
@@ -211,14 +248,15 @@ If you're running Vexa on your own infrastructure, you need to create a user and
 * **Endpoint:** `PUT /bots/{platform}/{native_meeting_id}/config`
 * **Description:** Updates the configuration of an active bot (e.g., changing the language, for details on language codes see [request bot section](#request-a-bot-for-a-meeting)) 
 * **Path Parameters:**
-  * `platform`: (string) The platform of the meeting (`google_meet` or `teams`).
+  * `platform`: (string) The platform of the meeting (`google_meet`, `teams`, or `zoom`).
   * `native_meeting_id`: (string) The identifier of the meeting with the active bot. **Use the exact same value you provided when requesting the bot**:
     * **Google Meet**: The meeting code (e.g., "abc-defg-hij")
     * **Teams**: The numeric meeting ID only (e.g., "9387167464734"), **not the full URL**
+    * **Zoom**: The numeric meeting ID only (10-11 digits), **not the full URL**
 * **Headers:**
   * `Content-Type: application/json`
   * `X-API-Key: YOUR_API_KEY_HERE`
-* **Request Body:** A JSON object containing the configuration parameters to update (e.g., `{"language": "new_language_code"}`). The specific parameters accepted depend on the API implementation.
+* **Request Body:** A JSON object containing the configuration parameters to update (currently supports `language` and `task`).
 * **Response:** Indicates whether the update request was accepted.
 * **Python Example:**
   ```python
@@ -258,10 +296,11 @@ If you're running Vexa on your own infrastructure, you need to create a user and
 * **Endpoint:** `DELETE /bots/{platform}/{native_meeting_id}`
 * **Description:** Removes an active bot from a meeting.
 * **Path Parameters:**
-  * `platform`: (string) The platform of the meeting (`google_meet` or `teams`).
+  * `platform`: (string) The platform of the meeting (`google_meet`, `teams`, or `zoom`).
   * `native_meeting_id`: (string) The identifier of the meeting. **Use the exact same value you provided when requesting the bot**:
     * **Google Meet**: The meeting code (e.g., "abc-defg-hij")
     * **Teams**: The numeric meeting ID only (e.g., "9387167464734"), **not the full URL**
+    * **Zoom**: The numeric meeting ID only (10-11 digits), **not the full URL**
 * **Headers:**
   * `X-API-Key: YOUR_API_KEY_HERE`
 * **Response:** Confirms the bot removal, potentially returning the final meeting record details.
@@ -324,10 +363,11 @@ If you're running Vexa on your own infrastructure, you need to create a user and
 * **Endpoint:** `PATCH /meetings/{platform}/{native_meeting_id}`
 * **Description:** Updates meeting metadata such as name, participants, languages, and notes. Only these specific fields can be updated.
 * **Path Parameters:**
-  * `platform`: (string) The platform of the meeting (`google_meet` or `teams`).
+  * `platform`: (string) The platform of the meeting (`google_meet`, `teams`, or `zoom`).
   * `native_meeting_id`: (string) The unique identifier of the meeting. **Use the exact same value you provided when requesting the bot**:
     * **Google Meet**: The meeting code (e.g., "abc-defg-hij")
     * **Teams**: The numeric meeting ID only (e.g., "9387167464734"), **not the full URL**
+    * **Zoom**: The numeric meeting ID only (10-11 digits), **not the full URL**
 * **Headers:**
   * `Content-Type: application/json`
   * `X-API-Key: YOUR_API_KEY_HERE`
@@ -391,10 +431,11 @@ If you're running Vexa on your own infrastructure, you need to create a user and
 * **Endpoint:** `DELETE /meetings/{platform}/{native_meeting_id}`
 * **Description:** Purges transcripts and recording artifacts (if present) and anonymizes meeting data for finalized meetings. Only works for meetings in `completed` or `failed` states. Deletes transcript segments but preserves meeting and session records for telemetry purposes. Scrubs PII while keeping status transitions and completion reasons.
 * **Path Parameters:**
-  * `platform`: (string) The platform of the meeting (`google_meet` or `teams`).
+  * `platform`: (string) The platform of the meeting (`google_meet`, `teams`, or `zoom`).
   * `native_meeting_id`: (string) The unique identifier of the meeting. **Use the exact same value you provided when requesting the bot**:
     * **Google Meet**: The meeting code (e.g., "abc-defg-hij")
     * **Teams**: The numeric meeting ID only (e.g., "9387167464734"), **not the full URL**
+    * **Zoom**: The numeric meeting ID only (10-11 digits), **not the full URL**
 * **Headers:**
   * `X-API-Key: YOUR_API_KEY_HERE`
 * **Response:** Returns a confirmation message.

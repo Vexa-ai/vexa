@@ -59,7 +59,7 @@ Meetings are identified by platform and native meeting ID:
 }
 ```
 
-Supported platforms: `google_meet`, `teams`
+Supported platforms: `google_meet`, `teams`, `zoom`
 
 ## REST API Bootstrap
 
