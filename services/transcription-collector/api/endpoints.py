@@ -389,6 +389,8 @@ async def get_transcript_by_native_id(
     
     meeting_details = MeetingResponse.model_validate(meeting)
     response_data = meeting_details.model_dump()
+    # Surface recordings directly in transcript response to avoid an extra dashboard API call.
+    response_data["recordings"] = (meeting.data or {}).get("recordings", []) if isinstance(meeting.data, dict) else []
     response_data["segments"] = sorted_segments
     return TranscriptionResponse(**response_data)
 
@@ -657,4 +659,3 @@ async def delete_meeting(
     logger.info(f"[API] Successfully purged transcripts and anonymized meeting {internal_meeting_id}")
     
     return {"message": f"Meeting {platform.value}/{native_meeting_id} transcripts deleted and data anonymized"}
-

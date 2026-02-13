@@ -392,6 +392,10 @@ services:
       sleep 5;
       mc alias set vexa http://minio:9000 $${MINIO_ROOT_USER:-vexa-access-key} $${MINIO_ROOT_PASSWORD:-vexa-secret-key};
       mc mb --ignore-existing vexa/${MINIO_BUCKET:-vexa-recordings};
+      cat > /tmp/cors.json <<'JSON'
+      {\"Rules\":[{\"AllowedOrigins\":[\"*\"],\"AllowedMethods\":[\"GET\",\"HEAD\"],\"AllowedHeaders\":[\"*\"],\"ExposeHeaders\":[\"ETag\",\"Accept-Ranges\",\"Content-Range\"],\"MaxAgeSeconds\":3600}]}
+      JSON
+      mc cors set vexa/${MINIO_BUCKET:-vexa-recordings} /tmp/cors.json;
       exit 0;
       "
     environment:
