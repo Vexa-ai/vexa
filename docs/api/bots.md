@@ -81,7 +81,7 @@ curl -H "X-API-Key: $API_KEY" \
   "$API_BASE/bots/status"
 ```
 
-## PUT /bots/{platform}/{native_meeting_id}/config
+## PUT `/bots/{platform}/{native_meeting_id}/config`
 
 Update an active bot configuration (currently supports `language` and `task`).
 
@@ -114,7 +114,7 @@ curl -X PUT "$API_BASE/bots/zoom/89055866087/config" \
   </Tab>
 </Tabs>
 
-## DELETE /bots/{platform}/{native_meeting_id}
+## DELETE `/bots/{platform}/{native_meeting_id}`
 
 Stop a bot (remove it from the meeting).
 
@@ -143,4 +143,3 @@ curl -X DELETE \
 ```
   </Tab>
 </Tabs>
-
