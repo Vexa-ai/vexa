@@ -201,6 +201,53 @@ Common flow:
 
 For storage and playback details (including `Range`/`206` seeking and `Content-Disposition: inline`), see [`docs/recording-storage.md`](recording-storage.md).
 
+### Recordings API (List/Get/Delete)
+
+Recordings can also be accessed directly via the Recordings API:
+
+#### List recordings
+
+* **Endpoint:** `GET /recordings`
+* **Description:** List recordings for the authenticated user. Supports optional meeting filter.
+* **Query Parameters:**
+  * `meeting_id`: (int, optional) Internal meeting ID (as returned by `GET /meetings`)
+  * `limit`: (int, optional) Default 50
+  * `offset`: (int, optional) Default 0
+* **Headers:**
+  * `X-API-Key: YOUR_API_KEY_HERE`
+* **cURL Example:**
+  ```bash
+  curl -X GET \
+    https://api.cloud.vexa.ai/recordings?limit=50&offset=0 \
+    -H 'X-API-Key: YOUR_API_KEY_HERE'
+  ```
+
+#### Get recording details
+
+* **Endpoint:** `GET /recordings/{recording_id}`
+* **Description:** Get a recording and its `media_files`.
+* **Headers:**
+  * `X-API-Key: YOUR_API_KEY_HERE`
+* **cURL Example:**
+  ```bash
+  curl -X GET \
+    https://api.cloud.vexa.ai/recordings/123456789 \
+    -H 'X-API-Key: YOUR_API_KEY_HERE'
+  ```
+
+#### Delete a recording
+
+* **Endpoint:** `DELETE /recordings/{recording_id}`
+* **Description:** Deletes a recording, its media files from storage, and related database rows (best-effort storage cleanup).
+* **Headers:**
+  * `X-API-Key: YOUR_API_KEY_HERE`
+* **cURL Example:**
+  ```bash
+  curl -X DELETE \
+    https://api.cloud.vexa.ai/recordings/123456789 \
+    -H 'X-API-Key: YOUR_API_KEY_HERE'
+  ```
+
 ### Recording Configuration (Per User)
 
 You can enable/disable recording by default (and set capture modes) for your bots:
