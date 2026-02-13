@@ -1,69 +1,77 @@
 ---
-title: "Vexa Docs"
-description: "This is the canonical entry point for Vexa setup, operations, and API usage."
+title: "Vexa Documentation"
+description: "Vexa is an open-source meeting bot + API for real-time transcription and post-meeting playback."
 ---
-# Vexa Docs
+# Vexa Documentation
 
-This is the canonical entry point for Vexa setup, operations, and API usage.
+Vexa is an open-source meeting bot + API for real-time transcription and post-meeting playback.
 
-## Start Here
+If you're here, you likely want one of three things:
 
-Pick the path that matches what you're doing:
+- **Get transcripts via API** (fastest path)
+- **Self-host Vexa** (recommended for production)
+- **Use the dashboard** (join meetings, review history, play recordings)
 
-- **End-to-end (deploy → token → bot → transcript → playback):** [Getting Started](getting-started.md)
-- **Self-host in production (recommended):** [Vexa Lite Deployment Guide](vexa-lite-deployment.md)
-- **Local development stack (Docker Compose):** [Deployment Guide](deployment.md)
-- **API-first integration:** [User API Guide](user_api_guide.md) + [WebSocket Guide](websocket.md)
+## Pick Your Path
 
-## Core Concepts
+### 1) Fastest: Hosted API
 
-- [Core Concepts](concepts.md): meeting/bot/session model, transcript timing semantics, recordings, delete semantics
+1. Get an API key: https://vexa.ai/dashboard/api-keys
+2. Send a bot to a meeting: [`POST /bots`](user_api_guide.md)
+3. Read transcripts: [`GET /transcripts/{platform}/{native_meeting_id}`](user_api_guide.md)
 
-## Platforms
+For low-latency live streaming, use WebSockets:
 
-- [Google Meet](platforms/google-meet.md)
-- [Microsoft Teams](platforms/microsoft-teams.md)
-- [Zoom](platforms/zoom.md)
-- [Zoom Integration Setup](zoom-app-setup.md): OAuth + Meeting SDK + OBF flow + approval caveats
+- [WebSocket guide](websocket.md)
 
-## Deployment and Operations
+### 2) Production Self-Host (Vexa Lite)
 
-- [Deployment Guide](deployment.md): full stack Docker Compose (dev)
-- [Vexa Lite Deployment Guide](vexa-lite-deployment.md): single container (prod self-host)
-- [Self-Hosted Management Guide](self-hosted-management.md): users + tokens + admin workflows
-- [Recording Storage Modes](recording-storage.md): local vs MinIO vs S3-compatible; playback and `Range`/`206` behavior
+Vexa Lite is a single container that connects to:
 
-## UI (Dashboard)
+- your Postgres database
+- your remote transcription service
 
-- [Vexa Dashboard](ui-dashboard.md): run the UI and use post-meeting playback
+Start here:
 
-## Troubleshooting and Security
+- [Vexa Lite deployment](vexa-lite-deployment.md)
+
+### 3) Local Development (Docker Compose)
+
+For contributors and local testing:
+
+- [Docker Compose (dev) deployment](deployment.md)
+
+### 4) Dashboard UI (Playback)
+
+If you want a UI to join meetings and review history (including playback when recordings exist):
+
+- [Dashboard UI](ui-dashboard.md)
+
+## Concepts That Matter
+
+- [Meeting links & IDs](meeting-ids.md): what to pass as `native_meeting_id` (and when `passcode` is required)
+- [Core concepts](concepts.md): bot/meeting/session model + timing semantics
+- [Recording storage](recording-storage.md): how artifacts are stored + playback notes (`Range`/`206`)
+- [Delete semantics](concepts.md#delete-semantics): what “delete” means and what remains for telemetry
+
+## Zoom (The Only Special Platform)
+
+Zoom has extra constraints (OAuth + Meeting SDK + OBF token flow) and typically Marketplace approval.
+
+- [Zoom limitations](platforms/zoom.md)
+- [Zoom app setup](zoom-app-setup.md)
+
+## Troubleshooting / Security
 
 - [Troubleshooting](troubleshooting.md)
-- [Security and Data Handling](security.md)
+- [Security](security.md)
 
-## Misc / Integrations
+## Integrations
 
-- [ChatGPT Transcript Share Links](chatgpt-transcript-share-links.md): shared transcript URL behavior
+- [ChatGPT transcript share links](chatgpt-transcript-share-links.md)
 
-## Notebooks (`../nbs`)
+## Support / Roadmap
 
-- `0_basic_test.ipynb`: end-to-end bot lifecycle smoke test
-- `1_load_tests.ipynb`: load testing scenarios
-- `2_bot_concurrency.ipynb`: concurrent bot behavior
-- `3_API_validation.ipynb`: API endpoint validation
-- `manage_users.ipynb`: user and token management examples
-
-## Typical Developer Flow
-
-1. Deploy locally with [Deployment Guide](deployment.md).
-2. Create users/tokens with [Self-Hosted Management Guide](self-hosted-management.md).
-3. Integrate REST endpoints via [User API Guide](user_api_guide.md).
-4. Add live updates with [WebSocket Guide](websocket.md).
-5. If needed, configure Zoom with [Zoom Integration Setup](zoom-app-setup.md).
-
-## Support
-
-- Discord: https://discord.gg/Ga9duGkVz9
 - Issues: https://github.com/Vexa-ai/vexa/issues
-- Website: https://vexa.ai
+- Milestones: https://github.com/Vexa-ai/vexa/milestones
+- Discord: https://discord.gg/Ga9duGkVz9

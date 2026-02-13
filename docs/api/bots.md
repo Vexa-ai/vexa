@@ -1,0 +1,146 @@
+# Bots API
+
+Bots join meetings and stream audio for transcription (and optionally persist a recording).
+
+If you're unsure what to pass as `native_meeting_id` (and when `passcode` is required), read:
+
+- [`docs/meeting-ids.md`](../meeting-ids.md)
+
+## POST /bots
+
+Create a bot for a meeting.
+
+Common request fields:
+
+- `platform` (`google_meet` | `teams` | `zoom`)
+- `native_meeting_id`
+- `passcode` (Teams required; Zoom optional)
+- `recording_enabled` (optional)
+- `transcribe_enabled` (optional)
+- `transcription_tier` (`realtime` | `deferred`, optional)
+
+<Tabs>
+  <Tab title="Google Meet">
+```bash
+curl -X POST "$API_BASE/bots" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{
+    "platform": "google_meet",
+    "native_meeting_id": "abc-defg-hij",
+    "recording_enabled": true,
+    "transcribe_enabled": true,
+    "transcription_tier": "realtime"
+  }'
+```
+  </Tab>
+
+  <Tab title="Microsoft Teams">
+```bash
+curl -X POST "$API_BASE/bots" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{
+    "platform": "teams",
+    "native_meeting_id": "9321836506982",
+    "passcode": "R3eB5oaDFRkDIDnFxR",
+    "recording_enabled": true,
+    "transcribe_enabled": true,
+    "transcription_tier": "realtime"
+  }'
+```
+  </Tab>
+
+  <Tab title="Zoom">
+> Caveat: until Marketplace approval, joining meetings outside the authorizing account may be limited.
+>
+> See [`docs/platforms/zoom.md`](../platforms/zoom.md) and [`docs/zoom-app-setup.md`](../zoom-app-setup.md).
+
+```bash
+curl -X POST "$API_BASE/bots" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{
+    "platform": "zoom",
+    "native_meeting_id": "89055866087",
+    "passcode": "OPTIONAL_PWD",
+    "recording_enabled": true,
+    "transcribe_enabled": true,
+    "transcription_tier": "realtime"
+  }'
+```
+  </Tab>
+</Tabs>
+
+## GET /bots/status
+
+List bots currently running under your API key.
+
+```bash
+curl -H "X-API-Key: $API_KEY" \
+  "$API_BASE/bots/status"
+```
+
+## PUT /bots/{platform}/{native_meeting_id}/config
+
+Update an active bot configuration (currently supports `language` and `task`).
+
+<Tabs>
+  <Tab title="Google Meet">
+```bash
+curl -X PUT "$API_BASE/bots/google_meet/abc-defg-hij/config" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{"language":"es"}'
+```
+  </Tab>
+
+  <Tab title="Microsoft Teams">
+```bash
+curl -X PUT "$API_BASE/bots/teams/9321836506982/config" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{"language":"es"}'
+```
+  </Tab>
+
+  <Tab title="Zoom">
+```bash
+curl -X PUT "$API_BASE/bots/zoom/89055866087/config" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{"language":"es"}'
+```
+  </Tab>
+</Tabs>
+
+## DELETE /bots/{platform}/{native_meeting_id}
+
+Stop a bot (remove it from the meeting).
+
+<Tabs>
+  <Tab title="Google Meet">
+```bash
+curl -X DELETE \
+  -H "X-API-Key: $API_KEY" \
+  "$API_BASE/bots/google_meet/abc-defg-hij"
+```
+  </Tab>
+
+  <Tab title="Microsoft Teams">
+```bash
+curl -X DELETE \
+  -H "X-API-Key: $API_KEY" \
+  "$API_BASE/bots/teams/9321836506982"
+```
+  </Tab>
+
+  <Tab title="Zoom">
+```bash
+curl -X DELETE \
+  -H "X-API-Key: $API_KEY" \
+  "$API_BASE/bots/zoom/89055866087"
+```
+  </Tab>
+</Tabs>
+

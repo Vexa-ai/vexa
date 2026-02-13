@@ -17,38 +17,59 @@
           {
             "group": "Start Here",
             "pages": [
+              "index",
               "getting-started",
               "vexa-lite-deployment",
               "deployment",
-              "user_api_guide",
-              "websocket",
               "ui-dashboard"
             ]
           },
           {
             "group": "Concepts",
-            "pages": ["concepts"]
+            "pages": ["meeting-ids", "concepts"]
           },
           {
-            "group": "Platforms",
-            "pages": [
-              "platforms/google-meet",
-              "platforms/microsoft-teams",
-              "platforms/zoom",
-              "zoom-app-setup"
-            ]
+            "group": "Zoom",
+            "pages": ["platforms/zoom", "zoom-app-setup"]
           },
           {
             "group": "Ops",
             "pages": ["recording-storage", "self-hosted-management"]
           },
           {
+            "group": "Troubleshooting",
+            "pages": ["troubleshooting"]
+          },
+          {
             "group": "Security",
-            "pages": ["security", "troubleshooting"]
+            "pages": ["security"]
           },
           {
             "group": "Integrations",
             "pages": ["chatgpt-transcript-share-links"]
+          }
+        ]
+      },
+      {
+        "tab": "API",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": ["user_api_guide"]
+          },
+          {
+            "group": "REST Reference",
+            "pages": [
+              "api/bots",
+              "api/transcripts",
+              "api/meetings",
+              "api/recordings",
+              "api/settings"
+            ]
+          },
+          {
+            "group": "WebSocket",
+            "pages": ["websocket"]
           }
         ]
       }

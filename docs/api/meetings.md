@@ -1,0 +1,107 @@
+# Meetings API
+
+Meetings are created/updated as bots run. You can list history, attach metadata (notes), and delete/anonymize artifacts.
+
+## GET /meetings
+
+List meetings for the authenticated user.
+
+```bash
+curl -H "X-API-Key: $API_KEY" \
+  "$API_BASE/meetings"
+```
+
+## PATCH /meetings/{platform}/{native_meeting_id}
+
+Update meeting metadata (stored in `meeting.data`), commonly used for:
+
+- `name`
+- `participants`
+- `languages`
+- `notes`
+
+<Tabs>
+  <Tab title="Google Meet">
+```bash
+curl -X PATCH "$API_BASE/meetings/google_meet/abc-defg-hij" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{
+    "data": {
+      "name": "Weekly Standup",
+      "notes": "Discussed roadmap"
+    }
+  }'
+```
+  </Tab>
+
+  <Tab title="Microsoft Teams">
+```bash
+curl -X PATCH "$API_BASE/meetings/teams/9321836506982" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{
+    "data": {
+      "name": "Weekly Standup",
+      "notes": "Discussed roadmap"
+    }
+  }'
+```
+  </Tab>
+
+  <Tab title="Zoom">
+```bash
+curl -X PATCH "$API_BASE/meetings/zoom/89055866087" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{
+    "data": {
+      "name": "Weekly Standup",
+      "notes": "Discussed roadmap"
+    }
+  }'
+```
+  </Tab>
+</Tabs>
+
+## DELETE /meetings/{platform}/{native_meeting_id}
+
+Delete transcript data and recording artifacts (best-effort) and anonymize the meeting.
+
+Important semantics:
+
+- Only works for finalized meetings (`completed` or `failed`).
+- Deletion is **idempotent** (already-redacted meetings return success).
+- The meeting record remains for telemetry/usage tracking (with PII scrubbed).
+- After deletion, the original `native_meeting_id` is cleared, so you cannot retry by `{platform}/{native_meeting_id}` later.
+
+<Tabs>
+  <Tab title="Google Meet">
+```bash
+curl -X DELETE \
+  -H "X-API-Key: $API_KEY" \
+  "$API_BASE/meetings/google_meet/abc-defg-hij"
+```
+  </Tab>
+
+  <Tab title="Microsoft Teams">
+```bash
+curl -X DELETE \
+  -H "X-API-Key: $API_KEY" \
+  "$API_BASE/meetings/teams/9321836506982"
+```
+  </Tab>
+
+  <Tab title="Zoom">
+```bash
+curl -X DELETE \
+  -H "X-API-Key: $API_KEY" \
+  "$API_BASE/meetings/zoom/89055866087"
+```
+  </Tab>
+</Tabs>
+
+If you want to delete just recordings (and keep transcript data), use:
+
+- `DELETE /recordings/{recording_id}` (see [`docs/api/recordings.md`](recordings.md))
+

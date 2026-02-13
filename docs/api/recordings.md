@@ -1,0 +1,63 @@
+# Recordings API
+
+Recordings are created only if recording is enabled **and** audio capture succeeds.
+
+If a recording exists, it will also be returned by:
+
+- `GET /transcripts/{platform}/{native_meeting_id}` → `recordings[]`
+
+## GET /recordings
+
+List recordings for the authenticated user.
+
+```bash
+curl -H "X-API-Key: $API_KEY" \
+  "$API_BASE/recordings?limit=50&offset=0"
+```
+
+## GET /recordings/{recording_id}
+
+Get a recording and its `media_files`.
+
+```bash
+curl -H "X-API-Key: $API_KEY" \
+  "$API_BASE/recordings/123456789"
+```
+
+## DELETE /recordings/{recording_id}
+
+Delete a recording, its media files from storage, and related DB rows (best-effort storage cleanup).
+
+```bash
+curl -X DELETE \
+  -H "X-API-Key: $API_KEY" \
+  "$API_BASE/recordings/123456789"
+```
+
+## GET /recordings/{recording_id}/media/{media_file_id}/raw
+
+Authenticated byte streaming (best for browser playback via same-origin proxy).
+
+- Returns `Content-Disposition: inline`
+- Supports `Range` requests (`206`) for seeking in `<audio>`
+
+```bash
+curl -L \
+  -H "X-API-Key: $API_KEY" \
+  "$API_BASE/recordings/123456789/media/987654321/raw" \
+  -o audio.wav
+```
+
+## GET /recordings/{recording_id}/media/{media_file_id}/download
+
+Returns a presigned URL for object storage backends (S3 / MinIO compatible).
+
+```bash
+curl -H "X-API-Key: $API_KEY" \
+  "$API_BASE/recordings/123456789/media/987654321/download"
+```
+
+Storage configuration details:
+
+- [`docs/recording-storage.md`](../recording-storage.md)
+
