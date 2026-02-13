@@ -94,6 +94,32 @@ function stripLeadingH1(md) {
   return md.replace(/^#\s+.+\r?\n(\r?\n)*/u, "");
 }
 
+function rewriteLinksForMintlify(md) {
+  // Mintlify routes are file-path based but without the `.md/.mdx` extension.
+  // Our source-of-truth docs live in `docs/` and use `.md` links (GitHub-friendly).
+  // Rewrite internal links for the generated bundle so they don't 404.
+  return md.replace(/\]\(([^)]+)\)/g, (m, href) => {
+    const h = String(href).trim();
+    if (!h) return m;
+    if (h.startsWith("#")) return m;
+    if (h.startsWith("http://") || h.startsWith("https://")) return m;
+    if (h.startsWith("mailto:")) return m;
+
+    const [pathPart, hashPart] = h.split("#");
+    const p = (pathPart || "").trim();
+    const hash = hashPart ? `#${hashPart}` : "";
+
+    // README in Mintlify is routed as the directory index; for our use-cases `/` is fine.
+    if (/^(\.?\.?\/)*README\.md$/i.test(p)) return `](/${hash})`;
+
+    // Only rewrite markdown-file links.
+    if (!/\.md$/i.test(p)) return m;
+
+    const withoutExt = p.replace(/\.md$/i, "");
+    return `](${withoutExt}${hash})`;
+  });
+}
+
 function relToDocs(p) {
   return path.relative(SRC_DIR, p).split(path.sep).join("/");
 }
@@ -131,7 +157,9 @@ function main() {
     const rel = relToDocs(abs);
     const outAbs = toOutPath(rel);
     const src = readUtf8(abs);
-    const out = hasFrontmatter(src) ? src : buildFrontmatter(src) + stripLeadingH1(src);
+    const body = stripLeadingH1(src);
+    const rewritten = rewriteLinksForMintlify(body);
+    const out = hasFrontmatter(src) ? src : buildFrontmatter(src) + rewritten;
     writeFile(outAbs, out);
   }
 

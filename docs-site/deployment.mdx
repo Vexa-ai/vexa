@@ -3,9 +3,9 @@ title: "Vexa Deployment Guide"
 ---
 Real-time Google Meet, Microsoft Teams, and Zoom transcription API. Get up and running in minutes.
 
-Note: Zoom joins require additional configuration (Zoom Meeting SDK + OAuth/OBF). See [Zoom Integration Setup Guide](zoom-app-setup.md).
+Note: Zoom joins require additional configuration (Zoom Meeting SDK + OAuth/OBF). See [Zoom Integration Setup Guide](zoom-app-setup).
 
-> 💡 **For end users**: If you want quick deployment on your platform of choice with user interfaces, see [Vexa Lite Deployment Guide](vexa-lite-deployment.md) and [vexa-lite-deploy repository](https://github.com/Vexa-ai/vexa-lite-deploy).  
+> 💡 **For end users**: If you want quick deployment on your platform of choice with user interfaces, see [Vexa Lite Deployment Guide](vexa-lite-deployment) and [vexa-lite-deploy repository](https://github.com/Vexa-ai/vexa-lite-deploy).  
 > 💻 **For developers**: This guide covers the full Docker Compose setup for development.
 
 ## Quick Start
@@ -29,7 +29,7 @@ make all  # Default profile: remote transcription (GPU-free)
 
 If you change code later, just run `make all` again - it rebuilds what's needed and skips the rest.
 
-> 💡 **Note**: This is the **development setup**. For production deployments, see [Vexa Lite Deployment Guide](vexa-lite-deployment.md).
+> 💡 **Note**: This is the **development setup**. For production deployments, see [Vexa Lite Deployment Guide](vexa-lite-deployment).
 
 ### 2. If you're on a fresh GPU VM in the cloud
 **Automated setup** - Tested on Vultr `vcg-a16-6c-64g-16vram`
@@ -160,7 +160,7 @@ make test-api  # Quick API connectivity test
 
 For detailed guidance on managing users and API tokens in your self-hosted deployment, see:
 
-**[Self-Hosted Management Guide](self-hosted-management.md)**
+**[Self-Hosted Management Guide](self-hosted-management)**
 
 This guide covers:
 - Creating and managing users
@@ -168,7 +168,7 @@ This guide covers:
 - Updating user settings (bot limits, etc.)
 - Complete workflow examples with curl and Python
 
-**For complete API documentation and usage guides**, see the [API Documentation](README.md).
+**For complete API documentation and usage guides**, see the [API Documentation](/).
 
 ## Troubleshooting
 

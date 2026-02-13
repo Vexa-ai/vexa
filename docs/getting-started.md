@@ -26,8 +26,8 @@ Choose one:
 Links:
 
 - Hosted: https://vexa.ai
-- Lite: [`docs/vexa-lite-deployment.md`](vexa-lite-deployment.md)
-- Docker Compose dev: [`docs/deployment.md`](deployment.md)
+- Lite: [Vexa Lite deployment](vexa-lite-deployment.md)
+- Docker Compose dev: [Docker Compose (dev)](deployment.md)
 
 ---
 
