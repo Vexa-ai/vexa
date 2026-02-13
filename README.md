@@ -274,9 +274,12 @@ Note: Meeting IDs are user-provided (Google Meet code like `xxx-xxxx-xxx` or Tea
 
 ## Roadmap
 
-* Continued Zoom reliability and UX improvements
+For the up-to-date roadmap and priorities, see GitHub Issues and Milestones. Issues are grouped by milestones to show what's coming next, in what order, and what's currently highest priority.
 
-> For issues and progress, join our [Discord](https://discord.gg/Ga9duGkVz9).
+- Issues: https://github.com/Vexa-ai/vexa/issues
+- Milestones: https://github.com/Vexa-ai/vexa/milestones
+
+> For discussion/support, join our [Discord](https://discord.gg/Ga9duGkVz9).
 
 ## Architecture
 
