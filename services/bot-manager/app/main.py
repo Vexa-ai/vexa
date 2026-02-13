@@ -741,53 +741,46 @@ async def request_bot(
                 try:
                     access_token = resolve_zoom_access_token_from_user_data(current_user.data)
 
-                    # Refresh if absent/expired
+                    # Refresh if absent/expired when a refresh token exists.
                     if not access_token:
                         refresh_token = get_zoom_refresh_token(current_user.data)
-                        if not refresh_token:
-                            raise HTTPException(
-                                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                                detail={
-                                    "status": "error",
-                                    "code": "ZOOM_AUTH_NOT_CONNECTED",
-                                    "message": "Zoom OAuth connection is missing for this user. Provide zoom_obf_token or connect Zoom OAuth first.",
-                                },
+                        if refresh_token:
+                            client_id, client_secret = get_zoom_oauth_client_credentials()
+                            refreshed = await refresh_zoom_access_token(refresh_token, client_id, client_secret)
+                            access_token = refreshed["access_token"]
+
+                            # Persist refreshed tokens into users.data
+                            user_data = dict(current_user.data) if isinstance(current_user.data, dict) else {}
+                            zoom_data = dict(user_data.get("zoom") or {})
+                            oauth_data = dict(zoom_data.get("oauth") or {})
+                            oauth_data.update({
+                                "access_token": refreshed["access_token"],
+                                "refresh_token": refreshed["refresh_token"],
+                                "expires_at": refreshed["expires_at"],
+                            })
+                            if refreshed.get("scope") is not None:
+                                oauth_data["scope"] = refreshed["scope"]
+                            zoom_data["oauth"] = oauth_data
+                            user_data["zoom"] = zoom_data
+                            current_user.data = user_data
+                            await db.commit()
+                            await db.refresh(current_user)
+                        else:
+                            logger.warning(
+                                f"Zoom OAuth is not connected for user {current_user.id}; "
+                                f"starting meeting {meeting_id} without OBF token."
                             )
 
-                        client_id, client_secret = get_zoom_oauth_client_credentials()
-                        refreshed = await refresh_zoom_access_token(refresh_token, client_id, client_secret)
-                        access_token = refreshed["access_token"]
-
-                        # Persist refreshed tokens into users.data
-                        user_data = dict(current_user.data) if isinstance(current_user.data, dict) else {}
-                        zoom_data = dict(user_data.get("zoom") or {})
-                        oauth_data = dict(zoom_data.get("oauth") or {})
-                        oauth_data.update({
-                            "access_token": refreshed["access_token"],
-                            "refresh_token": refreshed["refresh_token"],
-                            "expires_at": refreshed["expires_at"],
-                        })
-                        if refreshed.get("scope") is not None:
-                            oauth_data["scope"] = refreshed["scope"]
-                        zoom_data["oauth"] = oauth_data
-                        user_data["zoom"] = zoom_data
-                        current_user.data = user_data
-                        await db.commit()
-                        await db.refresh(current_user)
-
-                    zoom_obf_token_to_use = await mint_zoom_obf_token(access_token, native_meeting_id)
-                    logger.info(f"Minted Zoom OBF token for meeting {meeting_id}")
+                    if access_token:
+                        zoom_obf_token_to_use = await mint_zoom_obf_token(access_token, native_meeting_id)
+                        logger.info(f"Minted Zoom OBF token for meeting {meeting_id}")
+                    else:
+                        logger.info(f"No Zoom access token available for meeting {meeting_id}; continuing without OBF token.")
 
                 except ZoomOBFError as zoom_err:
-                    logger.error(f"Zoom OBF flow failed for meeting {meeting_id}: {zoom_err}")
-                    raise HTTPException(
-                        status_code=zoom_err.status_code,
-                        detail={
-                            "status": "error",
-                            "code": zoom_err.code,
-                            "message": str(zoom_err),
-                            "meeting_id": meeting_id,
-                        },
+                    logger.warning(
+                        f"Zoom OBF flow failed for meeting {meeting_id} ({zoom_err.code}): {zoom_err}. "
+                        "Continuing without OBF token."
                     )
 
         logger.info(f"Attempting to start bot container for meeting {meeting_id} (native: {native_meeting_id})...")
