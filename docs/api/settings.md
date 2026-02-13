@@ -49,6 +49,10 @@ Returns the updated configuration.
 
 Set a webhook URL for events (for example, when a meeting completes processing).
 
+See also:
+
+- [`docs/webhooks.md`](../webhooks.md)
+
 Notes:
 
 - The URL must be publicly reachable (private/internal URLs are rejected for SSRF prevention).
