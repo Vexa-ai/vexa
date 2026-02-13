@@ -11,7 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import redis.asyncio as aioredis
 
 from shared_models.database import get_db, async_session_local
-from shared_models.models import User, Meeting, Transcription, MeetingSession
+from shared_models.models import User, Meeting, Transcription, MeetingSession, Recording
+from shared_models.storage import create_storage_client
 from shared_models.schemas import (
     HealthResponse,
     MeetingResponse,
@@ -30,6 +31,82 @@ from api.auth import get_current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _extract_storage_paths_from_meeting_data(data: Optional[Dict]) -> List[str]:
+    """Collect storage paths from meeting.data['recordings'] payload."""
+    paths: List[str] = []
+    if not isinstance(data, dict):
+        return paths
+
+    for rec in (data.get("recordings") or []):
+        if not isinstance(rec, dict):
+            continue
+        for mf in (rec.get("media_files") or []):
+            if not isinstance(mf, dict):
+                continue
+            path = mf.get("storage_path")
+            if isinstance(path, str) and path:
+                paths.append(path)
+    return paths
+
+
+async def _purge_recordings_for_meeting(
+    db: AsyncSession,
+    meeting: Meeting,
+    user_id: int,
+) -> Dict[str, int]:
+    """
+    Delete recording DB rows and storage objects for a meeting.
+    Handles both meeting.data metadata mode and normalized Recording model mode.
+    """
+    storage_paths = set(_extract_storage_paths_from_meeting_data(meeting.data))
+
+    # Collect normalized recording rows/media paths and mark rows for deletion.
+    # Some deployments still run in meeting_data-only mode without normalized recording tables.
+    table_exists_result = await db.execute(text("SELECT to_regclass('public.recordings') IS NOT NULL"))
+    recordings_table_exists = bool(table_exists_result.scalar())
+    if recordings_table_exists:
+        stmt_recordings = select(Recording).where(
+            Recording.meeting_id == meeting.id,
+            Recording.user_id == user_id,
+        )
+        result_recordings = await db.execute(stmt_recordings)
+        recordings = result_recordings.scalars().all()
+    else:
+        logger.info("[API] recordings table unavailable in this environment; skipping model recording cleanup")
+        recordings = []
+    model_recordings_deleted = 0
+
+    for recording in recordings:
+        await db.refresh(recording, ["media_files"])
+        for media_file in (recording.media_files or []):
+            if media_file.storage_path:
+                storage_paths.add(media_file.storage_path)
+        await db.delete(recording)
+        model_recordings_deleted += 1
+
+    # Delete storage files best-effort.
+    storage_files_deleted = 0
+    if storage_paths:
+        try:
+            storage = create_storage_client()
+            for path in storage_paths:
+                try:
+                    storage.delete_file(path)
+                    storage_files_deleted += 1
+                except Exception as e:
+                    logger.warning(f"[API] Failed deleting recording media from storage ({path}): {e}")
+        except Exception as e:
+            logger.warning(f"[API] Failed to initialize storage client for recording cleanup: {e}")
+
+    return {
+        "model_recordings_deleted": model_recordings_deleted,
+        "storage_files_deleted": storage_files_deleted,
+        "storage_files_targeted": len(storage_paths),
+    }
+
+
 class WsMeetingRef(MeetingCreate):
     """
     Schema for WS subscription meeting reference.
@@ -600,11 +677,12 @@ async def delete_meeting(
         )
     
     internal_meeting_id = meeting.id
+    original_data = dict(meeting.data or {})
     
     # Check if already redacted (idempotency)
     if meeting.data and meeting.data.get('redacted'):
         logger.info(f"[API] Meeting {internal_meeting_id} already redacted, returning success")
-        return {"message": f"Meeting {platform.value}/{native_meeting_id} transcripts already deleted and data anonymized"}
+        return {"message": f"Meeting {platform.value}/{native_meeting_id} artifacts already deleted and data anonymized"}
     
     # Check if meeting is in finalized state
     finalized_states = {MeetingStatus.COMPLETED.value, MeetingStatus.FAILED.value}
@@ -615,7 +693,7 @@ async def delete_meeting(
             detail=f"Meeting not finalized; cannot delete transcripts. Current status: {meeting.status}"
         )
     
-    logger.info(f"[API] User {current_user.id} purging transcripts and anonymizing meeting {internal_meeting_id}")
+    logger.info(f"[API] User {current_user.id} purging transcripts/recordings and anonymizing meeting {internal_meeting_id}")
     
     # Delete transcripts from PostgreSQL
     stmt_transcripts = select(Transcription).where(Transcription.meeting_id == internal_meeting_id)
@@ -638,10 +716,11 @@ async def delete_meeting(
             logger.debug(f"[API] Deleted Redis hash {hash_key} and removed from active_meetings")
         except Exception as e:
             logger.error(f"[API] Failed to delete Redis data for meeting {internal_meeting_id}: {e}")
+
+    # Delete recordings artifacts (DB rows + storage files)
+    recording_cleanup = await _purge_recordings_for_meeting(db, meeting, current_user.id)
     
     # Scrub PII from meeting record while preserving telemetry
-    original_data = meeting.data or {}
-    
     # Keep only telemetry fields
     telemetry_fields = {'status_transition', 'completion_reason', 'error', 'diagnostics'}
     scrubbed_data = {k: v for k, v in original_data.items() if k in telemetry_fields}
@@ -656,6 +735,17 @@ async def delete_meeting(
     # Note: We keep Meeting and MeetingSession records for telemetry
     await db.commit()
     
-    logger.info(f"[API] Successfully purged transcripts and anonymized meeting {internal_meeting_id}")
-    
-    return {"message": f"Meeting {platform.value}/{native_meeting_id} transcripts deleted and data anonymized"}
+    logger.info(
+        f"[API] Successfully purged meeting {internal_meeting_id}: "
+        f"{len(transcripts)} transcripts, "
+        f"{recording_cleanup['model_recordings_deleted']} recording rows, "
+        f"{recording_cleanup['storage_files_deleted']}/{recording_cleanup['storage_files_targeted']} recording files; "
+        f"meeting anonymized"
+    )
+
+    return {
+        "message": (
+            f"Meeting {platform.value}/{native_meeting_id} transcripts and recording artifacts deleted; "
+            "meeting data anonymized"
+        )
+    }
