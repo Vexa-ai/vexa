@@ -2,9 +2,10 @@
   "$schema": "https://mintlify.com/docs.json",
   "name": "Vexa",
   "theme": "mint",
+  "favicon": "/assets/favicon.ico",
   "logo": {
-    "dark": "https://vexa.ai/logodark.svg",
-    "light": "https://vexa.ai/logo.svg"
+    "dark": "/assets/logodark.svg",
+    "light": "/assets/logo.svg"
   },
   "colors": {
     "primary": "#ffffff"
