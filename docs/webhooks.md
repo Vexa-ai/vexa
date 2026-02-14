@@ -6,7 +6,7 @@ Vexa can POST events to your server so you can react to meeting lifecycle change
 
 Use the REST API:
 
-- `PUT /user/webhook` (see also: [`docs/api/settings.md`](api/settings.md))
+- `PUT /user/webhook` (see also: [User Settings API](api/settings.md))
 
 ```bash
 curl -X PUT "$API_BASE/user/webhook" \

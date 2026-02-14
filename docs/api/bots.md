@@ -4,7 +4,7 @@ Bots join meetings and stream audio for transcription (and optionally persist a 
 
 If you're unsure what to pass as `native_meeting_id` (and when `passcode` is required), read:
 
-- [`docs/meeting-ids.md`](../meeting-ids.md)
+- [Meeting links & IDs](../meeting-ids.md)
 
 ## POST /bots
 
@@ -42,8 +42,8 @@ curl -X POST "$API_BASE/bots" \
   -H "X-API-Key: $API_KEY" \
   -d '{
     "platform": "teams",
-    "native_meeting_id": "9321836506982",
-    "passcode": "R3eB5oaDFRkDIDnFxR",
+    "native_meeting_id": "1234567890123",
+    "passcode": "YOUR_PASSCODE",
     "recording_enabled": true,
     "transcribe_enabled": true,
     "transcription_tier": "realtime"
@@ -62,7 +62,7 @@ curl -X POST "$API_BASE/bots" \
   -H "X-API-Key: $API_KEY" \
   -d '{
     "platform": "zoom",
-    "native_meeting_id": "89055866087",
+    "native_meeting_id": "12345678901",
     "passcode": "OPTIONAL_PWD",
     "recording_enabled": true,
     "transcribe_enabled": true,
@@ -153,7 +153,7 @@ curl -X PUT "$API_BASE/bots/google_meet/abc-defg-hij/config" \
 
   <Tab title="Microsoft Teams">
 ```bash
-curl -X PUT "$API_BASE/bots/teams/9321836506982/config" \
+curl -X PUT "$API_BASE/bots/teams/1234567890123/config" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $API_KEY" \
   -d '{"language":"es"}'
@@ -162,7 +162,7 @@ curl -X PUT "$API_BASE/bots/teams/9321836506982/config" \
 
   <Tab title="Zoom">
 ```bash
-curl -X PUT "$API_BASE/bots/zoom/89055866087/config" \
+curl -X PUT "$API_BASE/bots/zoom/12345678901/config" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $API_KEY" \
   -d '{"language":"es"}'
@@ -200,7 +200,7 @@ curl -X DELETE \
 ```bash
 curl -X DELETE \
   -H "X-API-Key: $API_KEY" \
-  "$API_BASE/bots/teams/9321836506982"
+  "$API_BASE/bots/teams/1234567890123"
 ```
   </Tab>
 
@@ -208,7 +208,7 @@ curl -X DELETE \
 ```bash
 curl -X DELETE \
   -H "X-API-Key: $API_KEY" \
-  "$API_BASE/bots/zoom/89055866087"
+  "$API_BASE/bots/zoom/12345678901"
 ```
   </Tab>
 </Tabs>

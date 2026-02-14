@@ -22,8 +22,8 @@ The API is platform-agnostic. The only differences are the meeting identifiers y
 | Platform | `platform` | `native_meeting_id` | `passcode` | Notes |
 | --- | --- | --- | --- | --- |
 | Google Meet | `google_meet` | `abc-defg-hij` | No | Often requires host admission (waiting room) |
-| Microsoft Teams | `teams` | numeric ID (e.g. `9321836506982`) | Yes (`?p=` value) | `passcode` is required for most Teams links |
-| Zoom | `zoom` | numeric ID (e.g. `89055866087`) | Optional (`?pwd=`) | Requires extra setup + usually Marketplace approval |
+| Microsoft Teams | `teams` | numeric ID (e.g. `1234567890123`) | Yes (`?p=` value) | `passcode` is required for most Teams links |
+| Zoom | `zoom` | numeric ID (e.g. `12345678901`) | Optional (`?pwd=`) | Requires extra setup + usually Marketplace approval |
 
 Meeting link extraction:
 
@@ -66,4 +66,3 @@ References:
 
 - [`docs/api/meetings.md`](api/meetings.md)
 - [`docs/errors-and-retries.md`](errors-and-retries.md)
-

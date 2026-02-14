@@ -4,7 +4,7 @@ Transcripts are available during and after a meeting.
 
 For live meetings, prefer WebSockets:
 
-- [`docs/websocket.md`](../websocket.md)
+- [WebSocket guide](../websocket.md)
 
 ## GET `/transcripts/{platform}/{native_meeting_id}`
 
@@ -26,14 +26,14 @@ curl -H "X-API-Key: $API_KEY" \
   <Tab title="Microsoft Teams">
 ```bash
 curl -H "X-API-Key: $API_KEY" \
-  "$API_BASE/transcripts/teams/9321836506982"
+  "$API_BASE/transcripts/teams/1234567890123"
 ```
   </Tab>
 
   <Tab title="Zoom">
 ```bash
 curl -H "X-API-Key: $API_KEY" \
-  "$API_BASE/transcripts/zoom/89055866087"
+  "$API_BASE/transcripts/zoom/12345678901"
 ```
   </Tab>
 </Tabs>
@@ -87,7 +87,7 @@ Returns meeting metadata plus `segments[]`. If recording was enabled and capture
       "text": "Hello everyone.",
       "language": "en",
       "created_at": "2026-02-13T20:10:20Z",
-      "speaker": "Dmitriy",
+      "speaker": "Alex",
       "completed": true,
       "absolute_start_time": "2026-02-13T20:10:20Z",
       "absolute_end_time": "2026-02-13T20:10:23Z"
@@ -115,7 +115,7 @@ curl -X POST \
 ```bash
 curl -X POST \
   -H "X-API-Key: $API_KEY" \
-  "$API_BASE/transcripts/teams/9321836506982/share"
+  "$API_BASE/transcripts/teams/1234567890123/share"
 ```
   </Tab>
 
@@ -123,7 +123,7 @@ curl -X POST \
 ```bash
 curl -X POST \
   -H "X-API-Key: $API_KEY" \
-  "$API_BASE/transcripts/zoom/89055866087/share"
+  "$API_BASE/transcripts/zoom/12345678901/share"
 ```
   </Tab>
 </Tabs>

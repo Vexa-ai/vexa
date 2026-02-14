@@ -4,7 +4,7 @@ Get from **meeting link → transcript (and optional recording playback)** in a 
 
 If you’re not sure what to pass as `native_meeting_id` (or when `passcode` is required), read:
 
-- [`docs/meeting-ids.md`](meeting-ids.md)
+- [Meeting links & IDs](meeting-ids.md)
 
 <Steps>
   <Step title="Set your API base + key">
@@ -37,7 +37,7 @@ If you’re not sure what to pass as `native_meeting_id` (or when `passcode` is 
           -H "X-API-Key: $API_KEY" \
           -d '{
             "platform": "teams",
-            "native_meeting_id": "9321836506982",
+            "native_meeting_id": "1234567890123",
             "passcode": "YOUR_TEAMS_P_VALUE",
             "recording_enabled": true,
             "transcribe_enabled": true,
@@ -56,7 +56,7 @@ If you’re not sure what to pass as `native_meeting_id` (or when `passcode` is 
           -H "X-API-Key: $API_KEY" \
           -d '{
             "platform": "zoom",
-            "native_meeting_id": "89055866087",
+            "native_meeting_id": "12345678901",
             "passcode": "OPTIONAL_PWD",
             "recording_enabled": true,
             "transcribe_enabled": true,
@@ -66,7 +66,7 @@ If you’re not sure what to pass as `native_meeting_id` (or when `passcode` is 
       </Tab>
     </Tabs>
 
-    Full reference: [`docs/api/bots.md`](api/bots.md)
+    Full reference: [Bots API](api/bots.md)
   </Step>
 
   <Step title="(Recommended) Configure a webhook for completion">
@@ -97,13 +97,12 @@ If you’re not sure what to pass as `native_meeting_id` (or when `passcode` is 
     - `segments[]`: transcript segments with `start_time`/`end_time`
     - `recordings[]` (optional): recording + `media_files[]` for playback/download
 
-    Full reference: [`docs/api/transcripts.md`](api/transcripts.md)
+    Full reference: [Transcripts API](api/transcripts.md)
   </Step>
 </Steps>
 
 ## Next Steps
 
-- Live streaming: [`docs/websocket.md`](websocket.md)
-- Post-meeting playback: [`docs/api/recordings.md`](api/recordings.md) + [`docs/recording-storage.md`](recording-storage.md)
-- Delete/anonymize: [`docs/api/meetings.md`](api/meetings.md) (and read: [`docs/errors-and-retries.md`](errors-and-retries.md))
-
+- Live streaming: [WebSocket guide](websocket.md)
+- Post-meeting playback: [Recordings API](api/recordings.md) + [Recording storage](recording-storage.md)
+- Delete/anonymize: [Meetings API](api/meetings.md) (and read: [Errors and retries](errors-and-retries.md))
