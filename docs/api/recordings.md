@@ -15,10 +15,8 @@ curl -H "X-API-Key: $API_KEY" \
   "$API_BASE/recordings?limit=50&offset=0"
 ```
 
-### Response (200)
-
 <details>
-  <summary>Show response JSON</summary>
+  <summary><strong>Response (200)</strong></summary>
 
 ```json
 {
@@ -63,12 +61,10 @@ curl -H "X-API-Key: $API_KEY" \
   "$API_BASE/recordings/123456789"
 ```
 
-### Response (200)
-
 Same shape as an item in `GET /recordings`:
 
 <details>
-  <summary>Show response JSON</summary>
+  <summary><strong>Response (200)</strong></summary>
 
 ```json
 {
@@ -110,10 +106,8 @@ curl -X DELETE \
   "$API_BASE/recordings/123456789"
 ```
 
-### Response (200)
-
 <details>
-  <summary>Show response JSON</summary>
+  <summary><strong>Response (200)</strong></summary>
 
 ```json
 {
@@ -151,10 +145,8 @@ curl -H "X-API-Key: $API_KEY" \
   "$API_BASE/recordings/123456789/media/987654321/download"
 ```
 
-### Response (200)
-
 <details>
-  <summary>Show response JSON</summary>
+  <summary><strong>Response (200)</strong></summary>
 
 ```json
 {

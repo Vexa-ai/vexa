@@ -72,12 +72,10 @@ curl -X POST "$API_BASE/bots" \
   </Tab>
 </Tabs>
 
-### Response (201)
-
 Returns the created meeting record.
 
 <details>
-  <summary>Show response JSON</summary>
+  <summary><strong>Response (201)</strong></summary>
 
 ```json
 {
@@ -109,10 +107,8 @@ curl -H "X-API-Key: $API_KEY" \
   "$API_BASE/bots/status"
 ```
 
-### Response (200)
-
 <details>
-  <summary>Show response JSON</summary>
+  <summary><strong>Response (200)</strong></summary>
 
 ```json
 {
@@ -170,10 +166,8 @@ curl -X PUT "$API_BASE/bots/zoom/12345678901/config" \
   </Tab>
 </Tabs>
 
-### Response (202)
-
 <details>
-  <summary>Show response JSON</summary>
+  <summary><strong>Response (202)</strong></summary>
 
 ```json
 {
@@ -213,10 +207,8 @@ curl -X DELETE \
   </Tab>
 </Tabs>
 
-### Response (202)
-
 <details>
-  <summary>Show response JSON</summary>
+  <summary><strong>Response (202)</strong></summary>
 
 ```json
 {

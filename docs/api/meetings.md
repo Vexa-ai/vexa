@@ -11,10 +11,8 @@ curl -H "X-API-Key: $API_KEY" \
   "$API_BASE/meetings"
 ```
 
-### Response (200)
-
 <details>
-  <summary>Show response JSON</summary>
+  <summary><strong>Response (200)</strong></summary>
 
 ```json
 {
@@ -96,12 +94,10 @@ curl -X PATCH "$API_BASE/meetings/zoom/12345678901" \
   </Tab>
 </Tabs>
 
-### Response (200)
-
 Returns the updated meeting record.
 
 <details>
-  <summary>Show response JSON</summary>
+  <summary><strong>Response (200)</strong></summary>
 
 ```json
 {
@@ -166,12 +162,10 @@ If you want to delete just recordings (and keep transcript data), use:
 
 - `DELETE /recordings/{recording_id}` (see [Recordings API](recordings.md))
 
-### Response (200)
-
 Returns a human-readable confirmation message. This operation is safe to retry (idempotent): deleting an already-anonymized meeting returns success.
 
 <details>
-  <summary>Show response JSON</summary>
+  <summary><strong>Response (200)</strong></summary>
 
 ```json
 {
