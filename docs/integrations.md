@@ -23,8 +23,8 @@ Vexa is designed to be easy to plug into your existing workflow.
 
 Meeting ID extraction (all platforms):
 
-- [`docs/meeting-ids.md`](meeting-ids.md)
-- [`docs/bot-overview.md`](bot-overview.md)
+- [Meeting links & IDs](meeting-ids.md)
+- [Bot overview](bot-overview.md)
 
 ## Available now
 

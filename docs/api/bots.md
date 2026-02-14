@@ -54,7 +54,7 @@ curl -X POST "$API_BASE/bots" \
   <Tab title="Zoom">
 > Caveat: until Marketplace approval, joining meetings outside the authorizing account may be limited.
 >
-> See [`docs/platforms/zoom.md`](../platforms/zoom.md) and [`docs/zoom-app-setup.md`](../zoom-app-setup.md).
+> See [Zoom limitations](../platforms/zoom.md) and [Zoom app setup](../zoom-app-setup.md).
 
 ```bash
 curl -X POST "$API_BASE/bots" \

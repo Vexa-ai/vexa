@@ -53,6 +53,5 @@ Design webhook handlers to be:
 
 References:
 
-- [`docs/webhooks.md`](webhooks.md)
-- [`docs/local-webhook-development.md`](local-webhook-development.md)
-
+- [Webhooks](webhooks.md)
+- [Local webhook development](local-webhook-development.md)

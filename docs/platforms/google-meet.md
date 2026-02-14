@@ -38,7 +38,7 @@ curl -X POST "$API_BASE/bots" \
 
 Full API guide:
 
-- [`docs/user_api_guide.md`](../user_api_guide.md)
+- [API overview](../user_api_guide.md)
 
 ## Common issues
 
@@ -61,5 +61,4 @@ Common causes:
 
 See:
 
-- [`docs/troubleshooting.md`](../troubleshooting.md)
-
+- [Troubleshooting](../troubleshooting.md)

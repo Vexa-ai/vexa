@@ -25,7 +25,7 @@ If your URL includes `?pwd=...`, you may pass it as `passcode`:
 
 Use this guide for the exact OAuth + OBF flow and environment variables:
 
-- [`docs/zoom-app-setup.md`](../zoom-app-setup.md)
+- [Zoom Integration Setup Guide](../zoom-app-setup.md)
 
 ## API example
 

@@ -161,4 +161,4 @@ curl -H "X-API-Key: $API_KEY" \
 
 Storage configuration details:
 
-- [`docs/recording-storage.md`](../recording-storage.md)
+- [Recording storage](../recording-storage.md)

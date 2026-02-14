@@ -13,7 +13,7 @@ Recording persistence is separate from capture (Vexa must capture audio to trans
 
 See timing + alignment details in:
 
-- [`docs/concepts.md`](concepts.md)
+- [Core concepts](concepts.md)
 
 ## Supported Meeting Platforms
 
@@ -27,12 +27,12 @@ The API is platform-agnostic. The only differences are the meeting identifiers y
 
 Meeting link extraction:
 
-- [`docs/meeting-ids.md`](meeting-ids.md)
+- [Meeting links & IDs](meeting-ids.md)
 
 Zoom specifics:
 
-- [`docs/platforms/zoom.md`](platforms/zoom.md)
-- [`docs/zoom-app-setup.md`](zoom-app-setup.md)
+- [Zoom limitations](platforms/zoom.md)
+- [Zoom app setup](zoom-app-setup.md)
 
 ## Lifecycle (High-Level)
 
@@ -46,8 +46,8 @@ Typical flow:
 
 You can observe lifecycle changes via:
 
-- Webhooks: [`docs/webhooks.md`](webhooks.md)
-- WebSocket live transcript updates: [`docs/websocket.md`](websocket.md)
+- Webhooks: [Webhooks](webhooks.md)
+- WebSocket live transcript updates: [WebSocket guide](websocket.md)
 
 ## Live vs Post-Meeting
 
@@ -57,12 +57,12 @@ You can observe lifecycle changes via:
 
 References:
 
-- [`docs/api/transcripts.md`](api/transcripts.md)
-- [`docs/api/recordings.md`](api/recordings.md)
+- [Transcripts API](api/transcripts.md)
+- [Recordings API](api/recordings.md)
 
 ## Deleting / Anonymizing
 
 `DELETE /meetings/{platform}/{native_meeting_id}` is designed to be safe to retry (idempotent) and scrubs meeting data for telemetry/usage tracking.
 
-- [`docs/api/meetings.md`](api/meetings.md)
-- [`docs/errors-and-retries.md`](errors-and-retries.md)
+- [Meetings API](api/meetings.md)
+- [Errors and retries](errors-and-retries.md)

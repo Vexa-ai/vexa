@@ -63,7 +63,7 @@ Example request body:
 
 Zoom has additional constraints (OAuth + Meeting SDK + OBF flow) and typically Marketplace approval:
 
-- [`docs/platforms/zoom.md`](platforms/zoom.md)
-- [`docs/zoom-app-setup.md`](zoom-app-setup.md)
+- [Zoom limitations](platforms/zoom.md)
+- [Zoom app setup](zoom-app-setup.md)
 </Tab>
 </Tabs>
