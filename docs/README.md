@@ -8,6 +8,42 @@ If you're here, you likely want one of three things:
 - **Self-host Vexa** (recommended for production)
 - **Use the dashboard** (join meetings, review history, play recordings)
 
+<Card title="Get Started in 5 Minutes" icon="rocket" href="/getting-started">
+  Connect your first meeting and read transcripts.
+</Card>
+
+<CardGroup cols={2}>
+  <Card title="REST API Reference" icon="code" href="/user_api_guide">
+    Send bots, fetch transcripts, list meetings, and download recordings.
+  </Card>
+  <Card title="WebSocket Streaming" icon="bolt" href="/websocket">
+    Low-latency live transcript updates.
+  </Card>
+  <Card title="Recordings + Playback" icon="play" href="/recording-storage">
+    Post-meeting audio + timestamp-aligned transcript segments.
+  </Card>
+  <Card title="Webhooks" icon="webhook" href="/webhooks">
+    Get notified when recordings or transcripts complete.
+  </Card>
+</CardGroup>
+
+## How It Works
+
+<Steps>
+  <Step title="Send a bot to a meeting">
+    Use `POST /bots` with `platform` + `native_meeting_id` (and `passcode` when required).
+  </Step>
+  <Step title="Stream or fetch transcripts">
+    Use WebSockets for live updates or `GET /transcripts/{platform}/{native_meeting_id}` for the full result.
+  </Step>
+  <Step title="Stop, then review post-meeting artifacts">
+    When the meeting ends, recordings (if enabled) become available for playback.
+  </Step>
+  <Step title="Optionally delete/anonymize">
+    Delete transcript + recording artifacts with `DELETE /meetings/{platform}/{native_meeting_id}`.
+  </Step>
+</Steps>
+
 ## Pick Your Path
 
 ### 1) Fastest: Hosted API
