@@ -4,6 +4,11 @@ The Vexa API is platform-agnostic: you use the same endpoints for Google Meet, T
 
 The only platform differences are in the **meeting identifiers** you pass (`native_meeting_id`, and `passcode` for Teams).
 
+If you’re new, start here:
+
+- [`quickstart.md`](quickstart.md)
+- [`bot-overview.md`](bot-overview.md)
+
 ## Authentication
 
 All requests use:
@@ -78,4 +83,3 @@ Zoom caveats:
 
 - [`platforms/zoom.md`](platforms/zoom.md)
 - [`zoom-app-setup.md`](zoom-app-setup.md)
-

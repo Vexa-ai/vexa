@@ -27,23 +27,40 @@
             "group": "Start Here",
             "pages": [
               "index",
+              "quickstart",
               "getting-started",
-              "vexa-lite-deployment",
-              "deployment",
-              "ui-dashboard"
+              "bot-overview"
             ]
           },
           {
+            "group": "Deploy",
+            "pages": ["vexa-lite-deployment", "self-hosted-management", "deployment"]
+          },
+          {
+            "group": "Playback",
+            "pages": ["ui-dashboard", "recording-storage"]
+          },
+          {
             "group": "Concepts",
-            "pages": ["meeting-ids", "concepts"]
+            "pages": ["meeting-ids", "concepts", "errors-and-retries"]
           },
           {
-            "group": "Zoom",
-            "pages": ["platforms/zoom", "zoom-app-setup"]
+            "group": "Platforms",
+            "pages": [
+              "platforms/google-meet",
+              "platforms/microsoft-teams",
+              "platforms/zoom",
+              "zoom-app-setup"
+            ]
           },
           {
-            "group": "Ops",
-            "pages": ["recording-storage", "self-hosted-management"]
+            "group": "Integrations",
+            "pages": [
+              "webhooks",
+              "local-webhook-development",
+              "integrations",
+              "chatgpt-transcript-share-links"
+            ]
           },
           {
             "group": "Troubleshooting",
@@ -52,10 +69,6 @@
           {
             "group": "Security",
             "pages": ["security"]
-          },
-          {
-            "group": "Integrations",
-            "pages": ["integrations", "webhooks", "chatgpt-transcript-share-links"]
           }
         ]
       },

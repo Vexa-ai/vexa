@@ -42,6 +42,9 @@ curl -H "X-API-Key: $API_KEY" \
 
 Returns meeting metadata plus `segments[]`. If recording was enabled and captured, `recordings[]` is included for post-meeting playback.
 
+<details>
+  <summary>Show response JSON</summary>
+
 ```json
 {
   "id": 16,
@@ -93,6 +96,8 @@ Returns meeting metadata plus `segments[]`. If recording was enabled and capture
 }
 ```
 
+</details>
+
 ## POST `/transcripts/{platform}/{native_meeting_id}/share`
 
 Create a public share link for a meeting transcript.
@@ -125,6 +130,9 @@ curl -X POST \
 
 ### Response (200)
 
+<details>
+  <summary>Show response JSON</summary>
+
 ```json
 {
   "share_id": "Cj3o9z0GZqf7Jd1wqYp3vQ",
@@ -133,3 +141,5 @@ curl -X POST \
   "expires_in_seconds": 3600
 }
 ```
+
+</details>

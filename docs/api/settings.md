@@ -13,12 +13,17 @@ curl -H "X-API-Key: $API_KEY" \
 
 ### Response (200)
 
+<details>
+  <summary>Show response JSON</summary>
+
 ```json
 {
   "enabled": true,
   "capture_modes": ["audio"]
 }
 ```
+
+</details>
 
 ## PUT /recording-config
 
@@ -38,12 +43,17 @@ curl -X PUT "$API_BASE/recording-config" \
 
 Returns the updated configuration.
 
+<details>
+  <summary>Show response JSON</summary>
+
 ```json
 {
   "enabled": true,
   "capture_modes": ["audio"]
 }
 ```
+
+</details>
 
 ## PUT /user/webhook
 
@@ -52,6 +62,7 @@ Set a webhook URL for events (for example, when a meeting completes processing).
 See also:
 
 - [`docs/webhooks.md`](../webhooks.md)
+- Local dev: [`docs/local-webhook-development.md`](../local-webhook-development.md)
 
 Notes:
 
@@ -72,6 +83,9 @@ curl -X PUT "$API_BASE/user/webhook" \
 
 Returns the updated user record. For security, `webhook_secret` is never returned.
 
+<details>
+  <summary>Show response JSON</summary>
+
 ```json
 {
   "id": 1,
@@ -85,3 +99,5 @@ Returns the updated user record. For security, `webhook_secret` is never returne
   "created_at": "2026-02-01T10:00:00Z"
 }
 ```
+
+</details>

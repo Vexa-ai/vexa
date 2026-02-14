@@ -13,6 +13,10 @@ This guide walks through the full Vexa lifecycle:
 
 If you already have a deployment, jump to **Send bots**.
 
+<Card title="Prefer the shortest path?" icon="rocket" href="/quickstart">
+  Follow the Quickstart (send a bot → fetch transcript → optional playback).
+</Card>
+
 ---
 
 ## 1) Pick a Deployment Path
@@ -180,4 +184,3 @@ See caveats in:
 For a web UI to join meetings, view live transcripts, and review history (including post-meeting playback when recordings exist), use Vexa Dashboard:
 
 - [`docs/ui-dashboard.md`](ui-dashboard.md)
-
