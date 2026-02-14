@@ -13,6 +13,9 @@ curl -H "X-API-Key: $API_KEY" \
 
 ### Response (200)
 
+<details>
+  <summary>Show response JSON</summary>
+
 ```json
 {
   "meetings": [
@@ -37,6 +40,8 @@ curl -H "X-API-Key: $API_KEY" \
   ]
 }
 ```
+
+</details>
 
 ## PATCH `/meetings/{platform}/{native_meeting_id}`
 
@@ -95,6 +100,9 @@ curl -X PATCH "$API_BASE/meetings/zoom/89055866087" \
 
 Returns the updated meeting record.
 
+<details>
+  <summary>Show response JSON</summary>
+
 ```json
 {
   "id": 16,
@@ -114,6 +122,8 @@ Returns the updated meeting record.
   "updated_at": "2026-02-13T20:44:51Z"
 }
 ```
+
+</details>
 
 ## DELETE `/meetings/{platform}/{native_meeting_id}`
 
@@ -160,8 +170,13 @@ If you want to delete just recordings (and keep transcript data), use:
 
 Returns a human-readable confirmation message. This operation is idempotent: deleting an already-redacted meeting returns success.
 
+<details>
+  <summary>Show response JSON</summary>
+
 ```json
 {
   "message": "Meeting google_meet/abc-defg-hij transcripts and recording artifacts deleted; meeting data anonymized"
 }
 ```
+
+</details>
