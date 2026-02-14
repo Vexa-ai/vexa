@@ -4,10 +4,10 @@ The Vexa API is platform-agnostic: you use the same endpoints for Google Meet, T
 
 The only platform differences are in the **meeting identifiers** you pass (`native_meeting_id`, and `passcode` for Teams).
 
-If you’re new, start here:
+If you're new, start here:
 
-- [`quickstart.md`](quickstart.md)
-- [`bot-overview.md`](bot-overview.md)
+- [Quickstart (Hosted)](quickstart.md)
+- [Self-Hosted Quickstart](getting-started.md)
 
 ## Authentication
 
@@ -21,7 +21,7 @@ Hosted users can get an API key from:
 
 Self-hosted users can create users/tokens via:
 
-- [`self-hosted-management.md`](self-hosted-management.md)
+- [Admin API](self-hosted-management.md)
 
 ## Base URL
 
@@ -69,12 +69,6 @@ Recording management endpoints (explicit):
 - `GET /recordings`
 - `GET /recordings/{recording_id}`
 - `DELETE /recordings/{recording_id}`
-
-## Meeting Links & IDs (Important)
-
-Before you integrate, skim this once:
-
-- [`meeting-ids.md`](meeting-ids.md)
 
 ## Reference
 

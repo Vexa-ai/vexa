@@ -5,10 +5,10 @@ The Vexa API is platform-agnostic: you use the same endpoints for Google Meet, T
 
 The only platform differences are in the **meeting identifiers** you pass (`native_meeting_id`, and `passcode` for Teams).
 
-If you’re new, start here:
+If you're new, start here:
 
-- [`quickstart.md`](quickstart)
-- [`bot-overview.md`](bot-overview)
+- [Quickstart (Hosted)](quickstart)
+- [Self-Hosted Quickstart](getting-started)
 
 ## Authentication
 
@@ -22,7 +22,7 @@ Hosted users can get an API key from:
 
 Self-hosted users can create users/tokens via:
 
-- [`self-hosted-management.md`](self-hosted-management)
+- [Admin API](self-hosted-management)
 
 ## Base URL
 
@@ -71,22 +71,16 @@ Recording management endpoints (explicit):
 - `GET /recordings/{recording_id}`
 - `DELETE /recordings/{recording_id}`
 
-## Meeting Links & IDs (Important)
-
-Before you integrate, skim this once:
-
-- [`meeting-ids.md`](meeting-ids)
-
 ## Reference
 
-- Bots: [`api/bots.md`](api/bots)
-- Meetings: [`api/meetings.md`](api/meetings)
-- Transcripts: [`api/transcripts.md`](api/transcripts)
-- Recordings: [`api/recordings.md`](api/recordings)
-- User settings (recording defaults, webhooks): [`api/settings.md`](api/settings)
-- WebSocket (live streaming): [`websocket.md`](websocket)
+- Bots: [Bots API](api/bots)
+- Meetings: [Meetings API](api/meetings)
+- Transcripts: [Transcripts API](api/transcripts)
+- Recordings: [Recordings API](api/recordings)
+- User settings (recording defaults, webhooks): [Settings API](api/settings)
+- WebSocket (live streaming): [WebSocket](websocket)
 
 Zoom caveats:
 
-- [`platforms/zoom.md`](platforms/zoom)
-- [`zoom-app-setup.md`](zoom-app-setup)
+- [Zoom limitations](platforms/zoom)
+- [Zoom app setup](zoom-app-setup)

@@ -1,63 +1,47 @@
-# Getting Started (End-to-End)
+# Self-Hosted Quickstart
 
-This guide walks through the full Vexa lifecycle:
+Deploy Vexa yourself for full control over your data and infrastructure. This guide walks through the full self-hosted lifecycle.
 
-1. First steps (pick deployment)
-2. Deploy
-3. Manage users/tokens
-4. Send bots to meetings
-5. Retrieve transcripts (REST + WebSocket)
-6. Post-meeting (recordings + playback)
-7. Cleanup (delete/anonymize)
-8. Use a UI (Vexa Dashboard)
-
-If you already have a deployment, jump to **Send bots**.
-
-<Card title="Prefer the shortest path?" icon="rocket" href="/quickstart">
-  Follow the Quickstart (send a bot → fetch transcript → optional playback).
-</Card>
+> **Just want to try the API?** Use the [hosted service](quickstart.md) — no deployment needed.
 
 ---
 
-## 1) Pick a Deployment Path
+## 1) Choose a Deployment
 
-Choose one:
-
-- **Hosted (fastest):** use the hosted API and dashboard.
-- **Self-hosted Lite (recommended for production):** single container + external Postgres + external transcription.
-- **Docker Compose (dev):** full local stack for development/testing.
-
-Links:
-
-- Hosted: https://vexa.ai
-- Lite: [Vexa Lite deployment](vexa-lite-deployment.md)
-- Docker Compose dev: [Docker Compose (dev)](deployment.md)
+| Option | Best for | Guide |
+|--------|----------|-------|
+| **Vexa Lite** | Production — single container + external Postgres + remote transcription | [Deploy Vexa Lite](vexa-lite-deployment.md) |
+| **Docker Compose** | Development/testing — full local stack | [Docker Compose setup](deployment.md) |
 
 ---
 
-## 2) Get an API Key / Token
+## 2) Create Users and API Tokens
 
-### Hosted
-
-Get an API key from:
-
-- https://vexa.ai/dashboard/api-keys
-
-### Self-hosted
-
-Create a user and API token with the admin API:
-
-- [Self-hosted management](self-hosted-management.md)
-
----
-
-## 3) Send a Bot to a Meeting (API)
-
-Set your base URL:
+Once your instance is running, use the Admin API to create users and mint API tokens.
 
 ```bash
-export API_BASE="http://localhost:8056" # or https://api.cloud.vexa.ai
-export API_KEY="YOUR_API_KEY_HERE"
+export API_BASE="http://localhost:8056"
+export ADMIN_TOKEN="your-admin-api-token"
+
+# Create a user
+curl -X POST "$API_BASE/admin/users" \
+  -H "Content-Type: application/json" \
+  -H "X-Admin-API-Key: $ADMIN_TOKEN" \
+  -d '{"email": "user@example.com", "name": "User", "max_concurrent_bots": 2}'
+
+# Generate an API token for the user (save it — cannot be retrieved later)
+curl -X POST "$API_BASE/admin/users/1/tokens" \
+  -H "X-Admin-API-Key: $ADMIN_TOKEN"
+```
+
+Full admin guide: [Admin API](self-hosted-management.md)
+
+---
+
+## 3) Send a Bot to a Meeting
+
+```bash
+export API_KEY="YOUR_USER_API_TOKEN"
 ```
 
 ### Google Meet
@@ -95,11 +79,7 @@ curl -X POST "$API_BASE/bots" \
 
 ### Zoom
 
-Zoom requires extra setup and (typically) Marketplace approval to join meetings outside the authorizing account.
-
-See:
-
-- [Zoom Integration Setup Guide](zoom-app-setup.md)
+Zoom requires extra setup and (typically) Marketplace approval. See: [Zoom Integration Setup Guide](zoom-app-setup.md)
 
 ```bash
 curl -X POST "$API_BASE/bots" \
@@ -115,9 +95,7 @@ curl -X POST "$API_BASE/bots" \
   }'
 ```
 
-Full API details:
-
-- [API overview](user_api_guide.md)
+Full API details: [API overview](user_api_guide.md)
 
 ---
 
@@ -148,7 +126,7 @@ curl -X DELETE \
 
 ---
 
-## 6) Post-Meeting: Recordings + Playback
+## 6) Post-Meeting: Recording & Playback
 
 If recording is enabled and a recording was captured, `GET /transcripts/{platform}/{native_meeting_id}` includes a `recordings` array.
 
@@ -157,9 +135,7 @@ Playback/streaming options:
 - `/recordings/{recording_id}/media/{media_file_id}/raw` (authenticated streaming; supports `Range`/`206` seeking)
 - `/recordings/{recording_id}/media/{media_file_id}/download` (presigned URL for object storage backends)
 
-Storage configuration and playback behavior:
-
-- [Recording storage](recording-storage.md)
+Storage configuration and playback behavior: [Recording storage](recording-storage.md)
 
 ---
 
@@ -173,14 +149,10 @@ curl -X DELETE \
 
 This purges transcript artifacts and recording objects (best-effort) and anonymizes the meeting for telemetry.
 
-See caveats in:
-
-- [API overview](user_api_guide.md)
-
 ---
 
-## 8) Use a UI (Vexa Dashboard)
+## 8) Use the Dashboard (optional)
 
-For a web UI to join meetings, view live transcripts, and review history (including post-meeting playback when recordings exist), use Vexa Dashboard:
+For a web UI to join meetings, view live transcripts, and review history, use the open-source Vexa Dashboard:
 
-- [Dashboard UI](ui-dashboard.md)
+- [Dashboard](ui-dashboard.md)

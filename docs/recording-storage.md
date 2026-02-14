@@ -1,6 +1,6 @@
-# Recording Storage Modes
+# Recording & Storage
 
-This document describes how recording artifacts are stored across deployment modes.
+How recording artifacts are stored across deployment modes and how playback works.
 
 ## Storage key format
 

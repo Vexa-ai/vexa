@@ -2,9 +2,15 @@
 
 Bots join meetings and stream audio for transcription (and optionally persist a recording).
 
-If you're unsure what to pass as `native_meeting_id` (and when `passcode` is required), read:
+## Meeting IDs by Platform
 
-- [Meeting links & IDs](../meeting-ids.md)
+Extract the `native_meeting_id` (and `passcode` when required) from the meeting URL:
+
+| Platform | URL example | `native_meeting_id` | `passcode` |
+|----------|-------------|---------------------|------------|
+| Google Meet | `https://meet.google.com/abc-defg-hij` | `abc-defg-hij` | — |
+| Microsoft Teams | `https://teams.live.com/meet/1234567890123?p=XYZ` | `1234567890123` | `XYZ` (required) |
+| Zoom | `https://us05web.zoom.us/j/12345678901?pwd=...` | `12345678901` | optional |
 
 ## POST /bots
 
