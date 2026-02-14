@@ -12,6 +12,11 @@
   "contextual": {
     "options": ["copy", "view", "chatgpt", "claude", "perplexity"]
   },
+  "seo": {
+    "metatags": {
+      "canonical": "https://docs.vexa.ai"
+    }
+  },
   "navigation": {
     "tabs": [
       {
