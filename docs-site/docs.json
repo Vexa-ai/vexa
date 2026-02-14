@@ -28,21 +28,28 @@
             "pages": [
               "index",
               "quickstart",
-              "getting-started",
-              "bot-overview"
+              "getting-started"
             ]
           },
           {
             "group": "Deploy",
-            "pages": ["vexa-lite-deployment", "self-hosted-management", "deployment"]
+            "pages": [
+              "vexa-lite-deployment",
+              "deployment",
+              "recording-storage"
+            ]
           },
           {
-            "group": "Playback",
-            "pages": ["ui-dashboard", "recording-storage"]
+            "group": "Dashboard",
+            "pages": ["ui-dashboard"]
+          },
+          {
+            "group": "Admin",
+            "pages": ["self-hosted-management"]
           },
           {
             "group": "Concepts",
-            "pages": ["meeting-ids", "concepts", "errors-and-retries"]
+            "pages": ["concepts", "errors-and-retries"]
           },
           {
             "group": "Platforms",

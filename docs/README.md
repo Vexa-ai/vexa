@@ -1,90 +1,50 @@
 # Vexa Documentation
 
-Vexa is an open-source meeting bot + API for real-time transcription and post-meeting playback.
+Vexa is an open-source meeting bot + API for real-time transcription and post-meeting recording & playback.
 
 If you're here, you likely want one of three things:
 
-- **Get transcripts via API** (fastest path)
-- **Self-host Vexa** (recommended for production)
-- **Use the dashboard** (join meetings, review history, play recordings)
-
-<Card title="Get Started in 5 Minutes" icon="rocket" href="/getting-started">
-  Connect your first meeting and read transcripts.
-</Card>
-
-<CardGroup cols={2}>
-  <Card title="REST API Reference" icon="code" href="/user_api_guide">
-    Send bots, fetch transcripts, list meetings, and download recordings.
-  </Card>
-  <Card title="WebSocket Streaming" icon="bolt" href="/websocket">
-    Low-latency live transcript updates.
-  </Card>
-  <Card title="Recordings + Playback" icon="play" href="/recording-storage">
-    Post-meeting audio + timestamp-aligned transcript segments.
-  </Card>
-  <Card title="Webhooks" icon="webhook" href="/webhooks">
-    Get notified when recordings or transcripts complete.
-  </Card>
-</CardGroup>
+- **Get transcripts via API** — use the hosted service to start in minutes
+- **Self-host Vexa** — full control over your data and deployment
+- **Use the dashboard** — open-source UI to join meetings, review history, and play recordings
 
 ## How It Works
 
-<Steps>
-  <Step title="Send a bot to a meeting">
-    Use `POST /bots` with `platform` + `native_meeting_id` (and `passcode` when required).
-  </Step>
-  <Step title="Stream or fetch transcripts">
-    Use WebSockets for live updates or `GET /transcripts/{platform}/{native_meeting_id}` for the full result.
-  </Step>
-  <Step title="Stop, then review post-meeting artifacts">
-    When the meeting ends, recordings (if enabled) become available for playback.
-  </Step>
-  <Step title="Optionally delete/anonymize">
-    Delete transcript + recording artifacts with `DELETE /meetings/{platform}/{native_meeting_id}`.
-  </Step>
-</Steps>
+1. **Send a bot to a meeting** — Use `POST /bots` with `platform` + `native_meeting_id` (and `passcode` when required).
+2. **Stream or fetch transcripts** — Use WebSockets for live updates or `GET /transcripts/{platform}/{native_meeting_id}` for the full result.
+3. **Stop, then review post-meeting artifacts** — When the meeting ends, recordings (if enabled) become available for playback.
+4. **Optionally delete/anonymize** — Delete transcript + recording artifacts with `DELETE /meetings/{platform}/{native_meeting_id}`.
 
-## Pick Your Path
+## Choose Your Path
 
-### 1) Fastest: Hosted API
+### [Hosted API](https://vexa.ai) (recommended to start)
 
-1. Get an API key: https://vexa.ai/dashboard/api-keys
-2. Send a bot to a meeting: [`POST /bots`](user_api_guide.md)
+Use the Vexa Cloud API and dashboard — no infrastructure to manage.
+
+1. Get an API key from [vexa.ai/dashboard/api-keys](https://vexa.ai/dashboard/api-keys)
+2. Send a bot: [`POST /bots`](user_api_guide.md)
 3. Read transcripts: [`GET /transcripts/{platform}/{native_meeting_id}`](user_api_guide.md)
+4. For live streaming: [WebSocket guide](websocket.md)
 
-For low-latency live streaming, use WebSockets:
+### [Self-Hosted (Vexa Lite)](vexa-lite-deployment.md) (full control)
 
-- [WebSocket guide](websocket.md)
+Self-host to have full control over your data and deployment. Vexa Lite is a single container that connects to your Postgres database and a remote transcription service.
 
-### 2) Production Self-Host (Vexa Lite)
+### [Docker Compose (dev)](deployment.md)
 
-Vexa Lite is a single container that connects to:
+Full local stack for contributors and development/testing.
 
-- your Postgres database
-- your remote transcription service
+### [Vexa Dashboard](ui-dashboard.md) (open-source UI)
 
-Start here:
+Open-source Next.js dashboard for joining meetings, viewing live transcripts, and reviewing history. Fork it or use it as a reference for building your own integration.
 
-- [Vexa Lite deployment](vexa-lite-deployment.md)
+- Repo: [github.com/Vexa-ai/Vexa-Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)
 
-### 3) Local Development (Docker Compose)
+## Core Concepts
 
-For contributors and local testing:
-
-- [Docker Compose (dev) deployment](deployment.md)
-
-### 4) Dashboard UI (Playback)
-
-If you want a UI to join meetings and review history (including playback when recordings exist):
-
-- [Dashboard UI](ui-dashboard.md)
-
-## Concepts That Matter
-
-- [Meeting links & IDs](meeting-ids.md): what to pass as `native_meeting_id` (and when `passcode` is required)
 - [Core concepts](concepts.md): bot/meeting/session model + timing semantics
-- [Recording storage](recording-storage.md): how artifacts are stored + playback notes (`Range`/`206`)
-- [Delete semantics](concepts.md#delete-semantics): what “delete” means and what remains for telemetry
+- [Recording & storage](recording-storage.md): how artifacts are stored + playback notes (`Range`/`206`)
+- [Delete semantics](concepts.md#delete-semantics): what "delete" means and what remains for telemetry
 
 ## Zoom (The Only Special Platform)
 
