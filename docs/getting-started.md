@@ -83,14 +83,14 @@ Teams requires the numeric meeting ID (not the full URL). If your Teams URL cont
 curl -X POST "$API_BASE/bots" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $API_KEY" \
-  -d '{
-    "platform": "teams",
-    "native_meeting_id": "9387167464734",
-    "passcode": "YOUR_TEAMS_P_VALUE",
-    "recording_enabled": true,
-    "transcribe_enabled": true,
-    "transcription_tier": "realtime"
-  }'
+	  -d '{
+	    "platform": "teams",
+	    "native_meeting_id": "1234567890123",
+	    "passcode": "YOUR_TEAMS_P_VALUE",
+	    "recording_enabled": true,
+	    "transcribe_enabled": true,
+	    "transcription_tier": "realtime"
+	  }'
 ```
 
 ### Zoom

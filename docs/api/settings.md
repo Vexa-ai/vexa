@@ -61,8 +61,8 @@ Set a webhook URL for events (for example, when a meeting completes processing).
 
 See also:
 
-- [`docs/webhooks.md`](../webhooks.md)
-- Local dev: [`docs/local-webhook-development.md`](../local-webhook-development.md)
+- [Webhooks](../webhooks.md)
+- Local dev: [Local webhook development](../local-webhook-development.md)
 
 Notes:
 

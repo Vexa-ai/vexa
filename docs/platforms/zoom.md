@@ -1,29 +1,25 @@
 # Zoom
 
-Zoom bots require additional configuration (Zoom OAuth + Meeting SDK + OBF token flow) and typically Marketplace approval to reliably join meetings across users.
+> Important: Zoom Marketplace approval can take weeks to months. Before approval, you should assume you can reliably join only meetings created/hosted by the authorizing account. The hosted Vexa Zoom app is not approved at the time of writing.
+
+Zoom bots require additional configuration (Zoom OAuth + Meeting SDK + OBF token flow).
 
 ## Native meeting ID and passcode
 
 For Zoom, you must pass the numeric meeting ID:
 
-- URL: `https://us05web.zoom.us/j/89055866087?pwd=...`
-- `native_meeting_id`: `89055866087`
+- URL: `https://us05web.zoom.us/j/12345678901?pwd=...`
+- `native_meeting_id`: `12345678901`
 
 If your URL includes `?pwd=...`, you may pass it as `passcode`:
 
 ```json
 {
   "platform": "zoom",
-  "native_meeting_id": "89055866087",
+  "native_meeting_id": "12345678901",
   "passcode": "YOUR_PWD"
 }
 ```
-
-## Approval caveat (important)
-
-Marketplace approval can take weeks to months. Before approval, you should assume you can reliably join only meetings created/hosted by the authorizing account.
-
-The hosted Vexa service Zoom app is not approved at the time of writing, so hosted Zoom bots should be treated as limited until approval is complete.
 
 ## Setup guide
 
@@ -46,4 +42,3 @@ curl -X POST "$API_BASE/bots" \
     "transcription_tier": "realtime"
   }'
 ```
-

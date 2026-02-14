@@ -64,6 +64,12 @@ Full recordings reference:
 
 - [`api/recordings.md`](api/recordings.md)
 
+Recording management endpoints (explicit):
+
+- `GET /recordings`
+- `GET /recordings/{recording_id}`
+- `DELETE /recordings/{recording_id}`
+
 ## Meeting Links & IDs (Important)
 
 Before you integrate, skim this once:

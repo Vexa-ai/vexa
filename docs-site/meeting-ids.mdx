@@ -30,17 +30,17 @@ Example request body:
 <Tab title="Microsoft Teams">
 Teams requires **both** the numeric meeting ID and the `p=` value.
 
-- URL: `https://teams.live.com/meet/9321836506982?p=R3eB5oaDFRkDIDnFxR`
-- `native_meeting_id`: `9321836506982`
-- `passcode`: `R3eB5oaDFRkDIDnFxR`
+- URL: `https://teams.live.com/meet/1234567890123?p=YOUR_PASSCODE`
+- `native_meeting_id`: `1234567890123`
+- `passcode`: `YOUR_PASSCODE`
 
 Example request body:
 
 ```json
 {
   "platform": "teams",
-  "native_meeting_id": "9321836506982",
-  "passcode": "R3eB5oaDFRkDIDnFxR"
+  "native_meeting_id": "1234567890123",
+  "passcode": "YOUR_PASSCODE"
 }
 ```
 </Tab>
@@ -48,8 +48,8 @@ Example request body:
 <Tab title="Zoom">
 Use the numeric meeting ID. If your link has `?pwd=...`, you can pass it as `passcode`.
 
-- URL: `https://us05web.zoom.us/j/89055866087?pwd=...`
-- `native_meeting_id`: `89055866087`
+- URL: `https://us05web.zoom.us/j/12345678901?pwd=...`
+- `native_meeting_id`: `12345678901`
 - `passcode`: optional (`pwd=...`)
 
 Example request body:
@@ -57,7 +57,7 @@ Example request body:
 ```json
 {
   "platform": "zoom",
-  "native_meeting_id": "89055866087",
+  "native_meeting_id": "12345678901",
   "passcode": "OPTIONAL_PWD"
 }
 ```

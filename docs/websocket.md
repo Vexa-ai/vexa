@@ -25,8 +25,8 @@ Body: {
 # For Microsoft Teams (requires passcode):
 Body: {
   "platform": "teams",
-  "native_meeting_id": "9387167464734",
-  "passcode": "qxJanYOcdjN4d6UlGa"
+  "native_meeting_id": "1234567890123",
+  "passcode": "YOUR_PASSCODE"
 }
 ```
 
@@ -55,7 +55,7 @@ Meetings are identified by platform and native meeting ID:
 ```json
 {
   "platform": "google_meet",
-  "native_id": "kzj-grsa-cqf"
+  "native_id": "abc-defg-hij"
 }
 ```
 
@@ -97,7 +97,7 @@ Send subscription message after connecting:
   "meetings": [
     {
       "platform": "google_meet",
-      "native_id": "kzj-grsa-cqf"
+      "native_id": "abc-defg-hij"
     }
   ]
 }
@@ -147,7 +147,7 @@ Meeting status updates.
 ```json
 {
   "type": "meeting.status",
-  "meeting": {"platform": "google_meet", "native_id": "kzj-grsa-cqf"},
+  "meeting": {"platform": "google_meet", "native_id": "abc-defg-hij"},
   "payload": {
     "status": "active"
   },
@@ -350,7 +350,7 @@ python testing/ws_realtime_transcription.py \
   --ws-url ws://localhost:8056/ws \
   --api-key $API_KEY \
   --platform google_meet \
-  --native-id kzj-grsa-cqf
+  --native-id abc-defg-hij
 
 # Debug mode (show raw frames)
 python testing/ws_realtime_transcription.py \
@@ -358,7 +358,7 @@ python testing/ws_realtime_transcription.py \
   --ws-url ws://localhost:8056/ws \
   --api-key $API_KEY \
   --platform google_meet \
-  --native-id kzj-grsa-cqf \
+  --native-id abc-defg-hij \
   --raw
 ```
 
