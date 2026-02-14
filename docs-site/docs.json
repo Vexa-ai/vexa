@@ -8,7 +8,7 @@
     "light": "/assets/logo.svg"
   },
   "colors": {
-    "primary": "#ffffff"
+    "primary": "#22c55e"
   },
   "contextual": {
     "options": ["copy", "view", "chatgpt", "claude", "perplexity"]
