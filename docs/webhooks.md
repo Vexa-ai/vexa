@@ -22,7 +22,7 @@ Notes:
 
 - `webhook_url` must be publicly reachable. Private/internal URLs are rejected (SSRF protection).
 - If you set `webhook_secret`, Vexa will include `Authorization: Bearer <secret>` on webhook requests.
-- For local development, use a tunnel (ngrok/cloudflared): [`docs/local-webhook-development.md`](local-webhook-development.md)
+- For local development, use a tunnel (ngrok/cloudflared): [Local webhook development](local-webhook-development.md)
 
 ## Delivery
 

@@ -48,7 +48,7 @@ If you’re not sure what to pass as `native_meeting_id` (or when `passcode` is 
       <Tab title="Zoom">
         > Zoom requires extra setup and typically Marketplace approval.
         >
-        > See: [`docs/platforms/zoom.md`](platforms/zoom.md) and [`docs/zoom-app-setup.md`](zoom-app-setup.md)
+        > See: [Zoom limitations](platforms/zoom.md) and [Zoom app setup](zoom-app-setup.md)
 
         ```bash
         curl -X POST "$API_BASE/bots" \
@@ -82,8 +82,8 @@ If you’re not sure what to pass as `native_meeting_id` (or when `passcode` is 
       }'
     ```
 
-    - Webhook guide: [`docs/webhooks.md`](webhooks.md)
-    - Local dev tunneling: [`docs/local-webhook-development.md`](local-webhook-development.md)
+    - Webhook guide: [Webhooks](webhooks.md)
+    - Local dev tunneling: [Local webhook development](local-webhook-development.md)
   </Step>
 
   <Step title="Fetch the transcript (and recording metadata, if present)">

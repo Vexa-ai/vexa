@@ -47,7 +47,7 @@ Get an API key from:
 
 Create a user and API token with the admin API:
 
-- [`docs/self-hosted-management.md`](self-hosted-management.md)
+- [Self-hosted management](self-hosted-management.md)
 
 ---
 
@@ -83,14 +83,14 @@ Teams requires the numeric meeting ID (not the full URL). If your Teams URL cont
 curl -X POST "$API_BASE/bots" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $API_KEY" \
-	  -d '{
-	    "platform": "teams",
-	    "native_meeting_id": "1234567890123",
-	    "passcode": "YOUR_TEAMS_P_VALUE",
-	    "recording_enabled": true,
-	    "transcribe_enabled": true,
-	    "transcription_tier": "realtime"
-	  }'
+  -d '{
+    "platform": "teams",
+    "native_meeting_id": "1234567890123",
+    "passcode": "YOUR_TEAMS_P_VALUE",
+    "recording_enabled": true,
+    "transcribe_enabled": true,
+    "transcription_tier": "realtime"
+  }'
 ```
 
 ### Zoom
@@ -99,7 +99,7 @@ Zoom requires extra setup and (typically) Marketplace approval to join meetings 
 
 See:
 
-- [`docs/zoom-app-setup.md`](zoom-app-setup.md)
+- [Zoom Integration Setup Guide](zoom-app-setup.md)
 
 ```bash
 curl -X POST "$API_BASE/bots" \
@@ -117,7 +117,7 @@ curl -X POST "$API_BASE/bots" \
 
 Full API details:
 
-- [`docs/user_api_guide.md`](user_api_guide.md)
+- [API overview](user_api_guide.md)
 
 ---
 
@@ -134,7 +134,7 @@ curl -H "X-API-Key: $API_KEY" \
 
 Use the WebSocket guide for low-latency updates:
 
-- [`docs/websocket.md`](websocket.md)
+- [WebSocket guide](websocket.md)
 
 ---
 
@@ -159,7 +159,7 @@ Playback/streaming options:
 
 Storage configuration and playback behavior:
 
-- [`docs/recording-storage.md`](recording-storage.md)
+- [Recording storage](recording-storage.md)
 
 ---
 
@@ -175,7 +175,7 @@ This purges transcript artifacts and recording objects (best-effort) and anonymi
 
 See caveats in:
 
-- [`docs/user_api_guide.md`](user_api_guide.md)
+- [API overview](user_api_guide.md)
 
 ---
 
@@ -183,4 +183,4 @@ See caveats in:
 
 For a web UI to join meetings, view live transcripts, and review history (including post-meeting playback when recordings exist), use Vexa Dashboard:
 
-- [`docs/ui-dashboard.md`](ui-dashboard.md)
+- [Dashboard UI](ui-dashboard.md)

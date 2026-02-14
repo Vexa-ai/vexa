@@ -61,8 +61,8 @@ Use a tunneling tool (ngrok / cloudflared) to expose a local port to the interne
 
     Webhook reference:
 
-    - [`docs/webhooks.md`](webhooks)
-    - [`docs/api/settings.md`](api/settings)
+    - [Webhooks](webhooks)
+    - [User Settings API](api/settings)
   </Step>
 </Steps>
 
@@ -71,4 +71,3 @@ Use a tunneling tool (ngrok / cloudflared) to expose a local port to the interne
 - Treat webhook handlers as **idempotent**: you may receive retries or repeated events.
 - Respond fast (2xx) and do heavy work asynchronously.
 - If your tunnel URL changes, update `webhook_url` again.
-
