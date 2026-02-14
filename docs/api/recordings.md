@@ -17,6 +17,9 @@ curl -H "X-API-Key: $API_KEY" \
 
 ### Response (200)
 
+<details>
+  <summary>Show response JSON</summary>
+
 ```json
 {
   "recordings": [
@@ -49,6 +52,8 @@ curl -H "X-API-Key: $API_KEY" \
 }
 ```
 
+</details>
+
 ## GET /recordings/{recording_id}
 
 Get a recording and its `media_files`.
@@ -61,6 +66,9 @@ curl -H "X-API-Key: $API_KEY" \
 ### Response (200)
 
 Same shape as an item in `GET /recordings`:
+
+<details>
+  <summary>Show response JSON</summary>
 
 ```json
 {
@@ -90,6 +98,8 @@ Same shape as an item in `GET /recordings`:
 }
 ```
 
+</details>
+
 ## DELETE /recordings/{recording_id}
 
 Delete a recording, its media files from storage, and related DB rows (best-effort storage cleanup).
@@ -102,12 +112,17 @@ curl -X DELETE \
 
 ### Response (200)
 
+<details>
+  <summary>Show response JSON</summary>
+
 ```json
 {
   "status": "deleted",
   "recording_id": 906238426347
 }
 ```
+
+</details>
 
 ## GET /recordings/{recording_id}/media/{media_file_id}/raw
 
@@ -138,6 +153,9 @@ curl -H "X-API-Key: $API_KEY" \
 
 ### Response (200)
 
+<details>
+  <summary>Show response JSON</summary>
+
 ```json
 {
   "download_url": "https://s3.example.com/vexa-recordings/recordings/1/906238426347/d6e337d6-92cd-452f-b003-23c5498091ef.wav?X-Amz-Algorithm=AWS4-HMAC-SHA256&...",
@@ -146,6 +164,8 @@ curl -H "X-API-Key: $API_KEY" \
   "file_size_bytes": 1234567
 }
 ```
+
+</details>
 
 Storage configuration details:
 

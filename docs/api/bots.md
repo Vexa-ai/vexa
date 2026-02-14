@@ -76,6 +76,9 @@ curl -X POST "$API_BASE/bots" \
 
 Returns the created meeting record.
 
+<details>
+  <summary>Show response JSON</summary>
+
 ```json
 {
   "id": 16,
@@ -95,6 +98,8 @@ Returns the created meeting record.
 }
 ```
 
+</details>
+
 ## GET /bots/status
 
 List bots currently running under your API key.
@@ -105,6 +110,9 @@ curl -H "X-API-Key: $API_KEY" \
 ```
 
 ### Response (200)
+
+<details>
+  <summary>Show response JSON</summary>
 
 ```json
 {
@@ -126,6 +134,8 @@ curl -H "X-API-Key: $API_KEY" \
   ]
 }
 ```
+
+</details>
 
 ## PUT `/bots/{platform}/{native_meeting_id}/config`
 
@@ -162,11 +172,16 @@ curl -X PUT "$API_BASE/bots/zoom/89055866087/config" \
 
 ### Response (202)
 
+<details>
+  <summary>Show response JSON</summary>
+
 ```json
 {
   "message": "Reconfiguration request accepted and sent to the bot."
 }
 ```
+
+</details>
 
 ## DELETE `/bots/{platform}/{native_meeting_id}`
 
@@ -200,8 +215,13 @@ curl -X DELETE \
 
 ### Response (202)
 
+<details>
+  <summary>Show response JSON</summary>
+
 ```json
 {
   "message": "Stop request accepted and is being processed."
 }
 ```
+
+</details>
