@@ -1,7 +1,7 @@
 import { Page } from "playwright";
 import { BotConfig } from "../../types";
 import { log, callStartupCallback } from "../../utils";
-import { hasStopSignalReceived, triggerPostAdmissionCamera } from "../../index";
+import { hasStopSignalReceived, triggerPostAdmissionCamera, triggerPostAdmissionChat } from "../../index";
 
 export type AdmissionDecision = {
   admitted: boolean;
@@ -149,6 +149,12 @@ export async function runMeetingFlow(
       // any canvas track that was set up before admission.
       triggerPostAdmissionCamera().catch((err: any) => {
         log(`[VoiceAgent] Post-admission camera error (non-fatal): ${err?.message || err}`);
+      });
+
+      // Start chat observer now that the bot is in the meeting.
+      // The chat panel can only be opened/read when admitted.
+      triggerPostAdmissionChat().catch((err: any) => {
+        log(`[Chat] Post-admission chat error (non-fatal): ${err?.message || err}`);
       });
     } catch (error: any) {
       log(`Error during startup callback or verification: ${error?.message || String(error)}`);

@@ -128,6 +128,15 @@ export class MeetingChatService {
       // May already be exposed (e.g., if startChatObserver called twice)
     }
 
+    // Expose a logging function for the browser observer to log back to Node
+    try {
+      await this.page.exposeFunction('__vexaChatLog', (message: string) => {
+        log(`[Chat] ${message}`);
+      });
+    } catch {
+      // May already be exposed
+    }
+
     if (this.platform === 'google_meet') {
       await this.initGoogleMeetObserver();
     } else if (this.platform === 'teams') {
@@ -166,33 +175,41 @@ export class MeetingChatService {
     this.messages.push(msg);
     log(`[Chat] ${msg.isFromBot ? '→' : '←'} ${msg.sender}: ${msg.text.substring(0, 100)}`);
 
-    // Publish to Redis pub/sub for real-time events
+    // Publish to Redis pub/sub for real-time WebSocket delivery.
+    // Uses the standard WebSocket envelope format so the API gateway
+    // can forward it directly and the Dashboard can parse it uniformly.
     if (this.redisPublisher) {
-      const event = JSON.stringify({
-        event: 'chat.received',
-        meeting_id: this.meetingId,
-        sender: msg.sender,
-        text: msg.text,
-        timestamp: msg.timestamp,
-        is_from_bot: msg.isFromBot
+      const wsEvent = JSON.stringify({
+        type: 'chat.new_message',
+        meeting: { id: this.meetingId },
+        payload: {
+          sender: msg.sender,
+          text: msg.text,
+          timestamp: msg.timestamp,
+          is_from_bot: msg.isFromBot,
+        },
+        ts: new Date(msg.timestamp).toISOString(),
       });
       this.redisPublisher.publish(
         `va:meeting:${this.meetingId}:chat`,
-        event
+        wsEvent
       ).catch(err => log(`[Chat] Redis publish failed: ${err.message}`));
 
-      // Also store in Redis list for GET retrieval
+      // Also store in Redis list for GET retrieval (use snake_case to match Dashboard types)
       this.redisPublisher.rPush(
         `meeting:${this.meetingId}:chat_messages`,
-        JSON.stringify(msg)
+        JSON.stringify({
+          sender: msg.sender,
+          text: msg.text,
+          timestamp: msg.timestamp,
+          is_from_bot: msg.isFromBot,
+        })
       ).catch(err => log(`[Chat] Redis store failed: ${err.message}`));
     }
 
-    // Inject non-bot chat messages into transcription stream
-    if (!msg.isFromBot && this.transcriptConfig && this.redisPublisher) {
-      this.publishChatToTranscriptStream(msg).catch(err => {
-        log(`[Chat] Transcript stream publish failed: ${err.message}`);
-      });
+    // Chat messages are rendered inline with the transcript in the Dashboard
+    // via the dedicated chat panel + WS channel (no longer injected into transcript stream)
+    if (false) {
     }
 
     if (this.messageCallback) {
@@ -406,12 +423,37 @@ export class MeetingChatService {
 
   private async initGoogleMeetObserver(): Promise<void> {
     const botName = this.botName;
+
     await this.page.evaluate((botNameArg: string) => {
       const observeChat = () => {
         // Track seen messages by data-message-id to avoid duplicates
         const seenMessages = new Set<string>();
+        let chatPanelOpened = false;
+
+        // Google Meet only renders chat message elements when the chat sidebar is visible.
+        // We need to open the chat panel before we can scan for messages.
+        const ensureChatPanelOpen = () => {
+          if (chatPanelOpened) return;
+          const chatBtnSelectors = [
+            'button[aria-label*="Chat with everyone"]',
+            'button[aria-label*="chat"]',
+            'button[aria-label*="Chat"]',
+            'button[data-tooltip*="Chat"]',
+          ];
+          for (const sel of chatBtnSelectors) {
+            const btn = document.querySelector(sel) as HTMLElement | null;
+            if (btn) {
+              btn.click();
+              chatPanelOpened = true;
+              (window as any).__vexaChatLog?.(`Opened chat panel via: ${sel}`);
+              break;
+            }
+          }
+        };
 
         const scanForMessages = () => {
+          // Try to open chat panel on each scan (idempotent — only clicks once)
+          ensureChatPanelOpen();
           // Google Meet 2024-2026 DOM structure:
           //
           //   .aops0b  (message group container)
