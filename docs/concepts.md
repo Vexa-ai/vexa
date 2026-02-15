@@ -100,6 +100,18 @@ Storage configuration:
 
 - [`docs/recording-storage.md`](recording-storage.md)
 
+## Voice Agent (Meeting Interaction)
+
+When `voice_agent_enabled: true` is passed at bot creation, the bot becomes an interactive meeting participant. An external agent can instruct it to:
+
+- **Speak** via text-to-speech (OpenAI TTS → PulseAudio → meeting mic)
+- **Read/write chat** messages in the meeting
+- **Share screen** content (images, URLs, video)
+
+The voice agent uses the same session model: all interactions happen within a single `session_uid`. Chat messages captured by the bot can optionally be injected into the transcription stream.
+
+Full details: [Voice Agent Guide](voice-agent.md)
+
 ## Delete Semantics
 
 Deleting a meeting is designed to be deliberate: it purges transcript artifacts and recording objects (best-effort), then anonymizes the meeting record for telemetry/usage tracking.

@@ -559,6 +559,40 @@ curl -X PUT \
     }'
   ```
 
+---
+
+### Voice Agent (Meeting Interaction)
+
+When a bot is requested with `voice_agent_enabled: true`, additional endpoints become available to control the bot during a live meeting. For full details, see the [Voice Agent Guide](voice-agent.md).
+
+#### Speak (Text-to-Speech)
+
+* **Endpoint:** `POST /bots/{platform}/{native_meeting_id}/speak`
+* **Description:** Make the bot speak in the meeting via TTS or pre-rendered audio.
+* **Request Body:**
+  ```json
+  {"text": "Hello everyone", "provider": "openai", "voice": "alloy"}
+  ```
+* **Interrupt:** `DELETE /bots/{platform}/{native_meeting_id}/speak`
+
+#### Chat
+
+* **Send:** `POST /bots/{platform}/{native_meeting_id}/chat`
+  ```json
+  {"text": "Here is the summary."}
+  ```
+* **Read:** `GET /bots/{platform}/{native_meeting_id}/chat` — returns `{"messages": [...]}`
+
+#### Screen Share
+
+* **Show content:** `POST /bots/{platform}/{native_meeting_id}/screen`
+  ```json
+  {"type": "image", "url": "https://example.com/chart.png"}
+  ```
+* **Stop sharing:** `DELETE /bots/{platform}/{native_meeting_id}/screen`
+
+---
+
 ## Need Help?
 
 Contact Vexa support via the designated channels if you encounter issues or have questions regarding API usage or API key provisioning.
