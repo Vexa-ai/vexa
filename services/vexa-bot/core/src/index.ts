@@ -563,6 +563,7 @@ async function handleSpeakCommand(command: any, page: Page | null): Promise<void
   // Unmute mic before speaking
   if (microphoneService) {
     await microphoneService.unmute();
+    await new Promise((r) => setTimeout(r, 500)); // Let Meet register unmute before audio
   }
 
   await publishVoiceEvent('speak.started', { text: command.text });
@@ -595,6 +596,7 @@ async function handleSpeakAudioCommand(command: any): Promise<void> {
   // Unmute mic before playing
   if (microphoneService) {
     await microphoneService.unmute();
+    await new Promise((r) => setTimeout(r, 500)); // Let Meet register unmute before audio
   }
 
   await publishVoiceEvent('speak.started', { source: command.audio_url ? 'url' : 'base64' });
