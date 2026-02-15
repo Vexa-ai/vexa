@@ -77,6 +77,7 @@ Recording management endpoints (explicit):
 - Transcripts: [`api/transcripts.md`](api/transcripts.md)
 - Recordings: [`api/recordings.md`](api/recordings.md)
 - User settings (recording defaults, webhooks): [`api/settings.md`](api/settings.md)
+- Voice Agent (speak, chat, screen share): [`api/voice-agent.md`](api/voice-agent.md)
 - WebSocket (live streaming): [`websocket.md`](websocket.md)
 
 Zoom caveats:
