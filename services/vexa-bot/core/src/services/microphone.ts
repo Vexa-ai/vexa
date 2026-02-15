@@ -112,12 +112,15 @@ export class MicrophoneService {
     if (this.page.isClosed()) return false;
 
     return await this.page.evaluate(async (shouldUnmute: boolean) => {
-      // Google Meet mic button selectors
+      // Use specific selectors for bot's own meeting controls (same as join flow)
+      // Prioritize "Turn on/off microphone" to avoid matching participant tiles
       const selectors = [
+        '[aria-label*="Turn on microphone"]',
+        '[aria-label*="Turn off microphone"]',
+        'button[aria-label*="Turn on microphone"]',
+        'button[aria-label*="Turn off microphone"]',
         'button[aria-label*="microphone"]',
-        'button[aria-label*="Microphone"]',
-        'button[data-tooltip*="microphone"]',
-        'button[data-tooltip*="Microphone"]'
+        'button[aria-label*="Microphone"]'
       ];
 
       for (const sel of selectors) {
@@ -133,7 +136,9 @@ export class MicrophoneService {
           return true;
         }
         // Already in desired state
-        return true;
+        if ((shouldUnmute && !isMuted) || (!shouldUnmute && isMuted)) {
+          return true;
+        }
       }
       return false;
     }, unmute);

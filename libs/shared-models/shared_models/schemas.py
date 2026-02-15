@@ -362,7 +362,7 @@ class MeetingCreate(BaseModel):
         description="Optional one-time Zoom OBF token. If omitted for Zoom meetings, the backend will mint one from the user's stored Zoom OAuth connection."
     )
     voice_agent_enabled: Optional[bool] = Field(
-        None,
+        True,
         description="Enable voice agent (TTS, chat, screen share) capabilities for this meeting"
     )
     default_avatar_url: Optional[str] = Field(
