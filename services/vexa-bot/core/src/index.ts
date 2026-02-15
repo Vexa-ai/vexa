@@ -815,6 +815,14 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     page = await context.newPage();
   }
 
+  // Forward browser console messages tagged [Vexa] to Node.js log
+  page.on('console', (msg) => {
+    const text = msg.text();
+    if (text.includes('[Vexa]')) {
+      log(`[BrowserConsole] ${text}`);
+    }
+  });
+
   // --- ADDED: Expose a function for browser to trigger Node.js graceful leave ---
   await page.exposeFunction("triggerNodeGracefulLeave", async () => {
     log("[Node.js] Received triggerNodeGracefulLeave from browser context.");
