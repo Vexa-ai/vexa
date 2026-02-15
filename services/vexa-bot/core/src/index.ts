@@ -114,6 +114,22 @@ export async function triggerPostAdmissionCamera(): Promise<void> {
 }
 // -------------------------------------------
 
+// --- Post-admission chat observer start ---
+// Called by meetingFlow.ts after the bot is admitted to the meeting.
+// The chat panel can only be opened and observed when the bot is in the
+// actual meeting (not the waiting room / pre-join screen).
+export async function triggerPostAdmissionChat(): Promise<void> {
+  if (!chatService) return;
+  try {
+    log('[Chat] Post-admission: starting chat observer...');
+    await chatService.startChatObserver();
+    log('[Chat] ✅ Post-admission chat observer started');
+  } catch (err: any) {
+    log(`[Chat] Post-admission observer failed (non-fatal): ${err.message}`);
+  }
+}
+// -------------------------------------------
+
 // Exit reason mapping function moved to services/unified-callback.ts
 
 // --- ADDED: Session Management Utilities ---
@@ -636,66 +652,19 @@ async function handleScreenShowCommand(command: any, page: Page | null): Promise
 }
 
 /**
- * Initialize voice agent services after the browser and page are ready.
+ * Initialize the virtual camera and default avatar display.
+ * Always runs — the bot should show its avatar regardless of voice agent state.
  */
-async function initVoiceAgentServices(
+async function initVirtualCamera(
   botConfig: BotConfig,
   page: Page,
-  browser: Browser
 ): Promise<void> {
-  log('[VoiceAgent] Initializing meeting interaction services...');
-
-  // TTS Playback
-  ttsPlaybackService = new TTSPlaybackService();
-  log('[VoiceAgent] TTS playback service ready');
-
-  // Microphone toggle
-  microphoneService = new MicrophoneService(page, botConfig.platform);
-  log('[VoiceAgent] Microphone service ready');
-
-  // Chat service — with transcript stream injection so chat messages
-  // appear alongside spoken transcriptions in the transcript feed.
-  const chatTranscriptConfig: ChatTranscriptConfig = {
-    token: botConfig.token,
-    platform: botConfig.platform,
-    meetingId: botConfig.meeting_id,
-    connectionId: botConfig.connectionId,
-  };
-  chatService = new MeetingChatService(
-    page,
-    botConfig.platform,
-    botConfig.meeting_id,
-    botConfig.botName,
-    botConfig.redisUrl,
-    chatTranscriptConfig
-  );
-  log('[VoiceAgent] Chat service ready (with transcript injection)');
+  log('[Bot] Initializing virtual camera and avatar...');
 
   // Screen content (virtual camera feed via canvas)
   screenContentService = new ScreenContentService(page, botConfig.defaultAvatarUrl);
-  screenShareService = new ScreenShareService(page, botConfig.platform); // kept for potential future use
-  log('[VoiceAgent] Screen content service ready');
-
-  // Redis publisher for events
-  if (botConfig.redisUrl) {
-    try {
-      redisPublisher = createClient({ url: botConfig.redisUrl }) as RedisClientType;
-      redisPublisher.on('error', (err) => log(`[VoiceAgent] Redis publisher error: ${err}`));
-      await redisPublisher.connect();
-      log('[VoiceAgent] Redis publisher connected');
-    } catch (err: any) {
-      log(`[VoiceAgent] Redis publisher failed: ${err.message}`);
-    }
-  }
-
-  // Start chat observer after a delay (UI needs to be loaded)
-  setTimeout(async () => {
-    try {
-      await chatService?.startChatObserver();
-    } catch (err: any) {
-      log(`[VoiceAgent] Chat observer init failed: ${err.message}`);
-    }
-  }, 10000); // Wait 10s for meeting UI to fully load
+  screenShareService = new ScreenShareService(page, botConfig.platform);
+  log('[Bot] Screen content service ready');
 
   // Auto-enable virtual camera so the default avatar shows from the start.
   // Strategy: start trying early (even before admission — the camera button
@@ -711,7 +680,7 @@ async function initVoiceAgentServices(
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
-        log(`[VoiceAgent] Auto-camera attempt ${attempt}/${MAX_ATTEMPTS}...`);
+        log(`[Bot] Auto-camera attempt ${attempt}/${MAX_ATTEMPTS}...`);
         await screenContentService.enableCamera();
 
         // Wait a moment for encoder to process the track
@@ -737,25 +706,89 @@ async function initVoiceAgentServices(
         });
 
         if (framesSent > 0) {
-          log(`[VoiceAgent] ✅ Virtual camera active! framesSent=${framesSent} (attempt ${attempt})`);
+          log(`[Bot] Virtual camera active! framesSent=${framesSent} (attempt ${attempt})`);
           break;
         }
 
-        log(`[VoiceAgent] framesSent=0 after attempt ${attempt}, will retry...`);
+        log(`[Bot] framesSent=0 after attempt ${attempt}, will retry...`);
 
         if (attempt < MAX_ATTEMPTS) {
           await new Promise(resolve => setTimeout(resolve, RETRY_INTERVALS[attempt - 1]));
         } else {
-          log('[VoiceAgent] ⚠️ Auto-camera exhausted all retries. Camera may activate on next screen_show command.');
+          log('[Bot] Auto-camera exhausted all retries. Camera may activate on next screen_show command.');
         }
       } catch (err: any) {
-        log(`[VoiceAgent] Auto-camera attempt ${attempt} failed: ${err.message}`);
+        log(`[Bot] Auto-camera attempt ${attempt} failed: ${err.message}`);
         if (attempt < MAX_ATTEMPTS) {
           await new Promise(resolve => setTimeout(resolve, RETRY_INTERVALS[attempt - 1]));
         }
       }
     }
   })();
+
+  log('[Bot] Virtual camera initialization complete');
+}
+
+/**
+ * Initialize chat service — always runs so chat read/write works
+ * regardless of voiceAgentEnabled.
+ */
+async function initChatService(
+  botConfig: BotConfig,
+  page: Page,
+): Promise<void> {
+  log('[Chat] Initializing chat service...');
+
+  const chatTranscriptConfig: ChatTranscriptConfig = {
+    token: botConfig.token,
+    platform: botConfig.platform,
+    meetingId: botConfig.meeting_id,
+    connectionId: botConfig.connectionId,
+  };
+  chatService = new MeetingChatService(
+    page,
+    botConfig.platform,
+    botConfig.meeting_id,
+    botConfig.botName,
+    botConfig.redisUrl,
+    chatTranscriptConfig
+  );
+  log('[Chat] Chat service ready');
+
+  // Chat observer will be started post-admission by triggerPostAdmissionChat()
+  // (called from meetingFlow.ts after the bot is admitted to the meeting)
+}
+
+/**
+ * Initialize voice agent services (TTS, mic) after the browser and page are ready.
+ * Only called when voiceAgentEnabled is true.
+ */
+async function initVoiceAgentServices(
+  botConfig: BotConfig,
+  page: Page,
+  browser: Browser
+): Promise<void> {
+  log('[VoiceAgent] Initializing meeting interaction services...');
+
+  // TTS Playback
+  ttsPlaybackService = new TTSPlaybackService();
+  log('[VoiceAgent] TTS playback service ready');
+
+  // Microphone toggle
+  microphoneService = new MicrophoneService(page, botConfig.platform);
+  log('[VoiceAgent] Microphone service ready');
+
+  // Redis publisher for events
+  if (botConfig.redisUrl) {
+    try {
+      redisPublisher = createClient({ url: botConfig.redisUrl }) as RedisClientType;
+      redisPublisher.on('error', (err) => log(`[VoiceAgent] Redis publisher error: ${err}`));
+      await redisPublisher.connect();
+      log('[VoiceAgent] Redis publisher connected');
+    } catch (err: any) {
+      log(`[VoiceAgent] Redis publisher failed: ${err.message}`);
+    }
+  }
 
   await publishVoiceEvent('voice_agent.initialized');
   log('[VoiceAgent] All meeting interaction services initialized');
@@ -874,7 +907,15 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     } catch (e) {
       log(`Warning: context.addInitScript failed: ${(e as any)?.message || e}`);
     }
-    
+
+    // Inject virtual camera init script for avatar display
+    try {
+      await context.addInitScript(getVirtualCameraInitScript());
+      log('[Bot] Virtual camera init script injected (Teams)');
+    } catch (e: any) {
+      log(`[Bot] Warning: addInitScript failed (Teams): ${e.message}`);
+    }
+
     page = await context.newPage();
   } else {
     log("Using Chrome browser for non-Teams platform");
@@ -900,14 +941,13 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     });
 
     // Inject virtual camera RTCPeerConnection patch BEFORE page loads
-    // so Google Meet gets our canvas stream from the start
-    if (botConfig.voiceAgentEnabled) {
-      try {
-        await context.addInitScript(getVirtualCameraInitScript());
-        log('[VoiceAgent] Virtual camera init script injected');
-      } catch (e: any) {
-        log(`[VoiceAgent] Warning: addInitScript failed: ${e.message}`);
-      }
+    // so Google Meet gets our canvas stream from the start.
+    // Always inject — the avatar should show regardless of voice agent state.
+    try {
+      await context.addInitScript(getVirtualCameraInitScript());
+      log('[Bot] Virtual camera init script injected');
+    } catch (e: any) {
+      log(`[Bot] Warning: addInitScript failed: ${e.message}`);
     }
 
     page = await context.newPage();
@@ -949,7 +989,27 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     Object.defineProperty(window, "outerHeight", { get: () => 1080 });
   });
 
-  // Initialize voice agent services if enabled
+  // Always initialize virtual camera and avatar display
+  try {
+    await initVirtualCamera(botConfig, page);
+  } catch (err: any) {
+    log(`[Bot] Virtual camera initialization failed (non-fatal): ${err.message}`);
+  }
+
+  // Always initialize chat service so chat read/write works for every bot
+  try {
+    await initChatService(botConfig, page);
+  } catch (err: any) {
+    log(`[Chat] Initialization failed (non-fatal): ${err.message}`);
+  }
+
+  // Always initialize TTS playback so speak commands work for all bots
+  if (!ttsPlaybackService) {
+    ttsPlaybackService = new TTSPlaybackService();
+    log('[TTS] Playback service initialized (available for all bots)');
+  }
+
+  // Initialize full voice agent services (mic, Redis events, etc.) if enabled
   if (botConfig.voiceAgentEnabled && browserInstance) {
     try {
       await initVoiceAgentServices(botConfig, page, browserInstance);

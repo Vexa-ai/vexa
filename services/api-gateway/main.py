@@ -928,6 +928,7 @@ async def websocket_multiplex(ws: WebSocket):
         channels = [
             f"tc:meeting:{meeting_id}:mutable",  # Meeting-ID based channel
             f"bm:meeting:{meeting_id}:status",  # Meeting-ID based channel (consistent)
+            f"va:meeting:{meeting_id}:chat",     # Chat messages from bot
         ]
 
         async def fan_in(channel_names: List[str]):
