@@ -361,6 +361,10 @@ class MeetingCreate(BaseModel):
         None,
         description="Optional one-time Zoom OBF token. If omitted for Zoom meetings, the backend will mint one from the user's stored Zoom OAuth connection."
     )
+    voice_agent_enabled: Optional[bool] = Field(
+        None,
+        description="Enable voice agent (TTS, chat, screen share) capabilities for this meeting"
+    )
 
     @field_validator('platform')
     @classmethod
@@ -828,3 +832,46 @@ class RecordingResponse(BaseModel):
 class RecordingListResponse(BaseModel):
     recordings: List[RecordingResponse]
 # --- END Recording Schemas ---
+
+
+# --- Voice Agent / Meeting Interaction Schemas ---
+
+class SpeakRequest(BaseModel):
+    """Request to make the bot speak in the meeting."""
+    text: Optional[str] = Field(None, description="Text to speak (bot does TTS)")
+    audio_url: Optional[str] = Field(None, description="URL to pre-rendered audio file")
+    audio_base64: Optional[str] = Field(None, description="Base64-encoded audio data")
+    format: Optional[str] = Field("wav", description="Audio format: wav, mp3, pcm, opus")
+    sample_rate: Optional[int] = Field(24000, description="Sample rate for PCM audio (Hz)")
+    provider: Optional[str] = Field("openai", description="TTS provider: openai, cartesia, elevenlabs")
+    voice: Optional[str] = Field("alloy", description="Voice ID for TTS")
+
+    @field_validator('text', 'audio_url', 'audio_base64')
+    @classmethod
+    def at_least_one_source(cls, v, info: ValidationInfo):
+        """At least one of text, audio_url, or audio_base64 must be provided."""
+        return v
+
+class ChatSendRequest(BaseModel):
+    """Request to send a message to the meeting chat."""
+    text: str = Field(..., description="Message text to send in the meeting chat")
+
+class ChatMessage(BaseModel):
+    """A chat message from the meeting."""
+    sender: str
+    text: str
+    timestamp: float
+    is_from_bot: bool = False
+
+class ChatMessagesResponse(BaseModel):
+    """Response with captured chat messages."""
+    messages: List[ChatMessage]
+
+class ScreenContentRequest(BaseModel):
+    """Request to show content on screen (via screen share)."""
+    type: str = Field(..., description="Content type: image, video, url, html")
+    url: Optional[str] = Field(None, description="URL of the content to display")
+    html: Optional[str] = Field(None, description="Custom HTML content to display")
+    start_share: bool = Field(True, description="Auto-start screen sharing")
+
+# --- END Voice Agent Schemas ---

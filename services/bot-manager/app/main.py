@@ -797,7 +797,8 @@ async def request_bot(
             transcription_tier=req.transcription_tier,
             recording_enabled=req.recording_enabled,
             transcribe_enabled=req.transcribe_enabled,
-            zoom_obf_token=zoom_obf_token_to_use
+            zoom_obf_token=zoom_obf_token_to_use,
+            voice_agent_enabled=req.voice_agent_enabled
         )
         container_start_time = datetime.utcnow()
         logger.info(f"Call to start_bot_container completed. Container ID: {container_id}, Connection ID: {connection_id}")
@@ -2522,6 +2523,300 @@ async def start_reconciliation_scheduler():
             await asyncio.sleep(60)  # Wait 1 minute before retrying on error
 
 # --- --------------------------------------------------------- ---
+
+
+# ==================== Voice Agent / Meeting Interaction Endpoints ====================
+
+@app.post("/bots/{platform}/{native_meeting_id}/speak",
+          status_code=status.HTTP_202_ACCEPTED,
+          summary="Make the bot speak in the meeting",
+          description="Accepts text (for TTS) or pre-rendered audio (URL/base64) and plays it through the bot's microphone into the meeting.",
+          dependencies=[Depends(get_user_and_token)])
+async def bot_speak(
+    platform: Platform,
+    native_meeting_id: str,
+    req: dict,  # Using dict to accept flexible body
+    auth_data: tuple[str, User] = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db)
+):
+    user_token, current_user = auth_data
+    platform_value = platform.value
+
+    # Find active meeting
+    meeting = await _find_active_meeting(db, current_user.id, platform_value, native_meeting_id)
+
+    # Build Redis command
+    if req.get("text"):
+        command = {
+            "action": "speak",
+            "meeting_id": meeting.id,
+            "text": req["text"],
+            "provider": req.get("provider", "openai"),
+            "voice": req.get("voice", "alloy")
+        }
+    elif req.get("audio_url") or req.get("audio_base64"):
+        command = {
+            "action": "speak_audio",
+            "meeting_id": meeting.id,
+            "audio_url": req.get("audio_url"),
+            "audio_base64": req.get("audio_base64"),
+            "format": req.get("format", "wav"),
+            "sample_rate": req.get("sample_rate", 24000)
+        }
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Must provide one of: text, audio_url, or audio_base64"
+        )
+
+    channel = f"bot_commands:meeting:{meeting.id}"
+    await redis_client.publish(channel, json.dumps(command))
+    logger.info(f"[VoiceAgent] Published speak command to {channel}")
+
+    return {"message": "Speak command sent", "meeting_id": meeting.id}
+
+
+@app.delete("/bots/{platform}/{native_meeting_id}/speak",
+            status_code=status.HTTP_202_ACCEPTED,
+            summary="Interrupt bot speech",
+            description="Immediately stops any TTS audio currently being played by the bot.",
+            dependencies=[Depends(get_user_and_token)])
+async def bot_speak_stop(
+    platform: Platform,
+    native_meeting_id: str,
+    auth_data: tuple[str, User] = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db)
+):
+    user_token, current_user = auth_data
+    platform_value = platform.value
+
+    meeting = await _find_active_meeting(db, current_user.id, platform_value, native_meeting_id)
+
+    channel = f"bot_commands:meeting:{meeting.id}"
+    await redis_client.publish(channel, json.dumps({
+        "action": "speak_stop",
+        "meeting_id": meeting.id
+    }))
+
+    return {"message": "Speak stop command sent", "meeting_id": meeting.id}
+
+
+@app.post("/bots/{platform}/{native_meeting_id}/chat",
+          status_code=status.HTTP_202_ACCEPTED,
+          summary="Send a chat message in the meeting",
+          description="Sends a text message to the meeting chat via the bot.",
+          dependencies=[Depends(get_user_and_token)])
+async def bot_chat_send(
+    platform: Platform,
+    native_meeting_id: str,
+    req: dict,
+    auth_data: tuple[str, User] = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db)
+):
+    user_token, current_user = auth_data
+    platform_value = platform.value
+
+    meeting = await _find_active_meeting(db, current_user.id, platform_value, native_meeting_id)
+
+    text = req.get("text")
+    if not text:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="text is required")
+
+    channel = f"bot_commands:meeting:{meeting.id}"
+    await redis_client.publish(channel, json.dumps({
+        "action": "chat_send",
+        "meeting_id": meeting.id,
+        "text": text
+    }))
+
+    return {"message": "Chat message sent", "meeting_id": meeting.id}
+
+
+@app.get("/bots/{platform}/{native_meeting_id}/chat",
+         summary="Get chat messages from the meeting",
+         description="Returns all chat messages captured by the bot from the meeting chat.",
+         dependencies=[Depends(get_user_and_token)])
+async def bot_chat_read(
+    platform: Platform,
+    native_meeting_id: str,
+    auth_data: tuple[str, User] = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db)
+):
+    user_token, current_user = auth_data
+    platform_value = platform.value
+
+    meeting = await _find_active_meeting(db, current_user.id, platform_value, native_meeting_id)
+
+    # Read chat messages from Redis
+    messages_raw = await redis_client.lrange(f"meeting:{meeting.id}:chat_messages", 0, -1)
+    messages = []
+    for raw in messages_raw:
+        try:
+            messages.append(json.loads(raw))
+        except json.JSONDecodeError:
+            pass
+
+    return {"messages": messages, "meeting_id": meeting.id}
+
+
+@app.post("/bots/{platform}/{native_meeting_id}/screen",
+          status_code=status.HTTP_202_ACCEPTED,
+          summary="Show content on screen (screen share)",
+          description="Displays an image, video, or web page via the bot's screen share. Types: 'image', 'video', 'url', 'html'.",
+          dependencies=[Depends(get_user_and_token)])
+async def bot_screen_show(
+    platform: Platform,
+    native_meeting_id: str,
+    req: dict,
+    auth_data: tuple[str, User] = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db)
+):
+    user_token, current_user = auth_data
+    platform_value = platform.value
+
+    meeting = await _find_active_meeting(db, current_user.id, platform_value, native_meeting_id)
+
+    content_type = req.get("type")
+    if content_type not in ("image", "video", "url", "html"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="type must be one of: image, video, url, html"
+        )
+
+    if content_type == "html" and not req.get("html"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="html content is required for type=html")
+    elif content_type != "html" and not req.get("url"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="url is required for type=" + content_type)
+
+    channel = f"bot_commands:meeting:{meeting.id}"
+    await redis_client.publish(channel, json.dumps({
+        "action": "screen_show",
+        "meeting_id": meeting.id,
+        "type": content_type,
+        "url": req.get("url"),
+        "html": req.get("html"),
+        "start_share": req.get("start_share", True)
+    }))
+
+    return {"message": "Screen content command sent", "meeting_id": meeting.id}
+
+
+@app.delete("/bots/{platform}/{native_meeting_id}/screen",
+            status_code=status.HTTP_202_ACCEPTED,
+            summary="Stop screen sharing",
+            description="Stops screen sharing and clears the displayed content.",
+            dependencies=[Depends(get_user_and_token)])
+async def bot_screen_stop(
+    platform: Platform,
+    native_meeting_id: str,
+    auth_data: tuple[str, User] = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db)
+):
+    user_token, current_user = auth_data
+    platform_value = platform.value
+
+    meeting = await _find_active_meeting(db, current_user.id, platform_value, native_meeting_id)
+
+    channel = f"bot_commands:meeting:{meeting.id}"
+    await redis_client.publish(channel, json.dumps({
+        "action": "screen_stop",
+        "meeting_id": meeting.id
+    }))
+
+    return {"message": "Screen stop command sent", "meeting_id": meeting.id}
+
+
+# ─── Avatar (Profile Pic) Endpoints ────────────────────────────────
+
+@app.put("/bots/{platform}/{native_meeting_id}/avatar",
+         status_code=status.HTTP_202_ACCEPTED,
+         summary="Set bot avatar image",
+         description="Sets a custom avatar image for the bot's camera feed. Shown when no screen content is active. Provide 'url' (image URL) or 'image_base64' (data URI).",
+         dependencies=[Depends(get_user_and_token)])
+async def bot_avatar_set(
+    platform: Platform,
+    native_meeting_id: str,
+    req: dict,
+    auth_data: tuple[str, User] = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db)
+):
+    user_token, current_user = auth_data
+    platform_value = platform.value
+
+    meeting = await _find_active_meeting(db, current_user.id, platform_value, native_meeting_id)
+
+    image_url = req.get("url")
+    image_base64 = req.get("image_base64")
+    if not image_url and not image_base64:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Either 'url' or 'image_base64' must be provided"
+        )
+
+    channel = f"bot_commands:meeting:{meeting.id}"
+    await redis_client.publish(channel, json.dumps({
+        "action": "avatar_set",
+        "meeting_id": meeting.id,
+        "url": image_url,
+        "image_base64": image_base64
+    }))
+
+    return {"message": "Avatar set command sent", "meeting_id": meeting.id}
+
+
+@app.delete("/bots/{platform}/{native_meeting_id}/avatar",
+            status_code=status.HTTP_202_ACCEPTED,
+            summary="Reset bot avatar to default",
+            description="Resets the bot's avatar to the default Vexa logo.",
+            dependencies=[Depends(get_user_and_token)])
+async def bot_avatar_reset(
+    platform: Platform,
+    native_meeting_id: str,
+    auth_data: tuple[str, User] = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db)
+):
+    user_token, current_user = auth_data
+    platform_value = platform.value
+
+    meeting = await _find_active_meeting(db, current_user.id, platform_value, native_meeting_id)
+
+    channel = f"bot_commands:meeting:{meeting.id}"
+    await redis_client.publish(channel, json.dumps({
+        "action": "avatar_reset",
+        "meeting_id": meeting.id
+    }))
+
+    return {"message": "Avatar reset command sent", "meeting_id": meeting.id}
+
+
+async def _find_active_meeting(
+    db: AsyncSession,
+    user_id: int,
+    platform_value: str,
+    native_meeting_id: str
+) -> Meeting:
+    """Find the latest active meeting for the given platform/native_id combination."""
+    stmt = select(Meeting).where(
+        Meeting.user_id == user_id,
+        Meeting.platform == platform_value,
+        Meeting.platform_specific_id == native_meeting_id,
+        Meeting.status == MeetingStatus.ACTIVE.value
+    ).order_by(desc(Meeting.created_at)).limit(1)
+
+    result = await db.execute(stmt)
+    meeting = result.scalar_one_or_none()
+
+    if not meeting:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No active meeting found for {platform_value}/{native_meeting_id}"
+        )
+
+    return meeting
+
+
+# --- END Voice Agent Endpoints ---
+
 
 if __name__ == "__main__":
     uvicorn.run(

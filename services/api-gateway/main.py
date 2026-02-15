@@ -21,7 +21,8 @@ from shared_models.schemas import (
     UserCreate, UserResponse, TokenResponse, UserDetailResponse, # Admin Schemas
     ErrorResponse,
     Platform, # Import Platform enum for path parameters
-    BotStatusResponse # ADDED: Import response model for documentation
+    BotStatusResponse, # ADDED: Import response model for documentation
+    SpeakRequest, ChatSendRequest, ChatMessagesResponse, ScreenContentRequest, # Voice agent schemas
 )
 
 load_dotenv()
@@ -287,6 +288,126 @@ async def get_bots_status_proxy(request: Request):
     url = f"{BOT_MANAGER_URL}/bots/status"
     return await forward_request(app.state.http_client, "GET", url, request)
 # --- END Route for GET /bots/status ---
+
+# --- Voice Agent Interaction Routes (proxy to Bot Manager) ---
+
+@app.post("/bots/{platform}/{native_meeting_id}/speak",
+          tags=["Voice Agent"],
+          summary="Make the bot speak in a meeting",
+          description="Sends text for TTS or raw audio to be played into the meeting via the bot's microphone.",
+          dependencies=[Depends(api_key_scheme)],
+          openapi_extra={
+              "requestBody": {
+                  "content": {
+                      "application/json": {
+                          "schema": SpeakRequest.schema()
+                      }
+                  },
+                  "required": True,
+                  "description": "Text to speak (TTS) or audio URL/base64 to play."
+              },
+          })
+async def speak_proxy(platform: Platform, native_meeting_id: str, request: Request):
+    """Forward speak request to Bot Manager."""
+    url = f"{BOT_MANAGER_URL}/bots/{platform.value}/{native_meeting_id}/speak"
+    return await forward_request(app.state.http_client, "POST", url, request)
+
+@app.delete("/bots/{platform}/{native_meeting_id}/speak",
+            tags=["Voice Agent"],
+            summary="Interrupt bot speech",
+            description="Stops any currently playing TTS or audio in the meeting.",
+            dependencies=[Depends(api_key_scheme)])
+async def speak_stop_proxy(platform: Platform, native_meeting_id: str, request: Request):
+    """Forward speak stop request to Bot Manager."""
+    url = f"{BOT_MANAGER_URL}/bots/{platform.value}/{native_meeting_id}/speak"
+    return await forward_request(app.state.http_client, "DELETE", url, request)
+
+@app.post("/bots/{platform}/{native_meeting_id}/chat",
+          tags=["Voice Agent"],
+          summary="Send a chat message in the meeting",
+          description="Sends a text message into the meeting chat via the bot.",
+          dependencies=[Depends(api_key_scheme)],
+          openapi_extra={
+              "requestBody": {
+                  "content": {
+                      "application/json": {
+                          "schema": ChatSendRequest.schema()
+                      }
+                  },
+                  "required": True,
+                  "description": "Chat message text to send."
+              },
+          })
+async def chat_send_proxy(platform: Platform, native_meeting_id: str, request: Request):
+    """Forward chat send request to Bot Manager."""
+    url = f"{BOT_MANAGER_URL}/bots/{platform.value}/{native_meeting_id}/chat"
+    return await forward_request(app.state.http_client, "POST", url, request)
+
+@app.get("/bots/{platform}/{native_meeting_id}/chat",
+         tags=["Voice Agent"],
+         summary="Read chat messages from the meeting",
+         description="Returns chat messages captured by the bot from the meeting chat.",
+         response_model=ChatMessagesResponse,
+         dependencies=[Depends(api_key_scheme)])
+async def chat_read_proxy(platform: Platform, native_meeting_id: str, request: Request):
+    """Forward chat read request to Bot Manager."""
+    url = f"{BOT_MANAGER_URL}/bots/{platform.value}/{native_meeting_id}/chat"
+    return await forward_request(app.state.http_client, "GET", url, request)
+
+@app.post("/bots/{platform}/{native_meeting_id}/screen",
+          tags=["Voice Agent"],
+          summary="Show content on screen share",
+          description="Displays an image, video, or URL via the bot's screen share in the meeting.",
+          dependencies=[Depends(api_key_scheme)],
+          openapi_extra={
+              "requestBody": {
+                  "content": {
+                      "application/json": {
+                          "schema": ScreenContentRequest.schema()
+                      }
+                  },
+                  "required": True,
+                  "description": "Content to display (image, video, or URL)."
+              },
+          })
+async def screen_show_proxy(platform: Platform, native_meeting_id: str, request: Request):
+    """Forward screen content request to Bot Manager."""
+    url = f"{BOT_MANAGER_URL}/bots/{platform.value}/{native_meeting_id}/screen"
+    return await forward_request(app.state.http_client, "POST", url, request)
+
+@app.delete("/bots/{platform}/{native_meeting_id}/screen",
+            tags=["Voice Agent"],
+            summary="Stop screen sharing",
+            description="Stops the bot's screen share and clears the displayed content.",
+            dependencies=[Depends(api_key_scheme)])
+async def screen_stop_proxy(platform: Platform, native_meeting_id: str, request: Request):
+    """Forward screen stop request to Bot Manager."""
+    url = f"{BOT_MANAGER_URL}/bots/{platform.value}/{native_meeting_id}/screen"
+    return await forward_request(app.state.http_client, "DELETE", url, request)
+
+
+@app.put("/bots/{platform}/{native_meeting_id}/avatar",
+         tags=["Voice Agent"],
+         summary="Set bot avatar image",
+         description="Sets a custom avatar for the bot's camera feed. Shown when no screen content is active. Provide 'url' (image URL) or 'image_base64' (data URI). Use DELETE to revert to default.",
+         dependencies=[Depends(api_key_scheme)])
+async def avatar_set_proxy(platform: Platform, native_meeting_id: str, request: Request):
+    """Forward avatar set request to Bot Manager."""
+    url = f"{BOT_MANAGER_URL}/bots/{platform.value}/{native_meeting_id}/avatar"
+    return await forward_request(app.state.http_client, "PUT", url, request)
+
+
+@app.delete("/bots/{platform}/{native_meeting_id}/avatar",
+            tags=["Voice Agent"],
+            summary="Reset bot avatar to default",
+            description="Resets the bot's avatar to the default Vexa logo.",
+            dependencies=[Depends(api_key_scheme)])
+async def avatar_reset_proxy(platform: Platform, native_meeting_id: str, request: Request):
+    """Forward avatar reset request to Bot Manager."""
+    url = f"{BOT_MANAGER_URL}/bots/{platform.value}/{native_meeting_id}/avatar"
+    return await forward_request(app.state.http_client, "DELETE", url, request)
+
+# --- END Voice Agent Interaction Routes ---
 
 # --- Recording Routes (proxy to Bot Manager) ---
 
