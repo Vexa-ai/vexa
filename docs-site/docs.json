@@ -61,6 +61,10 @@
             ]
           },
           {
+            "group": "Voice Agent",
+            "pages": ["voice-agent"]
+          },
+          {
             "group": "Integrations",
             "pages": [
               "webhooks",
@@ -93,7 +97,8 @@
               "api/transcripts",
               "api/meetings",
               "api/recordings",
-              "api/settings"
+              "api/settings",
+              "api/voice-agent"
             ]
           },
           {
