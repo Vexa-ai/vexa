@@ -267,14 +267,14 @@ async def start_bot_container(
         f"LOG_LEVEL={os.getenv('LOG_LEVEL', 'INFO').upper()}",
     ]
 
-    # Add voice agent environment variables (TTS API keys)
+    # Add voice agent environment variables (TTS service URL required)
     if voice_agent_enabled:
-        openai_api_key = os.getenv("OPENAI_API_KEY")
-        if openai_api_key:
-            environment.append(f"OPENAI_API_KEY={openai_api_key}")
-            logger.info("Added OPENAI_API_KEY to bot environment for TTS")
+        tts_service_url = os.getenv("TTS_SERVICE_URL", "").strip()
+        if tts_service_url:
+            environment.append(f"TTS_SERVICE_URL={tts_service_url}")
+            logger.info(f"Added TTS_SERVICE_URL to bot environment: {tts_service_url}")
         else:
-            logger.warning("voice_agent_enabled but OPENAI_API_KEY not set in bot-manager environment")
+            logger.warning("voice_agent_enabled but TTS_SERVICE_URL not set - TTS will fail")
 
     # Add Zoom-specific environment variables if platform is Zoom
     if platform == "zoom":

@@ -57,6 +57,7 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - BOT_IMAGE_NAME=${BOT_IMAGE_NAME:-vexa-bot:dev}
+      - TTS_SERVICE_URL=http://tts-service:8002
       - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa_default
       - LOG_LEVEL=DEBUG
       - DB_HOST=${DB_HOST:-postgres}
@@ -97,6 +98,8 @@ services:
     init: true
     depends_on:
       redis:
+        condition: service_started
+      tts-service:
         condition: service_started
     networks:
       - vexa_default
@@ -356,6 +359,22 @@ services:
     depends_on:
       api-gateway:
         condition: service_started
+    networks:
+      - vexa_default
+    restart: unless-stopped
+
+  tts-service:
+    build:
+      context: .
+      dockerfile: services/tts-service/Dockerfile
+    expose:
+      - "8002"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com}
+      - TTS_API_TOKEN=${TTS_API_TOKEN:-}
+      - LOG_LEVEL=DEBUG
+    init: true
     networks:
       - vexa_default
     restart: unless-stopped
