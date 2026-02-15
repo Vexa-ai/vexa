@@ -1,0 +1,100 @@
+---
+title: "Vexa Documentation"
+---
+Vexa is an open-source meeting bot + API for real-time transcription and post-meeting recording & playback.
+
+If you're here, you likely want one of three things:
+
+- **Get transcripts via API** — use the hosted service to start in minutes
+- **Self-host Vexa** — full control over your data and deployment
+- **Use the dashboard** — open-source UI to join meetings, review history, and play recordings
+
+<Card title="Quickstart (Hosted)" icon="rocket" href="/quickstart">
+  Get your API key and connect your first meeting in minutes.
+</Card>
+
+<CardGroup cols={2}>
+  <Card title="REST API Reference" icon="code" href="/user_api_guide">
+    Send bots, fetch transcripts, list meetings, and download recordings.
+  </Card>
+  <Card title="WebSocket Streaming" icon="bolt" href="/websocket">
+    Low-latency live transcript updates.
+  </Card>
+  <Card title="Recording & Playback" icon="circle-play" href="/recording-storage">
+    Post-meeting audio + timestamp-aligned transcript segments.
+  </Card>
+  <Card title="Webhooks" icon="webhook" href="/webhooks">
+    Get notified when recordings or transcripts complete.
+  </Card>
+</CardGroup>
+
+## How It Works
+
+<Steps>
+  <Step title="Send a bot to a meeting">
+    Use `POST /bots` with `platform` + `native_meeting_id` (and `passcode` when required).
+  </Step>
+  <Step title="Stream or fetch transcripts">
+    Use WebSockets for live updates or `GET /transcripts/{platform}/{native_meeting_id}` for the full result.
+  </Step>
+  <Step title="Stop, then review post-meeting artifacts">
+    When the meeting ends, recordings (if enabled) become available for playback.
+  </Step>
+  <Step title="Optionally delete/anonymize">
+    Delete transcript + recording artifacts with `DELETE /meetings/{platform}/{native_meeting_id}`.
+  </Step>
+</Steps>
+
+## Choose Your Path
+
+### [Hosted API](https://vexa.ai) (recommended to start)
+
+Use the Vexa Cloud API and dashboard — no infrastructure to manage.
+
+1. Get an API key from [vexa.ai/dashboard/api-keys](https://vexa.ai/dashboard/api-keys)
+2. Send a bot: [`POST /bots`](user_api_guide)
+3. Read transcripts: [`GET /transcripts/{platform}/{native_meeting_id}`](user_api_guide)
+4. For live streaming: [WebSocket guide](websocket)
+
+### [Self-Hosted (Vexa Lite)](vexa-lite-deployment) (full control)
+
+Self-host to have full control over your data and deployment. Vexa Lite is a single container that connects to your Postgres database and a remote transcription service.
+
+### [Docker Compose (dev)](deployment)
+
+Full local stack for contributors and development/testing.
+
+### [Vexa Dashboard](ui-dashboard) (open-source UI)
+
+Open-source Next.js dashboard for joining meetings, viewing live transcripts, and reviewing history. Fork it or use it as a reference for building your own integration.
+
+- Repo: [github.com/Vexa-ai/Vexa-Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)
+
+## Core Concepts
+
+- [Core concepts](concepts): bot/meeting/session model + timing semantics
+- [Recording & storage](recording-storage): how artifacts are stored + playback notes (`Range`/`206`)
+- [Delete semantics](concepts#delete-semantics): what "delete" means and what remains for telemetry
+
+## Zoom (The Only Special Platform)
+
+Zoom has extra constraints (OAuth + Meeting SDK + OBF token flow) and typically Marketplace approval.
+
+- [Zoom limitations](platforms/zoom)
+- [Zoom app setup](zoom-app-setup)
+
+## Troubleshooting / Security
+
+- [Troubleshooting](troubleshooting)
+- [Security](security)
+
+## Integrations
+
+- [Integrations](integrations)
+- [ChatGPT transcript share links](chatgpt-transcript-share-links)
+
+## Support / Roadmap
+
+- Issues: https://github.com/Vexa-ai/vexa/issues
+- Milestones: https://github.com/Vexa-ai/vexa/milestones
+- Discord: https://discord.gg/Ga9duGkVz9

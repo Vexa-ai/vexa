@@ -131,6 +131,9 @@ hub/
 
 *.mp3
 
+# Service directories that should not be tracked
+services/vexa-bot-zoom-sdk/
+
 # Image files
 *.png
 

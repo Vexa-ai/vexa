@@ -1,0 +1,70 @@
+# Troubleshooting
+
+This page covers the most common production and self-hosted issues.
+
+## Bot issues
+
+### Bot joins then leaves quickly
+
+Common causes:
+
+- not admitted (Google Meet waiting room)
+- wrong meeting ID / passcode (Teams)
+- Zoom not configured (missing OAuth/OBF token path or Meeting SDK credentials)
+- meeting ended / link invalid
+
+What to do:
+
+1. Check meeting status history in your UI (or your logs).
+2. Confirm you used the correct `native_meeting_id` for the platform.
+3. For Meet/Teams: confirm a host admits the bot.
+4. For Zoom: confirm [`zoom-app-setup.md`](zoom-app-setup.md) is fully configured.
+
+## Transcript issues
+
+### No transcript segments
+
+Common causes:
+
+- `transcribe_enabled=false`
+- there was no speech (silence)
+- audio capture failed (platform/browser restrictions)
+
+Verify:
+
+- call `GET /transcripts/{platform}/{native_meeting_id}` and check `segments`
+- check bot logs for capture/transcription errors
+
+## Recording / playback issues
+
+### "No audio recording" (post-meeting)
+
+Common causes:
+
+- `recording_enabled=false` for that meeting
+- storage backend misconfigured (object store credentials/bucket)
+- recording is still finalizing (short delay after stop)
+
+What to do:
+
+1. Call `GET /transcripts/{platform}/{native_meeting_id}` and check if `recordings` exists.
+2. If recordings exist, stream audio via:
+   - `GET /recordings/{recording_id}/media/{media_file_id}/raw`
+3. Validate storage configuration:
+   - [`recording-storage.md`](recording-storage.md)
+
+### Browser playback can't seek
+
+Seeking requires `Range` support (`206 Partial Content`).
+
+If you proxy audio through a frontend, ensure your proxy forwards the `Range` header and returns the raw bytes without JSON parsing.
+
+## Delete / retention issues
+
+### Deleted meetings still appear
+
+Vexa anonymizes deleted meetings for telemetry/usage tracking. UIs should hide deleted meetings from default lists.
+
+API semantics:
+
+- [`user_api_guide.md`](user_api_guide.md)

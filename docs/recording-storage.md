@@ -1,0 +1,154 @@
+# Recording & Storage
+
+How recording artifacts are stored across deployment modes and how playback works.
+
+## Storage key format
+
+All backends use the same logical key:
+
+`recordings/<user_id>/<recording_id>/<session_uid>.<ext>`
+
+Example:
+
+`recordings/36/42/abc123.wav`
+
+## Backend options
+
+Set `STORAGE_BACKEND` in `bot-manager`:
+
+- `local`: filesystem directory
+- `minio`: S3-compatible object store via MinIO settings
+- `s3`: cloud object store via AWS/S3 settings
+
+## 1) Docker Compose (local path)
+
+Use a simple local path in the container:
+
+```env
+STORAGE_BACKEND=local
+LOCAL_STORAGE_DIR=/data/recordings
+LOCAL_STORAGE_FSYNC=true
+# Optional: bind host path instead of named volume
+# LOCAL_STORAGE_VOLUME_SOURCE=./data/recordings
+```
+
+`docker-compose.yml` mounts a persistent named volume:
+
+- container path: `/data/recordings`
+- volume name: `recordings-data`
+
+So files survive container restarts/redeploys.
+
+If you set `LOCAL_STORAGE_VOLUME_SOURCE=./data/recordings`, files are stored directly under the repo path for easier inspection.
+
+## 2) Docker Compose (MinIO)
+
+```env
+STORAGE_BACKEND=minio
+MINIO_ENDPOINT=minio:9000
+MINIO_ACCESS_KEY=vexa-access-key
+MINIO_SECRET_KEY=vexa-secret-key
+MINIO_BUCKET=vexa-recordings
+MINIO_SECURE=false
+```
+
+This is the default object-storage mode for local dev and production-like tests.
+
+## 3) Cloud S3
+
+```env
+STORAGE_BACKEND=s3
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+S3_BUCKET=vexa-recordings
+# Optional for non-AWS providers:
+# S3_ENDPOINT=https://<provider-endpoint>
+# S3_SECURE=true
+```
+
+For AWS, do not set `S3_ENDPOINT`.
+
+## 4) Vexa Lite (single container)
+
+Lite supports local backend, but for production you should keep compute stateless and use object storage (`s3`).
+
+Recommended (stateless, production):
+
+```env
+STORAGE_BACKEND=s3
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+S3_BUCKET=vexa-recordings
+# Optional for non-AWS providers:
+# S3_ENDPOINT=https://<provider-endpoint>
+# S3_SECURE=true
+```
+
+Local filesystem (testing only):
+
+```env
+STORAGE_BACKEND=local
+LOCAL_STORAGE_DIR=/var/lib/vexa/recordings
+LOCAL_STORAGE_FSYNC=true
+```
+
+Mount a host/docker volume for persistence:
+
+```bash
+-v vexa-recordings:/var/lib/vexa/recordings
+```
+
+Without a mounted volume, recordings are lost when the container is replaced.
+
+## 5) Kubernetes
+
+### Option A: local filesystem in pod (requires PVC)
+
+Use local backend with a PVC mounted into the bot-manager pod:
+
+```env
+STORAGE_BACKEND=local
+LOCAL_STORAGE_DIR=/data/recordings
+LOCAL_STORAGE_FSYNC=true
+```
+
+Mount PVC at `/data/recordings`.
+
+### Option B: object storage (recommended)
+
+Use `minio` (self-hosted) or `s3` (managed cloud) and keep bot-manager stateless.
+
+## API behavior
+
+- For object storage (`minio`/`s3`):
+  - `/recordings/{id}/media/{media_id}/download` returns a presigned URL.
+  - `/recordings/{id}/media/{media_id}/raw` is also available as an authenticated streaming endpoint (useful for browser playback via a same-origin proxy to avoid CORS).
+- For local storage (`local`):
+  - `/recordings/{id}/media/{media_id}/download` returns an authenticated API path:
+    - `/recordings/{id}/media/{media_id}/raw`
+  - `/recordings/{id}/media/{media_id}/raw` streams bytes from the local filesystem.
+
+### Browser playback notes
+
+`/recordings/{id}/media/{media_id}/raw` is designed to support in-browser playback:
+
+- `Content-Disposition: inline` (lets `<audio>` play it without forcing download)
+- `Range` requests (`206 Partial Content`) for seeking
+
+If you proxy audio through a frontend (e.g., Next.js), ensure the proxy forwards `Range` and returns the upstream response body without JSON parsing.
+
+### Operational note (Docker Compose)
+
+Changing `.env` values (e.g., switching `STORAGE_BACKEND`) requires recreating containers to apply updated environment variables:
+
+```bash
+docker compose up -d --force-recreate <service>
+```
+
+## Durability notes
+
+- `LOCAL_STORAGE_FSYNC=true` forces fsync on writes for local backend.
+- Local backend durability depends on the underlying disk/volume lifecycle.
+- Object storage backends provide independent persistence outside bot process lifecycle.

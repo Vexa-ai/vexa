@@ -50,6 +50,7 @@ class Meeting(Base):
     user = relationship("User", back_populates="meetings")
     transcriptions = relationship("Transcription", back_populates="meeting")
     sessions = relationship("MeetingSession", back_populates="meeting", cascade="all, delete-orphan")
+    recordings = relationship("Recording", back_populates="meeting", cascade="all, delete-orphan")
 
     # Add composite index for efficient lookup by user, platform, and native ID, including created_at for sorting
     __table_args__ = (
@@ -112,3 +113,91 @@ class MeetingSession(Base):
     meeting = relationship("Meeting", back_populates="sessions") # Define relationship
 
     __table_args__ = (UniqueConstraint('meeting_id', 'session_uid', name='_meeting_session_uc'),) # Ensure unique session per meeting
+
+
+class Recording(Base):
+    """A recording session — container for one or more media artifacts (audio, video, screenshots)."""
+    __tablename__ = "recordings"
+    id = Column(Integer, primary_key=True, index=True)
+    meeting_id = Column(Integer, ForeignKey("meetings.id"), nullable=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    session_uid = Column(String, nullable=True, index=True)
+
+    # Source tracking
+    source = Column(String(50), nullable=False, default='bot')  # 'bot', 'upload', 'url'
+
+    # Status
+    status = Column(String(50), nullable=False, default='in_progress', index=True)  # 'in_progress', 'uploading', 'completed', 'failed'
+    error_message = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    meeting = relationship("Meeting", back_populates="recordings")
+    user = relationship("User")
+    media_files = relationship("MediaFile", back_populates="recording", cascade="all, delete-orphan")
+    transcription_jobs = relationship("TranscriptionJob", back_populates="recording", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index('ix_recording_meeting_session', 'meeting_id', 'session_uid'),
+        Index('ix_recording_user_created', 'user_id', 'created_at'),
+    )
+
+
+class MediaFile(Base):
+    """An individual media artifact (audio file, video file, screenshot) belonging to a Recording."""
+    __tablename__ = "media_files"
+    id = Column(Integer, primary_key=True, index=True)
+    recording_id = Column(Integer, ForeignKey("recordings.id"), nullable=False, index=True)
+
+    # Type and format
+    type = Column(String(50), nullable=False)  # 'audio', 'video', 'screenshot'
+    format = Column(String(20), nullable=False)  # 'wav', 'webm', 'opus', 'mp3', 'jpg', 'png'
+
+    # Storage
+    storage_path = Column(String(1024), nullable=False)
+    storage_backend = Column(String(50), nullable=False, default='minio')  # 'minio', 's3', 'local'
+
+    # Metadata
+    file_size_bytes = Column(Integer, nullable=True)
+    duration_seconds = Column(Float, nullable=True)  # For time-based media (audio, video)
+    extra_metadata = Column("metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=lambda: {})  # sample_rate, resolution, fps, screenshot_timestamp, etc.
+
+    created_at = Column(DateTime, server_default=func.now())
+
+    recording = relationship("Recording", back_populates="media_files")
+
+
+class TranscriptionJob(Base):
+    """A batch transcription job — processes a recording through the transcription service."""
+    __tablename__ = "transcription_jobs"
+    id = Column(Integer, primary_key=True, index=True)
+    recording_id = Column(Integer, ForeignKey("recordings.id"), nullable=False, index=True)
+    meeting_id = Column(Integer, ForeignKey("meetings.id"), nullable=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+
+    # Job config
+    language = Column(String(10), nullable=True)
+    task = Column(String(50), nullable=False, default='transcribe')
+
+    # Status tracking
+    status = Column(String(50), nullable=False, default='pending', index=True)  # 'pending', 'processing', 'completed', 'failed'
+    error_message = Column(Text, nullable=True)
+    progress = Column(Float, nullable=True)  # 0.0 to 1.0
+
+    # Results
+    segments_count = Column(Integer, nullable=True)
+    session_uid = Column(String, nullable=True, index=True)  # The session_uid used for transcription segments
+
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    recording = relationship("Recording", back_populates="transcription_jobs")
+    meeting = relationship("Meeting")
+    user = relationship("User")
+
+    __table_args__ = (
+        Index('ix_transcription_job_status_created', 'status', 'created_at'),
+        Index('ix_transcription_job_user_created', 'user_id', 'created_at'),
+    )

@@ -1,10 +1,10 @@
-# Self-Hosted Vexa Management Guide
+# Admin API
 
-Essential user and token management for self-hosted Vexa deployments.
+Manage users and API tokens for your self-hosted Vexa instance. The Admin API is used to create users, mint API tokens, and configure user settings.
 
 ## Prerequisites
 
-- **Base URL**: `http://localhost:18056` (default port from `.env`)
+- **Base URL**: `http://localhost:8056` (default port from `.env`)
 - **Admin Token**: `ADMIN_API_TOKEN=token` (default, check your `.env` file)
 
 **For Python examples**, install the client:
@@ -23,7 +23,7 @@ Create a new user or return existing user if email already exists.
 ### Using curl
 
 ```bash
-curl -X POST http://localhost:18056/admin/users \
+curl -X POST http://localhost:8056/admin/users \
   -H "Content-Type: application/json" \
   -H "X-Admin-API-Key: token" \
   -d '{
@@ -50,7 +50,7 @@ curl -X POST http://localhost:18056/admin/users \
 from vexa_client import VexaClient
 
 admin_client = VexaClient(
-    base_url="http://localhost:18056",
+    base_url="http://localhost:8056",
     admin_key="token"
 )
 
@@ -76,7 +76,7 @@ Generate an API token for a user to access the API.
 
 ```bash
 # Replace USER_ID with the user's ID from step 1
-curl -X POST http://localhost:18056/admin/users/1/tokens \
+curl -X POST http://localhost:8056/admin/users/1/tokens \
   -H "X-Admin-API-Key: token"
 ```
 
@@ -107,7 +107,7 @@ print(f"API token: {token_info['token']}")
 
 ```bash
 # Step 1: Create user
-USER_RESPONSE=$(curl -s -X POST http://localhost:18056/admin/users \
+USER_RESPONSE=$(curl -s -X POST http://localhost:8056/admin/users \
   -H "Content-Type: application/json" \
   -H "X-Admin-API-Key: token" \
   -d '{
@@ -120,14 +120,14 @@ USER_ID=$(echo $USER_RESPONSE | jq -r '.id')
 echo "Created user with ID: $USER_ID"
 
 # Step 2: Generate API token
-TOKEN_RESPONSE=$(curl -s -X POST http://localhost:18056/admin/users/${USER_ID}/tokens \
+TOKEN_RESPONSE=$(curl -s -X POST http://localhost:8056/admin/users/${USER_ID}/tokens \
   -H "X-Admin-API-Key: token")
 
 API_TOKEN=$(echo $TOKEN_RESPONSE | jq -r '.token')
 echo "Generated token: $API_TOKEN"
 
 # Step 3: Test user API access
-curl -X GET "http://localhost:18056/meetings" \
+curl -X GET "http://localhost:8056/meetings" \
   -H "X-API-Key: $API_TOKEN"
 ```
 
@@ -137,7 +137,7 @@ curl -X GET "http://localhost:18056/meetings" \
 from vexa_client import VexaClient
 
 # Step 1: Create user
-admin_client = VexaClient(base_url="http://localhost:18056", admin_key="token")
+admin_client = VexaClient(base_url="http://localhost:8056", admin_key="token")
 
 user = admin_client.create_user(
     email="newuser@example.com",
@@ -152,7 +152,7 @@ api_token = token_info['token']
 print(f"✓ Generated token: {api_token}")
 
 # Step 3: Test user access
-user_client = VexaClient(base_url="http://localhost:18056", api_key=api_token)
+user_client = VexaClient(base_url="http://localhost:8056", api_key=api_token)
 meetings = user_client.get_meetings()
 print(f"✓ User API access working!")
 ```
@@ -163,7 +163,7 @@ print(f"✓ User API access working!")
 
 **curl:**
 ```bash
-curl -X GET "http://localhost:18056/admin/users/email/user@example.com" \
+curl -X GET "http://localhost:8056/admin/users/email/user@example.com" \
   -H "X-Admin-API-Key: token"
 ```
 
@@ -177,7 +177,7 @@ print(f"User ID: {user['id']}, Bots: {user['max_concurrent_bots']}")
 
 **curl:**
 ```bash
-curl -X GET "http://localhost:18056/admin/users/1" \
+curl -X GET "http://localhost:8056/admin/users/1" \
   -H "X-Admin-API-Key: token"
 ```
 
@@ -187,7 +187,7 @@ Returns detailed user information including API tokens.
 
 **curl:**
 ```bash
-curl -X GET "http://localhost:18056/admin/users?skip=0&limit=100" \
+curl -X GET "http://localhost:8056/admin/users?skip=0&limit=100" \
   -H "X-Admin-API-Key: token"
 ```
 
@@ -204,7 +204,7 @@ Update user settings such as concurrent bot limits.
 
 **curl:**
 ```bash
-curl -X PATCH http://localhost:18056/admin/users/1 \
+curl -X PATCH http://localhost:8056/admin/users/1 \
   -H "Content-Type: application/json" \
   -H "X-Admin-API-Key: token" \
   -d '{
@@ -235,7 +235,7 @@ print(f"Updated bot limit to {updated_user['max_concurrent_bots']}")
 **curl:**
 ```bash
 # Delete token by ID
-curl -X DELETE http://localhost:18056/admin/tokens/1 \
+curl -X DELETE http://localhost:8056/admin/tokens/1 \
   -H "X-Admin-API-Key: token"
 ```
 
@@ -263,7 +263,7 @@ curl -X DELETE http://localhost:18056/admin/tokens/1 \
 
 **"Connection refused"**
 - Ensure services are running: `make ps`
-- Check API Gateway is healthy: `curl http://localhost:18056/`
+- Check API Gateway is healthy: `curl http://localhost:8056/`
 
 **Token not working for user API**
 - Verify token was copied correctly
@@ -272,7 +272,7 @@ curl -X DELETE http://localhost:18056/admin/tokens/1 \
 
 ## Reference Links
 
-- **API Gateway Docs**: http://localhost:18056/docs
+- **API Gateway Docs**: http://localhost:8056/docs
 - **Deployment Guide**: [deployment.md](deployment.md)
 - **Notebooks**: `nbs/manage_users.ipynb`, `nbs/0_basic_test.ipynb`
 
@@ -283,4 +283,4 @@ curl -X DELETE http://localhost:18056/admin/tokens/1 \
 
 ---
 
-**Note**: For complete API documentation including bot management and transcription endpoints, see http://localhost:18056/docs
+**Note**: For complete API documentation including bot management and transcription endpoints, see http://localhost:8056/docs

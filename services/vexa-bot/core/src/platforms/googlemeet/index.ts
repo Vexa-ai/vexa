@@ -17,15 +17,17 @@ export async function handleGoogleMeet(
   gracefulLeaveFunction: (page: Page | null, exitCode: number, reason: string, errorDetails?: any) => Promise<void>
 ): Promise<void> {
   
+  // Google Meet is browser-based, so page is always non-null
+  // Cast to satisfy PlatformStrategies interface which supports SDK-based platforms (Page | null)
   const strategies: PlatformStrategies = {
-    join: async (page: Page, botConfig: BotConfig) => {
-      await joinGoogleMeeting(page, botConfig.meetingUrl!, botConfig.botName, botConfig);
+    join: async (page: Page | null, botConfig: BotConfig) => {
+      await joinGoogleMeeting(page as Page, botConfig.meetingUrl!, botConfig.botName, botConfig);
     },
-    waitForAdmission: waitForGoogleMeetingAdmission,
-    checkAdmissionSilent: checkForGoogleAdmissionSilent,
-    prepare: prepareForRecording,
-    startRecording: startGoogleRecording,
-    startRemovalMonitor: startGoogleRemovalMonitor,
+    waitForAdmission: waitForGoogleMeetingAdmission as any,
+    checkAdmissionSilent: checkForGoogleAdmissionSilent as any,
+    prepare: prepareForRecording as any,
+    startRecording: startGoogleRecording as any,
+    startRemovalMonitor: startGoogleRemovalMonitor as any,
     leave: leaveGoogleMeet
   };
 

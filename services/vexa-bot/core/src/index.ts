@@ -4,8 +4,10 @@ import { callStatusChangeCallback, mapExitReasonToStatus } from "./services/unif
 import { chromium } from "playwright-extra";
 import { handleGoogleMeet, leaveGoogleMeet } from "./platforms/googlemeet";
 import { handleMicrosoftTeams, leaveMicrosoftTeams } from "./platforms/msteams";
+import { handleZoom, leaveZoom } from "./platforms/zoom";
 import { browserArgs, userAgent } from "./constans";
 import { BotConfig } from "./types";
+import { RecordingService } from "./services/recording";
 import { createClient, RedisClientType } from 'redis';
 import { Page, Browser } from 'playwright-core';
 // HTTP imports removed - using unified callback service instead
@@ -30,6 +32,14 @@ let redisSubscriber: RedisClientType | null = null;
 // --- ADDED: Browser instance ---
 let browserInstance: Browser | null = null;
 // -------------------------------
+
+// --- Recording service reference (set by platform handlers) ---
+let activeRecordingService: RecordingService | null = null;
+let currentBotConfig: BotConfig | null = null;
+export function setActiveRecordingService(svc: RecordingService | null): void {
+  activeRecordingService = svc;
+}
+// ----------------------------------------------------------
 
 // --- ADDED: Stop signal tracking ---
 let stopSignalReceived = false;
@@ -196,12 +206,13 @@ const handleRedisMessage = async (message: string, channel: string, page: Page |
         stopSignalReceived = true;
         // TODO: Implement leave logic (Phase 4)
         log("Received leave command");
-        if (!isShuttingDown && page && !page.isClosed()) { // Check flag and page state
+        if (!isShuttingDown) {
           // A command-initiated leave is a successful completion, not an error.
           // Exit with code 0 to signal success to Nomad and prevent restarts.
-          await performGracefulLeave(page, 0, "self_initiated_leave");
+          const pageForLeave = (page && !page.isClosed()) ? page : null;
+          await performGracefulLeave(pageForLeave, 0, "self_initiated_leave");
         } else {
-           log("Ignoring leave command: Already shutting down or page unavailable.")
+           log("Ignoring leave command: Already shutting down.")
         }
       }
   } catch (e: any) {
@@ -226,19 +237,26 @@ async function performGracefulLeave(
   log(`[Graceful Leave] Initiating graceful shutdown sequence... Reason: ${reason}, Exit Code: ${exitCode}`);
 
   let platformLeaveSuccess = false;
-  if (page && !page.isClosed()) { // Only attempt platform leave if page is valid
+
+  // Handle SDK-based platforms (Zoom) separately - they don't use Playwright page
+  if (currentPlatform === "zoom") {
+    try {
+      log("[Graceful Leave] Attempting Zoom SDK cleanup...");
+      platformLeaveSuccess = await leaveZoom(null); // Zoom doesn't use page
+    } catch (error: any) {
+      log(`[Graceful Leave] Zoom cleanup error: ${error.message}`);
+      platformLeaveSuccess = false;
+    }
+  } else if (page && !page.isClosed()) { // Browser-based platforms (Google Meet, Teams)
     try {
       log("[Graceful Leave] Attempting platform-specific leave...");
-      // Assuming currentPlatform is set appropriately, or determine it if needed
-      if (currentPlatform === "google_meet") { // Add platform check if you have other platform handlers
+      if (currentPlatform === "google_meet") {
          platformLeaveSuccess = await leaveGoogleMeet(page);
       } else if (currentPlatform === "teams") {
          platformLeaveSuccess = await leaveMicrosoftTeams(page);
       } else {
          log(`[Graceful Leave] No platform-specific leave defined for ${currentPlatform}. Page will be closed.`);
-         // If no specific leave, we still consider it "handled" to proceed with cleanup.
-         // The exitCode passed to this function will determine the callback's exitCode.
-         platformLeaveSuccess = true; // Or false if page closure itself is the "action"
+         platformLeaveSuccess = true;
       }
       log(`[Graceful Leave] Platform leave/close attempt result: ${platformLeaveSuccess}`);
       
@@ -256,6 +274,20 @@ async function performGracefulLeave(
     // If the page is already gone, we can't perform a UI leave.
     // The provided exitCode and reason will dictate the callback.
     // If reason is 'admission_failed', exitCode would be 2, and platformLeaveSuccess is irrelevant.
+  }
+
+  // Upload recording if available
+  if (activeRecordingService && currentBotConfig?.recordingUploadUrl && currentBotConfig?.token) {
+    try {
+      log("[Graceful Leave] Uploading recording to bot-manager...");
+      await activeRecordingService.upload(currentBotConfig.recordingUploadUrl, currentBotConfig.token);
+      log("[Graceful Leave] Recording uploaded successfully.");
+    } catch (uploadError: any) {
+      log(`[Graceful Leave] Recording upload failed: ${uploadError.message}`);
+    } finally {
+      await activeRecordingService.cleanup();
+      activeRecordingService = null;
+    }
   }
 
   // Determine final exit code. If the initial intent was a successful exit (code 0),
@@ -344,16 +376,20 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
   
   // --- UPDATED: Parse and store config values ---
   currentLanguage = botConfig.language;
-  currentTask = botConfig.task || 'transcribe';
+  currentTask = botConfig.transcribeEnabled === false ? null : (botConfig.task || 'transcribe');
   currentRedisUrl = botConfig.redisUrl;
   currentConnectionId = botConfig.connectionId;
   botManagerCallbackUrl = botConfig.botManagerCallbackUrl || null; // ADDED: Get callback URL from botConfig
   currentPlatform = botConfig.platform; // Set currentPlatform here
+  currentBotConfig = botConfig; // Store full config for recording upload
 
   // Destructure other needed config values
   const { meetingUrl, platform, botName } = botConfig;
 
-  log(`Starting bot for ${platform} with URL: ${meetingUrl}, name: ${botName}, language: ${currentLanguage}, task: ${currentTask}, connectionId: ${currentConnectionId}`);
+  log(
+    `Starting bot for ${platform} with URL: ${meetingUrl}, name: ${botName}, language: ${currentLanguage}, ` +
+    `task: ${currentTask}, transcribeEnabled: ${botConfig.transcribeEnabled !== false}, connectionId: ${currentConnectionId}`
+  );
 
   // Fail fast: meeting_id must be present for control-plane commands
   const meetingId = botConfig.meeting_id;
@@ -403,22 +439,33 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
 
   // Simple browser setup like simple-bot.js
   if (botConfig.platform === "teams") {
-    log("Using MS Edge browser for Teams platform (simple-bot.js approach)");
-    // Launch browser in headless mode with Edge channel with insecure WebSocket support
-    browserInstance = await chromium.launch({ 
-      headless: false,
-      channel: 'msedge',
-      args: [
-        '--disable-web-security',
-        '--disable-features=VizDisplayCompositor',
-        '--allow-running-insecure-content',
-        '--ignore-certificate-errors',
-        '--ignore-ssl-errors',
-        '--ignore-certificate-errors-spki-list',
-        '--disable-site-isolation-trials',
-        '--disable-features=VizDisplayCompositor'
-      ]
-    });
+    const teamsLaunchArgs = [
+      '--disable-web-security',
+      '--disable-features=VizDisplayCompositor',
+      '--allow-running-insecure-content',
+      '--ignore-certificate-errors',
+      '--ignore-ssl-errors',
+      '--ignore-certificate-errors-spki-list',
+      '--disable-site-isolation-trials',
+      '--disable-features=VizDisplayCompositor'
+    ];
+
+    try {
+      log("Using MS Edge browser for Teams platform");
+      // Preferred path: Edge channel
+      browserInstance = await chromium.launch({
+        headless: false,
+        channel: 'msedge',
+        args: teamsLaunchArgs
+      });
+    } catch (edgeLaunchError: any) {
+      // Runtime guard: if Edge isn't installed in the image, don't crash the bot process.
+      log(`MS Edge launch failed for Teams (${edgeLaunchError?.message || edgeLaunchError}). Falling back to bundled Chromium.`);
+      browserInstance = await chromium.launch({
+        headless: false,
+        args: teamsLaunchArgs
+      });
+    }
     
     // Create context with CSP bypass to allow script injection (like Google Meet)
     const context = await browserInstance.newContext({
@@ -496,8 +543,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     if (botConfig.platform === "google_meet") {
       await handleGoogleMeet(botConfig, page, performGracefulLeave);
     } else if (botConfig.platform === "zoom") {
-      log("Zoom platform not yet implemented.");
-      await performGracefulLeave(page, 1, "platform_not_implemented");
+      await handleZoom(botConfig, page, performGracefulLeave);
     } else if (botConfig.platform === "teams") {
       await handleMicrosoftTeams(botConfig, page, performGracefulLeave);
     } else {

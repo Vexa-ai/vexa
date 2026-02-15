@@ -101,6 +101,20 @@ export async function leaveMicrosoftTeams(page: Page | null, botConfig?: BotConf
     return false;
   }
 
+  // Flush browser-side recording blob before callback/leave path.
+  // This ensures Teams audio is persisted before upload is attempted.
+  try {
+    log("[leaveMicrosoftTeams] Flushing browser recording blob before leave...");
+    await page.evaluate(async () => {
+      const flushFn = (window as any).__vexaFlushRecordingBlob;
+      if (typeof flushFn === "function") {
+        await flushFn("manual_leave");
+      }
+    });
+  } catch (flushError: any) {
+    log(`[leaveMicrosoftTeams] Recording flush failed: ${flushError.message}`);
+  }
+
   // Call leave callback first to notify bot-manager
   if (botConfig) {
     try {
