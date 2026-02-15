@@ -349,6 +349,95 @@ export class ScreenContentService {
       };
     });
     log(`[ScreenContent] replaceTrack result: ${JSON.stringify(replaceResult)}`);
+
+    // Deep WebRTC SDP diagnostic — check what the SDP says about video
+    const sdpDiag = await this.page.evaluate(async () => {
+      const pcs = (window as any).__vexa_peer_connections as RTCPeerConnection[] || [];
+      const results: any[] = [];
+      for (let i = 0; i < pcs.length; i++) {
+        const pc = pcs[i];
+        if (pc.connectionState === 'closed') continue;
+        const localDesc = pc.localDescription;
+        const remoteDesc = pc.remoteDescription;
+
+        // Parse video m= lines from SDP
+        const parseVideoLines = (sdp: string | null | undefined) => {
+          if (!sdp) return null;
+          const lines = sdp.split('\n');
+          const videoSections: string[] = [];
+          let inVideo = false;
+          let current = '';
+          for (const line of lines) {
+            if (line.startsWith('m=video')) {
+              inVideo = true;
+              current = line.trim();
+            } else if (line.startsWith('m=') && inVideo) {
+              videoSections.push(current);
+              inVideo = false;
+              current = '';
+            } else if (inVideo) {
+              // Only capture key lines: a=mid, a=sendonly, a=recvonly, a=inactive, a=msid, a=ssrc
+              const trimmed = line.trim();
+              if (trimmed.startsWith('a=mid:') || trimmed.startsWith('a=sendonly') ||
+                  trimmed.startsWith('a=recvonly') || trimmed.startsWith('a=inactive') ||
+                  trimmed.startsWith('a=sendrecv') || trimmed.startsWith('a=msid:') ||
+                  trimmed.startsWith('a=ssrc:') || trimmed.startsWith('a=extmap-allow-mixed') ||
+                  trimmed.startsWith('c=')) {
+                current += ' | ' + trimmed;
+              }
+            }
+          }
+          if (current) videoSections.push(current);
+          return videoSections;
+        };
+
+        // Also get sender track info AFTER replaceTrack
+        const senderInfo: any[] = [];
+        for (const s of pc.getSenders()) {
+          senderInfo.push({
+            trackKind: s.track?.kind || 'null',
+            trackId: s.track?.id?.substring(0, 16) || 'null',
+            trackLabel: s.track?.label?.substring(0, 40) || 'null',
+            trackReadyState: s.track?.readyState || 'null',
+            trackEnabled: s.track?.enabled ?? null,
+          });
+        }
+
+        // getStats for outbound video
+        let outboundVideoStats: any = null;
+        try {
+          const stats = await pc.getStats();
+          stats.forEach((report: any) => {
+            if (report.type === 'outbound-rtp' && report.kind === 'video') {
+              outboundVideoStats = {
+                bytesSent: report.bytesSent,
+                packetsSent: report.packetsSent,
+                framesSent: report.framesSent,
+                framesEncoded: report.framesEncoded,
+                frameWidth: report.frameWidth,
+                frameHeight: report.frameHeight,
+                framesPerSecond: report.framesPerSecond,
+                qualityLimitationReason: report.qualityLimitationReason,
+                active: report.active,
+              };
+            }
+          });
+        } catch {}
+
+        results.push({
+          pc: i,
+          connectionState: pc.connectionState,
+          iceConnectionState: pc.iceConnectionState,
+          signalingState: pc.signalingState,
+          localVideoSDP: parseVideoLines(localDesc?.sdp),
+          remoteVideoSDP: parseVideoLines(remoteDesc?.sdp),
+          senders: senderInfo,
+          outboundVideoStats,
+        });
+      }
+      return results;
+    });
+    log(`[ScreenContent] SDP diagnostic: ${JSON.stringify(sdpDiag)}`);
   }
 
   /**
@@ -732,15 +821,17 @@ export function getVirtualCameraInitScript(): string {
 
       // Also patch replaceTrack on RTCRtpSender to intercept any later
       // track swaps that Google Meet might do (e.g., camera toggle).
+      // When Meet tries to set a video track, we substitute our canvas track.
       const origReplaceTrack = RTCRtpSender.prototype.replaceTrack;
       RTCRtpSender.prototype.replaceTrack = function(newTrack) {
         if (newTrack && newTrack.kind === 'video' && canvasStream) {
           const canvasTrack = canvasStream.getVideoTracks()[0];
           // Only swap if the incoming track is NOT our canvas track
           if (canvasTrack && newTrack.id !== canvasTrack.id) {
-            console.log('[Vexa] replaceTrack intercepted: keeping canvas track (blocked: ' + newTrack.label + ')');
-            // Return resolved promise — we keep our canvas track
-            return Promise.resolve();
+            console.log('[Vexa] replaceTrack intercepted: substituting canvas track (blocked: ' + newTrack.label + ')');
+            // CRITICAL: Don't just block — actually set our canvas track!
+            // Returning Promise.resolve() would leave the sender with a null track.
+            return origReplaceTrack.call(this, canvasTrack);
           }
         }
         return origReplaceTrack.call(this, newTrack);
