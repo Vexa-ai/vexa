@@ -186,6 +186,22 @@ Error messages.
 }
 ```
 
+#### Voice Agent Events
+
+When a bot is running with `voice_agent_enabled: true`, the following events are published on the Redis channel `va:meeting:{meeting_id}:events` (and forwarded via WebSocket):
+
+| Event Type | Payload | Description |
+|------------|---------|-------------|
+| `speak.started` | `{"text": "..."}` | Bot started speaking |
+| `speak.completed` | — | Speech playback finished |
+| `speak.interrupted` | — | Speech interrupted via API |
+| `chat.received` | `{"sender": "John", "text": "...", "timestamp": 1234}` | Chat message captured |
+| `chat.sent` | `{"text": "..."}` | Bot sent a chat message |
+| `screen.sharing_started` | `{"content_type": "image"}` | Screen sharing started |
+| `screen.sharing_stopped` | — | Screen sharing stopped |
+
+See [Voice Agent Guide](voice-agent.md) for full details.
+
 ## Segment Schema
 
 Minimum fields to consume:

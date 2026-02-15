@@ -38,6 +38,10 @@ Pick the path that matches what you're doing:
 - [Troubleshooting](troubleshooting.md)
 - [Security and Data Handling](security.md)
 
+## Voice Agent (Meeting Interaction)
+
+- [Voice Agent Guide](voice-agent.md): make the bot speak, chat, and share content in meetings (TTS, chat read/write, screen share)
+
 ## Misc / Integrations
 
 - [ChatGPT Transcript Share Links](chatgpt-transcript-share-links.md): shared transcript URL behavior
@@ -57,6 +61,7 @@ Pick the path that matches what you're doing:
 3. Integrate REST endpoints via [User API Guide](user_api_guide.md).
 4. Add live updates with [WebSocket Guide](websocket.md).
 5. If needed, configure Zoom with [Zoom Integration Setup](zoom-app-setup.md).
+6. For interactive bots (speak, chat, screen share), see [Voice Agent Guide](voice-agent.md).
 
 ## Support
 
