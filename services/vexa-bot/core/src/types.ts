@@ -23,4 +23,7 @@ export type BotConfig = {
   recordingEnabled?: boolean;
   captureModes?: string[];  // e.g., ['audio'], ['audio', 'video'], ['audio', 'screenshots']
   recordingUploadUrl?: string;  // bot-manager internal upload endpoint
+
+  // Voice agent / meeting interaction interface
+  voiceAgentEnabled?: boolean;  // Enable TTS, chat, screen share capabilities
 }

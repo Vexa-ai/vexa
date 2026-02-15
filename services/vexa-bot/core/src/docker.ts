@@ -26,7 +26,9 @@ export const BotConfigSchema = z.object({
   botManagerCallbackUrl: z.string().url().optional(), // ADDED: Optional callback URL
   recordingEnabled: z.boolean().optional(),
   captureModes: z.array(z.string()).optional(),
-  recordingUploadUrl: z.string().url().optional()
+  recordingUploadUrl: z.string().url().optional(),
+  // Voice agent / meeting interaction interface
+  voiceAgentEnabled: z.boolean().optional(),
 });
 
 

@@ -17,6 +17,18 @@ sleep 1
 echo "[Entrypoint] Creating PulseAudio null sink for audio capture..."
 pactl load-module module-null-sink sink_name=zoom_sink sink_properties=device.description="ZoomAudioSink" 2>/dev/null || true
 
+# Create a dedicated TTS sink for voice agent audio injection
+# Audio played to tts_sink will be picked up by tts_sink.monitor (the virtual mic)
+echo "[Entrypoint] Creating PulseAudio TTS sink for voice agent..."
+pactl load-module module-null-sink sink_name=tts_sink sink_properties=device.description="TTSAudioSink" 2>/dev/null || true
+
+# Create a remap source from tts_sink.monitor — this creates a proper capture device
+# that Chromium can discover and use as microphone input for WebRTC / getUserMedia().
+# Without this, Chromium only sees monitor sources (which it ignores for mic input).
+echo "[Entrypoint] Creating virtual microphone from TTS sink monitor..."
+pactl load-module module-remap-source master=tts_sink.monitor source_name=virtual_mic source_properties=device.description="VirtualMicrophone" 2>/dev/null || true
+pactl set-default-source virtual_mic 2>/dev/null || true
+
 # Configure ALSA to route through PulseAudio
 echo "[Entrypoint] Configuring ALSA to use PulseAudio..."
 mkdir -p /root

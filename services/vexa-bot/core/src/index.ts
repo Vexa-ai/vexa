@@ -5,9 +5,14 @@ import { chromium } from "playwright-extra";
 import { handleGoogleMeet, leaveGoogleMeet } from "./platforms/googlemeet";
 import { handleMicrosoftTeams, leaveMicrosoftTeams } from "./platforms/msteams";
 import { handleZoom, leaveZoom } from "./platforms/zoom";
-import { browserArgs, userAgent } from "./constans";
+import { browserArgs, getBrowserArgs, userAgent } from "./constans";
 import { BotConfig } from "./types";
 import { RecordingService } from "./services/recording";
+import { TTSPlaybackService } from "./services/tts-playback";
+import { MicrophoneService } from "./services/microphone";
+import { MeetingChatService, ChatTranscriptConfig } from "./services/chat";
+import { ScreenContentService, getVirtualCameraInitScript } from "./services/screen-content";
+import { ScreenShareService } from "./services/screen-share"; // kept for Teams; unused for Google Meet camera-feed approach
 import { createClient, RedisClientType } from 'redis';
 import { Page, Browser } from 'playwright-core';
 // HTTP imports removed - using unified callback service instead
@@ -40,6 +45,15 @@ export function setActiveRecordingService(svc: RecordingService | null): void {
   activeRecordingService = svc;
 }
 // ----------------------------------------------------------
+
+// --- Voice agent / meeting interaction services ---
+let ttsPlaybackService: TTSPlaybackService | null = null;
+let microphoneService: MicrophoneService | null = null;
+let chatService: MeetingChatService | null = null;
+let screenContentService: ScreenContentService | null = null;
+let screenShareService: ScreenShareService | null = null;
+let redisPublisher: RedisClientType | null = null;
+// -------------------------------------------------
 
 // --- ADDED: Stop signal tracking ---
 let stopSignalReceived = false;
@@ -214,6 +228,71 @@ const handleRedisMessage = async (message: string, channel: string, page: Page |
         } else {
            log("Ignoring leave command: Already shutting down.")
         }
+
+      // ==================== Voice Agent Commands ====================
+
+      } else if (command.action === 'speak') {
+        // Speak text using TTS
+        log(`Processing speak command: "${(command.text || '').substring(0, 50)}..."`);
+        await handleSpeakCommand(command, page);
+
+      } else if (command.action === 'speak_audio') {
+        // Play pre-rendered audio (URL or base64)
+        log(`Processing speak_audio command`);
+        await handleSpeakAudioCommand(command);
+
+      } else if (command.action === 'speak_stop') {
+        // Interrupt current speech
+        log('Processing speak_stop command');
+        if (ttsPlaybackService) {
+          ttsPlaybackService.interrupt();
+          await publishVoiceEvent('speak.interrupted');
+        }
+
+      } else if (command.action === 'chat_send') {
+        // Send a chat message
+        log(`Processing chat_send command: "${(command.text || '').substring(0, 50)}..."`);
+        if (chatService) {
+          const success = await chatService.sendMessage(command.text);
+          if (success) await publishVoiceEvent('chat.sent', { text: command.text });
+        } else {
+          log('[Chat] Chat service not initialized');
+        }
+
+      } else if (command.action === 'chat_read') {
+        // Return captured chat messages (publish to response channel)
+        log('Processing chat_read command');
+        if (chatService) {
+          const messages = chatService.getChatMessages();
+          await publishVoiceEvent('chat.messages', { messages });
+        }
+
+      } else if (command.action === 'screen_show') {
+        // Show content on screen (image, video, url)
+        log(`Processing screen_show command: type=${command.type}`);
+        await handleScreenShowCommand(command, page);
+
+      } else if (command.action === 'screen_stop') {
+        // Clear camera feed content (reverts to avatar/black)
+        log('Processing screen_stop command');
+        if (screenContentService) await screenContentService.clearScreen();
+        await publishVoiceEvent('screen.content_cleared');
+
+      } else if (command.action === 'avatar_set') {
+        // Set custom avatar image (shown when no screen content is active)
+        log(`Processing avatar_set command`);
+        if (screenContentService) {
+          await screenContentService.setAvatar(command.url || command.image_base64 || '');
+          await publishVoiceEvent('avatar.set');
+        }
+
+      } else if (command.action === 'avatar_reset') {
+        // Reset avatar to the default Vexa logo
+        log('Processing avatar_reset command');
+        if (screenContentService) {
+          await screenContentService.resetAvatar();
+          await publishVoiceEvent('avatar.reset');
+        }
       }
   } catch (e: any) {
       log(`Error processing Redis message: ${e.message}`);
@@ -274,6 +353,21 @@ async function performGracefulLeave(
     // If the page is already gone, we can't perform a UI leave.
     // The provided exitCode and reason will dictate the callback.
     // If reason is 'admission_failed', exitCode would be 2, and platformLeaveSuccess is irrelevant.
+  }
+
+  // Cleanup voice agent services
+  try {
+    if (ttsPlaybackService) { ttsPlaybackService.stop(); ttsPlaybackService = null; }
+    if (microphoneService) { microphoneService.clearMuteTimer(); microphoneService = null; }
+    if (chatService) { await chatService.cleanup(); chatService = null; }
+    if (screenContentService) { await screenContentService.close(); screenContentService = null; }
+    if (screenShareService) { screenShareService = null; }
+    if (redisPublisher && redisPublisher.isOpen) {
+      await redisPublisher.quit();
+      redisPublisher = null;
+    }
+  } catch (vaCleanupErr: any) {
+    log(`[Graceful Leave] Voice agent cleanup error: ${vaCleanupErr.message}`);
   }
 
   // Upload recording if available
@@ -370,6 +464,206 @@ async function performGracefulLeave(
 // This needs to be defined in a scope where 'page' will be available when it's exposed.
 // We will define the actual exposed function inside runBot where 'page' is in scope.
 // --- ------------------------------------------------------------ ---
+
+// ==================== Voice Agent Command Handlers ====================
+
+/**
+ * Publish a voice agent event to Redis.
+ */
+async function publishVoiceEvent(event: string, data: any = {}): Promise<void> {
+  if (!redisPublisher || !currentBotConfig) return;
+  const meetingId = currentBotConfig.meeting_id;
+  try {
+    await redisPublisher.publish(
+      `va:meeting:${meetingId}:events`,
+      JSON.stringify({ event, meeting_id: meetingId, ...data, ts: new Date().toISOString() })
+    );
+  } catch (err: any) {
+    log(`[VoiceAgent] Failed to publish event ${event}: ${err.message}`);
+  }
+}
+
+/**
+ * Handle "speak" command — synthesize text to speech and play into meeting.
+ */
+async function handleSpeakCommand(command: any, page: Page | null): Promise<void> {
+  if (!ttsPlaybackService) {
+    log('[Speak] TTS playback service not initialized');
+    return;
+  }
+
+  // Unmute mic before speaking
+  if (microphoneService) {
+    await microphoneService.unmute();
+  }
+
+  await publishVoiceEvent('speak.started', { text: command.text });
+
+  try {
+    const provider = command.provider || process.env.DEFAULT_TTS_PROVIDER || 'openai';
+    const voice = command.voice || process.env.DEFAULT_TTS_VOICE || 'alloy';
+    await ttsPlaybackService.synthesizeAndPlay(command.text, provider, voice);
+    await publishVoiceEvent('speak.completed');
+  } catch (err: any) {
+    log(`[Speak] TTS failed: ${err.message}`);
+    await publishVoiceEvent('speak.error', { message: err.message });
+  }
+
+  // Schedule auto-mute after speech
+  if (microphoneService) {
+    microphoneService.scheduleAutoMute(2000);
+  }
+}
+
+/**
+ * Handle "speak_audio" command — play pre-rendered audio.
+ */
+async function handleSpeakAudioCommand(command: any): Promise<void> {
+  if (!ttsPlaybackService) {
+    log('[SpeakAudio] TTS playback service not initialized');
+    return;
+  }
+
+  // Unmute mic before playing
+  if (microphoneService) {
+    await microphoneService.unmute();
+  }
+
+  await publishVoiceEvent('speak.started', { source: command.audio_url ? 'url' : 'base64' });
+
+  try {
+    if (command.audio_url) {
+      await ttsPlaybackService.playFromUrl(command.audio_url);
+    } else if (command.audio_base64) {
+      const format = command.format || 'wav';
+      const sampleRate = command.sample_rate || 24000;
+      await ttsPlaybackService.playFromBase64(command.audio_base64, format, sampleRate);
+    } else {
+      log('[SpeakAudio] No audio_url or audio_base64 provided');
+      return;
+    }
+    await publishVoiceEvent('speak.completed');
+  } catch (err: any) {
+    log(`[SpeakAudio] Playback failed: ${err.message}`);
+    await publishVoiceEvent('speak.error', { message: err.message });
+  }
+
+  if (microphoneService) {
+    microphoneService.scheduleAutoMute(2000);
+  }
+}
+
+/**
+ * Handle "screen_show" command — display content on the bot's virtual camera feed.
+ * Instead of screen sharing, we draw images/text onto a canvas that replaces
+ * the bot's camera track via RTCPeerConnection.replaceTrack().
+ */
+async function handleScreenShowCommand(command: any, page: Page | null): Promise<void> {
+  if (!screenContentService) {
+    log('[Screen] Screen content service not initialized');
+    return;
+  }
+
+  try {
+    const contentType = command.type || 'image';
+
+    if (contentType === 'image') {
+      await screenContentService.showImage(command.url);
+    } else if (contentType === 'text') {
+      await screenContentService.showText(command.text || command.url);
+    } else {
+      log(`[Screen] Unsupported content type for camera feed: ${contentType}. Only 'image' and 'text' are supported.`);
+      return;
+    }
+
+    await publishVoiceEvent('screen.content_updated', { content_type: contentType, url: command.url });
+  } catch (err: any) {
+    log(`[Screen] Show failed: ${err.message}`);
+    await publishVoiceEvent('screen.error', { message: err.message });
+  }
+}
+
+/**
+ * Initialize voice agent services after the browser and page are ready.
+ */
+async function initVoiceAgentServices(
+  botConfig: BotConfig,
+  page: Page,
+  browser: Browser
+): Promise<void> {
+  log('[VoiceAgent] Initializing meeting interaction services...');
+
+  // TTS Playback
+  ttsPlaybackService = new TTSPlaybackService();
+  log('[VoiceAgent] TTS playback service ready');
+
+  // Microphone toggle
+  microphoneService = new MicrophoneService(page, botConfig.platform);
+  log('[VoiceAgent] Microphone service ready');
+
+  // Chat service — with transcript stream injection so chat messages
+  // appear alongside spoken transcriptions in the transcript feed.
+  const chatTranscriptConfig: ChatTranscriptConfig = {
+    token: botConfig.token,
+    platform: botConfig.platform,
+    meetingId: botConfig.meeting_id,
+    connectionId: botConfig.connectionId,
+  };
+  chatService = new MeetingChatService(
+    page,
+    botConfig.platform,
+    botConfig.meeting_id,
+    botConfig.botName,
+    botConfig.redisUrl,
+    chatTranscriptConfig
+  );
+  log('[VoiceAgent] Chat service ready (with transcript injection)');
+
+  // Screen content (virtual camera feed via canvas)
+  screenContentService = new ScreenContentService(page);
+  screenShareService = new ScreenShareService(page, botConfig.platform); // kept for potential future use
+  log('[VoiceAgent] Screen content service ready');
+
+  // Redis publisher for events
+  if (botConfig.redisUrl) {
+    try {
+      redisPublisher = createClient({ url: botConfig.redisUrl }) as RedisClientType;
+      redisPublisher.on('error', (err) => log(`[VoiceAgent] Redis publisher error: ${err}`));
+      await redisPublisher.connect();
+      log('[VoiceAgent] Redis publisher connected');
+    } catch (err: any) {
+      log(`[VoiceAgent] Redis publisher failed: ${err.message}`);
+    }
+  }
+
+  // Start chat observer after a delay (UI needs to be loaded)
+  setTimeout(async () => {
+    try {
+      await chatService?.startChatObserver();
+    } catch (err: any) {
+      log(`[VoiceAgent] Chat observer init failed: ${err.message}`);
+    }
+  }, 10000); // Wait 10s for meeting UI to fully load
+
+  // Auto-enable virtual camera so the default avatar shows from the start
+  // (needs delay for WebRTC connections to be established after admission)
+  setTimeout(async () => {
+    try {
+      if (screenContentService) {
+        log('[VoiceAgent] Auto-enabling virtual camera with default avatar...');
+        await screenContentService.enableCamera();
+        log('[VoiceAgent] Virtual camera auto-enabled');
+      }
+    } catch (err: any) {
+      log(`[VoiceAgent] Auto-enable camera failed (non-fatal): ${err.message}`);
+    }
+  }, 20000); // Wait 20s for bot to be admitted and WebRTC to stabilize
+
+  await publishVoiceEvent('voice_agent.initialized');
+  log('[VoiceAgent] All meeting interaction services initialized');
+}
+
+// ==================================================================
 
 export async function runBot(botConfig: BotConfig): Promise<void> {// Store botConfig globally for command validation
   (globalThis as any).botConfig = botConfig;
@@ -494,7 +788,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
 
     browserInstance = await chromium.launch({
       headless: false,
-      args: browserArgs,
+      args: getBrowserArgs(!!botConfig.voiceAgentEnabled),
     });
 
     // Create a new page with permissions and viewport for non-Teams
@@ -506,7 +800,18 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
         height: 720
       }
     });
-    
+
+    // Inject virtual camera RTCPeerConnection patch BEFORE page loads
+    // so Google Meet gets our canvas stream from the start
+    if (botConfig.voiceAgentEnabled) {
+      try {
+        await context.addInitScript(getVirtualCameraInitScript());
+        log('[VoiceAgent] Virtual camera init script injected');
+      } catch (e: any) {
+        log(`[VoiceAgent] Warning: addInitScript failed: ${e.message}`);
+      }
+    }
+
     page = await context.newPage();
   }
 
@@ -537,6 +842,15 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     Object.defineProperty(window, "outerWidth", { get: () => 1920 });
     Object.defineProperty(window, "outerHeight", { get: () => 1080 });
   });
+
+  // Initialize voice agent services if enabled
+  if (botConfig.voiceAgentEnabled && browserInstance) {
+    try {
+      await initVoiceAgentServices(botConfig, page, browserInstance);
+    } catch (err: any) {
+      log(`[VoiceAgent] Initialization failed (non-fatal): ${err.message}`);
+    }
+  }
 
   // Call the appropriate platform handler
   try {

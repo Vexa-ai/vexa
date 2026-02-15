@@ -88,6 +88,8 @@ services:
       - LOCAL_STORAGE_FSYNC=${LOCAL_STORAGE_FSYNC:-true}
       - RECORDING_ENABLED=${RECORDING_ENABLED:-false}
       - CAPTURE_MODES=${CAPTURE_MODES:-audio}
+      # Voice agent / TTS
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ../.cursor:/app/.cursor

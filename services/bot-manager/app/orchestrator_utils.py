@@ -152,7 +152,8 @@ async def start_bot_container(
     transcription_tier: Optional[str] = "realtime",
     recording_enabled: Optional[bool] = None,
     transcribe_enabled: Optional[bool] = None,
-    zoom_obf_token: Optional[str] = None
+    zoom_obf_token: Optional[str] = None,
+    voice_agent_enabled: Optional[bool] = None
 ) -> Optional[tuple[str, str]]:
     """
     Starts a vexa-bot container via requests_unixsocket AFTER checking user limit.
@@ -237,6 +238,8 @@ async def start_bot_container(
     }
     if recording_enabled is not None:
         bot_config_data["recordingEnabled"] = bool(recording_enabled)
+    if voice_agent_enabled is not None:
+        bot_config_data["voiceAgentEnabled"] = bool(voice_agent_enabled)
     # Remove keys with None values before serializing
     cleaned_config_data = {k: v for k, v in bot_config_data.items() if v is not None}
     bot_config_json = json.dumps(cleaned_config_data)
@@ -260,6 +263,15 @@ async def start_bot_container(
         f"WHISPER_LIVE_URL={whisper_live_url_for_bot}", # Use the URL from bot-manager's env
         f"LOG_LEVEL={os.getenv('LOG_LEVEL', 'INFO').upper()}",
     ]
+
+    # Add voice agent environment variables (TTS API keys)
+    if voice_agent_enabled:
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        if openai_api_key:
+            environment.append(f"OPENAI_API_KEY={openai_api_key}")
+            logger.info("Added OPENAI_API_KEY to bot environment for TTS")
+        else:
+            logger.warning("voice_agent_enabled but OPENAI_API_KEY not set in bot-manager environment")
 
     # Add Zoom-specific environment variables if platform is Zoom
     if platform == "zoom":

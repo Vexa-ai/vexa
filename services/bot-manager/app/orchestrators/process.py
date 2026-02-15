@@ -170,7 +170,8 @@ async def start_bot_container(
     transcription_tier: Optional[str] = "realtime",
     recording_enabled: Optional[bool] = None,
     transcribe_enabled: Optional[bool] = None,
-    zoom_obf_token: Optional[str] = None
+    zoom_obf_token: Optional[str] = None,
+    voice_agent_enabled: Optional[bool] = None
 ) -> Optional[Tuple[str, str]]:
     """Start a bot as a Node.js child process.
 
@@ -239,6 +240,8 @@ async def start_bot_container(
     }
     if recording_enabled is not None:
         bot_config["recordingEnabled"] = bool(recording_enabled)
+    if voice_agent_enabled is not None:
+        bot_config["voiceAgentEnabled"] = bool(voice_agent_enabled)
 
     # Remove None values from config
     bot_config = {k: v for k, v in bot_config.items() if v is not None}
