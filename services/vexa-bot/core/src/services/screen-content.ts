@@ -3,6 +3,13 @@ import { log } from '../utils';
 import * as fs from 'fs';
 import * as path from 'path';
 
+/** Embedded Vexa logo (dark background, light V) used when vexa-logo-light.png is not found. */
+const EMBEDDED_LOGODARK_DATA_URI =
+  'data:image/svg+xml;base64,' +
+  Buffer.from(
+    '<svg width="1030" height="1030" viewBox="0 0 1030 1030" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="3" width="1024" height="1024" rx="225" fill="url(#p0)"/><rect x="3" y="3" width="1024" height="1024" rx="225" stroke="url(#p1)" stroke-opacity="0.4" stroke-width="6" stroke-linejoin="bevel"/><path fill-rule="evenodd" clip-rule="evenodd" d="M657.89 367.455L760.118 308.797C767.782 304.399 777.56 307.047 781.958 314.712L822.422 385.232C826.82 392.897 824.172 402.675 816.507 407.073L714.28 465.73C603.946 529.039 466 451.575 462.625 324.414L459.376 201.997C459.142 193.164 466.113 185.813 474.946 185.579L556.222 183.422C565.056 183.187 572.407 190.158 572.641 198.991L575.89 321.407C576.99 362.842 621.938 388.083 657.89 367.455ZM316.544 465.963L214.632 406.759C206.991 402.321 204.395 392.528 208.834 384.888L249.674 314.585C254.113 306.944 263.905 304.348 271.546 308.787L373.459 367.99C483.452 431.887 485.34 590.083 376.902 656.587L272.511 720.609C264.978 725.229 255.127 722.867 250.507 715.334L208.001 646.026C203.381 638.493 205.742 628.641 213.275 624.022L317.666 560C353 538.33 352.385 486.783 316.544 465.963ZM556.237 845.957C565.073 845.981 572.256 838.837 572.279 830L572.594 712.14C572.705 670.69 617.039 644.384 653.472 664.149L761.112 722.544C768.879 726.757 778.592 723.877 782.806 716.109L821.575 644.644C825.789 636.876 822.908 627.164 815.141 622.95L707.501 564.556C595.688 503.898 459.63 584.63 459.29 711.837L458.975 829.697C458.952 838.534 466.096 845.716 474.932 845.74L556.237 845.957Z" fill="url(#p2)"/><defs><linearGradient id="p0" x1="85" y1="26.5" x2="1027" y2="1027" gradientUnits="userSpaceOnUse"><stop stop-color="#313131"/><stop offset="1" stop-color="#191919"/></linearGradient><linearGradient id="p1" x1="2.99995" y1="-82.5" x2="1593" y2="1538.5" gradientUnits="userSpaceOnUse"><stop stop-color="#595959"/><stop offset="1" stop-color="#5F5F5F"/></linearGradient><linearGradient id="p2" x1="123.627" y1="64.1138" x2="939.893" y2="975.744" gradientUnits="userSpaceOnUse"><stop stop-color="white"/><stop offset="1" stop-color="#B3B3B3"/></linearGradient></defs></svg>'
+  ).toString('base64');
+
 /**
  * ScreenContentService
  *
@@ -57,9 +64,12 @@ export class ScreenContentService {
           return;
         }
       }
-      log('[ScreenContent] Default avatar file not found, using fallback');
+      // No PNG found: use embedded Vexa logo (dark background, light V) so we never show the text placeholder
+      this._defaultAvatarDataUri = EMBEDDED_LOGODARK_DATA_URI;
+      log('[ScreenContent] Default avatar: using embedded Vexa logo (vexa-logo-light.png not found)');
     } catch (err: any) {
       log(`[ScreenContent] Failed to load default avatar: ${err.message}`);
+      this._defaultAvatarDataUri = EMBEDDED_LOGODARK_DATA_URI;
     }
   }
 
@@ -710,17 +720,9 @@ export class ScreenContentService {
           resolve();
         };
         img.onerror = () => {
-          // Fallback: black screen with branded V
+          // Image failed to load: show black only (never show text placeholder)
           ctx.fillStyle = '#000000';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
-          ctx.fillStyle = '#7c3aed';
-          ctx.font = 'bold 64px sans-serif';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText('V', canvas.width / 2, canvas.height / 2 - 30);
-          ctx.fillStyle = '#a78bfa';
-          ctx.font = '24px sans-serif';
-          ctx.fillText('Vexa Bot', canvas.width / 2, canvas.height / 2 + 40);
           resolve();
         };
         img.src = imgSrc;
@@ -778,17 +780,9 @@ export function getVirtualCameraInitScript(): string {
 
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        // Draw an initial "Vexa" branded screen so we know it's working
+        // Initial frame: black only. ScreenContentService.initialize() will draw the logo.
         ctx.fillStyle = '#000000';
         ctx.fillRect(0, 0, 1920, 1080);
-        ctx.fillStyle = '#7c3aed';
-        ctx.font = 'bold 72px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('V', 960, 500);
-        ctx.fillStyle = '#a78bfa';
-        ctx.font = '28px sans-serif';
-        ctx.fillText('Vexa Bot', 960, 580);
       }
 
       const canvasStream = canvas.captureStream(30);

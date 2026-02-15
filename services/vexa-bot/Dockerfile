@@ -55,8 +55,9 @@ WORKDIR /app/vexa-bot/core
 RUN npm install
 RUN npm install -g typescript
 
-# Copy TypeScript source
+# Copy TypeScript source and assets (default avatar logo)
 COPY core/src/ ./src/
+COPY core/assets/ ./assets/
 
 # Build TypeScript
 RUN npm run build
@@ -97,10 +98,11 @@ COPY --from=native-builder /app/vexa-bot/build ./build
 # Copy Zoom SDK libraries (if present)
 COPY --from=native-builder /app/vexa-bot/core/src/platforms/zoom/native/zoom_meeting_sdk ./core/src/platforms/zoom/native/zoom_meeting_sdk
 
-# Copy TypeScript build artifacts
+# Copy TypeScript build artifacts and assets (default avatar logo)
 COPY --from=ts-builder /app/vexa-bot/core/package*.json ./core/
 COPY --from=ts-builder /app/vexa-bot/core/node_modules ./core/node_modules
 COPY --from=ts-builder /app/vexa-bot/core/dist ./core/dist
+COPY --from=ts-builder /app/vexa-bot/core/assets ./core/assets
 
 # Install MS Edge in runtime stage (x86_64 only)
 RUN arch=$(uname -m) && if [ "$arch" = "x86_64" ] || [ "$arch" = "amd64" ]; then \

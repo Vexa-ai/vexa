@@ -272,64 +272,61 @@ export class TTSPlaybackService {
   }
 
   /**
-   * Synthesize text to speech using OpenAI TTS API and play it.
+   * Synthesize text to speech via the Vexa TTS service and play it.
    * Streams the audio for low latency.
    */
   async synthesizeAndPlay(
     text: string,
     provider: string = 'openai',
-    voice: string = 'alloy',
-    apiKey?: string
+    voice: string = 'alloy'
   ): Promise<void> {
     this._currentText = text;
     log(`[TTS] Synthesizing with ${provider}, voice=${voice}: "${text.substring(0, 50)}..."`);
-
-    if (provider === 'openai') {
-      await this.synthesizeOpenAI(text, voice, apiKey);
-    } else {
-      // Fallback: try OpenAI for any unknown provider
-      log(`[TTS] Unknown provider "${provider}", falling back to OpenAI`);
-      await this.synthesizeOpenAI(text, voice, apiKey);
-    }
+    await this.synthesizeViaTtsService(text, voice);
     this._currentText = null;
   }
 
   /**
-   * OpenAI TTS API streaming synthesis.
-   * Streams response audio directly to paplay via ffmpeg for format conversion.
+   * TTS synthesis via Vexa TTS service. Streams response audio directly to paplay.
    */
-  private async synthesizeOpenAI(text: string, voice: string, apiKey?: string): Promise<void> {
-    const key = apiKey || process.env.OPENAI_API_KEY;
-    if (!key) {
-      throw new Error('[TTS] OPENAI_API_KEY not set');
+  private async synthesizeViaTtsService(text: string, voice: string): Promise<void> {
+    const ttsServiceUrl = process.env.TTS_SERVICE_URL?.trim();
+    if (!ttsServiceUrl) {
+      throw new Error('[TTS] TTS_SERVICE_URL not set');
     }
 
     this._isPlaying = true;
 
-    return new Promise((resolve, reject) => {
-      const postData = JSON.stringify({
-        model: 'tts-1',
-        input: text,
-        voice: voice,
-        response_format: 'pcm' // Raw PCM Int16LE 24kHz mono
-      });
+    const postData = JSON.stringify({
+      model: 'tts-1',
+      input: text,
+      voice: voice,
+      response_format: 'pcm' // Raw PCM Int16LE 24kHz mono
+    });
 
-      const req = https.request({
-        hostname: 'api.openai.com',
-        path: '/v1/audio/speech',
+    const base = ttsServiceUrl.replace(/\/$/, '');
+    const url = new URL(`${base}/v1/audio/speech`);
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Content-Length': String(Buffer.byteLength(postData))
+    };
+    const ttsToken = process.env.TTS_API_TOKEN?.trim();
+    if (ttsToken) headers['X-API-Key'] = ttsToken;
+
+    return new Promise((resolve, reject) => {
+      const req = (url.protocol === 'https:' ? https : http).request({
+        hostname: url.hostname,
+        port: url.port || (url.protocol === 'https:' ? 443 : 80),
+        path: url.pathname + url.search,
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${key}`,
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(postData)
-        }
+        headers
       }, (res) => {
         if (res.statusCode !== 200) {
           let body = '';
           res.on('data', (chunk) => body += chunk);
           res.on('end', () => {
             this._isPlaying = false;
-            reject(new Error(`OpenAI TTS API error ${res.statusCode}: ${body}`));
+            reject(new Error(`TTS service error ${res.statusCode}: ${body}`));
           });
           return;
         }
