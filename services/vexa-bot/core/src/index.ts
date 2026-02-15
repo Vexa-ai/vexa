@@ -62,6 +62,58 @@ export function hasStopSignalReceived(): boolean {
 }
 // -----------------------------------
 
+// --- Post-admission camera re-enablement ---
+// Google Meet may re-negotiate WebRTC tracks when the bot transitions from
+// waiting room to the actual meeting, killing our initial canvas track.
+// This function is called by meetingFlow.ts after admission is confirmed
+// to ensure the virtual camera is active in the meeting.
+export async function triggerPostAdmissionCamera(): Promise<void> {
+  if (!screenContentService || !page || page.isClosed()) return;
+
+  log('[VoiceAgent] Post-admission: re-enabling virtual camera...');
+
+  const MAX_ATTEMPTS = 5;
+  const RETRY_INTERVALS = [2000, 3000, 5000, 8000, 10000];
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      await screenContentService.enableCamera();
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      const framesSent = await page.evaluate(async () => {
+        const pcs = (window as any).__vexa_peer_connections as RTCPeerConnection[] || [];
+        for (const pc of pcs) {
+          if (pc.connectionState === 'closed') continue;
+          try {
+            const stats = await pc.getStats();
+            let frames = 0;
+            stats.forEach((report: any) => {
+              if (report.type === 'outbound-rtp' && report.kind === 'video') {
+                frames = report.framesSent || 0;
+              }
+            });
+            if (frames > 0) return frames;
+          } catch {}
+        }
+        return 0;
+      });
+
+      if (framesSent > 0) {
+        log(`[VoiceAgent] ✅ Post-admission camera active! framesSent=${framesSent} (attempt ${attempt})`);
+        return;
+      }
+      log(`[VoiceAgent] Post-admission framesSent=0 (attempt ${attempt}), retrying...`);
+    } catch (err: any) {
+      log(`[VoiceAgent] Post-admission camera attempt ${attempt} failed: ${err.message}`);
+    }
+    if (attempt < MAX_ATTEMPTS) {
+      await new Promise(resolve => setTimeout(resolve, RETRY_INTERVALS[attempt - 1]));
+    }
+  }
+  log('[VoiceAgent] ⚠️ Post-admission camera failed all retries');
+}
+// -------------------------------------------
+
 // Exit reason mapping function moved to services/unified-callback.ts
 
 // --- ADDED: Session Management Utilities ---
