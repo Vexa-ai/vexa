@@ -365,6 +365,10 @@ class MeetingCreate(BaseModel):
         None,
         description="Enable voice agent (TTS, chat, screen share) capabilities for this meeting"
     )
+    default_avatar_url: Optional[str] = Field(
+        None,
+        description="Custom default avatar image URL for the bot's camera feed. Shown when no screen content is active. If omitted, the default Vexa logo is used."
+    )
 
     @field_validator('platform')
     @classmethod

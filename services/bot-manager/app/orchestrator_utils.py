@@ -153,7 +153,8 @@ async def start_bot_container(
     recording_enabled: Optional[bool] = None,
     transcribe_enabled: Optional[bool] = None,
     zoom_obf_token: Optional[str] = None,
-    voice_agent_enabled: Optional[bool] = None
+    voice_agent_enabled: Optional[bool] = None,
+    default_avatar_url: Optional[str] = None
 ) -> Optional[tuple[str, str]]:
     """
     Starts a vexa-bot container via requests_unixsocket AFTER checking user limit.
@@ -240,6 +241,8 @@ async def start_bot_container(
         bot_config_data["recordingEnabled"] = bool(recording_enabled)
     if voice_agent_enabled is not None:
         bot_config_data["voiceAgentEnabled"] = bool(voice_agent_enabled)
+    if default_avatar_url:
+        bot_config_data["defaultAvatarUrl"] = default_avatar_url
     # Remove keys with None values before serializing
     cleaned_config_data = {k: v for k, v in bot_config_data.items() if v is not None}
     bot_config_json = json.dumps(cleaned_config_data)

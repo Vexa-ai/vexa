@@ -620,7 +620,7 @@ async function initVoiceAgentServices(
   log('[VoiceAgent] Chat service ready (with transcript injection)');
 
   // Screen content (virtual camera feed via canvas)
-  screenContentService = new ScreenContentService(page);
+  screenContentService = new ScreenContentService(page, botConfig.defaultAvatarUrl);
   screenShareService = new ScreenShareService(page, botConfig.platform); // kept for potential future use
   log('[VoiceAgent] Screen content service ready');
 
@@ -645,19 +645,65 @@ async function initVoiceAgentServices(
     }
   }, 10000); // Wait 10s for meeting UI to fully load
 
-  // Auto-enable virtual camera so the default avatar shows from the start
-  // (needs delay for WebRTC connections to be established after admission)
-  setTimeout(async () => {
-    try {
-      if (screenContentService) {
-        log('[VoiceAgent] Auto-enabling virtual camera with default avatar...');
+  // Auto-enable virtual camera so the default avatar shows from the start.
+  // Strategy: start trying early (even before admission — the camera button
+  // may be available in the pre-join UI). Keep retrying until frames flow.
+  (async () => {
+    // Short initial wait for the page to load the meeting UI
+    await new Promise(resolve => setTimeout(resolve, 5000));
+
+    if (!screenContentService) return;
+
+    const MAX_ATTEMPTS = 10;
+    const RETRY_INTERVALS = [3000, 3000, 5000, 5000, 5000, 8000, 8000, 10000, 10000, 15000]; // ~72s total
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        log(`[VoiceAgent] Auto-camera attempt ${attempt}/${MAX_ATTEMPTS}...`);
         await screenContentService.enableCamera();
-        log('[VoiceAgent] Virtual camera auto-enabled');
+
+        // Wait a moment for encoder to process the track
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // Check if frames are actually being sent
+        const framesSent = await page.evaluate(async () => {
+          const pcs = (window as any).__vexa_peer_connections as RTCPeerConnection[] || [];
+          for (const pc of pcs) {
+            if (pc.connectionState === 'closed') continue;
+            try {
+              const stats = await pc.getStats();
+              let frames = 0;
+              stats.forEach((report: any) => {
+                if (report.type === 'outbound-rtp' && report.kind === 'video') {
+                  frames = report.framesSent || 0;
+                }
+              });
+              if (frames > 0) return frames;
+            } catch {}
+          }
+          return 0;
+        });
+
+        if (framesSent > 0) {
+          log(`[VoiceAgent] ✅ Virtual camera active! framesSent=${framesSent} (attempt ${attempt})`);
+          break;
+        }
+
+        log(`[VoiceAgent] framesSent=0 after attempt ${attempt}, will retry...`);
+
+        if (attempt < MAX_ATTEMPTS) {
+          await new Promise(resolve => setTimeout(resolve, RETRY_INTERVALS[attempt - 1]));
+        } else {
+          log('[VoiceAgent] ⚠️ Auto-camera exhausted all retries. Camera may activate on next screen_show command.');
+        }
+      } catch (err: any) {
+        log(`[VoiceAgent] Auto-camera attempt ${attempt} failed: ${err.message}`);
+        if (attempt < MAX_ATTEMPTS) {
+          await new Promise(resolve => setTimeout(resolve, RETRY_INTERVALS[attempt - 1]));
+        }
       }
-    } catch (err: any) {
-      log(`[VoiceAgent] Auto-enable camera failed (non-fatal): ${err.message}`);
     }
-  }, 20000); // Wait 20s for bot to be admitted and WebRTC to stabilize
+  })();
 
   await publishVoiceEvent('voice_agent.initialized');
   log('[VoiceAgent] All meeting interaction services initialized');

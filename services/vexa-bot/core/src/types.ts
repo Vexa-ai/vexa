@@ -26,4 +26,5 @@ export type BotConfig = {
 
   // Voice agent / meeting interaction interface
   voiceAgentEnabled?: boolean;  // Enable TTS, chat, screen share capabilities
+  defaultAvatarUrl?: string;   // Custom default avatar image URL for virtual camera
 }

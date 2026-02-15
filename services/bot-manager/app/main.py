@@ -798,7 +798,8 @@ async def request_bot(
             recording_enabled=req.recording_enabled,
             transcribe_enabled=req.transcribe_enabled,
             zoom_obf_token=zoom_obf_token_to_use,
-            voice_agent_enabled=req.voice_agent_enabled
+            voice_agent_enabled=req.voice_agent_enabled,
+            default_avatar_url=req.default_avatar_url
         )
         container_start_time = datetime.utcnow()
         logger.info(f"Call to start_bot_container completed. Container ID: {container_id}, Connection ID: {connection_id}")

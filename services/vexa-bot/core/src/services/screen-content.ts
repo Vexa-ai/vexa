@@ -30,9 +30,14 @@ export class ScreenContentService {
   private _defaultAvatarDataUri: string | null = null;
   private _customAvatarDataUri: string | null = null;
 
-  constructor(page: Page) {
+  constructor(page: Page, defaultAvatarUrl?: string) {
     this.page = page;
-    // Load the default Vexa logo from assets
+    // If a custom default avatar URL was provided via bot config, use it
+    if (defaultAvatarUrl) {
+      this._customAvatarDataUri = defaultAvatarUrl;
+      log(`[ScreenContent] Custom default avatar URL set from config: ${defaultAvatarUrl.substring(0, 80)}...`);
+    }
+    // Load the built-in Vexa logo as fallback
     this._loadDefaultAvatar();
   }
 
@@ -260,6 +265,16 @@ export class ScreenContentService {
     const replaceResult = await this.page.evaluate(async () => {
       const canvas = (window as any).__vexa_canvas as HTMLCanvasElement;
       if (!canvas) return { success: false, reason: 'no canvas' };
+
+      // "Touch" the canvas to force captureStream to generate a new frame.
+      // captureStream(30) only emits frames when canvas content changes.
+      // Drawing a tiny invisible pixel forces a change event.
+      const ctx = (window as any).__vexa_canvas_ctx as CanvasRenderingContext2D;
+      if (ctx) {
+        // Read then write a single pixel at (0,0) — triggers frame without visual change
+        const pixel = ctx.getImageData(0, 0, 1, 1);
+        ctx.putImageData(pixel, 0, 0);
+      }
 
       // Always create a fresh captureStream to get a live track.
       // Google Meet's camera toggle can kill previous tracks.
@@ -574,7 +589,8 @@ export class ScreenContentService {
         const ctx = (window as any).__vexa_canvas_ctx as CanvasRenderingContext2D;
         if (!canvas || !ctx) return;
 
-        ctx.fillStyle = '#000000';
+        // Dark branded background when no avatar is available
+        ctx.fillStyle = '#1a1a2e';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
       });
     }
@@ -619,7 +635,8 @@ export class ScreenContentService {
   }
 
   /**
-   * Draw an avatar image (small, top-left corner) on a black canvas background.
+   * Draw an avatar image (small, top-left corner with margin) on a dark background.
+   * The logo is drawn at ~12% canvas height with 40px margin from top-left.
    */
   private async _drawAvatarOnCanvas(avatarUri: string): Promise<void> {
     await this.page.evaluate(async (imgSrc: string) => {
@@ -631,26 +648,33 @@ export class ScreenContentService {
         const img = new Image();
         img.crossOrigin = 'anonymous';
         img.onload = () => {
-          // Clear to black
-          ctx.fillStyle = '#000000';
+          // Dark background (slightly lighter than pure black for visibility)
+          ctx.fillStyle = '#1a1a2e';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-          // Draw the avatar in top-left corner (max ~15% of canvas height)
-          const maxSize = Math.max(Math.round(canvas.height * 0.15), 120);
+          // Draw the avatar in top-left corner with margin
+          // ~12% of canvas height, min 100px
+          const maxSize = Math.max(Math.round(canvas.height * 0.12), 100);
           const scale = Math.min(maxSize / img.width, maxSize / img.height);
           const w = img.width * scale;
           const h = img.height * scale;
-          const padding = 30;
-          const x = padding;
-          const y = padding;
+          const margin = 40;
 
-          ctx.drawImage(img, x, y, w, h);
+          ctx.drawImage(img, margin, margin, w, h);
           resolve();
         };
         img.onerror = () => {
-          // Fallback: black screen
-          ctx.fillStyle = '#000000';
+          // Fallback: branded dark screen (no logo)
+          ctx.fillStyle = '#1a1a2e';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = '#7c3aed';
+          ctx.font = 'bold 64px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('V', canvas.width / 2, canvas.height / 2 - 30);
+          ctx.fillStyle = '#a78bfa';
+          ctx.font = '24px sans-serif';
+          ctx.fillText('Vexa Bot', canvas.width / 2, canvas.height / 2 + 40);
           resolve();
         };
         img.src = imgSrc;
@@ -761,8 +785,9 @@ export function getVirtualCameraInitScript(): string {
           window.__vexa_gum_video_intercepted = (window.__vexa_gum_video_intercepted || 0) + 1;
           console.log('[Vexa] Intercepting video — returning canvas stream');
 
-          // Get canvas video track
-          const canvasVideoTrack = canvasStream.getVideoTracks()[0];
+          // Get canvas video track from the GLOBAL (may have been refreshed by enableCamera)
+          const currentStream = window.__vexa_canvas_stream || canvasStream;
+          const canvasVideoTrack = currentStream.getVideoTracks()[0];
 
           if (wantsAudio) {
             // Need both video (from canvas) and audio (real mic)
@@ -808,8 +833,12 @@ export function getVirtualCameraInitScript(): string {
       // it enters the WebRTC pipeline.
       const origAddTrack = OrigRTC.prototype.addTrack;
       OrigRTC.prototype.addTrack = function(track, ...streams) {
-        if (track && track.kind === 'video' && canvasStream) {
-          const canvasTrack = canvasStream.getVideoTracks()[0];
+        // IMPORTANT: Read from window.__vexa_canvas_stream (the GLOBAL), not the
+        // closure variable. enableCamera() may create a fresh captureStream(30)
+        // with a new track ID, and we need to use whatever is current.
+        const currentStream = window.__vexa_canvas_stream;
+        if (track && track.kind === 'video' && currentStream) {
+          const canvasTrack = currentStream.getVideoTracks()[0];
           if (canvasTrack) {
             window.__vexa_addtrack_intercepted = (window.__vexa_addtrack_intercepted || 0) + 1;
             console.log('[Vexa] addTrack intercepted: swapping video track for canvas track (original: ' + track.label + ')');
@@ -824,8 +853,11 @@ export function getVirtualCameraInitScript(): string {
       // When Meet tries to set a video track, we substitute our canvas track.
       const origReplaceTrack = RTCRtpSender.prototype.replaceTrack;
       RTCRtpSender.prototype.replaceTrack = function(newTrack) {
-        if (newTrack && newTrack.kind === 'video' && canvasStream) {
-          const canvasTrack = canvasStream.getVideoTracks()[0];
+        // IMPORTANT: Read from window.__vexa_canvas_stream (the GLOBAL), not the
+        // closure variable. enableCamera() may create a fresh captureStream(30).
+        const currentStream = window.__vexa_canvas_stream;
+        if (newTrack && newTrack.kind === 'video' && currentStream) {
+          const canvasTrack = currentStream.getVideoTracks()[0];
           // Only swap if the incoming track is NOT our canvas track
           if (canvasTrack && newTrack.id !== canvasTrack.id) {
             console.log('[Vexa] replaceTrack intercepted: substituting canvas track (blocked: ' + newTrack.label + ')');
