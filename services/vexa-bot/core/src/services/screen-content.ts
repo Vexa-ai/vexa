@@ -43,11 +43,11 @@ export class ScreenContentService {
 
   private _loadDefaultAvatar(): void {
     try {
-      // Try multiple paths (dev vs Docker)
+      // Try multiple paths (dev vs Docker) — use light logo for dark background
       const possiblePaths = [
-        path.join(__dirname, '../../assets/vexa-logo-default.png'),
-        path.join(__dirname, '../assets/vexa-logo-default.png'),
-        '/app/assets/vexa-logo-default.png',
+        path.join(__dirname, '../../assets/vexa-logo-light.png'),
+        path.join(__dirname, '../assets/vexa-logo-light.png'),
+        '/app/assets/vexa-logo-light.png',
       ];
       for (const p of possiblePaths) {
         if (fs.existsSync(p)) {
@@ -129,6 +129,52 @@ export class ScreenContentService {
       await this._drawAvatarOnCanvas(avatarUri);
       log('[ScreenContent] Default avatar drawn on canvas');
     }
+
+    // Start the frame pump — captureStream(30) only emits frames when the
+    // canvas changes. This loop makes an invisible 1-pixel change on every
+    // animation frame to keep the stream alive.
+    await this._startFramePump();
+  }
+
+  /**
+   * Start a requestAnimationFrame loop that touches a single pixel on
+   * each frame, forcing captureStream(30) to continuously emit frames.
+   * Without this, static content (avatar, images) produces only 1-2 frames
+   * and Google Meet stops displaying the video feed.
+   */
+  private async _startFramePump(): Promise<void> {
+    await this.page.evaluate(() => {
+      // Don't start twice
+      if ((window as any).__vexa_frame_pump_active) return;
+      (window as any).__vexa_frame_pump_active = true;
+
+      const canvas = (window as any).__vexa_canvas as HTMLCanvasElement;
+      const ctx = (window as any).__vexa_canvas_ctx as CanvasRenderingContext2D;
+      if (!canvas || !ctx) return;
+
+      // Continuously "touch" the canvas to force captureStream to emit frames.
+      // We read+write a single pixel at (0,0) — this triggers a change event
+      // without any visible effect on the content.
+      let toggle = false;
+      const pump = () => {
+        if (!(window as any).__vexa_frame_pump_active) return;
+
+        // Alternate between two invisible operations to ensure the canvas
+        // is always "dirty" from captureStream's perspective.
+        try {
+          const pixel = ctx.getImageData(0, 0, 1, 1);
+          // Flip the alpha by 1 unit (invisible at these values)
+          pixel.data[3] = toggle ? 254 : 255;
+          toggle = !toggle;
+          ctx.putImageData(pixel, 0, 0);
+        } catch {}
+
+        requestAnimationFrame(pump);
+      };
+      requestAnimationFrame(pump);
+      console.log('[Vexa] Frame pump started for continuous captureStream output');
+    });
+    log('[ScreenContent] Frame pump started');
   }
 
   /**
@@ -590,7 +636,7 @@ export class ScreenContentService {
         if (!canvas || !ctx) return;
 
         // Dark branded background when no avatar is available
-        ctx.fillStyle = '#1a1a2e';
+        ctx.fillStyle = '#000000';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
       });
     }
@@ -635,8 +681,8 @@ export class ScreenContentService {
   }
 
   /**
-   * Draw an avatar image (small, top-left corner with margin) on a dark background.
-   * The logo is drawn at ~12% canvas height with 40px margin from top-left.
+   * Draw an avatar image centered on a black background.
+   * The logo is drawn small (~12% of canvas height) and centered.
    */
   private async _drawAvatarOnCanvas(avatarUri: string): Promise<void> {
     await this.page.evaluate(async (imgSrc: string) => {
@@ -648,24 +694,24 @@ export class ScreenContentService {
         const img = new Image();
         img.crossOrigin = 'anonymous';
         img.onload = () => {
-          // Dark background (slightly lighter than pure black for visibility)
-          ctx.fillStyle = '#1a1a2e';
+          // Black background
+          ctx.fillStyle = '#000000';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-          // Draw the avatar in top-left corner with margin
-          // ~12% of canvas height, min 100px
+          // Draw the logo small and centered (~12% of canvas height)
           const maxSize = Math.max(Math.round(canvas.height * 0.12), 100);
           const scale = Math.min(maxSize / img.width, maxSize / img.height);
           const w = img.width * scale;
           const h = img.height * scale;
-          const margin = 40;
+          const x = (canvas.width - w) / 2;
+          const y = (canvas.height - h) / 2;
 
-          ctx.drawImage(img, margin, margin, w, h);
+          ctx.drawImage(img, x, y, w, h);
           resolve();
         };
         img.onerror = () => {
-          // Fallback: branded dark screen (no logo)
-          ctx.fillStyle = '#1a1a2e';
+          // Fallback: black screen with branded V
+          ctx.fillStyle = '#000000';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
           ctx.fillStyle = '#7c3aed';
           ctx.font = 'bold 64px sans-serif';
@@ -733,7 +779,7 @@ export function getVirtualCameraInitScript(): string {
       const ctx = canvas.getContext('2d');
       if (ctx) {
         // Draw an initial "Vexa" branded screen so we know it's working
-        ctx.fillStyle = '#1a1a2e';
+        ctx.fillStyle = '#000000';
         ctx.fillRect(0, 0, 1920, 1080);
         ctx.fillStyle = '#7c3aed';
         ctx.font = 'bold 72px sans-serif';
