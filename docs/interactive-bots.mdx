@@ -60,6 +60,36 @@ The Interactive Bots feature transforms the Vexa bot from a passive transcriptio
 
 For the full endpoint reference, see [Interactive Bots API](api/interactive-bots).
 
+## Output Formats
+
+For interactive command endpoints (`speak`, `chat` write, `screen`, `avatar`), the API returns:
+
+```json
+{
+  "message": "Speak command sent",
+  "meeting_id": 227
+}
+```
+
+`message` varies by endpoint (`Speak stop command sent`, `Chat message sent`, `Screen content command sent`, `Avatar set command sent`, etc.).
+
+Chat read returns:
+
+```json
+{
+  "messages": [],
+  "meeting_id": 227
+}
+```
+
+When the meeting is not active, interactive endpoints return:
+
+```json
+{
+  "detail": "No active meeting found for google_meet/abc-defg-hij"
+}
+```
+
 ## How It Works
 
 When `voice_agent_enabled` is set, the bot's audio pipeline changes: instead of feeding silence as mic input, the bot reads from a PulseAudio virtual microphone that receives TTS audio. The bot starts muted and auto-unmutes only when speaking.
@@ -110,7 +140,7 @@ curl "$API_BASE/bots/google_meet/abc-defg-hij/chat" \
   -H "X-API-Key: $API_KEY"
 ```
 
-Returns an array of messages with `sender`, `text`, `timestamp`, and `isFromBot` fields. Real-time chat events are also available via [WebSocket](websocket) (`chat.received`, `chat.sent`).
+Returns an object with `messages` and `meeting_id`. Each message has `sender`, `text`, `timestamp` (Unix milliseconds), and `is_from_bot` fields. Real-time chat events are also available via [WebSocket](websocket) (`chat.received`, `chat.sent`).
 
 ## Screen Share (Showing Images & Content)
 
@@ -187,10 +217,10 @@ When interactive bot mode is enabled, additional events are published on the [We
 
 | Feature | Google Meet | Teams | Zoom |
 |---------|:----------:|:-----:|:----:|
-| Speak (TTS) | Supported | Planned | Planned |
-| Chat write | Supported | Planned | Planned |
-| Chat read | Supported | Planned | Planned |
-| Screen share | Supported | Planned | Planned |
+| Speak (TTS) | Supported | Supported (validated API flow) | Requires Zoom SDK setup |
+| Chat write | Supported | Supported (validated API flow) | Requires Zoom SDK setup |
+| Chat read | Supported | Supported (validated API flow) | Requires Zoom SDK setup |
+| Screen share | Supported | Supported (validated API flow) | Requires Zoom SDK setup |
 | Virtual camera | Experimental | -- | -- |
 
 ## Prerequisites
@@ -205,7 +235,7 @@ PulseAudio is already configured in the bot container (`entrypoint.sh`). No manu
 
 1. **Virtual camera is experimental** -- the canvas-based virtual camera works intermittently on Google Meet. Screen share is more reliable for displaying visual content.
 2. **Single TTS provider** -- currently only OpenAI TTS is implemented. The architecture supports adding other providers.
-3. **Google Meet only** -- chat read/write and screen share are currently implemented for Google Meet. Teams and Zoom support is planned.
+3. **Zoom requires native SDK artifacts** -- without Zoom Meeting SDK binaries, Zoom joins fail during startup.
 4. **No speech queue** -- rapid speak commands may overlap. Wait for the `speak.completed` WebSocket event before sending the next command, or use `DELETE /speak` to interrupt.
 5. **Teams avatar not visible** -- Teams SFU returns `a=inactive` for video from anonymous guests, so the bot's virtual camera/avatar is never visible to other Teams participants. Use screen share instead. ([#124](https://github.com/Vexa-ai/vexa/issues/124))
 

@@ -99,6 +99,18 @@ ZOOM_OAUTH_REDIRECT_URI=https://dashboard.your-domain.com/auth/zoom/callback
 ZOOM_OAUTH_STATE_SECRET=long_random_secret
 ```
 
+Required local SDK artifacts (self-hosted):
+
+```text
+services/vexa-bot/build/Release/zoom_sdk_wrapper.node
+services/vexa-bot/core/src/platforms/zoom/native/zoom_meeting_sdk/libmeetingsdk.so
+services/vexa-bot/core/src/platforms/zoom/native/zoom_meeting_sdk/qt_libs/... (from Zoom SDK package)
+```
+
+The Zoom Meeting SDK binaries are proprietary and are not included in this repo. Download them from Zoom and place them at the paths above before running Zoom bots.
+
+If these files are missing, bot creation may return `201` initially, but the meeting quickly transitions `joining` -> `failed` with an `error_details` message containing `Zoom SDK native addon is not available` (tracked in [#128](https://github.com/Vexa-ai/vexa/issues/128)).
+
 Implementation detail:
 
 - Dashboard and bot-manager resolve OAuth credentials with fallback:
