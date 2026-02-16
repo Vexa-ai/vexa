@@ -124,8 +124,7 @@ curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
   </Tab>
 </Tabs>
 
-<details>
-  <summary><strong>Response (202)</strong></summary>
+<Accordion title="Response (202)">
 
 ```json
 {
@@ -134,10 +133,9 @@ curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
 }
 ```
 
-</details>
+</Accordion>
 
-<details>
-  <summary><strong>Validation Error (400)</strong></summary>
+<Accordion title="Validation Error (400)">
 
 ```json
 {
@@ -145,7 +143,7 @@ curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
 }
 ```
 
-</details>
+</Accordion>
 
 ### DELETE `/bots/{platform}/{native_meeting_id}/speak`
 
@@ -156,8 +154,7 @@ curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
   -H "X-API-Key: $API_KEY"
 ```
 
-<details>
-  <summary><strong>Response (202)</strong></summary>
+<Accordion title="Response (202)">
 
 ```json
 {
@@ -166,7 +163,7 @@ curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
 }
 ```
 
-</details>
+</Accordion>
 
 ---
 
@@ -191,8 +188,7 @@ curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/chat" \
 |-------|------|-------------|
 | `text` | string | Message to send to the meeting chat |
 
-<details>
-  <summary><strong>Response (202)</strong></summary>
+<Accordion title="Response (202)">
 
 ```json
 {
@@ -201,10 +197,9 @@ curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/chat" \
 }
 ```
 
-</details>
+</Accordion>
 
-<details>
-  <summary><strong>Validation Error (400)</strong></summary>
+<Accordion title="Validation Error (400)">
 
 ```json
 {
@@ -212,7 +207,7 @@ curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/chat" \
 }
 ```
 
-</details>
+</Accordion>
 
 ### GET `/bots/{platform}/{native_meeting_id}/chat`
 
@@ -223,8 +218,7 @@ curl "$API_BASE/bots/google_meet/abc-defg-hij/chat" \
   -H "X-API-Key: $API_KEY"
 ```
 
-<details>
-  <summary><strong>Response (200)</strong></summary>
+<Accordion title="Response (200)">
 
 ```json
 {
@@ -246,7 +240,7 @@ curl "$API_BASE/bots/google_meet/abc-defg-hij/chat" \
 }
 ```
 
-</details>
+</Accordion>
 
 **Response fields:**
 
@@ -312,8 +306,7 @@ curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/screen" \
 | `video` | Plays video fullscreen with autoplay |
 | `html` | Renders custom HTML content in the display page |
 
-<details>
-  <summary><strong>Response (202)</strong></summary>
+<Accordion title="Response (202)">
 
 ```json
 {
@@ -322,10 +315,9 @@ curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/screen" \
 }
 ```
 
-</details>
+</Accordion>
 
-<details>
-  <summary><strong>Validation Error (400)</strong></summary>
+<Accordion title="Validation Error (400)">
 
 ```json
 {
@@ -333,7 +325,7 @@ curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/screen" \
 }
 ```
 
-</details>
+</Accordion>
 
 ### DELETE `/bots/{platform}/{native_meeting_id}/screen`
 
@@ -344,8 +336,7 @@ curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij/screen" \
   -H "X-API-Key: $API_KEY"
 ```
 
-<details>
-  <summary><strong>Response (202)</strong></summary>
+<Accordion title="Response (202)">
 
 ```json
 {
@@ -354,7 +345,7 @@ curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij/screen" \
 }
 ```
 
-</details>
+</Accordion>
 
 ---
 
@@ -384,8 +375,7 @@ curl -X PUT "$API_BASE/bots/google_meet/abc-defg-hij/avatar" \
 | `url` | string | URL to an image file (PNG, JPG, SVG) |
 | `image_base64` | string | Base64-encoded image data (alternative to `url`) |
 
-<details>
-  <summary><strong>Response (202)</strong></summary>
+<Accordion title="Response (202)">
 
 ```json
 {
@@ -394,10 +384,9 @@ curl -X PUT "$API_BASE/bots/google_meet/abc-defg-hij/avatar" \
 }
 ```
 
-</details>
+</Accordion>
 
-<details>
-  <summary><strong>Validation Error (400)</strong></summary>
+<Accordion title="Validation Error (400)">
 
 ```json
 {
@@ -405,7 +394,7 @@ curl -X PUT "$API_BASE/bots/google_meet/abc-defg-hij/avatar" \
 }
 ```
 
-</details>
+</Accordion>
 
 ### DELETE `/bots/{platform}/{native_meeting_id}/avatar`
 
@@ -416,8 +405,7 @@ curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij/avatar" \
   -H "X-API-Key: $API_KEY"
 ```
 
-<details>
-  <summary><strong>Response (202)</strong></summary>
+<Accordion title="Response (202)">
 
 ```json
 {
@@ -426,7 +414,7 @@ curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij/avatar" \
 }
 ```
 
-</details>
+</Accordion>
 
 ---
 

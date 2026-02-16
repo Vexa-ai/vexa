@@ -105,8 +105,7 @@ curl -X POST "$API_BASE/bots" \
 
 Returns the created meeting record.
 
-<details>
-  <summary><strong>Response (201)</strong></summary>
+<Accordion title="Response (201)">
 
 ```json
 {
@@ -125,7 +124,7 @@ Returns the created meeting record.
 }
 ```
 
-</details>
+</Accordion>
 
 ## GET /bots/status
 
@@ -136,8 +135,7 @@ curl -H "X-API-Key: $API_KEY" \
   "$API_BASE/bots/status"
 ```
 
-<details>
-  <summary><strong>Response (200)</strong></summary>
+<Accordion title="Response (200)">
 
 ```json
 {
@@ -159,7 +157,7 @@ curl -H "X-API-Key: $API_KEY" \
 }
 ```
 
-</details>
+</Accordion>
 
 ## PUT `/bots/{platform}/{native_meeting_id}/config`
 
@@ -194,8 +192,7 @@ curl -X PUT "$API_BASE/bots/zoom/12345678901/config" \
   </Tab>
 </Tabs>
 
-<details>
-  <summary><strong>Response (202)</strong></summary>
+<Accordion title="Response (202)">
 
 ```json
 {
@@ -203,7 +200,7 @@ curl -X PUT "$API_BASE/bots/zoom/12345678901/config" \
 }
 ```
 
-</details>
+</Accordion>
 
 ## DELETE `/bots/{platform}/{native_meeting_id}`
 
@@ -235,8 +232,7 @@ curl -X DELETE \
   </Tab>
 </Tabs>
 
-<details>
-  <summary><strong>Response (202)</strong></summary>
+<Accordion title="Response (202)">
 
 ```json
 {
@@ -244,4 +240,4 @@ curl -X DELETE \
 }
 ```
 
-</details>
+</Accordion>
