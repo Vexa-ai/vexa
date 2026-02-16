@@ -57,7 +57,7 @@ curl -H "X-API-Key: $API_KEY" \
 
 </Accordion>
 
-## GET /recordings/{recording_id}
+## GET `/recordings/{recording_id}`
 
 Get a recording and its `media_files`.
 
@@ -100,7 +100,7 @@ Same shape as an item in `GET /recordings`:
 
 </Accordion>
 
-## DELETE /recordings/{recording_id}
+## DELETE `/recordings/{recording_id}`
 
 Delete a recording, its media files from storage, and related DB rows (best-effort storage cleanup).
 
@@ -121,7 +121,7 @@ curl -X DELETE \
 
 </Accordion>
 
-## GET /recordings/{recording_id}/media/{media_file_id}/raw
+## GET `/recordings/{recording_id}/media/{media_file_id}/raw`
 
 Authenticated byte streaming (best for browser playback via same-origin proxy).
 
@@ -139,7 +139,7 @@ curl -L \
 
 Returns binary bytes (for example, `audio/wav`). Seeking uses `Range` with `206 Partial Content`.
 
-## GET /recordings/{recording_id}/media/{media_file_id}/download
+## GET `/recordings/{recording_id}/media/{media_file_id}/download`
 
 Returns a presigned URL for object storage backends (S3 / MinIO compatible).
 
