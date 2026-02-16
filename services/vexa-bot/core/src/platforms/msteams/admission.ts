@@ -91,12 +91,6 @@ export async function waitForTeamsMeetingAdmission(
     if (initialLeaveButtonFound && !initialLobbyTextVisible && !initialJoinNowButtonVisible) {
       log(`Found Teams admission indicator: visible Leave button - Bot is already admitted to the meeting!`);
       
-      // #region agent log
-      try {
-        await fetch('http://127.0.0.1:7242/ingest/a89f31ed-bb1b-47a2-9c8c-c03467b63bbc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'msteams/admission.ts:92',message:'Bot immediately admitted - skipping awaiting_admission callback',data:{immediately_admitted:true},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-      } catch {}
-      // #endregion
-      
       // CRITICAL FIX: When bot is immediately admitted, skip awaiting_admission callback
       // The bot should go directly from "joining" -> "active", not "joining" -> "awaiting_admission" -> "active"
       // Sending awaiting_admission here causes a race condition where the callback arrives before

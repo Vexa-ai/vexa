@@ -487,19 +487,6 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
               const selectorsTyped = selectors as any;
 
               const speakingStates = new Map<string, string>();
-              // #region agent log
-              // Debug: log selector configuration (no PII)
-              try {
-                (window as any).logBot?.(
-                  `[Diag] SpeakerDetect selectors: participantSelectors=${JSON.stringify((selectorsTyped.participantSelectors||[]).slice(0,10))} ` +
-                  `nameSelectors=${JSON.stringify((selectorsTyped.nameSelectors||[]).slice(0,10))} ` +
-                  `speakingIndicators=${JSON.stringify((selectorsTyped.speakingIndicators||[]).slice(0,10))} ` +
-                  `speakingClasses=${JSON.stringify((selectorsTyped.speakingClasses||[]).slice(0,10))} ` +
-                  `silenceClasses=${JSON.stringify((selectorsTyped.silenceClasses||[]).slice(0,10))}`
-                );
-              } catch {}
-              // #endregion
-
               function hashStr(s: string): string {
                 // small non-crypto hash to avoid logging PII
                 let h = 5381;
@@ -664,22 +651,6 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
 
               function scanForAllGoogleParticipants() {
                 const participantSelectors: string[] = selectorsTyped.participantSelectors || [];
-                // #region agent log
-                // Debug: show how many participant elements we see (hashes only)
-                try {
-                  const all: HTMLElement[] = [];
-                  for (const sel of participantSelectors) {
-                    document.querySelectorAll(sel).forEach((el) => all.push(el as HTMLElement));
-                  }
-                  const ids = all.map((el) => getGoogleParticipantId(el));
-                  const uniqueIds = Array.from(new Set(ids));
-                  (window as any).logBot?.(
-                    `[Diag] scanForAllGoogleParticipants: selectors=${participantSelectors.length} ` +
-                    `elements=${all.length} uniqueIds=${uniqueIds.length} ` +
-                    `sampleIdHashes=${uniqueIds.slice(0,5).map((id)=>hashStr(String(id))).join(',')}`
-                  );
-                } catch {}
-                // #endregion
                 for (const sel of participantSelectors) {
                   document.querySelectorAll(sel).forEach((el) => {
                     const elh = el as HTMLElement;
@@ -710,19 +681,6 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                 participantSelectors.forEach(sel => {
                   document.querySelectorAll(sel).forEach(el => elements.push(el as HTMLElement));
                 });
-                // #region agent log
-                // Debug: if we never see >1 unique participant IDs, speaker switching cannot work.
-                try {
-                  const ids = elements.map((el) => getGoogleParticipantId(el));
-                  const uniqueIds = Array.from(new Set(ids));
-                  if (uniqueIds.length <= 1) {
-                    (window as any).logBot?.(
-                      `[Diag] poll: uniqueParticipantIds=${uniqueIds.length} elements=${elements.length} ` +
-                      `onlyIdHash=${uniqueIds[0] ? hashStr(String(uniqueIds[0])) : 'none'}`
-                    );
-                  }
-                } catch {}
-                // #endregion
                 elements.forEach((container) => {
                   const id = getGoogleParticipantId(container);
                   const indicatorSpeaking = hasSpeakingIndicator(container) || inferSpeakingFromClasses(container).speaking;

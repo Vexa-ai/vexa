@@ -11,6 +11,10 @@ REMOTE_TRANSCRIBER_API_KEY=your_api_key_here
 REMOTE_TRANSCRIBER_MODEL=whisper-v3-turbo
 REMOTE_TRANSCRIBER_TEMPERATURE=0
 REMOTE_TRANSCRIBER_VAD_MODEL=silero
+# Voice Agent / TTS Configuration (Optional)
+# Required only if using the voice agent feature (voice_agent_enabled: true)
+OPENAI_API_KEY=
+
 # Exposed Host Ports
 API_GATEWAY_HOST_PORT=8056
 ADMIN_API_HOST_PORT=8057
