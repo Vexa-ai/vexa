@@ -847,7 +847,17 @@ async def forward_mcp_root(request: Request):
             params=dict(request.query_params) or None,
             content=content
         )
-        return Response(content=resp.content, status_code=resp.status_code, headers=dict(resp.headers))
+        # Some MCP server implementations return a 400 JSON-RPC error for the initial GET handshake
+        # (while still providing a valid `mcp-session-id` header). Many clients treat non-2xx as fatal.
+        status_code = resp.status_code
+        if (
+            request.method == "GET"
+            and resp.status_code == 400
+            and "mcp-session-id" in resp.headers
+            and b"Missing session ID" in (resp.content or b"")
+        ):
+            status_code = 200
+        return Response(content=resp.content, status_code=status_code, headers=dict(resp.headers))
     except httpx.RequestError as exc:
         raise HTTPException(status_code=503, detail=f"MCP service unavailable: {exc}")
 
@@ -894,7 +904,15 @@ async def forward_mcp_path(request: Request, path: str):
             params=dict(request.query_params) or None,
             content=content
         )
-        return Response(content=resp.content, status_code=resp.status_code, headers=dict(resp.headers))
+        status_code = resp.status_code
+        if (
+            request.method == "GET"
+            and resp.status_code == 400
+            and "mcp-session-id" in resp.headers
+            and b"Missing session ID" in (resp.content or b"")
+        ):
+            status_code = 200
+        return Response(content=resp.content, status_code=status_code, headers=dict(resp.headers))
     except httpx.RequestError as exc:
         raise HTTPException(status_code=503, detail=f"MCP service unavailable: {exc}")
 

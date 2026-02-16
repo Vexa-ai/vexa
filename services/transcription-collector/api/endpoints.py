@@ -492,6 +492,8 @@ async def get_transcript_by_native_id(
     response_data = meeting_details.model_dump()
     # Surface recordings directly in transcript response to avoid an extra dashboard API call.
     response_data["recordings"] = (meeting.data or {}).get("recordings", []) if isinstance(meeting.data, dict) else []
+    # Surface user-provided meeting notes (stored in meeting.data).
+    response_data["notes"] = (meeting.data or {}).get("notes") if isinstance(meeting.data, dict) else None
     response_data["segments"] = sorted_segments
     return TranscriptionResponse(**response_data)
 
