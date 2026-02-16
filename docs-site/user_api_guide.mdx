@@ -1,0 +1,107 @@
+---
+title: "API Overview"
+---
+The Vexa API is platform-agnostic: you use the same endpoints for Google Meet, Teams, and Zoom.
+
+The only platform differences are in the **meeting identifiers** you pass (`native_meeting_id`, and `passcode` for Teams).
+
+If you're new, start here:
+
+- [Quickstart (Hosted)](quickstart)
+- [Self-Hosted Quickstart](getting-started)
+
+## Authentication
+
+All requests use:
+
+- `X-API-Key: <your token>`
+
+Hosted users can get an API key from:
+
+- https://vexa.ai/dashboard/api-keys
+
+Self-hosted users can create users/tokens via:
+
+- [Admin API](self-hosted-management)
+
+## Base URL
+
+Set these once in your shell:
+
+```bash
+export API_BASE="http://localhost:8056"   # or https://api.cloud.vexa.ai
+export API_KEY="YOUR_API_KEY_HERE"
+```
+
+## The Happy Path (3 requests)
+
+### 1) Send a bot to a meeting
+
+- `POST /bots`
+
+Examples (Meet/Teams/Zoom) are here:
+
+- [`api/bots.md`](api/bots)
+
+### 2) Read the transcript
+
+- `GET /transcripts/{platform}/{native_meeting_id}`
+
+Examples are here:
+
+- [`api/transcripts.md`](api/transcripts)
+
+### 3) Post-meeting playback (if a recording exists)
+
+If recording was enabled and capture succeeded, the transcript response includes:
+
+- `recordings[]` → each has `media_files[]`
+
+For browser playback, stream through the API:
+
+- `GET /recordings/{recording_id}/media/{media_file_id}/raw` (supports `Range`/`206` seeking)
+
+Full recordings reference:
+
+- [`api/recordings.md`](api/recordings)
+
+Recording management endpoints (explicit):
+
+- `GET /recordings`
+- `GET /recordings/{recording_id}`
+- `DELETE /recordings/{recording_id}`
+
+## Pagination
+
+List endpoints use `limit` and `offset` query parameters:
+
+```bash
+GET /recordings?limit=50&offset=0
+GET /meetings?limit=100&offset=0
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | int | varies (50-100) | Maximum items to return |
+| `offset` | int | `0` | Number of items to skip |
+
+Admin endpoints use `skip` instead of `offset` (same behavior):
+
+```bash
+GET /admin/users?skip=0&limit=100
+```
+
+## Reference
+
+- Bots: [Bots API](api/bots)
+- Meetings: [Meetings API](api/meetings)
+- Transcripts: [Transcripts API](api/transcripts)
+- Recordings: [Recordings API](api/recordings)
+- User settings (recording defaults, webhooks): [Settings API](api/settings)
+- Voice Agent (speak, chat, screen share): [Voice Agent API](api/voice-agent)
+- WebSocket (live streaming): [WebSocket](websocket)
+
+Zoom caveats:
+
+- [Zoom limitations](platforms/zoom)
+- [Zoom app setup](zoom-app-setup)
