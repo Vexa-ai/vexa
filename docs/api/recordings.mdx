@@ -21,8 +21,7 @@ curl -H "X-API-Key: $API_KEY" \
   "$API_BASE/recordings?limit=50&offset=0"
 ```
 
-<details>
-  <summary><strong>Response (200)</strong></summary>
+<Accordion title="Response (200)">
 
 ```json
 {
@@ -56,9 +55,9 @@ curl -H "X-API-Key: $API_KEY" \
 }
 ```
 
-</details>
+</Accordion>
 
-## GET /recordings/{recording_id}
+## GET `/recordings/{recording_id}`
 
 Get a recording and its `media_files`.
 
@@ -69,8 +68,7 @@ curl -H "X-API-Key: $API_KEY" \
 
 Same shape as an item in `GET /recordings`:
 
-<details>
-  <summary><strong>Response (200)</strong></summary>
+<Accordion title="Response (200)">
 
 ```json
 {
@@ -100,9 +98,9 @@ Same shape as an item in `GET /recordings`:
 }
 ```
 
-</details>
+</Accordion>
 
-## DELETE /recordings/{recording_id}
+## DELETE `/recordings/{recording_id}`
 
 Delete a recording, its media files from storage, and related DB rows (best-effort storage cleanup).
 
@@ -112,8 +110,7 @@ curl -X DELETE \
   "$API_BASE/recordings/123456789"
 ```
 
-<details>
-  <summary><strong>Response (200)</strong></summary>
+<Accordion title="Response (200)">
 
 ```json
 {
@@ -122,9 +119,9 @@ curl -X DELETE \
 }
 ```
 
-</details>
+</Accordion>
 
-## GET /recordings/{recording_id}/media/{media_file_id}/raw
+## GET `/recordings/{recording_id}/media/{media_file_id}/raw`
 
 Authenticated byte streaming (best for browser playback via same-origin proxy).
 
@@ -142,7 +139,7 @@ curl -L \
 
 Returns binary bytes (for example, `audio/wav`). Seeking uses `Range` with `206 Partial Content`.
 
-## GET /recordings/{recording_id}/media/{media_file_id}/download
+## GET `/recordings/{recording_id}/media/{media_file_id}/download`
 
 Returns a presigned URL for object storage backends (S3 / MinIO compatible).
 
@@ -151,8 +148,7 @@ curl -H "X-API-Key: $API_KEY" \
   "$API_BASE/recordings/123456789/media/987654321/download"
 ```
 
-<details>
-  <summary><strong>Response (200)</strong></summary>
+<Accordion title="Response (200)">
 
 ```json
 {
@@ -163,7 +159,7 @@ curl -H "X-API-Key: $API_KEY" \
 }
 ```
 
-</details>
+</Accordion>
 
 ### `raw` vs `download`: which to use?
 

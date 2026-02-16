@@ -12,8 +12,7 @@ curl -H "X-API-Key: $API_KEY" \
   "$API_BASE/recording-config"
 ```
 
-<details>
-  <summary><strong>Response (200)</strong></summary>
+<Accordion title="Response (200)">
 
 ```json
 {
@@ -22,7 +21,7 @@ curl -H "X-API-Key: $API_KEY" \
 }
 ```
 
-</details>
+</Accordion>
 
 ## PUT /recording-config
 
@@ -51,8 +50,7 @@ curl -X PUT "$API_BASE/recording-config" \
 
 Returns the updated configuration.
 
-<details>
-  <summary><strong>Response (200)</strong></summary>
+<Accordion title="Response (200)">
 
 ```json
 {
@@ -61,7 +59,7 @@ Returns the updated configuration.
 }
 ```
 
-</details>
+</Accordion>
 
 ## PUT /user/webhook
 
@@ -89,8 +87,7 @@ curl -X PUT "$API_BASE/user/webhook" \
 
 Returns the updated user record. For security, `webhook_secret` is never returned.
 
-<details>
-  <summary><strong>Response (200)</strong></summary>
+<Accordion title="Response (200)">
 
 ```json
 {
@@ -110,4 +107,4 @@ Returns the updated user record. For security, `webhook_secret` is never returne
 }
 ```
 
-</details>
+</Accordion>

@@ -3,28 +3,13 @@ title: "Bots API"
 ---
 Bots join meetings and stream audio for transcription (and optionally persist a recording).
 
-## Response Formats (Codebase)
-
-These endpoints return stable response envelopes:
-
-| Endpoint | Status | Response |
-|---|---:|---|
-| `POST /bots` | `201` | Full meeting object (`id`, `platform`, `native_meeting_id`, `constructed_meeting_url`, `status`, `bot_container_id`, `start_time`, `end_time`, `data`, `created_at`, `updated_at`) |
-| `GET /bots/status` | `200` | `{"running_bots":[{"container_id","container_name","platform","native_meeting_id","status","normalized_status","created_at","labels","meeting_id_from_name"}]}` |
-| `PUT /bots/{platform}/{native_meeting_id}/config` | `202` | `{"message":"Reconfiguration request accepted and sent to the bot."}` |
-| `DELETE /bots/{platform}/{native_meeting_id}` | `202` | `{"message":"Stop request accepted and is being processed."}` |
-
-Validation/auth errors use:
+Validation/auth errors use the standard envelope:
 
 ```json
 {
   "detail": "..."
 }
 ```
-
-<Info>
-The endpoint sections below include concrete JSON examples inside collapsed <code>Response (...)</code> blocks.
-</Info>
 
 ## Meeting IDs by Platform
 
@@ -105,8 +90,9 @@ curl -X POST "$API_BASE/bots" \
 
 Returns the created meeting record.
 
-<details>
-  <summary><strong>Response (201)</strong></summary>
+Response format (`201`): full meeting object with `id`, `platform`, `native_meeting_id`, `constructed_meeting_url`, `status`, `bot_container_id`, `start_time`, `end_time`, `data`, `created_at`, and `updated_at`.
+
+<Accordion title="Response (201)">
 
 ```json
 {
@@ -125,19 +111,20 @@ Returns the created meeting record.
 }
 ```
 
-</details>
+</Accordion>
 
 ## GET /bots/status
 
 List bots currently running under your API key.
+
+Response format (`200`): `{"running_bots":[{"container_id","container_name","platform","native_meeting_id","status","normalized_status","created_at","labels","meeting_id_from_name"}]}`.
 
 ```bash
 curl -H "X-API-Key: $API_KEY" \
   "$API_BASE/bots/status"
 ```
 
-<details>
-  <summary><strong>Response (200)</strong></summary>
+<Accordion title="Response (200)">
 
 ```json
 {
@@ -159,7 +146,7 @@ curl -H "X-API-Key: $API_KEY" \
 }
 ```
 
-</details>
+</Accordion>
 
 ## PUT `/bots/{platform}/{native_meeting_id}/config`
 
@@ -194,8 +181,9 @@ curl -X PUT "$API_BASE/bots/zoom/12345678901/config" \
   </Tab>
 </Tabs>
 
-<details>
-  <summary><strong>Response (202)</strong></summary>
+Response format (`202`): `{"message":"Reconfiguration request accepted and sent to the bot."}`.
+
+<Accordion title="Response (202)">
 
 ```json
 {
@@ -203,7 +191,7 @@ curl -X PUT "$API_BASE/bots/zoom/12345678901/config" \
 }
 ```
 
-</details>
+</Accordion>
 
 ## DELETE `/bots/{platform}/{native_meeting_id}`
 
@@ -235,8 +223,9 @@ curl -X DELETE \
   </Tab>
 </Tabs>
 
-<details>
-  <summary><strong>Response (202)</strong></summary>
+Response format (`202`): `{"message":"Stop request accepted and is being processed."}`.
+
+<Accordion title="Response (202)">
 
 ```json
 {
@@ -244,4 +233,4 @@ curl -X DELETE \
 }
 ```
 
-</details>
+</Accordion>
