@@ -15,6 +15,42 @@ Authentication: `X-API-Key` header (same as all Vexa endpoints).
 Interactive bot endpoints are available by default (`voice_agent_enabled` defaults to `true`). To disable, pass `voice_agent_enabled: false` when creating the bot. See [Bots API](bots) for the request format.
 </Info>
 
+<Info>
+Interactive endpoints require an **active** meeting. For non-active meetings, they return:
+
+```json
+{
+  "detail": "No active meeting found for {platform}/{native_meeting_id}"
+}
+```
+
+Most command endpoints return `202 Accepted` with this shape:
+
+```json
+{
+  "message": "Speak command sent",
+  "meeting_id": 220
+}
+```
+
+`message` text varies by endpoint (for example, `Chat message sent`, `Screen content command sent`, `Avatar set command sent`).
+</Info>
+
+## Response Envelope (Codebase)
+
+The backend implementation for these endpoints is in `services/bot-manager/app/main.py` and returns stable command acknowledgements:
+
+| Endpoint | Status | Response |
+|---|---:|---|
+| `POST /.../speak` | `202` | `{"message":"Speak command sent","meeting_id":<int>}` |
+| `DELETE /.../speak` | `202` | `{"message":"Speak stop command sent","meeting_id":<int>}` |
+| `POST /.../chat` | `202` | `{"message":"Chat message sent","meeting_id":<int>}` |
+| `POST /.../screen` | `202` | `{"message":"Screen content command sent","meeting_id":<int>}` |
+| `DELETE /.../screen` | `202` | `{"message":"Screen stop command sent","meeting_id":<int>}` |
+| `PUT /.../avatar` | `202` | `{"message":"Avatar set command sent","meeting_id":<int>}` |
+| `DELETE /.../avatar` | `202` | `{"message":"Avatar reset command sent","meeting_id":<int>}` |
+| `GET /.../chat` | `200` | `{"messages":[...],"meeting_id":<int>}` |
+
 ## Speak (Text-to-Speech)
 
 Make the bot speak in the meeting. The bot unmutes, plays the audio, then re-mutes.
@@ -88,6 +124,29 @@ curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
   </Tab>
 </Tabs>
 
+<details>
+  <summary><strong>Response (202)</strong></summary>
+
+```json
+{
+  "message": "Speak command sent",
+  "meeting_id": 220
+}
+```
+
+</details>
+
+<details>
+  <summary><strong>Validation Error (400)</strong></summary>
+
+```json
+{
+  "detail": "Must provide one of: text, audio_url, or audio_base64"
+}
+```
+
+</details>
+
 ### DELETE `/bots/{platform}/{native_meeting_id}/speak`
 
 Immediately stop any ongoing speech. The bot re-mutes.
@@ -96,6 +155,18 @@ Immediately stop any ongoing speech. The bot re-mutes.
 curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
   -H "X-API-Key: $API_KEY"
 ```
+
+<details>
+  <summary><strong>Response (202)</strong></summary>
+
+```json
+{
+  "message": "Speak stop command sent",
+  "meeting_id": 220
+}
+```
+
+</details>
 
 ---
 
@@ -120,6 +191,29 @@ curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/chat" \
 |-------|------|-------------|
 | `text` | string | Message to send to the meeting chat |
 
+<details>
+  <summary><strong>Response (202)</strong></summary>
+
+```json
+{
+  "message": "Chat message sent",
+  "meeting_id": 220
+}
+```
+
+</details>
+
+<details>
+  <summary><strong>Validation Error (400)</strong></summary>
+
+```json
+{
+  "detail": "text is required"
+}
+```
+
+</details>
+
 ### GET `/bots/{platform}/{native_meeting_id}/chat`
 
 Read all captured chat messages from the meeting.
@@ -138,16 +232,17 @@ curl "$API_BASE/bots/google_meet/abc-defg-hij/chat" \
     {
       "sender": "John Smith",
       "text": "Can you share the action items?",
-      "timestamp": 1707933456.123,
-      "isFromBot": false
+      "timestamp": 1771268061761,
+      "is_from_bot": false
     },
     {
       "sender": "AI Assistant",
       "text": "Here are the action items...",
-      "timestamp": 1707933460.456,
-      "isFromBot": true
+      "timestamp": 1771268061885,
+      "is_from_bot": true
     }
-  ]
+  ],
+  "meeting_id": 220
 }
 ```
 
@@ -159,8 +254,9 @@ curl "$API_BASE/bots/google_meet/abc-defg-hij/chat" \
 |-------|------|-------------|
 | `sender` | string | Participant name (or bot name for bot messages) |
 | `text` | string | Message content |
-| `timestamp` | float | Unix timestamp (seconds) |
-| `isFromBot` | bool | Whether the bot sent this message |
+| `timestamp` | number | Unix timestamp from bot runtime (commonly milliseconds in current integrations) |
+| `is_from_bot` | bool | Whether the bot sent this message |
+| `meeting_id` | integer | Internal Vexa meeting ID |
 
 ---
 
@@ -190,14 +286,21 @@ curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/screen" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $API_KEY" \
   -d '{"type": "video", "url": "https://example.com/demo.mp4"}'
+
+# Render custom HTML
+curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/screen" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{"type": "html", "html": "<h1>Quarterly Report</h1>"}'
 ```
 
 **Request body:**
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `type` | string | -- | Content type: `image`, `url`, or `video` |
-| `url` | string | -- | Content URL |
+| `type` | string | -- | Content type: `image`, `url`, `video`, or `html` |
+| `url` | string | -- | Content URL (required for `image`, `url`, `video`) |
+| `html` | string | -- | Raw HTML content (required for `html`) |
 | `start_share` | bool | `true` | Auto-start screen sharing (if not already sharing) |
 
 **Content types:**
@@ -207,6 +310,30 @@ curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/screen" \
 | `image` | Renders image fullscreen on black background |
 | `url` | Opens the URL in a browser window (e.g., Google Slides, dashboards) |
 | `video` | Plays video fullscreen with autoplay |
+| `html` | Renders custom HTML content in the display page |
+
+<details>
+  <summary><strong>Response (202)</strong></summary>
+
+```json
+{
+  "message": "Screen content command sent",
+  "meeting_id": 220
+}
+```
+
+</details>
+
+<details>
+  <summary><strong>Validation Error (400)</strong></summary>
+
+```json
+{
+  "detail": "type must be one of: image, video, url, html"
+}
+```
+
+</details>
 
 ### DELETE `/bots/{platform}/{native_meeting_id}/screen`
 
@@ -216,6 +343,18 @@ Stop screen sharing and clear the display.
 curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij/screen" \
   -H "X-API-Key: $API_KEY"
 ```
+
+<details>
+  <summary><strong>Response (202)</strong></summary>
+
+```json
+{
+  "message": "Screen stop command sent",
+  "meeting_id": 220
+}
+```
+
+</details>
 
 ---
 
@@ -245,6 +384,29 @@ curl -X PUT "$API_BASE/bots/google_meet/abc-defg-hij/avatar" \
 | `url` | string | URL to an image file (PNG, JPG, SVG) |
 | `image_base64` | string | Base64-encoded image data (alternative to `url`) |
 
+<details>
+  <summary><strong>Response (202)</strong></summary>
+
+```json
+{
+  "message": "Avatar set command sent",
+  "meeting_id": 220
+}
+```
+
+</details>
+
+<details>
+  <summary><strong>Validation Error (400)</strong></summary>
+
+```json
+{
+  "detail": "Either 'url' or 'image_base64' must be provided"
+}
+```
+
+</details>
+
 ### DELETE `/bots/{platform}/{native_meeting_id}/avatar`
 
 Reset the bot's avatar to the default Vexa logo.
@@ -253,6 +415,18 @@ Reset the bot's avatar to the default Vexa logo.
 curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij/avatar" \
   -H "X-API-Key: $API_KEY"
 ```
+
+<details>
+  <summary><strong>Response (202)</strong></summary>
+
+```json
+{
+  "message": "Avatar reset command sent",
+  "meeting_id": 220
+}
+```
+
+</details>
 
 ---
 
