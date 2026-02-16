@@ -87,20 +87,18 @@ Returns the created meeting record.
 
 ```json
 {
-  "id": 16,
-  "user_id": 1,
+  "id": 219,
+  "user_id": 4,
   "platform": "google_meet",
   "native_meeting_id": "abc-defg-hij",
   "constructed_meeting_url": "https://meet.google.com/abc-defg-hij",
   "status": "requested",
-  "bot_container_id": null,
+  "bot_container_id": "d21c5b0c5275...c9fe9333",
   "start_time": null,
   "end_time": null,
-  "data": {
-    "passcode": null
-  },
-  "created_at": "2026-02-13T20:10:00Z",
-  "updated_at": "2026-02-13T20:10:00Z"
+  "data": {},
+  "created_at": "2026-02-16T17:42:33.524137",
+  "updated_at": "2026-02-16T17:42:33.535113"
 }
 ```
 
@@ -122,18 +120,17 @@ curl -H "X-API-Key: $API_KEY" \
 {
   "running_bots": [
     {
-      "container_id": "3f2f...9b1",
-      "container_name": "vexa-bot-google_meet-16",
+      "container_id": "d21c5b0c5275...c9fe9333",
+      "container_name": "vexa-bot-219-fd0a58fb",
       "platform": "google_meet",
       "native_meeting_id": "abc-defg-hij",
-      "status": "Up 2 minutes",
+      "status": "Up 4 seconds",
       "normalized_status": "Up",
-      "created_at": "2026-02-13T20:10:10Z",
+      "created_at": "2026-02-16T17:42:33+00:00",
       "labels": {
-        "vexa.user_id": "1",
-        "vexa.meeting_id": "16"
+        "vexa.user_id": "4"
       },
-      "meeting_id_from_name": "16"
+      "meeting_id_from_name": "219"
     }
   ]
 }
