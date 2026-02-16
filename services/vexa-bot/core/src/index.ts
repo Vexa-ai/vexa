@@ -65,52 +65,185 @@ export function hasStopSignalReceived(): boolean {
 // --- Post-admission camera re-enablement ---
 // Google Meet may re-negotiate WebRTC tracks when the bot transitions from
 // waiting room to the actual meeting, killing our initial canvas track.
+// Teams "light meetings" (anonymous/guest) may set video to `inactive` in the
+// initial SDP answer, requiring a camera toggle to force SDP renegotiation.
 // This function is called by meetingFlow.ts after admission is confirmed
 // to ensure the virtual camera is active in the meeting.
+
+async function checkVideoFramesSent(): Promise<number> {
+  if (!page || page.isClosed()) return 0;
+  return page.evaluate(async () => {
+    const pcs = (window as any).__vexa_peer_connections as RTCPeerConnection[] || [];
+    for (const pc of pcs) {
+      if (pc.connectionState === 'closed') continue;
+      try {
+        const stats = await pc.getStats();
+        let frames = 0;
+        stats.forEach((report: any) => {
+          if (report.type === 'outbound-rtp' && report.kind === 'video') {
+            frames = report.framesSent || 0;
+          }
+        });
+        if (frames > 0) return frames;
+      } catch {}
+    }
+    return 0;
+  });
+}
+
 export async function triggerPostAdmissionCamera(): Promise<void> {
   if (!screenContentService || !page || page.isClosed()) return;
 
   log('[VoiceAgent] Post-admission: re-enabling virtual camera...');
 
-  const MAX_ATTEMPTS = 5;
-  const RETRY_INTERVALS = [2000, 3000, 5000, 8000, 10000];
+  // Quick diagnostic
+  try {
+    const deepDiag = await page.evaluate(() => {
+      const win = window as any;
+      return {
+        canvasExists: !!(win.__vexa_canvas),
+        canvasStreamExists: !!(win.__vexa_canvas_stream),
+        gumCallCount: win.__vexa_gum_call_count || 0,
+        peerConnections: (win.__vexa_peer_connections || []).length,
+        injectedAudioElements: (win.__vexaInjectedAudioElements || []).length,
+      };
+    });
+    log(`[VoiceAgent] Deep diagnostic: ${JSON.stringify(deepDiag)}`);
+  } catch (diagErr: any) {
+    log(`[VoiceAgent] Diagnostic error: ${diagErr.message}`);
+  }
 
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  // Phase 1: Try standard enableCamera (works for Google Meet and some Teams scenarios)
+  const PHASE1_ATTEMPTS = 2;
+  for (let attempt = 1; attempt <= PHASE1_ATTEMPTS; attempt++) {
     try {
       await screenContentService.enableCamera();
       await new Promise(resolve => setTimeout(resolve, 2000));
 
-      const framesSent = await page.evaluate(async () => {
-        const pcs = (window as any).__vexa_peer_connections as RTCPeerConnection[] || [];
-        for (const pc of pcs) {
-          if (pc.connectionState === 'closed') continue;
-          try {
-            const stats = await pc.getStats();
-            let frames = 0;
-            stats.forEach((report: any) => {
-              if (report.type === 'outbound-rtp' && report.kind === 'video') {
-                frames = report.framesSent || 0;
-              }
-            });
-            if (frames > 0) return frames;
-          } catch {}
-        }
-        return 0;
-      });
-
+      const framesSent = await checkVideoFramesSent();
       if (framesSent > 0) {
-        log(`[VoiceAgent] ✅ Post-admission camera active! framesSent=${framesSent} (attempt ${attempt})`);
+        log(`[VoiceAgent] ✅ Post-admission camera active! framesSent=${framesSent} (phase1, attempt ${attempt})`);
         return;
       }
-      log(`[VoiceAgent] Post-admission framesSent=0 (attempt ${attempt}), retrying...`);
+      log(`[VoiceAgent] Post-admission framesSent=0 (phase1, attempt ${attempt})`);
     } catch (err: any) {
-      log(`[VoiceAgent] Post-admission camera attempt ${attempt} failed: ${err.message}`);
+      log(`[VoiceAgent] Post-admission camera phase1 attempt ${attempt} failed: ${err.message}`);
     }
-    if (attempt < MAX_ATTEMPTS) {
-      await new Promise(resolve => setTimeout(resolve, RETRY_INTERVALS[attempt - 1]));
+    if (attempt < PHASE1_ATTEMPTS) {
+      await new Promise(resolve => setTimeout(resolve, 3000));
     }
   }
-  log('[VoiceAgent] ⚠️ Post-admission camera failed all retries');
+
+  // Phase 2: Camera toggle to force SDP renegotiation
+  // Teams light meetings (anonymous/guest) may reject video in the initial SDP.
+  // Toggling camera off→on forces Teams to issue a new SDP offer with video.
+  log('[VoiceAgent] Phase 1 failed — attempting camera toggle for SDP renegotiation...');
+  const PHASE2_ATTEMPTS = 3;
+  const PHASE2_INTERVALS = [3000, 5000, 8000];
+
+  for (let attempt = 1; attempt <= PHASE2_ATTEMPTS; attempt++) {
+    try {
+      const toggled = await screenContentService.toggleCameraForRenegotiation();
+      if (!toggled) {
+        log(`[VoiceAgent] Camera toggle attempt ${attempt}: could not find toggle buttons`);
+        // Fallback even on intermediate attempts — Teams may have no usable
+        // camera toggles in guest/light mode but still allow transceiver track injection.
+        await tryAddTrackFallback();
+        continue;
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      const framesSent = await checkVideoFramesSent();
+      if (framesSent > 0) {
+        log(`[VoiceAgent] ✅ Post-admission camera active after toggle! framesSent=${framesSent} (phase2, attempt ${attempt})`);
+        return;
+      }
+      log(`[VoiceAgent] Post-admission framesSent=0 after toggle (phase2, attempt ${attempt})`);
+
+      // Toggle succeeded but no frames are being published. Force a direct
+      // transceiver/addTrack fallback to trigger fresh negotiation.
+      await tryAddTrackFallback();
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      const fallbackFrames = await checkVideoFramesSent();
+      if (fallbackFrames > 0) {
+        log(`[VoiceAgent] ✅ Post-admission camera active after addTrack fallback! framesSent=${fallbackFrames} (phase2, attempt ${attempt})`);
+        return;
+      }
+      log(`[VoiceAgent] addTrack fallback still framesSent=0 (phase2, attempt ${attempt})`);
+    } catch (err: any) {
+      log(`[VoiceAgent] Post-admission camera phase2 attempt ${attempt} failed: ${err.message}`);
+    }
+    if (attempt < PHASE2_ATTEMPTS) {
+      await new Promise(resolve => setTimeout(resolve, PHASE2_INTERVALS[attempt - 1]));
+    }
+  }
+
+  log('[VoiceAgent] ⚠️ Post-admission camera failed all retries (both phases)');
+}
+
+// Last resort: directly call pc.addTrack() to inject our canvas track into the
+// active PeerConnection. This triggers negotiationneeded which forces a new
+// SDP offer/answer exchange with the video track included.
+async function tryAddTrackFallback(): Promise<void> {
+  if (!page || page.isClosed()) return;
+  log('[VoiceAgent] Trying addTrack fallback to force video negotiation...');
+  try {
+    const result = await page.evaluate(() => {
+      const win = window as any;
+      const pcs = (win.__vexa_peer_connections || []) as RTCPeerConnection[];
+      const canvasStream = win.__vexa_canvas_stream as MediaStream;
+      if (!canvasStream) return { success: false, reason: 'no canvas stream' };
+
+      const canvasTrack = canvasStream.getVideoTracks()[0];
+      if (!canvasTrack) return { success: false, reason: 'no canvas video track' };
+
+      for (const pc of pcs) {
+        if (pc.connectionState === 'closed') continue;
+        const transceivers = pc.getTransceivers();
+
+        // Try to set video on an existing video-capable transceiver first.
+        for (const t of transceivers) {
+          const receiverKind = t.receiver?.track?.kind;
+          const senderKind = t.sender?.track?.kind;
+          const isVideoTransceiver = receiverKind === 'video' || senderKind === 'video';
+          if (isVideoTransceiver) {
+            try {
+              t.direction = 'sendrecv';
+              t.sender.replaceTrack(canvasTrack);
+              return { success: true, method: 'transceiver-replace', mid: t.mid, pcState: pc.connectionState };
+            } catch (e) {
+              // Continue to next transceiver/fallback path.
+            }
+          }
+        }
+
+        // If no suitable transceiver exists, create one explicitly.
+        try {
+          const transceiver = pc.addTransceiver(canvasTrack, { direction: 'sendrecv' });
+          return {
+            success: true,
+            method: 'addTransceiver',
+            mid: transceiver?.mid ?? null,
+            pcState: pc.connectionState
+          };
+        } catch (e) {
+          // Fall back to addTrack below.
+        }
+
+        // Last resort: addTrack triggers negotiationneeded.
+        try {
+          pc.addTrack(canvasTrack, canvasStream);
+          return { success: true, method: 'addTrack', pcState: pc.connectionState };
+        } catch (e) {
+          return { success: false, reason: 'addTrack failed: ' + (e as Error).message };
+        }
+      }
+      return { success: false, reason: 'no suitable PC found' };
+    });
+    log(`[VoiceAgent] addTrack fallback result: ${JSON.stringify(result)}`);
+  } catch (err: any) {
+    log(`[VoiceAgent] addTrack fallback error: ${err.message}`);
+  }
 }
 // -------------------------------------------
 
@@ -866,16 +999,10 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
 
   // Simple browser setup like simple-bot.js
   if (botConfig.platform === "teams") {
-    const teamsLaunchArgs = [
-      '--disable-web-security',
-      '--disable-features=VizDisplayCompositor',
-      '--allow-running-insecure-content',
-      '--ignore-certificate-errors',
-      '--ignore-ssl-errors',
-      '--ignore-certificate-errors-spki-list',
-      '--disable-site-isolation-trials',
-      '--disable-features=VizDisplayCompositor'
-    ];
+    // Use shared browser args so Teams gets the same fake-device flags as Google Meet.
+    // This ensures Chromium creates a fake video device that enumerateDevices can see,
+    // allowing Teams to enable the camera button and our getUserMedia patch to intercept.
+    const teamsLaunchArgs = getBrowserArgs(!!botConfig.voiceAgentEnabled);
 
     try {
       log("Using MS Edge browser for Teams platform");
@@ -909,6 +1036,14 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     } catch (e) {
       log(`Warning: context.addInitScript failed: ${(e as any)?.message || e}`);
     }
+
+    // Diagnostic: verify addInitScript works for Teams
+    try {
+      await context.addInitScript(() => {
+        (window as any).__vexa_initscript_test = true;
+        console.log('[Vexa] Init script test: running in frame ' + window.location.href);
+      });
+    } catch {}
 
     // Inject virtual camera init script for avatar display
     try {
@@ -956,10 +1091,21 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
   }
 
   // Forward browser console messages tagged [Vexa] to Node.js log
+  // Also capture getUserMedia and RTC-related messages for diagnostics
   page.on('console', (msg) => {
     const text = msg.text();
-    if (text.includes('[Vexa]')) {
+    if (text.includes('[Vexa]') || text.includes('getUserMedia') || text.includes('RTCPeerConnection') || text.includes('enumerateDevices')) {
       log(`[BrowserConsole] ${text}`);
+    }
+  });
+
+  // Monitor frames for WebRTC usage (Teams may use iframes)
+  page.on('frameattached', (frame) => {
+    log(`[Frame] New frame attached: ${frame.url() || '(empty)'}`);
+  });
+  page.on('framenavigated', (frame) => {
+    if (frame !== page!.mainFrame()) {
+      log(`[Frame] Sub-frame navigated: ${frame.url()}`);
     }
   });
 

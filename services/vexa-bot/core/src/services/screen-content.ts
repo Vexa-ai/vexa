@@ -50,10 +50,14 @@ export class ScreenContentService {
 
   private _loadDefaultAvatar(): void {
     try {
-      // Try multiple paths (dev vs Docker) — use light logo for dark background
+      // Try multiple paths (dev vs Docker). The repository currently ships
+      // vexa-logo-default.png; keep vexa-logo-light.png as a legacy fallback.
       const possiblePaths = [
+        path.join(__dirname, '../../assets/vexa-logo-default.png'),
+        path.join(__dirname, '../assets/vexa-logo-default.png'),
         path.join(__dirname, '../../assets/vexa-logo-light.png'),
         path.join(__dirname, '../assets/vexa-logo-light.png'),
+        '/app/assets/vexa-logo-default.png',
         '/app/assets/vexa-logo-light.png',
       ];
       for (const p of possiblePaths) {
@@ -66,7 +70,7 @@ export class ScreenContentService {
       }
       // No PNG found: use embedded Vexa logo (dark background, light V) so we never show the text placeholder
       this._defaultAvatarDataUri = EMBEDDED_LOGODARK_DATA_URI;
-      log('[ScreenContent] Default avatar: using embedded Vexa logo (vexa-logo-light.png not found)');
+      log('[ScreenContent] Default avatar: using embedded Vexa logo (no logo PNG found on disk)');
     } catch (err: any) {
       log(`[ScreenContent] Failed to load default avatar: ${err.message}`);
       this._defaultAvatarDataUri = EMBEDDED_LOGODARK_DATA_URI;
@@ -188,8 +192,128 @@ export class ScreenContentService {
   }
 
   /**
-   * Turn on the camera button in Google Meet if it's off.
-   * The getUserMedia patch ensures that when Meet gets the camera stream,
+   * Teams light-meetings may expose only "Open video options". Try selecting
+   * a camera device there, then use the Teams keyboard shortcut for video.
+   */
+  private async tryTeamsVideoOptionsFallback(): Promise<boolean> {
+    const videoOptionsBtn = this.page.locator([
+      'button[aria-label="Open video options"]',
+      'button[aria-label="open video options"]',
+      'button[aria-label="Video options"]',
+      'button[aria-label="video options"]',
+      'button[aria-label="Camera options"]',
+      'button[aria-label="camera options"]',
+      'button:has-text("Open video options")',
+    ].join(', ')).first();
+
+    const optionsVisible = await videoOptionsBtn.isVisible().catch(() => false);
+    if (!optionsVisible) return false;
+
+    try {
+      const label = await videoOptionsBtn.getAttribute('aria-label');
+      await videoOptionsBtn.click({ force: true });
+      log(`[ScreenContent] Opened video options${label ? ` ("${label}")` : ''}`);
+      await this.page.waitForTimeout(700);
+    } catch (err: any) {
+      log(`[ScreenContent] Failed to open video options: ${err.message}`);
+      return false;
+    }
+
+    let deviceSelected = false;
+
+    const vexaOption = this.page.locator([
+      '[role="menuitemradio"]:has-text("Vexa Virtual Camera")',
+      '[role="option"]:has-text("Vexa Virtual Camera")',
+      'button:has-text("Vexa Virtual Camera")',
+      '[data-tid*="camera"]:has-text("Vexa Virtual Camera")',
+      'span:has-text("Vexa Virtual Camera")',
+    ].join(', ')).first();
+    try {
+      const vexaVisible = await vexaOption.isVisible().catch(() => false);
+      if (vexaVisible) {
+        await vexaOption.click({ force: true });
+        deviceSelected = true;
+        log('[ScreenContent] Selected "Vexa Virtual Camera" in video options');
+      }
+    } catch {}
+
+    if (!deviceSelected) {
+      const fallbackCameraLabel = await this.page.evaluate(() => {
+        const normalize = (value: string | null | undefined): string =>
+          (value || '').replace(/\s+/g, ' ').trim();
+        const isVisible = (el: Element): boolean => {
+          const node = el as HTMLElement;
+          const style = window.getComputedStyle(node);
+          const rect = node.getBoundingClientRect();
+          return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            style.visibility !== 'hidden' &&
+            style.display !== 'none'
+          );
+        };
+        const candidates = Array.from(
+          document.querySelectorAll('[role="menuitemradio"], [role="option"], button, [data-tid], [aria-label]')
+        );
+        for (const el of candidates) {
+          if (!isVisible(el)) continue;
+          const label = normalize((el as HTMLElement).innerText || el.getAttribute('aria-label'));
+          if (!label) continue;
+          const lower = label.toLowerCase();
+          const isCameraDeviceCandidate =
+            lower.includes('camera') &&
+            !lower.includes('open video options') &&
+            !lower.includes('video options') &&
+            !lower.includes('turn on camera') &&
+            !lower.includes('turn off camera') &&
+            !lower.includes('turn camera on') &&
+            !lower.includes('turn camera off') &&
+            !lower.includes('turn on video') &&
+            !lower.includes('turn off video') &&
+            !lower.includes('no camera');
+          if (!isCameraDeviceCandidate) continue;
+          (el as HTMLElement).click();
+          return label;
+        }
+        return null;
+      });
+
+      if (fallbackCameraLabel) {
+        deviceSelected = true;
+        log(`[ScreenContent] Selected fallback camera option: "${fallbackCameraLabel}"`);
+      } else {
+        log('[ScreenContent] No selectable camera device found in video options');
+      }
+    }
+
+    await this.page.keyboard.press('Escape').catch(() => {});
+    await this.page.waitForTimeout(500);
+
+    await this.page.keyboard.press('Control+Shift+O').catch(() => {});
+    await this.page.waitForTimeout(1000);
+
+    const turnOffVisible = await this.page.locator([
+      'button[aria-label="Turn off camera"]',
+      'button[aria-label="turn off camera"]',
+      'button[aria-label="Turn camera off"]',
+      'button[aria-label="turn camera off"]',
+      'button[aria-label="Turn off video"]',
+      'button[aria-label="turn off video"]',
+    ].join(', ')).first().isVisible().catch(() => false);
+
+    if (turnOffVisible) {
+      log('[ScreenContent] Video options fallback succeeded; camera appears ON');
+      return true;
+    }
+
+    log('[ScreenContent] Video options fallback did not expose a camera-ON state');
+    return deviceSelected;
+  }
+
+  /**
+   * Turn on the camera/video button if it's off.
+   * Works for both Google Meet ("Turn on camera") and Teams ("Turn on video").
+   * The getUserMedia patch ensures that when the platform gets the camera stream,
    * it receives our canvas stream. So just clicking the button is enough.
    */
   async enableCamera(): Promise<void> {
@@ -217,38 +341,54 @@ export class ScreenContentService {
     });
     log(`[ScreenContent] Camera-related buttons: ${JSON.stringify(toolbarButtons)}`);
 
-    // Click "Turn on camera" if it's visible (means camera is currently off)
-    // Try multiple selector patterns for i18n support and Google Meet UI variations
+    // Click "Turn on camera/video" if it's visible (means camera is currently off)
+    // Includes both Google Meet ("camera") and Teams ("video"/"camera") selectors
+    // NOTE: Teams has "Open video options" which also contains "video" — we must
+    // use specific prefixes to avoid matching the wrong button.
+    // Teams uses BOTH "Turn camera on" and "Turn on camera" depending on version.
     const turnOnCameraBtn = this.page.locator([
-      'button[aria-label*="Turn on camera"]',
-      'button[aria-label*="turn on camera"]',
-      'button[aria-label*="Включить камеру"]',
-      'button[aria-label*="camera" i][aria-label*="on" i]',
-      'button[data-tooltip*="Turn on camera"]',
-      'button[data-tooltip*="camera" i]',
+      // Google Meet selectors
+      'button[aria-label="Turn on camera"]',
+      'button[aria-label="turn on camera"]',
+      'button[aria-label="Включить камеру"]',
+      'button[data-tooltip="Turn on camera"]',
+      // Teams selectors — multiple aria-label variants
+      'button[aria-label="Turn on video"]',
+      'button[aria-label="turn on video"]',
+      'button[aria-label="Turn camera on"]',
+      'button[aria-label="turn camera on"]',
     ].join(', ')).first();
 
     try {
       await turnOnCameraBtn.waitFor({ state: 'visible', timeout: 5000 });
       const label = await turnOnCameraBtn.getAttribute('aria-label');
-      log(`[ScreenContent] Found camera button: "${label}", clicking...`);
+      log(`[ScreenContent] Found camera/video button: "${label}", clicking...`);
       await turnOnCameraBtn.click({ force: true });
-      log('[ScreenContent] Clicked camera button — getUserMedia patch will provide canvas stream');
+      log('[ScreenContent] Clicked camera/video button — getUserMedia patch will provide canvas stream');
       // Wait for camera to initialize and getUserMedia to be called
       await this.page.waitForTimeout(3000);
     } catch {
-      log('[ScreenContent] Camera button not found — trying "Turn off camera" check (maybe already on)');
+      log('[ScreenContent] Camera/video button not found — trying "Turn off" check (maybe already on)');
       // Check if camera is already on
       const turnOffCameraBtn = this.page.locator([
-        'button[aria-label*="Turn off camera"]',
-        'button[aria-label*="turn off camera"]',
-        'button[aria-label*="Выключить камеру"]',
+        'button[aria-label="Turn off camera"]',
+        'button[aria-label="turn off camera"]',
+        'button[aria-label="Выключить камеру"]',
+        // Teams — multiple variants
+        'button[aria-label="Turn off video"]',
+        'button[aria-label="turn off video"]',
+        'button[aria-label="Turn camera off"]',
+        'button[aria-label="turn camera off"]',
       ].join(', ')).first();
       try {
         await turnOffCameraBtn.waitFor({ state: 'visible', timeout: 2000 });
-        log('[ScreenContent] Camera is already ON (found "Turn off camera" button)');
+        log('[ScreenContent] Camera/video is already ON (found "Turn off" button)');
       } catch {
-        log('[ScreenContent] Neither camera on nor off button found — camera may be unavailable');
+        log('[ScreenContent] Neither camera/video on nor off button found — trying video options fallback');
+        const fallbackEnabled = await this.tryTeamsVideoOptionsFallback();
+        if (!fallbackEnabled) {
+          log('[ScreenContent] Video options fallback unavailable or unsuccessful');
+        }
       }
     }
 
@@ -512,6 +652,83 @@ export class ScreenContentService {
   }
 
   /**
+   * Toggle camera off→on to force Teams SDP renegotiation.
+   *
+   * Teams "light meetings" (anonymous/guest) sometimes sets video to `inactive`
+   * in the initial SDP answer, making all replaceTrack attempts useless.
+   * Toggling the camera UI off then on forces Teams to renegotiate the SDP
+   * with video enabled, allowing the virtual camera stream to flow.
+   */
+  async toggleCameraForRenegotiation(): Promise<boolean> {
+    log('[ScreenContent] Attempting camera toggle (off→on) to force SDP renegotiation...');
+
+    // All known "camera/video off" button selectors for Teams + Meet
+    const turnOffSelectors = [
+      'button[aria-label="Turn off camera"]',
+      'button[aria-label="turn off camera"]',
+      'button[aria-label="Turn camera off"]',
+      'button[aria-label="turn camera off"]',
+      'button[aria-label="Turn off video"]',
+      'button[aria-label="turn off video"]',
+      'button[aria-label="Выключить камеру"]',
+    ];
+
+    const turnOnSelectors = [
+      'button[aria-label="Turn on camera"]',
+      'button[aria-label="turn on camera"]',
+      'button[aria-label="Turn camera on"]',
+      'button[aria-label="turn camera on"]',
+      'button[aria-label="Turn on video"]',
+      'button[aria-label="turn on video"]',
+      'button[aria-label="Включить камеру"]',
+    ];
+
+    try {
+      // Step 1: Turn camera OFF
+      const turnOffBtn = this.page.locator(turnOffSelectors.join(', ')).first();
+      try {
+        await turnOffBtn.waitFor({ state: 'visible', timeout: 3000 });
+        const label = await turnOffBtn.getAttribute('aria-label');
+        log(`[ScreenContent] Toggle: clicking OFF button ("${label}")...`);
+        await turnOffBtn.click({ force: true });
+        // Wait for Teams to process the camera-off and release the video track
+        await this.page.waitForTimeout(2000);
+      } catch {
+        // Camera might already be off — try turning it on directly
+        log('[ScreenContent] Toggle: no "turn off" button found — camera may already be off');
+      }
+
+      // Step 2: Turn camera ON (this triggers getUserMedia → our canvas track → SDP renegotiation)
+      const turnOnBtn = this.page.locator(turnOnSelectors.join(', ')).first();
+      try {
+        await turnOnBtn.waitFor({ state: 'visible', timeout: 3000 });
+        const label = await turnOnBtn.getAttribute('aria-label');
+        log(`[ScreenContent] Toggle: clicking ON button ("${label}")...`);
+        await turnOnBtn.click({ force: true });
+        // Wait for getUserMedia, replaceTrack, and SDP renegotiation
+        await this.page.waitForTimeout(3000);
+        log('[ScreenContent] Toggle: camera toggled on — SDP renegotiation should be in progress');
+
+        // Now run replaceTrack to ensure our canvas stream is the active video source
+        await this.enableCamera();
+        return true;
+      } catch {
+        log('[ScreenContent] Toggle: no "turn on" button found — trying video options fallback');
+        const fallbackEnabled = await this.tryTeamsVideoOptionsFallback();
+        if (fallbackEnabled) {
+          await this.enableCamera();
+          return true;
+        }
+        log('[ScreenContent] Toggle: video options fallback failed');
+        return false;
+      }
+    } catch (err: any) {
+      log(`[ScreenContent] Toggle failed: ${err.message}`);
+      return false;
+    }
+  }
+
+  /**
    * Display an image on the virtual camera feed.
    * @param imageSource URL or base64 data URI for the image
    */
@@ -767,6 +984,8 @@ export class ScreenContentService {
 export function getVirtualCameraInitScript(): string {
   return `
     (() => {
+      console.log('[Vexa] Virtual camera init script START in: ' + window.location.href);
+      try {
       // ===== 1. Create the canvas and stream eagerly =====
       // We create a 1920x1080 canvas and captureStream(30) immediately.
       // ScreenContentService.initialize() will find these globals and reuse them.
@@ -864,6 +1083,7 @@ export function getVirtualCameraInitScript(): string {
       // Track all connections AND intercept addTrack to swap video tracks.
       window.__vexa_peer_connections = [];
       window.__vexa_addtrack_intercepted = 0;
+      window.__vexa_offer_video_forced = 0;
       const OrigRTC = window.RTCPeerConnection;
 
       // Patch addTrack on the prototype BEFORE creating any instances.
@@ -909,6 +1129,65 @@ export function getVirtualCameraInitScript(): string {
         return origReplaceTrack.call(this, newTrack);
       };
 
+      // Ensure outbound video is present BEFORE offers are generated.
+      // Teams guest/light meeting flow can create an offer with m=video inactive.
+      // If no active video sender exists at offer-time, remote side never receives
+      // a publishable camera track even if we replace tracks later.
+      const origCreateOffer = OrigRTC.prototype.createOffer;
+      OrigRTC.prototype.createOffer = async function(...offerArgs) {
+        try {
+          const currentStream = window.__vexa_canvas_stream;
+          const canvasTrack = currentStream?.getVideoTracks?.()[0];
+          if (canvasTrack) {
+            const transceivers = this.getTransceivers ? this.getTransceivers() : [];
+            let hasVideoSender = false;
+            let attachedToExisting = false;
+
+            for (const t of transceivers) {
+              const receiverKind = t.receiver?.track?.kind;
+              const senderKind = t.sender?.track?.kind;
+              const isVideoTransceiver = receiverKind === 'video' || senderKind === 'video';
+              if (!isVideoTransceiver) continue;
+
+              // Force video-capable transceivers to allow sending.
+              try {
+                if (t.direction === 'inactive' || t.direction === 'recvonly') {
+                  t.direction = 'sendrecv';
+                }
+              } catch {}
+
+              if (t.sender?.track?.kind === 'video') {
+                hasVideoSender = true;
+                continue;
+              }
+
+              if (!t.sender?.track) {
+                try {
+                  await t.sender.replaceTrack(canvasTrack.clone());
+                  attachedToExisting = true;
+                  hasVideoSender = true;
+                  console.log('[Vexa] createOffer pre-hook: attached canvas track to existing video transceiver (mid=' + (t.mid || 'null') + ')');
+                } catch {}
+              }
+            }
+
+            // If Teams did not keep a send-capable video transceiver, inject one.
+            if (!hasVideoSender) {
+              try {
+                const tx = this.addTransceiver(canvasTrack.clone(), { direction: 'sendrecv' });
+                window.__vexa_offer_video_forced = (window.__vexa_offer_video_forced || 0) + 1;
+                console.log('[Vexa] createOffer pre-hook: added canvas video transceiver (mid=' + (tx?.mid || 'null') + ', attachedExisting=' + attachedToExisting + ')');
+              } catch (addErr) {
+                console.warn('[Vexa] createOffer pre-hook addTransceiver failed:', addErr);
+              }
+            }
+          }
+        } catch (offerHookErr) {
+          console.warn('[Vexa] createOffer pre-hook failed:', offerHookErr);
+        }
+        return origCreateOffer.apply(this, offerArgs);
+      };
+
       window.RTCPeerConnection = function(...args) {
         const pc = new OrigRTC(...args);
         window.__vexa_peer_connections.push(pc);
@@ -927,7 +1206,33 @@ export function getVirtualCameraInitScript(): string {
         try { window.RTCPeerConnection[key] = OrigRTC[key]; } catch {}
       });
 
-      console.log('[Vexa] getUserMedia + RTCPeerConnection + addTrack patched for virtual camera');
+      // ===== 4. Patch enumerateDevices =====
+      // Teams checks navigator.mediaDevices.enumerateDevices() to decide
+      // whether to show the camera button. In a headless container there are
+      // no physical cameras, so Teams disables the video toggle. We inject a
+      // fake videoinput device so Teams enables the button. When Teams calls
+      // getUserMedia, our patch above returns the canvas stream.
+      const origEnumerateDevices = navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices);
+      navigator.mediaDevices.enumerateDevices = async function() {
+        const devices = await origEnumerateDevices();
+        const hasVideo = devices.some(d => d.kind === 'videoinput');
+        if (!hasVideo) {
+          devices.push({
+            deviceId: 'vexa-virtual-camera',
+            kind: 'videoinput',
+            label: 'Vexa Virtual Camera',
+            groupId: 'vexa-virtual',
+            toJSON() { return { deviceId: this.deviceId, kind: this.kind, label: this.label, groupId: this.groupId }; }
+          });
+          console.log('[Vexa] Injected virtual camera into enumerateDevices');
+        }
+        return devices;
+      };
+
+      console.log('[Vexa] getUserMedia + RTCPeerConnection + addTrack + createOffer + enumerateDevices patched for virtual camera');
+      } catch (e) {
+        console.error('[Vexa] Init script FAILED:', e);
+      }
     })();
   `;
 }

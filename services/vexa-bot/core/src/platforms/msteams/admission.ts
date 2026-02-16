@@ -247,18 +247,76 @@ export async function waitForTeamsMeetingAdmission(
     }
     
     if (!admitted) {
-      // CRITICAL: Before concluding failure, check if bot was actually rejected
-      log("No Teams meeting indicators found - checking if bot was rejected before concluding failure...");
-      
-      const isRejected = await checkForTeamsRejection(page);
-      if (isRejected) {
-        log("🚨 Bot was rejected from the Teams meeting by admin (final check)");
-        throw new Error("Bot admission was rejected by meeting admin");
+      // The bot may still be transitioning. Poll for admission indicators
+      // for up to 30 seconds before concluding failure.
+      log("No Teams meeting indicators found yet — polling for up to 30s...");
+      const pollStart = Date.now();
+      const pollTimeout = 30000;
+      const pollInterval = 2000;
+
+      while (Date.now() - pollStart < pollTimeout) {
+        await page.waitForTimeout(pollInterval);
+
+        // Check for rejection first
+        const isRejected = await checkForTeamsRejection(page);
+        if (isRejected) {
+          log("🚨 Bot was rejected from the Teams meeting by admin");
+          throw new Error("Bot admission was rejected by meeting admin");
+        }
+
+        // Check for admission
+        const leaveButtonFound = await checkForAdmissionIndicators(page);
+        if (leaveButtonFound) {
+          log("✅ Bot admitted during polling (Leave button found)");
+          return true;
+        }
+
+        // Check for waiting room (enter the waiting loop)
+        const lobbyText = await page.locator(teamsWaitingRoomIndicators[0]).isVisible().catch(() => false);
+        if (lobbyText) {
+          log("Found Teams lobby text — entering waiting room loop...");
+          // Re-enter the waiting room logic from here
+          try {
+            await callAwaitingAdmissionCallback(botConfig);
+            log("Awaiting admission callback sent successfully");
+          } catch (callbackError: any) {
+            log(`Warning: Failed to send awaiting admission callback: ${callbackError.message}`);
+          }
+
+          // Wait for admission in the lobby
+          const lobbyStart = Date.now();
+          while (Date.now() - lobbyStart < timeout) {
+            const stillInLobby = await page.locator(teamsWaitingRoomIndicators[0]).isVisible().catch(() => false);
+            if (!stillInLobby) {
+              const admittedNow = await checkForAdmissionIndicators(page);
+              if (admittedNow) {
+                log("✅ Bot was admitted from the lobby!");
+                return true;
+              }
+              const rejectedNow = await checkForTeamsRejection(page);
+              if (rejectedNow) {
+                throw new Error("Bot admission was rejected by meeting admin");
+              }
+            }
+            await page.waitForTimeout(2000);
+            log(`Still in Teams waiting room... ${Math.round((Date.now() - lobbyStart) / 1000)}s elapsed`);
+          }
+          throw new Error("Bot is still in the Teams waiting room after timeout");
+        }
+
+        log(`Polling for admission... ${Math.round((Date.now() - pollStart) / 1000)}s elapsed`);
       }
-      
-      // If no rejection found, then it's likely a join failure or unknown state
-      log("No rejection indicators found - bot likely failed to join or is in unknown state");
-      throw new Error("Bot failed to join the Teams meeting - no meeting indicators found");
+
+      // After polling timeout, final check
+      log("Polling timeout reached — final admission check...");
+      const finalCheck = await checkForAdmissionIndicators(page);
+      if (finalCheck) {
+        log("✅ Bot admitted after polling timeout (Leave button found)");
+        return true;
+      }
+
+      log("No admission, rejection, or lobby indicators found after polling — bot failed to join");
+      throw new Error("Bot failed to join the Teams meeting - no meeting indicators found after polling");
     }
     
     if (admitted) {

@@ -72,18 +72,10 @@ export const teamsRejectionIndicators: string[] = [
   '[role="alertdialog"]:has-text("failed")',
   
   // Rejection button patterns that indicate failure/retry scenarios
-  'button:has-text("Try again")',
-  'button:has-text("Retry")',
-  'button:has-text("OK")',
-  'button[aria-label*="denied"]',
-  'button[data-tid*="retry"]',
-  'button[data-tid="calling-retry-cancelbutton"]', // Specific pattern from logs
-  
-  // Error state indicators
-  '[data-tid*="error"]',
-  '[data-tid*="failed"]',
-  '[class*="error"]',
-  '[class*="failed"]'
+  // NOTE: Be very specific here — broad selectors like button:has-text("OK"),
+  // button[data-tid*="retry"], or [class*="error"] cause false positives on
+  // Teams pre-join/lobby screens. Only include text-based denied indicators.
+  'button[aria-label*="denied"]'
 ];
 
 export const teamsAdmissionIndicators: string[] = [
@@ -261,7 +253,32 @@ export const teamsJoinButtonSelectors: string[] = [
 
 export const teamsCameraButtonSelectors: string[] = [
   'button[aria-label*="Turn off camera"]',
-  'button[aria-label*="Turn on camera"]'
+  'button[aria-label*="Turn on camera"]',
+  'button[aria-label*="Turn camera off"]',
+  'button[aria-label*="Turn camera on"]',
+  'button[aria-label*="Turn off video"]',
+  'button[aria-label*="Turn on video"]',
+  'button[aria-label*="Turn video off"]',
+  'button[aria-label*="Turn video on"]'
+];
+
+export const teamsVideoOptionsButtonSelectors: string[] = [
+  'button[aria-label*="Open video options"]',
+  'button[aria-label*="open video options"]',
+  'button[aria-label*="Video options"]',
+  'button[aria-label*="video options"]',
+  'button[aria-label*="Camera options"]',
+  'button[aria-label*="camera options"]',
+  'button[data-tid*="video-options"]',
+  'button:has-text("Open video options")'
+];
+
+export const teamsVirtualCameraOptionSelectors: string[] = [
+  '[role="menuitemradio"]:has-text("Vexa Virtual Camera")',
+  '[role="option"]:has-text("Vexa Virtual Camera")',
+  'button:has-text("Vexa Virtual Camera")',
+  '[data-tid*="camera"]:has-text("Vexa Virtual Camera")',
+  'span:has-text("Vexa Virtual Camera")'
 ];
 
 // Teams audio option selectors (pre-join screen)
@@ -383,5 +400,4 @@ export const teamsLeaveSelectors: string[] = [
   'input[type="button"][value="Cancel"]',
   'input[type="submit"][value="Cancel"]'
 ];
-
 

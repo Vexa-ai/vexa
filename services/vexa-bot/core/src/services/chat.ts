@@ -578,78 +578,65 @@ export class MeetingChatService {
   private async sendTeamsChat(text: string): Promise<boolean> {
     if (this.page.isClosed()) return false;
 
-    return await this.page.evaluate(async (messageText: string) => {
-      // Open chat panel if not open
+    try {
+      // Open chat panel if not open — use Playwright locator click
       const chatBtnSelectors = [
         'button[aria-label*="Chat"]:not([disabled])',
         '#chat-button',
         'button[data-tid*="chat"]'
       ];
 
-      for (const sel of chatBtnSelectors) {
-        const btn = document.querySelector(sel) as HTMLElement | null;
-        if (btn) {
-          const chatInput = document.querySelector('[contenteditable="true"][aria-label*="message"]') ||
-                           document.querySelector('[contenteditable="true"][data-tid*="message"]') ||
-                           document.querySelector('div[role="textbox"]');
-          if (!chatInput) {
-            btn.click();
-            await new Promise(r => setTimeout(r, 800));
-          }
-          break;
-        }
-      }
-
-      // Find chat input
       const inputSelectors = [
         '[contenteditable="true"][aria-label*="message"]',
         '[contenteditable="true"][aria-label*="Message"]',
         '[contenteditable="true"][data-tid*="message"]',
-        'div[role="textbox"]'
+        'div[role="textbox"]',
+        'textarea[aria-label*="Send a message"]',
+        'textarea[aria-label*="Type a new message"]'
       ];
 
-      let input: HTMLElement | null = null;
-      for (const sel of inputSelectors) {
-        input = document.querySelector(sel) as HTMLElement | null;
-        if (input) break;
+      // Check if chat input is already visible
+      let inputLocator = this.page.locator(inputSelectors.join(', ')).first();
+      let inputVisible = await inputLocator.isVisible().catch(() => false);
+
+      if (!inputVisible) {
+        // Try to open the chat panel
+        for (const sel of chatBtnSelectors) {
+          const btn = this.page.locator(sel).first();
+          if (await btn.isVisible().catch(() => false)) {
+            await btn.click();
+            await this.page.waitForTimeout(1000);
+            break;
+          }
+        }
+        // Re-check for input
+        inputLocator = this.page.locator(inputSelectors.join(', ')).first();
+        inputVisible = await inputLocator.isVisible().catch(() => false);
       }
 
-      if (!input) {
-        (window as any).logBot?.('[Chat] Could not find Teams chat input');
+      if (!inputVisible) {
+        log('[Chat] Could not find Teams chat input after opening chat panel');
         return false;
       }
 
-      // Focus and type
-      input.focus();
-      input.textContent = messageText;
-      input.dispatchEvent(new Event('input', { bubbles: true }));
+      // Use Playwright's native click + type instead of DOM manipulation
+      // This triggers the framework's event handlers properly
+      await inputLocator.click();
+      await this.page.waitForTimeout(100);
 
-      await new Promise(r => setTimeout(r, 100));
+      // Type using keyboard — this fires real keydown/keypress/keyup/input events
+      await this.page.keyboard.type(text, { delay: 10 });
+      await this.page.waitForTimeout(200);
 
-      // Try send button
-      const sendBtnSelectors = [
-        'button[aria-label*="Send"]',
-        'button[aria-label*="send"]',
-        'button[data-tid*="send"]'
-      ];
+      // Send via Enter key (most reliable for Teams)
+      await this.page.keyboard.press('Enter');
 
-      let sent = false;
-      for (const sel of sendBtnSelectors) {
-        const sendBtn = document.querySelector(sel) as HTMLElement | null;
-        if (sendBtn && !sendBtn.hasAttribute('disabled')) {
-          sendBtn.click();
-          sent = true;
-          break;
-        }
-      }
-
-      if (!sent) {
-        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
-      }
-
-      (window as any).logBot?.(`[Chat] Sent Teams message: ${messageText.substring(0, 50)}`);
+      log(`[Chat] Sent Teams message: ${text.substring(0, 50)}`);
       return true;
-    }, text);
+    } catch (err: any) {
+      log(`[Chat] Failed to send Teams message: ${err.message}`);
+      return false;
+    }
   }
 
   private async initTeamsObserver(): Promise<void> {
