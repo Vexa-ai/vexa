@@ -41,8 +41,9 @@ curl -H "X-API-Key: $API_KEY" \
 
 Returns meeting metadata plus `segments[]`. If recording was enabled and captured, `recordings[]` is included for post-meeting playback.
 
-<details>
-  <summary><strong>Response (200)</strong></summary>
+Response format (`200`): meeting transcript object with `id`, `platform`, `native_meeting_id`, `constructed_meeting_url`, `status`, `start_time`, `end_time`, `recordings`, `notes`, and `segments[]`.
+
+<Accordion title="Response (200)">
 
 ```json
 {
@@ -75,7 +76,7 @@ Returns meeting metadata plus `segments[]`. If recording was enabled and capture
 When recording is enabled and completed, the `recordings` array contains recording objects with `media_files`. See [Recordings API](recordings) for the full recording object shape.
 </Info>
 
-</details>
+</Accordion>
 
 ## POST `/transcripts/{platform}/{native_meeting_id}/share`
 
@@ -107,8 +108,9 @@ curl -X POST \
   </Tab>
 </Tabs>
 
-<details>
-  <summary><strong>Response (200)</strong></summary>
+Response format (`200`): `{"share_id","url","expires_at","expires_in_seconds"}`.
+
+<Accordion title="Response (200)">
 
 ```json
 {
@@ -119,7 +121,7 @@ curl -X POST \
 }
 ```
 
-</details>
+</Accordion>
 
 **Response fields:**
 
@@ -137,5 +139,7 @@ Access a shared transcript. No authentication required.
 ```bash
 curl "https://api.vexa.ai/public/transcripts/Cj3o9z0GZqf7Jd1wqYp3vQ.txt"
 ```
+
+Response format (`200`): plain text (`Content-Type: text/plain; charset=utf-8`).
 
 Returns plain text (`Content-Type: text/plain`) with the formatted transcript including platform, meeting ID, timestamps, and speaker-attributed segments. Returns `404` if the share link has expired or does not exist.
