@@ -445,7 +445,7 @@ async def list_meetings_with_users(
     # Now, construct the response using Pydantic models
     response_items = [
         MeetingUserStat(
-            **meeting.__dict__,
+            **{k: v for k, v in meeting.__dict__.items() if k != "user" and not k.startswith("_")},
             user=UserResponse.model_validate(meeting.user)
         )
         for meeting in meetings if meeting.user
@@ -587,11 +587,9 @@ async def get_user_details(
     - Usage patterns
     - API token information (optional)
     """
-    # Get the user with tokens if requested
-    query = select(User)
-    if include_tokens:
-        query = query.options(selectinload(User.api_tokens))
-    
+    # Always eagerly load api_tokens to avoid MissingGreenlet when Pydantic validates UserDetailResponse
+    query = select(User).options(selectinload(User.api_tokens))
+
     result = await db.execute(query.where(User.id == user_id))
     user = result.scalars().first()
     
