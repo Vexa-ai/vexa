@@ -2,6 +2,8 @@ import { Page } from "playwright";
 import { log } from "../../utils";
 import { BotConfig } from "../../types";
 import { WhisperLiveService } from "../../services/whisperlive";
+import { RecordingService } from "../../services/recording";
+import { setActiveRecordingService } from "../../index";
 import { ensureBrowserUtils } from "../../utils/injection";
 import {
   teamsParticipantSelectors,
@@ -20,16 +22,61 @@ import {
 
 // Modified to use new services - Teams recording functionality
 export async function startTeamsRecording(page: Page, botConfig: BotConfig): Promise<void> {
-  // Initialize WhisperLive service on Node.js side
-  const whisperLiveService = new WhisperLiveService({
-    whisperLiveUrl: process.env.WHISPER_LIVE_URL
-  });
-
-  // Initialize WhisperLive connection with STUBBORN reconnection - NEVER GIVES UP!
-  const whisperLiveUrl = await whisperLiveService.initializeWithStubbornReconnection("Teams");
-
-  log(`[Node.js] Using WhisperLive URL for Teams: ${whisperLiveUrl}`);
+  const transcriptionEnabled = botConfig.transcribeEnabled !== false;
+  let whisperLiveService: WhisperLiveService | null = null;
+  let whisperLiveUrl: string | null = null;
+  if (transcriptionEnabled) {
+    whisperLiveService = new WhisperLiveService({
+      whisperLiveUrl: process.env.WHISPER_LIVE_URL
+    });
+    // Initialize WhisperLive connection with STUBBORN reconnection - NEVER GIVES UP!
+    whisperLiveUrl = await whisperLiveService.initializeWithStubbornReconnection("Teams");
+    log(`[Node.js] Using WhisperLive URL for Teams: ${whisperLiveUrl}`);
+  } else {
+    log("[Teams Recording] Transcription disabled by config; running recording-only mode.");
+  }
   log("Starting Teams recording with WebSocket connection");
+
+  const wantsAudioCapture =
+    !!botConfig.recordingEnabled &&
+    (!Array.isArray(botConfig.captureModes) || botConfig.captureModes.includes("audio"));
+  const sessionUid = botConfig.connectionId || `teams-${Date.now()}`;
+  let recordingService: RecordingService | null = null;
+
+  if (wantsAudioCapture) {
+    recordingService = new RecordingService(botConfig.meeting_id, sessionUid);
+    setActiveRecordingService(recordingService);
+
+    await page.exposeFunction("__vexaSaveRecordingBlob", async (payload: { base64: string; mimeType?: string }) => {
+      try {
+        if (!recordingService) {
+          log("[Teams Recording] Recording service not initialized; dropping blob.");
+          return false;
+        }
+
+        const mimeType = (payload?.mimeType || "").toLowerCase();
+        let format = "webm";
+        if (mimeType.includes("wav")) format = "wav";
+        else if (mimeType.includes("ogg")) format = "ogg";
+        else if (mimeType.includes("mp4") || mimeType.includes("m4a")) format = "m4a";
+
+        const blobBuffer = Buffer.from(payload.base64 || "", "base64");
+        if (!blobBuffer.length) {
+          log("[Teams Recording] Received empty audio blob.");
+          return false;
+        }
+
+        await recordingService.writeBlob(blobBuffer, format);
+        log(`[Teams Recording] Saved browser audio blob (${blobBuffer.length} bytes, ${format}).`);
+        return true;
+      } catch (error: any) {
+        log(`[Teams Recording] Failed to persist browser blob: ${error?.message || String(error)}`);
+        return false;
+      }
+    });
+  } else {
+    log("[Teams Recording] Audio capture disabled by config.");
+  }
 
   await ensureBrowserUtils(page, require('path').join(__dirname, '../../browser-utils.global.js'));
 
@@ -37,7 +84,7 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
   await page.evaluate(
     async (pageArgs: {
       botConfigData: BotConfig;
-      whisperUrlForBrowser: string;
+      whisperUrlForBrowser: string | null;
       selectors: {
         participantSelectors: string[];
         speakingClasses: string[];
@@ -54,6 +101,7 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
       };
     }) => {
       const { botConfigData, whisperUrlForBrowser, selectors } = pageArgs;
+      const transcriptionEnabled = (botConfigData as any)?.transcribeEnabled !== false;
       const selectorsTyped = selectors as any;
 
       // Use browser utility classes from the global bundle
@@ -81,20 +129,131 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
       });
 
       // Use BrowserWhisperLiveService with stubborn mode for Teams
-      const whisperLiveService = new BrowserWhisperLiveService({
-        whisperLiveUrl: whisperUrlForBrowser
-      }, true); // Enable stubborn mode for Teams
+      const whisperLiveService = transcriptionEnabled
+        ? new BrowserWhisperLiveService({
+            whisperLiveUrl: whisperUrlForBrowser as string
+          }, true) // Enable stubborn mode for Teams
+        : null;
 
       // Expose references for reconfiguration
       (window as any).__vexaWhisperLiveService = whisperLiveService;
       (window as any).__vexaAudioService = audioService;
       (window as any).__vexaBotConfig = botConfigData;
+      (window as any).__vexaMediaRecorder = null;
+      (window as any).__vexaRecordedChunks = [];
+      (window as any).__vexaRecordingFlushed = false;
+
+      const isAudioRecordingEnabled =
+        !!(botConfigData as any)?.recordingEnabled &&
+        (!Array.isArray((botConfigData as any)?.captureModes) ||
+          (botConfigData as any)?.captureModes.includes("audio"));
+
+      const getSupportedMediaRecorderMimeType = (): string => {
+        const candidates = [
+          "audio/webm;codecs=opus",
+          "audio/webm",
+          "audio/ogg;codecs=opus",
+          "audio/ogg",
+        ];
+        for (const mime of candidates) {
+          try {
+            if ((window as any).MediaRecorder?.isTypeSupported?.(mime)) {
+              return mime;
+            }
+          } catch {}
+        }
+        return "";
+      };
+
+      const flushBrowserRecordingBlob = async (reason: string): Promise<void> => {
+        if (!isAudioRecordingEnabled) return;
+        if ((window as any).__vexaRecordingFlushed) return;
+
+        try {
+          const recorder: MediaRecorder | null = (window as any).__vexaMediaRecorder;
+          const chunks: Blob[] = (window as any).__vexaRecordedChunks || [];
+
+          const finalizeAndSend = async () => {
+            if ((window as any).__vexaRecordingFlushed) return;
+            (window as any).__vexaRecordingFlushed = true;
+
+            try {
+              const recorded = (window as any).__vexaRecordedChunks || [];
+              if (!recorded.length) {
+                (window as any).logBot?.(`[Teams Recording] No media chunks to flush (${reason}).`);
+                return;
+              }
+
+              const mimeType =
+                (window as any).__vexaMediaRecorder?.mimeType || "audio/webm";
+              const blob = new Blob(recorded, { type: mimeType });
+              const buffer = await blob.arrayBuffer();
+              const bytes = new Uint8Array(buffer);
+              let binary = "";
+              const chunkSize = 0x8000;
+              for (let i = 0; i < bytes.length; i += chunkSize) {
+                binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+              }
+              const base64 = btoa(binary);
+
+              if (typeof (window as any).__vexaSaveRecordingBlob === "function") {
+                await (window as any).__vexaSaveRecordingBlob({
+                  base64,
+                  mimeType: blob.type || mimeType,
+                });
+                (window as any).logBot?.(
+                  `[Teams Recording] Flushed ${bytes.length} bytes (${blob.type || mimeType}) on ${reason}.`
+                );
+              } else {
+                (window as any).logBot?.("[Teams Recording] Node blob sink is not available.");
+              }
+            } catch (err: any) {
+              (window as any).logBot?.(
+                `[Teams Recording] Failed to flush blob: ${err?.message || err}`
+              );
+            } finally {
+              (window as any).__vexaRecordedChunks = [];
+            }
+          };
+
+          if (recorder && recorder.state !== "inactive") {
+            await new Promise<void>((resolveStop) => {
+              const onStop = async () => {
+                recorder.removeEventListener("stop", onStop as any);
+                await finalizeAndSend();
+                resolveStop();
+              };
+              recorder.addEventListener("stop", onStop as any, { once: true });
+              try {
+                recorder.stop();
+              } catch {
+                setTimeout(async () => {
+                  await finalizeAndSend();
+                  resolveStop();
+                }, 200);
+              }
+            });
+          } else if (chunks.length > 0) {
+            await finalizeAndSend();
+          }
+        } catch (err: any) {
+          (window as any).logBot?.(
+            `[Teams Recording] Unexpected flush error: ${err?.message || err}`
+          );
+        }
+      };
+
+      (window as any).__vexaFlushRecordingBlob = flushBrowserRecordingBlob;
 
       // Replace with real reconfigure implementation and apply any queued update
       (window as any).triggerWebSocketReconfigure = async (lang: string | null, task: string | null) => {
         try {
           const svc = (window as any).__vexaWhisperLiveService;
           const cfg = (window as any).__vexaBotConfig || {};
+          if (!transcriptionEnabled) {
+            (window as any).logBot?.('[Reconfigure] Ignored because transcription is disabled.');
+            return;
+          }
           if (!svc) {
             // Service not ready yet, queue the update
             (window as any).__vexaPendingReconfigure = { lang, task };
@@ -168,11 +327,44 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
               reject(new Error("[Teams BOT Error] Failed to create combined audio stream"));
               return;
             }
+
+            if (isAudioRecordingEnabled) {
+              try {
+                const mimeType = getSupportedMediaRecorderMimeType();
+                const recorderOptions = mimeType ? ({ mimeType } as MediaRecorderOptions) : undefined;
+                const recorder = recorderOptions
+                  ? new MediaRecorder(combinedStream, recorderOptions)
+                  : new MediaRecorder(combinedStream);
+
+                (window as any).__vexaMediaRecorder = recorder;
+                (window as any).__vexaRecordedChunks = [];
+                (window as any).__vexaRecordingFlushed = false;
+
+                recorder.ondataavailable = (event: BlobEvent) => {
+                  if (event.data && event.data.size > 0) {
+                    (window as any).__vexaRecordedChunks.push(event.data);
+                  }
+                };
+
+                recorder.start(1000);
+                (window as any).logBot?.(
+                  `[Teams Recording] MediaRecorder started (${recorder.mimeType || mimeType || "default"}).`
+                );
+              } catch (err: any) {
+                (window as any).logBot?.(
+                  `[Teams Recording] Failed to start MediaRecorder: ${err?.message || err}`
+                );
+              }
+            }
+
             // Initialize audio processor
             return await audioService.initializeAudioProcessor(combinedStream);
           }).then(async (processor: any) => {
             // Setup audio data processing
             audioService.setupAudioDataProcessor(async (audioData: Float32Array, sessionStartTime: number | null) => {
+              if (!transcriptionEnabled || !whisperLiveService) {
+                return;
+              }
               // Only send after server ready
               if (!whisperLiveService.isReady()) {
                 return;
@@ -209,7 +401,9 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
                 (window as any).logBot(`Teams Language detected: ${data["language"]}`);
               } else if (data["message"] === "DISCONNECT") {
                 (window as any).logBot("Teams Server requested disconnect.");
-                whisperLiveService.close();
+                if (whisperLiveService) {
+                  whisperLiveService.close();
+                }
               }
             };
             const onError = (event: Event) => {
@@ -224,15 +418,20 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
             (window as any).__vexaOnError = onError;
             (window as any).__vexaOnClose = onClose;
 
-            return await whisperLiveService.connectToWhisperLive(
-              (window as any).__vexaBotConfig,
-              onMessage,
-              onError,
-              onClose
-            );
+            if (transcriptionEnabled && whisperLiveService) {
+              return await whisperLiveService.connectToWhisperLive(
+                (window as any).__vexaBotConfig,
+                onMessage,
+                onError,
+                onClose
+              );
+            }
+            return null;
           }).then(() => {
             // Initialize Teams-specific speaker detection (browser context)
-            (window as any).logBot("Initializing Teams speaker detection...");
+            if (transcriptionEnabled && whisperLiveService) {
+              (window as any).logBot("Initializing Teams speaker detection...");
+            }
             
             // Unified Teams speaker detection - NO FALLBACKS (signal-only approach)
             const initializeTeamsSpeakerDetection = (whisperLiveService: any, audioService: any, botConfigData: any) => {
@@ -835,6 +1034,28 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
               let lastParticipantCount = 0;
               let speakersIdentified = false;
               let hasEverHadMultipleParticipants = false;
+              let monitoringStopped = false;
+
+              const stopWithFlush = async (
+                reason: string,
+                finish: () => void
+              ) => {
+                if (monitoringStopped) return;
+                monitoringStopped = true;
+                clearInterval(checkInterval);
+                try {
+                  if (typeof (window as any).__vexaFlushRecordingBlob === "function") {
+                    await (window as any).__vexaFlushRecordingBlob(reason);
+                  }
+                } catch (flushErr: any) {
+                  (window as any).logBot?.(
+                    `[Teams Recording] Flush error during shutdown (${reason}): ${flushErr?.message || flushErr}`
+                  );
+                }
+                audioService.disconnect();
+                whisperLiveService.close();
+                finish();
+              };
 
               // Teams removal detection function (browser context)
               const checkForRemoval = () => {
@@ -880,10 +1101,9 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
                 // First check for removal state
                 if (checkForRemoval()) {
                   (window as any).logBot("🚨 Bot has been removed from the Teams meeting. Initiating graceful leave...");
-                  clearInterval(checkInterval);
-                  audioService.disconnect();
-                  whisperLiveService.close();
-                  reject(new Error("TEAMS_BOT_REMOVED_BY_ADMIN"));
+                  void stopWithFlush("removed_by_admin", () =>
+                    reject(new Error("TEAMS_BOT_REMOVED_BY_ADMIN"))
+                  );
                   return;
                 }
                 // Check participant count using the comprehensive speaker detection system
@@ -916,16 +1136,14 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
                   if (aloneTime >= currentTimeout) {
                     if (speakersIdentified) {
                       (window as any).logBot(`Teams meeting ended or bot has been alone for ${everyoneLeftTimeoutSeconds} seconds after speakers were identified. Stopping recorder...`);
-                      clearInterval(checkInterval);
-                      audioService.disconnect();
-                      whisperLiveService.close();
-                      reject(new Error("TEAMS_BOT_LEFT_ALONE_TIMEOUT"));
+                      void stopWithFlush("left_alone_timeout", () =>
+                        reject(new Error("TEAMS_BOT_LEFT_ALONE_TIMEOUT"))
+                      );
                     } else {
                       (window as any).logBot(`Teams bot has been alone for ${startupAloneTimeoutSeconds} seconds during startup with no other participants. Stopping recorder...`);
-                      clearInterval(checkInterval);
-                      audioService.disconnect();
-                      whisperLiveService.close();
-                      reject(new Error("TEAMS_BOT_STARTUP_ALONE_TIMEOUT"));
+                      void stopWithFlush("startup_alone_timeout", () =>
+                        reject(new Error("TEAMS_BOT_STARTUP_ALONE_TIMEOUT"))
+                      );
                     }
                   } else if (aloneTime > 0 && aloneTime % 10 === 0) { // Log every 10 seconds to avoid spam
                     if (speakersIdentified) {
@@ -948,25 +1166,21 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
               // Listen for page unload
               window.addEventListener("beforeunload", () => {
                 (window as any).logBot("Teams page is unloading. Stopping recorder...");
-                clearInterval(checkInterval);
-                audioService.disconnect();
-                whisperLiveService.close();
-                resolve();
+                void stopWithFlush("beforeunload", () => resolve());
               });
 
               document.addEventListener("visibilitychange", () => {
                 if (document.visibilityState === "hidden") {
                   (window as any).logBot("Teams document is hidden. Stopping recorder...");
-                  clearInterval(checkInterval);
-                  audioService.disconnect();
-                  whisperLiveService.close();
-                  resolve();
+                  void stopWithFlush("visibility_hidden", () => resolve());
                 }
               });
             };
 
             // Initialize Teams-specific speaker detection
-            initializeTeamsSpeakerDetection(whisperLiveService, audioService, botConfigData);
+            if (transcriptionEnabled && whisperLiveService) {
+              initializeTeamsSpeakerDetection(whisperLiveService, audioService, botConfigData);
+            }
             
             // Setup Teams meeting monitoring
             setupTeamsMeetingMonitoring(botConfigData, audioService, whisperLiveService, resolve);
@@ -1008,5 +1222,7 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
   );
   
   // After page.evaluate finishes, cleanup services
-  await whisperLiveService.cleanup();
+  if (whisperLiveService) {
+    await whisperLiveService.cleanup();
+  }
 }

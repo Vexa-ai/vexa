@@ -1,0 +1,217 @@
+---
+title: "Voice Agent"
+description: "Turn the Vexa bot into an interactive meeting participant that can speak, chat, and share visual content"
+---
+
+The Voice Agent feature transforms the Vexa bot from a passive transcription observer into a fully interactive meeting participant. An external agent or application controls the bot via REST API to speak, read/write chat, and share visual content during a live meeting.
+
+## Capabilities
+
+| Capability | Description | Status |
+|------------|-------------|--------|
+| **Speak** | Text-to-speech or raw audio playback into the meeting | Working |
+| **Chat write** | Send messages to the meeting chat | Working |
+| **Chat read** | Capture messages from the meeting chat | Working |
+| **Screen share** | Display images, URLs, or video via screen share | Working |
+| **Virtual camera** | Show avatar/content via the bot's camera feed | Experimental |
+
+## Quick Start
+
+<Steps>
+  <Step title="Request a voice-agent-enabled bot">
+    Add `voice_agent_enabled: true` to your `POST /bots` request:
+
+    ```bash
+    curl -X POST "$API_BASE/bots" \
+      -H "Content-Type: application/json" \
+      -H "X-API-Key: $API_KEY" \
+      -d '{
+        "platform": "google_meet",
+        "native_meeting_id": "abc-defg-hij",
+        "bot_name": "AI Assistant",
+        "voice_agent_enabled": true
+      }'
+    ```
+  </Step>
+  <Step title="Make the bot speak">
+    ```bash
+    curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
+      -H "Content-Type: application/json" \
+      -H "X-API-Key: $API_KEY" \
+      -d '{"text": "Hello everyone, I am the meeting assistant.", "voice": "nova"}'
+    ```
+  </Step>
+  <Step title="Send a chat message">
+    ```bash
+    curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/chat" \
+      -H "Content-Type: application/json" \
+      -H "X-API-Key: $API_KEY" \
+      -d '{"text": "Meeting summary: 3 action items identified."}'
+    ```
+  </Step>
+  <Step title="Share visual content">
+    ```bash
+    curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/screen" \
+      -H "Content-Type: application/json" \
+      -H "X-API-Key: $API_KEY" \
+      -d '{"type": "image", "url": "https://example.com/quarterly-chart.png"}'
+    ```
+  </Step>
+</Steps>
+
+For the full endpoint reference, see [Voice Agent API](api/voice-agent).
+
+## How It Works
+
+When `voice_agent_enabled` is set, the bot's audio pipeline changes: instead of feeding silence as mic input, the bot reads from a PulseAudio virtual microphone that receives TTS audio. The bot starts muted and auto-unmutes only when speaking.
+
+### Audio Pipeline (TTS)
+
+```
+OpenAI TTS API
+  -> PCM stream (24 kHz, mono)
+  -> PulseAudio virtual sink
+  -> Chromium default audio source
+  -> WebRTC -> meeting participants hear speech
+```
+
+The bot unmutes before playback and re-mutes once audio finishes or is interrupted.
+
+### Screen Content Pipeline
+
+```
+API request (image/url/video)
+  -> Playwright renders content on Xvfb (1920x1080)
+  -> Content displayed fullscreen
+  -> Bot clicks "Present now" in meeting UI
+  -> Participants see shared screen with content
+```
+
+### Chat Pipeline
+
+The bot interacts with the meeting's native chat UI via DOM automation:
+- **Write**: opens the chat panel, types the message, and sends it
+- **Read**: captures messages from the chat panel (sender, text, timestamp)
+
+## Chat Read & Write
+
+Chat enables two-way text communication in the meeting alongside voice.
+
+**Write a message:**
+```bash
+curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/chat" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{"text": "Here is the meeting summary so far."}'
+```
+
+**Read all messages:**
+```bash
+curl "$API_BASE/bots/google_meet/abc-defg-hij/chat" \
+  -H "X-API-Key: $API_KEY"
+```
+
+Returns an array of messages with `sender`, `text`, `timestamp`, and `isFromBot` fields. Real-time chat events are also available via [WebSocket](websocket) (`chat.received`, `chat.sent`).
+
+## Screen Share (Showing Images & Content)
+
+Display visual content to meeting participants via the bot's screen share. Three content types are supported:
+
+| Type | Description |
+|------|-------------|
+| `image` | Renders an image fullscreen on a black background |
+| `url` | Opens a URL in a browser window (e.g., Google Slides, dashboards) |
+| `video` | Plays video fullscreen with autoplay |
+
+```bash
+# Share an image
+curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/screen" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{"type": "image", "url": "https://example.com/chart.png"}'
+
+# Share a Google Slides presentation
+curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/screen" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{"type": "url", "url": "https://docs.google.com/presentation/d/..."}'
+
+# Stop sharing
+curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij/screen" \
+  -H "X-API-Key: $API_KEY"
+```
+
+## Avatar (Virtual Camera)
+
+<Warning>
+The virtual camera feature is **experimental**. It works intermittently on Google Meet due to WebRTC `replaceTrack` reliability. For displaying visual content to participants, **screen share is recommended** as the more reliable approach.
+</Warning>
+
+The virtual camera uses a canvas-based approach to replace the bot's camera feed with custom content (e.g., an avatar image or animation). When working, participants see the avatar in the bot's video tile instead of a blank camera.
+
+You can set or reset the avatar at any time via the API:
+
+```bash
+# Set a custom avatar
+curl -X PUT "$API_BASE/bots/google_meet/abc-defg-hij/avatar" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{"url": "https://example.com/avatar.png"}'
+
+# Reset to default Vexa logo
+curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij/avatar" \
+  -H "X-API-Key: $API_KEY"
+```
+
+See the [Avatar API reference](api/voice-agent#avatar) for full details.
+
+Current limitations:
+- Only tested on Google Meet
+- `replaceTrack` into WebRTC works intermittently
+- Screen share is the recommended alternative for displaying images and content
+
+## WebSocket Events
+
+When voice agent is enabled, additional events are published on the [WebSocket](websocket) connection:
+
+| Event | Payload | Description |
+|-------|---------|-------------|
+| `speak.started` | `{"text": "..."}` | Bot started speaking |
+| `speak.completed` | -- | Speech playback finished |
+| `speak.interrupted` | -- | Speech was interrupted via API |
+| `chat.received` | `{"sender": "John", "text": "...", "timestamp": 1234}` | Chat message captured from a participant |
+| `chat.sent` | `{"text": "..."}` | Bot sent a chat message |
+| `screen.sharing_started` | `{"content_type": "image"}` | Screen sharing started |
+| `screen.sharing_stopped` | -- | Screen sharing stopped |
+
+## Platform Support
+
+| Feature | Google Meet | Teams | Zoom |
+|---------|:----------:|:-----:|:----:|
+| Speak (TTS) | Supported | Planned | Planned |
+| Chat write | Supported | Planned | Planned |
+| Chat read | Supported | Planned | Planned |
+| Screen share | Supported | Planned | Planned |
+| Virtual camera | Experimental | -- | -- |
+
+## Prerequisites
+
+<ResponseField name="OPENAI_API_KEY" type="string" required>
+  OpenAI API key for text-to-speech synthesis. Passed through `docker-compose.yml` to the bot container.
+</ResponseField>
+
+PulseAudio is already configured in the bot container (`entrypoint.sh`). No manual setup is needed.
+
+## Known Limitations
+
+1. **Virtual camera is experimental** -- the canvas-based virtual camera works intermittently on Google Meet. Screen share is more reliable for displaying visual content.
+2. **Single TTS provider** -- currently only OpenAI TTS is implemented. The architecture supports adding other providers.
+3. **Google Meet only** -- chat read/write and screen share are currently implemented for Google Meet. Teams and Zoom support is planned.
+4. **No speech queue** -- rapid speak commands may overlap. Wait for the `speak.completed` WebSocket event before sending the next command, or use `DELETE /speak` to interrupt.
+
+## Related
+
+- [Voice Agent API Reference](api/voice-agent) -- full endpoint documentation
+- [WebSocket](websocket) -- real-time event streaming
+- [Bots API](api/bots) -- requesting bots with `voice_agent_enabled`
+- [Concepts](concepts) -- meeting/bot/session model

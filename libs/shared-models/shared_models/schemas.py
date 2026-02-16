@@ -25,6 +25,9 @@ ACCEPTED_LANGUAGE_CODES = {
 # These are the tasks supported by WhisperLive
 ALLOWED_TASKS = {"transcribe", "translate"}
 
+# --- Allowed Transcription Tiers ---
+ALLOWED_TRANSCRIPTION_TIERS = {"realtime", "deferred"}
+
 # --- Meeting Status Definitions ---
 
 class MeetingStatus(str, Enum):
@@ -248,6 +251,15 @@ class Platform(str, Enum):
                     return url
                 else:
                     return None # Invalid Teams ID format - must be numeric only
+            elif platform == Platform.ZOOM:
+                # Zoom meeting ID (numeric, 10-11 digits) and optional passcode
+                if re.fullmatch(r"^\d{10,11}$", native_id):
+                    base_url = f"https://zoom.us/j/{native_id}"
+                    if passcode:
+                        return f"{base_url}?pwd={passcode}"
+                    return base_url
+                else:
+                    return None # Invalid Zoom ID format - must be numeric
             else:
                 return None # Unknown platform
         except ValueError:
@@ -332,7 +344,31 @@ class MeetingCreate(BaseModel):
     bot_name: Optional[str] = Field(None, description="Optional name for the bot in the meeting")
     language: Optional[str] = Field(None, description="Optional language code for transcription (e.g., 'en', 'es')")
     task: Optional[str] = Field(None, description="Optional task for the transcription model (e.g., 'transcribe', 'translate')")
+    transcription_tier: Optional[str] = Field(
+        "realtime",
+        description="Transcription priority tier: 'realtime' (default) or 'deferred'"
+    )
+    recording_enabled: Optional[bool] = Field(
+        None,
+        description="Optional per-meeting override for recording persistence (true/false)."
+    )
+    transcribe_enabled: Optional[bool] = Field(
+        None,
+        description="Optional per-meeting override for transcription processing (true/false)."
+    )
     passcode: Optional[str] = Field(None, description="Optional passcode for the meeting (Teams only)")
+    zoom_obf_token: Optional[str] = Field(
+        None,
+        description="Optional one-time Zoom OBF token. If omitted for Zoom meetings, the backend will mint one from the user's stored Zoom OAuth connection."
+    )
+    voice_agent_enabled: Optional[bool] = Field(
+        True,
+        description="Enable voice agent (TTS, chat, screen share) capabilities for this meeting"
+    )
+    default_avatar_url: Optional[str] = Field(
+        None,
+        description="Custom default avatar image URL for the bot's camera feed. Shown when no screen content is active. If omitted, the default Vexa logo is used."
+    )
 
     @field_validator('platform')
     @classmethod
@@ -359,6 +395,16 @@ class MeetingCreate(BaseModel):
                     raise ValueError("Teams passcode must be 8-20 alphanumeric characters")
         return v
 
+    @field_validator('zoom_obf_token')
+    @classmethod
+    def validate_zoom_obf_token(cls, v, info: ValidationInfo):
+        """Validate OBF token usage based on platform."""
+        if v is not None and v != "":
+            platform = info.data.get('platform') if info.data else None
+            if platform != Platform.ZOOM:
+                raise ValueError("zoom_obf_token is only supported for Zoom meetings")
+        return v
+
     @field_validator('language')
     @classmethod
     def validate_language(cls, v):
@@ -374,6 +420,19 @@ class MeetingCreate(BaseModel):
         if v is not None and v != "" and v not in ALLOWED_TASKS:
             raise ValueError(f"Invalid task '{v}'. Must be one of: {sorted(ALLOWED_TASKS)}")
         return v
+
+    @field_validator('transcription_tier')
+    @classmethod
+    def validate_transcription_tier(cls, v):
+        """Validate transcription tier."""
+        if v is None or v == "":
+            return "realtime"
+        normalized = str(v).strip().lower()
+        if normalized not in ALLOWED_TRANSCRIPTION_TIERS:
+            raise ValueError(
+                f"Invalid transcription_tier '{v}'. Must be one of: {sorted(ALLOWED_TRANSCRIPTION_TIERS)}"
+            )
+        return normalized
 
     @field_validator('native_meeting_id')
     @classmethod
@@ -568,6 +627,8 @@ class TranscriptionResponse(BaseModel): # Doesn't inherit MeetingResponse to avo
     status: str
     start_time: Optional[datetime]
     end_time: Optional[datetime]
+    recordings: List[Dict[str, Any]] = Field(default_factory=list, description="Recording metadata attached to the meeting (if available).")
+    notes: Optional[str] = Field(None, description="Meeting notes (from meeting data, if provided).")
     # ---
     segments: List[TranscriptionSegment] = Field(..., description="List of transcript segments")
 
@@ -722,4 +783,100 @@ class UserAnalyticsResponse(BaseModel):
     meeting_stats: UserMeetingStats
     usage_patterns: UserUsagePatterns
     api_tokens: Optional[List[TokenResponse]]  # Optional for security
-# --- END Analytics Schemas --- 
+# --- END Analytics Schemas ---
+
+# --- Recording Schemas ---
+
+class RecordingStatus(str, Enum):
+    IN_PROGRESS = "in_progress"
+    UPLOADING = "uploading"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+class RecordingSource(str, Enum):
+    BOT = "bot"
+    UPLOAD = "upload"
+    URL = "url"
+
+class MediaFileType(str, Enum):
+    AUDIO = "audio"
+    VIDEO = "video"
+    SCREENSHOT = "screenshot"
+
+class MediaFileResponse(BaseModel):
+    id: int
+    type: MediaFileType
+    format: str
+    storage_backend: str
+    file_size_bytes: Optional[int] = None
+    duration_seconds: Optional[float] = None
+    metadata: Optional[Dict[str, Any]] = Field(None, validation_alias="extra_metadata")
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+        use_enum_values = True
+        populate_by_name = True
+
+class RecordingResponse(BaseModel):
+    id: int
+    meeting_id: Optional[int] = None
+    user_id: int
+    session_uid: Optional[str] = None
+    source: RecordingSource
+    status: RecordingStatus
+    error_message: Optional[str] = None
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+    media_files: List[MediaFileResponse] = Field(default_factory=list)
+
+    class Config:
+        from_attributes = True
+        use_enum_values = True
+
+class RecordingListResponse(BaseModel):
+    recordings: List[RecordingResponse]
+# --- END Recording Schemas ---
+
+
+# --- Voice Agent / Meeting Interaction Schemas ---
+
+class SpeakRequest(BaseModel):
+    """Request to make the bot speak in the meeting."""
+    text: Optional[str] = Field(None, description="Text to speak (bot does TTS)")
+    audio_url: Optional[str] = Field(None, description="URL to pre-rendered audio file")
+    audio_base64: Optional[str] = Field(None, description="Base64-encoded audio data")
+    format: Optional[str] = Field("wav", description="Audio format: wav, mp3, pcm, opus")
+    sample_rate: Optional[int] = Field(24000, description="Sample rate for PCM audio (Hz)")
+    provider: Optional[str] = Field("openai", description="TTS provider: openai, cartesia, elevenlabs")
+    voice: Optional[str] = Field("alloy", description="Voice ID for TTS")
+
+    @field_validator('text', 'audio_url', 'audio_base64')
+    @classmethod
+    def at_least_one_source(cls, v, info: ValidationInfo):
+        """At least one of text, audio_url, or audio_base64 must be provided."""
+        return v
+
+class ChatSendRequest(BaseModel):
+    """Request to send a message to the meeting chat."""
+    text: str = Field(..., description="Message text to send in the meeting chat")
+
+class ChatMessage(BaseModel):
+    """A chat message from the meeting."""
+    sender: str
+    text: str
+    timestamp: float
+    is_from_bot: bool = False
+
+class ChatMessagesResponse(BaseModel):
+    """Response with captured chat messages."""
+    messages: List[ChatMessage]
+
+class ScreenContentRequest(BaseModel):
+    """Request to show content on screen (via screen share)."""
+    type: str = Field(..., description="Content type: image, video, url, html")
+    url: Optional[str] = Field(None, description="URL of the content to display")
+    html: Optional[str] = Field(None, description="Custom HTML content to display")
+    start_share: bool = Field(True, description="Auto-start screen sharing")
+
+# --- END Voice Agent Schemas ---

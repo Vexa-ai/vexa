@@ -57,6 +57,7 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - BOT_IMAGE_NAME=${BOT_IMAGE_NAME:-vexa-bot:dev}
+      - TTS_SERVICE_URL=http://tts-service:8002
       - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa_default
       - LOG_LEVEL=DEBUG
       - DB_HOST=${DB_HOST:-postgres}
@@ -69,12 +70,36 @@ services:
       - DEVICE_TYPE=${DEVICE_TYPE}
       - WHISPER_LIVE_URL=ws://whisperlive-remote:9090/ws  # Direct connection to whisperlive-remote
       - ADMIN_TOKEN=${ADMIN_API_TOKEN}
+      - ZOOM_CLIENT_ID=${ZOOM_CLIENT_ID}
+      - ZOOM_CLIENT_SECRET=${ZOOM_CLIENT_SECRET}
+      # Storage (recordings)
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-minio}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
+      - MINIO_BUCKET=${MINIO_BUCKET:-vexa-recordings}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - S3_BUCKET=${S3_BUCKET:-}
+      - S3_ENDPOINT=${S3_ENDPOINT:-}
+      - S3_SECURE=${S3_SECURE:-true}
+      - LOCAL_STORAGE_DIR=${LOCAL_STORAGE_DIR:-/data/recordings}
+      - LOCAL_STORAGE_FSYNC=${LOCAL_STORAGE_FSYNC:-true}
+      - RECORDING_ENABLED=${RECORDING_ENABLED:-false}
+      - CAPTURE_MODES=${CAPTURE_MODES:-audio}
+      # Voice agent / TTS
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ../.cursor:/app/.cursor
+      - ${LOCAL_STORAGE_VOLUME_SOURCE:-recordings-data}:/data/recordings
     init: true
     depends_on:
       redis:
+        condition: service_started
+      tts-service:
         condition: service_started
     networks:
       - vexa_default
@@ -88,6 +113,7 @@ services:
     volumes:
       - ./hub:/root/.cache/huggingface/hub
       - ./services/WhisperLive/models:/app/models
+      - wl-recordings:/var/lib/wl-recordings
     environment:
       # Use Redis Stream URL instead of WebSocket URL
       - REDIS_STREAM_URL=redis://redis:6379/0/transcription_segments
@@ -110,9 +136,26 @@ services:
       - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD:-0}
       # Minimum audio duration (seconds) before triggering transcription - lower = lower latency
       - MIN_AUDIO_S=${MIN_AUDIO_S:-2.0}
+      - WL_RECORDING_DIR=${WL_RECORDING_DIR:-/var/lib/wl-recordings}
+      - WL_RECORDING_FLUSH_SECONDS=${WL_RECORDING_FLUSH_SECONDS:-3}
+      - WL_RECORDING_FSYNC_SECONDS=${WL_RECORDING_FSYNC_SECONDS:-10}
+      - WL_RECORDING_ROTATE_SECONDS=${WL_RECORDING_ROTATE_SECONDS:-20}
+      - WL_RECORDING_ROTATE_BYTES=${WL_RECORDING_ROTATE_BYTES:-16777216}
+      - WL_RECORDING_SNAPSHOT_SECONDS=${WL_RECORDING_SNAPSHOT_SECONDS:-20}
+      - WL_RECORDING_UPLOAD_URL=${WL_RECORDING_UPLOAD_URL:-http://bot-manager:8080/internal/recordings/upload}
       - CONSUL_ENABLE=false
       - WL_REDIS_DISCOVERY_ENABLED=false
-    command: --port 9090 --backend faster_whisper --faster_whisper_custom_model_path ${WHISPER_MODEL_SIZE} --min_audio_s ${MIN_AUDIO_S:-2.0}
+    command: >-
+      --port 9090
+      --backend faster_whisper
+      --faster_whisper_custom_model_path ${WHISPER_MODEL_SIZE}
+      --min_audio_s ${MIN_AUDIO_S:-2.0}
+      --wl_recording_dir ${WL_RECORDING_DIR:-/var/lib/wl-recordings}
+      --wl_recording_flush_seconds ${WL_RECORDING_FLUSH_SECONDS:-3}
+      --wl_recording_fsync_seconds ${WL_RECORDING_FSYNC_SECONDS:-10}
+      --wl_recording_rotate_seconds ${WL_RECORDING_ROTATE_SECONDS:-20}
+      --wl_recording_rotate_bytes ${WL_RECORDING_ROTATE_BYTES:-16777216}
+      --wl_recording_snapshot_seconds ${WL_RECORDING_SNAPSHOT_SECONDS:-20}
     expose:
       - "9090" #use for transcription web socket
       - "9091" #use for health check
@@ -139,6 +182,7 @@ services:
     volumes:
       - ./hub:/root/.cache/huggingface/hub
       - ./services/WhisperLive/models:/app/models
+      - wl-recordings:/var/lib/wl-recordings
     environment:
       - REDIS_STREAM_URL=redis://redis:6379/0/transcription_segments
       - TRANSCRIPTION_COLLECTOR_URL=redis://redis:6379/0/transcription_segments
@@ -150,13 +194,30 @@ services:
       - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD}
       # Minimum audio duration (seconds) before triggering transcription - lower = lower latency
       - MIN_AUDIO_S=${MIN_AUDIO_S:-2.0}
+      - WL_RECORDING_DIR=${WL_RECORDING_DIR:-/var/lib/wl-recordings}
+      - WL_RECORDING_FLUSH_SECONDS=${WL_RECORDING_FLUSH_SECONDS:-3}
+      - WL_RECORDING_FSYNC_SECONDS=${WL_RECORDING_FSYNC_SECONDS:-10}
+      - WL_RECORDING_ROTATE_SECONDS=${WL_RECORDING_ROTATE_SECONDS:-20}
+      - WL_RECORDING_ROTATE_BYTES=${WL_RECORDING_ROTATE_BYTES:-16777216}
+      - WL_RECORDING_SNAPSHOT_SECONDS=${WL_RECORDING_SNAPSHOT_SECONDS:-20}
+      - WL_RECORDING_UPLOAD_URL=${WL_RECORDING_UPLOAD_URL:-http://bot-manager:8080/internal/recordings/upload}
       - DEVICE_TYPE=cpu
       - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}
       - WL_MAX_CLIENTS=${WL_MAX_CLIENTS}
       - CONSUL_ENABLE=false
     deploy:
       replicas: 1
-    command: --port 9090 --backend faster_whisper --faster_whisper_custom_model_path ${WHISPER_MODEL_SIZE} --min_audio_s ${MIN_AUDIO_S:-2.0}
+    command: >-
+      --port 9090
+      --backend faster_whisper
+      --faster_whisper_custom_model_path ${WHISPER_MODEL_SIZE}
+      --min_audio_s ${MIN_AUDIO_S:-2.0}
+      --wl_recording_dir ${WL_RECORDING_DIR:-/var/lib/wl-recordings}
+      --wl_recording_flush_seconds ${WL_RECORDING_FLUSH_SECONDS:-3}
+      --wl_recording_fsync_seconds ${WL_RECORDING_FSYNC_SECONDS:-10}
+      --wl_recording_rotate_seconds ${WL_RECORDING_ROTATE_SECONDS:-20}
+      --wl_recording_rotate_bytes ${WL_RECORDING_ROTATE_BYTES:-16777216}
+      --wl_recording_snapshot_seconds ${WL_RECORDING_SNAPSHOT_SECONDS:-20}
     expose:
       - "9090" #use for transcription web socket
       - "9091" #use for health check
@@ -178,6 +239,7 @@ services:
     volumes:
       - ./hub:/root/.cache/huggingface/hub
       - ./services/WhisperLive/models:/app/models
+      - wl-recordings:/var/lib/wl-recordings
     environment:
       - REDIS_STREAM_URL=redis://redis:6379/0/transcription_segments
       - TRANSCRIPTION_COLLECTOR_URL=redis://redis:6379/0/transcription_segments
@@ -189,15 +251,41 @@ services:
       - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD}
       # Minimum audio duration (seconds) before triggering transcription - lower = lower latency
       - MIN_AUDIO_S=${MIN_AUDIO_S:-2.0}
+      # Tier2 (deferred) tuning
+      - MIN_AUDIO_S_TIER2=${MIN_AUDIO_S_TIER2:-20.0}
+      - MIN_TIME_BETWEEN_REQUESTS_S=${MIN_TIME_BETWEEN_REQUESTS_S:-0.5}
+      - MIN_TIME_BETWEEN_REQUESTS_S_TIER2=${MIN_TIME_BETWEEN_REQUESTS_S_TIER2:-20.0}
+      - WL_RECORDING_DIR=${WL_RECORDING_DIR:-/var/lib/wl-recordings}
+      - WL_RECORDING_FLUSH_SECONDS=${WL_RECORDING_FLUSH_SECONDS:-3}
+      - WL_RECORDING_FSYNC_SECONDS=${WL_RECORDING_FSYNC_SECONDS:-10}
+      - WL_RECORDING_ROTATE_SECONDS=${WL_RECORDING_ROTATE_SECONDS:-20}
+      - WL_RECORDING_ROTATE_BYTES=${WL_RECORDING_ROTATE_BYTES:-16777216}
+      - WL_RECORDING_SNAPSHOT_SECONDS=${WL_RECORDING_SNAPSHOT_SECONDS:-20}
+      - WL_RECORDING_UPLOAD_URL=${WL_RECORDING_UPLOAD_URL:-http://bot-manager:8080/internal/recordings/upload}
       # Reconfirmation threshold - lower values reduce latency by reconfirming segments faster
       - SAME_OUTPUT_THRESHOLD=${SAME_OUTPUT_THRESHOLD:-3}
+      - SAME_OUTPUT_THRESHOLD_TIER2=${SAME_OUTPUT_THRESHOLD_TIER2:-2}
       - DEVICE_TYPE=remote
       - REMOTE_TRANSCRIBER_URL=${REMOTE_TRANSCRIBER_URL}
       - REMOTE_TRANSCRIBER_API_KEY=${REMOTE_TRANSCRIBER_API_KEY}
       - CONSUL_ENABLE=false
     deploy:
       replicas: 1
-    command: --port 9090 --backend remote
+    command: >-
+      --port 9090
+      --backend remote
+      --min_audio_s ${MIN_AUDIO_S:-2.0}
+      --min_audio_s_tier2 ${MIN_AUDIO_S_TIER2:-20.0}
+      --min_time_between_requests_s ${MIN_TIME_BETWEEN_REQUESTS_S:-0.5}
+      --min_time_between_requests_s_tier2 ${MIN_TIME_BETWEEN_REQUESTS_S_TIER2:-20.0}
+      --wl_recording_dir ${WL_RECORDING_DIR:-/var/lib/wl-recordings}
+      --wl_recording_flush_seconds ${WL_RECORDING_FLUSH_SECONDS:-3}
+      --wl_recording_fsync_seconds ${WL_RECORDING_FSYNC_SECONDS:-10}
+      --wl_recording_rotate_seconds ${WL_RECORDING_ROTATE_SECONDS:-20}
+      --wl_recording_rotate_bytes ${WL_RECORDING_ROTATE_BYTES:-16777216}
+      --wl_recording_snapshot_seconds ${WL_RECORDING_SNAPSHOT_SECONDS:-20}
+      --same_output_threshold ${SAME_OUTPUT_THRESHOLD:-3}
+      --same_output_threshold_tier2 ${SAME_OUTPUT_THRESHOLD_TIER2:-2}
     expose:
       - "9090" #use for transcription web socket
       - "9091" #use for health check
@@ -238,6 +326,18 @@ services:
       - REDIS_SEGMENT_TTL=3600
       - REDIS_CLEANUP_THRESHOLD=86400
       - LOG_LEVEL=DEBUG
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-minio}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
+      - MINIO_BUCKET=${MINIO_BUCKET:-vexa-recordings}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - S3_BUCKET=${S3_BUCKET:-}
+      - S3_ENDPOINT=${S3_ENDPOINT:-}
+      - S3_SECURE=${S3_SECURE:-true}
     init: true
     depends_on:
       redis:
@@ -263,6 +363,22 @@ services:
       - vexa_default
     restart: unless-stopped
 
+  tts-service:
+    build:
+      context: .
+      dockerfile: services/tts-service/Dockerfile
+    expose:
+      - "8002"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com}
+      - TTS_API_TOKEN=${TTS_API_TOKEN:-}
+      - LOG_LEVEL=DEBUG
+    init: true
+    networks:
+      - vexa_default
+    restart: unless-stopped
+
   redis:
     image: redis:7.0-alpine
     command:
@@ -273,9 +389,57 @@ services:
       - vexa_default
     restart: unless-stopped
 
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-vexa-access-key}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-vexa-secret-key}
+    volumes:
+      - minio-data:/data
+    ports:
+      - "${MINIO_HOST_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
+    networks:
+      - vexa_default
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        sleep 5
+        mc alias set vexa http://minio:9000 $${MINIO_ROOT_USER:-vexa-access-key} $${MINIO_ROOT_PASSWORD:-vexa-secret-key}
+        mc mb --ignore-existing vexa/${MINIO_BUCKET:-vexa-recordings}
+        cat > /tmp/cors.xml <<'XML'
+        <CORSConfiguration>
+          <CORSRule>
+            <AllowedOrigin>*</AllowedOrigin>
+            <AllowedMethod>GET</AllowedMethod>
+            <AllowedMethod>HEAD</AllowedMethod>
+            <AllowedHeader>*</AllowedHeader>
+          </CORSRule>
+        </CORSConfiguration>
+        XML
+        mc cors set vexa/${MINIO_BUCKET:-vexa-recordings} /tmp/cors.xml || echo "minio cors set unsupported in this environment; continuing"
+        mc anonymous set download vexa/${MINIO_BUCKET:-vexa-recordings} || true
+        exit 0
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-vexa-access-key}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-vexa-secret-key}
+    networks:
+      - vexa_default
+
 volumes:
   redis-data:
   postgres-data:
+  minio-data:
+  recordings-data:
+  wl-recordings:
 
 networks:
   vexa_default:

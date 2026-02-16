@@ -1,6 +1,8 @@
 # Vexa Deployment Guide
 
-Real-time Google Meet and Microsoft Teams transcription API. Get up and running in minutes.
+Real-time Google Meet, Microsoft Teams, and Zoom transcription API. Get up and running in minutes.
+
+Note: Zoom joins require additional configuration (Zoom Meeting SDK + OAuth/OBF). See [Zoom Integration Setup Guide](zoom-app-setup.md).
 
 > 💡 **For end users**: If you want quick deployment on your platform of choice with user interfaces, see [Vexa Lite Deployment Guide](vexa-lite-deployment.md) and [vexa-lite-deploy repository](https://github.com/Vexa-ai/vexa-lite-deploy).  
 > 💻 **For developers**: This guide covers the full Docker Compose setup for development.
@@ -15,13 +17,7 @@ Real-time Google Meet and Microsoft Teams transcription API. Get up and running 
 Try running directly - this might work instantly:
 ```bash
 git clone https://github.com/Vexa-ai/vexa.git && cd vexa
-make all  # CPU laptop (whisper tiny model - good for development)
-```
-or 
-
-```bash
-git clone https://github.com/Vexa-ai/vexa.git && cd vexa
-make all TARGET=gpu # GPU machine (whisper medium model - much better quality)
+make all  # Default profile: remote transcription (GPU-free)
 ```
 
 **What `make all` does:**
@@ -41,7 +37,7 @@ Sets up everything for you on a fresh VM:
 ```bash
 git clone https://github.com/Vexa-ai/vexa.git && cd vexa
 sudo ./fresh_setup.sh --gpu    # or --cpu for CPU-only hosts
-make all TARGET=gpu             # or make all for CPU
+make all
 ```
 
 
@@ -80,7 +76,7 @@ sudo systemctl restart docker
 # Deploy
 git clone https://github.com/Vexa-ai/vexa.git && cd vexa
 # make all              # CPU (tiny model)
-make all TARGET=gpu # GPU (medium model)
+make all
 ```
 
 **macOS (CPU only):**
@@ -132,8 +128,8 @@ docker run -d \
 ## Testing
 
 Once deployed, services are available at:
-- **API docs:** http://localhost:18056/docs (full stack) or http://localhost:8056/docs (lite)
-- **Admin API:** http://localhost:18057/docs (full stack only)
+- **API docs:** http://localhost:8056/docs
+- **Admin API:** http://localhost:8057/docs (full stack only)
 
 **Live meeting test:**
 ```bash
