@@ -164,8 +164,12 @@ Vexa Lite includes a built-in Redis server. If `REDIS_HOST` is `localhost` or un
 
 ### Interactive Bots (TTS & Virtual Camera)
 
+<Warning>
+  The OpenAI TTS dependency is **temporary**. A fully local TTS engine (no external API keys required) is planned — see [issue #130](https://github.com/Vexa-ai/vexa/issues/130).
+</Warning>
+
 <ResponseField name="OPENAI_API_KEY" type="string">
-  OpenAI API key for text-to-speech. Required for the `/speak` command to work. Without this, bots can still join meetings and transcribe, but TTS will be unavailable.
+  OpenAI API key for text-to-speech (temporary — will be replaced by local TTS, see [#130](https://github.com/Vexa-ai/vexa/issues/130)). Required for the `/speak` command to work. Without this, bots can still join meetings and transcribe, but TTS will be unavailable.
 </ResponseField>
 
 ### Recording Storage
