@@ -1,94 +1,318 @@
 ---
 title: "Vexa Lite Deployment"
+description: "Deploy Vexa as a single all-in-one Docker container"
 ---
-Deploy Vexa as a single Docker container with no GPU requirements. Vexa Lite is a stateless container that connects to an external database and the Vexa transcription service.
 
-> **One-click platform deployments**: For platform-specific deployment guides (Fly.io, Railway, Render, etc.), see the [vexa-lite-deploy repository](https://github.com/Vexa-ai/vexa-lite-deploy).
+Deploy Vexa as a single Docker container with no GPU requirements. Vexa Lite bundles all services into one image, managed by supervisord.
+
+> **One-click platform deployments**: For platform-specific guides (Fly.io, Railway, Render, etc.), see the [vexa-lite-deploy repository](https://github.com/Vexa-ai/vexa-lite-deploy).
 
 ## Overview
 
 **Why Vexa Lite?**
 
-- **Easy deployment** — Single container, no multi-service orchestration required
-- **Stateless** — All data stored in your database; easy to redeploy and scale
-- **No GPU required** — Transcription runs via the Vexa transcription service
-- **Flexible DB** — Use a managed Postgres (recommended) or local Postgres for dev
+- **Single container** — All services bundled, no multi-service orchestration
+- **Stateless** — All data stored in your database; easy to redeploy
+- **No GPU required** — Uses the Vexa remote transcription service
+- **Built-in Redis** — No external Redis needed (optional external Redis supported)
+- **Interactive bots** — TTS (text-to-speech) and virtual camera included
 
-## Deployment Options
+### Included Services
 
-Since v0.7, Vexa Lite uses **remote transcription**. Choose your database location:
+Vexa Lite runs the following services internally via supervisord:
 
-|  | Remote DB | Local DB |
-|--|-----------|----------|
-| **Best for** | Production | Development |
-| **GPU required** | No | No |
-| **Managed backups** | Yes | No |
-| **Serverless ready** | Yes | No |
-| **Scalable** | Yes | Limited |
-| **External costs** | DB hosting | None |
+| Service | Internal Port | Description |
+|---------|--------------|-------------|
+| API Gateway | 8056 | Main entry point (the only exposed port) |
+| Admin API | 8057 | User and API token management |
+| Bot Manager | 8080 | Bot lifecycle management (process orchestrator) |
+| Transcription Collector | 8123 | Stores transcription segments in PostgreSQL |
+| WhisperLive | 9090 | Transcription relay (routes to remote service) |
+| MCP Service | 18888 | Model Context Protocol for Claude/Cursor |
+| TTS Service | 8059 | Text-to-speech via OpenAI API |
+| Redis | 6379 | Built-in message broker |
+| Xvfb | — | Virtual display for headless browsers |
+| PulseAudio | — | Audio server for TTS playback |
+
+All internal services communicate over `localhost`. Only port **8056** is exposed externally.
 
 ---
 
-## Complete Setup Examples
+## Quick Start
 
-### Example 1: Remote Database + Remote Transcription
+### Production: Remote Database
 
-**Best for:** Production deployments
-
-**Setup steps:**
-
-1. **Set up a remote PostgreSQL database**
-
-   You need a PostgreSQL database accessible from your deployment environment. Any managed Postgres provider works (Supabase, Neon, AWS RDS, etc.).
-
-   <Accordion title="Example: Supabase setup">
-   - Create a new project at [supabase.com](https://supabase.com)
-   - On the project page, click **Connect** button
-   - Select method: **Session pooler**
-   - Copy your connection string (example format):
-     ```
-     postgresql://postgres.your_project_id:[YOUR-PASSWORD]@aws-1-eu-west-1.pooler.supabase.com:5432/postgres
-     ```
-   - Replace `[YOUR-PASSWORD]` with your actual database password
-   - Set `DB_SSL_MODE=require` when using Supabase
-   </Accordion>
-
-2. **Get your transcription API key**
-
-   Get your transcription API key from [vexa.ai/dashboard/api-keys](https://vexa.ai/dashboard/api-keys). This key authenticates with the Vexa transcription service.
-
-   ```
-   TRANSCRIBER_URL=https://transcription.vexa.ai/v1/audio/transcriptions
-   ```
-
-3. **Run Vexa Lite:**
 ```bash
 docker run -d \
   --name vexa \
   -p 8056:8056 \
   -e DATABASE_URL="postgresql://user:password@your-db-host:5432/vexa" \
   -e DB_SSL_MODE="require" \
+  -e ADMIN_API_TOKEN="your-secret-admin-token" \
+  -e TRANSCRIBER_URL="https://transcription.vexa.ai/v1/audio/transcriptions" \
+  -e TRANSCRIBER_API_KEY="your-transcription-api-key" \
+  -e OPENAI_API_KEY="sk-your-openai-key" \
+  vexaai/vexa-lite:latest
+```
+
+### Development: Local Database
+
+```bash
+# Create network
+docker network create vexa-network
+
+# Start PostgreSQL
+docker run -d \
+  --name vexa-postgres \
+  --network vexa-network \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=your_password \
+  -e POSTGRES_DB=vexa \
+  -p 5432:5432 \
+  postgres:latest
+
+# Start Vexa Lite
+docker run -d \
+  --name vexa \
+  --network vexa-network \
+  -p 8056:8056 \
+  -e DATABASE_URL="postgresql://postgres:your_password@vexa-postgres:5432/vexa" \
+  -e ADMIN_API_TOKEN="your-secret-admin-token" \
+  -e TRANSCRIBER_URL="https://transcription.vexa.ai/v1/audio/transcriptions" \
+  -e TRANSCRIBER_API_KEY="your-transcription-api-key" \
+  -e OPENAI_API_KEY="sk-your-openai-key" \
+  vexaai/vexa-lite:latest
+```
+
+<Info>
+The container automatically runs database migrations on startup. Fresh databases are initialized with the full schema.
+</Info>
+
+---
+
+## Environment Variables
+
+### Required
+
+<ResponseField name="DATABASE_URL" type="string" required>
+  PostgreSQL connection string. Supports both `postgresql://` and `postgres://` schemes.
+
+  Example: `postgresql://user:pass@host:5432/vexa`
+
+  Alternatively, set individual variables: `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`.
+</ResponseField>
+
+<ResponseField name="ADMIN_API_TOKEN" type="string" required>
+  Secret token for [admin operations](self-hosted-management) (creating users, minting API tokens).
+</ResponseField>
+
+<ResponseField name="TRANSCRIBER_URL" type="string" required>
+  Transcription service endpoint.
+
+  Default: `https://transcription.vexa.ai/v1/audio/transcriptions`
+</ResponseField>
+
+<ResponseField name="TRANSCRIBER_API_KEY" type="string" required>
+  API key for the transcription service. Get yours from [vexa.ai/dashboard/api-keys](https://vexa.ai/dashboard/api-keys).
+</ResponseField>
+
+### Database
+
+You can use `DATABASE_URL` or individual variables. If both are provided, `DATABASE_URL` takes precedence.
+
+<ResponseField name="DB_HOST" type="string" default="localhost">
+  PostgreSQL hostname.
+</ResponseField>
+
+<ResponseField name="DB_PORT" type="string" default="5432">
+  PostgreSQL port.
+</ResponseField>
+
+<ResponseField name="DB_NAME" type="string" default="vexa">
+  Database name.
+</ResponseField>
+
+<ResponseField name="DB_USER" type="string" default="postgres">
+  Database user.
+</ResponseField>
+
+<ResponseField name="DB_PASSWORD" type="string">
+  Database password.
+</ResponseField>
+
+<ResponseField name="DB_SSL_MODE" type="string" default="disable">
+  SSL mode for database connections. Set to `require` for cloud-hosted databases (Supabase, Neon, AWS RDS, etc.).
+</ResponseField>
+
+### Redis
+
+Vexa Lite includes a built-in Redis server. If `REDIS_HOST` is `localhost` or unset, the internal Redis is used automatically. To use an external Redis, set `REDIS_HOST` to your Redis server address.
+
+<ResponseField name="REDIS_HOST" type="string" default="localhost">
+  Redis hostname. Set to an external address to use external Redis instead of the built-in server.
+</ResponseField>
+
+<ResponseField name="REDIS_PORT" type="string" default="6379">
+  Redis port.
+</ResponseField>
+
+<ResponseField name="REDIS_URL" type="string">
+  Full Redis URL. If provided, individual Redis vars are parsed from it.
+
+  Example: `redis://user:password@redis-host:6379/0`
+</ResponseField>
+
+### Interactive Bots (TTS & Virtual Camera)
+
+<ResponseField name="OPENAI_API_KEY" type="string">
+  OpenAI API key for text-to-speech. Required for the `/speak` command to work. Without this, bots can still join meetings and transcribe, but TTS will be unavailable.
+</ResponseField>
+
+### Recording Storage
+
+<ResponseField name="STORAGE_BACKEND" type="string" default="local">
+  Recording storage backend: `local`, `minio`, or `s3`.
+</ResponseField>
+
+<ResponseField name="LOCAL_STORAGE_DIR" type="string" default="/var/lib/vexa/recordings">
+  Directory for local recording storage. Mount a volume here for persistence.
+</ResponseField>
+
+<Accordion title="S3 / MinIO storage variables">
+
+For `STORAGE_BACKEND=s3`:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AWS_REGION` | `us-east-1` | AWS region |
+| `AWS_ACCESS_KEY_ID` | — | AWS access key |
+| `AWS_SECRET_ACCESS_KEY` | — | AWS secret key |
+| `S3_BUCKET` | — | S3 bucket name |
+| `S3_ENDPOINT` | — | Custom S3 endpoint (for non-AWS providers) |
+| `S3_SECURE` | `true` | Use HTTPS for S3 connections |
+
+For `STORAGE_BACKEND=minio`:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MINIO_ENDPOINT` | — | MinIO server endpoint (e.g., `minio:9000`) |
+| `MINIO_ACCESS_KEY` | — | MinIO access key |
+| `MINIO_SECRET_KEY` | — | MinIO secret key |
+| `MINIO_BUCKET` | `vexa-recordings` | MinIO bucket name |
+| `MINIO_SECURE` | `false` | Use HTTPS for MinIO connections |
+
+</Accordion>
+
+### Transcription
+
+<ResponseField name="WHISPER_BACKEND" type="string" default="remote">
+  Transcription backend. Use `remote` to route audio to the Vexa transcription service (recommended). Use `faster_whisper` for local CPU-based transcription (slow, development only).
+</ResponseField>
+
+<ResponseField name="WHISPER_MODEL_SIZE" type="string" default="tiny">
+  Whisper model size when using local transcription (`WHISPER_BACKEND=faster_whisper`). Options: `tiny`, `base`, `small`, `medium`.
+</ResponseField>
+
+<ResponseField name="SKIP_TRANSCRIPTION_CHECK" type="string" default="false">
+  Set to `true` to skip the startup connectivity check to the transcription service. The URL and API key are still required but won't be validated at startup.
+</ResponseField>
+
+### Logging
+
+<ResponseField name="LOG_LEVEL" type="string" default="info">
+  Log level for all services. Options: `debug`, `info`, `warning`, `error`.
+</ResponseField>
+
+---
+
+## Health Check
+
+The container includes a built-in health check that polls the API Gateway:
+
+```
+GET http://localhost:8056/docs
+```
+
+- **Interval:** 30s
+- **Timeout:** 10s
+- **Start period:** 90s (allows services to initialize)
+- **Retries:** 3
+
+Use this with your orchestrator's health check mechanism:
+
+```bash
+# Check container health
+docker inspect --format='{{.State.Health.Status}}' vexa
+```
+
+---
+
+## Recording Storage
+
+For production, use object storage so recordings persist across container restarts:
+
+```bash
+docker run -d \
+  --name vexa \
+  -p 8056:8056 \
+  -e STORAGE_BACKEND=s3 \
+  -e AWS_ACCESS_KEY_ID="your-key" \
+  -e AWS_SECRET_ACCESS_KEY="your-secret" \
+  -e S3_BUCKET="vexa-recordings" \
+  -e AWS_REGION="us-east-1" \
+  -e DATABASE_URL="postgresql://user:pass@host/vexa" \
   -e ADMIN_API_TOKEN="your-admin-token" \
   -e TRANSCRIBER_URL="https://transcription.vexa.ai/v1/audio/transcriptions" \
   -e TRANSCRIBER_API_KEY="your-api-key" \
   vexaai/vexa-lite:latest
 ```
 
----
+For local development, mount a volume:
 
-### Example 2: Local Database + Remote Transcription
-
-**Best for:** Development, quick testing
-
-**Setup steps:**
-
-1. **Create network:**
 ```bash
-docker network create vexa-network
+docker run -d \
+  -v vexa-recordings:/var/lib/vexa/recordings \
+  ...
 ```
 
-2. **Start PostgreSQL:**
+For the full storage matrix, see [Recording storage](recording-storage).
+
+---
+
+## Build from Source
+
+To build the image locally from the Vexa repository:
+
 ```bash
+git clone https://github.com/Vexa-ai/vexa.git
+cd vexa/docker/lite
+make build
+```
+
+This produces a `vexa-lite:dev` image. See `make help` for additional commands (`push`, `set-latest`, etc.).
+
+---
+
+## Database Setup
+
+<Accordion title="Supabase">
+1. Create a project at [supabase.com](https://supabase.com)
+2. Click **Connect** on the project page
+3. Select method: **Session pooler**
+4. Copy the connection string
+5. Set `DB_SSL_MODE=require`
+</Accordion>
+
+<Accordion title="Neon">
+1. Create a project at [neon.tech](https://neon.tech)
+2. Copy the connection string from the dashboard
+3. Set `DB_SSL_MODE=require`
+</Accordion>
+
+<Accordion title="Local PostgreSQL">
+```bash
+docker network create vexa-network
+
 docker run -d \
   --name vexa-postgres \
   --network vexa-network \
@@ -99,99 +323,14 @@ docker run -d \
   postgres:latest
 ```
 
-3. **Get your transcription API key** from [vexa.ai/dashboard/api-keys](https://vexa.ai/dashboard/api-keys).
-
-4. **Run Vexa Lite:**
-```bash
-docker run -d \
-  --name vexa \
-  --network vexa-network \
-  -p 8056:8056 \
-  -e DATABASE_URL="postgresql://postgres:your_password@vexa-postgres:5432/vexa" \
-  -e ADMIN_API_TOKEN="your-admin-token" \
-  -e TRANSCRIBER_URL="https://transcription.vexa.ai/v1/audio/transcriptions" \
-  -e TRANSCRIBER_API_KEY="your-api-key" \
-  vexaai/vexa-lite:latest
-```
-
-**Note:** Vexa container must use `--network vexa-network` to connect to local PostgreSQL.
+Then run Vexa Lite with `--network vexa-network` and `DB_HOST=vexa-postgres`.
+</Accordion>
 
 ---
-
-## Environment Variables
-
-<ResponseField name="DATABASE_URL" type="string" required>
-  PostgreSQL connection string.
-
-  Example: `postgresql://user:pass@host:5432/vexa`
-</ResponseField>
-
-<ResponseField name="ADMIN_API_TOKEN" type="string" required>
-  Secret token for [admin operations](self-hosted-management) (creating users, minting API tokens).
-
-  Example: `your-secret-admin-token`
-</ResponseField>
-
-<ResponseField name="TRANSCRIBER_URL" type="string" required>
-  Vexa transcription service endpoint.
-
-  Use: `https://transcription.vexa.ai/v1/audio/transcriptions`
-</ResponseField>
-
-<ResponseField name="TRANSCRIBER_API_KEY" type="string" required>
-  API key for the transcription service. Get yours from [vexa.ai/dashboard/api-keys](https://vexa.ai/dashboard/api-keys).
-</ResponseField>
-
-<ResponseField name="STORAGE_BACKEND" type="string" default="local">
-  Recording storage backend: `local`, `minio`, or `s3`.
-
-  Use `s3` for production (stateless). See [Recording storage](recording-storage) for details.
-</ResponseField>
-
-<ResponseField name="LOCAL_STORAGE_DIR" type="string">
-  Local recordings directory (when `STORAGE_BACKEND=local`).
-
-  Example: `/var/lib/vexa/recordings`
-</ResponseField>
-
-<ResponseField name="DB_SSL_MODE" type="string">
-  SSL mode for database connection. Set to `require` for cloud-hosted databases (Supabase, Neon, etc.).
-</ResponseField>
-
----
-
-## Recording Storage
-
-Vexa Lite can store recording artifacts and expose them via the recordings API for post-meeting playback.
-
-**Recommended (stateless deployments):** Use object storage:
-- `STORAGE_BACKEND=s3` (AWS S3 or S3-compatible providers)
-- Set `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_BUCKET`, and optional `S3_ENDPOINT`/`S3_SECURE` for non-AWS providers
-
-**Local filesystem (testing only):** Mount a volume or recordings will be lost when the container is replaced:
-
-```bash
-docker run -d \
-  --name vexa \
-  -p 8056:8056 \
-  -v vexa-recordings:/var/lib/vexa/recordings \
-  -e STORAGE_BACKEND=local \
-  -e LOCAL_STORAGE_DIR=/var/lib/vexa/recordings \
-  -e DATABASE_URL="postgresql://user:pass@host/vexa" \
-  -e ADMIN_API_TOKEN="your-admin-token" \
-  -e TRANSCRIBER_URL="https://transcription.vexa.ai/v1/audio/transcriptions" \
-  -e TRANSCRIBER_API_KEY="your-api-key" \
-  vexaai/vexa-lite:latest
-```
-
-For the full storage matrix and playback endpoint behavior, see [Recording storage](recording-storage).
 
 ## Next Steps
 
 - Create users and API tokens: [Admin API](self-hosted-management)
-- Test the deployment: Follow `nbs/0_basic_test.ipynb`
 - Set up a dashboard UI: [Vexa Dashboard](ui-dashboard)
-
-## Platform-Specific Deployments
-
-For one-click deployment configurations on specific platforms (Fly.io, Railway, Render, Google Cloud Run, AWS, etc.), see the **[vexa-lite-deploy repository](https://github.com/Vexa-ai/vexa-lite-deploy)**.
+- Configure interactive bots: [Interactive Bots](interactive-bots)
+- Platform-specific guides: [vexa-lite-deploy repository](https://github.com/Vexa-ai/vexa-lite-deploy)
