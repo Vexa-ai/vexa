@@ -49,8 +49,10 @@
 |---|---|
 | **Meeting bots** | Automatically joins Google Meet, Microsoft Teams, and Zoom meetings |
 | **Real-time transcription** | Sub-second transcript delivery during the call |
+| **Interactive bots** | Make bots speak, send/read chat, share screen content, and set avatar in live meetings |
 | **Multilingual** | 100+ languages via Whisper (transcription + translation) |
 | **API-first** | REST API + WebSocket streaming for integrations |
+| **MCP-ready** | Connect AI agents (Claude/Cursor/etc.) through the MCP server |
 | **Storage** | Persist transcripts + meeting metadata in your database |
 | **Multi-user** | Team-ready: users, API keys/tokens, admin operations |
 | **Self-hostable** | Run on your infra for complete data sovereignty |
@@ -100,12 +102,14 @@ At [vexa.ai](https://vexa.ai) — just grab API key
 
 <a id="whats-new"></a>
 
-## 🎉 What's new in v0.8 (pre-release)
+## 🎉 What's new in v0.9 (pre-release)
 
 - **Zoom:** initial Zoom Meeting SDK support (requires Zoom app setup/approval; see docs)
 - **Recordings:** persist recording artifacts to S3-compatible storage (or local)
 - **Post-meeting playback:** stream recordings via `/recordings/.../raw` with `Range` seeking (`206`) + `Content-Disposition: inline`
 - **Delete semantics:** deleting a meeting also purges recording objects/artifacts (best-effort) before anonymizing the meeting
+- **Interactive Bots API:** live controls for speak/chat/screen/avatar during active meetings
+- **MCP integration docs:** end-to-end guide for connecting AI agents to Vexa tools
 
 ---
 
@@ -296,7 +300,9 @@ For the up-to-date roadmap and priorities, see GitHub Issues and Milestones. Iss
 - **Microsoft Teams integration** - Automatically join and transcribe Teams meetings
 - **Zoom integration** - Automatically join and transcribe Zoom meetings
 - **REST API** - Complete API for managing bots, users, and transcripts
+- **Interactive meeting controls** - Bot speak/chat/screen/avatar endpoints for active meetings
 - **WebSocket streaming** - Sub-second transcript delivery via WebSocket
+- **MCP server** - Expose Vexa APIs as agent tools for MCP-compatible clients
 - **Multiuser support** - User management, API tokens, and team features
 - **Self-hostable** - Full control over your data and infrastructure
 - **Open-source frontends** - Choose from user interfaces like [Vexa Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)
