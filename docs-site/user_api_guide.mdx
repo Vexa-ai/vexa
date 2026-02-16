@@ -71,6 +71,26 @@ Recording management endpoints (explicit):
 - `GET /recordings/{recording_id}`
 - `DELETE /recordings/{recording_id}`
 
+## Pagination
+
+List endpoints use `limit` and `offset` query parameters:
+
+```bash
+GET /recordings?limit=50&offset=0
+GET /meetings?limit=100&offset=0
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | int | varies (50-100) | Maximum items to return |
+| `offset` | int | `0` | Number of items to skip |
+
+Admin endpoints use `skip` instead of `offset` (same behavior):
+
+```bash
+GET /admin/users?skip=0&limit=100
+```
+
 ## Reference
 
 - Bots: [Bots API](api/bots)

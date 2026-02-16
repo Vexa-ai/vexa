@@ -1,0 +1,288 @@
+---
+title: "MCP Integration"
+description: "Connect Claude, ChatGPT, or any MCP-compatible agent to Vexa for real-time meeting control"
+---
+
+## Overview
+
+Vexa exposes a [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that lets AI agents join meetings, fetch transcripts, manage recordings, and interact with participants. Any MCP-compatible client (Claude Desktop, Cursor, custom agents) can use Vexa as a tool provider.
+
+The MCP server wraps the full Vexa REST API and adds agent-friendly features like meeting URL parsing and bundled post-meeting summaries.
+
+## Setup
+
+### 1. Get an API key
+
+Create a user and token via the [Admin API](self-hosted-management), or use an existing key.
+
+### 2. Configure your MCP client
+
+Add Vexa to your client's MCP server configuration:
+
+```json
+{
+  "mcpServers": {
+    "vexa": {
+      "command": "npx",
+      "args": [
+        "-y", "mcp-remote",
+        "https://api.cloud.vexa.ai/mcp",
+        "--header", "Authorization: Bearer ${VEXA_API_KEY}"
+      ],
+      "env": {
+        "VEXA_API_KEY": "YOUR_API_KEY_HERE"
+      }
+    }
+  }
+}
+```
+
+For self-hosted deployments, replace the URL with your MCP service endpoint (default: `http://localhost:18888`).
+
+### 3. Authentication
+
+The MCP server accepts API keys via:
+
+| Method | Format |
+|--------|--------|
+| Bearer token (preferred) | `Authorization: Bearer <api_key>` |
+| API key header | `X-API-Key: <api_key>` |
+
+## Tools
+
+### Meeting Management
+
+#### `parse-meeting-link`
+Extract platform, meeting ID, and passcode from any meeting URL.
+
+```json
+POST /parse-meeting-link
+{
+  "meeting_url": "https://meet.google.com/abc-defg-hij"
+}
+```
+
+**Response:**
+```json
+{
+  "platform": "google_meet",
+  "native_meeting_id": "abc-defg-hij",
+  "passcode": null,
+  "warnings": []
+}
+```
+
+Supported URL formats:
+- Google Meet: `https://meet.google.com/xxx-yyyy-zzz`
+- Zoom: `https://zoom.us/j/12345678901?pwd=abc123`
+- Teams: `https://teams.live.com/meet/<ID>?p=<PASSCODE>`
+
+<Warning>
+Teams `teams.microsoft.com/l/meetup-join/...` URLs are **not supported** for anonymous bot joins. Use the `teams.live.com/meet/` format with a passcode.
+</Warning>
+
+#### `request-meeting-bot`
+Send a bot to join a meeting. Accepts either a full URL (auto-parsed) or explicit platform + meeting ID.
+
+```json
+POST /request-meeting-bot
+{
+  "meeting_url": "https://meet.google.com/abc-defg-hij",
+  "bot_name": "Vexa Notetaker",
+  "language": "en"
+}
+```
+
+Or with explicit fields:
+```json
+{
+  "platform": "google_meet",
+  "native_meeting_id": "abc-defg-hij",
+  "language": "en"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `meeting_url` | string | No | Full meeting URL (auto-parsed) |
+| `native_meeting_id` | string | No | Platform-specific meeting ID |
+| `platform` | string | `"google_meet"` | `google_meet`, `teams`, or `zoom` |
+| `language` | string | No | Language code (e.g., `en`, `es`) |
+| `bot_name` | string | No | Display name for the bot |
+| `passcode` | string | No | Required for Teams meetings |
+
+#### `bot-status`
+Check status of all running bots.
+
+```json
+GET /bot-status
+```
+
+#### `bot-config`
+Update a running bot's configuration.
+
+```json
+PUT /bot-config/{platform}/{meeting_id}
+{ "language": "es" }
+```
+
+#### `bot` (DELETE)
+Remove a bot from a meeting.
+
+```json
+DELETE /bot/{platform}/{meeting_id}
+```
+
+---
+
+### Transcripts
+
+#### `meeting-transcript`
+Fetch the full transcript for a meeting.
+
+```json
+GET /meeting-transcript/{platform}/{meeting_id}
+```
+
+Returns meeting metadata, segments with speaker attribution, and notes.
+
+#### `transcript-share-link`
+Create a temporary public URL for sharing a transcript.
+
+```json
+POST /transcript-share-link/{platform}/{meeting_id}
+```
+
+**Response:**
+```json
+{
+  "share_id": "QlS7Rkkrxn9g6sadFmUwkg",
+  "url": "https://share.dev.vexa.ai/public/transcripts/QlS7Rkkrxn9g6sadFmUwkg.txt",
+  "expires_at": "2025-01-15T12:00:00Z",
+  "expires_in_seconds": 900
+}
+```
+
+---
+
+### Recordings
+
+#### `recordings` (GET)
+List recordings with pagination.
+
+```json
+GET /recordings?limit=10&offset=0
+```
+
+#### `recordings/{id}` (GET)
+Get a single recording with its media files.
+
+#### `recordings/{id}` (DELETE)
+Delete a recording and its storage files.
+
+#### `recordings/{id}/media/{media_id}/download`
+Get a download URL for a media file.
+
+---
+
+### Recording Configuration
+
+#### `recording-config` (GET)
+Get the user's default recording settings.
+
+#### `recording-config` (PUT)
+Update recording settings.
+
+```json
+PUT /recording-config
+{
+  "enabled": true,
+  "capture_modes": ["audio"]
+}
+```
+
+---
+
+### Meetings
+
+#### `meetings` (GET)
+List all meetings for the authenticated user.
+
+#### `meeting` (PATCH)
+Update meeting metadata (name, participants, languages, notes).
+
+```json
+PATCH /meeting/{platform}/{meeting_id}
+{
+  "name": "Weekly Standup",
+  "notes": "Discussed Q1 roadmap",
+  "participants": ["Alice", "Bob"],
+  "languages": ["en"]
+}
+```
+
+#### `meeting` (DELETE)
+Purge transcripts and anonymize meeting data.
+
+---
+
+### Bundles
+
+#### `meeting-bundle`
+Get a compact post-meeting summary combining status, notes, recordings, and an optional share link.
+
+```json
+POST /meeting-bundle
+{
+  "meeting_platform": "google_meet",
+  "meeting_id": "abc-defg-hij",
+  "include_segments": false,
+  "include_share_link": true,
+  "share_ttl_seconds": 86400,
+  "include_recordings": true,
+  "include_media_download_urls": false
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `meeting_platform` | string | -- | Platform identifier |
+| `meeting_id` | string | -- | Native meeting ID |
+| `include_segments` | bool | `false` | Include full transcript segments |
+| `include_share_link` | bool | `true` | Generate a temporary share URL |
+| `share_ttl_seconds` | int | `86400` | Share link expiration (seconds) |
+| `include_recordings` | bool | `true` | Include recording metadata |
+| `include_media_download_urls` | bool | `false` | Include presigned download URLs |
+
+## Prompts
+
+The MCP server provides pre-built prompts for common agent workflows:
+
+| Prompt | Use case | Key arguments |
+|--------|----------|---------------|
+| `vexa.meeting_prep` | Parse link, send bot, attach notes | `meeting_url`, `notes` |
+| `vexa.during_meeting` | Check bot status, get live transcript | `meeting_platform`, `meeting_id` |
+| `vexa.post_meeting` | Fetch bundle, produce follow-ups | `meeting_platform`, `meeting_id` |
+| `vexa.teams_link_help` | Troubleshoot Teams link issues | `meeting_url` |
+
+## Self-Hosted MCP Endpoint
+
+When running Vexa locally, the MCP server is available at `http://localhost:18888`. Update your MCP client configuration accordingly:
+
+```json
+{
+  "mcpServers": {
+    "vexa": {
+      "command": "npx",
+      "args": [
+        "-y", "mcp-remote",
+        "http://localhost:18888/mcp",
+        "--header", "Authorization: Bearer ${VEXA_API_KEY}"
+      ],
+      "env": {
+        "VEXA_API_KEY": "YOUR_API_KEY_HERE"
+      }
+    }
+  }
+}
+```

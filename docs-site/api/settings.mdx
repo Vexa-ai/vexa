@@ -26,7 +26,18 @@ curl -H "X-API-Key: $API_KEY" \
 
 ## PUT /recording-config
 
-Set your default recording configuration.
+Set your default recording configuration. These defaults apply to all new bots unless overridden per-request via `recording_enabled` in `POST /bots`.
+
+**Request body:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable recording for new bots by default |
+| `capture_modes` | string[] | `["audio"]` | Capture modes. Currently supported: `["audio"]` |
+
+<Info>
+**Per-meeting override**: Pass `recording_enabled: true` (or `false`) in the `POST /bots` request body to override the user-level default for a specific meeting.
+</Info>
 
 ```bash
 curl -X PUT "$API_BASE/recording-config" \

@@ -99,7 +99,7 @@ Returns meeting metadata plus `segments[]`. If recording was enabled and capture
 
 ## POST `/transcripts/{platform}/{native_meeting_id}/share`
 
-Create a public share link for a meeting transcript.
+Create a temporary public URL for sharing a meeting transcript. The link returns plain text (`Content-Type: text/plain`) and expires after a configurable TTL (default: 15 minutes).
 
 <Tabs>
   <Tab title="Google Meet">
@@ -140,3 +140,22 @@ curl -X POST \
 ```
 
 </details>
+
+**Response fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `share_id` | string | URL-safe Base64 identifier |
+| `url` | string | Full public URL (append `.txt` to share_id) |
+| `expires_at` | string | ISO 8601 expiration timestamp |
+| `expires_in_seconds` | int | Seconds until expiration |
+
+### GET `/public/transcripts/{share_id}.txt`
+
+Access a shared transcript. No authentication required.
+
+```bash
+curl "https://api.vexa.ai/public/transcripts/Cj3o9z0GZqf7Jd1wqYp3vQ.txt"
+```
+
+Returns plain text (`Content-Type: text/plain`) with the formatted transcript including platform, meeting ID, timestamps, and speaker-attributed segments. Returns `404` if the share link has expired or does not exist.
