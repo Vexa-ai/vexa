@@ -107,6 +107,20 @@ docker run -d \
 | `REMOTE_TRANSCRIBER_TEMPERATURE` | `0` | Temperature parameter for remote transcription |
 | `SKIP_TRANSCRIPTION_CHECK` | `false` | If `true`, skips the startup connectivity check to the transcription service. **Only relevant when using an external (non‑Vexa) Whisper‑compatible transcription service** that does not expose a `/health` or root URL returning 2xx (e.g. some third‑party/OVH gateways). The Vexa transcription service (developed in this stack) exposes `/health` and does not need this. The container still requires `REMOTE_TRANSCRIBER_URL` and `REMOTE_TRANSCRIBER_API_KEY` to be set. |
 | `API_GATEWAY_URL` | `http://localhost:8056` | API Gateway URL (used by MCP service) |
+| `STORAGE_BACKEND` | `local` | Recording storage backend: `local`, `minio`, or `s3` |
+| `LOCAL_STORAGE_DIR` | `/var/lib/vexa/recordings` | Local recording directory when `STORAGE_BACKEND=local` |
+| `LOCAL_STORAGE_FSYNC` | `true` | If `true`, fsync recording writes for durability |
+| `MINIO_ENDPOINT` | (empty) | MinIO/S3-compatible endpoint when `STORAGE_BACKEND=minio` |
+| `MINIO_ACCESS_KEY` | (empty) | Access key for MinIO backend |
+| `MINIO_SECRET_KEY` | (empty) | Secret key for MinIO backend |
+| `MINIO_BUCKET` | `vexa-recordings` | Bucket for MinIO backend |
+| `MINIO_SECURE` | `false` | Use TLS for MinIO endpoint |
+| `AWS_REGION` | `us-east-1` | Region for `s3` backend |
+| `AWS_ACCESS_KEY_ID` | (empty) | AWS access key for `s3` backend |
+| `AWS_SECRET_ACCESS_KEY` | (empty) | AWS secret key for `s3` backend |
+| `S3_BUCKET` | (empty) | Bucket for `s3` backend |
+| `S3_ENDPOINT` | (empty) | Optional custom endpoint for S3-compatible providers |
+| `S3_SECURE` | `true` | Use TLS for `S3_ENDPOINT` |
 
 ### External transcription services without health endpoint
 
@@ -190,6 +204,7 @@ docker run -d \
   --name vexa \
   -p 8056:8056 \
   -v vexa-logs:/var/log/vexa-bots \
+  -v vexa-recordings:/var/lib/vexa/recordings \
   -e DATABASE_URL="..." \
   -e ADMIN_API_TOKEN="..." \
   -e REMOTE_TRANSCRIBER_URL="http://localhost:8083/v1/audio/transcriptions" \
@@ -200,8 +215,36 @@ docker run -d \
 | Volume | Path | Description |
 |--------|------|-------------|
 | `vexa-logs` | `/var/log/vexa-bots` | Bot process logs |
+| `vexa-recordings` | `/var/lib/vexa/recordings` | Persisted recording files for `STORAGE_BACKEND=local` |
 
 **Note:** Model volumes are only needed for local CPU mode (`WHISPER_BACKEND=faster_whisper`). Remote transcription mode doesn't require model storage.
+
+### Recording backend quick switch
+
+Local filesystem (default in Lite):
+
+```bash
+-e STORAGE_BACKEND=local \
+-e LOCAL_STORAGE_DIR=/var/lib/vexa/recordings \
+-e LOCAL_STORAGE_FSYNC=true
+```
+
+Cloud object storage (AWS S3):
+
+```bash
+-e STORAGE_BACKEND=s3 \
+-e AWS_REGION=us-east-1 \
+-e AWS_ACCESS_KEY_ID=... \
+-e AWS_SECRET_ACCESS_KEY=... \
+-e S3_BUCKET=vexa-recordings
+```
+
+S3-compatible providers can also set:
+
+```bash
+-e S3_ENDPOINT=https://<provider-endpoint> \
+-e S3_SECURE=true
+```
 
 ## Platform-Specific Deployment
 

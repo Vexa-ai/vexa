@@ -166,7 +166,12 @@ async def start_bot_container(
     user_token: str,
     native_meeting_id: str,
     language: Optional[str],
-    task: Optional[str]
+    task: Optional[str],
+    transcription_tier: Optional[str] = "realtime",
+    recording_enabled: Optional[bool] = None,
+    transcribe_enabled: Optional[bool] = None,
+    zoom_obf_token: Optional[str] = None,
+    voice_agent_enabled: Optional[bool] = None
 ) -> Optional[Tuple[str, str]]:
     """Start a bot as a Node.js child process.
 
@@ -221,6 +226,9 @@ async def start_bot_container(
         "connectionId": connection_id,
         "language": language,
         "task": task or "transcribe",
+        "transcribeEnabled": True if transcribe_enabled is None else bool(transcribe_enabled),
+        "transcriptionTier": transcription_tier or "realtime",
+        "obfToken": zoom_obf_token if platform == "zoom" else None,
         "redisUrl": REDIS_URL,
         "container_name": process_name,
         "automaticLeave": {
@@ -230,6 +238,10 @@ async def start_bot_container(
         },
         "botManagerCallbackUrl": f"{BOT_CALLBACK_BASE_URL}/bots/internal/callback/exited"
     }
+    if recording_enabled is not None:
+        bot_config["recordingEnabled"] = bool(recording_enabled)
+    if voice_agent_enabled is not None:
+        bot_config["voiceAgentEnabled"] = bool(voice_agent_enabled)
 
     # Remove None values from config
     bot_config = {k: v for k, v in bot_config.items() if v is not None}

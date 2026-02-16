@@ -2,6 +2,8 @@ import { Page } from "playwright";
 import { log } from "../../utils";
 import { BotConfig } from "../../types";
 import { WhisperLiveService } from "../../services/whisperlive";
+import { RecordingService } from "../../services/recording";
+import { setActiveRecordingService } from "../../index";
 import { ensureBrowserUtils } from "../../utils/injection";
 import {
   googleParticipantSelectors,
@@ -15,16 +17,61 @@ import {
 
 // Modified to use new services - Google Meet recording functionality
 export async function startGoogleRecording(page: Page, botConfig: BotConfig): Promise<void> {
-  // Initialize WhisperLive service on Node.js side
-  const whisperLiveService = new WhisperLiveService({
-    whisperLiveUrl: process.env.WHISPER_LIVE_URL
-  });
-
-  // Initialize WhisperLive connection with STUBBORN reconnection - NEVER GIVES UP!
-  const whisperLiveUrl = await whisperLiveService.initializeWithStubbornReconnection("Google Meet");
-
-  log(`[Node.js] Using WhisperLive URL for Google Meet: ${whisperLiveUrl}`);
+  const transcriptionEnabled = botConfig.transcribeEnabled !== false;
+  let whisperLiveService: WhisperLiveService | null = null;
+  let whisperLiveUrl: string | null = null;
+  if (transcriptionEnabled) {
+    whisperLiveService = new WhisperLiveService({
+      whisperLiveUrl: process.env.WHISPER_LIVE_URL
+    });
+    // Initialize WhisperLive connection with STUBBORN reconnection - NEVER GIVES UP!
+    whisperLiveUrl = await whisperLiveService.initializeWithStubbornReconnection("Google Meet");
+    log(`[Node.js] Using WhisperLive URL for Google Meet: ${whisperLiveUrl}`);
+  } else {
+    log("[Google Recording] Transcription disabled by config; running recording-only mode.");
+  }
   log("Starting Google Meet recording with WebSocket connection");
+
+  const wantsAudioCapture =
+    !!botConfig.recordingEnabled &&
+    (!Array.isArray(botConfig.captureModes) || botConfig.captureModes.includes("audio"));
+  const sessionUid = botConfig.connectionId || `gm-${Date.now()}`;
+  let recordingService: RecordingService | null = null;
+
+  if (wantsAudioCapture) {
+    recordingService = new RecordingService(botConfig.meeting_id, sessionUid);
+    setActiveRecordingService(recordingService);
+
+    await page.exposeFunction("__vexaSaveRecordingBlob", async (payload: { base64: string; mimeType?: string }) => {
+      try {
+        if (!recordingService) {
+          log("[Google Recording] Recording service not initialized; dropping blob.");
+          return false;
+        }
+
+        const mimeType = (payload?.mimeType || "").toLowerCase();
+        let format = "webm";
+        if (mimeType.includes("wav")) format = "wav";
+        else if (mimeType.includes("ogg")) format = "ogg";
+        else if (mimeType.includes("mp4") || mimeType.includes("m4a")) format = "m4a";
+
+        const blobBuffer = Buffer.from(payload.base64 || "", "base64");
+        if (!blobBuffer.length) {
+          log("[Google Recording] Received empty audio blob.");
+          return false;
+        }
+
+        await recordingService.writeBlob(blobBuffer, format);
+        log(`[Google Recording] Saved browser audio blob (${blobBuffer.length} bytes, ${format}).`);
+        return true;
+      } catch (error: any) {
+        log(`[Google Recording] Failed to persist browser blob: ${error?.message || String(error)}`);
+        return false;
+      }
+    });
+  } else {
+    log("[Google Recording] Audio capture disabled by config.");
+  }
 
   await ensureBrowserUtils(page, require('path').join(__dirname, '../../browser-utils.global.js'));
 
@@ -32,7 +79,7 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
   await page.evaluate(
     async (pageArgs: {
       botConfigData: BotConfig;
-      whisperUrlForBrowser: string;
+      whisperUrlForBrowser: string | null;
       selectors: {
         participantSelectors: string[];
         speakingClasses: string[];
@@ -44,6 +91,7 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
       };
     }) => {
       const { botConfigData, whisperUrlForBrowser, selectors } = pageArgs;
+      const transcriptionEnabled = (botConfigData as any)?.transcribeEnabled !== false;
 
       // Use browser utility classes from the global bundle
       const browserUtils = (window as any).VexaBrowserUtils;
@@ -78,19 +126,131 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
       });
 
       // Use BrowserWhisperLiveService with stubborn mode to enable reconnection on Google Meet
-      const whisperLiveService = new browserUtils.BrowserWhisperLiveService({
-        whisperLiveUrl: whisperUrlForBrowser
-      }, true); // Enable stubborn mode for Google Meet
+      const whisperLiveService = transcriptionEnabled
+        ? new browserUtils.BrowserWhisperLiveService({
+            whisperLiveUrl: whisperUrlForBrowser as string
+          }, true) // Enable stubborn mode for Google Meet
+        : null;
 
       // Expose references for reconfiguration
       (window as any).__vexaWhisperLiveService = whisperLiveService;
       (window as any).__vexaAudioService = audioService;
       (window as any).__vexaBotConfig = botConfigData;
+      (window as any).__vexaMediaRecorder = null;
+      (window as any).__vexaRecordedChunks = [];
+      (window as any).__vexaRecordingFlushed = false;
+
+      const isAudioRecordingEnabled =
+        !!(botConfigData as any)?.recordingEnabled &&
+        (!Array.isArray((botConfigData as any)?.captureModes) ||
+          (botConfigData as any)?.captureModes.includes("audio"));
+
+      const getSupportedMediaRecorderMimeType = (): string => {
+        const candidates = [
+          "audio/webm;codecs=opus",
+          "audio/webm",
+          "audio/ogg;codecs=opus",
+          "audio/ogg",
+        ];
+        for (const mime of candidates) {
+          try {
+            if ((window as any).MediaRecorder?.isTypeSupported?.(mime)) {
+              return mime;
+            }
+          } catch {}
+        }
+        return "";
+      };
+
+      const flushBrowserRecordingBlob = async (reason: string): Promise<void> => {
+        if (!isAudioRecordingEnabled) return;
+        if ((window as any).__vexaRecordingFlushed) return;
+
+        try {
+          const recorder: MediaRecorder | null = (window as any).__vexaMediaRecorder;
+          const chunks: Blob[] = (window as any).__vexaRecordedChunks || [];
+
+          const finalizeAndSend = async () => {
+            if ((window as any).__vexaRecordingFlushed) return;
+            (window as any).__vexaRecordingFlushed = true;
+
+            try {
+              const recorded = (window as any).__vexaRecordedChunks || [];
+              if (!recorded.length) {
+                (window as any).logBot?.(`[Google Recording] No media chunks to flush (${reason}).`);
+                return;
+              }
+
+              const mimeType =
+                (window as any).__vexaMediaRecorder?.mimeType || "audio/webm";
+              const blob = new Blob(recorded, { type: mimeType });
+              const buffer = await blob.arrayBuffer();
+              const bytes = new Uint8Array(buffer);
+              let binary = "";
+              const chunkSize = 0x8000;
+              for (let i = 0; i < bytes.length; i += chunkSize) {
+                binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+              }
+              const base64 = btoa(binary);
+
+              if (typeof (window as any).__vexaSaveRecordingBlob === "function") {
+                await (window as any).__vexaSaveRecordingBlob({
+                  base64,
+                  mimeType: blob.type || mimeType,
+                });
+                (window as any).logBot?.(
+                  `[Google Recording] Flushed ${bytes.length} bytes (${blob.type || mimeType}) on ${reason}.`
+                );
+              } else {
+                (window as any).logBot?.("[Google Recording] Node blob sink is not available.");
+              }
+            } catch (err: any) {
+              (window as any).logBot?.(
+                `[Google Recording] Failed to flush blob: ${err?.message || err}`
+              );
+            } finally {
+              (window as any).__vexaRecordedChunks = [];
+            }
+          };
+
+          if (recorder && recorder.state !== "inactive") {
+            await new Promise<void>((resolveStop) => {
+              const onStop = async () => {
+                recorder.removeEventListener("stop", onStop as any);
+                await finalizeAndSend();
+                resolveStop();
+              };
+              recorder.addEventListener("stop", onStop as any, { once: true });
+              try {
+                recorder.stop();
+              } catch {
+                // Recorder may already be stopping; resolve after a short delay.
+                setTimeout(async () => {
+                  await finalizeAndSend();
+                  resolveStop();
+                }, 200);
+              }
+            });
+          } else if (chunks.length > 0) {
+            await finalizeAndSend();
+          }
+        } catch (err: any) {
+          (window as any).logBot?.(
+            `[Google Recording] Unexpected flush error: ${err?.message || err}`
+          );
+        }
+      };
+
+      (window as any).__vexaFlushRecordingBlob = flushBrowserRecordingBlob;
 
       // Replace stub with real reconfigure implementation and apply any queued update
       (window as any).triggerWebSocketReconfigure = async (lang: string | null, task: string | null) => {
         try {
           const svc = (window as any).__vexaWhisperLiveService;
+          if (!transcriptionEnabled) {
+            (window as any).logBot?.('[Reconfigure] Ignored because transcription is disabled.');
+            return;
+          }
           const cfg = (window as any).__vexaBotConfig || {};
           cfg.language = lang;
           cfg.task = task || 'transcribe';
@@ -144,6 +304,7 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
           
           // Wait a bit for media elements to initialize after admission, then start the chain
           (async () => {
+            let degradedNoMedia = false;
             // Wait 2 seconds for media elements to initialize after admission
             (window as any).logBot("Waiting 2 seconds for media elements to initialize after admission...");
             await new Promise(resolve => setTimeout(resolve, 2000));
@@ -152,26 +313,65 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
             // Use 10 retries with 3s delay = 30s total wait time
             audioService.findMediaElements(10, 3000).then(async (mediaElements: HTMLMediaElement[]) => {
             if (mediaElements.length === 0) {
-              reject(
-                new Error(
-                  "[Google Meet BOT Error] No active media elements found after multiple retries. Ensure the Google Meet meeting media is playing."
-                )
+              degradedNoMedia = true;
+              (window as any).logBot(
+                "[Google Meet BOT Warning] No active media elements found after retries; " +
+                "continuing in degraded monitoring mode (session remains active)."
               );
-              return;
+              return undefined;
             }
 
             // Create combined audio stream
             return await audioService.createCombinedAudioStream(mediaElements);
           }).then(async (combinedStream: MediaStream | undefined) => {
             if (!combinedStream) {
-              reject(new Error("[Google Meet BOT Error] Failed to create combined audio stream"));
-              return;
+              if (!degradedNoMedia) {
+                reject(new Error("[Google Meet BOT Error] Failed to create combined audio stream"));
+                return;
+              }
+              return null;
             }
+
+            if (isAudioRecordingEnabled) {
+              try {
+                const mimeType = getSupportedMediaRecorderMimeType();
+                const recorderOptions = mimeType ? ({ mimeType } as MediaRecorderOptions) : undefined;
+                const recorder = recorderOptions
+                  ? new MediaRecorder(combinedStream, recorderOptions)
+                  : new MediaRecorder(combinedStream);
+
+                (window as any).__vexaMediaRecorder = recorder;
+                (window as any).__vexaRecordedChunks = [];
+                (window as any).__vexaRecordingFlushed = false;
+
+                recorder.ondataavailable = (event: BlobEvent) => {
+                  if (event.data && event.data.size > 0) {
+                    (window as any).__vexaRecordedChunks.push(event.data);
+                  }
+                };
+
+                recorder.start(1000);
+                (window as any).logBot?.(
+                  `[Google Recording] MediaRecorder started (${recorder.mimeType || mimeType || "default"}).`
+                );
+              } catch (err: any) {
+                (window as any).logBot?.(
+                  `[Google Recording] Failed to start MediaRecorder: ${err?.message || err}`
+                );
+              }
+            }
+
             // Initialize audio processor
             return await audioService.initializeAudioProcessor(combinedStream);
           }).then(async (processor: any) => {
+            if (!processor) {
+              return null;
+            }
             // Setup audio data processing
             audioService.setupAudioDataProcessor(async (audioData: Float32Array, sessionStartTime: number | null) => {
+              if (!transcriptionEnabled || !whisperLiveService) {
+                return;
+              }
               // Only send after server ready (canonical Teams pattern)
               if (!whisperLiveService.isReady()) {
                 // Skip sending until server is ready
@@ -198,6 +398,9 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
 
             // Initialize WhisperLive WebSocket connection with simple reconnection wrapper
             const connectWhisper = async () => {
+              if (!transcriptionEnabled || !whisperLiveService) {
+                return;
+              }
               try {
                 // Define callbacks so they can be reused for reconfiguration reconnects
                 const onMessage = (data: any) => {
@@ -276,25 +479,14 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
             return await connectWhisper();
           }).then(() => {
             // Initialize Google-specific speaker detection (Teams-style with Google selectors)
-            (window as any).logBot("Initializing Google Meet speaker detection...");
+            if (!degradedNoMedia) {
+              (window as any).logBot("Initializing Google Meet speaker detection...");
+            }
 
             const initializeGoogleSpeakerDetection = (whisperLiveService: any, audioService: any, botConfigData: any) => {
               const selectorsTyped = selectors as any;
 
               const speakingStates = new Map<string, string>();
-              // #region agent log
-              // Debug: log selector configuration (no PII)
-              try {
-                (window as any).logBot?.(
-                  `[Diag] SpeakerDetect selectors: participantSelectors=${JSON.stringify((selectorsTyped.participantSelectors||[]).slice(0,10))} ` +
-                  `nameSelectors=${JSON.stringify((selectorsTyped.nameSelectors||[]).slice(0,10))} ` +
-                  `speakingIndicators=${JSON.stringify((selectorsTyped.speakingIndicators||[]).slice(0,10))} ` +
-                  `speakingClasses=${JSON.stringify((selectorsTyped.speakingClasses||[]).slice(0,10))} ` +
-                  `silenceClasses=${JSON.stringify((selectorsTyped.silenceClasses||[]).slice(0,10))}`
-                );
-              } catch {}
-              // #endregion
-
               function hashStr(s: string): string {
                 // small non-crypto hash to avoid logging PII
                 let h = 5381;
@@ -459,22 +651,6 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
 
               function scanForAllGoogleParticipants() {
                 const participantSelectors: string[] = selectorsTyped.participantSelectors || [];
-                // #region agent log
-                // Debug: show how many participant elements we see (hashes only)
-                try {
-                  const all: HTMLElement[] = [];
-                  for (const sel of participantSelectors) {
-                    document.querySelectorAll(sel).forEach((el) => all.push(el as HTMLElement));
-                  }
-                  const ids = all.map((el) => getGoogleParticipantId(el));
-                  const uniqueIds = Array.from(new Set(ids));
-                  (window as any).logBot?.(
-                    `[Diag] scanForAllGoogleParticipants: selectors=${participantSelectors.length} ` +
-                    `elements=${all.length} uniqueIds=${uniqueIds.length} ` +
-                    `sampleIdHashes=${uniqueIds.slice(0,5).map((id)=>hashStr(String(id))).join(',')}`
-                  );
-                } catch {}
-                // #endregion
                 for (const sel of participantSelectors) {
                   document.querySelectorAll(sel).forEach((el) => {
                     const elh = el as HTMLElement;
@@ -505,19 +681,6 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                 participantSelectors.forEach(sel => {
                   document.querySelectorAll(sel).forEach(el => elements.push(el as HTMLElement));
                 });
-                // #region agent log
-                // Debug: if we never see >1 unique participant IDs, speaker switching cannot work.
-                try {
-                  const ids = elements.map((el) => getGoogleParticipantId(el));
-                  const uniqueIds = Array.from(new Set(ids));
-                  if (uniqueIds.length <= 1) {
-                    (window as any).logBot?.(
-                      `[Diag] poll: uniqueParticipantIds=${uniqueIds.length} elements=${elements.length} ` +
-                      `onlyIdHash=${uniqueIds[0] ? hashStr(String(uniqueIds[0])) : 'none'}`
-                    );
-                  }
-                } catch {}
-                // #endregion
                 elements.forEach((container) => {
                   const id = getGoogleParticipantId(container);
                   const indicatorSpeaking = hasSpeakingIndicator(container) || inferSpeakingFromClasses(container).speaking;
@@ -539,7 +702,9 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
               }, 500);
             };
 
-            initializeGoogleSpeakerDetection(whisperLiveService, audioService, botConfigData);
+            if (!degradedNoMedia && transcriptionEnabled && whisperLiveService) {
+              initializeGoogleSpeakerDetection(whisperLiveService, audioService, botConfigData);
+            }
 
             // Simple single-strategy participant extraction from main video area
             (window as any).logBot("Initializing simplified participant counting (main frame text scan)...");
@@ -592,6 +757,30 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
               let lastParticipantCount = 0;
               let speakersIdentified = false;
               let hasEverHadMultipleParticipants = false;
+              let monitoringStopped = false;
+
+              const stopWithFlush = async (
+                reason: string,
+                finish: () => void
+              ) => {
+                if (monitoringStopped) return;
+                monitoringStopped = true;
+                clearInterval(checkInterval);
+                try {
+                  if (typeof (window as any).__vexaFlushRecordingBlob === "function") {
+                    await (window as any).__vexaFlushRecordingBlob(reason);
+                  }
+                } catch (flushErr: any) {
+                  (window as any).logBot?.(
+                    `[Google Recording] Flush error during shutdown (${reason}): ${flushErr?.message || flushErr}`
+                  );
+                }
+                audioService.disconnect();
+                if (whisperLiveService) {
+                  whisperLiveService.close();
+                }
+                finish();
+              };
 
               const checkInterval = setInterval(() => {
                 // Check participant count using the comprehensive helper
@@ -619,16 +808,14 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                   if (aloneTime >= currentTimeout) {
                     if (speakersIdentified) {
                       (window as any).logBot(`Google Meet meeting ended or bot has been alone for ${everyoneLeftTimeoutSeconds} seconds after speakers were identified. Stopping recorder...`);
-                      clearInterval(checkInterval);
-                      audioService.disconnect();
-                      whisperLiveService.close();
-                      reject(new Error("GOOGLE_MEET_BOT_LEFT_ALONE_TIMEOUT"));
+                      void stopWithFlush("left_alone_timeout", () =>
+                        reject(new Error("GOOGLE_MEET_BOT_LEFT_ALONE_TIMEOUT"))
+                      );
                     } else {
                       (window as any).logBot(`Google Meet bot has been alone for ${startupAloneTimeoutSeconds/60} minutes during startup with no other participants. Stopping recorder...`);
-                      clearInterval(checkInterval);
-                      audioService.disconnect();
-                      whisperLiveService.close();
-                      reject(new Error("GOOGLE_MEET_BOT_STARTUP_ALONE_TIMEOUT"));
+                      void stopWithFlush("startup_alone_timeout", () =>
+                        reject(new Error("GOOGLE_MEET_BOT_STARTUP_ALONE_TIMEOUT"))
+                      );
                     }
                   } else if (aloneTime > 0 && aloneTime % 10 === 0) { // Log every 10 seconds to avoid spam
                     if (speakersIdentified) {
@@ -651,19 +838,13 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
               // Listen for page unload
               window.addEventListener("beforeunload", () => {
                 (window as any).logBot("Page is unloading. Stopping recorder...");
-                clearInterval(checkInterval);
-                audioService.disconnect();
-                whisperLiveService.close();
-                resolve();
+                void stopWithFlush("beforeunload", () => resolve());
               });
 
               document.addEventListener("visibilitychange", () => {
                 if (document.visibilityState === "hidden") {
                   (window as any).logBot("Document is hidden. Stopping recorder...");
-                  clearInterval(checkInterval);
-                  audioService.disconnect();
-                  whisperLiveService.close();
-                  resolve();
+                  void stopWithFlush("visibility_hidden", () => resolve());
                 }
               });
             };
@@ -720,5 +901,7 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
   );
   
   // After page.evaluate finishes, cleanup services
-  await whisperLiveService.cleanup();
+  if (whisperLiveService) {
+    await whisperLiveService.cleanup();
+  }
 }

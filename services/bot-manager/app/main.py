@@ -1,5 +1,5 @@
 import uvicorn
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, UploadFile, File, Form, Query, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import logging
@@ -27,17 +27,36 @@ from app.orchestrators import (
 # Note: get_running_bots_status and verify_container_running are abstracted
 # and work for both Docker containers and process orchestrator (Lite setup)
 from shared_models.database import init_db, get_db, async_session_local
-from shared_models.models import User, Meeting, MeetingSession, Transcription # <--- ADD MeetingSession and Transcription import
+from shared_models.models import User, Meeting, MeetingSession, Transcription, Recording, MediaFile
 from shared_models.schemas import (
     MeetingCreate, MeetingResponse, Platform, BotStatusResponse, MeetingConfigUpdate,
     MeetingStatus, MeetingCompletionReason, MeetingFailureStage,
-    is_valid_status_transition, get_status_source
-) # Import new schemas, Platform, and status enums
+    is_valid_status_transition, get_status_source,
+    RecordingResponse, RecordingListResponse, RecordingStatus, RecordingSource,
+    MediaFileType, MediaFileResponse,
+)
+from shared_models.storage import create_storage_client
 from app.auth import get_user_and_token # MODIFIED
+from app.zoom_obf import (
+    ZoomOBFError,
+    get_zoom_oauth_client_credentials,
+    get_zoom_refresh_token,
+    mint_zoom_obf_token,
+    refresh_zoom_access_token,
+    resolve_zoom_access_token_from_user_data,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import and_, desc, func
+from sqlalchemy.orm import attributes
 from datetime import datetime # For start_time
+
+# Delayed stop timeout for fallback container shutdown after stop command.
+# Keep this above typical recording upload time to avoid interrupting uploads.
+try:
+    BOT_STOP_DELAY_SECONDS = max(0, int(os.getenv("BOT_STOP_DELAY_SECONDS", "90")))
+except ValueError:
+    BOT_STOP_DELAY_SECONDS = 90
 
 # --- Status Transition Helper ---
 
@@ -249,6 +268,43 @@ async def schedule_status_webhook_task(
     )
     logger.info(f"Scheduled status webhook task for meeting {meeting.id} status change: {old_status} -> {new_status}")
 
+
+async def send_event_webhook(user_id: int, event_type: str, payload: dict):
+    """
+    Fire-and-forget webhook for recording/transcription events.
+    Looks up user's webhook_url and POSTs the event payload.
+    """
+    from shared_models.webhook_url import validate_webhook_url
+
+    try:
+        async with async_session_local() as db:
+            user = await db.get(User, user_id)
+            if not user or not user.data or not isinstance(user.data, dict):
+                return
+            webhook_url = user.data.get('webhook_url')
+            if not webhook_url:
+                return
+            try:
+                validate_webhook_url(webhook_url)
+            except ValueError:
+                return
+
+            headers = {'Content-Type': 'application/json'}
+            secret = user.data.get('webhook_secret')
+            if secret and isinstance(secret, str) and secret.strip():
+                headers['Authorization'] = f'Bearer {secret.strip()}'
+
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            await client.post(
+                webhook_url,
+                json={'event_type': event_type, **payload},
+                timeout=30.0,
+                headers=headers,
+            )
+    except Exception as e:
+        logging.getLogger("bot_manager").warning(f"Event webhook ({event_type}) failed for user {user_id}: {e}")
+
+
 # Configure logging
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
@@ -271,6 +327,83 @@ app.add_middleware(
 # --- ADD Redis Client Global ---
 redis_client: Optional[aioredis.Redis] = None
 # --------------------------------
+
+# --- Storage Client (lazy init) ---
+_storage_client = None
+
+def get_storage_client():
+    global _storage_client
+    if _storage_client is None:
+        _storage_client = create_storage_client()
+    return _storage_client
+
+
+def get_recording_metadata_mode() -> str:
+    return os.getenv("RECORDING_METADATA_MODE", "meeting_data").strip().lower()
+
+
+def _new_recording_numeric_id() -> int:
+    return int(uuid_lib.uuid4().int % 900000000000 + 100000000000)
+
+
+def _to_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return default
+
+
+def _normalize_meeting_recording(recording: Dict[str, Any], meeting_id: int) -> Dict[str, Any]:
+    rec = dict(recording or {})
+    rec["meeting_id"] = rec.get("meeting_id") or meeting_id
+    rec["source"] = rec.get("source") or RecordingSource.BOT.value
+    rec["status"] = rec.get("status") or RecordingStatus.COMPLETED.value
+    rec["media_files"] = rec.get("media_files") or []
+    return rec
+
+
+async def _list_meeting_data_recordings(
+    db: AsyncSession,
+    user_id: int,
+    meeting_id: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    stmt = select(Meeting).where(Meeting.user_id == user_id)
+    if meeting_id is not None:
+        stmt = stmt.where(Meeting.id == meeting_id)
+    result = await db.execute(stmt)
+    meetings = result.scalars().all()
+    recordings: List[Dict[str, Any]] = []
+    for meeting in meetings:
+        if not isinstance(meeting.data, dict):
+            continue
+        for rec in (meeting.data.get("recordings") or []):
+            if isinstance(rec, dict):
+                recordings.append(_normalize_meeting_recording(rec, meeting.id))
+    recordings.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+    return recordings
+
+
+async def _find_meeting_data_recording(
+    db: AsyncSession,
+    user_id: int,
+    recording_id: int,
+) -> tuple[Optional[Meeting], Optional[Dict[str, Any]]]:
+    stmt = select(Meeting).where(Meeting.user_id == user_id)
+    result = await db.execute(stmt)
+    meetings = result.scalars().all()
+    for meeting in meetings:
+        if not isinstance(meeting.data, dict):
+            continue
+        for rec in (meeting.data.get("recordings") or []):
+            if isinstance(rec, dict) and int(rec.get("id", -1)) == recording_id:
+                return meeting, _normalize_meeting_recording(rec, meeting.id)
+    return None, None
+# ----------------------------------
 
 class BotExitCallbackPayload(BaseModel):
     connection_id: str = Field(..., description="The connectionId (session_uid) of the exiting bot.")
@@ -349,7 +482,7 @@ async def shutdown_event():
     logger.info("Docker Client closed.")
 
 # --- ADDED: Delayed Stop Task ---
-async def _delayed_container_stop(container_id: str, meeting_id: int, delay_seconds: int = 30):
+async def _delayed_container_stop(container_id: str, meeting_id: int, delay_seconds: int = BOT_STOP_DELAY_SECONDS):
     """
     Waits for a delay, then attempts to stop the container synchronously in a thread.
     After stopping, checks if meeting is still ACTIVE and finalizes it if needed.
@@ -595,9 +728,61 @@ async def request_bot(
         )
 
     # 4. Start the bot container
+    zoom_obf_token_to_use: Optional[str] = None
     container_id = None
     connection_id = None
     try:
+        if req.platform.value == Platform.ZOOM.value:
+            direct_obf = (req.zoom_obf_token or "").strip()
+            if direct_obf:
+                zoom_obf_token_to_use = direct_obf
+                logger.info(f"Using direct zoom_obf_token for meeting {meeting_id}")
+            else:
+                try:
+                    access_token = resolve_zoom_access_token_from_user_data(current_user.data)
+
+                    # Refresh if absent/expired when a refresh token exists.
+                    if not access_token:
+                        refresh_token = get_zoom_refresh_token(current_user.data)
+                        if refresh_token:
+                            client_id, client_secret = get_zoom_oauth_client_credentials()
+                            refreshed = await refresh_zoom_access_token(refresh_token, client_id, client_secret)
+                            access_token = refreshed["access_token"]
+
+                            # Persist refreshed tokens into users.data
+                            user_data = dict(current_user.data) if isinstance(current_user.data, dict) else {}
+                            zoom_data = dict(user_data.get("zoom") or {})
+                            oauth_data = dict(zoom_data.get("oauth") or {})
+                            oauth_data.update({
+                                "access_token": refreshed["access_token"],
+                                "refresh_token": refreshed["refresh_token"],
+                                "expires_at": refreshed["expires_at"],
+                            })
+                            if refreshed.get("scope") is not None:
+                                oauth_data["scope"] = refreshed["scope"]
+                            zoom_data["oauth"] = oauth_data
+                            user_data["zoom"] = zoom_data
+                            current_user.data = user_data
+                            await db.commit()
+                            await db.refresh(current_user)
+                        else:
+                            logger.warning(
+                                f"Zoom OAuth is not connected for user {current_user.id}; "
+                                f"starting meeting {meeting_id} without OBF token."
+                            )
+
+                    if access_token:
+                        zoom_obf_token_to_use = await mint_zoom_obf_token(access_token, native_meeting_id)
+                        logger.info(f"Minted Zoom OBF token for meeting {meeting_id}")
+                    else:
+                        logger.info(f"No Zoom access token available for meeting {meeting_id}; continuing without OBF token.")
+
+                except ZoomOBFError as zoom_err:
+                    logger.warning(
+                        f"Zoom OBF flow failed for meeting {meeting_id} ({zoom_err.code}): {zoom_err}. "
+                        "Continuing without OBF token."
+                    )
+
         logger.info(f"Attempting to start bot container for meeting {meeting_id} (native: {native_meeting_id})...")
         container_id, connection_id = await start_bot_container(
             user_id=current_user.id,
@@ -608,7 +793,13 @@ async def request_bot(
             user_token=user_token,
             native_meeting_id=native_meeting_id,
             language=req.language,
-            task=req.task
+            task=req.task,
+            transcription_tier=req.transcription_tier,
+            recording_enabled=req.recording_enabled,
+            transcribe_enabled=req.transcribe_enabled,
+            zoom_obf_token=zoom_obf_token_to_use,
+            voice_agent_enabled=req.voice_agent_enabled,
+            default_avatar_url=req.default_avatar_url
         )
         container_start_time = datetime.utcnow()
         logger.info(f"Call to start_bot_container completed. Container ID: {container_id}, Connection ID: {connection_id}")
@@ -882,7 +1073,7 @@ async def stop_bot(
         # 4. Schedule delayed container stop task
         logger.info(f"Scheduling delayed stop task for container {meeting.bot_container_id} (meeting {meeting.id}).")
         # Pass container_id, meeting_id, and delay
-        background_tasks.add_task(_delayed_container_stop, meeting.bot_container_id, meeting.id, 30) 
+        background_tasks.add_task(_delayed_container_stop, meeting.bot_container_id, meeting.id, BOT_STOP_DELAY_SECONDS) 
 
         # 5. Update Meeting status to STOPPING immediately (source of truth)
         # This allows users to immediately request a new bot after stopping
@@ -1501,6 +1692,646 @@ async def bot_status_change_callback(
             detail="An internal error occurred while processing the bot status change callback."
         )
 
+# --- RECORDING ENDPOINTS ---
+
+@app.post("/internal/recordings/upload",
+          status_code=status.HTTP_201_CREATED,
+          summary="Internal: Bot uploads a finalized recording",
+          include_in_schema=False)
+async def internal_upload_recording(
+    file: UploadFile = File(...),
+    metadata: Optional[str] = Form(default=None),
+    session_uid: Optional[str] = Form(default=None),
+    media_type: str = Form(default="audio"),
+    media_format: str = Form(default="wav"),
+    duration_seconds: Optional[float] = Form(default=None),
+    sample_rate: Optional[int] = Form(default=None),
+    is_final: bool = Form(default=True),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Internal endpoint called by bots to upload finalized recordings.
+    Creates a Recording + MediaFile row and stores the file in object storage.
+    """
+    # Support both payload styles:
+    # 1) Flat multipart fields (session_uid, media_format, etc.)
+    # 2) metadata JSON field produced by RecordingService.upload()
+    if metadata:
+        try:
+            metadata_obj = json.loads(metadata)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=422, detail="Invalid JSON in metadata form field")
+
+        session_uid = session_uid or metadata_obj.get("session_uid")
+        media_type = metadata_obj.get("media_type", media_type)
+        media_format = metadata_obj.get("format", media_format)
+        duration_seconds = metadata_obj.get("duration_seconds", duration_seconds)
+        sample_rate = metadata_obj.get("sample_rate", sample_rate)
+        if "is_final" in metadata_obj:
+            is_final = _to_bool(metadata_obj.get("is_final"), default=True)
+
+    if not session_uid:
+        raise HTTPException(status_code=422, detail="session_uid is required")
+
+    logger.info(f"Recording upload received: session_uid={session_uid}, type={media_type}, format={media_format}")
+
+    # Find meeting session to resolve meeting_id and user_id
+    session_stmt = select(MeetingSession).where(MeetingSession.session_uid == session_uid)
+    session_result = await db.execute(session_stmt)
+    meeting_session = session_result.scalars().first()
+
+    if not meeting_session:
+        if not is_final:
+            return {
+                "status": "pending",
+                "detail": f"Meeting session not ready yet: {session_uid}",
+            }
+        raise HTTPException(status_code=404, detail=f"Meeting session not found: {session_uid}")
+
+    meeting = await db.get(Meeting, meeting_session.meeting_id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail=f"Meeting not found for session: {session_uid}")
+
+    user_id = meeting.user_id
+
+    # Read file content
+    file_data = await file.read()
+    file_size = len(file_data)
+    logger.info(f"Read {file_size} bytes from uploaded file for session {session_uid}")
+
+    use_meeting_data_mode = get_recording_metadata_mode() == "meeting_data"
+    meeting_data = dict(meeting.data or {}) if use_meeting_data_mode else {}
+    recordings = list(meeting_data.get("recordings") or []) if use_meeting_data_mode else []
+    existing_recording_payload = None
+    existing_recording_index = None
+    legacy_recording_id = _new_recording_numeric_id() if use_meeting_data_mode else None
+    if use_meeting_data_mode:
+        for idx, rec in enumerate(recordings):
+            if (
+                isinstance(rec, dict)
+                and rec.get("session_uid") == session_uid
+                and rec.get("source") == RecordingSource.BOT.value
+            ):
+                existing_recording_payload = rec
+                existing_recording_index = idx
+                legacy_recording_id = rec.get("id") or legacy_recording_id
+                break
+    recording = None
+    if not use_meeting_data_mode:
+        recording = Recording(
+            meeting_id=meeting.id,
+            user_id=user_id,
+            session_uid=session_uid,
+            source="bot",
+            status="uploading",
+        )
+        db.add(recording)
+        await db.flush()  # get recording.id
+    storage_recording_id = legacy_recording_id if use_meeting_data_mode else recording.id
+
+    # Upload to object storage
+    storage_path = f"recordings/{user_id}/{storage_recording_id}/{session_uid}.{media_format}"
+    content_type_map = {
+        "wav": "audio/wav",
+        "webm": "video/webm",
+        "opus": "audio/opus",
+        "mp3": "audio/mpeg",
+        "jpg": "image/jpeg",
+        "png": "image/png",
+    }
+    content_type = content_type_map.get(media_format, "application/octet-stream")
+
+    try:
+        storage = get_storage_client()
+        storage.upload_file(storage_path, file_data, content_type=content_type)
+    except Exception as e:
+        logger.error(f"Storage upload failed for session {session_uid}: {e}", exc_info=True)
+        if recording is not None:
+            recording.status = "failed"
+            recording.error_message = str(e)
+            await db.commit()
+        raise HTTPException(status_code=500, detail="Failed to upload recording to storage")
+
+    if get_recording_metadata_mode() == "meeting_data":
+        existing_media = (
+            existing_recording_payload.get("media_files", [{}])[0]
+            if existing_recording_payload else {}
+        )
+        media_file_id = existing_media.get("id") or _new_recording_numeric_id()
+        created_at = (
+            existing_recording_payload.get("created_at")
+            if existing_recording_payload else datetime.utcnow().isoformat()
+        )
+        recording_payload = {
+            "id": legacy_recording_id,
+            "meeting_id": meeting.id,
+            "user_id": user_id,
+            "session_uid": session_uid,
+            "source": RecordingSource.BOT.value,
+            "status": RecordingStatus.COMPLETED.value if is_final else RecordingStatus.IN_PROGRESS.value,
+            "created_at": created_at,
+            "completed_at": datetime.utcnow().isoformat() if is_final else None,
+            "media_files": [
+                {
+                    "id": media_file_id,
+                    "type": media_type,
+                    "format": media_format,
+                    "storage_path": storage_path,
+                    "storage_backend": os.environ.get("STORAGE_BACKEND", "minio"),
+                    "file_size_bytes": file_size,
+                    "duration_seconds": duration_seconds,
+                    "metadata": {"sample_rate": sample_rate} if sample_rate else {},
+                    "created_at": datetime.utcnow().isoformat(),
+                }
+            ],
+        }
+        if existing_recording_index is None:
+            recordings.append(recording_payload)
+        else:
+            recordings[existing_recording_index] = recording_payload
+        meeting_data["recordings"] = recordings
+        meeting.data = meeting_data
+        attributes.flag_modified(meeting, "data")
+        await db.commit()
+        if is_final:
+            asyncio.create_task(send_event_webhook(user_id, "recording.completed", {"recording": recording_payload}))
+        return {
+            "recording_id": recording_payload["id"],
+            "media_file_id": media_file_id,
+            "storage_path": storage_path,
+            "status": recording_payload["status"],
+        }
+
+    # Build metadata dict
+    file_metadata = {}
+    if sample_rate:
+        file_metadata["sample_rate"] = sample_rate
+
+    # Create MediaFile row
+    media_file = MediaFile(
+        recording_id=recording.id,
+        type=media_type,
+        format=media_format,
+        storage_path=storage_path,
+        storage_backend=os.environ.get("STORAGE_BACKEND", "minio"),
+        file_size_bytes=file_size,
+        duration_seconds=duration_seconds,
+        extra_metadata=file_metadata if file_metadata else {},
+    )
+    db.add(media_file)
+
+    # Mark recording as completed
+    recording.status = "completed"
+    recording.completed_at = datetime.utcnow()
+
+    await db.commit()
+    await db.refresh(recording)
+    await db.refresh(media_file)
+
+    logger.info(f"Recording {recording.id} created with media file {media_file.id} for session {session_uid}")
+
+    # Fire webhook for recording completion
+    asyncio.create_task(send_event_webhook(user_id, "recording.completed", {
+        "recording": {
+            "id": recording.id,
+            "meeting_id": recording.meeting_id,
+            "session_uid": session_uid,
+            "status": recording.status,
+            "media_file_id": media_file.id,
+            "file_size_bytes": file_size,
+            "media_type": media_type,
+            "media_format": media_format,
+        }
+    }))
+
+    return {
+        "recording_id": recording.id,
+        "media_file_id": media_file.id,
+        "storage_path": storage_path,
+        "status": recording.status,
+    }
+
+
+@app.get("/recordings",
+         response_model=RecordingListResponse,
+         summary="List recordings for the authenticated user")
+async def list_recordings(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    meeting_id: Optional[int] = Query(default=None),
+    auth: tuple = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """List recordings owned by the authenticated user, with optional meeting_id filter."""
+    token, user = auth
+    if get_recording_metadata_mode() == "meeting_data":
+        recordings = await _list_meeting_data_recordings(db, user.id, meeting_id=meeting_id)
+        page = recordings[offset:offset + limit]
+        return RecordingListResponse(
+            recordings=[RecordingResponse.model_validate(r) for r in page]
+        )
+
+    stmt = select(Recording).where(Recording.user_id == user.id)
+    if meeting_id is not None:
+        stmt = stmt.where(Recording.meeting_id == meeting_id)
+    stmt = stmt.order_by(desc(Recording.created_at)).offset(offset).limit(limit)
+
+    result = await db.execute(stmt)
+    recordings = result.scalars().all()
+
+    # Eagerly load media files for each recording
+    recording_responses = []
+    for rec in recordings:
+        await db.refresh(rec, ["media_files"])
+        recording_responses.append(RecordingResponse.model_validate(rec))
+
+    return RecordingListResponse(recordings=recording_responses)
+
+
+@app.get("/recordings/{recording_id}",
+         response_model=RecordingResponse,
+         summary="Get a single recording with media file details")
+async def get_recording(
+    recording_id: int,
+    auth: tuple = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get recording details including all media files."""
+    token, user = auth
+    if get_recording_metadata_mode() == "meeting_data":
+        _meeting, rec = await _find_meeting_data_recording(db, user.id, recording_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="Recording not found")
+        return RecordingResponse.model_validate(rec)
+
+    recording = await db.get(Recording, recording_id)
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    if recording.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    await db.refresh(recording, ["media_files"])
+    return RecordingResponse.model_validate(recording)
+
+
+@app.get("/recordings/{recording_id}/media/{media_file_id}/download",
+         summary="Get a presigned download URL for a media file")
+async def download_media_file(
+    recording_id: int,
+    media_file_id: int,
+    auth: tuple = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate a presigned URL to download a specific media file."""
+    token, user = auth
+    if get_recording_metadata_mode() == "meeting_data":
+        _meeting, rec = await _find_meeting_data_recording(db, user.id, recording_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="Recording not found")
+        media_file = None
+        for mf in rec.get("media_files") or []:
+            if int(mf.get("id", -1)) == media_file_id:
+                media_file = mf
+                break
+        if media_file is None:
+            raise HTTPException(status_code=404, detail="Media file not found")
+        fmt = str(media_file.get("format", "bin")).lower()
+        media_type = str(media_file.get("type", "audio")).lower()
+        content_type_map = {
+            "wav": "audio/wav",
+            "webm": "video/webm" if media_type == "video" else "audio/webm",
+            "opus": "audio/opus",
+            "mp3": "audio/mpeg",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "png": "image/png",
+        }
+        content_type = content_type_map.get(fmt, "application/octet-stream")
+        try:
+            if media_file.get("storage_backend") == "local":
+                url = f"/recordings/{recording_id}/media/{media_file_id}/raw"
+            else:
+                storage = get_storage_client()
+                url = storage.get_presigned_url(media_file["storage_path"], expires=3600)
+        except Exception as e:
+            logger.error(f"Failed to generate download URL for media file {media_file_id}: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Failed to generate download URL")
+        return {
+            "download_url": url,
+            "filename": f"{recording_id}_{media_type}.{fmt}",
+            "content_type": content_type,
+            "file_size_bytes": media_file.get("file_size_bytes"),
+        }
+
+    recording = await db.get(Recording, recording_id)
+    if not recording or recording.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    # Find the media file
+    stmt = select(MediaFile).where(
+        and_(MediaFile.id == media_file_id, MediaFile.recording_id == recording_id)
+    )
+    result = await db.execute(stmt)
+    media_file = result.scalars().first()
+
+    if not media_file:
+        raise HTTPException(status_code=404, detail="Media file not found")
+
+    content_type_map = {
+        "wav": "audio/wav",
+        "webm": "video/webm" if media_file.type == "video" else "audio/webm",
+        "opus": "audio/opus",
+        "mp3": "audio/mpeg",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+    }
+    content_type = content_type_map.get(media_file.format.lower(), "application/octet-stream")
+
+    try:
+        if media_file.storage_backend == "local":
+            # For local backend, use authenticated API streaming endpoint instead of file:// URLs.
+            url = f"/recordings/{recording_id}/media/{media_file_id}/raw"
+        else:
+            storage = get_storage_client()
+            url = storage.get_presigned_url(media_file.storage_path, expires=3600)
+    except Exception as e:
+        logger.error(f"Failed to generate download URL for media file {media_file_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to generate download URL")
+
+    return {
+        "download_url": url,
+        "filename": f"{media_file.recording_id}_{media_file.type}.{media_file.format}",
+        "content_type": content_type,
+        "file_size_bytes": media_file.file_size_bytes,
+    }
+
+
+@app.get("/recordings/{recording_id}/media/{media_file_id}/raw",
+         summary="Download media file content via API (local storage backend)")
+async def download_media_file_raw(
+    recording_id: int,
+    media_file_id: int,
+    request: Request,
+    auth: tuple = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Stream media bytes via authenticated API.
+    Used primarily for local filesystem backend where presigned URLs are not available.
+    """
+    token, user = auth
+    def _parse_range_header(range_header: Optional[str], total_length: int) -> Optional[tuple[int, int]]:
+        if not range_header:
+            return None
+        if not range_header.startswith("bytes="):
+            raise HTTPException(status_code=416, detail="Invalid Range header")
+        spec = range_header[len("bytes="):].strip()
+        if "," in spec:
+            raise HTTPException(status_code=416, detail="Multiple ranges are not supported")
+        start_s, sep, end_s = spec.partition("-")
+        if sep != "-":
+            raise HTTPException(status_code=416, detail="Invalid Range header")
+        if start_s == "" and end_s == "":
+            raise HTTPException(status_code=416, detail="Invalid Range header")
+        if start_s == "":
+            suffix_len = int(end_s)
+            if suffix_len <= 0:
+                raise HTTPException(status_code=416, detail="Invalid Range header")
+            if suffix_len > total_length:
+                suffix_len = total_length
+            start = total_length - suffix_len
+            end = total_length - 1
+            return start, end
+        start = int(start_s)
+        if start < 0 or start >= total_length:
+            raise HTTPException(status_code=416, detail="Range start out of bounds")
+        if end_s == "":
+            end = total_length - 1
+        else:
+            end = int(end_s)
+            if end < start:
+                raise HTTPException(status_code=416, detail="Invalid Range header")
+            if end >= total_length:
+                end = total_length - 1
+        return start, end
+
+    def _build_media_response(payload: bytes, content_type: str, filename: str) -> Response:
+        total = len(payload)
+        range_header = request.headers.get("range")
+        base_headers = {
+            "Content-Disposition": f'inline; filename="{filename}"',
+            "Accept-Ranges": "bytes",
+        }
+        if not range_header:
+            return Response(content=payload, media_type=content_type, headers=base_headers)
+        try:
+            parsed = _parse_range_header(range_header, total)
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=416, detail="Invalid Range header")
+        if parsed is None:
+            return Response(content=payload, media_type=content_type, headers=base_headers)
+        start, end = parsed
+        chunk = payload[start:end + 1]
+        headers = dict(base_headers)
+        headers["Content-Range"] = f"bytes {start}-{end}/{total}"
+        headers["Content-Length"] = str(len(chunk))
+        return Response(content=chunk, media_type=content_type, status_code=206, headers=headers)
+
+    if get_recording_metadata_mode() == "meeting_data":
+        _meeting, rec = await _find_meeting_data_recording(db, user.id, recording_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="Recording not found")
+        media_file = None
+        for mf in rec.get("media_files") or []:
+            if int(mf.get("id", -1)) == media_file_id:
+                media_file = mf
+                break
+        if media_file is None:
+            raise HTTPException(status_code=404, detail="Media file not found")
+        fmt = str(media_file.get("format", "bin")).lower()
+        media_type = str(media_file.get("type", "audio")).lower()
+        content_type_map = {
+            "wav": "audio/wav",
+            "webm": "video/webm" if media_type == "video" else "audio/webm",
+            "opus": "audio/opus",
+            "mp3": "audio/mpeg",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "png": "image/png",
+        }
+        content_type = content_type_map.get(fmt, "application/octet-stream")
+        filename = f"{recording_id}_{media_type}.{fmt}"
+        try:
+            storage = get_storage_client()
+            data = storage.download_file(media_file["storage_path"])
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Media file content not found in storage")
+        except Exception as e:
+            logger.error(f"Failed raw media download for media file {media_file_id}: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Failed to read media file from storage")
+        return _build_media_response(data, content_type, filename)
+
+    recording = await db.get(Recording, recording_id)
+    if not recording or recording.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    stmt = select(MediaFile).where(
+        and_(MediaFile.id == media_file_id, MediaFile.recording_id == recording_id)
+    )
+    result = await db.execute(stmt)
+    media_file = result.scalars().first()
+    if not media_file:
+        raise HTTPException(status_code=404, detail="Media file not found")
+
+    content_type_map = {
+        "wav": "audio/wav",
+        "webm": "video/webm" if media_file.type == "video" else "audio/webm",
+        "opus": "audio/opus",
+        "mp3": "audio/mpeg",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+    }
+    content_type = content_type_map.get(media_file.format.lower(), "application/octet-stream")
+    filename = f"{media_file.recording_id}_{media_file.type}.{media_file.format}"
+
+    try:
+        storage = get_storage_client()
+        data = storage.download_file(media_file.storage_path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Media file content not found in storage")
+    except Exception as e:
+        logger.error(f"Failed raw media download for media file {media_file_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to read media file from storage")
+
+    return _build_media_response(data, content_type, filename)
+
+
+@app.delete("/recordings/{recording_id}",
+            summary="Delete a recording and its media files")
+async def delete_recording(
+    recording_id: int,
+    auth: tuple = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a recording, its media files from storage, and all database rows."""
+    token, user = auth
+    if get_recording_metadata_mode() == "meeting_data":
+        meeting, rec = await _find_meeting_data_recording(db, user.id, recording_id)
+        if meeting is None or rec is None:
+            raise HTTPException(status_code=404, detail="Recording not found")
+        storage = get_storage_client()
+        for mf in rec.get("media_files") or []:
+            path = mf.get("storage_path")
+            if not path:
+                continue
+            try:
+                storage.delete_file(path)
+            except Exception as e:
+                logger.warning(f"Failed to delete storage file {path}: {e}")
+        current_data = dict(meeting.data or {})
+        existing = list(current_data.get("recordings") or [])
+        current_data["recordings"] = [
+            r for r in existing
+            if not (isinstance(r, dict) and int(r.get("id", -1)) == recording_id)
+        ]
+        meeting.data = current_data
+        attributes.flag_modified(meeting, "data")
+        await db.commit()
+        return {"status": "deleted", "recording_id": recording_id}
+
+    recording = await db.get(Recording, recording_id)
+    if not recording or recording.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    await db.refresh(recording, ["media_files"])
+
+    # Delete files from object storage
+    storage = get_storage_client()
+    for mf in recording.media_files:
+        try:
+            storage.delete_file(mf.storage_path)
+        except Exception as e:
+            logger.warning(f"Failed to delete storage file {mf.storage_path}: {e}")
+
+    # Delete from database (cascade deletes media_files and transcription_jobs)
+    await db.delete(recording)
+    await db.commit()
+
+    return {"status": "deleted", "recording_id": recording_id}
+
+
+# --- RECORDING CONFIG ENDPOINTS ---
+
+class RecordingConfigUpdate(BaseModel):
+    enabled: Optional[bool] = Field(None, description="Enable or disable recording for this user's bots")
+    capture_modes: Optional[List[str]] = Field(None, description="Capture modes: ['audio'], ['audio', 'video'], etc.")
+
+
+@app.get("/recording-config",
+         summary="Get recording configuration for the authenticated user",
+         tags=["Recordings"])
+async def get_recording_config(
+    auth: tuple = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """Returns the user's recording configuration, with defaults from environment."""
+    token, user = auth
+    user_config = {}
+    if user.data and isinstance(user.data, dict):
+        user_config = user.data.get("recording_config", {})
+
+    return {
+        "enabled": user_config.get("enabled", os.environ.get("RECORDING_ENABLED", "false").lower() == "true"),
+        "capture_modes": user_config.get("capture_modes", os.environ.get("CAPTURE_MODES", "audio").split(",")),
+    }
+
+
+@app.put("/recording-config",
+         summary="Update recording configuration for the authenticated user",
+         tags=["Recordings"])
+async def update_recording_config(
+    config: RecordingConfigUpdate,
+    auth: tuple = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update the user's recording configuration. Only provided fields are updated."""
+    token, user = auth
+
+    if not user.data:
+        user.data = {}
+
+    # Ensure we create a new dict to trigger SQLAlchemy change detection
+    new_data = dict(user.data)
+    recording_config = new_data.get("recording_config", {})
+
+    if config.enabled is not None:
+        recording_config["enabled"] = config.enabled
+    if config.capture_modes is not None:
+        valid_modes = {"audio", "video", "screenshot"}
+        for mode in config.capture_modes:
+            if mode not in valid_modes:
+                raise HTTPException(status_code=400, detail=f"Invalid capture mode: {mode}. Valid: {sorted(valid_modes)}")
+        recording_config["capture_modes"] = config.capture_modes
+
+    new_data["recording_config"] = recording_config
+    user.data = new_data
+
+    from sqlalchemy.orm import attributes
+    attributes.flag_modified(user, "data")
+
+    await db.commit()
+    await db.refresh(user)
+
+    return {
+        "enabled": recording_config.get("enabled", False),
+        "capture_modes": recording_config.get("capture_modes", ["audio"]),
+    }
+
+
 # --- RECONCILIATION TASK: Detect and fix zombie meetings and orphan containers ---
 async def reconcile_meetings_and_containers():
     """
@@ -1693,6 +2524,300 @@ async def start_reconciliation_scheduler():
             await asyncio.sleep(60)  # Wait 1 minute before retrying on error
 
 # --- --------------------------------------------------------- ---
+
+
+# ==================== Voice Agent / Meeting Interaction Endpoints ====================
+
+@app.post("/bots/{platform}/{native_meeting_id}/speak",
+          status_code=status.HTTP_202_ACCEPTED,
+          summary="Make the bot speak in the meeting",
+          description="Accepts text (for TTS) or pre-rendered audio (URL/base64) and plays it through the bot's microphone into the meeting.",
+          dependencies=[Depends(get_user_and_token)])
+async def bot_speak(
+    platform: Platform,
+    native_meeting_id: str,
+    req: dict,  # Using dict to accept flexible body
+    auth_data: tuple[str, User] = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db)
+):
+    user_token, current_user = auth_data
+    platform_value = platform.value
+
+    # Find active meeting
+    meeting = await _find_active_meeting(db, current_user.id, platform_value, native_meeting_id)
+
+    # Build Redis command
+    if req.get("text"):
+        command = {
+            "action": "speak",
+            "meeting_id": meeting.id,
+            "text": req["text"],
+            "provider": req.get("provider", "openai"),
+            "voice": req.get("voice", "alloy")
+        }
+    elif req.get("audio_url") or req.get("audio_base64"):
+        command = {
+            "action": "speak_audio",
+            "meeting_id": meeting.id,
+            "audio_url": req.get("audio_url"),
+            "audio_base64": req.get("audio_base64"),
+            "format": req.get("format", "wav"),
+            "sample_rate": req.get("sample_rate", 24000)
+        }
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Must provide one of: text, audio_url, or audio_base64"
+        )
+
+    channel = f"bot_commands:meeting:{meeting.id}"
+    await redis_client.publish(channel, json.dumps(command))
+    logger.info(f"[VoiceAgent] Published speak command to {channel}")
+
+    return {"message": "Speak command sent", "meeting_id": meeting.id}
+
+
+@app.delete("/bots/{platform}/{native_meeting_id}/speak",
+            status_code=status.HTTP_202_ACCEPTED,
+            summary="Interrupt bot speech",
+            description="Immediately stops any TTS audio currently being played by the bot.",
+            dependencies=[Depends(get_user_and_token)])
+async def bot_speak_stop(
+    platform: Platform,
+    native_meeting_id: str,
+    auth_data: tuple[str, User] = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db)
+):
+    user_token, current_user = auth_data
+    platform_value = platform.value
+
+    meeting = await _find_active_meeting(db, current_user.id, platform_value, native_meeting_id)
+
+    channel = f"bot_commands:meeting:{meeting.id}"
+    await redis_client.publish(channel, json.dumps({
+        "action": "speak_stop",
+        "meeting_id": meeting.id
+    }))
+
+    return {"message": "Speak stop command sent", "meeting_id": meeting.id}
+
+
+@app.post("/bots/{platform}/{native_meeting_id}/chat",
+          status_code=status.HTTP_202_ACCEPTED,
+          summary="Send a chat message in the meeting",
+          description="Sends a text message to the meeting chat via the bot.",
+          dependencies=[Depends(get_user_and_token)])
+async def bot_chat_send(
+    platform: Platform,
+    native_meeting_id: str,
+    req: dict,
+    auth_data: tuple[str, User] = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db)
+):
+    user_token, current_user = auth_data
+    platform_value = platform.value
+
+    meeting = await _find_active_meeting(db, current_user.id, platform_value, native_meeting_id)
+
+    text = req.get("text")
+    if not text:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="text is required")
+
+    channel = f"bot_commands:meeting:{meeting.id}"
+    await redis_client.publish(channel, json.dumps({
+        "action": "chat_send",
+        "meeting_id": meeting.id,
+        "text": text
+    }))
+
+    return {"message": "Chat message sent", "meeting_id": meeting.id}
+
+
+@app.get("/bots/{platform}/{native_meeting_id}/chat",
+         summary="Get chat messages from the meeting",
+         description="Returns all chat messages captured by the bot from the meeting chat.",
+         dependencies=[Depends(get_user_and_token)])
+async def bot_chat_read(
+    platform: Platform,
+    native_meeting_id: str,
+    auth_data: tuple[str, User] = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db)
+):
+    user_token, current_user = auth_data
+    platform_value = platform.value
+
+    meeting = await _find_active_meeting(db, current_user.id, platform_value, native_meeting_id)
+
+    # Read chat messages from Redis
+    messages_raw = await redis_client.lrange(f"meeting:{meeting.id}:chat_messages", 0, -1)
+    messages = []
+    for raw in messages_raw:
+        try:
+            messages.append(json.loads(raw))
+        except json.JSONDecodeError:
+            pass
+
+    return {"messages": messages, "meeting_id": meeting.id}
+
+
+@app.post("/bots/{platform}/{native_meeting_id}/screen",
+          status_code=status.HTTP_202_ACCEPTED,
+          summary="Show content on screen (screen share)",
+          description="Displays an image, video, or web page via the bot's screen share. Types: 'image', 'video', 'url', 'html'.",
+          dependencies=[Depends(get_user_and_token)])
+async def bot_screen_show(
+    platform: Platform,
+    native_meeting_id: str,
+    req: dict,
+    auth_data: tuple[str, User] = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db)
+):
+    user_token, current_user = auth_data
+    platform_value = platform.value
+
+    meeting = await _find_active_meeting(db, current_user.id, platform_value, native_meeting_id)
+
+    content_type = req.get("type")
+    if content_type not in ("image", "video", "url", "html"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="type must be one of: image, video, url, html"
+        )
+
+    if content_type == "html" and not req.get("html"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="html content is required for type=html")
+    elif content_type != "html" and not req.get("url"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="url is required for type=" + content_type)
+
+    channel = f"bot_commands:meeting:{meeting.id}"
+    await redis_client.publish(channel, json.dumps({
+        "action": "screen_show",
+        "meeting_id": meeting.id,
+        "type": content_type,
+        "url": req.get("url"),
+        "html": req.get("html"),
+        "start_share": req.get("start_share", True)
+    }))
+
+    return {"message": "Screen content command sent", "meeting_id": meeting.id}
+
+
+@app.delete("/bots/{platform}/{native_meeting_id}/screen",
+            status_code=status.HTTP_202_ACCEPTED,
+            summary="Stop screen sharing",
+            description="Stops screen sharing and clears the displayed content.",
+            dependencies=[Depends(get_user_and_token)])
+async def bot_screen_stop(
+    platform: Platform,
+    native_meeting_id: str,
+    auth_data: tuple[str, User] = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db)
+):
+    user_token, current_user = auth_data
+    platform_value = platform.value
+
+    meeting = await _find_active_meeting(db, current_user.id, platform_value, native_meeting_id)
+
+    channel = f"bot_commands:meeting:{meeting.id}"
+    await redis_client.publish(channel, json.dumps({
+        "action": "screen_stop",
+        "meeting_id": meeting.id
+    }))
+
+    return {"message": "Screen stop command sent", "meeting_id": meeting.id}
+
+
+# ─── Avatar (Profile Pic) Endpoints ────────────────────────────────
+
+@app.put("/bots/{platform}/{native_meeting_id}/avatar",
+         status_code=status.HTTP_202_ACCEPTED,
+         summary="Set bot avatar image",
+         description="Sets a custom avatar image for the bot's camera feed. Shown when no screen content is active. Provide 'url' (image URL) or 'image_base64' (data URI).",
+         dependencies=[Depends(get_user_and_token)])
+async def bot_avatar_set(
+    platform: Platform,
+    native_meeting_id: str,
+    req: dict,
+    auth_data: tuple[str, User] = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db)
+):
+    user_token, current_user = auth_data
+    platform_value = platform.value
+
+    meeting = await _find_active_meeting(db, current_user.id, platform_value, native_meeting_id)
+
+    image_url = req.get("url")
+    image_base64 = req.get("image_base64")
+    if not image_url and not image_base64:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Either 'url' or 'image_base64' must be provided"
+        )
+
+    channel = f"bot_commands:meeting:{meeting.id}"
+    await redis_client.publish(channel, json.dumps({
+        "action": "avatar_set",
+        "meeting_id": meeting.id,
+        "url": image_url,
+        "image_base64": image_base64
+    }))
+
+    return {"message": "Avatar set command sent", "meeting_id": meeting.id}
+
+
+@app.delete("/bots/{platform}/{native_meeting_id}/avatar",
+            status_code=status.HTTP_202_ACCEPTED,
+            summary="Reset bot avatar to default",
+            description="Resets the bot's avatar to the default Vexa logo.",
+            dependencies=[Depends(get_user_and_token)])
+async def bot_avatar_reset(
+    platform: Platform,
+    native_meeting_id: str,
+    auth_data: tuple[str, User] = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db)
+):
+    user_token, current_user = auth_data
+    platform_value = platform.value
+
+    meeting = await _find_active_meeting(db, current_user.id, platform_value, native_meeting_id)
+
+    channel = f"bot_commands:meeting:{meeting.id}"
+    await redis_client.publish(channel, json.dumps({
+        "action": "avatar_reset",
+        "meeting_id": meeting.id
+    }))
+
+    return {"message": "Avatar reset command sent", "meeting_id": meeting.id}
+
+
+async def _find_active_meeting(
+    db: AsyncSession,
+    user_id: int,
+    platform_value: str,
+    native_meeting_id: str
+) -> Meeting:
+    """Find the latest active meeting for the given platform/native_id combination."""
+    stmt = select(Meeting).where(
+        Meeting.user_id == user_id,
+        Meeting.platform == platform_value,
+        Meeting.platform_specific_id == native_meeting_id,
+        Meeting.status == MeetingStatus.ACTIVE.value
+    ).order_by(desc(Meeting.created_at)).limit(1)
+
+    result = await db.execute(stmt)
+    meeting = result.scalar_one_or_none()
+
+    if not meeting:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No active meeting found for {platform_value}/{native_meeting_id}"
+        )
+
+    return meeting
+
+
+# --- END Voice Agent Endpoints ---
+
 
 if __name__ == "__main__":
     uvicorn.run(

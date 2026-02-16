@@ -22,7 +22,7 @@ from shared_models.schemas import Platform
 
 # ---> ADD Missing imports for _record_session_start
 from shared_models.database import async_session_local
-from shared_models.models import MeetingSession, Meeting
+from shared_models.models import MeetingSession, Meeting, User
 # <--- END ADD
 
 # ---> ADD Missing imports for check logic & session start
@@ -148,7 +148,13 @@ async def start_bot_container(
     user_token: str,
     native_meeting_id: str,
     language: Optional[str],
-    task: Optional[str]
+    task: Optional[str],
+    transcription_tier: Optional[str] = "realtime",
+    recording_enabled: Optional[bool] = None,
+    transcribe_enabled: Optional[bool] = None,
+    zoom_obf_token: Optional[str] = None,
+    voice_agent_enabled: Optional[bool] = None,
+    default_avatar_url: Optional[str] = None
 ) -> Optional[tuple[str, str]]:
     """
     Starts a vexa-bot container via requests_unixsocket AFTER checking user limit.
@@ -181,6 +187,16 @@ async def start_bot_container(
     connection_id = str(uuid.uuid4())
     logger.info(f"Generated unique connectionId for bot session: {connection_id}")
 
+    # Look up user-level recording config (falls back to env vars in bot_config_data)
+    user_recording_config = {}
+    try:
+        async with async_session_local() as db:
+            user = await db.get(User, user_id)
+            if user and user.data and isinstance(user.data, dict):
+                user_recording_config = user.data.get("recording_config", {})
+    except Exception as e:
+        logger.warning(f"Failed to load user recording config for user {user_id}: {e}")
+
     # Mint MeetingToken (HS256) - import at top of file if not present
     from app.main import mint_meeting_token
     try:
@@ -206,6 +222,8 @@ async def start_bot_container(
         "connectionId": connection_id,
         "language": language,
         "task": task,
+        "transcriptionTier": (transcription_tier or "realtime"),
+        "obfToken": zoom_obf_token if platform == "zoom" else None,
         "redisUrl": REDIS_URL,
         "container_name": container_name,  # ADDED: Container name for identification
         "automaticLeave": {
@@ -213,8 +231,18 @@ async def start_bot_container(
             "noOneJoinedTimeout": 120000,
             "everyoneLeftTimeout": 60000
         },
-        "botManagerCallbackUrl": f"http://bot-manager:8080/bots/internal/callback/exited"
+        "botManagerCallbackUrl": f"http://bot-manager:8080/bots/internal/callback/exited",
+        "recordingEnabled": user_recording_config.get("enabled", os.getenv("RECORDING_ENABLED", "false").lower() == "true"),
+        "transcribeEnabled": True if transcribe_enabled is None else bool(transcribe_enabled),
+        "captureModes": user_recording_config.get("capture_modes", os.getenv("CAPTURE_MODES", "audio").split(",")),
+        "recordingUploadUrl": f"http://bot-manager:8080/internal/recordings/upload"
     }
+    if recording_enabled is not None:
+        bot_config_data["recordingEnabled"] = bool(recording_enabled)
+    if voice_agent_enabled is not None:
+        bot_config_data["voiceAgentEnabled"] = bool(voice_agent_enabled)
+    if default_avatar_url:
+        bot_config_data["defaultAvatarUrl"] = default_avatar_url
     # Remove keys with None values before serializing
     cleaned_config_data = {k: v for k, v in bot_config_data.items() if v is not None}
     bot_config_json = json.dumps(cleaned_config_data)
@@ -238,6 +266,30 @@ async def start_bot_container(
         f"WHISPER_LIVE_URL={whisper_live_url_for_bot}", # Use the URL from bot-manager's env
         f"LOG_LEVEL={os.getenv('LOG_LEVEL', 'INFO').upper()}",
     ]
+
+    # Add voice agent environment variables (TTS service URL required)
+    if voice_agent_enabled:
+        tts_service_url = os.getenv("TTS_SERVICE_URL", "").strip()
+        if tts_service_url:
+            environment.append(f"TTS_SERVICE_URL={tts_service_url}")
+            logger.info(f"Added TTS_SERVICE_URL to bot environment: {tts_service_url}")
+        else:
+            logger.warning("voice_agent_enabled but TTS_SERVICE_URL not set - TTS will fail")
+
+    # Add Zoom-specific environment variables if platform is Zoom
+    if platform == "zoom":
+        zoom_client_id = os.getenv("ZOOM_CLIENT_ID")
+        zoom_client_secret = os.getenv("ZOOM_CLIENT_SECRET")
+
+        if not zoom_client_id or not zoom_client_secret:
+            logger.error("CRITICAL: ZOOM_CLIENT_ID and ZOOM_CLIENT_SECRET are required for Zoom bots but not set in environment")
+            raise ValueError("ZOOM_CLIENT_ID and ZOOM_CLIENT_SECRET environment variables are required for Zoom platform")
+
+        environment.extend([
+            f"ZOOM_CLIENT_ID={zoom_client_id}",
+            f"ZOOM_CLIENT_SECRET={zoom_client_secret}",
+        ])
+        logger.info("Added Zoom SDK credentials to bot environment")
 
     # Ensure absolute path for URL encoding here as well
     socket_path_relative = DOCKER_HOST.split('//', 1)[1]

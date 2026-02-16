@@ -38,7 +38,7 @@ Body: {
 
 Derive the WebSocket URL from your API base URL:
 - `https://api.example.com` → `wss://api.example.com/ws`
-- `http://localhost:18056` → `ws://localhost:18056/ws`
+- `http://localhost:8056` → `ws://localhost:8056/ws`
 
 ### Authentication
 
@@ -59,7 +59,7 @@ Meetings are identified by platform and native meeting ID:
 }
 ```
 
-Supported platforms: `google_meet`, `teams`
+Supported platforms: `google_meet`, `teams`, `zoom`
 
 ## REST API Bootstrap
 
@@ -73,6 +73,7 @@ Headers: X-API-Key: YOUR_API_KEY
 **Response Format**:
 ```json
 {
+  "notes": "Optional meeting notes (from meeting.data.notes, if provided)",
   "segments": [
     {
       "text": "Hello everyone",
@@ -184,6 +185,22 @@ Error messages.
   "error": "Invalid meeting ID"
 }
 ```
+
+#### Voice Agent Events
+
+When a bot is running with `voice_agent_enabled: true`, the following events are published on the Redis channel `va:meeting:{meeting_id}:events` (and forwarded via WebSocket):
+
+| Event Type | Payload | Description |
+|------------|---------|-------------|
+| `speak.started` | `{"text": "..."}` | Bot started speaking |
+| `speak.completed` | — | Speech playback finished |
+| `speak.interrupted` | — | Speech interrupted via API |
+| `chat.received` | `{"sender": "John", "text": "...", "timestamp": 1234}` | Chat message captured |
+| `chat.sent` | `{"text": "..."}` | Bot sent a chat message |
+| `screen.sharing_started` | `{"content_type": "image"}` | Screen sharing started |
+| `screen.sharing_stopped` | — | Screen sharing stopped |
+
+See [Voice Agent Guide](voice-agent.md) for full details.
 
 ## Segment Schema
 
@@ -333,8 +350,8 @@ Server responds with `pong`. Recommended ping interval: 25 seconds.
 ## Environment Variables
 
 ```bash
-export API_BASE="http://localhost:18056"
-export WS_URL="ws://localhost:18056/ws"
+export API_BASE="http://localhost:8056"
+export WS_URL="ws://localhost:8056/ws"
 export API_KEY="your_api_key_here"
 ```
 
@@ -345,16 +362,16 @@ See the real-time transcription script for a complete implementation:
 ```bash
 # Basic usage
 python testing/ws_realtime_transcription.py \
-  --api-base http://localhost:18056 \
-  --ws-url ws://localhost:18056/ws \
+  --api-base http://localhost:8056 \
+  --ws-url ws://localhost:8056/ws \
   --api-key $API_KEY \
   --platform google_meet \
   --native-id kzj-grsa-cqf
 
 # Debug mode (show raw frames)
 python testing/ws_realtime_transcription.py \
-  --api-base http://localhost:18056 \
-  --ws-url ws://localhost:18056/ws \
+  --api-base http://localhost:8056 \
+  --ws-url ws://localhost:8056/ws \
   --api-key $API_KEY \
   --platform google_meet \
   --native-id kzj-grsa-cqf \

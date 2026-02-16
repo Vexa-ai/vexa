@@ -1,0 +1,158 @@
+# Zoom Integration Setup Guide
+
+Use this guide to configure Zoom for the Vexa meeting bot in self-hosted or custom deployments.
+
+## Overview
+
+Vexa joins Zoom meetings with the Zoom Meeting SDK, captures audio, and sends it through the transcription pipeline.
+
+```text
+Zoom Meeting SDK -> PCM audio -> WhisperLive -> transcript output
+```
+
+Zoom requires an authorized token path (OBF/ZAK/RTMS) for Meeting SDK apps joining meetings outside their own account starting **March 2, 2026**.
+
+## Important Caveats (Approval + Who You Can Join)
+
+### Marketplace approval takes time
+
+If you want your Zoom app to join meetings across other users/accounts, you generally need to submit it for Zoom Marketplace review and approval. This process can take weeks to months.
+
+### Before approval: expect "your meetings only"
+
+Before your Zoom app is approved (and depending on Zoom policy and account settings), you should assume you can reliably join only meetings created/hosted by you personally (the account that owns/authorizes the app). Use this for development and internal testing.
+
+### Hosted service status
+
+The hosted Vexa service Zoom app is **not approved** at the time of writing, so Zoom bots from the hosted service should be treated as limited to the authorizing user's own meetings until approval is complete.
+
+## 1. Create and Configure the Zoom App
+
+1. Open [Zoom App Marketplace](https://marketplace.zoom.us/).
+2. Click `Develop` -> `Build App`.
+3. Select `General App`.
+4. Select management model:
+   - `User-managed` (recommended): each user authorizes their own Zoom account.
+   - `Admin-managed`: account admin authorizes for users in their org.
+5. In `Features` -> `Embed`, enable `Meeting SDK`.
+6. In `Features` -> `Surface`, enable only products you use:
+   - `Meetings` (required for standard bot usage)
+   - `Webinars` (optional, only if you support webinar joins)
+   - Leave unrelated in-client surfaces disabled unless you actually use them.
+
+Suggested metadata:
+
+| Field | Example |
+|---|---|
+| App name | `Vexa Meeting Bot` |
+| Short description | `Real-time meeting transcription` |
+| Company | `Your Organization` |
+| Developer contact | `maintainer@your-domain.com` |
+
+## 2. OAuth Configuration
+
+Set redirect URL(s) to where your dashboard serves Zoom callback UI:
+
+- Production example: `https://dashboard.your-domain.com/auth/zoom/callback`
+- Local dashboard dev: `http://localhost:3001/auth/zoom/callback`
+
+Redirect URL must match exactly (scheme, host, path, trailing slash behavior).
+
+If you override callback via env, it must exactly match your Zoom app redirect URL:
+
+- `ZOOM_OAUTH_REDIRECT_URI`
+
+Set deauthorization notification URL (required for distribution/review):
+
+- `https://your-domain.com/webhooks/zoom/deauthorize`
+
+Note: this repository currently does not include a Zoom deauthorization webhook handler. Implement it before marketplace submission.
+
+## 3. Scopes (Exact Matrix)
+
+Scopes are configured in the Zoom app itself. The current dashboard OAuth start route does not append a `scope` query parameter and relies on the app-configured scopes.
+
+| Scope | Required | Used by current code | Notes |
+|---|---|---|---|
+| `user:read:token` | Yes for external Zoom meetings | Yes | Required to mint OBF via `GET /v2/users/me/token?type=onbehalf...` |
+| `user:read:zak` | No | No | Only needed if you implement a ZAK-based join path (not used in current Vexa flow) |
+
+If you only run same-account/internal testing with SDK credentials, OAuth scopes are not needed for that path.
+No additional Zoom scopes are required by the current Vexa Zoom integration.
+
+## 4. Environment Variables
+
+Backend/bot runtime:
+
+```bash
+ZOOM_CLIENT_ID=your_zoom_client_id
+ZOOM_CLIENT_SECRET=your_zoom_client_secret
+```
+
+Dashboard OAuth (recommended explicit settings):
+
+```bash
+ZOOM_OAUTH_CLIENT_ID=your_zoom_client_id
+ZOOM_OAUTH_CLIENT_SECRET=your_zoom_client_secret
+ZOOM_OAUTH_REDIRECT_URI=https://dashboard.your-domain.com/auth/zoom/callback
+ZOOM_OAUTH_STATE_SECRET=long_random_secret
+```
+
+Implementation detail:
+
+- Dashboard and bot-manager resolve OAuth credentials with fallback:
+  `ZOOM_OAUTH_CLIENT_ID/SECRET` -> `ZOOM_CLIENT_ID/SECRET`.
+- Dashboard state signing secret fallback is:
+  `ZOOM_OAUTH_STATE_SECRET` -> `NEXTAUTH_SECRET` -> `VEXA_ADMIN_API_KEY`.
+
+## 5. OBF Flow in This Codebase
+
+Current behavior when creating a Zoom bot:
+
+1. If request includes `zoom_obf_token`, backend uses it directly.
+2. Otherwise backend reads stored user Zoom OAuth tokens.
+3. If access token is expired, backend refreshes it via `POST https://zoom.us/oauth/token`.
+4. Backend mints OBF via:
+   `GET https://api.zoom.us/v2/users/me/token?type=onbehalf&meeting_id={MEETING_ID}`.
+5. Bot passes OBF to SDK join as `onBehalfToken`.
+
+Code references:
+
+- `vexa/services/bot-manager/app/main.py`
+- `vexa/services/bot-manager/app/zoom_obf.py`
+- `vexa/services/vexa-bot/core/src/types.ts`
+- `vexa/services/vexa-bot/core/src/platforms/zoom/sdk-manager.ts`
+- `vexa/services/vexa-bot/core/src/platforms/zoom/native/src/zoom_wrapper.cpp`
+- `Vexa-Dashboard/src/app/api/zoom/oauth/start/route.ts`
+- `Vexa-Dashboard/src/app/api/zoom/oauth/complete/route.ts`
+
+## 6. Quick Verification
+
+Internal/same-account check:
+
+```bash
+ZOOM_MEETING_URL="https://us05web.zoom.us/j/YOUR_MEETING_ID?pwd=YOUR_PASSWORD" \
+ZOOM_CLIENT_ID="$ZOOM_CLIENT_ID" \
+ZOOM_CLIENT_SECRET="$ZOOM_CLIENT_SECRET" \
+./services/vexa-bot/run-zoom-bot.sh
+```
+
+External meeting check:
+
+1. User completes Zoom OAuth in dashboard.
+2. User starts Zoom bot without manual `zoom_obf_token`.
+3. Bot-manager mints OBF and bot joins.
+4. Bot remains valid only while the authorizing user is present.
+
+## 7. Security Rules
+
+- Never commit Zoom client secrets, access tokens, refresh tokens, or OBF tokens.
+- Never commit raw portal exports/snapshots containing account or credential data.
+- If any credential is exposed, rotate it in Zoom immediately.
+
+## References
+
+- [Zoom Meeting SDK](https://developers.zoom.us/docs/meeting-sdk/)
+- [Meeting SDK Auth](https://developers.zoom.us/docs/meeting-sdk/auth/)
+- [OBF Transition FAQ](https://developers.zoom.us/docs/meeting-sdk/obf-faq/)
+- [Zoom App Review Process](https://developers.zoom.us/docs/distribute/app-review-process/)

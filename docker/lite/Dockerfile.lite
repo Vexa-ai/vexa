@@ -181,6 +181,7 @@ COPY docker/lite/supervisord.conf /etc/supervisor/conf.d/vexa.conf
 # Entrypoint script
 COPY docker/lite/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+RUN mkdir -p /var/lib/vexa/recordings /var/log/vexa-bots
 
 # -----------------------------------------------------------------------------
 # Environment Variables (defaults)
@@ -204,6 +205,23 @@ ENV DISPLAY=:99
 # Logging
 ENV LOG_LEVEL=info \
     PYTHONUNBUFFERED=1
+
+# Recording storage defaults (lite)
+# Default to local filesystem for single-container deployments.
+ENV STORAGE_BACKEND=local \
+    LOCAL_STORAGE_DIR=/var/lib/vexa/recordings \
+    LOCAL_STORAGE_FSYNC=true \
+    MINIO_ENDPOINT= \
+    MINIO_ACCESS_KEY= \
+    MINIO_SECRET_KEY= \
+    MINIO_BUCKET=vexa-recordings \
+    MINIO_SECURE=false \
+    AWS_REGION=us-east-1 \
+    AWS_ACCESS_KEY_ID= \
+    AWS_SECRET_ACCESS_KEY= \
+    S3_BUCKET= \
+    S3_ENDPOINT= \
+    S3_SECURE=true
 
 # Database defaults (should be overridden)
 # Note: DB_PASSWORD must be provided at runtime via -e flag

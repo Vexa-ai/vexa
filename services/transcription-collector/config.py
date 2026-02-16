@@ -29,4 +29,4 @@ API_KEY_NAME = "X-API-Key"
 # Redis connection details
 REDIS_HOST = os.environ.get("REDIS_HOST", "redis")
 REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
-REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", None) 
+REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", None)

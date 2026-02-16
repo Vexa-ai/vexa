@@ -5,6 +5,8 @@ import json
 import functools
 import logging
 import hashlib
+import tempfile
+from pathlib import Path
 from enum import Enum
 from typing import List, Optional
 import datetime
@@ -41,6 +43,7 @@ import threading
 # Import Redis
 import redis
 import uuid
+import httpx
 
 # Setup basic logging (env-driven)
 _WL_LOG_LEVEL = os.getenv("WL_LOG_LEVEL", "INFO").strip().upper()
@@ -799,6 +802,9 @@ class TranscriptionServer:
         """
         if options is None:
             options = {}
+        transcription_tier = str(options.get("transcription_tier", "realtime")).strip().lower()
+        if transcription_tier not in ("realtime", "deferred"):
+            transcription_tier = "realtime"
         backend_str = options.get("backend", self.backend)
         backend = BackendType(backend_str)
         
@@ -816,6 +822,7 @@ class TranscriptionServer:
                 meeting_url=options.get("meeting_url"),
                 token=options.get("token"),
                 meeting_id=options.get("meeting_id"),
+                transcription_tier=transcription_tier,
                 collector_client_ref=self.collector_client,
                 server_options=self.server_options
             )
@@ -836,6 +843,7 @@ class TranscriptionServer:
                 meeting_url=options.get("meeting_url"),
                 token=options.get("token"),
                 meeting_id=options.get("meeting_id"),
+                transcription_tier=transcription_tier,
                 collector_client_ref=self.collector_client,
                 server_options=self.server_options
             )
@@ -855,6 +863,7 @@ class TranscriptionServer:
                 meeting_url=options.get("meeting_url"),
                 token=options.get("token"),
                 meeting_id=options.get("meeting_id"),
+                transcription_tier=transcription_tier,
                 collector_client_ref=self.collector_client,
                 server_options=self.server_options
             )
@@ -1686,6 +1695,7 @@ class ServeClientBase(object):
 
     def __init__(self, websocket, language="en", task="transcribe", client_uid=None, 
                  platform=None, meeting_url=None, token=None, meeting_id=None,
+                 transcription_tier: str = "realtime",
                  collector_client_ref: Optional[TranscriptionCollectorClient] = None,
                  server_options: Optional[dict] = None):
         self.websocket = websocket
@@ -1699,6 +1709,8 @@ class ServeClientBase(object):
         self.meeting_url = meeting_url
         self.token = token
         self.meeting_id = meeting_id
+        normalized_tier = str(transcription_tier or "realtime").strip().lower()
+        self.transcription_tier = normalized_tier if normalized_tier in ("realtime", "deferred") else "realtime"
         self.collector_client = collector_client_ref # Store the passed collector client
         
         # Restore all the original instance variables that were deleted
@@ -1732,6 +1744,29 @@ class ServeClientBase(object):
 
         # threading
         self.lock = threading.Lock()
+        self._recording_lock = threading.Lock()
+
+        # Durable recording spool (issue #112): write incoming float32 frames
+        # to persistent chunk files while keeping in-memory realtime flow intact.
+        self.wl_recording_dir = str(server_options.get("wl_recording_dir", "/tmp/wl-recordings")).strip()
+        self.wl_recording_flush_seconds = max(0.0, float(server_options.get("wl_recording_flush_seconds", 3.0)))
+        self.wl_recording_fsync_seconds = max(0.0, float(server_options.get("wl_recording_fsync_seconds", 10.0)))
+        self.wl_recording_rotate_seconds = max(1.0, float(server_options.get("wl_recording_rotate_seconds", 20.0)))
+        self.wl_recording_rotate_bytes = max(1024, int(server_options.get("wl_recording_rotate_bytes", 16 * 1024 * 1024)))
+        self.wl_recording_snapshot_seconds = max(0.0, float(server_options.get("wl_recording_snapshot_seconds", 20.0)))
+        self._recording_chunk_dir: Optional[Path] = None
+        self._recording_chunk_handle = None
+        self._recording_chunk_start_monotonic = 0.0
+        self._recording_chunk_size_bytes = 0
+        self._recording_last_flush_monotonic = 0.0
+        self._recording_last_fsync_monotonic = 0.0
+        self._recording_chunk_index = 0
+        self._recording_manifest: List[dict] = []
+        self._recording_finalized = False
+        self._recording_upload_in_flight = False
+        self._recording_upload_lock = threading.Lock()
+        self._recording_last_snapshot_upload_monotonic = 0.0
+        self._init_recording_spool()
         
         # Send SERVER_READY message
         ready_message = json.dumps({"status": self.SERVER_READY, "uid": self.client_uid})
@@ -1827,6 +1862,252 @@ class ServeClientBase(object):
     def handle_transcription_output(self):
         raise NotImplementedError
 
+    def _init_recording_spool(self):
+        if not self.wl_recording_dir:
+            return
+        try:
+            self._recording_chunk_dir = Path(self.wl_recording_dir) / self.client_uid
+            self._recording_chunk_dir.mkdir(parents=True, exist_ok=True)
+            self._open_new_recording_chunk()
+            logging.info(f"WL durable recording enabled for {self.client_uid}: {self._recording_chunk_dir}")
+        except Exception as e:
+            logging.error(f"Failed to initialize WL recording spool for {self.client_uid}: {e}")
+            self._recording_chunk_dir = None
+            self._recording_chunk_handle = None
+
+    def _open_new_recording_chunk(self):
+        if self._recording_chunk_dir is None:
+            return
+        now = int(time.time())
+        chunk_name = f"{now}_{self._recording_chunk_index:06d}.f32"
+        chunk_path = self._recording_chunk_dir / chunk_name
+        self._recording_chunk_handle = open(chunk_path, "ab")
+        self._recording_chunk_start_monotonic = time.monotonic()
+        self._recording_last_flush_monotonic = self._recording_chunk_start_monotonic
+        self._recording_last_fsync_monotonic = self._recording_chunk_start_monotonic
+        self._recording_chunk_size_bytes = 0
+        self._recording_manifest.append({"chunk": chunk_name, "created_at": datetime.datetime.utcnow().isoformat()})
+        self._recording_chunk_index += 1
+
+    def _rotate_recording_chunk_if_needed(self, now_mono: float):
+        if self._recording_chunk_handle is None:
+            return
+        age_s = now_mono - self._recording_chunk_start_monotonic
+        if self._recording_chunk_size_bytes >= self.wl_recording_rotate_bytes or age_s >= self.wl_recording_rotate_seconds:
+            try:
+                self._recording_chunk_handle.flush()
+                os.fsync(self._recording_chunk_handle.fileno())
+                self._recording_chunk_handle.close()
+            except Exception:
+                pass
+            self._open_new_recording_chunk()
+
+    def _append_to_recording_spool(self, frame_np: np.ndarray):
+        if self._recording_chunk_handle is None:
+            return
+        try:
+            payload = frame_np.astype(np.float32, copy=False).tobytes()
+            now_mono = time.monotonic()
+            with self._recording_lock:
+                self._rotate_recording_chunk_if_needed(now_mono)
+                if self._recording_chunk_handle is None:
+                    return
+                self._recording_chunk_handle.write(payload)
+                self._recording_chunk_size_bytes += len(payload)
+                if self.wl_recording_flush_seconds == 0 or (now_mono - self._recording_last_flush_monotonic) >= self.wl_recording_flush_seconds:
+                    self._recording_chunk_handle.flush()
+                    self._recording_last_flush_monotonic = now_mono
+                if self.wl_recording_fsync_seconds == 0 or (now_mono - self._recording_last_fsync_monotonic) >= self.wl_recording_fsync_seconds:
+                    os.fsync(self._recording_chunk_handle.fileno())
+                    self._recording_last_fsync_monotonic = now_mono
+        except Exception as e:
+            logging.error(f"Failed to append recording chunk for {self.client_uid}: {e}")
+
+    def _finalize_recording_spool(self):
+        if self._recording_finalized:
+            return
+        self._recording_finalized = True
+        if self._recording_chunk_dir is None:
+            return
+        try:
+            with self._recording_lock:
+                if self._recording_chunk_handle is not None:
+                    try:
+                        self._recording_chunk_handle.flush()
+                        os.fsync(self._recording_chunk_handle.fileno())
+                    finally:
+                        self._recording_chunk_handle.close()
+                        self._recording_chunk_handle = None
+
+            manifest_path = self._recording_chunk_dir / "manifest.json"
+            manifest = {
+                "session_uid": self.client_uid,
+                "rate": self.RATE,
+                "dtype": "float32",
+                "channels": 1,
+                "chunk_format": "f32le",
+                "chunks": self._recording_manifest,
+                "transcription_tier": self.transcription_tier,
+                "finalized_at": datetime.datetime.utcnow().isoformat(),
+            }
+            manifest_path.write_text(json.dumps(manifest, separators=(",", ":"), ensure_ascii=True))
+            logging.info(f"Finalized WL recording spool for {self.client_uid}: {manifest_path}")
+        except Exception as e:
+            logging.error(f"Failed finalizing WL recording spool for {self.client_uid}: {e}")
+
+    def _render_spool_to_wav(self) -> Optional[tuple[str, float]]:
+        """
+        Convert persisted float32le spool chunks to a temporary WAV file.
+        Returns tuple (wav_path, duration_seconds) on success.
+        """
+        if self._recording_chunk_dir is None or not self._recording_manifest:
+            return None
+        try:
+            tmp = tempfile.NamedTemporaryFile(
+                mode="wb",
+                suffix=".wav",
+                prefix=f"wl-{self.client_uid}-",
+                delete=False,
+            )
+            wav_path = tmp.name
+            tmp.close()
+
+            import wave
+
+            # Ensure currently-open chunk is visible to reader.
+            with self._recording_lock:
+                if self._recording_chunk_handle is not None:
+                    self._recording_chunk_handle.flush()
+
+            total_samples = 0
+            with wave.open(wav_path, "wb") as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)  # int16
+                wav_file.setframerate(self.RATE)
+
+                for chunk_meta in self._recording_manifest:
+                    chunk_name = chunk_meta.get("chunk")
+                    if not chunk_name:
+                        continue
+                    chunk_path = self._recording_chunk_dir / chunk_name
+                    if not chunk_path.exists():
+                        logging.warning(f"WL spool chunk missing for {self.client_uid}: {chunk_path}")
+                        continue
+
+                    raw = chunk_path.read_bytes()
+                    if not raw:
+                        continue
+                    frames_f32 = np.frombuffer(raw, dtype=np.float32)
+                    if frames_f32.size == 0:
+                        continue
+                    frames_i16 = np.clip(frames_f32, -1.0, 1.0)
+                    frames_i16 = (frames_i16 * 32767.0).astype(np.int16)
+                    wav_file.writeframes(frames_i16.tobytes())
+                    total_samples += int(frames_i16.size)
+
+            duration_seconds = (total_samples / float(self.RATE)) if total_samples > 0 else 0.0
+            if duration_seconds <= 0:
+                try:
+                    os.remove(wav_path)
+                except Exception:
+                    pass
+                return None
+            return wav_path, duration_seconds
+        except Exception as e:
+            logging.error(f"Failed to render WL spool to WAV for {self.client_uid}: {e}", exc_info=True)
+            return None
+
+    def _upload_recording_spool_to_bot_manager(self, is_final: bool):
+        """
+        Best-effort handoff: upload finalized recording to bot-manager internal endpoint.
+        """
+        upload_enabled = str(os.getenv("WL_RECORDING_UPLOAD_ENABLED", "true")).strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        if not upload_enabled:
+            return
+
+        upload_url = os.getenv(
+            "WL_RECORDING_UPLOAD_URL",
+            os.getenv("BOT_MANAGER_RECORDING_UPLOAD_URL", "http://bot-manager:8080/internal/recordings/upload"),
+        ).strip()
+        if not upload_url:
+            logging.warning(f"WL recording upload skipped for {self.client_uid}: upload URL is empty")
+            return
+
+        if not self.client_uid:
+            logging.warning("WL recording upload skipped: missing session UID")
+            return
+
+        rendered = self._render_spool_to_wav()
+        if not rendered:
+            logging.info(f"WL recording upload skipped for {self.client_uid}: no audio frames")
+            return
+
+        wav_path, duration_seconds = rendered
+        timeout_seconds = max(5.0, float(os.getenv("WL_RECORDING_UPLOAD_TIMEOUT_SECONDS", "180")))
+
+        try:
+            with open(wav_path, "rb") as wav_file:
+                files = {"file": (f"{self.client_uid}.wav", wav_file, "audio/wav")}
+                data = {
+                    "session_uid": self.client_uid,
+                    "media_type": "audio",
+                    "media_format": "wav",
+                    "sample_rate": str(self.RATE),
+                    "duration_seconds": str(round(duration_seconds, 3)),
+                    "is_final": "true" if is_final else "false",
+                }
+                with httpx.Client(timeout=timeout_seconds) as client:
+                    response = client.post(upload_url, files=files, data=data)
+                if response.status_code >= 400:
+                    logging.error(
+                        f"WL recording upload failed for {self.client_uid}: "
+                        f"status={response.status_code}, body={response.text[:500]}"
+                    )
+                else:
+                    logging.info(
+                        f"WL recording upload succeeded for {self.client_uid}: "
+                        f"status={response.status_code}, duration={duration_seconds:.2f}s, final={is_final}"
+                    )
+        except Exception as e:
+            logging.error(f"WL recording upload exception for {self.client_uid}: {e}", exc_info=True)
+        finally:
+            try:
+                os.remove(wav_path)
+            except Exception:
+                pass
+
+    def _start_snapshot_upload_if_due(self):
+        """
+        Upload periodic recording snapshots during the meeting.
+        This keeps object storage up to date while preserving existing in-memory realtime path.
+        """
+        if self.wl_recording_snapshot_seconds <= 0:
+            return
+        if self._recording_finalized:
+            return
+        now_mono = time.monotonic()
+        if (now_mono - self._recording_last_snapshot_upload_monotonic) < self.wl_recording_snapshot_seconds:
+            return
+        with self._recording_upload_lock:
+            if self._recording_upload_in_flight:
+                return
+            self._recording_upload_in_flight = True
+            self._recording_last_snapshot_upload_monotonic = now_mono
+
+        def _runner():
+            try:
+                self._upload_recording_spool_to_bot_manager(is_final=False)
+            finally:
+                with self._recording_upload_lock:
+                    self._recording_upload_in_flight = False
+
+        threading.Thread(target=_runner, daemon=True).start()
+
     def add_frames(self, frame_np):
         """
         Add audio frames to the ongoing audio stream buffer.
@@ -1843,6 +2124,7 @@ class ServeClientBase(object):
             frame_np (numpy.ndarray): The audio frame data as a NumPy array.
 
         """
+        self._append_to_recording_spool(frame_np)
         self.lock.acquire()
         if self.frames_np is not None and self.frames_np.shape[0] > self.max_buffer_s * self.RATE:
             self.frames_offset += self.discard_buffer_s
@@ -1857,6 +2139,7 @@ class ServeClientBase(object):
         else:
             self.frames_np = np.concatenate((self.frames_np, frame_np), axis=0)
         self.lock.release()
+        self._start_snapshot_upload_if_due()
 
     def clip_audio_if_no_valid_segment(self):
         """
@@ -2024,6 +2307,8 @@ class ServeClientBase(object):
 
         """
         logging.info("Cleaning up.")
+        self._finalize_recording_spool()
+        self._upload_recording_spool_to_bot_manager(is_final=True)
         self.exit = True
 
     def forward_to_collector(self, segments):
@@ -2047,9 +2332,11 @@ class ServeClientTensorRT(ServeClientBase):
     def __init__(self, websocket, task="transcribe", multilingual=False, language=None, 
                  client_uid=None, model=None, single_model=False, 
                  platform=None, meeting_url=None, token=None, meeting_id=None,
+                 transcription_tier: str = "realtime",
                  collector_client_ref: Optional[TranscriptionCollectorClient] = None,
                  server_options: Optional[dict] = None):
         super().__init__(websocket, language, task, client_uid, platform, meeting_url, token, meeting_id,
+                         transcription_tier=transcription_tier,
                          collector_client_ref=collector_client_ref, server_options=server_options)
         self.eos = False
         
@@ -2430,9 +2717,11 @@ class ServeClientFasterWhisper(ServeClientBase):
                  client_uid=None, model="small.en", initial_prompt=None, 
                  vad_parameters=None, use_vad=True, single_model=False, 
                  platform=None, meeting_url=None, token=None, meeting_id=None,
+                 transcription_tier: str = "realtime",
                  collector_client_ref: Optional[TranscriptionCollectorClient] = None,
                  server_options: Optional[dict] = None):
         super().__init__(websocket, language, task, client_uid, platform, meeting_url, token, meeting_id,
+                         transcription_tier=transcription_tier,
                          collector_client_ref=collector_client_ref, server_options=server_options)
         self.model_sizes = [
             "tiny", "tiny.en", "base", "base.en", "small", "small.en",
@@ -2882,9 +3171,11 @@ class ServeClientRemote(ServeClientBase):
                  client_uid=None, model=None, initial_prompt=None, 
                  vad_parameters=None, use_vad=True, 
                  platform=None, meeting_url=None, token=None, meeting_id=None,
+                 transcription_tier: str = "realtime",
                  collector_client_ref: Optional[TranscriptionCollectorClient] = None,
                  server_options: Optional[dict] = None):
         super().__init__(websocket, language, task, client_uid, platform, meeting_url, token, meeting_id,
+                         transcription_tier=transcription_tier,
                          collector_client_ref=collector_client_ref, server_options=server_options)
         
         # Log the critical parameters
@@ -2897,8 +3188,9 @@ class ServeClientRemote(ServeClientBase):
         self.initial_prompt = initial_prompt
 
         server_options = server_options or {}
-        self.min_audio_s = server_options.get("min_audio_s", 1.0)
-        self.same_output_threshold = server_options.get("same_output_threshold", 3)
+        is_deferred_tier = self.transcription_tier == "deferred"
+        self.min_audio_s = server_options.get("min_audio_s_tier2", 20.0) if is_deferred_tier else server_options.get("min_audio_s", 1.0)
+        self.same_output_threshold = server_options.get("same_output_threshold_tier2", 2) if is_deferred_tier else server_options.get("same_output_threshold", 3)
         
         # Rate limiting: minimum time between requests per connection
         from whisper_live import settings
@@ -2927,11 +3219,15 @@ class ServeClientRemote(ServeClientBase):
             else:
                 # New format: already in seconds, use directly
                 self.min_time_between_requests = min_time
+        if is_deferred_tier:
+            tier2_min_time = server_options.get("min_time_between_requests_s_tier2", 20.0)
+            self.min_time_between_requests = float(tier2_min_time)
         
         self.last_transcription_time = 0.0  # Track when last transcription request completed
         
-        logging.info(f"Remote client {client_uid}: min_audio_s={self.min_audio_s} (server_options had: {server_options.get('min_audio_s', 'NOT SET')})")
-        logging.info(f"Remote client {client_uid}: same_output_threshold={self.same_output_threshold} (server_options had: {server_options.get('same_output_threshold', 'NOT SET')})")
+        logging.info(f"Remote client {client_uid}: transcription_tier={self.transcription_tier}")
+        logging.info(f"Remote client {client_uid}: min_audio_s={self.min_audio_s}")
+        logging.info(f"Remote client {client_uid}: same_output_threshold={self.same_output_threshold}")
         logging.info(f"Remote client {client_uid}: min_time_between_requests={self.min_time_between_requests:.3f}s (max {1.0/self.min_time_between_requests:.2f} requests/second)")
         
         self.vad_parameters = vad_parameters or {"onset": server_options.get("vad_onset", 0.5)}
@@ -3014,6 +3310,7 @@ class ServeClientRemote(ServeClientBase):
             api_url=api_url,
             api_key=api_key,
             model=model,
+            transcription_tier=self.transcription_tier,
             sampling_rate=self.RATE,
         )
 

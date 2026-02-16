@@ -1,7 +1,7 @@
 import { Page } from "playwright";
 import { BotConfig } from "../../types";
 import { log, callStartupCallback } from "../../utils";
-import { hasStopSignalReceived } from "../../index";
+import { hasStopSignalReceived, triggerPostAdmissionCamera, triggerPostAdmissionChat } from "../../index";
 
 export type AdmissionDecision = {
   admitted: boolean;
@@ -34,19 +34,19 @@ function generateReasonTokens(platform: string): {
 }
 
 export type PlatformStrategies = {
-  join: (page: Page, botConfig: BotConfig) => Promise<void>;
-  waitForAdmission: (page: Page, timeoutMs: number, botConfig: BotConfig) => Promise<AdmissionResult>;
-  checkAdmissionSilent: (page: Page) => Promise<boolean>; // Silent check without callbacks
-  prepare: (page: Page, botConfig: BotConfig) => Promise<void>;
-  startRecording: (page: Page, botConfig: BotConfig) => Promise<void>;
-  startRemovalMonitor: (page: Page, onRemoval?: () => void | Promise<void>) => () => void;
+  join: (page: Page | null, botConfig: BotConfig) => Promise<void>;
+  waitForAdmission: (page: Page | null, timeoutMs: number, botConfig: BotConfig) => Promise<AdmissionResult>;
+  checkAdmissionSilent: (page: Page | null) => Promise<boolean>; // Silent check without callbacks
+  prepare: (page: Page | null, botConfig: BotConfig) => Promise<void>;
+  startRecording: (page: Page | null, botConfig: BotConfig) => Promise<void>;
+  startRemovalMonitor: (page: Page | null, onRemoval?: () => void | Promise<void>) => () => void;
   leave: (page: Page | null, botConfig?: BotConfig, reason?: LeaveReason) => Promise<boolean>;
 };
 
 export async function runMeetingFlow(
   platform: string,
   botConfig: BotConfig,
-  page: Page,
+  page: Page | null,
   gracefulLeaveFunction: (page: Page | null, exitCode: number, reason: string, errorDetails?: any) => Promise<void>,
   strategies: PlatformStrategies
 ): Promise<void> {
@@ -106,16 +106,18 @@ export async function runMeetingFlow(
         return;
       }
 
-      // Attempt stateless leave before graceful exit
-      try {
-        const result = await page.evaluate(async () => {
-          if (typeof (window as any).performLeaveAction === "function") {
-            return await (window as any).performLeaveAction();
-          }
-          return false;
-        });
-        if (result) log("✅ Successfully performed graceful leave during admission timeout");
-      } catch {}
+      // Attempt stateless leave before graceful exit (browser-based platforms only)
+      if (page) {
+        try {
+          const result = await page.evaluate(async () => {
+            if (typeof (window as any).performLeaveAction === "function") {
+              return await (window as any).performLeaveAction();
+            }
+            return false;
+          });
+          if (result) log("✅ Successfully performed graceful leave during admission timeout");
+        } catch {}
+      }
 
       await gracefulLeaveFunction(page, 0, decision.reason || "admission_timeout");
       return;
@@ -141,6 +143,19 @@ export async function runMeetingFlow(
         return;
       }
       log("✅ Bot verified to be in meeting after ACTIVE callback");
+
+      // Re-enable virtual camera after admission. Google Meet may re-negotiate
+      // WebRTC tracks during the waiting-room → meeting transition, killing
+      // any canvas track that was set up before admission.
+      triggerPostAdmissionCamera().catch((err: any) => {
+        log(`[VoiceAgent] Post-admission camera error (non-fatal): ${err?.message || err}`);
+      });
+
+      // Start chat observer now that the bot is in the meeting.
+      // The chat panel can only be opened/read when admitted.
+      triggerPostAdmissionChat().catch((err: any) => {
+        log(`[Chat] Post-admission chat error (non-fatal): ${err?.message || err}`);
+      });
     } catch (error: any) {
       log(`Error during startup callback or verification: ${error?.message || String(error)}`);
       // Continue to recording phase even if callback/verification fails
