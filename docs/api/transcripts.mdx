@@ -41,8 +41,7 @@ curl -H "X-API-Key: $API_KEY" \
 
 Returns meeting metadata plus `segments[]`. If recording was enabled and captured, `recordings[]` is included for post-meeting playback.
 
-<details>
-  <summary><strong>Response (200)</strong></summary>
+<Accordion title="Response (200)">
 
 ```json
 {
@@ -75,7 +74,7 @@ Returns meeting metadata plus `segments[]`. If recording was enabled and capture
 When recording is enabled and completed, the `recordings` array contains recording objects with `media_files`. See [Recordings API](recordings) for the full recording object shape.
 </Info>
 
-</details>
+</Accordion>
 
 ## POST `/transcripts/{platform}/{native_meeting_id}/share`
 
@@ -107,8 +106,7 @@ curl -X POST \
   </Tab>
 </Tabs>
 
-<details>
-  <summary><strong>Response (200)</strong></summary>
+<Accordion title="Response (200)">
 
 ```json
 {
@@ -119,7 +117,7 @@ curl -X POST \
 }
 ```
 
-</details>
+</Accordion>
 
 **Response fields:**
 
