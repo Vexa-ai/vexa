@@ -18,7 +18,7 @@ What to do:
 1. Check meeting status history in your UI (or your logs).
 2. Confirm you used the correct `native_meeting_id` for the platform.
 3. For Meet/Teams: confirm a host admits the bot.
-4. For Zoom: confirm [`docs/zoom-app-setup.md`](zoom-app-setup.md) is fully configured.
+4. For Zoom: confirm [`zoom-app-setup.md`](zoom-app-setup.md) is fully configured.
 
 ## Transcript issues
 
@@ -51,7 +51,7 @@ What to do:
 2. If recordings exist, stream audio via:
    - `GET /recordings/{recording_id}/media/{media_file_id}/raw`
 3. Validate storage configuration:
-   - [`docs/recording-storage.md`](recording-storage.md)
+   - [`recording-storage.md`](recording-storage.md)
 
 ### Browser playback can't seek
 
@@ -67,5 +67,4 @@ Vexa anonymizes deleted meetings for telemetry/usage tracking. UIs should hide d
 
 API semantics:
 
-- [`docs/user_api_guide.md`](user_api_guide.md)
-
+- [`user_api_guide.md`](user_api_guide.md)

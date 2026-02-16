@@ -1,58 +1,71 @@
-# Vexa Docs
+# Vexa Documentation
 
-This is the canonical entry point for Vexa setup, operations, and API usage.
+Vexa is an open-source meeting bot + API for real-time transcription and post-meeting recording & playback.
 
-## Start Here
+If you're here, you likely want one of three things:
 
-Pick the path that matches what you're doing:
+- **Get transcripts via API** — use the hosted service to start in minutes
+- **Self-host Vexa** — full control over your data and deployment
+- **Use the dashboard** — open-source UI to join meetings, review history, and play recordings
 
-- **End-to-end (deploy → token → bot → transcript → playback):** [Getting Started](getting-started.md)
-- **Self-host in production (recommended):** [Vexa Lite Deployment Guide](vexa-lite-deployment.md)
-- **Local development stack (Docker Compose):** [Deployment Guide](deployment.md)
-- **API-first integration:** [User API Guide](user_api_guide.md) + [WebSocket Guide](websocket.md)
+## How It Works
+
+1. **Send a bot to a meeting** — Use `POST /bots` with `platform` + `native_meeting_id` (and `passcode` when required).
+2. **Stream or fetch transcripts** — Use WebSockets for live updates or `GET /transcripts/{platform}/{native_meeting_id}` for the full result.
+3. **Stop, then review post-meeting artifacts** — When the meeting ends, recordings (if enabled) become available for playback.
+4. **Optionally delete/anonymize** — Delete transcript + recording artifacts with `DELETE /meetings/{platform}/{native_meeting_id}`.
+
+## Choose Your Path
+
+### [Hosted API](https://vexa.ai) (recommended to start)
+
+Use the Vexa Cloud API and dashboard — no infrastructure to manage.
+
+1. Get an API key from [vexa.ai/dashboard/api-keys](https://vexa.ai/dashboard/api-keys)
+2. Send a bot: [`POST /bots`](user_api_guide.md)
+3. Read transcripts: [`GET /transcripts/{platform}/{native_meeting_id}`](user_api_guide.md)
+4. For live streaming: [WebSocket guide](websocket.md)
+
+### [Self-Hosted (Vexa Lite)](vexa-lite-deployment.md) (full control)
+
+Self-host to have full control over your data and deployment. Vexa Lite is a single container that connects to your Postgres database and a remote transcription service.
+
+### [Docker Compose (dev)](deployment.md)
+
+Full local stack for contributors and development/testing.
+
+### [Vexa Dashboard](ui-dashboard.md) (open-source UI)
+
+Open-source Next.js dashboard for joining meetings, viewing live transcripts, and reviewing history. Fork it or use it as a reference for building your own integration.
+
+- Repo: [github.com/Vexa-ai/Vexa-Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)
 
 ## Core Concepts
 
-- [Core Concepts](concepts.md): meeting/bot/session model, transcript timing semantics, recordings, delete semantics
+- [Core concepts](concepts.md): bot/meeting/session model + timing semantics
+- [Recording & storage](recording-storage.md): how artifacts are stored + playback notes (`Range`/`206`)
+- [Delete semantics](concepts.md#delete-semantics): what "delete" means and what remains for telemetry
 
-## Platforms
+## Zoom (The Only Special Platform)
 
-- [Google Meet](platforms/google-meet.md)
-- [Microsoft Teams](platforms/microsoft-teams.md)
-- [Zoom](platforms/zoom.md)
-- [Zoom Integration Setup](zoom-app-setup.md): OAuth + Meeting SDK + OBF flow + approval caveats
+Zoom has extra constraints (OAuth + Meeting SDK + OBF token flow) and typically Marketplace approval.
 
-## Deployment and Operations
+- [Zoom limitations](platforms/zoom.md)
+- [Zoom app setup](zoom-app-setup.md)
 
-- [Deployment Guide](deployment.md): full stack Docker Compose (dev)
-- [Vexa Lite Deployment Guide](vexa-lite-deployment.md): single container (prod self-host)
-- [Self-Hosted Management Guide](self-hosted-management.md): users + tokens + admin workflows
-- [Recording Storage Modes](recording-storage.md): local vs MinIO vs S3-compatible; playback and `Range`/`206` behavior
-
-## UI (Dashboard)
-
-- [Vexa Dashboard](ui-dashboard.md): run the UI and use post-meeting playback
-
-## Troubleshooting and Security
+## Troubleshooting / Security
 
 - [Troubleshooting](troubleshooting.md)
-- [Security and Data Handling](security.md)
+- [Security](security.md)
 
 ## Voice Agent (Meeting Interaction)
 
 - [Voice Agent Guide](voice-agent.md): make the bot speak, chat, and share content in meetings (TTS, chat read/write, screen share)
 
-## Misc / Integrations
+## Integrations
 
-- [ChatGPT Transcript Share Links](chatgpt-transcript-share-links.md): shared transcript URL behavior
-
-## Notebooks (`../nbs`)
-
-- `0_basic_test.ipynb`: end-to-end bot lifecycle smoke test
-- `1_load_tests.ipynb`: load testing scenarios
-- `2_bot_concurrency.ipynb`: concurrent bot behavior
-- `3_API_validation.ipynb`: API endpoint validation
-- `manage_users.ipynb`: user and token management examples
+- [Integrations](integrations.md)
+- [ChatGPT transcript share links](chatgpt-transcript-share-links.md)
 
 ## Typical Developer Flow
 
@@ -63,8 +76,8 @@ Pick the path that matches what you're doing:
 5. If needed, configure Zoom with [Zoom Integration Setup](zoom-app-setup.md).
 6. For interactive bots (speak, chat, screen share), see [Voice Agent Guide](voice-agent.md).
 
-## Support
+## Support / Roadmap
 
-- Discord: https://discord.gg/Ga9duGkVz9
 - Issues: https://github.com/Vexa-ai/vexa/issues
-- Website: https://vexa.ai
+- Milestones: https://github.com/Vexa-ai/vexa/milestones
+- Discord: https://discord.gg/Ga9duGkVz9

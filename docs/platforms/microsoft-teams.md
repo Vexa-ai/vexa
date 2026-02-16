@@ -11,9 +11,9 @@ For Teams, you must pass:
 
 Example:
 
-- URL: `https://teams.live.com/meet/9321836506982?p=R3eB5oaDFRkDIDnFxR`
-- `native_meeting_id`: `9321836506982`
-- `passcode`: `R3eB5oaDFRkDIDnFxR`
+- URL: `https://teams.live.com/meet/1234567890123?p=YOUR_PASSCODE`
+- `native_meeting_id`: `1234567890123`
+- `passcode`: `YOUR_PASSCODE`
 
 ## API example
 
@@ -23,8 +23,8 @@ curl -X POST "$API_BASE/bots" \
   -H "X-API-Key: $API_KEY" \
   -d '{
     "platform": "teams",
-    "native_meeting_id": "9321836506982",
-    "passcode": "R3eB5oaDFRkDIDnFxR",
+    "native_meeting_id": "1234567890123",
+    "passcode": "YOUR_PASSCODE",
     "recording_enabled": true,
     "transcribe_enabled": true,
     "transcription_tier": "realtime"
@@ -33,7 +33,7 @@ curl -X POST "$API_BASE/bots" \
 
 Full API guide:
 
-- [`docs/user_api_guide.md`](../user_api_guide.md)
+- [API overview](../user_api_guide.md)
 
 ## Common issues
 
@@ -53,5 +53,4 @@ Common causes:
 
 See:
 
-- [`docs/troubleshooting.md`](../troubleshooting.md)
-
+- [Troubleshooting](../troubleshooting.md)
