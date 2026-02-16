@@ -18,8 +18,8 @@ The Interactive Bots feature transforms the Vexa bot from a passive transcriptio
 ## Quick Start
 
 <Steps>
-  <Step title="Request an interactive bot">
-    Add `voice_agent_enabled: true` to your `POST /bots` request:
+  <Step title="Send a bot to a meeting">
+    Interactive bot capabilities are **enabled by default** (`voice_agent_enabled: true`). Just send a regular bot:
 
     ```bash
     curl -X POST "$API_BASE/bots" \
@@ -28,8 +28,7 @@ The Interactive Bots feature transforms the Vexa bot from a passive transcriptio
       -d '{
         "platform": "google_meet",
         "native_meeting_id": "abc-defg-hij",
-        "bot_name": "AI Assistant",
-        "voice_agent_enabled": true
+        "bot_name": "AI Assistant"
       }'
     ```
   </Step>

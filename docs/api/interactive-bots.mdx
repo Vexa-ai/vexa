@@ -12,7 +12,7 @@ All interactive bot endpoints follow the pattern:
 Authentication: `X-API-Key` header (same as all Vexa endpoints).
 
 <Info>
-Interactive bot endpoints are only available when the bot was requested with `voice_agent_enabled: true`. See [Bots API](bots) for the request format.
+Interactive bot endpoints are available by default (`voice_agent_enabled` defaults to `true`). To disable, pass `voice_agent_enabled: false` when creating the bot. See [Bots API](bots) for the request format.
 </Info>
 
 ## Speak (Text-to-Speech)

@@ -103,7 +103,7 @@ Storage configuration:
 
 ## Interactive Bots (Meeting Interaction)
 
-When `voice_agent_enabled: true` is passed at bot creation, the bot becomes an interactive meeting participant. An external agent can instruct it to:
+By default (`voice_agent_enabled: true`), every bot is an interactive meeting participant. An external agent can instruct it to:
 
 - **Speak** via text-to-speech (OpenAI TTS → PulseAudio → meeting mic)
 - **Read/write chat** messages in the meeting
