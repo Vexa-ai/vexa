@@ -1,0 +1,64 @@
+---
+title: "Microsoft Teams"
+---
+This page covers Teams specifics: how to extract the meeting ID and passcode, and common join issues.
+
+## Native meeting ID and passcode
+
+For Teams, you must pass:
+
+- `native_meeting_id`: the numeric meeting ID
+- `passcode`: the value of the `?p=` query parameter from the URL
+
+Example:
+
+- URL: `https://teams.live.com/meet/1234567890123?p=YOUR_PASSCODE`
+- `native_meeting_id`: `1234567890123`
+- `passcode`: `YOUR_PASSCODE`
+
+## API example
+
+```bash
+curl -X POST "$API_BASE/bots" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{
+    "platform": "teams",
+    "native_meeting_id": "1234567890123",
+    "passcode": "YOUR_PASSCODE",
+    "recording_enabled": true,
+    "transcribe_enabled": true,
+    "transcription_tier": "realtime"
+  }'
+```
+
+Full API guide:
+
+- [API overview](../user_api_guide)
+
+## Common issues
+
+### Bot does not join
+
+Most often:
+
+- wrong `native_meeting_id` (must be numeric only)
+- missing/wrong `passcode` (the `p=` value)
+
+### Bot joins but you see no transcript
+
+Common causes:
+
+- `transcribe_enabled=false`
+- meeting audio not available to capture
+
+See:
+
+- [Troubleshooting](../troubleshooting)
+
+## Known Limitations
+
+- **Only `teams.live.com` personal meeting links are supported.** Enterprise/work/school URLs (`teams.microsoft.com/l/meetup-join/...`) and the new short URL format are not yet supported. ([#110](https://github.com/Vexa-ai/vexa/issues/110))
+- **Personal Microsoft accounts may generate passcodes shorter than 8 characters**, which are currently rejected by validation. Work/school accounts are not affected. ([#109](https://github.com/Vexa-ai/vexa/issues/109))
+- **Bot avatar/virtual camera is not visible to other participants.** Teams SFU returns `a=inactive` for video from anonymous guest bots. Use screen share for visual content instead. ([#124](https://github.com/Vexa-ai/vexa/issues/124))
+- **Intermittent false rejection on pre-join screen.** In rare cases the bot may incorrectly conclude it was rejected by the meeting admin. Retrying usually succeeds. ([#123](https://github.com/Vexa-ai/vexa/issues/123))

@@ -1,0 +1,57 @@
+---
+title: "Security and Data Handling"
+---
+This page documents the security boundaries and data lifecycle at a high level for self-hosted and hosted deployments.
+
+## Authentication and Secrets
+
+- All API calls use `X-API-Key`.
+- Admin operations use `ADMIN_API_TOKEN` (self-hosted).
+
+Rules:
+
+- Never commit API keys, admin tokens, OAuth credentials, or object-storage secrets.
+- Rotate any credential immediately if it is exposed.
+
+## What Data Is Stored
+
+Depending on configuration and per-meeting flags, Vexa may store:
+
+- meeting metadata (platform, native meeting ID, timestamps)
+- transcript segments (text + timing + speaker attribution)
+- recording artifacts (audio media files) when `recording_enabled=true`
+
+## Storage Backends
+
+Recommended for production:
+
+- Keep compute stateless.
+- Store artifacts in S3-compatible object storage (`STORAGE_BACKEND=s3`).
+
+Testing only:
+
+- `STORAGE_BACKEND=local` (requires mounted volume for persistence)
+
+Details:
+
+- [`recording-storage.md`](recording-storage)
+
+## Deletion Semantics
+
+Deleting a meeting is intended to purge transcript/recording artifacts best-effort, then anonymize the meeting record (for usage tracking/telemetry).
+
+This means:
+
+- the meeting may remain in storage in anonymized form
+- artifacts should be removed from your configured storage backend
+
+API details:
+
+- [`user_api_guide.md`](user_api_guide)
+
+## Zoom Credentials Caveat
+
+Zoom integrations involve sensitive credentials (OAuth + SDK secrets). Follow:
+
+- [`zoom-app-setup.md`](zoom-app-setup)
+

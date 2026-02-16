@@ -1,13 +1,14 @@
-# API Overview
-
+---
+title: "API Overview"
+---
 The Vexa API is platform-agnostic: you use the same endpoints for Google Meet, Teams, and Zoom.
 
 The only platform differences are in the **meeting identifiers** you pass (`native_meeting_id`, and `passcode` for Teams).
 
 If you're new, start here:
 
-- [Quickstart (Hosted)](quickstart.md)
-- [Self-Hosted Quickstart](getting-started.md)
+- [Quickstart (Hosted)](quickstart)
+- [Self-Hosted Quickstart](getting-started)
 
 ## Authentication
 
@@ -21,7 +22,7 @@ Hosted users can get an API key from:
 
 Self-hosted users can create users/tokens via:
 
-- [Admin API](self-hosted-management.md)
+- [Admin API](self-hosted-management)
 
 ## Base URL
 
@@ -40,7 +41,7 @@ export API_KEY="YOUR_API_KEY_HERE"
 
 Examples (Meet/Teams/Zoom) are here:
 
-- [`api/bots.md`](api/bots.md)
+- [`api/bots.md`](api/bots)
 
 ### 2) Read the transcript
 
@@ -48,7 +49,7 @@ Examples (Meet/Teams/Zoom) are here:
 
 Examples are here:
 
-- [`api/transcripts.md`](api/transcripts.md)
+- [`api/transcripts.md`](api/transcripts)
 
 ### 3) Post-meeting playback (if a recording exists)
 
@@ -62,7 +63,7 @@ For browser playback, stream through the API:
 
 Full recordings reference:
 
-- [`api/recordings.md`](api/recordings.md)
+- [`api/recordings.md`](api/recordings)
 
 Recording management endpoints (explicit):
 
@@ -70,17 +71,37 @@ Recording management endpoints (explicit):
 - `GET /recordings/{recording_id}`
 - `DELETE /recordings/{recording_id}`
 
+## Pagination
+
+List endpoints use `limit` and `offset` query parameters:
+
+```bash
+GET /recordings?limit=50&offset=0
+GET /meetings?limit=100&offset=0
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | int | varies (50-100) | Maximum items to return |
+| `offset` | int | `0` | Number of items to skip |
+
+Admin endpoints use `skip` instead of `offset` (same behavior):
+
+```bash
+GET /admin/users?skip=0&limit=100
+```
+
 ## Reference
 
-- Bots: [`api/bots.md`](api/bots.md)
-- Meetings: [`api/meetings.md`](api/meetings.md)
-- Transcripts: [`api/transcripts.md`](api/transcripts.md)
-- Recordings: [`api/recordings.md`](api/recordings.md)
-- User settings (recording defaults, webhooks): [`api/settings.md`](api/settings.md)
-- Voice Agent (speak, chat, screen share): [`api/voice-agent.md`](api/voice-agent.md)
-- WebSocket (live streaming): [`websocket.md`](websocket.md)
+- Bots: [Bots API](api/bots)
+- Meetings: [Meetings API](api/meetings)
+- Transcripts: [Transcripts API](api/transcripts)
+- Recordings: [Recordings API](api/recordings)
+- User settings (recording defaults, webhooks): [Settings API](api/settings)
+- Interactive Bots (speak, chat, screen share): [Interactive Bots API](api/interactive-bots)
+- WebSocket (live streaming): [WebSocket](websocket)
 
 Zoom caveats:
 
-- [`platforms/zoom.md`](platforms/zoom.md)
-- [`zoom-app-setup.md`](zoom-app-setup.md)
+- [Zoom limitations](platforms/zoom)
+- [Zoom app setup](zoom-app-setup)
