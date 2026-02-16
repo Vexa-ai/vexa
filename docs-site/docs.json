@@ -1,0 +1,113 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "Vexa",
+  "theme": "mint",
+  "favicon": "/assets/logodark.svg",
+  "logo": {
+    "dark": "/assets/logodark.svg",
+    "light": "/assets/logo.svg"
+  },
+  "colors": {
+    "primary": "#22c55e"
+  },
+  "contextual": {
+    "options": ["copy", "view", "chatgpt", "claude", "perplexity"]
+  },
+  "seo": {
+    "metatags": {
+      "canonical": "https://docs.vexa.ai"
+    }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Docs",
+        "groups": [
+          {
+            "group": "Start Here",
+            "pages": [
+              "index",
+              "quickstart",
+              "getting-started"
+            ]
+          },
+          {
+            "group": "Deploy",
+            "pages": [
+              "vexa-lite-deployment",
+              "deployment",
+              "recording-storage"
+            ]
+          },
+          {
+            "group": "Dashboard",
+            "pages": ["ui-dashboard"]
+          },
+          {
+            "group": "Admin",
+            "pages": ["self-hosted-management"]
+          },
+          {
+            "group": "Concepts",
+            "pages": ["concepts", "errors-and-retries"]
+          },
+          {
+            "group": "Platforms",
+            "pages": [
+              "platforms/google-meet",
+              "platforms/microsoft-teams",
+              "platforms/zoom",
+              "zoom-app-setup"
+            ]
+          },
+          {
+            "group": "Voice Agent",
+            "pages": ["voice-agent"]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "mcp",
+              "webhooks",
+              "local-webhook-development",
+              "integrations",
+              "chatgpt-transcript-share-links"
+            ]
+          },
+          {
+            "group": "Troubleshooting",
+            "pages": ["troubleshooting"]
+          },
+          {
+            "group": "Security",
+            "pages": ["security"]
+          }
+        ]
+      },
+      {
+        "tab": "API",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": ["user_api_guide"]
+          },
+          {
+            "group": "REST Reference",
+            "pages": [
+              "api/bots",
+              "api/transcripts",
+              "api/meetings",
+              "api/recordings",
+              "api/settings",
+              "api/voice-agent"
+            ]
+          },
+          {
+            "group": "WebSocket",
+            "pages": ["websocket"]
+          }
+        ]
+      }
+    ]
+  }
+}

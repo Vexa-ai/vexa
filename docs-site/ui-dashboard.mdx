@@ -1,0 +1,50 @@
+---
+title: "Vexa Dashboard"
+---
+Vexa Dashboard is an **open-source** Next.js web UI for Vexa. It's a fully functional application for joining meetings, viewing live transcripts, managing users/tokens, and reviewing transcript history — and it's also a great starting point for building your own integration.
+
+**Fork it, use it as a reference, or build on top of it.**
+
+Repo: [github.com/Vexa-ai/Vexa-Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)
+
+## Use It as a Reference
+
+The dashboard codebase contains working examples of how to integrate with the Vexa API and WebSocket. Use these as code snippets or patterns for building your own application:
+
+| What | File | Description |
+|------|------|-------------|
+| **REST API client** | [`src/lib/api.ts`](https://github.com/Vexa-ai/Vexa-Dashboard/blob/main/src/lib/api.ts) | API wrapper for bots, meetings, transcripts, recordings |
+| **WebSocket hook** | [`src/hooks/use-vexa-websocket.ts`](https://github.com/Vexa-ai/Vexa-Dashboard/blob/main/src/hooks/use-vexa-websocket.ts) | React hook for WebSocket connection, subscription, and message handling |
+| **Live transcripts** | [`src/hooks/use-live-transcripts.ts`](https://github.com/Vexa-ai/Vexa-Dashboard/blob/main/src/hooks/use-live-transcripts.ts) | Real-time transcript rendering with deduplication and speaker grouping |
+| **Meetings store** | [`src/stores/meetings-store.ts`](https://github.com/Vexa-ai/Vexa-Dashboard/blob/main/src/stores/meetings-store.ts) | Zustand store for meeting state management |
+| **Meeting detail page** | [`src/app/meetings/[id]/page.tsx`](https://github.com/Vexa-ai/Vexa-Dashboard/blob/main/src/app/meetings/%5Bid%5D/page.tsx) | Full meeting view with transcript, recording playback, and metadata |
+| **API config route** | [`src/app/api/config/route.ts`](https://github.com/Vexa-ai/Vexa-Dashboard/blob/main/src/app/api/config/route.ts) | Server-side API configuration and proxying |
+
+## What You Need
+
+- A reachable Vexa API Gateway URL (typically `http://<host>:8056`)
+- The Vexa **Admin API token** (the `ADMIN_API_TOKEN` from your Vexa deployment, set as `VEXA_ADMIN_API_KEY` in the dashboard)
+
+## Run With Docker
+
+```bash
+docker run --rm -p 3000:3000 \
+  -e VEXA_API_URL=http://your-vexa-host:8056 \
+  -e VEXA_ADMIN_API_KEY=your_admin_api_token \
+  vexaai/vexa-dashboard:latest
+```
+
+Then open `http://localhost:3000`.
+
+## Local Development
+
+```bash
+git clone https://github.com/Vexa-ai/Vexa-Dashboard.git
+cd Vexa-Dashboard
+npm install
+cp .env.example .env.local
+# edit .env.local: VEXA_API_URL + VEXA_ADMIN_API_KEY
+npm run dev
+```
+
+Local dev server runs on `http://localhost:3001`.

@@ -1,0 +1,65 @@
+---
+title: "Google Meet"
+---
+This page covers the Google Meet specifics: how to extract IDs, what to expect during admission, and common failure modes.
+
+## Native meeting ID
+
+Use the meeting code from the URL:
+
+- URL: `https://meet.google.com/abc-defg-hij`
+- `native_meeting_id`: `abc-defg-hij`
+
+## Admission model
+
+Most Google Meet meetings require the host to admit the bot from the waiting room.
+
+Typical lifecycle:
+
+1. Bot joins and waits in the lobby (`awaiting_admission`)
+2. Host admits the bot
+3. Bot becomes `active`
+
+If the bot is never admitted, you will not get a meaningful transcript or recording.
+
+## API example
+
+```bash
+curl -X POST "$API_BASE/bots" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{
+    "platform": "google_meet",
+    "native_meeting_id": "abc-defg-hij",
+    "recording_enabled": true,
+    "transcribe_enabled": true,
+    "transcription_tier": "realtime"
+  }'
+```
+
+Full API guide:
+
+- [API overview](../user_api_guide)
+
+## Common issues
+
+### Bot joins then leaves quickly
+
+Most often:
+
+- the bot was not admitted
+- the meeting is over / invalid link
+- policy restrictions on the meeting (host settings)
+
+Check the meeting status history and bot logs, and confirm the host admits the bot.
+
+### No transcript segments
+
+Common causes:
+
+- `transcribe_enabled=false`
+- the meeting was silent (or audio capture failed)
+
+See:
+
+- [Troubleshooting](../troubleshooting)

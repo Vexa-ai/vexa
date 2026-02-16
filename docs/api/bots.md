@@ -1,30 +1,6 @@
----
-title: "Bots API"
----
+# Bots API
+
 Bots join meetings and stream audio for transcription (and optionally persist a recording).
-
-## Response Formats (Codebase)
-
-These endpoints return stable response envelopes:
-
-| Endpoint | Status | Response |
-|---|---:|---|
-| `POST /bots` | `201` | Full meeting object (`id`, `platform`, `native_meeting_id`, `constructed_meeting_url`, `status`, `bot_container_id`, `start_time`, `end_time`, `data`, `created_at`, `updated_at`) |
-| `GET /bots/status` | `200` | `{"running_bots":[{"container_id","container_name","platform","native_meeting_id","status","normalized_status","created_at","labels","meeting_id_from_name"}]}` |
-| `PUT /bots/{platform}/{native_meeting_id}/config` | `202` | `{"message":"Reconfiguration request accepted and sent to the bot."}` |
-| `DELETE /bots/{platform}/{native_meeting_id}` | `202` | `{"message":"Stop request accepted and is being processed."}` |
-
-Validation/auth errors use:
-
-```json
-{
-  "detail": "..."
-}
-```
-
-<Info>
-The endpoint sections below include concrete JSON examples inside collapsed <code>Response (...)</code> blocks.
-</Info>
 
 ## Meeting IDs by Platform
 
@@ -48,7 +24,7 @@ Common request fields:
 - `recording_enabled` (optional)
 - `transcribe_enabled` (optional)
 - `transcription_tier` (`realtime` | `deferred`, optional)
-- `voice_agent_enabled` (optional, defaults to `true`) -- enables [Interactive Bots](interactive-bots) capabilities (speak, chat, screen share). Set to `false` to disable.
+- `voice_agent_enabled` (optional) -- enables [Voice Agent](voice-agent.md) capabilities (speak, chat, screen share)
 
 <Tabs>
   <Tab title="Google Meet">
@@ -85,7 +61,7 @@ curl -X POST "$API_BASE/bots" \
   <Tab title="Zoom">
 > Caveat: until Marketplace approval, joining meetings outside the authorizing account may be limited.
 >
-> See [Zoom limitations](../platforms/zoom) and [Zoom app setup](../zoom-app-setup).
+> See [Zoom limitations](../platforms/zoom.md) and [Zoom app setup](../zoom-app-setup.md).
 
 ```bash
 curl -X POST "$API_BASE/bots" \
@@ -110,18 +86,20 @@ Returns the created meeting record.
 
 ```json
 {
-  "id": 219,
-  "user_id": 4,
+  "id": 16,
+  "user_id": 1,
   "platform": "google_meet",
   "native_meeting_id": "abc-defg-hij",
   "constructed_meeting_url": "https://meet.google.com/abc-defg-hij",
   "status": "requested",
-  "bot_container_id": "d21c5b0c5275...c9fe9333",
+  "bot_container_id": null,
   "start_time": null,
   "end_time": null,
-  "data": {},
-  "created_at": "2026-02-16T17:42:33.524137",
-  "updated_at": "2026-02-16T17:42:33.535113"
+  "data": {
+    "passcode": null
+  },
+  "created_at": "2026-02-13T20:10:00Z",
+  "updated_at": "2026-02-13T20:10:00Z"
 }
 ```
 
@@ -143,17 +121,18 @@ curl -H "X-API-Key: $API_KEY" \
 {
   "running_bots": [
     {
-      "container_id": "d21c5b0c5275...c9fe9333",
-      "container_name": "vexa-bot-219-fd0a58fb",
+      "container_id": "3f2f...9b1",
+      "container_name": "vexa-bot-google_meet-16",
       "platform": "google_meet",
       "native_meeting_id": "abc-defg-hij",
-      "status": "Up 4 seconds",
+      "status": "Up 2 minutes",
       "normalized_status": "Up",
-      "created_at": "2026-02-16T17:42:33+00:00",
+      "created_at": "2026-02-13T20:10:10Z",
       "labels": {
-        "vexa.user_id": "4"
+        "vexa.user_id": "1",
+        "vexa.meeting_id": "16"
       },
-      "meeting_id_from_name": "219"
+      "meeting_id_from_name": "16"
     }
   ]
 }
