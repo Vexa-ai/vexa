@@ -1,9 +1,9 @@
 ---
-title: "Voice Agent API"
+title: "Interactive Bots API"
 description: "REST endpoints for controlling the bot's voice, chat, and screen share during live meetings"
 ---
 
-All voice agent endpoints follow the pattern:
+All interactive bot endpoints follow the pattern:
 
 ```
 {METHOD} /bots/{platform}/{native_meeting_id}/{action}
@@ -12,7 +12,7 @@ All voice agent endpoints follow the pattern:
 Authentication: `X-API-Key` header (same as all Vexa endpoints).
 
 <Info>
-Voice agent endpoints are only available when the bot was requested with `voice_agent_enabled: true`. See [Bots API](bots) for the request format.
+Interactive bot endpoints are available by default (`voice_agent_enabled` defaults to `true`). To disable, pass `voice_agent_enabled: false` when creating the bot. See [Bots API](bots) for the request format.
 </Info>
 
 ## Speak (Text-to-Speech)
@@ -258,7 +258,7 @@ curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij/avatar" \
 
 ## WebSocket Events
 
-When voice agent is enabled, additional events are published on the [WebSocket](../websocket) connection:
+When interactive bot mode is enabled, additional events are published on the [WebSocket](../websocket) connection:
 
 | Event | Payload | Description |
 |-------|---------|-------------|

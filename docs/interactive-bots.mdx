@@ -1,9 +1,9 @@
 ---
-title: "Voice Agent"
+title: "Interactive Bots"
 description: "Turn the Vexa bot into an interactive meeting participant that can speak, chat, and share visual content"
 ---
 
-The Voice Agent feature transforms the Vexa bot from a passive transcription observer into a fully interactive meeting participant. An external agent or application controls the bot via REST API to speak, read/write chat, and share visual content during a live meeting.
+The Interactive Bots feature transforms the Vexa bot from a passive transcription observer into a fully interactive meeting participant. An external agent or application controls the bot via REST API to speak, read/write chat, and share visual content during a live meeting.
 
 ## Capabilities
 
@@ -18,8 +18,8 @@ The Voice Agent feature transforms the Vexa bot from a passive transcription obs
 ## Quick Start
 
 <Steps>
-  <Step title="Request a voice-agent-enabled bot">
-    Add `voice_agent_enabled: true` to your `POST /bots` request:
+  <Step title="Send a bot to a meeting">
+    Interactive bot capabilities are **enabled by default** (`voice_agent_enabled: true`). Just send a regular bot:
 
     ```bash
     curl -X POST "$API_BASE/bots" \
@@ -28,8 +28,7 @@ The Voice Agent feature transforms the Vexa bot from a passive transcription obs
       -d '{
         "platform": "google_meet",
         "native_meeting_id": "abc-defg-hij",
-        "bot_name": "AI Assistant",
-        "voice_agent_enabled": true
+        "bot_name": "AI Assistant"
       }'
     ```
   </Step>
@@ -59,7 +58,7 @@ The Voice Agent feature transforms the Vexa bot from a passive transcription obs
   </Step>
 </Steps>
 
-For the full endpoint reference, see [Voice Agent API](api/voice-agent).
+For the full endpoint reference, see [Interactive Bots API](api/interactive-bots).
 
 ## How It Works
 
@@ -163,7 +162,7 @@ curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij/avatar" \
   -H "X-API-Key: $API_KEY"
 ```
 
-See the [Avatar API reference](api/voice-agent#avatar) for full details.
+See the [Avatar API reference](api/interactive-bots#avatar) for full details.
 
 Current limitations:
 - Only tested on Google Meet
@@ -172,7 +171,7 @@ Current limitations:
 
 ## WebSocket Events
 
-When voice agent is enabled, additional events are published on the [WebSocket](websocket) connection:
+When interactive bot mode is enabled, additional events are published on the [WebSocket](websocket) connection:
 
 | Event | Payload | Description |
 |-------|---------|-------------|
@@ -208,10 +207,11 @@ PulseAudio is already configured in the bot container (`entrypoint.sh`). No manu
 2. **Single TTS provider** -- currently only OpenAI TTS is implemented. The architecture supports adding other providers.
 3. **Google Meet only** -- chat read/write and screen share are currently implemented for Google Meet. Teams and Zoom support is planned.
 4. **No speech queue** -- rapid speak commands may overlap. Wait for the `speak.completed` WebSocket event before sending the next command, or use `DELETE /speak` to interrupt.
+5. **Teams avatar not visible** -- Teams SFU returns `a=inactive` for video from anonymous guests, so the bot's virtual camera/avatar is never visible to other Teams participants. Use screen share instead. ([#124](https://github.com/Vexa-ai/vexa/issues/124))
 
 ## Related
 
-- [Voice Agent API Reference](api/voice-agent) -- full endpoint documentation
+- [Interactive Bots API Reference](api/interactive-bots) -- full endpoint documentation
 - [WebSocket](websocket) -- real-time event streaming
 - [Bots API](api/bots) -- requesting bots with `voice_agent_enabled`
 - [Concepts](concepts) -- meeting/bot/session model
