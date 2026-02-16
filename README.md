@@ -32,7 +32,7 @@
   <a href="#whats-new">What’s new</a> •
   <a href="#quickstart">Quickstart</a> •
   <a href="#2-get-transcripts">API</a> •
-  <a href="docs/README.md">Docs</a> •
+  <a href="https://docs.vexa.ai">Docs</a> •
   <a href="#roadmap">Roadmap</a> •
   <a href="https://discord.gg/Ga9duGkVz9">Discord</a>
 </p>
@@ -150,7 +150,7 @@ docker run -d \
 - 🚀 **One-click platform deployments**: [vexa-lite-deploy repository](https://github.com/Vexa-ai/vexa-lite-deploy)
   - ✅ **Fly.io** - Implemented
   - 🚧 **Railway, Render, etc.** - To be added (contribute by adding your platform of choice!)
-- 📖 **Complete setup guide**: [Vexa Lite Deployment Guide](docs/vexa-lite-deployment.md) - All 4 configurations (local/remote database, local/remote transcription)
+- 📖 **Complete setup guide**: [Vexa Lite Deployment Guide](https://docs.vexa.ai/vexa-lite-deployment) - Environment variables, storage, TTS, and all configuration options
 - 🎨 **Frontend options**: Choose from open-source user interfaces like [Vexa Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)
 
 ### Option 3: Docker Compose - For Development
@@ -171,13 +171,13 @@ make all                         # Default: remote transcription (GPU-free)
 - Runs database migrations
 - Starts a simple test to verify everything works
 
-* Full guide: [docs/deployment.md](docs/deployment.md)
+* Full guide: [Deployment Guide](https://docs.vexa.ai/deployment)
 
 ### Recording storage (local and cloud)
 
 Recording is implemented and supports local filesystem, MinIO, and cloud S3-compatible backends.
 
-See [`docs/recording-storage.md`](docs/recording-storage.md) for:
+See [Recording Storage](https://docs.vexa.ai/recording-storage) for:
 
 - Storage backends and environment variables (`STORAGE_BACKEND`)
 - Docker Compose / Lite / Kubernetes deployment notes
@@ -254,8 +254,8 @@ curl -H "X-API-Key: <API_KEY>" \
   "$API_BASE/transcripts/<platform>/<native_meeting_id>"
 ```
 
-For real-time streaming (sub‑second), see the [WebSocket guide](docs/websocket.md).
-For full REST details, see the [User API Guide](docs/user_api_guide.md).
+For real-time streaming (sub‑second), see the [WebSocket guide](https://docs.vexa.ai/websocket).
+For full REST details, see the [User API Guide](https://docs.vexa.ai/user_api_guide).
 
 Note: Meeting IDs are user-provided (Google Meet code like `xxx-xxxx-xxx` or Teams numeric ID and passcode). Vexa does not generate meeting IDs.
 
@@ -308,9 +308,10 @@ For the up-to-date roadmap and priorities, see GitHub Issues and Milestones. Iss
 - **Open-source frontends** - Choose from user interfaces like [Vexa Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)
 
 **Deployment & Management Guides:**
-- [Local Deployment and Testing Guide](docs/deployment.md)
-- [Self-Hosted Management Guide](docs/self-hosted-management.md) - Managing users and API tokens
-- [Vexa Lite Deployment Guide](docs/vexa-lite-deployment.md) - Single container deployment
+- [Vexa Lite Deployment Guide](https://docs.vexa.ai/vexa-lite-deployment) - Single container deployment
+- [Docker Compose Deployment](https://docs.vexa.ai/deployment) - Full stack for development
+- [Self-Hosted Management Guide](https://docs.vexa.ai/self-hosted-management) - Managing users and API tokens
+- [Recording Storage](https://docs.vexa.ai/recording-storage) - S3, MinIO, and local storage configuration
 
 ## Related Projects
 
