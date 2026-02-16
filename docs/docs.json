@@ -61,13 +61,13 @@
             ]
           },
           {
-            "group": "Voice Agent",
-            "pages": ["voice-agent"]
+            "group": "Interactive Bots",
+            "pages": ["interactive-bots"]
           },
           {
             "group": "Integrations",
             "pages": [
-              "mcp",
+              "vexa-mcp",
               "webhooks",
               "local-webhook-development",
               "integrations",
@@ -99,7 +99,7 @@
               "api/meetings",
               "api/recordings",
               "api/settings",
-              "api/voice-agent"
+              "api/interactive-bots"
             ]
           },
           {
