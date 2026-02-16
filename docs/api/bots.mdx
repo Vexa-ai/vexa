@@ -1,5 +1,6 @@
-# Bots API
-
+---
+title: "Bots API"
+---
 Bots join meetings and stream audio for transcription (and optionally persist a recording).
 
 ## Meeting IDs by Platform
@@ -24,7 +25,7 @@ Common request fields:
 - `recording_enabled` (optional)
 - `transcribe_enabled` (optional)
 - `transcription_tier` (`realtime` | `deferred`, optional)
-- `voice_agent_enabled` (optional) -- enables [Voice Agent](voice-agent.md) capabilities (speak, chat, screen share)
+- `voice_agent_enabled` (optional) -- enables [Interactive Bots](interactive-bots) capabilities (speak, chat, screen share)
 
 <Tabs>
   <Tab title="Google Meet">
@@ -61,7 +62,7 @@ curl -X POST "$API_BASE/bots" \
   <Tab title="Zoom">
 > Caveat: until Marketplace approval, joining meetings outside the authorizing account may be limited.
 >
-> See [Zoom limitations](../platforms/zoom.md) and [Zoom app setup](../zoom-app-setup.md).
+> See [Zoom limitations](../platforms/zoom) and [Zoom app setup](../zoom-app-setup).
 
 ```bash
 curl -X POST "$API_BASE/bots" \

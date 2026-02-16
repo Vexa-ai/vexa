@@ -61,8 +61,8 @@
             ]
           },
           {
-            "group": "Voice Agent",
-            "pages": ["voice-agent"]
+            "group": "Interactive Bots",
+            "pages": ["interactive-bots"]
           },
           {
             "group": "Integrations",
@@ -99,7 +99,7 @@
               "api/meetings",
               "api/recordings",
               "api/settings",
-              "api/voice-agent"
+              "api/interactive-bots"
             ]
           },
           {

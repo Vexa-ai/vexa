@@ -187,7 +187,7 @@ Error messages.
 }
 ```
 
-## Voice Agent Events
+## Interactive Bot Events
 
 When a bot is running with `voice_agent_enabled: true`, the following additional events are published on the WebSocket connection:
 
@@ -201,7 +201,7 @@ When a bot is running with `voice_agent_enabled: true`, the following additional
 | `screen.sharing_started` | `{"content_type": "image"}` | Screen sharing started |
 | `screen.sharing_stopped` | -- | Screen sharing stopped |
 
-These events are also published on the Redis channel `va:meeting:{meeting_id}:events`. See the [Voice Agent guide](voice-agent) for full details on controlling the bot's voice, chat, and screen share capabilities.
+These events are also published on the Redis channel `va:meeting:{meeting_id}:events`. See the [Interactive Bots guide](interactive-bots) for full details on controlling the bot's voice, chat, and screen share capabilities.
 
 ## Segment Schema
 
