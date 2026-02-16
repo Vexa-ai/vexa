@@ -8,7 +8,7 @@ This page explains how Vexa models meetings, transcripts, and recordings, and ho
 
 Every API request is authenticated with `X-API-Key`. In self-hosted deployments, you create users and mint tokens via the admin API:
 
-- [`docs/self-hosted-management.md`](self-hosted-management.md)
+- [`self-hosted-management.md`](self-hosted-management.md)
 
 ### Meeting
 
@@ -98,7 +98,7 @@ The `/raw` endpoint is designed for browser playback:
 
 Storage configuration:
 
-- [`docs/recording-storage.md`](recording-storage.md)
+- [`recording-storage.md`](recording-storage.md)
 
 ## Voice Agent (Meeting Interaction)
 
@@ -118,5 +118,5 @@ Deleting a meeting is designed to be deliberate: it purges transcript artifacts 
 
 API details:
 
-- [`docs/user_api_guide.md`](user_api_guide.md)
+- [`user_api_guide.md`](user_api_guide.md)
 

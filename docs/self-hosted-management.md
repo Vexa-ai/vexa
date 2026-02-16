@@ -1,6 +1,6 @@
-# Self-Hosted Vexa Management Guide
+# Admin API
 
-Essential user and token management for self-hosted Vexa deployments.
+Manage users and API tokens for your self-hosted Vexa instance. The Admin API is used to create users, mint API tokens, and configure user settings.
 
 ## Prerequisites
 

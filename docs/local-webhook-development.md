@@ -1,0 +1,72 @@
+# Local Webhook Development
+
+When building locally, your webhook endpoint usually isn’t publicly reachable.
+Use a tunneling tool (ngrok / cloudflared) to expose a local port to the internet.
+
+<Steps>
+  <Step title="Run a local webhook handler">
+    Example (Node.js / Express):
+
+    ```bash
+    npm i express
+    node - <<'NODE'
+    const express = require("express");
+    const app = express();
+    app.use(express.json({ limit: "2mb" }));
+
+    app.post("/vexa/webhook", (req, res) => {
+      // If you set webhook_secret, Vexa will send: Authorization: Bearer <secret>
+      // const auth = req.headers.authorization || "";
+      // if (auth !== `Bearer ${process.env.VEXA_WEBHOOK_SECRET}`) return res.sendStatus(401);
+
+      console.log("event:", req.body?.event_type);
+      console.log(JSON.stringify(req.body, null, 2));
+
+      // Always ACK quickly. Do heavy work async.
+      res.sendStatus(204);
+    });
+
+    app.listen(3009, () => console.log("listening on :3009"));
+    NODE
+    ```
+  </Step>
+
+  <Step title="Expose it with a tunnel">
+    ngrok:
+
+    ```bash
+    ngrok http 3009
+    ```
+
+    cloudflared (no account required for quick tests):
+
+    ```bash
+    cloudflared tunnel --url http://localhost:3009
+    ```
+
+    Copy the public HTTPS URL and keep the process running.
+  </Step>
+
+  <Step title="Configure Vexa to send webhooks to your tunnel URL">
+    ```bash
+    curl -X PUT "$API_BASE/user/webhook" \
+      -H "Content-Type: application/json" \
+      -H "X-API-Key: $API_KEY" \
+      -d '{
+        "webhook_url": "https://YOUR_TUNNEL_HOST/vexa/webhook",
+        "webhook_secret": "optional-shared-secret"
+      }'
+    ```
+
+    Webhook reference:
+
+    - [Webhooks](webhooks.md)
+    - [User Settings API](api/settings.md)
+  </Step>
+</Steps>
+
+## Tips
+
+- Treat webhook handlers as **idempotent**: you may receive retries or repeated events.
+- Respond fast (2xx) and do heavy work asynchronously.
+- If your tunnel URL changes, update `webhook_url` again.

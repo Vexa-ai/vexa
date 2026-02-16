@@ -1,0 +1,58 @@
+---
+title: "ChatGPT transcript share links (no API integration)"
+---
+This repo supports a **link-based** flow for sending meeting transcripts to ChatGPT without embedding the full transcript in the ChatGPT URL (which can exceed browser / proxy limits).
+
+Instead, the Vexa Dashboard calls an **authenticated** Vexa API endpoint to mint a **short-lived public URL**. Then ChatGPT is opened with a query like:
+
+`Read from https://api.your-domain.com/public/transcripts/<share_id>.txt so I can ask questions about it.`
+
+## How it works
+
+1. Dashboard calls:
+   - `POST /transcripts/{platform}/{native_meeting_id}/share?meeting_id=<internal_meeting_id>`
+   - Requires `X-API-Key`
+2. API Gateway:
+   - Fetches the transcript from `transcription-collector`
+   - Formats it into **plain text**
+   - Stores it in **Redis** under a random share id with a **TTL**
+   - Returns a `url` like:
+     - `/public/transcripts/<share_id>.txt`
+3. ChatGPT reads the public URL (no auth headers required).
+
+## Configuration (API Gateway)
+
+Environment variables (optional):
+
+- `PUBLIC_BASE_URL`
+  - Example: `https://api.vexa.ai`
+  - If unset, the gateway derives the URL from `X-Forwarded-Proto` and `X-Forwarded-Host` (recommended to set these in your reverse proxy).
+- `TRANSCRIPT_SHARE_TTL_SECONDS`
+  - Default: `900` (15 minutes)
+- `TRANSCRIPT_SHARE_TTL_MAX_SECONDS`
+  - Default: `86400` (24 hours)
+
+## Security model
+
+- The public link is **unguessable** (random id) and **short-lived** (TTL in Redis).
+- The transcript is **not stored permanently** by this feature; it expires automatically.
+- You should still treat transcripts as sensitive data:
+  - Keep TTL short (15–60 minutes)
+  - Ensure HTTPS
+  - Consider limiting request rate on `/public/transcripts/*`
+
+## Reverse proxy requirements
+
+ChatGPT must be able to fetch the URL from the public internet.
+
+Your reverse proxy should:
+
+- Terminate TLS (HTTPS)
+- Forward requests to the API Gateway upstream
+- Set:
+  - `X-Forwarded-Proto`
+  - `X-Forwarded-Host`
+
+In your Nginx, expose the API Gateway publicly (HTTPS) and ensure the hostname you want ChatGPT to read from points to the gateway. For this repo’s dev setup we use `share.dev.vexa.ai` → `:8056`.
+
+
