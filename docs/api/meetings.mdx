@@ -19,22 +19,41 @@ curl -H "X-API-Key: $API_KEY" \
 {
   "meetings": [
     {
-      "id": 16,
-      "user_id": 1,
+      "id": 127,
+      "user_id": 4,
       "platform": "google_meet",
-      "native_meeting_id": "abc-defg-hij",
-      "constructed_meeting_url": "https://meet.google.com/abc-defg-hij",
+      "native_meeting_id": "zqe-gfmd-knr",
+      "constructed_meeting_url": "https://meet.google.com/zqe-gfmd-knr",
       "status": "completed",
-      "bot_container_id": null,
-      "start_time": "2026-02-13T20:10:12Z",
-      "end_time": "2026-02-13T20:44:51Z",
+      "bot_container_id": "vexa-bot-127-e76c2a06",
+      "start_time": "2026-02-15T09:11:56.052175",
+      "end_time": "2026-02-15T09:16:19.607242",
       "data": {
-        "name": "Weekly Standup",
-        "notes": "Discussed roadmap",
-        "completion_reason": "stopped"
+        "completion_reason": "stopped",
+        "status_transition": [
+          {
+            "to": "joining",
+            "from": "requested",
+            "source": "bot_callback",
+            "timestamp": "2026-02-15T09:11:33.852386"
+          },
+          {
+            "to": "active",
+            "from": "awaiting_admission",
+            "source": "bot_callback",
+            "timestamp": "2026-02-15T09:11:56.047736"
+          },
+          {
+            "to": "completed",
+            "from": "stopping",
+            "source": "user",
+            "timestamp": "2026-02-15T09:16:19.601196",
+            "completion_reason": "stopped"
+          }
+        ]
       },
-      "created_at": "2026-02-13T20:10:00Z",
-      "updated_at": "2026-02-13T20:44:51Z"
+      "created_at": "2026-02-15T09:11:30.287878",
+      "updated_at": "2026-02-15T09:16:19.606511"
     }
   ]
 }
@@ -102,21 +121,25 @@ Returns the updated meeting record.
 
 ```json
 {
-  "id": 16,
-  "user_id": 1,
+  "id": 129,
+  "user_id": 4,
   "platform": "google_meet",
-  "native_meeting_id": "abc-defg-hij",
-  "constructed_meeting_url": "https://meet.google.com/abc-defg-hij",
+  "native_meeting_id": "zqe-gfmd-knr",
+  "constructed_meeting_url": "https://meet.google.com/zqe-gfmd-knr",
   "status": "completed",
-  "bot_container_id": null,
-  "start_time": "2026-02-13T20:10:12Z",
-  "end_time": "2026-02-13T20:44:51Z",
+  "bot_container_id": "vexa-bot-129-24c9233d",
+  "start_time": "2026-02-15T09:20:02.597046",
+  "end_time": null,
   "data": {
     "name": "Weekly Standup",
-    "notes": "Discussed roadmap"
+    "notes": "Discussed roadmap",
+    "status_transition": [
+      {"to": "joining", "from": "requested", "source": "bot_callback", "timestamp": "..."},
+      {"to": "active", "from": "awaiting_admission", "source": "bot_callback", "timestamp": "..."}
+    ]
   },
-  "created_at": "2026-02-13T20:10:00Z",
-  "updated_at": "2026-02-13T20:44:51Z"
+  "created_at": "2026-02-15T09:18:52.592330",
+  "updated_at": "2026-02-16T17:42:18.455262"
 }
 ```
 
