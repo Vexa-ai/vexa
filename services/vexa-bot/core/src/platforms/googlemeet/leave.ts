@@ -100,6 +100,20 @@ export async function leaveGoogleMeet(page: Page | null, botConfig?: BotConfig, 
     return false;
   }
 
+  // Flush browser-side recording blob before UI leave and process shutdown.
+  // This ensures Google Meet audio is persisted before upload is attempted.
+  try {
+    log("[leaveGoogleMeet] Flushing browser recording blob before leave...");
+    await page.evaluate(async () => {
+      const flushFn = (window as any).__vexaFlushRecordingBlob;
+      if (typeof flushFn === "function") {
+        await flushFn("manual_leave");
+      }
+    });
+  } catch (flushError: any) {
+    log(`[leaveGoogleMeet] Recording flush failed: ${flushError.message}`);
+  }
+
   // Call leave callback first to notify bot-manager
   if (botConfig) {
     try {

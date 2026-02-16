@@ -125,6 +125,7 @@ class RemoteTranscriber:
         api_url: Optional[str] = None,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
+        transcription_tier: str = "realtime",
         temperature: Optional[str] = None,
         vad_model: Optional[str] = None,
         timestamp_granularities: Optional[str] = None,
@@ -165,6 +166,8 @@ class RemoteTranscriber:
         self.response_format = "verbose_json"
         self.temperature = temperature or os.getenv("REMOTE_TRANSCRIBER_TEMPERATURE", "0")
         self.vad_model = vad_model or os.getenv("REMOTE_TRANSCRIBER_VAD_MODEL")
+        normalized_tier = str(transcription_tier or "realtime").strip().lower()
+        self.transcription_tier = normalized_tier if normalized_tier in ("realtime", "deferred") else "realtime"
         # Request only segment timestamps (no word-level precision needed)
         self.timestamp_granularities = "segment"
         self.sampling_rate = sampling_rate
@@ -268,12 +271,16 @@ class RemoteTranscriber:
         last_exception = None
         
         # Prepare headers
-        headers = {"Authorization": f"Bearer {self.api_key}"}
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "X-Transcription-Tier": self.transcription_tier,
+        }
         
         # Prepare form data
         data = {
             "model": self.model,
             "temperature": self.temperature,
+            "transcription_tier": self.transcription_tier,
         }
         
         if self.vad_model:
@@ -684,4 +691,3 @@ class RemoteTranscriber:
                 self.http_client.close()
             except Exception:
                 pass
-

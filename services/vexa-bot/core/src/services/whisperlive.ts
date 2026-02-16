@@ -94,6 +94,7 @@ export class WhisperLiveService {
       uid: this.connection!.sessionUid,
       language: botConfig.language || null,
       task: botConfig.task || "transcribe",
+      transcription_tier: botConfig.transcriptionTier || "realtime",
       model: null, // Let server use WHISPER_MODEL_SIZE from environment
       use_vad: false,
       platform: botConfig.platform,

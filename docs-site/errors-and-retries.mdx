@@ -1,0 +1,79 @@
+---
+title: "Errors, Retries, and Idempotency"
+---
+Vexa is designed so you can safely retry **reads** and **cleanup** operations, and so production systems can recover from transient failures.
+
+## Error Shape (Typical)
+
+Most validation/auth errors are returned as JSON with a human-readable `detail` field.
+
+Example (missing API key):
+
+```json
+{
+  "detail": "Not authenticated"
+}
+```
+
+## Retry Guidance
+
+### Safe to retry (idempotent)
+
+- `GET ...` (reads)
+- `PUT ...` (settings updates)
+- `DELETE /meetings/{platform}/{native_meeting_id}` (delete/anonymize)
+- `DELETE /recordings/{recording_id}`
+
+“Idempotent” means: calling the endpoint multiple times results in the same outcome, and repeated calls won’t cause additional side effects.
+
+Example: if a meeting is already anonymized, deleting it again still returns success.
+
+### Be careful retrying
+
+- `POST /bots` can create *additional* bot runs if you retry blindly.
+
+If you’re not sure whether a `POST /bots` succeeded:
+
+1. Check the meeting exists (via `GET /transcripts/...` or `GET /meetings`)
+2. Only retry if you can confirm no bot is currently running for that meeting
+
+## HTTP Status Codes
+
+| Code | Meaning | When |
+|------|---------|------|
+| `200` | Success | Most GET, PUT, DELETE, and POST responses |
+| `202` | Accepted | `POST /bots` — bot creation is accepted and will be processed asynchronously |
+| `204` | No Content | Successful deletion with no response body |
+| `400` | Bad Request | Validation error (malformed body, invalid meeting ID format) |
+| `401` | Unauthorized | Missing or invalid API key |
+| `403` | Forbidden | Valid key but insufficient permissions |
+| `404` | Not Found | Resource doesn't exist or belongs to another user |
+| `409` | Conflict | Bot already running for this meeting |
+| `422` | Unprocessable Entity | Pydantic validation error (wrong field types) |
+| `429` | Too Many Requests | Rate limit exceeded |
+| `500` | Internal Server Error | Server-side error (retry with backoff) |
+| `502/503/504` | Gateway errors | Transient infrastructure issues (retry with backoff) |
+
+<Info>
+`POST /bots` returns `202 Accepted` because bot creation is asynchronous. The bot container is launched in the background. Use `GET /bots/status` or WebSocket `meeting.status` events to track the bot's progress.
+</Info>
+
+## Backoff Strategy
+
+For transient failures, use exponential backoff with jitter:
+
+- Retry on: `429`, `502`, `503`, `504`, network timeouts
+- Don’t retry on: `400`, `401`, `403`, `404` (fix request/auth first)
+
+## Webhooks
+
+Webhook deliveries are best-effort and your endpoint may receive retries or repeated events.
+Design webhook handlers to be:
+
+- fast to ACK (2xx)
+- idempotent (dedupe by event type + meeting/recording ids)
+
+References:
+
+- [Webhooks](webhooks)
+- [Local webhook development](local-webhook-development)

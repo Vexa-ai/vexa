@@ -4,8 +4,17 @@
     "core",
     "cli"
   ],
+  "scripts": {
+    "build": "npm run build --workspace=core",
+    "build:native": "node-gyp rebuild",
+    "build:all": "npm run build:native && npm run build"
+  },
+  "dependencies": {
+    "node-addon-api": "^7.1.1"
+  },
   "devDependencies": {
     "@types/node": "^22.15.30",
-    "@types/uuid": "^10.0.0"
+    "@types/uuid": "^10.0.0",
+    "node-gyp": "^10.0.0"
   }
 }

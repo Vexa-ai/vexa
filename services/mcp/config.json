@@ -5,12 +5,12 @@
         "args": [
           "-y",
           "mcp-remote",
-          "http://localhost:18888/mcp",
+          "http://localhost:8056/mcp",
           "--header",
-          "Authorization:${VEXA_API_KEY}"
+          "Authorization: Bearer ${VEXA_API_KEY}"
         ],
         "env": {
-          "VEXA_API_KEY": "AgJpnjTjOfpcqCHdGu2E1qDh6sYOxe7EAdOZkGuc"
+          "VEXA_API_KEY": "YOUR_VEXA_API_KEY_HERE"
         }
       }
     }

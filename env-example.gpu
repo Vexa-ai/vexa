@@ -46,6 +46,18 @@ REMOTE_TRANSCRIBER_API_KEY=
 
 
 # ----------------------------------------------------------------------------
+# Voice Agent / TTS Configuration (Optional)
+# ----------------------------------------------------------------------------
+# Required only if using the voice agent feature (voice_agent_enabled: true)
+# Used by tts-service for text-to-speech synthesis via OpenAI API
+OPENAI_API_KEY=
+# Get your key at https://platform.openai.com/api-keys
+
+# Zoom Meeting SDK Credentials (Optional - for Zoom bot support)
+# ZOOM_CLIENT_ID=
+# ZOOM_CLIENT_SECRET=
+
+# ----------------------------------------------------------------------------
 # Bot Configuration
 # ----------------------------------------------------------------------------
 BOT_IMAGE_NAME=vexa-bot:dev
@@ -81,3 +93,22 @@ REMOTE_DB=false
 # ----------------------------------------------------------------------------
 # BASE_URL=http://localhost:8056
 # WS_URL=ws://localhost:8056/ws
+
+# ----------------------------------------------------------------------------
+# Recording Storage Backend
+# ----------------------------------------------------------------------------
+# - minio: default object storage (recommended)
+# - local: filesystem backend for simple local setup
+STORAGE_BACKEND=minio
+MINIO_ENDPOINT=minio:9000
+MINIO_ACCESS_KEY=vexa-access-key
+MINIO_SECRET_KEY=vexa-secret-key
+MINIO_BUCKET=vexa-recordings
+MINIO_SECURE=false
+
+# Local backend options (used when STORAGE_BACKEND=local)
+LOCAL_STORAGE_DIR=/data/recordings
+LOCAL_STORAGE_FSYNC=true
+# Docker Compose source for /data/recordings.
+# Default uses named volume "recordings-data"; set to a host path for easier inspection, e.g. ./data/recordings
+# LOCAL_STORAGE_VOLUME_SOURCE=recordings-data
