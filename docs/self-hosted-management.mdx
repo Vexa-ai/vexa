@@ -1,5 +1,6 @@
-# Admin API
-
+---
+title: "Admin API"
+---
 Manage users and API tokens for your self-hosted Vexa instance. The Admin API is used to create users, mint API tokens, and configure user settings.
 
 ## Prerequisites
@@ -12,7 +13,7 @@ Manage users and API tokens for your self-hosted Vexa instance. The Admin API is
 pip install vexa-client
 ```
 
-**Before starting**, ensure Vexa services are running - see the [Deployment Guide](deployment.md) for setup instructions.
+**Before starting**, ensure Vexa services are running - see the [Deployment Guide](deployment) for setup instructions.
 
 Admin endpoints use `/admin/` prefix with `X-Admin-API-Key` header.
 
@@ -241,6 +242,68 @@ curl -X DELETE http://localhost:8056/admin/tokens/1 \
 
 **Note:** Token deletion is immediate and cannot be undone.
 
+## Analytics & Monitoring
+
+### Meeting & User Stats
+
+Paginated list of all meetings with embedded user details.
+
+```bash
+curl "http://localhost:8056/admin/stats/meetings-users?skip=0&limit=100" \
+  -H "X-Admin-API-Key: token"
+```
+
+Returns `{ "total": 218, "items": [...] }` where each item includes full meeting data and the associated user.
+
+### User Analytics
+
+List all users (for dashboard tables).
+
+```bash
+curl "http://localhost:8056/admin/analytics/users?skip=0&limit=100" \
+  -H "X-Admin-API-Key: token"
+```
+
+### Meeting Analytics
+
+List all meetings (for dashboard tables).
+
+```bash
+curl "http://localhost:8056/admin/analytics/meetings?skip=0&limit=100" \
+  -H "X-Admin-API-Key: token"
+```
+
+### Meeting Telematics
+
+Detailed telemetry for a specific meeting including sessions, transcription stats, and performance metrics.
+
+```bash
+curl "http://localhost:8056/admin/analytics/meetings/218/telematics" \
+  -H "X-Admin-API-Key: token"
+```
+
+Returns `{ "meeting": {...}, "sessions": [...], "transcription_stats": {...}, "performance_metrics": {...} }`.
+
+### User Details
+
+Comprehensive user analytics including meeting stats and usage patterns.
+
+```bash
+curl "http://localhost:8056/admin/analytics/users/1/details?include_tokens=true" \
+  -H "X-Admin-API-Key: token"
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `include_meetings` | bool | `true` | Include meeting history |
+| `include_tokens` | bool | `false` | Include API token list |
+
+Returns `{ "user": {...}, "meeting_stats": {...}, "usage_patterns": {...}, "api_tokens": [...] }`.
+
+### Webhook Configuration (User-facing)
+
+Admin can also set webhooks for users via `PUT /user/webhook` on the user API (port 8056) with the user's API key. See [Settings API](api/settings#put-userwebhook).
+
 ## Token Security Best Practices
 
 1. **Secure Distribution**: Share tokens via secure channels
@@ -273,7 +336,7 @@ curl -X DELETE http://localhost:8056/admin/tokens/1 \
 ## Reference Links
 
 - **API Gateway Docs**: http://localhost:8056/docs
-- **Deployment Guide**: [deployment.md](deployment.md)
+- **Deployment Guide**: [deployment](deployment)
 - **Notebooks**: `nbs/manage_users.ipynb`, `nbs/0_basic_test.ipynb`
 
 ## Getting Help
