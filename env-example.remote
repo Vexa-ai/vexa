@@ -11,6 +11,10 @@ REMOTE_TRANSCRIBER_API_KEY=your_api_key_here
 REMOTE_TRANSCRIBER_MODEL=whisper-v3-turbo
 REMOTE_TRANSCRIBER_TEMPERATURE=0
 REMOTE_TRANSCRIBER_VAD_MODEL=silero
+# Voice Agent / TTS Configuration (Optional)
+# Required only if using the voice agent feature (voice_agent_enabled: true)
+OPENAI_API_KEY=
+
 # Exposed Host Ports
 API_GATEWAY_HOST_PORT=8056
 ADMIN_API_HOST_PORT=8057
@@ -25,3 +29,32 @@ POSTGRES_HOST_PORT=5438
 # DB_USER=your-db-user
 # DB_PASSWORD=your-db-password
 REMOTE_DB=false
+
+# Recording Storage Backend
+# - minio: default object storage (works locally via docker compose and in cloud with S3-compatible stores)
+# - local: filesystem backend (for simple local setup)
+STORAGE_BACKEND=minio
+MINIO_ENDPOINT=minio:9000
+MINIO_ACCESS_KEY=vexa-access-key
+MINIO_SECRET_KEY=vexa-secret-key
+MINIO_BUCKET=vexa-recordings
+MINIO_SECURE=false
+
+# Local backend options (used when STORAGE_BACKEND=local)
+LOCAL_STORAGE_DIR=/data/recordings
+LOCAL_STORAGE_FSYNC=true
+# Docker Compose source for /data/recordings.
+# Default uses named volume "recordings-data"; set to a host path for easier inspection, e.g. ./data/recordings
+# LOCAL_STORAGE_VOLUME_SOURCE=recordings-data
+
+# Cloud S3 options (used when STORAGE_BACKEND=s3)
+# AWS_REGION=us-east-1
+# AWS_ACCESS_KEY_ID=
+# AWS_SECRET_ACCESS_KEY=
+# S3_BUCKET=vexa-recordings
+# S3_ENDPOINT=
+# S3_SECURE=true
+
+# WhisperLive durable recording upload cadence
+WL_RECORDING_SNAPSHOT_SECONDS=20
+WL_RECORDING_UPLOAD_URL=http://bot-manager:8080/internal/recordings/upload

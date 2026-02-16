@@ -1,50 +1,70 @@
-# Vexa Documentation
+# Vexa Docs
 
-This directory contains comprehensive documentation for Vexa self-hosted deployments.
+This is the canonical entry point for Vexa setup, operations, and API usage.
 
-## Available Documentation
+## Start Here
 
-### Setup & Deployment
+Pick the path that matches what you're doing:
 
-- **[Deployment Guide](deployment.md)** - Complete setup and deployment instructions for self-hosted Vexa
-- **[Vexa Lite Deployment Guide](vexa-lite-deployment.md)** - Single container deployment (no GPU required)
+- **End-to-end (deploy → token → bot → transcript → playback):** [Getting Started](getting-started.md)
+- **Self-host in production (recommended):** [Vexa Lite Deployment Guide](vexa-lite-deployment.md)
+- **Local development stack (Docker Compose):** [Deployment Guide](deployment.md)
+- **API-first integration:** [User API Guide](user_api_guide.md) + [WebSocket Guide](websocket.md)
 
-### User Guides
+## Core Concepts
 
-- **[Self-Hosted Management Guide](self-hosted-management.md)** - Complete guide for managing users and API tokens in self-hosted Vexa deployments
-  - User creation and management
-  - API token generation and revocation
-  - Complete workflow examples (curl + Python)
-  - Quick reference and troubleshooting
+- [Core Concepts](concepts.md): meeting/bot/session model, transcript timing semantics, recordings, delete semantics
 
-- **[WebSocket Guide](websocket.md)** - Real-time transcript streaming via WebSocket
-  
-- **[User API Guide](user_api_guide.md)** - Complete REST API reference
+## Platforms
 
-## Example Notebooks
+- [Google Meet](platforms/google-meet.md)
+- [Microsoft Teams](platforms/microsoft-teams.md)
+- [Zoom](platforms/zoom.md)
+- [Zoom Integration Setup](zoom-app-setup.md): OAuth + Meeting SDK + OBF flow + approval caveats
 
-Interactive Jupyter notebooks for testing and development are located in the `../nbs/` directory:
+## Deployment and Operations
 
-- `0_basic_test.ipynb` - Complete bot lifecycle test
-- `1_load_tests.ipynb` - Load testing with multiple users
-- `2_bot_concurrency.ipynb` - Concurrent bot testing
-- `3_API_validation.ipynb` - API endpoint validation
-- `manage_users.ipynb` - User management examples
+- [Deployment Guide](deployment.md): full stack Docker Compose (dev)
+- [Vexa Lite Deployment Guide](vexa-lite-deployment.md): single container (prod self-host)
+- [Self-Hosted Management Guide](self-hosted-management.md): users + tokens + admin workflows
+- [Recording Storage Modes](recording-storage.md): local vs MinIO vs S3-compatible; playback and `Range`/`206` behavior
 
-## Getting Started
+## UI (Dashboard)
 
-1. **Deploy Vexa**: Follow the [Deployment Guide](deployment.md) for full stack, or [Vexa Lite Deployment Guide](vexa-lite-deployment.md) for single container
-2. **Manage Users**: Read the [Self-Hosted Management Guide](self-hosted-management.md)
-3. **Use the API**: See [User API Guide](user_api_guide.md) and [WebSocket Guide](websocket.md)
+- [Vexa Dashboard](ui-dashboard.md): run the UI and use post-meeting playback
 
-## Related Repositories
+## Troubleshooting and Security
 
-- **[vexa-lite-deploy](https://github.com/Vexa-ai/vexa-lite-deploy)** - One-click deployment configurations for Vexa Lite
-- **[Vexa Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)** - Web interface for managing Vexa instances
+- [Troubleshooting](troubleshooting.md)
+- [Security and Data Handling](security.md)
+
+## Voice Agent (Meeting Interaction)
+
+- [Voice Agent Guide](voice-agent.md): make the bot speak, chat, and share content in meetings (TTS, chat read/write, screen share)
+
+## Misc / Integrations
+
+- [ChatGPT Transcript Share Links](chatgpt-transcript-share-links.md): shared transcript URL behavior
+
+## Notebooks (`../nbs`)
+
+- `0_basic_test.ipynb`: end-to-end bot lifecycle smoke test
+- `1_load_tests.ipynb`: load testing scenarios
+- `2_bot_concurrency.ipynb`: concurrent bot behavior
+- `3_API_validation.ipynb`: API endpoint validation
+- `manage_users.ipynb`: user and token management examples
+
+## Typical Developer Flow
+
+1. Deploy locally with [Deployment Guide](deployment.md).
+2. Create users/tokens with [Self-Hosted Management Guide](self-hosted-management.md).
+3. Integrate REST endpoints via [User API Guide](user_api_guide.md).
+4. Add live updates with [WebSocket Guide](websocket.md).
+5. If needed, configure Zoom with [Zoom Integration Setup](zoom-app-setup.md).
+6. For interactive bots (speak, chat, screen share), see [Voice Agent Guide](voice-agent.md).
 
 ## Support
 
-- **Discord**: https://discord.gg/Ga9duGkVz9
-- **GitHub Issues**: https://github.com/Vexa-ai/vexa/issues
-- **Website**: https://vexa.ai
-
+- Discord: https://discord.gg/Ga9duGkVz9
+- Issues: https://github.com/Vexa-ai/vexa/issues
+- Website: https://vexa.ai

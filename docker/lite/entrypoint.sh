@@ -132,6 +132,8 @@ echo "  - Database SSL Mode: ${DB_SSL_MODE}"
 echo "  - Whisper Model: ${WHISPER_MODEL_SIZE}"
 echo "  - Device Type: ${DEVICE_TYPE}"
 echo "  - Log Level: ${LOG_LEVEL}"
+echo "  - Storage Backend: ${STORAGE_BACKEND:-local}"
+echo "  - Local Storage Dir: ${LOCAL_STORAGE_DIR:-/var/lib/vexa/recordings}"
 echo ""
 
 # -----------------------------------------------------------------------------
@@ -263,6 +265,9 @@ mkdir -p /var/lib/redis
 mkdir -p /var/run/redis
 chmod 755 /var/lib/redis
 chmod 755 /var/run/redis
+# Recording storage directories
+mkdir -p "${LOCAL_STORAGE_DIR:-/var/lib/vexa/recordings}"
+mkdir -p /var/lib/vexa/recordings/spool
 echo "  Done"
 echo ""
 
