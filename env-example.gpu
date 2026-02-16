@@ -46,6 +46,18 @@ REMOTE_TRANSCRIBER_API_KEY=
 
 
 # ----------------------------------------------------------------------------
+# Voice Agent / TTS Configuration (Optional)
+# ----------------------------------------------------------------------------
+# Required only if using the voice agent feature (voice_agent_enabled: true)
+# Used by tts-service for text-to-speech synthesis via OpenAI API
+OPENAI_API_KEY=
+# Get your key at https://platform.openai.com/api-keys
+
+# Zoom Meeting SDK Credentials (Optional - for Zoom bot support)
+# ZOOM_CLIENT_ID=
+# ZOOM_CLIENT_SECRET=
+
+# ----------------------------------------------------------------------------
 # Bot Configuration
 # ----------------------------------------------------------------------------
 BOT_IMAGE_NAME=vexa-bot:dev
