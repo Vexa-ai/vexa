@@ -13,6 +13,11 @@
   "contextual": {
     "options": ["copy", "view", "chatgpt", "claude", "perplexity"]
   },
+  "integrations": {
+    "ga4": {
+      "measurementId": "G-45M7REZYT1"
+    }
+  },
   "seo": {
     "metatags": {
       "canonical": "https://docs.vexa.ai"
