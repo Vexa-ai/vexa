@@ -37,6 +37,27 @@ If you’re not sure whether a `POST /bots` succeeded:
 1. Check the meeting exists (via `GET /transcripts/...` or `GET /meetings`)
 2. Only retry if you can confirm no bot is currently running for that meeting
 
+## HTTP Status Codes
+
+| Code | Meaning | When |
+|------|---------|------|
+| `200` | Success | Most GET, PUT, DELETE, and POST responses |
+| `202` | Accepted | `POST /bots` — bot creation is accepted and will be processed asynchronously |
+| `204` | No Content | Successful deletion with no response body |
+| `400` | Bad Request | Validation error (malformed body, invalid meeting ID format) |
+| `401` | Unauthorized | Missing or invalid API key |
+| `403` | Forbidden | Valid key but insufficient permissions |
+| `404` | Not Found | Resource doesn't exist or belongs to another user |
+| `409` | Conflict | Bot already running for this meeting |
+| `422` | Unprocessable Entity | Pydantic validation error (wrong field types) |
+| `429` | Too Many Requests | Rate limit exceeded |
+| `500` | Internal Server Error | Server-side error (retry with backoff) |
+| `502/503/504` | Gateway errors | Transient infrastructure issues (retry with backoff) |
+
+<Info>
+`POST /bots` returns `202 Accepted` because bot creation is asynchronous. The bot container is launched in the background. Use `GET /bots/status` or WebSocket `meeting.status` events to track the bot's progress.
+</Info>
+
 ## Backoff Strategy
 
 For transient failures, use exponential backoff with jitter:

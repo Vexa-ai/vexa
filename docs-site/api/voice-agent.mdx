@@ -219,6 +219,43 @@ curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij/screen" \
 
 ---
 
+## Avatar
+
+Set or reset the bot's virtual camera avatar. The avatar is displayed in the bot's video tile when no screen share is active.
+
+<Warning>
+The virtual camera is **experimental** and only tested on Google Meet. Screen share is the recommended approach for displaying visual content.
+</Warning>
+
+### PUT `/bots/{platform}/{native_meeting_id}/avatar`
+
+Set a custom avatar image for the bot's camera feed.
+
+```bash
+curl -X PUT "$API_BASE/bots/google_meet/abc-defg-hij/avatar" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{"url": "https://example.com/avatar.png"}'
+```
+
+**Request body:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `url` | string | URL to an image file (PNG, JPG, SVG) |
+| `image_base64` | string | Base64-encoded image data (alternative to `url`) |
+
+### DELETE `/bots/{platform}/{native_meeting_id}/avatar`
+
+Reset the bot's avatar to the default Vexa logo.
+
+```bash
+curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij/avatar" \
+  -H "X-API-Key: $API_KEY"
+```
+
+---
+
 ## WebSocket Events
 
 When voice agent is enabled, additional events are published on the [WebSocket](../websocket) connection:

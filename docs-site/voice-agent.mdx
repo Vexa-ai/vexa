@@ -149,10 +149,25 @@ The virtual camera feature is **experimental**. It works intermittently on Googl
 
 The virtual camera uses a canvas-based approach to replace the bot's camera feed with custom content (e.g., an avatar image or animation). When working, participants see the avatar in the bot's video tile instead of a blank camera.
 
+You can set or reset the avatar at any time via the API:
+
+```bash
+# Set a custom avatar
+curl -X PUT "$API_BASE/bots/google_meet/abc-defg-hij/avatar" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
+  -d '{"url": "https://example.com/avatar.png"}'
+
+# Reset to default Vexa logo
+curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij/avatar" \
+  -H "X-API-Key: $API_KEY"
+```
+
+See the [Avatar API reference](api/voice-agent#avatar) for full details.
+
 Current limitations:
 - Only tested on Google Meet
 - `replaceTrack` into WebRTC works intermittently
-- No configuration API yet (avatar is set at bot startup)
 - Screen share is the recommended alternative for displaying images and content
 
 ## WebSocket Events
