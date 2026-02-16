@@ -9,7 +9,12 @@ If a recording exists, it will also be returned by:
 
 ## GET /recordings
 
-List recordings for the authenticated user.
+List recordings for the authenticated user. Supports pagination via `limit` and `offset` query parameters.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | int | `50` | Maximum number of recordings to return |
+| `offset` | int | `0` | Number of recordings to skip |
 
 ```bash
 curl -H "X-API-Key: $API_KEY" \
@@ -159,6 +164,16 @@ curl -H "X-API-Key: $API_KEY" \
 ```
 
 </details>
+
+### `raw` vs `download`: which to use?
+
+| | `raw` | `download` |
+|--|-------|-----------|
+| **Returns** | Binary audio bytes | JSON with presigned URL |
+| **Auth** | API key required per request | API key for URL generation, then unauthenticated download |
+| **Seeking** | `Range` headers / `206 Partial Content` | Depends on storage backend |
+| **Best for** | Server-side proxying, `<audio>` elements via same-origin proxy | Client-side downloads, sharing temporary URLs |
+| **Storage backends** | All (MinIO, S3, local) | S3 / MinIO only (returns presigned URL) |
 
 Storage configuration details:
 

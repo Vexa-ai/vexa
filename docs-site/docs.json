@@ -67,6 +67,7 @@
           {
             "group": "Integrations",
             "pages": [
+              "mcp",
               "webhooks",
               "local-webhook-development",
               "integrations",
