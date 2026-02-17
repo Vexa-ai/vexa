@@ -6,6 +6,7 @@ const baseBrowserArgs = [
   "--incognito",
   "--no-sandbox",
   "--disable-setuid-sandbox",
+  "--disable-dev-shm-usage",
   "--disable-features=IsolateOrigins,site-per-process",
   "--disable-infobars",
   "--disable-gpu",

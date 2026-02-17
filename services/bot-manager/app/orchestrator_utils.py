@@ -311,6 +311,7 @@ async def start_bot_container(
         "HostConfig": {
             "NetworkMode": DOCKER_NETWORK,
             "AutoRemove": True,
+            "ShmSize": 2 * 1024 * 1024 * 1024,  # 2GB — Chromium needs >64MB default
         },
     }
 

@@ -66,7 +66,8 @@ class UltravoxCall:
                     "description": (
                         "Trigger a backend agent to perform a complex task like research, "
                         "document generation, task creation, or analysis. The agent has access "
-                        "to the full meeting transcript with speaker names. Returns the result text."
+                        "to the full meeting transcript with speaker names. Returns the result text. "
+                        "This tool may take up to 2 minutes to complete — do NOT retry or call it again while waiting."
                     ),
                     "dynamicParameters": [
                         {
@@ -82,6 +83,7 @@ class UltravoxCall:
                             "required": False,
                         },
                     ],
+                    "timeout": "120s",
                     "client": {},
                 }
             },
