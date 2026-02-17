@@ -984,7 +984,9 @@ async function initUltravoxService(
         uid: generateUUID(),
         meeting_id: botConfig.meeting_id,
         token: botConfig.token,
+        api_key: botConfig.userApiKey || '',
         platform: botConfig.platform,
+        native_meeting_id: botConfig.nativeMeetingId,
         meeting_url: botConfig.meetingUrl,
         ultravox_system_prompt: null, // Use service default
       };

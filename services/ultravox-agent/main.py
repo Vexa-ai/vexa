@@ -52,13 +52,18 @@ class BotSession:
 
         logger.info(
             f"[Session] Starting for meeting={meeting_id} "
-            f"platform={config.get('platform', 'unknown')}"
+            f"platform={config.get('platform', 'unknown')} "
+            f"native_meeting_id={config.get('native_meeting_id', '')} "
+            f"api_key={'present' if config.get('api_key') else 'MISSING'}"
         )
 
         # Tool handler routes tool calls back to bot or to external APIs
         self.tool_handler = ToolHandler(
             meeting_id=meeting_id,
             token=token,
+            api_key=config.get("api_key", ""),
+            platform=config.get("platform", ""),
+            native_meeting_id=config.get("native_meeting_id", ""),
             send_to_bot=self._send_json_to_bot,
         )
 
@@ -121,6 +126,8 @@ class BotSession:
         if msg_type == "resume":
             self._paused = False
             logger.info("[Session] RESUMED — audio forwarding active")
+            # Inject meeting transcript as context on activation
+            asyncio.create_task(self._inject_transcript_context())
             return True
 
         return True
@@ -216,6 +223,24 @@ class BotSession:
             "text": text,
             "isFinal": True,
         })
+
+    async def _inject_transcript_context(self) -> None:
+        """Fetch meeting transcript and inject as text context into Ultravox on activation."""
+        if not self.tool_handler or not self.ultravox_call:
+            return
+        try:
+            transcript = await self.tool_handler._get_meeting_context()
+            if transcript and not transcript.startswith("Error") and not transcript.startswith("No transcript") and not transcript.startswith("Could not"):
+                context_msg = (
+                    f"[MEETING CONTEXT] Here is the meeting transcript so far. "
+                    f"Use this to answer questions about what was discussed:\n\n{transcript}"
+                )
+                await self.ultravox_call.send_text_input(context_msg)
+                logger.info(f"[Session] Injected transcript context: {len(transcript)} chars")
+            else:
+                logger.info(f"[Session] No transcript to inject: {transcript[:80] if transcript else 'empty'}")
+        except Exception as e:
+            logger.error(f"[Session] Failed to inject transcript context: {e}")
 
     async def _on_state_change(self, new_state: str) -> None:
         """Forward state changes to bot for mic control and interrupt handling."""

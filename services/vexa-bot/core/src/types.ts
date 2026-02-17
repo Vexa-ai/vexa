@@ -31,4 +31,7 @@ export type BotConfig = {
   // Ultravox voice assistant (independent parallel listener)
   ultravoxEnabled?: boolean;     // Enable Ultravox conversational voice assistant
   ultravoxServiceUrl?: string;   // WebSocket URL to ultravox-agent service (e.g., ws://ultravox-agent:9092)
+
+  // User API key for backend API access (transcript fetch, etc.)
+  userApiKey?: string;
 }

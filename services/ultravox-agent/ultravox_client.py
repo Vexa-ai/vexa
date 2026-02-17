@@ -299,6 +299,19 @@ class UltravoxCall:
             except Exception as e:
                 logger.error(f"[Ultravox] Error sending tool result: {e}")
 
+    async def send_text_input(self, text: str) -> None:
+        """Inject text input into the Ultravox conversation (e.g. transcript context)."""
+        msg = {
+            "type": "input_text_message",
+            "text": text,
+        }
+        if self._ws and self._running:
+            try:
+                await self._ws.send(json.dumps(msg))
+                logger.info(f"[Ultravox] Text input sent: {len(text)} chars")
+            except Exception as e:
+                logger.error(f"[Ultravox] Error sending text input: {e}")
+
     async def hangup(self) -> None:
         """Disconnect from the Ultravox call."""
         self._running = False

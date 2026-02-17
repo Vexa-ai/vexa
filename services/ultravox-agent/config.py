@@ -21,7 +21,7 @@ OUTPUT_SAMPLE_RATE = int(os.getenv("ULTRAVOX_OUTPUT_SAMPLE_RATE", "24000"))
 CLIENT_BUFFER_SIZE_MS = int(os.getenv("ULTRAVOX_CLIENT_BUFFER_MS", "60"))
 
 # Vexa / OpenClaw integration
-VEXA_API_URL = os.getenv("VEXA_API_URL", "http://api-gateway:8080")
+VEXA_API_URL = os.getenv("VEXA_API_URL", "http://api-gateway:8000")
 OPENCLAW_WEBHOOK_URL = os.getenv("OPENCLAW_WEBHOOK_URL", "")
 OPENCLAW_HOOKS_TOKEN = os.getenv("OPENCLAW_HOOKS_TOKEN", "")
 

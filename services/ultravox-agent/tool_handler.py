@@ -25,10 +25,16 @@ class ToolHandler:
         self,
         meeting_id: int,
         token: str,
+        api_key: str = "",
+        platform: str = "",
+        native_meeting_id: str = "",
         send_to_bot: Optional[Callable[[dict], Any]] = None,
     ):
         self.meeting_id = meeting_id
         self.token = token
+        self.api_key = api_key
+        self.platform = platform
+        self.native_meeting_id = native_meeting_id
         self._send_to_bot = send_to_bot
 
     async def handle(self, tool_name: str, invocation_id: str, parameters: dict) -> str:
@@ -66,7 +72,7 @@ class ToolHandler:
         transcript = await self._get_meeting_context()
 
         # Build message content: task + transcript + optional context
-        message_parts = [f"Meeting ID: {self.meeting_id}"]
+        message_parts = [f"Meeting: platform={self.platform}, native_meeting_id={self.native_meeting_id}, db_id={self.meeting_id}"]
         if transcript and not transcript.startswith("Error") and not transcript.startswith("No transcript"):
             message_parts.append(f"Meeting transcript:\n{transcript}")
         if context:
@@ -187,20 +193,24 @@ class ToolHandler:
 
     async def _get_meeting_context(self) -> str:
         """Fetch recent transcript with speaker names from Vexa API."""
-        url = f"{VEXA_API_URL.rstrip('/')}/api/meetings/{self.meeting_id}/transcript"
+        if not self.platform or not self.native_meeting_id:
+            logger.warning("[ToolHandler] Missing platform or native_meeting_id for transcript fetch")
+            return "No transcript available (missing meeting identifiers)."
+
+        url = f"{VEXA_API_URL.rstrip('/')}/transcripts/{self.platform}/{self.native_meeting_id}"
 
         try:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.get(
                     url,
-                    headers={"Authorization": f"Bearer {self.token}"},
-                    params={"limit": 50},  # Last 50 segments
+                    headers={"X-API-Key": self.api_key},
                 )
                 if resp.status_code != 200:
+                    logger.warning(f"[ToolHandler] Transcript fetch failed: HTTP {resp.status_code} from {url}")
                     return f"Could not fetch transcript (HTTP {resp.status_code})"
 
                 data = resp.json()
-                segments = data.get("segments", data.get("results", []))
+                segments = data.get("segments", [])
 
                 if not segments:
                     return "No transcript available yet."
@@ -208,7 +218,7 @@ class ToolHandler:
                 # Format as readable text with speaker names
                 lines = []
                 for seg in segments[-30:]:  # Last 30 segments
-                    speaker = seg.get("speaker_name", seg.get("speaker", "Unknown"))
+                    speaker = seg.get("speaker", "Unknown")
                     text = seg.get("text", "")
                     if text.strip():
                         lines.append(f"{speaker}: {text.strip()}")

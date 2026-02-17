@@ -235,7 +235,8 @@ async def start_bot_container(
         "recordingEnabled": user_recording_config.get("enabled", os.getenv("RECORDING_ENABLED", "false").lower() == "true"),
         "transcribeEnabled": True if transcribe_enabled is None else bool(transcribe_enabled),
         "captureModes": user_recording_config.get("capture_modes", os.getenv("CAPTURE_MODES", "audio").split(",")),
-        "recordingUploadUrl": f"http://bot-manager:8080/internal/recordings/upload"
+        "recordingUploadUrl": f"http://bot-manager:8080/internal/recordings/upload",
+        "userApiKey": user_token,  # User's API key for backend API access (transcript, etc.)
     }
     if recording_enabled is not None:
         bot_config_data["recordingEnabled"] = bool(recording_enabled)
