@@ -59,6 +59,7 @@ let redisPublisher: RedisClientType | null = null;
 // --- Ultravox voice assistant ---
 let ultravoxSocket: WebSocket | null = null;
 let ultravoxAudioStream: { write: (chunk: Buffer) => boolean; end: () => void; onDone: Promise<void> } | null = null;
+let ultravoxActive = false; // toggled via /on and /off chat commands
 // --------------------------------
 
 // --- ADDED: Stop signal tracking ---
@@ -904,6 +905,17 @@ async function initChatService(
   );
   log('[Chat] Chat service ready');
 
+  // Handle /on and /off chat commands to toggle Ultravox voice assistant
+  chatService.onMessage((msg) => {
+    if (msg.isFromBot) return;
+    const text = msg.text.trim().toLowerCase();
+    if (text === '/on') {
+      activateUltravox().catch(err => log(`[Ultravox] Activate error: ${err.message}`));
+    } else if (text === '/off') {
+      deactivateUltravox().catch(err => log(`[Ultravox] Deactivate error: ${err.message}`));
+    }
+  });
+
   // Chat observer will be started post-admission by triggerPostAdmissionChat()
   // (called from meetingFlow.ts after the bot is admitted to the meeting)
 }
@@ -1010,7 +1022,7 @@ async function initUltravoxService(
 
     // Expose function for browser to forward audio to Ultravox
     await page.exposeFunction('__vexaForwardAudioToUltravox', (float32Array: number[]) => {
-      if (ultravoxSocket && ultravoxSocket.readyState === WebSocket.OPEN) {
+      if (ultravoxActive && ultravoxSocket && ultravoxSocket.readyState === WebSocket.OPEN) {
         // Send Float32 as binary — the ultravox-agent service handles conversion
         const buffer = Buffer.alloc(float32Array.length * 4);
         for (let i = 0; i < float32Array.length; i++) {
@@ -1033,7 +1045,7 @@ async function initUltravoxService(
  * This function only writes data to the existing stream.
  */
 async function handleUltravoxAgentAudio(pcmData: Buffer): Promise<void> {
-  if (!ultravoxAudioStream) return;
+  if (!ultravoxActive || !ultravoxAudioStream) return;
   ultravoxAudioStream.write(pcmData);
 }
 
@@ -1066,6 +1078,62 @@ function endUltravoxAudioStream(): void {
 }
 
 /**
+ * Activate Ultravox voice assistant (called on /on chat command).
+ */
+async function activateUltravox(): Promise<void> {
+  if (ultravoxActive) return;
+  ultravoxActive = true;
+  log('[Ultravox] Voice assistant ACTIVATED via chat command');
+
+  // Tell ultravox-agent to resume forwarding audio to Ultravox
+  if (ultravoxSocket && ultravoxSocket.readyState === WebSocket.OPEN) {
+    ultravoxSocket.send(JSON.stringify({ type: 'resume' }));
+  }
+
+  // Update avatar to show active indicator
+  if (screenContentService) {
+    await screenContentService.drawAvatarWithStatus(true);
+  }
+
+  // Reply in chat
+  if (chatService) {
+    await chatService.sendMessage('🟢 Voice assistant activated');
+  }
+}
+
+/**
+ * Deactivate Ultravox voice assistant (called on /off chat command).
+ */
+async function deactivateUltravox(): Promise<void> {
+  if (!ultravoxActive) return;
+  ultravoxActive = false;
+  log('[Ultravox] Voice assistant DEACTIVATED via chat command');
+
+  // Stop any playing audio
+  endUltravoxAudioStream();
+
+  // Mute mic
+  if (microphoneService) {
+    await microphoneService.mute();
+  }
+
+  // Tell ultravox-agent to pause
+  if (ultravoxSocket && ultravoxSocket.readyState === WebSocket.OPEN) {
+    ultravoxSocket.send(JSON.stringify({ type: 'pause' }));
+  }
+
+  // Update avatar to show inactive (normal logo)
+  if (screenContentService) {
+    await screenContentService.drawAvatarWithStatus(false);
+  }
+
+  // Reply in chat
+  if (chatService) {
+    await chatService.sendMessage('🔴 Voice assistant deactivated');
+  }
+}
+
+/**
  * Handle JSON messages from the ultravox-agent service.
  */
 async function handleUltravoxMessage(msg: any, botConfig: BotConfig): Promise<void> {
@@ -1088,6 +1156,7 @@ async function handleUltravoxMessage(msg: any, botConfig: BotConfig): Promise<vo
   }
 
   if (msgType === 'agent_speaking') {
+    if (!ultravoxActive) return; // ignore if assistant is off
     // Agent started speaking — start PCM stream first (so audio frames aren't dropped),
     // then unmute mic (async page.evaluate, may take a moment)
     startUltravoxAudioStream();

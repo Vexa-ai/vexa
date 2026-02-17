@@ -41,6 +41,7 @@ class BotSession:
         self.tool_handler: Optional[ToolHandler] = None
         self._ultravox_task: Optional[asyncio.Task] = None
         self._config: dict = {}
+        self._paused: bool = True  # starts paused — activated via /on chat command
 
     async def start(self, config: dict) -> None:
         """Initialize Ultravox call based on bot config."""
@@ -112,12 +113,24 @@ class BotSession:
                 logger.info("[Session] Bot leaving meeting — ending Ultravox call")
                 return False
 
+        if msg_type == "pause":
+            self._paused = True
+            logger.info("[Session] PAUSED — audio forwarding stopped")
+            return True
+
+        if msg_type == "resume":
+            self._paused = False
+            logger.info("[Session] RESUMED — audio forwarding active")
+            return True
+
         return True
 
     _fwd_audio_count = 0
 
     async def _forward_audio(self, float32_bytes: bytes) -> None:
         """Convert Float32 PCM from bot to Int16LE and forward to Ultravox."""
+        if self._paused:
+            return
         if not self.ultravox_call or not self.ultravox_call.is_connected:
             return
 
@@ -137,6 +150,8 @@ class BotSession:
 
     async def _on_agent_audio(self, pcm_data: bytes) -> None:
         """Receive agent speech from Ultravox, forward to bot as binary."""
+        if self._paused:
+            return
         self._audio_frame_count += 1
         if self._audio_frame_count <= 3 or self._audio_frame_count % 100 == 0:
             logger.info(f"[Session] Agent audio frame #{self._audio_frame_count}: {len(pcm_data)} bytes")

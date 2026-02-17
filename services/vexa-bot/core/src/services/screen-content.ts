@@ -908,6 +908,76 @@ export class ScreenContentService {
   }
 
   /**
+   * Draw the Vexa avatar with a voice assistant status indicator.
+   * When active: green dot + "🎙 Listening" below the logo.
+   * When inactive: just the normal logo (no indicator).
+   */
+  async drawAvatarWithStatus(active: boolean): Promise<void> {
+    if (!this._initialized) await this.initialize();
+
+    const avatarUri = this._getAvatarDataUri();
+    if (!avatarUri) return;
+
+    await this.page.evaluate(async ({ imgSrc, isActive }: { imgSrc: string; isActive: boolean }) => {
+      const canvas = (window as any).__vexa_canvas as HTMLCanvasElement;
+      const ctx = (window as any).__vexa_canvas_ctx as CanvasRenderingContext2D;
+      if (!canvas || !ctx) return;
+
+      return new Promise<void>((resolve) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          // Black background
+          ctx.fillStyle = '#000000';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+          // Draw the logo small and centered (~12% of canvas height)
+          const maxSize = Math.max(Math.round(canvas.height * 0.12), 100);
+          const scale = Math.min(maxSize / img.width, maxSize / img.height);
+          const w = img.width * scale;
+          const h = img.height * scale;
+          const x = (canvas.width - w) / 2;
+          const y = (canvas.height - h) / 2;
+          ctx.drawImage(img, x, y, w, h);
+
+          if (isActive) {
+            // Green dot indicator — bottom-right of the logo
+            const dotRadius = Math.max(8, Math.round(maxSize * 0.08));
+            const dotX = x + w + dotRadius + 4;
+            const dotY = y + h - dotRadius;
+            ctx.beginPath();
+            ctx.arc(dotX, dotY, dotRadius, 0, Math.PI * 2);
+            ctx.fillStyle = '#22c55e'; // green-500
+            ctx.fill();
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // "Listening" text below the logo
+            const textSize = Math.max(20, Math.round(canvas.height * 0.022));
+            ctx.font = `${textSize}px sans-serif`;
+            ctx.fillStyle = '#a3a3a3'; // neutral-400
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            ctx.fillText('🎙 Listening', canvas.width / 2, y + h + 16);
+          }
+
+          resolve();
+        };
+        img.onerror = () => {
+          ctx.fillStyle = '#000000';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          resolve();
+        };
+        img.src = imgSrc;
+      });
+    }, { imgSrc: avatarUri, isActive: active });
+
+    this._currentContentType = null; // avatar mode
+    log(`[ScreenContent] Avatar with status: ${active ? 'ACTIVE' : 'INACTIVE'}`);
+  }
+
+  /**
    * Draw an avatar image centered on a black background.
    * The logo is drawn small (~12% of canvas height) and centered.
    */
