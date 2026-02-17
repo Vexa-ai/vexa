@@ -450,6 +450,56 @@ fi
 echo ""
 
 # -----------------------------------------------------------------------------
+# PulseAudio & ALSA Configuration
+# -----------------------------------------------------------------------------
+
+echo "Configuring PulseAudio and ALSA..."
+
+# Configure ALSA to route through PulseAudio (needed before PA starts)
+cat > /root/.asoundrc <<'ALSA_EOF'
+pcm.!default {
+    type pulse
+}
+ctl.!default {
+    type pulse
+}
+ALSA_EOF
+echo "  ALSA configured to use PulseAudio"
+
+# Create a post-start script for PulseAudio sink setup
+# This runs after supervisord starts PulseAudio
+cat > /usr/local/bin/setup-pulseaudio-sinks.sh <<'PA_EOF'
+#!/bin/bash
+# Wait for PulseAudio to be ready
+for i in $(seq 1 15); do
+    if pactl info >/dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
+
+if ! pactl info >/dev/null 2>&1; then
+    echo "[PulseAudio Setup] ERROR: PulseAudio not available after 15s"
+    exit 1
+fi
+
+echo "[PulseAudio Setup] Creating null sink for audio capture..."
+pactl load-module module-null-sink sink_name=zoom_sink sink_properties=device.description="ZoomAudioSink" 2>/dev/null || true
+
+echo "[PulseAudio Setup] Creating TTS sink for voice agent..."
+pactl load-module module-null-sink sink_name=tts_sink sink_properties=device.description="TTSAudioSink" 2>/dev/null || true
+
+echo "[PulseAudio Setup] Creating virtual microphone from TTS sink monitor..."
+pactl load-module module-remap-source master=tts_sink.monitor source_name=virtual_mic source_properties=device.description="VirtualMicrophone" 2>/dev/null || true
+pactl set-default-source virtual_mic 2>/dev/null || true
+
+echo "[PulseAudio Setup] Done - sinks configured"
+PA_EOF
+chmod +x /usr/local/bin/setup-pulseaudio-sinks.sh
+echo "  PulseAudio sink setup script created"
+echo ""
+
+# -----------------------------------------------------------------------------
 # Start Services
 # -----------------------------------------------------------------------------
 

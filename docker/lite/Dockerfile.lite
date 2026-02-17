@@ -66,7 +66,8 @@ RUN apt-get update && \
     wget \
     git \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && usermod -aG pulse-access root
 
 # Create directory structure
 WORKDIR /app
@@ -78,6 +79,7 @@ RUN mkdir -p \
     /app/whisperlive \
     /app/vexa-bot \
     /app/mcp \
+    /app/tts-service \
     /app/shared-models \
     /app/alembic \
     /var/log/supervisor \
@@ -146,6 +148,9 @@ COPY services/WhisperLive/ /app/whisperlive/
 # MCP Service
 COPY services/mcp/ /app/mcp/
 
+# TTS Service
+COPY services/tts-service/ /app/tts-service/
+
 # Alembic migrations
 COPY alembic.ini /app/alembic.ini
 COPY libs/shared-models/alembic/ /app/alembic/
@@ -192,6 +197,10 @@ ENV ORCHESTRATOR=process \
     BOT_SCRIPT_PATH=/app/vexa-bot/dist/docker.js \
     BOT_WORKING_DIR=/app/vexa-bot \
     BOT_CALLBACK_BASE_URL=http://localhost:8080
+
+# TTS Service (requires OPENAI_API_KEY at runtime)
+ENV TTS_SERVICE_URL=http://localhost:8059 \
+    OPENAI_API_KEY=
 
 # WhisperLive configuration
 ENV WHISPER_LIVE_URL=ws://localhost:9090 \
