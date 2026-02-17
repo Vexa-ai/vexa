@@ -276,6 +276,12 @@ async def start_bot_container(
         else:
             logger.warning("voice_agent_enabled but TTS_SERVICE_URL not set - TTS will fail")
 
+    # Add Ultravox agent service URL if configured
+    ultravox_agent_url = os.getenv("ULTRAVOX_AGENT_URL", "").strip()
+    if ultravox_agent_url:
+        environment.append(f"ULTRAVOX_AGENT_URL={ultravox_agent_url}")
+        logger.info(f"Added ULTRAVOX_AGENT_URL to bot environment: {ultravox_agent_url}")
+
     # Add Zoom-specific environment variables if platform is Zoom
     if platform == "zoom":
         zoom_client_id = os.getenv("ZOOM_CLIENT_ID")

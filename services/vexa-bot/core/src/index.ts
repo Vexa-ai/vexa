@@ -15,6 +15,7 @@ import { ScreenContentService, getVirtualCameraInitScript } from "./services/scr
 import { ScreenShareService } from "./services/screen-share"; // kept for Teams; unused for Google Meet camera-feed approach
 import { createClient, RedisClientType } from 'redis';
 import { Page, Browser } from 'playwright-core';
+import WebSocket from 'ws';
 // HTTP imports removed - using unified callback service instead
 
 // Module-level variables to store current configuration
@@ -54,6 +55,11 @@ let screenContentService: ScreenContentService | null = null;
 let screenShareService: ScreenShareService | null = null;
 let redisPublisher: RedisClientType | null = null;
 // -------------------------------------------------
+
+// --- Ultravox voice assistant ---
+let ultravoxSocket: WebSocket | null = null;
+let ultravoxAudioStream: { write: (chunk: Buffer) => boolean; end: () => void; onDone: Promise<void> } | null = null;
+// --------------------------------
 
 // --- ADDED: Stop signal tracking ---
 let stopSignalReceived = false;
@@ -556,6 +562,14 @@ async function performGracefulLeave(
     // If reason is 'admission_failed', exitCode would be 2, and platformLeaveSuccess is irrelevant.
   }
 
+  // Cleanup Ultravox
+  try {
+    if (ultravoxAudioStream) { ultravoxAudioStream.end(); ultravoxAudioStream = null; }
+    if (ultravoxSocket) { ultravoxSocket.close(); ultravoxSocket = null; }
+  } catch (uvCleanupErr: any) {
+    log(`[Graceful Leave] Ultravox cleanup error: ${uvCleanupErr.message}`);
+  }
+
   // Cleanup voice agent services
   try {
     if (ttsPlaybackService) { ttsPlaybackService.stop(); ttsPlaybackService = null; }
@@ -929,6 +943,208 @@ async function initVoiceAgentServices(
   log('[VoiceAgent] All meeting interaction services initialized');
 }
 
+/**
+ * Initialize Ultravox voice assistant — connects to the ultravox-agent service
+ * via WebSocket (same pattern as WhisperLive). The service manages the Ultravox
+ * call and relays audio/tool calls.
+ */
+async function initUltravoxService(
+  botConfig: BotConfig,
+  page: Page
+): Promise<void> {
+  const serviceUrl = botConfig.ultravoxServiceUrl || process.env.ULTRAVOX_AGENT_URL;
+  if (!serviceUrl) {
+    log('[Ultravox] No ultravoxServiceUrl or ULTRAVOX_AGENT_URL configured, skipping');
+    return;
+  }
+
+  log(`[Ultravox] Connecting to ultravox-agent at ${serviceUrl}...`);
+
+  try {
+    ultravoxSocket = new WebSocket(serviceUrl);
+
+    ultravoxSocket.onopen = () => {
+      log('[Ultravox] Connected to ultravox-agent service');
+
+      // Send initial config (same fields as WhisperLive config)
+      const config = {
+        uid: generateUUID(),
+        meeting_id: botConfig.meeting_id,
+        token: botConfig.token,
+        platform: botConfig.platform,
+        meeting_url: botConfig.meetingUrl,
+        ultravox_system_prompt: null, // Use service default
+      };
+      ultravoxSocket!.send(JSON.stringify(config));
+    };
+
+    let audioFrameCount = 0;
+    ultravoxSocket.on('message', async (data: Buffer, isBinary: boolean) => {
+      if (isBinary) {
+        audioFrameCount++;
+        if (audioFrameCount <= 3 || audioFrameCount % 200 === 0) {
+          log(`[Ultravox] Agent audio frame #${audioFrameCount}: ${data.length} bytes`);
+        }
+        // Binary: agent audio PCM (Int16LE 24kHz) — play into meeting
+        await handleUltravoxAgentAudio(Buffer.from(data));
+        return;
+      }
+
+      // Text: JSON message
+      try {
+        const msg = JSON.parse(data.toString());
+        await handleUltravoxMessage(msg, botConfig);
+      } catch (e: any) {
+        log(`[Ultravox] Non-JSON message: ${data.toString().substring(0, 100)}`);
+      }
+    });
+
+    ultravoxSocket.on('error', (err: Error) => {
+      log(`[Ultravox] WebSocket error: ${err.message || err}`);
+    });
+
+    ultravoxSocket.on('close', (code: number, reason: Buffer) => {
+      log(`[Ultravox] WebSocket closed: code=${code} reason=${reason.toString()}`);
+      ultravoxSocket = null;
+    });
+
+    // Expose function for browser to forward audio to Ultravox
+    await page.exposeFunction('__vexaForwardAudioToUltravox', (float32Array: number[]) => {
+      if (ultravoxSocket && ultravoxSocket.readyState === WebSocket.OPEN) {
+        // Send Float32 as binary — the ultravox-agent service handles conversion
+        const buffer = Buffer.alloc(float32Array.length * 4);
+        for (let i = 0; i < float32Array.length; i++) {
+          buffer.writeFloatLE(float32Array[i], i * 4);
+        }
+        ultravoxSocket.send(buffer);
+      }
+    });
+
+    log('[Ultravox] Audio forwarding function exposed to browser');
+
+  } catch (err: any) {
+    log(`[Ultravox] Initialization failed: ${err.message}`);
+  }
+}
+
+/**
+ * Handle agent audio from Ultravox — stream to PulseAudio for meeting playback.
+ * The PCM stream is created by handleUltravoxMessage on 'agent_speaking' state.
+ * This function only writes data to the existing stream.
+ */
+async function handleUltravoxAgentAudio(pcmData: Buffer): Promise<void> {
+  if (!ultravoxAudioStream) return;
+  ultravoxAudioStream.write(pcmData);
+}
+
+/**
+ * Start the Ultravox audio stream (called when agent starts speaking).
+ */
+function startUltravoxAudioStream(): void {
+  if (ultravoxAudioStream || !ttsPlaybackService) return;
+
+  ultravoxAudioStream = ttsPlaybackService.startPCMStream(24000, 1, 's16le');
+  ultravoxAudioStream.onDone.then(() => {
+    ultravoxAudioStream = null;
+    // Auto-mute after agent finishes speaking
+    if (microphoneService) {
+      microphoneService.scheduleAutoMute(1500);
+    }
+  }).catch(() => {
+    ultravoxAudioStream = null;
+  });
+}
+
+/**
+ * End the Ultravox audio stream (called when agent stops speaking).
+ */
+function endUltravoxAudioStream(): void {
+  if (ultravoxAudioStream) {
+    ultravoxAudioStream.end();
+    // ultravoxAudioStream will be nulled by onDone handler
+  }
+}
+
+/**
+ * Handle JSON messages from the ultravox-agent service.
+ */
+async function handleUltravoxMessage(msg: any, botConfig: BotConfig): Promise<void> {
+  const msgType = msg.type || msg.status || '';
+
+  if (msg.status === 'SERVER_READY') {
+    log('[Ultravox] Service ready');
+    return;
+  }
+
+  if (msg.status === 'ULTRAVOX_CONNECTED') {
+    log('[Ultravox] Ultravox call connected');
+    await publishVoiceEvent('ultravox.connected');
+    return;
+  }
+
+  if (msg.status === 'ERROR') {
+    log(`[Ultravox] Error from service: ${msg.message}`);
+    return;
+  }
+
+  if (msgType === 'agent_speaking') {
+    // Agent started speaking — start PCM stream first (so audio frames aren't dropped),
+    // then unmute mic (async page.evaluate, may take a moment)
+    startUltravoxAudioStream();
+    if (microphoneService) await microphoneService.unmute();
+    return;
+  }
+
+  if (msgType === 'agent_done_speaking') {
+    // Agent stopped speaking — end audio stream (mic auto-mutes via onDone)
+    endUltravoxAudioStream();
+    return;
+  }
+
+  if (msgType === 'meeting_action') {
+    // Ultravox service wants bot to perform a meeting action — publish to Redis
+    const meetingId = botConfig.meeting_id;
+    const action = msg.action;
+    log(`[Ultravox] Meeting action: ${action}`);
+
+    if (redisSubscriber || redisPublisher) {
+      // Publish as a bot command so existing handlers pick it up
+      const command = JSON.stringify({
+        action: action,
+        text: msg.text,
+        url: msg.url,
+        type: msg.content_type,
+        meeting_id: meetingId,
+        source: 'ultravox',
+      });
+      try {
+        const publisher = redisPublisher || redisSubscriber;
+        if (publisher && publisher.isOpen) {
+          await publisher.publish(`bot_commands:meeting:${meetingId}`, command);
+        }
+      } catch (err: any) {
+        log(`[Ultravox] Failed to publish meeting action: ${err.message}`);
+      }
+    }
+    return;
+  }
+
+  if (msgType === 'ultravox_transcript') {
+    // Log transcript events
+    const role = msg.role || '';
+    const text = msg.text || '';
+    if (msg.isFinal) {
+      log(`[Ultravox] Transcript [${role}]: ${text.substring(0, 100)}`);
+    }
+    return;
+  }
+
+  if (msgType === 'ultravox_state') {
+    log(`[Ultravox] State: ${msg.state}`);
+    return;
+  }
+}
+
 // ==================================================================
 
 export async function runBot(botConfig: BotConfig): Promise<void> {// Store botConfig globally for command validation
@@ -1163,6 +1379,16 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
       await initVoiceAgentServices(botConfig, page, browserInstance);
     } catch (err: any) {
       log(`[VoiceAgent] Initialization failed (non-fatal): ${err.message}`);
+    }
+  }
+
+  // Initialize Ultravox voice assistant (independent parallel listener)
+  // Auto-enable if ULTRAVOX_AGENT_URL is set in environment
+  if (botConfig.ultravoxEnabled || process.env.ULTRAVOX_AGENT_URL) {
+    try {
+      await initUltravoxService(botConfig, page);
+    } catch (err: any) {
+      log(`[Ultravox] Initialization failed (non-fatal): ${err.message}`);
     }
   }
 

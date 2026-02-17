@@ -6,6 +6,12 @@ BOT_IMAGE_NAME=vexa-bot:dev
 # Remote Transcriber API Configuration
 REMOTE_TRANSCRIBER_URL=http://transcription-service:80/v1/audio/transcriptions
 REMOTE_TRANSCRIBER_API_KEY=IUB8g9384bpfoiwnoig
+
+# Ultravox Voice Assistant (Optional)
+# Set ULTRAVOX_API_KEY to enable the conversational voice assistant in meetings
+# Get your key at https://app.ultravox.ai — 30 free minutes included
+ULTRAVOX_API_KEY=
+
 # Exposed Host Ports
 API_GATEWAY_HOST_PORT=8056
 ADMIN_API_HOST_PORT=8057

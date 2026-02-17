@@ -394,6 +394,12 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
               if (!success) {
                 (window as any).logBot("Failed to send Google Meet audio data to WhisperLive");
               }
+
+              // Forward audio to Ultravox service (if enabled — function exposed by initUltravoxService)
+              const ultravoxForward = (window as any).__vexaForwardAudioToUltravox;
+              if (typeof ultravoxForward === 'function') {
+                try { ultravoxForward(Array.from(audioData)); } catch {}
+              }
             });
 
             // Initialize WhisperLive WebSocket connection with simple reconnection wrapper

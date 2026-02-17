@@ -386,6 +386,12 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
               if (!success) {
                 (window as any).logBot("Failed to send Teams audio data to WhisperLive");
               }
+
+              // Forward audio to Ultravox service (if enabled — function exposed by initUltravoxService)
+              const ultravoxForward = (window as any).__vexaForwardAudioToUltravox;
+              if (typeof ultravoxForward === 'function') {
+                try { ultravoxForward(Array.from(audioData)); } catch {}
+              }
             });
 
             // Initialize WhisperLive WebSocket connection with reusable callbacks

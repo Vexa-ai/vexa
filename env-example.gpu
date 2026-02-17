@@ -53,6 +53,11 @@ REMOTE_TRANSCRIBER_API_KEY=
 OPENAI_API_KEY=
 # Get your key at https://platform.openai.com/api-keys
 
+# Ultravox Voice Assistant (Optional)
+# Set ULTRAVOX_API_KEY to enable the conversational voice assistant in meetings
+# Get your key at https://app.ultravox.ai — 30 free minutes included
+ULTRAVOX_API_KEY=
+
 # Zoom Meeting SDK Credentials (Optional - for Zoom bot support)
 # ZOOM_CLIENT_ID=
 # ZOOM_CLIENT_SECRET=

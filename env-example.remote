@@ -15,6 +15,11 @@ REMOTE_TRANSCRIBER_VAD_MODEL=silero
 # Required only if using the voice agent feature (voice_agent_enabled: true)
 OPENAI_API_KEY=
 
+# Ultravox Voice Assistant (Optional)
+# Set ULTRAVOX_API_KEY to enable the conversational voice assistant in meetings
+# Get your key at https://app.ultravox.ai — 30 free minutes included
+ULTRAVOX_API_KEY=
+
 # Exposed Host Ports
 API_GATEWAY_HOST_PORT=8056
 ADMIN_API_HOST_PORT=8057

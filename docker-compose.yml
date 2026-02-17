@@ -69,6 +69,7 @@ services:
       - DOCKER_HOST=unix://var/run/docker.sock
       - DEVICE_TYPE=${DEVICE_TYPE}
       - WHISPER_LIVE_URL=ws://whisperlive-remote:9090/ws  # Direct connection to whisperlive-remote
+      - ULTRAVOX_AGENT_URL=ws://ultravox-agent:9092
       - ADMIN_TOKEN=${ADMIN_API_TOKEN}
       - ZOOM_CLIENT_ID=${ZOOM_CLIENT_ID}
       - ZOOM_CLIENT_SECRET=${ZOOM_CLIENT_SECRET}
@@ -378,6 +379,32 @@ services:
     networks:
       - vexa_default
     restart: unless-stopped
+
+  ultravox-agent:
+    build:
+      context: .
+      dockerfile: services/ultravox-agent/Dockerfile
+    expose:
+      - "9092"
+      - "9093"
+    environment:
+      - ULTRAVOX_API_KEY=${ULTRAVOX_API_KEY:-}
+      - ULTRAVOX_API_URL=${ULTRAVOX_API_URL:-https://api.ultravox.ai/api}
+      - ULTRAVOX_MODEL=${ULTRAVOX_MODEL:-fixie-ai/ultravox}
+      - ULTRAVOX_VOICE=${ULTRAVOX_VOICE:-Mark}
+      - VEXA_API_URL=http://api-gateway:8080
+      - OPENCLAW_WEBHOOK_URL=${OPENCLAW_WEBHOOK_URL:-}
+      - LOG_LEVEL=DEBUG
+    init: true
+    networks:
+      - vexa_default
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9093/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
 
   redis:
     image: redis:7.0-alpine

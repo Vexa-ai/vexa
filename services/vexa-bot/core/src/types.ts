@@ -27,4 +27,8 @@ export type BotConfig = {
   // Voice agent / meeting interaction interface
   voiceAgentEnabled?: boolean;  // Enable TTS, chat, screen share capabilities
   defaultAvatarUrl?: string;   // Custom default avatar image URL for virtual camera
+
+  // Ultravox voice assistant (independent parallel listener)
+  ultravoxEnabled?: boolean;     // Enable Ultravox conversational voice assistant
+  ultravoxServiceUrl?: string;   // WebSocket URL to ultravox-agent service (e.g., ws://ultravox-agent:9092)
 }
