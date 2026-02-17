@@ -58,8 +58,9 @@ let redisPublisher: RedisClientType | null = null;
 
 // --- Ultravox voice assistant ---
 let ultravoxSocket: WebSocket | null = null;
-let ultravoxAudioStream: { write: (chunk: Buffer) => boolean; end: () => void; onDone: Promise<void> } | null = null;
+let ultravoxAudioStream: { write: (chunk: Buffer) => boolean; end: () => void; backpressured: boolean; onDone: Promise<void> } | null = null;
 let ultravoxActive = false; // toggled via /on and /off chat commands
+let ultravoxDroppedFrames = 0;
 // --------------------------------
 
 // --- ADDED: Stop signal tracking ---
@@ -1046,6 +1047,13 @@ async function initUltravoxService(
  */
 async function handleUltravoxAgentAudio(pcmData: Buffer): Promise<void> {
   if (!ultravoxActive || !ultravoxAudioStream) return;
+  if (ultravoxAudioStream.backpressured) {
+    ultravoxDroppedFrames++;
+    if (ultravoxDroppedFrames === 1 || ultravoxDroppedFrames % 100 === 0) {
+      log(`[Ultravox] Dropping audio frame (backpressured), total dropped: ${ultravoxDroppedFrames}`);
+    }
+    return;
+  }
   ultravoxAudioStream.write(pcmData);
 }
 
@@ -1167,6 +1175,14 @@ async function handleUltravoxMessage(msg: any, botConfig: BotConfig): Promise<vo
   if (msgType === 'agent_done_speaking') {
     // Agent stopped speaking — end audio stream (mic auto-mutes via onDone)
     endUltravoxAudioStream();
+    return;
+  }
+
+  if (msgType === 'agent_interrupted') {
+    // User barged in — kill audio playback immediately
+    log('[Ultravox] Agent interrupted by user (barge-in)');
+    if (ttsPlaybackService) ttsPlaybackService.interrupt();
+    ultravoxAudioStream = null;
     return;
   }
 

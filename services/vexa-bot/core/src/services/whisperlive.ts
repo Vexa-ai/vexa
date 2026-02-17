@@ -115,6 +115,10 @@ export class WhisperLiveService {
     if (!this.connection?.socket || this.connection.socket.readyState !== WebSocket.OPEN) {
       return false;
     }
+    // Backpressure: skip frame if WebSocket buffer is backed up (>64KB)
+    if (this.connection.socket.bufferedAmount > 65536) {
+      return false;
+    }
 
     try {
       this.connection.socket.send(audioData);

@@ -18,7 +18,7 @@ HEALTH_PORT = int(os.getenv("ULTRAVOX_AGENT_HEALTH_PORT", "9093"))
 # Audio
 INPUT_SAMPLE_RATE = int(os.getenv("ULTRAVOX_INPUT_SAMPLE_RATE", "16000"))
 OUTPUT_SAMPLE_RATE = int(os.getenv("ULTRAVOX_OUTPUT_SAMPLE_RATE", "24000"))
-CLIENT_BUFFER_SIZE_MS = int(os.getenv("ULTRAVOX_CLIENT_BUFFER_MS", "30000"))
+CLIENT_BUFFER_SIZE_MS = int(os.getenv("ULTRAVOX_CLIENT_BUFFER_MS", "60"))
 
 # Vexa / OpenClaw integration
 VEXA_API_URL = os.getenv("VEXA_API_URL", "http://api-gateway:8080")

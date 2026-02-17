@@ -204,16 +204,21 @@ class BotSession:
                 pass
 
     async def _on_transcript(self, data: dict) -> None:
-        """Forward transcript events to bot for logging."""
+        """Forward only final transcript events to bot (skip noisy incremental updates)."""
+        if not data.get("isFinal"):
+            return  # Skip non-final transcripts — they flood the bot WebSocket
+        text = data.get("text", "").strip()
+        if not text:
+            return  # Skip empty transcripts
         await self._send_json_to_bot({
             "type": "ultravox_transcript",
             "role": data.get("role", ""),
-            "text": data.get("text", ""),
-            "isFinal": data.get("isFinal", False),
+            "text": text,
+            "isFinal": True,
         })
 
     async def _on_state_change(self, new_state: str) -> None:
-        """Forward state changes to bot for mic control."""
+        """Forward state changes to bot for mic control and interrupt handling."""
         await self._send_json_to_bot({"type": "ultravox_state", "state": new_state})
 
         # Tell bot when agent starts/stops speaking (for mic mute/unmute)
@@ -221,6 +226,8 @@ class BotSession:
             await self._send_json_to_bot({"type": "agent_speaking"})
         elif new_state in ("listening", "idle"):
             await self._send_json_to_bot({"type": "agent_done_speaking"})
+        elif new_state == "interrupted":
+            await self._send_json_to_bot({"type": "agent_interrupted"})
 
     async def _send_json_to_bot(self, data: dict) -> None:
         """Send a JSON message to the bot."""

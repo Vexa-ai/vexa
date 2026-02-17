@@ -238,10 +238,13 @@ class UltravoxCall:
 
         elif msg_type == "transcript":
             text = data.get("text") or ""
-            logger.info(
-                f"[Ultravox] Transcript: role={data.get('role')} "
-                f"final={data.get('isFinal')} text={text[:80]}"
-            )
+            is_final = data.get("isFinal", False)
+            # Only log transcripts with actual text to reduce noise
+            if is_final or text.strip():
+                logger.info(
+                    f"[Ultravox] Transcript: role={data.get('role')} "
+                    f"final={is_final} text={text[:80]}"
+                )
             if self._on_transcript:
                 await _maybe_await(self._on_transcript(data))
 
@@ -262,7 +265,9 @@ class UltravoxCall:
                 await _maybe_await(self._on_tool_call(tool_name, invocation_id, parameters))
 
         elif msg_type == "playback_clear_buffer":
-            logger.debug("[Ultravox] Playback clear buffer")
+            logger.info("[Ultravox] Playback clear buffer (user barge-in)")
+            if self._on_state_change:
+                await _maybe_await(self._on_state_change("interrupted"))
 
         else:
             logger.info(f"[Ultravox] Unknown message type: {msg_type} data={str(data)[:200]}")

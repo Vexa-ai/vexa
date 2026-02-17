@@ -50,4 +50,4 @@ fi
 
 # Finally, run the bot using the built production wrapper
 # This wrapper (e.g., docker.js generated from docker.ts) will read the BOT_CONFIG env variable.
-node dist/docker.js
+node --max-old-space-size=2048 dist/docker.js

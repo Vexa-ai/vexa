@@ -81,7 +81,7 @@ export class TTSPlaybackService {
     sampleRate: number = 24000,
     channels: number = 1,
     format: string = 's16le'
-  ): { write: (chunk: Buffer) => boolean; end: () => void; onDone: Promise<void> } {
+  ): { write: (chunk: Buffer) => boolean; end: () => void; backpressured: boolean; onDone: Promise<void> } {
     this._isPlaying = true;
 
     const proc = spawn('paplay', [
@@ -112,10 +112,18 @@ export class TTSPlaybackService {
       });
     });
 
+    let backpressured = false;
+
+    proc.stdin?.on('drain', () => {
+      backpressured = false;
+    });
+
     return {
       write: (chunk: Buffer) => {
         if (proc.stdin && !proc.stdin.destroyed) {
-          return proc.stdin.write(chunk);
+          const ok = proc.stdin.write(chunk);
+          if (!ok) backpressured = true;
+          return ok;
         }
         return false;
       },
@@ -124,6 +132,7 @@ export class TTSPlaybackService {
           proc.stdin.end();
         }
       },
+      get backpressured() { return backpressured; },
       onDone
     };
   }

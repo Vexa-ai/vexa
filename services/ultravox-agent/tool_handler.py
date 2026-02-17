@@ -62,8 +62,13 @@ class ToolHandler:
                 "but suggest they try again later."
             )
 
-        # Build message content: task + optional context
+        # Fetch transcript to give OpenClaw meeting context
+        transcript = await self._get_meeting_context()
+
+        # Build message content: task + transcript + optional context
         message_parts = [f"Meeting ID: {self.meeting_id}"]
+        if transcript and not transcript.startswith("Error") and not transcript.startswith("No transcript"):
+            message_parts.append(f"Meeting transcript:\n{transcript}")
         if context:
             message_parts.append(f"Context: {context}")
         message_parts.append(f"Task: {task}")
@@ -86,6 +91,18 @@ class ToolHandler:
 
         logger.info(f"[ToolHandler] Triggering OpenClaw agent: task='{task[:80]}...'")
         logger.debug(f"[ToolHandler] OpenClaw URL: {url}")
+
+        # Show "thinking" status on bot video while OpenClaw processes
+        if self._send_to_bot:
+            try:
+                await self._send_to_bot({
+                    "type": "meeting_action",
+                    "action": "screen_show",
+                    "content_type": "text",
+                    "text": "🧠 Analyzing...",
+                })
+            except Exception:
+                pass  # Non-critical — don't fail the tool call
 
         try:
             async with httpx.AsyncClient(timeout=120) as client:
@@ -124,6 +141,16 @@ class ToolHandler:
                 "The agent backend took too long to respond. "
                 "Please let the user know the request timed out."
             )
+        finally:
+            # Clear "thinking" status — return to avatar
+            if self._send_to_bot:
+                try:
+                    await self._send_to_bot({
+                        "type": "meeting_action",
+                        "action": "screen_stop",
+                    })
+                except Exception:
+                    pass
 
     async def _send_chat_message(self, params: dict) -> str:
         """Send a chat message in the meeting via the bot."""
