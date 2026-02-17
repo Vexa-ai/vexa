@@ -2,7 +2,7 @@
 Tool call router for Ultravox agent.
 
 Routes tool invocations from Ultravox to the appropriate backend:
-- trigger_agent → Vexa API → OpenClaw webhook
+- trigger_agent → OpenClaw /v1/chat/completions (synchronous agent run)
 - send_chat_message → WebSocket message to vexa-bot
 - show_image → WebSocket message to vexa-bot
 - get_meeting_context → Vexa API transcript endpoint
@@ -13,7 +13,7 @@ from typing import Any, Callable, Optional
 
 import httpx
 
-from config import VEXA_API_URL, OPENCLAW_WEBHOOK_URL
+from config import VEXA_API_URL, OPENCLAW_WEBHOOK_URL, OPENCLAW_HOOKS_TOKEN
 
 logger = logging.getLogger(__name__)
 
@@ -50,12 +50,11 @@ class ToolHandler:
             return f"Error executing {tool_name}: {str(e)}"
 
     async def _trigger_agent(self, params: dict) -> str:
-        """Trigger OpenClaw agent via Vexa API webhook."""
+        """Trigger OpenClaw agent via /v1/chat/completions (synchronous)."""
         task = params.get("task", "")
         context = params.get("context", "")
 
         if not OPENCLAW_WEBHOOK_URL:
-            # Fallback: if no OpenClaw configured, use Vexa API directly
             logger.warning("[ToolHandler] OPENCLAW_WEBHOOK_URL not set, returning placeholder")
             return (
                 "Agent backend not configured. The user asked for: "
@@ -63,31 +62,68 @@ class ToolHandler:
                 "but suggest they try again later."
             )
 
+        # Build message content: task + optional context
+        message_parts = [f"Meeting ID: {self.meeting_id}"]
+        if context:
+            message_parts.append(f"Context: {context}")
+        message_parts.append(f"Task: {task}")
+        user_message = "\n".join(message_parts)
+
+        # Use OpenClaw's OpenAI-compatible Chat Completions endpoint
+        base_url = OPENCLAW_WEBHOOK_URL.rstrip("/")
+        url = f"{base_url}/v1/chat/completions"
+
+        headers = {
+            "Content-Type": "application/json",
+        }
+        if OPENCLAW_HOOKS_TOKEN:
+            headers["Authorization"] = f"Bearer {OPENCLAW_HOOKS_TOKEN}"
+
         payload = {
-            "task": task,
-            "context": context,
-            "meeting_id": self.meeting_id,
-            "source": "ultravox-agent",
+            "model": "openclaw",
+            "messages": [{"role": "user", "content": user_message}],
         }
 
-        logger.info(f"[ToolHandler] Triggering agent: task='{task[:80]}...'")
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                OPENCLAW_WEBHOOK_URL,
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {self.token}",
-                    "Content-Type": "application/json",
-                },
-            )
-            if resp.status_code not in (200, 201, 202):
-                return f"Agent request failed (HTTP {resp.status_code}): {resp.text[:200]}"
+        logger.info(f"[ToolHandler] Triggering OpenClaw agent: task='{task[:80]}...'")
+        logger.debug(f"[ToolHandler] OpenClaw URL: {url}")
 
-            try:
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                resp = await client.post(url, json=payload, headers=headers)
+
+                if resp.status_code != 200:
+                    logger.error(
+                        f"[ToolHandler] OpenClaw error {resp.status_code}: {resp.text[:300]}"
+                    )
+                    return f"Agent request failed (HTTP {resp.status_code}): {resp.text[:200]}"
+
                 data = resp.json()
-                return data.get("result", data.get("message", json.dumps(data)))
-            except Exception:
-                return resp.text[:2000]
+                # OpenAI Chat Completions response format
+                choices = data.get("choices", [])
+                if choices:
+                    content = choices[0].get("message", {}).get("content", "")
+                    if content:
+                        logger.info(
+                            f"[ToolHandler] OpenClaw response: {content[:120]}..."
+                        )
+                        return content
+
+                # Fallback: return raw response
+                logger.warning(f"[ToolHandler] Unexpected OpenClaw response: {json.dumps(data)[:300]}")
+                return json.dumps(data)[:2000]
+
+        except httpx.ConnectError as e:
+            logger.error(f"[ToolHandler] Cannot connect to OpenClaw at {base_url}: {e}")
+            return (
+                "Cannot reach the agent backend right now. "
+                "Please let the user know and suggest trying again later."
+            )
+        except httpx.TimeoutException:
+            logger.error(f"[ToolHandler] OpenClaw request timed out after 120s")
+            return (
+                "The agent backend took too long to respond. "
+                "Please let the user know the request timed out."
+            )
 
     async def _send_chat_message(self, params: dict) -> str:
         """Send a chat message in the meeting via the bot."""

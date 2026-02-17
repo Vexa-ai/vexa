@@ -20,6 +20,13 @@ OPENAI_API_KEY=
 # Get your key at https://app.ultravox.ai — 30 free minutes included
 ULTRAVOX_API_KEY=
 
+# OpenClaw Brain (Optional)
+# Connect the voice assistant to an OpenClaw instance for complex tasks
+# OPENCLAW_WEBHOOK_URL is the base URL of the OpenClaw Gateway (e.g. http://host.docker.internal:18789)
+# OPENCLAW_HOOKS_TOKEN is the Gateway auth token (gateway.auth.token in openclaw.json)
+OPENCLAW_WEBHOOK_URL=
+OPENCLAW_HOOKS_TOKEN=
+
 # Exposed Host Ports
 API_GATEWAY_HOST_PORT=8056
 ADMIN_API_HOST_PORT=8057

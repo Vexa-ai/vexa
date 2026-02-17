@@ -58,6 +58,13 @@ OPENAI_API_KEY=
 # Get your key at https://app.ultravox.ai — 30 free minutes included
 ULTRAVOX_API_KEY=
 
+# OpenClaw Brain (Optional)
+# Connect the voice assistant to an OpenClaw instance for complex tasks
+# OPENCLAW_WEBHOOK_URL is the base URL of the OpenClaw Gateway (e.g. http://host.docker.internal:18789)
+# OPENCLAW_HOOKS_TOKEN is the Gateway auth token (gateway.auth.token in openclaw.json)
+OPENCLAW_WEBHOOK_URL=
+OPENCLAW_HOOKS_TOKEN=
+
 # Zoom Meeting SDK Credentials (Optional - for Zoom bot support)
 # ZOOM_CLIENT_ID=
 # ZOOM_CLIENT_SECRET=

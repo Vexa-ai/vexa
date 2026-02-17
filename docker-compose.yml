@@ -394,6 +394,7 @@ services:
       - ULTRAVOX_VOICE=${ULTRAVOX_VOICE:-Mark}
       - VEXA_API_URL=http://api-gateway:8080
       - OPENCLAW_WEBHOOK_URL=${OPENCLAW_WEBHOOK_URL:-}
+      - OPENCLAW_HOOKS_TOKEN=${OPENCLAW_HOOKS_TOKEN:-}
       - LOG_LEVEL=DEBUG
     init: true
     networks:

@@ -165,19 +165,43 @@ class BotSession:
     async def _on_tool_call(
         self, tool_name: str, invocation_id: str, parameters: dict
     ) -> None:
-        """Handle tool call from Ultravox — route and return result."""
+        """Handle tool call from Ultravox — route and return result.
+
+        Runs in a background task so long-running tools (like trigger_agent
+        calling OpenClaw) don't block the WebSocket receive loop and cause
+        keepalive ping timeouts.
+        """
         if not self.tool_handler or not self.ultravox_call:
             return
 
-        result = await self.tool_handler.handle(tool_name, invocation_id, parameters)
+        asyncio.create_task(
+            self._execute_tool(tool_name, invocation_id, parameters)
+        )
 
-        # Determine reaction: speak for trigger_agent/get_meeting_context, listen for actions
-        if tool_name in ("send_chat_message", "show_image"):
-            reaction = "listens"
-        else:
-            reaction = "speaks"
+    async def _execute_tool(
+        self, tool_name: str, invocation_id: str, parameters: dict
+    ) -> None:
+        """Execute a tool call and send the result back to Ultravox."""
+        try:
+            result = await self.tool_handler.handle(tool_name, invocation_id, parameters)
 
-        await self.ultravox_call.send_tool_result(invocation_id, result, reaction)
+            # Determine reaction: speak for trigger_agent/get_meeting_context, listen for actions
+            if tool_name in ("send_chat_message", "show_image"):
+                reaction = "listens"
+            else:
+                reaction = "speaks"
+
+            await self.ultravox_call.send_tool_result(invocation_id, result, reaction)
+        except Exception as e:
+            logger.error(f"[Session] Tool execution error for {tool_name}: {e}", exc_info=True)
+            try:
+                await self.ultravox_call.send_tool_result(
+                    invocation_id,
+                    f"Error executing {tool_name}: {str(e)}",
+                    "speaks",
+                )
+            except Exception:
+                pass
 
     async def _on_transcript(self, data: dict) -> None:
         """Forward transcript events to bot for logging."""
