@@ -414,10 +414,16 @@ async def health_check(request: Request, db: AsyncSession = Depends(get_db)):
             dependencies=[Depends(get_current_user)])
 async def get_meetings(
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    deleted: Optional[bool] = Query(None, description="Filter by deleted status")
 ):
     """Returns a list of all meetings initiated by the authenticated user."""
     stmt = select(Meeting).where(Meeting.user_id == current_user.id).order_by(Meeting.created_at.desc())
+    if deleted is True:
+        stmt = stmt.where(Meeting.status == 'deleted')
+    elif deleted is False:
+        stmt = stmt.where(Meeting.status != 'deleted')
+
     result = await db.execute(stmt)
     meetings = result.scalars().all()
     return MeetingListResponse(meetings=[MeetingResponse.model_validate(m) for m in meetings])

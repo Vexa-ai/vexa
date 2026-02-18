@@ -1,5 +1,5 @@
 import uvicorn
-from fastapi import FastAPI, Request, Response, HTTPException, status, Depends, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, Response, HTTPException, status, Query, Depends, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import APIKeyHeader
@@ -488,7 +488,13 @@ async def update_recording_config_proxy(request: Request):
         description="Returns a list of all meetings initiated by the user associated with the API key.",
         response_model=MeetingListResponse, 
         dependencies=[Depends(api_key_scheme)])
-async def get_meetings_proxy(request: Request):
+async def get_meetings_proxy(
+        request: Request,
+        deleted: Optional[bool] = Query(
+            None, 
+            description="Filter by deletion status. Set to false to return only active (non-deleted) meetings."
+        )
+    ):
     """Forward request to Transcription Collector to get meetings."""
     url = f"{TRANSCRIPTION_COLLECTOR_URL}/meetings"
     return await forward_request(app.state.http_client, "GET", url, request)
