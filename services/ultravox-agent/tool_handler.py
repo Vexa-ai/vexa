@@ -93,47 +93,64 @@ class ToolHandler:
         payload = {
             "model": "openclaw",
             "messages": [{"role": "user", "content": user_message}],
+            "stream": True,
         }
 
-        logger.info(f"[ToolHandler] Triggering OpenClaw agent: task='{task[:80]}...'")
+        logger.info(f"[ToolHandler] Triggering OpenClaw agent: task='{task[:80]}'")
         logger.debug(f"[ToolHandler] OpenClaw URL: {url}")
 
-        # Show "thinking" status on bot video while OpenClaw processes
-        if self._send_to_bot:
-            try:
-                await self._send_to_bot({
-                    "type": "meeting_action",
-                    "action": "screen_show",
-                    "content_type": "text",
-                    "text": "🧠 Analyzing...",
-                })
-            except Exception:
-                pass  # Non-critical — don't fail the tool call
+        # Show task clearly on bot screen while waiting
+        task_preview = task[:120] + ("..." if len(task) > 120 else "")
+        await self._update_bot_screen(f"# 🧠 Working on it...\n\n{task_preview}")
 
         try:
             async with httpx.AsyncClient(timeout=120) as client:
-                resp = await client.post(url, json=payload, headers=headers)
-
-                if resp.status_code != 200:
-                    logger.error(
-                        f"[ToolHandler] OpenClaw error {resp.status_code}: {resp.text[:300]}"
-                    )
-                    return f"Agent request failed (HTTP {resp.status_code}): {resp.text[:200]}"
-
-                data = resp.json()
-                # OpenAI Chat Completions response format
-                choices = data.get("choices", [])
-                if choices:
-                    content = choices[0].get("message", {}).get("content", "")
-                    if content:
-                        logger.info(
-                            f"[ToolHandler] OpenClaw response: {content[:120]}..."
+                async with client.stream("POST", url, json=payload, headers=headers) as resp:
+                    if resp.status_code != 200:
+                        body = await resp.aread()
+                        logger.error(
+                            f"[ToolHandler] OpenClaw error {resp.status_code}: {body[:300]}"
                         )
+                        return f"Agent request failed (HTTP {resp.status_code}): {body[:200].decode()}"
+
+                    full_content = []
+                    last_screen_update = ""
+                    chars_since_update = 0
+
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        data_str = line[6:]
+                        if data_str.strip() == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        token = delta.get("content", "")
+                        if not token:
+                            continue
+
+                        full_content.append(token)
+                        chars_since_update += len(token)
+
+                        # Update screen every ~30 chars to avoid flooding
+                        if chars_since_update >= 30:
+                            chars_since_update = 0
+                            accumulated = "".join(full_content)
+                            if accumulated != last_screen_update:
+                                last_screen_update = accumulated
+                                await self._update_bot_screen(accumulated)
+
+                    content = "".join(full_content)
+                    if content:
+                        logger.info(f"[ToolHandler] OpenClaw response: {content[:120]}...")
                         return content
 
-                # Fallback: return raw response
-                logger.warning(f"[ToolHandler] Unexpected OpenClaw response: {json.dumps(data)[:300]}")
-                return json.dumps(data)[:2000]
+                    logger.warning("[ToolHandler] OpenClaw stream ended with no content")
+                    return "Agent returned no response."
 
         except httpx.ConnectError as e:
             logger.error(f"[ToolHandler] Cannot connect to OpenClaw at {base_url}: {e}")
@@ -148,7 +165,7 @@ class ToolHandler:
                 "Please let the user know the request timed out."
             )
         finally:
-            # Clear "thinking" status — return to avatar
+            # Clear status — return to avatar
             if self._send_to_bot:
                 try:
                     await self._send_to_bot({
@@ -157,6 +174,20 @@ class ToolHandler:
                     })
                 except Exception:
                     pass
+
+    async def _update_bot_screen(self, text: str) -> None:
+        """Update the bot screen with text. Non-critical — errors are swallowed."""
+        if not self._send_to_bot:
+            return
+        try:
+            await self._send_to_bot({
+                "type": "meeting_action",
+                "action": "screen_show",
+                "content_type": "text",
+                "text": text,
+            })
+        except Exception:
+            pass
 
     async def _send_chat_message(self, params: dict) -> str:
         """Send a chat message in the meeting via the bot."""

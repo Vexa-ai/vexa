@@ -187,15 +187,17 @@ async def start_bot_container(
     connection_id = str(uuid.uuid4())
     logger.info(f"Generated unique connectionId for bot session: {connection_id}")
 
-    # Look up user-level recording config (falls back to env vars in bot_config_data)
+    # Look up user-level config (recording + voice agent)
     user_recording_config = {}
+    user_voice_agent_config = {}
     try:
         async with async_session_local() as db:
             user = await db.get(User, user_id)
             if user and user.data and isinstance(user.data, dict):
                 user_recording_config = user.data.get("recording_config", {})
+                user_voice_agent_config = user.data.get("voice_agent_config", {})
     except Exception as e:
-        logger.warning(f"Failed to load user recording config for user {user_id}: {e}")
+        logger.warning(f"Failed to load user config for user {user_id}: {e}")
 
     # Mint MeetingToken (HS256) - import at top of file if not present
     from app.main import mint_meeting_token
@@ -244,6 +246,9 @@ async def start_bot_container(
         bot_config_data["voiceAgentEnabled"] = bool(voice_agent_enabled)
     if default_avatar_url:
         bot_config_data["defaultAvatarUrl"] = default_avatar_url
+    user_system_prompt = user_voice_agent_config.get("ultravox_system_prompt")
+    if user_system_prompt:
+        bot_config_data["ultravox_system_prompt"] = user_system_prompt
     # Remove keys with None values before serializing
     cleaned_config_data = {k: v for k, v in bot_config_data.items() if v is not None}
     bot_config_json = json.dumps(cleaned_config_data)

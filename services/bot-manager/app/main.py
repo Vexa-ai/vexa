@@ -2332,6 +2332,65 @@ async def update_recording_config(
     }
 
 
+class VoiceAgentConfigUpdate(BaseModel):
+    ultravox_system_prompt: Optional[str] = Field(None, description="Custom system prompt for the Ultravox voice agent. Set to null to reset to the service default.")
+
+
+@app.get("/voice-agent-config",
+         summary="Get voice agent configuration for the authenticated user",
+         tags=["Voice Agent"])
+async def get_voice_agent_config(
+    auth: tuple = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """Returns the user's voice agent configuration."""
+    token, user = auth
+    user_config = {}
+    if user.data and isinstance(user.data, dict):
+        user_config = user.data.get("voice_agent_config", {})
+    return {
+        "ultravox_system_prompt": user_config.get("ultravox_system_prompt", None),
+    }
+
+
+@app.put("/voice-agent-config",
+         summary="Update voice agent configuration for the authenticated user",
+         tags=["Voice Agent"])
+async def update_voice_agent_config(
+    config: VoiceAgentConfigUpdate,
+    auth: tuple = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update the user's voice agent configuration. Set ultravox_system_prompt to null to reset to service default."""
+    token, user = auth
+
+    if not user.data:
+        user.data = {}
+
+    new_data = dict(user.data)
+    voice_agent_config = new_data.get("voice_agent_config", {})
+
+    # Explicit None means reset to default; omitted field means no change
+    if "ultravox_system_prompt" in config.model_fields_set:
+        if config.ultravox_system_prompt is None:
+            voice_agent_config.pop("ultravox_system_prompt", None)
+        else:
+            voice_agent_config["ultravox_system_prompt"] = config.ultravox_system_prompt
+
+    new_data["voice_agent_config"] = voice_agent_config
+    user.data = new_data
+
+    from sqlalchemy.orm import attributes
+    attributes.flag_modified(user, "data")
+
+    await db.commit()
+    await db.refresh(user)
+
+    return {
+        "ultravox_system_prompt": voice_agent_config.get("ultravox_system_prompt", None),
+    }
+
+
 # --- RECONCILIATION TASK: Detect and fix zombie meetings and orphan containers ---
 async def reconcile_meetings_and_containers():
     """

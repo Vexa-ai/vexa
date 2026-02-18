@@ -481,6 +481,26 @@ async def update_recording_config_proxy(request: Request):
     url = f"{BOT_MANAGER_URL}/recording-config"
     return await forward_request(app.state.http_client, "PUT", url, request)
 
+@app.get("/voice-agent-config",
+         tags=["Voice Agent"],
+         summary="Get voice agent configuration",
+         description="Returns the user's voice agent configuration, including custom system prompt.",
+         dependencies=[Depends(api_key_scheme)])
+async def get_voice_agent_config_proxy(request: Request):
+    """Forward request to Bot Manager to get voice agent config."""
+    url = f"{BOT_MANAGER_URL}/voice-agent-config"
+    return await forward_request(app.state.http_client, "GET", url, request)
+
+@app.put("/voice-agent-config",
+         tags=["Voice Agent"],
+         summary="Update voice agent configuration",
+         description="Update the user's voice agent configuration. Set `ultravox_system_prompt` to null to reset to the service default.",
+         dependencies=[Depends(api_key_scheme)])
+async def update_voice_agent_config_proxy(request: Request):
+    """Forward request to Bot Manager to update voice agent config."""
+    url = f"{BOT_MANAGER_URL}/voice-agent-config"
+    return await forward_request(app.state.http_client, "PUT", url, request)
+
 # --- Transcription Collector Routes ---
 @app.get("/meetings",
         tags=["Transcriptions"],

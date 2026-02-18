@@ -795,7 +795,7 @@ export class ScreenContentService {
    * Display custom HTML-rendered content.
    * For now, just show text on the canvas.
    */
-  async showText(text: string, fontSize: number = 48): Promise<void> {
+  async showText(text: string, fontSize: number = 28): Promise<void> {
     if (!this._initialized) await this.initialize();
 
     await this.page.evaluate(({ text, fontSize }: { text: string; fontSize: number }) => {
@@ -803,39 +803,220 @@ export class ScreenContentService {
       const ctx = (window as any).__vexa_canvas_ctx as CanvasRenderingContext2D;
       if (!canvas || !ctx) return;
 
+      // Full black background
       ctx.fillStyle = '#000000';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      ctx.fillStyle = '#ffffff';
-      ctx.font = `${fontSize}px sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
+      // Render into a centered 1080x1080 square — meeting platforms show participant
+      // tiles as square/portrait crops, so we fill exactly that safe region.
+      const SQ = canvas.height; // 1080
+      const SQ_X = (canvas.width - SQ) / 2; // 420px left offset to center
+      const PAD = 60;
+      const boxX = SQ_X + PAD;
+      const boxW = SQ - PAD * 2;       // 960px wide text area
+      const boxH = SQ - PAD * 2;       // 960px tall text area
 
-      // Word wrap
-      const maxWidth = canvas.width - 100;
-      const words = text.split(' ');
-      const lines: string[] = [];
-      let currentLine = words[0];
+      // Dark panel background inside the square
+      ctx.fillStyle = '#0d1117';
+      ctx.fillRect(SQ_X, 0, SQ, SQ);
 
-      for (let i = 1; i < words.length; i++) {
-        const testLine = currentLine + ' ' + words[i];
-        const metrics = ctx.measureText(testLine);
-        if (metrics.width > maxWidth) {
-          lines.push(currentLine);
-          currentLine = words[i];
-        } else {
-          currentLine = testLine;
+      const lineHeight = fontSize * 1.45;
+      let y = PAD + fontSize;
+
+      // Parse markdown into a flat list of draw instructions
+      type Span = { text: string; bold: boolean; italic: boolean; code: boolean };
+      type DrawLine = { spans: Span[]; style: 'h1' | 'h2' | 'h3' | 'bullet' | 'normal' | 'code_block' };
+
+      function parseInline(raw: string): Span[] {
+        const spans: Span[] = [];
+        // Simple inline tokeniser: **bold**, *italic*, `code`
+        const re = /(\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`|([^*`]+))/g;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(raw)) !== null) {
+          if (m[2] !== undefined)      spans.push({ text: m[2], bold: true,  italic: false, code: false });
+          else if (m[3] !== undefined) spans.push({ text: m[3], bold: false, italic: true,  code: false });
+          else if (m[4] !== undefined) spans.push({ text: m[4], bold: false, italic: false, code: true  });
+          else if (m[5] !== undefined) spans.push({ text: m[5], bold: false, italic: false, code: false });
+        }
+        return spans.length ? spans : [{ text: raw, bold: false, italic: false, code: false }];
+      }
+
+      function makeFont(size: number, bold: boolean, italic: boolean, mono: boolean): string {
+        const style = italic ? 'italic ' : '';
+        const weight = bold ? 'bold ' : '';
+        const family = mono ? 'monospace' : 'sans-serif';
+        return `${style}${weight}${size}px ${family}`;
+      }
+
+      // Parse lines
+      const rawLines = text.split('\n');
+      const drawLines: DrawLine[] = [];
+      let inCodeBlock = false;
+
+      for (const raw of rawLines) {
+        if (raw.trim().startsWith('```')) { inCodeBlock = !inCodeBlock; continue; }
+        if (inCodeBlock) {
+          drawLines.push({ spans: [{ text: raw, bold: false, italic: false, code: true }], style: 'code_block' });
+          continue;
+        }
+        if (/^### /.test(raw))      drawLines.push({ spans: parseInline(raw.slice(4)), style: 'h3' });
+        else if (/^## /.test(raw))  drawLines.push({ spans: parseInline(raw.slice(3)), style: 'h2' });
+        else if (/^# /.test(raw))   drawLines.push({ spans: parseInline(raw.slice(2)), style: 'h1' });
+        else if (/^[-*] /.test(raw)) drawLines.push({ spans: parseInline(raw.slice(2)), style: 'bullet' });
+        else                        drawLines.push({ spans: parseInline(raw), style: 'normal' });
+      }
+
+      // Word-wrap a list of spans into canvas lines
+      function wrapSpans(spans: Span[], size: number, maxW: number): Span[][] {
+        const lines: Span[][] = [];
+        let currentLine: Span[] = [];
+        let lineWidth = 0;
+
+        for (const span of spans) {
+          const words = span.text.split(' ');
+          for (let wi = 0; wi < words.length; wi++) {
+            const word = (wi === 0 && lineWidth === 0 ? '' : ' ') + words[wi];
+            ctx.font = makeFont(size, span.bold, span.italic, span.code);
+            const w = ctx.measureText(word).width;
+            if (lineWidth + w > maxW && currentLine.length > 0) {
+              lines.push(currentLine);
+              currentLine = [];
+              lineWidth = 0;
+              const wordOnly = words[wi];
+              ctx.font = makeFont(size, span.bold, span.italic, span.code);
+              currentLine.push({ ...span, text: wordOnly });
+              lineWidth = ctx.measureText(wordOnly).width;
+            } else {
+              if (currentLine.length && currentLine[currentLine.length - 1].bold === span.bold &&
+                  currentLine[currentLine.length - 1].italic === span.italic &&
+                  currentLine[currentLine.length - 1].code === span.code) {
+                currentLine[currentLine.length - 1] = { ...span, text: currentLine[currentLine.length - 1].text + word };
+              } else {
+                currentLine.push({ ...span, text: word });
+              }
+              lineWidth += w;
+            }
+          }
+        }
+        if (currentLine.length) lines.push(currentLine);
+        return lines;
+      }
+
+      // First pass: compute layout (positions) without drawing
+      type LayoutLine = {
+        spans: Span[];
+        style: DrawLine['style'];
+        size: number;
+        indent: number;
+        lh: number;
+        isBulletFirst: boolean;
+        isHeadingFirst: boolean;
+        extraGapBefore: number;
+      };
+
+      const layout: LayoutLine[] = [];
+      let totalHeight = PAD; // start offset within the square
+
+      for (const dl of drawLines) {
+        let size = fontSize;
+        let extraGapBefore = 0;
+        let indent = 0;
+
+        if (dl.style === 'h1')              { size = Math.round(fontSize * 1.4); extraGapBefore = fontSize * 0.5; }
+        else if (dl.style === 'h2')         { size = Math.round(fontSize * 1.2); extraGapBefore = fontSize * 0.35; }
+        else if (dl.style === 'h3')         { size = Math.round(fontSize * 1.1); extraGapBefore = fontSize * 0.2; }
+        else if (dl.style === 'bullet')     { indent = fontSize * 1.2; }
+        else if (dl.style === 'code_block') { size = Math.round(fontSize * 0.85); }
+
+        const lh = size * 1.45;
+        totalHeight += extraGapBefore;
+
+        const wrappedLines = wrapSpans(dl.spans, size, boxW - indent);
+
+        for (let li = 0; li < wrappedLines.length; li++) {
+          totalHeight += size;
+          layout.push({
+            spans: wrappedLines[li],
+            style: dl.style,
+            size,
+            indent,
+            lh,
+            isBulletFirst: dl.style === 'bullet' && li === 0,
+            isHeadingFirst: (dl.style === 'h1' || dl.style === 'h2') && li === 0,
+            extraGapBefore: li === 0 ? extraGapBefore : 0,
+          });
+          totalHeight += lh - size;
         }
       }
-      lines.push(currentLine);
 
-      const lineHeight = fontSize * 1.3;
-      const totalHeight = lines.length * lineHeight;
-      const startY = (canvas.height - totalHeight) / 2 + fontSize / 2;
+      totalHeight += PAD;
 
-      for (let i = 0; i < lines.length; i++) {
-        ctx.fillText(lines[i], canvas.width / 2, startY + i * lineHeight);
+      // Scroll: if content is taller than the square, show the bottom (newest) content
+      const scrollOffset = Math.max(0, totalHeight - boxH);
+
+      // Second pass: draw with scroll offset, clipped to the square
+      ctx.save();
+      ctx.rect(SQ_X, 0, SQ, SQ);
+      ctx.clip();
+
+      let drawY = PAD + fontSize - scrollOffset;
+
+      for (const ll of layout) {
+        drawY += ll.extraGapBefore;
+
+        // Skip lines scrolled above top
+        if (drawY + ll.lh < 0) { drawY += ll.lh; continue; }
+        // Stop if below bottom of square
+        if (drawY - ll.size > boxH + PAD) break;
+
+        // Heading underline
+        if (ll.isHeadingFirst) {
+          ctx.strokeStyle = ll.style === 'h1' ? '#58a6ff' : '#8b949e';
+          ctx.lineWidth = ll.style === 'h1' ? 2 : 1;
+          ctx.beginPath();
+          ctx.moveTo(boxX, drawY + ll.size * 0.25);
+          ctx.lineTo(boxX + boxW, drawY + ll.size * 0.25);
+          ctx.stroke();
+        }
+
+        // Code block background
+        if (ll.style === 'code_block') {
+          ctx.fillStyle = '#161b22';
+          ctx.fillRect(boxX, drawY - ll.size * 0.9, boxW, ll.lh);
+        }
+
+        // Bullet dot
+        if (ll.isBulletFirst) {
+          ctx.font = makeFont(ll.size, false, false, false);
+          ctx.fillStyle = '#58a6ff';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'alphabetic';
+          ctx.fillText('• ', boxX, drawY);
+        }
+
+        // Draw spans
+        let x = boxX + ll.indent;
+        for (const span of ll.spans) {
+          const isMono = span.code || ll.style === 'code_block';
+          ctx.font = makeFont(ll.size, span.bold, span.italic, isMono);
+
+          if (ll.style === 'h1')       ctx.fillStyle = '#e6edf3';
+          else if (ll.style === 'h2')  ctx.fillStyle = '#cdd9e5';
+          else if (ll.style === 'h3')  ctx.fillStyle = '#adbac7';
+          else if (isMono)             ctx.fillStyle = '#f47067';
+          else if (span.bold)          ctx.fillStyle = '#e6edf3';
+          else                         ctx.fillStyle = '#cdd9e5';
+
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'alphabetic';
+          ctx.fillText(span.text, x, drawY);
+          x += ctx.measureText(span.text).width;
+        }
+
+        drawY += ll.lh;
       }
+
+      ctx.restore();
     }, { text, fontSize });
 
     this._currentContentType = 'text';
