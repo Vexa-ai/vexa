@@ -346,6 +346,32 @@ services:
       - vexa_default
     restart: unless-stopped
 
+  decision-listener:
+    build:
+      context: .
+      dockerfile: services/decision-listener/Dockerfile
+    ports:
+      - "${DECISION_LISTENER_HOST_PORT:-8765}:8765"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - PUBSUB_CHANNEL_PATTERN=tc:meeting:*:mutable
+      - WINDOW_SEGMENTS=${WINDOW_SEGMENTS:-30}
+      - OFFSET_SEGMENTS=${OFFSET_SEGMENTS:-3}
+      - DEBOUNCE_MS=${DEBOUNCE_MS:-2000}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4.1-mini}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - DECISIONS_TTL=7200
+      - LOG_LEVEL=DEBUG
+    init: true
+    depends_on:
+      redis:
+        condition: service_started
+    networks:
+      - vexa_default
+    restart: unless-stopped
+
   mcp:
     build:
       context: .

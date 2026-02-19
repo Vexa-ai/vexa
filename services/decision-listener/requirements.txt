@@ -1,0 +1,4 @@
+fastapi>=0.100.0
+uvicorn>=0.22.0
+redis>=4.6.0
+openai>=1.30.0
