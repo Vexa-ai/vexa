@@ -341,6 +341,7 @@ class MeetingBase(BaseModel):
 class MeetingCreate(BaseModel):
     platform: Platform
     native_meeting_id: str = Field(..., description="The platform-specific ID for the meeting (e.g., Google Meet code, Teams ID)")
+    meeting_url: Optional[str] = Field(None, description="Optional full meeting URL (e.g. Zoom invite URL with ?pwd=). When provided, used directly by the bot instead of the constructed URL.")
     bot_name: Optional[str] = Field(None, description="Optional name for the bot in the meeting")
     language: Optional[str] = Field(None, description="Optional language code for transcription (e.g., 'en', 'es')")
     task: Optional[str] = Field(None, description="Optional task for the transcription model (e.g., 'transcribe', 'translate')")

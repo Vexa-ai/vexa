@@ -58,28 +58,43 @@ export class WhisperLiveService {
     }
 
     try {
-      const socket = new WebSocket(this.connection.allocatedServerUrl);
-      
-      // Set up event handlers
-      socket.onopen = () => {
-        log(`[WhisperLive] Connected to ${this.connection!.allocatedServerUrl}`);
-        this.connection!.sessionUid = this.generateUUID();
-        this.connection!.isServerReady = false;
-        
-        // Send initial configuration
-        this.sendInitialConfig(socket, botConfig);
-      };
+      const connection = this.connection;
+      const socket = new WebSocket(connection.allocatedServerUrl!);
 
-      socket.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        onMessage(data);
-      };
+      // Return a promise that resolves when the socket is open and UID is set.
+      // This ensures callers can safely send speaker events after awaiting.
+      return new Promise<WebSocket | null>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('WebSocket open timeout'));
+        }, 10000);
 
-      socket.onerror = onError;
-      socket.onclose = onClose;
+        socket.onopen = () => {
+          clearTimeout(timeout);
+          log(`[WhisperLive] Connected to ${connection.allocatedServerUrl}`);
+          connection.sessionUid = this.generateUUID();
+          connection.isServerReady = false;
 
-      this.connection.socket = socket;
-      return socket;
+          // Send initial configuration (sendInitialConfig logs the payload)
+          this.sendInitialConfig(socket, botConfig);
+
+          resolve(socket);
+        };
+
+        socket.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          onMessage(data);
+        };
+
+        socket.onerror = (err) => {
+          clearTimeout(timeout);
+          onError(err);
+          reject(new Error('WebSocket error'));
+        };
+
+        socket.onclose = onClose;
+
+        connection.socket = socket;
+      });
     } catch (error: any) {
       log(`[WhisperLive] Connection error: ${error.message}`);
       return null;
@@ -169,7 +184,7 @@ export class WhisperLiveService {
         uid: this.connection.sessionUid,
         token: botConfig.token,
         platform: botConfig.platform,
-        meeting_id: botConfig.nativeMeetingId,
+        meeting_id: botConfig.meeting_id,
         meeting_url: botConfig.meetingUrl
       }
     };
@@ -199,7 +214,7 @@ export class WhisperLiveService {
         client_timestamp_ms: Date.now(),
         token: botConfig.token,
         platform: botConfig.platform,
-        meeting_id: botConfig.nativeMeetingId
+        meeting_id: botConfig.meeting_id
       }
     };
 
@@ -248,6 +263,20 @@ export class WhisperLiveService {
    */
   getSessionUid(): string | null {
     return this.connection?.sessionUid || null;
+  }
+
+  /**
+   * Close socket for reconfigure — closes the WebSocket but preserves the
+   * connection info (allocatedServerUrl) so connectToWhisperLive can reconnect.
+   * Mirrors closeForReconfigure in the browser-side BrowserWhisperLiveService.
+   */
+  closeSocketForReconfigure(): void {
+    if (this.connection?.socket) {
+      try {
+        this.connection.socket.close();
+      } catch {}
+      this.connection.socket = null;
+    }
   }
 
   /**

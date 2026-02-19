@@ -18,6 +18,7 @@ services:
       - LOG_LEVEL=DEBUG
     volumes:
       - ../.cursor:/app/.cursor
+      - /var/run/docker.sock:/var/run/docker.sock
     init: true
     depends_on:
       admin-api:
@@ -72,6 +73,7 @@ services:
       - ADMIN_TOKEN=${ADMIN_API_TOKEN}
       - ZOOM_CLIENT_ID=${ZOOM_CLIENT_ID}
       - ZOOM_CLIENT_SECRET=${ZOOM_CLIENT_SECRET}
+      - ZOOM_WEB=${ZOOM_WEB:-false}
       # Storage (recordings)
       - STORAGE_BACKEND=${STORAGE_BACKEND:-minio}
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}

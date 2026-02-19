@@ -278,18 +278,23 @@ async def start_bot_container(
 
     # Add Zoom-specific environment variables if platform is Zoom
     if platform == "zoom":
-        zoom_client_id = os.getenv("ZOOM_CLIENT_ID")
-        zoom_client_secret = os.getenv("ZOOM_CLIENT_SECRET")
-
-        if not zoom_client_id or not zoom_client_secret:
-            logger.error("CRITICAL: ZOOM_CLIENT_ID and ZOOM_CLIENT_SECRET are required for Zoom bots but not set in environment")
-            raise ValueError("ZOOM_CLIENT_ID and ZOOM_CLIENT_SECRET environment variables are required for Zoom platform")
-
-        environment.extend([
-            f"ZOOM_CLIENT_ID={zoom_client_id}",
-            f"ZOOM_CLIENT_SECRET={zoom_client_secret}",
-        ])
-        logger.info("Added Zoom SDK credentials to bot environment")
+        zoom_web = os.getenv("ZOOM_WEB", "").strip()
+        if zoom_web == "true":
+            # Playwright web-based Zoom: SDK credentials not needed
+            environment.append("ZOOM_WEB=true")
+            logger.info("ZOOM_WEB=true: using Playwright web client for Zoom (no SDK credentials needed)")
+        else:
+            # Zoom SDK mode: credentials required
+            zoom_client_id = os.getenv("ZOOM_CLIENT_ID")
+            zoom_client_secret = os.getenv("ZOOM_CLIENT_SECRET")
+            if not zoom_client_id or not zoom_client_secret:
+                logger.error("CRITICAL: ZOOM_CLIENT_ID and ZOOM_CLIENT_SECRET are required for Zoom SDK bots but not set in environment")
+                raise ValueError("ZOOM_CLIENT_ID and ZOOM_CLIENT_SECRET environment variables are required for Zoom SDK platform")
+            environment.extend([
+                f"ZOOM_CLIENT_ID={zoom_client_id}",
+                f"ZOOM_CLIENT_SECRET={zoom_client_secret}",
+            ])
+            logger.info("Added Zoom SDK credentials to bot environment")
 
     # Ensure absolute path for URL encoding here as well
     socket_path_relative = DOCKER_HOST.split('//', 1)[1]
@@ -297,16 +302,32 @@ async def start_bot_container(
     socket_path_encoded = socket_path_abs.replace("/", "%2F")
     socket_url_base = f'http+unix://{socket_path_encoded}'
 
+    # Assign a host port for CDP remote debugging.
+    # Use a port in the range 19200-19999 derived from meeting_id to avoid conflicts.
+    cdp_host_port = 19200 + (meeting_id % 800)
+
     # Docker API payload for creating a container
+    # Port 9223 is the socat forwarder (0.0.0.0:9223 -> 127.0.0.1:9222).
+    # Chromium ignores --remote-debugging-address=0.0.0.0 when launched via Playwright,
+    # so we use socat in entrypoint.sh to make CDP reachable from other containers.
     create_payload = {
         "Image": BOT_IMAGE_NAME,
         "Env": environment,
-        "Labels": {"vexa.user_id": str(user_id)}, # *** ADDED Label ***
+        "ExposedPorts": {"9223/tcp": {}},
+        "Labels": {
+            "vexa.user_id": str(user_id),
+            "vexa.meeting_id": str(meeting_id),
+            "vexa.cdp_port": str(cdp_host_port),
+        },
         "HostConfig": {
             "NetworkMode": DOCKER_NETWORK,
             "AutoRemove": True,
+            "PortBindings": {
+                "9223/tcp": [{"HostIp": "0.0.0.0", "HostPort": str(cdp_host_port)}]
+            },
         },
     }
+    logger.info(f"CDP remote debugging will be exposed on host port {cdp_host_port} (via socat:9223) for meeting {meeting_id}")
 
     create_url = f'{socket_url_base}/containers/create?name={container_name}'
     start_url_template = f'{socket_url_base}/containers/{{}}/start'

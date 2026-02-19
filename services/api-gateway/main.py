@@ -1090,6 +1090,212 @@ async def websocket_multiplex(ws: WebSocket):
         for task in sub_tasks.values():
             task.cancel()
 
+
+# --- CDP (Chrome DevTools Protocol) Proxy ---
+# Exposes the bot's Playwright/Chromium remote debugging endpoint through the API.
+# Chromium ignores --remote-debugging-address=0.0.0.0 when launched via Playwright,
+# so the bot's entrypoint.sh runs socat to forward 0.0.0.0:9223 -> 127.0.0.1:9222.
+# The API gateway connects to port 9223 on the bot's container IP.
+# Clients can connect here with standard Chrome DevTools, Playwright, or any CDP client.
+
+async def _get_meeting_cdp_info(platform: str, native_meeting_id: str, api_key: str) -> dict:
+    """Look up CDP connection info for an active meeting.
+    
+    Returns the bot container ID to look up its IP for direct container-to-container access.
+    """
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.get(
+            f"{TRANSCRIPTION_COLLECTOR_URL}/meetings",
+            headers={"X-API-Key": api_key}
+        )
+        if resp.status_code == 401:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+        if resp.status_code != 200:
+            raise HTTPException(status_code=502, detail="Error fetching meetings")
+        meetings_data = resp.json()
+        meetings = meetings_data.get("meetings", [])
+        
+        # Find matching meeting
+        target = None
+        for m in meetings:
+            if m.get("platform") == platform and m.get("native_meeting_id") == native_meeting_id:
+                target = m
+                break
+        
+        if not target:
+            raise HTTPException(status_code=404, detail=f"Meeting {platform}/{native_meeting_id} not found")
+        
+        if target.get("status") not in ("active", "requested"):
+            raise HTTPException(status_code=503, detail=f"Meeting is not active (status: {target.get('status')})")
+        
+        cdp_port = (target.get("data") or {}).get("cdp_port")
+        bot_container_id = target.get("bot_container_id", "")
+        
+        if not cdp_port:
+            raise HTTPException(
+                status_code=503,
+                detail="CDP not available for this meeting. Bot may not be active, or was started before CDP support was added."
+            )
+        
+        # Get the bot container's internal IP via Docker socket API
+        # (bot container is on the same Docker network as the API gateway)
+        bot_ip = None
+        try:
+            _transport = httpx.AsyncHTTPTransport(uds="/var/run/docker.sock")
+            async with httpx.AsyncClient(transport=_transport, timeout=5.0) as _dc:
+                _resp = await _dc.get(f"http://localhost/containers/{bot_container_id}/json")
+                if _resp.status_code == 200:
+                    _cinfo = _resp.json()
+                    for _net_info in (_cinfo.get("NetworkSettings", {}).get("Networks", {}) or {}).values():
+                        _ip = _net_info.get("IPAddress", "")
+                        if _ip:
+                            bot_ip = _ip
+                            break
+        except Exception:
+            pass
+        
+        return {
+            "cdp_port": int(cdp_port),
+            "bot_container_id": bot_container_id,
+            "bot_ip": bot_ip,
+            "host_port": int(cdp_port),  # host port for direct access
+        }
+
+
+async def _get_meeting_cdp_port(platform: str, native_meeting_id: str, api_key: str) -> int:
+    """Legacy helper - returns cdp_port."""
+    info = await _get_meeting_cdp_info(platform, native_meeting_id, api_key)
+    return info["cdp_port"]
+
+
+@app.get("/meetings/{platform}/{native_meeting_id}/cdp",
+         tags=["Debug"],
+         summary="Get CDP debug info for an active bot session")
+async def get_cdp_info(
+    platform: str,
+    native_meeting_id: str,
+    request: Request,
+    api_key: Optional[str] = Depends(api_key_scheme)
+):
+    """Returns CDP endpoint info for the bot's Chromium browser session.
+    
+    Use proxy_ws_url to connect Chrome DevTools, Playwright connect via CDP, or any CDP client.
+    The gateway proxies all CDP traffic — connect via:
+      ws://<gateway-host>:8056/meetings/{platform}/{native_id}/cdp/ws?api_key=<key>
+    """
+    if not api_key:
+        raise HTTPException(status_code=401, detail="Missing API key")
+    info = await _get_meeting_cdp_info(platform, native_meeting_id, api_key)
+    
+    bot_ip = info.get("bot_ip")
+    # Port 9223 is the socat forwarder inside the bot container (0.0.0.0:9223 -> 127.0.0.1:9222).
+    # This is reachable from the api-gateway container via the bot's container IP.
+    cdp_target = f"{bot_ip}:9223" if bot_ip else f"localhost:{info['host_port']}"
+
+    # Fetch tab list directly from bot container
+    tabs = []
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"http://{cdp_target}/json")
+            if resp.status_code == 200:
+                tabs = resp.json()
+    except Exception:
+        pass
+
+    return {
+        "cdp_host": bot_ip or "localhost",
+        "cdp_port": 9223,
+        "host_port": info["host_port"],
+        "bot_container_id": info["bot_container_id"],
+        "proxy_ws_url": f"ws://<gateway-host>/meetings/{platform}/{native_meeting_id}/cdp/ws?api_key=<key>",
+        "direct_cdp_url": f"http://{cdp_target}/json",
+        "tabs": tabs,
+    }
+
+
+@app.websocket("/meetings/{platform}/{native_meeting_id}/cdp/ws")
+async def cdp_websocket_proxy(
+    websocket: WebSocket,
+    platform: str,
+    native_meeting_id: str,
+):
+    """WebSocket proxy to the bot's Chromium CDP endpoint.
+    
+    Connect with: ws://<gateway>:8056/meetings/{platform}/{native_id}/cdp/ws?api_key=<key>&targetId=<tabId>
+    If targetId is omitted, the first page tab is selected automatically.
+    """
+    # Auth via query param (WS handshake headers are browser-restricted)
+    api_key = websocket.query_params.get("api_key")
+    if not api_key:
+        await websocket.close(code=4401)
+        return
+
+    try:
+        cdp_info = await _get_meeting_cdp_info(platform, native_meeting_id, api_key)
+    except HTTPException as e:
+        await websocket.close(code=4404)
+        return
+
+    bot_ip = cdp_info.get("bot_ip")
+    # Port 9223 is the socat forwarder inside the bot container
+    cdp_target = f"{bot_ip}:9223" if bot_ip else f"localhost:{cdp_info['host_port']}"
+
+    # Get target ID (tab) from query params, or use first available tab
+    target_id = websocket.query_params.get("targetId")
+    if not target_id:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"http://{cdp_target}/json")
+                tabs = resp.json()
+                # Pick first page tab
+                for tab in tabs:
+                    if tab.get("type") == "page":
+                        target_id = tab.get("id")
+                        break
+                if not target_id and tabs:
+                    target_id = tabs[0].get("id")
+        except Exception:
+            pass
+
+    if not target_id:
+        await websocket.close(code=4503)
+        return
+
+    upstream_url = f"ws://{cdp_target}/devtools/page/{target_id}"
+
+    await websocket.accept()
+
+    try:
+        import websockets
+        async with websockets.connect(upstream_url) as upstream_ws:
+            async def forward_to_upstream():
+                try:
+                    while True:
+                        data = await websocket.receive_text()
+                        await upstream_ws.send(data)
+                except (WebSocketDisconnect, Exception):
+                    pass
+
+            async def forward_to_client():
+                try:
+                    async for message in upstream_ws:
+                        await websocket.send_text(message if isinstance(message, str) else message.decode())
+                except Exception:
+                    pass
+
+            done, pending = await asyncio.wait(
+                [asyncio.create_task(forward_to_upstream()), asyncio.create_task(forward_to_client())],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+    except Exception as e:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
 # --- Main Execution --- 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True) 
