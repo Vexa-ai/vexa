@@ -12,9 +12,13 @@ services:
       - TRANSCRIPTION_COLLECTOR_URL=http://transcription-collector:8000
       - MCP_URL=http://mcp:18888
       - REDIS_URL=redis://redis:6379/0
+      # Used to generate public share URLs for ChatGPT "Read from <url>" flows
       - PUBLIC_BASE_URL=https://share.dev.vexa.ai
       - TRANSCRIPT_SHARE_TTL_SECONDS=900
       - LOG_LEVEL=DEBUG
+    volumes:
+      - ../.cursor:/app/.cursor
+      - /var/run/docker.sock:/var/run/docker.sock
     init: true
     depends_on:
       admin-api:
@@ -64,11 +68,12 @@ services:
       - DB_PASSWORD=${DB_PASSWORD:-postgres}
       - DB_SSL_MODE=${DB_SSL_MODE:-disable}
       - DOCKER_HOST=unix://var/run/docker.sock
-      - DEVICE_TYPE=remote
-      - WHISPER_LIVE_URL=ws://whisperlive:9090/ws
+      - DEVICE_TYPE=${DEVICE_TYPE}
+      - WHISPER_LIVE_URL=ws://whisperlive-remote:9090/ws  # Direct connection to whisperlive-remote
       - ADMIN_TOKEN=${ADMIN_API_TOKEN}
       - ZOOM_CLIENT_ID=${ZOOM_CLIENT_ID}
       - ZOOM_CLIENT_SECRET=${ZOOM_CLIENT_SECRET}
+      - ZOOM_WEB=${ZOOM_WEB:-false}
       # Storage (recordings)
       - STORAGE_BACKEND=${STORAGE_BACKEND:-minio}
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
@@ -92,6 +97,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - ../.cursor:/app/.cursor
       - ${LOCAL_STORAGE_VOLUME_SOURCE:-recordings-data}:/data/recordings
     init: true
     depends_on:
@@ -104,10 +110,82 @@ services:
     restart: unless-stopped
 
   whisperlive:
+    profiles: ["gpu"]
+    build:
+      context: .
+      dockerfile: services/WhisperLive/Dockerfile.project
+    volumes:
+      - ./hub:/root/.cache/huggingface/hub
+      - ./services/WhisperLive/models:/app/models
+      - wl-recordings:/var/lib/wl-recordings
+    environment:
+      # Use Redis Stream URL instead of WebSocket URL
+      - REDIS_STREAM_URL=redis://redis:6379/0/transcription_segments
+      # Keep the old URL for backward compatibility
+      - TRANSCRIPTION_COLLECTOR_URL=redis://redis:6379/0/transcription_segments
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_STREAM_NAME=transcription_segments
+      - LANGUAGE_DETECTION_SEGMENTS=${LANGUAGE_DETECTION_SEGMENTS}
+      - DEVICE_TYPE=${DEVICE_TYPE}
+      - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}
+      - WL_MAX_CLIENTS=${WL_MAX_CLIENTS}
+      # Server-level speaker-based circuit breaker
+      - WL_USE_SPEAKER_GROUND_TRUTH=${WL_USE_SPEAKER_GROUND_TRUTH:-true}
+      - WL_SERVER_SPEAKER_NO_TX_STALL_S=${WL_SERVER_SPEAKER_NO_TX_STALL_S:-30}
+      - WL_SPEAKER_ACTIVE_WINDOW_S=${WL_SPEAKER_ACTIVE_WINDOW_S:-8}
+      - WL_SERVER_WARMUP_S=${WL_SERVER_WARMUP_S:-60}
+      # VAD filter - most permissive to catch hallucinations during silence
+      - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD:-0}
+      # Minimum audio duration (seconds) before triggering transcription - lower = lower latency
+      - MIN_AUDIO_S=${MIN_AUDIO_S:-2.0}
+      - WL_RECORDING_DIR=${WL_RECORDING_DIR:-/var/lib/wl-recordings}
+      - WL_RECORDING_FLUSH_SECONDS=${WL_RECORDING_FLUSH_SECONDS:-3}
+      - WL_RECORDING_FSYNC_SECONDS=${WL_RECORDING_FSYNC_SECONDS:-10}
+      - WL_RECORDING_ROTATE_SECONDS=${WL_RECORDING_ROTATE_SECONDS:-20}
+      - WL_RECORDING_ROTATE_BYTES=${WL_RECORDING_ROTATE_BYTES:-16777216}
+      - WL_RECORDING_SNAPSHOT_SECONDS=${WL_RECORDING_SNAPSHOT_SECONDS:-20}
+      - WL_RECORDING_UPLOAD_URL=${WL_RECORDING_UPLOAD_URL:-http://bot-manager:8080/internal/recordings/upload}
+      - CONSUL_ENABLE=false
+      - WL_REDIS_DISCOVERY_ENABLED=false
+    command: >-
+      --port 9090
+      --backend faster_whisper
+      --faster_whisper_custom_model_path ${WHISPER_MODEL_SIZE}
+      --min_audio_s ${MIN_AUDIO_S:-2.0}
+      --wl_recording_dir ${WL_RECORDING_DIR:-/var/lib/wl-recordings}
+      --wl_recording_flush_seconds ${WL_RECORDING_FLUSH_SECONDS:-3}
+      --wl_recording_fsync_seconds ${WL_RECORDING_FSYNC_SECONDS:-10}
+      --wl_recording_rotate_seconds ${WL_RECORDING_ROTATE_SECONDS:-20}
+      --wl_recording_rotate_bytes ${WL_RECORDING_ROTATE_BYTES:-16777216}
+      --wl_recording_snapshot_seconds ${WL_RECORDING_SNAPSHOT_SECONDS:-20}
+    expose:
+      - "9090" #use for transcription web socket
+      - "9091" #use for health check
+    deploy:
+      replicas: 1
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["3"] # Ensure this is configurable or correct for your setup
+              capabilities: [gpu]
+    init: true
+    depends_on:
+      transcription-collector:
+        condition: service_started
+    networks:
+      - vexa_default
+  # CPU version of WhisperLive for users without GPU
+  whisperlive-cpu:
+    profiles: ["cpu"]
     build:
       context: .
       dockerfile: services/WhisperLive/Dockerfile.cpu
     volumes:
+      - ./hub:/root/.cache/huggingface/hub
+      - ./services/WhisperLive/models:/app/models
       - wl-recordings:/var/lib/wl-recordings
     environment:
       - REDIS_STREAM_URL=redis://redis:6379/0/transcription_segments
@@ -118,7 +196,66 @@ services:
       - REDIS_STREAM_NAME=transcription_segments
       - LANGUAGE_DETECTION_SEGMENTS=${LANGUAGE_DETECTION_SEGMENTS}
       - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD}
+      # Minimum audio duration (seconds) before triggering transcription - lower = lower latency
       - MIN_AUDIO_S=${MIN_AUDIO_S:-2.0}
+      - WL_RECORDING_DIR=${WL_RECORDING_DIR:-/var/lib/wl-recordings}
+      - WL_RECORDING_FLUSH_SECONDS=${WL_RECORDING_FLUSH_SECONDS:-3}
+      - WL_RECORDING_FSYNC_SECONDS=${WL_RECORDING_FSYNC_SECONDS:-10}
+      - WL_RECORDING_ROTATE_SECONDS=${WL_RECORDING_ROTATE_SECONDS:-20}
+      - WL_RECORDING_ROTATE_BYTES=${WL_RECORDING_ROTATE_BYTES:-16777216}
+      - WL_RECORDING_SNAPSHOT_SECONDS=${WL_RECORDING_SNAPSHOT_SECONDS:-20}
+      - WL_RECORDING_UPLOAD_URL=${WL_RECORDING_UPLOAD_URL:-http://bot-manager:8080/internal/recordings/upload}
+      - DEVICE_TYPE=cpu
+      - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}
+      - WL_MAX_CLIENTS=${WL_MAX_CLIENTS}
+      - CONSUL_ENABLE=false
+    deploy:
+      replicas: 1
+    command: >-
+      --port 9090
+      --backend faster_whisper
+      --faster_whisper_custom_model_path ${WHISPER_MODEL_SIZE}
+      --min_audio_s ${MIN_AUDIO_S:-2.0}
+      --wl_recording_dir ${WL_RECORDING_DIR:-/var/lib/wl-recordings}
+      --wl_recording_flush_seconds ${WL_RECORDING_FLUSH_SECONDS:-3}
+      --wl_recording_fsync_seconds ${WL_RECORDING_FSYNC_SECONDS:-10}
+      --wl_recording_rotate_seconds ${WL_RECORDING_ROTATE_SECONDS:-20}
+      --wl_recording_rotate_bytes ${WL_RECORDING_ROTATE_BYTES:-16777216}
+      --wl_recording_snapshot_seconds ${WL_RECORDING_SNAPSHOT_SECONDS:-20}
+    expose:
+      - "9090" #use for transcription web socket
+      - "9091" #use for health check
+    init: true
+    depends_on:
+      transcription-collector:
+        condition: service_started
+    networks:
+      - vexa_default
+    # Don't auto-start CPU version, users can manually start it
+    restart: unless-stopped
+
+  # Remote API version of WhisperLive
+  whisperlive-remote:
+    profiles: ["remote"]
+    build:
+      context: .
+      dockerfile: services/WhisperLive/Dockerfile.cpu
+    volumes:
+      - ./hub:/root/.cache/huggingface/hub
+      - ./services/WhisperLive/models:/app/models
+      - wl-recordings:/var/lib/wl-recordings
+    environment:
+      - REDIS_STREAM_URL=redis://redis:6379/0/transcription_segments
+      - TRANSCRIPTION_COLLECTOR_URL=redis://redis:6379/0/transcription_segments
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_STREAM_NAME=transcription_segments
+      - LANGUAGE_DETECTION_SEGMENTS=${LANGUAGE_DETECTION_SEGMENTS}
+      - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD}
+      # Minimum audio duration (seconds) before triggering transcription - lower = lower latency
+      - MIN_AUDIO_S=${MIN_AUDIO_S:-2.0}
+      # Tier2 (deferred) tuning
       - MIN_AUDIO_S_TIER2=${MIN_AUDIO_S_TIER2:-20.0}
       - MIN_TIME_BETWEEN_REQUESTS_S=${MIN_TIME_BETWEEN_REQUESTS_S:-0.5}
       - MIN_TIME_BETWEEN_REQUESTS_S_TIER2=${MIN_TIME_BETWEEN_REQUESTS_S_TIER2:-20.0}
@@ -129,6 +266,7 @@ services:
       - WL_RECORDING_ROTATE_BYTES=${WL_RECORDING_ROTATE_BYTES:-16777216}
       - WL_RECORDING_SNAPSHOT_SECONDS=${WL_RECORDING_SNAPSHOT_SECONDS:-20}
       - WL_RECORDING_UPLOAD_URL=${WL_RECORDING_UPLOAD_URL:-http://bot-manager:8080/internal/recordings/upload}
+      # Reconfirmation threshold - lower values reduce latency by reconfirming segments faster
       - SAME_OUTPUT_THRESHOLD=${SAME_OUTPUT_THRESHOLD:-3}
       - SAME_OUTPUT_THRESHOLD_TIER2=${SAME_OUTPUT_THRESHOLD_TIER2:-2}
       - DEVICE_TYPE=remote
@@ -136,6 +274,8 @@ services:
       - REMOTE_TRANSCRIBER_API_KEY=${REMOTE_TRANSCRIBER_API_KEY}
       - CONSUL_ENABLE=false
       - WL_REDIS_DISCOVERY_ENABLED=false
+    deploy:
+      replicas: 1
     command: >-
       --port 9090
       --backend remote
@@ -152,8 +292,8 @@ services:
       --same_output_threshold ${SAME_OUTPUT_THRESHOLD:-3}
       --same_output_threshold_tier2 ${SAME_OUTPUT_THRESHOLD_TIER2:-2}
     expose:
-      - "9090"
-      - "9091"
+      - "9090" #use for transcription web socket
+      - "9091" #use for health check
     extra_hosts:
       - "host.docker.internal:host-gateway"
     init: true
@@ -162,6 +302,7 @@ services:
         condition: service_started
     networks:
       - vexa_default
+      - vexa-network
     restart: unless-stopped
 
   transcription-collector:
@@ -329,3 +470,6 @@ volumes:
 networks:
   vexa_default:
     driver: bridge
+  vexa-network:
+    external: true
+    name: vexa-network

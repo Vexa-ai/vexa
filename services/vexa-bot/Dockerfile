@@ -86,6 +86,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xserver-xephyr \
     libssl3 \
     libxcb-xtest0 \
+    socat \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy workspace package files (for runtime dependencies)

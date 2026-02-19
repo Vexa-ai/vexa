@@ -843,6 +843,15 @@ async def request_bot(
         # Only set the container ID, keep status as 'requested' until bot confirms it's running
         logger.info(f"Setting container ID {container_id} for meeting {meeting_id} (status remains 'requested' until bot confirms startup)")
         current_meeting_for_bot_launch.bot_container_id = container_id
+        # Store CDP debug port in meeting data so API can expose it
+        cdp_host_port = 19200 + (meeting_id % 800)
+        if not current_meeting_for_bot_launch.data:
+            current_meeting_for_bot_launch.data = {}
+        current_data = dict(current_meeting_for_bot_launch.data)
+        current_data['cdp_port'] = cdp_host_port
+        current_meeting_for_bot_launch.data = current_data
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(current_meeting_for_bot_launch, 'data')
         # current_meeting_for_bot_launch.status = 'active'  # REMOVED - handled by callback
         # current_meeting_for_bot_launch.start_time = datetime.utcnow()  # REMOVED - handled by callback
         await db.commit()

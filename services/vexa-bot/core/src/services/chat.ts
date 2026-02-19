@@ -102,6 +102,8 @@ export class MeetingChatService {
         return await this.sendGoogleMeetChat(text);
       } else if (this.platform === 'teams') {
         return await this.sendTeamsChat(text);
+      } else if (this.platform === 'zoom') {
+        return await this.sendZoomChat(text);
       } else {
         log(`[Chat] Unsupported platform: ${this.platform}`);
         return false;
@@ -141,6 +143,8 @@ export class MeetingChatService {
       await this.initGoogleMeetObserver();
     } else if (this.platform === 'teams') {
       await this.initTeamsObserver();
+    } else if (this.platform === 'zoom') {
+      await this.initZoomObserver();
     }
 
     this.observerInitialized = true;
@@ -688,6 +692,180 @@ export class MeetingChatService {
         childList: true,
         subtree: true,
         characterData: true
+      });
+
+      scanForMessages();
+      setInterval(scanForMessages, 2000);
+    }, botName);
+  }
+
+  // ==================== Zoom ====================
+
+  private async sendZoomChat(text: string): Promise<boolean> {
+    if (this.page.isClosed()) return false;
+
+    try {
+      // Open chat panel if not already open
+      const chatBtnSelectors = [
+        'button[aria-label*="chat panel"]',
+        'button[aria-label*="Chat"]',
+        'button[class*="chat-btn"]',
+      ];
+
+      const inputSelectors = [
+        // Verified from live DOM: TipTap ProseMirror editor inside .chat-rtf-box__editor-outer
+        '.chat-rtf-box__editor-outer [contenteditable="true"]',
+        '.tiptap.ProseMirror',
+        // Legacy fallbacks
+        '[class*="chat-box"] [contenteditable="true"]',
+        '[class*="chatbox"] [contenteditable="true"]',
+      ];
+
+      // Check if chat input is already visible
+      let inputLocator = this.page.locator(inputSelectors.join(', ')).first();
+      let inputVisible = await inputLocator.isVisible().catch(() => false);
+
+      if (!inputVisible) {
+        // Try to open the chat panel
+        for (const sel of chatBtnSelectors) {
+          const btn = this.page.locator(sel).first();
+          if (await btn.isVisible().catch(() => false)) {
+            await btn.click();
+            await this.page.waitForTimeout(1000);
+            break;
+          }
+        }
+        // Re-check
+        inputLocator = this.page.locator(inputSelectors.join(', ')).first();
+        inputVisible = await inputLocator.isVisible().catch(() => false);
+      }
+
+      if (!inputVisible) {
+        log('[Chat] Could not find Zoom chat input after opening chat panel');
+        return false;
+      }
+
+      // Click into the input and type
+      await inputLocator.click();
+      await this.page.waitForTimeout(100);
+      await this.page.keyboard.type(text, { delay: 10 });
+      await this.page.waitForTimeout(200);
+
+      // Try send button first, fall back to Enter
+      const sendBtnSelectors = [
+        // Verified from live DOM: aria-label="send" on .chat-rtf-box__send button
+        'button[aria-label="send"]',
+        'button[class*="chat-rtf-box__send"]',
+        'button[aria-label*="send"]',
+        'button[class*="send-btn"]',
+      ];
+      let sent = false;
+      for (const sel of sendBtnSelectors) {
+        const btn = this.page.locator(sel).first();
+        if (await btn.isVisible().catch(() => false)) {
+          await btn.click();
+          sent = true;
+          break;
+        }
+      }
+      if (!sent) {
+        await this.page.keyboard.press('Enter');
+      }
+
+      log(`[Chat] Sent Zoom message: ${text.substring(0, 50)}`);
+      return true;
+    } catch (err: any) {
+      log(`[Chat] Failed to send Zoom message: ${err.message}`);
+      return false;
+    }
+  }
+
+  private async initZoomObserver(): Promise<void> {
+    const botName = this.botName;
+    const page = this.page;
+
+    // Open the chat panel first so messages are rendered in the DOM
+    const openChatPanel = async () => {
+      try {
+        const btn = page.locator('button[aria-label*="open the chat panel"], button[aria-label*="open chat"]').first();
+        if (await btn.isVisible({ timeout: 1000 }).catch(() => false)) {
+          await btn.click();
+          await page.waitForTimeout(500);
+          return true;
+        }
+      } catch {}
+      return false;
+    };
+
+    await openChatPanel();
+    log('[Chat] Opened Zoom chat panel for observation');
+
+    // Watchdog: re-open chat panel if Zoom closes it (happens on click-away, hot-debug, etc.)
+    const chatPanelWatchdog = setInterval(async () => {
+      if (page.isClosed()) { clearInterval(chatPanelWatchdog); return; }
+      try {
+        const panelClosed = await page.evaluate(() => {
+          const btn = document.querySelector('button[aria-label*="chat panel"]');
+          return btn?.getAttribute('aria-label')?.includes('open') || false;
+        }).catch(() => false);
+        if (panelClosed) {
+          await openChatPanel();
+          log('[Chat] Re-opened Zoom chat panel (was closed)');
+        }
+      } catch {}
+    }, 5000);
+
+    await page.evaluate((botNameArg: string) => {
+      // Track seen messages by DOM element reference (WeakSet) to handle duplicate text correctly
+      const seenElements = new WeakSet<Element>();
+
+      const scanForMessages = () => {
+        // Zoom Web Client chat message DOM (app.zoom.us/wc/) — verified from live DOM:
+        //
+        //   .new-chat-message__container         ← message container (one per message)
+        //     .new-chat-message__content          ← content wrapper
+        //       .chat-rtf-box__display            ← message text
+        //
+        // Sender name is in a separate .chat-item__sender element above the message group.
+        // We correlate sender by walking up to the .chat-item and finding its sender element.
+
+        document.querySelectorAll('.new-chat-message__container').forEach((el) => {
+          // Deduplicate by DOM element reference — handles duplicate text from same sender correctly
+          if (seenElements.has(el)) return;
+          seenElements.add(el);
+
+          // Extract text from the display box
+          const textEl = el.querySelector('.chat-rtf-box__display') ||
+                         el.querySelector('.new-chat-message__content');
+          const text = textEl?.textContent?.trim() || '';
+          if (!text) return;
+
+          // Walk up the DOM to find sender name: look for .chat-item__sender in the chat item
+          let senderEl: Element | null = null;
+          let ancestor: Element | null = el.parentElement;
+          for (let i = 0; i < 8 && ancestor; i++) {
+            senderEl = ancestor.querySelector('.chat-item__sender');
+            if (senderEl) break;
+            ancestor = ancestor.parentElement;
+          }
+          const sender = senderEl?.textContent?.trim() || 'Unknown';
+
+          try {
+            (window as any).__vexaChatMessage({
+              sender,
+              text,
+              timestamp: Date.now(),
+              isFromBot: sender === botNameArg,
+            });
+          } catch {}
+        });
+      };
+
+      const observer = new MutationObserver(() => scanForMessages());
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        characterData: true,
       });
 
       scanForMessages();
