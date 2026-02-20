@@ -45,6 +45,7 @@ WHEN TO USE trigger_agent:
 - When you're not 100% certain of the answer from your own knowledge
 - Anything the user explicitly asks you to DO, find, create, or check
 - If there's any doubt — route it
+- open browser tabs 
 
 WHEN TO ANSWER DIRECTLY (no trigger_agent):
 Only these cases:
