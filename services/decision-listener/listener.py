@@ -23,17 +23,34 @@ from llm import analyze_window, is_duplicate_llm
 logger = logging.getLogger(__name__)
 
 
-def _word_similarity(a: str, b: str) -> float:
-    """Jaccard similarity on significant words (>3 chars). Returns 0–1."""
+def _tokenize(s: str) -> set:
+    """Extract significant words (>3 chars) from lowercased text."""
     import re
-    def tokenize(s):
-        return set(w for w in re.sub(r"[^a-z0-9\s]", "", s).split() if len(w) > 3)
-    wa, wb = tokenize(a), tokenize(b)
+    return set(w for w in re.sub(r"[^a-z0-9\s]", "", s.lower()).split() if len(w) > 3)
+
+
+def _is_similar(a: str, b: str) -> bool:
+    """
+    Check if two summaries are similar enough to be duplicates.
+    Uses two metrics:
+    1. Jaccard similarity >= 0.50  (symmetric: shared / total words)
+    2. Containment >= 0.70  (asymmetric: shared / smaller set — catches paraphrases)
+    Either passing means duplicate.
+    """
+    wa, wb = _tokenize(a), _tokenize(b)
     if not wa and not wb:
-        return 1.0
+        return True
+    if not wa or not wb:
+        return False
     intersection = len(wa & wb)
     union = len(wa | wb)
-    return intersection / union if union else 0.0
+    jaccard = intersection / union if union else 0.0
+    if jaccard >= 0.50:
+        return True
+    # Containment: what fraction of the smaller set is covered?
+    smaller = min(len(wa), len(wb))
+    containment = intersection / smaller if smaller else 0.0
+    return containment >= 0.70
 
 
 # Per-meeting segment buffer: meeting_id -> deque of segment dicts (sorted by start time)
@@ -128,6 +145,10 @@ async def _store_decision(redis_c: aioredis.Redis, meeting_id: str, item: dict):
         logger.error(f"[{meeting_id}] Failed to store decision: {e}")
 
 
+# Per-meeting analysis lock — prevents overlapping LLM calls for the same meeting
+_analysis_locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+
 async def _handle_meeting_update(redis_c: aioredis.Redis, meeting_id: str, segments: list):
     """Called on every pub/sub message for a meeting."""
     _merge_segments(_segment_buffers[meeting_id], segments)
@@ -141,44 +162,47 @@ async def _handle_meeting_update(redis_c: aioredis.Redis, meeting_id: str, segme
         logger.debug(f"[{meeting_id}] Empty window, skipping LLM call")
         return
 
+    # Mark debounce immediately (don't wait for LLM to finish)
     _last_llm_call[meeting_id] = time.monotonic() * 1000
 
-    item = await analyze_window(window)
-    if item is None:
+    # Acquire per-meeting lock so we don't stack up concurrent LLM calls
+    lock = _analysis_locks[meeting_id]
+    if lock.locked():
+        logger.debug(f"[{meeting_id}] Analysis already in progress, skipping")
         return
 
-    # Dedup: two-pass check against recently stored items of the same type
-    key = DECISIONS_KEY_PREFIX.format(meeting_id=meeting_id)
-    try:
-        recent_raw = await redis_c.lrange(key, -10, -1)
-        same_type_summaries = [
-            json.loads(r).get("summary", "")
-            for r in recent_raw
-            if json.loads(r).get("type") == item["type"]
-        ]
+    async with lock:
+        item = await analyze_window(window)
+        if item is None:
+            return
 
-        if same_type_summaries:
-            incoming = item["summary"].strip().lower()
+        # Fast dedup: Jaccard against ALL stored items (cross-type)
+        key = DECISIONS_KEY_PREFIX.format(meeting_id=meeting_id)
+        try:
+            all_raw = await redis_c.lrange(key, 0, -1)
+            all_summaries = [
+                json.loads(r).get("summary", "")
+                for r in all_raw
+            ]
 
-            # Pass 1: fast Jaccard word-overlap
-            jaccard_hit = any(
-                _word_similarity(s.strip().lower(), incoming) >= 0.65
-                for s in same_type_summaries
-            )
+            if all_summaries:
+                incoming = item["summary"].strip()
 
-            if jaccard_hit:
-                logger.debug(f"[{meeting_id}] Jaccard duplicate, skipping: {item['summary'][:60]}")
-                return
+                # Dual-metric check against every stored item (any type)
+                jaccard_hit = any(
+                    _is_similar(s.strip(), incoming)
+                    for s in all_summaries
+                )
 
-            # Pass 2: LLM semantic check (only runs if Jaccard didn't catch it)
-            if await is_duplicate_llm(item["summary"], same_type_summaries):
-                logger.debug(f"[{meeting_id}] LLM duplicate, skipping: {item['summary'][:60]}")
-                return
-    except Exception as e:
-        logger.warning(f"[{meeting_id}] Dedup check failed, allowing item through: {e}")
+                if jaccard_hit:
+                    logger.debug(f"[{meeting_id}] Jaccard duplicate, skipping: {item['summary'][:60]}")
+                    return
+        except Exception as e:
+            logger.warning(f"[{meeting_id}] Dedup check failed, allowing item through: {e}")
 
-    await _store_decision(redis_c, meeting_id, item)
-    await _broadcast(meeting_id, item)
+        # Store + broadcast immediately — no LLM dedup blocking
+        await _store_decision(redis_c, meeting_id, item)
+        await _broadcast(meeting_id, item)
 
 
 async def start_listener():

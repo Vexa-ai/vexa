@@ -11,25 +11,31 @@ import copy
 # ── Default config ─────────────────────────────────────────────────────────────
 
 DEFAULT_TRACKER_NAME = "Meeting Intelligence"
-DEFAULT_TRACKER_DESCRIPTION = "Detects decisions, action items, and architecture statements."
+DEFAULT_TRACKER_DESCRIPTION = "Detects decisions, action items, key insights, and commitments."
 
 DEFAULT_CATEGORIES = [
     {
         "key": "decision",
         "label": "Decision",
-        "description": 'Something the group has clearly agreed to ("we will", "we\'ve decided", "let\'s go with")',
+        "description": 'Something the group has clearly agreed to or resolved ("we will", "we\'ve decided", "let\'s go with", "we agreed")',
         "enabled": True,
     },
     {
         "key": "action_item",
         "label": "Action Item",
-        "description": 'A concrete task assigned to someone ("John will", "we need to", "Alice is going to")',
+        "description": 'A concrete task assigned to someone with clear ownership ("John will", "we need to", "I\'ll take care of", "Alice is going to")',
         "enabled": True,
     },
     {
-        "key": "architecture_statement",
-        "label": "Architecture Statement",
-        "description": "A technical architecture choice about software systems, components, or infrastructure",
+        "key": "key_insight",
+        "label": "Key Insight",
+        "description": "An important observation, status update, risk flag, or strategic insight shared during the meeting that others should know about",
+        "enabled": True,
+    },
+    {
+        "key": "commitment",
+        "label": "Commitment",
+        "description": 'A timeline, deadline, or resource commitment ("by end of quarter", "we\'ll ship by Friday", "budget approved for X")',
         "enabled": True,
     },
 ]
@@ -37,7 +43,8 @@ DEFAULT_CATEGORIES = [
 DEFAULT_EXTRA_INSTRUCTIONS = (
     "Be conservative. Tentative language (\"maybe\", \"what if\", \"could we\") is NOT a decision. "
     "If multiple things are present, pick the most significant one. "
-    "Keep summaries short and specific (one sentence)."
+    "Keep summaries short and specific (one sentence). "
+    "Include the names of people mentioned whenever possible."
 )
 
 # ── Live config store ─────────────────────────────────────────────────────────
@@ -98,6 +105,8 @@ def build_system_prompt() -> str:
         if rule:
             lines.append(f"- {rule}.")
     lines.append("- Always call capture_meeting_item — even for no_match.")
+    lines.append("- Extract entities (people, companies, products, dates, amounts, documents, topics) relevant to the detected item.")
+    lines.append("- For no_match, entities should be an empty array.")
     return "\n".join(lines)
 
 
@@ -138,6 +147,33 @@ def build_tool_schema() -> dict:
                     "confidence": {
                         "type": "number",
                         "description": "Confidence score between 0 and 1.",
+                    },
+                    "entities": {
+                        "type": "array",
+                        "description": (
+                            "Entities mentioned in this item. Extract people, companies, "
+                            "products, dates/deadlines, dollar amounts, documents, and topics. "
+                            "Only include entities directly relevant to this specific item."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "type": {
+                                    "type": "string",
+                                    "enum": ["person", "company", "product", "date", "amount", "document", "topic"],
+                                    "description": "Entity type.",
+                                },
+                                "label": {
+                                    "type": "string",
+                                    "description": "Display text for the entity (e.g. 'Sarah Chen', 'AWS', 'March 15').",
+                                },
+                                "id": {
+                                    "type": "string",
+                                    "description": "Unique slug ID, lowercase with hyphens (e.g. 'sarah-chen', 'aws', 'mar-15').",
+                                },
+                            },
+                            "required": ["type", "label", "id"],
+                        },
                     },
                 },
                 "required": ["type", "summary", "speaker", "confidence"],

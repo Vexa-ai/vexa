@@ -91,6 +91,7 @@ async def analyze_window(segments: List[dict]) -> Optional[dict]:
             "summary": args.get("summary", ""),
             "speaker": args.get("speaker"),
             "confidence": float(args.get("confidence", 0.0)),
+            "entities": args.get("entities", []),
         }
 
     except Exception as e:
