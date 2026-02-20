@@ -269,6 +269,26 @@ def _parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
 
     # Teams enterprise: teams.microsoft.com, gov.teams.microsoft.us, dod.teams.microsoft.us, etc.
     if _is_teams_enterprise_host(host):
+        # Deep link format: /v2/?meetingjoin=true#/meet/<id>?p=<passcode>
+        # The meeting info lives in the fragment, not the path/query
+        fragment = parsed.fragment or ""
+        if path.rstrip("/") in ("/v2", "") and fragment.startswith("/meet/"):
+            frag_parsed = urlparse("https://x" + fragment)
+            fm = re.match(r"^/meet/(\d{10,15})/?$", frag_parsed.path)
+            if fm:
+                native_id = fm.group(1)
+                frag_query = parse_qs(frag_parsed.query or "")
+                passcode = (frag_query.get("p") or [None])[0]
+                if not passcode:
+                    warnings.append("Teams meeting link has no ?p= passcode. Many Teams meetings require it.")
+                return ParseMeetingLinkResponse(
+                    platform="teams",
+                    native_meeting_id=native_id,
+                    passcode=passcode,
+                    teams_base_host=host,
+                    warnings=warnings,
+                )
+
         # Short new-style URL: /meet/<numeric_id>?p=<passcode>
         m = re.match(r"^/meet/(\d{10,15})/?$", path)
         if m:

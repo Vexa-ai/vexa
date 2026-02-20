@@ -126,6 +126,18 @@ class TestTeamsEnterpriseShort:
         r = parse("https://dod.teams.microsoft.us/meet/12345678901234")
         assert r.teams_base_host == "dod.teams.microsoft.us"
 
+    def test_v2_deep_link(self):
+        r = parse("https://teams.microsoft.com/v2/?meetingjoin=true#/meet/33749853217630?p=em7xplMpIFquiFGvn8&anon=true&deeplinkId=c34d42b3")
+        assert r.platform == "teams"
+        assert r.native_meeting_id == "33749853217630"
+        assert r.passcode == "em7xplMpIFquiFGvn8"
+        assert r.teams_base_host == "teams.microsoft.com"
+
+    def test_v2_deep_link_no_passcode_warns(self):
+        r = parse("https://teams.microsoft.com/v2/?meetingjoin=true#/meet/33749853217630")
+        assert r.native_meeting_id == "33749853217630"
+        assert any("passcode" in w.lower() for w in r.warnings)
+
 
 # ---------------------------------------------------------------------------
 # Teams enterprise legacy long URL (Track B)
