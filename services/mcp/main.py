@@ -129,6 +129,8 @@ class ParseMeetingLinkResponse(BaseModel):
     platform: str
     native_meeting_id: str
     passcode: Optional[str] = None
+    meeting_url: Optional[str] = None       # raw URL for long Teams /l/meetup-join/ links
+    teams_base_host: Optional[str] = None   # non-default Teams host (e.g. teams.microsoft.com)
     warnings: List[str] = Field(default_factory=list)
 
 class TranscriptShareLinkResponse(BaseModel):
@@ -210,7 +212,18 @@ async def make_request(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
 
+_TEAMS_ENTERPRISE_HOSTS = {
+    "teams.microsoft.com",
+    "gov.teams.microsoft.us",
+    "dod.teams.microsoft.us",
+}
+
+def _is_teams_enterprise_host(host: str) -> bool:
+    return host in _TEAMS_ENTERPRISE_HOSTS or host.endswith(".teams.microsoft.us")
+
+
 def _parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
+    import hashlib
     url = (meeting_url or "").strip()
     if not url:
         raise HTTPException(status_code=422, detail="meeting_url cannot be empty")
@@ -223,13 +236,27 @@ def _parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
     warnings: List[str] = []
 
     # Google Meet
-    if host in {"meet.google.com"}:
+    if host == "meet.google.com":
+        # Block /lookup/ paths — internal Google URLs, not directly joinable
+        if path.startswith("/lookup/"):
+            raise HTTPException(
+                status_code=422,
+                detail="Google Meet /lookup/ URLs cannot be joined directly. Use the standard meeting link from your calendar invite.",
+            )
         code = path.strip("/").split("/")[0] if path else ""
-        if not re.fullmatch(r"^[a-z]{3}-[a-z]{4}-[a-z]{3}$", code):
-            raise HTTPException(status_code=422, detail="Invalid Google Meet URL: expected https://meet.google.com/abc-defg-hij")
-        return ParseMeetingLinkResponse(platform="google_meet", native_meeting_id=code, passcode=None, warnings=warnings)
+        # Standard abc-defg-hij format
+        if re.fullmatch(r"^[a-z]{3}-[a-z]{4}-[a-z]{3}$", code):
+            return ParseMeetingLinkResponse(platform="google_meet", native_meeting_id=code, passcode=None, warnings=warnings)
+        # Custom Workspace nickname: 5-40 lowercase alphanumeric + hyphens
+        if re.fullmatch(r"^[a-z0-9][a-z0-9-]{3,38}[a-z0-9]$", code):
+            warnings.append("Custom Google Meet nickname URL detected. This works for Google Workspace accounts only.")
+            return ParseMeetingLinkResponse(platform="google_meet", native_meeting_id=code, passcode=None, warnings=warnings)
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid Google Meet URL: expected https://meet.google.com/abc-defg-hij or a custom Workspace nickname.",
+        )
 
-    # Teams Free (teams.live.com/meet/<digits>?p=<passcode>)
+    # Teams personal (teams.live.com/meet/<digits>?p=<passcode>)
     if host.endswith("teams.live.com"):
         m = re.match(r"^/meet/(\d{10,15})/?$", path)
         if not m:
@@ -240,27 +267,67 @@ def _parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
             warnings.append("Teams meeting link has no ?p= passcode. Many Teams meetings require it.")
         return ParseMeetingLinkResponse(platform="teams", native_meeting_id=native_id, passcode=passcode, warnings=warnings)
 
-    # Teams enterprise link style (not supported)
-    if host.endswith("teams.microsoft.com"):
-        if "/l/meetup-join/" in path:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "Unsupported Teams link type: teams.microsoft.com/l/meetup-join/... is not supported yet "
-                    "(see issues #105, #110). Use a teams.live.com/meet/<id>?p=<passcode> link."
-                ),
+    # Teams enterprise: teams.microsoft.com, gov.teams.microsoft.us, dod.teams.microsoft.us, etc.
+    if _is_teams_enterprise_host(host):
+        # Short new-style URL: /meet/<numeric_id>?p=<passcode>
+        m = re.match(r"^/meet/(\d{10,15})/?$", path)
+        if m:
+            native_id = m.group(1)
+            passcode = (query.get("p") or [None])[0]
+            if not passcode:
+                warnings.append("Teams meeting link has no ?p= passcode. Many Teams meetings require it.")
+            return ParseMeetingLinkResponse(
+                platform="teams",
+                native_meeting_id=native_id,
+                passcode=passcode,
+                teams_base_host=host,
+                warnings=warnings,
             )
-        raise HTTPException(status_code=422, detail="Unsupported Teams URL host/path.")
+        # Long legacy URL: /l/meetup-join/...
+        if "/l/meetup-join/" in path:
+            url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
+            warnings.append(
+                "Legacy Teams enterprise URL detected. The full URL will be passed directly to the bot. "
+                "The meeting ID shown is a stable hash of the URL used for deduplication."
+            )
+            return ParseMeetingLinkResponse(
+                platform="teams",
+                native_meeting_id=url_hash,
+                passcode=None,
+                meeting_url=url,
+                warnings=warnings,
+            )
+        raise HTTPException(
+            status_code=422,
+            detail="Unsupported Teams enterprise URL format. Expected /meet/<id>?p=<passcode> or /l/meetup-join/...",
+        )
 
-    # Zoom
-    if "zoom.us" in host:
-        # Typical: /j/<id> or /w/<id>
+    # Zoom Events — not joinable via shareable URL (check before general zoom.us match)
+    if host in {"events.zoom.us", "ev.zoom.com"} or host.endswith(".events.zoom.us"):
+        raise HTTPException(
+            status_code=422,
+            detail="Zoom Events links are not supported. Attendees receive unique per-registrant join links via email; these cannot be shared with a bot.",
+        )
+
+    # Zoom: zoom.us (all subdomains) and zoomgov.com
+    if "zoom.us" in host or "zoomgov.com" in host:
         parts = [p for p in path.split("/") if p]
         native_id = ""
         if len(parts) >= 2 and parts[0] in {"j", "w"}:
             native_id = parts[1]
-        if not re.fullmatch(r"^\d{10,11}$", native_id or ""):
-            raise HTTPException(status_code=422, detail="Unsupported Zoom URL format. Expected https://zoom.us/j/<10-11 digit id>")
+        elif len(parts) >= 3 and parts[0] == "wc" and parts[1] == "join":
+            native_id = parts[2]
+        elif len(parts) >= 2 and parts[0] == "my":
+            raise HTTPException(
+                status_code=422,
+                detail="Zoom personal meeting room links (/my/...) are not supported. Ask the host to share a direct meeting link (/j/<id>).",
+            )
+        # Relax to 9-11 digits (Zoom supports 9, 10, and 11 digit IDs)
+        if not re.fullmatch(r"^\d{9,11}$", native_id or ""):
+            raise HTTPException(
+                status_code=422,
+                detail="Unsupported Zoom URL format. Expected https://zoom.us/j/<9-11 digit id>.",
+            )
         passcode = (query.get("pwd") or [None])[0]
         return ParseMeetingLinkResponse(platform="zoom", native_meeting_id=native_id, passcode=passcode, warnings=warnings)
 
@@ -315,6 +382,12 @@ async def request_meeting_bot(
         payload["native_meeting_id"] = parsed.native_meeting_id
         # Only set passcode from URL if caller didn't explicitly pass one.
         payload.setdefault("passcode", parsed.passcode)
+        # Forward raw URL for long Teams legacy links (Track B)
+        if parsed.meeting_url:
+            payload["meeting_url"] = parsed.meeting_url
+        # Forward enterprise hostname for short Teams links (Track A)
+        if parsed.teams_base_host:
+            payload["teams_base_host"] = parsed.teams_base_host
     try:
         return await make_request("POST", url, api_key, payload)
     except HTTPException as e:

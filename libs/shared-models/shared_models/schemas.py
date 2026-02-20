@@ -228,42 +228,54 @@ class Platform(str, Enum):
         return reverse_mapping.get(bot_platform_name)
 
     @classmethod
-    def construct_meeting_url(cls, platform_str: str, native_id: str, passcode: Optional[str] = None) -> Optional[str]:
+    def construct_meeting_url(
+        cls,
+        platform_str: str,
+        native_id: str,
+        passcode: Optional[str] = None,
+        base_host: Optional[str] = None,
+    ) -> Optional[str]:
         """
         Constructs the full meeting URL from platform, native ID, and optional passcode.
-        Returns None if the platform is unknown or ID is invalid for the platform.
+        Returns None if the platform is unknown, ID is invalid, or the ID is a hex hash
+        (indicating the caller should use the raw meeting_url field instead).
+
+        Args:
+            base_host: Optional override for the Teams hostname
+                       (e.g. 'teams.microsoft.com' for enterprise short URLs).
+                       Defaults to 'teams.live.com'.
         """
         try:
             platform = Platform(platform_str)
             if platform == Platform.GOOGLE_MEET:
-                # Basic validation for Google Meet code format (xxx-xxxx-xxx)
-                if re.fullmatch(r"^[a-z]{3}-[a-z]{4}-[a-z]{3}$", native_id):
-                     return f"https://meet.google.com/{native_id}"
-                else:
-                     return None # Invalid ID format
+                # Accept standard abc-defg-hij format and custom Workspace nicknames
+                if re.fullmatch(r"^[a-z]{3}-[a-z]{4}-[a-z]{3}$", native_id) or \
+                   re.fullmatch(r"^[a-z0-9][a-z0-9-]{3,38}[a-z0-9]$", native_id):
+                    return f"https://meet.google.com/{native_id}"
+                return None
             elif platform == Platform.TEAMS:
-                # Teams meeting ID (numeric) and optional passcode
-                # Only accept numeric meeting IDs, not full URLs
+                # Hex hash = long legacy URL; caller must use raw meeting_url field
+                if re.fullmatch(r"^[0-9a-f]{16}$", native_id):
+                    return None
                 if re.fullmatch(r"^\d{10,15}$", native_id):
-                    url = f"https://teams.live.com/meet/{native_id}"
+                    host = base_host or "teams.live.com"
+                    url = f"https://{host}/meet/{native_id}"
                     if passcode:
                         url += f"?p={passcode}"
                     return url
-                else:
-                    return None # Invalid Teams ID format - must be numeric only
+                return None
             elif platform == Platform.ZOOM:
-                # Zoom meeting ID (numeric, 10-11 digits) and optional passcode
-                if re.fullmatch(r"^\d{10,11}$", native_id):
+                # Zoom meeting ID (numeric, 9-11 digits) and optional passcode
+                if re.fullmatch(r"^\d{9,11}$", native_id):
                     base_url = f"https://zoom.us/j/{native_id}"
                     if passcode:
                         return f"{base_url}?pwd={passcode}"
                     return base_url
-                else:
-                    return None # Invalid Zoom ID format - must be numeric
+                return None
             else:
-                return None # Unknown platform
+                return None
         except ValueError:
-            return None # Invalid platform string
+            return None
 
 # --- Schemas from Admin API --- 
 
@@ -357,6 +369,14 @@ class MeetingCreate(BaseModel):
         description="Optional per-meeting override for transcription processing (true/false)."
     )
     passcode: Optional[str] = Field(None, description="Optional passcode for the meeting (Teams only)")
+    meeting_url: Optional[str] = Field(
+        None,
+        description="Raw meeting URL for Teams legacy /l/meetup-join/ links that cannot be reconstructed from parts. When provided, used directly as the bot's meetingUrl."
+    )
+    teams_base_host: Optional[str] = Field(
+        None,
+        description="Internal: Teams hostname for short enterprise URLs (e.g. 'teams.microsoft.com', 'gov.teams.microsoft.us'). Populated automatically by the MCP parser."
+    )
     zoom_obf_token: Optional[str] = Field(
         None,
         description="Optional one-time Zoom OBF token. If omitted for Zoom meetings, the backend will mint one from the user's stored Zoom OAuth connection."
@@ -390,9 +410,9 @@ class MeetingCreate(BaseModel):
             if platform == Platform.GOOGLE_MEET:
                 raise ValueError("Passcode is not supported for Google Meet meetings")
             elif platform == Platform.TEAMS:
-                # Teams passcode validation (alphanumeric, reasonable length)
-                if not re.match(r'^[A-Za-z0-9]{8,20}$', v):
-                    raise ValueError("Teams passcode must be 8-20 alphanumeric characters")
+                # Teams passcode validation (alphanumeric, 4-20 chars to support short personal passcodes)
+                if not re.match(r'^[A-Za-z0-9]{4,20}$', v):
+                    raise ValueError("Teams passcode must be 4-20 alphanumeric characters")
         return v
 
     @field_validator('zoom_obf_token')
@@ -449,18 +469,22 @@ class MeetingCreate(BaseModel):
         native_id = v.strip()
         
         if platform == Platform.GOOGLE_MEET:
-            # Google Meet format: abc-defg-hij
-            if not re.fullmatch(r"^[a-z]{3}-[a-z]{4}-[a-z]{3}$", native_id):
-                raise ValueError("Google Meet ID must be in format 'abc-defg-hij' (lowercase letters only)")
-        
+            # Google Meet format: standard abc-defg-hij OR custom Workspace nickname (5-40 alphanumeric/hyphen)
+            if not re.fullmatch(r"^[a-z]{3}-[a-z]{4}-[a-z]{3}$", native_id) and \
+               not re.fullmatch(r"^[a-z0-9][a-z0-9-]{3,38}[a-z0-9]$", native_id):
+                raise ValueError("Google Meet ID must be in format 'abc-defg-hij' or a custom nickname (5-40 lowercase alphanumeric/hyphen chars)")
+
         elif platform == Platform.TEAMS:
-            # Teams format: numeric ID only (10-15 digits)
-            if not re.fullmatch(r"^\d{10,15}$", native_id):
-                raise ValueError("Teams meeting ID must be 10-15 digits only (not a full URL)")
-            
-            # Explicitly reject full URLs
-            if native_id.startswith(('http://', 'https://', 'teams.microsoft.com', 'teams.live.com')):
-                raise ValueError("Teams meeting ID must be the numeric ID only (e.g., '9399697580372'), not a full URL")
+            # Reject full URLs up front
+            if native_id.startswith(('http://', 'https://', 'teams.')):
+                raise ValueError("Teams meeting ID must be the numeric ID or hash, not a full URL")
+            # Accept numeric ID (10-15 digits) or 16-char hex hash (for legacy /l/meetup-join/ URLs)
+            if not re.fullmatch(r"^\d{10,15}$", native_id) and \
+               not re.fullmatch(r"^[0-9a-f]{16}$", native_id):
+                raise ValueError(
+                    "Teams native_meeting_id must be a 10-15 digit numeric ID "
+                    "or a 16-character hex hash (for legacy /l/meetup-join/ URLs)"
+                )
         
         return v
 
