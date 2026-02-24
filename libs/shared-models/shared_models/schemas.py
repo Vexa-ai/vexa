@@ -181,7 +181,9 @@ class Platform(str, Enum):
     GOOGLE_MEET = "google_meet"
     ZOOM = "zoom"
     TEAMS = "teams"
-    
+    YOUTUBE = "youtube"
+    MANUAL = "manual"
+
     @property
     def bot_name(self) -> str:
         """
@@ -191,19 +193,21 @@ class Platform(str, Enum):
         mapping = {
             Platform.GOOGLE_MEET: "google_meet",
             Platform.ZOOM: "zoom",
-            Platform.TEAMS: "teams"
+            Platform.TEAMS: "teams",
+            Platform.YOUTUBE: "youtube",
+            Platform.MANUAL: "manual",
         }
         return mapping[self]
-    
+
     @classmethod
     def get_bot_name(cls, platform_str: str) -> str:
         """
         Static method to get the bot platform name from a string.
         This is useful when you have a platform string but not a Platform instance.
-        
+
         Args:
             platform_str: The platform identifier string (e.g., 'google_meet')
-            
+
         Returns:
             The platform name used by the bot (e.g., 'google')
         """
@@ -223,7 +227,9 @@ class Platform(str, Enum):
         reverse_mapping = {
             "google_meet": Platform.GOOGLE_MEET.value,
             "zoom": Platform.ZOOM.value,
-            "teams": Platform.TEAMS.value
+            "teams": Platform.TEAMS.value,
+            "youtube": Platform.YOUTUBE.value,
+            "manual": Platform.MANUAL.value,
         }
         return reverse_mapping.get(bot_platform_name)
 
@@ -247,7 +253,17 @@ class Platform(str, Enum):
         """
         try:
             platform = Platform(platform_str)
-            if platform == Platform.GOOGLE_MEET:
+            if platform == Platform.YOUTUBE:
+                # YouTube video ID: 11 chars, alphanumeric + hyphen + underscore
+                if re.fullmatch(r"^[A-Za-z0-9_-]{11}$", native_id):
+                    return f"https://www.youtube.com/watch?v={native_id}"
+                return None
+            elif platform == Platform.MANUAL:
+                # Manual/custom source — use native_id as-is (any non-empty string is valid)
+                if native_id:
+                    return f"manual://{native_id}"
+                return None
+            elif platform == Platform.GOOGLE_MEET:
                 # Accept standard abc-defg-hij format and custom Workspace nicknames
                 if re.fullmatch(r"^[a-z]{3}-[a-z]{4}-[a-z]{3}$", native_id) or \
                    re.fullmatch(r"^[a-z0-9][a-z0-9-]{3,38}[a-z0-9]$", native_id):

@@ -25,6 +25,7 @@ from shared_models.schemas import (
     MeetingCreate,
     MeetingStatus,
 )
+import uuid as uuid_lib
 
 from config import IMMUTABILITY_THRESHOLD
 from filters import TranscriptionFilter
@@ -775,3 +776,160 @@ async def delete_meeting(
             "meeting data anonymized"
         )
     }
+
+
+# ---------------------------------------------------------------------------
+# External Meeting Import (YouTube / manual) — hackathon feature
+# ---------------------------------------------------------------------------
+
+class ExternalMeetingCreate(BaseModel):
+    """Create a meeting from an external source without launching a bot."""
+    title: Optional[str] = None
+    platform: str = "youtube"  # "youtube" or "manual"
+    native_meeting_id: str  # YouTube video ID (11 chars) or arbitrary ID for manual
+    source_url: Optional[str] = None  # Original YouTube URL for reference
+
+
+class TranscriptSegmentInput(BaseModel):
+    """A single transcript segment for bulk upload."""
+    text: str
+    start: float  # seconds from beginning
+    end: float
+    speaker: Optional[str] = None
+    language: Optional[str] = None
+
+
+class TranscriptUpload(BaseModel):
+    segments: List[TranscriptSegmentInput]
+
+
+class ExternalMeetingResponse(BaseModel):
+    id: int
+    platform: str
+    native_meeting_id: Optional[str]
+    status: str
+    session_uid: str
+
+    class Config:
+        from_attributes = True
+
+
+@router.post("/meetings/external",
+             summary="Create a meeting from an external source (YouTube/manual)",
+             dependencies=[Depends(get_current_user)])
+async def create_external_meeting(
+    body: ExternalMeetingCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Creates a meeting record without launching a bot. Sets status=completed immediately.
+    Also creates a MeetingSession so that uploaded transcript segments get absolute timestamps.
+    """
+    # Validate platform
+    try:
+        plat = Platform(body.platform)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Unsupported platform '{body.platform}'. Use 'youtube' or 'manual'.")
+
+    native_id = body.native_meeting_id.strip()
+    if not native_id:
+        raise HTTPException(status_code=422, detail="native_meeting_id cannot be empty")
+
+    # Build meeting data
+    meeting_data: Dict[str, Any] = {"source": body.platform}
+    if body.title:
+        meeting_data["name"] = body.title
+    if body.source_url:
+        meeting_data["source_url"] = body.source_url
+
+    now = datetime.utcnow()
+
+    new_meeting = Meeting(
+        user_id=current_user.id,
+        platform=plat.value,
+        platform_specific_id=native_id,
+        status=MeetingStatus.COMPLETED.value,
+        start_time=now,
+        end_time=now,
+        data=meeting_data,
+    )
+    db.add(new_meeting)
+    await db.flush()  # get new_meeting.id without committing yet
+
+    # Create a session so transcript segments have a time anchor
+    session_uid = f"{plat.value}_{native_id}_{new_meeting.id}"
+    new_session = MeetingSession(
+        meeting_id=new_meeting.id,
+        session_uid=session_uid,
+        session_start_time=now,
+    )
+    db.add(new_session)
+    await db.commit()
+    await db.refresh(new_meeting)
+
+    logger.info(f"[API] Created external meeting {new_meeting.id} for user {current_user.id}: {plat.value}/{native_id}")
+
+    return {
+        "id": new_meeting.id,
+        "platform": new_meeting.platform,
+        "native_meeting_id": new_meeting.platform_specific_id,
+        "status": new_meeting.status,
+        "session_uid": session_uid,
+    }
+
+
+@router.post("/meetings/{meeting_id}/transcript",
+             summary="Upload transcript segments for a meeting",
+             dependencies=[Depends(get_current_user)])
+async def upload_transcript(
+    meeting_id: int,
+    body: TranscriptUpload,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Bulk-uploads transcript segments for a meeting (e.g., from YouTube captions).
+    Segments are stored in the Transcription table with session_uid so they appear
+    in GET /transcripts/{platform}/{native_meeting_id}.
+    """
+    # Verify meeting belongs to user
+    meeting = await db.get(Meeting, meeting_id)
+    if not meeting or meeting.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
+
+    # Get the session for this meeting (use first session, typically the one we created)
+    stmt_sess = select(MeetingSession).where(MeetingSession.meeting_id == meeting_id).limit(1)
+    result_sess = await db.execute(stmt_sess)
+    session = result_sess.scalars().first()
+
+    if not session:
+        raise HTTPException(
+            status_code=409,
+            detail=f"No session found for meeting {meeting_id}. Create the meeting via POST /meetings/external first."
+        )
+
+    session_uid = session.session_uid
+
+    # Delete existing transcripts for this meeting to allow re-upload
+    from sqlalchemy import delete as sql_delete
+    await db.execute(sql_delete(Transcription).where(Transcription.meeting_id == meeting_id))
+
+    # Insert new segments
+    for seg in body.segments:
+        t = Transcription(
+            meeting_id=meeting_id,
+            start_time=seg.start,
+            end_time=seg.end,
+            text=seg.text,
+            speaker=seg.speaker,
+            language=seg.language,
+            session_uid=session_uid,
+        )
+        db.add(t)
+
+    await db.commit()
+
+    logger.info(f"[API] Uploaded {len(body.segments)} transcript segments for meeting {meeting_id} (user {current_user.id})")
+
+    return {"meeting_id": meeting_id, "segments_uploaded": len(body.segments)}

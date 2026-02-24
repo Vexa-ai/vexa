@@ -493,6 +493,29 @@ async def get_meetings_proxy(request: Request):
     url = f"{TRANSCRIPTION_COLLECTOR_URL}/meetings"
     return await forward_request(app.state.http_client, "GET", url, request)
 
+@app.post("/meetings/external",
+         tags=["Transcriptions"],
+         summary="Create a meeting from an external source (YouTube/manual)",
+         description="Creates a meeting record without launching a bot. Useful for importing YouTube transcripts. Returns meeting ID and session_uid needed for transcript upload.",
+         status_code=status.HTTP_201_CREATED,
+         dependencies=[Depends(api_key_scheme)])
+async def create_external_meeting_proxy(request: Request):
+    """Forward to Transcription Collector to create an external meeting."""
+    url = f"{TRANSCRIPTION_COLLECTOR_URL}/meetings/external"
+    return await forward_request(app.state.http_client, "POST", url, request)
+
+
+@app.post("/meetings/{meeting_id}/transcript",
+         tags=["Transcriptions"],
+         summary="Upload transcript segments for a meeting",
+         description="Bulk-uploads transcript segments (e.g., from YouTube captions) for a meeting created via POST /meetings/external.",
+         dependencies=[Depends(api_key_scheme)])
+async def upload_transcript_proxy(meeting_id: int, request: Request):
+    """Forward to Transcription Collector to upload transcript segments."""
+    url = f"{TRANSCRIPTION_COLLECTOR_URL}/meetings/{meeting_id}/transcript"
+    return await forward_request(app.state.http_client, "POST", url, request)
+
+
 @app.get("/transcripts/{platform}/{native_meeting_id}",
         tags=["Transcriptions"],
         summary="Get transcript for a specific meeting",
