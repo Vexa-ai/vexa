@@ -236,73 +236,109 @@ async def shutdown():
 # --- Redis Listener: Bot Failures ---
 
 async def listen_for_failures():
-    """Listen for Vexa bot failure events on Redis and trigger Recall backup."""
-    # Use a separate connection for pubsub (decode_responses=True for JSON parsing)
-    r = redis.from_url(REDIS_URL, decode_responses=True)
-    pubsub = r.pubsub()
-    await pubsub.subscribe("vexa:bot:failure")
+    """Listen for Vexa bot failure events on Redis and trigger Recall backup.
 
-    logger.info("Listening for bot failure events on vexa:bot:failure")
-
-    async for message in pubsub.listen():
-        if message["type"] != "message":
-            continue
-
+    Uses get_message() polling instead of async-for to avoid the
+    ``aclose(): asynchronous generator is already running`` bug in
+    redis.asyncio pubsub.  Reconnects on any Redis error.
+    """
+    while True:
+        r = None
+        pubsub = None
         try:
-            data = json.loads(message["data"])
-            meeting_key = data.get("meeting_key")
-            meeting_url = data.get("meeting_url")
-            failure_reason = data.get("reason")
+            r = redis.from_url(REDIS_URL, decode_responses=True)
+            pubsub = r.pubsub()
+            await pubsub.subscribe("vexa:bot:failure")
+            logger.info("Subscribed to vexa:bot:failure")
 
-            logger.info(f"Bot failure detected: {meeting_key} reason={failure_reason}")
-
-            if not recall_client or not meeting_url:
-                continue
-
-            # Don't double-backup
-            if meeting_key in active_sessions:
-                logger.info(f"Recall backup already active for {meeting_key}")
-                continue
-
-            # Create Recall bot as fallback
-            callback_url = f"{CALLBACK_BASE_URL}/recall/events/{meeting_key}"
-            bot = await recall_client.create_bot(
-                meeting_url=meeting_url,
-                callback_url=callback_url,
-            )
-
-            # Create session with all enriched fields from bot-manager
-            session = RecallSession(
-                meeting_key=meeting_key,
-                meeting_url=meeting_url,
-                meeting_id=data.get("meeting_id", 0),
-                user_id=data.get("user_id", 0),
-                platform=data.get("platform", ""),
-                native_meeting_id=data.get("native_meeting_id", ""),
-                session_uid=data.get("session_uid", ""),
-                token=data.get("token", ""),
-                recall_bot_id=bot["id"],
-            )
-
-            # Start WebSocket bridge to WhisperLive
-            session._ws_task = asyncio.create_task(ws_bridge(session))
-            active_sessions[meeting_key] = session
-
-            logger.info(f"Recall backup bot created: {bot['id']} for {meeting_key}")
-
-            # Notify bot-manager that backup is active
-            if redis_pool:
-                await redis_pool.publish(
-                    "vexa:bot:backup_active",
-                    json.dumps({
-                        "meeting_key": meeting_key,
-                        "recall_bot_id": bot["id"],
-                        "user_id": session.user_id,
-                    }),
+            while True:
+                message = await pubsub.get_message(
+                    ignore_subscribe_messages=True, timeout=1.0
                 )
+                if message is None:
+                    await asyncio.sleep(0.1)
+                    continue
 
+                await _handle_failure_message(message)
+
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.error(f"Error handling bot failure: {e}", exc_info=True)
+            logger.error(f"Failure listener error: {e}", exc_info=True)
+        finally:
+            if pubsub:
+                try:
+                    await pubsub.unsubscribe("vexa:bot:failure")
+                    await pubsub.aclose()
+                except Exception:
+                    pass
+            if r:
+                try:
+                    await r.aclose()
+                except Exception:
+                    pass
+
+        logger.info("Failure listener reconnecting in 3s...")
+        await asyncio.sleep(3)
+
+
+async def _handle_failure_message(message: dict):
+    """Process a single failure event from Redis pubsub."""
+    try:
+        data = json.loads(message["data"])
+        meeting_key = data.get("meeting_key")
+        meeting_url = data.get("meeting_url")
+        failure_reason = data.get("reason")
+
+        logger.info(f"Bot failure detected: {meeting_key} reason={failure_reason}")
+
+        if not recall_client or not meeting_url:
+            return
+
+        # Don't double-backup
+        if meeting_key in active_sessions:
+            logger.info(f"Recall backup already active for {meeting_key}")
+            return
+
+        # Create Recall bot as fallback
+        callback_url = f"{CALLBACK_BASE_URL}/recall/events/{meeting_key}"
+        bot = await recall_client.create_bot(
+            meeting_url=meeting_url,
+            callback_url=callback_url,
+        )
+
+        # Create session with all enriched fields from bot-manager
+        session = RecallSession(
+            meeting_key=meeting_key,
+            meeting_url=meeting_url,
+            meeting_id=data.get("meeting_id", 0),
+            user_id=data.get("user_id", 0),
+            platform=data.get("platform", ""),
+            native_meeting_id=data.get("native_meeting_id", ""),
+            session_uid=data.get("session_uid", ""),
+            token=data.get("token", ""),
+            recall_bot_id=bot["id"],
+        )
+
+        # Start WebSocket bridge to WhisperLive
+        session._ws_task = asyncio.create_task(ws_bridge(session))
+        active_sessions[meeting_key] = session
+
+        logger.info(f"Recall backup bot created: {bot['id']} for {meeting_key}")
+
+        # Notify bot-manager that backup is active
+        if redis_pool:
+            await redis_pool.publish(
+                "vexa:bot:backup_active",
+                json.dumps({
+                    "meeting_key": meeting_key,
+                    "recall_bot_id": bot["id"],
+                    "user_id": session.user_id,
+                }),
+            )
+
+    except Exception as e:
+        logger.error(f"Error handling bot failure: {e}", exc_info=True)
 
 
 # --- Session Cleanup ---
