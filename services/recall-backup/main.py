@@ -95,6 +95,7 @@ class RecallClient:
                 "transcript": {
                     "provider": {"meeting_captions": {}},
                 },
+                "audio_mixed_raw": {},
                 "realtime_endpoints": [
                     {
                         "type": "websocket",
