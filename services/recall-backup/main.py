@@ -396,11 +396,19 @@ async def recall_ws_endpoint(ws: WebSocket, meeting_key: str):
 
             if event_type == "audio_mixed_raw.data":
                 # Extract base64 audio buffer and push to queue
-                b64_audio = event.get("data", {}).get("data", "")
-                if not b64_audio:
-                    # Try alternate field name
-                    b64_audio = event.get("data", {}).get("buffer", "")
-                if b64_audio:
+                audio_data = event.get("data", {})
+                # Log first audio event to understand structure
+                if not hasattr(session, '_audio_logged'):
+                    logger.info(f"[{meeting_key}] First audio event structure: {json.dumps(audio_data)[:500]}")
+                    session._audio_logged = True
+                # audio_data may be nested: {"data": {"buffer": "..."}} or {"buffer": "..."}
+                if isinstance(audio_data, dict):
+                    b64_audio = audio_data.get("buffer", "") or audio_data.get("data", "")
+                    if isinstance(b64_audio, dict):
+                        b64_audio = b64_audio.get("buffer", "") or b64_audio.get("data", "")
+                else:
+                    b64_audio = audio_data
+                if b64_audio and isinstance(b64_audio, str):
                     try:
                         raw_bytes = base64.b64decode(b64_audio)
                         await session.audio_queue.put(raw_bytes)
