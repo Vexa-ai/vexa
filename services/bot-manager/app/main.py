@@ -18,7 +18,7 @@ import uuid as uuid_lib
 # from app.database.service import TranscriptionService # Not used here
 # from app.tasks.monitoring import celery_app # Not used here
 
-from .config import BOT_IMAGE_NAME, REDIS_URL
+from .config import BOT_IMAGE_NAME, REDIS_URL, RECALL_BACKUP_ENABLED
 from app.orchestrators import (
     get_socket_session, close_docker_client, start_bot_container,
     stop_bot_container, _record_session_start, get_running_bots_status,
@@ -1235,7 +1235,46 @@ async def bot_exit_callback(
                 # Store in data field for debugging and analysis
                 meeting.data["last_error"] = error_data
                 logger.info(f"Bot exit callback: Stored error details in meeting {meeting_id} data: {error_data}")
-        
+
+            # --- Recall backup: publish failure event so recall-backup service can create a fallback bot ---
+            if RECALL_BACKUP_ENABLED and redis_client:
+                try:
+                    # Reconstruct meeting URL from platform + native_id + optional passcode
+                    passcode = (meeting.data or {}).get("passcode")
+                    meeting_url = Platform.construct_meeting_url(
+                        meeting.platform, meeting.platform_specific_id, passcode
+                    )
+                    if meeting_url:
+                        backup_session_uid = str(uuid_lib.uuid4())
+                        backup_token = mint_meeting_token(
+                            meeting_id=meeting.id,
+                            user_id=meeting.user_id,
+                            platform=meeting.platform,
+                            native_meeting_id=meeting.platform_specific_id,
+                            ttl_seconds=7200,
+                        )
+                        # Record a MeetingSession for the backup so transcripts land correctly
+                        await _record_session_start(meeting.id, backup_session_uid)
+
+                        failure_payload = {
+                            "meeting_key": f"{meeting.platform}:{meeting.platform_specific_id}",
+                            "meeting_url": meeting_url,
+                            "meeting_id": meeting.id,
+                            "user_id": meeting.user_id,
+                            "platform": meeting.platform,
+                            "native_meeting_id": meeting.platform_specific_id,
+                            "session_uid": backup_session_uid,
+                            "token": backup_token,
+                            "reason": payload.reason,
+                            "failure_stage": provided_stage.value if provided_stage else None,
+                        }
+                        await redis_client.publish("vexa:bot:failure", json.dumps(failure_payload))
+                        logger.info(f"Bot exit callback: Published recall backup event for meeting {meeting.id}, session_uid={backup_session_uid}")
+                    else:
+                        logger.warning(f"Bot exit callback: Cannot construct meeting URL for recall backup (platform={meeting.platform}, id={meeting.platform_specific_id})")
+                except Exception as recall_err:
+                    logger.error(f"Bot exit callback: Failed to publish recall backup event: {recall_err}", exc_info=True)
+
         meeting.end_time = datetime.utcnow()
         await db.commit()
         await db.refresh(meeting)

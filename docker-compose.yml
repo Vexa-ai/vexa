@@ -89,6 +89,8 @@ services:
       - LOCAL_STORAGE_FSYNC=${LOCAL_STORAGE_FSYNC:-true}
       - RECORDING_ENABLED=${RECORDING_ENABLED:-false}
       - CAPTURE_MODES=${CAPTURE_MODES:-audio}
+      # Recall backup fallback
+      - RECALL_BACKUP_ENABLED=${RECALL_BACKUP_ENABLED:-false}
       # Voice agent / TTS
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     volumes:
@@ -375,6 +377,28 @@ services:
       - TTS_API_TOKEN=${TTS_API_TOKEN:-}
       - LOG_LEVEL=DEBUG
     init: true
+    networks:
+      - vexa_default
+    restart: unless-stopped
+
+  recall-backup:
+    build:
+      context: .
+      dockerfile: services/recall-backup/Dockerfile
+    ports:
+      - "${RECALL_BACKUP_HOST_PORT:-8090}:8090"
+    environment:
+      - RECALL_API_KEY=${RECALL_API_KEY:-}
+      - RECALL_BASE_URL=${RECALL_BASE_URL:-https://us-west-2.recall.ai/api/v1}
+      - RECALL_BOT_NAME=${RECALL_BOT_NAME:-Meeting Assistant}
+      - REDIS_URL=redis://redis:6379/0
+      - WHISPERLIVE_URL=ws://whisperlive-remote:9090/ws
+      - CALLBACK_BASE_URL=${RECALL_CALLBACK_BASE_URL:-http://recall-backup:8090}
+      - LOG_LEVEL=DEBUG
+    init: true
+    depends_on:
+      redis:
+        condition: service_started
     networks:
       - vexa_default
     restart: unless-stopped

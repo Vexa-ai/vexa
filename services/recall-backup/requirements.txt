@@ -2,3 +2,5 @@ fastapi>=0.104.0
 uvicorn>=0.24.0
 httpx>=0.25.0
 redis[hiredis]>=5.0.0
+numpy>=1.24.0
+websockets>=12.0
