@@ -2,13 +2,14 @@
 Recall Backup Service
 
 Listens for Vexa bot failures and automatically creates Recall.ai bots as fallback.
-Receives real-time audio from Recall via webhook, pipes to WhisperLive for transcription.
+Recall bot connects to our WebSocket endpoint and streams audio_mixed_raw events.
+We bridge audio (S16LE → Float32) to WhisperLive for transcription.
 
 Flow:
 1. Bot Manager detects Vexa bot failure → publishes to Redis channel `vexa:bot:failure`
-2. This service picks up the event, creates Recall bot via API
-3. Recall bot joins meeting, sends audio_mixed_raw via webhook to our endpoint
-4. We decode base64 S16LE → Float32 and forward to WhisperLive via WebSocket
+2. This service picks up the event, creates Recall bot with WS endpoint pointing at us
+3. Recall bot joins meeting → opens WebSocket to our /recall/ws/{meeting_key}
+4. We receive audio_mixed_raw.data frames, convert S16LE → Float32, forward to WhisperLive
 5. WhisperLive produces transcriptions through the normal Redis pipeline
 6. The customer sees no difference — same transcript format.
 """
@@ -25,9 +26,10 @@ import httpx
 import numpy as np
 import redis.asyncio as redis
 import websockets
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.DEBUG)
 
 app = FastAPI(title="Recall Backup Service")
 
@@ -56,10 +58,10 @@ class RecallSession:
     session_uid: str
     token: str  # JWT for WhisperLive
     recall_bot_id: str
-    ws: Optional[websockets.WebSocketClientProtocol] = field(default=None, repr=False)
-    ws_ready: bool = False
+    wl_ws: Optional[websockets.WebSocketClientProtocol] = field(default=None, repr=False)
+    wl_ready: bool = False
     audio_queue: asyncio.Queue = field(default_factory=asyncio.Queue)
-    _ws_task: Optional[asyncio.Task] = field(default=None, repr=False)
+    _wl_task: Optional[asyncio.Task] = field(default=None, repr=False)
 
 
 active_sessions: dict[str, RecallSession] = {}  # meeting_key → RecallSession
@@ -82,10 +84,10 @@ class RecallClient:
     async def create_bot(
         self,
         meeting_url: str,
+        ws_url: str,
         bot_name: str = RECALL_BOT_NAME,
-        callback_url: Optional[str] = None,
     ) -> dict:
-        """Create a Recall bot that streams raw audio back to us."""
+        """Create a Recall bot that streams raw audio to our WebSocket endpoint."""
         body = {
             "meeting_url": meeting_url,
             "bot_name": bot_name,
@@ -93,21 +95,19 @@ class RecallClient:
                 "transcript": {
                     "provider": {"meeting_captions": {}},
                 },
-                "realtime_endpoints": [],
-                "participant_events": {},
+                "realtime_endpoints": [
+                    {
+                        "type": "websocket",
+                        "url": ws_url,
+                        "events": [
+                            "audio_mixed_raw.data",
+                            "participant_events.join",
+                            "participant_events.leave",
+                        ],
+                    }
+                ],
             },
         }
-
-        if callback_url:
-            body["recording_config"]["realtime_endpoints"].append({
-                "type": "webhook",
-                "url": callback_url,
-                "events": [
-                    "audio_mixed_raw.data",
-                    "participant_events.join",
-                    "participant_events.leave",
-                ],
-            })
 
         resp = await self.client.post("/bot/", json=body)
         if resp.status_code >= 400:
@@ -133,9 +133,9 @@ recall_client: Optional[RecallClient] = None
 redis_pool: Optional[redis.Redis] = None
 
 
-# --- WebSocket Bridge to WhisperLive ---
+# --- WhisperLive Bridge (outbound WS) ---
 
-async def ws_bridge(session: RecallSession):
+async def whisperlive_bridge(session: RecallSession):
     """
     Maintain a WebSocket connection to WhisperLive and forward audio from the queue.
 
@@ -148,8 +148,8 @@ async def ws_bridge(session: RecallSession):
     while True:
         try:
             async with websockets.connect(WHISPERLIVE_URL) as ws:
-                session.ws = ws
-                session.ws_ready = False
+                session.wl_ws = ws
+                session.wl_ready = False
                 backoff = 1.0  # reset on successful connect
 
                 # Send initial handshake config
@@ -164,20 +164,20 @@ async def ws_bridge(session: RecallSession):
                     "use_vad": True,
                 }
                 await ws.send(json.dumps(config))
-                logger.info(f"[{session.meeting_key}] WS bridge: sent config to WhisperLive")
+                logger.info(f"[{session.meeting_key}] WL bridge: sent config to WhisperLive")
 
                 # Wait for SERVER_READY
                 try:
                     resp_raw = await asyncio.wait_for(ws.recv(), timeout=15.0)
                     resp = json.loads(resp_raw)
                     if resp.get("status") == "SERVER_READY":
-                        session.ws_ready = True
-                        logger.info(f"[{session.meeting_key}] WS bridge: WhisperLive ready")
+                        session.wl_ready = True
+                        logger.info(f"[{session.meeting_key}] WL bridge: WhisperLive ready")
                     else:
-                        logger.warning(f"[{session.meeting_key}] WS bridge: unexpected response: {resp}")
+                        logger.warning(f"[{session.meeting_key}] WL bridge: unexpected response: {resp}")
                         continue  # reconnect
                 except asyncio.TimeoutError:
-                    logger.warning(f"[{session.meeting_key}] WS bridge: timeout waiting for SERVER_READY")
+                    logger.warning(f"[{session.meeting_key}] WL bridge: timeout waiting for SERVER_READY")
                     continue  # reconnect
 
                 # Consume audio queue and forward to WhisperLive
@@ -186,7 +186,7 @@ async def ws_bridge(session: RecallSession):
 
                     # Sentinel: None means session ended
                     if audio_bytes is None:
-                        logger.info(f"[{session.meeting_key}] WS bridge: received stop sentinel")
+                        logger.info(f"[{session.meeting_key}] WL bridge: received stop sentinel")
                         return
 
                     # Convert S16LE → Float32 and send as binary frame
@@ -195,12 +195,12 @@ async def ws_bridge(session: RecallSession):
                     await ws.send(pcm_float32)
 
         except websockets.ConnectionClosed as e:
-            logger.warning(f"[{session.meeting_key}] WS bridge: connection closed ({e}), reconnecting in {backoff}s")
+            logger.warning(f"[{session.meeting_key}] WL bridge: connection closed ({e}), reconnecting in {backoff}s")
         except Exception as e:
-            logger.error(f"[{session.meeting_key}] WS bridge: error ({e}), reconnecting in {backoff}s", exc_info=True)
+            logger.error(f"[{session.meeting_key}] WL bridge: error ({e}), reconnecting in {backoff}s", exc_info=True)
 
-        session.ws = None
-        session.ws_ready = False
+        session.wl_ws = None
+        session.wl_ready = False
         await asyncio.sleep(backoff)
         backoff = min(backoff * 2, max_backoff)
 
@@ -302,11 +302,15 @@ async def _handle_failure_message(message: dict):
             logger.info(f"Recall backup already active for {meeting_key}")
             return
 
-        # Create Recall bot as fallback
-        callback_url = f"{CALLBACK_BASE_URL}/recall/events/{meeting_key}"
+        # Build WebSocket URL for Recall to connect to us
+        # CALLBACK_BASE_URL is http(s)://... — convert to ws(s)://...
+        ws_base = CALLBACK_BASE_URL.replace("https://", "wss://").replace("http://", "ws://")
+        ws_url = f"{ws_base}/recall/ws/{meeting_key}"
+
+        # Create Recall bot with our WS endpoint
         bot = await recall_client.create_bot(
             meeting_url=meeting_url,
-            callback_url=callback_url,
+            ws_url=ws_url,
         )
 
         # Create session with all enriched fields from bot-manager
@@ -322,11 +326,11 @@ async def _handle_failure_message(message: dict):
             recall_bot_id=bot["id"],
         )
 
-        # Start WebSocket bridge to WhisperLive
-        session._ws_task = asyncio.create_task(ws_bridge(session))
+        # Start WhisperLive bridge (outbound WS)
+        session._wl_task = asyncio.create_task(whisperlive_bridge(session))
         active_sessions[meeting_key] = session
 
-        logger.info(f"Recall backup bot created: {bot['id']} for {meeting_key}")
+        logger.info(f"Recall backup bot created: {bot['id']} for {meeting_key}, ws_url={ws_url}")
 
         # Notify bot-manager that backup is active
         if redis_pool:
@@ -347,14 +351,14 @@ async def _handle_failure_message(message: dict):
 
 async def cleanup_session(session: RecallSession):
     """Clean up a Recall backup session."""
-    # Push sentinel to stop the WS bridge
+    # Push sentinel to stop the WL bridge
     await session.audio_queue.put(None)
 
-    # Cancel WS bridge task
-    if session._ws_task and not session._ws_task.done():
-        session._ws_task.cancel()
+    # Cancel WL bridge task
+    if session._wl_task and not session._wl_task.done():
+        session._wl_task.cancel()
         try:
-            await session._ws_task
+            await session._wl_task
         except asyncio.CancelledError:
             pass
 
@@ -363,50 +367,56 @@ async def cleanup_session(session: RecallSession):
     logger.info(f"Cleaned up session for {session.meeting_key}")
 
 
-# --- Webhook Receiver: Recall Real-Time Events ---
+# --- Inbound WebSocket: Recall sends audio/events to us ---
 
-@app.post("/recall/events/{meeting_key}")
-async def receive_recall_events(meeting_key: str, request: Request):
+@app.websocket("/recall/ws/{meeting_key}")
+async def recall_ws_endpoint(ws: WebSocket, meeting_key: str):
     """
-    Receive real-time events from Recall bot.
+    WebSocket endpoint that Recall.ai connects to.
 
-    audio_mixed_raw.data: decode base64 → push raw S16LE bytes to audio_queue
-    participant_events.*: forward to speaker_events_relative Redis stream
+    Recall sends JSON frames with event types:
+    - audio_mixed_raw.data: base64-encoded 16kHz mono S16LE PCM
+    - participant_events.*: join/leave notifications
     """
-    event = await request.json()
-    event_type = event.get("event", "")
+    await ws.accept()
+    logger.info(f"[{meeting_key}] Recall WS connected")
 
     session = active_sessions.get(meeting_key)
     if not session:
-        logger.warning(f"Received event for unknown meeting_key: {meeting_key}")
-        return {"status": "ignored"}
-
-    if event_type == "audio_mixed_raw.data":
-        await handle_audio_event(session, event.get("data", {}))
-
-    elif event_type.startswith("participant_events."):
-        await forward_participant_event(session, event_type, event.get("data", {}))
-
-    elif event_type == "bot.status_change":
-        bot_status = event.get("data", {}).get("status", {}).get("code", "")
-        if bot_status in ("done", "fatal"):
-            logger.info(f"[{meeting_key}] Recall bot ended with status: {bot_status}")
-            await cleanup_session(session)
-
-    return {"status": "ok"}
-
-
-async def handle_audio_event(session: RecallSession, audio_data: dict):
-    """Decode base64 audio and push raw S16LE bytes to the session's audio queue."""
-    b64_audio = audio_data.get("data", "")
-    if not b64_audio:
+        logger.warning(f"[{meeting_key}] Recall WS: no active session, closing")
+        await ws.close(code=4000, reason="No active session")
         return
 
     try:
-        raw_bytes = base64.b64decode(b64_audio)
-        await session.audio_queue.put(raw_bytes)
+        while True:
+            raw = await ws.receive_text()
+            event = json.loads(raw)
+            event_type = event.get("event", "")
+
+            if event_type == "audio_mixed_raw.data":
+                # Extract base64 audio buffer and push to queue
+                b64_audio = event.get("data", {}).get("data", "")
+                if not b64_audio:
+                    # Try alternate field name
+                    b64_audio = event.get("data", {}).get("buffer", "")
+                if b64_audio:
+                    try:
+                        raw_bytes = base64.b64decode(b64_audio)
+                        await session.audio_queue.put(raw_bytes)
+                    except Exception as e:
+                        logger.error(f"[{meeting_key}] Error decoding audio: {e}")
+
+            elif event_type.startswith("participant_events."):
+                await forward_participant_event(session, event_type, event.get("data", {}))
+
+    except WebSocketDisconnect:
+        logger.info(f"[{meeting_key}] Recall WS disconnected")
     except Exception as e:
-        logger.error(f"[{session.meeting_key}] Error decoding audio: {e}")
+        logger.error(f"[{meeting_key}] Recall WS error: {e}", exc_info=True)
+    finally:
+        # Recall disconnected — clean up session
+        logger.info(f"[{meeting_key}] Recall WS ended, cleaning up session")
+        await cleanup_session(session)
 
 
 async def forward_participant_event(
@@ -458,7 +468,7 @@ async def list_backup_bots():
                 "meeting_id": s.meeting_id,
                 "user_id": s.user_id,
                 "platform": s.platform,
-                "ws_ready": s.ws_ready,
+                "wl_ready": s.wl_ready,
                 "queue_size": s.audio_queue.qsize(),
             }
             for key, s in active_sessions.items()
