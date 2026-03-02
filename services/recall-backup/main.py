@@ -110,6 +110,8 @@ class RecallClient:
             })
 
         resp = await self.client.post("/bot/", json=body)
+        if resp.status_code >= 400:
+            logger.error(f"Recall API error {resp.status_code}: {resp.text}")
         resp.raise_for_status()
         return resp.json()
 
