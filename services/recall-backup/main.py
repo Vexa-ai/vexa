@@ -148,7 +148,7 @@ async def whisperlive_bridge(session: RecallSession):
 
     while True:
         try:
-            async with websockets.connect(WHISPERLIVE_URL) as ws:
+            async with websockets.connect(WHISPERLIVE_URL, ping_interval=None) as ws:
                 session.wl_ws = ws
                 session.wl_ready = False
                 backoff = 1.0  # reset on successful connect
