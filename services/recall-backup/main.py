@@ -29,7 +29,7 @@ import websockets
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 
 app = FastAPI(title="Recall Backup Service")
 
@@ -395,13 +395,8 @@ async def recall_ws_endpoint(ws: WebSocket, meeting_key: str):
             event_type = event.get("event", "")
 
             if event_type == "audio_mixed_raw.data":
-                # Extract base64 audio buffer and push to queue
+                # Recall sends: {"event": "audio_mixed_raw.data", "data": {"data": {"buffer": "base64..."}}}
                 audio_data = event.get("data", {})
-                # Log first audio event to understand structure
-                if not hasattr(session, '_audio_logged'):
-                    logger.info(f"[{meeting_key}] First audio event structure: {json.dumps(audio_data)[:500]}")
-                    session._audio_logged = True
-                # audio_data may be nested: {"data": {"buffer": "..."}} or {"buffer": "..."}
                 if isinstance(audio_data, dict):
                     b64_audio = audio_data.get("buffer", "") or audio_data.get("data", "")
                     if isinstance(b64_audio, dict):
