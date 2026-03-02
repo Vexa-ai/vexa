@@ -392,7 +392,7 @@ services:
       - RECALL_BASE_URL=${RECALL_BASE_URL:-https://us-west-2.recall.ai/api/v1}
       - RECALL_BOT_NAME=${RECALL_BOT_NAME:-Meeting Assistant}
       - REDIS_URL=redis://redis:6379/0
-      - WHISPERLIVE_URL=ws://whisperlive-remote:9090/ws
+      - WHISPERLIVE_URL=${RECALL_WHISPERLIVE_URL:-ws://whisperlive:9090/ws}
       - CALLBACK_BASE_URL=${RECALL_CALLBACK_BASE_URL:-http://recall-backup:8090}
       - LOG_LEVEL=DEBUG
     init: true
