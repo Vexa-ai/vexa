@@ -27,6 +27,14 @@ export function getUserFriendlyError(error: Error): UserFriendlyError {
     };
   }
 
+  // Subscription required (402)
+  if (error instanceof VexaAPIError && error.status === 402) {
+    return {
+      title: "Subscription required",
+      description: "Subscribe to a plan to continue using Vexa.",
+    };
+  }
+
   // Authentication errors
   if (error instanceof VexaAPIError && error.status === 401) {
     return {

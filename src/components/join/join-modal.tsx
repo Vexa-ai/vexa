@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { vexaAPI } from "@/lib/api";
+import { vexaAPI, VexaAPIError } from "@/lib/api";
 import { useLiveStore } from "@/stores/live-store";
 import { useJoinModalStore } from "@/stores/join-modal-store";
 import { useMeetingsStore } from "@/stores/meetings-store";
@@ -23,6 +23,7 @@ import type { Platform, CreateBotRequest } from "@/types/vexa";
 import { LanguagePicker } from "@/components/language-picker";
 import { cn } from "@/lib/utils";
 import { getUserFriendlyError } from "@/lib/error-messages";
+import { getWebappUrl } from "@/lib/docs/webapp-url";
 import { parseMeetingInput } from "@/lib/parse-meeting-input";
 import { DocsLink } from "@/components/docs/docs-link";
 import { useAuthStore } from "@/stores/auth-store";
@@ -133,6 +134,18 @@ export function JoinModal() {
       router.push(`/meetings/${meeting.id}`);
     } catch (error) {
       console.error("Failed to create bot:", error);
+
+      // Subscription required — redirect to pricing
+      if (error instanceof VexaAPIError && error.status === 402) {
+        toast.error("Subscription required", {
+          description: "Subscribe to a plan to create bots.",
+          action: {
+            label: "View Plans",
+            onClick: () => window.open(`${getWebappUrl()}/pricing`, "_blank"),
+          },
+        });
+        return;
+      }
 
       if (
         shouldTriggerZoomOAuth(error, request.platform) &&

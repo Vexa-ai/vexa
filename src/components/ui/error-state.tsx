@@ -1,10 +1,10 @@
 "use client";
 
-import { AlertCircle, RefreshCw, WifiOff, ServerCrash, FileQuestion } from "lucide-react";
+import { AlertCircle, RefreshCw, WifiOff, ServerCrash, FileQuestion, CreditCard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-type ErrorType = "connection" | "server" | "not-found" | "generic";
+type ErrorType = "connection" | "server" | "not-found" | "subscription" | "generic";
 
 interface ErrorStateProps {
   title?: string;
@@ -12,6 +12,8 @@ interface ErrorStateProps {
   error?: string;
   type?: ErrorType;
   onRetry?: () => void;
+  actionLabel?: string;
+  onAction?: () => void;
   className?: string;
 }
 
@@ -30,6 +32,11 @@ const errorConfig: Record<ErrorType, { icon: typeof AlertCircle; defaultTitle: s
     icon: FileQuestion,
     defaultTitle: "Not Found",
     defaultMessage: "The requested resource could not be found.",
+  },
+  subscription: {
+    icon: CreditCard,
+    defaultTitle: "Subscription Required",
+    defaultMessage: "Subscribe to a plan to continue using Vexa. Your existing meetings and transcripts are preserved.",
   },
   generic: {
     icon: AlertCircle,
@@ -50,6 +57,9 @@ function getErrorType(error?: string): ErrorType {
   if (lowerError.includes("404") || lowerError.includes("not found")) {
     return "not-found";
   }
+  if (lowerError.includes("402") || lowerError.includes("subscription required")) {
+    return "subscription";
+  }
   return "generic";
 }
 
@@ -59,6 +69,8 @@ export function ErrorState({
   error,
   type,
   onRetry,
+  actionLabel,
+  onAction,
   className,
 }: ErrorStateProps) {
   const errorType = type || getErrorType(error);
@@ -99,17 +111,28 @@ export function ErrorState({
           </p>
         )}
 
-        {/* Retry button */}
-        {onRetry && (
-          <Button
-            onClick={onRetry}
-            variant="outline"
-            className="mt-4 border-destructive/30 hover:bg-destructive/10 hover:border-destructive/50 transition-all"
-          >
-            <RefreshCw className="h-4 w-4 mr-2" />
-            Try Again
-          </Button>
-        )}
+        {/* Action buttons */}
+        <div className="flex items-center gap-3 mt-4">
+          {onAction && (
+            <Button
+              onClick={onAction}
+              className="transition-all"
+            >
+              <CreditCard className="h-4 w-4 mr-2" />
+              {actionLabel || "Subscribe"}
+            </Button>
+          )}
+          {onRetry && (
+            <Button
+              onClick={onRetry}
+              variant="outline"
+              className="border-destructive/30 hover:bg-destructive/10 hover:border-destructive/50 transition-all"
+            >
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Try Again
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   );

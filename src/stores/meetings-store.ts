@@ -33,6 +33,7 @@ interface MeetingsState {
 
   // Error states
   error: string | null;
+  subscriptionRequired: boolean;
 
   // Actions
   fetchMeetings: () => Promise<void>;
@@ -74,6 +75,7 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
   isLoadingTranscripts: false,
   isUpdatingMeeting: false,
   error: null,
+  subscriptionRequired: false,
 
   // Fetch all meetings
   fetchMeetings: async () => {
@@ -84,8 +86,17 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
       meetings.sort((a, b) =>
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
       );
-      set({ meetings, isLoadingMeetings: false });
+      set({ meetings, isLoadingMeetings: false, subscriptionRequired: false });
     } catch (error) {
+      if (error instanceof VexaAPIError && error.status === 402) {
+        // Subscription required — keep any cached meetings but flag the state
+        set({
+          subscriptionRequired: true,
+          isLoadingMeetings: false,
+          error: null,
+        });
+        return;
+      }
       set({
         error: (error as Error).message,
         isLoadingMeetings: false
@@ -122,6 +133,10 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
         });
       }
     } catch (error) {
+      if (error instanceof VexaAPIError && error.status === 402) {
+        set({ subscriptionRequired: true, isLoadingMeeting: false, error: null });
+        return;
+      }
       set({
         error: (error as Error).message,
         isLoadingMeeting: false
@@ -171,6 +186,10 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
       }
       set({ isLoadingTranscripts: false });
     } catch (error) {
+      if (error instanceof VexaAPIError && error.status === 402) {
+        set({ subscriptionRequired: true, isLoadingTranscripts: false, error: null });
+        return;
+      }
       set({
         error: (error as Error).message,
         isLoadingTranscripts: false

@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { vexaAPI } from "@/lib/api";
+import { vexaAPI, VexaAPIError } from "@/lib/api";
+import { getWebappUrl } from "@/lib/docs/webapp-url";
 import { useLiveStore } from "@/stores/live-store";
 import { useRuntimeConfig } from "@/hooks/use-runtime-config";
 import type { Platform, CreateBotRequest } from "@/types/vexa";
@@ -110,6 +111,18 @@ export function JoinForm({ onSuccess }: JoinFormProps) {
 
     } catch (error) {
       console.error("Failed to create bot:", error);
+
+      // Subscription required — redirect to pricing
+      if (error instanceof VexaAPIError && error.status === 402) {
+        toast.error("Subscription required", {
+          description: "Subscribe to a plan to create bots.",
+          action: {
+            label: "View Plans",
+            onClick: () => window.open(`${getWebappUrl()}/pricing`, "_blank"),
+          },
+        });
+        return;
+      }
 
       if (
         shouldTriggerZoomOAuth(error, request.platform) &&
