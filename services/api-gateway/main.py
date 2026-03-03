@@ -3,6 +3,7 @@ from fastapi import FastAPI, Request, Response, HTTPException, status, Depends, 
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import APIKeyHeader
+from starlette.middleware.base import BaseHTTPMiddleware
 import httpx
 import os
 from dotenv import load_dotenv
@@ -13,6 +14,9 @@ import asyncio
 import redis.asyncio as aioredis
 from datetime import datetime, timedelta, timezone
 import secrets
+import logging
+
+logger = logging.getLogger("api-gateway")
 
 # Import schemas for documentation
 from shared_models.schemas import (
@@ -37,6 +41,27 @@ MCP_URL = os.getenv("MCP_URL")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")  # Optional override, e.g. https://api.vexa.ai
 TRANSCRIPT_SHARE_TTL_SECONDS = int(os.getenv("TRANSCRIPT_SHARE_TTL_SECONDS", "900"))  # 15 min
 TRANSCRIPT_SHARE_TTL_MAX_SECONDS = int(os.getenv("TRANSCRIPT_SHARE_TTL_MAX_SECONDS", "86400"))  # 24h max
+
+# Billing enforcement: only active in cloud mode
+DEPLOYMENT_MODE = os.getenv("DEPLOYMENT_MODE", "self-hosted")  # "cloud" enables billing checks
+BILLING_CACHE_TTL = int(os.getenv("BILLING_CACHE_TTL", "60"))  # seconds
+
+# Subscription statuses that allow API access
+ALLOWED_SUBSCRIPTION_STATUSES = {"active", "trialing", "scheduled_to_cancel"}
+
+# Paths exempt from billing check (no auth or public)
+BILLING_EXEMPT_PATHS = {
+    "/",
+    "/health",
+    "/docs",
+    "/openapi.json",
+    "/redoc",
+}
+BILLING_EXEMPT_PREFIXES = (
+    "/public/",
+    "/admin/",
+    "/mcp",
+)
 
 # --- Validation at startup ---
 if not all([ADMIN_API_URL, BOT_MANAGER_URL, TRANSCRIPTION_COLLECTOR_URL, MCP_URL]):
@@ -149,7 +174,102 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- HTTP Client --- 
+# --- Subscription Check Middleware (billing enforcement) ---
+class SubscriptionCheckMiddleware(BaseHTTPMiddleware):
+    """Checks subscription status for cloud deployments. Returns 402 if no active subscription."""
+
+    async def dispatch(self, request: Request, call_next):
+        # Skip if not cloud mode
+        if DEPLOYMENT_MODE != "cloud":
+            return await call_next(request)
+
+        path = request.url.path
+
+        # Skip exempt paths
+        if path in BILLING_EXEMPT_PATHS:
+            return await call_next(request)
+        if path.startswith(BILLING_EXEMPT_PREFIXES):
+            return await call_next(request)
+
+        # Skip WebSocket upgrades (handled separately in the WS handler)
+        if request.headers.get("upgrade", "").lower() == "websocket":
+            return await call_next(request)
+
+        # Extract API key
+        api_key = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
+        if not api_key:
+            # No API key — let downstream handle 401
+            return await call_next(request)
+
+        # Check subscription status
+        allowed = await self._check_subscription(request, api_key)
+        if not allowed:
+            return Response(
+                content=json.dumps({"detail": "Subscription required", "url": "/pricing"}),
+                status_code=402,
+                media_type="application/json",
+            )
+
+        return await call_next(request)
+
+    async def _check_subscription(self, request: Request, api_key: str) -> bool:
+        redis = request.app.state.redis
+        cache_key = f"billing:{api_key}"
+
+        # Check Redis cache first
+        try:
+            cached = await redis.get(cache_key)
+            if cached is not None:
+                return cached in ("1", "true")
+        except Exception as e:
+            logger.warning(f"Redis cache read failed: {e}")
+
+        # Cache miss — resolve via admin-api
+        try:
+            http_client = request.app.state.http_client
+            admin_api_token = os.getenv("ADMIN_API_TOKEN", "")
+            resp = await http_client.get(
+                f"{ADMIN_API_URL}/admin/users/by-token",
+                params={"token": api_key},
+                headers={"X-Admin-API-Key": admin_api_token},
+                timeout=5.0,
+            )
+
+            if resp.status_code == 404:
+                # Invalid token — let downstream handle 403
+                return True
+            if resp.status_code != 200:
+                # Admin-api error — fail open (don't block on transient errors)
+                logger.error(f"Admin-API /users/by-token returned {resp.status_code}")
+                return True
+
+            user_data = resp.json()
+            data = user_data.get("data") or {}
+            sub_status = data.get("subscription_status", "none")
+            allowed = sub_status in ALLOWED_SUBSCRIPTION_STATUSES
+
+            # Cache the result
+            try:
+                await redis.set(cache_key, "1" if allowed else "0", ex=BILLING_CACHE_TTL)
+            except Exception as e:
+                logger.warning(f"Redis cache write failed: {e}")
+
+            return allowed
+
+        except httpx.TimeoutException:
+            logger.error("Admin-API timeout during subscription check — failing open")
+            return True
+        except Exception as e:
+            logger.error(f"Subscription check error: {e} — failing open")
+            return True
+
+if DEPLOYMENT_MODE == "cloud":
+    app.add_middleware(SubscriptionCheckMiddleware)
+    logger.info("Billing enforcement ENABLED (DEPLOYMENT_MODE=cloud)")
+else:
+    logger.info(f"Billing enforcement disabled (DEPLOYMENT_MODE={DEPLOYMENT_MODE})")
+
+# --- HTTP Client ---
 # Use a single client instance for connection pooling
 @app.on_event("startup")
 async def startup_event():

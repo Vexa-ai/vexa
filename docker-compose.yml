@@ -16,6 +16,10 @@ services:
       - PUBLIC_BASE_URL=https://share.dev.vexa.ai
       - TRANSCRIPT_SHARE_TTL_SECONDS=900
       - LOG_LEVEL=DEBUG
+      # Billing enforcement: set to "cloud" to enable subscription checks
+      - DEPLOYMENT_MODE=${DEPLOYMENT_MODE:-self-hosted}
+      - ADMIN_API_TOKEN=${ADMIN_API_TOKEN}
+      - BILLING_CACHE_TTL=${BILLING_CACHE_TTL:-60}
     volumes:
       - ../.cursor:/app/.cursor
     init: true

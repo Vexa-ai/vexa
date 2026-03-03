@@ -261,7 +261,31 @@ async def get_user_by_email(user_email: str, db: AsyncSession = Depends(get_db))
     # Return the user object. Pydantic will handle serialization using UserDetailResponse.
     return user
 
-@admin_router.get("/users/{user_id}", 
+@admin_router.get("/users/by-token",
+            response_model=UserResponse,
+            summary="Look up a user by their API token")
+async def get_user_by_token(token: str, db: AsyncSession = Depends(get_db)):
+    """Resolves an API token to the owning user. Used by API gateway for billing checks."""
+    if not token:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing token parameter")
+
+    result = await db.execute(
+        select(APIToken).where(APIToken.token == token).options(selectinload(APIToken.user))
+    )
+    db_token = result.scalars().first()
+
+    if not db_token or not db_token.user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Token not found or no associated user")
+
+    user = db_token.user
+    if user.created_at is None:
+        user.created_at = datetime.utcnow().replace(tzinfo=None)
+        db.add(user)
+        await db.commit()
+
+    return UserResponse.model_validate(user)
+
+@admin_router.get("/users/{user_id}",
             response_model=UserDetailResponse, # Use the detailed response schema
             summary="Get a specific user by ID, including their API tokens")
 async def get_user(user_id: int, db: AsyncSession = Depends(get_db)):
@@ -370,7 +394,7 @@ async def update_user(user_id: int, user_update: UserUpdate, db: AsyncSession = 
 
     return UserResponse.model_validate(db_user)
 
-@admin_router.post("/users/{user_id}/tokens", 
+@admin_router.post("/users/{user_id}/tokens",
              response_model=TokenResponse,
              status_code=status.HTTP_201_CREATED,
              summary="Generate a new API token for a user")
