@@ -200,7 +200,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
           {/* Footer */}
           <div className="border-t border-border p-4 shrink-0 space-y-2">
             <a
-              href={getDocsUrl("/docs")}
+              href={getDocsUrl()}
               target="_blank"
               rel="noopener noreferrer"
               onClick={onClose}

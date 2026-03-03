@@ -185,7 +185,7 @@ export function Header({ onMenuClick }: HeaderProps) {
                     className="text-xs"
                     asChild
                   >
-                    <a href={getDocsUrl("/docs")} target="_blank" rel="noopener noreferrer">
+                    <a href={getDocsUrl()} target="_blank" rel="noopener noreferrer">
                       <BookOpen className="h-3.5 w-3.5 mr-1.5" />
                       Docs
                     </a>
