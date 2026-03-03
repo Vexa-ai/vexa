@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
-import { Settings, Menu, LogOut, User, BookOpen, Code, FileCode, Code2 } from "lucide-react";
+import { Settings, Menu, LogOut, User, BookOpen, Code, FileCode, Code2, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/ui/logo";
 import {
@@ -236,6 +236,14 @@ export function Header({ onMenuClick }: HeaderProps) {
                   Settings
                 </Link>
               </DropdownMenuItem>
+              {process.env.NEXT_PUBLIC_HOSTED_MODE === "true" && (
+                <DropdownMenuItem asChild>
+                  <a href={`${process.env.NEXT_PUBLIC_WEBAPP_URL || "https://vexa.ai"}/account`}>
+                    <ExternalLink className="mr-2 h-4 w-4" />
+                    Account
+                  </a>
+                </DropdownMenuItem>
+              )}
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:text-destructive">
                 <LogOut className="mr-2 h-4 w-4" />
