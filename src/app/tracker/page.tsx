@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { redirect } from "next/navigation";
 import {
   Zap,
   Plus,
@@ -126,6 +127,10 @@ function CategoryRow({
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function TrackerPage() {
+  if (process.env.NEXT_PUBLIC_TRACKER_ENABLED !== "true") {
+    redirect("/");
+  }
+
   const [config, setConfig] = useState<TrackerConfig | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
