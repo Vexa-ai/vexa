@@ -1002,6 +1002,7 @@ export default function MeetingDetailPage() {
           </Button>
 
           {/* Decisions panel toggle */}
+          {process.env.NEXT_PUBLIC_TRACKER_ENABLED === "true" && (
           <Button
             variant={decisionsOpen ? "secondary" : "outline"}
             size="sm"
@@ -1011,6 +1012,7 @@ export default function MeetingDetailPage() {
             <Zap className="h-4 w-4 text-amber-500" />
             <span className="hidden sm:inline">Decisions</span>
           </Button>
+          )}
         </div>
       </div>
 
