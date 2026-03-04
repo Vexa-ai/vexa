@@ -152,6 +152,7 @@ export async function POST(request: NextRequest) {
         id: user.id,
         email: user.email,
         name: user.name,
+        data: user.data || {},
         max_concurrent_bots: user.max_concurrent_bots,
         created_at: user.created_at,
       },

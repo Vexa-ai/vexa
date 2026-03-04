@@ -43,6 +43,30 @@ export async function GET() {
       } catch {}
     }
 
+    // In hosted mode, enrich user info with subscription data from admin API
+    if (
+      process.env.NEXT_PUBLIC_HOSTED_MODE === "true" &&
+      userInfo?.email &&
+      process.env.VEXA_ADMIN_API_KEY
+    ) {
+      try {
+        const VEXA_ADMIN_API_URL =
+          process.env.VEXA_ADMIN_API_URL ||
+          process.env.VEXA_API_URL ||
+          "http://localhost:18056";
+        const adminRes = await fetch(
+          `${VEXA_ADMIN_API_URL}/admin/users/email/${encodeURIComponent(userInfo.email)}`,
+          {
+            headers: { "X-Admin-API-Key": process.env.VEXA_ADMIN_API_KEY },
+          }
+        );
+        if (adminRes.ok) {
+          const adminUser = await adminRes.json();
+          userInfo.data = adminUser.data || {};
+        }
+      } catch {}
+    }
+
     return NextResponse.json({
       authenticated: true,
       ...(userInfo && { user: userInfo }),

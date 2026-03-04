@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { getDocsUrl } from "@/lib/docs/webapp-url";
+import { getDocsUrl, getWebappUrl } from "@/lib/docs/webapp-url";
 import {
   LayoutDashboard,
   Video,
@@ -18,6 +18,7 @@ import {
   Bot,
   BookOpen,
   Zap,
+  CreditCard,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -41,6 +42,79 @@ const adminNavigation = [
   { name: "Bots", href: "/admin/bots", icon: Bot },
   { name: "Settings", href: "/settings", icon: Settings },
 ];
+
+const IS_HOSTED = process.env.NEXT_PUBLIC_HOSTED_MODE === "true";
+
+function BillingStatus() {
+  const [status, setStatus] = useState<{
+    subscription_status: string | null;
+    subscription_tier: string | null;
+    subscription_trial_end: string | null;
+  } | null>(null);
+
+  useEffect(() => {
+    fetch("/api/billing/status")
+      .then((r) => r.json())
+      .then(setStatus)
+      .catch(() => {});
+  }, []);
+
+  if (!status || !status.subscription_status) return null;
+
+  const { subscription_status, subscription_tier, subscription_trial_end } =
+    status;
+
+  if (subscription_status === "trialing" && subscription_trial_end) {
+    const daysLeft = Math.max(
+      0,
+      Math.ceil(
+        (new Date(subscription_trial_end).getTime() - Date.now()) /
+          (1000 * 60 * 60 * 24)
+      )
+    );
+    return (
+      <div className="px-3 py-1.5">
+        <span className="text-xs font-medium text-amber-500">
+          Trial: {daysLeft} day{daysLeft !== 1 ? "s" : ""} left
+        </span>
+      </div>
+    );
+  }
+
+  if (
+    subscription_status === "canceled" ||
+    subscription_status === "expired"
+  ) {
+    return (
+      <div className="px-3 py-1.5 flex items-center justify-between">
+        <span className="text-xs font-medium text-red-500">Plan expired</span>
+        <a
+          href={`${getWebappUrl()}/pricing`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs font-medium text-primary hover:underline"
+        >
+          Subscribe
+        </a>
+      </div>
+    );
+  }
+
+  if (subscription_status === "active") {
+    const label = subscription_tier
+      ? subscription_tier.charAt(0).toUpperCase() + subscription_tier.slice(1)
+      : "Active";
+    return (
+      <div className="px-3 py-1.5">
+        <span className="text-xs font-medium text-muted-foreground">
+          {label} plan
+        </span>
+      </div>
+    );
+  }
+
+  return null;
+}
 
 export function Sidebar({ isOpen, onClose }: SidebarProps) {
   const pathname = usePathname();
@@ -199,6 +273,21 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
 
           {/* Footer */}
           <div className="border-t border-border p-4 shrink-0 space-y-2">
+            {IS_HOSTED && (
+              <>
+                <BillingStatus />
+                <a
+                  href={`${getWebappUrl()}/account`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={onClose}
+                  className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                >
+                  <CreditCard className="h-4 w-4" />
+                  Account & Billing
+                </a>
+              </>
+            )}
             <a
               href={getDocsUrl()}
               target="_blank"
