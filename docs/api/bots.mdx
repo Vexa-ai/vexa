@@ -30,10 +30,13 @@ Common request fields:
 - `platform` (`google_meet` | `teams` | `zoom`)
 - `native_meeting_id`
 - `passcode` (Teams required; Zoom optional)
+- `language` (optional) — language code for transcription (e.g., `en`, `es`). If omitted, defaults to auto-detect.
+- `task` (`transcribe` | `translate`, optional) — transcription task. Defaults to `transcribe`.
+- `bot_name` (optional) — display name for the bot inside the meeting.
 - `recording_enabled` (optional)
 - `transcribe_enabled` (optional)
 - `transcription_tier` (`realtime` | `deferred`, optional)
-- `voice_agent_enabled` (optional, defaults to `true`) -- enables [Interactive Bots](interactive-bots) capabilities (speak, chat, screen share). Set to `false` to disable.
+- `voice_agent_enabled` (optional, defaults to `true`) — enables [Interactive Bots](interactive-bots) capabilities (speak, chat, screen share). Set to `false` to disable.
 
 <Tabs>
   <Tab title="Google Meet">
@@ -44,6 +47,7 @@ curl -X POST "$API_BASE/bots" \
   -d '{
     "platform": "google_meet",
     "native_meeting_id": "abc-defg-hij",
+    "language": "en",
     "recording_enabled": true,
     "transcribe_enabled": true,
     "transcription_tier": "realtime"
@@ -60,6 +64,7 @@ curl -X POST "$API_BASE/bots" \
     "platform": "teams",
     "native_meeting_id": "1234567890123",
     "passcode": "YOUR_PASSCODE",
+    "language": "en",
     "recording_enabled": true,
     "transcribe_enabled": true,
     "transcription_tier": "realtime"
@@ -80,6 +85,7 @@ curl -X POST "$API_BASE/bots" \
     "platform": "zoom",
     "native_meeting_id": "12345678901",
     "passcode": "OPTIONAL_PWD",
+    "language": "en",
     "recording_enabled": true,
     "transcribe_enabled": true,
     "transcription_tier": "realtime"
