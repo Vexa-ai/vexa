@@ -580,13 +580,23 @@ async def request_bot(
     logger.info(f"Received bot request for platform '{req.platform.value}' with native ID '{req.native_meeting_id}' from user {current_user.id}")
     native_meeting_id = req.native_meeting_id
 
-    constructed_url = Platform.construct_meeting_url(req.platform.value, native_meeting_id, req.passcode)
-    if not constructed_url:
-        logger.error(f"Invalid meeting URL for platform {req.platform.value} and ID {native_meeting_id}. Rejecting request.")
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Invalid platform/native_meeting_id combination: cannot construct meeting URL"
+    # Determine the meeting URL for the bot container.
+    # Priority: explicit meeting_url (long Teams legacy links) > reconstruct from parts.
+    if req.meeting_url:
+        constructed_url = req.meeting_url
+    else:
+        constructed_url = Platform.construct_meeting_url(
+            req.platform.value,
+            native_meeting_id,
+            req.passcode,
+            base_host=req.teams_base_host,
         )
+        if not constructed_url:
+            logger.error(f"Invalid meeting URL for platform {req.platform.value} and ID {native_meeting_id}. Rejecting request.")
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid platform/native_meeting_id combination: cannot construct meeting URL"
+            )
 
     existing_meeting_stmt = select(Meeting).where(
         Meeting.user_id == current_user.id,
@@ -631,10 +641,14 @@ async def request_bot(
     if existing_meeting is None:
         logger.info(f"No active/valid existing meeting found for user {current_user.id}, platform '{req.platform.value}', native ID '{native_meeting_id}'. Proceeding to create a new meeting record.")
         # Create Meeting record in DB
-        # Prepare data field with passcode if provided
+        # Prepare data field with passcode and any URL metadata
         meeting_data = {}
         if req.passcode:
             meeting_data['passcode'] = req.passcode
+        if req.meeting_url:
+            meeting_data['meeting_url'] = req.meeting_url
+        if req.teams_base_host:
+            meeting_data['teams_base_host'] = req.teams_base_host
             
         new_meeting = Meeting(
             user_id=current_user.id,
