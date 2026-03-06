@@ -3,18 +3,35 @@ title: "Microsoft Teams"
 ---
 This page covers Teams specifics: how to extract the meeting ID and passcode, and common join issues.
 
+## Supported URL formats
+
+Vexa supports all major Teams meeting link formats:
+
+| Format | Example | Support |
+|--------|---------|---------|
+| Personal (teams.live.com) | `https://teams.live.com/meet/1234567890123?p=PASSCODE` | Full |
+| Enterprise short URL | `https://teams.microsoft.com/meet/1234567890123?p=PASSCODE` | Full |
+| Enterprise deep link | `https://teams.microsoft.com/v2/?meetingjoin=true#/meet/1234567890123?p=PASSCODE` | Full |
+| Legacy enterprise | `https://teams.microsoft.com/l/meetup-join/19%3ameeting_...` | Full (via MCP) |
+| US Government | `https://gov.teams.microsoft.us/meet/...` | Full |
+| DoD | `https://dod.teams.microsoft.us/meet/...` | Full |
+
 ## Native meeting ID and passcode
 
 For Teams, you must pass:
 
-- `native_meeting_id`: the numeric meeting ID
-- `passcode`: the value of the `?p=` query parameter from the URL
+- `native_meeting_id`: the numeric meeting ID (10-15 digits)
+- `passcode`: the value of the `?p=` query parameter from the URL (4-20 alphanumeric characters)
 
 Example:
 
 - URL: `https://teams.live.com/meet/1234567890123?p=YOUR_PASSCODE`
 - `native_meeting_id`: `1234567890123`
 - `passcode`: `YOUR_PASSCODE`
+
+<Note>
+**Legacy enterprise URLs** (`/l/meetup-join/...`) do not contain an extractable numeric meeting ID. When using the MCP tool, these are handled automatically — the URL is passed directly to the bot. For direct API usage, a raw URL endpoint is planned ([#161](https://github.com/Vexa-ai/vexa/issues/161)).
+</Note>
 
 ## API example
 
@@ -58,7 +75,5 @@ See:
 
 ## Known Limitations
 
-- **Only `teams.live.com` personal meeting links are supported.** Enterprise/work/school URLs (`teams.microsoft.com/l/meetup-join/...`) and the new short URL format are not yet supported. ([#110](https://github.com/Vexa-ai/vexa/issues/110))
-- **Personal Microsoft accounts may generate passcodes shorter than 8 characters**, which are currently rejected by validation. Work/school accounts are not affected. ([#109](https://github.com/Vexa-ai/vexa/issues/109))
 - **Bot avatar/virtual camera is not visible to other participants.** Teams SFU returns `a=inactive` for video from anonymous guest bots. Use screen share for visual content instead. ([#124](https://github.com/Vexa-ai/vexa/issues/124))
 - **Intermittent false rejection on pre-join screen.** In rare cases the bot may incorrectly conclude it was rejected by the meeting admin. Retrying usually succeeds. ([#123](https://github.com/Vexa-ai/vexa/issues/123))

@@ -10,6 +10,12 @@ Use the meeting code from the URL:
 - URL: `https://meet.google.com/abc-defg-hij`
 - `native_meeting_id`: `abc-defg-hij`
 
+Google Workspace accounts may use custom nickname URLs (e.g. `https://meet.google.com/my-team-standup`). These are also supported as `native_meeting_id`.
+
+<Note>
+Google Meet `/lookup/` URLs are internal redirect links and cannot be joined directly. Use the standard meeting link from your calendar invite instead.
+</Note>
+
 ## Admission model
 
 Most Google Meet meetings require the host to admit the bot from the waiting room.
