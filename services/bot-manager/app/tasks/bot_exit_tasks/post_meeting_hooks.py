@@ -1,8 +1,8 @@
 import logging
 import os
-import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from shared_models.models import Meeting
+from shared_models.webhook_delivery import deliver
 
 logger = logging.getLogger(__name__)
 
@@ -58,16 +58,10 @@ async def run(meeting: Meeting, db: AsyncSession):
         },
     }
 
-    async with httpx.AsyncClient() as client:
-        for hook_url in POST_MEETING_HOOKS:
-            try:
-                resp = await client.post(hook_url, json=payload, timeout=10.0)
-                if resp.status_code < 300:
-                    logger.info(f"Hook {hook_url} OK for meeting {meeting.id}")
-                else:
-                    logger.warning(
-                        f"Hook {hook_url} returned {resp.status_code} for meeting {meeting.id}: "
-                        f"{resp.text[:200]}"
-                    )
-            except Exception as e:
-                logger.error(f"Hook {hook_url} failed for meeting {meeting.id}: {e}")
+    for hook_url in POST_MEETING_HOOKS:
+        await deliver(
+            url=hook_url,
+            payload=payload,
+            timeout=10.0,
+            label=f"post-meeting-hook meeting={meeting.id}",
+        )
