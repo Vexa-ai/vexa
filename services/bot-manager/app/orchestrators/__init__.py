@@ -21,6 +21,8 @@ if _orchestrator == "nomad":
     module_name = "app.orchestrators.nomad"
 elif _orchestrator == "process":
     module_name = "app.orchestrators.process"
+elif _orchestrator == "kubernetes":
+    module_name = "app.orchestrators.kubernetes"
 else:
     # Default to Docker orchestrator
     module_name = "app.orchestrators.docker"
