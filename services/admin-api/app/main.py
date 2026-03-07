@@ -49,6 +49,7 @@ class PaginatedMeetingUserStatResponse(BaseModel):
 API_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", auto_error=False) # Use a distinct header
 USER_API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False) # For user-facing endpoints
 ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN") # Read from environment
+ANALYTICS_API_TOKEN = os.getenv("ANALYTICS_API_TOKEN") # Read-only analytics token
 
 async def verify_admin_token(admin_api_key: str = Security(API_KEY_HEADER)):
     """Dependency to verify the admin API token."""
@@ -66,7 +67,29 @@ async def verify_admin_token(admin_api_key: str = Security(API_KEY_HEADER)):
             detail="Invalid or missing admin token."
         )
     logger.info("Admin token verified successfully.")
-    # No need to return anything, just raises exception on failure 
+    # No need to return anything, just raises exception on failure
+
+async def verify_analytics_or_admin_token(api_key: str = Security(API_KEY_HEADER)):
+    """Dependency that accepts either the full admin token or the read-only analytics token."""
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Missing API key"
+        )
+    
+    # Check if it matches admin token
+    if ADMIN_API_TOKEN and api_key == ADMIN_API_TOKEN:
+        return
+    
+    # Check if it matches analytics token
+    if ANALYTICS_API_TOKEN and api_key == ANALYTICS_API_TOKEN:
+        return
+    
+    logger.warning("Invalid token provided for analytics endpoint.")
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Invalid API key"
+    ) 
 
 async def get_current_user(api_key: str = Security(USER_API_KEY_HEADER), db: AsyncSession = Depends(get_db)) -> User:
     """Dependency to verify user API key and return user object."""
@@ -88,6 +111,13 @@ admin_router = APIRouter(
     prefix="/admin",
     tags=["Admin"],
     dependencies=[Depends(verify_admin_token)]
+)
+
+# Analytics router - accepts either admin or analytics token (read-only access)
+analytics_router = APIRouter(
+    prefix="/admin",
+    tags=["Analytics"],
+    dependencies=[Depends(verify_analytics_or_admin_token)]
 )
 
 # New router for user-facing actions
@@ -209,7 +239,7 @@ async def create_user(user_in: UserCreate, response: Response, db: AsyncSession 
         await db.commit()
     return UserResponse.model_validate(db_user)
 
-@admin_router.get("/users", 
+@analytics_router.get("/users", 
             response_model=List[UserResponse], # Use List import
             summary="List all users")
 async def list_users(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)):
@@ -416,7 +446,7 @@ async def delete_token(token_id: int, db: AsyncSession = Depends(get_db)):
     return 
 
 # --- Usage Stats Endpoints ---
-@admin_router.get("/stats/meetings-users",
+@analytics_router.get("/stats/meetings-users",
             response_model=PaginatedMeetingUserStatResponse,
             summary="Get paginated list of meetings joined with users")
 async def list_meetings_with_users(
@@ -454,7 +484,7 @@ async def list_meetings_with_users(
     return PaginatedMeetingUserStatResponse(total=total, items=response_items)
 
 # --- Analytics Endpoints ---
-@admin_router.get("/analytics/users",
+@analytics_router.get("/analytics/users",
                   response_model=List[UserTableResponse],
                   summary="Get users table structure without sensitive data")
 async def get_users_table(
@@ -485,7 +515,7 @@ async def get_users_table(
     
     return [UserTableResponse.model_validate(u) for u in users]
 
-@admin_router.get("/analytics/meetings",
+@analytics_router.get("/analytics/meetings",
                   response_model=List[MeetingTableResponse], 
                   summary="Get meetings table structure without sensitive data")
 async def get_meetings_table(
@@ -676,8 +706,9 @@ async def startup_event():
     # await init_db()
     pass
 
-# Include the admin router
+# Include the routers
 app.include_router(admin_router)
+app.include_router(analytics_router)
 app.include_router(user_router)
 
 # Root endpoint (optional)
