@@ -9,3 +9,4 @@ python-multipart==0.0.6
 # Added for Pydantic email validation
 email-validator==2.0.0
 redis==5.0.6
+websockets>=12.0

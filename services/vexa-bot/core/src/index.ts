@@ -4,7 +4,8 @@ import { callStatusChangeCallback, mapExitReasonToStatus } from "./services/unif
 import { chromium } from "playwright-extra";
 import { handleGoogleMeet, leaveGoogleMeet } from "./platforms/googlemeet";
 import { handleMicrosoftTeams, leaveMicrosoftTeams } from "./platforms/msteams";
-import { handleZoom, leaveZoom } from "./platforms/zoom";
+import { handleZoom, leaveZoom, leaveZoomWeb } from "./platforms/zoom";
+import { reconfigureZoomWebRecording } from "./platforms/zoom/web/recording";
 import { browserArgs, getBrowserArgs, userAgent } from "./constans";
 import { BotConfig } from "./types";
 import { RecordingService } from "./services/recording";
@@ -376,8 +377,16 @@ const handleRedisMessage = async (message: string, channel: string, page: Page |
           currentLanguage = command.language;
           currentTask = command.task;
 
-          // Trigger browser-side reconfiguration via the exposed function
-          if (page && !page.isClosed()) { // Ensure page exists and is open
+          // Zoom Web uses a Node.js-side WhisperLive (not browser-based) — reconfigure directly
+          const isZoomWeb = process.env.ZOOM_WEB === 'true' && (globalThis as any).botConfig?.platform === 'zoom';
+          if (isZoomWeb) {
+            await reconfigureZoomWebRecording(currentLanguage ?? null, currentTask ?? null);
+            log('[Zoom Web] Reconfigure handled via Node.js WhisperLive reconnect');
+          }
+
+          // Trigger browser-side reconfiguration via the exposed function (for Google Meet / Teams)
+          if (!isZoomWeb) {
+            if (page && !page.isClosed()) { // Ensure page exists and is open
               try {
                   await page.evaluate(
                       ([lang, task]) => {
@@ -413,8 +422,9 @@ const handleRedisMessage = async (message: string, channel: string, page: Page |
               } catch (evalError: any) {
                   log(`Error evaluating reconfiguration script in browser: ${evalError.message}`);
               }
-          } else {
+            } else {
                log("Page not available or closed, cannot send reconfigure command to browser.");
+            }
           }
       } else if (command.action === 'leave') {
         // Mark that a stop was requested via Redis
@@ -518,11 +528,17 @@ async function performGracefulLeave(
 
   let platformLeaveSuccess = false;
 
-  // Handle SDK-based platforms (Zoom) separately - they don't use Playwright page
+  // Handle Zoom separately — SDK mode uses null page, web mode uses browser page
   if (currentPlatform === "zoom") {
     try {
-      log("[Graceful Leave] Attempting Zoom SDK cleanup...");
-      platformLeaveSuccess = await leaveZoom(null); // Zoom doesn't use page
+      const zoomWebMode = process.env.ZOOM_WEB === 'true';
+      if (zoomWebMode) {
+        log("[Graceful Leave] Attempting Zoom Web cleanup...");
+        platformLeaveSuccess = await leaveZoomWeb(page);
+      } else {
+        log("[Graceful Leave] Attempting Zoom SDK cleanup...");
+        platformLeaveSuccess = await leaveZoom(null);
+      }
     } catch (error: any) {
       log(`[Graceful Leave] Zoom cleanup error: ${error.message}`);
       platformLeaveSuccess = false;

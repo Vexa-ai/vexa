@@ -17,7 +17,9 @@ const baseBrowserArgs = [
   "--ignore-certificate-errors",
   "--ignore-ssl-errors",
   "--ignore-certificate-errors-spki-list",
-  "--disable-site-isolation-trials"
+  "--disable-site-isolation-trials",
+  "--remote-debugging-port=9222",
+  "--remote-debugging-address=0.0.0.0",
 ];
 
 /**
