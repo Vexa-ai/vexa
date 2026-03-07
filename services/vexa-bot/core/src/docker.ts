@@ -30,6 +30,7 @@ export const BotConfigSchema = z.object({
   // Voice agent / meeting interaction interface
   voiceAgentEnabled: z.boolean().optional(),
   defaultAvatarUrl: z.string().url().optional(),
+  showAvatar: z.boolean().optional(),
 });
 
 
