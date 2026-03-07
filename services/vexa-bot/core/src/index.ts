@@ -1079,12 +1079,17 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
 
     // Inject virtual camera RTCPeerConnection patch BEFORE page loads
     // so Google Meet gets our canvas stream from the start.
-    // Always inject — the avatar should show regardless of voice agent state.
-    try {
-      await context.addInitScript(getVirtualCameraInitScript());
-      log('[Bot] Virtual camera init script injected');
-    } catch (e: any) {
-      log(`[Bot] Warning: addInitScript failed: ${e.message}`);
+    // Skip when showAvatar=false — injecting the script registers the fake device,
+    // causing Zoom (and others) to repeatedly call getUserMedia for the empty canvas.
+    if (botConfig.showAvatar !== false) {
+      try {
+        await context.addInitScript(getVirtualCameraInitScript());
+        log('[Bot] Virtual camera init script injected');
+      } catch (e: any) {
+        log(`[Bot] Warning: addInitScript failed: ${e.message}`);
+      }
+    } else {
+      log('[Bot] showAvatar=false — skipping virtual camera init script injection');
     }
 
     page = await context.newPage();
@@ -1137,11 +1142,15 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     Object.defineProperty(window, "outerHeight", { get: () => 1080 });
   });
 
-  // Always initialize virtual camera and avatar display
-  try {
-    await initVirtualCamera(botConfig, page);
-  } catch (err: any) {
-    log(`[Bot] Virtual camera initialization failed (non-fatal): ${err.message}`);
+  // Initialize virtual camera and avatar display unless explicitly disabled
+  if (botConfig.showAvatar !== false) {
+    try {
+      await initVirtualCamera(botConfig, page);
+    } catch (err: any) {
+      log(`[Bot] Virtual camera initialization failed (non-fatal): ${err.message}`);
+    }
+  } else {
+    log('[Bot] showAvatar=false — skipping virtual camera initialization');
   }
 
   // Always initialize chat service so chat read/write works for every bot
