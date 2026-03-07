@@ -245,6 +245,8 @@ async def start_bot_container(
         bot_config["voiceAgentEnabled"] = bool(voice_agent_enabled)
     if default_avatar_url:
         bot_config["defaultAvatarUrl"] = default_avatar_url
+    if os.getenv("SHOW_AVATAR", "true").lower() == "false":
+        bot_config["showAvatar"] = False
 
     # Remove None values from config
     bot_config = {k: v for k, v in bot_config.items() if v is not None}
