@@ -1045,6 +1045,10 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
       });
     } catch {}
 
+    // Set voice agent flag before virtual camera script so it knows
+    // whether to disable incoming video tracks (saves ~87% CPU per bot).
+    await context.addInitScript(`window.__vexa_voice_agent_enabled = ${!!botConfig.voiceAgentEnabled};`);
+
     // Inject virtual camera init script for avatar display
     try {
       await context.addInitScript(getVirtualCameraInitScript());
@@ -1076,6 +1080,11 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
         height: 720
       }
     });
+
+    // Set voice agent flag before virtual camera script so it knows
+    // whether to disable incoming video tracks (saves ~87% CPU per bot).
+    const isVoiceAgent = !!botConfig.voiceAgentEnabled;
+    await context.addInitScript(`window.__vexa_voice_agent_enabled = ${isVoiceAgent};`);
 
     // Inject virtual camera RTCPeerConnection patch BEFORE page loads
     // so Google Meet gets our canvas stream from the start.

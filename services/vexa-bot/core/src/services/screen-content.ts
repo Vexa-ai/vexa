@@ -1198,6 +1198,19 @@ export function getVirtualCameraInitScript(): string {
             if (idx >= 0) window.__vexa_peer_connections.splice(idx, 1);
           }
         });
+
+        // Disable incoming video to save CPU/memory.
+        // The bot only needs audio for transcription — receiving and rendering
+        // all participants' video wastes ~87% CPU and ~2GB RAM per bot.
+        if (!window.__vexa_voice_agent_enabled) {
+          pc.addEventListener('track', (event) => {
+            if (event.track && event.track.kind === 'video') {
+              event.track.enabled = false;
+              console.log('[Vexa] Incoming video track disabled (id=' + event.track.id + ')');
+            }
+          });
+        }
+
         return pc;
       };
       window.RTCPeerConnection.prototype = OrigRTC.prototype;
