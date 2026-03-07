@@ -439,10 +439,12 @@ async def startup_event():
     logger.info("Starting up Bot Manager...")
     # await init_db() # Removed - Admin API should handle this
     # await init_redis() # Removed redis init if not used elsewhere
-    try:
-        get_socket_session()
-    except Exception as e:
-        logger.error(f"Failed to initialize Docker client on startup: {e}", exc_info=True)
+    _orch = os.getenv("ORCHESTRATOR", "docker").lower()
+    if _orch not in ("kubernetes", "process"):
+        try:
+            get_socket_session()
+        except Exception as e:
+            logger.error(f"Failed to initialize Docker client on startup: {e}", exc_info=True)
 
     # --- ADD Redis Client Initialization ---
     try:
