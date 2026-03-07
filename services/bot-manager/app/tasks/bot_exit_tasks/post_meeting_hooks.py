@@ -42,6 +42,7 @@ async def run(meeting: Meeting, db: AsyncSession):
 
     duration_seconds = (meeting.end_time - meeting.start_time).total_seconds()
 
+    meeting_data = meeting.data or {}
     payload = {
         "event": "meeting.completed",
         "meeting": {
@@ -54,7 +55,8 @@ async def run(meeting: Meeting, db: AsyncSession):
             "start_time": meeting.start_time.isoformat(),
             "end_time": meeting.end_time.isoformat(),
             "created_at": meeting.created_at.isoformat() if meeting.created_at else None,
-            "data": meeting.data or {},
+            "transcription_enabled": meeting_data.get("transcribe_enabled", False),
+            "data": meeting_data,
         },
     }
 

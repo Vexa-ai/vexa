@@ -649,7 +649,9 @@ async def request_bot(
             meeting_data['meeting_url'] = req.meeting_url
         if req.teams_base_host:
             meeting_data['teams_base_host'] = req.teams_base_host
-            
+        meeting_data['transcribe_enabled'] = True if req.transcribe_enabled is None else bool(req.transcribe_enabled)
+        meeting_data['recording_enabled'] = bool(req.recording_enabled) if req.recording_enabled is not None else False
+
         new_meeting = Meeting(
             user_id=current_user.id,
             platform=req.platform.value,
