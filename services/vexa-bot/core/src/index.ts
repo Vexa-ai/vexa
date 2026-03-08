@@ -11,7 +11,7 @@ import { RecordingService } from "./services/recording";
 import { TTSPlaybackService } from "./services/tts-playback";
 import { MicrophoneService } from "./services/microphone";
 import { MeetingChatService, ChatTranscriptConfig } from "./services/chat";
-import { ScreenContentService, getVirtualCameraInitScript } from "./services/screen-content";
+import { ScreenContentService, getVirtualCameraInitScript, getVideoBlockInitScript } from "./services/screen-content";
 import { ScreenShareService } from "./services/screen-share"; // kept for Teams; unused for Google Meet camera-feed approach
 import { createClient, RedisClientType } from 'redis';
 import { Page, Browser } from 'playwright-core';
@@ -1045,12 +1045,27 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
       });
     } catch {}
 
-    // Inject virtual camera init script for avatar display
-    try {
-      await context.addInitScript(getVirtualCameraInitScript());
-      log('[Bot] Virtual camera init script injected (Teams)');
-    } catch (e: any) {
-      log(`[Bot] Warning: addInitScript failed (Teams): ${e.message}`);
+    // Set voice agent flag before virtual camera script so it knows
+    // whether to disable incoming video tracks (saves ~87% CPU per bot).
+    const isVoiceAgentTeams = !!botConfig.voiceAgentEnabled;
+    await context.addInitScript(`window.__vexa_voice_agent_enabled = ${isVoiceAgentTeams};`);
+
+    // Only inject virtual camera (avatar streaming) for voice agent bots.
+    // Transcription-only bots get a lightweight video blocker instead.
+    if (isVoiceAgentTeams) {
+      try {
+        await context.addInitScript(getVirtualCameraInitScript());
+        log('[Bot] Virtual camera init script injected (Teams, voice agent mode)');
+      } catch (e: any) {
+        log(`[Bot] Warning: addInitScript failed (Teams): ${e.message}`);
+      }
+    } else {
+      try {
+        await context.addInitScript(getVideoBlockInitScript());
+        log('[Bot] Video block init script injected (Teams, transcription-only mode)');
+      } catch (e: any) {
+        log(`[Bot] Warning: video block addInitScript failed (Teams): ${e.message}`);
+      }
     }
 
     page = await context.newPage();
@@ -1077,14 +1092,28 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
       }
     });
 
-    // Inject virtual camera RTCPeerConnection patch BEFORE page loads
-    // so Google Meet gets our canvas stream from the start.
-    // Always inject — the avatar should show regardless of voice agent state.
-    try {
-      await context.addInitScript(getVirtualCameraInitScript());
-      log('[Bot] Virtual camera init script injected');
-    } catch (e: any) {
-      log(`[Bot] Warning: addInitScript failed: ${e.message}`);
+    // Set voice agent flag before virtual camera script so it knows
+    // whether to disable incoming video tracks (saves ~87% CPU per bot).
+    const isVoiceAgent = !!botConfig.voiceAgentEnabled;
+    await context.addInitScript(`window.__vexa_voice_agent_enabled = ${isVoiceAgent};`);
+
+    // Only inject virtual camera (avatar streaming) for voice agent bots.
+    // Transcription-only bots get a lightweight video blocker that stops
+    // incoming video tracks and transceivers to save CPU/memory.
+    if (isVoiceAgent) {
+      try {
+        await context.addInitScript(getVirtualCameraInitScript());
+        log('[Bot] Virtual camera init script injected (voice agent mode)');
+      } catch (e: any) {
+        log(`[Bot] Warning: addInitScript failed: ${e.message}`);
+      }
+    } else {
+      try {
+        await context.addInitScript(getVideoBlockInitScript());
+        log('[Bot] Video block init script injected (transcription-only mode)');
+      } catch (e: any) {
+        log(`[Bot] Warning: video block addInitScript failed: ${e.message}`);
+      }
     }
 
     page = await context.newPage();
@@ -1137,11 +1166,16 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     Object.defineProperty(window, "outerHeight", { get: () => 1080 });
   });
 
-  // Always initialize virtual camera and avatar display
-  try {
-    await initVirtualCamera(botConfig, page);
-  } catch (err: any) {
-    log(`[Bot] Virtual camera initialization failed (non-fatal): ${err.message}`);
+  // Only initialize virtual camera and avatar for voice agent bots.
+  // Transcription-only bots skip this entirely to save CPU/memory.
+  if (botConfig.voiceAgentEnabled) {
+    try {
+      await initVirtualCamera(botConfig, page);
+    } catch (err: any) {
+      log(`[Bot] Virtual camera initialization failed (non-fatal): ${err.message}`);
+    }
+  } else {
+    log('[Bot] Skipping virtual camera init (transcription-only mode)');
   }
 
   // Always initialize chat service so chat read/write works for every bot

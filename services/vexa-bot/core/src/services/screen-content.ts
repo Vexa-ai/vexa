@@ -1198,6 +1198,19 @@ export function getVirtualCameraInitScript(): string {
             if (idx >= 0) window.__vexa_peer_connections.splice(idx, 1);
           }
         });
+
+        // Disable incoming video to save CPU/memory.
+        // The bot only needs audio for transcription — receiving and rendering
+        // all participants' video wastes ~87% CPU and ~2GB RAM per bot.
+        if (!window.__vexa_voice_agent_enabled) {
+          pc.addEventListener('track', (event) => {
+            if (event.track && event.track.kind === 'video') {
+              event.track.enabled = false;
+              console.log('[Vexa] Incoming video track disabled (id=' + event.track.id + ')');
+            }
+          });
+        }
+
         return pc;
       };
       window.RTCPeerConnection.prototype = OrigRTC.prototype;
@@ -1232,6 +1245,65 @@ export function getVirtualCameraInitScript(): string {
       console.log('[Vexa] getUserMedia + RTCPeerConnection + addTrack + createOffer + enumerateDevices patched for virtual camera');
       } catch (e) {
         console.error('[Vexa] Init script FAILED:', e);
+      }
+    })();
+  `;
+}
+
+/**
+ * Lightweight init script for transcription-only bots (no avatar/voice agent).
+ * Only patches RTCPeerConnection to:
+ * 1. Disable incoming video tracks (track.enabled = false)
+ * 2. Stop video transceivers to prevent Chrome from decoding video
+ * 3. Block outgoing video by setting video transceiver direction to 'inactive'
+ *
+ * This avoids the heavy virtual camera setup (canvas, getUserMedia, addTrack patches)
+ * while still reducing CPU/memory from incoming video decoding.
+ */
+export function getVideoBlockInitScript(): string {
+  return `
+    (() => {
+      console.log('[Vexa] Video block init script START (transcription-only mode)');
+      try {
+        const OrigRTC = window.RTCPeerConnection;
+        if (!OrigRTC) {
+          console.warn('[Vexa] RTCPeerConnection not available');
+          return;
+        }
+
+        window.RTCPeerConnection = function(...args) {
+          const pc = new OrigRTC(...args);
+
+          // Block incoming video: disable tracks AND stop transceivers
+          pc.addEventListener('track', (event) => {
+            if (event.track && event.track.kind === 'video') {
+              event.track.enabled = false;
+              event.track.stop();
+              console.log('[Vexa] Incoming video track stopped (id=' + event.track.id + ')');
+
+              // Also set the transceiver to recvonly->inactive to tell the
+              // remote peer we don't want video at all
+              if (event.transceiver) {
+                try {
+                  event.transceiver.direction = 'inactive';
+                  console.log('[Vexa] Video transceiver set to inactive (mid=' + event.transceiver.mid + ')');
+                } catch (e) {
+                  console.warn('[Vexa] Could not set transceiver direction:', e);
+                }
+              }
+            }
+          });
+
+          return pc;
+        };
+        window.RTCPeerConnection.prototype = OrigRTC.prototype;
+        Object.keys(OrigRTC).forEach(key => {
+          try { window.RTCPeerConnection[key] = OrigRTC[key]; } catch {}
+        });
+
+        console.log('[Vexa] RTCPeerConnection patched for video blocking (transcription-only)');
+      } catch (e) {
+        console.error('[Vexa] Video block init script FAILED:', e);
       }
     })();
   `;
