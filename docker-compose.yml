@@ -87,7 +87,7 @@ services:
       - RECORDING_ENABLED=${RECORDING_ENABLED:-false}
       - CAPTURE_MODES=${CAPTURE_MODES:-audio}
       # Post-meeting hooks — fires to webapp billing on meeting end
-      - POST_MEETING_HOOKS=${POST_MEETING_HOOKS:-http://webapp:3000/api/hooks/meeting-completed}
+      - POST_MEETING_HOOKS=${POST_MEETING_HOOKS:-}
       # Voice agent / TTS
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     volumes:
@@ -243,59 +243,6 @@ services:
     init: true
     depends_on:
       api-gateway:
-        condition: service_started
-    networks:
-      - vexa_default
-    restart: unless-stopped
-
-  webapp:
-    build:
-      context: ${WEBAPP_BILLING_PATH:-../vexa-webapp-billing}
-      dockerfile: ./apps/webapp/Dockerfile
-    ports:
-      - "${WEBAPP_HOST_PORT:-3000}:3000"
-    environment:
-      - NODE_ENV=production
-      - NEXT_TELEMETRY_DISABLED=1
-      - ADMIN_API_URL=http://admin-api:8001
-      - ADMIN_API_TOKEN=${ADMIN_API_TOKEN}
-      - BILLING_URL=http://billing:9000
-      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
-      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
-      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-vexa-dev-nextauth-secret}
-      - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3000}
-      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
-      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
-      - PORTAL_RETURN_URL=${PORTAL_RETURN_URL:-http://localhost:3000/account}
-      - NEXT_PUBLIC_DASHBOARD_URL=${NEXT_PUBLIC_DASHBOARD_URL:-http://localhost:3001}
-      - MOCK_AUTH=${MOCK_AUTH:-true}
-      - NEXT_PUBLIC_MOCK_AUTH=${NEXT_PUBLIC_MOCK_AUTH:-true}
-    init: true
-    depends_on:
-      admin-api:
-        condition: service_started
-      billing:
-        condition: service_started
-    networks:
-      - vexa_default
-    restart: unless-stopped
-
-  billing:
-    build:
-      context: ${WEBAPP_BILLING_PATH:-../vexa-webapp-billing}/apps/billing
-    ports:
-      - "${BILLING_HOST_PORT:-19100}:9000"
-    volumes:
-      - ${WEBAPP_BILLING_PATH:-../vexa-webapp-billing}/product:/app/product
-    environment:
-      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
-      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
-      - ADMIN_API_URL=http://admin-api:8001
-      - ADMIN_API_TOKEN=${ADMIN_API_TOKEN}
-      - PORTAL_RETURN_URL=${PORTAL_RETURN_URL:-http://localhost:3000/account}
-    init: true
-    depends_on:
-      admin-api:
         condition: service_started
     networks:
       - vexa_default
