@@ -12,12 +12,9 @@ services:
       - TRANSCRIPTION_COLLECTOR_URL=http://transcription-collector:8000
       - MCP_URL=http://mcp:18888
       - REDIS_URL=redis://redis:6379/0
-      # Used to generate public share URLs for ChatGPT "Read from <url>" flows
       - PUBLIC_BASE_URL=https://share.dev.vexa.ai
       - TRANSCRIPT_SHARE_TTL_SECONDS=900
       - LOG_LEVEL=DEBUG
-    volumes:
-      - ../.cursor:/app/.cursor
     init: true
     depends_on:
       admin-api:
@@ -67,8 +64,8 @@ services:
       - DB_PASSWORD=${DB_PASSWORD:-postgres}
       - DB_SSL_MODE=${DB_SSL_MODE:-disable}
       - DOCKER_HOST=unix://var/run/docker.sock
-      - DEVICE_TYPE=${DEVICE_TYPE}
-      - WHISPER_LIVE_URL=ws://whisperlive-remote:9090/ws  # Direct connection to whisperlive-remote
+      - DEVICE_TYPE=remote
+      - WHISPER_LIVE_URL=ws://whisperlive:9090/ws
       - ADMIN_TOKEN=${ADMIN_API_TOKEN}
       - ZOOM_CLIENT_ID=${ZOOM_CLIENT_ID}
       - ZOOM_CLIENT_SECRET=${ZOOM_CLIENT_SECRET}
@@ -89,11 +86,12 @@ services:
       - LOCAL_STORAGE_FSYNC=${LOCAL_STORAGE_FSYNC:-true}
       - RECORDING_ENABLED=${RECORDING_ENABLED:-false}
       - CAPTURE_MODES=${CAPTURE_MODES:-audio}
+      # Post-meeting hooks — fires to webapp billing on meeting end
+      - POST_MEETING_HOOKS=${POST_MEETING_HOOKS:-http://webapp:3000/api/hooks/meeting-completed}
       # Voice agent / TTS
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ../.cursor:/app/.cursor
       - ${LOCAL_STORAGE_VOLUME_SOURCE:-recordings-data}:/data/recordings
     init: true
     depends_on:
@@ -106,82 +104,10 @@ services:
     restart: unless-stopped
 
   whisperlive:
-    profiles: ["gpu"]
-    build:
-      context: .
-      dockerfile: services/WhisperLive/Dockerfile.project
-    volumes:
-      - ./hub:/root/.cache/huggingface/hub
-      - ./services/WhisperLive/models:/app/models
-      - wl-recordings:/var/lib/wl-recordings
-    environment:
-      # Use Redis Stream URL instead of WebSocket URL
-      - REDIS_STREAM_URL=redis://redis:6379/0/transcription_segments
-      # Keep the old URL for backward compatibility
-      - TRANSCRIPTION_COLLECTOR_URL=redis://redis:6379/0/transcription_segments
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_DB=0
-      - REDIS_STREAM_NAME=transcription_segments
-      - LANGUAGE_DETECTION_SEGMENTS=${LANGUAGE_DETECTION_SEGMENTS}
-      - DEVICE_TYPE=${DEVICE_TYPE}
-      - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}
-      - WL_MAX_CLIENTS=${WL_MAX_CLIENTS}
-      # Server-level speaker-based circuit breaker
-      - WL_USE_SPEAKER_GROUND_TRUTH=${WL_USE_SPEAKER_GROUND_TRUTH:-true}
-      - WL_SERVER_SPEAKER_NO_TX_STALL_S=${WL_SERVER_SPEAKER_NO_TX_STALL_S:-30}
-      - WL_SPEAKER_ACTIVE_WINDOW_S=${WL_SPEAKER_ACTIVE_WINDOW_S:-8}
-      - WL_SERVER_WARMUP_S=${WL_SERVER_WARMUP_S:-60}
-      # VAD filter - most permissive to catch hallucinations during silence
-      - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD:-0}
-      # Minimum audio duration (seconds) before triggering transcription - lower = lower latency
-      - MIN_AUDIO_S=${MIN_AUDIO_S:-2.0}
-      - WL_RECORDING_DIR=${WL_RECORDING_DIR:-/var/lib/wl-recordings}
-      - WL_RECORDING_FLUSH_SECONDS=${WL_RECORDING_FLUSH_SECONDS:-3}
-      - WL_RECORDING_FSYNC_SECONDS=${WL_RECORDING_FSYNC_SECONDS:-10}
-      - WL_RECORDING_ROTATE_SECONDS=${WL_RECORDING_ROTATE_SECONDS:-20}
-      - WL_RECORDING_ROTATE_BYTES=${WL_RECORDING_ROTATE_BYTES:-16777216}
-      - WL_RECORDING_SNAPSHOT_SECONDS=${WL_RECORDING_SNAPSHOT_SECONDS:-20}
-      - WL_RECORDING_UPLOAD_URL=${WL_RECORDING_UPLOAD_URL:-http://bot-manager:8080/internal/recordings/upload}
-      - CONSUL_ENABLE=false
-      - WL_REDIS_DISCOVERY_ENABLED=false
-    command: >-
-      --port 9090
-      --backend faster_whisper
-      --faster_whisper_custom_model_path ${WHISPER_MODEL_SIZE}
-      --min_audio_s ${MIN_AUDIO_S:-2.0}
-      --wl_recording_dir ${WL_RECORDING_DIR:-/var/lib/wl-recordings}
-      --wl_recording_flush_seconds ${WL_RECORDING_FLUSH_SECONDS:-3}
-      --wl_recording_fsync_seconds ${WL_RECORDING_FSYNC_SECONDS:-10}
-      --wl_recording_rotate_seconds ${WL_RECORDING_ROTATE_SECONDS:-20}
-      --wl_recording_rotate_bytes ${WL_RECORDING_ROTATE_BYTES:-16777216}
-      --wl_recording_snapshot_seconds ${WL_RECORDING_SNAPSHOT_SECONDS:-20}
-    expose:
-      - "9090" #use for transcription web socket
-      - "9091" #use for health check
-    deploy:
-      replicas: 1
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["3"] # Ensure this is configurable or correct for your setup
-              capabilities: [gpu]
-    init: true
-    depends_on:
-      transcription-collector:
-        condition: service_started
-    networks:
-      - vexa_default
-  # CPU version of WhisperLive for users without GPU
-  whisperlive-cpu:
-    profiles: ["cpu"]
     build:
       context: .
       dockerfile: services/WhisperLive/Dockerfile.cpu
     volumes:
-      - ./hub:/root/.cache/huggingface/hub
-      - ./services/WhisperLive/models:/app/models
       - wl-recordings:/var/lib/wl-recordings
     environment:
       - REDIS_STREAM_URL=redis://redis:6379/0/transcription_segments
@@ -192,66 +118,7 @@ services:
       - REDIS_STREAM_NAME=transcription_segments
       - LANGUAGE_DETECTION_SEGMENTS=${LANGUAGE_DETECTION_SEGMENTS}
       - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD}
-      # Minimum audio duration (seconds) before triggering transcription - lower = lower latency
       - MIN_AUDIO_S=${MIN_AUDIO_S:-2.0}
-      - WL_RECORDING_DIR=${WL_RECORDING_DIR:-/var/lib/wl-recordings}
-      - WL_RECORDING_FLUSH_SECONDS=${WL_RECORDING_FLUSH_SECONDS:-3}
-      - WL_RECORDING_FSYNC_SECONDS=${WL_RECORDING_FSYNC_SECONDS:-10}
-      - WL_RECORDING_ROTATE_SECONDS=${WL_RECORDING_ROTATE_SECONDS:-20}
-      - WL_RECORDING_ROTATE_BYTES=${WL_RECORDING_ROTATE_BYTES:-16777216}
-      - WL_RECORDING_SNAPSHOT_SECONDS=${WL_RECORDING_SNAPSHOT_SECONDS:-20}
-      - WL_RECORDING_UPLOAD_URL=${WL_RECORDING_UPLOAD_URL:-http://bot-manager:8080/internal/recordings/upload}
-      - DEVICE_TYPE=cpu
-      - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}
-      - WL_MAX_CLIENTS=${WL_MAX_CLIENTS}
-      - CONSUL_ENABLE=false
-    deploy:
-      replicas: 1
-    command: >-
-      --port 9090
-      --backend faster_whisper
-      --faster_whisper_custom_model_path ${WHISPER_MODEL_SIZE}
-      --min_audio_s ${MIN_AUDIO_S:-2.0}
-      --wl_recording_dir ${WL_RECORDING_DIR:-/var/lib/wl-recordings}
-      --wl_recording_flush_seconds ${WL_RECORDING_FLUSH_SECONDS:-3}
-      --wl_recording_fsync_seconds ${WL_RECORDING_FSYNC_SECONDS:-10}
-      --wl_recording_rotate_seconds ${WL_RECORDING_ROTATE_SECONDS:-20}
-      --wl_recording_rotate_bytes ${WL_RECORDING_ROTATE_BYTES:-16777216}
-      --wl_recording_snapshot_seconds ${WL_RECORDING_SNAPSHOT_SECONDS:-20}
-    expose:
-      - "9090" #use for transcription web socket
-      - "9091" #use for health check
-    init: true
-    depends_on:
-      transcription-collector:
-        condition: service_started
-    networks:
-      - vexa_default
-    # Don't auto-start CPU version, users can manually start it
-    restart: unless-stopped
-
-  # Remote API version of WhisperLive
-  whisperlive-remote:
-    profiles: ["remote"]
-    build:
-      context: .
-      dockerfile: services/WhisperLive/Dockerfile.cpu
-    volumes:
-      - ./hub:/root/.cache/huggingface/hub
-      - ./services/WhisperLive/models:/app/models
-      - wl-recordings:/var/lib/wl-recordings
-    environment:
-      - REDIS_STREAM_URL=redis://redis:6379/0/transcription_segments
-      - TRANSCRIPTION_COLLECTOR_URL=redis://redis:6379/0/transcription_segments
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_DB=0
-      - REDIS_STREAM_NAME=transcription_segments
-      - LANGUAGE_DETECTION_SEGMENTS=${LANGUAGE_DETECTION_SEGMENTS}
-      - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD}
-      # Minimum audio duration (seconds) before triggering transcription - lower = lower latency
-      - MIN_AUDIO_S=${MIN_AUDIO_S:-2.0}
-      # Tier2 (deferred) tuning
       - MIN_AUDIO_S_TIER2=${MIN_AUDIO_S_TIER2:-20.0}
       - MIN_TIME_BETWEEN_REQUESTS_S=${MIN_TIME_BETWEEN_REQUESTS_S:-0.5}
       - MIN_TIME_BETWEEN_REQUESTS_S_TIER2=${MIN_TIME_BETWEEN_REQUESTS_S_TIER2:-20.0}
@@ -262,15 +129,13 @@ services:
       - WL_RECORDING_ROTATE_BYTES=${WL_RECORDING_ROTATE_BYTES:-16777216}
       - WL_RECORDING_SNAPSHOT_SECONDS=${WL_RECORDING_SNAPSHOT_SECONDS:-20}
       - WL_RECORDING_UPLOAD_URL=${WL_RECORDING_UPLOAD_URL:-http://bot-manager:8080/internal/recordings/upload}
-      # Reconfirmation threshold - lower values reduce latency by reconfirming segments faster
       - SAME_OUTPUT_THRESHOLD=${SAME_OUTPUT_THRESHOLD:-3}
       - SAME_OUTPUT_THRESHOLD_TIER2=${SAME_OUTPUT_THRESHOLD_TIER2:-2}
       - DEVICE_TYPE=remote
       - REMOTE_TRANSCRIBER_URL=${REMOTE_TRANSCRIBER_URL}
       - REMOTE_TRANSCRIBER_API_KEY=${REMOTE_TRANSCRIBER_API_KEY}
       - CONSUL_ENABLE=false
-    deploy:
-      replicas: 1
+      - WL_REDIS_DISCOVERY_ENABLED=false
     command: >-
       --port 9090
       --backend remote
@@ -287,15 +152,16 @@ services:
       --same_output_threshold ${SAME_OUTPUT_THRESHOLD:-3}
       --same_output_threshold_tier2 ${SAME_OUTPUT_THRESHOLD_TIER2:-2}
     expose:
-      - "9090" #use for transcription web socket
-      - "9091" #use for health check
+      - "9090"
+      - "9091"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     init: true
     depends_on:
       transcription-collector:
         condition: service_started
     networks:
       - vexa_default
-      - vexa-network
     restart: unless-stopped
 
   transcription-collector:
@@ -358,6 +224,78 @@ services:
     init: true
     depends_on:
       api-gateway:
+        condition: service_started
+    networks:
+      - vexa_default
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: ${DASHBOARD_PATH:-../Vexa-Dashboard}
+    ports:
+      - "${DASHBOARD_HOST_PORT:-3001}:3000"
+    environment:
+      - VEXA_API_URL=http://api-gateway:8000
+      - VEXA_ADMIN_API_KEY=${ADMIN_API_TOKEN}
+      - VEXA_ADMIN_API_URL=http://admin-api:8001
+      - JWT_SECRET=${JWT_SECRET:-vexa-dev-jwt-secret}
+      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3001}
+    init: true
+    depends_on:
+      api-gateway:
+        condition: service_started
+    networks:
+      - vexa_default
+    restart: unless-stopped
+
+  webapp:
+    build:
+      context: ${WEBAPP_BILLING_PATH:-../vexa-webapp-billing}
+      dockerfile: ./apps/webapp/Dockerfile
+    ports:
+      - "${WEBAPP_HOST_PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+      - NEXT_TELEMETRY_DISABLED=1
+      - ADMIN_API_URL=http://admin-api:8001
+      - ADMIN_API_TOKEN=${ADMIN_API_TOKEN}
+      - BILLING_URL=http://billing:9000
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:-vexa-dev-nextauth-secret}
+      - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3000}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - PORTAL_RETURN_URL=${PORTAL_RETURN_URL:-http://localhost:3000/account}
+      - NEXT_PUBLIC_DASHBOARD_URL=${NEXT_PUBLIC_DASHBOARD_URL:-http://localhost:3001}
+      - MOCK_AUTH=${MOCK_AUTH:-true}
+      - NEXT_PUBLIC_MOCK_AUTH=${NEXT_PUBLIC_MOCK_AUTH:-true}
+    init: true
+    depends_on:
+      admin-api:
+        condition: service_started
+      billing:
+        condition: service_started
+    networks:
+      - vexa_default
+    restart: unless-stopped
+
+  billing:
+    build:
+      context: ${WEBAPP_BILLING_PATH:-../vexa-webapp-billing}/apps/billing
+    ports:
+      - "${BILLING_HOST_PORT:-19100}:9000"
+    volumes:
+      - ${WEBAPP_BILLING_PATH:-../vexa-webapp-billing}/product:/app/product
+    environment:
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+      - ADMIN_API_URL=http://admin-api:8001
+      - ADMIN_API_TOKEN=${ADMIN_API_TOKEN}
+      - PORTAL_RETURN_URL=${PORTAL_RETURN_URL:-http://localhost:3000/account}
+    init: true
+    depends_on:
+      admin-api:
         condition: service_started
     networks:
       - vexa_default
@@ -444,6 +382,3 @@ volumes:
 networks:
   vexa_default:
     driver: bridge
-  vexa-network:
-    external: true
-    name: vexa-network
