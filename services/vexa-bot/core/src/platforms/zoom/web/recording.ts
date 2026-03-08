@@ -277,15 +277,23 @@ function startSpeakerPolling(page: Page, botConfig: BotConfig): void {
     const cfg = activeBotConfig || botConfig;
     try {
       const speakerName = await page.evaluate((footerSelector: string) => {
-        // Active speaker name is in .video-avatar__avatar-footer > span inside the active container.
-        // NOTE: .video-avatar__avatar-name does NOT exist in Zoom Web Client DOM.
-        const activeSpeaker = document.querySelector('.speaker-active-container__video-frame');
-        if (!activeSpeaker) return null;
-        const footer = activeSpeaker.querySelector(footerSelector);
-        if (!footer) return null;
-        // The name is in a <span> child; fall back to footer innerText
-        const span = footer.querySelector('span');
-        return (span?.textContent?.trim() || (footer as HTMLElement).innerText?.trim()) || null;
+        function nameFromContainer(container: Element | null): string | null {
+          if (!container) return null;
+          const footer = container.querySelector(footerSelector);
+          if (!footer) return null;
+          const span = footer.querySelector('span');
+          return (span?.textContent?.trim() || (footer as HTMLElement).innerText?.trim()) || null;
+        }
+
+        // Layout 1: Normal view — active speaker has a dedicated full-size container
+        const name1 = nameFromContainer(document.querySelector('.speaker-active-container__video-frame'));
+        if (name1) return name1;
+
+        // Layout 2: Screen-share view — active speaker tile has the --active modifier class
+        const name2 = nameFromContainer(document.querySelector('.speaker-bar-container__video-frame--active'));
+        if (name2) return name2;
+
+        return null;
       }, zoomParticipantNameSelector);
 
       if (!audioSessionStartTime) return;
@@ -313,7 +321,7 @@ function startSpeakerPolling(page: Page, botConfig: BotConfig): void {
     } catch {
       // Page may be navigating — ignore
     }
-  }, 1000);
+  }, 250);
 }
 
 // ---- Helpers ----
