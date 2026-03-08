@@ -156,8 +156,11 @@ model: Optional[WhisperModel] = None
 
 # Load management: Global concurrency limit and bounded queue
 # These settings control how many transcription requests can be processed concurrently.
+# CTranslate2 serializes CUDA ops, so concurrent requests queue on the GPU.
+# RTX 4090 benchmarks (2026-03-08): 20 concurrent handles fine, latency ~3s worst case.
+# Set high enough to avoid artificial bottlenecks, low enough to bound queue latency.
 # MAX_ACTIVE_REQUESTS is the preferred name; MAX_CONCURRENT_TRANSCRIPTIONS is kept for compatibility.
-MAX_CONCURRENT_TRANSCRIPTIONS = _env_int("MAX_ACTIVE_REQUESTS", _env_int("MAX_CONCURRENT_TRANSCRIPTIONS", 2))
+MAX_CONCURRENT_TRANSCRIPTIONS = _env_int("MAX_ACTIVE_REQUESTS", _env_int("MAX_CONCURRENT_TRANSCRIPTIONS", 20))
 MAX_QUEUE_SIZE = _env_int("MAX_QUEUE_SIZE", 10)  # Max requests waiting in queue
 
 # Backpressure strategy:
