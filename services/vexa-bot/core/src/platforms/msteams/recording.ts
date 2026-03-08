@@ -1027,8 +1027,13 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
               (window as any).logBot("Setting up Teams meeting monitoring...");
               
               const leaveCfg = (botConfigData && (botConfigData as any).automaticLeave) || {};
-              const startupAloneTimeoutSeconds = Number(leaveCfg.startupAloneTimeoutSeconds ?? 10);
-              const everyoneLeftTimeoutSeconds = Number(leaveCfg.everyoneLeftTimeoutSeconds ?? 10);
+              // Config values are in milliseconds, convert to seconds
+              const startupAloneTimeoutSeconds = leaveCfg.noOneJoinedTimeout
+                ? Math.floor(Number(leaveCfg.noOneJoinedTimeout) / 1000)
+                : Number(leaveCfg.startupAloneTimeoutSeconds ?? (20 * 60));
+              const everyoneLeftTimeoutSeconds = leaveCfg.everyoneLeftTimeout
+                ? Math.floor(Number(leaveCfg.everyoneLeftTimeout) / 1000)
+                : Number(leaveCfg.everyoneLeftTimeoutSeconds ?? 60);
               
               let aloneTime = 0;
               let lastParticipantCount = 0;
