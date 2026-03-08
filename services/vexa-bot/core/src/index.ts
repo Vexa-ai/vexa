@@ -1166,11 +1166,16 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     Object.defineProperty(window, "outerHeight", { get: () => 1080 });
   });
 
-  // Always initialize virtual camera and avatar display
-  try {
-    await initVirtualCamera(botConfig, page);
-  } catch (err: any) {
-    log(`[Bot] Virtual camera initialization failed (non-fatal): ${err.message}`);
+  // Only initialize virtual camera and avatar for voice agent bots.
+  // Transcription-only bots skip this entirely to save CPU/memory.
+  if (botConfig.voiceAgentEnabled) {
+    try {
+      await initVirtualCamera(botConfig, page);
+    } catch (err: any) {
+      log(`[Bot] Virtual camera initialization failed (non-fatal): ${err.message}`);
+    }
+  } else {
+    log('[Bot] Skipping virtual camera init (transcription-only mode)');
   }
 
   // Always initialize chat service so chat read/write works for every bot
