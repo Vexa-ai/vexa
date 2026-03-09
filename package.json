@@ -27,6 +27,7 @@
     "@radix-ui/react-tabs": "^1.1.13",
     "@radix-ui/react-tooltip": "^1.2.8",
     "@vexa/transcript-rendering": "file:../transcript-rendering",
+    "@vexaai/transcript-rendering": "^0.1.0",
     "ai": "^5.0.110",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -43,7 +44,6 @@
     "remark-gfm": "^4.0.1",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.4.0",
-    "vexa-transcript-rendering": "^0.1.0",
     "zod": "^4.1.13",
     "zustand": "^5.0.9"
   },
