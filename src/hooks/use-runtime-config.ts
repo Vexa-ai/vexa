@@ -6,6 +6,8 @@ interface RuntimeConfig {
   wsUrl: string;
   apiUrl: string;
   defaultBotName: string | null;
+  hostedMode: boolean;
+  webappUrl: string;
 }
 
 // Global cache to avoid refetching on every component mount

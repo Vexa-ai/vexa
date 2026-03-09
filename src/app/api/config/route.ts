@@ -26,10 +26,16 @@ export async function GET() {
   // Get default bot name from environment (optional)
   const defaultBotName = process.env.DEFAULT_BOT_NAME || null;
 
+  // Hosted mode flags (read at runtime, not build time)
+  const hostedMode = process.env.NEXT_PUBLIC_HOSTED_MODE === "true";
+  const webappUrl = process.env.NEXT_PUBLIC_WEBAPP_URL || "https://vexa.ai";
+
   return NextResponse.json({
     wsUrl,
     apiUrl,
     authToken: authToken || null,
     defaultBotName,
+    hostedMode,
+    webappUrl,
   });
 }

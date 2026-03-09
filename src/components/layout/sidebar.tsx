@@ -25,6 +25,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useJoinModalStore } from "@/stores/join-modal-store";
 import { useAdminAuthStore } from "@/stores/admin-auth-store";
 import { AdminAuthModal } from "@/components/admin/admin-auth-modal";
+import { useRuntimeConfig } from "@/hooks/use-runtime-config";
 
 interface SidebarProps {
   isOpen?: boolean;
@@ -45,7 +46,7 @@ const adminNavigation = [
   { name: "Settings", href: "/settings", icon: Settings },
 ];
 
-const IS_HOSTED = process.env.NEXT_PUBLIC_HOSTED_MODE === "true";
+// IS_HOSTED is determined at runtime via /api/config, not build time
 
 function BillingStatus() {
   const [status, setStatus] = useState<{
@@ -124,6 +125,8 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
   const openJoinModal = useJoinModalStore((state) => state.openModal);
   const { isAdminAuthenticated, logout: adminLogout } = useAdminAuthStore();
   const [showAdminAuthModal, setShowAdminAuthModal] = useState(false);
+  const { config } = useRuntimeConfig();
+  const isHosted = config?.hostedMode ?? false;
 
   const handleJoinClick = () => {
     openJoinModal();
@@ -275,11 +278,11 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
 
           {/* Footer */}
           <div className="border-t border-border p-4 shrink-0 space-y-2">
-            {IS_HOSTED && (
+            {isHosted && (
               <>
                 <BillingStatus />
                 <a
-                  href={`${getWebappUrl()}/account`}
+                  href={`${config?.webappUrl || "https://vexa.ai"}/account`}
                   onClick={onClose}
                   className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                 >

@@ -28,6 +28,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { useAuthStore } from "@/stores/auth-store";
 import { cn } from "@/lib/utils";
 import { getDocsUrl } from "@/lib/docs/webapp-url";
+import { useRuntimeConfig } from "@/hooks/use-runtime-config";
 
 interface HeaderProps {
   onMenuClick?: () => void;
@@ -37,6 +38,7 @@ export function Header({ onMenuClick }: HeaderProps) {
   const router = useRouter();
   const { user, logout } = useAuthStore();
   const [docsModeEnabled, setDocsModeEnabled] = useState(false);
+  const { config } = useRuntimeConfig();
 
   useEffect(() => {
     // Read from localStorage on mount
@@ -236,9 +238,9 @@ export function Header({ onMenuClick }: HeaderProps) {
                   Settings
                 </Link>
               </DropdownMenuItem>
-              {process.env.NEXT_PUBLIC_HOSTED_MODE === "true" && (
+              {config?.hostedMode && (
                 <DropdownMenuItem asChild>
-                  <a href={`${process.env.NEXT_PUBLIC_WEBAPP_URL || "https://vexa.ai"}/account`}>
+                  <a href={`${config?.webappUrl || "https://vexa.ai"}/account`}>
                     <ExternalLink className="mr-2 h-4 w-4" />
                     Account
                   </a>
