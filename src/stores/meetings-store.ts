@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Meeting, TranscriptSegment, Platform, MeetingStatus, RecordingData, ChatMessage } from "@/types/vexa";
 import { VexaAPIError, vexaAPI } from "@/lib/api";
-import { deduplicateSegments } from "@vexa/transcript-rendering";
+import { deduplicateSegments } from "vexa-transcript-rendering";
 
 interface MeetingDataUpdate {
   name?: string;

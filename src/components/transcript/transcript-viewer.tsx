@@ -30,7 +30,7 @@ import {
   generateFilename,
 } from "@/lib/export";
 import { cn } from "@/lib/utils";
-import { groupSegments, type SegmentGroup } from "@vexa/transcript-rendering";
+import { groupSegments, type SegmentGroup } from "vexa-transcript-rendering";
 import { format } from "date-fns";
 
 // Linkify URLs in chat message text — splits text into plain strings and clickable <a> elements

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { Meeting, TranscriptSegment, Platform, MeetingStatus } from "@/types/vexa";
-import { deduplicateSegments } from "@vexa/transcript-rendering";
+import { deduplicateSegments } from "vexa-transcript-rendering";
 
 interface LiveMeetingState {
   // Current live meeting
