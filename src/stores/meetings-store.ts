@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Meeting, TranscriptSegment, Platform, MeetingStatus, RecordingData, ChatMessage } from "@/types/vexa";
 import { VexaAPIError, vexaAPI } from "@/lib/api";
-import { deduplicateOverlappingSegments } from "@/lib/transcript-dedup";
+import { deduplicateSegments } from "@vexa/transcript-rendering";
 
 interface MeetingDataUpdate {
   name?: string;
@@ -271,7 +271,7 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
     );
 
     // Deduplicate overlapping segments (expansion, tail-repeat, containment)
-    const dedupedTranscripts = deduplicateOverlappingSegments(sortedTranscripts);
+    const dedupedTranscripts = deduplicateSegments(sortedTranscripts);
 
     // Get the first segment's absolute_start_time to use as meeting start time
     const firstSegmentTime = dedupedTranscripts.length > 0 
@@ -350,7 +350,7 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
     );
 
     // Deduplicate overlapping segments (expansion, tail-repeat, containment)
-    const dedupedTranscripts = deduplicateOverlappingSegments(sortedTranscripts);
+    const dedupedTranscripts = deduplicateSegments(sortedTranscripts);
     
     // Get the first segment's absolute_start_time to use as meeting start time
     const firstSegmentTime = dedupedTranscripts.length > 0 

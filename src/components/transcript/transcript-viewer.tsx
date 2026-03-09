@@ -30,6 +30,7 @@ import {
   generateFilename,
 } from "@/lib/export";
 import { cn } from "@/lib/utils";
+import { groupSegments, type SegmentGroup } from "@vexa/transcript-rendering";
 import { format } from "date-fns";
 
 // Linkify URLs in chat message text — splits text into plain strings and clickable <a> elements
@@ -199,112 +200,9 @@ export function TranscriptViewer({
   }, []);
 
   // ---- Timeline item types for unified transcript + chat rendering ----
-  interface GroupedSegment {
-    speaker: string;
-    startTime: string;       // ISO absolute timestamp
-    endTime: string;
-    startTimeSeconds: number;
-    endTimeSeconds: number;
-    combinedText: string;
-    segments: TranscriptSegmentType[];
-  }
-
   type TimelineItem =
-    | { type: "transcript"; group: GroupedSegment; index: number }
+    | { type: "transcript"; group: SegmentGroup<TranscriptSegmentType>; index: number }
     | { type: "chat"; message: ChatMessage };
-
-  // Group consecutive segments by speaker and combine text
-  const groupSegmentsBySpeaker = useCallback((segments: TranscriptSegmentType[]) => {
-    if (!segments || segments.length === 0) return [];
-
-    // Sort by absolute_start_time
-    const sorted = [...segments].sort((a, b) =>
-      a.absolute_start_time.localeCompare(b.absolute_start_time)
-    );
-
-    const groups: GroupedSegment[] = [];
-    let current: GroupedSegment | null = null;
-
-    for (const seg of sorted) {
-      const speaker = seg.speaker || "Unknown";
-      const text = (seg.text || "").trim();
-      const startTime = seg.absolute_start_time;
-      const endTime = seg.absolute_end_time || seg.absolute_start_time;
-
-      if (!text) continue;
-
-      if (current && current.speaker === speaker) {
-        // Merge with current group
-        current.combinedText += " " + text;
-        current.endTime = endTime;
-        current.endTimeSeconds = seg.end_time;
-        current.segments.push(seg);
-      } else {
-        // Start new group
-        if (current) groups.push(current);
-        current = {
-          speaker,
-          startTime,
-          endTime,
-          startTimeSeconds: seg.start_time,
-          endTimeSeconds: seg.end_time,
-          combinedText: text,
-          segments: [seg],
-        };
-      }
-    }
-
-    if (current) groups.push(current);
-
-    // Split long speaker-runs into chunks for readability, but keep correct timestamps
-    // by chunking on underlying segments (so each chunk's time = first segment in that chunk).
-    const MAX_CHARS = 512;
-    const chunkedGroups: GroupedSegment[] = [];
-
-    for (const g of groups) {
-      if (!g.segments || g.segments.length === 0) continue;
-
-      let chunkSegments: TranscriptSegmentType[] = [];
-      let chunkText = "";
-
-      const flushChunk = () => {
-        if (chunkSegments.length === 0) return;
-        const first = chunkSegments[0];
-        const last = chunkSegments[chunkSegments.length - 1];
-        chunkedGroups.push({
-          speaker: g.speaker,
-          startTime: first.absolute_start_time,
-          endTime: last.absolute_end_time || last.absolute_start_time,
-          startTimeSeconds: first.start_time,
-          endTimeSeconds: last.end_time,
-          combinedText: chunkText.trim(),
-          segments: chunkSegments,
-        });
-        chunkSegments = [];
-        chunkText = "";
-      };
-
-      for (const seg of g.segments) {
-        const segText = (seg.text || "").trim();
-        if (!segText) continue;
-
-        const candidate = chunkText ? `${chunkText} ${segText}` : segText;
-
-        // If adding this segment would exceed MAX_CHARS, flush current chunk first.
-        // Then start a new chunk with this segment.
-        if (chunkSegments.length > 0 && candidate.length > MAX_CHARS) {
-          flushChunk();
-        }
-
-        chunkSegments.push(seg);
-        chunkText = chunkText ? `${chunkText} ${segText}` : segText;
-      }
-
-      flushChunk();
-    }
-
-    return chunkedGroups;
-  }, []);
 
   // Get unique speakers in order of appearance (excluding legacy [Chat] injected segments)
   const speakerOrder = useMemo(() => {
@@ -323,8 +221,8 @@ export function TranscriptViewer({
   // Filter out legacy "[Chat]" transcript-stream-injected segments (now rendered inline via chatMessages)
   const groupedSegments = useMemo(() => {
     const cleaned = segments.filter((seg) => !seg.text?.trimStart().startsWith("[Chat]"));
-    return groupSegmentsBySpeaker(cleaned);
-  }, [segments, segments.length, groupSegmentsBySpeaker]);
+    return groupSegments(cleaned);
+  }, [segments, segments.length]);
 
   // Filter grouped segments by search query and selected speakers
   const filteredSegments = useMemo(() => {
@@ -332,7 +230,7 @@ export function TranscriptViewer({
 
     // Filter by selected speakers
     if (selectedSpeakers.length > 0) {
-      result = result.filter((g) => selectedSpeakers.includes(g.speaker));
+      result = result.filter((g) => selectedSpeakers.includes(g.key));
     }
 
     // Filter by search query
@@ -341,7 +239,7 @@ export function TranscriptViewer({
       result = result.filter(
         (g) =>
           g.combinedText.toLowerCase().includes(query) ||
-          g.speaker.toLowerCase().includes(query)
+          g.key.toLowerCase().includes(query)
       );
     }
 
@@ -1016,7 +914,7 @@ export function TranscriptViewer({
                   absolute_start_time: group.startTime,
                   absolute_end_time: group.endTime,
                   text: group.combinedText,
-                  speaker: group.speaker,
+                  speaker: group.key,
                   language: group.segments[0]?.language || "en",
                   session_uid: group.segments[0]?.session_uid || "",
                   created_at: group.startTime,
@@ -1071,7 +969,7 @@ export function TranscriptViewer({
                   >
                     <TranscriptSegment
                       segment={syntheticSegment}
-                      speakerColor={getSpeakerColor(group.speaker, speakerOrder)}
+                      speakerColor={getSpeakerColor(group.key, speakerOrder)}
                       searchQuery={searchQuery}
                       isHighlighted={searchQuery.length > 0}
                       appendedText={textToHighlight}
