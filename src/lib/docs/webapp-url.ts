@@ -2,7 +2,7 @@
  * Get the webapp URL for API documentation links
  */
 export function getWebappUrl(): string {
-  return process.env.NEXT_PUBLIC_WEBAPP_URL || "https://webapp.vexa.ai";
+  return process.env.NEXT_PUBLIC_WEBAPP_URL || "https://vexa.ai";
 }
 
 /**

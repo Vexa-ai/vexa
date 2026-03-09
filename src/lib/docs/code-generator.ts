@@ -13,7 +13,7 @@ export interface CodeExample {
   code: string;
 }
 
-const BASE_URL = "https://api.cloud.vexa.ai";
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://api.cloud.vexa.ai";
 
 function buildUrl(path: string, query?: Record<string, string>): string {
   const url = `${BASE_URL}${path}`;
