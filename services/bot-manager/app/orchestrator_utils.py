@@ -243,6 +243,8 @@ async def start_bot_container(
         bot_config_data["voiceAgentEnabled"] = bool(voice_agent_enabled)
     if default_avatar_url:
         bot_config_data["defaultAvatarUrl"] = default_avatar_url
+    if os.getenv("SHOW_AVATAR", "true").lower() == "false":
+        bot_config_data["showAvatar"] = False
     # Remove keys with None values before serializing
     cleaned_config_data = {k: v for k, v in bot_config_data.items() if v is not None}
     bot_config_json = json.dumps(cleaned_config_data)

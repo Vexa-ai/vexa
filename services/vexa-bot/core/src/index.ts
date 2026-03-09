@@ -1096,9 +1096,9 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     const isVoiceAgentTeams = !!botConfig.voiceAgentEnabled;
     await context.addInitScript(`window.__vexa_voice_agent_enabled = ${isVoiceAgentTeams};`);
 
-    // Only inject virtual camera (avatar streaming) for voice agent bots.
-    // Transcription-only bots get a lightweight video blocker instead.
-    if (isVoiceAgentTeams) {
+    // Only inject virtual camera (avatar streaming) for voice agent bots with avatar enabled.
+    // Transcription-only bots (or voice agents with showAvatar=false) get a lightweight video blocker instead.
+    if (isVoiceAgentTeams && botConfig.showAvatar !== false) {
       try {
         await context.addInitScript(getVirtualCameraInitScript());
         log('[Bot] Virtual camera init script injected (Teams, voice agent mode)');
@@ -1143,10 +1143,10 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     const isVoiceAgent = !!botConfig.voiceAgentEnabled;
     await context.addInitScript(`window.__vexa_voice_agent_enabled = ${isVoiceAgent};`);
 
-    // Only inject virtual camera (avatar streaming) for voice agent bots.
-    // Transcription-only bots get a lightweight video blocker that stops
+    // Only inject virtual camera (avatar streaming) for voice agent bots with avatar enabled.
+    // Transcription-only bots (or voice agents with showAvatar=false) get a lightweight video blocker that stops
     // incoming video tracks and transceivers to save CPU/memory.
-    if (isVoiceAgent) {
+    if (isVoiceAgent && botConfig.showAvatar !== false) {
       try {
         await context.addInitScript(getVirtualCameraInitScript());
         log('[Bot] Virtual camera init script injected (voice agent mode)');
@@ -1212,16 +1212,16 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     Object.defineProperty(window, "outerHeight", { get: () => 1080 });
   });
 
-  // Only initialize virtual camera and avatar for voice agent bots.
-  // Transcription-only bots skip this entirely to save CPU/memory.
-  if (botConfig.voiceAgentEnabled) {
+  // Only initialize virtual camera and avatar for voice agent bots with avatar enabled.
+  // Transcription-only bots or voice agents with showAvatar=false skip this to save CPU/memory.
+  if (botConfig.voiceAgentEnabled && botConfig.showAvatar !== false) {
     try {
       await initVirtualCamera(botConfig, page);
     } catch (err: any) {
       log(`[Bot] Virtual camera initialization failed (non-fatal): ${err.message}`);
     }
   } else {
-    log('[Bot] Skipping virtual camera init (transcription-only mode)');
+    log(`[Bot] Skipping virtual camera init (${botConfig.voiceAgentEnabled ? 'showAvatar=false' : 'transcription-only mode'})`);
   }
 
   // Always initialize chat service so chat read/write works for every bot
