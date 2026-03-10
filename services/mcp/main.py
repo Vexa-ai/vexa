@@ -269,6 +269,39 @@ def _parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
 
     # Teams enterprise: teams.microsoft.com, gov.teams.microsoft.us, dod.teams.microsoft.us, etc.
     if _is_teams_enterprise_host(host):
+        # Launcher deep link: /dl/launcher/launcher.html?url=<encoded_path>&type=meet&...
+        # The real meeting path is URL-encoded inside the ?url= parameter.
+        # Example: /dl/launcher/launcher.html?url=%2F_%23%2Fmeet%2F33122884984323%3Fp%3Dxyz%26anon%3Dtrue
+        # Decoded url param: /_#/meet/33122884984323?p=xyz&anon=true
+        if path.startswith("/dl/launcher/"):
+            inner_url_raw = (query.get("url") or [None])[0]
+            if inner_url_raw:
+                from urllib.parse import unquote
+                inner_url = unquote(inner_url_raw)
+                # Inner path format: /_#/meet/<id>?p=<passcode>&anon=true
+                # The # splits into path=/_  fragment=/meet/<id>?p=...
+                inner_parsed = urlparse("https://" + host + inner_url)
+                inner_frag = inner_parsed.fragment or ""
+                # Parse the fragment as a URL to separate path from query
+                frag_parsed = urlparse("https://x" + inner_frag) if inner_frag else None
+                frag_path = frag_parsed.path if frag_parsed else ""
+                frag_query = parse_qs(frag_parsed.query or "") if frag_parsed else {}
+                # frag_path may contain &params if inner URL had no ? separator
+                frag_path_clean = frag_path.split("&")[0].split("?")[0]
+                fm = re.match(r"^/meet/(\d{10,15})/?$", frag_path_clean)
+                if fm:
+                    native_id = fm.group(1)
+                    passcode = (frag_query.get("p") or [None])[0]
+                    if not passcode:
+                        warnings.append("Teams meeting link has no ?p= passcode. Many Teams meetings require it.")
+                    return ParseMeetingLinkResponse(
+                        platform="teams",
+                        native_meeting_id=native_id,
+                        passcode=passcode,
+                        teams_base_host=host,
+                        warnings=warnings,
+                    )
+
         # Deep link format: /v2/?meetingjoin=true#/meet/<id>?p=<passcode>
         # The meeting info lives in the fragment, not the path/query
         fragment = parsed.fragment or ""

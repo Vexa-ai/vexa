@@ -138,6 +138,30 @@ class TestTeamsEnterpriseShort:
         assert r.native_meeting_id == "33749853217630"
         assert any("passcode" in w.lower() for w in r.warnings)
 
+    def test_dl_launcher_deep_link(self):
+        url = (
+            "https://teams.microsoft.com/dl/launcher/launcher.html"
+            "?url=%2F_%23%2Fmeet%2F33122884984323%3Fp%3DJ3o61K6vtz0f8RqKru%26anon%3Dtrue"
+            "&type=meet&deeplinkId=96bb53ab-7c6f-47eb-b532-38e29ada69f1"
+            "&directDl=true&msLaunch=true&enableMobilePage=true&suppressPrompt=true"
+        )
+        r = parse(url)
+        assert r.platform == "teams"
+        assert r.native_meeting_id == "33122884984323"
+        assert r.passcode == "J3o61K6vtz0f8RqKru"
+        assert r.teams_base_host == "teams.microsoft.com"
+
+    def test_dl_launcher_no_passcode(self):
+        url = (
+            "https://teams.microsoft.com/dl/launcher/launcher.html"
+            "?url=%2F_%23%2Fmeet%2F33122884984323%26anon%3Dtrue"
+            "&type=meet"
+        )
+        r = parse(url)
+        assert r.native_meeting_id == "33122884984323"
+        assert r.passcode is None
+        assert any("passcode" in w.lower() for w in r.warnings)
+
 
 # ---------------------------------------------------------------------------
 # Teams enterprise legacy long URL (Track B)

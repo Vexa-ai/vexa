@@ -1,0 +1,30 @@
+# Smithery configuration for Vexa MCP Server
+# https://smithery.ai/docs/build/project-config/smithery.yaml
+
+startCommand:
+  type: http
+  configSchema:
+    type: object
+    required:
+      - vexaApiKey
+    properties:
+      vexaApiKey:
+        type: string
+        title: "Vexa API Key"
+        description: "Your Vexa API key. Get one at https://vexa.ai/dashboard/api-keys"
+  commandFunction: |-
+    (config) => ({
+      command: "python",
+      args: ["services/mcp/main.py"],
+      env: {
+        API_GATEWAY_URL: "https://api.cloud.vexa.ai",
+        VEXA_API_KEY: config.vexaApiKey
+      }
+    })
+
+exampleConfig:
+  vexaApiKey: "your-vexa-api-key-here"
+
+build:
+  dockerfile: services/mcp/Dockerfile
+  dockerBuildPath: .
