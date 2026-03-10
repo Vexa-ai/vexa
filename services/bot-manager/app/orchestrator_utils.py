@@ -310,10 +310,14 @@ async def start_bot_container(
     }
 
     if agent_enabled:
-        # Mount Claude credentials for CLI access inside container
+        vexa_repo_path = os.environ.get("VEXA_REPO_PATH", "/home/dima/dev/vexa")
+        claude_home = os.environ.get("CLAUDE_HOME", "/home/dima")
         host_config["Binds"] = [
-            "/home/dima/.claude/.credentials.json:/root/.claude/.credentials.json:ro",
-            "/home/dima/.claude.json:/root/.claude.json:ro",
+            # Claude CLI credentials
+            f"{claude_home}/.claude/.credentials.json:/root/.claude/.credentials.json:ro",
+            f"{claude_home}/.claude.json:/root/.claude.json:ro",
+            # Agent context (CLAUDE.md + settings) for Claude CLI
+            f"{vexa_repo_path}/experiments/.claude:/app/vexa-bot/core/.claude:ro",
         ]
         host_config["ShmSize"] = 2 * 1024 * 1024 * 1024  # 2GB shared memory for Chromium
 

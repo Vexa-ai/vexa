@@ -4,7 +4,7 @@ You are inside the vexa-bot Docker container with Playwright, Chromium, and the 
 
 ## Environment
 
-- **Bot source**: `/app/vexa-bot/core/src/` (TypeScript, bind-mounted from host)
+- **Bot source**: `/app/vexa-bot/core/src/` (TypeScript, baked into experiment image)
 - **Built output**: `/app/vexa-bot/core/dist/`
 - **Display**: `DISPLAY=:99` (Xvfb running)
 - **Workspace**: `/workspace/` (persists on host)
