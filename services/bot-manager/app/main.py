@@ -1816,8 +1816,8 @@ async def internal_upload_recording(
         await db.flush()  # get recording.id
     storage_recording_id = legacy_recording_id if use_meeting_data_mode else recording.id
 
-    # Upload to object storage
-    storage_path = f"recordings/{user_id}/{storage_recording_id}/{session_uid}.{media_format}"
+    # Upload to object storage (include media_type in path to avoid collision when audio+video both upload)
+    storage_path = f"recordings/{user_id}/{storage_recording_id}/{session_uid}_{media_type}.{media_format}"
     content_type_map = {
         "wav": "audio/wav",
         "webm": "video/webm",
@@ -1840,15 +1840,33 @@ async def internal_upload_recording(
         raise HTTPException(status_code=500, detail="Failed to upload recording to storage")
 
     if get_recording_metadata_mode() == "meeting_data":
-        existing_media = (
-            existing_recording_payload.get("media_files", [{}])[0]
-            if existing_recording_payload else {}
+        # Preserve all existing media files; find the entry for this media_type to update (or append)
+        existing_media_files = list(existing_recording_payload.get("media_files", [])) if existing_recording_payload else []
+        existing_type_idx = next(
+            (i for i, mf in enumerate(existing_media_files) if mf.get("type") == media_type), None
         )
-        media_file_id = existing_media.get("id") or _new_recording_numeric_id()
+        # Reuse existing id for this media type if present, otherwise generate a new one
+        existing_media_entry = existing_media_files[existing_type_idx] if existing_type_idx is not None else {}
+        media_file_id = existing_media_entry.get("id") or _new_recording_numeric_id()
         created_at = (
             existing_recording_payload.get("created_at")
             if existing_recording_payload else datetime.utcnow().isoformat()
         )
+        new_media_entry = {
+            "id": media_file_id,
+            "type": media_type,
+            "format": media_format,
+            "storage_path": storage_path,
+            "storage_backend": os.environ.get("STORAGE_BACKEND", "minio"),
+            "file_size_bytes": file_size,
+            "duration_seconds": duration_seconds,
+            "metadata": {"sample_rate": sample_rate} if sample_rate else {},
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        if existing_type_idx is not None:
+            existing_media_files[existing_type_idx] = new_media_entry
+        else:
+            existing_media_files.append(new_media_entry)
         recording_payload = {
             "id": legacy_recording_id,
             "meeting_id": meeting.id,
@@ -1858,19 +1876,7 @@ async def internal_upload_recording(
             "status": RecordingStatus.COMPLETED.value if is_final else RecordingStatus.IN_PROGRESS.value,
             "created_at": created_at,
             "completed_at": datetime.utcnow().isoformat() if is_final else None,
-            "media_files": [
-                {
-                    "id": media_file_id,
-                    "type": media_type,
-                    "format": media_format,
-                    "storage_path": storage_path,
-                    "storage_backend": os.environ.get("STORAGE_BACKEND", "minio"),
-                    "file_size_bytes": file_size,
-                    "duration_seconds": duration_seconds,
-                    "metadata": {"sample_rate": sample_rate} if sample_rate else {},
-                    "created_at": datetime.utcnow().isoformat(),
-                }
-            ],
+            "media_files": existing_media_files,
         }
         if existing_recording_index is None:
             recordings.append(recording_payload)

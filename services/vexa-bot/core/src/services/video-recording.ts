@@ -212,8 +212,9 @@ export class VideoRecordingService {
     // Capture at 5fps — enough to follow screen shares and meeting content
     // while keeping file size and CPU usage reasonable.
     const fps = '5';
-    const inputSize = '1920x1080';
-    const outputSize = '1280:720';
+    // Capture only the browser viewport area (1280x720) so the video isn't padded
+    // with black borders from the larger Xvfb display (1920x1080).
+    const inputSize = '1280x720';
 
     // Common input: x11grab from the virtual display
     const inputArgs = [
@@ -232,7 +233,7 @@ export class VideoRecordingService {
         // Requires /dev/dri/renderD128 device in container
         encoderArgs = [
           '-vaapi_device', '/dev/dri/renderD128',
-          '-vf', `scale=${outputSize},format=nv12,hwupload`,
+          '-vf', 'format=nv12,hwupload',
           '-c:v', 'h264_vaapi',
           '-qp', '28',
         ];
@@ -244,7 +245,6 @@ export class VideoRecordingService {
         // Requires nvidia container runtime
         encoderArgs = [
           '-hwaccel', 'cuda',
-          '-vf', `scale=${outputSize}`,
           '-c:v', 'h264_nvenc',
           '-cq', '28',
           '-preset', 'p2',
@@ -255,7 +255,6 @@ export class VideoRecordingService {
       default: {
         // Software encoding with VP9 — excellent compression for screen content
         encoderArgs = [
-          '-vf', `scale=${outputSize}`,
           '-c:v', 'libvpx-vp9',
           '-crf', '35',
           '-b:v', '0',
