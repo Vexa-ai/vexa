@@ -28,7 +28,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { shouldTriggerZoomOAuth, startZoomOAuth } from "@/lib/zoom-oauth-client";
 
 // Parse Google Meet, Zoom, or Teams URL/meeting ID
-function parseMeetingInput(input: string): { platform: Platform; meetingId: string; passcode?: string } | null {
+function parseMeetingInput(input: string): { platform: Platform; meetingId: string; passcode?: string; originalUrl?: string } | null {
   const trimmed = input.trim();
   if (!trimmed) return null;
   // Google Meet URL patterns
@@ -37,7 +37,7 @@ function parseMeetingInput(input: string): { platform: Platform; meetingId: stri
   const googleMeetUrlRegex = /(?:https?:\/\/)?meet\.google\.com\/([a-z]{3}-[a-z]{4}-[a-z]{3})/i;
   const googleMeetMatch = trimmed.match(googleMeetUrlRegex);
   if (googleMeetMatch) {
-    return { platform: "google_meet", meetingId: googleMeetMatch[1].toLowerCase() };
+    return { platform: "google_meet", meetingId: googleMeetMatch[1].toLowerCase(), originalUrl: trimmed };
   }
 
   // Direct Google Meet code (abc-defg-hij)
@@ -62,7 +62,7 @@ function parseMeetingInput(input: string): { platform: Platform; meetingId: stri
     const passcodeMatch = trimmed.match(/[?&]p=([^&]+)/i);
     const passcode = passcodeMatch ? decodeURIComponent(passcodeMatch[1]) : undefined;
     
-    return { platform: "teams", meetingId, passcode };
+    return { platform: "teams", meetingId, passcode, originalUrl: trimmed };
   }
 
   // Zoom URL patterns
@@ -73,7 +73,7 @@ function parseMeetingInput(input: string): { platform: Platform; meetingId: stri
   if (zoomMatch) {
     const passcodeMatch = trimmed.match(/[?&]pwd=([^&]+)/i);
     const passcode = passcodeMatch ? decodeURIComponent(passcodeMatch[1]) : undefined;
-    return { platform: "zoom", meetingId: zoomMatch[1], passcode };
+    return { platform: "zoom", meetingId: zoomMatch[1], passcode, originalUrl: trimmed };
   }
 
   // Zoom meeting ID (9-11 digits)
@@ -94,7 +94,7 @@ function parseMeetingInput(input: string): { platform: Platform; meetingId: stri
       // Also try to extract passcode from query string
       const passcodeMatch = trimmed.match(/[?&]p=([^&]+)/i);
       const passcode = passcodeMatch ? decodeURIComponent(passcodeMatch[1]) : undefined;
-      return { platform: "teams", meetingId: genericId, passcode };
+      return { platform: "teams", meetingId: genericId, passcode, originalUrl: trimmed };
     }
   }
 
@@ -181,6 +181,11 @@ export function JoinModal() {
     // Add passcode for Teams and Zoom meetings
     if ((parsedInput.platform === "teams" || parsedInput.platform === "zoom") && finalPasscode) {
       request.passcode = finalPasscode;
+    }
+
+    // Pass original URL so API uses it directly instead of reconstructing
+    if (parsedInput.originalUrl) {
+      request.meeting_url = parsedInput.originalUrl;
     }
 
     // Set bot name - use custom name or configured default
