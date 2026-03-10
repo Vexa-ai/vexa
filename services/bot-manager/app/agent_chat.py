@@ -26,7 +26,7 @@ class AgentChatManager:
 
     async def _get_docker(self) -> aiodocker.Docker:
         if self._docker is None:
-            self._docker = aiodocker.Docker()
+            self._docker = aiodocker.Docker(url="unix:///var/run/docker.sock")
         return self._docker
 
     async def chat(
