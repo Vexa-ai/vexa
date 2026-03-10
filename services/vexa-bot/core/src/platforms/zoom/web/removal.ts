@@ -22,11 +22,17 @@ export function startZoomWebRemovalMonitor(
       const modalEl = page.locator(zoomMeetingEndedModalSelector).first();
       const modalVisible = await modalEl.isVisible({ timeout: 300 }).catch(() => false);
       if (modalVisible) {
-        const modalText = await modalEl.textContent();
-        log(`[Zoom Web] Removal/end modal detected: "${modalText?.trim()}"`);
-        stopped = true;
-        onRemoval && await onRemoval();
-        return;
+        const modalText = await modalEl.textContent() ?? '';
+        const trimmed = modalText.trim();
+        const isRemoval = zoomRemovalTexts.some(t => trimmed.includes(t));
+        if (isRemoval) {
+          log(`[Zoom Web] Removal/end modal detected: "${trimmed}"`);
+          stopped = true;
+          onRemoval && await onRemoval();
+          return;
+        } else {
+          log(`[Zoom Web] Ignoring non-removal modal: "${trimmed}"`);
+        }
       }
 
       // Check via body text for removal phrases
