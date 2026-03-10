@@ -79,7 +79,8 @@ class Meeting(Base):
     def constructed_meeting_url(self) -> Optional[str]: # Added return type hint
         # Calculate the URL on demand using the static method from schemas.py
         if self.platform and self.platform_specific_id:
-             return Platform.construct_meeting_url(self.platform, self.platform_specific_id)
+            passcode = (self.data or {}).get('passcode') if isinstance(self.data, dict) else None
+            return Platform.construct_meeting_url(self.platform, self.platform_specific_id, passcode=passcode)
         return None
 
 class Transcription(Base):
