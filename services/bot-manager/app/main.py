@@ -459,10 +459,13 @@ async def startup_event():
 
     logger.info("Database, Docker Client (attempted), and Redis Client (attempted) initialized.")
     
-    # Start reconciliation scheduler
-    logger.info("[Startup] Starting reconciliation scheduler...")
-    asyncio.create_task(start_reconciliation_scheduler())
-    logger.info("[Startup] Reconciliation scheduler started")
+    # Start reconciliation scheduler (disabled by default — not K8s-aware, kills production bots)
+    if os.environ.get("ENABLE_RECONCILIATION", "").lower() in ("1", "true", "yes"):
+        logger.info("[Startup] Starting reconciliation scheduler...")
+        asyncio.create_task(start_reconciliation_scheduler())
+        logger.info("[Startup] Reconciliation scheduler started")
+    else:
+        logger.info("[Startup] Reconciliation scheduler DISABLED (set ENABLE_RECONCILIATION=1 to enable)")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -579,6 +582,55 @@ async def request_bot(
     """
     user_token, current_user = auth_data
 
+    # --- Agent-only mode: no meeting, just a container with Playwright + Claude ---
+    if req.agent_enabled and req.platform is None:
+        logger.info(f"Agent-only bot request from user {current_user.id}")
+        # Create a minimal meeting record to track the container
+        new_meeting = Meeting(
+            user_id=current_user.id,
+            platform="agent",
+            platform_specific_id=f"agent-{uuid_lib.uuid4().hex[:8]}",
+            status=MeetingStatus.REQUESTED.value,
+            data={"agent_enabled": True},
+        )
+        db.add(new_meeting)
+        await db.commit()
+        await db.refresh(new_meeting)
+        meeting_id = new_meeting.id
+        logger.info(f"Created agent-only meeting record with ID: {meeting_id}")
+
+        try:
+            container_id, connection_id = await start_bot_container(
+                user_id=current_user.id,
+                meeting_id=meeting_id,
+                meeting_url=None,
+                platform="agent",
+                bot_name=req.bot_name or "VexaAgent",
+                user_token=user_token,
+                native_meeting_id=new_meeting.platform_specific_id,
+                language=None,
+                task=None,
+                agent_enabled=True,
+            )
+            if not container_id:
+                new_meeting.status = MeetingStatus.FAILED.value
+                await db.commit()
+                raise HTTPException(status_code=500, detail="Failed to start agent container")
+
+            new_meeting.bot_container_id = container_id
+            new_meeting.status = MeetingStatus.ACTIVE.value
+            await db.commit()
+            await db.refresh(new_meeting)
+            logger.info(f"Agent container {container_id} started for meeting {meeting_id}")
+            return MeetingResponse.model_validate(new_meeting)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to start agent container: {e}", exc_info=True)
+            new_meeting.status = MeetingStatus.FAILED.value
+            await db.commit()
+            raise HTTPException(status_code=500, detail=f"Agent container failed: {e}")
+
     logger.info(f"Received bot request for platform '{req.platform.value}' with native ID '{req.native_meeting_id}' from user {current_user.id}")
     native_meeting_id = req.native_meeting_id
 
@@ -606,7 +658,7 @@ async def request_bot(
         Meeting.platform_specific_id == native_meeting_id,
         Meeting.status.in_(['requested', 'joining', 'awaiting_admission', 'active']) # Block on all non-terminal states (excluding 'stopping' to allow immediate new bot after stop)
     ).order_by(desc(Meeting.created_at)).limit(1) # Get the latest one if multiple somehow exist
-    
+
     result = await db.execute(existing_meeting_stmt)
     existing_meeting = result.scalars().first()
     if existing_meeting:
@@ -817,7 +869,8 @@ async def request_bot(
             transcribe_enabled=req.transcribe_enabled,
             zoom_obf_token=zoom_obf_token_to_use,
             voice_agent_enabled=req.voice_agent_enabled,
-            default_avatar_url=req.default_avatar_url
+            default_avatar_url=req.default_avatar_url,
+            agent_enabled=req.agent_enabled,
         )
         container_start_time = datetime.utcnow()
         logger.info(f"Call to start_bot_container completed. Container ID: {container_id}, Connection ID: {connection_id}")

@@ -40,6 +40,7 @@ from sqlalchemy import select as sa_select
 DOCKER_HOST = os.environ.get("DOCKER_HOST", "unix://var/run/docker.sock")
 DOCKER_NETWORK = os.environ.get("DOCKER_NETWORK", "vexa_default")
 BOT_IMAGE_NAME = os.environ.get("BOT_IMAGE_NAME", "vexa-bot:dev")
+BOT_EXPERIMENT_IMAGE_NAME = os.environ.get("BOT_EXPERIMENT_IMAGE_NAME", "vexa-bot:experiment")
 
 # For example, use 'cuda' for NVIDIA GPUs or 'cpu' for CPU
 DEVICE_TYPE = os.environ.get("DEVICE_TYPE", "cuda").lower()
@@ -154,7 +155,8 @@ async def start_bot_container(
     transcribe_enabled: Optional[bool] = None,
     zoom_obf_token: Optional[str] = None,
     voice_agent_enabled: Optional[bool] = None,
-    default_avatar_url: Optional[str] = None
+    default_avatar_url: Optional[str] = None,
+    agent_enabled: Optional[bool] = None,
 ) -> Optional[tuple[str, str]]:
     """
     Starts a vexa-bot container via requests_unixsocket AFTER checking user limit.
@@ -262,10 +264,13 @@ async def start_bot_container(
 
     # These are the environment variables passed to the Node.js process  of the vexa-bot started by your entrypoint.sh.
     environment = [
-        f"BOT_CONFIG={bot_config_json}",
-        f"WHISPER_LIVE_URL={whisper_live_url_for_bot}", # Use the URL from bot-manager's env
         f"LOG_LEVEL={os.getenv('LOG_LEVEL', 'INFO').upper()}",
     ]
+
+    # Agent-only mode (agent_enabled + no meeting_url): skip BOT_CONFIG → entrypoint does sleep infinity
+    if not agent_enabled or meeting_url:
+        environment.insert(0, f"BOT_CONFIG={bot_config_json}")
+    environment.append(f"WHISPER_LIVE_URL={whisper_live_url_for_bot}")
 
     # Add voice agent environment variables (TTS service URL required)
     if voice_agent_enabled:
@@ -298,14 +303,25 @@ async def start_bot_container(
     socket_url_base = f'http+unix://{socket_path_encoded}'
 
     # Docker API payload for creating a container
+    image = BOT_EXPERIMENT_IMAGE_NAME if agent_enabled else BOT_IMAGE_NAME
+    host_config = {
+        "NetworkMode": DOCKER_NETWORK,
+        "AutoRemove": not agent_enabled,  # Agent containers persist for interactive use
+    }
+
+    if agent_enabled:
+        # Mount Claude credentials for CLI access inside container
+        host_config["Binds"] = [
+            "/home/dima/.claude/.credentials.json:/root/.claude/.credentials.json:ro",
+            "/home/dima/.claude.json:/root/.claude.json:ro",
+        ]
+        host_config["ShmSize"] = 2 * 1024 * 1024 * 1024  # 2GB shared memory for Chromium
+
     create_payload = {
-        "Image": BOT_IMAGE_NAME,
+        "Image": image,
         "Env": environment,
-        "Labels": {"vexa.user_id": str(user_id)}, # *** ADDED Label ***
-        "HostConfig": {
-            "NetworkMode": DOCKER_NETWORK,
-            "AutoRemove": True,
-        },
+        "Labels": {"vexa.user_id": str(user_id)},
+        "HostConfig": host_config,
     }
 
     create_url = f'{socket_url_base}/containers/create?name={container_name}'
@@ -313,7 +329,7 @@ async def start_bot_container(
 
     container_id = None # Initialize container_id
     try:
-        logger.info(f"Attempting to create bot container '{container_name}' ({BOT_IMAGE_NAME}) via socket ({socket_url_base})...")
+        logger.info(f"Attempting to create bot container '{container_name}' ({image}) via socket ({socket_url_base})...")
         response = session.post(create_url, json=create_payload)
         response.raise_for_status()
         container_info = response.json()

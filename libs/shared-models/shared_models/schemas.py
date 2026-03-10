@@ -1,5 +1,5 @@
 from typing import List, Optional, Dict, Tuple, Any
-from pydantic import BaseModel, Field, EmailStr, field_serializer, field_validator, ValidationInfo
+from pydantic import BaseModel, Field, EmailStr, field_serializer, field_validator, model_validator, ValidationInfo
 from datetime import datetime
 from enum import Enum, auto
 import re # Import re for native ID validation
@@ -351,8 +351,8 @@ class MeetingBase(BaseModel):
     # Removed get_bot_platform method, use Platform.get_bot_name(self.platform.value) if needed
 
 class MeetingCreate(BaseModel):
-    platform: Platform
-    native_meeting_id: str = Field(..., description="The platform-specific ID for the meeting (e.g., Google Meet code, Teams ID)")
+    platform: Optional[Platform] = Field(None, description="Meeting platform. Required unless agent_enabled=true with no meeting.")
+    native_meeting_id: Optional[str] = Field(None, description="The platform-specific ID for the meeting (e.g., Google Meet code, Teams ID). Required unless agent_enabled=true with no meeting.")
     bot_name: Optional[str] = Field(None, description="Optional name for the bot in the meeting")
     language: Optional[str] = Field(None, description="Optional language code for transcription (e.g., 'en', 'es')")
     task: Optional[str] = Field(None, description="Optional task for the transcription model (e.g., 'transcribe', 'translate')")
@@ -389,11 +389,17 @@ class MeetingCreate(BaseModel):
         None,
         description="Custom default avatar image URL for the bot's camera feed. Shown when no screen content is active. If omitted, the default Vexa logo is used."
     )
+    agent_enabled: Optional[bool] = Field(
+        False,
+        description="Enable Claude agent in the bot container. Agent can control the browser, debug selectors, and modify code interactively."
+    )
 
     @field_validator('platform')
     @classmethod
     def platform_must_be_valid(cls, v):
         """Validate that the platform is one of the supported platforms"""
+        if v is None:
+            return v  # Allowed when agent_enabled=True with no meeting
         try:
             Platform(v)
             return v
@@ -458,9 +464,11 @@ class MeetingCreate(BaseModel):
     @classmethod
     def validate_native_meeting_id(cls, v, info: ValidationInfo):
         """Validate that the native meeting ID matches the expected format for the platform."""
-        if not v or not v.strip():
+        if v is None:
+            return v  # Allowed when agent_enabled=True with no meeting
+        if not v.strip():
             raise ValueError("native_meeting_id cannot be empty")
-        
+
         platform = info.data.get('platform') if info.data else None
         if not platform:
             return v  # Let platform validator handle this case
@@ -487,6 +495,15 @@ class MeetingCreate(BaseModel):
                 )
         
         return v
+
+    @model_validator(mode='after')
+    def validate_meeting_or_agent(self):
+        """Ensure at least one of meeting info or agent_enabled is provided."""
+        has_meeting = self.platform is not None and self.native_meeting_id is not None
+        has_agent = bool(self.agent_enabled)
+        if not has_meeting and not has_agent:
+            raise ValueError("Either provide platform + native_meeting_id for a meeting, or set agent_enabled=true")
+        return self
 
 class MeetingResponse(BaseModel): # Not inheriting from MeetingBase anymore to avoid duplicate fields if DB model is used directly
     id: int = Field(..., description="Internal database ID for the meeting")
