@@ -508,7 +508,7 @@ class MeetingCreate(BaseModel):
 class MeetingResponse(BaseModel): # Not inheriting from MeetingBase anymore to avoid duplicate fields if DB model is used directly
     id: int = Field(..., description="Internal database ID for the meeting")
     user_id: int
-    platform: Platform # Use the enum type
+    platform: Optional[str] = None  # str to allow "agent" for agent-only containers
     native_meeting_id: Optional[str] = Field(None, description="The native meeting identifier provided during creation") # Renamed from platform_specific_id for clarity
     constructed_meeting_url: Optional[str] = Field(None, description="The meeting URL constructed internally, if possible") # Added for info
     status: MeetingStatus = Field(..., description="Current meeting status")
