@@ -602,11 +602,23 @@ async function performGracefulLeave(
     botPaSinkModuleId = null;
   }
 
-  // Stop and upload video recording if active
+  // Stop video recording, mux audio in, and upload the combined file
   if (activeVideoRecordingService && currentBotConfig?.recordingUploadUrl && currentBotConfig?.token) {
     try {
       log("[Graceful Leave] Stopping video recording...");
       await activeVideoRecordingService.stop();
+
+      // Finalize audio and mux into the video so the upload is a single self-contained file
+      if (activeRecordingService) {
+        try {
+          const audioPath = await activeRecordingService.finalize();
+          log("[Graceful Leave] Muxing audio into video...");
+          await activeVideoRecordingService.muxAudio(audioPath);
+        } catch (muxErr: any) {
+          log(`[Graceful Leave] Audio mux failed (will upload video-only): ${muxErr.message}`);
+        }
+      }
+
       log("[Graceful Leave] Uploading video to bot-manager...");
       await activeVideoRecordingService.upload(currentBotConfig.recordingUploadUrl, currentBotConfig.token);
       log("[Graceful Leave] Video uploaded successfully.");
@@ -618,14 +630,14 @@ async function performGracefulLeave(
     }
   }
 
-  // Upload audio recording if available
+  // Upload audio recording separately (used for audio-only playback / transcription alignment)
   if (activeRecordingService && currentBotConfig?.recordingUploadUrl && currentBotConfig?.token) {
     try {
-      log("[Graceful Leave] Uploading recording to bot-manager...");
+      log("[Graceful Leave] Uploading audio recording to bot-manager...");
       await activeRecordingService.upload(currentBotConfig.recordingUploadUrl, currentBotConfig.token);
-      log("[Graceful Leave] Recording uploaded successfully.");
+      log("[Graceful Leave] Audio recording uploaded successfully.");
     } catch (uploadError: any) {
-      log(`[Graceful Leave] Recording upload failed: ${uploadError.message}`);
+      log(`[Graceful Leave] Audio recording upload failed: ${uploadError.message}`);
     } finally {
       await activeRecordingService.cleanup();
       activeRecordingService = null;

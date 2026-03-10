@@ -9,6 +9,8 @@ const baseBrowserArgs = [
   "--disable-features=IsolateOrigins,site-per-process",
   "--disable-infobars",
   "--disable-gpu",
+  "--window-size=1280,720",
+  "--start-maximized",
   "--use-fake-ui-for-media-stream",
   "--use-file-for-fake-video-capture=/dev/null",
   "--allow-running-insecure-content",

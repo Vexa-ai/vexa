@@ -191,6 +191,62 @@ export class VideoRecordingService {
     });
   }
 
+  /**
+   * Mux an audio file into the video, producing a self-contained file.
+   * Copies the video stream as-is and encodes audio (opus for webm, aac for mkv/mp4).
+   * Replaces this.filePath with the muxed output.
+   */
+  async muxAudio(audioPath: string): Promise<void> {
+    if (!fs.existsSync(this.filePath)) {
+      log(`[VideoRecording] Video file not found for muxing: ${this.filePath}`);
+      return;
+    }
+    if (!fs.existsSync(audioPath)) {
+      log(`[VideoRecording] Audio file not found for muxing: ${audioPath}`);
+      return;
+    }
+
+    const muxedPath = this.filePath.replace(`.${this.format}`, `_muxed.${this.format}`);
+    const audioCodec = this.format === 'webm' ? 'libopus' : 'aac';
+
+    const args = [
+      '-y',
+      '-i', this.filePath,
+      '-i', audioPath,
+      '-c:v', 'copy',
+      '-c:a', audioCodec,
+      '-shortest',
+      muxedPath,
+    ];
+
+    log(`[VideoRecording] Muxing audio into video: ffmpeg ${args.join(' ')}`);
+
+    return new Promise((resolve) => {
+      const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      let stderr = '';
+      proc.stderr?.on('data', (data: Buffer) => { stderr += data.toString(); });
+      proc.on('exit', async (code) => {
+        if (code === 0 && fs.existsSync(muxedPath)) {
+          // Replace the original video-only file with the muxed one
+          try {
+            await fs.promises.unlink(this.filePath);
+          } catch {}
+          this.filePath = muxedPath;
+          const stats = fs.statSync(muxedPath);
+          log(`[VideoRecording] Muxed file ready: ${muxedPath} (${stats.size} bytes)`);
+        } else {
+          log(`[VideoRecording] Mux failed (code=${code}): ${stderr.slice(-500)}`);
+          // Keep the original video-only file for upload
+        }
+        resolve();
+      });
+      proc.on('error', (err) => {
+        log(`[VideoRecording] Mux spawn error: ${err.message}`);
+        resolve();
+      });
+    });
+  }
+
   async cleanup(): Promise<void> {
     try {
       if (fs.existsSync(this.filePath)) {
