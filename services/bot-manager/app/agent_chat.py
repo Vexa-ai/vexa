@@ -45,7 +45,7 @@ class AgentChatManager:
 
         # Read existing session_id from container
         session_id = await self._exec_simple(container_id,
-            ["cat", "/app/vexa-bot/core/.claude/.session"])
+            ["cat", "/tmp/.claude-session"])
 
         # Write prompt to file inside container (avoid shell escaping)
         encoded = base64.b64encode(message.encode()).decode()
@@ -136,7 +136,7 @@ class AgentChatManager:
             if new_session_id:
                 await self._exec_simple(container_id, [
                     "sh", "-c",
-                    f"mkdir -p /app/vexa-bot/core/.claude && echo '{new_session_id}' > /app/vexa-bot/core/.claude/.session"
+                    f"echo '{new_session_id}' > /tmp/.claude-session"
                 ])
                 logger.info(f"Saved session {new_session_id[:12]}... for {container_id[:12]}")
 
@@ -161,7 +161,7 @@ class AgentChatManager:
         """Delete .claude/.session inside container to start fresh."""
         await self.interrupt(container_id)
         await self._exec_simple(container_id, [
-            "rm", "-f", "/app/vexa-bot/core/.claude/.session"
+            "rm", "-f", "/tmp/.claude-session"
         ])
         logger.info(f"Session reset for {container_id[:12]}")
 
