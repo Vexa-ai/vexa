@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""
+vexa-chat — CLI for chatting with a Claude agent inside a Vexa bot container.
+
+Usage:
+  vexa-chat                     # launch new agent + start chatting
+  vexa-chat <meeting_id>        # attach to existing agent
+  vexa-chat launch              # launch new agent, print meeting_id
+  vexa-chat list                # list running agent containers
+
+Environment:
+  VEXA_API_URL    Bot manager URL (default: http://localhost:18080)
+  VEXA_API_KEY    API key for authentication
+"""
+
+import json
+import os
+import sys
+import signal
+import urllib.request
+import urllib.error
+
+API_URL = os.environ.get("VEXA_API_URL", "http://localhost:18080")
+API_KEY = os.environ.get("VEXA_API_KEY", "")
+
+BOLD = "\033[1m"
+DIM = "\033[2m"
+CYAN = "\033[36m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+RED = "\033[31m"
+RESET = "\033[0m"
+
+
+def api_request(method, path, data=None):
+    """Make an API request, return parsed JSON or raw response."""
+    url = f"{API_URL}{path}"
+    body = json.dumps(data).encode() if data else None
+    req = urllib.request.Request(url, data=body, method=method)
+    req.add_header("Content-Type", "application/json")
+    if API_KEY:
+        req.add_header("X-API-Key", API_KEY)
+    try:
+        resp = urllib.request.urlopen(req)
+        return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        err = e.read().decode()
+        print(f"{RED}API error {e.code}: {err}{RESET}", file=sys.stderr)
+        sys.exit(1)
+
+
+def api_stream(path, data):
+    """POST and stream SSE response line by line."""
+    url = f"{API_URL}{path}"
+    body = json.dumps(data).encode()
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Content-Type", "application/json")
+    if API_KEY:
+        req.add_header("X-API-Key", API_KEY)
+    try:
+        resp = urllib.request.urlopen(req)
+        return resp
+    except urllib.error.HTTPError as e:
+        err = e.read().decode()
+        print(f"{RED}API error {e.code}: {err}{RESET}", file=sys.stderr)
+        return None
+
+
+def launch_agent():
+    """Launch a new agent-only bot container."""
+    result = api_request("POST", "/bots", {"agent_enabled": True})
+    meeting_id = result["id"]
+    container = result.get("bot_container_id", "?")[:12]
+    print(f"{GREEN}Agent #{meeting_id}{RESET} launched (container {DIM}{container}{RESET})")
+    return meeting_id
+
+
+def chat_stream(meeting_id, message):
+    """Send a message and stream the response."""
+    resp = api_stream(f"/bots/{meeting_id}/agent/chat", {"message": message})
+    if not resp:
+        return
+
+    full_text = ""
+    tool_lines = []
+
+    for raw_line in resp:
+        line = raw_line.decode().strip()
+        if not line.startswith("data: "):
+            continue
+        try:
+            event = json.loads(line[6:])
+        except json.JSONDecodeError:
+            continue
+
+        etype = event.get("type", "")
+
+        if etype == "text_delta":
+            text = event.get("text", "")
+            sys.stdout.write(text)
+            sys.stdout.flush()
+            full_text += text
+
+        elif etype == "tool_use":
+            summary = event.get("summary", event.get("tool", "?"))
+            indicator = f"{DIM}⚙ {summary}{RESET}"
+            # Print on a new line if we have text, otherwise inline
+            if full_text and not full_text.endswith("\n"):
+                sys.stdout.write("\n")
+            print(indicator)
+            tool_lines.append(summary)
+
+        elif etype == "done":
+            session = event.get("session_id", "")
+            duration = event.get("duration_ms")
+            if not full_text.endswith("\n"):
+                sys.stdout.write("\n")
+            meta_parts = []
+            if duration:
+                meta_parts.append(f"{duration/1000:.1f}s")
+            if session:
+                meta_parts.append(f"session:{session[:8]}")
+            if meta_parts:
+                print(f"{DIM}({', '.join(meta_parts)}){RESET}")
+
+        elif etype == "error":
+            print(f"{RED}Error: {event.get('message', '?')}{RESET}", file=sys.stderr)
+
+
+def interrupt(meeting_id):
+    """Interrupt active response."""
+    try:
+        url = f"{API_URL}/bots/{meeting_id}/agent/chat"
+        req = urllib.request.Request(url, method="DELETE")
+        req.add_header("X-API-Key", API_KEY)
+        urllib.request.urlopen(req)
+    except Exception:
+        pass
+
+
+def reset_session(meeting_id):
+    """Reset the Claude session."""
+    api_request("POST", f"/bots/{meeting_id}/agent/chat/reset")
+    print(f"{YELLOW}Session reset.{RESET}")
+
+
+def interactive_loop(meeting_id):
+    """Interactive chat REPL."""
+    print(f"{BOLD}Vexa Agent #{meeting_id}{RESET} — type your message, /reset to reset session, /quit to exit")
+    print(f"{DIM}Ctrl+C interrupts active response{RESET}\n")
+
+    # Handle Ctrl+C: interrupt active response, don't exit
+    interrupted = [False]
+
+    def sigint_handler(sig, frame):
+        if interrupted[0]:
+            # Double Ctrl+C = exit
+            print(f"\n{DIM}Bye.{RESET}")
+            sys.exit(0)
+        interrupted[0] = True
+        interrupt(meeting_id)
+        print(f"\n{YELLOW}[interrupted]{RESET}")
+
+    signal.signal(signal.SIGINT, sigint_handler)
+
+    while True:
+        interrupted[0] = False
+        try:
+            message = input(f"{CYAN}> {RESET}")
+        except EOFError:
+            print(f"\n{DIM}Bye.{RESET}")
+            break
+        except KeyboardInterrupt:
+            print(f"\n{DIM}Bye.{RESET}")
+            break
+
+        message = message.strip()
+        if not message:
+            continue
+        if message == "/quit" or message == "/exit":
+            break
+        if message == "/reset":
+            reset_session(meeting_id)
+            continue
+        if message == "/help":
+            print(f"  /reset  — reset Claude session (fresh conversation)")
+            print(f"  /quit   — exit CLI")
+            print(f"  Ctrl+C  — interrupt active response")
+            continue
+
+        chat_stream(meeting_id, message)
+
+
+def main():
+    if not API_KEY:
+        print(f"{RED}Set VEXA_API_KEY environment variable{RESET}", file=sys.stderr)
+        sys.exit(1)
+
+    args = sys.argv[1:]
+
+    if not args:
+        # Launch + chat
+        meeting_id = launch_agent()
+        interactive_loop(meeting_id)
+
+    elif args[0] == "launch":
+        launch_agent()
+
+    elif args[0] == "list":
+        # Just hit the status endpoint
+        print(f"{DIM}(use bot manager /bots/status to see running containers){RESET}")
+
+    elif args[0].isdigit():
+        # Attach to existing
+        meeting_id = int(args[0])
+        interactive_loop(meeting_id)
+
+    else:
+        print(__doc__)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
