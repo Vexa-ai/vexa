@@ -9,6 +9,7 @@ import { reconfigureZoomWebRecording } from "./platforms/zoom/web/recording";
 import { browserArgs, getBrowserArgs, userAgent } from "./constans";
 import { BotConfig } from "./types";
 import { RecordingService } from "./services/recording";
+import { VideoRecordingService } from "./services/video-recording";
 import { TTSPlaybackService } from "./services/tts-playback";
 import { MicrophoneService } from "./services/microphone";
 import { MeetingChatService, ChatTranscriptConfig } from "./services/chat";
@@ -42,6 +43,7 @@ let browserInstance: Browser | null = null;
 
 // --- Recording service reference (set by platform handlers) ---
 let activeRecordingService: RecordingService | null = null;
+let activeVideoRecordingService: VideoRecordingService | null = null;
 let botPaSinkModuleId: string | null = null; // PulseAudio module ID for per-bot sink cleanup
 let currentBotConfig: BotConfig | null = null;
 export function setActiveRecordingService(svc: RecordingService | null): void {
@@ -600,6 +602,22 @@ async function performGracefulLeave(
     botPaSinkModuleId = null;
   }
 
+  // Stop and upload video recording if active
+  if (activeVideoRecordingService && currentBotConfig?.recordingUploadUrl && currentBotConfig?.token) {
+    try {
+      log("[Graceful Leave] Stopping video recording...");
+      await activeVideoRecordingService.stop();
+      log("[Graceful Leave] Uploading video to bot-manager...");
+      await activeVideoRecordingService.upload(currentBotConfig.recordingUploadUrl, currentBotConfig.token);
+      log("[Graceful Leave] Video uploaded successfully.");
+    } catch (uploadError: any) {
+      log(`[Graceful Leave] Video upload failed: ${uploadError.message}`);
+    } finally {
+      await activeVideoRecordingService.cleanup();
+      activeVideoRecordingService = null;
+    }
+  }
+
   // Upload audio recording if available
   if (activeRecordingService && currentBotConfig?.recordingUploadUrl && currentBotConfig?.token) {
     try {
@@ -1091,13 +1109,17 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
       });
     } catch {}
 
-    // Set voice agent flag before virtual camera script so it knows
-    // whether to disable incoming video tracks (saves ~87% CPU per bot).
+    // Set flags before init scripts so they can read them.
     const isVoiceAgentTeams = !!botConfig.voiceAgentEnabled;
+    const wantsVideoTeams = !!botConfig.recordingEnabled &&
+      Array.isArray(botConfig.captureModes) && botConfig.captureModes.includes('video');
     await context.addInitScript(`window.__vexa_voice_agent_enabled = ${isVoiceAgentTeams};`);
+    await context.addInitScript(`window.__vexa_video_recording_enabled = ${wantsVideoTeams};`);
 
-    // Only inject virtual camera (avatar streaming) for voice agent bots with avatar enabled.
-    // Transcription-only bots (or voice agents with showAvatar=false) get a lightweight video blocker instead.
+    // Script selection:
+    //   virtual camera — voice agent with avatar (sends canvas stream + enumerates fake device)
+    //   video block    — no avatar and no video recording (saves ~87% CPU)
+    //   nothing        — no avatar but video recording is on (allow incoming video to render)
     if (isVoiceAgentTeams && botConfig.showAvatar !== false) {
       try {
         await context.addInitScript(getVirtualCameraInitScript());
@@ -1105,13 +1127,15 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
       } catch (e: any) {
         log(`[Bot] Warning: addInitScript failed (Teams): ${e.message}`);
       }
-    } else {
+    } else if (!wantsVideoTeams) {
       try {
         await context.addInitScript(getVideoBlockInitScript());
         log('[Bot] Video block init script injected (Teams, transcription-only mode)');
       } catch (e: any) {
         log(`[Bot] Warning: video block addInitScript failed (Teams): ${e.message}`);
       }
+    } else {
+      log('[Bot] Skipping video block — incoming video needed for screen capture (Teams)');
     }
 
     page = await context.newPage();
@@ -1138,14 +1162,17 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
       }
     });
 
-    // Set voice agent flag before virtual camera script so it knows
-    // whether to disable incoming video tracks (saves ~87% CPU per bot).
+    // Set flags before init scripts so they can read them.
     const isVoiceAgent = !!botConfig.voiceAgentEnabled;
+    const wantsVideo = !!botConfig.recordingEnabled &&
+      Array.isArray(botConfig.captureModes) && botConfig.captureModes.includes('video');
     await context.addInitScript(`window.__vexa_voice_agent_enabled = ${isVoiceAgent};`);
+    await context.addInitScript(`window.__vexa_video_recording_enabled = ${wantsVideo};`);
 
-    // Only inject virtual camera (avatar streaming) for voice agent bots with avatar enabled.
-    // Transcription-only bots (or voice agents with showAvatar=false) get a lightweight video blocker that stops
-    // incoming video tracks and transceivers to save CPU/memory.
+    // Script selection:
+    //   virtual camera — voice agent with avatar (sends canvas stream + enumerates fake device)
+    //   video block    — no avatar and no video recording (saves ~87% CPU)
+    //   nothing        — no avatar but video recording is on (allow incoming video to render)
     if (isVoiceAgent && botConfig.showAvatar !== false) {
       try {
         await context.addInitScript(getVirtualCameraInitScript());
@@ -1153,13 +1180,15 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
       } catch (e: any) {
         log(`[Bot] Warning: addInitScript failed: ${e.message}`);
       }
-    } else {
+    } else if (!wantsVideo) {
       try {
         await context.addInitScript(getVideoBlockInitScript());
         log('[Bot] Video block init script injected (transcription-only mode)');
       } catch (e: any) {
         log(`[Bot] Warning: video block addInitScript failed: ${e.message}`);
       }
+    } else {
+      log('[Bot] Skipping video block — incoming video needed for screen capture');
     }
 
     page = await context.newPage();
@@ -1244,6 +1273,25 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     } catch (err: any) {
       log(`[VoiceAgent] Initialization failed (non-fatal): ${err.message}`);
     }
+  }
+
+  // Start screen capture video recording if requested (Meet, Teams, Zoom Web only).
+  // ffmpeg captures the Xvfb display — works for all browser-based platforms.
+  const wantsVideoCapture = !!botConfig.recordingEnabled &&
+    Array.isArray(botConfig.captureModes) && botConfig.captureModes.includes('video');
+  const isZoomNative = botConfig.platform === 'zoom' && process.env.ZOOM_WEB !== 'true';
+  if (wantsVideoCapture && !isZoomNative) {
+    try {
+      const sessionUid = botConfig.connectionId || `video-${Date.now()}`;
+      activeVideoRecordingService = new VideoRecordingService(botConfig.meeting_id, sessionUid);
+      activeVideoRecordingService.start();
+      log('[VideoRecording] Screen capture started');
+    } catch (err: any) {
+      log(`[VideoRecording] Failed to start (non-fatal): ${err.message}`);
+      activeVideoRecordingService = null;
+    }
+  } else if (wantsVideoCapture && isZoomNative) {
+    log('[VideoRecording] Video recording not supported for Zoom Native SDK — use ZOOM_WEB=true for screen capture');
   }
 
   // Call the appropriate platform handler

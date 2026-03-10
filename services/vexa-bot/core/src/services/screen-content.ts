@@ -1219,10 +1219,10 @@ export function getVirtualCameraInitScript(): string {
           }
         });
 
-        // Disable incoming video to save CPU/memory.
-        // The bot only needs audio for transcription — receiving and rendering
-        // all participants' video wastes ~87% CPU and ~2GB RAM per bot.
-        if (!window.__vexa_voice_agent_enabled) {
+        // Disable incoming video to save CPU/memory, unless video recording is
+        // enabled (in which case we need incoming video to render on the display
+        // for screen capture) or voice agent is active.
+        if (!window.__vexa_voice_agent_enabled && !window.__vexa_video_recording_enabled) {
           pc.addEventListener('track', (event) => {
             if (event.track && event.track.kind === 'video') {
               event.track.enabled = false;
@@ -1294,25 +1294,29 @@ export function getVideoBlockInitScript(): string {
         window.RTCPeerConnection = function(...args) {
           const pc = new OrigRTC(...args);
 
-          // Block incoming video: disable tracks AND stop transceivers
-          pc.addEventListener('track', (event) => {
-            if (event.track && event.track.kind === 'video') {
-              event.track.enabled = false;
-              event.track.stop();
-              console.log('[Vexa] Incoming video track stopped (id=' + event.track.id + ')');
+          // Block incoming video: disable tracks AND stop transceivers.
+          // Skip if video recording is enabled — incoming video must render
+          // on the Xvfb display for ffmpeg screen capture.
+          if (!window.__vexa_video_recording_enabled) {
+            pc.addEventListener('track', (event) => {
+              if (event.track && event.track.kind === 'video') {
+                event.track.enabled = false;
+                event.track.stop();
+                console.log('[Vexa] Incoming video track stopped (id=' + event.track.id + ')');
 
-              // Also set the transceiver to recvonly->inactive to tell the
-              // remote peer we don't want video at all
-              if (event.transceiver) {
-                try {
-                  event.transceiver.direction = 'inactive';
-                  console.log('[Vexa] Video transceiver set to inactive (mid=' + event.transceiver.mid + ')');
-                } catch (e) {
-                  console.warn('[Vexa] Could not set transceiver direction:', e);
+                // Also set the transceiver to recvonly->inactive to tell the
+                // remote peer we don't want video at all
+                if (event.transceiver) {
+                  try {
+                    event.transceiver.direction = 'inactive';
+                    console.log('[Vexa] Video transceiver set to inactive (mid=' + event.transceiver.mid + ')');
+                  } catch (e) {
+                    console.warn('[Vexa] Could not set transceiver direction:', e);
+                  }
                 }
               }
-            }
-          });
+            });
+          }
 
           return pc;
         };

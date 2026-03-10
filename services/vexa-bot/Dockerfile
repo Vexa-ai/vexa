@@ -80,13 +80,23 @@ FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS runtime
 WORKDIR /app/vexa-bot
 
 # Install runtime dependencies
+# GPU acceleration packages:
+#   libva-drm2, libva-x11-2, va-driver-all — VA-API runtime for Intel iGPU / AMD Radeon
+#   intel-media-va-driver-non-free         — Intel Gen8+ hardware encoding support
+#   libnvidia-encode-*                      — NVIDIA NVENC (installed separately if nvidia runtime present)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
     pulseaudio \
     xserver-xephyr \
+    ffmpeg \
     libssl3 \
     libxcb-xtest0 \
     socat \
+    libva-drm2 \
+    libva-x11-2 \
+    va-driver-all \
+    && apt-get install -y --no-install-recommends --allow-unauthenticated \
+    intel-media-va-driver-non-free 2>/dev/null || true \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy workspace package files (for runtime dependencies)

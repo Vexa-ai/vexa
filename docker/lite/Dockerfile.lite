@@ -54,6 +54,10 @@ RUN apt-get update && \
     pulseaudio \
     ffmpeg \
     libsndfile1 \
+    # GPU acceleration for video recording (VA-API: Intel iGPU / AMD Radeon)
+    libva-drm2 \
+    libva-x11-2 \
+    va-driver-all \
     # Process management
     supervisor \
     # Database clients (for health checks and migrations)
@@ -67,7 +71,11 @@ RUN apt-get update && \
     git \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
-    && usermod -aG pulse-access root
+    && usermod -aG pulse-access root \
+    # Intel Gen8+ hardware encoding (non-free, best-effort)
+    && apt-get update && apt-get install -y --no-install-recommends \
+    intel-media-va-driver-non-free 2>/dev/null || true \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create directory structure
 WORKDIR /app

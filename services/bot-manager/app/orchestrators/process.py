@@ -237,7 +237,10 @@ async def start_bot_container(
             "noOneJoinedTimeout": 120000,   # 2 minutes
             "everyoneLeftTimeout": 60000    # 1 minute
         },
-        "botManagerCallbackUrl": f"{BOT_CALLBACK_BASE_URL}/bots/internal/callback/exited"
+        "botManagerCallbackUrl": f"{BOT_CALLBACK_BASE_URL}/bots/internal/callback/exited",
+        "recordingEnabled": os.getenv("RECORDING_ENABLED", "false").lower() == "true",
+        "captureModes": os.getenv("CAPTURE_MODES", "audio").split(","),
+        "recordingUploadUrl": f"{BOT_CALLBACK_BASE_URL}/internal/recordings/upload"
     }
     if recording_enabled is not None:
         bot_config["recordingEnabled"] = bool(recording_enabled)

@@ -308,10 +308,38 @@ async def start_bot_container(
     # Use a port in the range 19200-19999 derived from meeting_id to avoid conflicts.
     cdp_host_port = 19200 + (meeting_id % 800)
 
-    # Docker API payload for creating a container
+    # Pass VIDEO_HWACCEL to the bot so it knows which ffmpeg encoder to use.
+    # Default is 'none' (software VP9). Set to 'vaapi' or 'nvenc' on the
+    # bot-manager host to enable hardware acceleration.
+    video_hwaccel = os.getenv("VIDEO_HWACCEL", "none").lower()
+    environment.append(f"VIDEO_HWACCEL={video_hwaccel}")
+
     # Port 9223 is the socat forwarder (0.0.0.0:9223 -> 127.0.0.1:9222).
     # Chromium ignores --remote-debugging-address=0.0.0.0 when launched via Playwright,
     # so we use socat in entrypoint.sh to make CDP reachable from other containers.
+    host_config: dict = {
+        "NetworkMode": DOCKER_NETWORK,
+        "AutoRemove": True,
+        "PortBindings": {
+            "9223/tcp": [{"HostIp": "0.0.0.0", "HostPort": str(cdp_host_port)}]
+        },
+    }
+
+    # GPU device passthrough for hardware video encoding:
+    #   VA-API (Intel iGPU / AMD Radeon): pass /dev/dri devices
+    #   NVENC (NVIDIA): pass GPU devices via DeviceRequests
+    if video_hwaccel == "vaapi":
+        host_config["Devices"] = [
+            {"PathOnHost": "/dev/dri", "PathInContainer": "/dev/dri", "CgroupPermissions": "rwm"},
+        ]
+        logger.info("GPU device passthrough enabled: /dev/dri (VA-API)")
+    elif video_hwaccel == "nvenc":
+        host_config["DeviceRequests"] = [
+            {"Driver": "nvidia", "Count": -1, "Capabilities": [["gpu"]]},
+        ]
+        logger.info("GPU device passthrough enabled: NVIDIA runtime (NVENC)")
+
+    # Docker API payload for creating a container
     create_payload = {
         "Image": BOT_IMAGE_NAME,
         "Env": environment,
@@ -321,13 +349,7 @@ async def start_bot_container(
             "vexa.meeting_id": str(meeting_id),
             "vexa.cdp_port": str(cdp_host_port),
         },
-        "HostConfig": {
-            "NetworkMode": DOCKER_NETWORK,
-            "AutoRemove": True,
-            "PortBindings": {
-                "9223/tcp": [{"HostIp": "0.0.0.0", "HostPort": str(cdp_host_port)}]
-            },
-        },
+        "HostConfig": host_config,
     }
     logger.info(f"CDP remote debugging will be exposed on host port {cdp_host_port} (via socat:9223) for meeting {meeting_id}")
 
