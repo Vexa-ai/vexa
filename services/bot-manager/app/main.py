@@ -1,5 +1,6 @@
 import uvicorn
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, UploadFile, File, Form, Query, Response, Request
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import logging
@@ -942,6 +943,83 @@ async def request_bot(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"status": "error", "message": f"An unexpected error occurred during bot startup: {str(e)}", "meeting_id": meeting_id}
         )
+
+# --- Agent Chat API (Quorum-style Claude CLI streaming) ---
+
+from app.agent_chat import agent_chat_manager
+
+class AgentChatRequest(BaseModel):
+    message: str = Field(..., description="Message to send to the Claude agent")
+    model: Optional[str] = Field(None, description="Override Claude model (e.g. claude-sonnet-4-6)")
+
+
+async def _get_agent_meeting(meeting_id: int, user_id: int, db: AsyncSession) -> Meeting:
+    """Look up meeting and verify it's an agent-enabled container owned by this user."""
+    meeting = await db.get(Meeting, meeting_id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    if meeting.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not your meeting")
+    if not meeting.bot_container_id:
+        raise HTTPException(status_code=400, detail="No container for this meeting")
+    return meeting
+
+
+@app.post("/bots/{meeting_id}/agent/chat",
+          summary="Send a message to the Claude agent inside the bot container",
+          description="Streams SSE events (text_delta, tool_use, done) from Claude CLI running inside the container.",
+          dependencies=[Depends(get_user_and_token)])
+async def agent_chat(
+    meeting_id: int,
+    req: AgentChatRequest,
+    auth_data: tuple[str, User] = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    _, current_user = auth_data
+    meeting = await _get_agent_meeting(meeting_id, current_user.id, db)
+
+    async def event_stream():
+        try:
+            async for event in agent_chat_manager.chat(
+                container_id=meeting.bot_container_id,
+                message=req.message,
+                model=req.model,
+            ):
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as e:
+            logger.error(f"Agent chat error for meeting {meeting_id}: {e}", exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.delete("/bots/{meeting_id}/agent/chat",
+            summary="Interrupt active Claude response",
+            dependencies=[Depends(get_user_and_token)])
+async def agent_interrupt(
+    meeting_id: int,
+    auth_data: tuple[str, User] = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    _, current_user = auth_data
+    meeting = await _get_agent_meeting(meeting_id, current_user.id, db)
+    await agent_chat_manager.interrupt(meeting.bot_container_id)
+    return {"status": "interrupted"}
+
+
+@app.post("/bots/{meeting_id}/agent/chat/reset",
+          summary="Reset Claude session (fresh conversation)",
+          dependencies=[Depends(get_user_and_token)])
+async def agent_reset(
+    meeting_id: int,
+    auth_data: tuple[str, User] = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    _, current_user = auth_data
+    meeting = await _get_agent_meeting(meeting_id, current_user.id, db)
+    await agent_chat_manager.reset_session(meeting.bot_container_id)
+    return {"status": "session_reset"}
+
 
 # --- ADD PUT Endpoint for Reconfiguration ---
 @app.put("/bots/{platform}/{native_meeting_id}/config",
