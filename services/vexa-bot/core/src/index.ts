@@ -1168,10 +1168,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     const context = await browserInstance.newContext({
       permissions: ["camera", "microphone"],
       userAgent: userAgent,
-      viewport: {
-        width: 1280,
-        height: 720
-      }
+      viewport: null, // kiosk mode fills the Xvfb display; let the browser report the real size
     });
 
     // Set flags before init scripts so they can read them.
