@@ -21,6 +21,7 @@ Common request fields:
 - `platform` (`google_meet` | `teams` | `zoom`)
 - `native_meeting_id`
 - `passcode` (Teams required; Zoom optional)
+- `meeting_url` (optional) -- pass the full meeting URL directly. When provided, the bot navigates to this URL instead of reconstructing one from `platform` + `native_meeting_id`. Recommended for Teams meetings to preserve the exact domain and path.
 - `recording_enabled` (optional)
 - `transcribe_enabled` (optional)
 - `transcription_tier` (`realtime` | `deferred`, optional)
@@ -51,11 +52,15 @@ curl -X POST "$API_BASE/bots" \
     "platform": "teams",
     "native_meeting_id": "1234567890123",
     "passcode": "YOUR_PASSCODE",
+    "meeting_url": "https://teams.microsoft.com/meet/1234567890123?p=YOUR_PASSCODE",
     "recording_enabled": true,
     "transcribe_enabled": true,
     "transcription_tier": "realtime"
   }'
 ```
+
+> **Tip:** Always pass `meeting_url` for Teams meetings. Teams URLs may use different domains
+> (`teams.microsoft.com`, `teams.live.com`, etc.) and the bot needs the exact URL to join successfully.
   </Tab>
 
   <Tab title="Zoom">
