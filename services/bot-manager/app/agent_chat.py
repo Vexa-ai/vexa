@@ -6,9 +6,9 @@ parses stream-json output, and yields SSE events back to the caller.
 """
 
 import asyncio
+import base64
 import json
 import logging
-import struct
 from typing import AsyncGenerator, Optional
 
 import aiodocker
@@ -48,7 +48,10 @@ class AgentChatManager:
             ["cat", "/app/vexa-bot/core/.claude/.session"])
 
         # Write prompt to file inside container (avoid shell escaping)
-        await self._exec_with_stdin(container_id, message)
+        encoded = base64.b64encode(message.encode()).decode()
+        await self._exec_simple(container_id, [
+            "sh", "-c", f"echo '{encoded}' | base64 -d > /tmp/.chat-prompt.txt"
+        ])
 
         # Build claude command
         claude_parts = [
@@ -59,13 +62,13 @@ class AgentChatManager:
             claude_parts.extend(["--resume", session_id])
         if model:
             claude_parts.extend(["--model", model])
-        claude_parts.extend(["-p", "$(cat /tmp/.chat-prompt.txt)"])
+        claude_parts.extend(["-p", "\"$(cat /tmp/.chat-prompt.txt)\""])
 
         cmd = ["sh", "-c", " ".join(claude_parts)]
 
-        logger.info(f"Starting claude in container {container_id[:12]}... (session={session_id or 'new'})")
+        logger.info(f"Starting claude in {container_id[:12]}... (session={session_id or 'new'})")
 
-        # Create exec instance
+        # Create and start exec
         container = docker.containers.container(container_id)
         exec_obj = await container.exec(
             cmd=cmd,
@@ -77,19 +80,24 @@ class AgentChatManager:
         )
         self._active[container_id] = exec_obj._id
 
+        stream = exec_obj.start(detach=False)
         new_session_id = None
-        try:
-            # Start exec and stream output
-            stream = exec_obj.start(detach=False)
-            buffer = b""
-            async for data in stream:
-                if isinstance(data, bytes):
-                    raw = data
-                else:
-                    raw = data.encode() if isinstance(data, str) else b""
+        buffer = b""
 
-                buffer += raw
-                # Process complete lines
+        try:
+            while True:
+                msg = await stream.read_out()
+                if msg is None:
+                    break
+
+                # msg.stream: 1=stdout, 2=stderr
+                if msg.stream == 2:
+                    # stderr — log but don't yield
+                    logger.debug(f"Claude stderr: {msg.data[:200]}")
+                    continue
+
+                # stdout — accumulate and parse JSON lines
+                buffer += msg.data
                 while b"\n" in buffer:
                     line, buffer = buffer.split(b"\n", 1)
                     line = line.strip()
@@ -98,7 +106,6 @@ class AgentChatManager:
                     try:
                         parsed = json.loads(line)
                     except json.JSONDecodeError:
-                        # Might be stderr or non-JSON output, skip
                         continue
 
                     for event in self._process_event(parsed):
@@ -125,15 +132,6 @@ class AgentChatManager:
         finally:
             self._active.pop(container_id, None)
 
-            # Check exec exit code
-            try:
-                inspect = await exec_obj.inspect()
-                exit_code = inspect.get("ExitCode")
-                if exit_code and exit_code != 0:
-                    logger.warning(f"Claude exec exited with code {exit_code}")
-            except Exception:
-                pass
-
             # Save new session_id
             if new_session_id:
                 await self._exec_simple(container_id, [
@@ -143,20 +141,19 @@ class AgentChatManager:
                 logger.info(f"Saved session {new_session_id[:12]}... for {container_id[:12]}")
 
     async def interrupt(self, container_id: str):
-        """Kill active Claude process in container by sending kill to the exec PID."""
+        """Kill active Claude process in container."""
         exec_id = self._active.pop(container_id, None)
         if not exec_id:
             return
         logger.info(f"Interrupting exec {exec_id[:12]} in {container_id[:12]}")
         try:
             docker = await self._get_docker()
-            # Find the PID of the exec and kill it inside the container
-            # Use a broad kill: find claude processes and kill them
             container = docker.containers.container(container_id)
-            await container.exec(
+            kill_exec = await container.exec(
                 cmd=["sh", "-c", "pkill -f 'claude.*stream-json' || true"],
                 stdout=False, stderr=False, stdin=False, tty=False,
             )
+            await kill_exec.start(detach=True)
         except Exception as e:
             logger.warning(f"Interrupt failed: {e}")
 
@@ -181,11 +178,12 @@ class AgentChatManager:
             )
             output = b""
             stream = exec_obj.start(detach=False)
-            async for data in stream:
-                if isinstance(data, bytes):
-                    output += data
-                elif isinstance(data, str):
-                    output += data.encode()
+            while True:
+                msg = await stream.read_out()
+                if msg is None:
+                    break
+                if msg.stream == 1:
+                    output += msg.data
 
             inspect = await exec_obj.inspect()
             if inspect.get("ExitCode", 1) == 0 and output.strip():
@@ -194,22 +192,12 @@ class AgentChatManager:
             logger.debug(f"exec_simple failed: {e}")
         return None
 
-    async def _exec_with_stdin(self, container_id: str, content: str):
-        """Write content to /tmp/.chat-prompt.txt inside the container."""
-        # Use a simple approach: base64 encode to avoid escaping issues
-        import base64
-        encoded = base64.b64encode(content.encode()).decode()
-        await self._exec_simple(container_id, [
-            "sh", "-c", f"echo '{encoded}' | base64 -d > /tmp/.chat-prompt.txt"
-        ])
-
     def _process_event(self, data: dict) -> list[dict]:
         """Convert a Claude stream-json event into our SSE events."""
         events = []
         msg_type = data.get("type", "")
 
         if msg_type == "assistant":
-            # Full or partial assistant message with content blocks
             content = data.get("message", {}).get("content", [])
             for block in content:
                 if block.get("type") == "text":
@@ -236,10 +224,9 @@ class AgentChatManager:
                 })
 
         elif msg_type == "result":
-            session_id = data.get("session_id")
             events.append({
                 "type": "done",
-                "session_id": session_id,
+                "session_id": data.get("session_id"),
                 "cost_usd": data.get("cost_usd"),
                 "duration_ms": data.get("duration_ms"),
             })
