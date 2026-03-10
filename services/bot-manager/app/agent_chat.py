@@ -1,14 +1,17 @@
 """
 Agent chat manager — Quorum-style Claude CLI streaming inside bot containers.
 
-Sends messages to Claude CLI running inside vexa-bot:experiment containers,
+Uses aiodocker to exec Claude CLI inside vexa-bot:experiment containers,
 parses stream-json output, and yields SSE events back to the caller.
 """
 
 import asyncio
 import json
 import logging
+import struct
 from typing import AsyncGenerator, Optional
+
+import aiodocker
 
 logger = logging.getLogger("bot_manager.agent_chat")
 
@@ -17,8 +20,14 @@ class AgentChatManager:
     """Manages Claude CLI sessions inside agent-enabled bot containers."""
 
     def __init__(self):
-        # Active subprocess per container_id
-        self._active: dict[str, asyncio.subprocess.Process] = {}
+        self._docker: Optional[aiodocker.Docker] = None
+        # Track active exec IDs per container for interrupt
+        self._active: dict[str, str] = {}  # container_id -> exec_id
+
+    async def _get_docker(self) -> aiodocker.Docker:
+        if self._docker is None:
+            self._docker = aiodocker.Docker()
+        return self._docker
 
     async def chat(
         self,
@@ -28,183 +37,171 @@ class AgentChatManager:
     ) -> AsyncGenerator[dict, None]:
         """
         Send a message to Claude inside the container, yield SSE events.
-
         Interrupts any existing response for this container first.
         """
         await self.interrupt(container_id)
 
-        # Read existing session_id from container (if any)
-        session_id = await self._read_session(container_id)
+        docker = await self._get_docker()
 
-        # Write prompt to file inside container to avoid shell escaping issues
-        await self._write_prompt(container_id, message)
+        # Read existing session_id from container
+        session_id = await self._exec_simple(container_id,
+            ["cat", "/app/vexa-bot/core/.claude/.session"])
+
+        # Write prompt to file inside container (avoid shell escaping)
+        await self._exec_with_stdin(container_id, message)
 
         # Build claude command
-        cmd = [
-            "docker", "exec", container_id,
+        claude_parts = [
             "claude",
             "--verbose", "--output-format", "stream-json",
         ]
         if session_id:
-            cmd.extend(["--resume", session_id])
+            claude_parts.extend(["--resume", session_id])
         if model:
-            cmd.extend(["--model", model])
+            claude_parts.extend(["--model", model])
+        claude_parts.extend(["-p", "$(cat /tmp/.chat-prompt.txt)"])
 
-        cmd.extend(["-p", "$(cat /tmp/.chat-prompt.txt)"])
-
-        # We need shell interpretation for the $(cat ...) substitution
-        shell_cmd = " ".join(cmd)
-        full_cmd = ["docker", "exec", container_id, "sh", "-c",
-                     " ".join([
-                         "claude",
-                         "--verbose", "--output-format", "stream-json",
-                         *(["--resume", session_id] if session_id else []),
-                         *(["--model", model] if model else []),
-                         "-p", "\"$(cat /tmp/.chat-prompt.txt)\"",
-                     ])]
+        cmd = ["sh", "-c", " ".join(claude_parts)]
 
         logger.info(f"Starting claude in container {container_id[:12]}... (session={session_id or 'new'})")
 
-        proc = await asyncio.create_subprocess_exec(
-            *full_cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        # Create exec instance
+        container = docker.containers.container(container_id)
+        exec_obj = await container.exec(
+            cmd=cmd,
+            stdout=True,
+            stderr=True,
+            stdin=False,
+            tty=False,
+            workdir="/app/vexa-bot/core",
         )
-        self._active[container_id] = proc
+        self._active[container_id] = exec_obj._id
 
         new_session_id = None
         try:
-            async for event in self._parse_stream(proc.stdout):
-                if event.get("type") == "done" and event.get("session_id"):
-                    new_session_id = event["session_id"]
-                yield event
+            # Start exec and stream output
+            stream = exec_obj.start(detach=False)
+            buffer = b""
+            async for data in stream:
+                if isinstance(data, bytes):
+                    raw = data
+                else:
+                    raw = data.encode() if isinstance(data, str) else b""
+
+                buffer += raw
+                # Process complete lines
+                while b"\n" in buffer:
+                    line, buffer = buffer.split(b"\n", 1)
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        parsed = json.loads(line)
+                    except json.JSONDecodeError:
+                        # Might be stderr or non-JSON output, skip
+                        continue
+
+                    for event in self._process_event(parsed):
+                        if event.get("type") == "done" and event.get("session_id"):
+                            new_session_id = event["session_id"]
+                        yield event
+
+            # Process remaining buffer
+            if buffer.strip():
+                try:
+                    parsed = json.loads(buffer.strip())
+                    for event in self._process_event(parsed):
+                        if event.get("type") == "done" and event.get("session_id"):
+                            new_session_id = event["session_id"]
+                        yield event
+                except json.JSONDecodeError:
+                    pass
+
         except asyncio.CancelledError:
-            proc.kill()
             raise
+        except Exception as e:
+            logger.error(f"Stream error: {e}", exc_info=True)
+            yield {"type": "error", "message": str(e)}
         finally:
             self._active.pop(container_id, None)
-            # Wait for process to finish
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                proc.kill()
 
-            # Check for errors
-            if proc.returncode and proc.returncode != 0:
-                stderr = b""
-                if proc.stderr:
-                    try:
-                        stderr = await asyncio.wait_for(proc.stderr.read(), timeout=2)
-                    except (asyncio.TimeoutError, Exception):
-                        pass
-                if stderr:
-                    err_text = stderr.decode(errors="replace").strip()
-                    logger.warning(f"Claude stderr: {err_text[:500]}")
-                    # Check for session errors
-                    if "session" in err_text.lower() and ("expired" in err_text.lower() or "not found" in err_text.lower()):
-                        await self._delete_session(container_id)
-                        yield {"type": "error", "message": "Session expired, reset and retry"}
-                        return
+            # Check exec exit code
+            try:
+                inspect = await exec_obj.inspect()
+                exit_code = inspect.get("ExitCode")
+                if exit_code and exit_code != 0:
+                    logger.warning(f"Claude exec exited with code {exit_code}")
+            except Exception:
+                pass
 
             # Save new session_id
             if new_session_id:
-                await self._save_session(container_id, new_session_id)
+                await self._exec_simple(container_id, [
+                    "sh", "-c",
+                    f"mkdir -p /app/vexa-bot/core/.claude && echo '{new_session_id}' > /app/vexa-bot/core/.claude/.session"
+                ])
+                logger.info(f"Saved session {new_session_id[:12]}... for {container_id[:12]}")
 
     async def interrupt(self, container_id: str):
-        """Kill active Claude process in container."""
-        proc = self._active.pop(container_id, None)
-        if proc and proc.returncode is None:
-            logger.info(f"Interrupting active claude in {container_id[:12]}")
-            proc.kill()
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                pass
+        """Kill active Claude process in container by sending kill to the exec PID."""
+        exec_id = self._active.pop(container_id, None)
+        if not exec_id:
+            return
+        logger.info(f"Interrupting exec {exec_id[:12]} in {container_id[:12]}")
+        try:
+            docker = await self._get_docker()
+            # Find the PID of the exec and kill it inside the container
+            # Use a broad kill: find claude processes and kill them
+            container = docker.containers.container(container_id)
+            await container.exec(
+                cmd=["sh", "-c", "pkill -f 'claude.*stream-json' || true"],
+                stdout=False, stderr=False, stdin=False, tty=False,
+            )
+        except Exception as e:
+            logger.warning(f"Interrupt failed: {e}")
 
     async def reset_session(self, container_id: str):
         """Delete .claude/.session inside container to start fresh."""
         await self.interrupt(container_id)
-        await self._delete_session(container_id)
+        await self._exec_simple(container_id, [
+            "rm", "-f", "/app/vexa-bot/core/.claude/.session"
+        ])
         logger.info(f"Session reset for {container_id[:12]}")
 
     # --- Internal helpers ---
 
-    async def _write_prompt(self, container_id: str, message: str):
-        """Write prompt to a temp file inside the container."""
-        proc = await asyncio.create_subprocess_exec(
-            "docker", "exec", "-i", container_id,
-            "sh", "-c", "cat > /tmp/.chat-prompt.txt",
-            stdin=asyncio.subprocess.PIPE,
-        )
-        await proc.communicate(message.encode())
+    async def _exec_simple(self, container_id: str, cmd: list[str]) -> Optional[str]:
+        """Run a command in the container, return stdout or None."""
+        try:
+            docker = await self._get_docker()
+            container = docker.containers.container(container_id)
+            exec_obj = await container.exec(
+                cmd=cmd,
+                stdout=True, stderr=False, stdin=False, tty=False,
+            )
+            output = b""
+            stream = exec_obj.start(detach=False)
+            async for data in stream:
+                if isinstance(data, bytes):
+                    output += data
+                elif isinstance(data, str):
+                    output += data.encode()
 
-    async def _read_session(self, container_id: str) -> Optional[str]:
-        """Read session_id from .claude/.session inside container."""
-        proc = await asyncio.create_subprocess_exec(
-            "docker", "exec", container_id,
-            "cat", "/app/vexa-bot/core/.claude/.session",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await proc.communicate()
-        if proc.returncode == 0 and stdout:
-            return stdout.decode().strip()
+            inspect = await exec_obj.inspect()
+            if inspect.get("ExitCode", 1) == 0 and output.strip():
+                return output.decode(errors="replace").strip()
+        except Exception as e:
+            logger.debug(f"exec_simple failed: {e}")
         return None
 
-    async def _save_session(self, container_id: str, session_id: str):
-        """Write session_id to .claude/.session inside container."""
-        proc = await asyncio.create_subprocess_exec(
-            "docker", "exec", container_id,
-            "sh", "-c", f"mkdir -p /app/vexa-bot/core/.claude && echo '{session_id}' > /app/vexa-bot/core/.claude/.session",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await proc.communicate()
-
-    async def _delete_session(self, container_id: str):
-        """Delete .claude/.session inside container."""
-        proc = await asyncio.create_subprocess_exec(
-            "docker", "exec", container_id,
-            "rm", "-f", "/app/vexa-bot/core/.claude/.session",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await proc.communicate()
-
-    async def _parse_stream(self, stdout: asyncio.StreamReader) -> AsyncGenerator[dict, None]:
-        """
-        Parse Claude CLI --output-format stream-json output.
-
-        Each line is a JSON object. We extract text deltas, tool use events,
-        and the final result (which contains session_id).
-        """
-        buffer = b""
-        while True:
-            chunk = await stdout.read(4096)
-            if not chunk:
-                break
-            buffer += chunk
-            while b"\n" in buffer:
-                line, buffer = buffer.split(b"\n", 1)
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
-                for event in self._process_event(data):
-                    yield event
-
-        # Process any remaining buffer
-        if buffer.strip():
-            try:
-                data = json.loads(buffer)
-                for event in self._process_event(data):
-                    yield event
-            except json.JSONDecodeError:
-                pass
+    async def _exec_with_stdin(self, container_id: str, content: str):
+        """Write content to /tmp/.chat-prompt.txt inside the container."""
+        # Use a simple approach: base64 encode to avoid escaping issues
+        import base64
+        encoded = base64.b64encode(content.encode()).decode()
+        await self._exec_simple(container_id, [
+            "sh", "-c", f"echo '{encoded}' | base64 -d > /tmp/.chat-prompt.txt"
+        ])
 
     def _process_event(self, data: dict) -> list[dict]:
         """Convert a Claude stream-json event into our SSE events."""
@@ -240,11 +237,10 @@ class AgentChatManager:
 
         elif msg_type == "result":
             session_id = data.get("session_id")
-            cost = data.get("cost_usd")
             events.append({
                 "type": "done",
                 "session_id": session_id,
-                "cost_usd": cost,
+                "cost_usd": data.get("cost_usd"),
                 "duration_ms": data.get("duration_ms"),
             })
 
