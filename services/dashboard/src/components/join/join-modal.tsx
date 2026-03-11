@@ -111,6 +111,11 @@ export function JoinModal() {
       request.passcode = finalPasscode;
     }
 
+    // Pass original URL for Teams to preserve exact domain
+    if (parsedInput.originalUrl) {
+      request.meeting_url = parsedInput.originalUrl;
+    }
+
     // Set bot name - use custom name or configured default
     request.bot_name = botName.trim() || config?.defaultBotName || "Vexa - Open Source Bot";
 

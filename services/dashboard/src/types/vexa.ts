@@ -74,6 +74,7 @@ export interface CreateBotRequest {
   platform: Platform;
   native_meeting_id: string;
   passcode?: string;
+  meeting_url?: string;
   bot_name?: string;
   language?: string;
 }

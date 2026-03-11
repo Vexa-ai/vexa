@@ -4,6 +4,7 @@ export interface ParsedMeetingInput {
   platform: Platform;
   meetingId: string;
   passcode?: string;
+  originalUrl?: string;
 }
 
 // Parse Google Meet, Zoom, or Teams URL/meeting ID
@@ -41,7 +42,10 @@ export function parseMeetingInput(input: string): ParsedMeetingInput | null {
     const passcodeMatch = trimmed.match(/[?&]p=([^&]+)/i);
     const passcode = passcodeMatch ? decodeURIComponent(passcodeMatch[1]) : undefined;
 
-    return { platform: "teams", meetingId, passcode };
+    // Preserve original URL — Teams domains vary (teams.microsoft.com, teams.live.com)
+    // and the bot needs the exact URL to join successfully
+    const originalUrl = trimmed.startsWith('http') ? trimmed : `https://${trimmed}`;
+    return { platform: "teams", meetingId, passcode, originalUrl };
   }
 
   // Zoom URL patterns
@@ -73,7 +77,8 @@ export function parseMeetingInput(input: string): ParsedMeetingInput | null {
       // Also try to extract passcode from query string
       const passcodeMatch = trimmed.match(/[?&]p=([^&]+)/i);
       const passcode = passcodeMatch ? decodeURIComponent(passcodeMatch[1]) : undefined;
-      return { platform: "teams", meetingId: genericId, passcode };
+      const originalUrl = trimmed.startsWith('http') ? trimmed : `https://${trimmed}`;
+      return { platform: "teams", meetingId: genericId, passcode, originalUrl };
     }
   }
 

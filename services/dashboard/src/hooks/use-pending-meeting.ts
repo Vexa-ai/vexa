@@ -40,6 +40,9 @@ export function usePendingMeeting() {
     if (parsed.passcode) {
       request.passcode = parsed.passcode;
     }
+    if (parsed.originalUrl) {
+      request.meeting_url = parsed.originalUrl;
+    }
     request.bot_name = "Vexa - Open Source Bot";
 
     toast.promise(
