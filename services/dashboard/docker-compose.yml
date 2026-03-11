@@ -1,0 +1,77 @@
+version: '3.8'
+
+services:
+  vexa-dashboard:
+    build:
+      context: .
+    ports:
+      - "3003:3000"
+    environment:
+      # Vexa API Connection (runtime configuration)
+      - VEXA_API_URL=${VEXA_API_URL:-http://vexa-api:18056}
+      # Hosted mode (proprietary platform wiring)
+      - NEXT_PUBLIC_HOSTED_MODE=${NEXT_PUBLIC_HOSTED_MODE:-false}
+      - NEXT_PUBLIC_WEBAPP_URL=${NEXT_PUBLIC_WEBAPP_URL:-}
+      - NEXT_PUBLIC_EXTERNAL_AUTH_URL=${NEXT_PUBLIC_EXTERNAL_AUTH_URL:-}
+      - COOKIE_DOMAIN=${COOKIE_DOMAIN:-}
+      - NEXT_PUBLIC_VEXA_WS_URL=${NEXT_PUBLIC_VEXA_WS_URL:-}
+
+      # Admin API (required for authentication)
+      - VEXA_ADMIN_API_KEY=${VEXA_ADMIN_API_KEY}
+      - VEXA_ADMIN_API_URL=${VEXA_ADMIN_API_URL:-}
+
+      # SMTP Configuration
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_SECURE=${SMTP_SECURE:-false}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASS=${SMTP_PASS}
+      - SMTP_FROM=${SMTP_FROM}
+
+      # Security
+      - JWT_SECRET=${JWT_SECRET:-}
+      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-}
+
+      # Registration Control
+      - ALLOW_REGISTRATIONS=${ALLOW_REGISTRATIONS:-true}
+      - ALLOWED_EMAIL_DOMAINS=${ALLOWED_EMAIL_DOMAINS:-}
+    restart: unless-stopped
+    networks:
+      - vexa-network
+
+  # Optional: Include Vexa API for full stack deployment
+  # Uncomment the section below to run Vexa alongside the dashboard
+  #
+  # vexa-api:
+  #   image: ghcr.io/vexa-ai/vexa:latest
+  #   ports:
+  #     - "18056:18056"
+  #   volumes:
+  #     - vexa-data:/data
+  #   environment:
+  #     - DATABASE_URL=postgresql://postgres:postgres@db:5432/vexa
+  #   depends_on:
+  #     - db
+  #   restart: unless-stopped
+  #   networks:
+  #     - vexa-network
+  #
+  # db:
+  #   image: postgres:15-alpine
+  #   environment:
+  #     - POSTGRES_USER=postgres
+  #     - POSTGRES_PASSWORD=postgres
+  #     - POSTGRES_DB=vexa
+  #   volumes:
+  #     - postgres-data:/var/lib/postgresql/data
+  #   restart: unless-stopped
+  #   networks:
+  #     - vexa-network
+
+networks:
+  vexa-network:
+    driver: bridge
+
+# volumes:
+#   vexa-data:
+#   postgres-data:
