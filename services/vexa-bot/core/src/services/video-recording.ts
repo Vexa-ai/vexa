@@ -273,14 +273,8 @@ export class VideoRecordingService {
     // No scaling needed — capture size matches display and viewport exactly.
     const inputSize = '1280x720';
 
-    // Common input: x11grab from the virtual display
-    const inputArgs = [
-      '-f', 'x11grab',
-      '-framerate', fps,
-      '-video_size', inputSize,
-      '-i', this.display,
-    ];
-
+    // Pre-input args (e.g. hwaccel flags that must appear before -i)
+    let preInputArgs: string[] = [];
     let encoderArgs: string[];
     let outputFile: string;
 
@@ -298,10 +292,9 @@ export class VideoRecordingService {
         break;
       }
       case 'nvenc': {
-        // NVIDIA via NVENC
-        // Requires nvidia container runtime
+        // NVIDIA via NVENC — -hwaccel cuda must precede -i
+        preInputArgs = ['-hwaccel', 'cuda'];
         encoderArgs = [
-          '-hwaccel', 'cuda',
           '-c:v', 'h264_nvenc',
           '-cq', '28',
           '-preset', 'p2',
@@ -324,11 +317,20 @@ export class VideoRecordingService {
       }
     }
 
+    // Common input: x11grab from the virtual display
+    const inputArgs = [
+      '-f', 'x11grab',
+      '-framerate', fps,
+      '-video_size', inputSize,
+      '-i', this.display,
+    ];
+
     return [
       '-y',         // overwrite output file if exists
+      ...preInputArgs,
       ...inputArgs,
       ...encoderArgs,
-      '-an',        // no audio (audio is handled separately)
+      '-an',        // no audio (audio is muxed in after recording stops)
       outputFile,
     ];
   }
