@@ -72,12 +72,22 @@ export async function dismissZoomPopups(page: Page): Promise<void> {
     }
   } catch { /* not present */ }
 
-  // 3. Generic OK/Got it buttons (catch-all for other Zoom modals)
+  // 3. "Floating reactions" / feature tips — OK button inside .settings-feature-tips
   try {
-    const genericOk = page.locator('.ReactModal__Content button:has-text("OK"), .ReactModal__Content button:has-text("Got it")').first();
+    const featureTip = page.locator('.settings-feature-tips button:has-text("OK")').first();
+    if (await featureTip.isVisible({ timeout: 800 })) {
+      await featureTip.click();
+      log('[Zoom Web] Dismissed feature tip popup');
+      await page.waitForTimeout(300);
+    }
+  } catch { /* not present */ }
+
+  // 4. Generic OK/Got it buttons (catch-all for other Zoom modals/tooltips)
+  try {
+    const genericOk = page.locator('.ReactModal__Content button:has-text("OK"), .ReactModal__Content button:has-text("Got it"), [role="presentation"] button:has-text("OK")').first();
     if (await genericOk.isVisible({ timeout: 500 })) {
       await genericOk.click();
-      log('[Zoom Web] Dismissed generic modal popup');
+      log('[Zoom Web] Dismissed generic popup');
     }
   } catch { /* not present */ }
 }
