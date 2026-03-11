@@ -49,6 +49,50 @@ let currentBotConfig: BotConfig | null = null;
 export function setActiveRecordingService(svc: RecordingService | null): void {
   activeRecordingService = svc;
 }
+
+/**
+ * Start video recording if the bot config requests it.
+ * Called by meetingFlow.ts after admission so video and audio start at the same time.
+ */
+export function startVideoRecordingIfNeeded(): void {
+  if (!currentBotConfig) return;
+  const wantsVideoCapture = !!currentBotConfig.recordingEnabled &&
+    Array.isArray(currentBotConfig.captureModes) && currentBotConfig.captureModes.includes('video');
+  const isZoomNative = currentBotConfig.platform === 'zoom' && process.env.ZOOM_WEB !== 'true';
+
+  if (wantsVideoCapture && !isZoomNative) {
+    try {
+      const sessionUid = currentBotConfig.connectionId || `video-${Date.now()}`;
+      activeVideoRecordingService = new VideoRecordingService(currentBotConfig.meeting_id, sessionUid);
+      activeVideoRecordingService.start();
+      log('[VideoRecording] Screen capture started (post-admission)');
+    } catch (err: any) {
+      log(`[VideoRecording] Failed to start (non-fatal): ${err.message}`);
+      activeVideoRecordingService = null;
+    }
+  } else if (wantsVideoCapture && isZoomNative) {
+    log('[VideoRecording] Video recording not supported for Zoom Native SDK — use ZOOM_WEB=true for screen capture');
+  }
+}
+
+/**
+ * Enter true fullscreen via CDP, hiding all browser chrome (tabs, address bar).
+ * Must be called after the page has navigated to a real URL.
+ */
+export async function enterBrowserFullscreen(): Promise<void> {
+  if (!page || page.isClosed()) return;
+  try {
+    const cdp = await page.context().newCDPSession(page);
+    const { windowId } = await cdp.send('Browser.getWindowForTarget');
+    await cdp.send('Browser.setWindowBounds', {
+      windowId,
+      bounds: { windowState: 'fullscreen' },
+    });
+    log('[Browser] Entered fullscreen via CDP (no tabs/address bar)');
+  } catch (err: any) {
+    log(`[Browser] CDP fullscreen failed (non-fatal): ${err.message}`);
+  }
+}
 // ----------------------------------------------------------
 
 // --- Voice agent / meeting interaction services ---
@@ -612,8 +656,10 @@ async function performGracefulLeave(
       if (activeRecordingService) {
         try {
           const audioPath = await activeRecordingService.finalize();
-          log("[Graceful Leave] Muxing audio into video...");
-          await activeVideoRecordingService.muxAudio(audioPath);
+          // Compute how much later audio started compared to video
+          const audioDelayMs = activeRecordingService.getStartTime() - activeVideoRecordingService.getStartTime();
+          log(`[Graceful Leave] Muxing audio into video (audio delay: ${audioDelayMs}ms)...`);
+          await activeVideoRecordingService.muxAudio(audioPath, audioDelayMs);
         } catch (muxErr: any) {
           log(`[Graceful Leave] Audio mux failed (will upload video-only): ${muxErr.message}`);
         }
@@ -1168,7 +1214,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     const context = await browserInstance.newContext({
       permissions: ["camera", "microphone"],
       userAgent: userAgent,
-      viewport: null, // kiosk mode fills the Xvfb display; let the browser report the real size
+      viewport: null, // CDP fullscreen removes browser chrome; window fills the 1920x1080 Xvfb display
     });
 
     // Set flags before init scripts so they can read them.
@@ -1284,24 +1330,8 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     }
   }
 
-  // Start screen capture video recording if requested (Meet, Teams, Zoom Web only).
-  // ffmpeg captures the Xvfb display — works for all browser-based platforms.
-  const wantsVideoCapture = !!botConfig.recordingEnabled &&
-    Array.isArray(botConfig.captureModes) && botConfig.captureModes.includes('video');
-  const isZoomNative = botConfig.platform === 'zoom' && process.env.ZOOM_WEB !== 'true';
-  if (wantsVideoCapture && !isZoomNative) {
-    try {
-      const sessionUid = botConfig.connectionId || `video-${Date.now()}`;
-      activeVideoRecordingService = new VideoRecordingService(botConfig.meeting_id, sessionUid);
-      activeVideoRecordingService.start();
-      log('[VideoRecording] Screen capture started');
-    } catch (err: any) {
-      log(`[VideoRecording] Failed to start (non-fatal): ${err.message}`);
-      activeVideoRecordingService = null;
-    }
-  } else if (wantsVideoCapture && isZoomNative) {
-    log('[VideoRecording] Video recording not supported for Zoom Native SDK — use ZOOM_WEB=true for screen capture');
-  }
+  // Video recording is started after admission by meetingFlow.ts via startVideoRecordingIfNeeded().
+  // This keeps video and audio in sync since both start at the same point.
 
   // Call the appropriate platform handler
   try {

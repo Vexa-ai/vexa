@@ -16,6 +16,7 @@ export class RecordingService {
   private sampleRate: number;
   private channels: number;
   private isFinalized: boolean = false;
+  private startTime: number = 0;
 
   constructor(
     private meetingId: number,
@@ -38,6 +39,7 @@ export class RecordingService {
     this.writeStream.write(this.createWavHeader(0));
     this.totalSamples = 0;
     this.isFinalized = false;
+    this.startTime = Date.now();
   }
 
   /**
@@ -200,6 +202,10 @@ export class RecordingService {
 
   getFilePath(): string {
     return this.filePath;
+  }
+
+  getStartTime(): number {
+    return this.startTime;
   }
 
   getDurationSeconds(): number {

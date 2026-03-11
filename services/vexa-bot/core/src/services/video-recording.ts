@@ -196,7 +196,13 @@ export class VideoRecordingService {
    * Copies the video stream as-is and encodes audio (opus for webm, aac for mkv/mp4).
    * Replaces this.filePath with the muxed output.
    */
-  async muxAudio(audioPath: string): Promise<void> {
+  /**
+   * @param audioPath   Path to the finalized WAV file.
+   * @param audioDelayMs  Delay (in ms) to apply to the audio stream.
+   *   Positive = audio started later than video, so we pad silence at the start.
+   *   This keeps audio and video in sync when they didn't start at the same time.
+   */
+  async muxAudio(audioPath: string, audioDelayMs: number = 0): Promise<void> {
     if (!fs.existsSync(this.filePath)) {
       log(`[VideoRecording] Video file not found for muxing: ${this.filePath}`);
       return;
@@ -208,10 +214,14 @@ export class VideoRecordingService {
 
     const muxedPath = this.filePath.replace(`.${this.format}`, `_muxed.${this.format}`);
     const audioCodec = this.format === 'webm' ? 'libopus' : 'aac';
+    const audioDelaySec = Math.max(0, audioDelayMs / 1000);
 
+    // -itsoffset delays the audio input so it aligns with the video timeline.
+    // Without this, audio that started later than video would play too early.
     const args = [
       '-y',
       '-i', this.filePath,
+      ...(audioDelaySec > 0 ? ['-itsoffset', audioDelaySec.toFixed(3)] : []),
       '-i', audioPath,
       '-c:v', 'copy',
       '-c:a', audioCodec,
@@ -262,16 +272,15 @@ export class VideoRecordingService {
     return this.filePath;
   }
 
+  getStartTime(): number {
+    return this.startTime;
+  }
+
   // ---------------------------------------------------------------------------
 
   private buildFfmpegArgs(): string[] {
-    // Capture at 5fps — enough to follow screen shares and meeting content
-    // while keeping file size and CPU usage reasonable.
-    const fps = '5';
-    // Capture the full Xvfb display (1280x720). Chrome runs in kiosk mode with
-    // --force-device-scale-factor=1, filling the entire display with no browser chrome.
-    // No scaling needed — capture size matches display and viewport exactly.
-    const inputSize = '1280x720';
+    const fps = '10';
+    const inputSize = '1920x1080';
 
     // Pre-input args (e.g. hwaccel flags that must appear before -i)
     let preInputArgs: string[] = [];
