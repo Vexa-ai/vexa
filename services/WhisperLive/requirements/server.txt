@@ -1,10 +1,4 @@
 websockets
-websocket-client
-soundfile
-scipy
-av
 numpy<2
 redis>=4.6.0
 httpx>=0.24.0
-torch --index-url https://download.pytorch.org/whl/cpu
-onnxruntime

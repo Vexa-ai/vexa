@@ -106,7 +106,7 @@ services:
   whisperlive:
     build:
       context: .
-      dockerfile: services/WhisperLive/Dockerfile.cpu
+      dockerfile: services/WhisperLive/Dockerfile
     volumes:
       - wl-recordings:/var/lib/wl-recordings
     environment:
