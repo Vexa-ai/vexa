@@ -11,15 +11,8 @@ export async function prepareZoomWebMeeting(page: Page | null, botConfig: BotCon
 
   log('[Zoom Web] Preparing meeting post-admission...');
 
-  // Dismiss any stale "Floating reactions" or other tooltip popups
-  try {
-    const okBtn = page.locator('button:has-text("OK")').first();
-    if (await okBtn.isVisible({ timeout: 1500 })) {
-      await okBtn.click();
-      log('[Zoom Web] Dismissed OK popup');
-      await page.waitForTimeout(500);
-    }
-  } catch { /* no popup */ }
+  // Dismiss popups that overlay the meeting content
+  await dismissZoomPopups(page);
 
   // Join computer audio if the audio button shows "Join Audio" state
   try {
@@ -52,4 +45,39 @@ export async function prepareZoomWebMeeting(page: Page | null, botConfig: BotCon
   } catch { /* no banner */ }
 
   log('[Zoom Web] Meeting preparation complete');
+}
+
+/**
+ * Dismiss known Zoom Web popups/modals that overlay meeting content.
+ * Safe to call repeatedly — each check is short-circuited if the popup isn't visible.
+ */
+export async function dismissZoomPopups(page: Page): Promise<void> {
+  // 1. "AI Companion is on." modal — has an OK button inside .zm-modal
+  try {
+    const aiModal = page.locator('.zm-modal button:has-text("OK")').first();
+    if (await aiModal.isVisible({ timeout: 800 })) {
+      await aiModal.click();
+      log('[Zoom Web] Dismissed "AI Companion" popup');
+      await page.waitForTimeout(300);
+    }
+  } catch { /* not present */ }
+
+  // 2. "You're chatting as a guest" tooltip — has a "Got it" button
+  try {
+    const gotItBtn = page.locator('.relative-tooltip button:has-text("Got it")').first();
+    if (await gotItBtn.isVisible({ timeout: 800 })) {
+      await gotItBtn.click();
+      log('[Zoom Web] Dismissed "chatting as guest" popup');
+      await page.waitForTimeout(300);
+    }
+  } catch { /* not present */ }
+
+  // 3. Generic OK/Got it buttons (catch-all for other Zoom modals)
+  try {
+    const genericOk = page.locator('.ReactModal__Content button:has-text("OK"), .ReactModal__Content button:has-text("Got it")').first();
+    if (await genericOk.isVisible({ timeout: 500 })) {
+      await genericOk.click();
+      log('[Zoom Web] Dismissed generic modal popup');
+    }
+  } catch { /* not present */ }
 }

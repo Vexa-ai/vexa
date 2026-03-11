@@ -9,6 +9,7 @@ import {
   zoomActiveSpeakerSelector,
   zoomParticipantNameSelector,
 } from './selectors';
+import { dismissZoomPopups } from './prepare';
 
 let whisperLive: WhisperLiveService | null = null;
 let recordingService: RecordingService | null = null;
@@ -18,6 +19,7 @@ let audioSessionStartTime: number | null = null;
 let speakerPollInterval: NodeJS.Timeout | null = null;
 let lastActiveSpeaker: string | null = null;
 let activeBotConfig: BotConfig | null = null;
+let popupDismissInterval: NodeJS.Timeout | null = null;
 let connectWhisperFn: ((cfg: BotConfig) => Promise<void>) | null = null;
 let isReconfiguring = false;
 
@@ -107,6 +109,11 @@ export async function startZoomWebRecording(page: Page | null, botConfig: BotCon
   // Start speaker detection polling via DOM
   startSpeakerPolling(page, botConfig);
 
+  // Periodically dismiss popups (AI Companion, chat guest tooltip, etc.)
+  popupDismissInterval = setInterval(() => {
+    dismissZoomPopups(page).catch(() => {});
+  }, 2000);
+
   // Block until stopZoomWebRecording() is called
   await new Promise<void>((resolve) => {
     recordingStopResolver = resolve;
@@ -120,6 +127,12 @@ export async function stopZoomWebRecording(): Promise<void> {
   if (speakerPollInterval) {
     clearInterval(speakerPollInterval);
     speakerPollInterval = null;
+  }
+
+  // Stop popup dismissal
+  if (popupDismissInterval) {
+    clearInterval(popupDismissInterval);
+    popupDismissInterval = null;
   }
 
   audioSessionStartTime = null;
