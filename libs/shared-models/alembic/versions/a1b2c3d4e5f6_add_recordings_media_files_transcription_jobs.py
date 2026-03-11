@@ -1,4 +1,4 @@
-"""Add recordings, media_files, and transcription_jobs tables
+"""Add recordings and media_files tables
 
 Revision ID: a1b2c3d4e5f6
 Revises: 5befe308fa8b
@@ -61,39 +61,7 @@ def upgrade() -> None:
     op.create_index('ix_media_files_id', 'media_files', ['id'])
     op.create_index('ix_media_files_recording_id', 'media_files', ['recording_id'])
 
-    # --- transcription_jobs table ---
-    op.create_table(
-        'transcription_jobs',
-        sa.Column('id', sa.Integer(), nullable=False),
-        sa.Column('recording_id', sa.Integer(), nullable=False),
-        sa.Column('meeting_id', sa.Integer(), nullable=True),
-        sa.Column('user_id', sa.Integer(), nullable=False),
-        sa.Column('language', sa.String(10), nullable=True),
-        sa.Column('task', sa.String(50), nullable=False, server_default='transcribe'),
-        sa.Column('status', sa.String(50), nullable=False, server_default='pending'),
-        sa.Column('error_message', sa.Text(), nullable=True),
-        sa.Column('progress', sa.Float(), nullable=True),
-        sa.Column('segments_count', sa.Integer(), nullable=True),
-        sa.Column('session_uid', sa.String(), nullable=True),
-        sa.Column('created_at', sa.DateTime(), server_default=sa.func.now(), nullable=True),
-        sa.Column('started_at', sa.DateTime(), nullable=True),
-        sa.Column('completed_at', sa.DateTime(), nullable=True),
-        sa.ForeignKeyConstraint(['recording_id'], ['recordings.id']),
-        sa.ForeignKeyConstraint(['meeting_id'], ['meetings.id']),
-        sa.ForeignKeyConstraint(['user_id'], ['users.id']),
-        sa.PrimaryKeyConstraint('id'),
-    )
-    op.create_index('ix_transcription_jobs_id', 'transcription_jobs', ['id'])
-    op.create_index('ix_transcription_jobs_recording_id', 'transcription_jobs', ['recording_id'])
-    op.create_index('ix_transcription_jobs_meeting_id', 'transcription_jobs', ['meeting_id'])
-    op.create_index('ix_transcription_jobs_user_id', 'transcription_jobs', ['user_id'])
-    op.create_index('ix_transcription_jobs_session_uid', 'transcription_jobs', ['session_uid'])
-    op.create_index('ix_transcription_jobs_created_at', 'transcription_jobs', ['created_at'])
-    op.create_index('ix_transcription_job_status_created', 'transcription_jobs', ['status', 'created_at'])
-    op.create_index('ix_transcription_job_user_created', 'transcription_jobs', ['user_id', 'created_at'])
-
 
 def downgrade() -> None:
-    op.drop_table('transcription_jobs')
     op.drop_table('media_files')
     op.drop_table('recordings')

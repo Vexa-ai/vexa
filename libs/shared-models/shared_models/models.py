@@ -136,7 +136,6 @@ class Recording(Base):
     meeting = relationship("Meeting", back_populates="recordings")
     user = relationship("User")
     media_files = relationship("MediaFile", back_populates="recording", cascade="all, delete-orphan")
-    transcription_jobs = relationship("TranscriptionJob", back_populates="recording", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index('ix_recording_meeting_session', 'meeting_id', 'session_uid'),
@@ -168,36 +167,3 @@ class MediaFile(Base):
     recording = relationship("Recording", back_populates="media_files")
 
 
-class TranscriptionJob(Base):
-    """A batch transcription job — processes a recording through the transcription service."""
-    __tablename__ = "transcription_jobs"
-    id = Column(Integer, primary_key=True, index=True)
-    recording_id = Column(Integer, ForeignKey("recordings.id"), nullable=False, index=True)
-    meeting_id = Column(Integer, ForeignKey("meetings.id"), nullable=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-
-    # Job config
-    language = Column(String(10), nullable=True)
-    task = Column(String(50), nullable=False, default='transcribe')
-
-    # Status tracking
-    status = Column(String(50), nullable=False, default='pending', index=True)  # 'pending', 'processing', 'completed', 'failed'
-    error_message = Column(Text, nullable=True)
-    progress = Column(Float, nullable=True)  # 0.0 to 1.0
-
-    # Results
-    segments_count = Column(Integer, nullable=True)
-    session_uid = Column(String, nullable=True, index=True)  # The session_uid used for transcription segments
-
-    created_at = Column(DateTime, server_default=func.now(), index=True)
-    started_at = Column(DateTime, nullable=True)
-    completed_at = Column(DateTime, nullable=True)
-
-    recording = relationship("Recording", back_populates="transcription_jobs")
-    meeting = relationship("Meeting")
-    user = relationship("User")
-
-    __table_args__ = (
-        Index('ix_transcription_job_status_created', 'status', 'created_at'),
-        Index('ix_transcription_job_user_created', 'user_id', 'created_at'),
-    )
