@@ -231,7 +231,7 @@ services:
 
   dashboard:
     build:
-      context: ${DASHBOARD_PATH:-../Vexa-Dashboard}
+      context: ${DASHBOARD_PATH:-./services/dashboard}
     ports:
       - "${DASHBOARD_HOST_PORT:-3001}:3000"
     environment:
