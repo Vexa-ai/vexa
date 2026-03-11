@@ -2661,12 +2661,14 @@ async def reconcile_meetings_and_containers():
     except Exception as e:
         logger.error(f"[Reconciliation] Error during reconciliation: {e}", exc_info=True)
 
-# Schedule reconciliation task to run periodically (every 5 minutes)
+# Schedule reconciliation task to run periodically
+RECONCILIATION_INTERVAL = int(os.environ.get("RECONCILIATION_INTERVAL_SECONDS", "7200"))  # Default 2 hours
+
 async def start_reconciliation_scheduler():
     """Start periodic reconciliation task"""
     while True:
         try:
-            await asyncio.sleep(300)  # Run every 5 minutes
+            await asyncio.sleep(RECONCILIATION_INTERVAL)
             await reconcile_meetings_and_containers()
         except Exception as e:
             logger.error(f"[Reconciliation Scheduler] Error: {e}", exc_info=True)
