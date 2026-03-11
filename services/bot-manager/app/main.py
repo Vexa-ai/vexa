@@ -890,8 +890,8 @@ async def request_bot(
                 detail={"status": "error", "message": error_msg, "meeting_id": meeting_id}
             )
 
-        asyncio.create_task(_record_session_start(meeting_id, connection_id))
-        logger.info(f"Scheduled background task to record session start for meeting {meeting_id}, session {connection_id}")
+        await _record_session_start(meeting_id, connection_id)
+        logger.info(f"Recorded session start for meeting {meeting_id}, session {connection_id}")
 
         # REMOVED: Status update to 'active' - now handled by bot startup callback
         # Only set the container ID, keep status as 'requested' until bot confirms it's running
@@ -1675,14 +1675,6 @@ async def bot_status_change_callback(
     new_status = payload.status
     reason = payload.reason
 
-    # #region agent log
-    try:
-        with open('/home/dima/dev/.cursor/debug.log', 'a') as f:
-            import json
-            f.write(json.dumps({"location": "bot-manager/main.py:1320", "message": "Unified callback received", "data": {"connection_id": session_uid, "new_status": new_status.value, "reason": reason}, "timestamp": __import__('time').time(), "sessionId": "debug-session", "runId": "run1", "hypothesisId": "A"}) + "\n")
-    except: pass
-    # #endregion
-
     try:
         # Find the meeting session to get the meeting_id
         session_stmt = select(MeetingSession).where(MeetingSession.session_uid == session_uid)
@@ -1691,7 +1683,10 @@ async def bot_status_change_callback(
 
         if not meeting_session:
             logger.error(f"Bot status change callback: Could not find meeting session for connection_id {session_uid}")
-            return {"status": "error", "detail": f"Meeting session not found for connection_id: {session_uid}"}
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Meeting session not found for connection_id: {session_uid}"
+            )
 
         meeting_id = meeting_session.meeting_id
         logger.info(f"Bot status change callback: Found meeting_id {meeting_id} for connection_id {session_uid}")
@@ -1700,7 +1695,10 @@ async def bot_status_change_callback(
         meeting = await db.get(Meeting, meeting_id)
         if not meeting:
             logger.error(f"Bot status change callback: Could not find meeting {meeting_id}")
-            return {"status": "error", "detail": f"Meeting {meeting_id} not found"}
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Meeting {meeting_id} not found"
+            )
         
         # Refresh meeting to get latest status from database
         await db.refresh(meeting)
