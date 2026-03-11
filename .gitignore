@@ -146,4 +146,5 @@ test_data/
 *.mp4
 *.txt
 !**/requirements.txt
-manifest.csv
+manifest.csvdocker-compose.override.yml
+.env.test
