@@ -52,42 +52,24 @@ export async function prepareZoomWebMeeting(page: Page | null, botConfig: BotCon
  * Safe to call repeatedly — each check is short-circuited if the popup isn't visible.
  */
 export async function dismissZoomPopups(page: Page): Promise<void> {
-  // 1. "AI Companion is on." modal — has an OK button inside .zm-modal
-  try {
-    const aiModal = page.locator('.zm-modal button:has-text("OK")').first();
-    if (await aiModal.isVisible({ timeout: 800 })) {
-      await aiModal.click();
-      log('[Zoom Web] Dismissed "AI Companion" popup');
-      await page.waitForTimeout(300);
-    }
-  } catch { /* not present */ }
+  // All checks use timeout:0 — instant visibility check, no waiting.
+  // This function is polled every 2s so there's no need to wait for elements to appear.
+  const dismissTargets = [
+    { selector: '.zm-modal button:has-text("OK")', label: 'AI Companion' },
+    { selector: '.relative-tooltip button:has-text("Got it")', label: 'chatting as guest' },
+    { selector: '.settings-feature-tips button:has-text("OK")', label: 'feature tip' },
+    { selector: '.ReactModal__Content button:has-text("OK")', label: 'modal OK' },
+    { selector: '.ReactModal__Content button:has-text("Got it")', label: 'modal Got it' },
+    { selector: '[role="presentation"] button:has-text("OK")', label: 'presentation OK' },
+  ];
 
-  // 2. "You're chatting as a guest" tooltip — has a "Got it" button
-  try {
-    const gotItBtn = page.locator('.relative-tooltip button:has-text("Got it")').first();
-    if (await gotItBtn.isVisible({ timeout: 800 })) {
-      await gotItBtn.click();
-      log('[Zoom Web] Dismissed "chatting as guest" popup');
-      await page.waitForTimeout(300);
-    }
-  } catch { /* not present */ }
-
-  // 3. "Floating reactions" / feature tips — OK button inside .settings-feature-tips
-  try {
-    const featureTip = page.locator('.settings-feature-tips button:has-text("OK")').first();
-    if (await featureTip.isVisible({ timeout: 800 })) {
-      await featureTip.click();
-      log('[Zoom Web] Dismissed feature tip popup');
-      await page.waitForTimeout(300);
-    }
-  } catch { /* not present */ }
-
-  // 4. Generic OK/Got it buttons (catch-all for other Zoom modals/tooltips)
-  try {
-    const genericOk = page.locator('.ReactModal__Content button:has-text("OK"), .ReactModal__Content button:has-text("Got it"), [role="presentation"] button:has-text("OK")').first();
-    if (await genericOk.isVisible({ timeout: 500 })) {
-      await genericOk.click();
-      log('[Zoom Web] Dismissed generic popup');
-    }
-  } catch { /* not present */ }
+  for (const { selector, label } of dismissTargets) {
+    try {
+      const btn = page.locator(selector).first();
+      if (await btn.isVisible({ timeout: 0 })) {
+        await btn.click();
+        log(`[Zoom Web] Dismissed "${label}" popup`);
+      }
+    } catch { /* not present or already gone */ }
+  }
 }
