@@ -86,10 +86,12 @@ services:
       - LOCAL_STORAGE_FSYNC=${LOCAL_STORAGE_FSYNC:-true}
       - RECORDING_ENABLED=${RECORDING_ENABLED:-false}
       - CAPTURE_MODES=${CAPTURE_MODES:-audio}
-      # Post-meeting hooks — fires to webapp billing on meeting end
+      # Post-meeting hooks
       - POST_MEETING_HOOKS=${POST_MEETING_HOOKS:-}
       # Voice agent / TTS
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    ports:
+      - "18080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${LOCAL_STORAGE_VOLUME_SOURCE:-recordings-data}:/data/recordings
@@ -221,25 +223,6 @@ services:
     environment:
       - API_GATEWAY_URL=http://api-gateway:8000
       - LOG_LEVEL=DEBUG
-    init: true
-    depends_on:
-      api-gateway:
-        condition: service_started
-    networks:
-      - vexa_default
-    restart: unless-stopped
-
-  dashboard:
-    build:
-      context: ${DASHBOARD_PATH:-../Vexa-Dashboard}
-    ports:
-      - "${DASHBOARD_HOST_PORT:-3001}:3000"
-    environment:
-      - VEXA_API_URL=http://api-gateway:8000
-      - VEXA_ADMIN_API_KEY=${ADMIN_API_TOKEN}
-      - VEXA_ADMIN_API_URL=http://admin-api:8001
-      - JWT_SECRET=${JWT_SECRET:-vexa-dev-jwt-secret}
-      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3001}
     init: true
     depends_on:
       api-gateway:

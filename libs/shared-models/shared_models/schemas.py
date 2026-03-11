@@ -181,6 +181,7 @@ class Platform(str, Enum):
     GOOGLE_MEET = "google_meet"
     ZOOM = "zoom"
     TEAMS = "teams"
+    AGENT = "agent"
     
     @property
     def bot_name(self) -> str:
@@ -191,7 +192,8 @@ class Platform(str, Enum):
         mapping = {
             Platform.GOOGLE_MEET: "google_meet",
             Platform.ZOOM: "zoom",
-            Platform.TEAMS: "teams"
+            Platform.TEAMS: "teams",
+            Platform.AGENT: "agent",
         }
         return mapping[self]
     
@@ -223,7 +225,8 @@ class Platform(str, Enum):
         reverse_mapping = {
             "google_meet": Platform.GOOGLE_MEET.value,
             "zoom": Platform.ZOOM.value,
-            "teams": Platform.TEAMS.value
+            "teams": Platform.TEAMS.value,
+            "agent": Platform.AGENT.value
         }
         return reverse_mapping.get(bot_platform_name)
 

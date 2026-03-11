@@ -139,6 +139,53 @@ async def _record_session_start(meeting_id: int, session_uid: str):
         logger.error(f"Failed to record session start for session {session_uid}, meeting {meeting_id}: {db_err}", exc_info=True)
         # Log error but allow the main function to continue
 
+
+def _ensure_workspace_init(workspace_path: str):
+    """Initialize a per-user workspace as a git repo with standard structure.
+    Idempotent — skips if .git already exists."""
+    import subprocess
+
+    git_dir = os.path.join(workspace_path, ".git")
+    if os.path.isdir(git_dir):
+        return  # Already initialized
+
+    logger.info(f"Initializing workspace at {workspace_path}")
+
+    def _run(cmd, **kwargs):
+        subprocess.run(cmd, cwd=workspace_path, capture_output=True, text=True, check=True, **kwargs)
+
+    # Create directory structure
+    dirs = [
+        "knowledge/entities/contacts",
+        "knowledge/entities/companies",
+        "knowledge/entities/products",
+        "knowledge/meetings",
+        "scripts",
+    ]
+    for d in dirs:
+        os.makedirs(os.path.join(workspace_path, d), exist_ok=True)
+
+    # Git init
+    _run(["git", "init", "-b", "main"])
+    _run(["git", "config", "user.email", "agent@vexa.ai"])
+    _run(["git", "config", "user.name", "Vexa Agent"])
+
+    # .gitignore
+    gitignore = os.path.join(workspace_path, ".gitignore")
+    with open(gitignore, "w") as f:
+        f.write(""".claude/.session
+.claude/.agent-prompt.txt
+.claude/.chat-prompt.txt
+__pycache__/
+node_modules/
+.env
+""")
+
+    # Initial commit
+    _run(["git", "add", "-A"])
+    _run(["git", "commit", "-m", "Initialize workspace"])
+
+
 # Make the function async
 async def start_bot_container(
     user_id: int,
@@ -271,6 +318,8 @@ async def start_bot_container(
     if not agent_enabled or meeting_url:
         environment.insert(0, f"BOT_CONFIG={bot_config_json}")
     environment.append(f"WHISPER_LIVE_URL={whisper_live_url_for_bot}")
+    if agent_enabled:
+        environment.append("AGENT_ENABLED=true")
 
     # Add voice agent environment variables (TTS service URL required)
     if voice_agent_enabled:
@@ -310,14 +359,35 @@ async def start_bot_container(
     }
 
     if agent_enabled:
-        vexa_repo_path = os.environ.get("VEXA_REPO_PATH", "/home/dima/dev/vexa")
-        claude_home = os.environ.get("CLAUDE_HOME", "/home/dima")
+        # Paths inside bot-manager container (for workspace init)
+        workspaces_dir = os.environ.get("WORKSPACES_DIR", "/home/dima/workspaces")
+
+        # Host paths (for Docker bind mounts — agent containers mount from host filesystem)
+        host_workspaces_dir = os.environ.get("HOST_WORKSPACES_DIR", workspaces_dir)
+        host_claude_home = os.environ.get("HOST_CLAUDE_HOME", os.environ.get("CLAUDE_HOME", "/home/dima"))
+        host_vexa_repo = os.environ.get("HOST_VEXA_REPO_PATH", os.environ.get("VEXA_REPO_PATH", "/home/dima/dev/vexa"))
+
+        # Ensure per-user workspace directory exists (bot-manager can see it via volume mount)
+        user_workspace = os.path.join(workspaces_dir, str(user_id))
+        os.makedirs(user_workspace, exist_ok=True)
+
+        # Initialize git repo + workspace structure if new
+        _ensure_workspace_init(user_workspace)
+
+        # Host path for agent container bind mount
+        host_user_workspace = os.path.join(host_workspaces_dir, str(user_id))
+
         host_config["Binds"] = [
             # Claude CLI credentials
-            f"{claude_home}/.claude/.credentials.json:/root/.claude/.credentials.json:ro",
-            f"{claude_home}/.claude.json:/root/.claude.json:ro",
+            f"{host_claude_home}/.claude/.credentials.json:/root/.claude/.credentials.json:ro",
+            f"{host_claude_home}/.claude.json:/root/.claude.json:ro",
             # Agent context (CLAUDE.md + settings) for Claude CLI
-            f"{vexa_repo_path}/experiments/.claude:/app/vexa-bot/core/.claude:ro",
+            f"{host_vexa_repo}/experiments/.claude:/app/vexa-bot/core/.claude:ro",
+            # Bot source code (agent edits persist on host)
+            f"{host_vexa_repo}/services/vexa-bot/core/src:/app/vexa-bot/core/src",
+            f"{host_vexa_repo}/services/vexa-bot/core/dist:/app/vexa-bot/core/dist",
+            # Per-user persistent workspace (survives container restarts)
+            f"{host_user_workspace}:/workspace",
         ]
         host_config["ShmSize"] = 2 * 1024 * 1024 * 1024  # 2GB shared memory for Chromium
 

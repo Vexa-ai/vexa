@@ -488,7 +488,7 @@ async def shutdown_event():
     logger.info("Docker Client closed.")
 
 # --- ADDED: Delayed Stop Task ---
-async def _delayed_container_stop(container_id: str, meeting_id: int, delay_seconds: int = BOT_STOP_DELAY_SECONDS):
+async def _delayed_container_stop(container_id: str, meeting_id: int, delay_seconds: int = BOT_STOP_DELAY_SECONDS, agent_enabled: bool = False):
     """
     Waits for a delay, then attempts to stop the container synchronously in a thread.
     After stopping, checks if meeting is still ACTIVE and finalizes it if needed.
@@ -496,14 +496,15 @@ async def _delayed_container_stop(container_id: str, meeting_id: int, delay_seco
     """
     logger.info(f"[Delayed Stop] Task started for container {container_id} (meeting {meeting_id}). Waiting {delay_seconds}s before stopping.")
     await asyncio.sleep(delay_seconds)
-    logger.info(f"[Delayed Stop] Delay finished for {container_id}. Attempting synchronous stop...")
-    try:
-        # Run the synchronous stop_bot_container in a separate thread
-        # to avoid blocking the async event loop.
-        await asyncio.to_thread(stop_bot_container, container_id)
-        logger.info(f"[Delayed Stop] Successfully stopped container {container_id}.")
-    except Exception as e:
-        logger.error(f"[Delayed Stop] Error stopping container {container_id}: {e}", exc_info=True)
+    if agent_enabled:
+        logger.info(f"[Delayed Stop] Agent-enabled meeting {meeting_id} — skipping container stop (container stays alive for agent).")
+    else:
+        logger.info(f"[Delayed Stop] Delay finished for {container_id}. Attempting synchronous stop...")
+        try:
+            await asyncio.to_thread(stop_bot_container, container_id)
+            logger.info(f"[Delayed Stop] Successfully stopped container {container_id}.")
+        except Exception as e:
+            logger.error(f"[Delayed Stop] Error stopping container {container_id}: {e}", exc_info=True)
     
     # Safety finalizer: Check if meeting is still ACTIVE and finalize if needed
     # This ensures meetings are always finalized when stop_bot is called
@@ -706,6 +707,8 @@ async def request_bot(
             meeting_data['teams_base_host'] = req.teams_base_host
         meeting_data['transcribe_enabled'] = True if req.transcribe_enabled is None else bool(req.transcribe_enabled)
         meeting_data['recording_enabled'] = bool(req.recording_enabled) if req.recording_enabled is not None else False
+        if req.agent_enabled:
+            meeting_data["agent_enabled"] = True
 
         new_meeting = Meeting(
             user_id=current_user.id,
@@ -1189,7 +1192,7 @@ async def stop_bot(
             meeting.data["stop_requested"] = True
             await db.commit()
             # Stop container ASAP (no delay) in background
-            background_tasks.add_task(_delayed_container_stop, meeting.bot_container_id, meeting.id, 0)
+            background_tasks.add_task(_delayed_container_stop, meeting.bot_container_id, meeting.id, 0, agent_enabled=bool((meeting.data or {}).get("agent_enabled")))
             # Finalize meeting now
             success = await update_meeting_status(
                 meeting,
@@ -1222,7 +1225,7 @@ async def stop_bot(
         # 4. Schedule delayed container stop task
         logger.info(f"Scheduling delayed stop task for container {meeting.bot_container_id} (meeting {meeting.id}).")
         # Pass container_id, meeting_id, and delay
-        background_tasks.add_task(_delayed_container_stop, meeting.bot_container_id, meeting.id, BOT_STOP_DELAY_SECONDS) 
+        background_tasks.add_task(_delayed_container_stop, meeting.bot_container_id, meeting.id, BOT_STOP_DELAY_SECONDS, agent_enabled=bool((meeting.data or {}).get("agent_enabled")))
 
         # 5. Update Meeting status to STOPPING immediately (source of truth)
         # This allows users to immediately request a new bot after stopping
@@ -1246,6 +1249,95 @@ async def stop_bot(
     return {"message": "Stop request accepted and is being processed."}
 
 # --- NEW Endpoint: Get Running Bot Status --- 
+
+
+@app.delete("/meetings/{meeting_id}",
+            status_code=status.HTTP_202_ACCEPTED,
+            tags=["meetings"],
+            summary="Stop a bot by meeting ID",
+            dependencies=[Depends(get_user_and_token)])
+async def stop_meeting_by_id(
+    meeting_id: int,
+    background_tasks: BackgroundTasks,
+    auth_data: tuple = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    token, current_user = auth_data
+    result = await db.execute(
+        select(Meeting).where(
+            Meeting.id == meeting_id,
+            Meeting.user_id == current_user.id,
+        )
+    )
+    meeting = result.scalar_one_or_none()
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    if meeting.status in ("completed", "failed"):
+        return {"status": "already_stopped"}
+
+    if meeting.bot_container_id:
+        background_tasks.add_task(_delayed_container_stop, meeting.bot_container_id, meeting.id, 0, agent_enabled=bool((meeting.data or {}).get("agent_enabled")))
+
+    meeting.status = "completed"
+    meeting.data = dict(meeting.data or {})
+    meeting.data["completion_reason"] = "stopped"
+    await db.commit()
+    return {"status": "stopping", "meeting_id": meeting.id}
+
+
+@app.patch("/meetings/{meeting_id}",
+           tags=["meetings"],
+           summary="Update meeting data",
+           dependencies=[Depends(get_user_and_token)])
+async def update_meeting_by_id(
+    meeting_id: int,
+    body: dict,
+    auth_data: tuple = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    token, current_user = auth_data
+    result = await db.execute(
+        select(Meeting).where(
+            Meeting.id == meeting_id,
+            Meeting.user_id == current_user.id,
+        )
+    )
+    meeting = result.scalar_one_or_none()
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    data_update = body.get("data", {})
+    current_data = dict(meeting.data or {})
+    current_data.update(data_update)
+    meeting.data = current_data
+    await db.commit()
+    await db.refresh(meeting)
+    return MeetingResponse.model_validate(meeting)
+
+
+@app.get("/meetings",
+         tags=["meetings"],
+         summary="List meetings for the authenticated user",
+         dependencies=[Depends(get_user_and_token)])
+async def list_meetings(
+    auth_data: tuple = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+    limit: int = 50,
+    skip: int = 0,
+):
+    token, current_user = auth_data
+    result = await db.execute(
+        select(Meeting)
+        .where(Meeting.user_id == current_user.id)
+        .order_by(desc(Meeting.created_at))
+        .offset(skip)
+        .limit(limit)
+    )
+    meetings = result.scalars().all()
+    return {"meetings": [MeetingResponse.model_validate(m) for m in meetings]}
+
+
 @app.get("/bots/status",
          response_model=BotStatusResponse,
          summary="Get status of running bot containers for the authenticated user",
@@ -1402,7 +1494,7 @@ async def bot_exit_callback(
         # Schedule a delayed stop as a safeguard.
         if exit_code != 0 and meeting.bot_container_id:
             logger.warning(f"Bot exit callback: Scheduling delayed stop for container {meeting.bot_container_id} of failed meeting {meeting.id}.")
-            background_tasks.add_task(_delayed_container_stop, meeting.bot_container_id, meeting.id, 10)
+            background_tasks.add_task(_delayed_container_stop, meeting.bot_container_id, meeting.id, 10, agent_enabled=bool((meeting.data or {}).get("agent_enabled")))
 
         return {"status": "callback processed", "meeting_id": meeting.id, "final_status": meeting.status}
 

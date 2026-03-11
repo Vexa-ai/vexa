@@ -10,6 +10,30 @@ You are inside the vexa-bot Docker container with Playwright, Chromium, and the 
 - **Workspace**: `/workspace/` (persists on host)
 - **Node modules**: `/app/vexa-bot/core/node_modules/`
 
+## Bot Logs (Meeting+Agent Mode)
+
+When running alongside a live meeting bot, the bot's real-time logs are streamed to `/tmp/bot.log`. **Always check this first** when asked about the meeting or bot status:
+
+```bash
+# See recent bot activity
+tail -100 /tmp/bot.log
+
+# Follow bot logs in real-time (use timeout to avoid blocking)
+timeout 10 tail -f /tmp/bot.log
+
+# Search for specific events
+grep -i "error\|warn\|joined\|admitted\|recording\|caption" /tmp/bot.log | tail -30
+```
+
+Key bot log patterns:
+- `[MeetingFlow]` — join/leave lifecycle, admission, recording state
+- `[Captions]` — transcript capture activity
+- `[Chat]` — in-meeting chat messages
+- `[AudioCapture]` — recording pipeline status
+- `ERROR` / `WARN` — problems to investigate
+
+When the user asks you to follow the bot or check what's happening, read the bot logs. You can also connect to the bot's browser via CDP to inspect the page directly.
+
 ## Browser Control
 
 Launch a Chromium browser:
@@ -57,12 +81,11 @@ const { chromium } = require('playwright');
 
 ## Workflow
 
-1. Launch browser (or connect to running one)
-2. Navigate to a meeting URL, inspect the page
-3. Test selectors: `page.$(selector)`, `page.$$(selector)`, `page.evaluate(...)`
-4. Edit source files in `/app/vexa-bot/core/src/`
-5. Rebuild: `cd /app/vexa-bot/core && npm run build`
-6. Re-test
+1. Check bot logs: `tail -100 /tmp/bot.log` (if meeting+agent mode)
+2. Connect to running browser: `chromium.connectOverCDP('http://localhost:9222')`
+3. Inspect the page, test selectors
+4. Edit source in `/app/vexa-bot/core/src/`, rebuild: `npm run build`
+5. Re-test
 
 To run the full bot manually:
 ```bash

@@ -41,10 +41,23 @@ if [ ! -f "$BROWSER_UTILS" ]; then
   (cd /app/vexa-bot/core && node build-browser-utils.js) || echo "[Entrypoint] Failed to regenerate browser-utils.global.js"
 fi
 
+BOT_LOG="/tmp/bot.log"
+
 # Fork: bot mode vs agent-only mode
 if [ -n "$BOT_CONFIG" ]; then
   echo "[Entrypoint] BOT_CONFIG set — running bot..."
-  node dist/docker.js
+  if [ "$AGENT_ENABLED" = "true" ]; then
+    echo "[Entrypoint] Agent mode — bot logs at $BOT_LOG"
+    # stdbuf -oL forces line-buffered stdout so tee flushes every line.
+    stdbuf -oL node dist/docker.js 2>&1 | tee "$BOT_LOG"
+    BOT_EXIT=$?
+    echo "[Entrypoint] Bot process exited (code $BOT_EXIT). Container stays alive for agent." | tee -a "$BOT_LOG"
+    # Agent container stays alive beyond the meeting lifespan.
+    # User can keep chatting with the agent after the meeting ends.
+    exec sleep infinity
+  else
+    exec node dist/docker.js
+  fi
 else
   echo "[Entrypoint] No BOT_CONFIG — agent-only mode."
   echo "[Entrypoint] Xvfb + PulseAudio ready. Attach with: docker exec -it <container> claude -c"

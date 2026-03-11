@@ -153,7 +153,7 @@ app.add_middleware(
 # Use a single client instance for connection pooling
 @app.on_event("startup")
 async def startup_event():
-    app.state.http_client = httpx.AsyncClient()
+    app.state.http_client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0))
     # Initialize Redis for Pub/Sub used by WS
     redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
     app.state.redis = await aioredis.from_url(redis_url, encoding="utf-8", decode_responses=True)
@@ -215,6 +215,43 @@ async def forward_request(client: httpx.AsyncClient, method: str, url: str, requ
         return Response(content=resp.content, status_code=resp.status_code, headers=dict(resp.headers))
     except httpx.RequestError as exc:
         print(f"DEBUG: Request error: {exc}")
+        raise HTTPException(status_code=503, detail=f"Service unavailable: {exc}")
+
+
+async def forward_request_streaming(client: httpx.AsyncClient, method: str, url: str, request: Request) -> Response:
+    """Forward request and stream the response (for SSE endpoints)."""
+    from starlette.responses import StreamingResponse
+    excluded_headers = {"host", "content-length", "transfer-encoding"}
+    headers = {k.lower(): v for k, v in request.headers.items() if k.lower() not in excluded_headers}
+
+    client_key = request.headers.get("x-api-key")
+    if client_key:
+        headers["x-api-key"] = client_key
+
+    content = await request.body()
+
+    try:
+        req = client.build_request(method, url, headers=headers, content=content)
+        resp = await client.send(req, stream=True)
+
+        if resp.status_code != 200:
+            body = await resp.aread()
+            await resp.aclose()
+            return Response(content=body, status_code=resp.status_code, headers=dict(resp.headers))
+
+        async def stream_body():
+            try:
+                async for chunk in resp.aiter_bytes():
+                    yield chunk
+            finally:
+                await resp.aclose()
+
+        return StreamingResponse(
+            stream_body(),
+            status_code=200,
+            headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive"},
+        )
+    except httpx.RequestError as exc:
         raise HTTPException(status_code=503, detail=f"Service unavailable: {exc}")
 
 # --- Root Endpoint --- 
@@ -288,6 +325,48 @@ async def get_bots_status_proxy(request: Request):
     url = f"{BOT_MANAGER_URL}/bots/status"
     return await forward_request(app.state.http_client, "GET", url, request)
 # --- END Route for GET /bots/status ---
+
+
+# --- Agent Chat Routes (proxy to Bot Manager) ---
+
+@app.post("/bots/{meeting_id}/agent/chat",
+          tags=["Agent"],
+          summary="Send message to Claude agent (SSE streaming)",
+          description="Sends a message to the Claude agent running inside the bot container. Returns SSE stream.",
+          dependencies=[Depends(api_key_scheme)])
+async def agent_chat_proxy(meeting_id: int, request: Request):
+    """Forward agent chat request to Bot Manager with SSE streaming."""
+    url = f"{BOT_MANAGER_URL}/bots/{meeting_id}/agent/chat"
+    return await forward_request_streaming(app.state.http_client, "POST", url, request)
+
+@app.delete("/bots/{meeting_id}/agent/chat",
+            tags=["Agent"],
+            summary="Interrupt active Claude agent response",
+            dependencies=[Depends(api_key_scheme)])
+async def agent_interrupt_proxy(meeting_id: int, request: Request):
+    """Forward agent interrupt to Bot Manager."""
+    url = f"{BOT_MANAGER_URL}/bots/{meeting_id}/agent/chat"
+    return await forward_request(app.state.http_client, "DELETE", url, request)
+
+@app.post("/bots/{meeting_id}/agent/chat/reset",
+          tags=["Agent"],
+          summary="Reset Claude agent session",
+          dependencies=[Depends(api_key_scheme)])
+async def agent_reset_proxy(meeting_id: int, request: Request):
+    """Forward agent session reset to Bot Manager."""
+    url = f"{BOT_MANAGER_URL}/bots/{meeting_id}/agent/chat/reset"
+    return await forward_request(app.state.http_client, "POST", url, request)
+
+# --- Meeting Update by ID (proxy to Bot Manager) ---
+
+@app.patch("/meetings/{meeting_id}",
+           tags=["Meetings"],
+           summary="Update meeting data by database ID",
+           dependencies=[Depends(api_key_scheme)])
+async def update_meeting_by_id_proxy(meeting_id: int, request: Request):
+    """Forward meeting update to Bot Manager (by DB ID)."""
+    url = f"{BOT_MANAGER_URL}/meetings/{meeting_id}"
+    return await forward_request(app.state.http_client, "PATCH", url, request)
 
 # --- Voice Agent Interaction Routes (proxy to Bot Manager) ---
 
