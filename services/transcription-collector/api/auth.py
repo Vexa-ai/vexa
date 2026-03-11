@@ -9,6 +9,7 @@ from config import API_KEY_NAME
 # Imports from shared libraries
 from shared_models.database import get_db
 from shared_models.models import APIToken, User
+from shared_models.token_scope import check_token_scope
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,12 @@ async def get_current_user(api_key: str = Security(api_key_header),
     """Dependency to verify X-API-Key and return the associated User."""
     if not api_key:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Missing API token")
+
+    if not check_token_scope(api_key, {"tx", "user", "admin"}):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Token scope not authorized for transcription access"
+        )
 
     # Find the token in the database
     result = await db.execute(

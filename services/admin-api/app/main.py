@@ -96,6 +96,9 @@ async def get_current_user(api_key: str = Security(USER_API_KEY_HEADER), db: Asy
     if not api_key:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing API Key")
 
+    if not check_token_scope(api_key, {"user", "admin"}):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token scope not authorized for this endpoint")
+
     result = await db.execute(
         select(APIToken).where(APIToken.token == api_key).options(selectinload(APIToken.user))
     )
@@ -103,7 +106,7 @@ async def get_current_user(api_key: str = Security(USER_API_KEY_HEADER), db: Asy
 
     if not db_token or not db_token.user:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid API Key")
-    
+
     return db_token.user
 
 # Router setup (all routes require admin token verification)
@@ -127,10 +130,11 @@ user_router = APIRouter(
     dependencies=[Depends(get_current_user)]
 )
 
-# --- Helper Functions --- 
-def generate_secure_token(length=40):
-    alphabet = string.ascii_letters + string.digits
-    return ''.join(secrets.choice(alphabet) for i in range(length))
+# --- Helper Functions ---
+from shared_models.token_scope import generate_prefixed_token, check_token_scope
+
+def generate_secure_token(length=40, scope: str = "user"):
+    return generate_prefixed_token(scope, length)
 
 # --- User Endpoints ---
 @user_router.put("/webhook",
@@ -400,16 +404,16 @@ async def update_user(user_id: int, user_update: UserUpdate, db: AsyncSession = 
 
     return UserResponse.model_validate(db_user)
 
-@admin_router.post("/users/{user_id}/tokens", 
+@admin_router.post("/users/{user_id}/tokens",
              response_model=TokenResponse,
              status_code=status.HTTP_201_CREATED,
              summary="Generate a new API token for a user")
-async def create_token_for_user(user_id: int, db: AsyncSession = Depends(get_db)):
+async def create_token_for_user(user_id: int, scope: str = "user", db: AsyncSession = Depends(get_db)):
     user = await db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    
-    token_value = generate_secure_token()
+
+    token_value = generate_secure_token(scope=scope)
     # Use the APIToken model from shared_models
     # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
     db_token = APIToken(

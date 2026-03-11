@@ -7,6 +7,7 @@ import os
 
 from shared_models.models import User, APIToken
 from shared_models.database import get_db
+from shared_models.token_scope import check_token_scope
 
 logger = logging.getLogger("bot_manager.auth")
 
@@ -22,9 +23,15 @@ async def get_api_key(api_key: str = Security(API_KEY_HEADER),
             detail="Missing API token (X-API-Key header)"
         )
     
+    if not check_token_scope(api_key, {"bot", "user", "admin"}):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Token scope not authorized for bot management"
+        )
+
     # Log the API key received for debugging
     logger.info(f"Received API key: {api_key[:5]}...")
-    
+
     # Find the token in the database
     result = await db.execute(
         select(APIToken, User)
