@@ -34,6 +34,8 @@ class Segment:
 
 @dataclass
 class VadOptions:
+    onset: float = 0.5
+    offset: Optional[float] = None
     threshold: float = 0.5
     min_speech_duration_ms: int = 250
     max_speech_duration_s: float = float("inf")
