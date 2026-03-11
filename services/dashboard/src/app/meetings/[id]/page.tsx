@@ -27,6 +27,9 @@ import {
   Trash2,
   Zap,
   Code,
+  Copy,
+  Download,
+  Music,
 } from "lucide-react";
 import { AudioPlayer, type AudioPlayerHandle, type AudioFragment } from "@/components/recording/audio-player";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -373,6 +376,36 @@ export default function MeetingDetailPage() {
     downloadFile(content, filename, mimeType);
   }, [currentMeeting, transcripts]);
 
+  // Copy transcript to clipboard
+  const handleCopyTranscript = useCallback(async () => {
+    if (transcripts.length === 0) {
+      toast.error("No transcript to copy");
+      return;
+    }
+    const text = transcripts
+      .map(s => `[${s.speaker || "Unknown"}] ${s.text}`)
+      .join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success("Transcript copied to clipboard");
+    } catch {
+      toast.error("Failed to copy to clipboard");
+    }
+  }, [transcripts]);
+
+  // Download recording audio file
+  const handleDownloadAudio = useCallback((rec: (typeof recordings)[0]) => {
+    const audioMedia = rec.media_files.find(mf => mf.type === "audio");
+    if (!audioMedia) return;
+    const url = vexaAPI.getRecordingAudioUrl(rec.id, audioMedia.id);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `recording-${rec.session_uid.slice(0, 8)}.${audioMedia.format || "wav"}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }, []);
+
   // Format transcript for ChatGPT
   const formatTranscriptForChatGPT = useCallback((meeting: Meeting, segments: typeof transcripts): string => {
     let output = "Meeting Transcript\n\n";
@@ -702,13 +735,13 @@ export default function MeetingDetailPage() {
       : null;
   const isPostMeetingFlow =
     forcePostMeetingMode ||
-    currentMeeting.status === "stopping" || currentMeeting.status === "completed";
+    currentMeeting.status === "stopping" || currentMeeting.status === "completed" || currentMeeting.status === "failed";
   const recordingExplicitlyDisabled = currentMeeting.data?.recording_enabled === false;
   const hasRecordingEntries = recordings.length > 0;
   const noAudioRecordingForMeeting =
     recordingExplicitlyDisabled ||
-    (currentMeeting.status === "completed" && !hasRecordingEntries);
-  const canUseSegmentPlayback = isPostMeetingFlow && !noAudioRecordingForMeeting;
+    (["completed", "failed"].includes(currentMeeting.status) && !hasRecordingEntries);
+  const canUseSegmentPlayback = hasRecordingAudio;
   const recordingTopBar = isPostMeetingFlow ? (
     hasRecordingAudio ? (
       <AudioPlayer
@@ -840,7 +873,7 @@ export default function MeetingDetailPage() {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          {(currentMeeting.status === "active" || currentMeeting.status === "completed") && transcripts.length > 0 && (
+          {(currentMeeting.status === "active" || currentMeeting.status === "completed" || currentMeeting.status === "failed" || currentMeeting.status === "stopping") && transcripts.length > 0 && (
             <div className="flex items-center gap-2">
               <AIChatPanel
                 meeting={currentMeeting}
@@ -860,16 +893,10 @@ export default function MeetingDetailPage() {
                       variant="ghost"
                       className="gap-2 rounded-r-none border-r-0 hover:bg-muted h-full"
                       onClick={handleSendToChatGPT}
-                      title="Connect AI"
+                      title="Export transcript to AI"
                     >
-                      <Image
-                        src="/icons/icons8-chatgpt-100.png"
-                        alt="AI"
-                        width={18}
-                        height={18}
-                        className="object-contain invert dark:invert-0"
-                      />
-                      <span>Connect AI</span>
+                      <Download className="h-4 w-4" />
+                      <span>Export</span>
                     </Button>
                     <DropdownMenuTrigger asChild>
                       <Button
@@ -912,14 +939,34 @@ export default function MeetingDetailPage() {
                     Configure Prompt
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={() => handleExport("txt")}>
+                  <DropdownMenuItem onClick={handleCopyTranscript} disabled={transcripts.length === 0}>
+                    <Copy className="h-4 w-4 mr-2" />
+                    Copy to clipboard
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => handleExport("txt")} disabled={transcripts.length === 0}>
                     <FileText className="h-4 w-4 mr-2" />
                     Download .txt
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => handleExport("json")}>
+                  <DropdownMenuItem onClick={() => handleExport("srt")} disabled={transcripts.length === 0}>
+                    <FileVideo className="h-4 w-4 mr-2" />
+                    Download .srt
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleExport("json")} disabled={transcripts.length === 0}>
                     <FileJson className="h-4 w-4 mr-2" />
                     Download .json
                   </DropdownMenuItem>
+                  {recordings.filter(r => r.media_files?.some(mf => mf.type === "audio")).length > 0 && (
+                    <>
+                      <DropdownMenuSeparator />
+                      {recordings.filter(r => r.media_files?.some(mf => mf.type === "audio")).map((rec) => (
+                        <DropdownMenuItem key={rec.id} onClick={() => handleDownloadAudio(rec)}>
+                          <Music className="h-4 w-4 mr-2" />
+                          Download audio{recordings.length > 1 ? ` (${rec.session_uid.slice(0, 8)})` : ""}
+                        </DropdownMenuItem>
+                      ))}
+                    </>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
               <DocsLink href="/docs/cookbook/share-transcript-url" />
@@ -1230,14 +1277,34 @@ export default function MeetingDetailPage() {
                       </Link>
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={handleCopyTranscript} disabled={transcripts.length === 0}>
+                      <Copy className="h-4 w-4 mr-2" />
+                      Copy to clipboard
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
                     <DropdownMenuItem onClick={() => handleExport("txt")} disabled={transcripts.length === 0}>
                       <FileText className="h-4 w-4 mr-2" />
                       Download .txt
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => handleExport("srt")} disabled={transcripts.length === 0}>
+                      <FileVideo className="h-4 w-4 mr-2" />
+                      Download .srt
                     </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => handleExport("json")} disabled={transcripts.length === 0}>
                       <FileJson className="h-4 w-4 mr-2" />
                       Download .json
                     </DropdownMenuItem>
+                    {recordings.filter(r => r.media_files?.some(mf => mf.type === "audio")).length > 0 && (
+                      <>
+                        <DropdownMenuSeparator />
+                        {recordings.filter(r => r.media_files?.some(mf => mf.type === "audio")).map((rec) => (
+                          <DropdownMenuItem key={rec.id} onClick={() => handleDownloadAudio(rec)}>
+                            <Music className="h-4 w-4 mr-2" />
+                            Download audio{recordings.length > 1 ? ` (${rec.session_uid.slice(0, 8)})` : ""}
+                          </DropdownMenuItem>
+                        ))}
+                      </>
+                    )}
                 </DropdownMenuContent>
               </DropdownMenu>
               <DocsLink href="/docs/cookbook/share-transcript-url" />
@@ -1399,7 +1466,8 @@ export default function MeetingDetailPage() {
           {/* Keep transcript visible through stopping -> completed transition */}
           {(currentMeeting.status === "active" ||
             currentMeeting.status === "stopping" ||
-            currentMeeting.status === "completed") && (
+            currentMeeting.status === "completed" ||
+            currentMeeting.status === "failed") && (
             <TranscriptViewer
               meeting={currentMeeting}
               segments={transcripts}
