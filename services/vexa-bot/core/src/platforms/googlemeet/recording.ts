@@ -706,40 +706,44 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
               initializeGoogleSpeakerDetection(whisperLiveService, audioService, botConfigData);
             }
 
-            // Simple single-strategy participant extraction from main video area
-            (window as any).logBot("Initializing simplified participant counting (main frame text scan)...");
+            // Participant counting: uses data-participant-id tiles, but falls back to
+            // "Leave call" button visibility to avoid false-positive "alone" during screen share.
+            // Google Meet removes participant tiles from the DOM during presentation mode,
+            // but the "Leave call" button remains visible as long as the bot is in the meeting.
+            (window as any).logBot("Initializing participant counting (data-participant-id + leave-button fallback)...");
 
-            const extractParticipantsFromMain = (botName: string | undefined): string[] => {
-              const participants: string[] = [];
-              const mainElement = document.querySelector('main');
-              if (mainElement) {
-                const nameElements = mainElement.querySelectorAll('*');
-                nameElements.forEach((el: Element) => {
-                  const element = el as HTMLElement;
-                  const text = (element.textContent || '').trim();
-                  if (text && element.children.length === 0) {
-                    // Basic length validation only (allow numbers, parentheses, etc.)
-                    if ((text.length > 1 && text.length < 50) || (botName && text === botName)) {
-                      participants.push(text);
-                    }
-                  }
-                });
-              }
-              const tooltips = document.querySelectorAll('main [role="tooltip"]');
-              tooltips.forEach((el: Element) => {
-                const text = (el.textContent || '').trim();
-                // Basic length validation only (allow numbers, parentheses, etc.)
-                if (text && ((text.length > 1 && text.length < 50) || (botName && text === botName))) {
-                  participants.push(text);
-                }
+            let lastKnownParticipantCount = 0;
+
+            const countParticipantTiles = (): number => {
+              const participantElements = document.querySelectorAll('[data-participant-id]');
+              const ids = new Set<string>();
+              participantElements.forEach((el: Element) => {
+                const id = el.getAttribute('data-participant-id');
+                if (id) ids.add(id);
               });
-              return Array.from(new Set(participants));
+              return ids.size;
+            };
+
+            const isBotStillInMeeting = (): boolean => {
+              // "Leave call" button is the most reliable signal — it's always visible while in a meeting
+              const leaveBtn = document.querySelector('button[aria-label*="Leave call"]');
+              return leaveBtn !== null;
             };
 
             (window as any).getGoogleMeetActiveParticipants = () => {
-              const names = extractParticipantsFromMain((botConfigData as any)?.botName);
-              (window as any).logBot(`🔍 [Google Meet Participants] ${JSON.stringify(names)}`);
-              return names;
+              const tileCount = countParticipantTiles();
+              const inMeeting = isBotStillInMeeting();
+              // If tiles show 0 but we're still in the meeting (e.g. screen share mode),
+              // keep the last known count (minimum 2) to avoid false "alone" triggers
+              if (tileCount === 0 && inMeeting && lastKnownParticipantCount > 1) {
+                (window as any).logBot(`🔍 [Google Meet Participants] 0 tiles but Leave button present — keeping last count ${lastKnownParticipantCount} (screen share mode)`);
+                return new Array(lastKnownParticipantCount).fill('placeholder');
+              }
+              if (tileCount > 0) {
+                lastKnownParticipantCount = tileCount;
+              }
+              (window as any).logBot(`🔍 [Google Meet Participants] ${tileCount} tiles, inMeeting=${inMeeting}`);
+              return new Array(tileCount).fill('placeholder');
             };
             (window as any).getGoogleMeetActiveParticipantsCount = () => {
               return (window as any).getGoogleMeetActiveParticipants().length;

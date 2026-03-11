@@ -1274,23 +1274,14 @@ export function getVideoBlockInitScript(): string {
         window.RTCPeerConnection = function(...args) {
           const pc = new OrigRTC(...args);
 
-          // Block incoming video: disable tracks AND stop transceivers
+          // Block incoming video: disable track rendering only.
+          // IMPORTANT: Do NOT call track.stop() or set transceiver to inactive —
+          // that breaks WebRTC renegotiation and causes Google Meet to kick the bot
+          // when new video tracks arrive (e.g. screen share/presentation).
           pc.addEventListener('track', (event) => {
             if (event.track && event.track.kind === 'video') {
               event.track.enabled = false;
-              event.track.stop();
-              console.log('[Vexa] Incoming video track stopped (id=' + event.track.id + ')');
-
-              // Also set the transceiver to recvonly->inactive to tell the
-              // remote peer we don't want video at all
-              if (event.transceiver) {
-                try {
-                  event.transceiver.direction = 'inactive';
-                  console.log('[Vexa] Video transceiver set to inactive (mid=' + event.transceiver.mid + ')');
-                } catch (e) {
-                  console.warn('[Vexa] Could not set transceiver direction:', e);
-                }
-              }
+              console.log('[Vexa] Incoming video track disabled (id=' + event.track.id + ')');
             }
           });
 
