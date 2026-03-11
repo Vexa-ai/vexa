@@ -59,7 +59,18 @@ export async function startZoomWebRecording(page: Page | null, botConfig: BotCon
             }
             log(`[Zoom Web] WhisperLive connection closed (code=${evt.code}). Reconnecting in 2s...`);
             whisperLive?.setServerReady(false);
-            setTimeout(() => { connectWhisper(activeBotConfig || cfg).catch(() => {}); }, 2000);
+            setTimeout(() => {
+              connectWhisper(activeBotConfig || cfg).then(() => {
+                // New session UID generated on reconnect — reset timestamps and re-send speaker
+                // so the server knows who is talking (mirrors reconfigure logic).
+                audioSessionStartTime = Date.now();
+                if (lastActiveSpeaker && whisperLive) {
+                  const relativeMs = Date.now() - audioSessionStartTime;
+                  const sent = whisperLive.sendSpeakerEvent('SPEAKER_START', lastActiveSpeaker, lastActiveSpeaker, relativeMs, activeBotConfig || cfg);
+                  log(`🎤 [Zoom Web] SPEAKER_START (re-sent after reconnect): ${lastActiveSpeaker} (sent=${sent})`);
+                }
+              }).catch(() => {});
+            }, 2000);
           }
         );
         log(`[Zoom Web] WhisperLive WebSocket connected (lang=${cfg.language || 'auto'})`);
