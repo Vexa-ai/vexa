@@ -541,6 +541,16 @@ export default function MeetingDetailPage() {
     }
   }, [currentMeeting]);
 
+  // Poll for status updates in early states (requested/joining) as a fallback
+  // in case the WebSocket subscription missed the status change event
+  useEffect(() => {
+    if (!isEarlyState || !meetingId) return;
+    const interval = setInterval(() => {
+      refreshMeeting(meetingId);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [isEarlyState, meetingId, refreshMeeting]);
+
   // Show detected language from backend first (meeting.data.languages or from segments), then user can change via toggle
   const validLangCodes = useMemo(
     () => new Set(WHISPER_LANGUAGE_CODES),
