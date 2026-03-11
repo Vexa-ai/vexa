@@ -42,6 +42,13 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
     recordingService = new RecordingService(botConfig.meeting_id, sessionUid);
     setActiveRecordingService(recordingService);
 
+    // Called from browser when MediaRecorder.start() fires — marks the audio start time
+    // so video/audio mux can compute the correct offset.
+    await page.exposeFunction("__vexaMarkRecordingStart", () => {
+      recordingService?.markStartTime();
+      log('[Google Recording] Audio recording start time marked');
+    });
+
     await page.exposeFunction("__vexaSaveRecordingBlob", async (payload: { base64: string; mimeType?: string }) => {
       try {
         if (!recordingService) {
@@ -351,6 +358,10 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                 };
 
                 recorder.start(1000);
+                // Signal Node.js to mark the audio start time for video/audio sync
+                if (typeof (window as any).__vexaMarkRecordingStart === "function") {
+                  (window as any).__vexaMarkRecordingStart();
+                }
                 (window as any).logBot?.(
                   `[Google Recording] MediaRecorder started (${recorder.mimeType || mimeType || "default"}).`
                 );

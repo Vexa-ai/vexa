@@ -47,6 +47,11 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
     recordingService = new RecordingService(botConfig.meeting_id, sessionUid);
     setActiveRecordingService(recordingService);
 
+    await page.exposeFunction("__vexaMarkRecordingStart", () => {
+      recordingService?.markStartTime();
+      log('[Teams Recording] Audio recording start time marked');
+    });
+
     await page.exposeFunction("__vexaSaveRecordingBlob", async (payload: { base64: string; mimeType?: string }) => {
       try {
         if (!recordingService) {
@@ -347,6 +352,9 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
                 };
 
                 recorder.start(1000);
+                if (typeof (window as any).__vexaMarkRecordingStart === "function") {
+                  (window as any).__vexaMarkRecordingStart();
+                }
                 (window as any).logBot?.(
                   `[Teams Recording] MediaRecorder started (${recorder.mimeType || mimeType || "default"}).`
                 );

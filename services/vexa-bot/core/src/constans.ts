@@ -3,6 +3,7 @@ export const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 
 // Base browser launch arguments (shared across all modes)
 const baseBrowserArgs = [
+  "--incognito",
   "--no-sandbox",
   "--disable-setuid-sandbox",
   "--disable-features=IsolateOrigins,site-per-process",

@@ -208,6 +208,15 @@ export class RecordingService {
     return this.startTime;
   }
 
+  /**
+   * Mark the recording start time without opening a WAV stream.
+   * Used by browser-based recordings (Google Meet, Teams) where audio
+   * is captured via MediaRecorder and saved as a blob at the end.
+   */
+  markStartTime(): void {
+    this.startTime = Date.now();
+  }
+
   getDurationSeconds(): number {
     return this.totalSamples / this.sampleRate;
   }

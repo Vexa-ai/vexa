@@ -213,7 +213,6 @@ export class VideoRecordingService {
     }
 
     const muxedPath = this.filePath.replace(`.${this.format}`, `_muxed.${this.format}`);
-    const audioCodec = this.format === 'webm' ? 'libopus' : 'aac';
     const audioDelaySec = Math.max(0, audioDelayMs / 1000);
 
     // -itsoffset delays the audio input so it aligns with the video timeline.
@@ -224,7 +223,8 @@ export class VideoRecordingService {
       ...(audioDelaySec > 0 ? ['-itsoffset', audioDelaySec.toFixed(3)] : []),
       '-i', audioPath,
       '-c:v', 'copy',
-      '-c:a', audioCodec,
+      // Copy audio stream when possible; WAV/PCM must be encoded for webm/mkv containers.
+      '-c:a', audioPath.endsWith('.wav') ? (this.format === 'webm' ? 'libopus' : 'aac') : 'copy',
       '-shortest',
       muxedPath,
     ];
@@ -329,6 +329,7 @@ export class VideoRecordingService {
     // Common input: x11grab from the virtual display
     const inputArgs = [
       '-f', 'x11grab',
+      '-draw_mouse', '0',
       '-framerate', fps,
       '-video_size', inputSize,
       '-i', this.display,
