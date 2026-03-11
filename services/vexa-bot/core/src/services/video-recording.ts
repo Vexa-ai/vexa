@@ -268,8 +268,9 @@ export class VideoRecordingService {
     // Capture at 5fps — enough to follow screen shares and meeting content
     // while keeping file size and CPU usage reasonable.
     const fps = '5';
-    // Capture only the browser viewport area (1280x720) so the video isn't padded
-    // with black borders from the larger Xvfb display (1920x1080).
+    // Capture the full Xvfb display (1280x720). Chrome runs in kiosk mode with
+    // --force-device-scale-factor=1, filling the entire display with no browser chrome.
+    // No scaling needed — capture size matches display and viewport exactly.
     const inputSize = '1280x720';
 
     // Common input: x11grab from the virtual display

@@ -10,6 +10,7 @@ const baseBrowserArgs = [
   "--disable-infobars",
   "--disable-gpu",
   "--kiosk",
+  "--force-device-scale-factor=1",
   "--use-fake-ui-for-media-stream",
   "--use-file-for-fake-video-capture=/dev/null",
   "--allow-running-insecure-content",
