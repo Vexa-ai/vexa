@@ -5,10 +5,16 @@ services:
     build:
       context: .
     ports:
-      - "3000:3000"
+      - "3003:3000"
     environment:
       # Vexa API Connection (runtime configuration)
       - VEXA_API_URL=${VEXA_API_URL:-http://vexa-api:18056}
+      # Hosted mode (proprietary platform wiring)
+      - NEXT_PUBLIC_HOSTED_MODE=${NEXT_PUBLIC_HOSTED_MODE:-false}
+      - NEXT_PUBLIC_WEBAPP_URL=${NEXT_PUBLIC_WEBAPP_URL:-}
+      - NEXT_PUBLIC_EXTERNAL_AUTH_URL=${NEXT_PUBLIC_EXTERNAL_AUTH_URL:-}
+      - COOKIE_DOMAIN=${COOKIE_DOMAIN:-}
+      - NEXT_PUBLIC_VEXA_WS_URL=${NEXT_PUBLIC_VEXA_WS_URL:-}
 
       # Admin API (required for authentication)
       - VEXA_ADMIN_API_KEY=${VEXA_ADMIN_API_KEY}
