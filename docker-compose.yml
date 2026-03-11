@@ -67,8 +67,8 @@ services:
       - DEVICE_TYPE=remote
       - WHISPER_LIVE_URL=ws://whisperlive:9090/ws
       - ADMIN_TOKEN=${ADMIN_API_TOKEN}
-      - ZOOM_CLIENT_ID=${ZOOM_CLIENT_ID}
-      - ZOOM_CLIENT_SECRET=${ZOOM_CLIENT_SECRET}
+      - ZOOM_CLIENT_ID=${ZOOM_CLIENT_ID:-}
+      - ZOOM_CLIENT_SECRET=${ZOOM_CLIENT_SECRET:-}
       # Storage (recordings)
       - STORAGE_BACKEND=${STORAGE_BACKEND:-minio}
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
@@ -236,6 +236,7 @@ services:
       - "${DASHBOARD_HOST_PORT:-3001}:3000"
     environment:
       - VEXA_API_URL=http://api-gateway:8000
+      - NEXT_PUBLIC_VEXA_WS_URL=${NEXT_PUBLIC_VEXA_WS_URL:-}
       - VEXA_ADMIN_API_KEY=${ADMIN_API_TOKEN}
       - VEXA_ADMIN_API_URL=http://admin-api:8001
       - JWT_SECRET=${JWT_SECRET:-vexa-dev-jwt-secret}

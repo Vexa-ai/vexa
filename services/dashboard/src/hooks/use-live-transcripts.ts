@@ -10,6 +10,7 @@ import type {
   ChatMessage,
 } from "@/types/vexa";
 import { useMeetingsStore } from "@/stores/meetings-store";
+import { useAuthStore } from "@/stores/auth-store";
 import { vexaAPI } from "@/lib/api";
 
 interface UseLiveTranscriptsOptions {
@@ -64,6 +65,9 @@ export function useLiveTranscripts(
   // Store refs for stable callbacks
   const onStatusChangeRef = useRef(onStatusChange);
   onStatusChangeRef.current = onStatusChange;
+
+  // Auth token from store (client-side, more reliable than httpOnly cookie via /api/config)
+  const storeToken = useAuthStore((state) => state.token);
 
   // Store actions (stable references from Zustand)
   const bootstrapTranscripts = useMeetingsStore((state) => state.bootstrapTranscripts);
@@ -155,18 +159,20 @@ export function useLiveTranscripts(
     setIsConnecting(true);
     setConnectionError(null);
 
-    // Fetch WebSocket URL and auth token from runtime config API
+    // Fetch WebSocket URL from runtime config API
+    // Auth token comes from the client-side auth store (more reliable than httpOnly cookie)
     let wsUrl: string;
-    let authToken: string | null = null;
     try {
       const configResponse = await fetch("/api/config");
       const config = await configResponse.json();
       wsUrl = config.wsUrl;
-      authToken = config.authToken;
     } catch (error) {
       // Fallback to default (runtime config should always be available)
       wsUrl = "ws://localhost:18056/ws";
     }
+
+    // Use auth token from the Zustand store (available client-side)
+    const authToken = storeToken;
 
     // Append auth token as query parameter if available
     // Vexa uses X-API-Key header for REST, but browsers can't set WS headers
@@ -372,6 +378,7 @@ export function useLiveTranscripts(
     platform,
     nativeId,
     meetingId,
+    storeToken,
     convertWebSocketSegment,
     upsertTranscriptSegments,
     updateMeetingStatus,
