@@ -1,8 +1,9 @@
 #!/bin/sh
 set -e
-
-# Use fixed health check port for both GPU and CPU versions
-HEALTH_PORT=9091
-
-# Using curl to check health endpoint
-curl -sf "http://localhost:${HEALTH_PORT}/health" > /dev/null 
+python -c "
+import urllib.request, sys
+try:
+    urllib.request.urlopen('http://localhost:9091/health', timeout=3)
+except Exception:
+    sys.exit(1)
+"

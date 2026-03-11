@@ -10,9 +10,8 @@ from pathlib import Path
 from enum import Enum
 from typing import List, Optional
 import datetime
-import websocket
-import sys # Added sys import
-import socket  # Added to resolve container IP for ws_url
+import sys
+import socket
 
 import numpy as np
 from websockets.sync.server import serve
@@ -52,13 +51,6 @@ WL_LOG_HALLUCINATIONS = _def_bool(os.getenv("WL_LOG_HALLUCINATIONS", "false"))
 WL_LOG_CONTROL_EVENTS = _def_bool(os.getenv("WL_LOG_CONTROL_EVENTS", "false"))
 WL_LOG_SPEAKER_EVENTS = _def_bool(os.getenv("WL_LOG_SPEAKER_EVENTS", "false"))
 WL_LOG_SPEAKER_PUBLISH = _def_bool(os.getenv("WL_LOG_SPEAKER_PUBLISH", "false"))
-
-# Suppress external chatter
-_FW_LEVEL = os.getenv("WL_FAST_WHISPER_LOG_LEVEL", "WARNING").strip().upper()
-try:
-    logging.getLogger("faster_whisper").setLevel(getattr(logging, _FW_LEVEL, logging.WARNING))
-except Exception:
-    pass
 
 # Add file logging for transcription data
 LOG_DIR = "transcription_logs"
@@ -1023,7 +1015,7 @@ class TranscriptionServer:
 
     def recv_audio(self,
                    websocket,
-                   backend: BackendType = BackendType.FASTER_WHISPER,
+                   backend: BackendType = BackendType.REMOTE,
                    faster_whisper_custom_model_path=None,
                    whisper_tensorrt_path=None,
                    trt_multilingual=False):
@@ -1048,8 +1040,8 @@ class TranscriptionServer:
 
     def run(self,
             host,
-            port=9090,  # Unified port for both GPU and CPU versions
-            backend="tensorrt",
+            port=9090,
+            backend="remote",
             faster_whisper_custom_model_path=None,
             whisper_tensorrt_path=None,
             trt_multilingual=False,
@@ -1064,18 +1056,9 @@ class TranscriptionServer:
         self.trt_multilingual = trt_multilingual
         self.single_model = single_model
         self.server_options = server_options or {}
-        
-        # Set max_clients based on backend type
-        if self.backend.is_remote():
-            # Remote mode always uses 1000 max clients (hardcoded for scalability)
-            self.config_max_clients = 1000
-            logging.info("CONFIG: max_clients=1000 (hardcoded for remote backend)")
-        else:
-            try:
-                self.config_max_clients = int(os.getenv("WL_MAX_CLIENTS", "10"))
-            except Exception:
-                self.config_max_clients = 10
-            logging.info(f"CONFIG: max_clients={self.config_max_clients}")
+
+        self.config_max_clients = 1000
+        logging.info("CONFIG: max_clients=1000 (remote backend)")
 
         # For the health check, we need to know if Redis is being used.
         # This is inferred from the presence of the REDIS_STREAM_URL env var.

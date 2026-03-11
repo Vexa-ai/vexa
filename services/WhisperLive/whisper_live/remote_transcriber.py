@@ -16,7 +16,7 @@ from typing import BinaryIO, Iterable, List, Optional, Tuple, Union
 import numpy as np
 import httpx
 
-from .transcriber import Segment, TranscriptionInfo, TranscriptionOptions, VadOptions
+from .types import Segment, TranscriptionInfo, TranscriptionOptions, VadOptions
 
 logger = logging.getLogger(__name__)
 
@@ -572,37 +572,11 @@ class RemoteTranscriber:
         Returns:
             Tuple of (segments list, TranscriptionInfo).
         """
-        # Convert audio to numpy array if needed
+        # Audio arrives as numpy array from the websocket server
         if isinstance(audio, np.ndarray):
             audio_array = audio
-        elif isinstance(audio, str):
-            # File path - read it (fallback for compatibility)
-            try:
-                import soundfile as sf
-                audio_array, sr = sf.read(audio)
-                if sr != self.sampling_rate:
-                    try:
-                        from scipy import signal
-                        audio_array = signal.resample(audio_array, int(len(audio_array) * self.sampling_rate / sr))
-                    except ImportError:
-                        logger.warning("scipy not available for resampling. Audio may have wrong sample rate.")
-            except ImportError:
-                logger.error("soundfile not available. Cannot read audio file.")
-                raise
         else:
-            # File-like object (fallback for compatibility)
-            try:
-                import soundfile as sf
-                audio_array, sr = sf.read(audio)
-                if sr != self.sampling_rate:
-                    try:
-                        from scipy import signal
-                        audio_array = signal.resample(audio_array, int(len(audio_array) * self.sampling_rate / sr))
-                    except ImportError:
-                        logger.warning("scipy not available for resampling. Audio may have wrong sample rate.")
-            except ImportError:
-                logger.error("soundfile not available. Cannot read audio file.")
-                raise
+            raise TypeError(f"Expected numpy array, got {type(audio)}")
         
         # Ensure mono
         if len(audio_array.shape) > 1:
