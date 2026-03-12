@@ -6,7 +6,6 @@ import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { getDocsUrl, getWebappUrl } from "@/lib/docs/webapp-url";
 import {
-  LayoutDashboard,
   Video,
   Plus,
   Settings,
@@ -19,6 +18,8 @@ import {
   BookOpen,
   Zap,
   CreditCard,
+  Webhook,
+  User,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -33,7 +34,6 @@ interface SidebarProps {
 }
 
 const navigation = [
-  { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Meetings", href: "/meetings", icon: Video },
   ...(process.env.NEXT_PUBLIC_TRACKER_ENABLED === "true"
     ? [{ name: "Tracker", href: "/tracker", icon: Zap }]
@@ -218,6 +218,66 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                 Join Meeting
               </button>
 
+              {/* Below the line: integrations & settings */}
+              <div className="mt-4 pt-4 border-t space-y-1">
+                {/* Webhooks (hosted mode only) */}
+                {isHosted && (
+                  <Link
+                    href="/webhooks"
+                    onClick={onClose}
+                    className={cn(
+                      "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                      pathname.startsWith("/webhooks")
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                    )}
+                  >
+                    <Webhook className="h-5 w-5" />
+                    Webhooks
+                  </Link>
+                )}
+                {/* MCP Setup */}
+                <Link
+                  href="/mcp"
+                  onClick={onClose}
+                  className={cn(
+                    "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                    pathname.startsWith("/mcp")
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                  )}
+                >
+                  <span className="h-5 w-5 flex items-center justify-center">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src="/icons/icons8-mcp-96 (1).png"
+                      alt="MCP"
+                      width={20}
+                      height={20}
+                      className={cn(
+                        "dark:invert opacity-70",
+                        pathname.startsWith("/mcp") && "invert dark:invert-0 opacity-100"
+                      )}
+                    />
+                  </span>
+                  MCP Setup
+                </Link>
+                {/* Profile */}
+                <Link
+                  href="/profile"
+                  onClick={onClose}
+                  className={cn(
+                    "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                    pathname.startsWith("/profile")
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                  )}
+                >
+                  <User className="h-5 w-5" />
+                  Profile
+                </Link>
+              </div>
+
               {/* Admin Section */}
               <div className="mt-6 pt-4 border-t">
                 <div className="flex items-center justify-between px-3 mb-2">
@@ -301,9 +361,10 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
               <BookOpen className="h-4 w-4" />
               API Docs
             </a>
+
             <div className="px-3">
               <p className="text-[11px] text-muted-foreground">
-                vexa v1.0
+                vexa v{process.env.NEXT_PUBLIC_APP_VERSION}
               </p>
               <p className="text-[11px] text-muted-foreground">
                 Open Source · API-first

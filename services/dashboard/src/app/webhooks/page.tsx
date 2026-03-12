@@ -1,8 +1,17 @@
 "use client";
 
-import { useEffect } from "react";
-import { Webhook, Loader2 } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
+import { useEffect, useState } from "react";
+import {
+  Webhook,
+  Loader2,
+  Eye,
+  EyeOff,
+  RotateCw,
+} from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -10,9 +19,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { toast } from "sonner";
 import { useWebhookStore, type WebhookDeliveryStatus } from "@/stores/webhook-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { cn } from "@/lib/utils";
+
+const WEBHOOK_EVENTS = [
+  { key: "meeting.completed", label: "meeting.completed", defaultEnabled: true },
+  { key: "meeting.started", label: "meeting.started", defaultEnabled: false },
+  { key: "bot.failed", label: "bot.failed", defaultEnabled: false },
+  { key: "meeting.status_change", label: "meeting.status_change", defaultEnabled: false },
+];
 
 function StatusDot({ status }: { status: WebhookDeliveryStatus }) {
   return (
@@ -58,16 +75,30 @@ function formatDate(dateStr: string): string {
 export default function WebhooksPage() {
   const user = useAuthStore((state) => state.user);
   const {
+    config: webhookConfig,
     deliveries,
     stats,
     isLoading,
+    isLoadingConfig: isLoadingWebhookConfig,
+    isSavingConfig,
     statusFilter,
     timeRange,
     setStatusFilter,
     setTimeRange,
     setUserId,
     fetchDeliveries,
+    fetchConfig: fetchWebhookConfig,
+    saveConfig: saveWebhookConfig,
+    testWebhook,
+    rotateSecret,
   } = useWebhookStore();
+
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [webhookSecret, setWebhookSecret] = useState("");
+  const [webhookEvents, setWebhookEvents] = useState<Record<string, boolean>>({});
+  const [showSecret, setShowSecret] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
+  const [isRotating, setIsRotating] = useState(false);
 
   useEffect(() => {
     if (user?.id) {
@@ -78,20 +109,212 @@ export default function WebhooksPage() {
   useEffect(() => {
     if (user?.id) {
       fetchDeliveries();
+      fetchWebhookConfig();
     }
-  }, [user?.id, fetchDeliveries]);
+  }, [user?.id, fetchDeliveries, fetchWebhookConfig]);
+
+  // Sync webhook config to local state
+  useEffect(() => {
+    if (webhookConfig) {
+      setWebhookUrl(webhookConfig.endpoint_url || "");
+      setWebhookSecret(webhookConfig.signing_secret_masked || "");
+      setWebhookEvents(webhookConfig.events || {});
+    }
+  }, [webhookConfig]);
+
+  const handleTestWebhook = async () => {
+    if (!webhookUrl) return;
+    setIsTesting(true);
+    try {
+      const result = await testWebhook(webhookUrl);
+      if (result.success) {
+        toast.success("Webhook test successful", {
+          description: `Status ${result.status} in ${result.time_ms}ms`,
+        });
+      } else {
+        toast.error("Webhook test failed", { description: result.error });
+      }
+    } catch (error) {
+      toast.error("Test failed", { description: (error as Error).message });
+    } finally {
+      setIsTesting(false);
+      fetchDeliveries();
+    }
+  };
+
+  const handleRotateSecret = async () => {
+    setIsRotating(true);
+    try {
+      await rotateSecret();
+      toast.success("Signing secret rotated", {
+        description: "The new secret is active immediately.",
+      });
+      setShowSecret(true);
+      setTimeout(() => setShowSecret(false), 10000);
+    } catch (error) {
+      toast.error("Failed to rotate secret", { description: (error as Error).message });
+    } finally {
+      setIsRotating(false);
+    }
+  };
+
+  const handleSaveWebhookConfig = async () => {
+    try {
+      await saveWebhookConfig({
+        endpoint_url: webhookUrl,
+        signing_secret: webhookSecret || undefined,
+        events: webhookEvents,
+      });
+      toast.success("Webhook settings saved");
+    } catch (error) {
+      toast.error("Failed to save settings", { description: (error as Error).message });
+    }
+  };
+
+  const toggleEvent = (key: string) => {
+    setWebhookEvents((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
 
   return (
     <div className="space-y-6">
       {/* Header */}
+      <div>
+        <h1 className="text-2xl font-semibold tracking-[-0.02em] text-foreground">
+          Webhooks
+        </h1>
+        <p className="text-sm text-muted-foreground">
+          Configure webhook delivery and monitor delivery history
+        </p>
+      </div>
+
+      {/* Webhook Configuration */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Webhook className="h-5 w-5" />
+            Configuration
+          </CardTitle>
+          <CardDescription>
+            Configure webhook delivery for meeting events
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Endpoint URL */}
+          <div className="space-y-1.5">
+            <Label className="text-sm text-muted-foreground">Endpoint URL</Label>
+            <div className="flex gap-2">
+              <Input
+                type="url"
+                placeholder="https://your-server.com/webhook"
+                value={webhookUrl}
+                onChange={(e) => setWebhookUrl(e.target.value)}
+                className="flex-1 font-mono text-sm"
+              />
+              <Button
+                variant="secondary"
+                onClick={handleTestWebhook}
+                disabled={isTesting || !webhookUrl}
+              >
+                {isTesting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  "Test"
+                )}
+              </Button>
+            </div>
+          </div>
+
+          {/* Signing Secret */}
+          <div className="space-y-1.5">
+            <Label className="text-sm text-muted-foreground">Signing Secret</Label>
+            <div className="flex items-center gap-2">
+              <Input
+                type={showSecret ? "text" : "password"}
+                value={webhookSecret}
+                onChange={(e) => setWebhookSecret(e.target.value)}
+                placeholder="whsec_... or enter your own secret"
+                className="flex-1 font-mono text-sm"
+              />
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setShowSecret(!showSecret)}
+              >
+                {showSecret ? (
+                  <EyeOff className="h-4 w-4" />
+                ) : (
+                  <Eye className="h-4 w-4" />
+                )}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={handleRotateSecret}
+                disabled={isRotating}
+              >
+                {isRotating ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RotateCw className="h-4 w-4" />
+                )}
+              </Button>
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Use this secret to verify webhook signatures.
+            </p>
+          </div>
+
+          {/* Event toggles */}
+          <div className="space-y-1.5">
+            <Label className="text-sm text-muted-foreground">Events</Label>
+            <div className="flex flex-wrap gap-2">
+              {WEBHOOK_EVENTS.map((event) => {
+                const enabled = webhookEvents[event.key] ?? event.defaultEnabled;
+                return (
+                  <button
+                    key={event.key}
+                    type="button"
+                    onClick={() => toggleEvent(event.key)}
+                    className={cn(
+                      "inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium border cursor-pointer transition-colors",
+                      enabled
+                        ? "bg-emerald-100 text-emerald-700 border-emerald-300 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800/30"
+                        : "bg-muted text-muted-foreground border-border hover:border-muted-foreground/30"
+                    )}
+                  >
+                    {event.label}
+                    {enabled && " \u2713"}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Save */}
+          <div className="flex justify-end pt-2">
+            <Button
+              onClick={handleSaveWebhookConfig}
+              disabled={isSavingConfig}
+            >
+              {isSavingConfig ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                "Save"
+              )}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Delivery History */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-[-0.02em] text-foreground">
-            Webhook History
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Monitor webhook delivery status and retry attempts
-          </p>
+          <h2 className="text-lg font-semibold tracking-[-0.02em] text-foreground">
+            Delivery History
+          </h2>
         </div>
         <div className="flex items-center gap-3">
           <Select
@@ -180,9 +403,6 @@ export default function WebhooksPage() {
                       <Webhook className="h-8 w-8 text-muted-foreground/50" />
                       <p className="text-sm text-muted-foreground">
                         No webhook deliveries found
-                      </p>
-                      <p className="text-xs text-muted-foreground/70">
-                        Configure a webhook endpoint in your profile settings to start receiving events.
                       </p>
                     </div>
                   </td>

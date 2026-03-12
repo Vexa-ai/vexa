@@ -1,5 +1,20 @@
 import type { NextConfig } from "next";
 import path from "path";
+import fs from "fs";
+
+// Read version from vexa monorepo root VERSION file
+function getVersion(): string {
+  const candidates = [
+    path.resolve(__dirname, "../../VERSION"),       // services/dashboard -> vexa root
+    path.resolve(__dirname, "VERSION"),              // local fallback
+  ];
+  for (const p of candidates) {
+    try {
+      return fs.readFileSync(p, "utf-8").trim();
+    } catch {}
+  }
+  return "dev";
+}
 
 const nextConfig: NextConfig = {
   // Only use standalone output for production builds
@@ -10,8 +25,10 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: path.resolve(__dirname),
   },
-  // Note: Don't use env block here as it overrides .env.local values at build time
-  // Environment variables are loaded automatically from .env.local at runtime
+  // Expose app version from vexa VERSION file at build time
+  env: {
+    NEXT_PUBLIC_APP_VERSION: getVersion(),
+  },
 };
 
 export default nextConfig;

@@ -4,16 +4,12 @@ import { useState, useEffect } from "react";
 import {
   User,
   Key,
-  Webhook,
   Copy,
-  Eye,
-  EyeOff,
-  RotateCw,
   Loader2,
   Plus,
   Check,
 } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -27,8 +23,6 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/auth-store";
-import { useWebhookStore } from "@/stores/webhook-store";
-import { useRuntimeConfig } from "@/hooks/use-runtime-config";
 import { cn } from "@/lib/utils";
 
 // ==========================================
@@ -50,13 +44,6 @@ const SCOPE_CONFIG: Record<KeyScope, { label: string; prefix: string; color: str
   tx: { label: "tx", prefix: "vxa_tx_", color: "text-cyan-300", bgColor: "bg-cyan-900/40" },
   user: { label: "user", prefix: "vxa_user_", color: "text-amber-300", bgColor: "bg-amber-900/40" },
 };
-
-const WEBHOOK_EVENTS = [
-  { key: "meeting.completed", label: "meeting.completed", defaultEnabled: true },
-  { key: "transcript.ready", label: "transcript.ready", defaultEnabled: true },
-  { key: "meeting.started", label: "meeting.started", defaultEnabled: false },
-  { key: "bot.failed", label: "bot.failed", defaultEnabled: false },
-];
 
 // ==========================================
 // Helpers
@@ -90,8 +77,6 @@ function maskToken(token: string): string {
 
 export default function ProfilePage() {
   const user = useAuthStore((state) => state.user);
-  const { config: runtimeConfig } = useRuntimeConfig();
-  const isHosted = runtimeConfig?.hostedMode ?? false;
 
   // API Keys state
   const [apiKeys, setApiKeys] = useState<APIKeyDisplay[]>([]);
@@ -103,26 +88,6 @@ export default function ProfilePage() {
   const [createdKeyToken, setCreatedKeyToken] = useState<string | null>(null);
   const [copiedKeyId, setCopiedKeyId] = useState<string | null>(null);
 
-  // Webhook config state (hosted mode only)
-  const {
-    config: webhookConfig,
-    isLoadingConfig: isLoadingWebhookConfig,
-    isSavingConfig,
-    deliveries: webhookDeliveries,
-    fetchConfig: fetchWebhookConfig,
-    saveConfig: saveWebhookConfig,
-    testWebhook,
-    rotateSecret,
-    setUserId,
-    fetchDeliveries: fetchWebhookDeliveries,
-  } = useWebhookStore();
-
-  const [webhookUrl, setWebhookUrl] = useState("");
-  const [webhookSecret, setWebhookSecret] = useState("");
-  const [webhookEvents, setWebhookEvents] = useState<Record<string, boolean>>({});
-  const [showSecret, setShowSecret] = useState(false);
-  const [isTesting, setIsTesting] = useState(false);
-  const [isRotating, setIsRotating] = useState(false);
 
   // Fetch API keys
   useEffect(() => {
@@ -154,28 +119,6 @@ export default function ProfilePage() {
     fetchKeys();
   }, [user?.id]);
 
-  // Set userId in webhook store and fetch config (hosted mode)
-  useEffect(() => {
-    if (user?.id) {
-      setUserId(user.id);
-    }
-  }, [user?.id, setUserId]);
-
-  useEffect(() => {
-    if (isHosted && user?.id) {
-      fetchWebhookConfig();
-      fetchWebhookDeliveries();
-    }
-  }, [isHosted, user?.id, fetchWebhookConfig, fetchWebhookDeliveries]);
-
-  // Sync webhook config to local state
-  useEffect(() => {
-    if (webhookConfig) {
-      setWebhookUrl(webhookConfig.endpoint_url || "");
-      setWebhookSecret(webhookConfig.signing_secret_masked || "");
-      setWebhookEvents(webhookConfig.events || {});
-    }
-  }, [webhookConfig]);
 
   const handleCreateKey = async () => {
     setIsCreatingKey(true);
@@ -225,59 +168,6 @@ export default function ProfilePage() {
     toast.success("Copied to clipboard");
   };
 
-  const handleTestWebhook = async () => {
-    if (!webhookUrl) return;
-    setIsTesting(true);
-    try {
-      const result = await testWebhook(webhookUrl);
-      if (result.success) {
-        toast.success("Webhook test successful", {
-          description: `Status ${result.status} in ${result.time_ms}ms`,
-        });
-      } else {
-        toast.error("Webhook test failed", { description: result.error });
-      }
-    } catch (error) {
-      toast.error("Test failed", { description: (error as Error).message });
-    } finally {
-      setIsTesting(false);
-      fetchWebhookDeliveries();
-    }
-  };
-
-  const handleRotateSecret = async () => {
-    setIsRotating(true);
-    try {
-      const newSecret = await rotateSecret();
-      toast.success("Signing secret rotated", {
-        description: "The new secret is active immediately.",
-      });
-      // Briefly show the new secret
-      setShowSecret(true);
-      setTimeout(() => setShowSecret(false), 10000);
-    } catch (error) {
-      toast.error("Failed to rotate secret", { description: (error as Error).message });
-    } finally {
-      setIsRotating(false);
-    }
-  };
-
-  const handleSaveWebhookConfig = async () => {
-    try {
-      await saveWebhookConfig({
-        endpoint_url: webhookUrl,
-        signing_secret: webhookSecret || undefined,
-        events: webhookEvents,
-      });
-      toast.success("Webhook settings saved");
-    } catch (error) {
-      toast.error("Failed to save settings", { description: (error as Error).message });
-    }
-  };
-
-  const toggleEvent = (key: string) => {
-    setWebhookEvents((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
 
   return (
     <div className="space-y-6">
@@ -285,7 +175,7 @@ export default function ProfilePage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-[-0.02em] text-foreground">Profile</h1>
         <p className="text-sm text-muted-foreground">
-          Manage your account, API keys, and webhook settings
+          Manage your account and API keys
         </p>
       </div>
 
@@ -400,172 +290,6 @@ export default function ProfilePage() {
           </CardContent>
         </Card>
 
-        {/* Webhook Configuration (hosted mode only) */}
-        {isHosted && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Webhook className="h-5 w-5" />
-                Webhook Configuration
-              </CardTitle>
-              <CardDescription>
-                Configure webhook delivery for meeting events
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {/* Endpoint URL */}
-              <div className="space-y-1.5">
-                <Label className="text-sm text-muted-foreground">Endpoint URL</Label>
-                <div className="flex gap-2">
-                  <Input
-                    type="url"
-                    placeholder="https://your-server.com/webhook"
-                    value={webhookUrl}
-                    onChange={(e) => setWebhookUrl(e.target.value)}
-                    className="flex-1 font-mono text-sm"
-                  />
-                  <Button
-                    variant="secondary"
-                    onClick={handleTestWebhook}
-                    disabled={isTesting || !webhookUrl}
-                  >
-                    {isTesting ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      "Test"
-                    )}
-                  </Button>
-                </div>
-              </div>
-
-              {/* Signing Secret */}
-              <div className="space-y-1.5">
-                <Label className="text-sm text-muted-foreground">Signing Secret</Label>
-                <div className="flex items-center gap-2">
-                  <Input
-                    type={showSecret ? "text" : "password"}
-                    value={webhookSecret}
-                    onChange={(e) => setWebhookSecret(e.target.value)}
-                    placeholder="whsec_... or enter your own secret"
-                    className="flex-1 font-mono text-sm"
-                  />
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => setShowSecret(!showSecret)}
-                  >
-                    {showSecret ? (
-                      <EyeOff className="h-4 w-4" />
-                    ) : (
-                      <Eye className="h-4 w-4" />
-                    )}
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={handleRotateSecret}
-                    disabled={isRotating}
-                  >
-                    {isRotating ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <RotateCw className="h-4 w-4" />
-                    )}
-                  </Button>
-                </div>
-                <p className="text-[11px] text-muted-foreground">
-                  Use this secret to verify webhook signatures.
-                </p>
-              </div>
-
-              {/* Event toggles */}
-              <div className="space-y-1.5">
-                <Label className="text-sm text-muted-foreground">Events</Label>
-                <div className="flex flex-wrap gap-2">
-                  {WEBHOOK_EVENTS.map((event) => {
-                    const enabled = webhookEvents[event.key] ?? event.defaultEnabled;
-                    return (
-                      <button
-                        key={event.key}
-                        type="button"
-                        onClick={() => toggleEvent(event.key)}
-                        className={cn(
-                          "inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium border cursor-pointer transition-colors",
-                          enabled
-                            ? "bg-emerald-900/30 text-emerald-300 border-emerald-800/30"
-                            : "bg-muted text-muted-foreground border-border hover:border-muted-foreground/30"
-                        )}
-                      >
-                        {event.label}
-                        {enabled && " \u2713"}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Save */}
-              <div className="flex justify-end pt-2">
-                <Button
-                  onClick={handleSaveWebhookConfig}
-                  disabled={isSavingConfig}
-                >
-                  {isSavingConfig ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Saving...
-                    </>
-                  ) : (
-                    "Save Webhook Settings"
-                  )}
-                </Button>
-              </div>
-
-              {/* Recent Deliveries */}
-              {webhookDeliveries.length > 0 && (
-                <div className="space-y-1.5 pt-4 border-t">
-                  <Label className="text-sm text-muted-foreground">Recent Deliveries</Label>
-                  <div className="space-y-1">
-                    {webhookDeliveries.slice(0, 10).map((d) => (
-                      <div
-                        key={d.id}
-                        className="flex items-center justify-between text-xs py-1.5 px-2 rounded bg-muted/50"
-                      >
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={cn(
-                              "inline-block w-2 h-2 rounded-full",
-                              d.status === "delivered" && "bg-emerald-400",
-                              d.status === "retrying" && "bg-amber-400",
-                              d.status === "failed" && "bg-red-400"
-                            )}
-                          />
-                          <span className="font-mono">{d.event}</span>
-                          {d.response_status && (
-                            <span className={cn(
-                              "px-1.5 py-0.5 rounded text-[10px] font-medium",
-                              d.response_status >= 200 && d.response_status < 300
-                                ? "bg-emerald-900/30 text-emerald-300"
-                                : "bg-red-900/30 text-red-300"
-                            )}>
-                              {d.response_status}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2 text-muted-foreground">
-                          {d.response_time_ms != null && (
-                            <span>{d.response_time_ms}ms</span>
-                          )}
-                          <span>{new Date(d.created_at).toLocaleString()}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        )}
       </div>
 
       {/* Create Key Dialog */}

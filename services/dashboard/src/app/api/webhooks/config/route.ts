@@ -52,9 +52,9 @@ export async function GET(request: NextRequest) {
       signing_secret_masked: secret || null,
       events: data.webhook_events || {
         "meeting.completed": true,
-        "transcript.ready": true,
         "meeting.started": false,
         "bot.failed": false,
+        "meeting.status_change": false,
       },
     };
 

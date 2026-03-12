@@ -30,9 +30,16 @@ export async function GET() {
   const hostedMode = process.env.NEXT_PUBLIC_HOSTED_MODE === "true";
   const webappUrl = process.env.NEXT_PUBLIC_WEBAPP_URL || "https://vexa.ai";
 
+  // Public API URL for client-facing configs (MCP, docs, etc.)
+  // Falls back to VEXA_PUBLIC_API_URL -> NEXT_PUBLIC_VEXA_API_URL -> apiUrl
+  const publicApiUrl = process.env.VEXA_PUBLIC_API_URL
+    || process.env.NEXT_PUBLIC_VEXA_API_URL
+    || apiUrl;
+
   return NextResponse.json({
     wsUrl,
     apiUrl,
+    publicApiUrl,
     authToken: authToken || null,
     defaultBotName,
     hostedMode,

@@ -8,9 +8,45 @@ from typing import Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 
+# Map meeting status to webhook event type
+STATUS_TO_EVENT: Dict[str, str] = {
+    "completed": "meeting.completed",
+    "active": "meeting.started",
+    "failed": "bot.failed",
+}
+
+
+def _resolve_event_type(meeting_status: str) -> str:
+    """Map a meeting status to the corresponding webhook event type."""
+    return STATUS_TO_EVENT.get(meeting_status, "meeting.status_change")
+
+
+def _is_event_enabled(user_data: Optional[Dict], event_type: str) -> bool:
+    """Check if the user has enabled this event type in their webhook config.
+
+    Defaults:
+      - meeting.completed and transcript.ready are ON by default.
+      - Everything else is OFF unless explicitly enabled.
+    """
+    default_enabled = {"meeting.completed"}
+
+    events_config = (user_data or {}).get("webhook_events")
+    if not events_config or not isinstance(events_config, dict):
+        # No explicit config — fall back to defaults
+        return event_type in default_enabled
+
+    # Explicit config exists — respect it
+    enabled = events_config.get(event_type)
+    if enabled is not None:
+        return bool(enabled)
+
+    # Event not mentioned in config — use defaults
+    return event_type in default_enabled
+
+
 async def run(meeting: Meeting, db: AsyncSession, status_change_info: Optional[Dict[str, Any]] = None):
     """
-    Sends a webhook for ANY meeting status change, not just completion.
+    Sends a webhook for meeting status changes, filtered by user's event preferences.
     Uses exponential backoff retry and HMAC signing when webhook_secret is set.
 
     Args:
@@ -35,6 +71,15 @@ async def run(meeting: Meeting, db: AsyncSession, status_change_info: Optional[D
             logger.info(f"No webhook URL configured for user {user.email} (meeting {meeting.id})")
             return
 
+        # Check if user has enabled this event type
+        event_type = _resolve_event_type(meeting.status)
+        if not _is_event_enabled(user.data, event_type):
+            logger.info(
+                f"Webhook event '{event_type}' not enabled for user {user.email} "
+                f"(meeting {meeting.id}, status {meeting.status}). Skipping."
+            )
+            return
+
         # SSRF defense: validate URL before sending
         try:
             validate_webhook_url(webhook_url)
@@ -47,7 +92,7 @@ async def run(meeting: Meeting, db: AsyncSession, status_change_info: Optional[D
             webhook_secret = user.data.get('webhook_secret')
 
         payload = {
-            'event_type': 'meeting.status_change',
+            'event_type': event_type,
             'meeting': {
                 'id': meeting.id,
                 'user_id': meeting.user_id,

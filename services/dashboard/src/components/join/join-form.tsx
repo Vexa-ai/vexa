@@ -27,6 +27,10 @@ export function JoinForm({ onSuccess }: JoinFormProps) {
   const { setActiveMeeting } = useLiveStore();
   const { config } = useRuntimeConfig();
   const user = useAuthStore((state) => state.user);
+  const isHosted = config?.hostedMode ?? false;
+
+  // Depleted state: user has active subscription but max_concurrent_bots === 0
+  const isDepleted = isHosted && user?.max_concurrent_bots === 0;
 
   const [platform, setPlatform] = useState<Platform>("google_meet");
   const [meetingId, setMeetingId] = useState("");
@@ -164,7 +168,24 @@ export function JoinForm({ onSuccess }: JoinFormProps) {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <form onSubmit={handleSubmit} className="space-y-6">
+        {/* Depleted banner */}
+        {isDepleted && (
+          <div className="mb-6 rounded-lg bg-amber-950/20 border border-amber-900/30 p-3">
+            <p className="text-sm text-amber-300 font-medium">
+              Bot launches disabled — credits depleted
+            </p>
+            <p className="text-xs text-amber-400/60 mt-1">
+              <a
+                href={`${config?.webappUrl || "https://vexa.ai"}/account`}
+                className="underline hover:text-amber-300"
+              >
+                Add funds
+              </a>{" "}
+              in your account to re-enable bot launches.
+            </p>
+          </div>
+        )}
+        <form onSubmit={handleSubmit} className={cn("space-y-6", isDepleted && "opacity-50 pointer-events-none")}>
           {/* Platform Selection */}
           <fieldset className="space-y-3">
             <legend className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">Platform</legend>
@@ -391,7 +412,7 @@ export function JoinForm({ onSuccess }: JoinFormProps) {
                 !isSubmitting && meetingIdValidation.valid && "bg-primary hover:bg-primary/90 shadow-lg shadow-primary/25"
               )}
               size="lg"
-              disabled={isSubmitting || !meetingIdValidation.valid}
+              disabled={isSubmitting || !meetingIdValidation.valid || isDepleted}
             >
               {isSubmitting ? (
                 <>

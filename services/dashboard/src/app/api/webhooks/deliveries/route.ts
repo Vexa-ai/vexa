@@ -13,17 +13,13 @@ const getAdminConfig = () => {
 /**
  * GET /api/webhooks/deliveries?userId=N&status=...&time_range=...
  *
- * Read webhook_deliveries from user data stored via admin API.
+ * Combines two sources:
+ * 1. meeting.data.webhook_delivery — real deliveries from the gateway on meeting completion
+ * 2. user.data.webhook_deliveries  — test deliveries sent from the dashboard
  */
 export async function GET(request: NextRequest) {
   const { VEXA_ADMIN_API_URL, VEXA_ADMIN_API_KEY } = getAdminConfig();
-
-  if (!VEXA_ADMIN_API_KEY) {
-    return NextResponse.json({
-      deliveries: [],
-      stats: { total: 0, delivered: 0, retrying: 0, failed: 0 },
-    });
-  }
+  const VEXA_API_URL = process.env.VEXA_API_URL || "http://localhost:18056";
 
   const cookieStore = await cookies();
   const token = cookieStore.get("vexa-token")?.value;
@@ -32,29 +28,51 @@ export async function GET(request: NextRequest) {
   }
 
   const userId = request.nextUrl.searchParams.get("userId");
-  if (!userId) {
-    return NextResponse.json({
-      deliveries: [],
-      stats: { total: 0, delivered: 0, retrying: 0, failed: 0 },
-    });
-  }
 
   try {
-    const response = await fetch(`${VEXA_ADMIN_API_URL}/admin/users/${userId}`, {
-      headers: { "X-Admin-API-Key": VEXA_ADMIN_API_KEY },
+    const allDeliveries: Array<Record<string, unknown>> = [];
+
+    // Source 1: Real meeting webhook deliveries from gateway
+    const meetingsRes = await fetch(`${VEXA_API_URL}/meetings`, {
+      headers: { "X-API-Key": token },
       cache: "no-store",
     });
-
-    if (!response.ok) {
-      return NextResponse.json({
-        deliveries: [],
-        stats: { total: 0, delivered: 0, retrying: 0, failed: 0 },
-      });
+    if (meetingsRes.ok) {
+      const meetingsData = await meetingsRes.json();
+      const meetings = meetingsData.meetings || [];
+      for (const m of meetings) {
+        const wd = m.data?.webhook_delivery;
+        if (wd && wd.url) {
+          allDeliveries.push({
+            id: `meeting-${m.id}`,
+            event: "meeting.completed",
+            meeting_id: String(m.id),
+            meeting_name: m.data?.name || m.native_meeting_id || `Meeting ${m.id}`,
+            status: wd.status === "delivered" ? "delivered" : wd.status === "queued" ? "retrying" : "failed",
+            attempts: wd.attempts || 1,
+            max_attempts: wd.attempts || 1,
+            response_status: wd.status_code || null,
+            response_time_ms: null,
+            endpoint_url: wd.url,
+            created_at: wd.delivered_at || wd.queued_at || wd.failed_at || m.updated_at,
+            last_attempt_at: wd.delivered_at || wd.queued_at || wd.failed_at || m.updated_at,
+          });
+        }
+      }
     }
 
-    const userData = await response.json();
-    const data = userData.data || {};
-    const allDeliveries: Array<Record<string, unknown>> = data.webhook_deliveries || [];
+    // Source 2: Test webhook deliveries from user data
+    if (VEXA_ADMIN_API_KEY && userId) {
+      const userRes = await fetch(`${VEXA_ADMIN_API_URL}/admin/users/${userId}`, {
+        headers: { "X-Admin-API-Key": VEXA_ADMIN_API_KEY },
+        cache: "no-store",
+      });
+      if (userRes.ok) {
+        const userData = await userRes.json();
+        const testDeliveries = userData.data?.webhook_deliveries || [];
+        allDeliveries.push(...testDeliveries);
+      }
+    }
 
     // Apply time range filter
     const timeRange = request.nextUrl.searchParams.get("time_range") || "7d";
