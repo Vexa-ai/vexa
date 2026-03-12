@@ -191,6 +191,8 @@ async def update_meeting_status(
 
 from app.tasks.bot_exit_tasks import run_all_tasks
 from app.tasks.webhook_runner import run_status_webhook_task
+from shared_models.webhook_delivery import set_redis_client as set_webhook_redis
+from shared_models.webhook_retry_worker import start_retry_worker, stop_retry_worker
 
 def _b64url_encode(data: bytes) -> str:
     """URL-safe base64 encoding without padding."""
@@ -459,7 +461,15 @@ async def startup_event():
     # --------------------------------------
 
     logger.info("Database, Docker Client (attempted), and Redis Client (attempted) initialized.")
-    
+
+    # Configure durable webhook delivery via Redis
+    if redis_client is not None:
+        set_webhook_redis(redis_client)
+        asyncio.create_task(start_retry_worker(redis_client))
+        logger.info("[Startup] Webhook retry worker started")
+    else:
+        logger.warning("[Startup] Webhook retry worker NOT started — Redis unavailable")
+
     # Start reconciliation scheduler (disabled by default — not K8s-aware, kills production bots)
     if os.environ.get("ENABLE_RECONCILIATION", "").lower() in ("1", "true", "yes"):
         logger.info("[Startup] Starting reconciliation scheduler...")
@@ -473,6 +483,10 @@ async def shutdown_event():
     global redis_client # <-- Add global reference
     logger.info("Shutting down Bot Manager...")
     # await close_redis() # Removed redis close if not used
+
+    # Stop webhook retry worker before closing Redis
+    await stop_retry_worker()
+    logger.info("Webhook retry worker stopped.")
 
     # --- ADD Redis Client Closing ---
     if redis_client:

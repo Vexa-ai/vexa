@@ -4,6 +4,11 @@ Webhook delivery with exponential backoff and HMAC signing.
 Provides reliable delivery for both:
 - Internal hooks (billing, analytics) via POST_MEETING_HOOKS env var
 - Per-client webhooks via user-configured webhook_url + webhook_secret
+
+When a Redis client is configured (via ``set_redis_client()`` or the
+``redis_client`` parameter), failed deliveries are persisted to a
+Redis-backed retry queue for durable delivery by the background worker
+(see webhook_retry_worker.py).
 """
 from __future__ import annotations
 
@@ -19,6 +24,28 @@ import httpx
 from .retry import with_retry
 
 logger = logging.getLogger(__name__)
+
+RETRY_QUEUE_KEY = "webhook:retry_queue"
+
+# Module-level Redis client — set once at startup via set_redis_client().
+_redis_client: Any = None
+
+
+def set_redis_client(client: Any) -> None:
+    """Set the module-level Redis client for durable webhook delivery.
+
+    Call this once at application startup (e.g. in bot-manager's
+    startup_event) so that all ``deliver()`` calls automatically get
+    Redis-backed retry without needing to pass the client explicitly.
+    """
+    global _redis_client
+    _redis_client = client
+    logger.info("Webhook delivery: Redis client configured for durable retry")
+
+
+def get_redis_client() -> Any:
+    """Return the module-level Redis client (may be None)."""
+    return _redis_client
 
 
 def sign_payload(payload_bytes: bytes, secret: str) -> str:
@@ -55,6 +82,38 @@ def build_headers(
     return headers
 
 
+async def _enqueue_failed_webhook(
+    redis: Any,
+    url: str,
+    payload: Dict[str, Any],
+    headers: Dict[str, str],
+    webhook_secret: Optional[str],
+    label: str,
+) -> bool:
+    """Persist a failed webhook to the Redis retry queue.
+
+    Returns True if enqueued successfully, False otherwise.
+    """
+    now = time.time()
+    entry = {
+        "url": url,
+        "payload": payload,
+        "headers": headers,
+        "webhook_secret": webhook_secret,
+        "label": label,
+        "attempt": 0,
+        "next_retry_at": now + 60,  # first retry in 1 minute
+        "created_at": now,
+    }
+    try:
+        await redis.rpush(RETRY_QUEUE_KEY, json.dumps(entry))
+        logger.info(f"Enqueued failed webhook for durable retry: {url} [{label}]")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to enqueue webhook to Redis: {e}")
+        return False
+
+
 async def deliver(
     url: str,
     payload: Dict[str, Any],
@@ -62,6 +121,7 @@ async def deliver(
     timeout: float = 30.0,
     max_retries: int = 3,
     label: str = "",
+    redis_client: Any = None,
 ) -> Optional[httpx.Response]:
     """Deliver a webhook with exponential backoff retry.
 
@@ -72,6 +132,10 @@ async def deliver(
         timeout: Request timeout in seconds.
         max_retries: Number of retry attempts.
         label: Label for log messages.
+        redis_client: Optional async Redis client override. When not
+            provided, falls back to the module-level client set via
+            ``set_redis_client()``. If neither is available, failed
+            deliveries are dropped (current behavior).
 
     Returns:
         The response on success, None on total failure.
@@ -95,4 +159,10 @@ async def deliver(
         return resp
     except Exception as e:
         logger.error(f"Webhook delivery failed after retries for {url}: {e}")
+        # Persist to Redis retry queue if a client is available
+        effective_redis = redis_client if redis_client is not None else _redis_client
+        if effective_redis is not None:
+            await _enqueue_failed_webhook(
+                effective_redis, url, payload, headers, webhook_secret, label,
+            )
         return None
