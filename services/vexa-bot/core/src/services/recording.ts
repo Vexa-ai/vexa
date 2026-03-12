@@ -133,6 +133,7 @@ export class RecordingService {
       channels: this.channels,
       duration_seconds: durationSeconds,
       file_size_bytes: fileStats.size,
+      start_time_utc: this.startTime ? new Date(this.startTime).toISOString() : undefined,
     });
 
     // Build multipart body

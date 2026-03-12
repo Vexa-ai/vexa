@@ -1756,6 +1756,18 @@ async def internal_upload_recording(
         sample_rate = metadata_obj.get("sample_rate", sample_rate)
         if "is_final" in metadata_obj:
             is_final = _to_bool(metadata_obj.get("is_final"), default=True)
+        _start_time_utc_str = metadata_obj.get("start_time_utc")
+    else:
+        _start_time_utc_str = None
+
+    # Parse start_time_utc from bot metadata — this is when recording actually started,
+    # which we use as created_at so that audio/video alignment is accurate.
+    recording_start_time: Optional[datetime] = None
+    if _start_time_utc_str:
+        try:
+            recording_start_time = datetime.fromisoformat(_start_time_utc_str.replace("Z", "+00:00")).replace(tzinfo=None)
+        except (ValueError, AttributeError):
+            logger.warning(f"Could not parse start_time_utc: {_start_time_utc_str!r}")
 
     if not session_uid:
         raise HTTPException(status_code=422, detail="session_uid is required")
@@ -1811,6 +1823,7 @@ async def internal_upload_recording(
             session_uid=session_uid,
             source="bot",
             status="uploading",
+            **({"created_at": recording_start_time} if recording_start_time else {}),
         )
         db.add(recording)
         await db.flush()  # get recording.id
@@ -1850,7 +1863,8 @@ async def internal_upload_recording(
         media_file_id = existing_media_entry.get("id") or _new_recording_numeric_id()
         created_at = (
             existing_recording_payload.get("created_at")
-            if existing_recording_payload else datetime.utcnow().isoformat()
+            if existing_recording_payload
+            else (recording_start_time.isoformat() if recording_start_time else datetime.utcnow().isoformat())
         )
         new_media_entry = {
             "id": media_file_id,
