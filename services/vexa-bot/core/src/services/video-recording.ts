@@ -9,8 +9,8 @@ import { log } from '../utils';
  * Hardware acceleration modes for video encoding.
  * Controlled via VIDEO_HWACCEL env var (default: 'none').
  *   none  — software encoding (libvpx-vp9 → webm). Works everywhere.
- *   vaapi — Intel iGPU / AMD via VA-API (h264_vaapi → mkv). Requires /dev/dri passthrough.
- *   nvenc — NVIDIA via NVENC (h264_nvenc → mkv). Requires nvidia runtime.
+ *   vaapi — Intel iGPU / AMD via VA-API (h264_vaapi → mp4). Requires /dev/dri passthrough.
+ *   nvenc — NVIDIA via NVENC (h264_nvenc → mp4). Requires nvidia runtime.
  */
 export type VideoHwAccel = 'none' | 'vaapi' | 'nvenc';
 
@@ -42,7 +42,7 @@ export class VideoRecordingService {
   ) {
     this.display = process.env.DISPLAY || ':99';
     this.hwaccel = (process.env.VIDEO_HWACCEL || 'none').toLowerCase() as VideoHwAccel;
-    this.format = this.hwaccel === 'none' ? 'webm' : 'mkv';
+    this.format = this.hwaccel === 'none' ? 'webm' : 'mp4';
     this.filePath = path.join('/tmp', `video_recording_${meetingId}_${sessionUid}.${this.format}`);
   }
 
@@ -297,7 +297,7 @@ export class VideoRecordingService {
           '-c:v', 'h264_vaapi',
           '-qp', '28',
         ];
-        outputFile = this.filePath; // .mkv
+        outputFile = this.filePath; // .mp4
         break;
       }
       case 'nvenc': {
@@ -308,13 +308,14 @@ export class VideoRecordingService {
           '-cq', '28',
           '-preset', 'p2',
         ];
-        outputFile = this.filePath; // .mkv
+        outputFile = this.filePath; // .mp4
         break;
       }
       default: {
         // Software encoding with VP9 — excellent compression for screen content
         encoderArgs = [
           '-c:v', 'libvpx-vp9',
+          '-pix_fmt', 'yuv420p', // VP9 profile 0 — required for Safari compatibility
           '-crf', '35',
           '-b:v', '0',
           '-deadline', 'realtime',
