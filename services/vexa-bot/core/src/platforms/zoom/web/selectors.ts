@@ -52,8 +52,10 @@ export const zoomWaitingRoomTexts = [
   'Please wait, the meeting host will let you in soon.',
   'Please wait',
   'Waiting for the host to start this meeting',
+  'Waiting for the host to start the meeting',
   'waiting room',
   'Waiting Room',
+  'Host has joined. We\'ve let them know you\'re here',
 ];
 
 // ---- Removal / end-of-meeting indicators ----
