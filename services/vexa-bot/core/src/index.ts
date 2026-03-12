@@ -1147,7 +1147,8 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     const context = await browserInstance.newContext({
       permissions: ['microphone', 'camera'],
       ignoreHTTPSErrors: true,
-      bypassCSP: true
+      bypassCSP: true,
+      viewport: null, // CDP fullscreen removes browser chrome; window fills the 1920x1080 Xvfb display
     });
     
     // Pre-inject browser utils before any page scripts (affects current + future navigations)
