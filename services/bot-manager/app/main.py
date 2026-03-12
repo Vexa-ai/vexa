@@ -686,7 +686,15 @@ async def request_bot(
         )
     
     # --- Fast-fail concurrency limit check (DB-based) ---
-    user_limit = int(getattr(current_user, "max_concurrent_bots", 0) or 0)
+    # Lock the user row (SELECT ... FOR UPDATE) to serialize concurrent bot launches
+    # per-user. This prevents the race condition where two concurrent requests both
+    # read the count as under the limit and both proceed to INSERT.
+    lock_stmt = select(User).where(User.id == current_user.id).with_for_update()
+    lock_result = await db.execute(lock_stmt)
+    locked_user = lock_result.scalars().first()
+    if locked_user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    user_limit = int(getattr(locked_user, "max_concurrent_bots", 0) or 0)
     if user_limit > 0:
         count_stmt = select(func.count()).select_from(Meeting).where(
             and_(
