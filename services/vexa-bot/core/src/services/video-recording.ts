@@ -35,6 +35,7 @@ export class VideoRecordingService {
   private startTime = 0;
   private display: string;
   private hwaccel: VideoHwAccel;
+  private encodeH264: boolean;
 
   constructor(
     private meetingId: number,
@@ -42,7 +43,8 @@ export class VideoRecordingService {
   ) {
     this.display = process.env.DISPLAY || ':99';
     this.hwaccel = (process.env.VIDEO_HWACCEL || 'none').toLowerCase() as VideoHwAccel;
-    this.format = this.hwaccel === 'none' ? 'webm' : 'mp4';
+    this.encodeH264 = process.env.ENCODE_H264 === 'true';
+    this.format = (this.hwaccel === 'none' && !this.encodeH264) ? 'webm' : 'mp4';
     this.filePath = path.join('/tmp', `video_recording_${meetingId}_${sessionUid}.${this.format}`);
   }
 
@@ -312,17 +314,28 @@ export class VideoRecordingService {
         break;
       }
       default: {
-        // Software encoding with VP9 — excellent compression for screen content
-        encoderArgs = [
-          '-c:v', 'libvpx-vp9',
-          '-pix_fmt', 'yuv420p', // VP9 profile 0 — required for Safari compatibility
-          '-crf', '35',
-          '-b:v', '0',
-          '-deadline', 'realtime',
-          '-cpu-used', '8',
-          '-row-mt', '1',
-        ];
-        outputFile = this.filePath; // .webm
+        if (this.encodeH264) {
+          // CPU H.264 — universally supported including Safari
+          encoderArgs = [
+            '-c:v', 'libx264',
+            '-crf', '28',
+            '-preset', 'ultrafast',
+            '-tune', 'zerolatency',
+            '-pix_fmt', 'yuv420p',
+          ];
+        } else {
+          // Software VP9 — excellent compression for screen content
+          encoderArgs = [
+            '-c:v', 'libvpx-vp9',
+            '-pix_fmt', 'yuv420p', // VP9 profile 0 — required for Safari compatibility
+            '-crf', '35',
+            '-b:v', '0',
+            '-deadline', 'realtime',
+            '-cpu-used', '8',
+            '-row-mt', '1',
+          ];
+        }
+        outputFile = this.filePath; // .webm or .mp4
         break;
       }
     }
