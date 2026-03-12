@@ -29,12 +29,13 @@ export function startZoomWebRemovalMonitor(
   const onNavigated = (frame: any) => {
     if (stopped || frame !== page.mainFrame()) return;
     const url: string = frame.url();
-    // While in a meeting the URL always contains /wc/.../meeting.
-    // A redirect to /join, /signin, or any other path means the meeting ended.
-    if (url && url.includes('/wc/') && !url.includes('/meeting')) {
-      triggerRemoval(`[Zoom Web] Navigation to non-meeting URL detected: ${url}`);
-    } else if (url && (url.includes('/signin') || url.includes('/login'))) {
-      triggerRemoval(`[Zoom Web] Redirected to sign-in page: ${url}`);
+    if (!url || url.startsWith('about:')) return;
+    // Any navigation away from the zoom.us domain means the meeting ended
+    // (covers company SSO redirects, homepages, sign-in pages, etc.)
+    if (!/zoom\.(us|com|eu|com\.cn|com\.br|com\.au|de|fr|jp|ca|co\.uk)\b/.test(url)) {
+      triggerRemoval(`Navigation away from Zoom domain: ${url}`);
+    } else if (url.includes('/wc/') && !url.includes('/meeting')) {
+      triggerRemoval(`Navigation to non-meeting Zoom URL: ${url}`);
     }
   };
   page.on('framenavigated', onNavigated);
@@ -75,7 +76,12 @@ export function startZoomWebRemovalMonitor(
       if (!leaveVisible) {
         const url = page.url();
         const title = await page.title().catch(() => '');
-        // Redirected away from meeting page
+        // Navigated off Zoom entirely (e.g. company SSO homepage)
+        if (url && !url.startsWith('about:') && !/zoom\.(us|com|eu|com\.cn|com\.br|com\.au|de|fr|jp|ca|co\.uk)\b/.test(url)) {
+          await triggerRemoval(`Leave button gone and URL left Zoom domain: ${url}`);
+          return;
+        }
+        // Redirected away from meeting page within Zoom
         if (url.includes('/wc/') && !url.includes('/meeting')) {
           await triggerRemoval(`Leave button gone and URL is non-meeting: ${url}`);
           return;
