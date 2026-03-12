@@ -192,7 +192,7 @@ async def update_meeting_status(
 from app.tasks.bot_exit_tasks import run_all_tasks
 from app.tasks.webhook_runner import run_status_webhook_task
 from shared_models.webhook_delivery import set_redis_client as set_webhook_redis
-from shared_models.webhook_retry_worker import start_retry_worker, stop_retry_worker
+from shared_models.webhook_retry_worker import start_retry_worker, stop_retry_worker, set_session_factory as set_retry_session_factory
 
 def _b64url_encode(data: bytes) -> str:
     """URL-safe base64 encoding without padding."""
@@ -463,6 +463,7 @@ async def startup_event():
     logger.info("Database, Docker Client (attempted), and Redis Client (attempted) initialized.")
 
     # Configure durable webhook delivery via Redis
+    set_retry_session_factory(async_session_local)
     if redis_client is not None:
         set_webhook_redis(redis_client)
         asyncio.create_task(start_retry_worker(redis_client))

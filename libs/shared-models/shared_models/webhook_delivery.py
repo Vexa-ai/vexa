@@ -89,6 +89,7 @@ async def _enqueue_failed_webhook(
     headers: Dict[str, str],
     webhook_secret: Optional[str],
     label: str,
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Persist a failed webhook to the Redis retry queue.
 
@@ -105,6 +106,8 @@ async def _enqueue_failed_webhook(
         "next_retry_at": now + 60,  # first retry in 1 minute
         "created_at": now,
     }
+    if metadata:
+        entry["metadata"] = metadata
     try:
         await redis.rpush(RETRY_QUEUE_KEY, json.dumps(entry))
         logger.info(f"Enqueued failed webhook for durable retry: {url} [{label}]")
@@ -122,6 +125,7 @@ async def deliver(
     max_retries: int = 3,
     label: str = "",
     redis_client: Any = None,
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> Optional[httpx.Response]:
     """Deliver a webhook with exponential backoff retry.
 
@@ -136,6 +140,9 @@ async def deliver(
             provided, falls back to the module-level client set via
             ``set_redis_client()``. If neither is available, failed
             deliveries are dropped (current behavior).
+        metadata: Optional dict of caller context (e.g. meeting_id).
+            Passed through to the retry queue so the worker can update
+            the originating record on eventual success/failure.
 
     Returns:
         The response on success, None on total failure.
@@ -164,5 +171,6 @@ async def deliver(
         if effective_redis is not None:
             await _enqueue_failed_webhook(
                 effective_redis, url, payload, headers, webhook_secret, label,
+                metadata=metadata,
             )
         return None

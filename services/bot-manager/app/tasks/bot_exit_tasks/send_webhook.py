@@ -1,17 +1,28 @@
 import logging
+from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 from shared_models.models import Meeting, User
 from shared_models.webhook_url import validate_webhook_url
-from shared_models.webhook_delivery import deliver
+from shared_models.webhook_delivery import deliver, get_redis_client
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _write_delivery_status(meeting: Meeting, status: dict):
+    """Merge webhook_delivery into meeting.data without overwriting other keys."""
+    data = dict(meeting.data) if meeting.data else {}
+    data["webhook_delivery"] = status
+    meeting.data = data
+    flag_modified(meeting, "data")
 
 
 async def run(meeting: Meeting, db: AsyncSession):
     """
     Sends a webhook with the completed meeting details to a user-configured URL.
     Uses exponential backoff retry and HMAC signing when webhook_secret is set.
+    Writes delivery status to meeting.data["webhook_delivery"].
     """
     logger.info(f"Executing send_webhook task for meeting {meeting.id}")
 
@@ -52,13 +63,47 @@ async def run(meeting: Meeting, db: AsyncSession):
             'updated_at': meeting.updated_at.isoformat() if meeting.updated_at else None,
         }
 
-        await deliver(
+        now = datetime.now(timezone.utc).isoformat()
+
+        resp = await deliver(
             url=webhook_url,
             payload=payload,
             webhook_secret=webhook_secret,
             timeout=30.0,
             label=f"client-webhook meeting={meeting.id} user={user.email}",
+            metadata={"meeting_id": meeting.id},
         )
+
+        if resp is not None:
+            # deliver() returned a response — delivery succeeded (possibly non-2xx)
+            _write_delivery_status(meeting, {
+                "url": webhook_url,
+                "status_code": resp.status_code,
+                "attempts": 1,
+                "delivered_at": now,
+                "status": "delivered",
+            })
+            logger.info(f"Webhook delivery status written for meeting {meeting.id}: delivered ({resp.status_code})")
+        else:
+            # deliver() returned None — all in-process retries failed.
+            # Check whether it was enqueued to Redis for durable retry.
+            effective_redis = get_redis_client()
+            if effective_redis is not None:
+                _write_delivery_status(meeting, {
+                    "url": webhook_url,
+                    "attempts": 0,
+                    "status": "queued",
+                    "queued_at": now,
+                })
+                logger.info(f"Webhook delivery status written for meeting {meeting.id}: queued for retry")
+            else:
+                _write_delivery_status(meeting, {
+                    "url": webhook_url,
+                    "attempts": 3,
+                    "status": "failed",
+                    "failed_at": now,
+                })
+                logger.warning(f"Webhook delivery status written for meeting {meeting.id}: failed (no retry queue)")
 
     except Exception as e:
         logger.error(f"Unexpected error sending webhook for meeting {meeting.id}: {e}", exc_info=True)

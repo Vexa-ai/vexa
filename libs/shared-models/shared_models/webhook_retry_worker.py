@@ -5,6 +5,10 @@ Polls the ``webhook:retry_queue`` list every POLL_INTERVAL seconds. Each
 entry carries its own ``next_retry_at`` timestamp and exponential backoff
 schedule. Entries older than MAX_AGE_SECONDS (24 h) are dropped.
 
+When an entry contains ``metadata.meeting_id``, the worker updates the
+meeting's ``data.webhook_delivery`` JSONB field on terminal outcomes
+(delivered or permanently failed/expired).
+
 Usage (inside bot-manager startup)::
 
     from shared_models.webhook_retry_worker import start_retry_worker, stop_retry_worker
@@ -21,7 +25,8 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any, List, Optional
+from datetime import datetime, timezone
+from typing import Any, Callable, List, Optional
 
 import httpx
 
@@ -41,6 +46,55 @@ MAX_AGE_SECONDS = 86400  # 24 hours
 POLL_INTERVAL = 30       # seconds between queue polls
 
 _stop_event: Optional[asyncio.Event] = None
+
+# DB session factory — set once at startup via set_session_factory().
+_session_factory: Optional[Callable] = None
+
+
+def set_session_factory(factory: Callable) -> None:
+    """Set the async session factory for DB writes in the retry worker.
+
+    Call this once at application startup (e.g. in bot-manager's
+    startup_event) so the retry worker can update meeting records.
+
+    Args:
+        factory: An async context-manager that yields an AsyncSession,
+                 typically ``shared_models.database.async_session_local``.
+    """
+    global _session_factory
+    _session_factory = factory
+    logger.info("[retry-worker] DB session factory configured")
+
+
+async def _update_meeting_delivery_status(
+    meeting_id: int,
+    status: dict,
+) -> None:
+    """Update meeting.data['webhook_delivery'] using an independent DB session."""
+    if _session_factory is None:
+        logger.warning(
+            f"[retry-worker] Cannot update meeting {meeting_id} — no DB session factory configured"
+        )
+        return
+
+    try:
+        from .models import Meeting
+        from sqlalchemy.orm.attributes import flag_modified
+
+        async with _session_factory() as session:
+            meeting = await session.get(Meeting, meeting_id)
+            if meeting is None:
+                logger.warning(f"[retry-worker] Meeting {meeting_id} not found, skipping status update")
+                return
+
+            data = dict(meeting.data) if meeting.data else {}
+            data["webhook_delivery"] = status
+            meeting.data = data
+            flag_modified(meeting, "data")
+            await session.commit()
+            logger.info(f"[retry-worker] Updated meeting {meeting_id} webhook_delivery: {status.get('status')}")
+    except Exception as e:
+        logger.error(f"[retry-worker] Failed to update meeting {meeting_id} delivery status: {e}", exc_info=True)
 
 
 async def _deliver_one(entry: dict) -> bool:
@@ -102,13 +156,24 @@ async def _process_queue(redis_client: Any) -> int:
         created_at = entry.get("created_at", 0)
         next_retry_at = entry.get("next_retry_at", 0)
         attempt = entry.get("attempt", 0)
+        metadata = entry.get("metadata") or {}
+        meeting_id = metadata.get("meeting_id")
+        url = entry.get("url", "")
 
         # Drop entries older than MAX_AGE
         if now - created_at > MAX_AGE_SECONDS:
             logger.warning(
-                f"[retry-worker] Dropping webhook to {entry.get('url')} — "
+                f"[retry-worker] Dropping webhook to {url} — "
                 f"exceeded max age ({MAX_AGE_SECONDS}s). label={entry.get('label')}"
             )
+            if meeting_id:
+                await _update_meeting_delivery_status(meeting_id, {
+                    "url": url,
+                    "attempts": attempt,
+                    "status": "failed",
+                    "error": f"Expired after {MAX_AGE_SECONDS}s",
+                    "failed_at": datetime.now(timezone.utc).isoformat(),
+                })
             processed += 1
             continue
 
@@ -121,16 +186,39 @@ async def _process_queue(redis_client: Any) -> int:
         success = await _deliver_one(entry)
         processed += 1
 
-        if not success:
-            # Re-enqueue with bumped attempt and next backoff
-            entry["attempt"] = attempt + 1
-            backoff_idx = min(attempt, len(BACKOFF_SCHEDULE) - 1)
-            entry["next_retry_at"] = now + BACKOFF_SCHEDULE[backoff_idx]
-            requeue.append(json.dumps(entry))
-            logger.info(
-                f"[retry-worker] Re-enqueued webhook to {entry.get('url')} — "
-                f"attempt {entry['attempt']}, next retry in {BACKOFF_SCHEDULE[backoff_idx]}s"
-            )
+        if success:
+            if meeting_id:
+                await _update_meeting_delivery_status(meeting_id, {
+                    "url": url,
+                    "attempts": attempt + 1,
+                    "status": "delivered",
+                    "delivered_at": datetime.now(timezone.utc).isoformat(),
+                })
+        else:
+            # Check if we've exhausted the backoff schedule
+            if attempt >= len(BACKOFF_SCHEDULE):
+                logger.warning(
+                    f"[retry-worker] Permanently failed webhook to {url} — "
+                    f"exhausted all {len(BACKOFF_SCHEDULE)} retry attempts. label={entry.get('label')}"
+                )
+                if meeting_id:
+                    await _update_meeting_delivery_status(meeting_id, {
+                        "url": url,
+                        "attempts": attempt + 1,
+                        "status": "failed",
+                        "error": "Exhausted all retry attempts",
+                        "failed_at": datetime.now(timezone.utc).isoformat(),
+                    })
+            else:
+                # Re-enqueue with bumped attempt and next backoff
+                entry["attempt"] = attempt + 1
+                backoff_idx = min(attempt, len(BACKOFF_SCHEDULE) - 1)
+                entry["next_retry_at"] = now + BACKOFF_SCHEDULE[backoff_idx]
+                requeue.append(json.dumps(entry))
+                logger.info(
+                    f"[retry-worker] Re-enqueued webhook to {url} — "
+                    f"attempt {entry['attempt']}, next retry in {BACKOFF_SCHEDULE[backoff_idx]}s"
+                )
 
     # Put deferred/re-queued entries back
     if requeue:
