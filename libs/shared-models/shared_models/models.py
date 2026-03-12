@@ -29,7 +29,7 @@ class APIToken(Base):
     token = Column(String(255), unique=True, index=True, nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     created_at = Column(DateTime, server_default=func.now())
-    
+
     user = relationship("User", back_populates="api_tokens")
 
 class Meeting(Base):

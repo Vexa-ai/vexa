@@ -43,4 +43,5 @@ async def get_current_user(api_key: str = Security(api_key_header),
         )
 
     _token_obj, user_obj = token_user
-    return user_obj 
+
+    return user_obj

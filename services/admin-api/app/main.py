@@ -362,8 +362,8 @@ async def update_user(user_id: int, user_update: UserUpdate, db: AsyncSession = 
         if new_data is not None:
             logger.info(f"Admin updating data field for user ID: {user_id}. Current: {db_user.data}, New: {new_data}")
             
-            # Replace the data field entirely (rather than merging)
-            db_user.data = new_data
+            # Merge incoming keys into existing data (preserves keys not in the patch)
+            db_user.data = {**(db_user.data or {}), **new_data}
             
             # Flag the 'data' field as modified for SQLAlchemy to detect the change
             attributes.flag_modified(db_user, "data")
