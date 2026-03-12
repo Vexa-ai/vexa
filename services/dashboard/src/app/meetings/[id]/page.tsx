@@ -27,9 +27,9 @@ import {
   Trash2,
   Zap,
   Code,
-  Copy,
   Download,
-  Music,
+  ClipboardCopy,
+  Share,
 } from "lucide-react";
 import { AudioPlayer, type AudioPlayerHandle, type AudioFragment } from "@/components/recording/audio-player";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -85,6 +85,7 @@ import {
 import { getCookie, setCookie } from "@/lib/cookies";
 import { DocsLink } from "@/components/docs/docs-link";
 import { DecisionsPanel } from "@/components/decisions/decisions-panel";
+import { WebhookDeliverySection } from "@/components/webhooks/webhook-delivery-section";
 
 export default function MeetingDetailPage() {
   const params = useParams();
@@ -267,9 +268,9 @@ export default function MeetingDetailPage() {
       currentMeeting?.platform &&
       currentMeeting?.platform_specific_id
     ) {
-      fetchTranscripts(currentMeeting.platform, currentMeeting.platform_specific_id);
+      fetchTranscripts(currentMeeting.platform, currentMeeting.platform_specific_id, String(currentMeeting.id));
     }
-  }, [fetchMeeting, fetchTranscripts, meetingId, currentMeeting?.platform, currentMeeting?.platform_specific_id]);
+  }, [fetchMeeting, fetchTranscripts, meetingId, currentMeeting?.platform, currentMeeting?.platform_specific_id, currentMeeting?.id]);
 
   // Handle stopping the bot
   const handleStopBot = useCallback(async () => {
@@ -280,7 +281,7 @@ export default function MeetingDetailPage() {
       // Optimistic transition to post-meeting UI immediately after stop is accepted.
       setForcePostMeetingMode(true);
       updateMeetingStatus(String(currentMeeting.id), "stopping");
-      fetchTranscripts(currentMeeting.platform, currentMeeting.platform_specific_id);
+      fetchTranscripts(currentMeeting.platform, currentMeeting.platform_specific_id, String(currentMeeting.id));
       toast.success("Bot stopped", {
         description: "The transcription has been stopped.",
       });
@@ -375,36 +376,6 @@ export default function MeetingDetailPage() {
     const filename = generateFilename(currentMeeting, format);
     downloadFile(content, filename, mimeType);
   }, [currentMeeting, transcripts]);
-
-  // Copy transcript to clipboard
-  const handleCopyTranscript = useCallback(async () => {
-    if (transcripts.length === 0) {
-      toast.error("No transcript to copy");
-      return;
-    }
-    const text = transcripts
-      .map(s => `[${s.speaker || "Unknown"}] ${s.text}`)
-      .join("\n");
-    try {
-      await navigator.clipboard.writeText(text);
-      toast.success("Transcript copied to clipboard");
-    } catch {
-      toast.error("Failed to copy to clipboard");
-    }
-  }, [transcripts]);
-
-  // Download recording audio file
-  const handleDownloadAudio = useCallback((rec: (typeof recordings)[0]) => {
-    const audioMedia = rec.media_files.find(mf => mf.type === "audio");
-    if (!audioMedia) return;
-    const url = vexaAPI.getRecordingAudioUrl(rec.id, audioMedia.id);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `recording-${rec.session_uid.slice(0, 8)}.${audioMedia.format || "wav"}`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  }, []);
 
   // Format transcript for ChatGPT
   const formatTranscriptForChatGPT = useCallback((meeting: Meeting, segments: typeof transcripts): string => {
@@ -574,16 +545,6 @@ export default function MeetingDetailPage() {
     }
   }, [currentMeeting]);
 
-  // Poll for status updates in early states (requested/joining) as a fallback
-  // in case the WebSocket subscription missed the status change event
-  useEffect(() => {
-    if (!isEarlyState || !meetingId) return;
-    const interval = setInterval(() => {
-      refreshMeeting(meetingId);
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [isEarlyState, meetingId, refreshMeeting]);
-
   // Show detected language from backend first (meeting.data.languages or from segments), then user can change via toggle
   const validLangCodes = useMemo(
     () => new Set(WHISPER_LANGUAGE_CODES),
@@ -610,22 +571,23 @@ export default function MeetingDetailPage() {
   // Use specific properties as dependencies to avoid unnecessary refetches
   const meetingPlatform = currentMeeting?.platform;
   const meetingNativeId = currentMeeting?.platform_specific_id;
+  const meetingNumericId = currentMeeting?.id ? String(currentMeeting.id) : undefined;
   const meetingStatus = currentMeeting?.status;
 
   useEffect(() => {
     // Always refresh transcript/recording artifacts when entering post-meeting flow.
     if ((meetingStatus === "stopping" || meetingStatus === "completed") && meetingPlatform && meetingNativeId) {
-      fetchTranscripts(meetingPlatform, meetingNativeId);
+      fetchTranscripts(meetingPlatform, meetingNativeId, meetingNumericId);
       fetchChatMessages(meetingPlatform, meetingNativeId);
       return;
     }
 
     // During non-WS states, use REST fetch as source of truth.
     if (!shouldUseWebSocket && meetingPlatform && meetingNativeId) {
-      fetchTranscripts(meetingPlatform, meetingNativeId);
+      fetchTranscripts(meetingPlatform, meetingNativeId, meetingNumericId);
       fetchChatMessages(meetingPlatform, meetingNativeId);
     }
-  }, [meetingStatus, shouldUseWebSocket, meetingPlatform, meetingNativeId, fetchTranscripts, fetchChatMessages]);
+  }, [meetingStatus, shouldUseWebSocket, meetingPlatform, meetingNativeId, meetingNumericId, fetchTranscripts, fetchChatMessages]);
 
   // Also fetch chat messages for active meetings (WS handles real-time, REST bootstraps)
   useEffect(() => {
@@ -735,13 +697,12 @@ export default function MeetingDetailPage() {
       : null;
   const isPostMeetingFlow =
     forcePostMeetingMode ||
-    currentMeeting.status === "stopping" || currentMeeting.status === "completed" || currentMeeting.status === "failed";
-  const recordingExplicitlyDisabled = currentMeeting.data?.recording_enabled === false;
+    currentMeeting.status === "stopping" || currentMeeting.status === "completed";
   const hasRecordingEntries = recordings.length > 0;
   const noAudioRecordingForMeeting =
-    recordingExplicitlyDisabled ||
-    (["completed", "failed"].includes(currentMeeting.status) && !hasRecordingEntries);
-  const canUseSegmentPlayback = hasRecordingAudio;
+    (currentMeeting.data?.recording_enabled === false && !hasRecordingAudio) ||
+    (currentMeeting.status === "completed" && !hasRecordingEntries);
+  const canUseSegmentPlayback = isPostMeetingFlow && !noAudioRecordingForMeeting;
   const recordingTopBar = isPostMeetingFlow ? (
     hasRecordingAudio ? (
       <AudioPlayer
@@ -873,7 +834,7 @@ export default function MeetingDetailPage() {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          {(currentMeeting.status === "active" || currentMeeting.status === "completed" || currentMeeting.status === "failed" || currentMeeting.status === "stopping") && transcripts.length > 0 && (
+          {(currentMeeting.status === "active" || currentMeeting.status === "completed") && transcripts.length > 0 && (
             <div className="flex items-center gap-2">
               <AIChatPanel
                 meeting={currentMeeting}
@@ -892,10 +853,10 @@ export default function MeetingDetailPage() {
                     <Button
                       variant="ghost"
                       className="gap-2 rounded-r-none border-r-0 hover:bg-muted h-full"
-                      onClick={handleSendToChatGPT}
-                      title="Export transcript to AI"
+                      onClick={() => handleExport("txt")}
+                      title="Export"
                     >
-                      <Download className="h-4 w-4" />
+                      <Share className="h-4 w-4" />
                       <span>Export</span>
                     </Button>
                     <DropdownMenuTrigger asChild>
@@ -939,33 +900,42 @@ export default function MeetingDetailPage() {
                     Configure Prompt
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={handleCopyTranscript} disabled={transcripts.length === 0}>
-                    <Copy className="h-4 w-4 mr-2" />
-                    Copy to clipboard
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={() => handleExport("txt")} disabled={transcripts.length === 0}>
+                  <DropdownMenuItem onClick={() => handleExport("txt")}>
                     <FileText className="h-4 w-4 mr-2" />
                     Download .txt
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => handleExport("srt")} disabled={transcripts.length === 0}>
-                    <FileVideo className="h-4 w-4 mr-2" />
-                    Download .srt
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => handleExport("json")} disabled={transcripts.length === 0}>
+                  <DropdownMenuItem onClick={() => handleExport("json")}>
                     <FileJson className="h-4 w-4 mr-2" />
                     Download .json
                   </DropdownMenuItem>
-                  {recordings.filter(r => r.media_files?.some(mf => mf.type === "audio")).length > 0 && (
-                    <>
-                      <DropdownMenuSeparator />
-                      {recordings.filter(r => r.media_files?.some(mf => mf.type === "audio")).map((rec) => (
-                        <DropdownMenuItem key={rec.id} onClick={() => handleDownloadAudio(rec)}>
-                          <Music className="h-4 w-4 mr-2" />
-                          Download audio{recordings.length > 1 ? ` (${rec.session_uid.slice(0, 8)})` : ""}
-                        </DropdownMenuItem>
-                      ))}
-                    </>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={() => {
+                      if (!currentMeeting || transcripts.length === 0) return;
+                      const text = exportToTxt(currentMeeting, transcripts);
+                      navigator.clipboard.writeText(text).then(() => {
+                        toast.success("Transcript copied to clipboard");
+                      });
+                    }}
+                    disabled={transcripts.length === 0}
+                  >
+                    <ClipboardCopy className="h-4 w-4 mr-2" />
+                    Copy to clipboard
+                  </DropdownMenuItem>
+                  {hasRecordingAudio && (
+                    <DropdownMenuItem
+                      onClick={() => {
+                        if (recordingFragments.length > 0) {
+                          const link = document.createElement("a");
+                          link.href = recordingFragments[0].src;
+                          link.download = `${currentMeeting?.data?.name || currentMeeting?.data?.title || "recording"}.webm`;
+                          link.click();
+                        }
+                      }}
+                    >
+                      <Download className="h-4 w-4 mr-2" />
+                      Download audio
+                    </DropdownMenuItem>
                   )}
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -1236,14 +1206,8 @@ export default function MeetingDetailPage() {
 
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="icon" className="h-7 w-7 ml-0.5">
-                      <Image
-                        src="/icons/icons8-chatgpt-100.png"
-                        alt="AI"
-                        width={12}
-                        height={12}
-                        className="object-contain dark:invert"
-                      />
+                    <Button variant="outline" size="icon" className="h-7 w-7 ml-0.5" title="Export">
+                      <Share className="h-3.5 w-3.5" />
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
@@ -1277,33 +1241,42 @@ export default function MeetingDetailPage() {
                       </Link>
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={handleCopyTranscript} disabled={transcripts.length === 0}>
-                      <Copy className="h-4 w-4 mr-2" />
-                      Copy to clipboard
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
                     <DropdownMenuItem onClick={() => handleExport("txt")} disabled={transcripts.length === 0}>
                       <FileText className="h-4 w-4 mr-2" />
                       Download .txt
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleExport("srt")} disabled={transcripts.length === 0}>
-                      <FileVideo className="h-4 w-4 mr-2" />
-                      Download .srt
                     </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => handleExport("json")} disabled={transcripts.length === 0}>
                       <FileJson className="h-4 w-4 mr-2" />
                       Download .json
                     </DropdownMenuItem>
-                    {recordings.filter(r => r.media_files?.some(mf => mf.type === "audio")).length > 0 && (
-                      <>
-                        <DropdownMenuSeparator />
-                        {recordings.filter(r => r.media_files?.some(mf => mf.type === "audio")).map((rec) => (
-                          <DropdownMenuItem key={rec.id} onClick={() => handleDownloadAudio(rec)}>
-                            <Music className="h-4 w-4 mr-2" />
-                            Download audio{recordings.length > 1 ? ` (${rec.session_uid.slice(0, 8)})` : ""}
-                          </DropdownMenuItem>
-                        ))}
-                      </>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={() => {
+                        if (!currentMeeting || transcripts.length === 0) return;
+                        const text = exportToTxt(currentMeeting, transcripts);
+                        navigator.clipboard.writeText(text).then(() => {
+                          toast.success("Transcript copied to clipboard");
+                        });
+                      }}
+                      disabled={transcripts.length === 0}
+                    >
+                      <ClipboardCopy className="h-4 w-4 mr-2" />
+                      Copy to clipboard
+                    </DropdownMenuItem>
+                    {hasRecordingAudio && (
+                      <DropdownMenuItem
+                        onClick={() => {
+                          if (recordingFragments.length > 0) {
+                            const link = document.createElement("a");
+                            link.href = recordingFragments[0].src;
+                            link.download = `${currentMeeting?.data?.name || currentMeeting?.data?.title || "recording"}.webm`;
+                            link.click();
+                          }
+                        }}
+                      >
+                        <Download className="h-4 w-4 mr-2" />
+                        Download audio
+                      </DropdownMenuItem>
                     )}
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -1466,8 +1439,7 @@ export default function MeetingDetailPage() {
           {/* Keep transcript visible through stopping -> completed transition */}
           {(currentMeeting.status === "active" ||
             currentMeeting.status === "stopping" ||
-            currentMeeting.status === "completed" ||
-            currentMeeting.status === "failed") && (
+            currentMeeting.status === "completed") && (
             <TranscriptViewer
               meeting={currentMeeting}
               segments={transcripts}
@@ -1816,6 +1788,13 @@ export default function MeetingDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Webhook Delivery Section */}
+      {currentMeeting.status === "completed" && (
+        <div className="mt-6">
+          <WebhookDeliverySection meetingId={meetingId} />
+        </div>
+      )}
 
       {/* Decisions slide-over panel */}
       {/* Backdrop */}
