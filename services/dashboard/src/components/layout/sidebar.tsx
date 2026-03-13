@@ -20,6 +20,7 @@ import {
   CreditCard,
   Webhook,
   User,
+  Bug,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -360,6 +361,16 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
             >
               <BookOpen className="h-4 w-4" />
               API Docs
+            </a>
+            <a
+              href="https://github.com/Vexa-ai/vexa/issues/new?labels=bug,hosted&title=[Hosted]%20&body=%23%23%20Environment%0AHosted%20service%20(dashboard.vexa.ai)%0A%0A%23%23%20Description%0A%0A%23%23%20Steps%20to%20reproduce%0A1.%20%0A%0A%23%23%20Expected%20behavior%0A%0A%23%23%20Actual%20behavior%0A"
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={onClose}
+              className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            >
+              <Bug className="h-4 w-4" />
+              Report a Bug
             </a>
 
             <div className="px-3">
