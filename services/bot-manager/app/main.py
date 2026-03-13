@@ -50,7 +50,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import and_, desc, func
 from sqlalchemy.orm import attributes
-from datetime import datetime # For start_time
+from datetime import datetime, timezone # For start_time
 
 # Delayed stop timeout for fallback container shutdown after stop command.
 # Keep this above typical recording upload time to avoid interrupting uploads.
@@ -727,8 +727,15 @@ async def request_bot(
             meeting_data['meeting_url'] = req.meeting_url
         if req.teams_base_host:
             meeting_data['teams_base_host'] = req.teams_base_host
-        meeting_data['transcribe_enabled'] = True if req.transcribe_enabled is None else bool(req.transcribe_enabled)
-        meeting_data['recording_enabled'] = bool(req.recording_enabled) if req.recording_enabled is not None else False
+        transcribe = True if req.transcribe_enabled is None else bool(req.transcribe_enabled)
+        meeting_data['transcribe_enabled'] = transcribe
+        # Auto-enable recording when transcription is off (record-only mode)
+        if req.recording_enabled is not None:
+            meeting_data['recording_enabled'] = bool(req.recording_enabled)
+        elif not transcribe:
+            meeting_data['recording_enabled'] = True
+        else:
+            meeting_data['recording_enabled'] = False
 
         new_meeting = Meeting(
             user_id=current_user.id,
@@ -2989,6 +2996,171 @@ async def _find_active_meeting(
 
 
 # --- END Voice Agent Endpoints ---
+
+
+# --- Deferred Transcription Endpoint ---
+
+class TranscribeRequest(BaseModel):
+    language: Optional[str] = None  # ISO 639 code or None for auto-detect
+
+
+def _map_speakers_to_segments(speaker_events, segments):
+    """Map speaker names to transcription segments using speaking_start/stop events."""
+    ranges = []
+    active = {}
+    for event in sorted(speaker_events, key=lambda e: e.get('relative_timestamp_ms', 0)):
+        name = event.get('participant_name', 'Unknown')
+        ts_sec = event.get('relative_timestamp_ms', 0) / 1000.0
+        if event.get('event_type') == 'speaking_start':
+            active[name] = ts_sec
+        elif event.get('event_type') == 'speaking_stop' and name in active:
+            ranges.append((name, active.pop(name), ts_sec))
+    for name, start in active.items():
+        ranges.append((name, start, float('inf')))
+
+    for seg in segments:
+        best_speaker = "Unknown"
+        best_overlap = 0
+        for speaker, r_start, r_end in ranges:
+            overlap = max(0, min(seg['end'], r_end) - max(seg['start'], r_start))
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_speaker = speaker
+        seg['speaker'] = best_speaker
+    return segments
+
+
+@app.post("/meetings/{meeting_id}/transcribe",
+          summary="Transcribe a meeting recording",
+          tags=["Meetings"])
+async def transcribe_meeting_recording(
+    meeting_id: int,
+    req: TranscribeRequest = TranscribeRequest(),
+    auth: tuple = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """Transcribe a completed meeting's recording using Fireworks Whisper API."""
+    token, current_user = auth
+
+    # 1. Look up meeting
+    meeting = await db.get(Meeting, meeting_id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    if meeting.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    # 2. Check meeting status
+    if meeting.status != MeetingStatus.COMPLETED.value:
+        raise HTTPException(status_code=400, detail="Meeting is not completed yet")
+
+    # 3. Check no transcriptions exist yet
+    stmt = select(func.count()).select_from(Transcription).where(Transcription.meeting_id == meeting_id)
+    result = await db.execute(stmt)
+    count = result.scalar()
+    if count > 0:
+        raise HTTPException(status_code=409, detail="Meeting already has transcription")
+
+    # 4. Get recording audio
+    audio_bytes = None
+    storage = get_storage_client()
+
+    # Try meeting_data recordings first (default mode)
+    meeting_data = dict(meeting.data or {})
+    for rec in meeting_data.get('recordings', []):
+        if isinstance(rec, dict):
+            for mf in rec.get('media_files', []):
+                if isinstance(mf, dict) and mf.get('type') == 'audio' and mf.get('storage_path'):
+                    try:
+                        audio_bytes = storage.download_file(mf['storage_path'])
+                    except Exception:
+                        logger.warning(f"Failed to download from meeting_data path: {mf['storage_path']}")
+                    if audio_bytes:
+                        break
+        if audio_bytes:
+            break
+
+    # Fallback to recordings table
+    if not audio_bytes:
+        stmt = select(Recording).where(Recording.meeting_id == meeting_id, Recording.status == 'completed')
+        result = await db.execute(stmt)
+        recordings = result.scalars().all()
+        for recording in recordings:
+            await db.refresh(recording, ["media_files"])
+            for mf in recording.media_files:
+                if mf.type == 'audio' and mf.storage_path:
+                    try:
+                        audio_bytes = storage.download_file(mf.storage_path)
+                    except Exception:
+                        logger.warning(f"Failed to download from recording table path: {mf.storage_path}")
+                    if audio_bytes:
+                        break
+            if audio_bytes:
+                break
+
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="No recording available for this meeting")
+
+    # 5. Call Fireworks API
+    fireworks_key = os.getenv("REMOTE_TRANSCRIBER_API_KEY")
+    if not fireworks_key:
+        raise HTTPException(status_code=503, detail="Transcription service not configured")
+
+    fireworks_url = os.getenv("REMOTE_TRANSCRIBER_URL", "https://audio-turbo.api.fireworks.ai/v1/audio/transcriptions")
+    fireworks_model = os.getenv("REMOTE_TRANSCRIBER_MODEL", "whisper-v3-turbo")
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            files = {"file": ("audio.wav", audio_bytes, "audio/wav")}
+            data = {"model": fireworks_model, "response_format": "verbose_json"}
+            if req.language:
+                data["language"] = req.language
+            resp = await client.post(
+                fireworks_url,
+                headers={"Authorization": f"Bearer {fireworks_key}"},
+                files=files,
+                data=data,
+            )
+        if resp.status_code != 200:
+            logger.error(f"Fireworks API error {resp.status_code}: {resp.text}")
+            raise HTTPException(status_code=502, detail="Transcription service error")
+        result = resp.json()
+    except httpx.HTTPError as e:
+        logger.error(f"Fireworks API request failed: {e}")
+        raise HTTPException(status_code=502, detail="Transcription service error")
+
+    # 6. Parse response
+    segments = result.get('segments', [])
+    detected_language = result.get('language', req.language or 'unknown')
+
+    # 7. Map speakers
+    speaker_events = meeting_data.get('speaker_events', [])
+    mapped_segments = _map_speakers_to_segments(speaker_events, segments)
+
+    # 8. Write to transcriptions table
+    session_uid = meeting_data.get('session_uid', str(meeting.id))
+    for seg in mapped_segments:
+        t = Transcription(
+            meeting_id=meeting.id,
+            start_time=seg['start'],
+            end_time=seg['end'],
+            text=seg['text'].strip(),
+            speaker=seg.get('speaker', 'Unknown'),
+            language=detected_language,
+            session_uid=session_uid,
+        )
+        db.add(t)
+
+    # 9. Update meeting.data
+    meeting_data['transcribe_enabled'] = True
+    meeting_data['transcribed_at'] = datetime.now(timezone.utc).isoformat()
+    meeting_data['transcription_language'] = detected_language
+    meeting.data = meeting_data
+    await db.commit()
+
+    # 10. Return result
+    return {"status": "completed", "segment_count": len(mapped_segments), "language": detected_language}
+
+# --- END Deferred Transcription Endpoint ---
 
 
 if __name__ == "__main__":

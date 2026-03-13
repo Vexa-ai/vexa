@@ -481,6 +481,17 @@ async def update_recording_config_proxy(request: Request):
     url = f"{BOT_MANAGER_URL}/recording-config"
     return await forward_request(app.state.http_client, "PUT", url, request)
 
+# --- Deferred Transcription Route ---
+
+@app.post("/meetings/{meeting_id}/transcribe",
+          tags=["Meetings"],
+          summary="Transcribe a completed meeting recording",
+          dependencies=[Depends(api_key_scheme)])
+async def transcribe_meeting_proxy(meeting_id: int, request: Request):
+    """Forward transcribe request to Bot Manager."""
+    url = f"{BOT_MANAGER_URL}/meetings/{meeting_id}/transcribe"
+    return await forward_request(app.state.http_client, "POST", url, request)
+
 # --- Transcription Collector Routes ---
 @app.get("/meetings",
         tags=["Transcriptions"],
