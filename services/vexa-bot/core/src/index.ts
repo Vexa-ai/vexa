@@ -4,7 +4,8 @@ import { callStatusChangeCallback, mapExitReasonToStatus } from "./services/unif
 import { chromium } from "playwright-extra";
 import { handleGoogleMeet, leaveGoogleMeet } from "./platforms/googlemeet";
 import { handleMicrosoftTeams, leaveMicrosoftTeams } from "./platforms/msteams";
-import { handleZoom, leaveZoom } from "./platforms/zoom";
+import { handleZoom, leaveZoom, leaveZoomWeb } from "./platforms/zoom";
+import { reconfigureZoomWebRecording } from "./platforms/zoom/web/recording";
 import { browserArgs, getBrowserArgs, userAgent } from "./constans";
 import { BotConfig } from "./types";
 import { RecordingService } from "./services/recording";
@@ -15,6 +16,7 @@ import { ScreenContentService, getVirtualCameraInitScript, getVideoBlockInitScri
 import { ScreenShareService } from "./services/screen-share"; // kept for Teams; unused for Google Meet camera-feed approach
 import { createClient, RedisClientType } from 'redis';
 import { Page, Browser } from 'playwright-core';
+import { execSync } from 'child_process';
 // HTTP imports removed - using unified callback service instead
 
 // Module-level variables to store current configuration
@@ -40,6 +42,7 @@ let browserInstance: Browser | null = null;
 
 // --- Recording service reference (set by platform handlers) ---
 let activeRecordingService: RecordingService | null = null;
+let botPaSinkModuleId: string | null = null; // PulseAudio module ID for per-bot sink cleanup
 let currentBotConfig: BotConfig | null = null;
 export function setActiveRecordingService(svc: RecordingService | null): void {
   activeRecordingService = svc;
@@ -376,8 +379,16 @@ const handleRedisMessage = async (message: string, channel: string, page: Page |
           currentLanguage = command.language;
           currentTask = command.task;
 
-          // Trigger browser-side reconfiguration via the exposed function
-          if (page && !page.isClosed()) { // Ensure page exists and is open
+          // Zoom Web uses a Node.js-side WhisperLive (not browser-based) — reconfigure directly
+          const isZoomWeb = process.env.ZOOM_WEB === 'true' && (globalThis as any).botConfig?.platform === 'zoom';
+          if (isZoomWeb) {
+            await reconfigureZoomWebRecording(currentLanguage ?? null, currentTask ?? null);
+            log('[Zoom Web] Reconfigure handled via Node.js WhisperLive reconnect');
+          }
+
+          // Trigger browser-side reconfiguration via the exposed function (for Google Meet / Teams)
+          if (!isZoomWeb) {
+            if (page && !page.isClosed()) { // Ensure page exists and is open
               try {
                   await page.evaluate(
                       ([lang, task]) => {
@@ -413,8 +424,9 @@ const handleRedisMessage = async (message: string, channel: string, page: Page |
               } catch (evalError: any) {
                   log(`Error evaluating reconfiguration script in browser: ${evalError.message}`);
               }
-          } else {
+            } else {
                log("Page not available or closed, cannot send reconfigure command to browser.");
+            }
           }
       } else if (command.action === 'leave') {
         // Mark that a stop was requested via Redis
@@ -518,11 +530,17 @@ async function performGracefulLeave(
 
   let platformLeaveSuccess = false;
 
-  // Handle SDK-based platforms (Zoom) separately - they don't use Playwright page
+  // Handle Zoom separately — SDK mode uses null page, web mode uses browser page
   if (currentPlatform === "zoom") {
     try {
-      log("[Graceful Leave] Attempting Zoom SDK cleanup...");
-      platformLeaveSuccess = await leaveZoom(null); // Zoom doesn't use page
+      const zoomWebMode = process.env.ZOOM_WEB === 'true';
+      if (zoomWebMode) {
+        log("[Graceful Leave] Attempting Zoom Web cleanup...");
+        platformLeaveSuccess = await leaveZoomWeb(page);
+      } else {
+        log("[Graceful Leave] Attempting Zoom SDK cleanup...");
+        platformLeaveSuccess = await leaveZoom(null);
+      }
     } catch (error: any) {
       log(`[Graceful Leave] Zoom cleanup error: ${error.message}`);
       platformLeaveSuccess = false;
@@ -571,7 +589,18 @@ async function performGracefulLeave(
     log(`[Graceful Leave] Voice agent cleanup error: ${vaCleanupErr.message}`);
   }
 
-  // Upload recording if available
+  // Clean up per-bot PulseAudio sink if one was created
+  if (botPaSinkModuleId) {
+    try {
+      execSync(`pactl unload-module ${botPaSinkModuleId}`, { stdio: 'ignore' });
+      log(`[Graceful Leave] Unloaded PulseAudio sink module ${botPaSinkModuleId}`);
+    } catch (e: any) {
+      log(`[Graceful Leave] Warning: Could not unload PulseAudio sink module: ${e.message}`);
+    }
+    botPaSinkModuleId = null;
+  }
+
+  // Upload audio recording if available
   if (activeRecordingService && currentBotConfig?.recordingUploadUrl && currentBotConfig?.token) {
     try {
       log("[Graceful Leave] Uploading recording to bot-manager...");
@@ -996,6 +1025,23 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     log("Redis URL or meeting_id missing, skipping Redis setup.");
   }
   // -------------------------------------------------
+
+  // For Zoom Web: create a per-bot PulseAudio null sink so concurrent bots don't
+  // cross-contaminate each other's audio via the shared zoom_sink.monitor.
+  if (botConfig.platform === 'zoom' && process.env.ZOOM_WEB === 'true') {
+    const sinkName = `bot_sink_${botConfig.meeting_id}`;
+    try {
+      const moduleId = execSync(
+        `pactl load-module module-null-sink sink_name=${sinkName} sink_properties=device.description="BotSink_${botConfig.meeting_id}"`,
+        { stdio: ['ignore', 'pipe', 'ignore'] }
+      ).toString().trim();
+      botPaSinkModuleId = moduleId;
+      process.env.PULSE_SINK = sinkName;
+      log(`[Bot] Per-bot PulseAudio sink created: ${sinkName} (module ${moduleId})`);
+    } catch (e: any) {
+      log(`[Bot] Warning: Could not create per-bot PulseAudio sink: ${e.message}. Falling back to shared zoom_sink.`);
+    }
+  }
 
   // Simple browser setup like simple-bot.js
   if (botConfig.platform === "teams") {

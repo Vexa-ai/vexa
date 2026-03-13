@@ -48,6 +48,19 @@ if [ ! -f "$BROWSER_UTILS" ]; then
   (cd /app/vexa-bot/core && node build-browser-utils.js) || echo "[Entrypoint] Failed to regenerate browser-utils.global.js"
 fi
 
+# Start socat to forward 0.0.0.0:9223 -> 127.0.0.1:9222 so CDP is reachable
+# from outside the container (Playwright ignores --remote-debugging-address=0.0.0.0).
+# We retry in a loop because Chromium takes a few seconds to bind CDP.
+(
+  echo "[Entrypoint] Starting socat CDP forwarder (0.0.0.0:9223 -> 127.0.0.1:9222)..."
+  for i in $(seq 1 30); do
+    if socat TCP-LISTEN:9223,fork,bind=0.0.0.0,reuseaddr TCP:127.0.0.1:9222 2>/dev/null; then
+      break
+    fi
+    sleep 2
+  done
+) &
+
 # Finally, run the bot using the built production wrapper
 # This wrapper (e.g., docker.js generated from docker.ts) will read the BOT_CONFIG env variable.
 node dist/docker.js
