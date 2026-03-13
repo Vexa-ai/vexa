@@ -10,12 +10,18 @@ import {
 } from './selectors';
 
 /**
- * Check if the bot is confirmed inside the meeting (Leave button visible).
+ * Check if the bot is confirmed inside the meeting.
+ * Primary: Leave button visible (footer is showing).
+ * Fallback: .meeting-app container present (footer may be auto-hidden).
  */
 async function isAdmitted(page: Page): Promise<boolean> {
   try {
     const leaveBtn = page.locator(zoomLeaveButtonSelector).first();
-    return await leaveBtn.isVisible({ timeout: 500 });
+    if (await leaveBtn.isVisible({ timeout: 500 })) return true;
+
+    // Footer may be auto-hidden — check for the meeting app container
+    const meetingApp = page.locator(zoomMeetingAppSelector).first();
+    return await meetingApp.isVisible({ timeout: 500 });
   } catch {
     return false;
   }

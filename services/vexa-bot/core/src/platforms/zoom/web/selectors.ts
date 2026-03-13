@@ -98,5 +98,7 @@ export const zoomParticipantNameSelector = '.video-avatar__avatar-footer';
 export const zoomVideoAvatarSelector = '.video-avatar__avatar';
 
 // ---- Leave dialog (after clicking Leave button) ----
-export const zoomLeaveConfirmSelector = 'button:has-text("Leave Meeting")';
+// Verified from live DOM: the "Leave Meeting" button has class leave-meeting-options__btn--danger
+// aria-label is empty so text-based selectors are unreliable; use the CSS class directly
+export const zoomLeaveConfirmSelector = 'button.leave-meeting-options__btn--danger';
 export const zoomEndForAllSelector = 'button:has-text("End for All")';
