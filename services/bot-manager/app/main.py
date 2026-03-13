@@ -843,6 +843,15 @@ async def request_bot(
         # Only set the container ID, keep status as 'requested' until bot confirms it's running
         logger.info(f"Setting container ID {container_id} for meeting {meeting_id} (status remains 'requested' until bot confirms startup)")
         current_meeting_for_bot_launch.bot_container_id = container_id
+        # Store CDP debug port in meeting data so API can expose it
+        cdp_host_port = 19200 + (meeting_id % 800)
+        if not current_meeting_for_bot_launch.data:
+            current_meeting_for_bot_launch.data = {}
+        current_data = dict(current_meeting_for_bot_launch.data)
+        current_data['cdp_port'] = cdp_host_port
+        current_meeting_for_bot_launch.data = current_data
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(current_meeting_for_bot_launch, 'data')
         # current_meeting_for_bot_launch.status = 'active'  # REMOVED - handled by callback
         # current_meeting_for_bot_launch.start_time = datetime.utcnow()  # REMOVED - handled by callback
         await db.commit()
@@ -1747,6 +1756,18 @@ async def internal_upload_recording(
         sample_rate = metadata_obj.get("sample_rate", sample_rate)
         if "is_final" in metadata_obj:
             is_final = _to_bool(metadata_obj.get("is_final"), default=True)
+        _start_time_utc_str = metadata_obj.get("start_time_utc")
+    else:
+        _start_time_utc_str = None
+
+    # Parse start_time_utc from bot metadata — this is when recording actually started,
+    # which we use as created_at so that audio/video alignment is accurate.
+    recording_start_time: Optional[datetime] = None
+    if _start_time_utc_str:
+        try:
+            recording_start_time = datetime.fromisoformat(_start_time_utc_str.replace("Z", "+00:00")).replace(tzinfo=None)
+        except (ValueError, AttributeError):
+            logger.warning(f"Could not parse start_time_utc: {_start_time_utc_str!r}")
 
     if not session_uid:
         raise HTTPException(status_code=422, detail="session_uid is required")
@@ -1802,13 +1823,14 @@ async def internal_upload_recording(
             session_uid=session_uid,
             source="bot",
             status="uploading",
+            **({"created_at": recording_start_time} if recording_start_time else {}),
         )
         db.add(recording)
         await db.flush()  # get recording.id
     storage_recording_id = legacy_recording_id if use_meeting_data_mode else recording.id
 
-    # Upload to object storage
-    storage_path = f"recordings/{user_id}/{storage_recording_id}/{session_uid}.{media_format}"
+    # Upload to object storage (include media_type in path to avoid collision when audio+video both upload)
+    storage_path = f"recordings/{user_id}/{storage_recording_id}/{session_uid}_{media_type}.{media_format}"
     content_type_map = {
         "wav": "audio/wav",
         "webm": "video/webm",
@@ -1831,15 +1853,34 @@ async def internal_upload_recording(
         raise HTTPException(status_code=500, detail="Failed to upload recording to storage")
 
     if get_recording_metadata_mode() == "meeting_data":
-        existing_media = (
-            existing_recording_payload.get("media_files", [{}])[0]
-            if existing_recording_payload else {}
+        # Preserve all existing media files; find the entry for this media_type to update (or append)
+        existing_media_files = list(existing_recording_payload.get("media_files", [])) if existing_recording_payload else []
+        existing_type_idx = next(
+            (i for i, mf in enumerate(existing_media_files) if mf.get("type") == media_type), None
         )
-        media_file_id = existing_media.get("id") or _new_recording_numeric_id()
+        # Reuse existing id for this media type if present, otherwise generate a new one
+        existing_media_entry = existing_media_files[existing_type_idx] if existing_type_idx is not None else {}
+        media_file_id = existing_media_entry.get("id") or _new_recording_numeric_id()
         created_at = (
             existing_recording_payload.get("created_at")
-            if existing_recording_payload else datetime.utcnow().isoformat()
+            if existing_recording_payload
+            else (recording_start_time.isoformat() if recording_start_time else datetime.utcnow().isoformat())
         )
+        new_media_entry = {
+            "id": media_file_id,
+            "type": media_type,
+            "format": media_format,
+            "storage_path": storage_path,
+            "storage_backend": os.environ.get("STORAGE_BACKEND", "minio"),
+            "file_size_bytes": file_size,
+            "duration_seconds": duration_seconds,
+            "metadata": {"sample_rate": sample_rate} if sample_rate else {},
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        if existing_type_idx is not None:
+            existing_media_files[existing_type_idx] = new_media_entry
+        else:
+            existing_media_files.append(new_media_entry)
         recording_payload = {
             "id": legacy_recording_id,
             "meeting_id": meeting.id,
@@ -1849,19 +1890,7 @@ async def internal_upload_recording(
             "status": RecordingStatus.COMPLETED.value if is_final else RecordingStatus.IN_PROGRESS.value,
             "created_at": created_at,
             "completed_at": datetime.utcnow().isoformat() if is_final else None,
-            "media_files": [
-                {
-                    "id": media_file_id,
-                    "type": media_type,
-                    "format": media_format,
-                    "storage_path": storage_path,
-                    "storage_backend": os.environ.get("STORAGE_BACKEND", "minio"),
-                    "file_size_bytes": file_size,
-                    "duration_seconds": duration_seconds,
-                    "metadata": {"sample_rate": sample_rate} if sample_rate else {},
-                    "created_at": datetime.utcnow().isoformat(),
-                }
-            ],
+            "media_files": existing_media_files,
         }
         if existing_recording_index is None:
             recordings.append(recording_payload)

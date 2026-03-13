@@ -9,6 +9,9 @@ const baseBrowserArgs = [
   "--disable-features=IsolateOrigins,site-per-process",
   "--disable-infobars",
   "--disable-gpu",
+  "--window-size=1920,1080",
+  "--window-position=0,0",
+  "--force-device-scale-factor=1",
   "--use-fake-ui-for-media-stream",
   "--use-file-for-fake-video-capture=/dev/null",
   "--allow-running-insecure-content",
@@ -17,7 +20,9 @@ const baseBrowserArgs = [
   "--ignore-certificate-errors",
   "--ignore-ssl-errors",
   "--ignore-certificate-errors-spki-list",
-  "--disable-site-isolation-trials"
+  "--disable-site-isolation-trials",
+  "--remote-debugging-port=9222",
+  "--remote-debugging-address=0.0.0.0",
 ];
 
 /**

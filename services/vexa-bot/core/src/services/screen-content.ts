@@ -357,6 +357,11 @@ export class ScreenContentService {
       'button[aria-label="turn on video"]',
       'button[aria-label="Turn camera on"]',
       'button[aria-label="turn camera on"]',
+      // Zoom Web Client selectors
+      'button[aria-label="start my video"]',
+      'button[aria-label="Start my video"]',
+      'button[aria-label="Start Video"]',
+      'button[aria-label="start video"]',
     ].join(', ')).first();
 
     try {
@@ -379,6 +384,11 @@ export class ScreenContentService {
         'button[aria-label="turn off video"]',
         'button[aria-label="Turn camera off"]',
         'button[aria-label="turn camera off"]',
+        // Zoom Web Client selectors
+        'button[aria-label="stop my video"]',
+        'button[aria-label="Stop my video"]',
+        'button[aria-label="Stop Video"]',
+        'button[aria-label="stop video"]',
       ].join(', ')).first();
       try {
         await turnOffCameraBtn.waitFor({ state: 'visible', timeout: 2000 });
@@ -662,7 +672,7 @@ export class ScreenContentService {
   async toggleCameraForRenegotiation(): Promise<boolean> {
     log('[ScreenContent] Attempting camera toggle (off→on) to force SDP renegotiation...');
 
-    // All known "camera/video off" button selectors for Teams + Meet
+    // All known "camera/video off" button selectors for Teams + Meet + Zoom Web
     const turnOffSelectors = [
       'button[aria-label="Turn off camera"]',
       'button[aria-label="turn off camera"]',
@@ -671,6 +681,11 @@ export class ScreenContentService {
       'button[aria-label="Turn off video"]',
       'button[aria-label="turn off video"]',
       'button[aria-label="Выключить камеру"]',
+      // Zoom Web Client
+      'button[aria-label="stop my video"]',
+      'button[aria-label="Stop my video"]',
+      'button[aria-label="Stop Video"]',
+      'button[aria-label="stop video"]',
     ];
 
     const turnOnSelectors = [
@@ -681,6 +696,11 @@ export class ScreenContentService {
       'button[aria-label="Turn on video"]',
       'button[aria-label="turn on video"]',
       'button[aria-label="Включить камеру"]',
+      // Zoom Web Client
+      'button[aria-label="start my video"]',
+      'button[aria-label="Start my video"]',
+      'button[aria-label="Start Video"]',
+      'button[aria-label="start video"]',
     ];
 
     try {
@@ -1199,10 +1219,10 @@ export function getVirtualCameraInitScript(): string {
           }
         });
 
-        // Disable incoming video to save CPU/memory.
-        // The bot only needs audio for transcription — receiving and rendering
-        // all participants' video wastes ~87% CPU and ~2GB RAM per bot.
-        if (!window.__vexa_voice_agent_enabled) {
+        // Disable incoming video to save CPU/memory, unless video recording is
+        // enabled (in which case we need incoming video to render on the display
+        // for screen capture) or voice agent is active.
+        if (!window.__vexa_voice_agent_enabled && !window.__vexa_video_recording_enabled) {
           pc.addEventListener('track', (event) => {
             if (event.track && event.track.kind === 'video') {
               event.track.enabled = false;
@@ -1274,25 +1294,29 @@ export function getVideoBlockInitScript(): string {
         window.RTCPeerConnection = function(...args) {
           const pc = new OrigRTC(...args);
 
-          // Block incoming video: disable tracks AND stop transceivers
-          pc.addEventListener('track', (event) => {
-            if (event.track && event.track.kind === 'video') {
-              event.track.enabled = false;
-              event.track.stop();
-              console.log('[Vexa] Incoming video track stopped (id=' + event.track.id + ')');
+          // Block incoming video: disable tracks AND stop transceivers.
+          // Skip if video recording is enabled — incoming video must render
+          // on the Xvfb display for ffmpeg screen capture.
+          if (!window.__vexa_video_recording_enabled) {
+            pc.addEventListener('track', (event) => {
+              if (event.track && event.track.kind === 'video') {
+                event.track.enabled = false;
+                event.track.stop();
+                console.log('[Vexa] Incoming video track stopped (id=' + event.track.id + ')');
 
-              // Also set the transceiver to recvonly->inactive to tell the
-              // remote peer we don't want video at all
-              if (event.transceiver) {
-                try {
-                  event.transceiver.direction = 'inactive';
-                  console.log('[Vexa] Video transceiver set to inactive (mid=' + event.transceiver.mid + ')');
-                } catch (e) {
-                  console.warn('[Vexa] Could not set transceiver direction:', e);
+                // Also set the transceiver to recvonly->inactive to tell the
+                // remote peer we don't want video at all
+                if (event.transceiver) {
+                  try {
+                    event.transceiver.direction = 'inactive';
+                    console.log('[Vexa] Video transceiver set to inactive (mid=' + event.transceiver.mid + ')');
+                  } catch (e) {
+                    console.warn('[Vexa] Could not set transceiver direction:', e);
+                  }
                 }
               }
-            }
-          });
+            });
+          }
 
           return pc;
         };

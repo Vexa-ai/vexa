@@ -237,7 +237,10 @@ async def start_bot_container(
             "noOneJoinedTimeout": 120000,   # 2 minutes
             "everyoneLeftTimeout": 60000    # 1 minute
         },
-        "botManagerCallbackUrl": f"{BOT_CALLBACK_BASE_URL}/bots/internal/callback/exited"
+        "botManagerCallbackUrl": f"{BOT_CALLBACK_BASE_URL}/bots/internal/callback/exited",
+        "recordingEnabled": os.getenv("RECORDING_ENABLED", "false").lower() == "true",
+        "captureModes": os.getenv("CAPTURE_MODES", "audio").split(","),
+        "recordingUploadUrl": f"{BOT_CALLBACK_BASE_URL}/internal/recordings/upload"
     }
     if recording_enabled is not None:
         bot_config["recordingEnabled"] = bool(recording_enabled)
@@ -245,6 +248,8 @@ async def start_bot_container(
         bot_config["voiceAgentEnabled"] = bool(voice_agent_enabled)
     if default_avatar_url:
         bot_config["defaultAvatarUrl"] = default_avatar_url
+    if os.getenv("SHOW_AVATAR", "true").lower() == "false":
+        bot_config["showAvatar"] = False
 
     # Remove None values from config
     bot_config = {k: v for k, v in bot_config.items() if v is not None}

@@ -7,14 +7,22 @@ import { prepareZoomRecording } from './strategies/prepare';
 import { startZoomRecording } from './strategies/recording';
 import { startZoomRemovalMonitor } from './strategies/removal';
 import { leaveZoomMeeting } from './strategies/leave';
+import { handleZoomWeb, leaveZoomWeb } from './web/index';
 
 export async function handleZoom(
   botConfig: BotConfig,
-  page: Page | null, // May be null for SDK-only approach
+  page: Page | null,
   gracefulLeaveFunction: (page: Page | null, exitCode: number, reason: string) => Promise<void>
 ): Promise<void> {
 
-  // Define platform strategies for Zoom
+  // Route to web-based Playwright implementation when ZOOM_WEB=true
+  // or when the native SDK addon is not available
+  const useWebClient = process.env.ZOOM_WEB === 'true';
+  if (useWebClient) {
+    return handleZoomWeb(botConfig, page, gracefulLeaveFunction);
+  }
+
+  // Native SDK path (requires proprietary Zoom Meeting SDK binaries)
   const strategies: PlatformStrategies = {
     join: joinZoomMeeting,
     waitForAdmission: waitForZoomAdmission,
@@ -25,9 +33,9 @@ export async function handleZoom(
     leave: leaveZoomMeeting
   };
 
-  // Use shared meeting flow orchestration
   await runMeetingFlow("zoom", botConfig, page, gracefulLeaveFunction, strategies);
 }
 
 // Export for graceful leave in index.ts
 export { leaveZoomMeeting as leaveZoom };
+export { leaveZoomWeb };

@@ -30,6 +30,7 @@ export const BotConfigSchema = z.object({
   // Voice agent / meeting interaction interface
   voiceAgentEnabled: z.boolean().optional(),
   defaultAvatarUrl: z.string().url().optional(),
+  showAvatar: z.boolean().optional(),
 });
 
 
@@ -45,6 +46,13 @@ if (!rawConfig) {
   const parsedConfig = JSON.parse(rawConfig);
   // Validate and parse the config using zod
   const botConfig: BotConfig = BotConfigSchema.parse(parsedConfig) as BotConfig;
+
+  // Apply SHOW_AVATAR env var override (default true)
+  if (process.env.SHOW_AVATAR === 'false') {
+    botConfig.showAvatar = false;
+  } else if (botConfig.showAvatar === undefined) {
+    botConfig.showAvatar = true;
+  }
 
   // Run the bot with the validated configuration
   runBot(botConfig).catch((error) => {

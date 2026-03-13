@@ -243,6 +243,8 @@ async def start_bot_container(
         bot_config_data["voiceAgentEnabled"] = bool(voice_agent_enabled)
     if default_avatar_url:
         bot_config_data["defaultAvatarUrl"] = default_avatar_url
+    if os.getenv("SHOW_AVATAR", "true").lower() == "false":
+        bot_config_data["showAvatar"] = False
     # Remove keys with None values before serializing
     cleaned_config_data = {k: v for k, v in bot_config_data.items() if v is not None}
     bot_config_json = json.dumps(cleaned_config_data)
@@ -278,18 +280,23 @@ async def start_bot_container(
 
     # Add Zoom-specific environment variables if platform is Zoom
     if platform == "zoom":
-        zoom_client_id = os.getenv("ZOOM_CLIENT_ID")
-        zoom_client_secret = os.getenv("ZOOM_CLIENT_SECRET")
-
-        if not zoom_client_id or not zoom_client_secret:
-            logger.error("CRITICAL: ZOOM_CLIENT_ID and ZOOM_CLIENT_SECRET are required for Zoom bots but not set in environment")
-            raise ValueError("ZOOM_CLIENT_ID and ZOOM_CLIENT_SECRET environment variables are required for Zoom platform")
-
-        environment.extend([
-            f"ZOOM_CLIENT_ID={zoom_client_id}",
-            f"ZOOM_CLIENT_SECRET={zoom_client_secret}",
-        ])
-        logger.info("Added Zoom SDK credentials to bot environment")
+        zoom_web = os.getenv("ZOOM_WEB", "").strip()
+        if zoom_web == "true":
+            # Playwright web-based Zoom: SDK credentials not needed
+            environment.append("ZOOM_WEB=true")
+            logger.info("ZOOM_WEB=true: using Playwright web client for Zoom (no SDK credentials needed)")
+        else:
+            # Zoom SDK mode: credentials required
+            zoom_client_id = os.getenv("ZOOM_CLIENT_ID")
+            zoom_client_secret = os.getenv("ZOOM_CLIENT_SECRET")
+            if not zoom_client_id or not zoom_client_secret:
+                logger.error("CRITICAL: ZOOM_CLIENT_ID and ZOOM_CLIENT_SECRET are required for Zoom SDK bots but not set in environment")
+                raise ValueError("ZOOM_CLIENT_ID and ZOOM_CLIENT_SECRET environment variables are required for Zoom SDK platform")
+            environment.extend([
+                f"ZOOM_CLIENT_ID={zoom_client_id}",
+                f"ZOOM_CLIENT_SECRET={zoom_client_secret}",
+            ])
+            logger.info("Added Zoom SDK credentials to bot environment")
 
     # Ensure absolute path for URL encoding here as well
     socket_path_relative = DOCKER_HOST.split('//', 1)[1]
@@ -297,16 +304,54 @@ async def start_bot_container(
     socket_path_encoded = socket_path_abs.replace("/", "%2F")
     socket_url_base = f'http+unix://{socket_path_encoded}'
 
+    # Assign a host port for CDP remote debugging.
+    # Use a port in the range 19200-19999 derived from meeting_id to avoid conflicts.
+    cdp_host_port = 19200 + (meeting_id % 800)
+
+    # Pass VIDEO_HWACCEL to the bot so it knows which ffmpeg encoder to use.
+    # Default is 'none' (software VP9). Set to 'vaapi' or 'nvenc' on the
+    # bot-manager host to enable hardware acceleration.
+    video_hwaccel = os.getenv("VIDEO_HWACCEL", "none").lower()
+    environment.append(f"VIDEO_HWACCEL={video_hwaccel}")
+
+    # Port 9223 is the socat forwarder (0.0.0.0:9223 -> 127.0.0.1:9222).
+    # Chromium ignores --remote-debugging-address=0.0.0.0 when launched via Playwright,
+    # so we use socat in entrypoint.sh to make CDP reachable from other containers.
+    host_config: dict = {
+        "NetworkMode": DOCKER_NETWORK,
+        "AutoRemove": True,
+        "PortBindings": {
+            "9223/tcp": [{"HostIp": "0.0.0.0", "HostPort": str(cdp_host_port)}]
+        },
+    }
+
+    # GPU device passthrough for hardware video encoding:
+    #   VA-API (Intel iGPU / AMD Radeon): pass /dev/dri devices
+    #   NVENC (NVIDIA): pass GPU devices via DeviceRequests
+    if video_hwaccel == "vaapi":
+        host_config["Devices"] = [
+            {"PathOnHost": "/dev/dri", "PathInContainer": "/dev/dri", "CgroupPermissions": "rwm"},
+        ]
+        logger.info("GPU device passthrough enabled: /dev/dri (VA-API)")
+    elif video_hwaccel == "nvenc":
+        host_config["DeviceRequests"] = [
+            {"Driver": "nvidia", "Count": -1, "Capabilities": [["gpu"]]},
+        ]
+        logger.info("GPU device passthrough enabled: NVIDIA runtime (NVENC)")
+
     # Docker API payload for creating a container
     create_payload = {
         "Image": BOT_IMAGE_NAME,
         "Env": environment,
-        "Labels": {"vexa.user_id": str(user_id)}, # *** ADDED Label ***
-        "HostConfig": {
-            "NetworkMode": DOCKER_NETWORK,
-            "AutoRemove": True,
+        "ExposedPorts": {"9223/tcp": {}},
+        "Labels": {
+            "vexa.user_id": str(user_id),
+            "vexa.meeting_id": str(meeting_id),
+            "vexa.cdp_port": str(cdp_host_port),
         },
+        "HostConfig": host_config,
     }
+    logger.info(f"CDP remote debugging will be exposed on host port {cdp_host_port} (via socat:9223) for meeting {meeting_id}")
 
     create_url = f'{socket_url_base}/containers/create?name={container_name}'
     start_url_template = f'{socket_url_base}/containers/{{}}/start'

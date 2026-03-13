@@ -16,6 +16,7 @@ export class RecordingService {
   private sampleRate: number;
   private channels: number;
   private isFinalized: boolean = false;
+  private startTime: number = 0;
 
   constructor(
     private meetingId: number,
@@ -38,6 +39,7 @@ export class RecordingService {
     this.writeStream.write(this.createWavHeader(0));
     this.totalSamples = 0;
     this.isFinalized = false;
+    this.startTime = Date.now();
   }
 
   /**
@@ -131,6 +133,7 @@ export class RecordingService {
       channels: this.channels,
       duration_seconds: durationSeconds,
       file_size_bytes: fileStats.size,
+      start_time_utc: this.startTime ? new Date(this.startTime).toISOString() : undefined,
     });
 
     // Build multipart body
@@ -200,6 +203,19 @@ export class RecordingService {
 
   getFilePath(): string {
     return this.filePath;
+  }
+
+  getStartTime(): number {
+    return this.startTime;
+  }
+
+  /**
+   * Mark the recording start time without opening a WAV stream.
+   * Used by browser-based recordings (Google Meet, Teams) where audio
+   * is captured via MediaRecorder and saved as a blob at the end.
+   */
+  markStartTime(): void {
+    this.startTime = Date.now();
   }
 
   getDurationSeconds(): number {

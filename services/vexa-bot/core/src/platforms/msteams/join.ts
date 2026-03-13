@@ -297,7 +297,7 @@ export async function joinMicrosoftTeams(page: Page, botConfig: BotConfig): Prom
   // We must configure all of these before clicking "Join now" in Step 6.
 
   log("Step 3: Camera handling...");
-  if (botConfig.voiceAgentEnabled) {
+  if (botConfig.voiceAgentEnabled && botConfig.showAvatar !== false) {
     // Voice agent needs camera ON so the virtual camera canvas stream is sent via WebRTC.
     // The getUserMedia + enumerateDevices patches ensure Teams gets our canvas stream.
     // Try to turn camera ON if it's off.
