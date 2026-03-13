@@ -7,6 +7,7 @@ import { Sidebar } from "./sidebar";
 import { JoinModal } from "@/components/join/join-modal";
 import { Toaster } from "@/components/ui/sonner";
 import { AuthProvider } from "@/components/auth/auth-provider";
+import { NotificationBanner } from "@/components/notifications/notification-banner";
 
 // Routes that don't need the full app layout
 const publicRoutes = ["/login", "/auth", "/docs"];
@@ -35,6 +36,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         <div className="flex flex-1 overflow-hidden">
           <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
           <main className="flex-1 overflow-auto p-4 md:p-6">
+            <NotificationBanner />
             {children}
           </main>
         </div>

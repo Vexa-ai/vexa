@@ -8,12 +8,15 @@ interface Notification {
   id: string;
   type: "maintenance" | "incident" | "announcement";
   title: string;
-  message: string;
+  body: string;
   link?: string;
-  link_text?: string;
+  active_from: string;
+  active_until: string;
 }
 
-const DISMISSED_KEY = "vexa-dismissed-notifications";
+const DISMISSED_KEY = "dismissed-notifications";
+const BLOG_URL =
+  process.env.NEXT_PUBLIC_BLOG_URL || "https://blog.vexa.ai";
 
 function getDismissedIds(): string[] {
   if (typeof window === "undefined") return [];
@@ -24,13 +27,29 @@ function getDismissedIds(): string[] {
   }
 }
 
-function dismissNotification(id: string) {
-  const dismissed = getDismissedIds();
-  if (!dismissed.includes(id)) {
-    dismissed.push(id);
-    localStorage.setItem(DISMISSED_KEY, JSON.stringify(dismissed));
-  }
-}
+const typeConfig = {
+  maintenance: {
+    bg: "bg-amber-500/10",
+    icon: "text-amber-400",
+    text: "text-amber-200",
+    body: "text-amber-200/70",
+    link: "text-amber-300 hover:text-amber-100",
+  },
+  incident: {
+    bg: "bg-red-500/10",
+    icon: "text-red-400",
+    text: "text-red-200",
+    body: "text-red-200/70",
+    link: "text-red-300 hover:text-red-100",
+  },
+  announcement: {
+    bg: "bg-sky-500/10",
+    icon: "text-sky-400",
+    text: "text-sky-200",
+    body: "text-sky-200/70",
+    link: "text-sky-300 hover:text-sky-100",
+  },
+} as const;
 
 export function NotificationBanner() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -39,88 +58,77 @@ export function NotificationBanner() {
   useEffect(() => {
     setDismissed(getDismissedIds());
 
-    // Fetch notifications from static JSON or blog API
     async function fetchNotifications() {
       try {
-        const response = await fetch("/api/notifications");
-        if (!response.ok) return;
-        const data = await response.json();
-        setNotifications(data.notifications || []);
+        const resp = await fetch(`${BLOG_URL}/notifications.json`, {
+          cache: "no-store",
+        });
+        if (!resp.ok) return;
+        const data: Notification[] = await resp.json();
+        const now = new Date();
+        const active = data.filter((n) => {
+          const from = new Date(n.active_from);
+          const until = new Date(n.active_until);
+          return now >= from && now <= until;
+        });
+        setNotifications(active);
       } catch {
-        // Silent fail — notifications are non-critical
+        // Notifications are optional — fail silently
       }
     }
     fetchNotifications();
   }, []);
+
+  function dismiss(id: string) {
+    const updated = [...dismissed, id];
+    setDismissed(updated);
+    try {
+      localStorage.setItem(DISMISSED_KEY, JSON.stringify(updated));
+    } catch {}
+  }
 
   const visible = notifications.filter((n) => !dismissed.includes(n.id));
   if (visible.length === 0) return null;
 
   return (
     <div className="space-y-2">
-      {visible.map((notification) => (
-        <div
-          key={notification.id}
-          className={cn(
-            "rounded-lg border px-4 py-3 flex items-center justify-between",
-            notification.type === "maintenance" &&
-              "border-amber-800/30 bg-amber-950/20",
-            notification.type === "incident" &&
-              "border-red-800/30 bg-red-950/20",
-            notification.type === "announcement" &&
-              "border-blue-800/30 bg-blue-950/20"
-          )}
-        >
-          <div className="flex items-center gap-3">
-            <Bell
-              className={cn(
-                "h-4 w-4 flex-shrink-0",
-                notification.type === "maintenance" && "text-amber-400",
-                notification.type === "incident" && "text-red-400",
-                notification.type === "announcement" && "text-blue-400"
+      {visible.map((n) => {
+        const s = typeConfig[n.type] || typeConfig.announcement;
+        return (
+          <div
+            key={n.id}
+            className={cn("rounded-lg px-4 py-3 flex items-center gap-3", s.bg)}
+          >
+            <Bell className={cn("h-4 w-4 flex-shrink-0", s.icon)} />
+            <p className="flex-1 text-sm">
+              <span className={cn("font-medium", s.text)}>{n.title}</span>
+              {n.body && (
+                <span className={cn("ml-1", s.body)}>{n.body}</span>
               )}
-            />
-            <p
-              className={cn(
-                "text-sm",
-                notification.type === "maintenance" && "text-amber-300",
-                notification.type === "incident" && "text-red-300",
-                notification.type === "announcement" && "text-blue-300"
-              )}
-            >
-              {notification.title}
-              {notification.message && (
-                <>
-                  {" "}
-                  <span className="opacity-60">{notification.message}</span>
-                </>
-              )}
-              {notification.link && (
-                <>
-                  {" "}
-                  <a
-                    href={notification.link}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="underline hover:opacity-80"
-                  >
-                    {notification.link_text || "Details"}
-                  </a>
-                </>
+              {n.link && (
+                <a
+                  href={n.link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={cn(
+                    "ml-1 underline underline-offset-2",
+                    s.link
+                  )}
+                >
+                  Read more
+                </a>
               )}
             </p>
+            <button
+              onClick={() => dismiss(n.id)}
+              className="flex-shrink-0 p-1 rounded-md text-muted-foreground/40 hover:text-foreground transition-opacity"
+              aria-label="Dismiss"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
           </div>
-          <button
-            onClick={() => {
-              dismissNotification(notification.id);
-              setDismissed((prev) => [...prev, notification.id]);
-            }}
-            className="text-xs text-muted-foreground hover:text-foreground ml-4 flex-shrink-0"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

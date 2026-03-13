@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
-import { Plus, RefreshCw, CreditCard, Video, Loader2 } from "lucide-react";
+import { Plus, RefreshCw, CreditCard, Video, Loader2, Search } from "lucide-react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { format, formatDistanceToNow } from "date-fns";
@@ -21,7 +21,7 @@ import type { Platform, MeetingStatus, Meeting } from "@/types/vexa";
 import { getDetailedStatus } from "@/types/vexa";
 import { DocsLink } from "@/components/docs/docs-link";
 import { getWebappUrl } from "@/lib/docs/webapp-url";
-import { NotificationBanner } from "@/components/notifications/notification-banner";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { usePendingMeeting } from "@/hooks/use-pending-meeting";
 
@@ -74,6 +74,7 @@ export default function MeetingsPage() {
   const { meetings, isLoadingMeetings, fetchMeetings, error, subscriptionRequired } = useMeetingsStore();
   const openJoinModal = useJoinModalStore((state) => state.openModal);
 
+  const [searchQuery, setSearchQuery] = useState("");
   const [platformFilter, setPlatformFilter] = useState<Platform | "all">("all");
   const [statusFilter, setStatusFilter] = useState<MeetingStatus | "all">("all");
 
@@ -85,9 +86,15 @@ export default function MeetingsPage() {
     return meetings.filter((meeting) => {
       if (platformFilter !== "all" && meeting.platform !== platformFilter) return false;
       if (statusFilter !== "all" && meeting.status !== statusFilter) return false;
+      if (searchQuery.trim()) {
+        const q = searchQuery.trim().toLowerCase();
+        const name = (meeting.data?.name || meeting.data?.title || "").toLowerCase();
+        const nativeId = (meeting.platform_specific_id || "").toLowerCase();
+        if (!name.includes(q) && !nativeId.includes(q)) return false;
+      }
       return true;
     });
-  }, [meetings, platformFilter, statusFilter]);
+  }, [meetings, platformFilter, statusFilter, searchQuery]);
 
   const handleRefresh = () => fetchMeetings();
 
@@ -97,8 +104,6 @@ export default function MeetingsPage() {
 
   return (
     <div className="space-y-6">
-      <NotificationBanner />
-
       {subscriptionRequired && (
         <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -128,6 +133,15 @@ export default function MeetingsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search meetings..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-[200px] pl-8"
+            />
+          </div>
           <Select value={platformFilter} onValueChange={(v) => setPlatformFilter(v as Platform | "all")}>
             <SelectTrigger className="w-[150px]">
               <SelectValue placeholder="All Platforms" />
@@ -204,11 +218,11 @@ export default function MeetingsPage() {
                       <div className="flex flex-col items-center gap-2">
                         <Video className="h-8 w-8 text-muted-foreground/50" />
                         <p className="text-sm text-muted-foreground">
-                          {platformFilter !== "all" || statusFilter !== "all"
+                          {searchQuery.trim() || platformFilter !== "all" || statusFilter !== "all"
                             ? "No meetings match your filters"
                             : "No meetings yet"}
                         </p>
-                        {platformFilter === "all" && statusFilter === "all" && !subscriptionRequired && (
+                        {!searchQuery.trim() && platformFilter === "all" && statusFilter === "all" && !subscriptionRequired && (
                           <Button onClick={openJoinModal} size="sm" variant="outline" className="mt-2">
                             <Plus className="mr-2 h-3.5 w-3.5" />
                             Join your first meeting

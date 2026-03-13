@@ -6,7 +6,7 @@
 services:
   # Postgres service for local database
   postgres:
-    image: postgres:15-alpine
+    image: postgres:17-alpine
     environment:
       - POSTGRES_DB=${DB_NAME:-vexa}
       - POSTGRES_USER=${DB_USER:-postgres}

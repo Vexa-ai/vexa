@@ -272,40 +272,55 @@ export function JoinForm({ onSuccess }: JoinFormProps) {
                 type="button"
                 role="radio"
                 aria-checked={platform === "zoom"}
+                aria-disabled={isHosted}
                 onClick={() => {
+                  if (isHosted) return;
                   setPlatform("zoom");
                   setMeetingId("");
                   setTouched({});
                 }}
                 className={cn(
                   "relative flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2",
-                  platform === "zoom"
+                  isHosted
+                    ? "border-muted opacity-50 cursor-not-allowed"
+                    : platform === "zoom"
                     ? "border-blue-400 bg-blue-50/50 dark:bg-blue-950/30 shadow-sm shadow-blue-400/20"
                     : "border-muted hover:border-blue-400/50 hover:bg-blue-50/30 dark:hover:bg-blue-950/10"
                 )}
               >
-                {platform === "zoom" && (
+                {!isHosted && platform === "zoom" && (
                   <div className="absolute top-2 right-2">
                     <Check className="h-4 w-4 text-blue-400" />
                   </div>
                 )}
                 <div className={cn(
                   "w-10 h-10 rounded-full flex items-center justify-center transition-all",
-                  platform === "zoom"
+                  isHosted
+                    ? "bg-blue-400/10"
+                    : platform === "zoom"
                     ? "bg-blue-500 shadow-lg shadow-blue-400/30"
                     : "bg-blue-400/20"
                 )}>
                   <Video className={cn(
                     "h-5 w-5 transition-colors",
-                    platform === "zoom" ? "text-white" : "text-blue-500 dark:text-blue-400"
+                    isHosted
+                      ? "text-muted-foreground"
+                      : platform === "zoom" ? "text-white" : "text-blue-500 dark:text-blue-400"
                   )} />
                 </div>
                 <span className={cn(
                   "font-medium text-sm transition-colors",
-                  platform === "zoom" ? "text-blue-600 dark:text-blue-300" : "text-muted-foreground"
+                  isHosted
+                    ? "text-muted-foreground"
+                    : platform === "zoom" ? "text-blue-600 dark:text-blue-300" : "text-muted-foreground"
                 )}>
                   Zoom
                 </span>
+                {isHosted && (
+                  <span className="text-[10px] font-medium text-muted-foreground bg-muted px-1.5 py-0.5 rounded-full">
+                    Coming soon
+                  </span>
+                )}
               </button>
             </div>
           </fieldset>

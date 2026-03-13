@@ -102,7 +102,7 @@ export default function WebhooksPage() {
 
   useEffect(() => {
     if (user?.id) {
-      setUserId(user.id);
+      setUserId(Number(user.id));
     }
   }, [user?.id, setUserId]);
 
@@ -162,7 +162,6 @@ export default function WebhooksPage() {
     try {
       await saveWebhookConfig({
         endpoint_url: webhookUrl,
-        signing_secret: webhookSecret || undefined,
         events: webhookEvents,
       });
       toast.success("Webhook settings saved");
