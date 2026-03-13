@@ -3113,11 +3113,8 @@ async def transcribe_meeting_recording(
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="No recording available for this meeting")
 
-    # 5. Call Transcription Gateway
+    # 5. Call Transcription Gateway (using the requesting user's token for billing)
     tg_url = os.getenv("TRANSCRIPTION_GATEWAY_URL", "http://transcription-gateway:8084")
-    tg_api_key = os.getenv("TRANSCRIPTION_GATEWAY_API_KEY")
-    if not tg_api_key:
-        raise HTTPException(status_code=503, detail="Transcription gateway not configured")
 
     try:
         async with httpx.AsyncClient(timeout=180.0) as client:
@@ -3127,7 +3124,7 @@ async def transcribe_meeting_recording(
                 data["language"] = req.language
             resp = await client.post(
                 f"{tg_url}/v1/audio/transcriptions",
-                headers={"Authorization": f"Bearer {tg_api_key}"},
+                headers={"Authorization": f"Bearer {token}"},
                 files=files,
                 data=data,
             )
