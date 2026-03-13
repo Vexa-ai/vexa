@@ -77,6 +77,7 @@ export interface CreateBotRequest {
   meeting_url?: string;
   bot_name?: string;
   language?: string;
+  transcribe_enabled?: boolean;
 }
 
 export interface BotConfigUpdate {

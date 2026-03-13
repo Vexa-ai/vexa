@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Video, Loader2, Sparkles, Globe, ChevronDown } from "lucide-react";
+import { Video, Loader2, Sparkles, Globe, ChevronDown, Mic } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -21,6 +21,7 @@ import { useMeetingsStore } from "@/stores/meetings-store";
 import { useRuntimeConfig } from "@/hooks/use-runtime-config";
 import type { Platform, CreateBotRequest } from "@/types/vexa";
 import { LanguagePicker } from "@/components/language-picker";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { getUserFriendlyError } from "@/lib/error-messages";
 import { getWebappUrl } from "@/lib/docs/webapp-url";
@@ -42,6 +43,7 @@ export function JoinModal() {
   const [platform, setPlatform] = useState<Platform>("google_meet");
   const [language, setLanguage] = useState("auto");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [transcribeEnabled, setTranscribeEnabled] = useState(true);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [botName, setBotName] = useState("");
   const [passcode, setPasscode] = useState("");
@@ -55,6 +57,7 @@ export function JoinModal() {
       setMeetingInput("");
       setPlatform("google_meet");
       setIsSubmitting(false);
+      setTranscribeEnabled(true);
       setShowAdvanced(false);
       setBotName("");
       setPasscode("");
@@ -123,6 +126,10 @@ export function JoinModal() {
       request.language = language;
     }
 
+    if (!transcribeEnabled) {
+      request.transcribe_enabled = false;
+    }
+
     try {
       const meeting = await vexaAPI.createBot(request);
 
@@ -180,7 +187,7 @@ export function JoinModal() {
     } finally {
       setIsSubmitting(false);
     }
-  }, [parsedInput, passcode, botName, language, config, setActiveMeeting, setCurrentMeeting, closeModal, router, user]);
+  }, [parsedInput, passcode, botName, language, transcribeEnabled, config, setActiveMeeting, setCurrentMeeting, closeModal, router, user]);
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && closeModal()}>
@@ -304,8 +311,8 @@ export function JoinModal() {
             )}
           </div>
 
-          {/* Language Selection - backend detects language if not set; user can change from meeting page */}
-          <div className="space-y-2">
+          {/* Language Selection - only shown when transcription is enabled */}
+          {transcribeEnabled && <div className="space-y-2">
             <Label htmlFor="language" className="text-sm flex items-center gap-2">
               <Globe className="h-3.5 w-3.5" />
               Transcription Language
@@ -320,7 +327,25 @@ export function JoinModal() {
                 Auto-detect: the service will detect the language when the meeting starts. You can change it anytime from the meeting page.
               </p>
             )}
+          </div>}
+
+          {/* Transcription Toggle */}
+          <div className="flex items-center justify-between">
+            <Label htmlFor="transcribe" className="text-sm flex items-center gap-2 cursor-pointer">
+              <Mic className="h-3.5 w-3.5" />
+              Real-time Transcription
+            </Label>
+            <Switch
+              id="transcribe"
+              checked={transcribeEnabled}
+              onCheckedChange={setTranscribeEnabled}
+            />
           </div>
+          {!transcribeEnabled && (
+            <p className="text-xs text-muted-foreground -mt-2">
+              Bot will record audio only. You can transcribe later from the meeting page.
+            </p>
+          )}
 
           {/* Advanced Options Toggle */}
           <button
@@ -388,7 +413,7 @@ export function JoinModal() {
               ) : (
                 <>
                   <Sparkles className="mr-2 h-5 w-5" />
-                  Start Transcription
+                  {transcribeEnabled ? "Start Transcription" : "Start Recording"}
                 </>
               )}
             </Button>
