@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
-import { StopCircle, Wifi, WifiOff, Loader2, Users, Clock } from "lucide-react";
+import { StopCircle, Wifi, WifiOff, Loader2, Users, Clock, Mic } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -169,7 +169,20 @@ export function LiveSession({ platform, nativeId, onEnd }: LiveSessionProps) {
           <ScrollArea className="h-[400px] pr-4">
             {liveTranscripts.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full py-12 text-center">
-                {isActive ? (
+                {isActive && activeMeeting?.data?.transcribe_enabled === false ? (
+                  <>
+                    <div className="relative mb-4">
+                      <Mic className="h-8 w-8 text-red-500" />
+                      <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-red-500 animate-pulse" />
+                    </div>
+                    <p className="text-muted-foreground">
+                      Recording in progress
+                    </p>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Audio is being captured. You can transcribe after the meeting ends.
+                    </p>
+                  </>
+                ) : isActive ? (
                   <>
                     <Loader2 className="h-8 w-8 animate-spin text-muted-foreground mb-4" />
                     <p className="text-muted-foreground">

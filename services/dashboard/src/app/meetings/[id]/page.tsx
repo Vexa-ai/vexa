@@ -1456,6 +1456,12 @@ export default function MeetingDetailPage() {
               playbackAbsoluteTime={playbackAbsoluteTime}
               isPlaybackActive={isPlaybackActive}
               onSegmentClick={canUseSegmentPlayback ? handleSegmentClick : undefined}
+              onTranscribeComplete={() => {
+                fetchMeeting(meetingId);
+                if (currentMeeting?.platform && currentMeeting?.platform_specific_id) {
+                  fetchTranscripts(currentMeeting.platform, currentMeeting.platform_specific_id, String(currentMeeting.id));
+                }
+              }}
             />
           )}
 

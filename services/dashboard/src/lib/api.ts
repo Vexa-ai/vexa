@@ -319,6 +319,21 @@ export const vexaAPI = {
     return `/api/vexa/recordings/${recordingId}/media/${mediaFileId}/raw`;
   },
 
+  // Transcribe a recorded meeting (deferred transcription)
+  async transcribeMeeting(
+    meetingId: string | number,
+    language?: string
+  ): Promise<{ status: string; segment_count: number; language: string }> {
+    const body: Record<string, string> = {};
+    if (language) body.language = language;
+    const response = await fetch(`/api/vexa/meetings/${meetingId}/transcribe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return handleResponse<{ status: string; segment_count: number; language: string }>(response);
+  },
+
   // Connection test
   async testConnection(): Promise<{ success: boolean; error?: string }> {
     try {
