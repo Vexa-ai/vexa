@@ -725,15 +725,24 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
               function sendTeamsSpeakerEvent(eventType: string, identity: ParticipantIdentity) {
                 const eventAbsoluteTimeMs = Date.now();
                 const sessionStartTime = audioService.getSessionAudioStartTime();
-                
+
                 if (sessionStartTime === null) {
                   return;
                 }
-                
+
                 const relativeTimestampMs = eventAbsoluteTimeMs - sessionStartTime;
-                
+
+                // Accumulate for persistence (direct bot accumulation)
+                (window as any).__vexaSpeakerEvents = (window as any).__vexaSpeakerEvents || [];
+                (window as any).__vexaSpeakerEvents.push({
+                  event_type: eventType,
+                  participant_name: identity.name,
+                  participant_id: identity.id,
+                  relative_timestamp_ms: relativeTimestampMs,
+                });
+
                 try {
-                  whisperLiveService.sendSpeakerEvent(
+                  whisperLiveService?.sendSpeakerEvent(
                     eventType,
                     identity.name,
                     identity.id,
@@ -1183,9 +1192,7 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
             };
 
             // Initialize Teams-specific speaker detection
-            if (transcriptionEnabled && whisperLiveService) {
-              initializeTeamsSpeakerDetection(whisperLiveService, audioService, botConfigData);
-            }
+            initializeTeamsSpeakerDetection(whisperLiveService, audioService, botConfigData);
             
             // Setup Teams meeting monitoring
             setupTeamsMeetingMonitoring(botConfigData, audioService, whisperLiveService, resolve);

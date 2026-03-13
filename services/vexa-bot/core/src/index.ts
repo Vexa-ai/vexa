@@ -5,6 +5,7 @@ import { chromium } from "playwright-extra";
 import { handleGoogleMeet, leaveGoogleMeet } from "./platforms/googlemeet";
 import { handleMicrosoftTeams, leaveMicrosoftTeams } from "./platforms/msteams";
 import { handleZoom, leaveZoom } from "./platforms/zoom";
+import { getZoomSpeakerEvents } from "./platforms/zoom/strategies/recording";
 import { browserArgs, getBrowserArgs, userAgent } from "./constans";
 import { BotConfig } from "./types";
 import { RecordingService } from "./services/recording";
@@ -590,10 +591,24 @@ async function performGracefulLeave(
   const finalCallbackExitCode = (exitCode === 0) ? 0 : exitCode;
   const finalCallbackReason = reason;
 
+  // Read accumulated speaker events from browser context (or Zoom module)
+  let speakerEvents: any[] = [];
+  try {
+    if (currentPlatform === "zoom") {
+      speakerEvents = getZoomSpeakerEvents();
+      log(`[Speaker Events] Read ${speakerEvents.length} speaker events from Zoom module`);
+    } else if (page && !page.isClosed()) {
+      speakerEvents = await page.evaluate(() => (window as any).__vexaSpeakerEvents || []);
+      log(`[Speaker Events] Read ${speakerEvents.length} speaker events from browser context`);
+    }
+  } catch (e: any) {
+    log(`[Speaker Events] Failed to read: ${e?.message}`);
+  }
+
   if (botManagerCallbackUrl && currentConnectionId) {
     // Use unified callback for exit status
     const statusMapping = mapExitReasonToStatus(finalCallbackReason, finalCallbackExitCode);
-    
+
     const botConfig = {
       botManagerCallbackUrl,
       connectionId: currentConnectionId,
@@ -608,7 +623,8 @@ async function performGracefulLeave(
         finalCallbackExitCode,
         errorDetails,
         statusMapping.completionReason,
-        statusMapping.failureStage
+        statusMapping.failureStage,
+        speakerEvents.length > 0 ? speakerEvents : undefined
       );
       log(`[Graceful Leave] Unified exit callback sent successfully`);
     } catch (callbackError: any) {

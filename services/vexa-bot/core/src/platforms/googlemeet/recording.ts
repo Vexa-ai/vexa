@@ -583,8 +583,16 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                 const relativeTimestampMs = Date.now() - sessionStartTime;
                 const participantId = getGoogleParticipantId(participantElement);
                 const participantName = getGoogleParticipantName(participantElement);
+                // Accumulate for persistence (direct bot accumulation)
+                (window as any).__vexaSpeakerEvents = (window as any).__vexaSpeakerEvents || [];
+                (window as any).__vexaSpeakerEvents.push({
+                  event_type: eventType,
+                  participant_name: participantName,
+                  participant_id: participantId,
+                  relative_timestamp_ms: relativeTimestampMs,
+                });
                 try {
-                  whisperLiveService.sendSpeakerEvent(
+                  whisperLiveService?.sendSpeakerEvent(
                     eventType,
                     participantName,
                     participantId,
@@ -702,7 +710,7 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
               }, 500);
             };
 
-            if (!degradedNoMedia && transcriptionEnabled && whisperLiveService) {
+            if (!degradedNoMedia) {
               initializeGoogleSpeakerDetection(whisperLiveService, audioService, botConfigData);
             }
 

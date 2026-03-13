@@ -14,6 +14,7 @@ let parecordProcess: ChildProcess | null = null;
 let audioSessionStartTime: number | null = null;
 let activeSpeakers = new Set<number>();  // Currently active speaker user IDs
 let recordingService: RecordingService | null = null;
+let zoomSpeakerEvents: any[] = [];  // Accumulated speaker events for persistence
 
 export async function startZoomRecording(page: Page | null, botConfig: BotConfig): Promise<void> {
   log('[Zoom] Starting audio recording and WhisperLive connection');
@@ -180,6 +181,13 @@ export function getZoomRecordingService(): RecordingService | null {
   return recordingService;
 }
 
+/**
+ * Get accumulated speaker events for persistence via bot exit callback.
+ */
+export function getZoomSpeakerEvents(): any[] {
+  return zoomSpeakerEvents;
+}
+
 // Helper function to convert PCM Int16 buffer to Float32Array
 function bufferToFloat32(buffer: Buffer): Float32Array {
   const int16 = new Int16Array(buffer.buffer, buffer.byteOffset, buffer.length / 2);
@@ -271,7 +279,7 @@ function handleActiveSpeakerChange(
   whisperLive: WhisperLiveService | null,
   botConfig: BotConfig
 ): void {
-  if (!whisperLive || !audioSessionStartTime) {
+  if (!audioSessionStartTime) {
     return;
   }
 
@@ -284,7 +292,14 @@ function handleActiveSpeakerChange(
       const userInfo = sdkManager.getUserInfo(userId);
       if (userInfo) {
         log(`🎤 [Zoom] SPEAKER_START: ${userInfo.userName} (ID: ${userId})`);
-        whisperLive.sendSpeakerEvent(
+        // Accumulate for persistence (direct bot accumulation)
+        zoomSpeakerEvents.push({
+          event_type: 'SPEAKER_START',
+          participant_name: userInfo.userName,
+          participant_id: String(userId),
+          relative_timestamp_ms: relativeTimestampMs,
+        });
+        whisperLive?.sendSpeakerEvent(
           'SPEAKER_START',
           userInfo.userName,
           String(userId),
@@ -301,7 +316,14 @@ function handleActiveSpeakerChange(
       const userInfo = sdkManager.getUserInfo(userId);
       if (userInfo) {
         log(`🔇 [Zoom] SPEAKER_END: ${userInfo.userName} (ID: ${userId})`);
-        whisperLive.sendSpeakerEvent(
+        // Accumulate for persistence (direct bot accumulation)
+        zoomSpeakerEvents.push({
+          event_type: 'SPEAKER_END',
+          participant_name: userInfo.userName,
+          participant_id: String(userId),
+          relative_timestamp_ms: relativeTimestampMs,
+        });
+        whisperLive?.sendSpeakerEvent(
           'SPEAKER_END',
           userInfo.userName,
           String(userId),

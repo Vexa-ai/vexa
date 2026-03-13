@@ -433,6 +433,7 @@ class BotStatusChangePayload(BaseModel):
     completion_reason: Optional[MeetingCompletionReason] = Field(None, description="Reason for completion if applicable.")
     failure_stage: Optional[MeetingFailureStage] = Field(None, description="Stage where failure occurred if applicable.")
     timestamp: Optional[str] = Field(None, description="Timestamp of the status change.")
+    speaker_events: Optional[List[Dict]] = Field(None, description="Accumulated speaker events from bot browser.")
 
 # --- --------------------------------------------- ---
 
@@ -1756,9 +1757,20 @@ async def bot_status_change_callback(
             
             if success:
                 meeting.end_time = datetime.utcnow()
+
+                # Persist speaker events to meeting.data (direct bot accumulation)
+                if payload.speaker_events:
+                    if not meeting.data:
+                        meeting.data = {}
+                    meeting_data = dict(meeting.data)
+                    meeting_data['speaker_events'] = payload.speaker_events
+                    meeting.data = meeting_data
+                    attributes.flag_modified(meeting, 'data')
+                    logger.info(f"Persisted {len(payload.speaker_events)} speaker events to meeting.data for meeting {meeting_id}")
+
                 await db.commit()
                 await db.refresh(meeting)
-                
+
                 # Schedule post-meeting tasks (including original webhook)
                 background_tasks.add_task(run_all_tasks, meeting.id)
                 
