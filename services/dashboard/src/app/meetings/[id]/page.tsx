@@ -908,6 +908,17 @@ export default function MeetingDetailPage() {
                     <FileJson className="h-4 w-4 mr-2" />
                     Download .json
                   </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => {
+                      if (!currentMeeting) return;
+                      const content = JSON.stringify(currentMeeting, null, 2);
+                      const filename = `metadata-${currentMeeting.platform_specific_id}.json`;
+                      downloadFile(content, filename, "application/json");
+                    }}
+                  >
+                    <Code className="h-4 w-4 mr-2" />
+                    Download metadata
+                  </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     onClick={() => {
@@ -1249,6 +1260,17 @@ export default function MeetingDetailPage() {
                       <FileJson className="h-4 w-4 mr-2" />
                       Download .json
                     </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        if (!currentMeeting) return;
+                        const content = JSON.stringify(currentMeeting, null, 2);
+                        const filename = `metadata-${currentMeeting.platform_specific_id}.json`;
+                        downloadFile(content, filename, "application/json");
+                      }}
+                    >
+                      <Code className="h-4 w-4 mr-2" />
+                      Download metadata
+                    </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
                       onClick={() => {
@@ -1421,6 +1443,7 @@ export default function MeetingDetailPage() {
               meetingId={currentMeeting.platform_specific_id}
               createdAt={currentMeeting.created_at}
               updatedAt={currentMeeting.updated_at}
+              transcribeEnabled={currentMeeting.data?.transcribe_enabled !== false}
               onStopped={() => {
                 fetchMeeting(meetingId);
               }}

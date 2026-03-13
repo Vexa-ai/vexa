@@ -242,6 +242,10 @@ services:
       - VEXA_ADMIN_API_URL=http://admin-api:8001
       - JWT_SECRET=${JWT_SECRET:-vexa-dev-jwt-secret}
       - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3001}
+      - NEXT_PUBLIC_HOSTED_MODE=${NEXT_PUBLIC_HOSTED_MODE:-false}
+      - NEXT_PUBLIC_WEBAPP_URL=${NEXT_PUBLIC_WEBAPP_URL:-https://vexa.ai}
+      - NEXT_PUBLIC_EXTERNAL_AUTH_URL=${NEXT_PUBLIC_EXTERNAL_AUTH_URL:-}
+      - COOKIE_DOMAIN=${COOKIE_DOMAIN:-}
     init: true
     depends_on:
       api-gateway:

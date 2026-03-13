@@ -3127,7 +3127,7 @@ async def transcribe_meeting_recording(
         tx_api_key = generate_prefixed_token("tx")
         new_token = APIToken(token=tx_api_key, user_id=current_user.id)
         db.add(new_token)
-        await db.flush()
+        await db.commit()
         logger.info(f"Created vxa_tx_ token for user {current_user.id} for deferred transcription")
 
     # 6. Call Transcription Gateway
@@ -3156,6 +3156,9 @@ async def transcribe_meeting_recording(
     # 6. Parse response
     segments = result.get('segments', [])
     detected_language = result.get('language', req.language or 'unknown')
+
+    # Filter out segments missing required keys (e.g. silence-only transcriptions)
+    segments = [s for s in segments if 'start' in s and 'end' in s and s.get('text', '').strip()]
 
     # 7. Map speakers
     speaker_events = meeting_data.get('speaker_events', [])
@@ -3186,6 +3189,8 @@ async def transcribe_meeting_recording(
     await db.commit()
 
     # 10. Return result
+    if len(mapped_segments) == 0:
+        return {"status": "completed", "segment_count": 0, "language": detected_language, "message": "No speech detected in recording"}
     return {"status": "completed", "segment_count": len(mapped_segments), "language": detected_language}
 
 # --- END Deferred Transcription Endpoint ---

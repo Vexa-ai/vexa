@@ -898,6 +898,17 @@ export function TranscriptViewer({
                     Clear all filters
                   </Button>
                 </>
+              ) : isLive && meeting.data?.transcribe_enabled === false ? (
+                <>
+                  <div className="w-16 h-16 rounded-full bg-red-50 dark:bg-red-950/30 flex items-center justify-center mb-4 relative">
+                    <Mic className="h-8 w-8 text-red-500" />
+                    <span className="absolute top-1 right-1 h-3 w-3 rounded-full bg-red-500 animate-pulse" />
+                  </div>
+                  <h3 className="font-medium mb-1">Recording in progress</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Audio is being captured. Transcription will run after the meeting ends.
+                  </p>
+                </>
               ) : (
                 <>
                   <div className="w-16 h-16 rounded-full bg-muted/50 flex items-center justify-center mb-4">

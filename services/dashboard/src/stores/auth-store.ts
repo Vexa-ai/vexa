@@ -16,6 +16,7 @@ interface AuthState {
   token: string | null;
   isLoading: boolean;
   isAuthenticated: boolean;
+  didLogout: boolean; // true after explicit logout — prevents SSO redirect loop
 
   // Actions
   sendMagicLink: (email: string) => Promise<LoginResult>;
@@ -36,6 +37,7 @@ export const useAuthStore = create<AuthState>()(
       token: null,
       isLoading: true, // Start true so auth-provider waits for checkAuth() before redirecting
       isAuthenticated: false,
+      didLogout: false,
 
       sendMagicLink: async (email: string): Promise<LoginResult> => {
         set({ isLoading: true });
@@ -61,6 +63,7 @@ export const useAuthStore = create<AuthState>()(
               token: data.token,
               isAuthenticated: true,
               isLoading: false,
+              didLogout: false,
             });
 
             return {
@@ -90,6 +93,7 @@ export const useAuthStore = create<AuthState>()(
           token,
           isAuthenticated: true,
           isLoading: false,
+          didLogout: false,
         });
       },
 
@@ -115,6 +119,7 @@ export const useAuthStore = create<AuthState>()(
             token: data.token,
             isAuthenticated: true,
             isLoading: false,
+            didLogout: false,
           });
 
           return { success: true };
@@ -131,6 +136,7 @@ export const useAuthStore = create<AuthState>()(
           user: null,
           token: null,
           isAuthenticated: false,
+          didLogout: true, // prevent SSO redirect loop
         });
       },
 
@@ -142,7 +148,7 @@ export const useAuthStore = create<AuthState>()(
 
         // If we have user in localStorage, consider authenticated
         if (user && token) {
-          set({ isAuthenticated: true, isLoading: false });
+          set({ isAuthenticated: true, isLoading: false, didLogout: false });
           return;
         }
 
@@ -159,6 +165,7 @@ export const useAuthStore = create<AuthState>()(
                 token: meData.token,
                 isAuthenticated: true,
                 isLoading: false,
+                didLogout: false,
               });
               return;
             }
@@ -175,6 +182,7 @@ export const useAuthStore = create<AuthState>()(
                       token: oauthData.token,
                       isAuthenticated: true,
                       isLoading: false,
+                      didLogout: false,
                     });
                     return;
                   }
@@ -184,7 +192,7 @@ export const useAuthStore = create<AuthState>()(
               }
             }
             // Cookie is valid, but we don't have user info
-            set({ isAuthenticated: true, isLoading: false });
+            set({ isAuthenticated: true, isLoading: false, didLogout: false });
           } else {
             set({ user: null, token: null, isAuthenticated: false, isLoading: false });
           }
@@ -204,6 +212,7 @@ export const useAuthStore = create<AuthState>()(
         user: state.user,
         token: state.token,
         isAuthenticated: state.isAuthenticated,
+        didLogout: state.didLogout,
       }),
     }
   )

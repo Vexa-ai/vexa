@@ -22,15 +22,23 @@ interface BotStatusIndicatorProps {
   createdAt?: string;
   updatedAt?: string;
   errorMessage?: string;
+  transcribeEnabled?: boolean;
   onRetry?: () => void;
   onStopped?: () => void;
 }
 
-const STATUS_STEPS = [
+const STATUS_STEPS_REALTIME = [
   { key: "requested", label: "Requested", description: "Bot is starting up" },
   { key: "joining", label: "Joining", description: "Connecting to meeting" },
   { key: "awaiting_admission", label: "Waiting", description: "Waiting to be admitted" },
-  { key: "active", label: "Recording", description: "Transcribing audio" },
+  { key: "active", label: "Recording", description: "Transcribing audio in real-time" },
+] as const;
+
+const STATUS_STEPS_RECORDING = [
+  { key: "requested", label: "Requested", description: "Bot is starting up" },
+  { key: "joining", label: "Joining", description: "Connecting to meeting" },
+  { key: "awaiting_admission", label: "Waiting", description: "Waiting to be admitted" },
+  { key: "active", label: "Recording", description: "Recording audio (transcription after meeting)" },
 ] as const;
 
 const STATUS_ORDER: Record<string, number> = {
@@ -42,7 +50,7 @@ const STATUS_ORDER: Record<string, number> = {
   failed: -1,
 };
 
-export function BotStatusIndicator({ status, platform, meetingId, createdAt, updatedAt, errorMessage, onRetry, onStopped }: BotStatusIndicatorProps) {
+export function BotStatusIndicator({ status, platform, meetingId, createdAt, updatedAt, errorMessage, transcribeEnabled = true, onRetry, onStopped }: BotStatusIndicatorProps) {
   const [dots, setDots] = useState("");
   const [isTimedOut, setIsTimedOut] = useState(false);
   const [isBotRunning, setIsBotRunning] = useState<boolean | null>(null);
@@ -198,7 +206,7 @@ export function BotStatusIndicator({ status, platform, meetingId, createdAt, upd
   const getStatusMessage = () => {
     switch (status) {
       case "requested":
-        return "Starting transcription bot";
+        return transcribeEnabled ? "Starting transcription bot" : "Starting recording bot";
       case "joining":
         return "Joining the meeting";
       case "awaiting_admission":
@@ -255,7 +263,7 @@ export function BotStatusIndicator({ status, platform, meetingId, createdAt, upd
 
             {/* Steps */}
             <div className="relative space-y-6">
-              {STATUS_STEPS.map((step, index) => {
+              {(transcribeEnabled ? STATUS_STEPS_REALTIME : STATUS_STEPS_RECORDING).map((step, index) => {
                 const isCompleted = currentStep > index;
                 const isActive = currentStep === index;
 

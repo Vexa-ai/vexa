@@ -16,7 +16,7 @@ interface AuthProviderProps {
 export function AuthProvider({ children }: AuthProviderProps) {
   const router = useRouter();
   const pathname = usePathname();
-  const { isAuthenticated, isLoading, checkAuth } = useAuthStore();
+  const { isAuthenticated, isLoading, checkAuth, didLogout } = useAuthStore();
   const [shouldRedirect, setShouldRedirect] = useState(false);
   const meetingUrlCaptured = useRef(false);
 
@@ -54,15 +54,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
   useEffect(() => {
     if (shouldRedirect) {
       const externalAuthUrl = process.env.NEXT_PUBLIC_EXTERNAL_AUTH_URL;
-      if (externalAuthUrl) {
-        // SSO: redirect to webapp for authentication
+      if (externalAuthUrl && !didLogout) {
+        // SSO: redirect to webapp for authentication (skip if user explicitly logged out)
         const returnUrl = encodeURIComponent(window.location.href);
         window.location.href = `${externalAuthUrl}?returnUrl=${returnUrl}`;
       } else {
         router.push("/login");
       }
     }
-  }, [shouldRedirect, router]);
+  }, [shouldRedirect, router, didLogout]);
 
   // If on a public route, just render children
   if (isPublicRoute) {
