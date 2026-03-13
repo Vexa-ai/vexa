@@ -28,7 +28,8 @@ from app.orchestrators import (
 # Note: get_running_bots_status and verify_container_running are abstracted
 # and work for both Docker containers and process orchestrator (Lite setup)
 from shared_models.database import init_db, get_db, async_session_local
-from shared_models.models import User, Meeting, MeetingSession, Transcription, Recording, MediaFile
+from shared_models.models import User, Meeting, MeetingSession, Transcription, Recording, MediaFile, APIToken
+from shared_models.token_scope import generate_prefixed_token
 from shared_models.schemas import (
     MeetingCreate, MeetingResponse, Platform, BotStatusResponse, MeetingConfigUpdate,
     MeetingStatus, MeetingCompletionReason, MeetingFailureStage,
@@ -3113,7 +3114,23 @@ async def transcribe_meeting_recording(
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="No recording available for this meeting")
 
-    # 5. Call Transcription Gateway (using the requesting user's token for billing)
+    # 5. Get or create a vxa_tx_ token for the user (required by TX Gateway for billing)
+    tx_token_stmt = select(APIToken).where(
+        APIToken.user_id == current_user.id,
+        APIToken.token.like("vxa_tx_%")
+    ).limit(1)
+    tx_token_result = await db.execute(tx_token_stmt)
+    tx_token_row = tx_token_result.scalar_one_or_none()
+    if tx_token_row:
+        tx_api_key = tx_token_row.token
+    else:
+        tx_api_key = generate_prefixed_token("tx")
+        new_token = APIToken(token=tx_api_key, user_id=current_user.id)
+        db.add(new_token)
+        await db.flush()
+        logger.info(f"Created vxa_tx_ token for user {current_user.id} for deferred transcription")
+
+    # 6. Call Transcription Gateway
     tg_url = os.getenv("TRANSCRIPTION_GATEWAY_URL", "http://transcription-gateway:8084")
 
     try:
@@ -3124,7 +3141,7 @@ async def transcribe_meeting_recording(
                 data["language"] = req.language
             resp = await client.post(
                 f"{tg_url}/v1/audio/transcriptions",
-                headers={"Authorization": f"Bearer {token}"},
+                headers={"Authorization": f"Bearer {tx_api_key}"},
                 files=files,
                 data=data,
             )
