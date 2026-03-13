@@ -896,7 +896,7 @@ async def request_bot(
             language=req.language,
             task=req.task,
             transcription_tier=req.transcription_tier,
-            recording_enabled=req.recording_enabled,
+            recording_enabled=meeting_data.get('recording_enabled', req.recording_enabled),
             transcribe_enabled=req.transcribe_enabled,
             zoom_obf_token=zoom_obf_token_to_use,
             voice_agent_enabled=req.voice_agent_enabled,
@@ -3011,9 +3011,10 @@ def _map_speakers_to_segments(speaker_events, segments):
     for event in sorted(speaker_events, key=lambda e: e.get('relative_timestamp_ms', 0)):
         name = event.get('participant_name', 'Unknown')
         ts_sec = event.get('relative_timestamp_ms', 0) / 1000.0
-        if event.get('event_type') == 'speaking_start':
+        etype = event.get('event_type', '')
+        if etype in ('SPEAKER_START', 'speaking_start'):
             active[name] = ts_sec
-        elif event.get('event_type') == 'speaking_stop' and name in active:
+        elif etype in ('SPEAKER_END', 'speaking_stop') and name in active:
             ranges.append((name, active.pop(name), ts_sec))
     for name, start in active.items():
         ranges.append((name, start, float('inf')))
@@ -3100,32 +3101,30 @@ async def transcribe_meeting_recording(
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="No recording available for this meeting")
 
-    # 5. Call Fireworks API
-    fireworks_key = os.getenv("REMOTE_TRANSCRIBER_API_KEY")
-    if not fireworks_key:
-        raise HTTPException(status_code=503, detail="Transcription service not configured")
-
-    fireworks_url = os.getenv("REMOTE_TRANSCRIBER_URL", "https://audio-turbo.api.fireworks.ai/v1/audio/transcriptions")
-    fireworks_model = os.getenv("REMOTE_TRANSCRIBER_MODEL", "whisper-v3-turbo")
+    # 5. Call Transcription Gateway
+    tg_url = os.getenv("TRANSCRIPTION_GATEWAY_URL", "http://transcription-gateway:8084")
+    tg_api_key = os.getenv("TRANSCRIPTION_GATEWAY_API_KEY")
+    if not tg_api_key:
+        raise HTTPException(status_code=503, detail="Transcription gateway not configured")
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=180.0) as client:
             files = {"file": ("audio.wav", audio_bytes, "audio/wav")}
-            data = {"model": fireworks_model, "response_format": "verbose_json"}
+            data = {"model": "whisper-v3-turbo", "response_format": "verbose_json"}
             if req.language:
                 data["language"] = req.language
             resp = await client.post(
-                fireworks_url,
-                headers={"Authorization": f"Bearer {fireworks_key}"},
+                f"{tg_url}/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {tg_api_key}"},
                 files=files,
                 data=data,
             )
         if resp.status_code != 200:
-            logger.error(f"Fireworks API error {resp.status_code}: {resp.text}")
+            logger.error(f"Transcription Gateway error {resp.status_code}: {resp.text}")
             raise HTTPException(status_code=502, detail="Transcription service error")
         result = resp.json()
     except httpx.HTTPError as e:
-        logger.error(f"Fireworks API request failed: {e}")
+        logger.error(f"Transcription Gateway request failed: {e}")
         raise HTTPException(status_code=502, detail="Transcription service error")
 
     # 6. Parse response
@@ -3137,7 +3136,10 @@ async def transcribe_meeting_recording(
     mapped_segments = _map_speakers_to_segments(speaker_events, segments)
 
     # 8. Write to transcriptions table
-    session_uid = meeting_data.get('session_uid', str(meeting.id))
+    # Get actual session_uid from meeting_sessions table
+    session_stmt = select(MeetingSession.session_uid).where(MeetingSession.meeting_id == meeting.id).order_by(MeetingSession.id.desc()).limit(1)
+    session_result = await db.execute(session_stmt)
+    session_uid = session_result.scalar() or str(meeting.id)
     for seg in mapped_segments:
         t = Transcription(
             meeting_id=meeting.id,
