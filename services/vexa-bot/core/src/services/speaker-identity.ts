@@ -194,7 +194,11 @@ export async function resolveSpeakerName(
       log(`[SpeakerIdentity] Element ${elementIndex} → "${gmName}" (platform: ${platform}, via speaker detection)`);
       return gmName;
     }
-    // Fall through to generic DOM strategy as last resort
+    // No participant tile for this track — likely screen share / presentation audio
+    const fallback = `Presentation`;
+    speakerNameCache.set(key, fallback);
+    log(`[SpeakerIdentity] Element ${elementIndex} → "${fallback}" (platform: ${platform}, no participant tile — screen share?)`);
+    return fallback;
   }
 
   const selectors = PLATFORM_SELECTORS[platform];
