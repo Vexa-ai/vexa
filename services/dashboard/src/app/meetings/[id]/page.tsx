@@ -87,6 +87,8 @@ import { DocsLink } from "@/components/docs/docs-link";
 import { DecisionsPanel } from "@/components/decisions/decisions-panel";
 import { WebhookDeliverySection } from "@/components/webhooks/webhook-delivery-section";
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_VEXA_PUBLIC_API_URL || "https://api.vexa.ai";
+
 export default function MeetingDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -996,7 +998,7 @@ export default function MeetingDetailPage() {
                         <span className="text-gray-300"> \</span>
                       </div>
                       <div className="pl-4">
-                        <span className="text-[#6ee7b7]">https://api.vexa.ai/bots/{currentMeeting.platform}/{currentMeeting.platform_specific_id}</span>
+                        <span className="text-[#6ee7b7]">{API_BASE_URL}/bots/{currentMeeting.platform}/{currentMeeting.platform_specific_id}</span>
                         <span className="text-gray-300"> \</span>
                       </div>
                       <div className="pl-4">

@@ -52,15 +52,6 @@ if not all([ADMIN_API_URL, BOT_MANAGER_URL, TRANSCRIPTION_COLLECTOR_URL, MCP_URL
     ]
     raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
 
-# Response Models
-# class BotResponseModel(BaseModel): ...
-# class MeetingModel(BaseModel): ...
-# class MeetingsResponseModel(BaseModel): ...
-# class TranscriptSegmentModel(BaseModel): ...
-# class TranscriptResponseModel(BaseModel): ...
-# class UserModel(BaseModel): ...
-# class TokenModel(BaseModel): ...
-
 # Security Schemes for OpenAPI
 api_key_scheme = APIKeyHeader(name="X-API-Key", description="API Key for client operations", auto_error=False)
 admin_api_key_scheme = APIKeyHeader(name="X-Admin-API-Key", description="API Key for admin operations", auto_error=False)
@@ -84,14 +75,14 @@ app = FastAPI(
     
     Include the appropriate header in your requests.
     """,
-    version="1.2.0", # Incremented version
+    version="1.5.0", # Interactive bots, recordings, MCP, webhooks, transcript sharing, voice agent
     contact={
         "name": "Vexa Support",
-        "url": "https://vexa.io/support", # Placeholder URL
-        "email": "support@vexa.io", # Placeholder Email
+        "url": "https://vexa.ai",
+        "email": "support@vexa.ai",
     },
     license_info={
-        "name": "Proprietary",
+        "name": "Apache-2.0",
     },
     # Include security schemes in OpenAPI spec
     # Note: Applying them globally or per-route is done below
@@ -141,9 +132,14 @@ def custom_openapi():
 app.openapi = custom_openapi
 
 # Add CORS middleware
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001").split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

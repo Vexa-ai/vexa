@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head><title>Mock Meeting - 3 Participants</title></head>
+<body>
+  <h1>Mock Meeting</h1>
+  <p>3 participants with separate audio tracks. Simulates a Google Meet-like DOM structure.</p>
+
+  <!-- Participant containers (mimics Google Meet DOM for speaker-identity.ts) -->
+  <div class="participant-list">
+    <div class="participant" data-participant-id="1">
+      <div class="participant-name">Alice Johnson</div>
+      <audio id="audio-alice" src="alice.wav" autoplay></audio>
+    </div>
+
+    <div class="participant" data-participant-id="2">
+      <div class="participant-name">Bob Smith</div>
+      <audio id="audio-bob" src="bob.wav" autoplay></audio>
+    </div>
+
+    <div class="participant" data-participant-id="3">
+      <div class="participant-name">Carol Williams</div>
+      <audio id="audio-carol" src="carol.wav" autoplay></audio>
+    </div>
+  </div>
+
+  <div id="status">
+    <p>Audio elements: <span id="count">0</span></p>
+    <p>Playing: <span id="playing">checking...</span></p>
+  </div>
+
+  <script>
+    // Report status
+    function updateStatus() {
+      const audios = document.querySelectorAll('audio');
+      document.getElementById('count').textContent = audios.length;
+      const playing = Array.from(audios).filter(a => !a.paused).length;
+      document.getElementById('playing').textContent = `${playing}/${audios.length}`;
+    }
+    setInterval(updateStatus, 1000);
+    updateStatus();
+
+    // Loop audio for continuous meeting simulation
+    document.querySelectorAll('audio').forEach(a => {
+      a.loop = true;
+    });
+  </script>
+</body>
+</html>

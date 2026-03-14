@@ -132,12 +132,20 @@ export const useAuthStore = create<AuthState>()(
       logout: () => {
         // Clear server-side cookie
         fetch("/api/auth/logout", { method: "POST" });
+        // Clear state
         set({
           user: null,
           token: null,
           isAuthenticated: false,
-          didLogout: true, // prevent SSO redirect loop
+          didLogout: true,
         });
+        // In hosted mode: redirect to webapp signout immediately
+        // Don't wait for React re-render — avoids flash of "Invalid API token"
+        const externalAuthUrl = process.env.NEXT_PUBLIC_EXTERNAL_AUTH_URL;
+        if (externalAuthUrl) {
+          const webappUrl = process.env.NEXT_PUBLIC_WEBAPP_URL || externalAuthUrl.replace(/\/account$/, '');
+          window.location.href = `${webappUrl}/api/auth/signout?callbackUrl=${encodeURIComponent(webappUrl + '/signin')}`;
+        }
       },
 
       setUser: (user) => set({ user, isAuthenticated: !!user }),
@@ -146,13 +154,14 @@ export const useAuthStore = create<AuthState>()(
       checkAuth: async () => {
         const { token, user } = get();
 
-        // If we have user in localStorage, consider authenticated
+        // Use localStorage as a quick pre-render hint so UI doesn't flash,
+        // but ALWAYS verify with the server below.
         if (user && token) {
           set({ isAuthenticated: true, isLoading: false, didLogout: false });
-          return;
         }
 
-        // Try to verify with server (cookie-based)
+        // Always verify with server — localStorage may be stale (e.g. different
+        // user logged in on the webapp since last dashboard visit).
         try {
           const response = await fetch("/api/auth/me");
           if (response.ok) {
@@ -171,7 +180,7 @@ export const useAuthStore = create<AuthState>()(
             }
 
             // OAuth callback path (Dashboard's own auth flow)
-            if (!user || !token) {
+            if (!get().user || !get().token) {
               try {
                 const oauthResponse = await fetch("/api/auth/oauth-callback");
                 if (oauthResponse.ok) {
@@ -194,11 +203,13 @@ export const useAuthStore = create<AuthState>()(
             // Cookie is valid, but we don't have user info
             set({ isAuthenticated: true, isLoading: false, didLogout: false });
           } else {
+            // Server returned 401 or error — clear stale localStorage
             set({ user: null, token: null, isAuthenticated: false, isLoading: false });
           }
         } catch {
-          // If server check fails but we have local data, trust it
-          if (user && token) {
+          // Network error — if we have local data, keep it as fallback
+          const current = get();
+          if (current.user && current.token) {
             set({ isAuthenticated: true, isLoading: false });
           } else {
             set({ user: null, token: null, isAuthenticated: false, isLoading: false });

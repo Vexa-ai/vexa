@@ -67,4 +67,4 @@ Vexa anonymizes deleted meetings for telemetry/usage tracking. UIs should hide d
 
 API semantics:
 
-- [`user_api_guide.md`](user_api_guide.md)
+- [API guide](user_api_guide.mdx)

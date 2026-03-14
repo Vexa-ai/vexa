@@ -8,7 +8,7 @@ This page explains how Vexa models meetings, transcripts, and recordings, and ho
 
 Every API request is authenticated with `X-API-Key`. In self-hosted deployments, you create users and mint tokens via the admin API:
 
-- [`self-hosted-management.md`](self-hosted-management.md)
+- [Self-hosted management](self-hosted-management.mdx)
 
 ### Meeting
 
@@ -118,5 +118,5 @@ Deleting a meeting is designed to be deliberate: it purges transcript artifacts 
 
 API details:
 
-- [`user_api_guide.md`](user_api_guide.md)
+- [API guide](user_api_guide.mdx)
 

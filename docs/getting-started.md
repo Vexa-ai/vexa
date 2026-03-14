@@ -10,8 +10,8 @@ Deploy Vexa yourself for full control over your data and infrastructure. This gu
 
 | Option | Best for | Guide |
 |--------|----------|-------|
-| **Vexa Lite** | Production — single container + external Postgres + remote transcription | [Deploy Vexa Lite](vexa-lite-deployment.md) |
-| **Docker Compose** | Development/testing — full local stack | [Docker Compose setup](deployment.md) |
+| **Vexa Lite** | Production — single container + external Postgres + remote transcription | [Deploy Vexa Lite](vexa-lite-deployment.mdx) |
+| **Docker Compose** | Development/testing — full local stack | [Docker Compose setup](deployment.mdx) |
 
 ---
 
@@ -34,7 +34,7 @@ curl -X POST "$API_BASE/admin/users/1/tokens" \
   -H "X-Admin-API-Key: $ADMIN_TOKEN"
 ```
 
-Full admin guide: [Admin API](self-hosted-management.md)
+Full admin guide: [Admin API](self-hosted-management.mdx)
 
 ---
 
@@ -95,7 +95,7 @@ curl -X POST "$API_BASE/bots" \
   }'
 ```
 
-Full API details: [API overview](user_api_guide.md)
+Full API details: [API overview](user_api_guide.mdx)
 
 ---
 
@@ -112,7 +112,7 @@ curl -H "X-API-Key: $API_KEY" \
 
 Use the WebSocket guide for low-latency updates:
 
-- [WebSocket guide](websocket.md)
+- [WebSocket guide](websocket.mdx)
 
 ---
 

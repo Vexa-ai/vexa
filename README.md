@@ -56,7 +56,7 @@
 | **Storage** | Persist transcripts + meeting metadata in your database |
 | **Multi-user** | Team-ready: users, API keys/tokens, admin operations |
 | **Self-hostable** | Run on your infra for complete data sovereignty |
-| **User interfaces** | Open-source frontends (currently: **[Vexa Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)**) |
+| **User interfaces** | Open-source frontends (currently: **[Vexa Dashboard](./services/dashboard)**) |
 
 ### Who it's for
 
@@ -131,7 +131,7 @@ Vexa Lite is a single-container deployment perfect for teams who want:
 - **Self-hosted multiuser service** - Multiple users, API tokens, and team management
 - **Quick deployment** on any platform - Single container, easy to deploy
 - **No GPU required** - Transcription runs externally
-- **Choose your frontend** - Pick from open-source user interfaces like [Vexa Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)
+- **Choose your frontend** - Pick from open-source user interfaces like [Vexa Dashboard](./services/dashboard)
 - **Production-ready** - Stateless, scalable, serverless-friendly
 
 **Quick start:**
@@ -151,7 +151,7 @@ docker run -d \
   - ✅ **Fly.io** - Implemented
   - 🚧 **Railway, Render, etc.** - To be added (contribute by adding your platform of choice!)
 - 📖 **Complete setup guide**: [Vexa Lite Deployment Guide](https://docs.vexa.ai/vexa-lite-deployment) - Environment variables, storage, TTS, and all configuration options
-- 🎨 **Frontend options**: Choose from open-source user interfaces like [Vexa Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)
+- 🎨 **Frontend options**: Choose from open-source user interfaces like [Vexa Dashboard](./services/dashboard)
 
 ### Option 3: Docker Compose - For Development
 
@@ -282,12 +282,15 @@ For the up-to-date roadmap and priorities, see GitHub Issues and Milestones. Iss
 ## Architecture
 
 - [api-gateway](./services/api-gateway): Routes API requests to appropriate services
-- [mcp](./services/mcp): Provides MCP-capable agents with Vexa as a toolkit
+- [admin-api](./services/admin-api): User CRUD, API keys, meeting management
 - [bot-manager](./services/bot-manager): Handles bot lifecycle management
 - [vexa-bot](./services/vexa-bot): The bot that joins meetings and captures audio
+- [dashboard](./services/dashboard): Open-source Next.js web UI
+- [mcp](./services/mcp): Provides MCP-capable agents with Vexa as a toolkit
 - [WhisperLive](./services/WhisperLive): Real-time audio transcription service (uses transcription-service as backend in remote mode)
 - [transcription-service](./services/transcription-service): Basic transcription service (WhisperLive uses it as a real-time wrapper)
 - [transcription-collector](./services/transcription-collector): Processes and stores transcription segments
+- [tts-service](./services/tts-service): Text-to-speech for interactive bot voice
 - [Database models](./libs/shared-models/shared_models/models.py): Data structures for storing meeting information
 
 > 💫 If you're building with Vexa, we'd love your support! [Star our repo](https://github.com/Vexa-ai/vexa/stargazers) to help us reach 2000 stars.
@@ -305,7 +308,7 @@ For the up-to-date roadmap and priorities, see GitHub Issues and Milestones. Iss
 - **MCP server** - Expose Vexa APIs as agent tools for MCP-compatible clients
 - **Multiuser support** - User management, API tokens, and team features
 - **Self-hostable** - Full control over your data and infrastructure
-- **Open-source frontends** - Choose from user interfaces like [Vexa Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)
+- **Open-source frontends** - Choose from user interfaces like [Vexa Dashboard](./services/dashboard)
 
 **Deployment & Management Guides:**
 - [Vexa Lite Deployment Guide](https://docs.vexa.ai/vexa-lite-deployment) - Single container deployment
@@ -318,8 +321,8 @@ For the up-to-date roadmap and priorities, see GitHub Issues and Milestones. Iss
 Vexa is part of an ecosystem of open-source tools:
 
 
-### 🎨 [Vexa Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)
-100% open-source web interface for Vexa. Join meetings, view transcripts, manage users, and more. Self-host everything with no cloud dependencies.
+### 🎨 [Vexa Dashboard](./services/dashboard)
+100% open-source web interface for Vexa, included in this monorepo at `services/dashboard/`. Join meetings, view transcripts, manage users, and more. Self-host everything with no cloud dependencies.
 
 ## Contributing
 
@@ -361,7 +364,7 @@ Licensed under **Apache-2.0** — see [LICENSE](LICENSE).
 This is the main Vexa repository containing the core API and services. For related projects:
 
 - **[vexa-lite-deploy](https://github.com/Vexa-ai/vexa-lite-deploy)** - Deployment configurations for Vexa Lite
-- **[Vexa-Dashboard](https://github.com/Vexa-ai/Vexa-Dashboard)** - Web UI for managing Vexa instances (first in a planned series of UI applications)
+- **[Vexa Dashboard](./services/dashboard)** - Web UI for managing Vexa instances (included in this monorepo)
 
 [![Meet Founder](https://img.shields.io/badge/LinkedIn-Dmitry_Grankin-0A66C2?style=flat-square&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/dmitry-grankin/)
 

@@ -33,7 +33,7 @@ Meeting ID extraction (all platforms):
 <img src="/assets/integrations/chatgpt.svg" width="28" height="28" style={{ display: "inline-block", verticalAlign: "middle" }} alt="ChatGPT" />{" "}
 Share a transcript with a single URL and paste it into ChatGPT (or any LLM UI).
 
-- [ChatGPT transcript share links](chatgpt-transcript-share-links.md)
+- [ChatGPT transcript share links](chatgpt-transcript-share-links.mdx)
 
 ### n8n
 

@@ -1,11 +1,9 @@
 import redis.asyncio as redis
 import logging
-import hashlib
 import json
 # Only import REDIS_URL from config
 from config import REDIS_URL
 from typing import Optional, Tuple
-import re
 
 logger = logging.getLogger(__name__)
 redis_client = None
@@ -46,36 +44,7 @@ def get_redis_client():
         # For now, return None and let callers handle it.
     return redis_client
 
-# --- Meeting ID and Key Generation ---
-
-def extract_platform_specific_id(platform: str, meeting_url: str) -> Optional[str]:
-    """Extracts the platform-specific part of the meeting URL."""
-    try:
-        # Expect 'google' as the platform identifier
-        if platform == "google_meet":
-            # https://meet.google.com/abc-def-ghi OR meet.google.com/abc-def-ghi
-            match = re.search(r'(?:meet\.google\.com/)?([a-z]{3}-[a-z]{4}-[a-z]{3})', meeting_url)
-            if match:
-                return match.group(1)
-        # Add other platforms here
-        # elif platform == "zoom":
-        #     # Extract zoom meeting ID logic
-        #     pass
-        logger.warning(f"Platform '{platform}' URL parsing not implemented or pattern mismatch for URL: {meeting_url}")
-        return None
-    except Exception as e:
-        logger.error(f"Error extracting platform_specific_id for {platform}/{meeting_url}: {e}", exc_info=True)
-        return None
-
-def generate_meeting_id(platform: str, platform_specific_id: str, token: str) -> str:
-    """Generates a standardized meeting ID."""
-    # Basic validation to prevent empty parts
-    if not all([platform, platform_specific_id, token]):
-        raise ValueError("Platform, platform_specific_id, and token cannot be empty for meeting_id generation.")
-    # Format: platform:platform_specific_id:token
-    # Ensure no problematic characters are in the components if necessary,
-    # but ':' separation should be fine for Redis keys.
-    return f"{platform}:{platform_specific_id}:{token}"
+# --- Key Generation ---
 
 def generate_lock_key(meeting_id: str) -> str:
     """Generates the Redis key for the distributed lock."""

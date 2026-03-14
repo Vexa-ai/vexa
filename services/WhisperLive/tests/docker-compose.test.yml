@@ -1,0 +1,27 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6399:6379"
+
+  whisperlive:
+    build:
+      context: ../../..
+      dockerfile: services/WhisperLive/Dockerfile
+    ports:
+      - "19090:9090"
+      - "19091:9091"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - REDIS_STREAM_URL=redis://redis:6379/0/transcription_segments
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_STREAM_NAME=transcription_segments
+      - DEVICE_TYPE=remote
+      - REMOTE_TRANSCRIBER_URL=http://host.docker.internal:8083/v1/audio/transcriptions
+      - REMOTE_TRANSCRIBER_API_KEY=${REMOTE_TRANSCRIBER_API_KEY:-your_secure_token_here}
+      - WL_RECORDING_DIR=/tmp/wl-recordings
+    depends_on:
+      - redis

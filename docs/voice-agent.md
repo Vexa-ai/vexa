@@ -109,7 +109,7 @@ curl "$API_BASE/bots/google_meet/abc-defg-hij/chat" \
   -H "X-API-Key: $API_KEY"
 ```
 
-Returns an array of messages with `sender`, `text`, `timestamp`, and `isFromBot` fields. Real-time chat events are also available via [WebSocket](websocket.md) (`chat.received`, `chat.sent`).
+Returns an array of messages with `sender`, `text`, `timestamp`, and `isFromBot` fields. Real-time chat events are also available via [WebSocket](websocket.mdx) (`chat.received`, `chat.sent`).
 
 ## Screen Share (Showing Images & Content)
 
@@ -153,7 +153,7 @@ Current limitations:
 
 ## WebSocket Events
 
-When voice agent is enabled, additional events are published on the [WebSocket](websocket.md) connection:
+When voice agent is enabled, additional events are published on the [WebSocket](websocket.mdx) connection:
 
 | Event | Payload | Description |
 |-------|---------|-------------|
@@ -190,6 +190,6 @@ When voice agent is enabled, additional events are published on the [WebSocket](
 ## Related
 
 - [Voice Agent API Reference](api/voice-agent.md) -- full endpoint documentation
-- [WebSocket](websocket.md) -- real-time event streaming
+- [WebSocket](websocket.mdx) -- real-time event streaming
 - [Bots API](api/bots.md) -- requesting bots with `voice_agent_enabled`
 - [Concepts](concepts.md) -- meeting/bot/session model

@@ -420,7 +420,6 @@ const handleRedisMessage = async (message: string, channel: string, page: Page |
       } else if (command.action === 'leave') {
         // Mark that a stop was requested via Redis
         stopSignalReceived = true;
-        // TODO: Implement leave logic (Phase 4)
         log("Received leave command");
         if (!isShuttingDown) {
           // A command-initiated leave is a successful completion, not an error.

@@ -97,14 +97,6 @@ async def update_meeting_status(
         await db.commit()
     
     # Validate transition
-    # #region agent log
-    try:
-        with open('/home/dima/dev/.cursor/debug.log', 'a') as f:
-            import json
-            f.write(json.dumps({"location": "bot-manager/main.py:79", "message": "Validating status transition", "data": {"meeting_id": meeting.id, "current_status": current_status.value, "new_status": new_status.value}, "timestamp": __import__('time').time(), "sessionId": "debug-session", "runId": "run1", "hypothesisId": "D"}) + "\n")
-    except: pass
-    # #endregion
-    
     if not is_valid_status_transition(current_status, new_status):
         logger.warning(f"Invalid status transition from '{current_status.value}' to '{new_status.value}' for meeting {meeting.id}")
         logger.error(f"[DEBUG] Invalid transition: current='{current_status.value}', requested='{new_status.value}', meeting_id={meeting.id}")
@@ -320,9 +312,14 @@ logger = logging.getLogger("bot_manager")
 app = FastAPI(title="Vexa Bot Manager")
 
 # Add CORS middleware
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001").split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1829,33 +1826,10 @@ async def bot_status_change_callback(
                 
         else:
             # Handle other status changes (joining, awaiting_admission)
-            # #region agent log
-            try:
-                with open('/home/dima/dev/.cursor/debug.log', 'a') as f:
-                    import json
-                    f.write(json.dumps({"location": "bot-manager/main.py:1423", "message": "Before update_meeting_status", "data": {"meeting_id": meeting_id, "old_status": meeting.status, "new_status": new_status.value}, "timestamp": __import__('time').time(), "sessionId": "debug-session", "runId": "run1", "hypothesisId": "B"}) + "\n")
-            except: pass
-            # #endregion
-            
             success = await update_meeting_status(meeting, new_status, db)
-            
-            # #region agent log
-            try:
-                with open('/home/dima/dev/.cursor/debug.log', 'a') as f:
-                    import json
-                    f.write(json.dumps({"location": "bot-manager/main.py:1429", "message": "After update_meeting_status", "data": {"meeting_id": meeting_id, "success": success, "meeting_status": meeting.status}, "timestamp": __import__('time').time(), "sessionId": "debug-session", "runId": "run1", "hypothesisId": "B"}) + "\n")
-            except: pass
-            # #endregion
-            
+
             if not success:
                 logger.error(f"Bot status change callback: Failed to update meeting {meeting_id} status to '{new_status.value}'")
-                # #region agent log
-                try:
-                    with open('/home/dima/dev/.cursor/debug.log', 'a') as f:
-                        import json
-                        f.write(json.dumps({"location": "bot-manager/main.py:1435", "message": "Status update failed", "data": {"meeting_id": meeting_id, "old_status": old_status, "new_status": new_status.value}, "timestamp": __import__('time').time(), "sessionId": "debug-session", "runId": "run1", "hypothesisId": "C"}) + "\n")
-                except: pass
-                # #endregion
                 return {"status": "error", "detail": "Failed to update meeting status"}
 
         # Publish meeting status change via Redis Pub/Sub

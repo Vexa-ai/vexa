@@ -38,7 +38,7 @@ curl -X POST "$API_BASE/bots" \
 
 Full API guide:
 
-- [API overview](../user_api_guide.md)
+- [API overview](../user_api_guide.mdx)
 
 ## Common issues
 

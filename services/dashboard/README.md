@@ -13,13 +13,15 @@ docker run --rm -p 3000:3000 \
   vexaai/vexa-dashboard:latest
 ```
 
-Then open `http://localhost:3000`.
+Then open `http://localhost:3000`. (The container listens on port 3000; the `npm run dev` server uses port 3001.)
 
 ## Local Development
 
+The dashboard lives in the Vexa monorepo at `services/dashboard/`.
+
 ```bash
-git clone https://github.com/Vexa-ai/Vexa-Dashboard.git
-cd Vexa-Dashboard
+git clone https://github.com/Vexa-ai/vexa.git
+cd vexa/services/dashboard
 npm install
 cp .env.example .env.local
 npm run dev
@@ -54,12 +56,14 @@ Zoom meeting joins require additional setup in the Vexa backend (Zoom Meeting SD
 
 | Area | Variables |
 |---|---|
-| Session/auth | `NEXTAUTH_URL`, `NEXTAUTH_SECRET`, `JWT_SECRET` |
+| Session/auth | `NEXTAUTH_URL`, `NEXTAUTH_SECRET`, `JWT_SECRET`, `NEXT_PUBLIC_APP_URL` |
 | Magic-link email | `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` |
 | Google OAuth | `ENABLE_GOOGLE_AUTH`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` |
 | Zoom OAuth | `ZOOM_OAUTH_CLIENT_ID`, `ZOOM_OAUTH_CLIENT_SECRET`, `ZOOM_OAUTH_REDIRECT_URI`, `ZOOM_OAUTH_STATE_SECRET` |
 | AI assistant | `AI_MODEL`, `AI_API_KEY`, `AI_BASE_URL` |
 | Registration policy | `ALLOW_REGISTRATIONS`, `ALLOWED_EMAIL_DOMAINS` |
+| Bot defaults | `DEFAULT_BOT_NAME` |
+| Hosted mode | `NEXT_PUBLIC_HOSTED_MODE` |
 | Frontend/public URLs | `NEXT_PUBLIC_APP_URL`, `NEXT_PUBLIC_BASE_URL`, `NEXT_PUBLIC_TRANSCRIPT_SHARE_BASE_URL`, `NEXT_PUBLIC_VEXA_WS_URL`, `NEXT_PUBLIC_WEBAPP_URL` |
 
 See `.env.example` for a complete template.

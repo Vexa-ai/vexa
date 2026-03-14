@@ -55,12 +55,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
     if (shouldRedirect) {
       const externalAuthUrl = process.env.NEXT_PUBLIC_EXTERNAL_AUTH_URL;
       if (externalAuthUrl && !didLogout) {
-        // SSO: redirect to webapp for authentication (skip if user explicitly logged out)
+        // SSO: redirect to webapp for authentication
         const returnUrl = encodeURIComponent(window.location.href);
         window.location.href = `${externalAuthUrl}?returnUrl=${returnUrl}`;
-      } else {
+      } else if (!didLogout) {
+        // Self-hosted: show dashboard login
         router.push("/login");
       }
+      // If didLogout: logout() already handles the redirect — do nothing here
     }
   }, [shouldRedirect, router, didLogout]);
 

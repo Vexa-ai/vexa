@@ -46,7 +46,7 @@ This means:
 
 API details:
 
-- [`user_api_guide.md`](user_api_guide.md)
+- [API guide](user_api_guide.mdx)
 
 ## Zoom Credentials Caveat
 

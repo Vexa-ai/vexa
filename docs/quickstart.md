@@ -103,7 +103,7 @@ Full reference: [Transcripts API](api/transcripts.md)
 
 ## Next Steps
 
-- Live streaming: [WebSocket guide](websocket.md)
+- Live streaming: [WebSocket guide](websocket.mdx)
 - Post-meeting recording & playback: [Recordings API](api/recordings.md) + [Recording storage](recording-storage.md)
 - Delete/anonymize: [Meetings API](api/meetings.md) (and read: [Errors and retries](errors-and-retries.md))
 - Self-hosted deployment: [Self-hosted quickstart](getting-started.md)

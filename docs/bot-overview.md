@@ -47,7 +47,7 @@ Typical flow:
 You can observe lifecycle changes via:
 
 - Webhooks: [Webhooks](webhooks.md)
-- WebSocket live transcript updates: [WebSocket guide](websocket.md)
+- WebSocket live transcript updates: [WebSocket guide](websocket.mdx)
 
 ## Live vs Post-Meeting
 

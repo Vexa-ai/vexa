@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
+import { getAuthenticatedUserId } from "@/lib/auth-utils";
 
 const getAdminConfig = () => {
   const VEXA_ADMIN_API_URL =
@@ -11,7 +11,7 @@ const getAdminConfig = () => {
 };
 
 /**
- * GET /api/profile/keys?userId=123 — list user's API keys via admin API
+ * GET /api/profile/keys — list user's API keys via admin API
  */
 export async function GET(request: NextRequest) {
   const { VEXA_ADMIN_API_URL, VEXA_ADMIN_API_KEY } = getAdminConfig();
@@ -20,15 +20,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ keys: [] });
   }
 
-  const cookieStore = await cookies();
-  const token = cookieStore.get("vexa-token")?.value;
-  if (!token) {
+  // Resolve user from authenticated token instead of client-supplied userId
+  const userId = await getAuthenticatedUserId();
+  if (!userId) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
-  }
-
-  const userId = request.nextUrl.searchParams.get("userId");
-  if (!userId || !/^\d+$/.test(userId)) {
-    return NextResponse.json({ keys: [] });
   }
 
   try {
@@ -66,20 +61,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Admin API not configured" }, { status: 503 });
   }
 
-  const cookieStore = await cookies();
-  const token = cookieStore.get("vexa-token")?.value;
-  if (!token) {
+  // Resolve user from authenticated token instead of client-supplied userId
+  const userId = await getAuthenticatedUserId();
+  if (!userId) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
   try {
     const body = await request.json();
-    const userId = body.userId;
     const scope = body.scope; // "bot" or "tx"
-
-    if (!userId) {
-      return NextResponse.json({ error: "userId is required" }, { status: 400 });
-    }
 
     const url = scope
       ? `${VEXA_ADMIN_API_URL}/admin/users/${userId}/tokens?scope=${encodeURIComponent(scope)}`

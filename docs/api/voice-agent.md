@@ -178,7 +178,7 @@ curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij/screen" \
 
 ## WebSocket Events
 
-When voice agent is enabled, additional events are published on the [WebSocket](../websocket.md) connection:
+When voice agent is enabled, additional events are published on the [WebSocket](../websocket.mdx) connection:
 
 | Event | Payload | Description |
 |-------|---------|-------------|

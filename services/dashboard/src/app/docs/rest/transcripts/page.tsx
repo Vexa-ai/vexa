@@ -1,6 +1,8 @@
 import { Metadata } from "next";
 import { APIEndpointDoc } from "@/components/docs/api-endpoint-doc";
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_VEXA_PUBLIC_API_URL || "https://api.vexa.ai";
+
 export const metadata: Metadata = {
   title: "Transcripts API | Vexa API Documentation",
   description: "API reference for fetching and sharing meeting transcripts",
@@ -113,7 +115,7 @@ export default function TranscriptsPage() {
         ]}
         responseExample={{
           share_id: "abc123def456",
-          url: "https://api.vexa.ai/public/transcripts/abc123def456.txt",
+          url: `${API_BASE_URL}/public/transcripts/abc123def456.txt`,
           expires_at: "2024-01-01T13:00:00Z",
           expires_in_seconds: 3600,
         }}

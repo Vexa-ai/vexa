@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import crypto from "crypto";
+import { getAuthenticatedUserId } from "@/lib/auth-utils";
 
 const getAdminConfig = () => {
   const VEXA_ADMIN_API_URL =
@@ -12,7 +13,7 @@ const getAdminConfig = () => {
 };
 
 /**
- * GET /api/webhooks/config?userId=N — fetch webhook configuration from user data
+ * GET /api/webhooks/config — fetch webhook configuration from user data
  */
 export async function GET(request: NextRequest) {
   const { VEXA_ADMIN_API_URL, VEXA_ADMIN_API_KEY } = getAdminConfig();
@@ -21,15 +22,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(null, { status: 404 });
   }
 
-  const cookieStore = await cookies();
-  const token = cookieStore.get("vexa-token")?.value;
-  if (!token) {
+  // Resolve user from authenticated token instead of client-supplied userId
+  const userId = await getAuthenticatedUserId();
+  if (!userId) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
-  }
-
-  const userId = request.nextUrl.searchParams.get("userId");
-  if (!userId || !/^\d+$/.test(userId)) {
-    return NextResponse.json(null, { status: 404 });
   }
 
   try {
@@ -49,7 +45,7 @@ export async function GET(request: NextRequest) {
     const secret = data.webhook_secret || null;
     const config = {
       endpoint_url: data.webhook_url || "",
-      signing_secret_masked: secret || null,
+      signing_secret_masked: secret ? "****" + secret.slice(-4) : null,
       events: data.webhook_events || {
         "meeting.completed": true,
         "meeting.started": false,
@@ -74,19 +70,17 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: "Admin API not configured" }, { status: 503 });
   }
 
-  const cookieStore = await cookies();
-  const token = cookieStore.get("vexa-token")?.value;
-  if (!token) {
+  // Resolve user from authenticated token instead of client-supplied userId
+  const userId = await getAuthenticatedUserId();
+  if (!userId) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
+  const cookieStore = await cookies();
+  const token = cookieStore.get("vexa-token")?.value;
+
   try {
     const body = await request.json();
-    const userId = body.userId;
-
-    if (!userId) {
-      return NextResponse.json({ error: "userId is required" }, { status: 400 });
-    }
 
     // Get current user data
     const userRes = await fetch(`${VEXA_ADMIN_API_URL}/admin/users/${userId}`, {
@@ -143,18 +137,20 @@ export async function PUT(request: NextRequest) {
 
     // Also update the gateway's webhook URL for this user
     const VEXA_API_URL = process.env.VEXA_API_URL || "http://localhost:18056";
-    await fetch(`${VEXA_API_URL}/user/webhook`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-Key": token,
-      },
-      body: JSON.stringify({ webhook_url: body.endpoint_url || "" }),
-    }).catch(() => {});
+    if (token) {
+      await fetch(`${VEXA_API_URL}/user/webhook`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": token,
+        },
+        body: JSON.stringify({ webhook_url: body.endpoint_url || "" }),
+      }).catch(() => {});
+    }
 
     return NextResponse.json({
       endpoint_url: body.endpoint_url || "",
-      signing_secret_masked: secret,
+      signing_secret_masked: secret ? "****" + secret.slice(-4) : null,
       events: body.events || currentData.webhook_events || {},
     });
   } catch (error) {

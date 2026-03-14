@@ -1,0 +1,17 @@
+services:
+  bot-manager:
+    environment:
+      - WORKSPACES_DIR=/workspaces
+      - HOST_WORKSPACES_DIR=/home/dima/workspaces
+      - CLAUDE_HOME=/claude-home
+      - HOST_CLAUDE_HOME=/home/dima
+      - VEXA_REPO_PATH=/vexa-repo
+      - HOST_VEXA_REPO_PATH=/home/dima/dev/vexa
+      - BOT_EXPERIMENT_IMAGE_NAME=vexa-bot:experiment
+      - TRANSCRIPTION_GATEWAY_URL=http://transcription-gateway:8084
+      - TRANSCRIPTION_GATEWAY_API_KEY=vxa_tx_QbdILWVrUKjWH9j0IKKh33jnYq1sP7NegB19Jg5K
+    volumes:
+      - /home/dima/workspaces:/workspaces
+      - /home/dima/.claude:/claude-home/.claude:ro
+      - /home/dima/.claude.json:/claude-home/.claude.json:ro
+      - /home/dima/dev/vexa:/vexa-repo:ro

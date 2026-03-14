@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import crypto from "crypto";
+import { getAuthenticatedUserId } from "@/lib/auth-utils";
 
 /**
  * POST /api/webhooks/rotate-secret — rotate webhook signing secret
@@ -16,19 +16,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Admin API not configured" }, { status: 503 });
   }
 
-  const cookieStore = await cookies();
-  const token = cookieStore.get("vexa-token")?.value;
-  if (!token) {
+  // Resolve user from authenticated token instead of client-supplied userId
+  const userId = await getAuthenticatedUserId();
+  if (!userId) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
   try {
-    const body = await request.json().catch(() => ({}));
-    const userId = (body as Record<string, unknown>).userId;
-
-    if (!userId) {
-      return NextResponse.json({ error: "userId is required" }, { status: 400 });
-    }
 
     // Get current user data
     const userRes = await fetch(`${VEXA_ADMIN_API_URL}/admin/users/${userId}`, {

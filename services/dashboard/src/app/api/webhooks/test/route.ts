@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import crypto from "crypto";
+import { getAuthenticatedUserId } from "@/lib/auth-utils";
 
 const getAdminConfig = () => {
   const VEXA_ADMIN_API_URL =
@@ -54,16 +54,15 @@ async function logDelivery(
 export async function POST(request: NextRequest) {
   const { VEXA_ADMIN_API_URL, VEXA_ADMIN_API_KEY } = getAdminConfig();
 
-  const cookieStore = await cookies();
-  const userToken = cookieStore.get("vexa-token")?.value;
-  if (!userToken) {
+  // Resolve user from authenticated token instead of client-supplied userId
+  const userId = await getAuthenticatedUserId();
+  if (!userId) {
     return NextResponse.json({ success: false, error: "Not authenticated" }, { status: 401 });
   }
 
   try {
     const body = await request.json();
     const url = body.url;
-    const userId = body.userId;
 
     if (!url) {
       return NextResponse.json({ success: false, error: "No webhook URL provided" }, { status: 400 });

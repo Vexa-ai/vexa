@@ -4,10 +4,12 @@ The Transcription Collector is a service that aggregates and deduplicates transc
 
 ## Architecture
 
-- **WebSocket Server**: Accepts connections from WhisperLive servers
-- **Redis**: Temporary storage and deduplication
-- **PostgreSQL**: Permanent storage for completed segments
-- **Filtering System**: Removes non-informative segments
+- **Redis Stream Consumer**: Reads transcription segments from Redis streams (published by WhisperLive)
+- **Redis**: Temporary/mutable segment storage and deduplication (Hash per meeting)
+- **PostgreSQL**: Permanent storage for finalized (immutable) segments
+- **Background Processor**: Periodically flushes immutable segments from Redis to PostgreSQL
+- **Filtering System**: Removes non-informative segments before persistence
+- **REST API**: Serves transcript data, meeting management, and health checks
 
 ## Filtering System
 
@@ -85,8 +87,10 @@ CUSTOM_FILTERS.append(filter_out_short_words_only)
 ## API Endpoints
 
 - `GET /health`: Health check endpoint
-- `GET /stats`: Statistics about stored transcriptions
-- `WebSocket /collector`: WebSocket endpoint for WhisperLive servers
+- `GET /meetings`: List meetings for a user
+- `GET /transcripts/{platform}/{native_meeting_id}`: Fetch transcript segments
+- `PATCH /meetings/{platform}/{native_meeting_id}`: Update meeting metadata
+- `DELETE /meetings/{platform}/{native_meeting_id}`: Delete/anonymize a meeting
 
 ## Deployment
 

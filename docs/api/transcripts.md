@@ -4,7 +4,7 @@ Transcripts are available during and after a meeting.
 
 For live meetings, prefer WebSockets:
 
-- [WebSocket guide](../websocket.md)
+- [WebSocket guide](../websocket.mdx)
 
 ## GET `/transcripts/{platform}/{native_meeting_id}`
 

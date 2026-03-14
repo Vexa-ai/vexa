@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Nginx load balancer - Single entry point
   transcription-api:
@@ -58,37 +56,36 @@ services:
       retries: 3
       start_period: 60s
 
-  # # Worker 2
-  # transcription-worker-2:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile
-  #   container_name: transcription-worker-2
-  #   environment:
-  #     - WORKER_ID=2
-  #     - MODEL_SIZE=${MODEL_SIZE:-large-v3-turbo}
-  #     - DEVICE=${DEVICE:-cuda}
-  #     - COMPUTE_TYPE=${COMPUTE_TYPE:-int8}
-  #     - CPU_THREADS=${CPU_THREADS:-0}
-  #     - API_TOKEN=${API_TOKEN:-}
-  #   volumes:
-  #     - ./models:/app/models
-  #   deploy:
-  #     resources:
-  #       reservations:
-  #         devices:
-  #           - driver: nvidia
-  #             count: 1
-  #             capabilities: [gpu]
-  #   restart: unless-stopped
-  #   networks:
-  #     - transcription-net
-  #   healthcheck:
-  #     test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 3
-  #     start_period: 60s
+  # Worker 2
+  transcription-worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - WORKER_ID=2
+      - MODEL_SIZE=${MODEL_SIZE:-large-v3-turbo}
+      - DEVICE=${DEVICE:-cuda}
+      - COMPUTE_TYPE=${COMPUTE_TYPE:-int8}
+      - CPU_THREADS=${CPU_THREADS:-0}
+      - API_TOKEN=${API_TOKEN:-}
+    volumes:
+      - ./models:/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    networks:
+      - transcription-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   # # Worker 3
   # transcription-worker-3:

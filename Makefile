@@ -1,4 +1,4 @@
-.PHONY: all setup submodules env force-env setup-transcription-service-env build-bot-image build build-transcription-service up up-transcription-service down down-transcription-service ps logs test test-api test-setup migrate makemigrations init-db stamp-db migrate-or-init migration-status
+.PHONY: all setup submodules env force-env setup-transcription-service-env build-bot-image build build-transcription-service up up-transcription-service down down-transcription-service ps logs test test-api test-setup migrate makemigrations init-db stamp-db migrate-or-init migration-status test-unit test-integration test-load test-smoke test-full audit
 
 # Default target: Sets up everything and starts the services
 all: setup-env build up migrate-or-init test
@@ -299,7 +299,7 @@ test: check_docker
 		echo "API: http://localhost:8056/docs"; \
 		echo "Admin: http://localhost:8057/docs"; \
 	fi
-	@chmod +x testing/run_vexa_interaction.sh
+	@chmod +x tests/integration/run_vexa_interaction.sh
 	@if [ -f .env ]; then \
 		DEVICE_TYPE=$$(grep -E '^[[:space:]]*DEVICE_TYPE=' .env | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//'); \
 		WHISPER_MODEL=$$(grep -E '^[[:space:]]*WHISPER_MODEL_SIZE=' .env | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//'); \
@@ -308,9 +308,9 @@ test: check_docker
 		fi; \
 	fi
 	@if [ -n "$(MEETING_ID)" ]; then \
-		./testing/run_vexa_interaction.sh "$(MEETING_ID)"; \
+		./tests/integration/run_vexa_interaction.sh "$(MEETING_ID)"; \
 	else \
-		./testing/run_vexa_interaction.sh; \
+		./tests/integration/run_vexa_interaction.sh; \
 	fi
 
 # Quick API connectivity test
@@ -464,3 +464,38 @@ migration-status: check_docker
 	fi
 	@docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini current
 	@docker compose $$COMPOSE_FILES exec -T transcription-collector alembic -c /app/alembic.ini history --verbose
+
+# --- Testing Targets ---
+
+# Run unit tests across all services (no Docker required)
+test-unit:
+	@bash tests/run_unit.sh
+
+# Run integration tests (Docker required)
+test-integration: check_docker
+	@python -m pytest tests/integration/ -q --tb=short
+
+# Run load tests (Docker required, services must be running)
+test-load: check_docker
+	@bash tests/load/run_load_test.sh
+
+# Run smoke tests (Docker required, all services must be running)
+test-smoke: check_docker
+	@bash tests/smoke/test_full_stack.sh
+
+# Run unit + integration + smoke tests
+test-all: test-unit test-integration test-smoke
+
+# Run everything including load tests
+test-full: test-unit test-integration test-smoke test-load
+
+# Run all audit scripts
+audit:
+	@echo "Running security audit..."
+	@python tests/audit/security_audit.py --path .
+	@echo ""
+	@echo "Running configuration audit..."
+	@python tests/audit/config_audit.py --path .
+	@echo ""
+	@echo "Running architecture audit..."
+	@python tests/audit/architecture_audit.py --path .

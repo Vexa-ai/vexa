@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import type { MeetingStatus } from "@/types/vexa";
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_VEXA_PUBLIC_API_URL || "https://api.vexa.ai";
+
 interface WsEvent {
   direction: "out" | "in";
   type: string;
@@ -54,7 +56,7 @@ function buildEvents(
     events.push({
       direction: "out",
       type: "connect",
-      payload: { url: "wss://api.vexa.ai/ws" },
+      payload: { url: `${API_BASE_URL.replace(/^http/, 'ws')}/ws` },
       ts: ts(30),
     });
   }
@@ -295,7 +297,7 @@ export function WsEventLog({
           <span className="w-[11px] h-[11px] rounded-full bg-[#28c840]" />
         </div>
         <span className="text-[11px] text-gray-500 font-mono">
-          WebSocket · api.vexa.ai/ws
+          WebSocket · {API_BASE_URL.replace(/^https?:\/\//, '')}/ws
         </span>
         {isLive && (
           <div className="flex items-center gap-1.5">
@@ -401,7 +403,7 @@ export function RestTranscriptsPreview({
 }: RestTranscriptsPreviewProps) {
   const displayToken = token ? maskToken(token) : "vx_sk_...";
   const copyToken = token || "YOUR_API_KEY";
-  const curlCommand = `curl https://api.vexa.ai/transcripts/${platform}/${nativeId} \\\n  -H 'X-API-Key: ${copyToken}'`;
+  const curlCommand = `curl ${API_BASE_URL}/transcripts/${platform}/${nativeId} \\\n  -H 'X-API-Key: ${copyToken}'`;
 
   return (
     <div className="rounded-[16px] border border-border overflow-hidden shadow-lg bg-[#111111]">
@@ -426,7 +428,7 @@ export function RestTranscriptsPreview({
         <div>
           <span className="text-gray-300">curl </span>
           <span className="text-[#6ee7b7]">
-            https://api.vexa.ai/transcripts/{platform}/{nativeId}
+            {API_BASE_URL}/transcripts/{platform}/{nativeId}
           </span>
           <span className="text-gray-300"> \</span>
         </div>
@@ -441,7 +443,7 @@ export function RestTranscriptsPreview({
         <div className="flex items-center gap-1.5">
           <span className="w-[6px] h-[6px] rounded-full bg-emerald-400" />
           <span className="text-[10px] text-gray-600">
-            REST API · api.vexa.ai
+            REST API · {API_BASE_URL.replace(/^https?:\/\//, '')}
           </span>
         </div>
         <span className="text-[10px] text-gray-700">
@@ -463,8 +465,8 @@ export function RestRecordingsPreview({
 }: RestRecordingsPreviewProps) {
   const displayToken = token ? maskToken(token) : "vx_sk_...";
   const copyToken = token || "YOUR_API_KEY";
-  const curlListCommand = `curl https://api.vexa.ai/recordings \\\n  -H 'X-API-Key: ${copyToken}'`;
-  const curlDownloadCommand = `curl -L https://api.vexa.ai/recordings/{id}/media/{media_id}/raw \\\n  -H 'X-API-Key: ${copyToken}' \\\n  -o recording.wav`;
+  const curlListCommand = `curl ${API_BASE_URL}/recordings \\\n  -H 'X-API-Key: ${copyToken}'`;
+  const curlDownloadCommand = `curl -L ${API_BASE_URL}/recordings/{id}/media/{media_id}/raw \\\n  -H 'X-API-Key: ${copyToken}' \\\n  -o recording.wav`;
   const fullCopy = `${curlListCommand}\n\n${curlDownloadCommand}`;
 
   return (
@@ -490,7 +492,7 @@ export function RestRecordingsPreview({
         <div>
           <span className="text-gray-300">curl </span>
           <span className="text-[#6ee7b7]">
-            https://api.vexa.ai/recordings
+            {API_BASE_URL}/recordings
           </span>
           <span className="text-gray-300"> \</span>
         </div>
@@ -506,7 +508,7 @@ export function RestRecordingsPreview({
           <div>
             <span className="text-gray-300">curl -L </span>
             <span className="text-[#6ee7b7]">
-              https://api.vexa.ai/recordings/{'{'}<span className="text-[#fca5a5]">id</span>{'}'}/media/{'{'}<span className="text-[#fca5a5]">media_id</span>{'}'}/raw
+              {API_BASE_URL}/recordings/{'{'}<span className="text-[#fca5a5]">id</span>{'}'}/media/{'{'}<span className="text-[#fca5a5]">media_id</span>{'}'}/raw
             </span>
             <span className="text-gray-300"> \</span>
           </div>
@@ -527,7 +529,7 @@ export function RestRecordingsPreview({
         <div className="flex items-center gap-1.5">
           <span className="w-[6px] h-[6px] rounded-full bg-emerald-400" />
           <span className="text-[10px] text-gray-600">
-            REST API · api.vexa.ai
+            REST API · {API_BASE_URL.replace(/^https?:\/\//, '')}
           </span>
         </div>
         <span className="text-[10px] text-gray-700">

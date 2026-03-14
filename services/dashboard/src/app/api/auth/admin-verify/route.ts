@@ -1,8 +1,34 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
+import crypto from "crypto";
 
 const ADMIN_COOKIE_NAME = "vexa-admin-session";
 const COOKIE_MAX_AGE = 60 * 60 * 24; // 24 hours
+
+function getSigningSecret(): string {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error("JWT_SECRET is not configured");
+  }
+  return secret;
+}
+
+function signCookieValue(payload: string): string {
+  const hmac = crypto.createHmac("sha256", getSigningSecret()).update(payload).digest("hex");
+  return `${payload}.${hmac}`;
+}
+
+function verifyCookieValue(signed: string): string | null {
+  const dotIndex = signed.lastIndexOf(".");
+  if (dotIndex === -1) return null;
+  const payload = signed.substring(0, dotIndex);
+  const signature = signed.substring(dotIndex + 1);
+  const expected = crypto.createHmac("sha256", getSigningSecret()).update(payload).digest("hex");
+  if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
+    return null;
+  }
+  return payload;
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -35,13 +61,15 @@ export async function POST(request: NextRequest) {
     // Token is valid - set a secure session cookie
     const cookieStore = await cookies();
 
-    // Create a signed session value (simple hash for verification)
-    const sessionValue = Buffer.from(
+    // Create HMAC-signed session value
+    const payload = Buffer.from(
       JSON.stringify({
         authenticated: true,
         timestamp: Date.now(),
       })
     ).toString("base64");
+
+    const sessionValue = signCookieValue(payload);
 
     cookieStore.set(ADMIN_COOKIE_NAME, sessionValue, {
       httpOnly: true,
@@ -75,8 +103,14 @@ export async function GET() {
     }
 
     try {
+      // Verify HMAC signature before trusting the payload
+      const payload = verifyCookieValue(sessionCookie.value);
+      if (!payload) {
+        return NextResponse.json({ authenticated: false, reason: "invalid" }, { status: 401 });
+      }
+
       const sessionData = JSON.parse(
-        Buffer.from(sessionCookie.value, "base64").toString()
+        Buffer.from(payload, "base64").toString()
       );
 
       // Check if session is expired (24 hours)
