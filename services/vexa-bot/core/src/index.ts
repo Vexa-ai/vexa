@@ -23,6 +23,7 @@ import { TranscriptionClient } from './services/transcription-client';
 import { SegmentPublisher } from './services/segment-publisher';
 import { SpeakerStreamManager } from './services/speaker-streams';
 import { resolveSpeakerName } from './services/speaker-identity';
+import { SileroVAD } from './services/vad';
 import { SpeakerStreamHandle } from './services/audio';
 
 // Module-level variables to store current configuration
@@ -67,6 +68,7 @@ let redisPublisher: RedisClientType | null = null;
 let transcriptionClient: TranscriptionClient | null = null;
 let segmentPublisher: SegmentPublisher | null = null;
 let speakerManager: SpeakerStreamManager | null = null;
+let vadModel: SileroVAD | null = null;
 let activeSpeakerStreamHandles: SpeakerStreamHandle[] = [];
 // ------------------------------------------
 
@@ -994,6 +996,14 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
     });
     log('[PerSpeaker] SegmentPublisher created');
 
+    try {
+      vadModel = await SileroVAD.create();
+      log('[PerSpeaker] Silero VAD loaded');
+    } catch (err: any) {
+      log(`[PerSpeaker] VAD not available (${err.message}) — will send all audio`);
+      vadModel = null;
+    }
+
     speakerManager = new SpeakerStreamManager({
       sampleRate: 16000,
       minAudioDuration: 3,
@@ -1072,6 +1082,12 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
       timestamp: Date.now() / 1000,
     });
     log(`[📡 SPEAKER EVENT] "${name}" joined → Redis`);
+  }
+
+  // VAD check — only feed audio that contains speech
+  if (vadModel) {
+    const hasSpeech = await vadModel.isSpeech(audioData);
+    if (!hasSpeech) return; // silence — don't buffer, don't transcribe
   }
 
   speakerManager.feedAudio(speakerId, audioData);
