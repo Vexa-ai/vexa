@@ -17,14 +17,20 @@ what, the bot keeps each speaker's WebRTC audio track separate. This gives:
 
 - Joins Google Meet, Teams, and Zoom via browser automation (Playwright).
 - Per-speaker audio capture: each participant = separate audio stream.
+- Screen share tracks (unmapped to a participant tile) labeled "Presentation".
 - Silero VAD filters silence before transcription (saves compute).
 - Direct HTTP POST to transcription-service (no WhisperLive dependency).
+- Per-speaker language detection: auto-detect on first chunk, lock language
+  after high-confidence detection so subsequent chunks skip detection overhead.
 - Confirmation-based buffer: resubmits full buffer on each cycle, only
   publishes a segment when the text stabilizes across consecutive responses.
 - Hallucination filter: known junk phrases + repetition detection.
+  Shared phrase lists at `services/WhisperLive/hallucinations/`.
 - Redis output: XADD to streams (persistence) + PUBLISH to channels
   (real-time dashboard).
 - Speaker identity: one-time DOM name resolution per participant, cached.
+  Google Meet uses participant tile DOM selectors. Teams uses
+  RTCPeerConnection track metadata.
 - Recording: audio file capture + upload to storage via bot-manager.
 
 ## How
@@ -105,6 +111,15 @@ node tests/test_mock_meeting_e2e.js      # end-to-end: bot -> transcription -> R
 # Verify Redis output
 redis-cli XRANGE transcription_segments - +
 # Segments should have speaker: "Alice Johnson", "Bob Smith", etc.
+
+# Pretty-print recent transcripts from Redis
+bash tests/print_transcripts.sh
+```
+
+Unit tests for the confirmation buffer (no Docker needed):
+
+```bash
+cd core && npx tsx src/services/__tests__/speaker-streams.test.ts
 ```
 
 ### Dev

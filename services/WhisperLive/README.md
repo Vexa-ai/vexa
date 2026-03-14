@@ -1,6 +1,13 @@
 # WhisperLive
 
-Real-time audio bridge between meeting bots and transcription. Fork of [collabora/WhisperLive](https://github.com/collabora/WhisperLive), running in **remote-only mode**.
+Real-time audio bridge for transcription. Fork of [collabora/WhisperLive](https://github.com/collabora/WhisperLive), running in **remote-only mode**.
+
+> **Note:** The Vexa bot now has its own per-speaker transcription pipeline
+> (direct HTTP POST to transcription-service, per-speaker buffers, VAD).
+> WhisperLive is **optional** for bot-based meetings. It remains useful for
+> standalone / external WebSocket clients that send a single mixed audio
+> stream and need server-side buffering, LIFO scheduling, and segment
+> delivery.
 
 ## Why
 
@@ -140,6 +147,20 @@ WhisperLive/
     test_hot.sh              # Integration / chain test
     test_stress.sh           # Stress / concurrency test
     AGENT_TEST.md            # Test objectives and plan
+```
+
+## Shared hallucination filter
+
+The `hallucinations/` directory contains per-language phrase lists and a
+reusable filter used by both WhisperLive and the bot:
+
+```
+hallucinations/
+  en.txt, ru.txt, es.txt, pt.txt   # known junk phrases per language
+  filter.py                         # Python filter (WhisperLive)
+  filter.ts                         # TypeScript filter (bot)
+  collect_hallucinations.py         # tool to gather new phrases from logs
+  README.md                         # format and contribution guide
 ```
 
 ## License

@@ -77,6 +77,8 @@ All configuration is via environment variables. Copy `.env.example` and adjust.
 | `MAX_CONCURRENT_TRANSCRIPTIONS` | `2` | Concurrent model calls per worker |
 | `FAIL_FAST_WHEN_BUSY` | `true` | Return 503 immediately when busy |
 | `BUSY_RETRY_AFTER_S` | `1` | Retry-After header value (seconds) |
+| `REPETITION_PENALTY` | `1.1` | Penalize repeated tokens (>1.0 = penalize). Prevents "they are saying they are saying..." loops |
+| `NO_REPEAT_NGRAM_SIZE` | `3` | Hard-block any N-word phrase from repeating in the output |
 
 Full list with quality/VAD tuning parameters: `.env.example`.
 
