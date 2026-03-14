@@ -88,6 +88,21 @@ Each service and test directory includes an `AGENT_TEST.md` file with instructio
 find . -name "AGENT_TEST.md"
 ```
 
+## Full test cycle
+
+For thorough pre-release validation, use the bottom-up cycle in [tests/CYCLE.md](tests/CYCLE.md). The cycle covers 8 phases:
+
+1. **Code quality** -- per-service unit tests, README validation (no Docker)
+2. **Service isolation** -- start each service in Docker, verify it works
+3. **Functionality chains** -- transcription chain, webhook delivery, API chain, real-time delivery, speaker identification
+4. **User experience flows** -- self-hoster deploy, API user flow, dashboard flow
+5. **Stress and load** -- transcription-service capacity, WhisperLive streams (if used), bot scaling
+6. **Builds and packages** -- Docker images, Vexa-lite, Helm charts, version consistency
+7. **Audit** -- security, config, architecture, staleness
+8. **Report to human** -- per-phase summary, human decides next steps
+
+The cycle is the most thorough option. `make test-unit` is fine for quick checks. `make test-all` is fine for CI.
+
 ## Audit kit
 
 ### Security audit
@@ -132,6 +147,7 @@ tests/
   audit/                # security and compliance
   run_unit.sh           # run all unit tests
   run_all.sh            # run unit + integration + smoke
+  CYCLE.md              # bottom-up sequential validation (8 phases)
 ```
 
 ## Resource baselines

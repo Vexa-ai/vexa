@@ -1,66 +1,68 @@
 # Test Cycle: Bottom-Up Sequential Validation
 
-The most thorough, human-gated test approach. Not the only way — `make test-unit` and `make test-all` exist for quick runs. Use the cycle for pre-release, after major changes, or when you need confidence.
+The most thorough, human-gated test approach. Not the only way -- `make test-unit` and `make test-all` exist for quick runs. Use the cycle for pre-release, after major changes, or when you need confidence.
 
 **How it works:**
-1. Agent presents the step — WHY, WHAT, HOW
+1. Agent presents the step -- WHY, WHAT, HOW
 2. Agent runs it
-3. Agent presents results AND tells human what to look at — gaps, risks, findings
-4. Human validates — approves, asks questions, or says fix it
+3. Agent presents results AND tells human what to look at -- gaps, risks, findings
+4. Human validates -- approves, asks questions, or says fix it
 5. Next step
 
 ## Principles
 
-1. **Isolate, then chain.** Test each service completely alone first (unit → start → verify → stress → quality). Start from services with no dependencies (transcription-service — standalone GPU inference). Only then test things that depend on it (WhisperLive, bot). If the chain fails, you already know the foundation works — the problem is in the dependent or the connection.
+1. **Isolate, then chain.** Test each service completely alone first (unit, start, verify). Start from services with no dependencies (transcription-service -- standalone GPU inference). Only then test things that depend on it. If the chain fails, you already know the foundation works -- the problem is in the dependent or the connection.
 
 2. **Bottom-up by dependency.** Start at the foundation, work up. Never test something whose foundation is unverified.
 
 3. **Every service has THREE gates:**
-   - **Unit tests pass** — code logic is sound
-   - **README exists with WHY/WHAT/HOW** — documented for humans
-   - **Hot test passes** — the service actually runs and does its job
+   - **Unit tests pass** -- code logic is sound
+   - **README exists with WHY/WHAT/HOW** -- documented for humans
+   - **Hot test passes** -- the service actually runs and does its job
 
    If any gate fails, the step fails. Fix it before moving on.
 
-4. **Chain tests follow isolation tests.** After service A passes and service B passes, test A→B as a chain. The chain test verifies the connection, not the individual services.
+4. **Chain tests follow isolation tests.** After service A passes and service B passes, test A->B as a chain. The chain test verifies the connection, not the individual services.
 
 5. **Test objectives per service:** throughput, quality, dev experience, clean code, robustness/stability, security, compatibility, recovery, configuration validation, observability.
 
 6. **Results go to TWO places:** the service's `tests/results/` (local) AND repo's `tests/*/results/` (central). Baselines in `tests/load/results/README.md` must be updated.
 
-7. **Findings feed back into docs.** Every finding — security gaps, code issues, missing docs — gets documented. If it changes how we test, update CYCLE.md. If it changes a service, update its README.
+7. **Findings feed back into docs.** Every finding -- security gaps, code issues, missing docs -- gets documented. If it changes how we test, update CYCLE.md. If it changes a service, update its README.
 
 8. **Code without docs is untested code.** Missing README blocks the gate.
 
-9. **Docs must be validated.** Documented commands that don't work are bugs. Follow the README — if a step fails, it's a finding.
+9. **Docs must be validated.** Documented commands that don't work are bugs. Follow the README -- if a step fails, it's a finding.
 
 ## Service dependency graph
 
 ```
-shared-models              ← library, no deps
-     ↓
-transcription-service      ← standalone, GPU inference behind API
-     ↓
-WhisperLive                ← WebSocket server, depends on transcription-service + Redis
-     ↓
-Bot (per-speaker pipeline) ← depends on transcription-service + Redis (NOT WhisperLive)
-     ↓
-admin-api                  ← depends on Postgres + shared-models
-transcription-collector    ← depends on Redis + Postgres
-     ↓
-bot-manager                ← depends on Redis + Postgres + admin-api
-     ↓
-api-gateway                ← depends on admin-api + bot-manager + Redis
-     ↓
-dashboard                  ← depends on api-gateway + admin-api
+shared-models              <- library, no deps
+     |
+transcription-service      <- standalone, GPU inference behind API
+     |
+WhisperLive                <- WebSocket server, depends on transcription-service + Redis (optional for bots)
+     |
+Bot (per-speaker pipeline) <- depends on transcription-service + Redis (NOT WhisperLive)
+     |
+admin-api                  <- depends on Postgres + shared-models
+transcription-collector    <- depends on Redis + Postgres
+     |
+bot-manager                <- depends on Redis + Postgres + admin-api
+     |
+api-gateway                <- depends on admin-api + bot-manager + Redis
+     |
+dashboard                  <- depends on api-gateway + admin-api
 ```
 
-## Phase 1: Standalone services (no Docker)
+---
+
+## Phase 1: Code quality (no Docker)
 
 Test code logic in isolation. Bottom of dependency graph first.
 
 ### 1.1 shared-models
-**WHY:** Foundation — every service imports it.
+**WHY:** Foundation -- every service imports it.
 **Gates:** 39 unit tests + library (no README gate).
 ```bash
 cd libs/shared-models && python -m pytest shared_models/test_*.py -v
@@ -69,7 +71,7 @@ cd libs/shared-models && python -m pytest shared_models/test_*.py -v
 ### 1.2 transcription-service
 
 **1.2a Unit tests**
-**WHY:** Transcription logic — hallucination detection, silence filtering, config parsing.
+**WHY:** Transcription logic -- hallucination detection, silence filtering, config parsing.
 **Gates:** 30 unit tests + README with WHY/WHAT/HOW.
 ```bash
 cd services/transcription-service && pytest tests/ -v
@@ -78,12 +80,12 @@ cd services/transcription-service && pytest tests/ -v
 **1.2b Hot isolation test**
 **WHY:** Unit tests prove logic. Now prove it actually transcribes.
 ```bash
-bash tests/test_hot.sh --full    # start → verify → basic load → stop
+bash tests/test_hot.sh --full    # start -> verify -> basic load -> stop
 ```
 **Look at:** Transcript quality (coherent, not garbage), latency vs baseline, README port matches actual.
 
 **1.2c Stress test**
-**WHY:** Find real capacity limits — concurrency curve, audio sizes, GPU utilization.
+**WHY:** Find real capacity limits -- concurrency curve, audio sizes, GPU utilization.
 ```bash
 bash tests/test_stress.sh
 ```
@@ -91,23 +93,23 @@ bash tests/test_stress.sh
 **Baselines:** Single: ~0.17s GPU. 40 concurrent (2 workers): 100% success. Queue limit: ~20/worker.
 
 **1.2d Agent-driven deep test**
-**WHY:** Security, compatibility, recovery, observability — things scripts can't judge.
+**WHY:** Security, compatibility, recovery, observability -- things scripts can't judge.
 ```bash
 # Agent reads tests/AGENT_TEST.md and executes all 6 tests
 ```
 **Look at:** Auth enforcement, OpenAI API compatibility, worker crash recovery, log quality.
 
-### 1.3 WhisperLive
+### 1.3 WhisperLive (optional -- not required for bot pipeline)
 
 **1.3a Unit tests**
-**WHY:** Dataclass contracts — if Segment serializes wrong, downstream breaks silently.
+**WHY:** Dataclass contracts -- if Segment serializes wrong, downstream breaks silently.
 **Gates:** 10 unit tests + README with WHY/WHAT/HOW.
 ```bash
 cd services/WhisperLive && pytest tests/ -v
 ```
 
 **1.3b Hot chain test**
-**WHY:** WhisperLive can't be tested alone — needs transcription-service. Test the chain.
+**WHY:** WhisperLive can't be tested alone -- needs transcription-service. Test the chain.
 **Prerequisite:** transcription-service running (already tested in 1.2).
 ```bash
 # Start transcription-service first
@@ -124,7 +126,7 @@ cd services/WhisperLive && bash tests/test_hot.sh --full
 bash tests/test_stress.sh
 ```
 **Baselines:** 100 concurrent: 100% segment delivery. 200: 96.5%. 500: 58.4% (LIFO skipping by design). ~4MiB memory per connection.
-**Look at:** This is NOT silent failure — it's LIFO prioritizing freshness. Streams that "miss" segments would get them eventually, just slower.
+**Look at:** This is NOT silent failure -- it's LIFO prioritizing freshness. Streams that "miss" segments would get them eventually, just slower.
 
 ### 1.4 Bot (per-speaker pipeline)
 
@@ -143,7 +145,7 @@ cd services/vexa-bot/core && npx jest    # or vitest
 docker compose up -d redis
 cd services/transcription-service && docker compose up -d
 
-# Serve mock meeting (3 speakers: Alice, Bob, Carol — Edge TTS audio)
+# Serve mock meeting (3 speakers: Alice, Bob, Carol -- Edge TTS audio)
 cd services/vexa-bot/tests/mock-meeting && bash serve.sh
 
 # Run bot against mock meeting
@@ -184,14 +186,23 @@ cd services/api-gateway && pytest tests/ -v
 ### 1.8 Remaining services
 **tts-service:** 16 unit tests + README.
 **mcp:** 53 unit tests + README.
-**dashboard:** README check (no unit tests — UI service).
+**dashboard:** README check (no unit tests -- UI service).
+
+### 1.9 README validation
+**WHY:** Docs must be accurate post-architecture change.
+**Check each service README for:**
+- Bot README reflects per-speaker pipeline, no WhisperLive dependency
+- WhisperLive README says optional for bots
+- Transcription-service README mentions repetition_penalty
+- Collector README reflects bot-published segments (not just WhisperLive)
+- redis.md reflects bot as stream producer alongside WhisperLive
 
 ### Phase 1 Gate
 **All unit tests pass. All READMEs have WHY/WHAT/HOW. Standalone services hot-tested.**
 
 ---
 
-## Phase 2: Infrastructure + services (Docker)
+## Phase 2: Service isolation (Docker, one at a time)
 
 Start services in dependency order. Each must be healthy before its dependents start.
 
@@ -207,25 +218,38 @@ docker compose up -d admin-api
 ```
 **Verify:** health check, CRUD operations, auth enforcement.
 
-### 2.3 transcription-collector
+### 2.3 transcription-service
+```bash
+docker compose up -d transcription-service
+```
+**Verify:** health check, send audio, get transcript back.
+
+### 2.4 transcription-collector
 ```bash
 docker compose up -d transcription-collector
 ```
 **Verify:** consuming Redis stream, persisting to Postgres.
 
-### 2.4 bot-manager
+### 2.5 WhisperLive (optional)
+```bash
+docker compose up -d whisperlive
+```
+**Verify:** health check, WebSocket connect, segments arrive.
+**Note:** Only needed if serving external WebSocket clients. Bot does not require WhisperLive.
+
+### 2.6 bot-manager
 ```bash
 docker compose up -d bot-manager
 ```
 **Verify:** health check, bot launch capability.
 
-### 2.5 api-gateway
+### 2.7 api-gateway
 ```bash
 docker compose up -d api-gateway
 ```
 **Verify:** routing, auth enforcement, WebSocket proxy.
 
-### 2.6 dashboard
+### 2.8 dashboard
 ```bash
 docker compose up -d dashboard
 ```
@@ -236,51 +260,156 @@ docker compose up -d dashboard
 
 ---
 
-## Phase 3: Chains (services talk to each other)
+## Phase 3: Functionality chains
+
+Verify the data flows that make the product work.
 
 ### 3.1 Transcription chain (THE HOT PATH)
 ```
-audio → bot (per-speaker) → transcription-service → segments → Redis → collector → Postgres → API
+audio -> bot (per-speaker) -> transcription-service -> segments -> Redis -> collector -> Postgres -> API
 ```
 **Test with mock meeting.** Verify transcript with speaker labels in API response.
+**Look at:**
+- Segments arrive in Redis with correct speaker labels
+- Collector persists to Postgres without data loss
+- API returns transcript with speaker attribution
+- Hallucination filter catches known junk phrases
 
-### 3.2 Bot chain
+### 3.2 Webhook delivery
 ```
-launch bot → bot joins mock meeting → per-speaker transcription → segments appear
+meeting event -> bot-manager -> webhook fired -> customer endpoint
 ```
-**Verify:** resource usage, speaker events, recording upload.
+**Verify:**
+- Status change (joining, active, completed) triggers webhook
+- Failed delivery goes to Redis retry queue
+- Retry worker re-delivers successfully
+- `redis-cli llen webhook_retry_queue` drains to 0
 
 ### 3.3 API chain
 ```
-authenticate → CRUD → launch bot → poll transcript → get result with speakers
+authenticate -> create token -> list meetings -> get transcript with speakers
 ```
+**Verify:**
+- Token creation via admin-api
+- Bot launch via api-gateway
+- Transcript retrieval with speaker labels
+- Meeting list includes correct metadata
+
+### 3.4 Real-time delivery
+```
+bot produces segment -> Redis PUBLISH -> api-gateway -> WebSocket -> dashboard
+```
+**Verify:**
+- WebSocket connection to api-gateway succeeds
+- Segments appear on WebSocket within 1s of Redis PUBLISH
+- Multiple concurrent WebSocket clients receive same segments
+- Connection survives brief network interruption
+
+### 3.5 Speaker identification
+```
+per-speaker audio tracks -> VAD filter -> transcription -> labeled segments
+```
+**Verify:**
+- Each speaker gets distinct label in transcript
+- No cross-contamination between speakers
+- Speaker events (joined, started, stopped, left) have correct timestamps
+- Screen share tracks labeled "Presentation"
 
 ### Phase 3 Gate
-**All chains work end-to-end.**
+**All functionality chains work end-to-end.**
 
 ---
 
-## Phase 4: Stress (one service at a time)
+## Phase 4: User experience flows
 
-### 4.1 transcription-service
+### 4.1 Self-hoster: README to first transcript
+```
+git clone -> follow README -> make all -> join meeting -> get transcript
+```
+**Verify:**
+- README instructions work without modification
+- All services start successfully
+- Bot can join a mock meeting
+- Transcript appears in API response
+
+### 4.2 API user: token to transcript
+```
+create API token -> launch bot via API -> poll for transcript -> get result with speakers
+```
+**Verify:**
+- Token creation flow works
+- Bot launch returns meeting ID
+- Polling endpoint shows transcript appearing
+- Final transcript has speaker labels
+
+### 4.3 Dashboard: login to live transcript
+```
+open dashboard -> log in -> see meetings -> click meeting -> see live transcript with speakers
+```
+**Verify:**
+- Dashboard loads without errors
+- Meeting list populates
+- Clicking a meeting shows transcript
+- Live segments appear via WebSocket during active meeting
+
+### Phase 4 Gate
+**All user experience flows complete successfully.**
+
+---
+
+## Phase 5: Stress and load
+
+### 5.1 transcription-service capacity
 ```bash
 cd services/transcription-service && bash tests/test_stress.sh
 ```
+**Baselines:** Single: ~0.17s GPU. 40 concurrent (2 workers): 100% success.
 
-### 4.2 WhisperLive (if using shared mode)
+### 5.2 WhisperLive concurrent streams (if used)
 ```bash
 cd services/WhisperLive && bash tests/test_stress.sh
 ```
+**Baselines:** 100 concurrent: 100% delivery. 200: 96.5%. 500: 58.4% (LIFO by design).
 
-### 4.3 Bot scaling
+### 5.3 Bot scaling
 Multiple concurrent bots against mock meetings. Resource usage per bot.
+**Baselines:** ~250m CPU, ~597Mi RAM per bot.
 
-### Phase 4 Gate
+### Phase 5 Gate
 **No regression >20% from baselines.**
 
 ---
 
-## Phase 5: Audit (code, not runtime)
+## Phase 6: Builds and packages
+
+### 6.1 Docker images
+```bash
+# All service images build successfully
+docker compose build
+```
+**Verify:** No build failures, no warnings about missing files.
+
+### 6.2 Vexa-lite
+```bash
+cd services/vexa-lite && docker build -t vexa-lite .
+```
+**Verify:** Image builds, container starts, health check passes.
+
+### 6.3 Helm charts
+```bash
+cd charts && helm lint charts/vexa/ && helm lint charts/vexa-lite/
+```
+**Verify:** No lint errors. Template rendering with default values succeeds.
+
+### 6.4 Version consistency
+**Verify:** Docker image tags, Helm chart versions, and package.json versions are consistent.
+
+### Phase 6 Gate
+**All builds succeed. Helm lint passes.**
+
+---
+
+## Phase 7: Audit (code, not runtime)
 
 ```bash
 make audit    # security + config + architecture + staleness
@@ -291,19 +420,45 @@ Plus agent-driven:
 - Security deep review
 - Dev experience assessment
 
-### Phase 5 Gate
+### 7.1 Security audit
+```bash
+python tests/audit/security_audit.py
+```
+**Look at:** New findings vs last run.
+
+### 7.2 Configuration audit
+```bash
+python tests/audit/config_audit.py
+```
+**Look at:** Undocumented env vars, dev defaults in production config.
+
+### 7.3 Architecture compliance
+```bash
+python tests/audit/architecture_audit.py
+```
+**Look at:** Stateless services, token scoping, durable delivery, self-hostable.
+
+### 7.4 Staleness audit
+```bash
+python tests/audit/staleness_audit.py
+```
+**Look at:** Dead code, orphaned files, stale docs.
+
+### Phase 7 Gate
 **0 errors. Warnings reviewed by human.**
 
 ---
 
-## Phase 6: Report → Human
+## Phase 8: Report to Human
 
 ```
 Phase 1: X/Y services pass (N total tests)
 Phase 2: X/Y services healthy
-Phase 3: X/Y chains work
-Phase 4: baselines held / regressed
-Phase 5: N new findings, M resolved
+Phase 3: X/Y functionality chains work
+Phase 4: X/Y UX flows complete
+Phase 5: baselines held / regressed
+Phase 6: X/Y builds succeed
+Phase 7: N new findings, M resolved
 ```
 
 **Human decides: commit, fix more, or investigate.**
@@ -320,3 +475,4 @@ Phase 5: N new findings, M resolved
 6. **Missing README = failed gate.** Not optional. 4 services were missing READMEs and should have blocked Phase 1.
 7. **DOM is still needed for speaker names.** Audio tracks give you separation, DOM gives you labels. One-time lookup per participant, not continuous polling.
 8. **Edge TTS generates good test audio.** Three distinct neural voices (Jenny, Guy, Sonia), different content, transcribes perfectly. Use for mock meeting dev environment.
+9. **Bot does not need WhisperLive.** The per-speaker pipeline posts directly to transcription-service via HTTP. WhisperLive is only needed for external WebSocket clients sending mixed audio.

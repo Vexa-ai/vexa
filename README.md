@@ -284,12 +284,12 @@ For the up-to-date roadmap and priorities, see GitHub Issues and Milestones. Iss
 - [api-gateway](./services/api-gateway): Routes API requests to appropriate services
 - [admin-api](./services/admin-api): User CRUD, API keys, meeting management
 - [bot-manager](./services/bot-manager): Handles bot lifecycle management
-- [vexa-bot](./services/vexa-bot): The bot that joins meetings and captures audio
+- [vexa-bot](./services/vexa-bot): The bot that joins meetings, captures per-speaker audio, and transcribes via direct HTTP to transcription-service
 - [dashboard](./services/dashboard): Open-source Next.js web UI
 - [mcp](./services/mcp): Provides MCP-capable agents with Vexa as a toolkit
-- [WhisperLive](./services/WhisperLive): Real-time audio transcription service (uses transcription-service as backend in remote mode)
-- [transcription-service](./services/transcription-service): Basic transcription service (WhisperLive uses it as a real-time wrapper)
-- [transcription-collector](./services/transcription-collector): Processes and stores transcription segments
+- [WhisperLive](./services/WhisperLive): Optional real-time WebSocket transcription bridge for external clients (not required by bots)
+- [transcription-service](./services/transcription-service): GPU inference service -- OpenAI-compatible Whisper API
+- [transcription-collector](./services/transcription-collector): Consumes transcription segments from Redis, persists to PostgreSQL, serves transcript API
 - [tts-service](./services/tts-service): Text-to-speech for interactive bot voice
 - [Database models](./libs/shared-models/shared_models/models.py): Data structures for storing meeting information
 

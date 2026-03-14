@@ -2,9 +2,9 @@
 
 ## Why
 
-Vexa is a real-time audio pipeline — bots join meetings, stream audio over WebSocket, transcribe it, persist transcripts, and fire webhooks. Every piece can fail independently: the transcription service can degrade under load, WebSocket connections can drop, webhooks can timeout, bots can leak resources.
+Vexa is a real-time audio pipeline -- bots join meetings, capture per-speaker audio, transcribe via HTTP POST to the transcription service, publish segments to Redis, persist to Postgres, and fire webhooks. Every piece can fail independently: the transcription service can degrade under load, Redis streams can back up, webhooks can timeout, bots can leak resources.
 
-Tests exist so that self-hosters can verify their deployment works, find bottlenecks before users do, and catch security issues before they're exploited. They're not academic — they solve real problems we've hit in production.
+Tests exist so that self-hosters can verify their deployment works, find bottlenecks before users do, and catch security issues before they're exploited. They're not academic -- they solve real problems we've hit in production.
 
 ## What
 
@@ -43,6 +43,8 @@ tests/
 ├── agent/                   # Agent-generated test reports
 │   └── results/
 │
+├── CYCLE.md                 # Bottom-up sequential validation (8 phases)
+│
 └── results/                 # Combined test run outputs (by date)
     └── 2026-03-14/
 ```
@@ -74,12 +76,18 @@ make audit          # all audit scripts
 
 ### Full cycle: bottom-up with human in the loop
 
-See [CYCLE.md](CYCLE.md) — the most thorough approach. Tests each service in isolation following the dependency graph, with human approval gates between phases. Use this for:
-- Pre-release validation
-- After major changes
-- When you need confidence, not speed
+See [CYCLE.md](CYCLE.md) -- the most thorough approach. 8 phases:
 
-The cycle is one run option — not the only one. `make test-unit` is fine for quick checks. `make test-all` is fine for CI. The cycle is for when you want a human verifying every step.
+1. **Code quality** -- per-service unit tests and README validation
+2. **Service isolation** -- each service starts and works in Docker
+3. **Functionality chains** -- transcription chain, webhook delivery, API chain, real-time delivery, speaker identification
+4. **User experience flows** -- self-hoster deploy, API user, dashboard
+5. **Stress and load** -- capacity limits, baselines
+6. **Builds and packages** -- Docker images, Vexa-lite, Helm charts
+7. **Audit** -- security, config, architecture, staleness
+8. **Report to human** -- summary and decision
+
+The cycle is one run option -- not the only one. `make test-unit` is fine for quick checks. `make test-all` is fine for CI. The cycle is for when you want a human verifying every step.
 
 ### Single service
 
