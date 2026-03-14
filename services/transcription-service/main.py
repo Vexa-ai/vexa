@@ -78,11 +78,13 @@ def _env_float(name: str, default: float) -> float:
 # WhisperLive-inspired defaults (can be overridden via env)
 BEAM_SIZE = _env_int("BEAM_SIZE", 5)
 BEST_OF = _env_int("BEST_OF", 5)
-COMPRESSION_RATIO_THRESHOLD = _env_float("COMPRESSION_RATIO_THRESHOLD", 2.4)
+COMPRESSION_RATIO_THRESHOLD = _env_float("COMPRESSION_RATIO_THRESHOLD", 1.8)
 LOG_PROB_THRESHOLD = _env_float("LOG_PROB_THRESHOLD", -1.0)
 NO_SPEECH_THRESHOLD = _env_float("NO_SPEECH_THRESHOLD", 0.6)
-CONDITION_ON_PREVIOUS_TEXT = _env_bool("CONDITION_ON_PREVIOUS_TEXT", True)
-PROMPT_RESET_ON_TEMPERATURE = _env_float("PROMPT_RESET_ON_TEMPERATURE", 0.5)
+CONDITION_ON_PREVIOUS_TEXT = _env_bool("CONDITION_ON_PREVIOUS_TEXT", False)
+PROMPT_RESET_ON_TEMPERATURE = _env_float("PROMPT_RESET_ON_TEMPERATURE", 0.3)
+REPETITION_PENALTY = _env_float("REPETITION_PENALTY", 1.1)
+NO_REPEAT_NGRAM_SIZE = _env_int("NO_REPEAT_NGRAM_SIZE", 3)
 
 # VAD parameters
 VAD_FILTER = _env_bool("VAD_FILTER", True)
@@ -211,7 +213,9 @@ async def startup_event():
         f"compression_ratio_threshold={COMPRESSION_RATIO_THRESHOLD}, "
         f"log_prob_threshold={LOG_PROB_THRESHOLD}, "
         f"no_speech_threshold={NO_SPEECH_THRESHOLD}, "
-        f"vad_filter={VAD_FILTER}"
+        f"vad_filter={VAD_FILTER}, "
+        f"repetition_penalty={REPETITION_PENALTY}, "
+        f"no_repeat_ngram_size={NO_REPEAT_NGRAM_SIZE}"
     )
     
     try:
@@ -401,6 +405,8 @@ async def transcribe_audio(
                     no_speech_threshold=NO_SPEECH_THRESHOLD,
                     condition_on_previous_text=CONDITION_ON_PREVIOUS_TEXT,
                     prompt_reset_on_temperature=PROMPT_RESET_ON_TEMPERATURE,
+                    repetition_penalty=REPETITION_PENALTY,
+                    no_repeat_ngram_size=NO_REPEAT_NGRAM_SIZE,
                     vad_filter=VAD_FILTER,
                     vad_parameters={
                         "threshold": VAD_FILTER_THRESHOLD,
