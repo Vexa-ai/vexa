@@ -1,4 +1,3 @@
-export { WhisperLiveService, type WhisperLiveConfig, type WhisperLiveConnection } from './whisperlive';
 export { AudioService, type AudioProcessorConfig, type AudioProcessor, type SpeakerStreamHandle } from './audio';
 export { RecordingService } from './recording';
 export { TranscriptionClient, type TranscriptionClientConfig, type TranscriptionResult } from './transcription-client';

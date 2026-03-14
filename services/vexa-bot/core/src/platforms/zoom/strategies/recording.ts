@@ -1,14 +1,11 @@
 import { Page } from 'playwright';
 import { BotConfig } from '../../../types';
-import { WhisperLiveService } from '../../../services/whisperlive';
 import { RecordingService } from '../../../services/recording';
 import { setActiveRecordingService } from '../../../index';
 import { getSDKManager } from './join';
 import { log } from '../../../utils';
 import { spawn, ChildProcess } from 'child_process';
 
-let whisperLive: WhisperLiveService | null = null;
-let whisperSocket: WebSocket | null = null;
 let recordingStopResolver: (() => void) | null = null;
 let parecordProcess: ChildProcess | null = null;
 let audioSessionStartTime: number | null = null;
@@ -17,52 +14,11 @@ let recordingService: RecordingService | null = null;
 let zoomSpeakerEvents: any[] = [];  // Accumulated speaker events for persistence
 
 export async function startZoomRecording(page: Page | null, botConfig: BotConfig): Promise<void> {
-  log('[Zoom] Starting audio recording and WhisperLive connection');
+  log('[Zoom] Starting audio recording');
 
   const sdkManager = getSDKManager();
-  const transcriptionEnabled = botConfig.transcribeEnabled !== false;
 
   try {
-    if (transcriptionEnabled) {
-      // Initialize WhisperLive service
-      whisperLive = new WhisperLiveService({
-        whisperLiveUrl: process.env.WHISPER_LIVE_URL
-      });
-
-      // Initialize connection
-      const whisperLiveUrl = await whisperLive.initialize();
-      if (!whisperLiveUrl) {
-        throw new Error('[Zoom] Failed to initialize WhisperLive URL');
-      }
-      log(`[Zoom] WhisperLive URL initialized: ${whisperLiveUrl}`);
-
-      // Connect to WhisperLive with event handlers
-      whisperSocket = await whisperLive.connectToWhisperLive(
-        botConfig,
-        (data: any) => {
-          // Handle incoming messages (transcriptions, etc.)
-          if (data.message === 'SERVER_READY') {
-            log('[Zoom] WhisperLive server ready');
-          }
-        },
-        (error: Event) => {
-          log(`[Zoom] WhisperLive error: ${error}`);
-        },
-        (event: CloseEvent) => {
-          log(`[Zoom] WhisperLive connection closed: ${event.code} ${event.reason}`);
-        }
-      );
-
-      if (!whisperSocket) {
-        throw new Error('[Zoom] Failed to connect to WhisperLive');
-      }
-      log('[Zoom] WhisperLive connected successfully');
-    } else {
-      log('[Zoom] Transcription disabled by config; running recording-only mode.');
-      whisperLive = null;
-      whisperSocket = null;
-    }
-
     // Initialize audio recording if enabled
     if (botConfig.recordingEnabled) {
       const sessionUid = botConfig.connectionId || `zoom_${Date.now()}`;
@@ -72,23 +28,18 @@ export async function startZoomRecording(page: Page | null, botConfig: BotConfig
       log('[Zoom] Audio recording service started');
     }
 
-    // Start SDK audio capture with callback to send to WhisperLive.
+    // Start SDK audio capture with callback for recording.
     // If SDK returns NO_PERMISSION (raw data license required), fall back to PulseAudio capture.
     let sdkRecordingSucceeded = false;
     try {
       await sdkManager.startRecording((buffer: Buffer, sampleRate: number) => {
-        if (whisperLive) {
-          const float32 = bufferToFloat32(buffer);
-          if (transcriptionEnabled && whisperLive) {
-            whisperLive.sendAudioData(float32);
-          }
-          // Also capture for recording
-          if (recordingService) {
-            recordingService.appendChunk(float32);
-          }
+        const float32 = bufferToFloat32(buffer);
+        // Capture for recording
+        if (recordingService) {
+          recordingService.appendChunk(float32);
         }
       });
-      log('[Zoom] SDK raw audio recording started, streaming to WhisperLive');
+      log('[Zoom] SDK raw audio recording started');
       sdkRecordingSucceeded = true;
     } catch (recordingError: any) {
       const msg = recordingError?.message ?? String(recordingError);
@@ -97,7 +48,7 @@ export async function startZoomRecording(page: Page | null, botConfig: BotConfig
         log('[Zoom] SDK raw audio not available (license missing). Falling back to PulseAudio capture...');
         // Fall back to PulseAudio capture from the null sink monitor
         try {
-          await startPulseAudioCapture(whisperLive);
+          await startPulseAudioCapture();
           log('[Zoom] PulseAudio capture started successfully');
         } catch (paError) {
           log(`[Zoom] PulseAudio capture failed: ${paError}. Staying in meeting without transcription.`);
@@ -113,7 +64,7 @@ export async function startZoomRecording(page: Page | null, botConfig: BotConfig
 
     // Register speaker change callback
     await sdkManager.onActiveSpeakerChange((activeUserIds: number[]) => {
-      handleActiveSpeakerChange(activeUserIds, sdkManager, whisperLive, botConfig);
+      handleActiveSpeakerChange(activeUserIds, sdkManager, botConfig);
     });
     log('[Zoom] Speaker detection initialized');
 
@@ -150,13 +101,6 @@ export async function stopZoomRecording(): Promise<void> {
 
     const sdkManager = getSDKManager();
     await sdkManager.stopRecording();
-
-    if (whisperSocket) {
-      whisperSocket.close();
-      whisperSocket = null;
-    }
-
-    whisperLive = null;
 
     // Finalize the audio recording file
     if (recordingService) {
@@ -203,9 +147,9 @@ function bufferToFloat32(buffer: Buffer): Float32Array {
 
 /**
  * Start PulseAudio capture from the zoom_sink monitor.
- * Captures raw PCM audio and forwards to WhisperLive.
+ * Captures raw PCM audio for recording.
  */
-async function startPulseAudioCapture(whisperLive: WhisperLiveService | null): Promise<void> {
+async function startPulseAudioCapture(): Promise<void> {
   return new Promise((resolve, reject) => {
     // Spawn parecord to capture from zoom_sink monitor
     // Output: raw PCM Int16LE, 16kHz, mono
@@ -224,21 +168,14 @@ async function startPulseAudioCapture(whisperLive: WhisperLiveService | null): P
 
     let started = false;
 
-    // Forward captured audio to WhisperLive
+    // Forward captured audio to recording service
     parecordProcess.stdout.on('data', (chunk: Buffer) => {
       if (!started) {
         log('[Zoom] PulseAudio capture receiving audio data');
         started = true;
         resolve();
       }
-      if (whisperLive) {
-        const float32 = bufferToFloat32(chunk);
-        whisperLive.sendAudioData(float32);
-        // Also capture for recording
-        if (recordingService) {
-          recordingService.appendPCMBuffer(chunk);
-        }
-      } else if (recordingService) {
+      if (recordingService) {
         recordingService.appendPCMBuffer(chunk);
       }
     });
@@ -271,12 +208,11 @@ async function startPulseAudioCapture(whisperLive: WhisperLiveService | null): P
 
 /**
  * Handle active speaker changes from Zoom SDK.
- * Tracks which users started/stopped speaking and sends events to WhisperLive.
+ * Tracks which users started/stopped speaking and accumulates speaker events for persistence.
  */
 function handleActiveSpeakerChange(
   activeUserIds: number[],
   sdkManager: any,
-  whisperLive: WhisperLiveService | null,
   botConfig: BotConfig
 ): void {
   if (!audioSessionStartTime) {
@@ -291,7 +227,7 @@ function handleActiveSpeakerChange(
     if (!activeSpeakers.has(userId)) {
       const userInfo = sdkManager.getUserInfo(userId);
       if (userInfo) {
-        log(`🎤 [Zoom] SPEAKER_START: ${userInfo.userName} (ID: ${userId})`);
+        log(`[Zoom] SPEAKER_START: ${userInfo.userName} (ID: ${userId})`);
         // Accumulate for persistence (direct bot accumulation)
         zoomSpeakerEvents.push({
           event_type: 'SPEAKER_START',
@@ -299,13 +235,6 @@ function handleActiveSpeakerChange(
           participant_id: String(userId),
           relative_timestamp_ms: relativeTimestampMs,
         });
-        whisperLive?.sendSpeakerEvent(
-          'SPEAKER_START',
-          userInfo.userName,
-          String(userId),
-          relativeTimestampMs,
-          botConfig
-        );
       }
     }
   }
@@ -315,7 +244,7 @@ function handleActiveSpeakerChange(
     if (!currentSpeakers.has(userId)) {
       const userInfo = sdkManager.getUserInfo(userId);
       if (userInfo) {
-        log(`🔇 [Zoom] SPEAKER_END: ${userInfo.userName} (ID: ${userId})`);
+        log(`[Zoom] SPEAKER_END: ${userInfo.userName} (ID: ${userId})`);
         // Accumulate for persistence (direct bot accumulation)
         zoomSpeakerEvents.push({
           event_type: 'SPEAKER_END',
@@ -323,13 +252,6 @@ function handleActiveSpeakerChange(
           participant_id: String(userId),
           relative_timestamp_ms: relativeTimestampMs,
         });
-        whisperLive?.sendSpeakerEvent(
-          'SPEAKER_END',
-          userInfo.userName,
-          String(userId),
-          relativeTimestampMs,
-          botConfig
-        );
       }
     }
   }

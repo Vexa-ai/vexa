@@ -156,6 +156,14 @@ export async function runMeetingFlow(
       triggerPostAdmissionChat().catch((err: any) => {
         log(`[Chat] Post-admission chat error (non-fatal): ${err?.message || err}`);
       });
+
+      // Start per-speaker audio capture (if pipeline is initialized)
+      const { startPerSpeakerAudioCapture } = await import("../../index");
+      if (page) {
+        startPerSpeakerAudioCapture(page).catch((err: any) => {
+          log(`[PerSpeaker] Post-admission audio capture error (non-fatal): ${err?.message || err}`);
+        });
+      }
     } catch (error: any) {
       log(`Error during startup callback or verification: ${error?.message || String(error)}`);
       // Continue to recording phase even if callback/verification fails

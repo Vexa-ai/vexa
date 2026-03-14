@@ -66,6 +66,103 @@ function cacheKey(platform: string, elementIndex: number): string {
 }
 
 /**
+ * Google Meet-specific name resolution.
+ *
+ * In Google Meet, <audio> elements are NOT inside participant tiles — they
+ * live in a separate part of the DOM. Walking up from an audio element will
+ * never find a participant container. Instead we use data already collected
+ * by the browser-side speaker detection (recording.ts), which exposes:
+ *
+ *   window.__vexaGetAllParticipantNames()
+ *     → { names: Record<participantId, displayName>, speaking: string[] }
+ *
+ *   window.__vexaSpeakerEvents
+ *     → Array<{ event_type, participant_name, participant_id, relative_timestamp_ms }>
+ *
+ * Resolution strategy (ordered by reliability):
+ *  1. If exactly one participant is currently speaking, use that name.
+ *     (When audio arrives for a track, someone must be speaking.)
+ *  2. Use the most recent SPEAKER_START event from __vexaSpeakerEvents
+ *     that has not been followed by a SPEAKER_END for the same participant.
+ *  3. Map by element index → participant tile index (positional).
+ *  4. Fall back to "Speaker N".
+ */
+async function resolveGoogleMeetSpeakerName(
+  page: Page,
+  elementIndex: number,
+): Promise<string | null> {
+  try {
+    const result = await page.evaluate((idx: number) => {
+      // Strategy 1: Use the live participant name lookup exposed by recording.ts
+      // __vexaGetAllParticipantNames() scans DOM participant tiles and returns
+      // all names keyed by participant-id plus the currently-speaking subset.
+      const getNames = (window as any).__vexaGetAllParticipantNames;
+      if (typeof getNames === 'function') {
+        const { names, speaking } = getNames() as {
+          names: Record<string, string>;
+          speaking: string[];
+        };
+
+        // Positional mapping: participant tile N → audio element N.
+        // Google Meet creates one audio element per remote participant in the
+        // same DOM order as participant tiles, making this the most reliable
+        // strategy (it survives multiple people speaking simultaneously).
+        const nameList = Object.values(names);
+        if (idx < nameList.length) {
+          return nameList[idx];
+        }
+
+        // If we have more audio elements than tiles (rare), fall back to
+        // whoever is currently speaking.
+        if (speaking.length === 1) {
+          return speaking[0];
+        }
+        if (speaking.length > 1) {
+          return speaking[0]; // first match — best we can do
+        }
+      }
+
+      // Strategy 2: Fall back to speaker events history (__vexaSpeakerEvents)
+      // accumulated by the speaker detection polling in recording.ts.
+      const events: Array<{
+        event_type: string;
+        participant_name: string;
+        participant_id: string;
+        relative_timestamp_ms: number;
+      }> = (window as any).__vexaSpeakerEvents || [];
+
+      if (events.length > 0) {
+        // Collect unique participant names in order of first appearance
+        const seen = new Set<string>();
+        const orderedNames: string[] = [];
+        for (const evt of events) {
+          if (!seen.has(evt.participant_id)) {
+            seen.add(evt.participant_id);
+            orderedNames.push(evt.participant_name);
+          }
+        }
+        if (idx < orderedNames.length) {
+          return orderedNames[idx];
+        }
+
+        // More audio elements than known participants — return most recent speaker
+        const lastStart = [...events].reverse().find(e => e.event_type === 'SPEAKER_START');
+        if (lastStart) {
+          return lastStart.participant_name;
+        }
+      }
+
+      return null;
+    }, elementIndex);
+
+    return result;
+  } catch (err: any) {
+    log(`[SpeakerIdentity] Google Meet browser query failed: ${err.message}`);
+    return null;
+  }
+}
+
+/**
  * Resolve the participant display name for a given media element by
  * inspecting the surrounding DOM.
  *
@@ -86,6 +183,18 @@ export async function resolveSpeakerName(
   const cached = speakerNameCache.get(key);
   if (cached) {
     return cached;
+  }
+
+  // Google Meet: audio elements are NOT inside participant tiles.
+  // Use browser-side speaker detection data instead of DOM traversal.
+  if (platform === 'googlemeet') {
+    const gmName = await resolveGoogleMeetSpeakerName(page, elementIndex);
+    if (gmName) {
+      speakerNameCache.set(key, gmName);
+      log(`[SpeakerIdentity] Element ${elementIndex} → "${gmName}" (platform: ${platform}, via speaker detection)`);
+      return gmName;
+    }
+    // Fall through to generic DOM strategy as last resort
   }
 
   const selectors = PLATFORM_SELECTORS[platform];

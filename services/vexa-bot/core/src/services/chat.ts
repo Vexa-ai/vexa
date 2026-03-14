@@ -262,7 +262,7 @@ export class MeetingChatService {
 
     const streamKey = this.transcriptConfig.streamKey || 'transcription_segments';
 
-    // Calculate relative time from session start (in seconds, matching WhisperLive format)
+    // Calculate relative time from session start (in seconds)
     const relativeTimeSec = (msg.timestamp - this.sessionStartTimeMs) / 1000;
     // Use a small duration (0.5s) for chat messages — they're instant but need non-zero duration
     const segmentDuration = 0.5;

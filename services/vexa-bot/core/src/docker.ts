@@ -17,10 +17,10 @@ export const BotConfigSchema = z.object({
   redisUrl: z.string(),         // Required Redis URL
   container_name: z.string().optional(), // ADDED: Optional container name
   automaticLeave: z.object({
-    waitingRoomTimeout: z.number().int(),
-    noOneJoinedTimeout: z.number().int(),
-    everyoneLeftTimeout: z.number().int()
-  }),
+    waitingRoomTimeout: z.number().int().default(300000),      // 5 minutes
+    noOneJoinedTimeout: z.number().int().default(600000),      // 10 minutes
+    everyoneLeftTimeout: z.number().int().default(120000)      // 2 minutes
+  }).default({}),
   reconnectionIntervalMs: z.number().int().optional(), // ADDED: Optional reconnection interval
   meeting_id: z.number().int().optional(), // Allow optional internal ID
   botManagerCallbackUrl: z.string().url().optional(), // ADDED: Optional callback URL

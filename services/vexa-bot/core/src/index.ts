@@ -1002,9 +1002,12 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
     // Wire the transcription callback
     speakerManager.onSegmentReady = async (speakerId: string, speakerName: string, audioBuffer: Float32Array) => {
       if (!transcriptionClient || !segmentPublisher) return;
+      const durationSec = (audioBuffer.length / 16000).toFixed(1);
+      log(`[📤 TRANSCRIBING] ${speakerName} | ${durationSec}s audio | sending to transcription-service...`);
       try {
         const result = await transcriptionClient.transcribe(audioBuffer, currentLanguage || undefined);
         if (result && result.text) {
+          log(`[📝 TRANSCRIPT] ${speakerName} | lang=${result.language} | "${result.text.substring(0, 100)}${result.text.length > 100 ? '...' : ''}"`);
           const segments = result.segments.length > 0
             ? result.segments
             : [{ text: result.text, start: 0, end: result.duration }];
@@ -1017,9 +1020,12 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
               language: result.language || 'en',
             });
           }
+          log(`[✅ PUBLISHED] ${speakerName} | ${segments.length} segment(s) → Redis`);
+        } else {
+          log(`[⚠️ EMPTY] ${speakerName} | transcription returned no text`);
         }
       } catch (err: any) {
-        log(`[PerSpeaker] Transcription failed for ${speakerName}: ${err.message}`);
+        log(`[❌ TRANSCRIPTION FAILED] ${speakerName}: ${err.message}`);
       }
     };
 
@@ -1049,13 +1055,16 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
     const platformKey = currentPlatform === 'google_meet' ? 'googlemeet'
       : currentPlatform === 'teams' ? 'msteams'
       : currentPlatform || 'unknown';
+    log(`[🔊 NEW SPEAKER] Track ${speakerIndex} — first audio received, resolving name...`);
     const name = await resolveSpeakerName(page, speakerIndex, platformKey);
+    log(`[🎙️ SPEAKER ACTIVE] Track ${speakerIndex} → "${name}" — streaming audio`);
     speakerManager.addSpeaker(speakerId, name);
     await segmentPublisher.publishSpeakerEvent({
       speaker: name,
       type: 'joined',
       timestamp: Date.now() / 1000,
     });
+    log(`[📡 SPEAKER EVENT] "${name}" joined → Redis`);
   }
 
   speakerManager.feedAudio(speakerId, audioData);
@@ -1097,9 +1106,6 @@ async function cleanupPerSpeakerPipeline(): Promise<void> {
  * per-speaker audio capture inside the page.
  *
  * Called by platform handlers after media elements are available.
- * The platform handler should call this instead of (or in addition to)
- * the WhisperLive audio pipeline when transcriptionTier === 'deferred'
- * or when TRANSCRIPTION_SERVICE_URL is configured.
  */
 export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Promise<void> {
   if (!speakerManager) {
@@ -1118,48 +1124,61 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
     }
   }
 
-  // Set up per-speaker audio streams inside the browser
+  // Set up per-speaker audio streams inside the browser using raw Web Audio API
   const handleCount = await pageToCaptureFrom.evaluate(async () => {
-    const browserUtils = (window as any).VexaBrowserUtils;
-    if (!browserUtils || !browserUtils.BrowserAudioService) {
-      (window as any).logBot?.('[PerSpeaker] BrowserAudioService not available');
-      return 0;
+    const TARGET_SAMPLE_RATE = 16000;
+    const BUFFER_SIZE = 4096;
+
+    // Find active media elements with audio tracks (retry up to 10 times)
+    let mediaElements: HTMLMediaElement[] = [];
+    for (let attempt = 0; attempt < 10; attempt++) {
+      mediaElements = Array.from(document.querySelectorAll('audio, video')).filter((el: any) =>
+        !el.paused &&
+        el.srcObject instanceof MediaStream &&
+        el.srcObject.getAudioTracks().length > 0
+      ) as HTMLMediaElement[];
+      if (mediaElements.length > 0) break;
+      await new Promise(r => setTimeout(r, 2000));
+      (window as any).logBot?.(`[PerSpeaker] No media elements yet, retry ${attempt + 1}/10...`);
     }
 
-    const audioService = new browserUtils.BrowserAudioService({
-      targetSampleRate: 16000,
-      bufferSize: 4096,
-      inputChannels: 1,
-      outputChannels: 1,
-    });
-
-    // Find active media elements
-    const mediaElements = await audioService.findMediaElements(5, 2000);
     if (mediaElements.length === 0) {
-      (window as any).logBot?.('[PerSpeaker] No media elements found');
+      (window as any).logBot?.('[PerSpeaker] No active media elements with audio found');
       return 0;
     }
 
-    // Create per-speaker streams
-    const handles = audioService.createPerSpeakerStreams(
-      mediaElements,
-      (speakerIndex: number, audioData: Float32Array) => {
-        // Send audio data to Node.js via the exposed function.
-        // Convert Float32Array to plain array for serialization.
-        (window as any).__vexaPerSpeakerAudioData(speakerIndex, Array.from(audioData));
-      }
-    );
+    (window as any).logBot?.(`[PerSpeaker] Found ${mediaElements.length} media elements with audio`);
 
-    // Start all streams
-    for (const handle of handles) {
-      handle.start();
+    let streamCount = 0;
+    for (let i = 0; i < mediaElements.length; i++) {
+      const el = mediaElements[i] as any;
+      try {
+        const stream: MediaStream = el.srcObject;
+        if (!stream || stream.getAudioTracks().length === 0) continue;
+
+        const ctx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+        const source = ctx.createMediaStreamSource(stream);
+        const processor = ctx.createScriptProcessor(BUFFER_SIZE, 1, 1);
+
+        processor.onaudioprocess = (e: AudioProcessingEvent) => {
+          const data = e.inputBuffer.getChannelData(0);
+          // Only send if there's actual audio (not silence)
+          const maxVal = Math.max(...Array.from(data).map(Math.abs));
+          if (maxVal > 0.005) {
+            (window as any).__vexaPerSpeakerAudioData(i, Array.from(data));
+          }
+        };
+
+        source.connect(processor);
+        processor.connect(ctx.destination);
+        streamCount++;
+        (window as any).logBot?.(`[PerSpeaker] Stream ${i} started (track: ${stream.getAudioTracks()[0].id.substring(0, 12)})`);
+      } catch (err: any) {
+        (window as any).logBot?.(`[PerSpeaker] Stream ${i} error: ${err.message}`);
+      }
     }
 
-    // Store handles on window for potential cleanup
-    (window as any).__vexaPerSpeakerHandles = handles;
-
-    (window as any).logBot?.(`[PerSpeaker] Started ${handles.length} per-speaker audio streams`);
-    return handles.length;
+    return streamCount;
   });
 
   log(`[PerSpeaker] Browser-side audio capture started with ${handleCount} streams`);
@@ -1437,7 +1456,6 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
   }
 
   // Initialize per-speaker transcription pipeline (Node.js side).
-  // This replaces WhisperLive WebSocket when TRANSCRIPTION_SERVICE_URL is set.
   if (botConfig.transcribeEnabled !== false) {
     try {
       const pipelineReady = await initPerSpeakerPipeline(botConfig);
