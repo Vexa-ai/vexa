@@ -1,131 +1,179 @@
 import { log } from '../utils';
 
 /**
- * Per-speaker audio buffer.
- * Accumulates Float32 chunks until enough audio is ready for transcription.
+ * Per-speaker audio buffer with confirmation-based segment emission.
+ *
+ * Buffer accumulates audio and resubmits the full buffer every interval.
+ * Segments are only EMITTED (published to Redis) when confirmed — the
+ * beginning of the transcript is stable across consecutive submissions.
+ * Buffer advances (trims confirmed audio) and continues with new audio.
+ *
+ * Hard cap prevents the buffer from growing beyond maxBufferDuration —
+ * at the cap, buffer is force-flushed and reset regardless of confirmation.
  */
+
 interface SpeakerBuffer {
   speakerId: string;
   speakerName: string;
   chunks: Float32Array[];
   totalSamples: number;
+  lastTranscript: string;
+  confirmCount: number;
+  inFlight: boolean;
+  /** Pending confirmed transcript to emit */
+  pendingEmit: string | null;
 }
 
 export interface SpeakerStreamManagerConfig {
-  /** Minimum audio duration (seconds) before firing onSegmentReady. Default: 2 */
+  /** Minimum audio before first submission (seconds). Default: 3 */
   minAudioDuration?: number;
-  /** Sample rate of incoming audio. Default: 16000 */
+  /** Interval between resubmissions (seconds). Default: 3 */
+  submitInterval?: number;
+  /** Consecutive matches to confirm (fuzzy). Default: 2 */
+  confirmThreshold?: number;
+  /** Hard cap — force reset at this duration (seconds). Default: 15 */
+  maxBufferDuration?: number;
+  /** Sample rate. Default: 16000 */
   sampleRate?: number;
 }
 
-/**
- * Manages multiple per-speaker audio buffers.
- * When a speaker accumulates enough audio, fires onSegmentReady callback
- * with the concatenated Float32Array.
- */
 export class SpeakerStreamManager {
   private buffers: Map<string, SpeakerBuffer> = new Map();
+  private timers: Map<string, ReturnType<typeof setInterval>> = new Map();
   private minAudioDuration: number;
+  private submitInterval: number;
+  private confirmThreshold: number;
+  private maxBufferDuration: number;
   private sampleRate: number;
 
   /**
-   * Callback fired when a speaker has accumulated enough audio for transcription.
-   * Set this before feeding audio.
+   * Called when buffer needs transcription. Receives FULL unconfirmed buffer.
+   * Caller must call handleTranscriptionResult() with the result.
    */
   onSegmentReady: ((speakerId: string, speakerName: string, audioBuffer: Float32Array) => void) | null = null;
 
+  /**
+   * Called when a segment is CONFIRMED and should be published.
+   * Only fires after consecutive identical outputs — not on every resubmission.
+   */
+  onSegmentConfirmed: ((speakerId: string, speakerName: string, transcript: string) => void) | null = null;
+
   constructor(config?: SpeakerStreamManagerConfig) {
-    this.minAudioDuration = config?.minAudioDuration ?? 2;
+    this.minAudioDuration = config?.minAudioDuration ?? 3;
+    this.submitInterval = config?.submitInterval ?? 3;
+    this.confirmThreshold = config?.confirmThreshold ?? 2;
+    this.maxBufferDuration = config?.maxBufferDuration ?? 15;
     this.sampleRate = config?.sampleRate ?? 16000;
   }
 
-  /**
-   * Create a new buffer for a speaker.
-   * If the speaker already exists, this is a no-op (logs a warning).
-   */
   addSpeaker(speakerId: string, speakerName: string): void {
-    if (this.buffers.has(speakerId)) {
-      log(`[SpeakerStreams] Speaker "${speakerName}" (${speakerId}) already tracked, ignoring addSpeaker`);
-      return;
-    }
+    if (this.buffers.has(speakerId)) return;
 
     this.buffers.set(speakerId, {
       speakerId,
       speakerName,
       chunks: [],
       totalSamples: 0,
+      lastTranscript: '',
+      confirmCount: 0,
+      inFlight: false,
+      pendingEmit: null,
     });
+
+    const timer = setInterval(() => this.trySubmit(speakerId), this.submitInterval * 1000);
+    this.timers.set(speakerId, timer);
 
     log(`[SpeakerStreams] Added speaker "${speakerName}" (${speakerId})`);
   }
 
-  /**
-   * Add audio data to a speaker's buffer.
-   * When the buffer reaches minAudioDuration, fires onSegmentReady and resets.
-   */
   feedAudio(speakerId: string, audioData: Float32Array): void {
     const buffer = this.buffers.get(speakerId);
-    if (!buffer) {
-      log(`[SpeakerStreams] feedAudio called for unknown speaker ${speakerId}, ignoring`);
-      return;
-    }
-
+    if (!buffer) return;
     buffer.chunks.push(audioData);
     buffer.totalSamples += audioData.length;
+  }
 
-    const durationSec = buffer.totalSamples / this.sampleRate;
-    if (durationSec >= this.minAudioDuration) {
-      this.flushBuffer(buffer);
+  handleTranscriptionResult(speakerId: string, transcript: string): void {
+    const buffer = this.buffers.get(speakerId);
+    if (!buffer) return;
+
+    buffer.inFlight = false;
+
+    if (!transcript || transcript.trim().length === 0) return;
+
+    const trimmed = transcript.trim();
+
+    // Fuzzy match: compare first 80% of the shorter string
+    const compareLen = Math.floor(Math.min(trimmed.length, buffer.lastTranscript.length) * 0.8);
+
+    if (compareLen > 20 && trimmed.substring(0, compareLen) === buffer.lastTranscript.substring(0, compareLen)) {
+      buffer.confirmCount++;
+    } else {
+      buffer.lastTranscript = trimmed;
+      buffer.confirmCount = 1;
+    }
+
+    if (buffer.confirmCount >= this.confirmThreshold) {
+      // Confirmed — emit and advance
+      buffer.pendingEmit = trimmed;
+      this.emitAndReset(buffer);
     }
   }
 
-  /**
-   * Remove a speaker: flush any remaining audio, then clean up the buffer.
-   */
   removeSpeaker(speakerId: string): void {
-    const buffer = this.buffers.get(speakerId);
-    if (!buffer) {
-      log(`[SpeakerStreams] removeSpeaker called for unknown speaker ${speakerId}, ignoring`);
-      return;
-    }
+    const timer = this.timers.get(speakerId);
+    if (timer) clearInterval(timer);
+    this.timers.delete(speakerId);
 
-    // Flush whatever is left (even if below minAudioDuration)
-    if (buffer.totalSamples > 0) {
-      this.flushBuffer(buffer);
+    const buffer = this.buffers.get(speakerId);
+    if (buffer && buffer.totalSamples > 0 && buffer.lastTranscript) {
+      // Emit whatever we have on exit
+      buffer.pendingEmit = buffer.lastTranscript;
+      this.emitAndReset(buffer);
     }
 
     this.buffers.delete(speakerId);
-    log(`[SpeakerStreams] Removed speaker "${buffer.speakerName}" (${speakerId})`);
   }
 
-  /**
-   * Check whether a speaker is already being tracked.
-   */
   hasSpeaker(speakerId: string): boolean {
     return this.buffers.has(speakerId);
   }
 
-  /**
-   * Get all currently tracked speaker IDs.
-   */
   getActiveSpeakers(): string[] {
     return Array.from(this.buffers.keys());
   }
 
-  /**
-   * Remove all speakers: flush remaining audio for each, then clear the map.
-   */
   removeAll(): void {
     for (const speakerId of Array.from(this.buffers.keys())) {
       this.removeSpeaker(speakerId);
     }
   }
 
-  /**
-   * Concatenate buffered chunks, fire the callback, and reset the buffer.
-   */
-  private flushBuffer(buffer: SpeakerBuffer): void {
-    if (buffer.totalSamples === 0) return;
+  private trySubmit(speakerId: string): void {
+    const buffer = this.buffers.get(speakerId);
+    if (!buffer || buffer.inFlight) return;
+
+    const durationSec = buffer.totalSamples / this.sampleRate;
+
+    // Hard cap — force emit whatever we have and reset
+    if (durationSec >= this.maxBufferDuration) {
+      if (buffer.lastTranscript) {
+        buffer.pendingEmit = buffer.lastTranscript;
+      }
+      this.emitAndReset(buffer);
+      // Still submit if there's audio left after reset
+      return;
+    }
+
+    if (durationSec >= this.minAudioDuration) {
+      this.submitBuffer(buffer);
+    }
+  }
+
+  private submitBuffer(buffer: SpeakerBuffer): void {
+    if (buffer.totalSamples === 0 || !this.onSegmentReady) return;
+
+    buffer.inFlight = true;
 
     const combined = new Float32Array(buffer.totalSamples);
     let offset = 0;
@@ -134,17 +182,24 @@ export class SpeakerStreamManager {
       offset += chunk.length;
     }
 
+    try {
+      this.onSegmentReady(buffer.speakerId, buffer.speakerName, combined);
+    } catch (err: any) {
+      buffer.inFlight = false;
+    }
+  }
+
+  private emitAndReset(buffer: SpeakerBuffer): void {
+    if (buffer.pendingEmit && this.onSegmentConfirmed) {
+      this.onSegmentConfirmed(buffer.speakerId, buffer.speakerName, buffer.pendingEmit);
+    }
+
     // Reset buffer
     buffer.chunks = [];
     buffer.totalSamples = 0;
-
-    // Fire callback
-    if (this.onSegmentReady) {
-      try {
-        this.onSegmentReady(buffer.speakerId, buffer.speakerName, combined);
-      } catch (err: any) {
-        log(`[SpeakerStreams] onSegmentReady callback error for "${buffer.speakerName}": ${err.message}`);
-      }
-    }
+    buffer.lastTranscript = '';
+    buffer.confirmCount = 0;
+    buffer.pendingEmit = null;
+    buffer.inFlight = false;
   }
 }

@@ -996,37 +996,44 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
 
     speakerManager = new SpeakerStreamManager({
       sampleRate: 16000,
-      minAudioDuration: 2.0,
+      minAudioDuration: 3,
+      submitInterval: 3,
+      confirmThreshold: 2,
+      maxBufferDuration: 15,
     });
 
-    // Wire the transcription callback
+    // onSegmentReady: transcribe the buffer (called every submitInterval)
+    // Does NOT publish — just transcribes and feeds result back for confirmation.
     speakerManager.onSegmentReady = async (speakerId: string, speakerName: string, audioBuffer: Float32Array) => {
-      if (!transcriptionClient || !segmentPublisher) return;
+      if (!transcriptionClient) return;
       const durationSec = (audioBuffer.length / 16000).toFixed(1);
-      log(`[📤 TRANSCRIBING] ${speakerName} | ${durationSec}s audio | sending to transcription-service...`);
+      // Transcription request — debug level (DRAFT/CONFIRMED are the useful logs)
       try {
         const result = await transcriptionClient.transcribe(audioBuffer, currentLanguage || undefined);
         if (result && result.text) {
-          log(`[📝 TRANSCRIPT] ${speakerName} | lang=${result.language} | "${result.text.substring(0, 100)}${result.text.length > 100 ? '...' : ''}"`);
-          const segments = result.segments.length > 0
-            ? result.segments
-            : [{ text: result.text, start: 0, end: result.duration }];
-          for (const segment of segments) {
-            await segmentPublisher.publishSegment({
-              speaker: speakerName,
-              text: segment.text,
-              start: segment.start,
-              end: segment.end,
-              language: result.language || 'en',
-            });
-          }
-          log(`[✅ PUBLISHED] ${speakerName} | ${segments.length} segment(s) → Redis`);
+          log(`[📝 DRAFT] ${speakerName} | "${result.text}"`);
+          speakerManager!.handleTranscriptionResult(speakerId, result.text);
         } else {
-          log(`[⚠️ EMPTY] ${speakerName} | transcription returned no text`);
+          speakerManager!.handleTranscriptionResult(speakerId, '');
         }
       } catch (err: any) {
-        log(`[❌ TRANSCRIPTION FAILED] ${speakerName}: ${err.message}`);
+        log(`[❌ FAILED] ${speakerName}: ${err.message}`);
+        speakerManager!.handleTranscriptionResult(speakerId, '');
       }
+    };
+
+    // onSegmentConfirmed: publish to Redis (only after confirmation or hard cap)
+    speakerManager.onSegmentConfirmed = async (speakerId: string, speakerName: string, transcript: string) => {
+      if (!segmentPublisher) return;
+      log(`[📝 CONFIRMED] ${speakerName} | "${transcript}"`);
+      await segmentPublisher.publishSegment({
+        speaker: speakerName,
+        text: transcript,
+        start: 0,
+        end: 0,
+        language: currentLanguage || 'en',
+      });
+      log(`[✅ PUBLISHED] ${speakerName} → Redis`);
     };
 
     log('[PerSpeaker] SpeakerStreamManager created and wired');

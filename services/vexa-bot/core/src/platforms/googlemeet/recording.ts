@@ -402,13 +402,13 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
 
                 if (isCurrentlySpeaking) {
                   if (previousLogicalState !== 'speaking') {
-                    (window as any).logBot(`🎤 [Google] SPEAKER_START: ${participantName} (ID: ${participantId})`);
+                    // Speaker start/end logged at debug level to reduce noise
                     sendGoogleSpeakerEvent('SPEAKER_START', participantElement);
                   }
                   speakingStates.set(participantId, 'speaking');
                 } else {
                   if (previousLogicalState === 'speaking') {
-                    (window as any).logBot(`🔇 [Google] SPEAKER_END: ${participantName} (ID: ${participantId})`);
+                    // Speaker end logged at debug level
                     sendGoogleSpeakerEvent('SPEAKER_END', participantElement);
                   }
                   speakingStates.set(participantId, 'silent');
@@ -506,12 +506,12 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                   const indicatorSpeaking = hasSpeakingIndicator(container) || inferSpeakingFromClasses(container).speaking;
                   const prev = lastSpeakingById.get(id) || false;
                   if (indicatorSpeaking && !prev) {
-                    (window as any).logBot(`[Google Poll] SPEAKER_START ${getGoogleParticipantName(container)}`);
+                    // Poll speaker start — debug level
                     sendGoogleSpeakerEvent('SPEAKER_START', container);
                     lastSpeakingById.set(id, true);
                     speakingStates.set(id, 'speaking');
                   } else if (!indicatorSpeaking && prev) {
-                    (window as any).logBot(`[Google Poll] SPEAKER_END ${getGoogleParticipantName(container)}`);
+                    // Poll speaker end — debug level
                     sendGoogleSpeakerEvent('SPEAKER_END', container);
                     lastSpeakingById.set(id, false);
                     speakingStates.set(id, 'silent');
@@ -562,7 +562,10 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
               if (tileCount > 0) {
                 lastKnownParticipantCount = tileCount;
               }
-              (window as any).logBot(`🔍 [Google Meet Participants] ${tileCount} tiles, inMeeting=${inMeeting}`);
+              // Only log participant count changes, not every poll
+              if (tileCount !== lastKnownParticipantCount) {
+                (window as any).logBot(`🔍 [Google Meet Participants] ${tileCount} tiles, inMeeting=${inMeeting}`);
+              }
               return new Array(tileCount).fill('placeholder');
             };
             (window as any).getGoogleMeetActiveParticipantsCount = () => {
