@@ -9,6 +9,7 @@ export interface TranscriptionSegment {
 export interface TranscriptionResult {
   text: string;
   language: string;
+  language_probability?: number;
   duration: number;
   segments: TranscriptionSegment[];
 }

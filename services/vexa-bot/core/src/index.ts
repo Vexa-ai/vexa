@@ -69,6 +69,8 @@ let transcriptionClient: TranscriptionClient | null = null;
 let segmentPublisher: SegmentPublisher | null = null;
 let speakerManager: SpeakerStreamManager | null = null;
 let vadModel: SileroVAD | null = null;
+/** Per-speaker detected language — locked after high-confidence detection */
+const speakerLanguages: Map<string, string> = new Map();
 let activeSpeakerStreamHandles: SpeakerStreamHandle[] = [];
 // ------------------------------------------
 
@@ -1014,14 +1016,28 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
 
     // onSegmentReady: transcribe the buffer (called every submitInterval)
     // Does NOT publish — just transcribes and feeds result back for confirmation.
+    // Language is tracked per speaker — auto-detected on first chunk, locked when confident.
     speakerManager.onSegmentReady = async (speakerId: string, speakerName: string, audioBuffer: Float32Array) => {
       if (!transcriptionClient) return;
-      const durationSec = (audioBuffer.length / 16000).toFixed(1);
-      // Transcription request — debug level (DRAFT/CONFIRMED are the useful logs)
+
+      // Use per-speaker language if locked, otherwise auto-detect (null)
+      const lang = speakerLanguages.get(speakerId) || null;
+
       try {
-        const result = await transcriptionClient.transcribe(audioBuffer, currentLanguage || undefined);
+        const result = await transcriptionClient.transcribe(audioBuffer, lang || undefined);
         if (result && result.text) {
-          log(`[📝 DRAFT] ${speakerName} | "${result.text}"`);
+          // Track language per speaker — lock after high-confidence detection
+          if (!speakerLanguages.has(speakerId) && result.language) {
+            const prob = result.language_probability ?? 0;
+            if (prob > 0.7) {
+              speakerLanguages.set(speakerId, result.language);
+              log(`[🌐 LANGUAGE] ${speakerName} → ${result.language} (prob=${prob.toFixed(2)}, locked)`);
+            } else {
+              log(`[🌐 LANGUAGE] ${speakerName} → ${result.language} (prob=${prob.toFixed(2)}, not locked)`);
+            }
+          }
+
+          log(`[📝 DRAFT] ${speakerName} | ${result.language} | "${result.text}"`);
           speakerManager!.handleTranscriptionResult(speakerId, result.text);
         } else {
           speakerManager!.handleTranscriptionResult(speakerId, '');
@@ -1035,13 +1051,14 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
     // onSegmentConfirmed: publish to Redis (only after confirmation or hard cap)
     speakerManager.onSegmentConfirmed = async (speakerId: string, speakerName: string, transcript: string) => {
       if (!segmentPublisher) return;
-      log(`[📝 CONFIRMED] ${speakerName} | "${transcript}"`);
+      const lang = speakerLanguages.get(speakerId) || currentLanguage || 'en';
+      log(`[📝 CONFIRMED] ${speakerName} | ${lang} | "${transcript}"`);
       await segmentPublisher.publishSegment({
         speaker: speakerName,
         text: transcript,
         start: 0,
         end: 0,
-        language: currentLanguage || 'en',
+        language: lang,
       });
       log(`[✅ PUBLISHED] ${speakerName} → Redis`);
     };
