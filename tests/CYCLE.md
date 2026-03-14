@@ -11,7 +11,7 @@ The most thorough, human-gated test approach. Not the only way — `make test-un
 
 ## Principles
 
-1. **Isolate, then chain.** Test each service completely alone first (unit → start → verify → stress → quality). Only then test it connected to its dependencies. If the chain fails, you already know the individual pieces work — the problem is the connection.
+1. **Isolate, then chain.** Test each service completely alone first (unit → start → verify → stress → quality). Start from services with no dependencies (transcription-service — standalone GPU inference). Only then test things that depend on it (WhisperLive, bot). If the chain fails, you already know the foundation works — the problem is in the dependent or the connection.
 
 2. **Bottom-up by dependency.** Start at the foundation, work up. Never test something whose foundation is unverified.
 

@@ -18,6 +18,13 @@ import { createClient, RedisClientType } from 'redis';
 import { Page, Browser } from 'playwright-core';
 // HTTP imports removed - using unified callback service instead
 
+// Per-speaker transcription pipeline
+import { TranscriptionClient } from './services/transcription-client';
+import { SegmentPublisher } from './services/segment-publisher';
+import { SpeakerStreamManager } from './services/speaker-streams';
+import { resolveSpeakerName } from './services/speaker-identity';
+import { SpeakerStreamHandle } from './services/audio';
+
 // Module-level variables to store current configuration
 let currentLanguage: string | null | undefined = null;
 let currentTask: string | null | undefined = 'transcribe'; // Default task
@@ -55,6 +62,13 @@ let screenContentService: ScreenContentService | null = null;
 let screenShareService: ScreenShareService | null = null;
 let redisPublisher: RedisClientType | null = null;
 // -------------------------------------------------
+
+// --- Per-speaker transcription pipeline ---
+let transcriptionClient: TranscriptionClient | null = null;
+let segmentPublisher: SegmentPublisher | null = null;
+let speakerManager: SpeakerStreamManager | null = null;
+let activeSpeakerStreamHandles: SpeakerStreamHandle[] = [];
+// ------------------------------------------
 
 // --- ADDED: Stop signal tracking ---
 let stopSignalReceived = false;
@@ -571,6 +585,13 @@ async function performGracefulLeave(
     log(`[Graceful Leave] Voice agent cleanup error: ${vaCleanupErr.message}`);
   }
 
+  // Cleanup per-speaker transcription pipeline
+  try {
+    await cleanupPerSpeakerPipeline();
+  } catch (pipelineCleanupErr: any) {
+    log(`[Graceful Leave] Per-speaker pipeline cleanup error: ${pipelineCleanupErr.message}`);
+  }
+
   // Upload recording if available
   if (activeRecordingService && currentBotConfig?.recordingUploadUrl && currentBotConfig?.token) {
     try {
@@ -944,6 +965,206 @@ async function initVoiceAgentServices(
   log('[VoiceAgent] All meeting interaction services initialized');
 }
 
+// ==================== Per-Speaker Transcription Pipeline ====================
+
+/**
+ * Initialize the per-speaker transcription pipeline (Node.js side).
+ * Creates TranscriptionClient, SegmentPublisher, and SpeakerStreamManager.
+ * Must be called before `startPerSpeakerAudioCapture()`.
+ */
+async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
+  const transcriptionServiceUrl = process.env.TRANSCRIPTION_SERVICE_URL;
+  if (!transcriptionServiceUrl) {
+    log('[PerSpeaker] WARNING: TRANSCRIPTION_SERVICE_URL not set. Per-speaker transcription disabled.');
+    return false;
+  }
+
+  const meetingId = botConfig.meeting_id;
+
+  try {
+    transcriptionClient = new TranscriptionClient({
+      serviceUrl: transcriptionServiceUrl,
+      apiToken: process.env.TRANSCRIPTION_SERVICE_TOKEN,
+    });
+    log('[PerSpeaker] TranscriptionClient created');
+
+    segmentPublisher = new SegmentPublisher({
+      redisUrl: botConfig.redisUrl || process.env.REDIS_URL || 'redis://localhost:6379',
+      meetingId: String(meetingId),
+    });
+    log('[PerSpeaker] SegmentPublisher created');
+
+    speakerManager = new SpeakerStreamManager({
+      sampleRate: 16000,
+      minAudioDuration: 2.0,
+    });
+
+    // Wire the transcription callback
+    speakerManager.onSegmentReady = async (speakerId: string, speakerName: string, audioBuffer: Float32Array) => {
+      if (!transcriptionClient || !segmentPublisher) return;
+      try {
+        const result = await transcriptionClient.transcribe(audioBuffer, currentLanguage || undefined);
+        if (result && result.text) {
+          const segments = result.segments.length > 0
+            ? result.segments
+            : [{ text: result.text, start: 0, end: result.duration }];
+          for (const segment of segments) {
+            await segmentPublisher.publishSegment({
+              speaker: speakerName,
+              text: segment.text,
+              start: segment.start,
+              end: segment.end,
+              language: result.language || 'en',
+            });
+          }
+        }
+      } catch (err: any) {
+        log(`[PerSpeaker] Transcription failed for ${speakerName}: ${err.message}`);
+      }
+    };
+
+    log('[PerSpeaker] SpeakerStreamManager created and wired');
+    return true;
+  } catch (err: any) {
+    log(`[PerSpeaker] Pipeline initialization failed: ${err.message}`);
+    return false;
+  }
+}
+
+/**
+ * Handle per-speaker audio data arriving from the browser.
+ * Called via page.exposeFunction from the browser's per-speaker audio streams.
+ *
+ * @param speakerIndex - index of the media element
+ * @param audioDataArray - the Float32 audio samples as a plain number array (serialized from browser)
+ */
+async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: number[]): Promise<void> {
+  if (!speakerManager || !segmentPublisher || !page || page.isClosed()) return;
+
+  const speakerId = `speaker-${speakerIndex}`;
+  const audioData = new Float32Array(audioDataArray);
+
+  // Resolve speaker name on first audio from this track
+  if (!speakerManager.hasSpeaker(speakerId)) {
+    const platformKey = currentPlatform === 'google_meet' ? 'googlemeet'
+      : currentPlatform === 'teams' ? 'msteams'
+      : currentPlatform || 'unknown';
+    const name = await resolveSpeakerName(page, speakerIndex, platformKey);
+    speakerManager.addSpeaker(speakerId, name);
+    await segmentPublisher.publishSpeakerEvent({
+      speaker: name,
+      type: 'joined',
+      timestamp: Date.now() / 1000,
+    });
+  }
+
+  speakerManager.feedAudio(speakerId, audioData);
+}
+
+/**
+ * Tear down the per-speaker transcription pipeline and release resources.
+ */
+async function cleanupPerSpeakerPipeline(): Promise<void> {
+  // Stop browser-side audio capture
+  for (const handle of activeSpeakerStreamHandles) {
+    try {
+      handle.stop();
+      handle.cleanup();
+    } catch (err: any) {
+      log(`[PerSpeaker] Error cleaning up stream handle: ${err.message}`);
+    }
+  }
+  activeSpeakerStreamHandles = [];
+
+  // Flush remaining speaker buffers
+  if (speakerManager) {
+    speakerManager.removeAll();
+    speakerManager = null;
+  }
+
+  // Close Redis connections
+  if (segmentPublisher) {
+    await segmentPublisher.close();
+    segmentPublisher = null;
+  }
+
+  transcriptionClient = null;
+  log('[PerSpeaker] Pipeline cleaned up');
+}
+
+/**
+ * Expose the per-speaker audio callback to the browser and set up
+ * per-speaker audio capture inside the page.
+ *
+ * Called by platform handlers after media elements are available.
+ * The platform handler should call this instead of (or in addition to)
+ * the WhisperLive audio pipeline when transcriptionTier === 'deferred'
+ * or when TRANSCRIPTION_SERVICE_URL is configured.
+ */
+export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Promise<void> {
+  if (!speakerManager) {
+    log('[PerSpeaker] Pipeline not initialized, skipping audio capture setup');
+    return;
+  }
+
+  // Expose the Node.js callback so browser code can send audio data
+  try {
+    await pageToCaptureFrom.exposeFunction('__vexaPerSpeakerAudioData', handlePerSpeakerAudioData);
+  } catch (err: any) {
+    // May already be exposed (e.g., page reload)
+    if (!err.message.includes('has been already registered')) {
+      log(`[PerSpeaker] Failed to expose audio callback: ${err.message}`);
+      return;
+    }
+  }
+
+  // Set up per-speaker audio streams inside the browser
+  const handleCount = await pageToCaptureFrom.evaluate(async () => {
+    const browserUtils = (window as any).VexaBrowserUtils;
+    if (!browserUtils || !browserUtils.BrowserAudioService) {
+      (window as any).logBot?.('[PerSpeaker] BrowserAudioService not available');
+      return 0;
+    }
+
+    const audioService = new browserUtils.BrowserAudioService({
+      targetSampleRate: 16000,
+      bufferSize: 4096,
+      inputChannels: 1,
+      outputChannels: 1,
+    });
+
+    // Find active media elements
+    const mediaElements = await audioService.findMediaElements(5, 2000);
+    if (mediaElements.length === 0) {
+      (window as any).logBot?.('[PerSpeaker] No media elements found');
+      return 0;
+    }
+
+    // Create per-speaker streams
+    const handles = audioService.createPerSpeakerStreams(
+      mediaElements,
+      (speakerIndex: number, audioData: Float32Array) => {
+        // Send audio data to Node.js via the exposed function.
+        // Convert Float32Array to plain array for serialization.
+        (window as any).__vexaPerSpeakerAudioData(speakerIndex, Array.from(audioData));
+      }
+    );
+
+    // Start all streams
+    for (const handle of handles) {
+      handle.start();
+    }
+
+    // Store handles on window for potential cleanup
+    (window as any).__vexaPerSpeakerHandles = handles;
+
+    (window as any).logBot?.(`[PerSpeaker] Started ${handles.length} per-speaker audio streams`);
+    return handles.length;
+  });
+
+  log(`[PerSpeaker] Browser-side audio capture started with ${handleCount} streams`);
+}
+
 // ==================================================================
 
 export async function runBot(botConfig: BotConfig): Promise<void> {// Store botConfig globally for command validation
@@ -1213,6 +1434,21 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     } catch (err: any) {
       log(`[VoiceAgent] Initialization failed (non-fatal): ${err.message}`);
     }
+  }
+
+  // Initialize per-speaker transcription pipeline (Node.js side).
+  // This replaces WhisperLive WebSocket when TRANSCRIPTION_SERVICE_URL is set.
+  if (botConfig.transcribeEnabled !== false) {
+    try {
+      const pipelineReady = await initPerSpeakerPipeline(botConfig);
+      if (pipelineReady) {
+        log('[Bot] Per-speaker transcription pipeline initialized');
+      }
+    } catch (err: any) {
+      log(`[Bot] Per-speaker pipeline init failed (non-fatal): ${err.message}`);
+    }
+  } else {
+    log('[Bot] Transcription disabled, skipping per-speaker pipeline');
   }
 
   // Call the appropriate platform handler

@@ -99,10 +99,26 @@ export class SpeakerStreamManager {
   }
 
   /**
+   * Check whether a speaker is already being tracked.
+   */
+  hasSpeaker(speakerId: string): boolean {
+    return this.buffers.has(speakerId);
+  }
+
+  /**
    * Get all currently tracked speaker IDs.
    */
   getActiveSpeakers(): string[] {
     return Array.from(this.buffers.keys());
+  }
+
+  /**
+   * Remove all speakers: flush remaining audio for each, then clear the map.
+   */
+  removeAll(): void {
+    for (const speakerId of Array.from(this.buffers.keys())) {
+      this.removeSpeaker(speakerId);
+    }
   }
 
   /**
