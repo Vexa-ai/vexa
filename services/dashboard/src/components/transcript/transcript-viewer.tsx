@@ -1043,11 +1043,27 @@ export function TranscriptViewer({
 
                 const isActivePlayback = activePlaybackIndex === index;
 
+                // Determine if this is a continuation from the same speaker
+                // by looking at the previous timeline item
+                let showSpeakerHeader = true;
+                if (idx > 0) {
+                  const prevItem = timelineItems[idx - 1];
+                  if (prevItem.type === "transcript") {
+                    const prevSpeaker = prevItem.group.key.startsWith("__unmapped_")
+                      ? (prevItem.group.segments[0]?.speaker || "")
+                      : prevItem.group.key;
+                    const currSpeaker = syntheticSegment.speaker;
+                    if (prevSpeaker === currSpeaker) {
+                      showSpeakerHeader = false;
+                    }
+                  }
+                }
+
                 return (
                   <div
                     key={`${group.startTime}-${index}`}
                     ref={isActivePlayback ? activeSegmentRef : undefined}
-                    className="animate-fade-in"
+                    className={cn("animate-fade-in", showSpeakerHeader && idx > 0 && "mt-1")}
                     style={{
                       animationDelay: isLive ? "0ms" : `${Math.min(index * 20, 200)}ms`,
                       animationFillMode: "backwards",
@@ -1061,6 +1077,7 @@ export function TranscriptViewer({
                       appendedText={textToHighlight}
                       isActivePlayback={isActivePlayback}
                       onClickSegment={onSegmentClick ? () => onSegmentClick(group.startTimeSeconds, group.startTime) : undefined}
+                      showSpeakerHeader={showSpeakerHeader}
                     />
                   </div>
                 );

@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import type { Meeting, TranscriptSegment, Platform, MeetingStatus, RecordingData, ChatMessage } from "@/types/vexa";
 import { VexaAPIError, vexaAPI } from "@/lib/api";
-import { deduplicateSegments } from "@vexaai/transcript-rendering";
+// deduplicateSegments removed — it merges time-overlapping segments which
+// is wrong for per-speaker pipeline where concurrent speakers overlap.
 
 interface MeetingDataUpdate {
   name?: string;
@@ -259,19 +260,17 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
       (seg) => seg.absolute_start_time && seg.text?.trim()
     );
 
-    // Create a map keyed by absolute_start_time (deduplication key)
+    // Key by segment_id (stable, per-speaker) or absolute_start_time (legacy)
     const transcriptMap = new Map<string, TranscriptSegment>();
     for (const segment of validSegments) {
-      transcriptMap.set(segment.absolute_start_time, segment);
+      const key = segment.segment_id || segment.absolute_start_time;
+      transcriptMap.set(key, segment);
     }
 
-    // Convert map to array and sort by absolute_start_time
-    const sortedTranscripts = Array.from(transcriptMap.values()).sort(
+    // Sort by absolute_start_time
+    const dedupedTranscripts = Array.from(transcriptMap.values()).sort(
       (a, b) => a.absolute_start_time.localeCompare(b.absolute_start_time)
     );
-
-    // Deduplicate overlapping segments (expansion, tail-repeat, containment)
-    const dedupedTranscripts = deduplicateSegments(sortedTranscripts);
 
     // Get the first segment's absolute_start_time to use as meeting start time
     const firstSegmentTime = dedupedTranscripts.length > 0 
@@ -300,57 +299,44 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
 
     if (!segments || segments.length === 0) return;
 
-    // Convert current transcripts to a map keyed by absolute_start_time
+    // Key by segment_id (stable, per-speaker) or absolute_start_time (legacy)
     const transcriptMap = new Map<string, TranscriptSegment>();
     for (const seg of transcripts) {
-      if (seg.absolute_start_time) {
-        transcriptMap.set(seg.absolute_start_time, seg);
-      }
+      const key = seg.segment_id || seg.absolute_start_time;
+      if (key) transcriptMap.set(key, seg);
     }
 
-    // Upsert new segments with deduplication logic
+    // Upsert new segments
     let hasUpdates = false;
     for (const segment of segments) {
-      const absStart = segment.absolute_start_time;
-      if (!absStart || !segment.text?.trim()) continue;
+      if (!segment.absolute_start_time || !segment.text?.trim()) continue;
 
-      const existing = transcriptMap.get(absStart);
+      const key = segment.segment_id || segment.absolute_start_time;
+      const existing = transcriptMap.get(key);
 
-      // For real-time updates: always update if text is different, regardless of timestamp
-      // This ensures that segment changes are reflected immediately
       if (existing) {
-        // If text is different (trimmed comparison for accuracy), always update (real-time transcription update)
         const existingText = (existing.text || "").trim();
         const newText = (segment.text || "").trim();
         const completedChanged = Boolean(existing.completed) !== Boolean(segment.completed);
         if (existingText !== newText || completedChanged) {
-          transcriptMap.set(absStart, segment);
+          transcriptMap.set(key, segment);
           hasUpdates = true;
           continue;
         }
-        
-        // If text is the same, use timestamp-based deduplication
-        if (existing.updated_at && segment.updated_at) {
-          // If existing is newer, skip this segment
-          if (existing.updated_at >= segment.updated_at) {
-            continue;
-          }
+        // Same text — keep newer
+        if (existing.updated_at && segment.updated_at && existing.updated_at >= segment.updated_at) {
+          continue;
         }
       }
 
-      // Update the map with new/updated segment
-      transcriptMap.set(absStart, segment);
+      transcriptMap.set(key, segment);
       hasUpdates = true;
     }
 
-    // Always update store to ensure React detects changes (even if no new segments, content may have updated)
-    // Convert map to array and sort by absolute_start_time
-    const sortedTranscripts = Array.from(transcriptMap.values()).sort(
+    // Sort by absolute_start_time
+    const dedupedTranscripts = Array.from(transcriptMap.values()).sort(
       (a, b) => a.absolute_start_time.localeCompare(b.absolute_start_time)
     );
-
-    // Deduplicate overlapping segments (expansion, tail-repeat, containment)
-    const dedupedTranscripts = deduplicateSegments(sortedTranscripts);
     
     // Get the first segment's absolute_start_time to use as meeting start time
     const firstSegmentTime = dedupedTranscripts.length > 0 
@@ -382,8 +368,9 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
   // Real-time: Update existing transcript segment
   updateTranscriptSegment: (segment: TranscriptSegment) => {
     const { transcripts } = get();
+    const segKey = segment.segment_id || segment.absolute_start_time;
     const updated = transcripts.map((t) =>
-      t.absolute_start_time === segment.absolute_start_time ? segment : t
+      (t.segment_id || t.absolute_start_time) === segKey ? segment : t
     );
     set({ transcripts: updated });
   },

@@ -238,13 +238,9 @@ export const googleRemovalIndicators: string[] = [
   'text="Reconnecting"',
   'text*="Reconnecting"',
   
-  // Removal-specific patterns (avoid generic [role="alert"] / [role="alertdialog"]
-  // which false-positive on screen share dialogs and other transient notifications)
-  'text="You were removed from the meeting"',
-  'text*="You were removed"',
-  'text="You have been removed"',
-  'text*="been removed"',
-  'text="The meeting organizer removed you"',
+  // Generic error patterns
+  '[role="alert"]',
+  '[role="alertdialog"]',
   '.error-message',
   '.connection-error',
   '.meeting-error'

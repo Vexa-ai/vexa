@@ -13,6 +13,8 @@ interface TranscriptSegmentProps {
   appendedText?: string | null;
   isActivePlayback?: boolean;
   onClickSegment?: () => void;
+  /** When false, hide the avatar and speaker name (consecutive segments from same speaker). Defaults to true. */
+  showSpeakerHeader?: boolean;
 }
 
 function formatTimestamp(seconds: number): string {
@@ -106,6 +108,7 @@ export function TranscriptSegment({
   appendedText,
   isActivePlayback,
   onClickSegment,
+  showSpeakerHeader = true,
 }: TranscriptSegmentProps) {
   // Always display absolute time from the feed when available (device-independent).
   // For grouped segments, callers should pass the FIRST segment's `absolute_start_time` as `segment.absolute_start_time`.
@@ -117,48 +120,57 @@ export function TranscriptSegment({
     <div
       onClick={onClickSegment}
       className={cn(
-        "group flex gap-3 p-3 rounded-lg transition-colors",
+        "group flex gap-2 rounded-lg transition-colors",
+        showSpeakerHeader ? "px-3 pt-2 pb-0.5" : "px-3 py-0",
         isHighlighted && "bg-yellow-50 dark:bg-yellow-900/20",
         isActivePlayback && "bg-primary/10 border-l-2 border-primary",
         !isHighlighted && !isActivePlayback && "hover:bg-muted/50",
         onClickSegment && "cursor-pointer"
       )}
     >
-      {/* Avatar */}
-      <Avatar className={cn("h-8 w-8 flex-shrink-0", speakerColor.avatar)}>
-        <AvatarFallback className={cn("text-xs font-medium text-white", speakerColor.avatar)}>
-          {getInitials(segment.speaker)}
-        </AvatarFallback>
-      </Avatar>
 
       {/* Content */}
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-1">
-          <span className={cn("font-medium text-sm", speakerColor.text)}>
-            {segment.speaker || ""}
-          </span>
-          <span className="text-xs text-muted-foreground">
-            {displayTimestamp}
-          </span>
-          {onClickSegment && (
-            <span
-              className={cn(
-                "ml-auto inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground transition-all",
-                isActivePlayback
-                  ? "opacity-100 border-primary/40 bg-primary/10 text-primary"
-                  : "opacity-80 group-hover:opacity-100 group-hover:border-primary/40 group-hover:bg-primary/10 group-hover:text-primary"
-              )}
-              aria-label="Click segment to play from this timestamp"
-              title="Click to play from this segment"
-            >
-              <Play className="h-3 w-3" />
-              Play
+        {showSpeakerHeader && (
+          <div className="flex items-center gap-2 mb-0.5">
+            <span className={cn("font-medium text-sm", speakerColor.text)}>
+              {segment.speaker || ""}
             </span>
-          )}
-        </div>
-        <p className="text-sm leading-relaxed">
-          {renderTextWithAppendedHighlight(segment.text, appendedText || null, searchQuery)}
-        </p>
+            <span className="text-xs text-muted-foreground">
+              {displayTimestamp}
+            </span>
+            {onClickSegment && (
+              <span
+                className={cn(
+                  "ml-auto inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground transition-all",
+                  isActivePlayback
+                    ? "opacity-100 border-primary/40 bg-primary/10 text-primary"
+                    : "opacity-80 group-hover:opacity-100 group-hover:border-primary/40 group-hover:bg-primary/10 group-hover:text-primary"
+                )}
+                aria-label="Click segment to play from this timestamp"
+                title="Click to play from this segment"
+              >
+                <Play className="h-3 w-3" />
+                Play
+              </span>
+            )}
+          </div>
+        )}
+        {!showSpeakerHeader && (
+          <div className="flex items-center gap-2">
+            <p className="text-sm leading-snug flex-1">
+              {renderTextWithAppendedHighlight(segment.text, appendedText || null, searchQuery)}
+            </p>
+            <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+              {displayTimestamp}
+            </span>
+          </div>
+        )}
+        {showSpeakerHeader && (
+          <p className="text-sm leading-snug">
+            {renderTextWithAppendedHighlight(segment.text, appendedText || null, searchQuery)}
+          </p>
+        )}
       </div>
     </div>
   );

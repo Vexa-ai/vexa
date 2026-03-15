@@ -206,12 +206,12 @@ export default function MeetingsPage() {
             <table className="w-full">
               <thead>
                 <tr className="border-b text-xs text-muted-foreground uppercase tracking-wider">
-                  <th className="text-left px-5 py-3 font-medium">Platform</th>
+                  <th className="hidden sm:table-cell text-left px-5 py-3 font-medium">Platform</th>
                   <th className="text-left px-5 py-3 font-medium">Meeting</th>
                   <th className="text-left px-5 py-3 font-medium">Status</th>
                   <th className="text-left px-5 py-3 font-medium">Duration</th>
-                  <th className="text-left px-5 py-3 font-medium">Participants</th>
-                  <th className="text-left px-5 py-3 font-medium">Time</th>
+                  <th className="hidden lg:table-cell text-left px-5 py-3 font-medium">Participants</th>
+                  <th className="hidden sm:table-cell text-left px-5 py-3 font-medium">Time</th>
                 </tr>
               </thead>
               <tbody className="text-sm">
@@ -266,7 +266,7 @@ function MeetingRow({ meeting }: { meeting: Meeting }) {
         className="border-b border-border/50 hover:bg-muted/30 cursor-pointer transition-colors"
         onClick={() => router.push(`/meetings/${meeting.id}`)}
       >
-        <td className="px-5 py-3">
+        <td className="hidden sm:table-cell px-5 py-3">
           <PlatformIcon platform={meeting.platform} />
         </td>
         <td className="px-5 py-3">
@@ -296,7 +296,7 @@ function MeetingRow({ meeting }: { meeting: Meeting }) {
         <td className="px-5 py-3 text-muted-foreground">
           {formatDuration(meeting.start_time, meeting.end_time)}
         </td>
-        <td className="px-5 py-3 text-muted-foreground text-xs">
+        <td className="hidden lg:table-cell px-5 py-3 text-muted-foreground text-xs">
           {participants.length > 0 ? (
             <span>
               {participants.slice(0, 2).join(", ")}
@@ -306,7 +306,7 @@ function MeetingRow({ meeting }: { meeting: Meeting }) {
             "—"
           )}
         </td>
-        <td className="px-5 py-3 text-muted-foreground text-xs whitespace-nowrap">
+        <td className="hidden sm:table-cell px-5 py-3 text-muted-foreground text-xs whitespace-nowrap">
           {meeting.start_time ? (
             <>
               {formatDate(meeting.start_time)}
