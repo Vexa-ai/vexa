@@ -1187,9 +1187,14 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
         // Detect participant count change → invalidate all mappings
         try {
           const currentCount = await page.evaluate(() => {
-            return typeof (window as any).getGoogleMeetActiveParticipantsCount === 'function'
-              ? (window as any).getGoogleMeetActiveParticipantsCount()
-              : 0;
+            // Google Meet: injected function
+            if (typeof (window as any).getGoogleMeetActiveParticipantsCount === 'function') {
+              return (window as any).getGoogleMeetActiveParticipantsCount();
+            }
+            // Teams: count visible participant tiles
+            const teamsTiles = document.querySelectorAll('[data-tid*="video-tile"], [data-tid*="participant"]');
+            if (teamsTiles.length > 0) return teamsTiles.length;
+            return 0;
           });
           if (lastParticipantCount > 0 && currentCount !== lastParticipantCount) {
             log(`[SpeakerIdentity] Participant count changed: ${lastParticipantCount} → ${currentCount}. Invalidating all mappings.`);
@@ -1255,10 +1260,43 @@ async function cleanupPerSpeakerPipeline(): Promise<void> {
 }
 
 /**
+ * Handle audio from Teams' single mixed stream, routed by speaker name.
+ * Teams has one audio element; the browser routes chunks based on DOM speaker indicators.
+ * Speaker name is known from DOM events — no voting/locking needed.
+ */
+async function handleTeamsAudioData(speakerName: string, audioDataArray: number[]): Promise<void> {
+  if (!speakerManager || !segmentPublisher || !page || page.isClosed()) return;
+
+  const speakerId = `teams-${speakerName.replace(/\s+/g, '_')}`;
+  const audioData = new Float32Array(audioDataArray);
+
+  // Add speaker if new — name is already known from DOM
+  if (!speakerManager.hasSpeaker(speakerId)) {
+    log(`[🎙️ TEAMS SPEAKER] "${speakerName}" — first audio received`);
+    speakerManager.addSpeaker(speakerId, speakerName);
+    await segmentPublisher.publishSpeakerEvent({
+      speaker: speakerName,
+      type: 'joined',
+      timestamp: Date.now(),
+    });
+  }
+
+  // VAD check
+  if (vadModel) {
+    const hasSpeech = await vadModel.isSpeech(audioData);
+    if (!hasSpeech) return;
+  }
+
+  speakerManager.feedAudio(speakerId, audioData);
+}
+
+/**
  * Expose the per-speaker audio callback to the browser and set up
  * per-speaker audio capture inside the page.
  *
  * Called by platform handlers after media elements are available.
+ * Google Meet: per-element streams (1 element = 1 participant).
+ * Teams: single stream routed by DOM speaker events (handled in recording.ts).
  */
 export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Promise<void> {
   if (!speakerManager) {
@@ -1267,11 +1305,26 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
   }
 
 
-  // Expose the Node.js callback so browser code can send audio data
+  const isTeams = currentPlatform === 'teams';
+
+  // Expose Teams audio callback — browser routes single stream by speaker name
+  if (isTeams) {
+    try {
+      await pageToCaptureFrom.exposeFunction('__vexaTeamsAudioData', handleTeamsAudioData);
+      log('[PerSpeaker] Teams audio callback exposed — browser-side routing via DOM speaker events');
+    } catch (err: any) {
+      if (!err.message.includes('has been already registered')) {
+        log(`[PerSpeaker] Failed to expose Teams audio callback: ${err.message}`);
+      }
+    }
+    // Teams audio routing is set up in recording.ts page.evaluate — nothing more to do here
+    return;
+  }
+
+  // Google Meet: expose per-element callback and set up per-element streams
   try {
     await pageToCaptureFrom.exposeFunction('__vexaPerSpeakerAudioData', handlePerSpeakerAudioData);
   } catch (err: any) {
-    // May already be exposed (e.g., page reload)
     if (!err.message.includes('has been already registered')) {
       log(`[PerSpeaker] Failed to expose audio callback: ${err.message}`);
       return;

@@ -188,62 +188,35 @@ async function resolveGoogleMeetSpeakerName(
   return null;
 }
 
+// ─── Teams DOM Traversal ─────────────────────────────────────────────────────
+
+const TEAMS_SELECTORS = {
+  participantContainer: [
+    '[data-tid*="video-tile"]',
+    '[data-tid*="videoTile"]',
+    '[data-tid*="participant"]',
+    '[data-tid*="roster-item"]',
+    '.participant-tile',
+    '.video-tile',
+  ],
+  nameElement: [
+    '[data-tid*="display-name"]',
+    '[data-tid*="participant-name"]',
+    '.participant-name',
+    '.display-name',
+    '.user-name',
+    '.roster-item-name',
+    '.video-tile-name',
+    'span[title]',
+    '.ms-Persona-primaryText',
+  ],
+};
+
 /**
- * Resolve speaker name for any platform.
- * Google Meet: correlation-based voting → permanent lock.
- * Other platforms: DOM traversal from media element.
+ * DOM traversal for Teams: walk up from a media element to find a name.
  */
-export async function resolveSpeakerName(
-  page: Page,
-  elementIndex: number,
-  platform: string,
-  botName?: string,
-): Promise<string> {
-  if (platform === 'googlemeet') {
-    const name = await resolveGoogleMeetSpeakerName(page, elementIndex, botName);
-    if (name) {
-      log(`[SpeakerIdentity] Element ${elementIndex} → "${name}" (platform: ${platform})`);
-      return name;
-    }
-    log(`[SpeakerIdentity] Element ${elementIndex} → "" (platform: ${platform}, not yet mapped)`);
-    return '';
-  }
-
-  // Other platforms: DOM traversal (Teams, etc.)
-  const PLATFORM_SELECTORS: Record<string, {
-    participantContainer: string[];
-    nameElement: string[];
-  }> = {
-    msteams: {
-      participantContainer: [
-        '[data-tid*="video-tile"]',
-        '[data-tid*="videoTile"]',
-        '[data-tid*="participant"]',
-        '[data-tid*="roster-item"]',
-        '.participant-tile',
-        '.video-tile',
-      ],
-      nameElement: [
-        '[data-tid*="display-name"]',
-        '[data-tid*="participant-name"]',
-        '.participant-name',
-        '.display-name',
-        '.user-name',
-        '.roster-item-name',
-        '.video-tile-name',
-        'span[title]',
-        '.ms-Persona-primaryText',
-      ],
-    },
-  };
-
-  const selectors = PLATFORM_SELECTORS[platform];
-  if (!selectors) {
-    log(`[SpeakerIdentity] Unknown platform "${platform}" — returning empty`);
-    return '';
-  }
-
-  const name = await page.evaluate(
+async function traverseTeamsDOM(page: Page, elementIndex: number): Promise<string | null> {
+  return await page.evaluate(
     ({ idx, containerSelectors, nameSelectors }) => {
       const mediaElements = Array.from(
         document.querySelectorAll('audio, video')
@@ -261,10 +234,6 @@ export async function resolveSpeakerName(
         for (const cs of containerSelectors) {
           if (current.matches(cs)) {
             for (const ns of nameSelectors) {
-              if (ns === '[data-self-name]') {
-                const selfName = current.getAttribute('data-self-name');
-                if (selfName) return selfName;
-              }
               const nameEl = current.querySelector(ns);
               if (nameEl) {
                 const text = (nameEl.textContent || '').trim();
@@ -291,13 +260,78 @@ export async function resolveSpeakerName(
     },
     {
       idx: elementIndex,
-      containerSelectors: selectors.participantContainer,
-      nameSelectors: selectors.nameElement,
+      containerSelectors: TEAMS_SELECTORS.participantContainer,
+      nameSelectors: TEAMS_SELECTORS.nameElement,
     }
   );
+}
 
-  log(`[SpeakerIdentity] Element ${elementIndex} → "${name || ''}" (platform: ${platform})`);
-  return name || '';
+/**
+ * Teams speaker resolution: DOM traversal + voting/locking (same system as Google Meet).
+ * DOM traversal provides the name candidate, voting provides consistency and uniqueness.
+ */
+async function resolveTeamsSpeakerName(
+  page: Page,
+  elementIndex: number,
+): Promise<string | null> {
+  // Locked → permanent, instant return
+  const locked = getLockedMapping(elementIndex);
+  if (locked) return locked;
+
+  // Try DOM traversal
+  const domName = await traverseTeamsDOM(page, elementIndex);
+
+  if (domName) {
+    // Don't return a name already taken by another track
+    if (isNameTaken(domName, elementIndex)) return null;
+
+    recordTrackVote(elementIndex, domName);
+    return getLockedMapping(elementIndex) || domName;
+  }
+
+  // No DOM name — return top voted if not taken
+  const votes = trackVotes.get(elementIndex);
+  if (votes && votes.size > 0) {
+    const sorted = Array.from(votes.entries()).sort((a, b) => b[1] - a[1]);
+    for (const [name] of sorted) {
+      if (!isNameTaken(name, elementIndex)) return name;
+    }
+  }
+
+  return null;
+}
+
+// ─── Main Resolution ─────────────────────────────────────────────────────────
+
+/**
+ * Resolve speaker name for any platform.
+ * Google Meet: speaking-indicator correlation → voting → permanent lock.
+ * Teams: DOM traversal → voting → permanent lock.
+ * Both enforce one-name-per-track, one-track-per-name.
+ */
+export async function resolveSpeakerName(
+  page: Page,
+  elementIndex: number,
+  platform: string,
+  botName?: string,
+): Promise<string> {
+  let name: string | null = null;
+
+  if (platform === 'googlemeet') {
+    name = await resolveGoogleMeetSpeakerName(page, elementIndex, botName);
+  } else if (platform === 'msteams') {
+    name = await resolveTeamsSpeakerName(page, elementIndex);
+  } else {
+    log(`[SpeakerIdentity] Unknown platform "${platform}" — returning empty`);
+    return '';
+  }
+
+  if (name) {
+    log(`[SpeakerIdentity] Element ${elementIndex} → "${name}" (platform: ${platform})`);
+    return name;
+  }
+  log(`[SpeakerIdentity] Element ${elementIndex} → "" (platform: ${platform}, not yet mapped)`);
+  return '';
 }
 
 // ─── Lifecycle ───────────────────────────────────────────────────────────────

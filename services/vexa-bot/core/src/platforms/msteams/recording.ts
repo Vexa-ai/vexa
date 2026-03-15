@@ -2,7 +2,7 @@ import { Page } from "playwright";
 import { log } from "../../utils";
 import { BotConfig } from "../../types";
 import { RecordingService } from "../../services/recording";
-import { setActiveRecordingService } from "../../index";
+import { setActiveRecordingService, getSegmentPublisher } from "../../index";
 import { ensureBrowserUtils } from "../../utils/injection";
 import {
   teamsParticipantSelectors,
@@ -22,6 +22,14 @@ import {
 // Modified to use new services - Teams recording functionality
 export async function startTeamsRecording(page: Page, botConfig: BotConfig): Promise<void> {
   log("Starting Teams recording");
+
+  // Reset segment publisher session start to align with recording start.
+  // SegmentPublisher was created pre-admission; recording starts post-admission.
+  const publisher = getSegmentPublisher();
+  if (publisher) {
+    publisher.resetSessionStart();
+    log(`[Teams Recording] Session start reset to ${new Date(publisher.sessionStartMs).toISOString()}`);
+  }
 
   const wantsAudioCapture =
     !!botConfig.recordingEnabled &&
@@ -211,7 +219,7 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
           (window as any).logBot("Starting Teams recording process with new services.");
           
           // Find and create combined audio stream
-          audioService.findMediaElements().then(async (mediaElements: HTMLMediaElement[]) => {
+          audioService.findMediaElements(10, 3000).then(async (mediaElements: HTMLMediaElement[]) => {
             if (mediaElements.length === 0) {
               reject(
                 new Error(
@@ -312,6 +320,13 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
                   }
                   
                   return this.cache.get(element)!;
+                }
+
+                getNameById(id: string): string | null {
+                  const element = this.idToElement.get(id);
+                  if (!element) return null;
+                  const identity = this.cache.get(element);
+                  return identity?.name || null;
                 }
 
                 invalidate(element: HTMLElement) {
@@ -813,6 +828,69 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
               // Do initial count immediately, then poll every 5 seconds
               countParticipants();
               setInterval(countParticipants, 5000);
+
+              // ─── Per-speaker audio routing ──────────────────────────────
+              // Teams has ONE mixed audio stream. We route audio chunks to
+              // speaker buffers based on who the DOM says is currently speaking.
+              // The speakingStates map (populated by the observer above) tells
+              // us who's active. Registry maps IDs to names.
+              const setupPerSpeakerAudioRouting = () => {
+                const audioEl = document.querySelector('audio') as HTMLAudioElement | null;
+                if (!audioEl || !(audioEl.srcObject instanceof MediaStream)) {
+                  (window as any).logBot?.('[Teams PerSpeaker] No audio element found, skipping per-speaker routing');
+                  return;
+                }
+
+                const stream = audioEl.srcObject as MediaStream;
+                if (stream.getAudioTracks().length === 0) {
+                  (window as any).logBot?.('[Teams PerSpeaker] Audio stream has no tracks');
+                  return;
+                }
+
+                const ctx = new AudioContext({ sampleRate: 16000 });
+                const source = ctx.createMediaStreamSource(stream);
+                const processor = ctx.createScriptProcessor(4096, 1, 1);
+
+                processor.onaudioprocess = (e: AudioProcessingEvent) => {
+                  const data = e.inputBuffer.getChannelData(0);
+                  // Skip silence
+                  let maxVal = 0;
+                  for (let j = 0; j < data.length; j++) {
+                    const abs = data[j] < 0 ? -data[j] : data[j];
+                    if (abs > maxVal) maxVal = abs;
+                  }
+                  if (maxVal <= 0.005) return;
+
+                  // Find active speakers from DOM state (exclude bot itself)
+                  const botNameLower = ((botConfigData as any)?.botName || (botConfigData as any)?.name || 'vexa').toLowerCase();
+                  const activeSpeakerNames: string[] = [];
+                  for (const [id, state] of speakingStates) {
+                    if (state === 'speaking') {
+                      const name = registry.getNameById(id);
+                      if (name && !name.toLowerCase().includes(botNameLower)) {
+                        activeSpeakerNames.push(name);
+                      }
+                    }
+                  }
+
+                  if (activeSpeakerNames.length === 0) return;
+
+                  // Route audio to each active speaker
+                  const audioArray = Array.from(data);
+                  for (const name of activeSpeakerNames) {
+                    if (typeof (window as any).__vexaTeamsAudioData === 'function') {
+                      (window as any).__vexaTeamsAudioData(name, audioArray);
+                    }
+                  }
+                };
+
+                source.connect(processor);
+                processor.connect(ctx.destination);
+                (window as any).logBot?.(`[Teams PerSpeaker] Audio routing active on stream ${stream.id}`);
+              };
+
+              // Delay slightly to ensure audio element is ready
+              setTimeout(setupPerSpeakerAudioRouting, 2000);
               
               // Expose participant count for meeting monitoring
               // Accessible-roles based participant collection (robust and simple)
