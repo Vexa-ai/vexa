@@ -135,7 +135,7 @@ export function TranscriptSegment({
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
           <span className={cn("font-medium text-sm", speakerColor.text)}>
-            {segment.speaker || "Unknown Speaker"}
+            {segment.speaker || ""}
           </span>
           <span className="text-xs text-muted-foreground">
             {displayTimestamp}
