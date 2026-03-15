@@ -30,7 +30,7 @@ Architecture position: sits between the api-gateway (which proxies client reques
 | POST | `/bots/internal/callback/awaiting_admission` | Bot waiting in lobby |
 | POST | `/bots/internal/callback/status_change` | Unified status change handler |
 | POST | `/bots/internal/callback/exited` | Bot exited (success or failure) |
-| POST | `/internal/recordings/upload` | Upload recording media from WhisperLive |
+| POST | `/internal/recordings/upload` | Upload recording media |
 
 **Recordings**
 

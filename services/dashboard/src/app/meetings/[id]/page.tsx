@@ -207,13 +207,6 @@ export default function MeetingDetailPage() {
     return map;
   }, [transcripts]);
 
-  // For single-fragment or fallback: the session start for the first recording fragment
-  const primarySessionStartMs = useMemo((): number | null => {
-    if (recordingFragments.length === 0) return null;
-    const uid = recordingFragments[0].sessionUid;
-    return sessionStartMsBySessionUid.get(uid) ?? sessionStartMsBySessionUid.values().next().value ?? null;
-  }, [recordingFragments, sessionStartMsBySessionUid]);
-
   const handlePlaybackTimeUpdate = useCallback((time: number) => {
     setPlaybackTime(time);
     setIsPlaybackActive(true);
@@ -223,12 +216,22 @@ export default function MeetingDetailPage() {
     setActiveFragmentIndex(index);
   }, []);
 
-  // Map a segment click to the correct recording fragment.
-  // `startTimeSeconds` is the segment's start_time (relative to its session).
-  // `absoluteStartTime` is the segment's absolute_start_time (wall-clock ISO string).
-  // We use absolute_start_time to find which recording fragment the segment belongs to,
-  // then use start_time as the seek offset within that fragment (since start_time is
-  // relative to the session and each recording fragment corresponds to one session).
+  // Map a segment click to the correct recording fragment and seek position.
+  //
+  // segment.start_time is relative to session start — the same reference point
+  // as the audio recording (both start from session start). So start_time IS
+  // the correct seek position within the recording fragment.
+  //
+  // For multi-fragment: use absolute_start_time + session_uid to find the right fragment,
+  // then use start_time as the seek offset within that fragment.
+  //
+  // KNOWN ISSUE: Audio playback seek is off by a few seconds when clicking segments.
+  // segment.start_time is relative to SegmentPublisher session start, but the recording
+  // (MediaRecorder) starts slightly later. resetSessionStart() in recording.ts reduces
+  // the gap but doesn't eliminate it — there's still a few-second delta between when
+  // the session start is reset and when MediaRecorder.start() actually fires inside
+  // page.evaluate(). A precise fix would require the browser to signal the exact
+  // MediaRecorder start timestamp back to Node.js.
   const handleSegmentClick = useCallback((startTimeSeconds: number, absoluteStartTime?: string) => {
     if (!hasRecordingAudio) {
       setPendingSeekTime(startTimeSeconds);
@@ -236,21 +239,17 @@ export default function MeetingDetailPage() {
     }
 
     if (recordingFragments.length <= 1) {
-      // Single recording — simple seek
+      // Single recording — start_time is the seek position
       audioPlayerRef.current?.seekTo(startTimeSeconds);
       setPlaybackTime(startTimeSeconds);
       setIsPlaybackActive(true);
       return;
     }
 
-    // Multi-fragment: find which fragment this segment belongs to.
-    // Match by session_uid first (each fragment has a sessionUid from the recording).
-    // Fall back to finding the fragment whose derived session start is closest
-    // but not after the segment's absolute_start_time.
+    // Multi-fragment: find which fragment this segment belongs to
     let targetFragmentIndex = 0;
     if (absoluteStartTime) {
-      const segTime = new Date(absoluteStartTime).getTime();
-      // Try matching by session_uid from the segment
+      const segTimeMs = new Date(absoluteStartTime).getTime();
       const matchingSegment = transcripts.find(
         s => s.absolute_start_time === absoluteStartTime
       );
@@ -258,15 +257,13 @@ export default function MeetingDetailPage() {
         const uidIndex = recordingFragments.findIndex(
           f => f.sessionUid === matchingSegment.session_uid
         );
-        if (uidIndex >= 0) {
-          targetFragmentIndex = uidIndex;
-        }
+        if (uidIndex >= 0) targetFragmentIndex = uidIndex;
       } else {
-        // Fallback: find fragment whose session start is closest but not after the segment
+        // Fallback: find fragment by derived session start
         for (let i = recordingFragments.length - 1; i >= 0; i--) {
           const uid = recordingFragments[i].sessionUid;
           const sessionStart = sessionStartMsBySessionUid.get(uid);
-          if (sessionStart != null && sessionStart <= segTime) {
+          if (sessionStart != null && sessionStart <= segTimeMs) {
             targetFragmentIndex = i;
             break;
           }
@@ -274,10 +271,7 @@ export default function MeetingDetailPage() {
       }
     }
 
-    // Seek to the segment's relative start_time within the matched fragment
     audioPlayerRef.current?.seekToFragment(targetFragmentIndex, startTimeSeconds);
-
-    // Compute virtual time for playback highlighting
     const virtualOffset = recordingFragments
       .slice(0, targetFragmentIndex)
       .reduce((sum, f) => sum + (f.duration || 0), 0);
@@ -690,16 +684,17 @@ export default function MeetingDetailPage() {
   //
   // Previously this used recording.created_at, which is the upload time — not
   // when the recording actually started — causing a large offset.
+  // Convert playback position (seconds from session start) to absolute wall-clock
+  // time so the transcript viewer can highlight the matching segment.
   const playbackAbsoluteTime = useMemo((): string | null => {
     if (playbackTime == null || !isPlaybackActive || recordingFragments.length === 0) return null;
     if (recordingFragments.length === 1) {
-      // Single fragment: use derived session start time
-      const sessionStart = primarySessionStartMs;
+      const uid = recordingFragments[0].sessionUid;
+      const sessionStart = sessionStartMsBySessionUid.get(uid);
       if (sessionStart == null) return null;
       return new Date(sessionStart + playbackTime * 1000).toISOString();
     }
-    // Multi-fragment: find which fragment the virtual time falls in,
-    // then use that fragment's session start time
+    // Multi-fragment: find which fragment the virtual time falls in
     let remaining = playbackTime;
     for (let i = 0; i < recordingFragments.length; i++) {
       const fragDur = recordingFragments[i].duration || 0;
@@ -712,7 +707,7 @@ export default function MeetingDetailPage() {
       remaining -= fragDur;
     }
     return null;
-  }, [playbackTime, isPlaybackActive, recordingFragments, primarySessionStartMs, sessionStartMsBySessionUid]);
+  }, [playbackTime, isPlaybackActive, recordingFragments, sessionStartMsBySessionUid]);
 
   if (error) {
     return (

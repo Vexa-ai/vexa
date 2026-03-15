@@ -441,7 +441,7 @@ async def transcribe_audio(
             last_segments = segments
 
             if _looks_like_silence(segments):
-                best = ("", info.language, 0.0, [])
+                best = ("", info.language, getattr(info, 'language_probability', 0.0), 0.0, [])
                 logger.info(f"Worker {WORKER_ID} detected silence (temp={t})")
                 break
 
@@ -450,7 +450,7 @@ async def transcribe_audio(
             if not is_hallucination:
                 full_text = " ".join([s["text"].strip() for s in segments]).strip()
                 duration = segments[-1]["end"] if segments else 0.0
-                best = (full_text, info.language, duration, segments)
+                best = (full_text, info.language, getattr(info, 'language_probability', 0.0), duration, segments)
                 logger.info(f"Worker {WORKER_ID} accepted transcription (temp={t})")
                 break
             else:
@@ -462,10 +462,11 @@ async def transcribe_audio(
             segments = last_segments
             full_text = " ".join([s["text"].strip() for s in segments]).strip()
             duration = segments[-1]["end"] if segments else 0.0
-            best = (full_text, info.language if info else (language or "unknown"), duration, segments)
+            lang_prob = getattr(info, 'language_probability', 0.0) if info else 0.0
+            best = (full_text, info.language if info else (language or "unknown"), lang_prob, duration, segments)
 
-        full_text, detected_language, duration, segments = best
-        logger.info(f"Worker {WORKER_ID} transcription completed - language: {detected_language}")
+        full_text, detected_language, detected_language_probability, duration, segments = best
+        logger.info(f"Worker {WORKER_ID} transcription completed - language: {detected_language}, language_probability: {detected_language_probability}")
         
         processing_time = time.time() - start_time
         logger.info(
@@ -477,6 +478,7 @@ async def transcribe_audio(
         response = {
             "text": full_text,
             "language": detected_language,
+            "language_probability": detected_language_probability,
             "duration": duration,
             "segments": segments,
         }

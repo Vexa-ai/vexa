@@ -160,6 +160,7 @@ export class TranscriptionClient {
       return {
         text: data.text || '',
         language: data.language || language || 'unknown',
+        language_probability: data.language_probability ?? 0,
         duration: data.duration || 0,
         segments: (data.segments || []).map((s: any) => ({
           start: s.start || 0,

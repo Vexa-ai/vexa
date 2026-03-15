@@ -59,8 +59,10 @@ export class SegmentPublisher {
   private speakerEventStreamKey: string;
   private client: RedisClientType | null = null;
   private connected: boolean = false;
-  /** Wall-clock time when the session started (ms). Set on first connect. */
-  readonly sessionStartMs: number;
+  /** Wall-clock time when the session started (ms). Defaults to construction time,
+   *  should be reset via resetSessionStart() when audio capture actually begins
+   *  so that segment start_time aligns with the recording. */
+  sessionStartMs: number;
 
   constructor(config: SegmentPublisherConfig) {
     this.redisUrl = config.redisUrl;
@@ -70,6 +72,14 @@ export class SegmentPublisher {
     this.platform = config.platform;
     this.segmentStreamKey = config.segmentStreamKey ?? 'transcription_segments';
     this.speakerEventStreamKey = config.speakerEventStreamKey ?? 'speaker_events_relative';
+    this.sessionStartMs = Date.now();
+  }
+
+  /**
+   * Reset session start to now. Call when audio capture actually begins
+   * so that segment start_time values align with the recording timeline.
+   */
+  resetSessionStart(): void {
     this.sessionStartMs = Date.now();
   }
 

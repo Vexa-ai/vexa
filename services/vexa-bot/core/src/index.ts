@@ -68,6 +68,7 @@ let redisPublisher: RedisClientType | null = null;
 // --- Per-speaker transcription pipeline ---
 let transcriptionClient: TranscriptionClient | null = null;
 let segmentPublisher: SegmentPublisher | null = null;
+export function getSegmentPublisher(): SegmentPublisher | null { return segmentPublisher; }
 let speakerManager: SpeakerStreamManager | null = null;
 let vadModel: SileroVAD | null = null;
 /** Per-speaker detected language — locked after high-confidence detection */
@@ -1028,21 +1029,24 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
     speakerManager.onSegmentReady = async (speakerId: string, speakerName: string, audioBuffer: Float32Array) => {
       if (!transcriptionClient) return;
 
-      // Use per-speaker language if locked, otherwise auto-detect (null)
-      const lang = speakerLanguages.get(speakerId) || null;
+      // Language strategy:
+      // - If user explicitly set a language → always use it (respect the choice)
+      // - Otherwise → auto-detect (null), keep multilingual support
+      const explicitLang = currentLanguage && currentLanguage !== 'auto' ? currentLanguage : null;
+      const lang = explicitLang || speakerLanguages.get(speakerId) || null;
 
       try {
         const result = await transcriptionClient.transcribe(audioBuffer, lang || undefined);
         if (result && result.text) {
-          // Track language per speaker — lock after high-confidence detection
-          if (!speakerLanguages.has(speakerId) && result.language) {
-            const prob = result.language_probability ?? 0;
-            if (prob > 0.7) {
-              speakerLanguages.set(speakerId, result.language);
-              log(`[🌐 LANGUAGE] ${speakerName} → ${result.language} (prob=${prob.toFixed(2)}, locked)`);
-            } else {
-              log(`[🌐 LANGUAGE] ${speakerName} → ${result.language} (prob=${prob.toFixed(2)}, not locked)`);
-            }
+          const prob = result.language_probability ?? 0;
+          log(`[🌐 LANGUAGE] ${speakerName} → ${result.language} (prob=${prob.toFixed(2)}${lang ? ', explicit' : ''})`);
+
+          // Discard low-confidence auto-detected results (likely gibberish)
+          // Only apply when auto-detecting — explicit language is always trusted
+          if (!lang && prob > 0 && prob < 0.3) {
+            log(`[🚫 LOW CONFIDENCE] ${speakerName} | prob=${prob.toFixed(2)} | "${result.text}" — discarded`);
+            speakerManager!.handleTranscriptionResult(speakerId, '');
+            return;
           }
 
           // Filter hallucinations before publishing
@@ -1054,7 +1058,7 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
 
           // Publish draft immediately for real-time dashboard display
           if (segmentPublisher) {
-            const lang = speakerLanguages.get(speakerId) || result.language || currentLanguage || 'en';
+            const lang = explicitLang || result.language || 'en';
             const bufStart = speakerManager!.getBufferStartMs(speakerId);
             const nowMs = Date.now();
             const startSec = (bufStart - segmentPublisher.sessionStartMs) / 1000;
@@ -1091,7 +1095,8 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
         log(`[🚫 HALLUCINATION] ${speakerName} | confirmed but filtered: "${transcript}"`);
         return;
       }
-      const lang = speakerLanguages.get(speakerId) || currentLanguage || 'en';
+      const explicitLang = currentLanguage && currentLanguage !== 'auto' ? currentLanguage : null;
+      const lang = explicitLang || 'en';
       const startSec = (bufferStartMs - segmentPublisher.sessionStartMs) / 1000;
       const endSec = (bufferEndMs - segmentPublisher.sessionStartMs) / 1000;
       const fullSegmentId = `${segmentPublisher.sessionUid}:${segmentId}`;
@@ -1260,6 +1265,7 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
     log('[PerSpeaker] Pipeline not initialized, skipping audio capture setup');
     return;
   }
+
 
   // Expose the Node.js callback so browser code can send audio data
   try {

@@ -4,7 +4,7 @@
 
 Vexa has multiple services that need to communicate without tight coupling. Redis provides three distinct messaging patterns that the system depends on:
 
-1. **Streams** -- durable, ordered message delivery for transcription segments. The bot (and optionally WhisperLive) produces segments, transcription-collector consumes them. If the collector is slow or restarts, the stream retains messages until they're consumed. This is why transcripts don't get lost.
+1. **Streams** -- durable, ordered message delivery for transcription segments. The bot produces segments, transcription-collector consumes them. If the collector is slow or restarts, the stream retains messages until they're consumed. This is why transcripts don't get lost.
 
 2. **Pub/Sub** — real-time event broadcasting for meeting status changes and WebSocket multiplexing. When a bot's status changes (joining → active → completed), all interested clients hear about it instantly. This is how the dashboard shows live meeting status.
 
@@ -23,8 +23,6 @@ Bot (per-speaker) ──XADD {payload}──► Redis Stream (transcription_segm
 
 Bot (per-speaker) ──XADD──► Redis Stream (speaker_events_relative) ──XREADGROUP──► transcription-collector
     collector ──ZADD──► Redis Sorted Set (speaker_events:{session_uid})
-
-WhisperLive (optional, external clients) ──XADD──► Redis Stream (transcription_segments) ──► same consumer
 
 bot-manager ──PUBLISH──► Redis Pub/Sub (meeting:{id}:status)  ──SUBSCRIBE──► api-gateway ──► WebSocket clients
 bot-manager ──PUBLISH──► Redis Pub/Sub (bot_commands:meeting:{id}) ──SUBSCRIBE──► vexa-bot
@@ -85,12 +83,11 @@ Collector stores these in sorted set `speaker_events:{session_uid}` (score = tim
 | Env var | Service | Default | Purpose |
 |---------|---------|---------|---------|
 | `REDIS_URL` | bot-manager, api-gateway | `redis://redis:6379/0` | Connection URL |
-| `REDIS_HOST` | WhisperLive, transcription-collector | `redis` | Hostname |
-| `REDIS_PORT` | WhisperLive, transcription-collector | `6379` | Port |
-| `REDIS_DB` | WhisperLive, transcription-collector | `0` | Database index |
+| `REDIS_HOST` | transcription-collector | `redis` | Hostname |
+| `REDIS_PORT` | transcription-collector | `6379` | Port |
+| `REDIS_DB` | transcription-collector | `0` | Database index |
 | `REDIS_URL` | vexa-bot | `redis://redis:6379/0` | Bot Redis connection |
-| `REDIS_STREAM_URL` | WhisperLive | `redis://redis:6379/0/transcription_segments` | Stream connection URL |
-| `REDIS_STREAM_NAME` | WhisperLive, transcription-collector | `transcription_segments` | Stream key |
+| `REDIS_STREAM_NAME` | transcription-collector | `transcription_segments` | Stream key |
 | `REDIS_CONSUMER_GROUP` | transcription-collector | `collector_group` | Consumer group name |
 | `REDIS_STREAM_READ_COUNT` | transcription-collector | `10` | Messages per XREADGROUP call |
 | `REDIS_STREAM_BLOCK_MS` | transcription-collector | `2000` | XREADGROUP block timeout |
@@ -99,7 +96,6 @@ Collector stores these in sorted set `speaker_events:{session_uid}` (score = tim
 ### References
 
 - Stream producer (bot): [`services/vexa-bot/core/src/services/segment-publisher.ts`](vexa-bot/core/src/services/segment-publisher.ts) -- XADD + PUBLISH per segment
-- Stream producer (WhisperLive, optional): [`services/WhisperLive/whisper_live/server.py`](WhisperLive/whisper_live/server.py) -- `TranscriptionCollectorClient.xadd()`
 - Stream consumer: [`services/transcription-collector/streaming/consumer.py`](transcription-collector/streaming/consumer.py) -- `XREADGROUP` loop
 - Pub/Sub producer: [`services/bot-manager/app/main.py`](bot-manager/app/main.py) -- `publish_meeting_status_change()`
 - Pub/Sub consumer: [`services/api-gateway/main.py`](api-gateway/main.py) -- `websocket_multiplex()` subscribes for real-time updates
@@ -119,7 +115,6 @@ redis:
 ```
 
 No persistence, no auth, no cluster. If Redis restarts, in-flight stream messages are lost but:
-- WhisperLive re-publishes on the next audio chunk
 - Webhook retry queue is rebuilt from the next failure
 - Pub/Sub is inherently ephemeral
 

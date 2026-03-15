@@ -253,18 +253,7 @@ async def start_bot_container(
 
     logger.debug(f"Bot config: {bot_config_json}") # Log the full config
 
-    # Get the WhisperLive URL from bot-manager's own environment.
-    # This is set in docker-compose.yml to ws://whisperlive.internal/ws to go through Traefik.
-    whisper_live_url_for_bot = os.getenv('WHISPER_LIVE_URL')
-
-    if not whisper_live_url_for_bot:
-        # This should ideally not happen if docker-compose.yml is correctly configured.
-        logger.error("CRITICAL: WHISPER_LIVE_URL is not set in bot-manager's environment. Falling back to default, but this should be fixed in docker-compose.yml for bot-manager service.")
-        whisper_live_url_for_bot = 'ws://whisperlive.internal/ws' # Fallback, but log an error.
-
-    logger.info(f"Passing WHISPER_LIVE_URL to bot: {whisper_live_url_for_bot}")
-
-    # These are the environment variables passed to the Node.js process  of the vexa-bot started by your entrypoint.sh.
+    # These are the environment variables passed to the Node.js process of the vexa-bot started by your entrypoint.sh.
     environment = [
         f"LOG_LEVEL={os.getenv('LOG_LEVEL', 'INFO').upper()}",
     ]
@@ -272,8 +261,6 @@ async def start_bot_container(
     # Agent-only mode (agent_enabled + no meeting_url): skip BOT_CONFIG → entrypoint does sleep infinity
     if not agent_enabled or meeting_url:
         environment.insert(0, f"BOT_CONFIG={bot_config_json}")
-    environment.append(f"WHISPER_LIVE_URL={whisper_live_url_for_bot}")
-
     # Add voice agent environment variables (TTS service URL required)
     if voice_agent_enabled:
         tts_service_url = os.getenv("TTS_SERVICE_URL", "").strip()

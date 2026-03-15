@@ -65,7 +65,6 @@ services:
       - DB_SSL_MODE=${DB_SSL_MODE:-disable}
       - DOCKER_HOST=unix://var/run/docker.sock
       - DEVICE_TYPE=remote
-      - WHISPER_LIVE_URL=ws://whisperlive:9090/ws
       - ADMIN_TOKEN=${ADMIN_API_TOKEN}
       - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-http://host.docker.internal:8083/v1/audio/transcriptions}
       - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-your_secure_token_here}
@@ -100,67 +99,6 @@ services:
       redis:
         condition: service_started
       tts-service:
-        condition: service_started
-    networks:
-      - vexa_default
-    restart: unless-stopped
-
-  whisperlive:
-    build:
-      context: .
-      dockerfile: services/WhisperLive/Dockerfile
-    volumes:
-      - wl-recordings:/var/lib/wl-recordings
-    environment:
-      - REDIS_STREAM_URL=redis://redis:6379/0/transcription_segments
-      - TRANSCRIPTION_COLLECTOR_URL=redis://redis:6379/0/transcription_segments
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_DB=0
-      - REDIS_STREAM_NAME=transcription_segments
-      - LANGUAGE_DETECTION_SEGMENTS=${LANGUAGE_DETECTION_SEGMENTS}
-      - VAD_FILTER_THRESHOLD=${VAD_FILTER_THRESHOLD}
-      - MIN_AUDIO_S=${MIN_AUDIO_S:-2.0}
-      - MIN_AUDIO_S_TIER2=${MIN_AUDIO_S_TIER2:-20.0}
-      - MIN_TIME_BETWEEN_REQUESTS_S=${MIN_TIME_BETWEEN_REQUESTS_S:-0.5}
-      - MIN_TIME_BETWEEN_REQUESTS_S_TIER2=${MIN_TIME_BETWEEN_REQUESTS_S_TIER2:-20.0}
-      - WL_RECORDING_DIR=${WL_RECORDING_DIR:-/var/lib/wl-recordings}
-      - WL_RECORDING_FLUSH_SECONDS=${WL_RECORDING_FLUSH_SECONDS:-3}
-      - WL_RECORDING_FSYNC_SECONDS=${WL_RECORDING_FSYNC_SECONDS:-10}
-      - WL_RECORDING_ROTATE_SECONDS=${WL_RECORDING_ROTATE_SECONDS:-20}
-      - WL_RECORDING_ROTATE_BYTES=${WL_RECORDING_ROTATE_BYTES:-16777216}
-      - WL_RECORDING_SNAPSHOT_SECONDS=${WL_RECORDING_SNAPSHOT_SECONDS:-20}
-      - WL_RECORDING_UPLOAD_URL=${WL_RECORDING_UPLOAD_URL:-http://bot-manager:8080/internal/recordings/upload}
-      - SAME_OUTPUT_THRESHOLD=${SAME_OUTPUT_THRESHOLD:-3}
-      - SAME_OUTPUT_THRESHOLD_TIER2=${SAME_OUTPUT_THRESHOLD_TIER2:-2}
-      - DEVICE_TYPE=remote
-      - REMOTE_TRANSCRIBER_URL=${REMOTE_TRANSCRIBER_URL}
-      - REMOTE_TRANSCRIBER_API_KEY=${REMOTE_TRANSCRIBER_API_KEY}
-      - CONSUL_ENABLE=false
-      - WL_REDIS_DISCOVERY_ENABLED=false
-    command: >-
-      --port 9090
-      --backend remote
-      --min_audio_s ${MIN_AUDIO_S:-2.0}
-      --min_audio_s_tier2 ${MIN_AUDIO_S_TIER2:-20.0}
-      --min_time_between_requests_s ${MIN_TIME_BETWEEN_REQUESTS_S:-0.5}
-      --min_time_between_requests_s_tier2 ${MIN_TIME_BETWEEN_REQUESTS_S_TIER2:-20.0}
-      --wl_recording_dir ${WL_RECORDING_DIR:-/var/lib/wl-recordings}
-      --wl_recording_flush_seconds ${WL_RECORDING_FLUSH_SECONDS:-3}
-      --wl_recording_fsync_seconds ${WL_RECORDING_FSYNC_SECONDS:-10}
-      --wl_recording_rotate_seconds ${WL_RECORDING_ROTATE_SECONDS:-20}
-      --wl_recording_rotate_bytes ${WL_RECORDING_ROTATE_BYTES:-16777216}
-      --wl_recording_snapshot_seconds ${WL_RECORDING_SNAPSHOT_SECONDS:-20}
-      --same_output_threshold ${SAME_OUTPUT_THRESHOLD:-3}
-      --same_output_threshold_tier2 ${SAME_OUTPUT_THRESHOLD_TIER2:-2}
-    expose:
-      - "9090"
-      - "9091"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    init: true
-    depends_on:
-      transcription-collector:
         condition: service_started
     networks:
       - vexa_default
@@ -332,7 +270,6 @@ volumes:
   postgres-data:
   minio-data:
   recordings-data:
-  wl-recordings:
 
 networks:
   vexa_default:

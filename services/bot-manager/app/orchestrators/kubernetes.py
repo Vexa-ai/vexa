@@ -35,7 +35,6 @@ logger = logging.getLogger("bot_manager.kubernetes_orchestrator")
 BOT_IMAGE_NAME = os.getenv("BOT_IMAGE_NAME", "vexa-bot:latest")
 BOT_NAMESPACE = os.getenv("BOT_NAMESPACE", os.getenv("POD_NAMESPACE", "default"))
 BOT_SERVICE_ACCOUNT = os.getenv("BOT_SERVICE_ACCOUNT_NAME", "")
-WHISPER_LIVE_URL = os.getenv("WHISPER_LIVE_URL", "ws://whisperlive:9090/ws")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 BOT_CALLBACK_BASE_URL = os.getenv("BOT_CALLBACK_BASE_URL", "http://bot-manager:8080")
 
@@ -192,7 +191,6 @@ async def start_bot_container(
     # Build environment variables for the bot container
     env_vars = [
         client.V1EnvVar(name="BOT_CONFIG", value=json.dumps(bot_config)),
-        client.V1EnvVar(name="WHISPER_LIVE_URL", value=WHISPER_LIVE_URL),
         client.V1EnvVar(name="LOG_LEVEL", value=os.getenv("LOG_LEVEL", "INFO")),
         client.V1EnvVar(name="DISPLAY", value=":99"),
     ]

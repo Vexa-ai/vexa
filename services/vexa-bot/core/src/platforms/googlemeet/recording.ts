@@ -2,7 +2,7 @@ import { Page } from "playwright";
 import { log } from "../../utils";
 import { BotConfig } from "../../types";
 import { RecordingService } from "../../services/recording";
-import { setActiveRecordingService } from "../../index";
+import { setActiveRecordingService, getSegmentPublisher } from "../../index";
 import { ensureBrowserUtils } from "../../utils/injection";
 import {
   googleParticipantSelectors,
@@ -17,6 +17,15 @@ import {
 // Modified to use new services - Google Meet recording functionality
 export async function startGoogleRecording(page: Page, botConfig: BotConfig): Promise<void> {
   log("Starting Google Meet recording");
+
+  // Reset segment publisher session start to align with recording start.
+  // SegmentPublisher was created pre-admission; recording starts post-admission.
+  // Without this reset, segment.start_time would be offset by the admission wait time.
+  const publisher = getSegmentPublisher();
+  if (publisher) {
+    publisher.resetSessionStart();
+    log(`[Recording] Session start reset to ${new Date(publisher.sessionStartMs).toISOString()}`);
+  }
 
   const wantsAudioCapture =
     !!botConfig.recordingEnabled &&
