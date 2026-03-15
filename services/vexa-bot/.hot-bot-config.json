@@ -1,0 +1,27 @@
+{
+    "meeting_id": 8742,
+    "platform": "google_meet",
+    "meetingUrl": "https://meet.google.com/rrz-iahj-cee",
+    "botName": "VexaBot-aaff02",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJtZWV0aW5nX2lkIjo4NzQyLCJ1c2VyX2lkIjoyMywicGxhdGZvcm0iOiJnb29nbGVfbWVldCIsIm5hdGl2ZV9tZWV0aW5nX2lkIjoicnJ6LWlhaGotY2VlIiwic2NvcGUiOiJ0cmFuc2NyaWJlOndyaXRlIiwiaXNzIjoiYm90LW1hbmFnZXIiLCJhdWQiOiJ0cmFuc2NyaXB0aW9uLWNvbGxlY3RvciIsImlhdCI6MTc3MzU3MzgyMiwiZXhwIjoxNzczNTgxMDIyLCJqdGkiOiIxZTg0MTkwOC1hZTcwLTRiNmYtODI0Ny1kZjI5NTIyNTA4NjEifQ.v8l7h2ko4tOk9lqK68GAZXoMzhE8xSmMXD21yCmLxCY",
+    "nativeMeetingId": "rrz-iahj-cee",
+    "connectionId": "22e125c0-bf18-410a-87c5-5f03c0298c85",
+    "transcriptionTier": "realtime",
+    "redisUrl": "redis://redis:6379/0",
+    "container_name": "vexa-bot-8742-17d24d63",
+    "automaticLeave": {
+        "waitingRoomTimeout": 300000,
+        "noOneJoinedTimeout": 120000,
+        "everyoneLeftTimeout": 60000
+    },
+    "botManagerCallbackUrl": "http://bot-manager:8080/bots/internal/callback/exited",
+    "recordingEnabled": true,
+    "transcribeEnabled": true,
+    "captureModes": [
+        "audio"
+    ],
+    "recordingUploadUrl": "http://bot-manager:8080/internal/recordings/upload",
+    "transcriptionServiceUrl": "http://host.docker.internal:8083/v1/audio/transcriptions",
+    "transcriptionServiceToken": "your_secure_token_here",
+    "voiceAgentEnabled": false
+}
