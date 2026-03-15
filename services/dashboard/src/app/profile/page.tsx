@@ -33,6 +33,7 @@ interface APIKeyDisplay {
   id: string;
   name: string;
   scope: "bot" | "tx" | "user";
+  token: string;
   masked_token: string;
   created_at: string;
 }
@@ -106,6 +107,7 @@ export default function ProfilePage() {
             id: k.id,
             name: k.name || "API Key",
             scope: inferScope(k.token),
+            token: k.token,
             masked_token: maskToken(k.token),
             created_at: k.created_at,
           }))
@@ -138,6 +140,7 @@ export default function ProfilePage() {
           id: data.id,
           name: newKeyName || "API Key",
           scope: newKeyScope,
+          token: data.token,
           masked_token: maskToken(data.token),
           created_at: new Date().toISOString(),
         },
@@ -267,7 +270,7 @@ export default function ProfilePage() {
                         })}
                       </span>
                       <button
-                        onClick={() => handleCopyKey(key.id, key.masked_token)}
+                        onClick={() => handleCopyKey(key.id, key.token)}
                         className="text-muted-foreground hover:text-foreground transition-colors"
                       >
                         {copiedKeyId === key.id ? (

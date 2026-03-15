@@ -51,7 +51,20 @@ export default function LoginPage() {
   useEffect(() => {
     if (isAuthenticated) {
       router.push("/");
+      return;
     }
+    // Hosted mode: redirect to external auth (webapp) instead of showing dashboard login
+    const checkHostedMode = async () => {
+      try {
+        const res = await fetch("/api/config");
+        const config = await res.json();
+        if (config.hostedMode && config.webappUrl) {
+          const returnUrl = encodeURIComponent(window.location.origin);
+          window.location.href = `${config.webappUrl}/account?returnUrl=${returnUrl}`;
+        }
+      } catch {}
+    };
+    checkHostedMode();
   }, [isAuthenticated, router]);
 
   useEffect(() => {
