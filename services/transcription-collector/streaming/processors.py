@@ -247,10 +247,12 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                      logger.debug(f"[Msg {message_id}/Meet {internal_meeting_id}] Skipping ~zero-length segment: {segment}")
                      continue
                             
-                 # Use segment_id as Redis Hash key when available (stable identity),
-                 # fall back to start_time for legacy/WhisperLive segments
+                 # Use segment_id as Redis Hash key (stable identity)
                  segment_id = segment.get('segment_id')
-                 start_time_key = segment_id if segment_id else f"{start_time_float:.3f}"
+                 if not segment_id:
+                     logger.error(f"[Msg {message_id}/Meet {internal_meeting_id}] Segment {i} missing segment_id. Skipping.")
+                     continue
+                 start_time_key = segment_id
 
                  mapping_status: str = STATUS_UNKNOWN
                  mapped_speaker_name = None

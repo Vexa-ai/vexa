@@ -227,11 +227,8 @@ async def _get_full_transcript_segments(
             if 'end_time' in segment_data and 'text' in segment_data and session_uid_from_redis and session_start:
                 if session_start.tzinfo is None:
                     session_start = session_start.replace(tzinfo=timezone.utc)
-                # Hash key may be segment_id (string) or start_time (float)
-                try:
-                    relative_start_time = float(start_time_str)
-                except (ValueError, TypeError):
-                    relative_start_time = float(segment_data.get("start_time", 0))
+                # Hash key is segment_id (string); get start_time from segment data
+                relative_start_time = float(segment_data.get("start_time", 0))
                 # Use absolute_start_time from segment data if available (bot publishes UTC directly)
                 abs_from_data = segment_data.get("absolute_start_time")
                 if abs_from_data:
