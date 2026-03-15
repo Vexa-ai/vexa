@@ -187,6 +187,14 @@ async def start_bot_container(
     if default_avatar_url:
         bot_config["defaultAvatarUrl"] = default_avatar_url
 
+    # Transcription service URL — required for per-speaker pipeline
+    tx_url = os.getenv("TRANSCRIPTION_SERVICE_URL")
+    tx_token = os.getenv("TRANSCRIPTION_SERVICE_TOKEN")
+    if tx_url:
+        bot_config["transcriptionServiceUrl"] = tx_url
+    if tx_token:
+        bot_config["transcriptionServiceToken"] = tx_token
+
     bot_config = {k: v for k, v in bot_config.items() if v is not None}
 
     # Build environment variables for the bot container
