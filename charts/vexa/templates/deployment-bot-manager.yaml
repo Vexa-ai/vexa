@@ -106,6 +106,18 @@ spec:
             - name: DOCKER_HOST
               value: "unix:///var/run/docker.sock"
             {{- end }}
+            {{- if .Values.botManager.transcriptionServiceUrl }}
+            - name: TRANSCRIPTION_SERVICE_URL
+              value: {{ .Values.botManager.transcriptionServiceUrl | quote }}
+            {{- end }}
+            {{- if .Values.botManager.transcriptionServiceToken }}
+            - name: TRANSCRIPTION_SERVICE_TOKEN
+              value: {{ .Values.botManager.transcriptionServiceToken | quote }}
+            {{- end }}
+            {{- if .Values.botManager.postMeetingHooks }}
+            - name: POST_MEETING_HOOKS
+              value: {{ .Values.botManager.postMeetingHooks | quote }}
+            {{- end }}
             {{- with .Values.botManager.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
