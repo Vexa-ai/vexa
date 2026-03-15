@@ -1,0 +1,16 @@
+apiVersion: v2
+name: vexa-lite
+description: Vexa - self-hosted real-time meeting transcription platform
+type: application
+version: 0.1.0
+appVersion: "0.6.0"
+home: https://github.com/Vexa-ai/vexa
+sources:
+  - https://github.com/Vexa-ai/vexa
+keywords:
+  - vexa
+  - meeting-bot
+  - transcription
+  - lite
+maintainers:
+  - name: Vexa community

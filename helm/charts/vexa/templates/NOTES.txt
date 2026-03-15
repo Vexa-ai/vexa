@@ -1,0 +1,20 @@
+Vexa installed.
+
+This chart is designed around the upstream Vexa Docker Compose topology.
+
+Bot orchestration in Kubernetes:
+- Default in this chart: ORCHESTRATOR=process
+  Bots are spawned as child Node.js processes inside the bot-manager Pod (no Docker socket).
+  NOTE: this requires your bot-manager image to include the vexa-bot Node.js code/runtime + Playwright deps.
+
+- Optional PoC: ORCHESTRATOR=kubernetes
+  Bots are spawned as Kubernetes Pods via the Kubernetes API.
+  Enable RBAC for bot-manager with:
+    botManager.kubernetesOrchestrator.createRbac=true
+
+Services:
+- API Gateway: {{ include "vexa.componentName" (list . "api-gateway") }}
+- Admin API: {{ include "vexa.componentName" (list . "admin-api") }}
+- Bot Manager: {{ include "vexa.componentName" (list . "bot-manager") }}
+- Transcription Collector: {{ include "vexa.componentName" (list . "transcription-collector") }}
+- MCP: {{ include "vexa.componentName" (list . "mcp") }}

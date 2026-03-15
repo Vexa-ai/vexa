@@ -1,0 +1,174 @@
+{{- if .Values.botManager.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vexa.componentName" (list . "bot-manager") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.botManager.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "vexa.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: bot-manager
+  template:
+    metadata:
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: bot-manager
+      annotations:
+        {{- toYaml .Values.global.podAnnotations | nindent 8 }}
+    spec:
+      {{- if and (eq .Values.botManager.orchestrator "kubernetes") .Values.botManager.kubernetesOrchestrator.createRbac }}
+      serviceAccountName: {{ include "vexa.componentName" (list . "bot-manager") }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: bot-manager
+          securityContext:
+            {{- toYaml .Values.global.securityContext | nindent 12 }}
+          image: "{{ .Values.botManager.image.repository }}:{{ .Values.botManager.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: ORCHESTRATOR
+              value: {{ .Values.botManager.orchestrator | quote }}
+            - name: REDIS_URL
+              value: {{ include "vexa.redisUrl" . | quote }}
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            {{- if eq .Values.botManager.orchestrator "kubernetes" }}
+            - name: BOT_NAMESPACE
+              value: {{ default .Release.Namespace .Values.botManager.kubernetesOrchestrator.botNamespace | quote }}
+            - name: BOT_SERVICE_ACCOUNT_NAME
+              value: {{ .Values.botManager.kubernetesOrchestrator.botServiceAccountName | quote }}
+            {{- end }}
+            - name: BOT_IMAGE_NAME
+              value: {{ .Values.botManager.bot.imageName | quote }}
+            {{- with .Values.botManager.bot.resources }}
+            - name: BOT_POD_CPU_REQUEST
+              value: {{ .requests.cpu | quote }}
+            - name: BOT_POD_MEMORY_REQUEST
+              value: {{ .requests.memory | quote }}
+            - name: BOT_POD_CPU_LIMIT
+              value: {{ .limits.cpu | quote }}
+            - name: BOT_POD_MEMORY_LIMIT
+              value: {{ .limits.memory | quote }}
+            {{- end }}
+            - name: DOCKER_NETWORK
+              value: {{ .Values.botManager.bot.dockerNetwork | quote }}
+            - name: TRANSCRIPTION_COLLECTOR_URL
+              value: {{ default (printf "http://%s.%s.svc.%s:%d" (include "vexa.componentName" (list . "transcription-collector")) .Release.Namespace .Values.global.clusterDomain (.Values.transcriptionCollector.service.port | int)) .Values.botManager.transcriptionCollectorUrl | quote }}
+            - name: ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: ADMIN_API_TOKEN
+            - name: DB_HOST
+              value: {{ include "vexa.dbHost" . | quote }}
+            - name: DB_PORT
+              value: {{ .Values.database.port | quote }}
+            - name: DB_NAME
+              {{- if .Values.postgres.enabled }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.credentialsSecretName | quote }}
+                  key: POSTGRES_DB
+              {{- else }}
+              value: {{ .Values.database.name | quote }}
+              {{- end }}
+            - name: DB_USER
+              {{- if .Values.postgres.enabled }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.credentialsSecretName | quote }}
+                  key: POSTGRES_USER
+              {{- else }}
+              value: {{ .Values.database.user | quote }}
+              {{- end }}
+            - name: DB_SSL_MODE
+              value: {{ .Values.database.sslMode | quote }}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.credentialsSecretName | quote }}
+                  key: POSTGRES_PASSWORD
+            {{- if and .Values.botManager.dockerSocketMount.enabled (eq .Values.botManager.orchestrator "docker") }}
+            - name: DOCKER_HOST
+              value: "unix:///var/run/docker.sock"
+            {{- end }}
+            {{- if .Values.botManager.transcriptionServiceUrl }}
+            - name: TRANSCRIPTION_SERVICE_URL
+              value: {{ .Values.botManager.transcriptionServiceUrl | quote }}
+            {{- end }}
+            {{- if .Values.botManager.transcriptionServiceToken }}
+            - name: TRANSCRIPTION_SERVICE_TOKEN
+              value: {{ .Values.botManager.transcriptionServiceToken | quote }}
+            {{- end }}
+            {{- if .Values.botManager.postMeetingHooks }}
+            - name: POST_MEETING_HOOKS
+              value: {{ .Values.botManager.postMeetingHooks | quote }}
+            {{- end }}
+            {{- with .Values.botManager.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /docs
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /docs
+              port: http
+            initialDelaySeconds: 45
+            periodSeconds: 20
+          volumeMounts:
+            {{- if and (eq .Values.botManager.orchestrator "process") .Values.botManager.processOrchestrator.shm.enabled }}
+            - name: dshm
+              mountPath: /dev/shm
+            {{- end }}
+            {{- if and .Values.botManager.dockerSocketMount.enabled (eq .Values.botManager.orchestrator "docker") }}
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
+            {{- end }}
+          resources:
+            {{- toYaml .Values.botManager.resources | nindent 12 }}
+      volumes:
+        {{- if and (eq .Values.botManager.orchestrator "process") .Values.botManager.processOrchestrator.shm.enabled }}
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            {{- if .Values.botManager.processOrchestrator.shm.sizeLimit }}
+            sizeLimit: {{ .Values.botManager.processOrchestrator.shm.sizeLimit }}
+            {{- end }}
+        {{- end }}
+        {{- if and .Values.botManager.dockerSocketMount.enabled (eq .Values.botManager.orchestrator "docker") }}
+        - name: docker-sock
+          hostPath:
+            path: {{ .Values.botManager.dockerSocketMount.hostPath }}
+            type: Socket
+        {{- end }}
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

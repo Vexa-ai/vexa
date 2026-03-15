@@ -1,0 +1,34 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "vexa.componentName" (list . "ingress") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          {{ range .Values.ingress.paths }}
+          {{- $svc := .service | default "api-gateway" -}}
+          - path: {{ .path | quote }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ if eq $svc "apiGateway" }}{{ include "vexa.componentName" (list $ "api-gateway") }}{{ else if eq $svc "adminApi" }}{{ include "vexa.componentName" (list $ "admin-api") }}{{ else }}{{ include "vexa.componentName" (list $ $svc) }}{{ end }}
+                port:
+                  number: {{ .servicePort }}
+          {{ end }}
+  {{- if .Values.ingress.tls }}
+  tls:
+    {{- toYaml .Values.ingress.tls | nindent 4 }}
+  {{- end }}
+{{- end }}

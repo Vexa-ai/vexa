@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vexa-lite.fullname" . }}
+  labels:
+{{ include "vexa-lite.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+{{ include "vexa-lite.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "vexa-lite.selectorLabels" . | nindent 8 }}
+{{ with .Values.podLabels }}
+{{ toYaml . | nindent 8 }}
+{{ end }}
+{{ with .Values.podAnnotations }}
+      annotations:
+{{ toYaml . | nindent 8 }}
+{{ end }}
+    spec:
+      serviceAccountName: {{ include "vexa-lite.serviceAccountName" . }}
+{{ with .Values.imagePullSecrets }}
+      imagePullSecrets:
+{{ toYaml . | nindent 8 }}
+{{ end }}
+      securityContext:
+{{ toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: vexa-lite
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+{{ toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.containerPort }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "vexa-lite.configmapName" . }}
+            - secretRef:
+                name: {{ include "vexa-lite.secretName" . }}
+{{ if .Values.devShm.enabled }}
+          volumeMounts:
+            - name: dshm
+              mountPath: /dev/shm
+{{ end }}
+{{ if .Values.probes.liveness.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.liveness.path | quote }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+{{ end }}
+{{ if .Values.probes.readiness.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path | quote }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+{{ end }}
+          resources:
+{{ toYaml .Values.resources | nindent 12 }}
+{{ if .Values.devShm.enabled }}
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+{{ if .Values.devShm.sizeLimit }}
+            sizeLimit: {{ .Values.devShm.sizeLimit | quote }}
+{{ end }}
+{{ end }}
+{{ with .Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | nindent 8 }}
+{{ end }}
+{{ with .Values.affinity }}
+      affinity:
+{{ toYaml . | nindent 8 }}
+{{ end }}
+{{ with .Values.tolerations }}
+      tolerations:
+{{ toYaml . | nindent 8 }}
+{{ end }}

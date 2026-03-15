@@ -1,0 +1,123 @@
+{{- if .Values.transcriptionCollector.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vexa.componentName" (list . "transcription-collector") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.transcriptionCollector.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "vexa.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: transcription-collector
+  template:
+    metadata:
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: transcription-collector
+      annotations:
+        {{- toYaml .Values.global.podAnnotations | nindent 8 }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: transcription-collector
+          securityContext:
+            {{- toYaml .Values.global.securityContext | nindent 12 }}
+          image: "{{ .Values.transcriptionCollector.image.repository }}:{{ .Values.transcriptionCollector.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: REDIS_URL
+              value: {{ include "vexa.redisUrl" . | quote }}
+            - name: REDIS_HOST
+              value: {{ include "vexa.redisHost" . | quote }}
+            - name: REDIS_PORT
+              value: {{ include "vexa.redisPort" . | quote }}
+            - name: DB_HOST
+              value: {{ include "vexa.dbHost" . | quote }}
+            - name: DB_PORT
+              value: {{ .Values.database.port | quote }}
+            - name: DB_NAME
+              {{- if .Values.postgres.enabled }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.credentialsSecretName | quote }}
+                  key: POSTGRES_DB
+              {{- else }}
+              value: {{ .Values.database.name | quote }}
+              {{- end }}
+            - name: DB_USER
+              {{- if .Values.postgres.enabled }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.credentialsSecretName | quote }}
+                  key: POSTGRES_USER
+              {{- else }}
+              value: {{ .Values.database.user | quote }}
+              {{- end }}
+            - name: DB_SSL_MODE
+              value: {{ .Values.database.sslMode | quote }}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.credentialsSecretName | quote }}
+                  key: POSTGRES_PASSWORD
+            - name: ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: ADMIN_API_TOKEN
+            # Transcription Collector stream processing configuration
+            - name: REDIS_STREAM_NAME
+              value: {{ .Values.transcriptionCollector.config.redisStreamName | quote }}
+            - name: REDIS_SPEAKER_EVENTS_STREAM_NAME
+              value: {{ .Values.transcriptionCollector.config.redisSpeakerEventsStreamName | quote }}
+            - name: REDIS_CONSUMER_GROUP
+              value: {{ .Values.transcriptionCollector.config.redisConsumerGroup | quote }}
+            - name: BACKGROUND_TASK_INTERVAL
+              value: {{ .Values.transcriptionCollector.config.backgroundTaskIntervalSeconds | quote }}
+            - name: IMMUTABILITY_THRESHOLD
+              value: {{ .Values.transcriptionCollector.config.immutabilityThresholdSeconds | quote }}
+            - name: REDIS_SEGMENT_TTL
+              value: {{ .Values.transcriptionCollector.config.redisSegmentTtlSeconds | quote }}
+            - name: REDIS_SPEAKER_EVENT_TTL
+              value: {{ .Values.transcriptionCollector.config.redisSpeakerEventTtlSeconds | quote }}
+
+            {{- with .Values.transcriptionCollector.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /docs
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /docs
+              port: http
+            initialDelaySeconds: 45
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.transcriptionCollector.resources | nindent 12 }}
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

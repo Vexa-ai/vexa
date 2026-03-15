@@ -1,0 +1,46 @@
+{{ if .Values.dashboard.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vexa-lite.fullname" . }}-dashboard
+  labels:
+{{ include "vexa-lite.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.dashboard.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: dashboard
+{{ include "vexa-lite.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: dashboard
+{{ include "vexa-lite.selectorLabels" . | nindent 8 }}
+    spec:
+{{ with .Values.imagePullSecrets }}
+      imagePullSecrets:
+{{ toYaml . | nindent 8 }}
+{{ end }}
+      securityContext:
+{{ toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: dashboard
+          image: "{{ .Values.dashboard.image.repository }}:{{ .Values.dashboard.image.tag }}"
+          imagePullPolicy: {{ .Values.dashboard.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.dashboard.containerPort }}
+          env:
+{{ range $key, $val := .Values.dashboard.env }}
+            - name: {{ $key }}
+              value: {{ $val | quote }}
+{{ end }}
+            - name: VEXA_ADMIN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "vexa.existingSecret must be set to reuse ADMIN_API_TOKEN" .Values.dashboard.existingSecret }}
+                  key: ADMIN_API_TOKEN
+
+          resources:
+{{ toYaml .Values.dashboard.resources | nindent 12 }}
+{{ end }}

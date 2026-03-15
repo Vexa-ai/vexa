@@ -1,0 +1,136 @@
+replicaCount: 1
+
+image:
+  # Build locally from the Vexa repo (docker/lite) and tag as vexa-lite:local
+  repository: vexa-lite
+  tag: local
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext: {}
+securityContext: {}
+
+# Vexa Lite listens on port 8056 by default (HTTP).
+containerPort: 8056
+
+service:
+  port: 8056
+  type: ClusterIP
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: vexa-lite.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+
+# Chromium/Playwright bots are much more stable with a real /dev/shm.
+devShm:
+  enabled: true
+  # Optional sizeLimit for the memory emptyDir (K8s supports it on many distros)
+  sizeLimit: ""
+
+probes:
+  liveness:
+    enabled: true
+    path: /docs
+    initialDelaySeconds: 30
+    periodSeconds: 20
+    timeoutSeconds: 3
+    failureThreshold: 6
+  readiness:
+    enabled: true
+    path: /docs
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+vexa:
+  # If set, the chart will NOT create a Secret and will instead reference this one.
+  # The Secret must contain keys:
+  #   DATABASE_URL, ADMIN_API_TOKEN, TRANSCRIBER_API_KEY
+  existingSecret: ""
+
+  # REQUIRED (stored in Secret if existingSecret is empty)
+  databaseUrl: ""
+  adminApiToken: ""
+  transcriberApiKey: ""
+
+  # OPTIONAL (stored in ConfigMap)
+  transcriberUrl: ""      # if omitted, Vexa Lite may have a default depending on your setup
+  dbSslMode: "require"    # optional; upstream examples often use require
+
+  # IMPORTANT: no Docker socket in Kubernetes → use process orchestrator.
+  # This spawns bots as child Node.js processes inside the vexa-lite container.
+  orchestrator: "process"
+
+  extraEnv: {}
+  extraSecretEnv: {}
+
+dashboard:
+  enabled: true
+
+  replicaCount: 1
+
+  image:
+    repository: vexa/vexa-dashboard
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  containerPort: 3000
+
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "2000m"
+      memory: "4Gi"
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts:
+      - host: dashboard.local
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+
+  env:
+    VEXA_API_URL: "https://vexa-lite/"
+
+  existingSecret: ""   # set to an existing Secret name if you manage it externally (SealedSecret/ExternalSecret)

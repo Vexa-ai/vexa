@@ -1,0 +1,13 @@
+\
+Vexa Lite deployed.
+
+This chart deploys a SINGLE container (vexa-lite) and sets:
+- ORCHESTRATOR=process (no Docker socket; bots are spawned as child processes)
+
+Service:
+  {{ include "vexa-lite.fullname" . }}:{{ .Values.service.port }}
+
+To port-forward:
+  kubectl port-forward svc/{{ include "vexa-lite.fullname" . }} 8056:{{ .Values.service.port }}
+
+Then use API_HOST = http://localhost:8056

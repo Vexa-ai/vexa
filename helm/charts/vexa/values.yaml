@@ -1,0 +1,306 @@
+# Default values for the vexa chart.
+# This chart is designed for LOCAL development builds:
+#   - imagePullPolicy defaults to IfNotPresent
+#   - images default to repos/tags you build locally (see scripts/build-images.sh)
+
+global:
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: []
+  clusterDomain: cluster.local
+
+  # Common pod-level knobs (override per component if you want)
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podSecurityContext: {}
+  securityContext: {}
+
+# Shared secrets (recommended: override via --set-file or external secret tooling)
+secrets:
+  existingSecretName: ""
+  adminApiToken: "CHANGE_ME"   # Used by Admin API auth & MeetingToken signing across services
+  transcriberApiKey: ""
+
+# Shared database config (used by admin-api, bot-manager, transcription-collector)
+database:
+  host: ""          # auto-filled if postgres.enabled=true, else REQUIRED
+  port: 5432
+  name: "vexa"
+  user: "vexa"
+  sslMode: "disable"
+
+# Shared redis config
+redisConfig:
+  url: ""           # auto-filled if redis.enabled=true, else REQUIRED
+  host: ""
+  port: 6379
+
+# ---------- Components ----------
+
+apiGateway:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: vexa/api-gateway
+    tag: local
+  mcpUrl: ""
+  service:
+    type: ClusterIP
+    port: 8000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  extraEnv: []
+
+adminApi:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: vexa/admin-api
+    tag: local
+  service:
+    type: ClusterIP
+    port: 8001
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  extraEnv: []
+
+botManager:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: vexa/bot-manager
+    tag: local
+  service:
+    type: ClusterIP
+    port: 8080
+
+  # Orchestrator mode:
+  # - process: spawns bots as child Node.js processes (no Docker socket; designed for Lite/all-in-one images)
+  # - docker: spawns bots as Docker containers (requires Docker daemon socket access)
+  # - nomad: spawns bots via Nomad jobs (production/scale)
+  # - kubernetes: (PoC) spawns bots as Pods via the Kubernetes API (recommended long-term for k8s)
+  orchestrator: process
+
+  # Process orchestrator knobs (only used when orchestrator=process)
+  processOrchestrator:
+    # Chromium/Playwright is much more stable with a larger /dev/shm.
+    # This mounts an in-memory emptyDir to /dev/shm inside the bot-manager Pod.
+    shm:
+      enabled: true
+      # Optional; leave empty to omit. Example: "1Gi"
+      sizeLimit: ""
+
+  # Kubernetes orchestrator knobs (PoC; only used when orchestrator=kubernetes)
+  kubernetesOrchestrator:
+    # Create a namespaced ServiceAccount + Role/RoleBinding for bot-manager to manage bot Pods.
+    createRbac: false
+
+    # Namespace where bot Pods should be created.
+    # Empty means: use the bot-manager Pod namespace.
+    botNamespace: ""
+
+    # ServiceAccount name to attach to bot Pods (optional; empty means "default").
+    botServiceAccountName: ""
+
+  # The Docker orchestrator requires access to a Docker daemon socket.
+  # WARNING: This is privileged and usually NOT available on standard Kubernetes clusters.
+  dockerSocketMount:
+    enabled: false
+    hostPath: /var/run/docker.sock
+
+  bot:
+    # Image name Bot Manager will ask the orchestrator to run (used by docker/kubernetes orchestrators)
+    imageName: "vexa-bot:dev"
+
+    # Only relevant for Docker orchestrator; set if your bot containers must join a specific Docker network.
+    dockerNetwork: ""
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "512Mi"
+      limits:
+        cpu: "2000m"
+        memory: "4Gi"
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 4000m
+      memory: 4Gi
+  extraEnv: []
+
+transcriptionCollector:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: vexa/transcription-collector
+    tag: local
+  service:
+    type: ClusterIP
+    port: 8000
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+  config:
+    # Defaults from the Transcription Collector docs
+    redisStreamName: "transcription_segments"
+    redisSpeakerEventsStreamName: "speaker_events_relative"
+    redisConsumerGroup: "transcription_collectors"
+    backgroundTaskIntervalSeconds: 30
+    immutabilityThresholdSeconds: 60
+    redisSegmentTtlSeconds: 86400
+    redisSpeakerEventTtlSeconds: 86400
+
+  extraEnv: []
+
+transcriptionService:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: vexa/transcription-service
+    tag: local
+  service:
+    type: ClusterIP
+    port: 8000
+  azure:
+    endpoint: ""
+    apiKey: ""
+    apiVersion: "2025-03-01-preview"
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  extraEnv: []
+
+mcp:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: vexa/mcp
+    tag: local
+  service:
+    type: ClusterIP
+    port: 18888
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  extraEnv: []
+
+dashboard:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: vexa/vexa-dashboard
+    tag: local
+  service:
+    type: ClusterIP
+    port: 3000
+  # env:
+  #   ENABLE_AZURE_AD_AUTH: "true"
+  #   NEXTAUTH_URL: ""
+  env: {}
+  extraEnv: []
+  extraSecretName: ""
+  extraSecretEnv: {}
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    host: ""
+    tls: []
+
+migrations:
+  enabled: false
+  backoffLimit: 3
+  image:
+    repository: ""
+    tag: ""
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# ---------- Optional bundled dependencies (for dev) ----------
+
+postgres:
+  enabled: true
+  image: postgres:15-alpine
+  credentialsSecretName: postgres-credentials
+  service:
+    port: 5432
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClassName: ""
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 4000m
+      memory: 4Gi
+
+redis:
+  enabled: true
+  image: redis:7-alpine
+  service:
+    port: 6379
+  persistence:
+    enabled: true
+    size: 2Gi
+    storageClassName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+# ---------- Ingress (optional; exposes api-gateway by default) ----------
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: "vexa.local"
+  tls: []
+  paths:
+    - path: /
+      pathType: Prefix
+      service: api-gateway
+      servicePort: 8000

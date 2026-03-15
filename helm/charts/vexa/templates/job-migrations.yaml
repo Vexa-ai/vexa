@@ -1,0 +1,85 @@
+{{- if .Values.migrations.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "vexa.componentName" (list . "migrations") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrations
+    spec:
+      restartPolicy: Never
+      securityContext:
+        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: migrations
+          securityContext:
+            {{- toYaml .Values.global.securityContext | nindent 12 }}
+          image: "{{ default .Values.transcriptionCollector.image.repository .Values.migrations.image.repository }}:{{ default .Values.transcriptionCollector.image.tag .Values.migrations.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "Checking database state..."
+              state=$(python /app/libs/shared-models/check_db_state.py 2>/dev/null || echo fresh)
+              echo "Database state: ${state}"
+              case "${state}" in
+                alembic)
+                  echo "Alembic-managed database detected, running migrations..."
+                  alembic -c /app/alembic.ini upgrade head || echo "WARNING: Migration failed, database may already be up to date"
+                  ;;
+                legacy)
+                  echo "Legacy database detected, stamping and migrating..."
+                  alembic -c /app/alembic.ini stamp base || true
+                  alembic -c /app/alembic.ini upgrade head || echo "WARNING: Migration failed"
+                  ;;
+                fresh|*)
+                  echo "Fresh database detected, initializing schema..."
+                  python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db()); print('Database schema initialized')"
+                  alembic -c /app/alembic.ini stamp head 2>/dev/null || true
+                  ;;
+              esac
+          env:
+            - name: DB_HOST
+              value: {{ include "vexa.dbHost" . | quote }}
+            - name: DB_PORT
+              value: {{ .Values.database.port | quote }}
+            - name: DB_NAME
+              {{- if .Values.postgres.enabled }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.credentialsSecretName | quote }}
+                  key: POSTGRES_DB
+              {{- else }}
+              value: {{ .Values.database.name | quote }}
+              {{- end }}
+            - name: DB_USER
+              {{- if .Values.postgres.enabled }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.credentialsSecretName | quote }}
+                  key: POSTGRES_USER
+              {{- else }}
+              value: {{ .Values.database.user | quote }}
+              {{- end }}
+            - name: DB_SSL_MODE
+              value: {{ .Values.database.sslMode | quote }}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.credentialsSecretName | quote }}
+                  key: POSTGRES_PASSWORD
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+{{- end }}

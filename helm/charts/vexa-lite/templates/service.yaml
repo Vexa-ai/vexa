@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vexa-lite.fullname" . }}
+  labels:
+{{ include "vexa-lite.labels" . | nindent 4 }}
+{{ with .Values.service.annotations }}
+  annotations:
+{{ toYaml . | nindent 4 }}
+{{ end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: api
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.port }}
+      protocol: TCP
+  selector:
+{{ include "vexa-lite.selectorLabels" . | nindent 4 }}

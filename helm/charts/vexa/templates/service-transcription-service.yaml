@@ -1,0 +1,17 @@
+{{- if .Values.transcriptionService.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vexa.componentName" (list . "transcription-service") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.transcriptionService.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.transcriptionService.service.port }}
+      targetPort: http
+  selector:
+    {{- include "vexa.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: transcription-service
+{{- end }}
