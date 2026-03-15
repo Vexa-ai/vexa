@@ -55,7 +55,7 @@ apiGateway:
     limits:
       cpu: 500m
       memory: 512Mi
-  extraEnv: {}
+  extraEnv: []
 
 adminApi:
   enabled: true
@@ -73,7 +73,7 @@ adminApi:
     limits:
       cpu: 500m
       memory: 512Mi
-  extraEnv: {}
+  extraEnv: []
 
 botManager:
   enabled: true
@@ -140,7 +140,7 @@ botManager:
     limits:
       cpu: 4000m
       memory: 4Gi
-  extraEnv: {}
+  extraEnv: []
 
 transcriptionCollector:
   enabled: true
@@ -169,7 +169,7 @@ transcriptionCollector:
     redisSegmentTtlSeconds: 86400
     redisSpeakerEventTtlSeconds: 86400
 
-  extraEnv: {}
+  extraEnv: []
 
 transcriptionService:
   enabled: false
@@ -191,7 +191,7 @@ transcriptionService:
     limits:
       cpu: 2000m
       memory: 2Gi
-  extraEnv: {}
+  extraEnv: []
 
 mcp:
   enabled: true
@@ -209,7 +209,7 @@ mcp:
     limits:
       cpu: 1000m
       memory: 1Gi
-  extraEnv: {}
+  extraEnv: []
 
 dashboard:
   enabled: false
@@ -224,7 +224,7 @@ dashboard:
   #   ENABLE_AZURE_AD_AUTH: "true"
   #   NEXTAUTH_URL: ""
   env: {}
-  extraEnv: {}
+  extraEnv: []
   extraSecretName: ""
   extraSecretEnv: {}
   resources:
