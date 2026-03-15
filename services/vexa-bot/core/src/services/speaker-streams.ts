@@ -24,6 +24,10 @@ interface SpeakerBuffer {
   pendingEmit: string | null;
   /** Wall-clock time (ms) when buffer started accumulating audio */
   bufferStartMs: number;
+  /** Number of chunks that were included in the last submission */
+  submittedChunkCount: number;
+  /** Total samples in the submitted portion */
+  submittedSamples: number;
 }
 
 export interface SpeakerStreamManagerConfig {
@@ -83,6 +87,8 @@ export class SpeakerStreamManager {
       inFlight: false,
       pendingEmit: null,
       bufferStartMs: Date.now(),
+      submittedChunkCount: 0,
+      submittedSamples: 0,
     });
 
     const timer = setInterval(() => this.trySubmit(speakerId), this.submitInterval * 1000);
@@ -200,6 +206,10 @@ export class SpeakerStreamManager {
     if (buffer.totalSamples === 0 || !this.onSegmentReady) return;
 
     buffer.inFlight = true;
+    // Record how many chunks are in this submission so emitAndReset
+    // knows which chunks to keep (ones that arrived after submission)
+    buffer.submittedChunkCount = buffer.chunks.length;
+    buffer.submittedSamples = buffer.totalSamples;
 
     const combined = new Float32Array(buffer.totalSamples);
     let offset = 0;
@@ -221,13 +231,20 @@ export class SpeakerStreamManager {
       this.onSegmentConfirmed(buffer.speakerId, buffer.speakerName, buffer.pendingEmit, buffer.bufferStartMs, endMs);
     }
 
-    // Reset buffer
-    buffer.chunks = [];
-    buffer.totalSamples = 0;
+    // Keep chunks that arrived AFTER the last submission — they're the
+    // beginning of the next segment and must not be discarded.
+    const newChunks = buffer.chunks.slice(buffer.submittedChunkCount);
+    let newSamples = 0;
+    for (const c of newChunks) newSamples += c.length;
+
+    buffer.chunks = newChunks;
+    buffer.totalSamples = newSamples;
     buffer.lastTranscript = '';
     buffer.confirmCount = 0;
     buffer.pendingEmit = null;
     buffer.inFlight = false;
     buffer.bufferStartMs = Date.now();
+    buffer.submittedChunkCount = 0;
+    buffer.submittedSamples = 0;
   }
 }

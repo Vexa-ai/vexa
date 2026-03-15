@@ -414,10 +414,26 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                 });
               }
 
+              // Debug: log all class mutations to discover current Google Meet speaking classes
+              let classMutationCount = 0;
+              function debugClassMutation(participantElement: HTMLElement, mutatedClassList?: DOMTokenList) {
+                classMutationCount++;
+                // Log first 20 mutations and then every 50th to avoid spam
+                if (classMutationCount <= 20 || classMutationCount % 50 === 0) {
+                  const id = getGoogleParticipantId(participantElement);
+                  const name = getGoogleParticipantName(participantElement);
+                  const classes = mutatedClassList ? Array.from(mutatedClassList).join(' ') : '(no classList)';
+                  (window as any).logBot(`[SpeakerDebug] #${classMutationCount} ${name} (${id}): classes=[${classes}]`);
+                }
+              }
+
               function logGoogleSpeakerEvent(participantElement: HTMLElement, mutatedClassList?: DOMTokenList) {
                 const participantId = getGoogleParticipantId(participantElement);
                 const participantName = getGoogleParticipantName(participantElement);
                 const previousLogicalState = speakingStates.get(participantId) || 'silent';
+
+                // Debug: log class mutations
+                debugClassMutation(participantElement, mutatedClassList);
 
                 // Primary: indicators; Fallback: classes
                 const indicatorSpeaking = hasSpeakingIndicator(participantElement);
@@ -426,13 +442,13 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
 
                 if (isCurrentlySpeaking) {
                   if (previousLogicalState !== 'speaking') {
-                    // Speaker start/end logged at debug level to reduce noise
+                    (window as any).logBot(`[SpeakerDebug] SPEAKING START: ${participantName} (indicator=${indicatorSpeaking}, classInference=${classInference.speaking})`);
                     sendGoogleSpeakerEvent('SPEAKER_START', participantElement);
                   }
                   speakingStates.set(participantId, 'speaking');
                 } else {
                   if (previousLogicalState === 'speaking') {
-                    // Speaker end logged at debug level
+                    (window as any).logBot(`[SpeakerDebug] SPEAKING END: ${participantName}`);
                     sendGoogleSpeakerEvent('SPEAKER_END', participantElement);
                   }
                   speakingStates.set(participantId, 'silent');
@@ -471,6 +487,19 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
 
               function scanForAllGoogleParticipants() {
                 const participantSelectors: string[] = selectorsTyped.participantSelectors || [];
+                // Debug: dump participant tile structure on first scan
+                (window as any).logBot(`[SpeakerDebug] Scanning for participants with selectors: ${participantSelectors.join(', ')}`);
+                let foundCount = 0;
+                for (const sel of participantSelectors) {
+                  document.querySelectorAll(sel).forEach((el) => {
+                    foundCount++;
+                    const elh = el as HTMLElement;
+                    const outerClasses = elh.className;
+                    const childClasses = Array.from(elh.querySelectorAll('*')).slice(0, 5).map(c => (c as HTMLElement).className).filter(Boolean);
+                    (window as any).logBot(`[SpeakerDebug] Participant tile (${sel}): classes=[${outerClasses}], children=[${childClasses.join(' | ')}], innerHTML=${elh.innerHTML.substring(0, 200)}`);
+                  });
+                }
+                (window as any).logBot(`[SpeakerDebug] Found ${foundCount} participant tiles total`);
                 for (const sel of participantSelectors) {
                   document.querySelectorAll(sel).forEach((el) => {
                     const elh = el as HTMLElement;

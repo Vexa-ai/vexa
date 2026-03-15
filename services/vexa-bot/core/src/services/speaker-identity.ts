@@ -284,8 +284,7 @@ async function resolveGoogleMeetSpeakerName(
     if (eventsResult) return eventsResult;
   } catch {}
 
-  // No positional fallback — it produces wrong mappings.
-  // Return null → "Presentation" fallback. Better to label unknown than label wrong.
+  // No fallback — return null, caller gets empty string
   return null;
 }
 
@@ -307,15 +306,16 @@ export async function resolveSpeakerName(
       log(`[SpeakerIdentity] Element ${elementIndex} → "${name}" (platform: ${platform})`);
       return name;
     }
-    log(`[SpeakerIdentity] Element ${elementIndex} → "Presentation" (platform: ${platform}, no mapping)`);
-    return 'Presentation';
+    // No mapping yet — return empty string, not "Presentation".
+    // The caller will re-resolve aggressively until a real name is found.
+    log(`[SpeakerIdentity] Element ${elementIndex} → "" (platform: ${platform}, no mapping yet)`);
+    return '';
   }
 
   const selectors = PLATFORM_SELECTORS[platform];
   if (!selectors) {
-    const fallback = `Speaker ${elementIndex + 1}`;
-    log(`[SpeakerIdentity] Unknown platform "${platform}", using fallback: ${fallback}`);
-    return fallback;
+    log(`[SpeakerIdentity] Unknown platform "${platform}", no selectors — returning empty`);
+    return '';
   }
 
   const name = await page.evaluate(
@@ -371,9 +371,9 @@ export async function resolveSpeakerName(
     }
   );
 
-  const resolvedName = name || `Speaker ${elementIndex + 1}`;
-  log(`[SpeakerIdentity] Element ${elementIndex} → "${resolvedName}" (platform: ${platform})`);
-  return resolvedName;
+  // No fallback — return what we found, or empty string
+  log(`[SpeakerIdentity] Element ${elementIndex} → "${name || ''}" (platform: ${platform})`);
+  return name || '';
 }
 
 /**

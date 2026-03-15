@@ -1140,26 +1140,38 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
   if (!speakerManager.hasSpeaker(speakerId)) {
     log(`[🔊 NEW SPEAKER] Track ${speakerIndex} — first audio received, resolving name...`);
     const name = await resolveSpeakerName(page, speakerIndex, platformKey, currentBotConfig?.botName);
-    log(`[🎙️ SPEAKER ACTIVE] Track ${speakerIndex} → "${name}" — streaming audio`);
+    log(`[🎙️ SPEAKER ACTIVE] Track ${speakerIndex} → "${name || '(unmapped)'}" — streaming audio`);
     speakerManager.addSpeaker(speakerId, name);
     lastReResolveTime.set(speakerId, Date.now());
-    await segmentPublisher.publishSpeakerEvent({
-      speaker: name,
-      type: 'joined',
-      timestamp: Date.now(),
-    });
-    log(`[📡 SPEAKER EVENT] "${name}" joined → Redis`);
+    if (name) {
+      await segmentPublisher.publishSpeakerEvent({
+        speaker: name,
+        type: 'joined',
+        timestamp: Date.now(),
+      });
+      log(`[📡 SPEAKER EVENT] "${name}" joined → Redis`);
+    }
   } else {
-    // Re-resolve periodically — the correlation map improves over time
-    // as more single-speaker moments are observed
+    const currentName = speakerManager.getSpeakerName(speakerId) || '';
+    const isUnmapped = !currentName;
+    // Re-resolve aggressively (every 2s) for unmapped tracks, periodically (10s) for mapped ones
+    const interval = isUnmapped ? 2_000 : RE_RESOLVE_INTERVAL_MS;
     const lastResolve = lastReResolveTime.get(speakerId) || 0;
-    if (Date.now() - lastResolve > RE_RESOLVE_INTERVAL_MS) {
+    if (Date.now() - lastResolve > interval) {
       lastReResolveTime.set(speakerId, Date.now());
       const newName = await resolveSpeakerName(page, speakerIndex, platformKey, currentBotConfig?.botName);
-      const oldName = speakerManager.getSpeakerName(speakerId);
-      if (oldName && newName !== oldName && newName !== 'Presentation') {
-        log(`[🔄 SPEAKER UPDATE] Track ${speakerIndex}: "${oldName}" → "${newName}"`);
+      if (newName && newName !== currentName) {
+        log(`[🔄 SPEAKER UPDATE] Track ${speakerIndex}: "${currentName || '(unmapped)'}" → "${newName}"`);
         speakerManager.updateSpeakerName(speakerId, newName);
+        if (!currentName) {
+          // First real name — publish the join event now
+          await segmentPublisher.publishSpeakerEvent({
+            speaker: newName,
+            type: 'joined',
+            timestamp: Date.now(),
+          });
+          log(`[📡 SPEAKER EVENT] "${newName}" joined → Redis (delayed)`);
+        }
       }
     }
   }
