@@ -22,6 +22,8 @@ interface SpeakerBuffer {
   inFlight: boolean;
   /** Pending confirmed transcript to emit */
   pendingEmit: string | null;
+  /** Wall-clock time (ms) when buffer started accumulating audio */
+  bufferStartMs: number;
 }
 
 export interface SpeakerStreamManagerConfig {
@@ -55,8 +57,10 @@ export class SpeakerStreamManager {
   /**
    * Called when a segment is CONFIRMED and should be published.
    * Only fires after consecutive identical outputs — not on every resubmission.
+   * @param bufferStartMs - wall-clock time when this buffer started accumulating
+   * @param bufferEndMs - wall-clock time when the segment was confirmed/flushed
    */
-  onSegmentConfirmed: ((speakerId: string, speakerName: string, transcript: string) => void) | null = null;
+  onSegmentConfirmed: ((speakerId: string, speakerName: string, transcript: string, bufferStartMs: number, bufferEndMs: number) => void) | null = null;
 
   constructor(config?: SpeakerStreamManagerConfig) {
     this.minAudioDuration = config?.minAudioDuration ?? 3;
@@ -78,6 +82,7 @@ export class SpeakerStreamManager {
       confirmCount: 0,
       inFlight: false,
       pendingEmit: null,
+      bufferStartMs: Date.now(),
     });
 
     const timer = setInterval(() => this.trySubmit(speakerId), this.submitInterval * 1000);
@@ -139,8 +144,25 @@ export class SpeakerStreamManager {
     return this.buffers.has(speakerId);
   }
 
+  updateSpeakerName(speakerId: string, newName: string): boolean {
+    const buffer = this.buffers.get(speakerId);
+    if (!buffer || buffer.speakerName === newName) return false;
+    log(`[SpeakerStreams] Updated speaker name "${buffer.speakerName}" → "${newName}" (${speakerId})`);
+    buffer.speakerName = newName;
+    return true;
+  }
+
+  getSpeakerName(speakerId: string): string | undefined {
+    return this.buffers.get(speakerId)?.speakerName;
+  }
+
   getActiveSpeakers(): string[] {
     return Array.from(this.buffers.keys());
+  }
+
+  /** Get the wall-clock time when the current buffer started accumulating */
+  getBufferStartMs(speakerId: string): number {
+    return this.buffers.get(speakerId)?.bufferStartMs ?? Date.now();
   }
 
   removeAll(): void {
@@ -153,10 +175,14 @@ export class SpeakerStreamManager {
     const buffer = this.buffers.get(speakerId);
     if (!buffer || buffer.inFlight) return;
 
-    const durationSec = buffer.totalSamples / this.sampleRate;
+    const audioDurationSec = buffer.totalSamples / this.sampleRate;
+    const wallClockDurationSec = (Date.now() - buffer.bufferStartMs) / 1000;
 
-    // Hard cap — force emit whatever we have and reset
-    if (durationSec >= this.maxBufferDuration) {
+    // Hard cap — force emit based on WALL CLOCK time (not audio duration).
+    // Audio duration can be much shorter than wall clock when VAD filters
+    // silence or audio arrives in bursts. Without wall-clock cap, buffers
+    // accumulate for minutes producing mega-segments.
+    if (wallClockDurationSec >= this.maxBufferDuration) {
       if (buffer.lastTranscript) {
         buffer.pendingEmit = buffer.lastTranscript;
       }
@@ -165,7 +191,7 @@ export class SpeakerStreamManager {
       return;
     }
 
-    if (durationSec >= this.minAudioDuration) {
+    if (audioDurationSec >= this.minAudioDuration) {
       this.submitBuffer(buffer);
     }
   }
@@ -191,7 +217,8 @@ export class SpeakerStreamManager {
 
   private emitAndReset(buffer: SpeakerBuffer): void {
     if (buffer.pendingEmit && this.onSegmentConfirmed) {
-      this.onSegmentConfirmed(buffer.speakerId, buffer.speakerName, buffer.pendingEmit);
+      const endMs = Date.now();
+      this.onSegmentConfirmed(buffer.speakerId, buffer.speakerName, buffer.pendingEmit, buffer.bufferStartMs, endMs);
     }
 
     // Reset buffer
@@ -201,5 +228,6 @@ export class SpeakerStreamManager {
     buffer.confirmCount = 0;
     buffer.pendingEmit = null;
     buffer.inFlight = false;
+    buffer.bufferStartMs = Date.now();
   }
 }

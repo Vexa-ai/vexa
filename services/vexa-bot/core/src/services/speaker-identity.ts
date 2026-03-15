@@ -4,14 +4,9 @@ import { log } from '../utils';
 /**
  * Platform-specific CSS selectors used to locate participant names
  * associated with media elements in the DOM.
- *
- * These are intentionally coarse for the first iteration — they will be
- * refined as we test against real meeting UIs.
  */
 const PLATFORM_SELECTORS: Record<string, {
-  /** Selectors for the container that wraps a participant tile / video */
   participantContainer: string[];
-  /** Selectors for the element inside the container that holds the name */
   nameElement: string[];
 }> = {
   googlemeet: {
@@ -22,11 +17,11 @@ const PLATFORM_SELECTORS: Record<string, {
       '.video-tile',
     ],
     nameElement: [
-      '[data-self-name]',       // self-name attribute holds the name directly
-      'span.notranslate',       // primary name span in Google Meet
-      '.zWGUib',                // Google Meet name class
-      '.cS7aqe.N2K3jd',        // alternative name class
-      '.XWGOtd',               // another name class
+      '[data-self-name]',
+      'span.notranslate',
+      '.zWGUib',
+      '.cS7aqe.N2K3jd',
+      '.XWGOtd',
       '.participant-name',
       '.display-name',
     ],
@@ -54,164 +49,277 @@ const PLATFORM_SELECTORS: Record<string, {
   },
 };
 
-/** Simple in-memory cache: mediaElement index -> resolved name */
-const speakerNameCache = new Map<string, string>();
+// ─── Track-to-Speaker Correlation Map ────────────────────────────────────────
+//
+// Instead of guessing on each audio chunk, we build a mapping over time:
+// - When audio arrives on track N and exactly one speaking indicator is active,
+//   that's a "vote" for track N = that speaker.
+// - After enough consistent votes, we lock the mapping with high confidence.
+// - This survives simultaneous speech because the mapping was built during
+//   single-speaker moments.
+
+interface TrackVote {
+  name: string;
+  count: number;
+}
+
+interface TrackMapping {
+  /** Confirmed speaker name for this track */
+  name: string;
+  /** How many consistent votes confirmed this mapping */
+  confidence: number;
+  /** Whether the mapping is locked (enough votes) */
+  locked: boolean;
+  /** Timestamp of last update */
+  updatedAt: number;
+}
+
+/** Votes per track: trackIndex → { speakerName → voteCount } */
+const trackVotes = new Map<number, Map<string, number>>();
+
+/** Confirmed mappings: trackIndex → TrackMapping */
+const trackMappings = new Map<number, TrackMapping>();
+
+/** Minimum votes needed to lock a mapping */
+const LOCK_THRESHOLD = 3;
+
+/** After this many ms, allow re-evaluation of a locked mapping */
+const LOCK_EXPIRY_MS = 60_000;
 
 /**
- * Build a cache key from platform + element index so we don't
- * re-query the DOM for the same participant.
+ * Record a correlation vote: track N was active while speaker X was indicated.
+ * Called from handlePerSpeakerAudioData when we have a speaking signal.
  */
-function cacheKey(platform: string, elementIndex: number): string {
-  return `${platform}:${elementIndex}`;
+export function recordTrackVote(trackIndex: number, speakerName: string): void {
+  if (!trackVotes.has(trackIndex)) {
+    trackVotes.set(trackIndex, new Map());
+  }
+  const votes = trackVotes.get(trackIndex)!;
+  const current = votes.get(speakerName) || 0;
+  votes.set(speakerName, current + 1);
+
+  // Check if we can lock this mapping
+  const totalVotes = Array.from(votes.values()).reduce((a, b) => a + b, 0);
+  const topVote = Array.from(votes.entries()).sort((a, b) => b[1] - a[1])[0];
+
+  if (topVote && topVote[1] >= LOCK_THRESHOLD) {
+    const ratio = topVote[1] / totalVotes;
+    if (ratio >= 0.7) { // 70%+ votes for same speaker → lock
+      const existing = trackMappings.get(trackIndex);
+      if (!existing || existing.name !== topVote[0]) {
+        log(`[SpeakerIdentity] Track ${trackIndex} → "${topVote[0]}" LOCKED (${topVote[1]}/${totalVotes} votes, ${(ratio * 100).toFixed(0)}%)`);
+      }
+      trackMappings.set(trackIndex, {
+        name: topVote[0],
+        confidence: topVote[1],
+        locked: true,
+        updatedAt: Date.now(),
+      });
+    }
+  }
 }
 
 /**
- * Google Meet-specific name resolution.
- *
- * In Google Meet, <audio> elements are NOT inside participant tiles — they
- * live in a separate part of the DOM. Walking up from an audio element will
- * never find a participant container. Instead we use data already collected
- * by the browser-side speaker detection (recording.ts), which exposes:
- *
- *   window.__vexaGetAllParticipantNames()
- *     → { names: Record<participantId, displayName>, speaking: string[] }
- *
- *   window.__vexaSpeakerEvents
- *     → Array<{ event_type, participant_name, participant_id, relative_timestamp_ms }>
- *
- * Resolution strategy (ordered by reliability):
- *  1. If exactly one participant is currently speaking, use that name.
- *     (When audio arrives for a track, someone must be speaking.)
- *  2. Use the most recent SPEAKER_START event from __vexaSpeakerEvents
- *     that has not been followed by a SPEAKER_END for the same participant.
- *  3. Map by element index → participant tile index (positional).
- *  4. Fall back to "Speaker N".
+ * Get the confirmed speaker name for a track, if the mapping is locked.
  */
-async function resolveGoogleMeetSpeakerName(
+export function getLockedMapping(trackIndex: number): string | null {
+  const mapping = trackMappings.get(trackIndex);
+  if (!mapping || !mapping.locked) return null;
+
+  // Check expiry
+  if (Date.now() - mapping.updatedAt > LOCK_EXPIRY_MS) {
+    mapping.locked = false;
+    return null;
+  }
+
+  return mapping.name;
+}
+
+/**
+ * Query the browser for current speaking state and participant names.
+ * Returns the raw data for the caller to use for voting or resolution.
+ */
+async function queryBrowserState(
   page: Page,
   elementIndex: number,
-): Promise<string | null> {
+  botName?: string,
+): Promise<{ filteredNames: string[]; speaking: string[] } | null> {
   try {
-    const result = await page.evaluate((idx: number) => {
-      // Strategy 1: Use the live participant name lookup exposed by recording.ts
-      // __vexaGetAllParticipantNames() scans DOM participant tiles and returns
-      // all names keyed by participant-id plus the currently-speaking subset.
+    return await page.evaluate(({ idx, selfName }: { idx: number; selfName: string }) => {
+      const isJunkName = (name: string): boolean => {
+        return /^Google Participant \(/.test(name) ||
+               /spaces\//.test(name) ||
+               /devices\//.test(name);
+      };
+
       const getNames = (window as any).__vexaGetAllParticipantNames;
-      if (typeof getNames === 'function') {
-        const { names, speaking } = getNames() as {
-          names: Record<string, string>;
-          speaking: string[];
-        };
+      if (typeof getNames !== 'function') return null;
 
-        // Positional mapping: participant tile N → audio element N.
-        // Google Meet creates one audio element per remote participant in the
-        // same DOM order as participant tiles, making this the most reliable
-        // strategy (it survives multiple people speaking simultaneously).
-        const nameList = Object.values(names);
-        if (idx < nameList.length) {
-          return nameList[idx];
-        }
+      const data = getNames() as {
+        names: Record<string, string>;
+        speaking: string[];
+      };
 
-        // If we have more audio elements than tiles (rare), fall back to
-        // whoever is currently speaking.
-        if (speaking.length === 1) {
-          return speaking[0];
-        }
-        if (speaking.length > 1) {
-          return speaking[0]; // first match — best we can do
-        }
-      }
+      const selfLower = selfName.toLowerCase();
+      const junkPatterns = ['let participants', 'send messages', 'turn on captions'];
+      const filteredNames = Object.values(data.names).filter(n => {
+        const lower = n.toLowerCase();
+        if (lower.includes(selfLower) || selfLower.includes(lower)) return false;
+        if (junkPatterns.some(p => lower.includes(p))) return false;
+        if (isJunkName(n)) return false;
+        return true;
+      });
+      const speaking = data.speaking.filter(n => !isJunkName(n));
 
-      // Strategy 2: Fall back to speaker events history (__vexaSpeakerEvents)
-      // accumulated by the speaker detection polling in recording.ts.
-      const events: Array<{
-        event_type: string;
-        participant_name: string;
-        participant_id: string;
-        relative_timestamp_ms: number;
-      }> = (window as any).__vexaSpeakerEvents || [];
-
-      if (events.length > 0) {
-        // Collect unique participant names in order of first appearance
-        const seen = new Set<string>();
-        const orderedNames: string[] = [];
-        for (const evt of events) {
-          if (!seen.has(evt.participant_id)) {
-            seen.add(evt.participant_id);
-            orderedNames.push(evt.participant_name);
-          }
-        }
-        if (idx < orderedNames.length) {
-          return orderedNames[idx];
-        }
-
-        // More audio elements than known participants — return most recent speaker
-        const lastStart = [...events].reverse().find(e => e.event_type === 'SPEAKER_START');
-        if (lastStart) {
-          return lastStart.participant_name;
-        }
-      }
-
-      return null;
-    }, elementIndex);
-
-    return result;
+      return { filteredNames, speaking };
+    }, { idx: elementIndex, selfName: botName || 'Vexa Bot' });
   } catch (err: any) {
-    log(`[SpeakerIdentity] Google Meet browser query failed: ${err.message}`);
+    log(`[SpeakerIdentity] Browser query failed: ${err.message}`);
     return null;
   }
 }
 
 /**
- * Resolve the participant display name for a given media element by
- * inspecting the surrounding DOM.
+ * Resolve speaker name for a Google Meet audio track.
  *
- * The lookup is performed once per element and cached — subsequent calls
- * for the same element return the cached value immediately.
+ * Strategy:
+ * 1. Check locked track mapping (built from correlation votes)
+ * 2. If exactly one person speaking → use that name + record vote
+ * 3. Speaker events history
+ * 4. Positional fallback (weakest)
+ */
+async function resolveGoogleMeetSpeakerName(
+  page: Page,
+  elementIndex: number,
+  botName?: string,
+): Promise<string | null> {
+  // Strategy 1: Use locked mapping if available
+  const locked = getLockedMapping(elementIndex);
+  if (locked) {
+    return locked;
+  }
+
+  // Query browser for current state
+  const state = await queryBrowserState(page, elementIndex, botName);
+  if (!state) return null;
+
+  const { filteredNames, speaking } = state;
+
+  // Strategy 2: Speaking signal → use name AND record vote for this track
+  // But only if this name isn't already locked to a DIFFERENT track
+  if (speaking.length === 1) {
+    const speakingName = speaking[0];
+    let alreadyLockedElsewhere = false;
+    for (const [otherIdx, mapping] of trackMappings) {
+      if (otherIdx !== elementIndex && mapping.locked && mapping.name === speakingName) {
+        alreadyLockedElsewhere = true;
+        break;
+      }
+    }
+    if (!alreadyLockedElsewhere) {
+      recordTrackVote(elementIndex, speakingName);
+      return speakingName;
+    }
+    // Speaking name is locked to another track — this track belongs to someone else.
+    // Don't assign, let re-resolution find the correct name later.
+    log(`[SpeakerIdentity] Track ${elementIndex}: "${speakingName}" already locked to another track, skipping`);
+  }
+
+  // If multiple speaking, we can't vote but check if any match our existing votes
+  if (speaking.length > 1) {
+    const votes = trackVotes.get(elementIndex);
+    if (votes) {
+      // Return the speaking name that has the most votes for this track
+      let bestName = '';
+      let bestCount = 0;
+      for (const name of speaking) {
+        const count = votes.get(name) || 0;
+        if (count > bestCount) {
+          bestCount = count;
+          bestName = name;
+        }
+      }
+      if (bestName && bestCount > 0) {
+        log(`[SpeakerIdentity] Track ${elementIndex} → "${bestName}" (multi-speaker, best vote match)`);
+        return bestName;
+      }
+    }
+  }
+
+  // Strategy 3: Speaker events — most recent unended SPEAKER_START
+  try {
+    const eventsResult = await page.evaluate(() => {
+      const events: Array<{
+        event_type: string;
+        participant_name: string;
+        participant_id: string;
+      }> = (window as any).__vexaSpeakerEvents || [];
+
+      if (events.length === 0) return null;
+
+      const isJunkName = (name: string): boolean => {
+        return /^Google Participant \(/.test(name) ||
+               /spaces\//.test(name) ||
+               /devices\//.test(name);
+      };
+
+      const activeByParticipant = new Map<string, string>();
+      for (const evt of events) {
+        if (evt.event_type === 'SPEAKER_START') {
+          activeByParticipant.set(evt.participant_id, evt.participant_name);
+        } else if (evt.event_type === 'SPEAKER_END') {
+          activeByParticipant.delete(evt.participant_id);
+        }
+      }
+
+      const activeNames = Array.from(activeByParticipant.values()).filter(n => !isJunkName(n));
+      if (activeNames.length === 1) return activeNames[0];
+
+      const lastStart = [...events].reverse().find(e =>
+        e.event_type === 'SPEAKER_START' && !isJunkName(e.participant_name)
+      );
+      return lastStart?.participant_name || null;
+    });
+
+    if (eventsResult) return eventsResult;
+  } catch {}
+
+  // No positional fallback — it produces wrong mappings.
+  // Return null → "Presentation" fallback. Better to label unknown than label wrong.
+  return null;
+}
+
+/**
+ * Resolve the participant display name for a given media element.
  *
- * @param page      - Playwright Page handle for the meeting tab
- * @param elementIndex - the index of the media element (from findMediaElements)
- * @param platform  - 'googlemeet' | 'msteams'
- * @returns the participant name, or a fallback like "Speaker 1"
+ * For Google Meet: uses correlation-based track mapping.
+ * For other platforms: walks up the DOM from the media element.
  */
 export async function resolveSpeakerName(
   page: Page,
   elementIndex: number,
-  platform: string
+  platform: string,
+  botName?: string,
 ): Promise<string> {
-  const key = cacheKey(platform, elementIndex);
-  const cached = speakerNameCache.get(key);
-  if (cached) {
-    return cached;
-  }
-
-  // Google Meet: audio elements are NOT inside participant tiles.
-  // Use browser-side speaker detection data instead of DOM traversal.
   if (platform === 'googlemeet') {
-    const gmName = await resolveGoogleMeetSpeakerName(page, elementIndex);
-    if (gmName) {
-      speakerNameCache.set(key, gmName);
-      log(`[SpeakerIdentity] Element ${elementIndex} → "${gmName}" (platform: ${platform}, via speaker detection)`);
-      return gmName;
+    const name = await resolveGoogleMeetSpeakerName(page, elementIndex, botName);
+    if (name) {
+      log(`[SpeakerIdentity] Element ${elementIndex} → "${name}" (platform: ${platform})`);
+      return name;
     }
-    // No participant tile for this track — likely screen share / presentation audio
-    const fallback = `Presentation`;
-    speakerNameCache.set(key, fallback);
-    log(`[SpeakerIdentity] Element ${elementIndex} → "${fallback}" (platform: ${platform}, no participant tile — screen share?)`);
-    return fallback;
+    log(`[SpeakerIdentity] Element ${elementIndex} → "Presentation" (platform: ${platform}, no mapping)`);
+    return 'Presentation';
   }
 
   const selectors = PLATFORM_SELECTORS[platform];
   if (!selectors) {
     const fallback = `Speaker ${elementIndex + 1}`;
     log(`[SpeakerIdentity] Unknown platform "${platform}", using fallback: ${fallback}`);
-    speakerNameCache.set(key, fallback);
     return fallback;
   }
 
   const name = await page.evaluate(
     ({ idx, containerSelectors, nameSelectors }) => {
-      // Gather all active media elements in DOM order (same logic as findMediaElements)
       const mediaElements = Array.from(
         document.querySelectorAll('audio, video')
       ).filter((el: any) =>
@@ -223,15 +331,11 @@ export async function resolveSpeakerName(
       const targetElement = mediaElements[idx] as HTMLElement | undefined;
       if (!targetElement) return null;
 
-      // Strategy 1: Walk up from the media element to find a participant container,
-      // then look inside for a name element.
       let current: HTMLElement | null = targetElement;
       while (current && current !== document.body) {
         for (const cs of containerSelectors) {
           if (current.matches(cs)) {
-            // Found a participant container — look for a name inside
             for (const ns of nameSelectors) {
-              // Check for data-self-name attribute first
               if (ns === '[data-self-name]') {
                 const selfName = current.getAttribute('data-self-name');
                 if (selfName) return selfName;
@@ -240,7 +344,6 @@ export async function resolveSpeakerName(
               if (nameEl) {
                 const text = (nameEl.textContent || '').trim();
                 if (text.length > 0) return text;
-                // Try title attribute (Teams uses span[title])
                 const title = nameEl.getAttribute('title');
                 if (title && title.trim().length > 0) return title.trim();
               }
@@ -250,11 +353,9 @@ export async function resolveSpeakerName(
         current = current.parentElement;
       }
 
-      // Strategy 2: Check aria-label on the media element itself or its parent
       const ariaLabel = targetElement.getAttribute('aria-label');
       if (ariaLabel && ariaLabel.trim().length > 0) return ariaLabel.trim();
 
-      // Strategy 3: Check the closest element with a title attribute
       const titled = targetElement.closest('[title]');
       if (titled) {
         const title = titled.getAttribute('title');
@@ -271,23 +372,35 @@ export async function resolveSpeakerName(
   );
 
   const resolvedName = name || `Speaker ${elementIndex + 1}`;
-  speakerNameCache.set(key, resolvedName);
   log(`[SpeakerIdentity] Element ${elementIndex} → "${resolvedName}" (platform: ${platform})`);
   return resolvedName;
 }
 
 /**
- * Clear the speaker name cache. Useful when participants change
- * (e.g., someone leaves and a new person takes their media element slot).
+ * Clear all track mappings and votes. Call when meeting resets.
  */
 export function clearSpeakerNameCache(): void {
-  speakerNameCache.clear();
-  log('[SpeakerIdentity] Cache cleared.');
+  trackVotes.clear();
+  trackMappings.clear();
+  log('[SpeakerIdentity] All track mappings cleared.');
 }
 
 /**
- * Remove a single entry from the cache (e.g., when a participant leaves).
+ * Remove mapping for a single track (e.g., when a participant leaves).
  */
 export function invalidateSpeakerName(platform: string, elementIndex: number): void {
-  speakerNameCache.delete(cacheKey(platform, elementIndex));
+  trackVotes.delete(elementIndex);
+  trackMappings.delete(elementIndex);
+  log(`[SpeakerIdentity] Track ${elementIndex} mapping invalidated.`);
+}
+
+/**
+ * Get current mapping state for debugging.
+ */
+export function getTrackMappingState(): Record<number, { name: string; confidence: number; locked: boolean }> {
+  const state: Record<number, { name: string; confidence: number; locked: boolean }> = {};
+  for (const [idx, mapping] of trackMappings) {
+    state[idx] = { name: mapping.name, confidence: mapping.confidence, locked: mapping.locked };
+  }
+  return state;
 }

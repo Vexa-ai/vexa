@@ -329,24 +329,31 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                   }
                 }
 
+                // Helper: reject junk names (fallback-generated IDs, not real names)
+                const isJunkName = (name: string): boolean => {
+                  return /^Google Participant \(/.test(name) ||
+                         /spaces\//.test(name) ||
+                         /devices\//.test(name);
+                };
+
                 // Fallbacks
                 const selfName = participantElement.getAttribute('data-self-name');
-                if (selfName && selfName.trim()) return selfName.trim();
+                if (selfName && selfName.trim() && !isJunkName(selfName.trim())) return selfName.trim();
 
                 // aria-label on the container or any descendant (catches Spaces/Chat device participants)
                 const ariaLabel = participantElement.getAttribute('aria-label');
-                if (ariaLabel && ariaLabel.trim().length > 1 && ariaLabel.trim().length < 50) return ariaLabel.trim();
+                if (ariaLabel && ariaLabel.trim().length > 1 && ariaLabel.trim().length < 50 && !isJunkName(ariaLabel.trim())) return ariaLabel.trim();
                 const ariaChild = participantElement.querySelector('[aria-label]') as HTMLElement | null;
                 if (ariaChild) {
                   const childLabel = ariaChild.getAttribute('aria-label')?.trim();
-                  if (childLabel && childLabel.length > 1 && childLabel.length < 50) return childLabel;
+                  if (childLabel && childLabel.length > 1 && childLabel.length < 50 && !isJunkName(childLabel)) return childLabel;
                 }
 
                 // data-tooltip on any descendant
                 const tooltipEl = participantElement.querySelector('[data-tooltip]') as HTMLElement | null;
                 if (tooltipEl) {
                   const tooltip = tooltipEl.getAttribute('data-tooltip')?.trim();
-                  if (tooltip && tooltip.length > 1 && tooltip.length < 50) return tooltip;
+                  if (tooltip && tooltip.length > 1 && tooltip.length < 50 && !isJunkName(tooltip)) return tooltip;
                 }
 
                 const idToDisplay = getGoogleParticipantId(participantElement);

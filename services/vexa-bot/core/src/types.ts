@@ -24,6 +24,10 @@ export type BotConfig = {
   captureModes?: string[];  // e.g., ['audio'], ['audio', 'video'], ['audio', 'screenshots']
   recordingUploadUrl?: string;  // bot-manager internal upload endpoint
 
+  // Per-speaker transcription
+  transcriptionServiceUrl?: string;   // HTTP endpoint for transcription-service
+  transcriptionServiceToken?: string; // Bearer token for transcription-service
+
   // Voice agent / meeting interaction interface
   voiceAgentEnabled?: boolean;  // Enable TTS, chat, screen share capabilities
   defaultAvatarUrl?: string;   // Custom default avatar image URL for virtual camera

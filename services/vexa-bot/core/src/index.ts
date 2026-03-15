@@ -24,6 +24,7 @@ import { SegmentPublisher } from './services/segment-publisher';
 import { SpeakerStreamManager } from './services/speaker-streams';
 import { resolveSpeakerName } from './services/speaker-identity';
 import { SileroVAD } from './services/vad';
+import { isHallucination } from './services/hallucination-filter';
 import { SpeakerStreamHandle } from './services/audio';
 
 // Module-level variables to store current configuration
@@ -977,9 +978,9 @@ async function initVoiceAgentServices(
  * Must be called before `startPerSpeakerAudioCapture()`.
  */
 async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
-  const transcriptionServiceUrl = process.env.TRANSCRIPTION_SERVICE_URL;
+  const transcriptionServiceUrl = botConfig.transcriptionServiceUrl || process.env.TRANSCRIPTION_SERVICE_URL;
   if (!transcriptionServiceUrl) {
-    log('[PerSpeaker] WARNING: TRANSCRIPTION_SERVICE_URL not set. Per-speaker transcription disabled.');
+    log('[PerSpeaker] WARNING: transcriptionServiceUrl not in config and TRANSCRIPTION_SERVICE_URL not set. Per-speaker transcription disabled.');
     return false;
   }
 
@@ -988,15 +989,22 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
   try {
     transcriptionClient = new TranscriptionClient({
       serviceUrl: transcriptionServiceUrl,
-      apiToken: process.env.TRANSCRIPTION_SERVICE_TOKEN,
+      apiToken: botConfig.transcriptionServiceToken || process.env.TRANSCRIPTION_SERVICE_TOKEN,
     });
     log('[PerSpeaker] TranscriptionClient created');
 
     segmentPublisher = new SegmentPublisher({
       redisUrl: botConfig.redisUrl || process.env.REDIS_URL || 'redis://localhost:6379',
       meetingId: String(meetingId),
+      token: botConfig.token,
+      sessionUid: botConfig.connectionId || `bot-${Date.now()}`,
+      platform: botConfig.platform,
     });
     log('[PerSpeaker] SegmentPublisher created');
+
+    // Publish session_start so the collector knows when this session began
+    await segmentPublisher.publishSessionStart();
+    log('[PerSpeaker] Session start published');
 
     try {
       vadModel = await SileroVAD.create();
@@ -1008,10 +1016,10 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
 
     speakerManager = new SpeakerStreamManager({
       sampleRate: 16000,
-      minAudioDuration: 3,
-      submitInterval: 3,
-      confirmThreshold: 2,
-      maxBufferDuration: 15,
+      minAudioDuration: 2,    // 2s of audio before first submit (was 3)
+      submitInterval: 2,      // resubmit every 2s (was 3) — drafts arrive faster
+      confirmThreshold: 2,    // still require 2 matches for quality
+      maxBufferDuration: 10,  // wall-clock hard cap 10s (was 15) — shorter segments
     });
 
     // onSegmentReady: transcribe the buffer (called every submitInterval)
@@ -1037,7 +1045,34 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
             }
           }
 
+          // Filter hallucinations before publishing
+          if (isHallucination(result.text)) {
+            log(`[🚫 HALLUCINATION] ${speakerName} | "${result.text}"`);
+            speakerManager!.handleTranscriptionResult(speakerId, '');
+            return;
+          }
+
           log(`[📝 DRAFT] ${speakerName} | ${result.language} | "${result.text}"`);
+
+          // Publish draft immediately for real-time dashboard display
+          if (segmentPublisher) {
+            const lang = speakerLanguages.get(speakerId) || result.language || currentLanguage || 'en';
+            const bufStart = speakerManager!.getBufferStartMs(speakerId);
+            const nowMs = Date.now();
+            const startSec = (bufStart - segmentPublisher.sessionStartMs) / 1000;
+            const endSec = (nowMs - segmentPublisher.sessionStartMs) / 1000;
+            await segmentPublisher.publishSegment({
+              speaker: speakerName,
+              text: result.text,
+              start: startSec,
+              end: endSec,
+              language: lang,
+              completed: false,
+              absolute_start_time: new Date(bufStart).toISOString(),
+              absolute_end_time: new Date(nowMs).toISOString(),
+            });
+          }
+
           speakerManager!.handleTranscriptionResult(speakerId, result.text);
         } else {
           speakerManager!.handleTranscriptionResult(speakerId, '');
@@ -1049,16 +1084,25 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
     };
 
     // onSegmentConfirmed: publish to Redis (only after confirmation or hard cap)
-    speakerManager.onSegmentConfirmed = async (speakerId: string, speakerName: string, transcript: string) => {
+    speakerManager.onSegmentConfirmed = async (speakerId: string, speakerName: string, transcript: string, bufferStartMs: number, bufferEndMs: number) => {
       if (!segmentPublisher) return;
+      if (isHallucination(transcript)) {
+        log(`[🚫 HALLUCINATION] ${speakerName} | confirmed but filtered: "${transcript}"`);
+        return;
+      }
       const lang = speakerLanguages.get(speakerId) || currentLanguage || 'en';
-      log(`[📝 CONFIRMED] ${speakerName} | ${lang} | "${transcript}"`);
+      const startSec = (bufferStartMs - segmentPublisher.sessionStartMs) / 1000;
+      const endSec = (bufferEndMs - segmentPublisher.sessionStartMs) / 1000;
+      log(`[📝 CONFIRMED] ${speakerName} | ${lang} | ${startSec.toFixed(1)}s-${endSec.toFixed(1)}s | "${transcript}"`);
       await segmentPublisher.publishSegment({
         speaker: speakerName,
         text: transcript,
-        start: 0,
-        end: 0,
+        start: startSec,
+        end: endSec,
         language: lang,
+        completed: true,
+        absolute_start_time: new Date(bufferStartMs).toISOString(),
+        absolute_end_time: new Date(bufferEndMs).toISOString(),
       });
       log(`[✅ PUBLISHED] ${speakerName} → Redis`);
     };
@@ -1078,27 +1122,46 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
  * @param speakerIndex - index of the media element
  * @param audioDataArray - the Float32 audio samples as a plain number array (serialized from browser)
  */
+/** Track last re-resolution time per speaker to avoid re-resolving on every audio chunk */
+const lastReResolveTime = new Map<string, number>();
+const RE_RESOLVE_INTERVAL_MS = 10_000; // re-check name every 10s
+
 async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: number[]): Promise<void> {
   if (!speakerManager || !segmentPublisher || !page || page.isClosed()) return;
 
   const speakerId = `speaker-${speakerIndex}`;
   const audioData = new Float32Array(audioDataArray);
 
-  // Resolve speaker name on first audio from this track
+  const platformKey = currentPlatform === 'google_meet' ? 'googlemeet'
+    : currentPlatform === 'teams' ? 'msteams'
+    : currentPlatform || 'unknown';
+
+  // Resolve speaker name — uses correlation-based mapping (builds over time)
   if (!speakerManager.hasSpeaker(speakerId)) {
-    const platformKey = currentPlatform === 'google_meet' ? 'googlemeet'
-      : currentPlatform === 'teams' ? 'msteams'
-      : currentPlatform || 'unknown';
     log(`[🔊 NEW SPEAKER] Track ${speakerIndex} — first audio received, resolving name...`);
-    const name = await resolveSpeakerName(page, speakerIndex, platformKey);
+    const name = await resolveSpeakerName(page, speakerIndex, platformKey, currentBotConfig?.botName);
     log(`[🎙️ SPEAKER ACTIVE] Track ${speakerIndex} → "${name}" — streaming audio`);
     speakerManager.addSpeaker(speakerId, name);
+    lastReResolveTime.set(speakerId, Date.now());
     await segmentPublisher.publishSpeakerEvent({
       speaker: name,
       type: 'joined',
-      timestamp: Date.now() / 1000,
+      timestamp: Date.now(),
     });
     log(`[📡 SPEAKER EVENT] "${name}" joined → Redis`);
+  } else {
+    // Re-resolve periodically — the correlation map improves over time
+    // as more single-speaker moments are observed
+    const lastResolve = lastReResolveTime.get(speakerId) || 0;
+    if (Date.now() - lastResolve > RE_RESOLVE_INTERVAL_MS) {
+      lastReResolveTime.set(speakerId, Date.now());
+      const newName = await resolveSpeakerName(page, speakerIndex, platformKey, currentBotConfig?.botName);
+      const oldName = speakerManager.getSpeakerName(speakerId);
+      if (oldName && newName !== oldName && newName !== 'Presentation') {
+        log(`[🔄 SPEAKER UPDATE] Track ${speakerIndex}: "${oldName}" → "${newName}"`);
+        speakerManager.updateSpeakerName(speakerId, newName);
+      }
+    }
   }
 
   // VAD check — only feed audio that contains speech
@@ -1131,8 +1194,9 @@ async function cleanupPerSpeakerPipeline(): Promise<void> {
     speakerManager = null;
   }
 
-  // Close Redis connections
+  // Publish session_end and close Redis connections
   if (segmentPublisher) {
+    await segmentPublisher.publishSessionEnd();
     await segmentPublisher.close();
     segmentPublisher = null;
   }
