@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Messy Meeting - Parameterized</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; background: #fafafa; }
+    h1 { margin-bottom: 4px; }
+    #description { color: #555; margin-top: 0; }
+    #play-btn {
+      font-size: 20px; padding: 14px 40px; cursor: pointer;
+      background: #2196F3; color: white; border: none; border-radius: 8px;
+      margin: 20px 0; display: block;
+    }
+    #play-btn:hover { background: #1976D2; }
+    .participant {
+      margin: 10px 0; padding: 14px 16px;
+      border: 2px solid #ccc; border-radius: 10px;
+      background: white;
+      display: flex; align-items: center; gap: 16px;
+    }
+    .participant.speaking { border-color: #4CAF50; background: #e8f5e9; }
+    .participant-name { font-weight: 700; font-size: 16px; min-width: 130px; }
+    audio { flex: 1; min-width: 200px; height: 40px; }
+    #status { margin-top: 24px; padding: 12px; background: #eee; border-radius: 8px; font-family: monospace; font-size: 14px; }
+    #status p { margin: 4px 0; }
+    #error { color: red; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1 id="title">Messy Meeting</h1>
+  <p id="description">Loading scenario...</p>
+  <p id="error"></p>
+
+  <button id="play-btn" onclick="playAll()">Play All Simultaneously</button>
+
+  <div id="participants"></div>
+
+  <div id="status">
+    <p>Scenario: <span id="scenario-name">--</span></p>
+    <p>Audio elements: <span id="count">0</span></p>
+    <p>Playing: <span id="playing">waiting...</span></p>
+    <p>Time: <span id="time">0.0s</span></p>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const scenario = params.get('scenario') || 'full-messy';
+    let startTime = null;
+
+    document.getElementById('scenario-name').textContent = scenario;
+    document.title = 'Messy Meeting - ' + scenario;
+
+    const FULL_NAMES = { Alice: 'Alice Johnson', Bob: 'Bob Smith', Carol: 'Carol Williams' };
+
+    function playAll() {
+      var audios = document.querySelectorAll('audio');
+      startTime = performance.now();
+      audios.forEach(function(a) {
+        a.currentTime = 0;
+        a.play().catch(function(e) { console.error('Play failed:', e); });
+      });
+      document.getElementById('play-btn').textContent = 'Playing... (click to restart)';
+    }
+
+    // Load manifest
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', 'cache/' + scenario + '/manifest.json');
+    xhr.onload = function() {
+      if (xhr.status !== 200) {
+        document.getElementById('error').textContent = 'Manifest not found. Run: python generate_audio.py --scenario ' + scenario;
+        return;
+      }
+      var manifest = JSON.parse(xhr.responseText);
+      document.getElementById('title').textContent = 'Messy Meeting: ' + scenario;
+      document.getElementById('description').textContent = manifest.description;
+
+      var container = document.getElementById('participants');
+      var speakers = Object.keys(manifest.speakers);
+
+      for (var i = 0; i < speakers.length; i++) {
+        var name = speakers[i];
+        var info = manifest.speakers[name];
+
+        var div = document.createElement('div');
+        div.className = 'participant';
+        div.setAttribute('data-participant-id', String(i + 1));
+
+        if (name !== 'Presentation') {
+          var nameDiv = document.createElement('div');
+          nameDiv.className = 'participant-name';
+          nameDiv.textContent = FULL_NAMES[name] || name;
+          div.appendChild(nameDiv);
+        }
+
+        var audio = document.createElement('audio');
+        audio.id = 'audio-' + name.toLowerCase();
+        audio.src = 'cache/' + scenario + '/' + info.wav;
+        audio.setAttribute('controls', '');
+        audio.setAttribute('preload', 'auto');
+        div.appendChild(audio);
+
+        container.appendChild(div);
+      }
+    };
+    xhr.onerror = function() {
+      document.getElementById('error').textContent = 'Failed to load manifest';
+    };
+    xhr.send();
+
+    // Status ticker
+    setInterval(function() {
+      var audios = document.querySelectorAll('audio');
+      document.getElementById('count').textContent = audios.length;
+      var playing = 0;
+      audios.forEach(function(a) {
+        var isPlaying = !a.paused && a.currentTime > 0;
+        if (isPlaying) playing++;
+        var tile = a.closest('.participant');
+        if (tile) {
+          if (isPlaying) { tile.classList.add('speaking'); }
+          else { tile.classList.remove('speaking'); }
+        }
+      });
+      document.getElementById('playing').textContent = playing + '/' + audios.length;
+      if (startTime) {
+        document.getElementById('time').textContent = ((performance.now() - startTime) / 1000).toFixed(1) + 's';
+      }
+    }, 200);
+  </script>
+</body>
+</html>
