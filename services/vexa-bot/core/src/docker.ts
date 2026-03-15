@@ -27,6 +27,9 @@ export const BotConfigSchema = z.object({
   recordingEnabled: z.boolean().optional(),
   captureModes: z.array(z.string()).optional(),
   recordingUploadUrl: z.string().url().optional(),
+  // Per-speaker transcription
+  transcriptionServiceUrl: z.string().optional(),
+  transcriptionServiceToken: z.string().optional(),
   // Voice agent / meeting interaction interface
   voiceAgentEnabled: z.boolean().optional(),
   defaultAvatarUrl: z.string().url().optional(),

@@ -67,6 +67,8 @@ services:
       - DEVICE_TYPE=remote
       - WHISPER_LIVE_URL=ws://whisperlive:9090/ws
       - ADMIN_TOKEN=${ADMIN_API_TOKEN}
+      - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-http://host.docker.internal:8083/v1/audio/transcriptions}
+      - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-your_secure_token_here}
       - ZOOM_CLIENT_ID=${ZOOM_CLIENT_ID:-}
       - ZOOM_CLIENT_SECRET=${ZOOM_CLIENT_SECRET:-}
       # Storage (recordings)

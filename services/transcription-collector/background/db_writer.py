@@ -155,11 +155,12 @@ async def process_redis_to_postgres(redis_c: aioredis.Redis, local_transcription
                                         logger.warning(f"[FinalMap] Corrected inverted segment times for meet {meeting_id}, start={segment_start_time_float}, end={segment_end_time_float}")
                                     
                                     if local_transcription_filter.filter_segment(
-                                        segment_data['text'], 
-                                        start_time=segment_start_time_float, 
-                                        end_time=segment_end_time_float, 
+                                        segment_data['text'],
+                                        start_time=segment_start_time_float,
+                                        end_time=segment_end_time_float,
                                         meeting_id=meeting_id,
-                                        language=segment_data.get('language')
+                                        language=segment_data.get('language'),
+                                        speaker=mapped_speaker_name
                                     ):
                                         new_transcription = create_transcription_object(
                                             meeting_id=meeting_id,

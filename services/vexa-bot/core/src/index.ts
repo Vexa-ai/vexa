@@ -22,7 +22,7 @@ import { Page, Browser } from 'playwright-core';
 import { TranscriptionClient } from './services/transcription-client';
 import { SegmentPublisher } from './services/segment-publisher';
 import { SpeakerStreamManager } from './services/speaker-streams';
-import { resolveSpeakerName } from './services/speaker-identity';
+import { resolveSpeakerName, clearSpeakerNameCache, isTrackLocked, isNameTaken } from './services/speaker-identity';
 import { SileroVAD } from './services/vad';
 import { isHallucination } from './services/hallucination-filter';
 import { SpeakerStreamHandle } from './services/audio';
@@ -1052,8 +1052,6 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
             return;
           }
 
-          log(`[📝 DRAFT] ${speakerName} | ${result.language} | "${result.text}"`);
-
           // Publish draft immediately for real-time dashboard display
           if (segmentPublisher) {
             const lang = speakerLanguages.get(speakerId) || result.language || currentLanguage || 'en';
@@ -1061,6 +1059,8 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
             const nowMs = Date.now();
             const startSec = (bufStart - segmentPublisher.sessionStartMs) / 1000;
             const endSec = (nowMs - segmentPublisher.sessionStartMs) / 1000;
+            const segmentId = `${segmentPublisher.sessionUid}:${speakerManager!.getSegmentId(speakerId)}`;
+            log(`[📝 DRAFT] ${speakerName} | ${result.language} | ${startSec.toFixed(1)}s-${endSec.toFixed(1)}s | ${segmentId} | "${result.text}"`);
             await segmentPublisher.publishSegment({
               speaker: speakerName,
               text: result.text,
@@ -1068,6 +1068,7 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
               end: endSec,
               language: lang,
               completed: false,
+              segment_id: segmentId,
               absolute_start_time: new Date(bufStart).toISOString(),
               absolute_end_time: new Date(nowMs).toISOString(),
             });
@@ -1084,7 +1085,7 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
     };
 
     // onSegmentConfirmed: publish to Redis (only after confirmation or hard cap)
-    speakerManager.onSegmentConfirmed = async (speakerId: string, speakerName: string, transcript: string, bufferStartMs: number, bufferEndMs: number) => {
+    speakerManager.onSegmentConfirmed = async (speakerId: string, speakerName: string, transcript: string, bufferStartMs: number, bufferEndMs: number, segmentId: string) => {
       if (!segmentPublisher) return;
       if (isHallucination(transcript)) {
         log(`[🚫 HALLUCINATION] ${speakerName} | confirmed but filtered: "${transcript}"`);
@@ -1093,7 +1094,8 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
       const lang = speakerLanguages.get(speakerId) || currentLanguage || 'en';
       const startSec = (bufferStartMs - segmentPublisher.sessionStartMs) / 1000;
       const endSec = (bufferEndMs - segmentPublisher.sessionStartMs) / 1000;
-      log(`[📝 CONFIRMED] ${speakerName} | ${lang} | ${startSec.toFixed(1)}s-${endSec.toFixed(1)}s | "${transcript}"`);
+      const fullSegmentId = `${segmentPublisher.sessionUid}:${segmentId}`;
+      log(`[📝 CONFIRMED] ${speakerName} | ${lang} | ${startSec.toFixed(1)}s-${endSec.toFixed(1)}s | ${fullSegmentId} | "${transcript}"`);
       await segmentPublisher.publishSegment({
         speaker: speakerName,
         text: transcript,
@@ -1101,6 +1103,7 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
         end: endSec,
         language: lang,
         completed: true,
+        segment_id: fullSegmentId,
         absolute_start_time: new Date(bufferStartMs).toISOString(),
         absolute_end_time: new Date(bufferEndMs).toISOString(),
       });
@@ -1122,9 +1125,19 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
  * @param speakerIndex - index of the media element
  * @param audioDataArray - the Float32 audio samples as a plain number array (serialized from browser)
  */
-/** Track last re-resolution time per speaker to avoid re-resolving on every audio chunk */
+/** Track last re-resolution time per unmapped speaker */
 const lastReResolveTime = new Map<string, number>();
-const RE_RESOLVE_INTERVAL_MS = 10_000; // re-check name every 10s
+/** Track last known participant count to detect joins/leaves */
+let lastParticipantCount = 0;
+
+/** Check if a name is already assigned to a different speaker in the SpeakerStreamManager. */
+function isDuplicateSpeakerName(name: string, excludeSpeakerId: string): boolean {
+  if (!speakerManager) return false;
+  for (const sid of speakerManager.getActiveSpeakers()) {
+    if (sid !== excludeSpeakerId && speakerManager.getSpeakerName(sid) === name) return true;
+  }
+  return false;
+}
 
 async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: number[]): Promise<void> {
   if (!speakerManager || !segmentPublisher || !page || page.isClosed()) return;
@@ -1136,41 +1149,60 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
     : currentPlatform === 'teams' ? 'msteams'
     : currentPlatform || 'unknown';
 
-  // Resolve speaker name — uses correlation-based mapping (builds over time)
+  // Speaker name resolution: discover via voting, lock permanently.
+  // Locked tracks return instantly. Unlocked tracks re-resolve every 2s.
+  // Invariant: one name per track, one track per name — always.
   if (!speakerManager.hasSpeaker(speakerId)) {
     log(`[🔊 NEW SPEAKER] Track ${speakerIndex} — first audio received, resolving name...`);
     const name = await resolveSpeakerName(page, speakerIndex, platformKey, currentBotConfig?.botName);
-    log(`[🎙️ SPEAKER ACTIVE] Track ${speakerIndex} → "${name || '(unmapped)'}" — streaming audio`);
-    speakerManager.addSpeaker(speakerId, name);
+    // Start unmapped — only assign if name is genuinely unique
+    const safeName = (name && !isDuplicateSpeakerName(name, speakerId)) ? name : '';
+    log(`[🎙️ SPEAKER ACTIVE] Track ${speakerIndex} → "${safeName || '(unmapped)'}" — streaming audio`);
+    speakerManager.addSpeaker(speakerId, safeName);
     lastReResolveTime.set(speakerId, Date.now());
-    if (name) {
+    if (safeName) {
       await segmentPublisher.publishSpeakerEvent({
-        speaker: name,
+        speaker: safeName,
         type: 'joined',
         timestamp: Date.now(),
       });
-      log(`[📡 SPEAKER EVENT] "${name}" joined → Redis`);
+      log(`[📡 SPEAKER EVENT] "${safeName}" joined → Redis`);
     }
   } else {
     const currentName = speakerManager.getSpeakerName(speakerId) || '';
-    const isUnmapped = !currentName;
-    // Re-resolve aggressively (every 2s) for unmapped tracks, periodically (10s) for mapped ones
-    const interval = isUnmapped ? 2_000 : RE_RESOLVE_INTERVAL_MS;
-    const lastResolve = lastReResolveTime.get(speakerId) || 0;
-    if (Date.now() - lastResolve > interval) {
-      lastReResolveTime.set(speakerId, Date.now());
-      const newName = await resolveSpeakerName(page, speakerIndex, platformKey, currentBotConfig?.botName);
-      if (newName && newName !== currentName) {
-        log(`[🔄 SPEAKER UPDATE] Track ${speakerIndex}: "${currentName || '(unmapped)'}" → "${newName}"`);
-        speakerManager.updateSpeakerName(speakerId, newName);
-        if (!currentName) {
-          // First real name — publish the join event now
+    const locked = isTrackLocked(speakerIndex);
+
+    // Re-resolve if: unmapped OR has a name but not locked yet (may be wrong)
+    if (!locked) {
+      const lastResolve = lastReResolveTime.get(speakerId) || 0;
+      const reResolveInterval = currentName ? 5_000 : 2_000; // slower for named-but-unlocked
+      if (Date.now() - lastResolve > reResolveInterval) {
+        lastReResolveTime.set(speakerId, Date.now());
+
+        // Detect participant count change → invalidate all mappings
+        try {
+          const currentCount = await page.evaluate(() => {
+            return typeof (window as any).getGoogleMeetActiveParticipantsCount === 'function'
+              ? (window as any).getGoogleMeetActiveParticipantsCount()
+              : 0;
+          });
+          if (lastParticipantCount > 0 && currentCount !== lastParticipantCount) {
+            log(`[SpeakerIdentity] Participant count changed: ${lastParticipantCount} → ${currentCount}. Invalidating all mappings.`);
+            clearSpeakerNameCache();
+          }
+          lastParticipantCount = currentCount;
+        } catch {}
+
+        const newName = await resolveSpeakerName(page, speakerIndex, platformKey, currentBotConfig?.botName);
+        if (newName && newName !== currentName && !isDuplicateSpeakerName(newName, speakerId)) {
+          log(`[🔄 SPEAKER MAPPED] Track ${speakerIndex}: "${currentName}" → "${newName}"`);
+          speakerManager.updateSpeakerName(speakerId, newName);
           await segmentPublisher.publishSpeakerEvent({
             speaker: newName,
             type: 'joined',
             timestamp: Date.now(),
           });
-          log(`[📡 SPEAKER EVENT] "${newName}" joined → Redis (delayed)`);
+          log(`[📡 SPEAKER EVENT] "${newName}" joined → Redis`);
         }
       }
     }

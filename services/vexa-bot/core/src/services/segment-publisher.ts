@@ -4,9 +4,19 @@ import { log } from '../utils';
 export interface TranscriptionSegment {
   speaker: string;
   text: string;
+  /** Relative to session start (seconds) */
   start: number;
+  /** Relative to session start (seconds) */
   end: number;
   language: string;
+  /** Whether this segment is finalized */
+  completed?: boolean;
+  /** Absolute UTC start time as ISO string */
+  absolute_start_time?: string;
+  /** Absolute UTC end time as ISO string */
+  absolute_end_time?: string;
+  /** Stable segment identity: {session_uid}:{speakerId}:{sequenceNumber} */
+  segment_id?: string;
 }
 
 export interface SpeakerEvent {
@@ -18,33 +28,49 @@ export interface SpeakerEvent {
 export interface SegmentPublisherConfig {
   /** Redis URL, e.g. "redis://localhost:6379" */
   redisUrl: string;
-  /** Meeting ID used for pub/sub channel naming */
+  /** Internal meeting ID (numeric) */
   meetingId: string;
+  /** MeetingToken JWT (HS256, signed by bot-manager) */
+  token: string;
+  /** Session UID (connectionId from bot config) */
+  sessionUid: string;
+  /** Platform identifier */
+  platform: string;
   /** Redis stream key for transcription segments. Default: "transcription_segments" */
   segmentStreamKey?: string;
-  /** Redis stream key for speaker events. Default: "speaker_events" */
+  /** Redis stream key for speaker events. Default: "speaker_events_relative" */
   speakerEventStreamKey?: string;
 }
 
 /**
- * Publishes transcription segments and speaker events to Redis.
- * Two operations per segment:
- *   1. XADD to a Redis stream (for persistence via transcription-collector)
- *   2. PUBLISH to a pub/sub channel (for real-time delivery via gateway)
+ * Publishes transcription segments and speaker events to Redis
+ * in the format expected by transcription-collector.
+ *
+ * Segments: XADD with { payload: JSON } to stream, PUBLISH flat JSON to pub/sub.
+ * Speaker events: XADD flat fields to speaker_events_relative stream.
  */
 export class SegmentPublisher {
   private redisUrl: string;
   private meetingId: string;
+  private token: string;
+  readonly sessionUid: string;
+  private platform: string;
   private segmentStreamKey: string;
   private speakerEventStreamKey: string;
   private client: RedisClientType | null = null;
   private connected: boolean = false;
+  /** Wall-clock time when the session started (ms). Set on first connect. */
+  readonly sessionStartMs: number;
 
   constructor(config: SegmentPublisherConfig) {
     this.redisUrl = config.redisUrl;
     this.meetingId = config.meetingId;
+    this.token = config.token;
+    this.sessionUid = config.sessionUid;
+    this.platform = config.platform;
     this.segmentStreamKey = config.segmentStreamKey ?? 'transcription_segments';
-    this.speakerEventStreamKey = config.speakerEventStreamKey ?? 'speaker_events';
+    this.speakerEventStreamKey = config.speakerEventStreamKey ?? 'speaker_events_relative';
+    this.sessionStartMs = Date.now();
   }
 
   /**
@@ -75,9 +101,54 @@ export class SegmentPublisher {
   }
 
   /**
+   * Publish a session_start message to the stream.
+   * Called once when the per-speaker pipeline is initialized.
+   */
+  async publishSessionStart(): Promise<void> {
+    try {
+      const client = await this.ensureConnected();
+
+      const payload = JSON.stringify({
+        type: 'session_start',
+        token: this.token,
+        uid: this.sessionUid,
+        platform: this.platform,
+        meeting_id: this.meetingId,
+        start_timestamp: new Date(this.sessionStartMs).toISOString(),
+      });
+
+      await client.xAdd(this.segmentStreamKey, '*', { payload });
+      log(`[SegmentPublisher] Published session_start for session ${this.sessionUid}`);
+    } catch (err: any) {
+      log(`[SegmentPublisher] Failed to publish session_start: ${err.message}`);
+    }
+  }
+
+  /**
+   * Publish a session_end message to the stream.
+   * Called on pipeline cleanup.
+   */
+  async publishSessionEnd(): Promise<void> {
+    try {
+      const client = await this.ensureConnected();
+
+      const payload = JSON.stringify({
+        type: 'session_end',
+        token: this.token,
+        uid: this.sessionUid,
+      });
+
+      await client.xAdd(this.segmentStreamKey, '*', { payload });
+      log(`[SegmentPublisher] Published session_end for session ${this.sessionUid}`);
+    } catch (err: any) {
+      log(`[SegmentPublisher] Failed to publish session_end: ${err.message}`);
+    }
+  }
+
+  /**
    * Publish a transcription segment to Redis.
-   * - XADD to transcription_segments stream
-   * - PUBLISH to meeting:{meetingId}:segments channel
+   * - XADD to transcription_segments stream (collector format: { payload: JSON })
+   * - PUBLISH to meeting:{meetingId}:segments channel (flat JSON for gateway/dashboard)
    *
    * Errors are logged but do not throw (bot should not crash on Redis failure).
    */
@@ -85,25 +156,36 @@ export class SegmentPublisher {
     try {
       const client = await this.ensureConnected();
 
-      const fields: Record<string, string> = {
-        speaker: segment.speaker,
-        text: segment.text,
-        start: segment.start.toString(),
-        end: segment.end.toString(),
-        language: segment.language,
+      // XADD: collector format — single 'payload' field with JSON
+      const payload = JSON.stringify({
+        type: 'transcription',
+        token: this.token,
+        uid: this.sessionUid,
+        platform: this.platform,
         meeting_id: this.meetingId,
-        timestamp: Date.now().toString(),
-      };
+        segments: [{
+          start: segment.start,
+          end: segment.end,
+          text: segment.text,
+          language: segment.language,
+          completed: segment.completed ?? true,
+          speaker: segment.speaker,
+          segment_id: segment.segment_id,
+          ...(segment.absolute_start_time && { absolute_start_time: segment.absolute_start_time }),
+          ...(segment.absolute_end_time && { absolute_end_time: segment.absolute_end_time }),
+        }],
+      });
 
-      // XADD to the stream for persistence
-      await client.xAdd(this.segmentStreamKey, '*', fields);
+      await client.xAdd(this.segmentStreamKey, '*', { payload });
 
-      // PUBLISH to pub/sub channel for real-time delivery
+      // PUBLISH: flat JSON for real-time delivery via gateway → WebSocket → dashboard
       const channel = `meeting:${this.meetingId}:segments`;
       await client.publish(channel, JSON.stringify({
         ...segment,
         meeting_id: this.meetingId,
         timestamp: Date.now(),
+        ...(segment.absolute_start_time && { absolute_start_time: segment.absolute_start_time }),
+        ...(segment.absolute_end_time && { absolute_end_time: segment.absolute_end_time }),
       }));
     } catch (err: any) {
       log(`[SegmentPublisher] Failed to publish segment: ${err.message}`);
@@ -112,7 +194,9 @@ export class SegmentPublisher {
 
   /**
    * Publish a speaker lifecycle event to Redis.
-   * - XADD to speaker_events stream
+   * Format matches what transcription-collector expects:
+   *   stream: speaker_events_relative
+   *   fields: uid, relative_client_timestamp_ms, event_type, participant_name
    *
    * Errors are logged but do not throw.
    */
@@ -120,10 +204,19 @@ export class SegmentPublisher {
     try {
       const client = await this.ensureConnected();
 
+      // Map bot event types to collector's expected event_type values
+      const eventTypeMap: Record<string, string> = {
+        'joined': 'SPEAKER_START',
+        'started_speaking': 'SPEAKER_START',
+        'stopped_speaking': 'SPEAKER_END',
+        'left': 'SPEAKER_END',
+      };
+
       const fields: Record<string, string> = {
-        speaker: event.speaker,
-        type: event.type,
-        timestamp: event.timestamp.toString(),
+        uid: this.sessionUid,
+        relative_client_timestamp_ms: String(event.timestamp - this.sessionStartMs),
+        event_type: eventTypeMap[event.type] || event.type,
+        participant_name: event.speaker,
         meeting_id: this.meetingId,
       };
 

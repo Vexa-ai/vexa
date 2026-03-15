@@ -17,9 +17,12 @@ Redis 7 (Alpine), single instance, no persistence configuration (data is ephemer
 ### Data flows
 
 ```
-Bot (per-speaker) ──XADD──► Redis Stream (transcription_segments) ──XREADGROUP──► transcription-collector ──► Postgres
-Bot (per-speaker) ──XADD──► Redis Stream (speaker_events)         ──XREADGROUP──► transcription-collector
-Bot (per-speaker) ──PUBLISH──► Redis Pub/Sub (meeting:{id}:segments) ──SUBSCRIBE──► api-gateway ──► WebSocket (dashboard)
+Bot (per-speaker) ──XADD {payload}──► Redis Stream (transcription_segments) ──XREADGROUP──► transcription-collector
+    collector ──HSET──► Redis Hash (meeting:{id}:segments)  ──background flush──► Postgres
+    collector ──PUBLISH──► Redis Pub/Sub (tc:meeting:{id}:mutable) ──SUBSCRIBE──► api-gateway ──► WebSocket (dashboard)
+
+Bot (per-speaker) ──XADD──► Redis Stream (speaker_events_relative) ──XREADGROUP──► transcription-collector
+    collector ──ZADD──► Redis Sorted Set (speaker_events:{session_uid})
 
 WhisperLive (optional, external clients) ──XADD──► Redis Stream (transcription_segments) ──► same consumer
 
@@ -33,30 +36,38 @@ webhook_delivery ──LPUSH──► Redis List (webhook_retry_queue) ──BRP
 
 | Pattern | Type | Producer | Consumer | Purpose |
 |---------|------|----------|----------|---------|
-| `transcription_segments` | Stream | Bot, WhisperLive (optional) | transcription-collector | Transcript segments with text, timestamps, speaker info |
-| `speaker_events` | Stream | Bot | transcription-collector | Speaker activity events (join, leave, speaking) |
-| `meeting:{meeting_id}:segments` | Pub/Sub | Bot | api-gateway -> WebSocket | Real-time segment delivery to dashboard |
-| `meeting:{meeting_id}:status` | Pub/Sub | bot-manager | api-gateway -> WebSocket | Meeting status changes (joining, active, completed, failed) |
+| `transcription_segments` | Stream | Bot (XADD {payload: JSON with JWT}) | transcription-collector | Transcript segments with speaker, text, timestamps. Payload includes `completed` flag (false=draft, true=confirmed) |
+| `speaker_events_relative` | Stream | Bot | transcription-collector | Speaker activity events with relative timestamps (ms from session start) |
+| `meeting:{meeting_id}:segments` | Hash | transcription-collector | collector API, background flush | Mutable segment store keyed by start_time. TTL 1h |
+| `tc:meeting:{meeting_id}:mutable` | Pub/Sub | transcription-collector | api-gateway → WebSocket → dashboard | Change-only segment updates for real-time display |
+| `speaker_events:{session_uid}` | Sorted Set | transcription-collector | collector (speaker mapping fallback) | Speaker events scored by relative timestamp. TTL 24h |
+| `meeting:{meeting_id}:status` | Pub/Sub | bot-manager | api-gateway → WebSocket | Meeting status changes (joining, active, completed, failed) |
 | `bot_commands:meeting:{meeting_id}` | Pub/Sub | bot-manager | vexa-bot | Bot control commands (leave, reconfigure) |
 | `webhook_retry_queue` | List | webhook_delivery (shared-models) | retry_worker (bot-manager) | Failed webhook deliveries with backoff metadata |
 
 ### Stream details
 
-**transcription_segments stream:**
+**transcription_segments stream (payload format):**
 ```
-XADD transcription_segments * \
-  token <api_token> \
-  session_uid <uuid> \
-  meeting_id <meeting_id> \
-  platform <google_meet|teams|zoom> \
-  type <segment|session_start|session_end> \
-  text "Hello, this is the transcript" \
-  start 0.0 \
-  end 2.5 \
-  speaker <speaker_id>
+XADD transcription_segments * payload '{"type":"transcription","token":"<JWT>","uid":"<session_uid>","platform":"google_meet","meeting_id":"8725","segments":[{"start":19.0,"end":34.0,"text":"Hello, this is the transcript","language":"en","completed":false,"speaker":"Alice"}]}'
 ```
 
-Consumer group: `collector_group`. The collector reads with `XREADGROUP`, acknowledges with `XACK`, and persists to Postgres.
+The `payload` field contains a JSON string with:
+- `token` — MeetingToken JWT (HS256, iss=bot-manager, aud=transcription-collector, scope=transcribe:write)
+- `uid` — session UID (connectionId from bot-manager)
+- `segments[].completed` — `false` for drafts (immediate, low latency), `true` for confirmed (stable after fuzzy match)
+- `segments[].speaker` — producer-labeled speaker name from DOM. Collector uses this directly (`PRODUCER_LABELED` status)
+
+Session lifecycle messages use the same stream: `type: "session_start"` and `type: "session_end"`.
+
+Consumer group: `collector_group`. The collector reads with `XREADGROUP`, acknowledges with `XACK`, stores in Redis hash, publishes changes to pub/sub, and background-flushes to Postgres.
+
+**speaker_events_relative stream (flat fields):**
+```
+XADD speaker_events_relative * uid <session_uid> relative_client_timestamp_ms 5000 event_type SPEAKER_START participant_name "Alice" meeting_id 8725
+```
+
+Collector stores these in sorted set `speaker_events:{session_uid}` (score = timestamp_ms, 24h TTL). Used as fallback speaker mapping when segments don't have a `speaker` field.
 
 **Pub/Sub meeting status:**
 ```json

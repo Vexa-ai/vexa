@@ -22,8 +22,10 @@ what, the bot keeps each speaker's WebRTC audio track separate. This gives:
 - Direct HTTP POST to transcription-service (no WhisperLive dependency).
 - Per-speaker language detection: auto-detect on first chunk, lock language
   after high-confidence detection so subsequent chunks skip detection overhead.
-- Confirmation-based buffer: resubmits full buffer on each cycle, only
-  publishes a segment when the text stabilizes across consecutive responses.
+- Confirmation-based buffer: resubmits full buffer every 2s, publishes
+  drafts immediately (`completed: false`) for ~2s dashboard latency.
+  Confirmed segments (`completed: true`) replace drafts after 2 consecutive
+  matching transcriptions. Wall-clock hard cap at 10s forces flush.
 - Hallucination filter: known junk phrases + repetition detection.
   Shared phrase lists at `services/WhisperLive/hallucinations/`.
 - Redis output: XADD to streams (persistence) + PUBLISH to channels
@@ -41,9 +43,9 @@ what, the bot keeps each speaker's WebRTC audio track separate. This gives:
 Browser WebRTC: Track A (Alice), Track B (Bob), Track C (Carol)
   -> Per-speaker ScriptProcessor (browser)
   -> VAD filter (Node.js, Silero)
-  -> Speaker buffer (confirmation-based, 3s interval, 15s cap)
+  -> Speaker buffer (confirmation-based, 2s interval, 10s wall-clock cap)
   -> Transcription-service (HTTP POST)
-  -> Redis XADD + PUBLISH (with speaker label)
+  -> Redis XADD {payload} with JWT + absolute UTC timestamps
 ```
 
 ### Key modules
@@ -145,17 +147,23 @@ and published to Redis.
 
 ## Redis Output
 
-Two Redis calls per segment:
+Per segment — XADD with `{payload: JSON}` wrapping JWT token, session UID, and segments array:
 
 ```
-XADD  transcription_segments   -- collector persists to Postgres
-PUBLISH meeting:{id}:segments  -- gateway forwards to dashboard WebSocket
+XADD transcription_segments * payload '{"type":"transcription","token":"<JWT>","uid":"<session>","segments":[{"start":19.0,"end":34.0,"text":"...","speaker":"Alice","completed":false,"absolute_start_time":"2026-03-15T08:10:01.194Z","absolute_end_time":"2026-03-15T08:10:16.193Z"}]}'
 ```
+
+- `completed: false` — draft (published immediately on each transcription result, ~2s latency)
+- `completed: true` — confirmed (after fuzzy match stabilization, replaces draft)
+- `absolute_start_time/end_time` — bot publishes absolute UTC directly (no collector reconstruction needed)
+- `start/end` — relative seconds, kept for backward compatibility (Redis hash key)
+
+Both go through collector → Redis hash → `PUBLISH tc:meeting:{id}:mutable` → gateway WebSocket → dashboard.
 
 Speaker lifecycle events (track-based: joined, started, stopped, left):
 
 ```
-XADD  speaker_events
+XADD speaker_events_relative * uid <session> relative_client_timestamp_ms 5000 event_type SPEAKER_START participant_name "Alice"
 ```
 
 ## Runtime Control

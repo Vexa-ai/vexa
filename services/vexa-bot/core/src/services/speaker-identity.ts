@@ -2,151 +2,112 @@ import { Page } from 'playwright-core';
 import { log } from '../utils';
 
 /**
- * Platform-specific CSS selectors used to locate participant names
- * associated with media elements in the DOM.
+ * Speaker Identity — discover track→speaker mapping once, lock forever.
+ *
+ * Google Meet assigns each participant a fixed audio track for the duration
+ * of the meeting. The mapping never changes (unless someone leaves and
+ * rejoins). We discover it by correlating audio activity with speaking
+ * indicators, then lock it permanently.
+ *
+ * Strategy:
+ * 1. When audio arrives on track N and exactly one speaking indicator is active,
+ *    record a vote: track N = that speaker.
+ * 2. After LOCK_THRESHOLD consistent votes → lock permanently.
+ * 3. Locked mappings are never re-evaluated (the mapping is static).
+ * 4. If a name is already taken by another track (locked OR leading votes),
+ *    don't return it — enforce one-name-per-track, one-track-per-name always.
  */
-const PLATFORM_SELECTORS: Record<string, {
-  participantContainer: string[];
-  nameElement: string[];
-}> = {
-  googlemeet: {
-    participantContainer: [
-      '[data-participant-id]',
-      '[data-self-name]',
-      '.participant-tile',
-      '.video-tile',
-    ],
-    nameElement: [
-      '[data-self-name]',
-      'span.notranslate',
-      '.zWGUib',
-      '.cS7aqe.N2K3jd',
-      '.XWGOtd',
-      '.participant-name',
-      '.display-name',
-    ],
-  },
-  msteams: {
-    participantContainer: [
-      '[data-tid*="video-tile"]',
-      '[data-tid*="videoTile"]',
-      '[data-tid*="participant"]',
-      '[data-tid*="roster-item"]',
-      '.participant-tile',
-      '.video-tile',
-    ],
-    nameElement: [
-      '[data-tid*="display-name"]',
-      '[data-tid*="participant-name"]',
-      '.participant-name',
-      '.display-name',
-      '.user-name',
-      '.roster-item-name',
-      '.video-tile-name',
-      'span[title]',
-      '.ms-Persona-primaryText',
-    ],
-  },
-};
 
-// ─── Track-to-Speaker Correlation Map ────────────────────────────────────────
-//
-// Instead of guessing on each audio chunk, we build a mapping over time:
-// - When audio arrives on track N and exactly one speaking indicator is active,
-//   that's a "vote" for track N = that speaker.
-// - After enough consistent votes, we lock the mapping with high confidence.
-// - This survives simultaneous speech because the mapping was built during
-//   single-speaker moments.
-
-interface TrackVote {
-  name: string;
-  count: number;
-}
-
-interface TrackMapping {
-  /** Confirmed speaker name for this track */
-  name: string;
-  /** How many consistent votes confirmed this mapping */
-  confidence: number;
-  /** Whether the mapping is locked (enough votes) */
-  locked: boolean;
-  /** Timestamp of last update */
-  updatedAt: number;
-}
+// ─── Track→Speaker Mapping ───────────────────────────────────────────────────
 
 /** Votes per track: trackIndex → { speakerName → voteCount } */
 const trackVotes = new Map<number, Map<string, number>>();
 
-/** Confirmed mappings: trackIndex → TrackMapping */
-const trackMappings = new Map<number, TrackMapping>();
+/** Locked mappings: trackIndex → speakerName. Once set, permanent. */
+const lockedMappings = new Map<number, string>();
 
-/** Minimum votes needed to lock a mapping */
+/** Minimum votes to lock */
 const LOCK_THRESHOLD = 3;
 
-/** After this many ms, allow re-evaluation of a locked mapping */
-const LOCK_EXPIRY_MS = 60_000;
+/** Minimum vote ratio to lock (70%) */
+const LOCK_RATIO = 0.7;
 
 /**
- * Record a correlation vote: track N was active while speaker X was indicated.
- * Called from handlePerSpeakerAudioData when we have a speaking signal.
+ * Check if a name is already taken by another track.
+ * "Taken" means locked to another track.
+ */
+export function isNameTaken(name: string, excludeTrackIndex?: number): boolean {
+  for (const [idx, lockedName] of lockedMappings) {
+    if (idx !== excludeTrackIndex && lockedName === name) return true;
+  }
+  return false;
+}
+
+/**
+ * Record a vote: track N was active while speaker X was the only one speaking.
+ * Once locked, votes are ignored for that track.
  */
 export function recordTrackVote(trackIndex: number, speakerName: string): void {
+  // Already locked — nothing to do
+  if (lockedMappings.has(trackIndex)) return;
+
+  // Don't vote for a name already locked to another track
+  if (isNameTaken(speakerName, trackIndex)) return;
+
   if (!trackVotes.has(trackIndex)) {
     trackVotes.set(trackIndex, new Map());
   }
   const votes = trackVotes.get(trackIndex)!;
-  const current = votes.get(speakerName) || 0;
-  votes.set(speakerName, current + 1);
+  votes.set(speakerName, (votes.get(speakerName) || 0) + 1);
 
-  // Check if we can lock this mapping
+  // Check if we can lock
   const totalVotes = Array.from(votes.values()).reduce((a, b) => a + b, 0);
-  const topVote = Array.from(votes.entries()).sort((a, b) => b[1] - a[1])[0];
+  const topEntry = Array.from(votes.entries()).sort((a, b) => b[1] - a[1])[0];
 
-  if (topVote && topVote[1] >= LOCK_THRESHOLD) {
-    const ratio = topVote[1] / totalVotes;
-    if (ratio >= 0.7) { // 70%+ votes for same speaker → lock
-      const existing = trackMappings.get(trackIndex);
-      if (!existing || existing.name !== topVote[0]) {
-        log(`[SpeakerIdentity] Track ${trackIndex} → "${topVote[0]}" LOCKED (${topVote[1]}/${totalVotes} votes, ${(ratio * 100).toFixed(0)}%)`);
-      }
-      trackMappings.set(trackIndex, {
-        name: topVote[0],
-        confidence: topVote[1],
-        locked: true,
-        updatedAt: Date.now(),
-      });
+  if (topEntry && topEntry[1] >= LOCK_THRESHOLD && topEntry[1] / totalVotes >= LOCK_RATIO) {
+    // Final check: don't lock if the name is taken
+    if (isNameTaken(topEntry[0], trackIndex)) {
+      log(`[SpeakerIdentity] Track ${trackIndex} would lock to "${topEntry[0]}" but name is taken by another track — skipping`);
+      return;
     }
+    lockedMappings.set(trackIndex, topEntry[0]);
+    log(`[SpeakerIdentity] Track ${trackIndex} → "${topEntry[0]}" LOCKED PERMANENTLY (${topEntry[1]}/${totalVotes} votes, ${(topEntry[1] / totalVotes * 100).toFixed(0)}%)`);
   }
 }
 
 /**
- * Get the confirmed speaker name for a track, if the mapping is locked.
+ * Get locked speaker name for a track. Returns null if not yet locked.
  */
 export function getLockedMapping(trackIndex: number): string | null {
-  const mapping = trackMappings.get(trackIndex);
-  if (!mapping || !mapping.locked) return null;
-
-  // Check expiry
-  if (Date.now() - mapping.updatedAt > LOCK_EXPIRY_MS) {
-    mapping.locked = false;
-    return null;
-  }
-
-  return mapping.name;
+  return lockedMappings.get(trackIndex) ?? null;
 }
 
 /**
- * Query the browser for current speaking state and participant names.
- * Returns the raw data for the caller to use for voting or resolution.
+ * Check if a track is locked.
+ */
+export function isTrackLocked(trackIndex: number): boolean {
+  return lockedMappings.has(trackIndex);
+}
+
+// ─── Browser State Query ─────────────────────────────────────────────────────
+
+/** Helper: reject junk names */
+function isJunkName(name: string): boolean {
+  return /^Google Participant \(/.test(name) ||
+         /spaces\//.test(name) ||
+         /devices\//.test(name);
+}
+
+/**
+ * Query browser for participant names and who's currently speaking.
  */
 async function queryBrowserState(
   page: Page,
-  elementIndex: number,
   botName?: string,
 ): Promise<{ filteredNames: string[]; speaking: string[] } | null> {
   try {
-    return await page.evaluate(({ idx, selfName }: { idx: number; selfName: string }) => {
-      const isJunkName = (name: string): boolean => {
+    return await page.evaluate((selfName: string) => {
+      const isJunk = (name: string): boolean => {
         return /^Google Participant \(/.test(name) ||
                /spaces\//.test(name) ||
                /devices\//.test(name);
@@ -155,144 +116,82 @@ async function queryBrowserState(
       const getNames = (window as any).__vexaGetAllParticipantNames;
       if (typeof getNames !== 'function') return null;
 
-      const data = getNames() as {
-        names: Record<string, string>;
-        speaking: string[];
-      };
-
+      const data = getNames() as { names: Record<string, string>; speaking: string[] };
       const selfLower = selfName.toLowerCase();
       const junkPatterns = ['let participants', 'send messages', 'turn on captions'];
+
       const filteredNames = Object.values(data.names).filter(n => {
         const lower = n.toLowerCase();
         if (lower.includes(selfLower) || selfLower.includes(lower)) return false;
         if (junkPatterns.some(p => lower.includes(p))) return false;
-        if (isJunkName(n)) return false;
+        if (isJunk(n)) return false;
         return true;
       });
-      const speaking = data.speaking.filter(n => !isJunkName(n));
+      const speaking = data.speaking.filter(n => !isJunk(n));
 
       return { filteredNames, speaking };
-    }, { idx: elementIndex, selfName: botName || 'Vexa Bot' });
+    }, botName || 'Vexa Bot');
   } catch (err: any) {
     log(`[SpeakerIdentity] Browser query failed: ${err.message}`);
     return null;
   }
 }
 
+// ─── Main Resolution ─────────────────────────────────────────────────────────
+
 /**
  * Resolve speaker name for a Google Meet audio track.
  *
- * Strategy:
- * 1. Check locked track mapping (built from correlation votes)
- * 2. If exactly one person speaking → use that name + record vote
- * 3. Speaker events history
- * 4. Positional fallback (weakest)
+ * If locked → return immediately (permanent).
+ * If not locked → query browser, vote if single speaker.
+ * Never return a name that's already taken by another track.
  */
 async function resolveGoogleMeetSpeakerName(
   page: Page,
   elementIndex: number,
   botName?: string,
 ): Promise<string | null> {
-  // Strategy 1: Use locked mapping if available
+  // Locked → permanent, instant return
   const locked = getLockedMapping(elementIndex);
-  if (locked) {
-    return locked;
-  }
+  if (locked) return locked;
 
-  // Query browser for current state
-  const state = await queryBrowserState(page, elementIndex, botName);
+  // Query browser
+  const state = await queryBrowserState(page, botName);
   if (!state) return null;
 
-  const { filteredNames, speaking } = state;
+  const { speaking } = state;
 
-  // Strategy 2: Speaking signal → use name AND record vote for this track
-  // But only if this name isn't already locked to a DIFFERENT track
+  // Single speaker → vote
   if (speaking.length === 1) {
-    const speakingName = speaking[0];
-    let alreadyLockedElsewhere = false;
-    for (const [otherIdx, mapping] of trackMappings) {
-      if (otherIdx !== elementIndex && mapping.locked && mapping.name === speakingName) {
-        alreadyLockedElsewhere = true;
-        break;
-      }
+    const candidate = speaking[0];
+
+    // Don't return a name already taken by another track
+    if (isNameTaken(candidate, elementIndex)) {
+      return null;
     }
-    if (!alreadyLockedElsewhere) {
-      recordTrackVote(elementIndex, speakingName);
-      return speakingName;
-    }
-    // Speaking name is locked to another track — this track belongs to someone else.
-    // Don't assign, let re-resolution find the correct name later.
-    log(`[SpeakerIdentity] Track ${elementIndex}: "${speakingName}" already locked to another track, skipping`);
+
+    recordTrackVote(elementIndex, candidate);
+    // Re-check lock (may have just locked)
+    return getLockedMapping(elementIndex) || candidate;
   }
 
-  // If multiple speaking, we can't vote but check if any match our existing votes
-  if (speaking.length > 1) {
-    const votes = trackVotes.get(elementIndex);
-    if (votes) {
-      // Return the speaking name that has the most votes for this track
-      let bestName = '';
-      let bestCount = 0;
-      for (const name of speaking) {
-        const count = votes.get(name) || 0;
-        if (count > bestCount) {
-          bestCount = count;
-          bestName = name;
-        }
-      }
-      if (bestName && bestCount > 0) {
-        log(`[SpeakerIdentity] Track ${elementIndex} → "${bestName}" (multi-speaker, best vote match)`);
-        return bestName;
-      }
+  // Multiple or zero speaking — can't vote.
+  // Return top voted name only if it's not taken by another track.
+  const votes = trackVotes.get(elementIndex);
+  if (votes && votes.size > 0) {
+    const sorted = Array.from(votes.entries()).sort((a, b) => b[1] - a[1]);
+    for (const [name] of sorted) {
+      if (!isNameTaken(name, elementIndex)) return name;
     }
   }
 
-  // Strategy 3: Speaker events — most recent unended SPEAKER_START
-  try {
-    const eventsResult = await page.evaluate(() => {
-      const events: Array<{
-        event_type: string;
-        participant_name: string;
-        participant_id: string;
-      }> = (window as any).__vexaSpeakerEvents || [];
-
-      if (events.length === 0) return null;
-
-      const isJunkName = (name: string): boolean => {
-        return /^Google Participant \(/.test(name) ||
-               /spaces\//.test(name) ||
-               /devices\//.test(name);
-      };
-
-      const activeByParticipant = new Map<string, string>();
-      for (const evt of events) {
-        if (evt.event_type === 'SPEAKER_START') {
-          activeByParticipant.set(evt.participant_id, evt.participant_name);
-        } else if (evt.event_type === 'SPEAKER_END') {
-          activeByParticipant.delete(evt.participant_id);
-        }
-      }
-
-      const activeNames = Array.from(activeByParticipant.values()).filter(n => !isJunkName(n));
-      if (activeNames.length === 1) return activeNames[0];
-
-      const lastStart = [...events].reverse().find(e =>
-        e.event_type === 'SPEAKER_START' && !isJunkName(e.participant_name)
-      );
-      return lastStart?.participant_name || null;
-    });
-
-    if (eventsResult) return eventsResult;
-  } catch {}
-
-  // No fallback — return null, caller gets empty string
   return null;
 }
 
 /**
- * Resolve the participant display name for a given media element.
- *
- * For Google Meet: uses correlation-based track mapping.
- * For other platforms: walks up the DOM from the media element.
+ * Resolve speaker name for any platform.
+ * Google Meet: correlation-based voting → permanent lock.
+ * Other platforms: DOM traversal from media element.
  */
 export async function resolveSpeakerName(
   page: Page,
@@ -306,15 +205,41 @@ export async function resolveSpeakerName(
       log(`[SpeakerIdentity] Element ${elementIndex} → "${name}" (platform: ${platform})`);
       return name;
     }
-    // No mapping yet — return empty string, not "Presentation".
-    // The caller will re-resolve aggressively until a real name is found.
-    log(`[SpeakerIdentity] Element ${elementIndex} → "" (platform: ${platform}, no mapping yet)`);
+    log(`[SpeakerIdentity] Element ${elementIndex} → "" (platform: ${platform}, not yet mapped)`);
     return '';
   }
 
+  // Other platforms: DOM traversal (Teams, etc.)
+  const PLATFORM_SELECTORS: Record<string, {
+    participantContainer: string[];
+    nameElement: string[];
+  }> = {
+    msteams: {
+      participantContainer: [
+        '[data-tid*="video-tile"]',
+        '[data-tid*="videoTile"]',
+        '[data-tid*="participant"]',
+        '[data-tid*="roster-item"]',
+        '.participant-tile',
+        '.video-tile',
+      ],
+      nameElement: [
+        '[data-tid*="display-name"]',
+        '[data-tid*="participant-name"]',
+        '.participant-name',
+        '.display-name',
+        '.user-name',
+        '.roster-item-name',
+        '.video-tile-name',
+        'span[title]',
+        '.ms-Persona-primaryText',
+      ],
+    },
+  };
+
   const selectors = PLATFORM_SELECTORS[platform];
   if (!selectors) {
-    log(`[SpeakerIdentity] Unknown platform "${platform}", no selectors — returning empty`);
+    log(`[SpeakerIdentity] Unknown platform "${platform}" — returning empty`);
     return '';
   }
 
@@ -371,36 +296,36 @@ export async function resolveSpeakerName(
     }
   );
 
-  // No fallback — return what we found, or empty string
   log(`[SpeakerIdentity] Element ${elementIndex} → "${name || ''}" (platform: ${platform})`);
   return name || '';
 }
 
-/**
- * Clear all track mappings and votes. Call when meeting resets.
- */
+// ─── Lifecycle ───────────────────────────────────────────────────────────────
+
+/** Clear all mappings. Call only when meeting resets. */
 export function clearSpeakerNameCache(): void {
   trackVotes.clear();
-  trackMappings.clear();
+  lockedMappings.clear();
   log('[SpeakerIdentity] All track mappings cleared.');
 }
 
-/**
- * Remove mapping for a single track (e.g., when a participant leaves).
- */
+/** Remove mapping for a single track (participant left). */
 export function invalidateSpeakerName(platform: string, elementIndex: number): void {
   trackVotes.delete(elementIndex);
-  trackMappings.delete(elementIndex);
+  lockedMappings.delete(elementIndex);
   log(`[SpeakerIdentity] Track ${elementIndex} mapping invalidated.`);
 }
 
-/**
- * Get current mapping state for debugging.
- */
-export function getTrackMappingState(): Record<number, { name: string; confidence: number; locked: boolean }> {
-  const state: Record<number, { name: string; confidence: number; locked: boolean }> = {};
-  for (const [idx, mapping] of trackMappings) {
-    state[idx] = { name: mapping.name, confidence: mapping.confidence, locked: mapping.locked };
+/** Debug: get current mapping state. */
+export function getTrackMappingState(): Record<number, { name: string; locked: boolean; votes: Record<string, number> }> {
+  const state: Record<number, { name: string; locked: boolean; votes: Record<string, number> }> = {};
+  for (const [idx, votes] of trackVotes) {
+    const locked = lockedMappings.get(idx);
+    state[idx] = {
+      name: locked || '',
+      locked: !!locked,
+      votes: Object.fromEntries(votes),
+    };
   }
   return state;
 }

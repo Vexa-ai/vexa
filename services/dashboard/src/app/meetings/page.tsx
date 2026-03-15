@@ -122,61 +122,70 @@ export default function MeetingsPage() {
       )}
 
       {/* Header */}
-      <div className="sticky top-0 z-10 bg-background -mx-4 md:-mx-6 px-4 md:px-6 py-4 -mt-4 md:-mt-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-border/50">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-semibold tracking-[-0.02em] text-foreground">Meetings</h1>
-            <DocsLink href="/docs/rest/meetings#list-meetings" />
+      <div className="sticky top-0 z-10 bg-background -mx-4 md:-mx-6 px-4 md:px-6 py-4 -mt-4 md:-mt-6 border-b border-border/50 space-y-4">
+        {/* Top row: title + join button */}
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-semibold tracking-[-0.02em] text-foreground">Meetings</h1>
+              <DocsLink href="/docs/rest/meetings#list-meetings" />
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Browse and search your meeting transcriptions
+            </p>
           </div>
-          <p className="text-sm text-muted-foreground">
-            Browse and search your meeting transcriptions
-          </p>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <Button variant="outline" size="icon" onClick={handleRefresh} disabled={isLoadingMeetings}>
+              <RefreshCw className={`h-4 w-4 ${isLoadingMeetings ? "animate-spin" : ""}`} />
+            </Button>
+            {!subscriptionRequired && (
+              <div className="flex items-center">
+                <Button onClick={openJoinModal}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  <span className="hidden sm:inline">Join Meeting</span>
+                  <span className="sm:hidden">Join</span>
+                </Button>
+                <DocsLink href="/docs/rest/bots#create-bot" />
+              </div>
+            )}
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="relative">
+        {/* Filters row */}
+        <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2">
+          <div className="relative flex-1 min-w-0 sm:min-w-[180px] sm:max-w-[240px]">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               placeholder="Search meetings..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-[200px] pl-8"
+              className="w-full pl-8"
             />
           </div>
-          <Select value={platformFilter} onValueChange={(v) => setPlatformFilter(v as Platform | "all")}>
-            <SelectTrigger className="w-[150px]">
-              <SelectValue placeholder="All Platforms" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Platforms</SelectItem>
-              <SelectItem value="google_meet">Google Meet</SelectItem>
-              <SelectItem value="teams">Teams</SelectItem>
-              <SelectItem value="zoom">Zoom</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as MeetingStatus | "all")}>
-            <SelectTrigger className="w-[150px]">
-              <SelectValue placeholder="All Status" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Status</SelectItem>
-              <SelectItem value="active">Active</SelectItem>
-              <SelectItem value="completed">Completed</SelectItem>
-              <SelectItem value="failed">Failed</SelectItem>
-              <SelectItem value="joining">Joining</SelectItem>
-            </SelectContent>
-          </Select>
-          <Button variant="outline" size="icon" onClick={handleRefresh} disabled={isLoadingMeetings}>
-            <RefreshCw className={`h-4 w-4 ${isLoadingMeetings ? "animate-spin" : ""}`} />
-          </Button>
-          {!subscriptionRequired && (
-            <div className="flex items-center">
-              <Button onClick={openJoinModal}>
-                <Plus className="mr-2 h-4 w-4" />
-                Join Meeting
-              </Button>
-              <DocsLink href="/docs/rest/bots#create-bot" />
-            </div>
-          )}
+          <div className="flex gap-2 min-w-0">
+            <Select value={platformFilter} onValueChange={(v) => setPlatformFilter(v as Platform | "all")}>
+              <SelectTrigger className="flex-1 min-w-0 sm:w-[140px] lg:w-[150px]">
+                <SelectValue placeholder="All Platforms" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Platforms</SelectItem>
+                <SelectItem value="google_meet">Google Meet</SelectItem>
+                <SelectItem value="teams">Teams</SelectItem>
+                <SelectItem value="zoom">Zoom</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as MeetingStatus | "all")}>
+              <SelectTrigger className="flex-1 min-w-0 sm:w-[130px] lg:w-[150px]">
+                <SelectValue placeholder="All Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Status</SelectItem>
+                <SelectItem value="active">Active</SelectItem>
+                <SelectItem value="completed">Completed</SelectItem>
+                <SelectItem value="failed">Failed</SelectItem>
+                <SelectItem value="joining">Joining</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </div>
       </div>
 

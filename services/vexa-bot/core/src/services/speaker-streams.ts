@@ -28,6 +28,8 @@ interface SpeakerBuffer {
   submittedChunkCount: number;
   /** Total samples in the submitted portion */
   submittedSamples: number;
+  /** Monotonic sequence number for segment_id generation */
+  sequenceNumber: number;
 }
 
 export interface SpeakerStreamManagerConfig {
@@ -63,8 +65,9 @@ export class SpeakerStreamManager {
    * Only fires after consecutive identical outputs — not on every resubmission.
    * @param bufferStartMs - wall-clock time when this buffer started accumulating
    * @param bufferEndMs - wall-clock time when the segment was confirmed/flushed
+   * @param segmentId - stable ID: {speakerId}:{sequenceNumber}. Drafts + confirmed share the same ID.
    */
-  onSegmentConfirmed: ((speakerId: string, speakerName: string, transcript: string, bufferStartMs: number, bufferEndMs: number) => void) | null = null;
+  onSegmentConfirmed: ((speakerId: string, speakerName: string, transcript: string, bufferStartMs: number, bufferEndMs: number, segmentId: string) => void) | null = null;
 
   constructor(config?: SpeakerStreamManagerConfig) {
     this.minAudioDuration = config?.minAudioDuration ?? 3;
@@ -89,6 +92,7 @@ export class SpeakerStreamManager {
       bufferStartMs: Date.now(),
       submittedChunkCount: 0,
       submittedSamples: 0,
+      sequenceNumber: 0,
     });
 
     const timer = setInterval(() => this.trySubmit(speakerId), this.submitInterval * 1000);
@@ -162,6 +166,13 @@ export class SpeakerStreamManager {
     return this.buffers.get(speakerId)?.speakerName;
   }
 
+  /** Get current segment_id for a speaker (for draft publishing). */
+  getSegmentId(speakerId: string): string {
+    const buffer = this.buffers.get(speakerId);
+    const seq = buffer?.sequenceNumber ?? 0;
+    return `${speakerId}:${seq}`;
+  }
+
   getActiveSpeakers(): string[] {
     return Array.from(this.buffers.keys());
   }
@@ -228,7 +239,9 @@ export class SpeakerStreamManager {
   private emitAndReset(buffer: SpeakerBuffer): void {
     if (buffer.pendingEmit && this.onSegmentConfirmed) {
       const endMs = Date.now();
-      this.onSegmentConfirmed(buffer.speakerId, buffer.speakerName, buffer.pendingEmit, buffer.bufferStartMs, endMs);
+      const segmentId = `${buffer.speakerId}:${buffer.sequenceNumber}`;
+      this.onSegmentConfirmed(buffer.speakerId, buffer.speakerName, buffer.pendingEmit, buffer.bufferStartMs, endMs, segmentId);
+      buffer.sequenceNumber++;
     }
 
     // Keep chunks that arrived AFTER the last submission — they're the

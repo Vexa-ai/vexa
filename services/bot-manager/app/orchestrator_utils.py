@@ -237,7 +237,9 @@ async def start_bot_container(
         "recordingEnabled": user_recording_config.get("enabled", os.getenv("RECORDING_ENABLED", "false").lower() == "true"),
         "transcribeEnabled": True if transcribe_enabled is None else bool(transcribe_enabled),
         "captureModes": user_recording_config.get("capture_modes", os.getenv("CAPTURE_MODES", "audio").split(",")),
-        "recordingUploadUrl": f"http://bot-manager:8080/internal/recordings/upload"
+        "recordingUploadUrl": f"http://bot-manager:8080/internal/recordings/upload",
+        "transcriptionServiceUrl": os.getenv("TRANSCRIPTION_SERVICE_URL"),
+        "transcriptionServiceToken": os.getenv("TRANSCRIPTION_SERVICE_TOKEN"),
     }
     if recording_enabled is not None:
         bot_config_data["recordingEnabled"] = bool(recording_enabled)
@@ -307,6 +309,7 @@ async def start_bot_container(
     host_config = {
         "NetworkMode": DOCKER_NETWORK,
         "AutoRemove": not agent_enabled,  # Agent containers persist for interactive use
+        "ExtraHosts": ["host.docker.internal:host-gateway"],
     }
 
     if agent_enabled:

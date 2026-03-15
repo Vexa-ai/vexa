@@ -33,7 +33,7 @@ import { cn } from "@/lib/utils";
 import { vexaAPI } from "@/lib/api";
 import { toast } from "sonner";
 import { LanguagePicker } from "@/components/language-picker";
-import { groupSegments, type SegmentGroup } from "@vexaai/transcript-rendering";
+import { type SegmentGroup } from "@vexaai/transcript-rendering";
 import { format } from "date-fns";
 
 // Linkify URLs in chat message text — splits text into plain strings and clickable <a> elements
@@ -223,12 +223,34 @@ export function TranscriptViewer({
     return speakers;
   }, [segments]);
 
-  // Group segments by speaker first, then filter
-  // Use segments.length as part of the key to ensure re-computation when segments change
-  // Filter out legacy "[Chat]" transcript-stream-injected segments (now rendered inline via chatMessages)
+  // Raw segments — no grouping, no merging. Each segment rendered individually.
+  // Dedup by segment_id when available, otherwise by absolute_start_time.
   const groupedSegments = useMemo(() => {
-    const cleaned = segments.filter((seg) => !seg.text?.trimStart().startsWith("[Chat]"));
-    return groupSegments(cleaned);
+    const cleaned = segments.filter((seg) => !seg.text?.trimStart().startsWith("[Chat]") && seg.text?.trim());
+
+    // Dedup by segment_id
+    const seen = new Map<string, typeof cleaned[0]>();
+    for (const seg of cleaned) {
+      const key = (seg as any).segment_id || seg.absolute_start_time;
+      const existing = seen.get(key);
+      if (!existing || (seg.updated_at && existing.updated_at && seg.updated_at > existing.updated_at)) {
+        seen.set(key, seg);
+      }
+    }
+    const deduped = Array.from(seen.values()).sort(
+      (a, b) => a.absolute_start_time.localeCompare(b.absolute_start_time)
+    );
+
+    // Wrap each segment as its own group (1 segment per group)
+    return deduped.map((seg): SegmentGroup<typeof seg> => ({
+      key: seg.speaker || "",
+      startTime: seg.absolute_start_time,
+      endTime: seg.absolute_end_time || seg.absolute_start_time,
+      startTimeSeconds: seg.start_time ?? 0,
+      endTimeSeconds: seg.end_time ?? 0,
+      combinedText: (seg.text || "").trim(),
+      segments: [seg],
+    }));
   }, [segments, segments.length]);
 
   // Filter grouped segments by search query and selected speakers

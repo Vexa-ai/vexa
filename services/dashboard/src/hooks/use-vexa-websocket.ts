@@ -108,19 +108,20 @@ export function useVexaWebSocket(
 
                 // Convert WebSocket segment to TranscriptSegment format
                 const segment: TranscriptSegment = {
-                  id: seg.absolute_start_time,
+                  id: seg.segment_id || seg.absolute_start_time,
                   meeting_id: nativeId,
                   start_time: seg.start || 0,
                   end_time: seg.end_time || 0,
                   absolute_start_time: seg.absolute_start_time,
                   absolute_end_time: seg.absolute_end_time,
                   text: seg.text,
-                  speaker: seg.speaker || "Unknown",
+                  speaker: seg.speaker || "",
                   language: seg.language || "en",
                   completed: seg.completed,
                   session_uid: seg.session_uid || "",
                   created_at: seg.absolute_start_time,
                   updated_at: seg.updated_at,
+                  segment_id: seg.segment_id,
                 };
                 addLiveTranscript(segment);
                 onTranscript?.(segment);

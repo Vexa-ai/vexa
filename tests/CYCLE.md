@@ -131,10 +131,10 @@ bash tests/test_stress.sh
 ### 1.4 Bot (per-speaker pipeline)
 
 **1.4a Unit tests**
-**WHY:** Per-speaker buffer management, transcription client, segment publisher.
+**WHY:** Per-speaker buffer management — confirmation logic, fuzzy matching, hard cap flush.
 **Gates:** Unit tests + README with WHY/WHAT/HOW.
 ```bash
-cd services/vexa-bot/core && npx jest    # or vitest
+cd services/vexa-bot/core && npx tsx src/services/__tests__/speaker-streams.test.ts
 ```
 
 **1.4b Mock meeting test**
@@ -152,15 +152,39 @@ cd services/vexa-bot/tests/mock-meeting && bash serve.sh
 cd services/vexa-bot/core
 MEETING_URL=http://localhost:8080 npm run dev
 
-# Verify
-redis-cli XRANGE transcription_segments - +    # segments with speaker labels
-redis-cli XRANGE speaker_events - +            # speaker lifecycle events
+# Verify segments in stream (payload format with JWT)
+redis-cli XRANGE transcription_segments - + | head -20
+
+# Verify speaker events in stream (flat fields)
+redis-cli XRANGE speaker_events_relative - + | head -20
+
+# Verify collector stored segments in hash
+redis-cli HGETALL meeting:<meeting_id>:segments
 ```
 **Look at:**
 - 3 separate streams discovered (not mixed)
-- Each speaker's segments have correct speaker label
+- Each speaker's segments have correct speaker label in payload (`segments[].speaker`)
+- Segments have `completed: false` (drafts) and `completed: true` (confirmed)
 - No cross-contamination (Alice's words don't appear in Bob's segments)
-- Speaker events have correct start/end times
+- Speaker events have correct event_type (SPEAKER_START/SPEAKER_END) and relative timestamps
+- Bot's own name is NOT in the speaker list (filtered by speaker-identity.ts)
+
+**1.4c Dashboard end-to-end test**
+**WHY:** Verify the full pipeline from dashboard bot launch to live transcript display.
+**Prerequisite:** All services running (`docker compose up -d`), dashboard on :3001.
+```bash
+# Launch bot from dashboard UI to a real meeting
+# Verify in collector logs:
+docker logs vexa_dev-transcription-collector-1 --tail 20 | grep -E "producer|Stored|Published|mutable"
+
+# Verify via API:
+curl -s http://localhost:8056/transcripts/google_meet/<native_id> -H "X-API-Key: <key>" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'{len(d[\"segments\"])} segments'); [print(f'  {s[\"speaker\"]} | {s[\"text\"][:80]}') for s in d['segments'][-5:]]"
+```
+**Look at:**
+- Segments appear in dashboard within ~3s of speech (draft latency)
+- Speaker names are real participant names, not "Presentation" for everything
+- `PRODUCER_LABELED` in collector logs (not `MULTIPLE_CONCURRENT_SPEAKERS`)
+- Confirmed segments replace drafts (same start_time key, completed=true)
 
 ### 1.5 admin-api
 **WHY:** User/token store. JSONB merge bug guard.
@@ -266,13 +290,29 @@ Verify the data flows that make the product work.
 
 ### 3.1 Transcription chain (THE HOT PATH)
 ```
-audio -> bot (per-speaker) -> transcription-service -> segments -> Redis -> collector -> Postgres -> API
+audio -> bot (per-speaker) -> HTTP POST -> transcription-service -> text
+  -> XADD {payload} -> Redis stream -> collector -> Redis hash -> PUBLISH tc:meeting:{id}:mutable
+  -> api-gateway (WebSocket) -> dashboard (live transcript)
+  -> collector background flush -> Postgres -> API (GET /transcripts)
 ```
-**Test with mock meeting.** Verify transcript with speaker labels in API response.
+**Test with dashboard bot launch to a real meeting.**
+**Verify:**
+```bash
+# Collector logs show producer-labeled speaker
+docker logs vexa_dev-transcription-collector-1 --tail 20 | grep -E "producer|Stored|Published"
+
+# API returns segments with correct speakers
+curl -s localhost:8056/transcripts/google_meet/<native_id> -H "X-API-Key: <key>" | python3 -m json.tool | head -30
+
+# Redis hash has segments (before Postgres flush)
+redis-cli HGETALL meeting:<id>:segments | head -20
+```
 **Look at:**
-- Segments arrive in Redis with correct speaker labels
-- Collector persists to Postgres without data loss
-- API returns transcript with speaker attribution
+- Drafts appear in dashboard within ~3s (completed=false via XADD → collector → pub/sub)
+- Confirmed segments replace drafts (completed=true, same start_time key)
+- Speaker names are producer-labeled (PRODUCER_LABELED, not MULTIPLE_CONCURRENT_SPEAKERS)
+- Collector persists to Postgres after 30s immutability threshold
+- API returns transcript with speaker attribution from both Redis (mutable) and Postgres (immutable)
 - Hallucination filter catches known junk phrases
 
 ### 3.2 Webhook delivery
@@ -297,23 +337,26 @@ authenticate -> create token -> list meetings -> get transcript with speakers
 
 ### 3.4 Real-time delivery
 ```
-bot produces segment -> Redis PUBLISH -> api-gateway -> WebSocket -> dashboard
+bot XADD {payload} -> collector -> PUBLISH tc:meeting:{id}:mutable -> api-gateway (subscribe) -> WebSocket -> dashboard
 ```
 **Verify:**
 - WebSocket connection to api-gateway succeeds
-- Segments appear on WebSocket within 1s of Redis PUBLISH
+- Draft segments appear on WebSocket within ~3s of speech (completed=false)
+- Confirmed segments replace drafts (completed=true, same start_time)
 - Multiple concurrent WebSocket clients receive same segments
 - Connection survives brief network interruption
 
 ### 3.5 Speaker identification
 ```
-per-speaker audio tracks -> VAD filter -> transcription -> labeled segments
+per-speaker audio tracks -> DOM name resolution (filtered: bot self + UI junk) -> VAD -> transcription -> labeled segments
 ```
 **Verify:**
-- Each speaker gets distinct label in transcript
+- Each speaker gets distinct label in transcript (real participant names)
+- Bot's own name is NOT in speaker list (filtered by speaker-identity.ts)
 - No cross-contamination between speakers
-- Speaker events (joined, started, stopped, left) have correct timestamps
-- Screen share tracks labeled "Presentation"
+- Speaker events on `speaker_events_relative` stream have correct event_type and relative timestamps
+- Screen share tracks (extra audio elements beyond tile count) labeled "Presentation"
+- Collector uses producer-labeled speaker (`PRODUCER_LABELED` in logs)
 
 ### Phase 3 Gate
 **All functionality chains work end-to-end.**
@@ -476,3 +519,8 @@ Phase 7: N new findings, M resolved
 7. **DOM is still needed for speaker names.** Audio tracks give you separation, DOM gives you labels. One-time lookup per participant, not continuous polling.
 8. **Edge TTS generates good test audio.** Three distinct neural voices (Jenny, Guy, Sonia), different content, transcribes perfectly. Use for mock meeting dev environment.
 9. **Bot does not need WhisperLive.** The per-speaker pipeline posts directly to transcription-service via HTTP. WhisperLive is only needed for external WebSocket clients sending mixed audio.
+10. **Zod schema strips unknown fields.** `docker.ts` uses `BotConfigSchema.parse()` — any field not in the schema is silently dropped from BOT_CONFIG. New config fields MUST be added to the Zod schema or they won't reach the bot code.
+11. **Bot name filtering is required.** `__vexaGetAllParticipantNames()` returns all DOM tiles including the bot itself and UI text ("Let participants send messages"). speaker-identity.ts must filter these before positional mapping to audio elements.
+12. **Draft/confirmed is the latency solution.** Publish drafts (`completed=false`) on every transcription result (~3s latency). Confirmed segments (`completed=true`) replace drafts after stabilization. Both flow through XADD → collector → pub/sub → dashboard. Same Redis hash key (start_time) so drafts update in place.
+13. **Transcription service URL is bot-manager config.** Passed via `BOT_CONFIG.transcriptionServiceUrl` (same pattern as `redisUrl`). Docker containers need `ExtraHosts: host.docker.internal:host-gateway` to reach host services. K8s uses cluster DNS — no ExtraHosts needed.
+14. **Collector must use producer-labeled speaker.** When segment payload includes `speaker` field, collector should use it directly (`PRODUCER_LABELED`) instead of running the overlap-based speaker mapper which picks wrong speaker when multiple are active simultaneously.

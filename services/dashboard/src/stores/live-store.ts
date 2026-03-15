@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import type { Meeting, TranscriptSegment, Platform, MeetingStatus } from "@/types/vexa";
-import { deduplicateSegments } from "@vexaai/transcript-rendering";
 
 interface LiveMeetingState {
   // Current live meeting
@@ -44,75 +43,39 @@ export const useLiveStore = create<LiveMeetingState>((set, get) => ({
   addLiveTranscript: (segment: TranscriptSegment) => {
     const { liveTranscripts } = get();
 
-    // Check if segment already exists (by absolute_start_time)
+    // Use segment_id for identity when available, fall back to absolute_start_time
+    const segKey = segment.segment_id || segment.absolute_start_time;
     const existingIndex = liveTranscripts.findIndex(
-      (t) => t.absolute_start_time === segment.absolute_start_time
+      (t) => (t.segment_id || t.absolute_start_time) === segKey
     );
 
     if (existingIndex !== -1) {
-      // Update existing segment
-      const existing = liveTranscripts[existingIndex];
-      
-      // For real-time updates: always update if text is different, regardless of timestamp
-      // This ensures that segment changes are reflected immediately
-      const existingText = (existing.text || "").trim();
-      const newText = (segment.text || "").trim();
-      const completedChanged = Boolean(existing.completed) !== Boolean(segment.completed);
-      if (existingText !== newText || completedChanged) {
-        // Text changed - always update (real-time transcription update)
-        const updated = [...liveTranscripts];
-        updated[existingIndex] = segment;
-        // Sort and deduplicate after update
-        const sorted = updated.sort(
-          (a, b) => a.absolute_start_time.localeCompare(b.absolute_start_time)
-        );
-        const deduped = deduplicateSegments(sorted);
-        set({ liveTranscripts: deduped });
-      } else if (segment.updated_at && existing.updated_at) {
-        // Text is the same - use timestamp-based deduplication
-        if (new Date(segment.updated_at) > new Date(existing.updated_at)) {
-          const updated = [...liveTranscripts];
-          updated[existingIndex] = segment;
-          // Sort and deduplicate after update
-          const sorted = updated.sort(
-            (a, b) => a.absolute_start_time.localeCompare(b.absolute_start_time)
-          );
-          const deduped = deduplicateSegments(sorted);
-          set({ liveTranscripts: deduped });
-        }
-      } else {
-        // No timestamps - update anyway (fallback)
-        const updated = [...liveTranscripts];
-        updated[existingIndex] = segment;
-        // Sort and deduplicate after update
-        const sorted = updated.sort(
-          (a, b) => a.absolute_start_time.localeCompare(b.absolute_start_time)
-        );
-        const deduped = deduplicateSegments(sorted);
-        set({ liveTranscripts: deduped });
-      }
+      // Same segment — update in place (latest version wins)
+      const updated = [...liveTranscripts];
+      updated[existingIndex] = segment;
+      const sorted = updated.sort(
+        (a, b) => a.absolute_start_time.localeCompare(b.absolute_start_time)
+      );
+      set({ liveTranscripts: sorted });
     } else {
-      // Add new segment and sort by absolute_start_time
+      // New segment
       const updated = [...liveTranscripts, segment].sort(
         (a, b) => a.absolute_start_time.localeCompare(b.absolute_start_time)
       );
-      // Deduplicate overlapping segments
-      const deduped = deduplicateSegments(updated);
-      set({ liveTranscripts: deduped });
+      set({ liveTranscripts: updated });
     }
   },
 
   updateLiveTranscript: (segment: TranscriptSegment) => {
     const { liveTranscripts } = get();
+    const segKey = segment.segment_id || segment.absolute_start_time;
     const updated = liveTranscripts.map((t) =>
-      t.absolute_start_time === segment.absolute_start_time ? segment : t
+      (t.segment_id || t.absolute_start_time) === segKey ? segment : t
     );
-    // Sort and deduplicate after update
     const sorted = updated.sort(
       (a, b) => a.absolute_start_time.localeCompare(b.absolute_start_time)
     );
-    const deduped = deduplicateSegments(sorted);
-    set({ liveTranscripts: deduped });
+    set({ liveTranscripts: sorted });
   },
 
   bootstrapLiveTranscripts: (segments: TranscriptSegment[]) => {
@@ -121,21 +84,18 @@ export const useLiveStore = create<LiveMeetingState>((set, get) => ({
       (seg) => seg.absolute_start_time && seg.text?.trim()
     );
 
-    // Create a map keyed by absolute_start_time (deduplication key)
+    // Dedup by segment_id (stable) or absolute_start_time (legacy)
     const transcriptMap = new Map<string, TranscriptSegment>();
     for (const segment of validSegments) {
-      transcriptMap.set(segment.absolute_start_time, segment);
+      const key = segment.segment_id || segment.absolute_start_time;
+      transcriptMap.set(key, segment);
     }
 
-    // Convert map to array and sort by absolute_start_time
-    const sortedTranscripts = Array.from(transcriptMap.values()).sort(
+    const sorted = Array.from(transcriptMap.values()).sort(
       (a, b) => a.absolute_start_time.localeCompare(b.absolute_start_time)
     );
 
-    // Deduplicate overlapping segments (expansion, tail-repeat, containment)
-    const dedupedTranscripts = deduplicateSegments(sortedTranscripts);
-
-    set({ liveTranscripts: dedupedTranscripts });
+    set({ liveTranscripts: sorted });
   },
 
   setBotStatus: (status: MeetingStatus) => {

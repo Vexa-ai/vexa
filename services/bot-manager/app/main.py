@@ -728,13 +728,11 @@ async def request_bot(
             meeting_data['teams_base_host'] = req.teams_base_host
         transcribe = True if req.transcribe_enabled is None else bool(req.transcribe_enabled)
         meeting_data['transcribe_enabled'] = transcribe
-        # Auto-enable recording when transcription is off (record-only mode)
+        # Enable recording by default; callers can opt-out with recording_enabled=false
         if req.recording_enabled is not None:
             meeting_data['recording_enabled'] = bool(req.recording_enabled)
-        elif not transcribe:
-            meeting_data['recording_enabled'] = True
         else:
-            meeting_data['recording_enabled'] = False
+            meeting_data['recording_enabled'] = True
 
         new_meeting = Meeting(
             user_id=current_user.id,

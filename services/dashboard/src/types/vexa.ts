@@ -68,6 +68,8 @@ export interface TranscriptSegment {
   session_uid: string;
   created_at: string;
   updated_at?: string;
+  /** Stable segment identity from bot: {session_uid}:{speakerId}:{seq} */
+  segment_id?: string;
 }
 
 export interface CreateBotRequest {

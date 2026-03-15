@@ -169,7 +169,7 @@ export const vexaAPI = {
       absolute_start_time: seg.absolute_start_time,
       absolute_end_time: seg.absolute_end_time,
       text: seg.text,
-      speaker: seg.speaker || "Unknown",
+      speaker: seg.speaker || "",
       language: seg.language,
       session_uid: "",
       created_at: seg.created_at,
