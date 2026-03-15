@@ -65,7 +65,7 @@ Architecture position: sits between the api-gateway (which proxies client reques
 
 - **PostgreSQL** -- meetings, meeting_sessions, recordings, media_files, users, api_tokens
 - **Redis** -- bot locking, bot-to-container mapping, status pub/sub, config commands
-- **Docker socket** -- container creation and management (or process orchestrator in lite mode)
+- **Docker socket** -- container creation and management (Docker orchestrator), or Kubernetes API (Kubernetes orchestrator), or subprocess spawning (process/lite mode). Set via `ORCHESTRATOR` env var (`docker`, `kubernetes`, or `process`)
 - **shared_models** -- ORM models, schemas, storage client, webhook delivery
 - **TTS service** -- text-to-speech for voice agent speak commands
 - **Object storage** -- MinIO, S3, or local filesystem for recording media

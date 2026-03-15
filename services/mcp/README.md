@@ -1,4 +1,27 @@
-# Vexa Meeting Bot MCP Setup Guide
+# Vexa MCP Service
+
+## Why
+
+AI assistants (Claude, Cursor, etc.) need a structured way to interact with Vexa -- launching bots, fetching transcripts, managing recordings -- without building custom integrations. The Model Context Protocol (MCP) provides a standard tool interface that any MCP-compatible client can use. Without this service, every AI client would need its own Vexa API integration code.
+
+## What
+
+A FastAPI service that exposes Vexa's bot management, transcript retrieval, and recording operations as MCP tools. It proxies to the api-gateway, translating MCP tool calls into Vexa API requests.
+
+Key tools: `start_bot`, `stop_bot`, `get_bot_status`, `get_meeting_transcript`, `parse_meeting_link`, `update_meeting_data`, `create_transcript_share_link`, `get_meeting_bundle`, recording CRUD.
+
+### Dependencies
+
+- **api-gateway** -- all Vexa operations are proxied through the gateway
+- No database, no Redis -- stateless proxy
+
+## How
+
+See the setup guide below for connecting MCP clients.
+
+---
+
+# Setup Guide
 
 Welcome! This guide will help you set up and connect Claude (or any other client) to the Vexa Meeting Bot MCP (Model Context Protocol).
 Follow these steps carefully, even if you are new to these tools. In under 5 minutes you will be easily set up. All we have to do is install Node.js and copy paste a config.

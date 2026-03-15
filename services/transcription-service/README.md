@@ -82,6 +82,23 @@ All configuration is via environment variables. Copy `.env.example` and adjust.
 
 Full list with quality/VAD tuning parameters: `.env.example`.
 
+### Response format
+
+The `/v1/audio/transcriptions` endpoint returns JSON with:
+
+```json
+{
+  "text": "transcribed text",
+  "language": "en",
+  "language_probability": 0.98,
+  "duration": 5.2,
+  "segments": [{"start": 0.0, "end": 5.2, "text": "transcribed text"}]
+}
+```
+
+- `language_probability` -- confidence (0.0-1.0) of the detected language. The bot uses this to decide whether to lock language detection or keep auto-detecting.
+- `segments` -- word-level timing for the transcription.
+
 ### Scale
 
 To add or remove workers, edit `docker-compose.yml` (add/uncomment worker service definitions) and `nginx.conf` (add/uncomment upstream entries), then restart:

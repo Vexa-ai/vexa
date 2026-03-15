@@ -135,15 +135,15 @@ core/src/platforms/hot-debug.sh
 
 ## Supported Platforms
 
-| Platform         | Browser            | Audio Capture                                   |
-|------------------|--------------------|------------------------------------------------|
-| Google Meet      | Chrome + Stealth   | DOM `<audio>`/`<video>` elements                |
-| Microsoft Teams  | MS Edge (required) | RTCPeerConnection hook intercepts WebRTC tracks |
-| Zoom             | None (native SDK)  | SDK raw audio callback or PulseAudio fallback   |
+| Platform         | Browser            | Audio Capture                                   | Speaker Identity                                    |
+|------------------|--------------------|------------------------------------------------|-----------------------------------------------------|
+| Google Meet      | Chrome + Stealth   | Per-element `<audio>`/`<video>` streams (one per participant) | Speaking-indicator correlation + voting/locking: correlates DOM speaking indicators with audio tracks, votes on matches, locks permanently after threshold |
+| Microsoft Teams  | MS Edge (required) | Single mixed RTCPeerConnection stream, DOM-routed by speaker events | DOM traversal + voting/locking: identifies active speaker from DOM, routes mixed audio segments to the correct speaker via the same vote/lock system |
+| Zoom             | None (native SDK)  | SDK raw audio callback or PulseAudio fallback   | SDK participant metadata                            |
 
 All platforms feed into the same per-speaker pipeline: tracks discovered,
-tagged with participant identity, filtered through VAD, buffered, transcribed,
-and published to Redis.
+tagged with participant identity (via voting/locking in `speaker-identity.ts`),
+filtered through VAD, buffered, transcribed, and published to Redis.
 
 ## Redis Output
 

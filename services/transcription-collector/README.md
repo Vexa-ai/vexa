@@ -24,6 +24,10 @@ Segments are pre-labeled with speaker identity by the producer:
 - **Bot (primary):** Per-speaker pipeline publishes segments to Redis via XADD with speaker label, meeting ID, and platform already set. No diarization needed -- the bot has per-speaker audio tracks.
 - **WhisperLive (optional):** External WebSocket clients sending mixed audio. WhisperLive publishes segments to the same Redis stream.
 
+When the bot publishes segments with a `speaker` field already set, the collector uses it directly (logged as `PRODUCER_LABELED`) instead of running the overlap-based speaker mapper. This is the primary path -- diarization-free speaker attribution from per-speaker audio tracks.
+
+Each segment has a `segment_id` (assigned by the bot) which the collector uses as the Redis hash key. This provides stable identity for draft/confirmed updates: a confirmed segment (`completed: true`) replaces the draft (`completed: false`) at the same hash key.
+
 The collector treats all segments identically regardless of source. It reads from the stream, deduplicates, filters, and persists.
 
 ### Filtering system

@@ -1,5 +1,30 @@
 # Vexa Dashboard
 
+## Why
+
+Users need a visual interface to launch bots into meetings, watch live transcripts with speaker attribution, manage API tokens, and review past meetings. Without the dashboard, all interaction with Vexa requires direct API calls. The dashboard provides the self-service experience for non-technical users and a convenient dev tool for API users.
+
+## What
+
+A Next.js web application that provides:
+- Meeting management: launch bots, see active/past meetings
+- Live transcript viewer: real-time segments via WebSocket with speaker labels
+- Recording playback: audio player synced with transcript segments
+- User/token management: create API keys, configure webhooks
+- Admin analytics: user and meeting statistics
+
+### Dependencies
+
+- **api-gateway** -- all API calls route through the gateway
+- **admin-api** (via gateway) -- user authentication and token management
+- No direct database access -- fully API-driven
+
+## How
+
+See Quick Start and Local Development sections below.
+
+---
+
 Open-source web UI for [Vexa](https://github.com/Vexa-ai/vexa): join meetings, watch live transcripts, manage users/tokens, and review transcript history.
 
 Main backend repo: [Vexa](https://github.com/Vexa-ai/vexa)
