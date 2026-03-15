@@ -113,6 +113,7 @@ async def start_bot_container(
     zoom_obf_token: Optional[str] = None,
     voice_agent_enabled: Optional[bool] = None,
     default_avatar_url: Optional[str] = None,
+    agent_enabled: Optional[bool] = None,
 ) -> Optional[Tuple[str, str]]:
     """Start a bot as a Kubernetes Pod.
 

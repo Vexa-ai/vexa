@@ -115,6 +115,7 @@ export interface WebSocketSegment {
   speaker: string | null;
   language?: string;
   session_uid?: string;
+  segment_id?: string;
   completed?: boolean;
   start?: number;
   end_time?: number;
