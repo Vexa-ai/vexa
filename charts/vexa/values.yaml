@@ -123,10 +123,6 @@ botManager:
     # Image name Bot Manager will ask the orchestrator to run (used by docker/kubernetes orchestrators)
     imageName: "vexa-bot:dev"
 
-    # URL bots use to connect to WhisperLive (WebSocket).
-    # In Kubernetes, you can point directly to the whisperlive Service.
-    whisperLiveUrl: ""   # default auto-filled to ws://<release>-vexa-whisperlive:9090/ws
-
     # Only relevant for Docker orchestrator; set if your bot containers must join a specific Docker network.
     dockerNetwork: ""
     resources:
@@ -195,70 +191,6 @@ transcriptionService:
     limits:
       cpu: 2000m
       memory: 2Gi
-  extraEnv: {}
-
-whisperLive:
-  enabled: true
-  replicaCount: 1
-
-  # cpu or gpu (this impacts env vars + optional GPU resources/limits you set)
-  profile: cpu
-
-  image:
-    repository: vexa/whisperlive
-    tag: local
-
-  service:
-    type: ClusterIP
-    wsPort: 9090
-    healthPort: 9091
-
-  model:
-    size: "base"     # tiny|base|small|medium|large
-
-  # Optional override for run_server.py args. When empty, chart sets port and model size.
-  args: []
-
-  # WhisperLive tuning (based on env-example.* in repo)
-  tuning:
-    languageDetectionSegments: 10
-    vadFilterThreshold: 0.2
-    wlMaxClients: 10
-    consulEnable: false
-    pingIntervalSeconds: 20
-    pingTimeoutSeconds: 60
-
-  cache:
-    enabled: true
-    size: 10Gi
-    storageClassName: ""   # empty = default storage class
-
-  remoteTranscriber:
-    url: ""
-    apiKey: ""
-    model: ""
-    temperature: ""
-    vadModel: ""
-
-  resourcesCpu:
-    requests:
-      cpu: 500m
-      memory: 512Mi
-    limits:
-      cpu: 4000m
-      memory: 8Gi
-  resourcesGpu:
-    requests:
-      cpu: 500m
-      memory: 512Mi
-      nvidia.com/gpu: 1
-    limits:
-      cpu: 4000m
-      memory: 8Gi
-      nvidia.com/gpu: 1
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}
   extraEnv: {}
 
 mcp:

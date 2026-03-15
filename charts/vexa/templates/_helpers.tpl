@@ -73,6 +73,3 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
-{{- define "vexa.whisperLiveWsUrl" -}}
-{{- printf "ws://%s.%s.svc.%s:%d/ws" (include "vexa.componentName" (list . "whisperlive")) .Release.Namespace .Values.global.clusterDomain (.Values.whisperLive.service.wsPort | int) -}}
-{{- end -}}

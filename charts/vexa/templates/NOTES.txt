@@ -17,5 +17,4 @@ Services:
 - Admin API: {{ include "vexa.componentName" (list . "admin-api") }}
 - Bot Manager: {{ include "vexa.componentName" (list . "bot-manager") }}
 - Transcription Collector: {{ include "vexa.componentName" (list . "transcription-collector") }}
-- WhisperLive: {{ include "vexa.componentName" (list . "whisperlive") }}
 - MCP: {{ include "vexa.componentName" (list . "mcp") }}

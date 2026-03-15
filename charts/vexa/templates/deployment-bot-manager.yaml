@@ -66,10 +66,6 @@ spec:
             {{- end }}
             - name: DOCKER_NETWORK
               value: {{ .Values.botManager.bot.dockerNetwork | quote }}
-            - name: DEVICE_TYPE
-              value: {{ .Values.whisperLive.profile | quote }}
-            - name: WHISPER_LIVE_URL
-              value: {{ default (include "vexa.whisperLiveWsUrl" .) .Values.botManager.bot.whisperLiveUrl | quote }}
             - name: TRANSCRIPTION_COLLECTOR_URL
               value: {{ default (printf "http://%s.%s.svc.%s:%d" (include "vexa.componentName" (list . "transcription-collector")) .Release.Namespace .Values.global.clusterDomain (.Values.transcriptionCollector.service.port | int)) .Values.botManager.transcriptionCollectorUrl | quote }}
             - name: ADMIN_TOKEN
