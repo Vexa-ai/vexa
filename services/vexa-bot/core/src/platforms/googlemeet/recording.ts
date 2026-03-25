@@ -706,44 +706,51 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
               initializeGoogleSpeakerDetection(whisperLiveService, audioService, botConfigData);
             }
 
-            // Simple single-strategy participant extraction from main video area
-            (window as any).logBot("Initializing simplified participant counting (main frame text scan)...");
+            // Event-driven participant registry using MutationObserver on data-participant-id.
+            // Replaces the text-scan approach which was unreliable: it matched UI labels,
+            // tooltips, and other text nodes as "participants", causing both false positives
+            // (bot stays when everyone left) and false negatives (bot leaves when someone refreshes).
+            // data-participant-id is Google Meet's stable, per-device identity attribute.
+            // A grace timer absorbs transient DOM removals (e.g. browser refresh, tab switch)
+            // so the bot doesn't leave during the reconnect window.
+            (window as any).logBot("Initializing participant registry (MutationObserver)...");
 
-            const extractParticipantsFromMain = (botName: string | undefined): string[] => {
-              const participants: string[] = [];
-              const mainElement = document.querySelector('main');
-              if (mainElement) {
-                const nameElements = mainElement.querySelectorAll('*');
-                nameElements.forEach((el: Element) => {
-                  const element = el as HTMLElement;
-                  const text = (element.textContent || '').trim();
-                  if (text && element.children.length === 0) {
-                    // Basic length validation only (allow numbers, parentheses, etc.)
-                    if ((text.length > 1 && text.length < 50) || (botName && text === botName)) {
-                      participants.push(text);
-                    }
-                  }
-                });
-              }
-              const tooltips = document.querySelectorAll('main [role="tooltip"]');
-              tooltips.forEach((el: Element) => {
-                const text = (el.textContent || '').trim();
-                // Basic length validation only (allow numbers, parentheses, etc.)
-                if (text && ((text.length > 1 && text.length < 50) || (botName && text === botName))) {
-                  participants.push(text);
+            const _vexaKnownParticipants = new Set<string>();
+            const _vexaLeaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+            const LEAVE_GRACE_MS = 5000;
+
+            const _vexaSyncParticipants = () => {
+              const current = new Set(
+                Array.from(document.querySelectorAll('[data-participant-id]'))
+                  .map(el => el.getAttribute('data-participant-id'))
+                  .filter((id): id is string => Boolean(id))
+              );
+              for (const id of current) {
+                if (!_vexaKnownParticipants.has(id)) {
+                  _vexaKnownParticipants.add(id);
+                  (window as any).logBot('[ParticipantRegistry] Joined: ' + id);
                 }
-              });
-              return Array.from(new Set(participants));
+                if (_vexaLeaveTimers.has(id)) {
+                  clearTimeout(_vexaLeaveTimers.get(id)!);
+                  _vexaLeaveTimers.delete(id);
+                }
+              }
+              for (const id of _vexaKnownParticipants) {
+                if (!current.has(id) && !_vexaLeaveTimers.has(id)) {
+                  _vexaLeaveTimers.set(id, setTimeout(() => {
+                    _vexaKnownParticipants.delete(id);
+                    _vexaLeaveTimers.delete(id);
+                    (window as any).logBot('[ParticipantRegistry] Left: ' + id);
+                  }, LEAVE_GRACE_MS));
+                }
+              }
             };
 
-            (window as any).getGoogleMeetActiveParticipants = () => {
-              const names = extractParticipantsFromMain((botConfigData as any)?.botName);
-              (window as any).logBot(`🔍 [Google Meet Participants] ${JSON.stringify(names)}`);
-              return names;
-            };
-            (window as any).getGoogleMeetActiveParticipantsCount = () => {
-              return (window as any).getGoogleMeetActiveParticipants().length;
-            };
+            _vexaSyncParticipants();
+            const _vexaParticipantObserver = new MutationObserver(_vexaSyncParticipants);
+            _vexaParticipantObserver.observe(document.body, { childList: true, subtree: true });
+
+            (window as any).getGoogleMeetActiveParticipantsCount = () => _vexaKnownParticipants.size;
             
             // Setup Google Meet meeting monitoring (browser context)
             const setupGoogleMeetingMonitoring = (botConfigData: any, audioService: any, whisperLiveService: any, resolve: any) => {
