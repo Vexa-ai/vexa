@@ -1,0 +1,15 @@
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.ruff_cache
+tests/
+.git
+.gitignore
+*.egg-info
+dist/
+build/
+docker-compose.yml
+Makefile
+CONTRIBUTING.md
+LICENSE

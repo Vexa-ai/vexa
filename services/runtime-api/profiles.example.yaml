@@ -1,0 +1,62 @@
+# Container profiles — declarative templates for container types.
+# Each profile defines the image, resources, timeouts, and defaults.
+# Hot-reload: send SIGHUP to the runtime-api process after editing.
+
+profiles:
+  # Generic web server — long-running, no idle timeout
+  web-server:
+    image: "nginx:alpine"
+    resources:
+      cpu_request: "100m"
+      cpu_limit: "500m"
+      memory_request: "128Mi"
+      memory_limit: "512Mi"
+    idle_timeout: 0          # never auto-stop
+    auto_remove: false
+    ports:
+      "80/tcp": {}
+      "443/tcp": {}
+
+  # Background worker — runs tasks, auto-removes on exit
+  worker:
+    image: "python:3.12-slim"
+    resources:
+      cpu_request: "250m"
+      cpu_limit: "1000m"
+      memory_request: "256Mi"
+      memory_limit: "1Gi"
+    idle_timeout: 900        # 15 minutes
+    auto_remove: true
+    env:
+      LOG_LEVEL: "INFO"
+
+  # Sandbox — isolated environment with resource limits
+  sandbox:
+    image: "ubuntu:24.04"
+    command: ["sleep", "infinity"]
+    resources:
+      cpu_request: "500m"
+      cpu_limit: "2000m"
+      memory_request: "512Mi"
+      memory_limit: "2Gi"
+      shm_size: 2147483648   # 2GB shared memory
+    idle_timeout: 600        # 10 minutes
+    auto_remove: false
+    ports:
+      "8080/tcp": {}
+    gpu: false
+
+  # GPU compute — for ML inference or video processing
+  gpu-compute:
+    image: "nvidia/cuda:12.3-runtime-ubuntu22.04"
+    resources:
+      cpu_request: "1000m"
+      cpu_limit: "4000m"
+      memory_request: "4Gi"
+      memory_limit: "16Gi"
+    idle_timeout: 300        # 5 minutes
+    auto_remove: true
+    gpu: true
+    gpu_type: "nvidia"
+    node_selector:
+      accelerator: "nvidia-gpu"

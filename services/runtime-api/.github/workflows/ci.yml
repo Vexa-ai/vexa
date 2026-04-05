@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check runtime_api/ tests/
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/ -v --ignore=tests/test_integration.py
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]" httpx
+      - name: Start runtime-api
+        run: |
+          REDIS_URL=redis://localhost:6379/0 \
+          ORCHESTRATOR_BACKEND=docker \
+          LOG_LEVEL=DEBUG \
+          uvicorn runtime_api.main:app --host 0.0.0.0 --port 8090 &
+          sleep 3
+          curl -sf http://localhost:8090/health
+      - name: Pull test image
+        run: docker pull python:3.12-slim
+      - name: Run integration tests
+        run: RUNTIME_API_URL=http://localhost:8090 pytest tests/test_integration.py -v
