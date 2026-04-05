@@ -1,0 +1,145 @@
+"use client";
+
+import { cn, parseUTCTimestamp } from "@/lib/utils";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Play } from "lucide-react";
+import type { TranscriptSegment as TranscriptSegmentType, SpeakerColor } from "@/types/vexa";
+
+interface TranscriptSegmentProps {
+  segment: TranscriptSegmentType;
+  speakerColor: SpeakerColor;
+  isHighlighted?: boolean;
+  searchQuery?: string;
+
+  isActivePlayback?: boolean;
+  onClickSegment?: () => void;
+  /** When false, hide the avatar and speaker name (consecutive segments from same speaker). Defaults to true. */
+  showSpeakerHeader?: boolean;
+}
+
+function formatTimestamp(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+}
+
+function formatAbsoluteTimestamp(utcAbsoluteTime: string): string {
+  try {
+    const date = parseUTCTimestamp(utcAbsoluteTime);
+    const hh = date.getUTCHours().toString().padStart(2, "0");
+    const mm = date.getUTCMinutes().toString().padStart(2, "0");
+    const ss = date.getUTCSeconds().toString().padStart(2, "0");
+    return `${hh}:${mm}:${ss}`;
+  } catch (error) {
+    console.error("Error parsing absolute timestamp:", error);
+    return "00:00:00";
+  }
+}
+
+function getInitials(name: string | null | undefined): string {
+  if (!name) return "??";
+  return name
+    .split(" ")
+    .map((n) => n[0])
+    .filter(Boolean)
+    .join("")
+    .toUpperCase()
+    .slice(0, 2) || "??";
+}
+
+function highlightText(text: string, query: string): React.ReactNode {
+  if (!query) return text;
+
+  const parts = text.split(new RegExp(`(${query})`, "gi"));
+  return parts.map((part, i) =>
+    part.toLowerCase() === query.toLowerCase() ? (
+      <mark key={i} className="bg-yellow-200 dark:bg-yellow-800 rounded px-0.5">
+        {part}
+      </mark>
+    ) : (
+      part
+    )
+  );
+}
+
+function renderText(
+  text: string,
+  searchQuery?: string
+): React.ReactNode {
+  return searchQuery ? highlightText(text, searchQuery) : text;
+}
+
+export function TranscriptSegment({
+  segment,
+  speakerColor,
+  isHighlighted,
+  searchQuery,
+  isActivePlayback,
+  onClickSegment,
+  showSpeakerHeader = true,
+}: TranscriptSegmentProps) {
+  // Always display absolute time from the feed when available (device-independent).
+  // For grouped segments, callers should pass the FIRST segment's `absolute_start_time` as `segment.absolute_start_time`.
+  const displayTimestamp = segment.absolute_start_time
+    ? formatAbsoluteTimestamp(segment.absolute_start_time)
+    : formatTimestamp(segment.start_time);
+
+  return (
+    <div
+      onClick={onClickSegment}
+      className={cn(
+        "group flex gap-2 rounded-lg transition-colors",
+        showSpeakerHeader ? "px-3 pt-2 pb-0.5" : "px-3 py-0",
+        isHighlighted && "bg-yellow-50 dark:bg-yellow-900/20",
+        isActivePlayback && "bg-primary/10 border-l-2 border-primary",
+        !isHighlighted && !isActivePlayback && "hover:bg-muted/50",
+        onClickSegment && "cursor-pointer"
+      )}
+    >
+
+      {/* Content */}
+      <div className="flex-1 min-w-0">
+        {showSpeakerHeader && (
+          <div className="flex items-center gap-2 mb-0.5">
+            <span className={cn("font-medium text-sm", speakerColor.text)}>
+              {segment.speaker || ""}
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {displayTimestamp}
+            </span>
+            {onClickSegment && (
+              <span
+                className={cn(
+                  "ml-auto inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground transition-all",
+                  isActivePlayback
+                    ? "opacity-100 border-primary/40 bg-primary/10 text-primary"
+                    : "opacity-80 group-hover:opacity-100 group-hover:border-primary/40 group-hover:bg-primary/10 group-hover:text-primary"
+                )}
+                aria-label="Click segment to play from this timestamp"
+                title="Click to play from this segment"
+              >
+                <Play className="h-3 w-3" />
+                Play
+              </span>
+            )}
+          </div>
+        )}
+        {!showSpeakerHeader && (
+          <div className="flex items-center gap-2">
+            <p className={cn("text-sm leading-snug flex-1", !segment.completed && "text-muted-foreground/70 italic")}>
+              {renderText(segment.text, searchQuery)}
+            </p>
+            <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+              {displayTimestamp}
+            </span>
+          </div>
+        )}
+        {showSpeakerHeader && (
+          <p className={cn("text-sm leading-snug", !segment.completed && "text-muted-foreground/70 italic")}>
+            {renderText(segment.text, searchQuery)}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
