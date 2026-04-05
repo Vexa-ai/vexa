@@ -7,7 +7,7 @@
           "mcp-remote",
           "http://localhost:8056/mcp",
           "--header",
-          "Authorization: Bearer ${VEXA_API_KEY}"
+          "X-API-Key: ${VEXA_API_KEY}"
         ],
         "env": {
           "VEXA_API_KEY": "YOUR_VEXA_API_KEY_HERE"

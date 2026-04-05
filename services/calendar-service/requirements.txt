@@ -1,0 +1,8 @@
+fastapi>=0.100.0
+uvicorn>=0.22.0
+httpx>=0.24.0
+sqlalchemy>=2.0.0
+asyncpg>=0.27.0
+alembic
+python-dotenv>=1.0.0
+email-validator>=2.0.0

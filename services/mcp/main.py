@@ -2,7 +2,7 @@ import json
 import os
 import re
 from urllib.parse import urlparse, parse_qs
-from fastapi import FastAPI, Header, HTTPException, Depends, Response
+from fastapi import FastAPI, Header, HTTPException, Depends, Response, Query
 from fastapi_mcp import FastApiMCP
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field, model_validator
@@ -219,7 +219,7 @@ _TEAMS_ENTERPRISE_HOSTS = {
 }
 
 def _is_teams_enterprise_host(host: str) -> bool:
-    return host in _TEAMS_ENTERPRISE_HOSTS or host.endswith(".teams.microsoft.us")
+    return host in _TEAMS_ENTERPRISE_HOSTS or host.endswith(".teams.microsoft.us") or host.endswith(".teams.microsoft.com")
 
 
 def _parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
@@ -505,11 +505,20 @@ async def get_recording_media_download(
     """
     url = f"{BASE_URL}/recordings/{recording_id}/media/{media_file_id}/download"
     data = await make_request("GET", url, api_key)
-    # Bot Manager returns a relative URL for local storage; make it absolute through the gateway.
+    # Rewrite download URLs to be externally accessible through the gateway.
+    # Bot Manager may return:
+    #   - Relative URLs ("/recordings/...") — prefix with gateway base URL
+    #   - Internal Docker URLs ("http://minio:9000/...") — replace host with gateway
     try:
         dl = data.get("download_url")
-        if isinstance(dl, str) and dl.startswith("/"):
-            data["download_url"] = f"{BASE_URL}{dl}"
+        if isinstance(dl, str):
+            if dl.startswith("/"):
+                data["download_url"] = f"{BASE_URL}{dl}"
+            elif "minio:" in dl or "minio/" in dl:
+                from urllib.parse import urlparse, urlunparse
+                parsed_base = urlparse(BASE_URL)
+                parsed_dl = urlparse(dl)
+                data["download_url"] = urlunparse(parsed_base._replace(path=parsed_dl.path))
     except Exception:
         pass
     return data
@@ -681,14 +690,35 @@ async def stop_bot(
 
 
 @app.get("/meetings", operation_id="list_meetings")
-async def list_meetings(api_key: str = Depends(get_api_key)) -> Dict[str, Any]:
+async def list_meetings(
+    limit: Optional[int] = Query(20, ge=1, le=100, description="Max meetings to return (default 20)"),
+    offset: Optional[int] = Query(0, ge=0, description="Number of meetings to skip"),
+    status: Optional[str] = Query(None, description="Filter by status: active, completed, failed"),
+    platform: Optional[str] = Query(None, description="Filter by platform: google_meet, teams, zoom"),
+    api_key: str = Depends(get_api_key),
+) -> Dict[str, Any]:
     """
-    List all meetings associated with your API key.
-    
+    List meetings associated with your API key.
+
+    Supports pagination (limit/offset) and filtering (status, platform).
+    Default limit is 20 meetings.
+
     Returns:
         JSON with a list of meeting records
     """
+    params = {}
+    if limit is not None:
+        params["limit"] = limit
+    if offset is not None:
+        params["offset"] = offset
+    if status:
+        params["status"] = status
+    if platform:
+        params["platform"] = platform
+    query_string = "&".join(f"{k}={v}" for k, v in params.items())
     url = f"{BASE_URL}/meetings"
+    if query_string:
+        url = f"{url}?{query_string}"
     return await make_request("GET", url, api_key)
 
 

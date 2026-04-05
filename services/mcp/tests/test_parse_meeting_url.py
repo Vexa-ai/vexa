@@ -1,17 +1,54 @@
 """
 Unit tests for _parse_meeting_url and Platform.construct_meeting_url.
 
-Run with: pytest services/mcp/test_parse_meeting_url.py -v
-  (from the repo root, with meeting-api on PYTHONPATH)
+Run with: cd services/mcp && pytest tests/ -v
 """
 import hashlib
 import sys
-import os
+import types
 import pytest
 
-# Allow running from repo root without installing the package
-sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "packages", "meeting-api"))
+# Stub out fastapi_mcp before importing main (it's not pip-installable outside Docker)
+if "fastapi_mcp" not in sys.modules:
+    stub = types.ModuleType("fastapi_mcp")
+    class _FakeMCP:
+        def __init__(self, *a, **kw): pass
+        def mount_http(self, *a, **kw): pass
+        server = types.SimpleNamespace(
+            list_prompts=lambda: (lambda f: f),
+            get_prompt=lambda: (lambda f: f),
+        )
+    stub.FastApiMCP = _FakeMCP
+    sys.modules["fastapi_mcp"] = stub
+
+# Stub mcp.types if not available
+if "mcp" not in sys.modules:
+    mcp_pkg = types.ModuleType("mcp")
+    mcp_types = types.ModuleType("mcp.types")
+
+    class _FakePromptArg:
+        def __init__(self, **kw): pass
+    class _FakePrompt:
+        def __init__(self, **kw): pass
+    class _FakeTextContent:
+        def __init__(self, **kw): pass
+    class _FakePromptMessage:
+        def __init__(self, **kw): pass
+    class _FakeListPromptsResult:
+        def __init__(self, **kw): pass
+    class _FakeGetPromptResult:
+        def __init__(self, **kw): pass
+
+    mcp_types.Prompt = _FakePrompt
+    mcp_types.PromptArgument = _FakePromptArg
+    mcp_types.TextContent = _FakeTextContent
+    mcp_types.PromptMessage = _FakePromptMessage
+    mcp_types.ListPromptsResult = _FakeListPromptsResult
+    mcp_types.GetPromptResult = _FakeGetPromptResult
+
+    mcp_pkg.types = mcp_types
+    sys.modules["mcp"] = mcp_pkg
+    sys.modules["mcp.types"] = mcp_types
 
 from fastapi import HTTPException
 from main import _parse_meeting_url

@@ -75,19 +75,22 @@ def _env_float(name: str, default: float) -> float:
         logger.warning(f"Invalid float env {name}={raw!r}, using default {default}")
         return default
 
-# WhisperLive-inspired defaults (can be overridden via env)
+# Transcription defaults (can be overridden via env)
 BEAM_SIZE = _env_int("BEAM_SIZE", 5)
 BEST_OF = _env_int("BEST_OF", 5)
-COMPRESSION_RATIO_THRESHOLD = _env_float("COMPRESSION_RATIO_THRESHOLD", 2.4)
+COMPRESSION_RATIO_THRESHOLD = _env_float("COMPRESSION_RATIO_THRESHOLD", 1.8)
 LOG_PROB_THRESHOLD = _env_float("LOG_PROB_THRESHOLD", -1.0)
 NO_SPEECH_THRESHOLD = _env_float("NO_SPEECH_THRESHOLD", 0.6)
-CONDITION_ON_PREVIOUS_TEXT = _env_bool("CONDITION_ON_PREVIOUS_TEXT", True)
-PROMPT_RESET_ON_TEMPERATURE = _env_float("PROMPT_RESET_ON_TEMPERATURE", 0.5)
+CONDITION_ON_PREVIOUS_TEXT = _env_bool("CONDITION_ON_PREVIOUS_TEXT", False)
+PROMPT_RESET_ON_TEMPERATURE = _env_float("PROMPT_RESET_ON_TEMPERATURE", 0.3)
+REPETITION_PENALTY = _env_float("REPETITION_PENALTY", 1.1)
+NO_REPEAT_NGRAM_SIZE = _env_int("NO_REPEAT_NGRAM_SIZE", 3)
 
 # VAD parameters
 VAD_FILTER = _env_bool("VAD_FILTER", True)
 VAD_FILTER_THRESHOLD = _env_float("VAD_FILTER_THRESHOLD", 0.5)
 VAD_MIN_SILENCE_DURATION_MS = _env_int("VAD_MIN_SILENCE_DURATION_MS", 160)
+VAD_MAX_SPEECH_DURATION_S = _env_float("VAD_MAX_SPEECH_DURATION_S", 15.0)  # max segment length before forced split
 
 # Temperature fallback chain
 USE_TEMPERATURE_FALLBACK = _env_bool("USE_TEMPERATURE_FALLBACK", False)
@@ -165,7 +168,7 @@ MAX_QUEUE_SIZE = _env_int("MAX_QUEUE_SIZE", 10)  # Max requests waiting in queue
 
 # Backpressure strategy:
 # - If FAIL_FAST_WHEN_BUSY=true, we do NOT wait in a queue; we immediately return 503 so callers
-#   (e.g. WhisperLive) can keep buffering and submit a newer/larger window later.
+#   callers can keep buffering and submit a newer/larger window later.
 FAIL_FAST_WHEN_BUSY = _env_bool("FAIL_FAST_WHEN_BUSY", True)
 BUSY_RETRY_AFTER_S = _env_int("BUSY_RETRY_AFTER_S", 1)
 REALTIME_RESERVED_SLOTS = _env_int("REALTIME_RESERVED_SLOTS", 1)
@@ -211,7 +214,9 @@ async def startup_event():
         f"compression_ratio_threshold={COMPRESSION_RATIO_THRESHOLD}, "
         f"log_prob_threshold={LOG_PROB_THRESHOLD}, "
         f"no_speech_threshold={NO_SPEECH_THRESHOLD}, "
-        f"vad_filter={VAD_FILTER}"
+        f"vad_filter={VAD_FILTER}, "
+        f"repetition_penalty={REPETITION_PENALTY}, "
+        f"no_repeat_ngram_size={NO_REPEAT_NGRAM_SIZE}"
     )
     
     try:
@@ -267,6 +272,8 @@ async def transcribe_audio(
     prompt: Optional[str] = Form(None),
     response_format: str = Form("verbose_json"),
     timestamp_granularities: str = Form("segment"),
+    max_speech_duration_s: Optional[str] = Form(None),
+    min_silence_duration_ms: Optional[str] = Form(None),
     transcription_tier_form: Optional[str] = Form(None, alias="transcription_tier"),
     task: str = Form("transcribe"),
     _: bool = Depends(verify_api_token)
@@ -356,13 +363,36 @@ async def transcribe_audio(
         
         # Convert to format suitable for faster-whisper
         # Use soundfile to properly decode audio formats (WAV, MP3, etc.)
+        # Falls back to ffmpeg subprocess for formats soundfile can't handle (webm, opus, etc.)
         audio_io = io.BytesIO(audio_bytes)
         try:
             audio_array, sample_rate = sf.read(audio_io, dtype=np.float32)
             logger.info(f"Worker {WORKER_ID} decoded audio - shape: {audio_array.shape}, sample_rate: {sample_rate}")
         except Exception as e:
-            logger.error(f"Worker {WORKER_ID} failed to decode audio with soundfile: {e}")
-            raise HTTPException(status_code=400, detail=f"Failed to decode audio file: {e}")
+            logger.warning(f"Worker {WORKER_ID} soundfile failed ({e}), trying ffmpeg fallback")
+            try:
+                import subprocess, tempfile
+                with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as tmp_in:
+                    tmp_in.write(audio_bytes)
+                    tmp_in_path = tmp_in.name
+                tmp_out_path = tmp_in_path.replace('.webm', '.wav')
+                result = subprocess.run(
+                    ['ffmpeg', '-y', '-i', tmp_in_path, '-ar', '16000', '-ac', '1', '-f', 'wav', tmp_out_path],
+                    capture_output=True, timeout=120
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(f"ffmpeg failed: {result.stderr.decode()[:500]}")
+                audio_array, sample_rate = sf.read(tmp_out_path, dtype=np.float32)
+                logger.info(f"Worker {WORKER_ID} decoded via ffmpeg - shape: {audio_array.shape}, sample_rate: {sample_rate}")
+                import os
+                os.unlink(tmp_in_path)
+                os.unlink(tmp_out_path)
+            except FileNotFoundError:
+                logger.error(f"Worker {WORKER_ID} ffmpeg not installed - cannot decode non-WAV formats")
+                raise HTTPException(status_code=400, detail=f"Failed to decode audio file: {e}. Install ffmpeg for webm/opus support.")
+            except Exception as e2:
+                logger.error(f"Worker {WORKER_ID} ffmpeg fallback also failed: {e2}")
+                raise HTTPException(status_code=400, detail=f"Failed to decode audio file: {e2}")
         
         # Ensure mono audio (convert stereo to mono if needed)
         if len(audio_array.shape) > 1:
@@ -375,10 +405,16 @@ async def transcribe_audio(
         # Transcribe (with optional temperature fallback)
         requested_temp = float(temperature) if temperature else 0.0
         temps = TEMPERATURE_FALLBACK_CHAIN if USE_TEMPERATURE_FALLBACK else [requested_temp]
+        want_word_timestamps = "word" in timestamp_granularities
+
+        # Per-request VAD overrides (with defaults from env)
+        req_max_speech = float(max_speech_duration_s) if max_speech_duration_s else VAD_MAX_SPEECH_DURATION_S
+        req_min_silence = int(min_silence_duration_ms) if min_silence_duration_ms else VAD_MIN_SILENCE_DURATION_MS
 
         logger.info(
             f"Worker {WORKER_ID} starting transcription - requested_temp: {requested_temp}, "
-            f"temps: {temps}, language: {language}, task: {task}, vad_filter: {VAD_FILTER}"
+            f"temps: {temps}, language: {language}, task: {task}, vad_filter: {VAD_FILTER}, "
+            f"max_speech={req_max_speech}s, min_silence={req_min_silence}ms"
         )
 
         best: Optional[Tuple[str, str, float, List[Dict[str, Any]]]] = None
@@ -401,12 +437,15 @@ async def transcribe_audio(
                     no_speech_threshold=NO_SPEECH_THRESHOLD,
                     condition_on_previous_text=CONDITION_ON_PREVIOUS_TEXT,
                     prompt_reset_on_temperature=PROMPT_RESET_ON_TEMPERATURE,
+                    repetition_penalty=REPETITION_PENALTY,
+                    no_repeat_ngram_size=NO_REPEAT_NGRAM_SIZE,
                     vad_filter=VAD_FILTER,
                     vad_parameters={
                         "threshold": VAD_FILTER_THRESHOLD,
-                        "min_silence_duration_ms": VAD_MIN_SILENCE_DURATION_MS,
+                        "min_silence_duration_ms": req_min_silence,
+                        "max_speech_duration_s": req_max_speech,
                     },
-                    word_timestamps=False,
+                    word_timestamps=want_word_timestamps,
                 )
             
             segments_list, info = await asyncio.get_event_loop().run_in_executor(
@@ -417,25 +456,30 @@ async def transcribe_audio(
             # Convert segments to list (faster-whisper returns generator)
             segments: List[Dict[str, Any]] = []
             for idx, segment in enumerate(segments_list):
-                segments.append({
+                seg_dict: Dict[str, Any] = {
                     "id": idx,
                     "seek": 0,
                     "start": segment.start,
                     "end": segment.end,
                     "text": segment.text,
-                    "tokens": [],  # Not needed for PoC
+                    "tokens": [],
                     "temperature": t,
                     "avg_logprob": segment.avg_logprob,
                     "compression_ratio": segment.compression_ratio,
                     "no_speech_prob": segment.no_speech_prob,
-                    # Add audio_ fields that RemoteTranscriber looks for
                     "audio_start": segment.start,
                     "audio_end": segment.end,
-                })
+                }
+                if want_word_timestamps and hasattr(segment, 'words') and segment.words:
+                    seg_dict["words"] = [
+                        {"word": w.word, "start": w.start, "end": w.end, "probability": w.probability}
+                        for w in segment.words
+                    ]
+                segments.append(seg_dict)
             last_segments = segments
 
             if _looks_like_silence(segments):
-                best = ("", info.language, 0.0, [])
+                best = ("", info.language, getattr(info, 'language_probability', 0.0), 0.0, [])
                 logger.info(f"Worker {WORKER_ID} detected silence (temp={t})")
                 break
 
@@ -444,7 +488,7 @@ async def transcribe_audio(
             if not is_hallucination:
                 full_text = " ".join([s["text"].strip() for s in segments]).strip()
                 duration = segments[-1]["end"] if segments else 0.0
-                best = (full_text, info.language, duration, segments)
+                best = (full_text, info.language, getattr(info, 'language_probability', 0.0), duration, segments)
                 logger.info(f"Worker {WORKER_ID} accepted transcription (temp={t})")
                 break
             else:
@@ -456,10 +500,11 @@ async def transcribe_audio(
             segments = last_segments
             full_text = " ".join([s["text"].strip() for s in segments]).strip()
             duration = segments[-1]["end"] if segments else 0.0
-            best = (full_text, info.language if info else (language or "unknown"), duration, segments)
+            lang_prob = getattr(info, 'language_probability', 0.0) if info else 0.0
+            best = (full_text, info.language if info else (language or "unknown"), lang_prob, duration, segments)
 
-        full_text, detected_language, duration, segments = best
-        logger.info(f"Worker {WORKER_ID} transcription completed - language: {detected_language}")
+        full_text, detected_language, detected_language_probability, duration, segments = best
+        logger.info(f"Worker {WORKER_ID} transcription completed - language: {detected_language}, language_probability: {detected_language_probability}")
         
         processing_time = time.time() - start_time
         logger.info(
@@ -471,6 +516,7 @@ async def transcribe_audio(
         response = {
             "text": full_text,
             "language": detected_language,
+            "language_probability": detected_language_probability,
             "duration": duration,
             "segments": segments,
         }

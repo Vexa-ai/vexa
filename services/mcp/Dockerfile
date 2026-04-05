@@ -14,8 +14,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy MCP service code
 COPY services/mcp/ .
 
-# Expose the port
+# Run as non-root
+RUN useradd -r -s /bin/false appuser
+USER appuser
+
 EXPOSE 18888
 
-# Run the MCP service
 CMD ["python", "main.py"]

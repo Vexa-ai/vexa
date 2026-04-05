@@ -1,1 +1,0 @@
-# This file makes the 'background' directory a Python package 

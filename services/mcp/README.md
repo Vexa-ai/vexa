@@ -1,22 +1,77 @@
-# Vexa Meeting Bot MCP Setup Guide
+# Vexa MCP Service
+
+## Why
+
+AI assistants (Claude, Cursor, etc.) need a structured way to interact with Vexa — launching bots, fetching transcripts, managing recordings, chatting in meetings, speaking via TTS, managing calendar — without building custom integrations. The Model Context Protocol (MCP) provides a standard tool interface that any MCP-compatible client can use. Without this service, every AI client would need its own Vexa API integration code.
+
+## What
+
+A FastAPI service that exposes Vexa's meeting capabilities as **32+ MCP tools**, **4+ prompts**, and **MCP Resources** with a custom `vexa://` URI scheme. It proxies to the api-gateway, translating MCP tool calls into Vexa API requests.
+
+### Documentation
+- [Vexa MCP](../../docs/vexa-mcp.mdx)
+
+### Tool Categories
+
+| Category | Count | Examples |
+|----------|-------|---------|
+| Meeting Management | 7 | `request_meeting_bot`, `stop_bot`, `list_meetings`, `parse_meeting_link` |
+| Transcripts & Sharing | 3 | `get_meeting_transcript`, `get_meeting_bundle`, `create_transcript_share_link` |
+| Recordings | 6 | `list_recordings`, `get_recording`, `get_recording_media_download` |
+| Bot Config | 1 | `update_bot_config` |
+| Interactive Bot Control | 7 | `send_chat_message`, `read_chat_messages`, `bot_speak`, `stop_speaking`, `bot_screen_share`, `stop_screen_share`, `set_bot_avatar` |
+| Calendar | 5 | `calendar_connect`, `calendar_status`, `list_calendar_events`, `update_calendar_preferences` |
+| Webhook & Processing | 2 | `configure_webhook`, `transcribe_recording` |
+
+### MCP Protocol Features Used
+
+| Feature | Status | Details |
+|---------|--------|---------|
+| Tools | Active | 32+ tools with annotations |
+| Prompts | Active | 7 workflow prompts |
+| Resources | New | `vexa://` URI scheme for meetings/transcripts |
+| Tool Annotations | New | readOnly, destructive, idempotent, openWorld hints |
+| Subscriptions | Planned | Live transcript push via WebSocket bridge |
+| Sampling | Planned | Real-time meeting intelligence |
+
+### Dependencies
+
+- **api-gateway** — all Vexa operations are proxied through the gateway
+- No database, no Redis — stateless proxy
+
+## How
+
+See the setup guide below for connecting MCP clients.
+
+---
+
+# Setup Guide
 
 Welcome! This guide will help you set up and connect Claude (or any other client) to the Vexa Meeting Bot MCP (Model Context Protocol).
 Follow these steps carefully, even if you are new to these tools. In under 5 minutes you will be easily set up. All we have to do is install Node.js and copy paste a config.
 
-## Teams Passcodes and URL Limitations (Important)
+## Teams URL Formats (Updated 2026-04-05)
 
-Vexa can join Microsoft Teams meetings, but **Teams meeting links are tricky** and **many meetings require a passcode**.
+Vexa can join Microsoft Teams meetings using **all major URL formats**. The `parse_meeting_link` tool handles URL parsing automatically.
 
-Key points:
+**Supported formats (all tested 2026-04-05):**
 
-- **Only Teams Free style links are supported**: `https://teams.live.com/meet/<MEETING_ID>?p=<PASSCODE>`
-- **Recommended:** pass the **full Teams URL** via `meeting_url` (Vexa will parse out `native_meeting_id` + `passcode` for you).
-- If you prefer passing parts separately:
-  - `native_meeting_id`: the numeric `<MEETING_ID>` (10-15 digits)
-  - `passcode`: the `<PASSCODE>` from `?p=...` (often required)
-- **Full Teams URLs are not accepted** as `native_meeting_id`. Use `meeting_url` or the numeric ID only.
-- **`teams.microsoft.com/l/meetup-join/...` links are not supported yet** (see issues #105, #110). If you have one of these links, you must obtain a `teams.live.com/meet/...` link instead (or use the REST API with the numeric ID + passcode if you already know them).
-- **Passcode constraints**: Teams passcodes must be **8-20 alphanumeric characters**. If your `p=` value contains non-alphanumeric characters or is longer than 20, it will be rejected.
+| Format | Example | Status |
+|--------|---------|--------|
+| T1: Standard join | `teams.microsoft.com/l/meetup-join/19%3ameeting_{id}%40thread.v2/...` | PASS |
+| T2: Meet shortlink (OeNB) | `teams.microsoft.com/meet/{id}?p={passcode}` | PASS |
+| T3: Channel meeting | `teams.microsoft.com/l/meetup-join/19%3a{channel}%40thread.tacv2/...` | PASS |
+| T4: Custom domain | `{org}.teams.microsoft.com/meet/{id}?p={passcode}` | PASS |
+| T5: Deep link | `msteams:/l/meetup-join/...` | NOT SUPPORTED |
+| T6: Personal/consumer | `teams.live.com/meet/{id}` | PASS |
+
+**Recommended:** Pass the **full Teams URL** via `meeting_url` — Vexa will parse out `native_meeting_id` + `passcode` automatically.
+
+If you prefer passing parts separately:
+- `native_meeting_id`: the numeric meeting ID
+- `passcode`: the `<PASSCODE>` from `?p=...` (often required for anonymous join)
+
+**Passcode constraints**: Teams passcodes must be **8-20 alphanumeric characters**. If your `p=` value contains non-alphanumeric characters or is longer than 20, it will be rejected.
 
 ## 1. Install Node.js (Required for npm)
 
@@ -62,7 +117,7 @@ You will need your Vexa API key to connect to the MCP. If you do not have one, p
         "mcp-remote",
         "https://api.cloud.vexa.ai/mcp",
         "--header",
-        "Authorization: Bearer ${VEXA_API_KEY}"
+        "X-API-Key: ${VEXA_API_KEY}"
       ],
       "env": {
         "VEXA_API_KEY": "YOUR_API_KEY_HERE"
@@ -86,29 +141,34 @@ Once you have completed the above steps:
 
 ## Useful MCP Tools by Use Case
 
-Meeting preparation:
-
+**Meeting preparation:**
 - `parse_meeting_link`: paste a full meeting URL to extract `platform`, `native_meeting_id`, and `passcode` (Teams/Zoom).
-- `update_meeting_data`: set `name`, `participants`, `languages`, and `notes` ahead of time (these notes are surfaced in transcript responses).
+- `update_meeting_data`: set `name`, `participants`, `languages`, and `notes` ahead of time.
+- `list_calendar_events`: see upcoming meetings from connected calendar.
 
-During the meeting:
-
+**During the meeting:**
 - `get_bot_status`: see which bots are currently running.
-- `get_meeting_transcript`: fetch the current transcript snapshot (REST-style polling).
+- `get_meeting_transcript`: fetch the current transcript snapshot.
+- `send_chat_message`: send a message to the meeting chat.
+- `read_chat_messages`: read messages from the meeting chat.
+- `bot_speak`: make the bot speak using TTS.
 
-Post meeting:
+**Post meeting:**
+- `create_transcript_share_link`: create a short-lived public URL for a transcript.
+- `get_meeting_bundle`: one call to fetch status + notes + recordings + share link.
+- `transcribe_recording`: trigger post-meeting transcription of a recording.
+- Recordings: `list_recordings`, `get_recording`, `get_recording_media_download`, `delete_recording`
 
-- `create_transcript_share_link`: create a short-lived public URL for a transcript (good for sharing / downstream tools).
-- `get_meeting_bundle`: one call to fetch status + notes + recordings + (optional) share link.
-- Recordings:
-  - `list_recordings`, `get_recording`, `get_recording_media_download`, `delete_recording`
-  - `get_recording_media_download` returns an absolute `download_url` when running on local storage.
+**Configuration:**
+- `configure_webhook`: set up webhook notifications for meeting events.
+- `calendar_connect` / `calendar_status`: manage calendar integration.
+- `update_recording_config`: toggle recording on/off, set capture modes.
 
 ## Troubleshooting
 
 - If you see errors about missing `npx` or `npm`, make sure Node.js is installed
 - If you get authentication errors, double-check your API key
-- If Teams meetings fail to join, verify you are using a `teams.live.com/meet/...` link and that you extracted both the numeric meeting ID and the `?p=` passcode.
+- If Teams meetings fail to join, verify the URL format is supported (T1-T4, T6 — see table above). Use `parse_meeting_link` to test URL parsing. Ensure passcode is included for anonymous join.
 - For further help, contact Vexa support
 
 ---
