@@ -1,0 +1,66 @@
+# --- Vexa Environment ---
+# Copy to repo root as .env:  cp deploy/env/env-example .env
+# Then edit the REQUIRED fields below.
+
+# ============================================================================
+# REQUIRED — you MUST set these
+# ============================================================================
+
+# Transcription service
+# Get a key at vexa.ai OR self-host services/transcription-service/ with GPU
+TRANSCRIPTION_SERVICE_URL=https://your-transcription-url/v1/audio/transcriptions
+TRANSCRIPTION_SERVICE_TOKEN=your-token
+
+# Dashboard source (absolute path to dashboard code)
+# The dashboard is included at services/dashboard/ in this repo
+DASHBOARD_PATH=./services/dashboard
+
+# ============================================================================
+# Ports — change these to avoid conflicts with other stacks
+# ============================================================================
+API_GATEWAY_HOST_PORT=8056
+ADMIN_API_HOST_PORT=8057
+RUNTIME_API_PORT=8090
+AGENT_API_PORT=8100
+CALENDAR_SERVICE_PORT=8050
+DASHBOARD_HOST_PORT=3001
+POSTGRES_HOST_PORT=5458
+MCP_HOST_PORT=18888
+MINIO_HOST_PORT=9000
+MINIO_CONSOLE_HOST_PORT=9001
+
+# ============================================================================
+# Defaults — work as-is for local dev
+# ============================================================================
+
+# Admin
+ADMIN_API_TOKEN=changeme
+
+# Bot image (built by `make build`)
+BOT_IMAGE_NAME=vexaai/vexa-bot:dev
+
+# Database (embedded postgres by default)
+DB_NAME=vexa
+DB_USER=postgres
+DB_PASSWORD=postgres
+# For external DB, uncomment:
+# REMOTE_DB=true
+# DB_HOST=your-postgres-host
+# DB_PORT=5432
+
+# Storage (embedded minio by default)
+STORAGE_BACKEND=minio
+MINIO_ENDPOINT=minio:9000
+MINIO_ACCESS_KEY=vexa-access-key
+MINIO_SECRET_KEY=vexa-secret-key
+MINIO_BUCKET=vexa-recordings
+MINIO_SECURE=false
+
+# Local GPU transcription (uncomment to self-host)
+# LOCAL_TRANSCRIPTION=true
+
+# TTS uses Piper (local, no API key needed)
+# Voice models auto-download from HuggingFace on first use
+
+# Billing hooks (optional — for hosted service)
+# POST_MEETING_HOOKS=https://your-billing-webhook

@@ -1,0 +1,398 @@
+name: vexa
+services:
+  # --- Infrastructure ---
+
+  redis:
+    image: redis:7.0-alpine
+    mem_limit: 512m
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    volumes:
+      - redis-data:/data
+    networks:
+      - vexa
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=${DB_NAME:-vexa}
+      - POSTGRES_USER=${DB_USER:-postgres}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres}
+    ports:
+      - "${POSTGRES_HOST_PORT:-5458}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-vexa}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - vexa
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    mem_limit: 1g
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-vexa-access-key}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-vexa-secret-key}
+    ports:
+      - "${MINIO_HOST_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - vexa
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        sleep 5
+        mc alias set vexa http://minio:9000 $${MINIO_ROOT_USER:-vexa-access-key} $${MINIO_ROOT_PASSWORD:-vexa-secret-key}
+        mc mb --ignore-existing vexa/${MINIO_BUCKET:-vexa}
+        exit 0
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-vexa-access-key}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-vexa-secret-key}
+    networks:
+      - vexa
+
+  # --- Core services ---
+
+  admin-api:
+    build:
+      context: ../..
+      dockerfile: services/admin-api/Dockerfile
+    image: vexaai/admin-api:${IMAGE_TAG:-dev}
+    ports:
+      - "${ADMIN_API_PORT:-8067}:8001"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-vexa}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-postgres}
+      - DB_SSL_MODE=disable
+      - ADMIN_API_TOKEN=${ADMIN_TOKEN:-vexa-admin-token}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - vexa
+    restart: unless-stopped
+
+  runtime-api:
+    build:
+      context: ../../services/runtime-api
+      dockerfile: Dockerfile
+    image: vexaai/runtime-api:${IMAGE_TAG:-dev}
+    group_add:
+      - "${DOCKER_GID:-998}"
+    ports:
+      - "${RUNTIME_API_PORT:-8090}:8090"
+    environment:
+      - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa
+      - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/vexa-agent:${IMAGE_TAG:-dev}}
+      - BROWSER_IMAGE=${BROWSER_IMAGE:-vexaai/vexa-bot:${IMAGE_TAG:-dev}}
+      - REDIS_URL=redis://redis:6379
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
+      - MINIO_BUCKET=${MINIO_BUCKET:-vexa}
+      - CLAUDE_CREDENTIALS_PATH=${CLAUDE_CREDENTIALS_PATH}
+      - CLAUDE_JSON_PATH=${CLAUDE_JSON_PATH}
+      - BOT_API_TOKEN=${BOT_API_TOKEN:-}
+      - API_KEYS=${BOT_API_TOKEN:-}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-vexa}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-postgres}
+      - DB_SSL_MODE=disable
+      - PROFILES_PATH=/app/profiles.yaml
+      - ALLOW_PRIVATE_CALLBACKS=1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../../services/runtime-api/profiles.yaml:/app/profiles.yaml:ro
+    init: true
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - vexa
+    restart: unless-stopped
+
+  agent-api:
+    build:
+      context: ../..
+      dockerfile: services/agent-api/Dockerfile
+    image: vexaai/agent-api:${IMAGE_TAG:-dev}
+    ports:
+      - "${AGENT_API_PORT:-8100}:8100"
+    environment:
+      - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa
+      - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/vexa-agent:${IMAGE_TAG:-dev}}
+      - STORAGE_BACKEND=s3
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
+      - S3_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
+      - S3_BUCKET=${MINIO_BUCKET:-vexa}
+      - CLAUDE_CREDENTIALS_PATH=${CLAUDE_CREDENTIALS_PATH}
+      - CLAUDE_JSON_PATH=${CLAUDE_JSON_PATH}
+      - IDLE_TIMEOUT=${IDLE_TIMEOUT:-300}
+      - REDIS_URL=redis://redis:6379
+      - RUNTIME_API_URL=http://runtime-api:8090
+      - ADMIN_API_URL=http://admin-api:8001
+      - ADMIN_API_TOKEN=${ADMIN_TOKEN:-vexa-admin-token}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - AGENT_API_INTERNAL_URL=http://agent-api:8100
+      - API_KEY=${BOT_API_TOKEN:-}
+      - BOT_API_TOKEN=${BOT_API_TOKEN:-}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+      runtime-api:
+        condition: service_started
+    networks:
+      - vexa
+    restart: unless-stopped
+
+  api-gateway:
+    build:
+      context: ../..
+      dockerfile: services/api-gateway/Dockerfile
+    image: vexaai/api-gateway:${IMAGE_TAG:-dev}
+    mem_limit: 1g
+    ports:
+      - "${API_GATEWAY_HOST_PORT:-8056}:8000"
+    environment:
+      - ADMIN_API_URL=http://admin-api:8001
+      - MEETING_API_URL=http://meeting-api:8080
+      - TRANSCRIPTION_COLLECTOR_URL=http://meeting-api:8080
+      - MCP_URL=http://mcp:18888
+      - CALENDAR_SERVICE_URL=http://calendar-service:8050
+      - AGENT_API_URL=http://agent-api:8100
+      - REDIS_URL=redis://redis:6379/0
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+      - RATE_LIMIT_RPM=${RATE_LIMIT_RPM:-120}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - CORS_ORIGINS=http://localhost:${DASHBOARD_HOST_PORT:-3001},http://localhost:3000,http://localhost:3001
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    init: true
+    depends_on:
+      admin-api:
+        condition: service_healthy
+      meeting-api:
+        condition: service_started
+      agent-api:
+        condition: service_started
+      redis:
+        condition: service_started
+    networks:
+      - vexa
+    restart: unless-stopped
+
+  meeting-api:
+    build:
+      context: ../..
+      dockerfile: services/meeting-api/Dockerfile
+    image: vexaai/meeting-api:${IMAGE_TAG:-dev}
+    mem_limit: 1g
+    expose:
+      - "8080"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-vexa}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-postgres}
+      - DB_SSL_MODE=disable
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-vexa-admin-token}
+      - RUNTIME_API_URL=http://runtime-api:8090
+      - RUNTIME_API_TOKEN=${BOT_API_TOKEN:-}
+      - MEETING_API_URL=http://meeting-api:8080
+      - BOT_IMAGE_NAME=${BROWSER_IMAGE:-vexaai/vexa-bot:${IMAGE_TAG:-dev}}
+      - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa
+      - TTS_SERVICE_URL=http://tts-service:8002
+      - POST_MEETING_HOOKS=${POST_MEETING_HOOKS:-http://agent-api:8100/internal/webhooks/meeting-completed}
+      - TRANSCRIPTION_COLLECTOR_URL=http://meeting-api:8080
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-minio}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
+      - MINIO_BUCKET=${MINIO_BUCKET:-vexa}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - RECORDING_ENABLED=${RECORDING_ENABLED:-true}
+      - CAPTURE_MODES=${CAPTURE_MODES:-audio}
+      - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
+      - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
+      - TRANSCRIPTION_GATEWAY_URL=${TRANSCRIPTION_GATEWAY_URL:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ${LOCAL_STORAGE_VOLUME_SOURCE:-recordings-data}:/data/recordings
+    init: true
+    depends_on:
+      - redis
+      - postgres
+      - runtime-api
+    networks:
+      - vexa
+    restart: unless-stopped
+
+  # --- Optional services ---
+
+  telegram-bot:
+    build:
+      context: ../..
+      dockerfile: services/telegram-bot/Dockerfile
+    image: vexaai/telegram-bot:${IMAGE_TAG:-dev}
+    expose:
+      - "8200"
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - CHAT_API_URL=http://agent-api:8100
+      - CHAT_DEFAULT_USER_ID=${CHAT_DEFAULT_USER_ID:-}
+      - CHAT_USER_MAP=${CHAT_USER_MAP:-{}}
+      - TELEGRAM_BOT_PORT=8200
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    depends_on:
+      - agent-api
+    networks:
+      - vexa
+    restart: unless-stopped
+
+  mcp:
+    build:
+      context: ../..
+      dockerfile: services/mcp/Dockerfile
+    image: vexaai/mcp:${IMAGE_TAG:-dev}
+    mem_limit: 512m
+    ports:
+      - "${MCP_HOST_PORT:-18888}:18888"
+    environment:
+      - API_GATEWAY_URL=http://api-gateway:8000
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    init: true
+    depends_on:
+      - api-gateway
+    networks:
+      - vexa
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: ../..
+      dockerfile: services/dashboard/Dockerfile
+    image: vexaai/dashboard:${IMAGE_TAG:-dev}
+    mem_limit: 1g
+    ports:
+      - "${DASHBOARD_HOST_PORT:-3001}:3000"
+    environment:
+      - VEXA_API_URL=http://api-gateway:8000
+      - VEXA_PUBLIC_API_URL=${VEXA_PUBLIC_API_URL:-http://localhost:${API_GATEWAY_HOST_PORT:-8056}}
+      - VEXA_API_KEY=${VEXA_API_KEY:-}
+      - VEXA_ADMIN_API_KEY=${ADMIN_TOKEN:-vexa-admin-token}
+      - VEXA_ADMIN_API_URL=http://admin-api:8001
+      - JWT_SECRET=${JWT_SECRET:-vexa-dev-jwt-secret}
+      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:${DASHBOARD_HOST_PORT:-3001}}
+    init: true
+    depends_on:
+      - api-gateway
+    networks:
+      - vexa
+    restart: unless-stopped
+
+  tts-service:
+    build:
+      context: ../..
+      dockerfile: services/tts-service/Dockerfile
+    image: vexaai/tts-service:${IMAGE_TAG:-dev}
+    mem_limit: 1g
+    expose:
+      - "8002"
+    environment:
+      - TTS_API_TOKEN=${TTS_API_TOKEN:-}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - tts-voices:/app/voices
+    init: true
+    networks:
+      - vexa
+    restart: unless-stopped
+
+  # calendar-service: NO-SHIP for 0.10 — not included in release
+  # calendar-service:
+  #   build:
+  #     context: ../..
+  #     dockerfile: services/calendar-service/Dockerfile
+  #   image: vexaai/calendar-service:${IMAGE_TAG:-dev}
+  #   ports:
+  #     - "${CALENDAR_SERVICE_PORT:-8050}:8050"
+  #   environment:
+  #     - DB_HOST=postgres
+  #     - DB_PORT=5432
+  #     - DB_NAME=${DB_NAME:-vexa}
+  #     - DB_USER=${DB_USER:-postgres}
+  #     - DB_PASSWORD=${DB_PASSWORD:-postgres}
+  #     - DB_SSL_MODE=disable
+  #     - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+  #     - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+  #     - MEETING_API_URL=http://meeting-api:8080
+  #     - BOT_API_TOKEN=${BOT_API_TOKEN:-}
+  #     - SYNC_INTERVAL_SECONDS=${CALENDAR_SYNC_INTERVAL:-300}
+  #     - DEFAULT_LEAD_TIME_MINUTES=${CALENDAR_LEAD_TIME:-2}
+  #     - LOG_LEVEL=${LOG_LEVEL:-INFO}
+  #   depends_on:
+  #     - postgres
+  #     - meeting-api
+  #   networks:
+  #     - vexa
+  #   restart: unless-stopped
+
+volumes:
+  redis-data:
+  postgres-data:
+  minio-data:
+  recordings-data:
+  tts-voices:
+
+networks:
+  vexa:
+    driver: bridge

@@ -1,0 +1,276 @@
+# =============================================================================
+# Vexa Lite - All-in-One Docker Image
+# =============================================================================
+#
+# Single container with all Vexa services:
+# - API Gateway (:8056) — main entry point, routes to all services
+# - Admin API (:8057) — user/token management
+# - Meeting API (:8080) — bot orchestration (process mode via Runtime API)
+# - Runtime API (:8090) — container lifecycle (process backend, no Docker)
+# - Agent API (:8100) — AI agent chat runtime
+# - Dashboard (:3000) — Next.js web UI
+# - Vexa Bot (Node.js/Playwright) — spawned as child processes
+# - MCP Service (:18888) — Model Context Protocol
+# - TTS Service (:8059) — text-to-speech
+#
+# Build:
+#   docker build -f deploy/lite/Dockerfile.lite -t vexa-lite .
+#
+# Run:
+#   docker run -d \
+#     -p 8056:8056 -p 3000:3000 \
+#     -e DATABASE_URL="postgresql://user:pass@host:5432/vexa" \
+#     -e ADMIN_API_TOKEN="your-secret-token" \
+#     -e TRANSCRIBER_URL="http://host:8083/v1/audio/transcriptions" \
+#     -e TRANSCRIBER_API_KEY="your-api-key" \
+#     vexa-lite
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Base Image: Playwright with browsers pre-installed
+# -----------------------------------------------------------------------------
+FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS base
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends --fix-missing \
+    python3 \
+    python3-pip \
+    python3-venv \
+    python3-dev \
+    build-essential \
+    gcc \
+    g++ \
+    xvfb \
+    x11vnc \
+    novnc \
+    python3-websockify \
+    pulseaudio \
+    ffmpeg \
+    libsndfile1 \
+    supervisor \
+    postgresql-client \
+    redis-tools \
+    redis-server \
+    awscli \
+    curl \
+    wget \
+    git \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && usermod -aG pulse-access root
+
+# Create directory structure
+WORKDIR /app
+RUN mkdir -p \
+    /app/api-gateway \
+    /app/admin-api \
+    /app/meeting-api \
+    /app/runtime-api \
+    /app/agent-api \
+    /app/vexa-bot \
+    /app/mcp \
+    /app/tts-service \
+    /app/admin-models \
+    /app/schema-sync \
+    /var/log/supervisor \
+    /var/log/vexa-bots \
+    /var/lib/redis \
+    /var/run/redis
+
+# -----------------------------------------------------------------------------
+# Python Dependencies
+# -----------------------------------------------------------------------------
+
+COPY deploy/lite/requirements.txt /tmp/requirements.txt
+COPY services/mcp/requirements.txt /tmp/requirements-mcp.txt
+
+RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
+RUN pip3 install --no-cache-dir -r /tmp/requirements-mcp.txt
+RUN rm -f /tmp/requirements-*.txt
+
+# Copy shared libraries
+COPY libs/schema-sync /app/schema-sync
+COPY libs/admin-models /app/admin-models
+
+# meeting-api package must be importable by api-gateway (for schemas, security_headers)
+# We copy the full service and add its parent to PYTHONPATH
+COPY services/meeting-api/ /app/meeting-api/
+
+ENV PYTHONPATH="/app/schema-sync:/app/admin-models:/app/meeting-api${PYTHONPATH:+:${PYTHONPATH}}"
+
+# Verify imports
+RUN python3 -c "from admin_models.models import User; print('admin_models OK')" \
+    && python3 -c "from meeting_api.schemas import Platform; print('meeting_api OK')"
+
+# -----------------------------------------------------------------------------
+# Application Code — Python Services
+# -----------------------------------------------------------------------------
+
+# API Gateway
+COPY services/api-gateway/ /app/api-gateway/
+
+# Admin API
+COPY services/admin-api/ /app/admin-api/
+
+# Runtime API (process backend — no Docker socket needed)
+COPY services/runtime-api/ /app/runtime-api/
+
+# Agent API
+COPY services/agent-api/ /app/agent-api/
+
+# MCP Service
+COPY services/mcp/ /app/mcp/
+
+# TTS Service
+COPY services/tts-service/ /app/tts-service/
+
+# -----------------------------------------------------------------------------
+# Node.js Bot Build
+# -----------------------------------------------------------------------------
+
+COPY services/vexa-bot/core/ /app/vexa-bot/
+WORKDIR /app/vexa-bot
+RUN npm ci --omit=dev 2>/dev/null || npm install \
+    && npm run build
+RUN npx playwright install msedge --with-deps || true
+RUN node build-browser-utils.js || true
+
+# -----------------------------------------------------------------------------
+# Dashboard Build (Next.js)
+# -----------------------------------------------------------------------------
+
+WORKDIR /app
+RUN mkdir -p /app/dashboard-build
+
+# Copy transcript-rendering dependency
+COPY packages/transcript-rendering/package.json /transcript-rendering/package.json
+COPY packages/transcript-rendering/dist/ /transcript-rendering/dist/
+
+# Copy dashboard source
+COPY services/dashboard/package*.json /app/dashboard-build/
+RUN cd /app/dashboard-build && \
+    sed -i 's|file:../../../packages/transcript-rendering|file:/transcript-rendering|' package.json && \
+    npm install --ignore-scripts && \
+    rm -rf node_modules/@vexaai/transcript-rendering && \
+    cp -r /transcript-rendering node_modules/@vexaai/transcript-rendering
+
+COPY services/dashboard/src /app/dashboard-build/src
+COPY services/dashboard/public /app/dashboard-build/public
+COPY services/dashboard/next.config.ts services/dashboard/tsconfig.json services/dashboard/postcss.config.mjs /app/dashboard-build/
+COPY services/dashboard/components.json /app/dashboard-build/
+# No tailwind.config — postcss handles it
+
+# Build-time env: rewrites in next.config.ts bake VEXA_API_URL into routes-manifest
+ENV VEXA_API_URL=http://localhost:8056
+RUN cd /app/dashboard-build && npm run build
+
+# Move standalone output to final location
+# Next.js standalone: .next/standalone/ has server.js + node_modules
+# .next/standalone/.next/ has build artifacts (BUILD_ID, server/)
+# .next/static/ has static assets (must be at .next/static/ relative to server.js)
+RUN cp -r /app/dashboard-build/.next/standalone /app/dashboard-standalone && \
+    mkdir -p /app/dashboard && \
+    cp -r /app/dashboard-standalone/* /app/dashboard/ && \
+    cp -r /app/dashboard-standalone/.next /app/dashboard/.next 2>/dev/null || true && \
+    cp -r /app/dashboard-build/.next/static /app/dashboard/.next/static && \
+    cp -r /app/dashboard-build/public /app/dashboard/public 2>/dev/null || true && \
+    rm -rf /app/dashboard-standalone
+
+COPY services/dashboard/docker-entrypoint.sh /app/dashboard/docker-entrypoint.sh
+RUN chmod +x /app/dashboard/docker-entrypoint.sh
+
+# Clean up build artifacts
+RUN rm -rf /app/dashboard-build /transcript-rendering
+
+WORKDIR /app
+
+# -----------------------------------------------------------------------------
+# Configuration Files
+# -----------------------------------------------------------------------------
+
+COPY deploy/lite/supervisord.conf /etc/supervisor/conf.d/vexa.conf
+COPY deploy/lite/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+RUN mkdir -p /var/lib/vexa/recordings /var/log/vexa-bots
+
+# Test audio for transcription startup check
+COPY tests/testdata/test-speech-en.wav /app/test-speech-en.wav
+
+# -----------------------------------------------------------------------------
+# Environment Variables (defaults)
+# -----------------------------------------------------------------------------
+
+# Orchestrator — runtime-api uses process backend in lite
+ENV ORCHESTRATOR_BACKEND=process \
+    BOT_SCRIPT_PATH=/app/vexa-bot/dist/docker.js \
+    BOT_WORKING_DIR=/app/vexa-bot \
+    BOT_CALLBACK_BASE_URL=http://localhost:8080
+
+# Internal service URLs for api-gateway
+ENV ADMIN_API_URL=http://localhost:8057 \
+    MEETING_API_URL=http://localhost:8080 \
+    TRANSCRIPTION_COLLECTOR_URL=http://localhost:8080 \
+    MCP_URL=http://localhost:18888 \
+    AGENT_API_URL=http://localhost:8100 \
+    RUNTIME_API_URL=http://localhost:8090
+
+# TTS Service
+ENV TTS_SERVICE_URL=http://localhost:8059 \
+    OPENAI_API_KEY=
+
+# Display for headless browsers
+ENV DISPLAY=:99
+
+# Logging
+ENV LOG_LEVEL=info \
+    PYTHONUNBUFFERED=1
+
+# Recording storage defaults (lite — local filesystem)
+ENV STORAGE_BACKEND=local \
+    LOCAL_STORAGE_DIR=/var/lib/vexa/recordings \
+    LOCAL_STORAGE_FSYNC=true \
+    MINIO_ENDPOINT= \
+    MINIO_ACCESS_KEY= \
+    MINIO_SECRET_KEY= \
+    MINIO_BUCKET=vexa-recordings \
+    MINIO_SECURE=false \
+    AWS_REGION=us-east-1 \
+    AWS_ACCESS_KEY_ID= \
+    AWS_SECRET_ACCESS_KEY= \
+    S3_BUCKET= \
+    S3_ENDPOINT= \
+    S3_SECURE=true
+
+# Database defaults (override at runtime)
+ENV DB_HOST=localhost \
+    DB_PORT=5432 \
+    DB_NAME=vexa \
+    DB_USER=postgres
+
+# Redis defaults
+ENV REDIS_HOST=localhost \
+    REDIS_PORT=6379
+
+# -----------------------------------------------------------------------------
+# Ports
+# -----------------------------------------------------------------------------
+
+# API Gateway (main entry point) + Dashboard
+EXPOSE 8056 3000
+
+# -----------------------------------------------------------------------------
+# Health Check
+# -----------------------------------------------------------------------------
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+    CMD curl -sf http://localhost:8056/docs > /dev/null || exit 1
+
+# -----------------------------------------------------------------------------
+# Entrypoint
+# -----------------------------------------------------------------------------
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["supervisord", "-n", "-c", "/etc/supervisor/conf.d/vexa.conf"]

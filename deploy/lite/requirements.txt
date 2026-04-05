@@ -1,0 +1,46 @@
+# =============================================================================
+# Vexa Lite - Consolidated Python Dependencies
+# =============================================================================
+# Merges dependencies from all Python services (api-gateway, admin-api,
+# meeting-api, runtime-api, agent-api, tts-service) with resolved conflicts.
+# =============================================================================
+
+# Web Framework
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.6
+
+# Data Validation
+pydantic[email]>=2.0
+pyyaml>=6.0
+
+# Database
+SQLAlchemy[asyncio]>=2.0
+psycopg2-binary>=2.9
+asyncpg>=0.29
+alembic>=1.13
+
+# Redis
+redis[hiredis]>=5.0
+
+# HTTP Clients
+httpx>=0.27
+requests>=2.31
+requests-unixsocket>=0.3
+
+# Object Storage (recordings)
+boto3>=1.34
+
+# WebSockets
+websockets>=11.0
+
+# Scheduling (runtime-api, agent-api)
+croniter>=2.0
+
+# TTS Service
+piper-tts>=1.4.0
+numpy>=1.21.0
+
+# Utilities
+python-dotenv>=1.0
+email-validator>=2.0

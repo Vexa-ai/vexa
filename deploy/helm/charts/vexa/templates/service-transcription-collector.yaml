@@ -1,0 +1,17 @@
+{{- if .Values.transcriptionCollector.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vexa.componentName" (list . "transcription-collector") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.transcriptionCollector.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.transcriptionCollector.service.port }}
+      targetPort: http
+  selector:
+    {{- include "vexa.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: transcription-collector
+{{- end }}
