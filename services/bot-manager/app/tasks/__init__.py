@@ -1,1 +1,0 @@
-# Celery tasks package 

@@ -1,1 +1,0 @@
-# Bot Manager app package 

@@ -1,0 +1,42 @@
+# Vexa meeting bot container profile for Runtime API.
+# Hot-reload: send SIGHUP to the runtime-api process after editing.
+
+profiles:
+  meeting:
+    image: "${BOT_IMAGE_NAME:-vexaai/vexa-bot:latest}"
+    resources:
+      cpu_request: "500m"
+      cpu_limit: "2000m"
+      memory_request: "512Mi"
+      memory_limit: "2Gi"
+      shm_size: 2147483648   # 2GB shared memory (Chrome/Chromium)
+    idle_timeout: 0           # managed by meeting-api, not idle loop
+    auto_remove: false
+    network: "${DOCKER_NETWORK:-vexa-network}"
+    ports:
+      "9222/tcp": {}          # CDP remote debugging
+    max_per_user: 5
+    gpu: false
+    env:
+      REDIS_URL: "${REDIS_URL}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      VIDEO_HWACCEL: "${VIDEO_HWACCEL:-none}"
+    # BOT_CONFIG, TTS_SERVICE_URL, platform-specific vars are passed
+    # per-container via the config.env override in the create request.
+
+  agent:
+    image: "${AGENT_IMAGE:-vexaai/vexa-agent:latest}"
+    resources:
+      cpu_request: "250m"
+      cpu_limit: "1000m"
+      memory_request: "256Mi"
+      memory_limit: "512Mi"
+    idle_timeout: 300           # 5 minutes, then killed
+    auto_remove: true
+    network: "${DOCKER_NETWORK:-vexa-network}"
+    max_per_user: 1
+    gpu: false
+    env:
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    # ANTHROPIC_API_KEY, AWS creds, and user env vars are passed
+    # per-container via the config.env override in the create request.
