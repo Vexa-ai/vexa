@@ -1,4 +1,4 @@
-# Default values for the vexa chart.
+# Default values for the Vexa Helm chart.
 # This chart is designed for LOCAL development builds:
 #   - imagePullPolicy defaults to IfNotPresent
 #   - images default to DockerHub repos with :latest tag
