@@ -1,0 +1,999 @@
+#!/bin/bash
+# vexa CLI -- thin wrapper over Vexa APIs
+# Available inside agent containers. Uses VEXA_USER_ID and VEXA_AGENT_API env vars.
+set -euo pipefail
+
+AGENT_API="${VEXA_AGENT_API:-http://agent-api:8100}"
+USER_ID="${VEXA_USER_ID:-unknown}"
+
+# Override bot token from file if dashboard user injected one
+if [ -f /tmp/.vexa-bot-token ]; then
+  VEXA_BOT_API_TOKEN="$(cat /tmp/.vexa-bot-token)"
+  export VEXA_BOT_API_TOKEN
+fi
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_json_escape() {
+  python3 -c "import json,sys; print(json.dumps(sys.stdin.read().strip()))" <<< "$1"
+}
+
+# Central curl wrapper — captures HTTP status + body, reports meaningful errors.
+# Usage: _curl [-X METHOD] [curl args...] URL
+# On success (2xx): prints response body, returns 0.
+# On failure: prints "[vexa] ERROR: ..." with details, returns 1.
+_CURL_BODY=""
+_curl() {
+  local tmpfile
+  tmpfile=$(mktemp /tmp/vexa-curl.XXXXXX)
+  local http_code
+  # Run curl: write body to tmpfile, capture HTTP status code.
+  # Use --connect-timeout 10 so DNS/connection failures don't hang forever.
+  http_code=$(curl -s --connect-timeout 10 -o "$tmpfile" -w "%{http_code}" "$@" 2>"${tmpfile}.err") || {
+    local exit_code=$?
+    local err_msg
+    err_msg=$(cat "${tmpfile}.err" 2>/dev/null || true)
+    # Map common curl exit codes to human-readable messages
+    case $exit_code in
+      6)  err_msg="Could not resolve host — is the service running? (curl exit 6)" ;;
+      7)  err_msg="Connection refused — service is down or not listening (curl exit 7)" ;;
+      28) err_msg="Connection timed out — service not reachable (curl exit 28)" ;;
+      35) err_msg="SSL/TLS handshake failed (curl exit 35)" ;;
+      52) err_msg="Empty reply from server (curl exit 52)" ;;
+      56) err_msg="Connection reset — server closed unexpectedly (curl exit 56)" ;;
+    esac
+    echo "[vexa] ERROR: Request failed: ${err_msg:-curl exit code $exit_code}"
+    # Show which URL we tried
+    local url="${!#}"  # last argument is URL
+    echo "[vexa]   url: $url"
+    rm -f "$tmpfile" "${tmpfile}.err"
+    return 1
+  }
+  rm -f "${tmpfile}.err"
+
+  _CURL_BODY=$(cat "$tmpfile")
+  rm -f "$tmpfile"
+
+  # Check HTTP status
+  case "$http_code" in
+    2*)
+      # Success — print body
+      echo "$_CURL_BODY"
+      return 0
+      ;;
+    401)
+      echo "[vexa] ERROR: Authentication failed (HTTP 401). Check VEXA_BOT_API_TOKEN."
+      [ -n "$_CURL_BODY" ] && echo "[vexa]   detail: $_CURL_BODY"
+      return 1
+      ;;
+    403)
+      echo "[vexa] ERROR: Forbidden (HTTP 403). Token may lack permissions."
+      [ -n "$_CURL_BODY" ] && echo "[vexa]   detail: $_CURL_BODY"
+      return 1
+      ;;
+    404)
+      echo "[vexa] ERROR: Not found (HTTP 404). Check platform/meeting ID."
+      [ -n "$_CURL_BODY" ] && echo "[vexa]   detail: $_CURL_BODY"
+      return 1
+      ;;
+    409)
+      echo "[vexa] ERROR: Conflict (HTTP 409)."
+      [ -n "$_CURL_BODY" ] && echo "[vexa]   detail: $_CURL_BODY"
+      return 1
+      ;;
+    422)
+      echo "[vexa] ERROR: Invalid request (HTTP 422)."
+      [ -n "$_CURL_BODY" ] && echo "[vexa]   detail: $_CURL_BODY"
+      return 1
+      ;;
+    5*)
+      echo "[vexa] ERROR: Server error (HTTP $http_code)."
+      [ -n "$_CURL_BODY" ] && echo "[vexa]   detail: $_CURL_BODY"
+      return 1
+      ;;
+    *)
+      echo "[vexa] ERROR: Unexpected HTTP $http_code."
+      [ -n "$_CURL_BODY" ] && echo "[vexa]   detail: $_CURL_BODY"
+      return 1
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+case "${1:-}" in
+  workspace)
+    case "${2:-}" in
+      save)
+        _curl -X POST "$AGENT_API/internal/workspace/save" \
+          -H 'Content-Type: application/json' \
+          -d "{\"user_id\":\"$USER_ID\"}" > /dev/null && \
+          echo "[vexa] Workspace saved."
+        ;;
+      status)
+        _curl "$AGENT_API/internal/workspace/status?user_id=$USER_ID"
+        ;;
+      *)
+        echo "Usage: vexa workspace {save|status}"
+        exit 1
+        ;;
+    esac
+    ;;
+
+  schedule)
+    case "${2:-}" in
+      --at)
+        AT="$3"; shift 3
+        ACTION="${1:-chat}"; shift || true
+        MSG="$*"
+        ESCAPED_MSG=$(_json_escape "$MSG")
+        _curl -X POST "$AGENT_API/api/schedule" \
+          -H 'Content-Type: application/json' \
+          -d "{\"user_id\":\"$USER_ID\",\"action\":\"$ACTION\",\"at\":\"$AT\",\"message\":$ESCAPED_MSG}" > /dev/null && \
+          echo "[vexa] Job scheduled."
+        ;;
+      --in)
+        DELAY="$3"; shift 3
+        ACTION="${1:-chat}"; shift || true
+        MSG="$*"
+        ESCAPED_MSG=$(_json_escape "$MSG")
+        _curl -X POST "$AGENT_API/api/schedule" \
+          -H 'Content-Type: application/json' \
+          -d "{\"user_id\":\"$USER_ID\",\"action\":\"$ACTION\",\"in\":\"$DELAY\",\"message\":$ESCAPED_MSG}" > /dev/null && \
+          echo "[vexa] Job scheduled."
+        ;;
+      --cron)
+        EXPR="$3"; shift 3
+        ACTION="${1:-run-script}"; shift || true
+        TARGET="$*"
+        _curl -X POST "$AGENT_API/api/schedule" \
+          -H 'Content-Type: application/json' \
+          -d "{\"user_id\":\"$USER_ID\",\"action\":\"$ACTION\",\"cron\":\"$EXPR\",\"script_id\":\"$TARGET\"}" > /dev/null && \
+          echo "[vexa] Cron job scheduled."
+        ;;
+      --every)
+        INTERVAL="$3"; shift 3
+        ACTION="${1:-chat}"; shift || true
+        MSG="$*"
+        ESCAPED_MSG=$(_json_escape "$MSG")
+        _curl -X POST "$AGENT_API/api/schedule" \
+          -H 'Content-Type: application/json' \
+          -d "{\"user_id\":\"$USER_ID\",\"action\":\"$ACTION\",\"in\":\"$INTERVAL\",\"message\":$ESCAPED_MSG}" > /dev/null && \
+          echo "[vexa] Job scheduled (one-shot, recurring not yet supported)."
+        ;;
+      list)
+        _curl "$AGENT_API/api/schedule?user_id=$USER_ID" | python3 -c "
+import sys, json
+jobs = json.load(sys.stdin)
+if not jobs:
+    print('[vexa] No scheduled jobs.')
+else:
+    for j in jobs:
+        import datetime
+        t = datetime.datetime.fromtimestamp(j['execute_at'], tz=datetime.timezone.utc)
+        print(f\"  {j['job_id']}  {t.strftime('%Y-%m-%d %H:%M UTC')}  {j.get('action','')}  {j.get('message','')[:50]}\")
+"
+        ;;
+      cancel)
+        JOB_ID="${3:-}"
+        if [ -z "$JOB_ID" ]; then
+          echo "Usage: vexa schedule cancel <job_id>"
+          exit 1
+        fi
+        _curl -X DELETE "$AGENT_API/api/schedule/$JOB_ID" > /dev/null && \
+          echo "[vexa] Job $JOB_ID cancelled."
+        ;;
+      *)
+        echo "Usage: vexa schedule {--at|--in|--every|--cron|list|cancel} ..."
+        echo ""
+        echo "Examples:"
+        echo "  vexa schedule --at '2026-03-24T14:00:00Z' chat 'Reminder: call Brian'"
+        echo "  vexa schedule --in 2h chat 'Check deploy status'"
+        echo "  vexa schedule --every 3d chat 'Run workspace audit'"
+        echo "  vexa schedule list"
+        echo "  vexa schedule cancel job_abc123"
+        exit 1
+        ;;
+    esac
+    ;;
+
+  container)
+    RUNTIME="${VEXA_RUNTIME_API:-http://runtime-api:8090}"
+    BOT_TOKEN="${VEXA_BOT_API_TOKEN:-}"
+    case "${2:-}" in
+      spawn)
+        PROFILE="agent"
+        shift 2
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --profile) PROFILE="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        _curl -X POST "$RUNTIME/containers" \
+          -H "X-API-Key: $BOT_TOKEN" \
+          -H 'Content-Type: application/json' \
+          -d "{\"user_id\":\"$USER_ID\",\"profile\":\"$PROFILE\",\"config\":{}}" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print(f\"[vexa] Container spawned: {d['name']}\")
+print(f\"  profile: {d.get('profile')}\")
+print(f\"  status:  {d.get('status')}\")
+if d.get('cdp_url'):
+    print(f\"  cdp_url: {d['cdp_url']}\")
+ports = d.get('ports', {})
+if ports:
+    for k, v in ports.items():
+        print(f\"  port {k}: {v}\")
+"
+        ;;
+      list)
+        _curl -H "X-API-Key: $BOT_TOKEN" "$RUNTIME/containers?user_id=$USER_ID" | python3 -c "
+import sys, json
+containers = json.load(sys.stdin)
+if not containers:
+    print('[vexa] No containers.')
+else:
+    for c in containers:
+        cdp = f\"  cdp={c['cdp_url']}\" if c.get('cdp_url') else ''
+        print(f\"  {c['name']}  {c.get('profile','')}  {c.get('status','')}{cdp}\")
+"
+        ;;
+      stop)
+        NAME="${3:-}"
+        if [ -z "$NAME" ]; then
+          echo "Usage: vexa container stop <name>"
+          exit 1
+        fi
+        _curl -H "X-API-Key: $BOT_TOKEN" -X DELETE "$RUNTIME/containers/$NAME" > /dev/null && \
+          echo "[vexa] Container $NAME stopped."
+        ;;
+      *)
+        echo "Usage: vexa container {spawn --profile <profile>|list|stop <name>}"
+        ;;
+    esac
+    ;;
+
+  browser)
+    RUNTIME="${VEXA_RUNTIME_API:-http://runtime-api:8090}"
+    BOT_TOKEN="${VEXA_BOT_API_TOKEN:-}"
+    case "${2:-}" in
+      connect)
+        NAME="${3:-}"
+        if [ -z "$NAME" ]; then
+          echo "Usage: vexa browser connect <container-name>"
+          exit 1
+        fi
+        _curl -H "X-API-Key: $BOT_TOKEN" "$RUNTIME/containers/$NAME/cdp" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print(d.get('cdp_url', 'No CDP URL available'))
+"
+        ;;
+      *)
+        echo "Usage: vexa browser {connect <name>}"
+        ;;
+    esac
+    ;;
+
+  meeting)
+    BOT_MGR="${VEXA_MEETING_API:-http://meeting-api:8080}"
+    BOT_TOKEN="${VEXA_BOT_API_TOKEN:-}"
+    TC="${VEXA_TC:-http://transcription-collector:8000}"
+    case "${2:-}" in
+      join)
+        PLATFORM="" URL="" BOT_NAME="Vexa Agent"
+        shift 2
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --platform) PLATFORM="$2"; shift 2 ;;
+            --url) URL="$2"; shift 2 ;;
+            --name) BOT_NAME="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        if [ -z "$PLATFORM" ] || [ -z "$URL" ]; then
+          echo "Usage: vexa meeting join --platform {teams|google_meet|zoom} --url <meeting_url>"
+          exit 1
+        fi
+        NATIVE_ID=$(python3 -c "
+import re, sys
+url = '$URL'
+if 'teams.microsoft.com' in url:
+    m = re.search(r'/(\d{10,})', url)
+    print(m.group(1) if m else url)
+elif 'meet.google.com' in url:
+    m = re.search(r'([a-z]{3}-[a-z]{4}-[a-z]{3})', url)
+    print(m.group(1) if m else url)
+elif 'zoom.us' in url:
+    m = re.search(r'/j/(\d+)', url)
+    print(m.group(1) if m else url)
+else:
+    print(url)
+" 2>/dev/null)
+        _curl -X POST "$BOT_MGR/bots" \
+          -H "X-API-Key: $BOT_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d "{\"platform\":\"$PLATFORM\",\"native_meeting_id\":\"$NATIVE_ID\",\"meeting_url\":\"$URL\",\"bot_name\":\"$BOT_NAME\",\"transcribe_enabled\":true,\"recording_enabled\":true}" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print(f\"[vexa] Meeting bot launched!\")
+print(f\"  meeting_id: {d.get('id')}\")
+print(f\"  platform:   {d.get('platform')}\")
+print(f\"  status:     {d.get('status')}\")
+"
+        ;;
+
+      list)
+        _curl "$BOT_MGR/bots/status" \
+          -H "X-API-Key: $BOT_TOKEN" | python3 -c "
+import sys, json, datetime
+d = json.load(sys.stdin)
+bots = d.get('running_bots', [])
+if not bots:
+    print('[vexa] No active meeting bots.')
+else:
+    now = datetime.datetime.now(datetime.timezone.utc)
+    for b in bots:
+        elapsed = ''
+        st = b.get('start_time')
+        if st:
+            try:
+                started = datetime.datetime.fromisoformat(st.replace('Z', '+00:00'))
+                delta = int((now - started).total_seconds())
+                if delta >= 3600:
+                    elapsed = f'  {delta//3600}h {(delta%3600)//60}m ago'
+                else:
+                    elapsed = f'  {delta//60}m ago'
+            except Exception:
+                pass
+        print(f\"  {b.get('meeting_id','')}  {b.get('platform','')}  {b.get('status','')}{elapsed}\")
+"
+        ;;
+
+      status)
+        PLATFORM="" NATIVE_ID=""
+        shift 2
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --platform) PLATFORM="$2"; shift 2 ;;
+            --id) NATIVE_ID="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        if [ -z "$PLATFORM" ] || [ -z "$NATIVE_ID" ]; then
+          echo "Usage: vexa meeting status --platform <platform> --id <native_meeting_id>"
+          exit 1
+        fi
+        _curl "$BOT_MGR/bots/status" \
+          -H "X-API-Key: $BOT_TOKEN" | python3 -c "
+import sys, json, datetime
+d = json.load(sys.stdin)
+bots = d.get('running_bots', [])
+target_platform = '$PLATFORM'
+target_id = '$NATIVE_ID'
+bot = next((b for b in bots if b.get('platform') == target_platform and b.get('native_meeting_id') == target_id), None)
+if not bot:
+    print(f'[vexa] ERROR: No bot found for {target_platform}/{target_id}')
+    sys.exit(1)
+now = datetime.datetime.now(datetime.timezone.utc)
+elapsed = 'N/A'
+st = bot.get('start_time')
+if st:
+    try:
+        started = datetime.datetime.fromisoformat(st.replace('Z', '+00:00'))
+        delta = int((now - started).total_seconds())
+        if delta >= 3600:
+            elapsed = f'{delta//3600}h {(delta%3600)//60}m'
+        else:
+            elapsed = f'{delta//60}m {delta%60}s'
+    except Exception:
+        elapsed = st
+print(f'[vexa] Meeting bot status:')
+print(f'  meeting_id:       {bot.get(\"meeting_id\", \"N/A\")}')
+print(f'  platform:         {bot.get(\"platform\", \"N/A\")}')
+print(f'  native_id:        {bot.get(\"native_meeting_id\", \"N/A\")}')
+print(f'  status:           {bot.get(\"status\", \"N/A\")}')
+print(f'  start_time:       {st or \"N/A\"}')
+print(f'  elapsed:          {elapsed}')
+data = bot.get('data', {})
+if data:
+    recording = data.get('recording_state') or data.get('recording_status')
+    if recording:
+        print(f'  recording_state:  {recording}')
+"
+        ;;
+
+      transcript)
+        MEETING_ID="${3:-}"
+        if [ -z "$MEETING_ID" ]; then
+          echo "Usage: vexa meeting transcript <meeting_id>"
+          exit 1
+        fi
+        _curl "$TC/internal/transcripts/$MEETING_ID" \
+          -H "X-API-Key: $BOT_TOKEN" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+segments = data if isinstance(data, list) else data.get('segments', data.get('transcriptions', []))
+if not segments:
+    print('[vexa] No transcript segments found.')
+else:
+    for s in segments:
+        speaker = s.get('speaker', 'Unknown')
+        text = s.get('text', '')
+        print(f'{speaker}: {text}')
+"
+        ;;
+
+      participants)
+        PLATFORM="" NATIVE_ID=""
+        shift 2
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --platform) PLATFORM="$2"; shift 2 ;;
+            --id) NATIVE_ID="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        if [ -z "$PLATFORM" ] || [ -z "$NATIVE_ID" ]; then
+          echo "Usage: vexa meeting participants --platform <platform> --id <native_meeting_id>"
+          exit 1
+        fi
+        # Find meeting_id for the native_id first, then fetch transcript for speaker names
+        MEETING_ID=$(_curl "$BOT_MGR/bots/status" \
+          -H "X-API-Key: $BOT_TOKEN" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+bots = d.get('running_bots', [])
+target_platform = '$PLATFORM'
+target_id = '$NATIVE_ID'
+bot = next((b for b in bots if b.get('platform') == target_platform and b.get('native_meeting_id') == target_id), None)
+if bot:
+    print(bot.get('meeting_id', ''))
+" 2>/dev/null) || true
+        if [ -z "$MEETING_ID" ]; then
+          echo "[vexa] ERROR: No active bot found for $PLATFORM/$NATIVE_ID"
+          exit 1
+        fi
+        _curl "$TC/internal/transcripts/$MEETING_ID" \
+          -H "X-API-Key: $BOT_TOKEN" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+segments = data if isinstance(data, list) else data.get('segments', data.get('transcriptions', []))
+speakers = []
+seen = set()
+for s in segments:
+    sp = s.get('speaker', '')
+    if sp and sp not in seen:
+        seen.add(sp)
+        speakers.append(sp)
+if not speakers:
+    print('[vexa] No participants detected yet (no transcript segments).')
+else:
+    print(f'[vexa] Participants ({len(speakers)}):')
+    for sp in speakers:
+        print(f'  {sp}')
+"
+        ;;
+
+      stop)
+        PLATFORM="" NATIVE_ID=""
+        shift 2
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --platform) PLATFORM="$2"; shift 2 ;;
+            --id) NATIVE_ID="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        if [ -z "$PLATFORM" ] || [ -z "$NATIVE_ID" ]; then
+          echo "Usage: vexa meeting stop --platform <platform> --id <native_meeting_id>"
+          exit 1
+        fi
+        _curl -X DELETE "$BOT_MGR/bots/$PLATFORM/$NATIVE_ID" \
+          -H "X-API-Key: $BOT_TOKEN" > /dev/null && \
+          echo "[vexa] Meeting bot stopped."
+        ;;
+
+      wait-active)
+        PLATFORM="" NATIVE_ID="" TIMEOUT="60"
+        shift 2
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --platform) PLATFORM="$2"; shift 2 ;;
+            --id) NATIVE_ID="$2"; shift 2 ;;
+            --timeout) TIMEOUT="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        if [ -z "$PLATFORM" ] || [ -z "$NATIVE_ID" ]; then
+          echo "Usage: vexa meeting wait-active --platform <platform> --id <native_meeting_id> [--timeout 60]"
+          exit 1
+        fi
+        DEADLINE=$(( $(date +%s) + TIMEOUT ))
+        while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+          STATUS=$(_curl "$BOT_MGR/bots/status" \
+            -H "X-API-Key: $BOT_TOKEN" 2>/dev/null | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+bots = d.get('running_bots', [])
+target_platform = '$PLATFORM'
+target_id = '$NATIVE_ID'
+bot = next((b for b in bots if b.get('platform') == target_platform and b.get('native_meeting_id') == target_id), None)
+print(bot.get('status', '') if bot else '')
+" 2>/dev/null) || STATUS=""
+          if [ "$STATUS" = "active" ]; then
+            echo "[vexa] Bot is active in meeting."
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "[vexa] ERROR: Timeout waiting for bot to become active."
+        exit 1
+        ;;
+
+      transcribe)
+        MEETING_ID=""
+        shift 2
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --meeting-id) MEETING_ID="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        if [ -z "$MEETING_ID" ]; then
+          echo "Usage: vexa meeting transcribe --meeting-id <meeting_id>"
+          exit 1
+        fi
+        _curl -X POST "$BOT_MGR/meetings/$MEETING_ID/transcribe" \
+          -H "X-API-Key: $BOT_TOKEN" > /dev/null && \
+          echo "[vexa] Transcription triggered for meeting $MEETING_ID."
+        ;;
+
+      speak)
+        PLATFORM="" NATIVE_ID="" TEXT="" VOICE="alloy"
+        shift 2
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --platform) PLATFORM="$2"; shift 2 ;;
+            --id) NATIVE_ID="$2"; shift 2 ;;
+            --text) TEXT="$2"; shift 2 ;;
+            --voice) VOICE="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        if [ -z "$PLATFORM" ] || [ -z "$NATIVE_ID" ] || [ -z "$TEXT" ]; then
+          echo "Usage: vexa meeting speak --platform <platform> --id <native_meeting_id> --text <text> [--voice <voice>]"
+          echo "Voices: alloy, echo, fable, onyx, nova, shimmer (or any Piper voice name)"
+          exit 1
+        fi
+        ESCAPED_TEXT=$(_json_escape "$TEXT")
+        _curl -X POST "$BOT_MGR/bots/$PLATFORM/$NATIVE_ID/speak" \
+          -H "X-API-Key: $BOT_TOKEN" -H "Content-Type: application/json" \
+          -d "{\"text\":$ESCAPED_TEXT,\"voice\":\"$VOICE\"}" > /dev/null && \
+          echo "[vexa] Speak command queued. Use 'vexa meeting events' to check status."
+        ;;
+
+      speak-stop)
+        PLATFORM="" NATIVE_ID=""
+        shift 2
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --platform) PLATFORM="$2"; shift 2 ;;
+            --id) NATIVE_ID="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        if [ -z "$PLATFORM" ] || [ -z "$NATIVE_ID" ]; then
+          echo "Usage: vexa meeting speak-stop --platform <platform> --id <native_meeting_id>"
+          exit 1
+        fi
+        _curl -X DELETE "$BOT_MGR/bots/$PLATFORM/$NATIVE_ID/speak" \
+          -H "X-API-Key: $BOT_TOKEN" > /dev/null && \
+          echo "[vexa] Speak stopped."
+        ;;
+
+      chat)
+        PLATFORM="" NATIVE_ID="" TEXT=""
+        shift 2
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --platform) PLATFORM="$2"; shift 2 ;;
+            --id) NATIVE_ID="$2"; shift 2 ;;
+            --text) TEXT="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        if [ -z "$PLATFORM" ] || [ -z "$NATIVE_ID" ] || [ -z "$TEXT" ]; then
+          echo "Usage: vexa meeting chat --platform <platform> --id <native_meeting_id> --text <message>"
+          exit 1
+        fi
+        ESCAPED_TEXT=$(_json_escape "$TEXT")
+        _curl -X POST "$BOT_MGR/bots/$PLATFORM/$NATIVE_ID/chat" \
+          -H "X-API-Key: $BOT_TOKEN" -H "Content-Type: application/json" \
+          -d "{\"text\":$ESCAPED_TEXT}" > /dev/null && \
+          echo "[vexa] Chat message queued. Use 'vexa meeting events' to check status."
+        ;;
+
+      chat-read)
+        PLATFORM="" NATIVE_ID=""
+        shift 2
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --platform) PLATFORM="$2"; shift 2 ;;
+            --id) NATIVE_ID="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        if [ -z "$PLATFORM" ] || [ -z "$NATIVE_ID" ]; then
+          echo "Usage: vexa meeting chat-read --platform <platform> --id <native_meeting_id>"
+          exit 1
+        fi
+        _curl "$BOT_MGR/bots/$PLATFORM/$NATIVE_ID/chat" \
+          -H "X-API-Key: $BOT_TOKEN" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+msgs = data.get('messages', [])
+if not msgs:
+    print('[vexa] No chat messages.')
+else:
+    for m in msgs:
+        sender = m.get('sender', 'Unknown')
+        text = m.get('text', '')
+        ts = m.get('timestamp', '')
+        print(f'  [{ts}] {sender}: {text}')
+"
+        ;;
+
+      screen)
+        PLATFORM="" NATIVE_ID="" TYPE="" URL="" HTML_CONTENT=""
+        shift 2
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --platform) PLATFORM="$2"; shift 2 ;;
+            --id) NATIVE_ID="$2"; shift 2 ;;
+            --type) TYPE="$2"; shift 2 ;;
+            --url) URL="$2"; shift 2 ;;
+            --html) HTML_CONTENT="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        if [ -z "$PLATFORM" ] || [ -z "$NATIVE_ID" ] || [ -z "$TYPE" ]; then
+          echo "Usage: vexa meeting screen --platform <platform> --id <native_meeting_id> --type <image|video|url|html> [--url <url>] [--html <html>]"
+          exit 1
+        fi
+        if [ "$TYPE" = "html" ]; then
+          ESCAPED_HTML=$(_json_escape "$HTML_CONTENT")
+          BODY="{\"type\":\"$TYPE\",\"html\":$ESCAPED_HTML}"
+        else
+          BODY="{\"type\":\"$TYPE\",\"url\":\"$URL\"}"
+        fi
+        _curl -X POST "$BOT_MGR/bots/$PLATFORM/$NATIVE_ID/screen" \
+          -H "X-API-Key: $BOT_TOKEN" -H "Content-Type: application/json" \
+          -d "$BODY" > /dev/null && \
+          echo "[vexa] Screen share queued. Use 'vexa meeting events' to check status."
+        ;;
+
+      screen-stop)
+        PLATFORM="" NATIVE_ID=""
+        shift 2
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --platform) PLATFORM="$2"; shift 2 ;;
+            --id) NATIVE_ID="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        if [ -z "$PLATFORM" ] || [ -z "$NATIVE_ID" ]; then
+          echo "Usage: vexa meeting screen-stop --platform <platform> --id <native_meeting_id>"
+          exit 1
+        fi
+        _curl -X DELETE "$BOT_MGR/bots/$PLATFORM/$NATIVE_ID/screen" \
+          -H "X-API-Key: $BOT_TOKEN" > /dev/null && \
+          echo "[vexa] Screen share stopped."
+        ;;
+
+      avatar)
+        PLATFORM="" NATIVE_ID="" URL=""
+        shift 2
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --platform) PLATFORM="$2"; shift 2 ;;
+            --id) NATIVE_ID="$2"; shift 2 ;;
+            --url) URL="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        if [ -z "$PLATFORM" ] || [ -z "$NATIVE_ID" ] || [ -z "$URL" ]; then
+          echo "Usage: vexa meeting avatar --platform <platform> --id <native_meeting_id> --url <image_url>"
+          exit 1
+        fi
+        _curl -X PUT "$BOT_MGR/bots/$PLATFORM/$NATIVE_ID/avatar" \
+          -H "X-API-Key: $BOT_TOKEN" -H "Content-Type: application/json" \
+          -d "{\"url\":\"$URL\"}" > /dev/null && \
+          echo "[vexa] Avatar set."
+        ;;
+
+      avatar-reset)
+        PLATFORM="" NATIVE_ID=""
+        shift 2
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --platform) PLATFORM="$2"; shift 2 ;;
+            --id) NATIVE_ID="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        if [ -z "$PLATFORM" ] || [ -z "$NATIVE_ID" ]; then
+          echo "Usage: vexa meeting avatar-reset --platform <platform> --id <native_meeting_id>"
+          exit 1
+        fi
+        _curl -X DELETE "$BOT_MGR/bots/$PLATFORM/$NATIVE_ID/avatar" \
+          -H "X-API-Key: $BOT_TOKEN" > /dev/null && \
+          echo "[vexa] Avatar reset."
+        ;;
+
+      config)
+        PLATFORM="" NATIVE_ID="" LANGUAGE="" TASK=""
+        shift 2
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --platform) PLATFORM="$2"; shift 2 ;;
+            --id) NATIVE_ID="$2"; shift 2 ;;
+            --language) LANGUAGE="$2"; shift 2 ;;
+            --task) TASK="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        if [ -z "$PLATFORM" ] || [ -z "$NATIVE_ID" ]; then
+          echo "Usage: vexa meeting config --platform <platform> --id <native_meeting_id> [--language <lang>] [--task <task>]"
+          exit 1
+        fi
+        BODY="{"
+        [ -n "$LANGUAGE" ] && BODY="$BODY\"language\":\"$LANGUAGE\","
+        [ -n "$TASK" ] && BODY="$BODY\"task\":\"$TASK\","
+        BODY="${BODY%,}}"
+        _curl -X PUT "$BOT_MGR/bots/$PLATFORM/$NATIVE_ID/config" \
+          -H "X-API-Key: $BOT_TOKEN" -H "Content-Type: application/json" \
+          -d "$BODY" > /dev/null && \
+          echo "[vexa] Config updated."
+        ;;
+
+      events)
+        # vexa meeting events --platform teams --id <native_id> [--limit 20]
+        PLATFORM="" NATIVE_ID="" LIMIT="20"
+        shift 2
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --platform) PLATFORM="$2"; shift 2 ;;
+            --id) NATIVE_ID="$2"; shift 2 ;;
+            --limit) LIMIT="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        if [ -z "$PLATFORM" ] || [ -z "$NATIVE_ID" ]; then
+          echo "Usage: vexa meeting events --platform <platform> --id <native_meeting_id> [--limit 20]"
+          exit 1
+        fi
+        _curl "$BOT_MGR/bots/$PLATFORM/$NATIVE_ID/events?limit=$LIMIT" \
+          -H "X-API-Key: $BOT_TOKEN" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+events = data.get('events', [])
+if not events:
+    print('[vexa] No events yet. The bot may not have processed any commands.')
+else:
+    for e in events:
+        ts = e.get('ts', '?')
+        ev = e.get('event', '?')
+        # Show relevant extra info
+        extra = ''
+        if e.get('text'): extra = f' text=\"{e[\"text\"][:60]}\"'
+        if e.get('message'): extra = f' error=\"{e[\"message\"]}\"'
+        if e.get('source'): extra = f' source={e[\"source\"]}'
+        print(f'  {ts}  {ev}{extra}')
+"
+        ;;
+
+      *)
+        echo "Usage: vexa meeting {join|list|status|participants|wait-active|transcript|transcribe|stop|speak|speak-stop|chat|chat-read|screen|screen-stop|avatar|avatar-reset|config|events}"
+        echo ""
+        echo "Bot lifecycle:"
+        echo "  vexa meeting join --platform {teams|google_meet|zoom} --url {url}"
+        echo "  vexa meeting list"
+        echo "  vexa meeting status --platform {p} --id {id}"
+        echo "  vexa meeting participants --platform {p} --id {id}"
+        echo "  vexa meeting wait-active --platform {p} --id {id} [--timeout 60]"
+        echo "  vexa meeting transcript {meeting_id}"
+        echo "  vexa meeting transcribe --meeting-id {id}"
+        echo "  vexa meeting stop --platform {p} --id {id}"
+        echo "  vexa meeting config --platform {p} --id {id} [--language en] [--task transcribe]"
+        echo ""
+        echo "Voice (TTS):"
+        echo "  vexa meeting speak --platform {p} --id {id} --text {text} [--voice alloy]"
+        echo "  vexa meeting speak-stop --platform {p} --id {id}"
+        echo ""
+        echo "Chat:"
+        echo "  vexa meeting chat --platform {p} --id {id} --text {message}"
+        echo "  vexa meeting chat-read --platform {p} --id {id}"
+        echo ""
+        echo "Screen share:"
+        echo "  vexa meeting screen --platform {p} --id {id} --type {image|video|url|html} [--url {url}] [--html {html}]"
+        echo "  vexa meeting screen-stop --platform {p} --id {id}"
+        echo ""
+        echo "Avatar:"
+        echo "  vexa meeting avatar --platform {p} --id {id} --url {image_url}"
+        echo "  vexa meeting avatar-reset --platform {p} --id {id}"
+        echo ""
+        echo "Diagnostics:"
+        echo "  vexa meeting events --platform {p} --id {id} [--limit 20]"
+        ;;
+    esac
+    ;;
+
+  recording)
+    BOT_MGR="${VEXA_MEETING_API:-http://meeting-api:8080}"
+    BOT_TOKEN="${VEXA_BOT_API_TOKEN:-}"
+    case "${2:-}" in
+      list)
+        MEETING_ID=""
+        shift 2
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --meeting-id) MEETING_ID="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        PARAMS=""
+        [ -n "$MEETING_ID" ] && PARAMS="?meeting_id=$MEETING_ID"
+        _curl "$BOT_MGR/recordings$PARAMS" \
+          -H "X-API-Key: $BOT_TOKEN" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+recs = data.get('recordings', [])
+if not recs:
+    print('[vexa] No recordings.')
+else:
+    for r in recs:
+        rid = r.get('id', '')
+        mid = r.get('meeting_id', '')
+        created = r.get('created_at', '')
+        media = r.get('media_files', [])
+        media_str = ', '.join(f\"{m.get('type','?')}/{m.get('format','?')}\" for m in media) if media else 'none'
+        print(f'  {rid}  meeting={mid}  {created}  media=[{media_str}]')
+"
+        ;;
+
+      get)
+        REC_ID="${3:-}"
+        if [ -z "$REC_ID" ]; then
+          echo "Usage: vexa recording get <recording_id>"
+          exit 1
+        fi
+        _curl "$BOT_MGR/recordings/$REC_ID" \
+          -H "X-API-Key: $BOT_TOKEN" | python3 -m json.tool
+        ;;
+
+      download)
+        REC_ID="${3:-}"
+        MEDIA_ID="${4:-}"
+        if [ -z "$REC_ID" ] || [ -z "$MEDIA_ID" ]; then
+          echo "Usage: vexa recording download <recording_id> <media_file_id>"
+          exit 1
+        fi
+        _curl "$BOT_MGR/recordings/$REC_ID/media/$MEDIA_ID/download" \
+          -H "X-API-Key: $BOT_TOKEN" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+print(f\"[vexa] Download URL: {data.get('download_url', 'N/A')}\")
+print(f\"  filename: {data.get('filename', 'N/A')}\")
+print(f\"  size: {data.get('file_size_bytes', 'N/A')} bytes\")
+"
+        ;;
+
+      delete)
+        REC_ID="${3:-}"
+        if [ -z "$REC_ID" ]; then
+          echo "Usage: vexa recording delete <recording_id>"
+          exit 1
+        fi
+        _curl -X DELETE "$BOT_MGR/recordings/$REC_ID" \
+          -H "X-API-Key: $BOT_TOKEN" > /dev/null && \
+          echo "[vexa] Recording deleted."
+        ;;
+
+      config)
+        shift 2
+        if [ $# -eq 0 ]; then
+          _curl "$BOT_MGR/recording-config" \
+            -H "X-API-Key: $BOT_TOKEN" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+print(f\"[vexa] Recording config:\")
+print(f\"  enabled: {data.get('enabled')}\")
+print(f\"  capture_modes: {data.get('capture_modes')}\")
+"
+        else
+          ENABLED="" MODES=""
+          while [ $# -gt 0 ]; do
+            case "$1" in
+              --enabled) ENABLED="$2"; shift 2 ;;
+              --capture-modes) MODES="$2"; shift 2 ;;
+              *) shift ;;
+            esac
+          done
+          BODY="{"
+          [ -n "$ENABLED" ] && BODY="$BODY\"enabled\":$ENABLED,"
+          if [ -n "$MODES" ]; then
+            MODES_JSON=$(python3 -c "import json; print(json.dumps('$MODES'.split(',')))")
+            BODY="$BODY\"capture_modes\":$MODES_JSON,"
+          fi
+          BODY="${BODY%,}}"
+          _curl -X PUT "$BOT_MGR/recording-config" \
+            -H "X-API-Key: $BOT_TOKEN" -H "Content-Type: application/json" \
+            -d "$BODY" > /dev/null && \
+            echo "[vexa] Recording config updated."
+        fi
+        ;;
+
+      *)
+        echo "Usage: vexa recording {list|get|download|delete|config}"
+        echo ""
+        echo "  vexa recording list [--meeting-id <id>]"
+        echo "  vexa recording get <recording_id>"
+        echo "  vexa recording download <recording_id> <media_file_id>"
+        echo "  vexa recording delete <recording_id>"
+        echo "  vexa recording config                                    # show config"
+        echo "  vexa recording config --enabled true --capture-modes audio,video"
+        ;;
+    esac
+    ;;
+
+  --help|-h|"")
+    echo "vexa -- Vexa Agentic Runtime CLI"
+    echo ""
+    echo "Commands:"
+    echo "  workspace save                  Sync workspace to persistent storage"
+    echo "  workspace status                Check workspace sync state"
+    echo "  schedule --at|--in              Schedule a job for later"
+    echo "  schedule list|cancel            View or cancel scheduled jobs"
+    echo "  container spawn --profile X     Spawn a container (agent|browser)"
+    echo "  container list                  List running containers"
+    echo "  container stop <name>           Stop a container"
+    echo "  browser connect <name>          Get CDP URL for a browser container"
+    echo ""
+    echo "  meeting join --platform X --url Y  Send bot to join a meeting"
+    echo "  meeting list                       List active meeting bots (with elapsed time)"
+    echo "  meeting status --platform X --id Y Detailed status for a specific bot"
+    echo "  meeting participants ...           Speakers seen in meeting"
+    echo "  meeting wait-active ...            Poll until bot is active"
+    echo "  meeting transcript <id>            Fetch meeting transcript"
+    echo "  meeting transcribe --meeting-id X  Trigger post-meeting transcription"
+    echo "  meeting stop --platform X --id Y   Stop a meeting bot"
+    echo "  meeting config ...                 Update bot language/task"
+    echo "  meeting speak ...                  Bot speaks via TTS"
+    echo "  meeting speak-stop ...             Interrupt bot speech"
+    echo "  meeting chat ...                   Send chat message in meeting"
+    echo "  meeting chat-read ...              Read chat messages from meeting"
+    echo "  meeting screen ...                 Share screen content"
+    echo "  meeting screen-stop ...            Stop screen share"
+    echo "  meeting avatar ...                 Set bot avatar image"
+    echo "  meeting avatar-reset ...           Reset bot avatar"
+    echo "  meeting events ...                 Recent bot events (diagnose failures)"
+    echo ""
+    echo "  recording list                     List recordings"
+    echo "  recording get <id>                 Get recording details"
+    echo "  recording download <id> <media_id> Get download URL"
+    echo "  recording delete <id>              Delete a recording"
+    echo "  recording config                   View/update recording settings"
+    ;;
+  *)
+    echo "[vexa] Unknown command: $1"
+    echo "[vexa] Run 'vexa --help' for available commands."
+    exit 1
+    ;;
+esac
