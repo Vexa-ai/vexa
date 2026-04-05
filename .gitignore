@@ -88,6 +88,7 @@ celerybeat-schedule
 .env
 .venv
 env/
+!deploy/env/
 venv/
 ENV/
 env.bak/
@@ -122,9 +123,13 @@ model_weights/
 *.pt
 *.pth
 
+# Node
+node_modules/
+
 # Docker
 .docker/
 docker-volumes/
+.last-tag
 
 
 hub/
@@ -147,3 +152,9 @@ test_data/
 *.txt
 !**/requirements.txt
 manifest.csv
+docker-compose.override.yml
+.env.test
+hub
+test.log
+.worktrees/
+secrets/

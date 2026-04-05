@@ -1,0 +1,30 @@
+name: Test Admin API
+
+on:
+  push:
+    branches: [main, feature/*]
+    paths:
+      - 'services/admin-api/**'
+      - 'libs/admin-models/**'
+      - '.github/workflows/test-admin-api.yml'
+  pull_request:
+    paths:
+      - 'services/admin-api/**'
+      - 'libs/admin-models/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          pip install -e libs/admin-models/
+          pip install -e services/meeting-api/
+          pip install -e services/admin-api/ 2>/dev/null || pip install -r services/admin-api/requirements.txt
+          pip install pytest pytest-asyncio httpx
+      - name: Run tests
+        run: pytest services/admin-api/tests/ -v

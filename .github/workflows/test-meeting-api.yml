@@ -1,0 +1,29 @@
+name: Test Meeting API
+
+on:
+  push:
+    branches: [main, feature/*]
+    paths:
+      - 'services/meeting-api/**'
+      - 'libs/admin-models/**'
+      - '.github/workflows/test-meeting-api.yml'
+  pull_request:
+    paths:
+      - 'services/meeting-api/**'
+      - 'libs/admin-models/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          pip install -e libs/admin-models/
+          pip install -e services/meeting-api/
+          pip install pytest pytest-asyncio httpx
+      - name: Run unit tests
+        run: pytest services/meeting-api/tests/ -v --ignore=services/meeting-api/tests/test_integration_live.py

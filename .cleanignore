@@ -1,0 +1,36 @@
+# Paths to exclude from the clean branch
+# One path per line. Directories end with /
+# Lines starting with # are comments
+
+# Claude Code artifacts (everywhere in the repo)
+.claude/
+**/.claude/
+
+# Management workspace — not part of the product
+features/
+
+# Marketing and presentations
+presentation.html
+
+# Not shipping in 0.10 — zero readiness
+services/calendar-service/
+
+# Not shipping in 0.10 — not properly tested
+services/telegram-bot/
+
+# Dashboard development artifacts
+services/dashboard/agent-flow.js
+services/dashboard/agent-inspect.js
+services/dashboard/auth-validate.js
+services/dashboard/auth-validate2.js
+services/dashboard/auth-validate3.js
+services/dashboard/auth-validate-final.js
+services/dashboard/check-pages.js
+services/dashboard/deliver-validate.js
+services/dashboard/deliver-validate.ts
+services/dashboard/feature-validate.js
+services/dashboard/test-agent-panel.mjs
+services/dashboard/docs/screenshots/
+
+# Orphaned docs
+docs/tests/

@@ -1,0 +1,102 @@
+---
+title: "Token Scoping"
+---
+
+API tokens can be scoped to limit what they can access. A bot-only token cannot manage users, and a transcription-only token cannot start bots. This follows the principle of least privilege.
+
+## Token format
+
+Scoped tokens use a prefix that identifies the scope:
+
+```
+vxa_<scope>_<random>
+```
+
+Examples:
+- `vxa_user_pZqJ5dEQK47Mc7YeVTR53wAefBCs7Nf6d0fHbHs8` — user scope
+- `vxa_bot_VDXyV683YBvsCRrlUtnWWKLC0qTtGNaxGgVS8F5s` — bot scope
+- `vxa_tx_eFgh1234abcd5678...` — transcription scope
+- `vxa_admin_xyz789...` — admin scope
+
+Legacy tokens (without the `vxa_` prefix) retain full access for backward compatibility.
+
+## Scopes
+
+| Scope | Prefix | Access |
+|-------|--------|--------|
+| `user` | `vxa_user_` | Standard user operations: manage bots, view meetings, read transcripts |
+| `bot` | `vxa_bot_` | Bot operations only: start/stop bots, check bot status |
+| `tx` | `vxa_tx_` | Transcription read-only: view meetings, read transcripts |
+| `admin` | `vxa_admin_` | Full admin access: all operations |
+
+## Enforcement
+
+Scope enforcement happens at the service level, not the gateway. Each backend service declares which scopes it accepts:
+
+| Service | Endpoint examples | Allowed scopes |
+|---------|-------------------|---------------|
+| meeting-api | `POST /bots`, `GET /bots/status` | `bot`, `user`, `admin` |
+| meeting-api | `GET /meetings`, `GET /transcripts` | `tx`, `user`, `admin` |
+| admin-api | `POST /admin/users`, `GET /admin/tokens` | `user`, `admin` |
+
+A request with an out-of-scope token receives `403 Forbidden`:
+
+```json
+{
+  "detail": "Token scope not authorized for bot management"
+}
+```
+
+## Creating scoped tokens
+
+Create tokens via the admin API:
+
+```bash
+curl -X POST "https://your-vexa-host/admin/users/{user_id}/tokens?scope=bot" \
+  -H "X-Admin-API-Key: YOUR_ADMIN_KEY"
+```
+
+Response:
+
+```json
+{
+  "user_id": 1,
+  "id": 42,
+  "token": "vxa_bot_VDXyV683YBvsCRrlUtnWWKLC0qTtGNaxGgVS8F5s",
+  "created_at": "2026-03-23T10:00:00"
+}
+```
+
+The `scope` parameter accepts: `user`, `bot`, `tx`, `admin`. If omitted, defaults to `user`.
+
+## Using scoped tokens
+
+Use scoped tokens the same way as regular tokens — via the `X-API-Key` header:
+
+```bash
+# This works — bot scope can access bot endpoints
+curl -H "X-API-Key: vxa_bot_VDXyV683Y..." \
+  https://your-vexa-host/bots/status
+
+# This fails with 403 — bot scope cannot access transcripts
+curl -H "X-API-Key: vxa_bot_VDXyV683Y..." \
+  https://your-vexa-host/meetings
+```
+
+## Legacy tokens
+
+Tokens created before scoping was introduced have no `vxa_` prefix. These tokens retain full access to all endpoints for backward compatibility.
+
+To migrate a legacy token to a scoped token:
+1. Create a new scoped token with the desired scope
+2. Update your application to use the new token
+3. Revoke the legacy token via `DELETE /admin/tokens/{id}`
+
+## Revoking tokens
+
+```bash
+curl -X DELETE "https://your-vexa-host/admin/tokens/{token_id}" \
+  -H "X-Admin-API-Key: YOUR_ADMIN_KEY"
+```
+
+Revoked tokens are immediately rejected on the next request.

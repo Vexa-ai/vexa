@@ -15,7 +15,7 @@ Example:
 
 ## Backend options
 
-Set `STORAGE_BACKEND` in `bot-manager`:
+Set `STORAGE_BACKEND` in `meeting-api`:
 
 - `local`: filesystem directory
 - `minio`: S3-compatible object store via MinIO settings
@@ -33,7 +33,7 @@ LOCAL_STORAGE_FSYNC=true
 # LOCAL_STORAGE_VOLUME_SOURCE=./data/recordings
 ```
 
-`docker-compose.yml` mounts a persistent named volume:
+`deploy/compose/docker-compose.yml` mounts a persistent named volume:
 
 - container path: `/data/recordings`
 - volume name: `recordings-data`
@@ -107,7 +107,7 @@ Without a mounted volume, recordings are lost when the container is replaced.
 
 ### Option A: local filesystem in pod (requires PVC)
 
-Use local backend with a PVC mounted into the bot-manager pod:
+Use local backend with a PVC mounted into the meeting-api pod:
 
 ```env
 STORAGE_BACKEND=local
@@ -119,7 +119,7 @@ Mount PVC at `/data/recordings`.
 
 ### Option B: object storage (recommended)
 
-Use `minio` (self-hosted) or `s3` (managed cloud) and keep bot-manager stateless.
+Use `minio` (self-hosted) or `s3` (managed cloud) and keep meeting-api stateless.
 
 ## API behavior
 

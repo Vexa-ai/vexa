@@ -25,11 +25,12 @@ Vexa Lite runs the following services internally via supervisord:
 |---------|--------------|-------------|
 | API Gateway | 8056 | Main entry point (the only exposed port) |
 | Admin API | 8057 | User and API token management |
-| Bot Manager | 8080 | Bot lifecycle management (process orchestrator) |
-| Transcription Collector | 8123 | Stores transcription segments in PostgreSQL |
-| WhisperLive | 9090 | Transcription relay (routes to remote service) |
+| Meeting API | 8080 | Bot orchestration + transcription pipeline |
+| Runtime API | 8090 | Container lifecycle — process backend |
+| Agent API | 8100 | AI agent chat runtime |
+| Dashboard | 3000 | Next.js web UI |
 | MCP Service | 18888 | Model Context Protocol for Claude/Cursor |
-| TTS Service | 8059 | Text-to-speech via OpenAI API |
+| TTS Service | 8059 | Text-to-speech |
 | Redis | 6379 | Built-in message broker |
 | Xvfb | — | Virtual display for headless browsers |
 | PulseAudio | — | Audio server for TTS playback |
@@ -54,6 +55,8 @@ docker run -d \
   -e OPENAI_API_KEY="sk-your-openai-key" \
   vexaai/vexa-lite:latest
 ```
+
+> **Production:** Use immutable tags (e.g., `0.10.0-260405-0108`) instead of `:latest` for reproducible deployments.
 
 ### Development: Local Database
 
@@ -271,6 +274,8 @@ docker run -d \
   vexaai/vexa-lite:latest
 ```
 
+> **Production:** Use immutable tags (e.g., `0.10.0-260405-0108`) instead of `:latest`.
+
 For local development, mount a volume:
 
 ```bash
@@ -289,7 +294,7 @@ To build the image locally from the Vexa repository:
 
 ```bash
 git clone https://github.com/Vexa-ai/vexa.git
-cd vexa/docker/lite
+cd vexa/deploy/lite
 make build
 ```
 
@@ -331,6 +336,13 @@ Then run Vexa Lite with `--network vexa-network` and `DB_HOST=vexa-postgres`.
 </Accordion>
 
 ---
+
+## Source Code
+
+- [api-gateway](https://github.com/Vexa-ai/vexa/blob/main/services/api-gateway/README.md) -- REST/WebSocket API
+- [meeting-api](https://github.com/Vexa-ai/vexa/blob/main/services/meeting-api/README.md) -- bot lifecycle orchestration
+- [dashboard](https://github.com/Vexa-ai/vexa/blob/main/services/dashboard/README.md) -- web UI
+- [admin-api](https://github.com/Vexa-ai/vexa/blob/main/services/admin-api/README.md) -- user and token management
 
 ## Next Steps
 

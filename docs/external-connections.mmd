@@ -1,0 +1,131 @@
+graph TB
+    subgraph VEXA["VEXA AGENTIC RUNTIME"]
+        GW["API Gateway<br/>:8056"]
+        MCP["MCP Service<br/>:18888"]
+        BOT["Vexa Bot<br/>(Browser)"]
+        RT["Runtime API"]
+        MEET["Meeting API"]
+        CAL["Calendar Service"]
+        AGENT["Agent API"]
+        ADMIN["Admin API"]
+        DASH["Dashboard<br/>(Next.js)"]
+        TGBOT["Telegram Bot"]
+        WEBHOOK["Webhook Delivery"]
+        RETRY["Webhook Retry Worker"]
+    end
+
+    subgraph DATA["DATA STORES"]
+        PG[("PostgreSQL<br/>:5432<br/>asyncpg")]
+        REDIS[("Redis<br/>:6379<br/>pub/sub + streams")]
+        MINIO[("MinIO / S3<br/>:9000<br/>recordings & workspaces")]
+    end
+
+    subgraph MEETING_PLATFORMS["MEETING PLATFORMS"]
+        TEAMS["Microsoft Teams"]
+        GMEET["Google Meet"]
+        ZOOM["Zoom"]
+    end
+
+    subgraph GOOGLE["GOOGLE APIS"]
+        GCAL["Google Calendar API<br/>calendar/v3"]
+        GOAUTH["Google OAuth 2.0<br/>oauth2.googleapis.com"]
+    end
+
+    subgraph AI["AI SERVICES"]
+        CLAUDE["Claude API<br/>(Anthropic)"]
+        OPENAI["OpenAI API"]
+    end
+
+    subgraph COMMS["COMMUNICATION"]
+        TG_API["Telegram Bot API"]
+        SMTP["SMTP Server<br/>(email magic links)"]
+        USER_WH["User Webhook<br/>Endpoints"]
+        BILLING["Billing Hooks<br/>(internal)"]
+    end
+
+    subgraph ML["ML SERVICES (self-hosted)"]
+        STT["Transcription Service<br/>Whisper :8085"]
+        TTS["TTS Service<br/>Piper :8002"]
+    end
+
+    subgraph INFRA["INFRASTRUCTURE"]
+        DOCKER["Docker Engine<br/>/var/run/docker.sock"]
+        K8S["Kubernetes API<br/>(alternative)"]
+    end
+
+    subgraph BROWSER["BROWSER SESSIONS"]
+        CDP["CDP WebSocket<br/>:9223"]
+        VNC["VNC WebSocket<br/>:6080"]
+    end
+
+    %% Client-facing
+    GW ---|"WebSocket /ws<br/>live transcripts"| CLIENTS(("External<br/>Clients"))
+    GW ---|"REST + MCP<br/>X-API-Key / Bearer"| CLIENTS
+    DASH ---|"NextAuth<br/>JWT sessions"| CLIENTS
+
+    %% Data store connections
+    MEET --> PG
+    ADMIN --> PG
+    CAL --> PG
+    AGENT --> PG
+    GW --> REDIS
+    MEET --> REDIS
+    AGENT --> REDIS
+    MEET --> MINIO
+    AGENT --> MINIO
+
+    %% Meeting platforms (browser-based)
+    BOT -->|"Browser join<br/>WebSocket + WebRTC"| TEAMS
+    BOT -->|"Browser join<br/>WebSocket + WebRTC"| GMEET
+    BOT -->|"Browser join<br/>OAuth + WebRTC"| ZOOM
+
+    %% Google APIs
+    CAL -->|"HTTPS REST<br/>OAuth 2.0 Bearer"| GCAL
+    CAL -->|"Token refresh"| GOAUTH
+    DASH -->|"OAuth login"| GOAUTH
+
+    %% AI services
+    AGENT -->|"Docker exec<br/>Claude CLI streaming"| CLAUDE
+    DASH -->|"Vercel AI SDK<br/>HTTPS"| CLAUDE
+    DASH -->|"Vercel AI SDK<br/>HTTPS"| OPENAI
+
+    %% Communication
+    TGBOT -->|"HTTPS polling<br/>python-telegram-bot"| TG_API
+    DASH -->|"Nodemailer<br/>SMTP"| SMTP
+    WEBHOOK -->|"HTTPS POST<br/>HMAC-SHA256 signed"| USER_WH
+    MEET -->|"HTTPS POST"| BILLING
+    RETRY -->|"Backoff 1m→5m→30m→2h"| USER_WH
+
+    %% ML services
+    MEET -->|"HTTP POST<br/>multipart WAV"| STT
+    MEET -->|"HTTP POST"| TTS
+
+    %% Infrastructure
+    RT -->|"Unix socket"| DOCKER
+    AGENT -->|"Unix socket"| DOCKER
+    RT -.->|"kubeconfig"| K8S
+
+    %% Browser sessions
+    GW -->|"WebSocket proxy"| CDP
+    GW -->|"Websockify proxy"| VNC
+
+    %% Internal routing
+    GW --> MEET
+    GW --> MCP
+    GW --> AGENT
+    MCP --> MEET
+
+    %% Styling
+    classDef external fill:#f9a825,stroke:#f57f17,color:#000
+    classDef data fill:#42a5f5,stroke:#1565c0,color:#fff
+    classDef service fill:#66bb6a,stroke:#2e7d32,color:#fff
+    classDef infra fill:#ab47bc,stroke:#6a1b9a,color:#fff
+    classDef ml fill:#ef5350,stroke:#c62828,color:#fff
+    classDef client fill:#78909c,stroke:#37474f,color:#fff
+
+    class TEAMS,GMEET,ZOOM,GCAL,GOAUTH,CLAUDE,OPENAI,TG_API,SMTP,USER_WH,BILLING external
+    class PG,REDIS,MINIO data
+    class GW,MCP,BOT,RT,MEET,CAL,AGENT,ADMIN,DASH,TGBOT,WEBHOOK,RETRY service
+    class DOCKER,K8S,CDP,VNC infra
+    class STT,TTS ml
+    class CLIENTS client

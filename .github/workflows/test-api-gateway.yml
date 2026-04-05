@@ -1,0 +1,35 @@
+name: Test API Gateway
+
+on:
+  push:
+    branches: [main, feature/*]
+    paths:
+      - 'services/api-gateway/**'
+      - 'services/meeting-api/meeting_api/schemas.py'
+      - '.github/workflows/test-api-gateway.yml'
+  pull_request:
+    paths:
+      - 'services/api-gateway/**'
+      - 'services/meeting-api/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          pip install -e libs/admin-models/
+          pip install -e services/meeting-api/
+          pip install -r services/api-gateway/requirements.txt
+          pip install pytest pytest-asyncio httpx
+      - name: Run tests
+        env:
+          ADMIN_API_URL: http://admin-api:8001
+          MEETING_API_URL: http://meeting-api:8080
+          TRANSCRIPTION_COLLECTOR_URL: http://meeting-api:8080
+          MCP_URL: http://mcp:18888
+        run: pytest services/api-gateway/tests/ -v

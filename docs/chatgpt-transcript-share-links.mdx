@@ -13,7 +13,7 @@ Instead, the Vexa Dashboard calls an **authenticated** Vexa API endpoint to mint
    - `POST /transcripts/{platform}/{native_meeting_id}/share?meeting_id=<internal_meeting_id>`
    - Requires `X-API-Key`
 2. API Gateway:
-   - Fetches the transcript from `transcription-collector`
+   - Fetches the transcript from `meeting-api`
    - Formats it into **plain text**
    - Stores it in **Redis** under a random share id with a **TTL**
    - Returns a `url` like:

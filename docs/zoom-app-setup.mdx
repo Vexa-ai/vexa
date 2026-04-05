@@ -1,14 +1,19 @@
 ---
 title: "Zoom Integration Setup Guide"
 ---
-Use this guide to configure Zoom for the Vexa meeting bot in self-hosted or custom deployments.
+
+<Warning>
+**Zoom SDK integration is for self-hosted (open source) deployments only.** The hosted service at vexa.ai does not yet support Zoom. A browser-based approach (no SDK needed) is in development.
+</Warning>
+
+Use this guide to configure Zoom for the Vexa meeting bot in self-hosted deployments.
 
 ## Overview
 
 Vexa joins Zoom meetings with the Zoom Meeting SDK, captures audio, and sends it through the transcription pipeline.
 
 ```text
-Zoom Meeting SDK -> PCM audio -> WhisperLive -> transcript output
+Zoom Meeting SDK -> PCM audio -> transcription-service -> transcript output
 ```
 
 Zoom requires an authorized token path (OBF/ZAK/RTMS) for Meeting SDK apps joining meetings outside their own account starting **March 2, 2026**.
@@ -25,7 +30,7 @@ Before your Zoom app is approved (and depending on Zoom policy and account setti
 
 ### Hosted service status
 
-The hosted Vexa service Zoom app is **not approved** at the time of writing, so Zoom bots from the hosted service should be treated as limited to the authorizing user's own meetings until approval is complete.
+**Zoom is not available on the hosted service (vexa.ai).** This setup guide applies to self-hosted (open source) deployments only. A browser-based Zoom web app (no SDK needed) is in development and will enable Zoom on the hosted service when released.
 
 ## 1. Create and Configure the Zoom App
 
@@ -113,7 +118,7 @@ If these files are missing, bot creation may return `201` initially, but the mee
 
 Implementation detail:
 
-- Dashboard and bot-manager resolve OAuth credentials with fallback:
+- Dashboard and meeting-api resolve OAuth credentials with fallback:
   `ZOOM_OAUTH_CLIENT_ID/SECRET` -> `ZOOM_CLIENT_ID/SECRET`.
 - Dashboard state signing secret fallback is:
   `ZOOM_OAUTH_STATE_SECRET` -> `NEXTAUTH_SECRET` -> `VEXA_ADMIN_API_KEY`.
@@ -131,13 +136,13 @@ Current behavior when creating a Zoom bot:
 
 Code references:
 
-- `vexa/services/bot-manager/app/main.py`
-- `vexa/services/bot-manager/app/zoom_obf.py`
+- `vexa/services/meeting-api/meeting_api/meetings.py`
+- `vexa/services/meeting-api/meeting_api/zoom_obf.py`
 - `vexa/services/vexa-bot/core/src/types.ts`
 - `vexa/services/vexa-bot/core/src/platforms/zoom/sdk-manager.ts`
 - `vexa/services/vexa-bot/core/src/platforms/zoom/native/src/zoom_wrapper.cpp`
-- `Vexa-Dashboard/src/app/api/zoom/oauth/start/route.ts`
-- `Vexa-Dashboard/src/app/api/zoom/oauth/complete/route.ts`
+- `services/dashboard/src/app/api/zoom/oauth/start/route.ts`
+- `services/dashboard/src/app/api/zoom/oauth/complete/route.ts`
 
 ## 6. Quick Verification
 

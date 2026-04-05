@@ -27,7 +27,7 @@ Add Vexa to your client's MCP server configuration:
       "args": [
         "-y", "mcp-remote",
         "https://api.cloud.vexa.ai/mcp",
-        "--header", "Authorization: Bearer ${VEXA_API_KEY}"
+        "--header", "X-API-Key: ${VEXA_API_KEY}"
       ],
       "env": {
         "VEXA_API_KEY": "YOUR_API_KEY_HERE"
@@ -45,8 +45,8 @@ The MCP server accepts API keys via:
 
 | Method | Format |
 |--------|--------|
-| Bearer token (preferred) | `Authorization: Bearer <api_key>` |
-| API key header | `X-API-Key: <api_key>` |
+| API key header (preferred) | `X-API-Key: <api_key>` |
+| Bearer token | `Authorization: Bearer <api_key>` |
 
 ## Tools
 
@@ -277,7 +277,7 @@ When running Vexa locally, the MCP server is available at `http://localhost:1888
       "args": [
         "-y", "mcp-remote",
         "http://localhost:18888/mcp",
-        "--header", "Authorization: Bearer ${VEXA_API_KEY}"
+        "--header", "X-API-Key: ${VEXA_API_KEY}"
       ],
       "env": {
         "VEXA_API_KEY": "YOUR_API_KEY_HERE"

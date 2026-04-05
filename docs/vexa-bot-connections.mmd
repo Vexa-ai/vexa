@@ -1,0 +1,96 @@
+graph TB
+    subgraph BOT["VEXA BOT (Node.js + Playwright)"]
+        direction TB
+        MAIN["Bot Core<br/>index.ts"]
+        AUDIO["Audio Service<br/>audio.ts"]
+        VAD["VAD + Resampler"]
+        TC["Transcription Client<br/>transcription-client.ts"]
+        TTS["TTS Playback<br/>tts-playback.ts"]
+        REC["Recording Service<br/>recording.ts"]
+        SEG["Segment Publisher<br/>segment-publisher.ts"]
+        CHAT["Chat Service<br/>chat.ts"]
+        CB["Unified Callback<br/>unified-callback.ts"]
+        S3SYNC["S3 Sync<br/>s3-sync.ts"]
+        BSESS["Browser Session<br/>browser-session.ts"]
+        ZOOM_SDK["Zoom SDK Manager<br/>sdk-manager.ts"]
+    end
+
+    subgraph PLATFORMS["MEETING PLATFORMS (Browser / WebRTC)"]
+        TEAMS["Microsoft Teams<br/>teams.live.com"]
+        GMEET["Google Meet<br/>meet.google.com"]
+        ZOOM_WEB["Zoom Web<br/>app.zoom.us"]
+        ZOOM_NATIVE["Zoom Native SDK<br/>(C++ addon)"]
+    end
+
+    subgraph VEXA_INTERNAL["VEXA INTERNAL SERVICES"]
+        STT["Transcription Service<br/>Whisper :8085<br/>/v1/audio/transcriptions"]
+        TTS_SVC["TTS Service<br/>Piper :8002<br/>/v1/audio/speech"]
+        BM["Bot Manager<br/>(runtime-api)<br/>/status_change  /upload"]
+        REDIS[("Redis :6379<br/>pub/sub + streams")]
+        MINIO[("MinIO / S3 :9000<br/>browser profiles<br/>& workspaces")]
+    end
+
+    subgraph EXTERNAL["EXTERNAL SERVICES"]
+        ZOOM_AUTH["Zoom OAuth<br/>JWT from<br/>CLIENT_ID + SECRET"]
+        GIT["Git Remote<br/>(GitHub/GitLab)<br/>HTTPS + PAT"]
+    end
+
+    %% Audio capture flow
+    MAIN -->|"Playwright browser<br/>joins meeting"| TEAMS
+    MAIN -->|"Playwright browser<br/>joins meeting"| GMEET
+    MAIN -->|"Playwright browser<br/>joins meeting"| ZOOM_WEB
+    ZOOM_SDK -->|"Native SDK join<br/>JWT auth"| ZOOM_NATIVE
+
+    TEAMS -->|"WebRTC audio<br/>MediaStream"| AUDIO
+    GMEET -->|"WebRTC audio<br/>MediaStream"| AUDIO
+    ZOOM_WEB -->|"WebRTC audio<br/>MediaStream"| AUDIO
+    ZOOM_NATIVE -->|"Native audio<br/>callback"| AUDIO
+
+    %% Internal processing
+    AUDIO --> VAD
+    VAD -->|"per-speaker<br/>Float32Array"| TC
+    VAD -->|"PCM chunks"| REC
+
+    %% Transcription Service
+    TC -->|"HTTP POST multipart WAV<br/>Bearer token<br/>3 retries, exp backoff"| STT
+    STT -->|"JSON transcript"| TC
+    TC -->|"confirmed segments"| SEG
+
+    %% TTS Service
+    TTS -->|"HTTP POST JSON<br/>X-API-Key header<br/>streaming PCM response"| TTS_SVC
+    TTS_SVC -->|"PCM audio stream"| TTS
+    TTS -->|"virtual_mic<br/>PulseAudio sink"| AUDIO
+
+    %% Recording upload
+    REC -->|"HTTP POST multipart<br/>WAV + metadata JSON<br/>30s timeout, 3 retries"| BM
+
+    %% Status callbacks
+    CB -->|"HTTP POST JSON<br/>status: joining→active→completed<br/>5s timeout, 3 retries"| BM
+
+    %% Redis connections
+    SEG -->|"XADD transcription_segments<br/>XADD speaker_events_relative"| REDIS
+    SEG -->|"PUBLISH meeting:{id}:segments<br/>PUBLISH tc:meeting:{id}:mutable"| REDIS
+    CHAT -->|"XADD chat events<br/>PUBLISH meeting:{id}:chat"| REDIS
+
+    %% S3/MinIO sync
+    S3SYNC -->|"aws s3 sync<br/>browser profiles<br/>120s timeout"| MINIO
+    BSESS --> S3SYNC
+
+    %% Git sync
+    BSESS -->|"git clone/push<br/>HTTPS + PAT injection<br/>workspace sync"| GIT
+
+    %% Zoom auth
+    ZOOM_SDK -->|"JWT generation<br/>client_id + secret"| ZOOM_AUTH
+
+    %% Styling
+    classDef bot fill:#4db6ac,stroke:#00796b,color:#000
+    classDef platform fill:#f9a825,stroke:#f57f17,color:#000
+    classDef internal fill:#42a5f5,stroke:#1565c0,color:#fff
+    classDef external fill:#ef5350,stroke:#c62828,color:#fff
+    classDef data fill:#7e57c2,stroke:#4527a0,color:#fff
+
+    class MAIN,AUDIO,VAD,TC,TTS,REC,SEG,CHAT,CB,S3SYNC,BSESS,ZOOM_SDK bot
+    class TEAMS,GMEET,ZOOM_WEB,ZOOM_NATIVE platform
+    class STT,TTS_SVC,BM internal
+    class REDIS,MINIO data
+    class ZOOM_AUTH,GIT external
