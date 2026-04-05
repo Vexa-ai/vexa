@@ -8,7 +8,7 @@ let sdkManager: ZoomSDKManager | null = null;
 export async function joinZoomMeeting(page: Page | null, botConfig: BotConfig): Promise<void> {
   log(`[Zoom] Initializing SDK and joining meeting: ${botConfig.meetingUrl}`);
 
-  // Signal "joining" so bot-manager transitions: requested → joining → active
+  // Signal "joining" so meeting-api transitions: requested → joining → active
   await callJoiningCallback(botConfig);
 
   // Validate environment variables
