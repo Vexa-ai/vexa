@@ -2,17 +2,13 @@
 // Keep this file free of runtime logic; export constants only.
 
 export const googleInitialAdmissionIndicators: string[] = [
-  // Most reliable indicators: UI controls that appear when in meeting
-  'button[aria-label*="People"]',
-  'button[aria-label*="people"]',
-  'button[aria-label*="Chat"]',
-  'button[aria-label*="chat"]',
-  'button[aria-label*="Leave call"]',
-  'button[aria-label*="Leave meeting"]',
-  '[role="toolbar"]',
+  // DOM fallback selectors — only indicators that do NOT appear in the lobby.
+  // DANGER: Leave call, toolbar, mic/camera toggles all exist in the lobby too!
+  // Primary admission signal is active MediaStreams (checked in admission.ts).
   '[data-participant-id]',
-  'button[aria-label*="Turn off microphone"]',
-  'button[aria-label*="Turn on microphone"]'
+  '[data-self-name]',
+  'button[aria-label*="Share screen"]',
+  'button[aria-label*="Present now"]',
 ];
 
 export const googleWaitingRoomIndicators: string[] = [
@@ -25,22 +21,11 @@ export const googleWaitingRoomIndicators: string[] = [
   'text="Waiting for the host to let you in"',
   'text="You\'re in the waiting room"',
   'text="Asking to be let in"',
-  
+
   // Aria labels and waiting room indicators
   '[aria-label*="waiting room"]',
   '[aria-label*="Asking to be let in"]',
   '[aria-label*="waiting for admission"]',
-  
-  // Progress/loading indicators in waiting room
-  '[role="progressbar"]',
-  '[aria-label*="loading"]',
-  '.loading-spinner',
-  
-  // Legacy patterns (keep for compatibility)
-  'text="Ask to join"',
-  'text="Join now"',
-  'text="Can\'t join the meeting"',
-  'text="Meeting not found"'
 ];
 
 export const googleRejectionIndicators: string[] = [
@@ -213,7 +198,9 @@ export const googleNameSelectors: string[] = [
 
 // Google Meet speaking indicators (primary speaker detection)
 export const googleSpeakingIndicators: string[] = [
-  // Google Meet uses class-based detection primarily
+  // Semantic attribute — survives CSS class rotation across GMeet releases
+  '[data-audio-level]:not([data-audio-level="0"])',
+  // Obfuscated class names — may rotate with GMeet UI updates
   '.Oaajhc', // Speaking animation class
   '.HX2H7',  // Alternative speaking class
   '.wEsLMd', // Another speaking indicator
@@ -238,13 +225,9 @@ export const googleRemovalIndicators: string[] = [
   'text="Reconnecting"',
   'text*="Reconnecting"',
   
-  // Removal-specific patterns (avoid generic [role="alert"] / [role="alertdialog"]
-  // which false-positive on screen share dialogs and other transient notifications)
-  'text="You were removed from the meeting"',
-  'text*="You were removed"',
-  'text="You have been removed"',
-  'text*="been removed"',
-  'text="The meeting organizer removed you"',
+  // Generic error patterns
+  '[role="alert"]',
+  '[role="alertdialog"]',
   '.error-message',
   '.connection-error',
   '.meeting-error'

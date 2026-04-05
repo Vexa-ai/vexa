@@ -1,6 +1,7 @@
 import { Page } from "playwright";
 import { log, callAwaitingAdmissionCallback } from "../../utils";
 import { BotConfig } from "../../types";
+import { checkEscalation, triggerEscalation, getEscalationExtensionMs } from "../shared/escalation";
 import {
   teamsInitialAdmissionIndicators,
   teamsWaitingRoomIndicators,
@@ -129,7 +130,7 @@ export async function waitForTeamsMeetingAdmission(
       log("Waiting 1 second to ensure joining callback is processed before sending awaiting_admission...");
       await new Promise(resolve => setTimeout(resolve, 1000));
       
-      // --- Call awaiting admission callback to notify bot-manager that bot is waiting ---
+      // --- Call awaiting admission callback to notify meeting-api that bot is waiting ---
       try {
         await callAwaitingAdmissionCallback(botConfig);
         log("Awaiting admission callback sent successfully");
@@ -143,14 +144,16 @@ export async function waitForTeamsMeetingAdmission(
     // If we're in waiting room, wait for the full timeout period for admission
     if (stillInWaitingRoom) {
       log(`Bot is in Teams waiting room. Waiting for ${timeout}ms for admission...`);
-      
+
       const checkInterval = 2000; // Check every 2 seconds for faster detection
       const startTime = Date.now();
-      
-      while (Date.now() - startTime < timeout) {
+      let unknownStateDuration = 0;
+      const effectiveTimeout = () => timeout + getEscalationExtensionMs();
+
+      while (Date.now() - startTime < effectiveTimeout()) {
         // Check if we're still in waiting room using visibility
         const lobbyTextStillVisible = await page.locator(teamsWaitingRoomIndicators[0]).isVisible();
-        
+
         let joinNowButtonStillVisible = false;
         for (const selector of joinNowButtons) {
           try {
@@ -161,22 +164,23 @@ export async function waitForTeamsMeetingAdmission(
             }
           } catch {}
         }
-        
+
         const stillWaiting = lobbyTextStillVisible || joinNowButtonStillVisible;
-        
+
         if (!stillWaiting) {
           log("Teams waiting room indicator disappeared - checking if bot was admitted or rejected...");
-          
+          unknownStateDuration += checkInterval;
+
           // CRITICAL: Check for rejection first since that's a definitive outcome
           const isRejected = await checkForTeamsRejection(page);
           if (isRejected) {
             log("🚨 Bot was rejected from the Teams meeting by admin");
             throw new Error("Bot admission was rejected by meeting admin");
           }
-          
+
           // Check for admission indicators since waiting room disappeared and no rejection found
           const leaveButtonNowFound = await checkForAdmissionIndicators(page);
-          
+
           if (leaveButtonNowFound) {
             log(`✅ Bot was admitted to the Teams meeting: Leave button confirmed`);
             return true;
@@ -184,8 +188,17 @@ export async function waitForTeamsMeetingAdmission(
             log("⚠️ Teams waiting room disappeared but no clear admission indicators found - assuming admitted");
             return true; // Fallback: if waiting room disappeared and no rejection, assume admitted
           }
+        } else {
+          unknownStateDuration = 0;
         }
-        
+
+        // Escalation check
+        const elapsedMs = Date.now() - startTime;
+        const escalation = checkEscalation(elapsedMs, timeout, unknownStateDuration);
+        if (escalation) {
+          await triggerEscalation(botConfig, escalation.reason);
+        }
+
         // Wait before next check
         await page.waitForTimeout(checkInterval);
         log(`Still in Teams waiting room... ${Math.round((Date.now() - startTime) / 1000)}s elapsed`);

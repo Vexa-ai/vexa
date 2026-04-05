@@ -55,7 +55,7 @@ else
 fi
 
 # Configuration
-IMAGE_NAME="vexa-bot:test"
+IMAGE_NAME="vexaai/vexa-bot:test"
 DOCKER_NETWORK="${DOCKER_NETWORK:-vexa_dev_vexa_default}"
 
 # Resolve core/dist for bind mount
@@ -108,7 +108,6 @@ docker run --rm --name "$CONTAINER_NAME" \
       "everyoneLeftTimeout":120000
     }
   }' \
-  -e WHISPER_LIVE_URL="ws://whisperlive-remote:9090" \
   -e WL_MAX_CLIENTS="10" \
   -e LOG_LEVEL="DEBUG" \
   --cap-add=SYS_ADMIN \

@@ -7,7 +7,7 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "tsc && node build-browser-utils.js",
+    "build": "tsc && cp -r src/services/hallucinations dist/services/hallucinations 2>/dev/null; node build-browser-utils.js",
     "build-browser": "node build-browser-utils.js",
     "dev": "tsx src/index.ts"
   },
@@ -15,7 +15,9 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@jjhbw/silero-vad": "^1.0.3",
     "@types/uuid": "^10.0.0",
+    "onnxruntime-node": "^1.24.3",
     "playwright": "^1.55.1",
     "playwright-extra": "^4.3.6",
     "puppeteer": "^24.4.0",

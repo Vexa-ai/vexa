@@ -1,7 +1,8 @@
 import { Page } from "playwright";
 import { BotConfig } from "../../types";
 import { log, callStartupCallback } from "../../utils";
-import { hasStopSignalReceived, triggerPostAdmissionCamera, triggerPostAdmissionChat } from "../../index";
+import { hasStopSignalReceived, triggerPostAdmissionCamera, triggerPostAdmissionChat, startVideoRecordingIfNeeded, enterBrowserFullscreen } from "../../index";
+import { enableTeamsLiveCaptions } from "../msteams/captions";
 
 export type AdmissionDecision = {
   admitted: boolean;
@@ -156,10 +157,33 @@ export async function runMeetingFlow(
       triggerPostAdmissionChat().catch((err: any) => {
         log(`[Chat] Post-admission chat error (non-fatal): ${err?.message || err}`);
       });
+
+      // Start per-speaker audio capture (if pipeline is initialized)
+      const { startPerSpeakerAudioCapture } = await import("../../index");
+      if (page) {
+        startPerSpeakerAudioCapture(page).catch((err: any) => {
+          log(`[PerSpeaker] Post-admission audio capture error (non-fatal): ${err?.message || err}`);
+        });
+
+        // Enable live captions for Teams — captions provide speaker-attributed
+        // text directly from Teams ASR, used as primary speaker detection signal.
+        // Captions are per-user, so the bot can always enable them for itself.
+        if (platform === 'teams') {
+          enableTeamsLiveCaptions(page).catch((err: any) => {
+            log(`[Captions] Failed to enable live captions (non-fatal, falling back to DOM signals): ${err?.message || err}`);
+          });
+        }
+      }
     } catch (error: any) {
       log(`Error during startup callback or verification: ${error?.message || String(error)}`);
       // Continue to recording phase even if callback/verification fails
     }
+
+    // Enter fullscreen via CDP to hide tabs/address bar before recording starts.
+    await enterBrowserFullscreen();
+
+    // Start video recording now (same time as audio) so they stay in sync.
+    startVideoRecordingIfNeeded();
 
     // Removal monitoring + recording race
     let signalRemoval: (() => void) | null = null;

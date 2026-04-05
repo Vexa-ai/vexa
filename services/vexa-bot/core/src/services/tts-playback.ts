@@ -1,13 +1,42 @@
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, execSync, ChildProcess } from 'child_process';
 import { Readable } from 'stream';
 import { log } from '../utils';
 import https from 'https';
 import http from 'http';
 
 /**
+ * Unmute PulseAudio tts_sink and virtual_mic so TTS audio reaches the meeting.
+ * Called before playback, re-muted after via muteTtsAudio().
+ */
+function unmuteTtsAudio(): void {
+  try {
+    execSync('pactl set-sink-mute tts_sink 0', { stdio: 'pipe' });
+    execSync('pactl set-source-mute virtual_mic 0', { stdio: 'pipe' });
+    log('[TTS] PulseAudio unmuted (tts_sink + virtual_mic)');
+  } catch (err: any) {
+    log(`[TTS] pactl unmute failed: ${err.message}`);
+  }
+}
+
+/**
+ * Mute PulseAudio tts_sink and virtual_mic to silence the mic.
+ * Called after playback completes.
+ */
+function muteTtsAudio(): void {
+  try {
+    execSync('pactl set-sink-mute tts_sink 1', { stdio: 'pipe' });
+    execSync('pactl set-source-mute virtual_mic 1', { stdio: 'pipe' });
+    log('[TTS] PulseAudio muted (tts_sink + virtual_mic)');
+  } catch (err: any) {
+    log(`[TTS] pactl mute failed: ${err.message}`);
+  }
+}
+
+/**
  * TTSPlaybackService
  *
  * Plays audio into the meeting via PulseAudio tts_sink.
+ * PulseAudio is muted by default. Unmuted only during active playback.
  * Supports:
  *   - Raw PCM playback (from external agents with their own TTS)
  *   - WAV/MP3 file playback
@@ -35,6 +64,7 @@ export class TTSPlaybackService {
     format: string = 's16le'
   ): Promise<void> {
     this._isPlaying = true;
+    unmuteTtsAudio();
     return new Promise((resolve, reject) => {
       const proc = spawn('paplay', [
         '--raw',
@@ -53,6 +83,7 @@ export class TTSPlaybackService {
       proc.on('exit', (code) => {
         this._isPlaying = false;
         this.paplayProcess = null;
+        muteTtsAudio();
         if (code === 0 || code === null) {
           resolve();
         } else {
@@ -134,6 +165,7 @@ export class TTSPlaybackService {
    */
   async playFile(filePath: string): Promise<void> {
     this._isPlaying = true;
+    unmuteTtsAudio();
     return new Promise((resolve, reject) => {
       // Use ffmpeg to convert any audio format to raw PCM, pipe to paplay
       const ffmpeg = spawn('ffmpeg', [
@@ -170,6 +202,7 @@ export class TTSPlaybackService {
       paplay.on('exit', (code) => {
         this._isPlaying = false;
         this.paplayProcess = null;
+        muteTtsAudio();
         if (code === 0 || code === null) resolve();
         else reject(new Error(`paplay exited with code ${code}`));
       });
@@ -177,12 +210,14 @@ export class TTSPlaybackService {
       paplay.on('error', (err) => {
         this._isPlaying = false;
         this.paplayProcess = null;
+        muteTtsAudio();
         ffmpeg.kill('SIGTERM');
         reject(err);
       });
 
       ffmpeg.on('error', (err) => {
         this._isPlaying = false;
+        muteTtsAudio();
         paplay.kill('SIGTERM');
         reject(err);
       });
@@ -331,6 +366,9 @@ export class TTSPlaybackService {
           return;
         }
 
+        // Unmute PulseAudio before playback
+        unmuteTtsAudio();
+
         // Stream response directly to paplay (OpenAI pcm format = Int16LE 24kHz mono)
         const paplay = spawn('paplay', [
           '--raw',
@@ -350,6 +388,7 @@ export class TTSPlaybackService {
           this._isPlaying = false;
           this.paplayProcess = null;
           this._currentText = null;
+          muteTtsAudio();
           if (code === 0 || code === null) resolve();
           else reject(new Error(`paplay exited with code ${code}`));
         });
@@ -357,6 +396,7 @@ export class TTSPlaybackService {
         paplay.on('error', (err) => {
           this._isPlaying = false;
           this.paplayProcess = null;
+          muteTtsAudio();
           reject(err);
         });
 
@@ -388,6 +428,7 @@ export class TTSPlaybackService {
     }
     this._isPlaying = false;
     this._currentText = null;
+    muteTtsAudio();
   }
 
   /**

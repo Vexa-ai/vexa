@@ -1,6 +1,7 @@
 import { Page } from "playwright";
 import { log, callAwaitingAdmissionCallback } from "../../utils";
 import { BotConfig } from "../../types";
+import { checkEscalation, triggerEscalation, getEscalationExtensionMs } from "../shared/escalation";
 import {
   googleInitialAdmissionIndicators,
   googleWaitingRoomIndicators,
@@ -31,9 +32,19 @@ export async function checkForGoogleRejection(page: Page): Promise<boolean> {
 }
 
 // Helper function to check for any visible and enabled admission indicators
-// Returns true only if at least 2 indicators are found (to reduce false positives)
 export async function checkForGoogleAdmissionIndicators(page: Page): Promise<boolean> {
-  const foundSelectors: string[] = [];
+  // 1. NEGATIVE GUARD: If any waiting room indicator is visible,
+  // the bot is NOT admitted — lobby toolbar buttons are false positives.
+  const inWaitingRoom = await checkForWaitingRoomIndicators(page);
+  if (inWaitingRoom) {
+    log(`⚠️ Waiting room indicator visible — suppressing admission (lobby buttons are false positives)`);
+    return false;
+  }
+
+  // 2. DOM SELECTORS: participant tiles, self-name, share/present buttons.
+  // NOTE: MediaStream-based detection was tested but Google Meet's lobby has
+  // active media elements (self-preview audio tracks), causing false positives.
+  // Filtering self vs. remote streams is needed — tracked as follow-up.
   for (const selector of googleInitialAdmissionIndicators) {
     try {
       const element = page.locator(selector).first();
@@ -41,30 +52,20 @@ export async function checkForGoogleAdmissionIndicators(page: Page): Promise<boo
       if (isVisible) {
         const isDisabled = await element.getAttribute('aria-disabled');
         if (isDisabled !== 'true') {
-          foundSelectors.push(selector);log(`✅ Found Google Meet admission indicator: ${selector}`);
+          log(`✅ Found Google Meet admission indicator: ${selector}`);
+          return true;
         }
       }
     } catch (error) {
       // Continue to next selector if this one fails
       continue;
     }
-  }// CRITICAL: Require at least 2 indicators to reduce false positives
-  // Single indicator (like "Leave call" button) can appear in waiting room UI
-  if (foundSelectors.length >= 2) {
-    log(`✅ Multiple admission indicators found (${foundSelectors.length}), confirming admission`);
-    return true;
-  }
-  if (foundSelectors.length === 1) {
-    log(`⚠️ Only one admission indicator found (${foundSelectors[0]}), rejecting as likely false positive`);
-    // Reject single indicator to prevent false positives
-    return false;
   }
   return false;
 }
 
 // Silent admission check (doesn't send callbacks) - used for verification
 export async function checkForGoogleAdmissionSilent(page: Page): Promise<boolean> {
-  // Just check indicators without sending any callbacks
   return await checkForGoogleAdmissionIndicators(page);
 }
 
@@ -100,23 +101,23 @@ export async function waitForGoogleMeetingAdmission(
     log("Checking if bot is already admitted to the Google Meet meeting...");
     
     // Check for any visible admission indicator (multiple selectors for robustness)
+    // If meeting controls are visible, the bot is admitted — lobby indicators are unreliable
     const initialAdmissionFound = await checkForGoogleAdmissionIndicators(page);
-    
-    // Negative check: ensure we're not still in lobby/pre-join
-    const initialLobbyStillVisible = await checkForWaitingRoomIndicators(page);
-    
-    if (initialAdmissionFound && !initialLobbyStillVisible) {
+
+    if (initialAdmissionFound) {
       log(`Found Google Meet admission indicator: visible meeting controls - Bot is already admitted to the meeting!`);
       
       // Take screenshot when already admitted
       await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-2-admitted.png', fullPage: true });
       log("📸 Screenshot taken: Bot confirmed already admitted to meeting");
       
-      // CRITICAL FIX: When bot is immediately admitted, skip awaiting_admission callback
-      // The bot should go directly from "joining" -> "active", not "joining" -> "awaiting_admission" -> "active"
-      // Sending awaiting_admission here causes a race condition where the callback arrives before
-      // the "joining" callback is processed, causing REQUESTED -> AWAITING_ADMISSION (invalid transition)
-      log("Bot immediately admitted - skipping awaiting_admission callback to avoid race condition");
+      // --- Call awaiting admission callback even for immediate admission ---
+      try {
+        await callAwaitingAdmissionCallback(botConfig);
+        log("Awaiting admission callback sent successfully (immediate admission)");
+      } catch (callbackError: any) {
+        log(`Warning: Failed to send awaiting admission callback: ${callbackError.message}. Continuing...`);
+      }
       
       log("Successfully admitted to the Google Meet meeting - no waiting room required");
       return true;
@@ -136,12 +137,7 @@ export async function waitForGoogleMeetingAdmission(
       await page.screenshot({ path: '/app/storage/screenshots/bot-checkpoint-4-waiting-room.png', fullPage: true });
       log("📸 Screenshot taken: Bot confirmed in waiting room");
       
-      // CRITICAL: Wait a moment to ensure "joining" callback is processed before sending "awaiting_admission"
-      // This prevents race condition where awaiting_admission arrives before joining is processed
-      log("Waiting 1 second to ensure joining callback is processed before sending awaiting_admission...");
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // --- Call awaiting admission callback to notify bot-manager that bot is waiting ---
+      // --- Call awaiting admission callback to notify meeting-api that bot is waiting ---
       try {
         await callAwaitingAdmissionCallback(botConfig);
         log("Awaiting admission callback sent successfully");
@@ -155,43 +151,47 @@ export async function waitForGoogleMeetingAdmission(
     // If we're in waiting room, wait for the full timeout period for admission
     if (stillInWaitingRoom) {
       log(`Bot is in Google Meet waiting room. Waiting for ${timeout}ms for admission...`);
-      
+
       const checkInterval = 2000; // Check every 2 seconds for faster detection
       const startTime = Date.now();
-      
-      while (Date.now() - startTime < timeout) {
-        // CRITICAL: Check for meeting ended/user left while waiting
-        const { checkForGoogleRemoval } = await import("./removal");
-        const isRemoved = await checkForGoogleRemoval(page);
-        if (isRemoved) {
-          log("🚨 Meeting ended or user left while bot was waiting for admission");
-          throw new Error("Meeting ended or user left while waiting for admission");
-        }
-        
+      let unknownStateDuration = 0;
+      const effectiveTimeout = () => timeout + getEscalationExtensionMs();
+
+      while (Date.now() - startTime < effectiveTimeout()) {
         // Check if we're still in waiting room using visibility
         const stillWaiting = await checkForWaitingRoomIndicators(page);
-        
+
         if (!stillWaiting) {
           log("Google Meet waiting room indicator disappeared - checking if bot was admitted or rejected...");
-          
+          unknownStateDuration += checkInterval;
+
           // CRITICAL: Check for rejection first since that's a definitive outcome
           const isRejected = await checkForGoogleRejection(page);
           if (isRejected) {
             log("🚨 Bot was rejected from the Google Meet meeting by admin");
             throw new Error("Bot admission was rejected by meeting admin");
           }
-          
+
           // Check for admission indicators since waiting room disappeared and no rejection found
           const admissionFound = await checkForGoogleAdmissionIndicators(page);
-          
+
           if (admissionFound) {
             log(`✅ Bot was admitted to the Google Meet meeting: meeting controls confirmed`);
             return true;
           }
-          
+
           // Keep waiting if neither admitted nor rejected
+        } else {
+          unknownStateDuration = 0;
         }
-        
+
+        // Escalation check
+        const elapsedMs = Date.now() - startTime;
+        const escalation = checkEscalation(elapsedMs, timeout, unknownStateDuration);
+        if (escalation) {
+          await triggerEscalation(botConfig, escalation.reason);
+        }
+
         // Wait before next check
         await page.waitForTimeout(checkInterval);
         log(`Still in Google Meet waiting room... ${Math.round((Date.now() - startTime) / 1000)}s elapsed`);
@@ -208,15 +208,9 @@ export async function waitForGoogleMeetingAdmission(
       log(`No waiting room detected. Polling for admission for up to ${timeout}ms...`);
       const checkInterval = 2000;
       const startTime = Date.now();
-      while (Date.now() - startTime < timeout) {
-        // CRITICAL: Check for meeting ended/user left while polling
-        const { checkForGoogleRemoval } = await import("./removal");
-        const isRemoved = await checkForGoogleRemoval(page);
-        if (isRemoved) {
-          log("🚨 Meeting ended or user left while bot was polling for admission");
-          throw new Error("Meeting ended or user left while waiting for admission");
-        }
-        
+      let unknownStateDuration2 = 0;
+      const effectiveTimeout2 = () => timeout + getEscalationExtensionMs();
+      while (Date.now() - startTime < effectiveTimeout2()) {
         // Rejection check first
         const isRejected = await checkForGoogleRejection(page);
         if (isRejected) {
@@ -224,18 +218,19 @@ export async function waitForGoogleMeetingAdmission(
           throw new Error("Bot admission was rejected by meeting admin");
         }
 
-        // Admission indicators
+        // Admission indicators — if meeting controls are visible, bot is admitted
+        // regardless of any residual lobby-like elements in the DOM
         const admissionFound = await checkForGoogleAdmissionIndicators(page);
-        const lobbyVisible = await checkForWaitingRoomIndicators(page);
-        if (admissionFound && !lobbyVisible) {
+        if (admissionFound) {
           log("✅ Bot admitted during polling window (meeting controls visible)");
           return true;
         }
 
         // If lobby appears later, switch to waiting-room handling by breaking
+        const lobbyVisible = await checkForWaitingRoomIndicators(page);
         if (lobbyVisible) {
           log("ℹ️ Waiting room appeared during polling. Switching to waiting-room monitoring...");
-          
+
           // --- Call awaiting admission callback when waiting room appears during polling ---
           try {
             await callAwaitingAdmissionCallback(botConfig);
@@ -243,9 +238,18 @@ export async function waitForGoogleMeetingAdmission(
           } catch (callbackError: any) {
             log(`Warning: Failed to send awaiting admission callback: ${callbackError.message}. Continuing...`);
           }
-          
+
           stillInWaitingRoom = true;
+          unknownStateDuration2 = 0;
           break;
+        }
+
+        // Track unknown state for escalation
+        unknownStateDuration2 += checkInterval;
+        const elapsedMs = Date.now() - startTime;
+        const escalation = checkEscalation(elapsedMs, timeout, unknownStateDuration2);
+        if (escalation) {
+          await triggerEscalation(botConfig, escalation.reason);
         }
 
         await page.waitForTimeout(checkInterval);

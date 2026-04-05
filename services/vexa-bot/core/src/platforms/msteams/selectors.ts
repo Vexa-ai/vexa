@@ -350,6 +350,37 @@ export const teamsParticipantIdSelectors: string[] = [
   '[data-user-id]'
 ];
 
+// Teams live captions selectors.
+//
+// IMPORTANT — DOM variance between host and guest views:
+//   HOST:  wrapper > window-wrapper > virtual-list-content > items-renderer > ChatMessageCompact > author + text
+//   GUEST: wrapper > window-wrapper > virtual-list-content > (div) > author + text  (NO items-renderer)
+//
+// The ONLY stable selectors across both views are:
+//   - rendererWrapper:  the top-level caption container (always present when captions enabled)
+//   - authorName:       [data-tid="author"] — speaker name (stable atom)
+//   - captionText:      [data-tid="closed-caption-text"] — spoken text (stable atom)
+//
+// DO NOT rely on captionItem (closed-captions-v2-items-renderer) — it only exists in host view.
+// Instead, query authorName and captionText directly inside rendererWrapper and pair by index.
+// See recording.ts processCaptions() for the implementation.
+//
+// Verified 2026-03-19 on both host (Speaker D account) and guest (bot) views.
+export const teamsCaptionSelectors = {
+  /** Top-level caption container. Present when captions are enabled AND someone has spoken. */
+  rendererWrapper: '[data-tid="closed-caption-renderer-wrapper"]',
+  /** @deprecated Host-only. Use authorName/captionText directly. */
+  captionItem: '[data-tid="closed-captions-v2-items-renderer"]',
+  /** Speaker name — stable across host and guest views. Pair with captionText by index. */
+  authorName: '[data-tid="author"]',
+  /** Caption text — stable across host and guest views. Pair with authorName by index. */
+  captionText: '[data-tid="closed-caption-text"]',
+  /** Virtual list content container */
+  virtualListContent: '[data-tid="closed-caption-v2-virtual-list-content"]',
+  /** Meeting toolbar More button (stable id) */
+  moreButton: '#callingButtons-showMoreBtn',
+};
+
 // Primary hangup button selector (most reliable)
 export const teamsPrimaryHangupButtonSelector = '#hangup-button';
 

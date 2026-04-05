@@ -34,6 +34,8 @@ export class MicrophoneService {
         success = await this.toggleGoogleMeetMic(true);
       } else if (this.platform === 'teams') {
         success = await this.toggleTeamsMic(true);
+      } else if (this.platform === 'zoom') {
+        success = await this.toggleZoomMic(true);
       } else {
         log(`[Microphone] Unsupported platform for mic toggle: ${this.platform}`);
         return false;
@@ -64,6 +66,8 @@ export class MicrophoneService {
         success = await this.toggleGoogleMeetMic(false);
       } else if (this.platform === 'teams') {
         success = await this.toggleTeamsMic(false);
+      } else if (this.platform === 'zoom') {
+        success = await this.toggleZoomMic(false);
       } else {
         return false;
       }
@@ -131,6 +135,43 @@ export class MicrophoneService {
         const isMuted = ariaLabel.includes('turn on') || ariaLabel.includes('unmute');
 
         // Click if state doesn't match desired state
+        if ((shouldUnmute && isMuted) || (!shouldUnmute && !isMuted)) {
+          btn.click();
+          return true;
+        }
+        // Already in desired state
+        if ((shouldUnmute && !isMuted) || (!shouldUnmute && isMuted)) {
+          return true;
+        }
+      }
+      return false;
+    }, unmute);
+  }
+
+  // --- Zoom Web Client ---
+
+  private async toggleZoomMic(unmute: boolean): Promise<boolean> {
+    if (this.page.isClosed()) return false;
+
+    return await this.page.evaluate(async (shouldUnmute: boolean) => {
+      // Zoom web client audio button: .join-audio-container__btn
+      // When muted: aria-label contains "unmute" or "Unmute"
+      // When unmuted: aria-label contains "mute" or "Mute" (but not "unmute")
+      const selectors = [
+        'button.join-audio-container__btn',
+        'button[aria-label*="Mute"]',
+        'button[aria-label*="mute"]',
+        'button[aria-label*="Unmute"]',
+        'button[aria-label*="unmute"]',
+      ];
+
+      for (const sel of selectors) {
+        const btn = document.querySelector(sel) as HTMLElement | null;
+        if (!btn) continue;
+
+        const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+        const isMuted = ariaLabel.includes('unmute');
+
         if ((shouldUnmute && isMuted) || (!shouldUnmute && !isMuted)) {
           btn.click();
           return true;

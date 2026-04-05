@@ -71,7 +71,7 @@ async function waitForTeamsPreJoinReadiness(page: Page, timeoutMs: number): Prom
       try {
         await page.locator(teamsContinueButtonSelectors[0]).first().click();
       } catch {}
-      await page.waitForTimeout(1200);
+      await page.waitForTimeout(500);
       continue;
     }
 
@@ -86,7 +86,7 @@ async function waitForTeamsPreJoinReadiness(page: Page, timeoutMs: number): Prom
       await warmUpTeamsMediaDevices(page);
     }
 
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(300);
   }
 
   const finalUrl = page.url();
@@ -103,7 +103,7 @@ async function trySelectCameraFromVideoOptions(page: Page): Promise<boolean> {
     const label = await videoOptionsBtn.getAttribute("aria-label");
     await videoOptionsBtn.click({ force: true });
     log(`ℹ️ Opened Teams video options${label ? ` ("${label}")` : ""}`);
-    await page.waitForTimeout(700);
+    await page.waitForTimeout(300);
   } catch (err: any) {
     log(`ℹ️ Failed to open Teams video options: ${err?.message || err}`);
     return false;
@@ -116,7 +116,7 @@ async function trySelectCameraFromVideoOptions(page: Page): Promise<boolean> {
       await vexaOption.click({ force: true });
       log('✅ Selected "Vexa Virtual Camera" in video options');
       await page.keyboard.press("Escape").catch(() => {});
-      await page.waitForTimeout(600);
+      await page.waitForTimeout(200);
       return true;
     }
   } catch {}
@@ -167,7 +167,7 @@ async function trySelectCameraFromVideoOptions(page: Page): Promise<boolean> {
   });
 
   await page.keyboard.press("Escape").catch(() => {});
-  await page.waitForTimeout(600);
+  await page.waitForTimeout(200);
 
   if (fallback.selected) {
     log(`ℹ️ Selected fallback camera option from video menu: "${fallback.label}"`);
@@ -270,12 +270,9 @@ export async function joinMicrosoftTeams(page: Page, botConfig: BotConfig): Prom
   await page.goto(botConfig.meetingUrl!, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForTimeout(500);
   
-  try {
-    await callJoiningCallback(botConfig);
-    log("Joining callback sent successfully");
-  } catch (callbackError: any) {
-    log(`Warning: Failed to send joining callback: ${callbackError.message}. Continuing with join process...`);
-  }
+  // Fix 2: Propagate JOINING callback failure — bot must NOT proceed if server rejected
+  await callJoiningCallback(botConfig);
+  log("Joining callback sent successfully");
 
   log("Step 2: Looking for 'Continue on this browser' button...");
   try {
@@ -283,8 +280,8 @@ export async function joinMicrosoftTeams(page: Page, botConfig: BotConfig): Prom
     await continueButton.waitFor({ timeout: 10000 });
     await continueButton.click();
     log("✅ Clicked 'Continue on this browser' button");
-    // Wait for the pre-join page to fully load (camera preview, audio settings, name input)
-    await page.waitForTimeout(3000);
+    // Brief wait before pre-join readiness loop takes over
+    await page.waitForTimeout(500);
   } catch (error) {
     log("ℹ️ Continue button not found, continuing...");
   }
@@ -323,7 +320,7 @@ export async function joinMicrosoftTeams(page: Page, botConfig: BotConfig): Prom
       if (!turnOnVisible && !turnOffVisible) {
         const selectedFromVideoOptions = await trySelectCameraFromVideoOptions(page);
         if (selectedFromVideoOptions) {
-          await page.waitForTimeout(800);
+          await page.waitForTimeout(300);
           turnOnVisible = await turnOnBtn.isVisible().catch(() => false);
           turnOffVisible = await turnOffBtn.isVisible().catch(() => false);
         }
@@ -332,7 +329,7 @@ export async function joinMicrosoftTeams(page: Page, botConfig: BotConfig): Prom
       if (turnOnVisible) {
         await turnOnBtn.click();
         log("✅ Camera/video turned ON for voice agent");
-        await page.waitForTimeout(1000);
+        await page.waitForTimeout(300);
       } else if (turnOffVisible) {
         log("ℹ️ Camera/video already ON");
       } else {
@@ -340,7 +337,7 @@ export async function joinMicrosoftTeams(page: Page, botConfig: BotConfig): Prom
         if (videoOptionsVisible) {
           log("ℹ️ Only video options control is visible; trying keyboard toggle as fallback...");
           await page.keyboard.press("Control+Shift+O").catch(() => {});
-          await page.waitForTimeout(800);
+          await page.waitForTimeout(300);
           const turnOffAfterShortcut = await turnOffBtn.isVisible().catch(() => false);
           if (turnOffAfterShortcut) {
             log("✅ Camera/video turned ON via keyboard shortcut");
@@ -378,7 +375,6 @@ export async function joinMicrosoftTeams(page: Page, botConfig: BotConfig): Prom
 
   log("Step 5: Ensuring Computer audio is selected...");
   try {
-    await page.waitForTimeout(1000);
     const computerAudioRadio = page.locator(teamsComputerAudioRadioSelectors.join(', ')).first();
     const dontUseAudioRadio = page.locator(teamsDontUseAudioRadioSelectors.join(', ')).first();
     const computerAudioVisible = await computerAudioRadio.isVisible().catch(() => false);
@@ -391,7 +387,7 @@ export async function joinMicrosoftTeams(page: Page, botConfig: BotConfig): Prom
       if (dontUseAudioChecked) {
         log("⚠️ 'Don't use audio' detected. Switching to Computer audio...");
         await computerAudioRadio.click({ timeout: 5000 });
-        await page.waitForTimeout(500);
+        await page.waitForTimeout(200);
       } else {
         await computerAudioRadio.click({ timeout: 5000 });
         await page.waitForTimeout(200);
@@ -409,7 +405,7 @@ export async function joinMicrosoftTeams(page: Page, botConfig: BotConfig): Prom
 
     if (speakerOnVisible) {
       await speakerOnButton.click({ timeout: 5000 });
-      await page.waitForTimeout(300);
+      await page.waitForTimeout(100);
       log("✅ Speaker enabled via toggle.");
     } else if (speakerOffVisible) {
       log("ℹ️ Speaker already enabled.");
@@ -450,13 +446,21 @@ export async function joinMicrosoftTeams(page: Page, botConfig: BotConfig): Prom
       await fallbackJoinButton.click();
       log("✅ Clicked join button (fallback selector)");
     }
-    // Wait for Teams to transition from pre-join to lobby/meeting.
-    // Teams needs several seconds to process the join request and show
-    // either the waiting room or the meeting view.
-    log("Waiting for Teams to process join request...");
-    await page.waitForTimeout(8000);
+    // Brief wait for Teams to start processing the join request
+    await page.waitForTimeout(1000);
   } catch (error) {
     log("⚠️ Join button not found — bot may not be able to enter the meeting");
+  }
+
+  // Mute mic for all bots after join. TTS bots unmute only when speaking
+  // (handleSpeakCommand unmutes → speaks → re-mutes).
+  log("Step 6b: Muting mic...");
+  try {
+    await page.keyboard.press("Control+Shift+M");
+    await page.waitForTimeout(200);
+    log("✅ Mic muted via Ctrl+Shift+M");
+  } catch (error) {
+    log("ℹ️ Could not mute mic via keyboard shortcut");
   }
 
   log("Step 7: Checking current state...");

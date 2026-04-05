@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run Zoom bot in a container and join the meeting via docker run.
-# Requires: vexa stack running (redis, optional whisperlive) and network vexa_dev_vexa_default.
+# Requires: vexa stack running (redis) and network vexa_dev_vexa_default.
 #
 # Usage:
 #   ./run-zoom-bot.sh
@@ -13,9 +13,8 @@ set -e
 MEETING_URL="${ZOOM_MEETING_URL:-https://us05web.zoom.us/j/81137509581?pwd=swiL9I4MliS99mTVV1FXDCWsgaiRvy.1}"
 BOT_NAME="${ZOOM_BOT_NAME:-Vexa Bot}"
 REDIS_URL="${REDIS_URL:-redis://redis:6379/0}"
-WHISPER_LIVE_URL="${WHISPER_LIVE_URL:-ws://whisperlive:9090/ws}"
 ZOOM_CLIENT_ID="${ZOOM_CLIENT_ID:-6gMe9aY8R8OG1pqsmTFBBg}"
-ZOOM_CLIENT_SECRET="${ZOOM_CLIENT_SECRET:-mN9cMR039CnNvsE8TGSifduK11k7C6g8}"
+ZOOM_CLIENT_SECRET="${ZOOM_CLIENT_SECRET:?Set ZOOM_CLIENT_SECRET}"
 
 # Extract meeting number and passcode from URL (e.g. .../j/81137509581?pwd=xxx)
 if [[ "$MEETING_URL" =~ /j/([0-9]+) ]]; then
@@ -36,7 +35,6 @@ docker run --rm \
   --platform linux/amd64 \
   --network vexa_dev_vexa_default \
   -e "BOT_CONFIG=$BOT_CONFIG" \
-  -e "WHISPER_LIVE_URL=$WHISPER_LIVE_URL" \
   -e "ZOOM_CLIENT_ID=$ZOOM_CLIENT_ID" \
   -e "ZOOM_CLIENT_SECRET=$ZOOM_CLIENT_SECRET" \
-  vexa-bot:dev
+  vexaai/vexa-bot:dev

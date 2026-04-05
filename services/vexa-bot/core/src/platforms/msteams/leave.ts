@@ -18,7 +18,7 @@ export async function prepareForRecording(page: Page, botConfig: BotConfig): Pro
     if (typeof (window as any).performLeaveAction !== "function") {
       (window as any).performLeaveAction = async () => {
         try {
-          // Call leave callback first to notify bot-manager
+          // Call leave callback first to notify meeting-api
           (window as any).logBot?.("🔥 Calling leave callback before attempting to leave...");
           try {
             const botConfig = (window as any).getBotConfig?.();
@@ -115,7 +115,7 @@ export async function leaveMicrosoftTeams(page: Page | null, botConfig?: BotConf
     log(`[leaveMicrosoftTeams] Recording flush failed: ${flushError.message}`);
   }
 
-  // Call leave callback first to notify bot-manager
+  // Call leave callback first to notify meeting-api
   if (botConfig) {
     try {
       log("🔥 Calling leave callback before attempting to leave...");

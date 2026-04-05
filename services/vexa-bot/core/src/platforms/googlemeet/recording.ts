@@ -1,9 +1,8 @@
 import { Page } from "playwright";
 import { log } from "../../utils";
 import { BotConfig } from "../../types";
-import { WhisperLiveService } from "../../services/whisperlive";
 import { RecordingService } from "../../services/recording";
-import { setActiveRecordingService } from "../../index";
+import { setActiveRecordingService, getSegmentPublisher } from "../../index";
 import { ensureBrowserUtils } from "../../utils/injection";
 import {
   googleParticipantSelectors,
@@ -17,20 +16,16 @@ import {
 
 // Modified to use new services - Google Meet recording functionality
 export async function startGoogleRecording(page: Page, botConfig: BotConfig): Promise<void> {
-  const transcriptionEnabled = botConfig.transcribeEnabled !== false;
-  let whisperLiveService: WhisperLiveService | null = null;
-  let whisperLiveUrl: string | null = null;
-  if (transcriptionEnabled) {
-    whisperLiveService = new WhisperLiveService({
-      whisperLiveUrl: process.env.WHISPER_LIVE_URL
-    });
-    // Initialize WhisperLive connection with STUBBORN reconnection - NEVER GIVES UP!
-    whisperLiveUrl = await whisperLiveService.initializeWithStubbornReconnection("Google Meet");
-    log(`[Node.js] Using WhisperLive URL for Google Meet: ${whisperLiveUrl}`);
-  } else {
-    log("[Google Recording] Transcription disabled by config; running recording-only mode.");
+  log("Starting Google Meet recording");
+
+  // Reset segment publisher session start to align with recording start.
+  // SegmentPublisher was created pre-admission; recording starts post-admission.
+  // Without this reset, segment.start_time would be offset by the admission wait time.
+  const publisher = getSegmentPublisher();
+  if (publisher) {
+    publisher.resetSessionStart();
+    log(`[Recording] Session start reset to ${new Date(publisher.sessionStartMs).toISOString()}`);
   }
-  log("Starting Google Meet recording with WebSocket connection");
 
   const wantsAudioCapture =
     !!botConfig.recordingEnabled &&
@@ -73,13 +68,21 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
     log("[Google Recording] Audio capture disabled by config.");
   }
 
+  // Expose callback so the browser can signal when MediaRecorder actually starts.
+  // This re-aligns sessionStartMs with the recording, fixing click-to-seek offset.
+  await page.exposeFunction("__vexaRecordingStarted", () => {
+    if (publisher) {
+      publisher.resetSessionStart();
+      log(`[Recording] Session start re-aligned to MediaRecorder start: ${new Date(publisher.sessionStartMs).toISOString()}`);
+    }
+  });
+
   await ensureBrowserUtils(page, require('path').join(__dirname, '../../browser-utils.global.js'));
 
   // Pass the necessary config fields and the resolved URL into the page context
   await page.evaluate(
     async (pageArgs: {
       botConfigData: BotConfig;
-      whisperUrlForBrowser: string | null;
       selectors: {
         participantSelectors: string[];
         speakingClasses: string[];
@@ -90,34 +93,12 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
         peopleButtonSelectors: string[];
       };
     }) => {
-      const { botConfigData, whisperUrlForBrowser, selectors } = pageArgs;
-      const transcriptionEnabled = (botConfigData as any)?.transcribeEnabled !== false;
+      const { botConfigData, selectors } = pageArgs;
 
       // Use browser utility classes from the global bundle
       const browserUtils = (window as any).VexaBrowserUtils;
       (window as any).logBot(`Browser utils available: ${Object.keys(browserUtils || {}).join(', ')}`);
 
-      // --- Early reconfigure wiring (stub + event) ---
-      // Queue reconfig requests until service is ready
-      (window as any).__vexaPendingReconfigure = null;
-      if (typeof (window as any).triggerWebSocketReconfigure !== 'function') {
-        (window as any).triggerWebSocketReconfigure = async (lang: string | null, task: string | null) => {
-          (window as any).__vexaPendingReconfigure = { lang, task };
-          (window as any).logBot?.('[Reconfigure] Stub queued update; will apply when service is ready.');
-        };
-      }
-      try {
-        document.addEventListener('vexa:reconfigure', (ev: Event) => {
-          try {
-            const detail = (ev as CustomEvent).detail || {};
-            const { lang, task } = detail;
-            const fn = (window as any).triggerWebSocketReconfigure;
-            if (typeof fn === 'function') fn(lang, task);
-          } catch {}
-        });
-      } catch {}
-      // ---------------------------------------------
-      
       const audioService = new browserUtils.BrowserAudioService({
         targetSampleRate: 16000,
         bufferSize: 4096,
@@ -125,15 +106,6 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
         outputChannels: 1
       });
 
-      // Use BrowserWhisperLiveService with stubborn mode to enable reconnection on Google Meet
-      const whisperLiveService = transcriptionEnabled
-        ? new browserUtils.BrowserWhisperLiveService({
-            whisperLiveUrl: whisperUrlForBrowser as string
-          }, true) // Enable stubborn mode for Google Meet
-        : null;
-
-      // Expose references for reconfiguration
-      (window as any).__vexaWhisperLiveService = whisperLiveService;
       (window as any).__vexaAudioService = audioService;
       (window as any).__vexaBotConfig = botConfigData;
       (window as any).__vexaMediaRecorder = null;
@@ -243,61 +215,6 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
 
       (window as any).__vexaFlushRecordingBlob = flushBrowserRecordingBlob;
 
-      // Replace stub with real reconfigure implementation and apply any queued update
-      (window as any).triggerWebSocketReconfigure = async (lang: string | null, task: string | null) => {
-        try {
-          const svc = (window as any).__vexaWhisperLiveService;
-          if (!transcriptionEnabled) {
-            (window as any).logBot?.('[Reconfigure] Ignored because transcription is disabled.');
-            return;
-          }
-          const cfg = (window as any).__vexaBotConfig || {};
-          cfg.language = lang;
-          cfg.task = task || 'transcribe';
-          (window as any).__vexaBotConfig = cfg;
-          
-          // Close existing connection to establish new session from scratch
-          (window as any).logBot?.(`[Reconfigure] Closing existing connection to establish new session...`);
-          try { 
-            // Use closeForReconfigure to prevent auto-reconnect during manual reconfigure
-            if (svc?.closeForReconfigure) {
-              svc.closeForReconfigure();
-            } else {
-              svc?.close();
-            }
-            // Reset audio service session start time so speaker events use new session timestamps
-            const audioSvc = (window as any).__vexaAudioService;
-            if (audioSvc?.resetSessionStartTime) {
-              audioSvc.resetSessionStartTime();
-            }
-            // Wait a brief moment to ensure socket is fully closed
-            await new Promise(resolve => setTimeout(resolve, 100));
-          } catch (closeErr: any) {
-            (window as any).logBot?.(`[Reconfigure] Error closing connection: ${closeErr?.message || closeErr}`);
-          }
-          
-          // Reconnect with new config - this will generate a new session_uid
-          (window as any).logBot?.(`[Reconfigure] Reconnecting with new config: language=${cfg.language}, task=${cfg.task}`);
-          await svc?.connectToWhisperLive(
-            cfg,
-            (window as any).__vexaOnMessage,
-            (window as any).__vexaOnError,
-            (window as any).__vexaOnClose
-          );
-          (window as any).logBot?.(`[Reconfigure] Successfully reconnected with new session. Language=${cfg.language}, Task=${cfg.task}`);
-        } catch (e: any) {
-          (window as any).logBot?.(`[Reconfigure] Error applying new config: ${e?.message || e}`);
-        }
-      };
-      try {
-        const pending = (window as any).__vexaPendingReconfigure;
-        if (pending && typeof (window as any).triggerWebSocketReconfigure === 'function') {
-          (window as any).triggerWebSocketReconfigure(pending.lang, pending.task);
-          (window as any).__vexaPendingReconfigure = null;
-        }
-      } catch {}
-
-
       await new Promise<void>((resolve, reject) => {
         try {
           (window as any).logBot("Starting Google Meet recording process with new services.");
@@ -351,6 +268,8 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                 };
 
                 recorder.start(1000);
+                // Signal Node.js that recording started — re-aligns segment timestamps
+                (window as any).__vexaRecordingStarted?.();
                 (window as any).logBot?.(
                   `[Google Recording] MediaRecorder started (${recorder.mimeType || mimeType || "default"}).`
                 );
@@ -368,122 +287,20 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
               return null;
             }
             // Setup audio data processing
-            audioService.setupAudioDataProcessor(async (audioData: Float32Array, sessionStartTime: number | null) => {
-              if (!transcriptionEnabled || !whisperLiveService) {
-                return;
-              }
-              // Only send after server ready (canonical Teams pattern)
-              if (!whisperLiveService.isReady()) {
-                // Skip sending until server is ready
-                return;
-              }
-              // Compute simple RMS and peak for diagnostics
-              let sumSquares = 0;
-              let peak = 0;
-              for (let i = 0; i < audioData.length; i++) {
-                const v = audioData[i];
-                sumSquares += v * v;
-                const a = Math.abs(v);
-                if (a > peak) peak = a;
-              }
-              const rms = Math.sqrt(sumSquares / Math.max(1, audioData.length));
-              // Diagnostic: send metadata first
-              whisperLiveService.sendAudioChunkMetadata(audioData.length, 16000);
-              // Send audio data to WhisperLive
-              const success = whisperLiveService.sendAudioData(audioData);
-              if (!success) {
-                (window as any).logBot("Failed to send Google Meet audio data to WhisperLive");
-              }
+            // Audio data processor — no-op now; per-speaker pipeline handles transcription
+            audioService.setupAudioDataProcessor(async (_audioData: Float32Array, _sessionStartTime: number | null) => {
+              // Per-speaker pipeline (speaker-streams.ts) handles transcription.
+              // This processor is kept for MediaRecorder / recording only.
             });
 
-            // Initialize WhisperLive WebSocket connection with simple reconnection wrapper
-            const connectWhisper = async () => {
-              if (!transcriptionEnabled || !whisperLiveService) {
-                return;
-              }
-              try {
-                // Define callbacks so they can be reused for reconfiguration reconnects
-                const onMessage = (data: any) => {
-                  const logFn = (window as any).logBot;
-                  // Reduce log spam: log only important status changes and completed transcript segments
-                  if (!data || typeof data !== 'object') {
-                    return;
-                  }
-                  if (data["status"] === "ERROR") {
-                    logFn(`Google Meet WebSocket Server Error: ${data["message"]}`);
-                    return;
-                  }
-                  if (data["status"] === "WAIT") {
-                    logFn(`Google Meet Server busy: ${data["message"]}`);
-                    return;
-                  }
-                  if (!whisperLiveService.isReady() && data["status"] === "SERVER_READY") {
-                    whisperLiveService.setServerReady(true);
-                    logFn("Google Meet Server is ready.");
-                    return;
-                  }
-                  if (data["language"]) {
-                    if (!(window as any).__vexaLangLogged) {
-                      (window as any).__vexaLangLogged = true;
-                      logFn(`Google Meet Language detected: ${data["language"]}`);
-                    }
-                    // do not return; language can accompany segments
-                  }
-                  if (data["message"] === "DISCONNECT") {
-                    logFn("Google Meet Server requested disconnect.");
-                    whisperLiveService.close();
-                    return;
-                  }
-                  // Log only completed transcript segments, with deduplication
-                  if (Array.isArray(data.segments)) {
-                    const completedTexts = data.segments
-                      .filter((s: any) => s && s.completed && s.text)
-                      .map((s: any) => s.text as string);
-                    if (completedTexts.length > 0) {
-                      const transcriptKey = completedTexts.join(' ').trim();
-                      if (transcriptKey && transcriptKey !== (window as any).__lastTranscript) {
-                        (window as any).__lastTranscript = transcriptKey;
-                        logFn(`Transcript: ${transcriptKey}`);
-                      }
-                    }
-                  }
-                };
-                const onError = (event: Event) => {
-                  (window as any).logBot(`[Google Meet Failover] WebSocket error. This will trigger retry logic.`);
-                };
-                const onClose = async (event: CloseEvent) => {
-                  (window as any).logBot(`[Google Meet Failover] WebSocket connection closed. Code: ${event.code}, Reason: ${event.reason}. Attempting reconnect in 2s...`);
-                  try { whisperLiveService.setServerReady(false); } catch {}
-                  setTimeout(() => {
-                    // Best-effort reconnect; BrowserWhisperLiveService stubborn mode should also help
-                    connectWhisper().catch(() => {});
-                  }, 2000);
-                };
-
-                // Save callbacks globally for reuse
-                (window as any).__vexaOnMessage = onMessage;
-                (window as any).__vexaOnError = onError;
-                (window as any).__vexaOnClose = onClose;
-
-                await whisperLiveService.connectToWhisperLive(
-                  (window as any).__vexaBotConfig,
-                  onMessage,
-                  onError,
-                  onClose
-                );
-              } catch (e) {
-                (window as any).logBot(`Google Meet connect error: ${(e as any)?.message || e}. Retrying in 2s...`);
-                setTimeout(() => { connectWhisper().catch(() => {}); }, 2000);
-              }
-            };
-            return await connectWhisper();
+            return null;
           }).then(() => {
             // Initialize Google-specific speaker detection (Teams-style with Google selectors)
             if (!degradedNoMedia) {
               (window as any).logBot("Initializing Google Meet speaker detection...");
             }
 
-            const initializeGoogleSpeakerDetection = (whisperLiveService: any, audioService: any, botConfigData: any) => {
+            const initializeGoogleSpeakerDetection = (audioService: any, botConfigData: any) => {
               const selectorsTyped = selectors as any;
 
               const speakingStates = new Map<string, string>();
@@ -532,9 +349,33 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                   }
                 }
 
+                // Helper: reject junk names (fallback-generated IDs, not real names)
+                const isJunkName = (name: string): boolean => {
+                  return /^Google Participant \(/.test(name) ||
+                         /spaces\//.test(name) ||
+                         /devices\//.test(name);
+                };
+
                 // Fallbacks
                 const selfName = participantElement.getAttribute('data-self-name');
-                if (selfName && selfName.trim()) return selfName.trim();
+                if (selfName && selfName.trim() && !isJunkName(selfName.trim())) return selfName.trim();
+
+                // aria-label on the container or any descendant (catches Spaces/Chat device participants)
+                const ariaLabel = participantElement.getAttribute('aria-label');
+                if (ariaLabel && ariaLabel.trim().length > 1 && ariaLabel.trim().length < 50 && !isJunkName(ariaLabel.trim())) return ariaLabel.trim();
+                const ariaChild = participantElement.querySelector('[aria-label]') as HTMLElement | null;
+                if (ariaChild) {
+                  const childLabel = ariaChild.getAttribute('aria-label')?.trim();
+                  if (childLabel && childLabel.length > 1 && childLabel.length < 50 && !isJunkName(childLabel)) return childLabel;
+                }
+
+                // data-tooltip on any descendant
+                const tooltipEl = participantElement.querySelector('[data-tooltip]') as HTMLElement | null;
+                if (tooltipEl) {
+                  const tooltip = tooltipEl.getAttribute('data-tooltip')?.trim();
+                  if (tooltip && tooltip.length > 1 && tooltip.length < 50 && !isJunkName(tooltip)) return tooltip;
+                }
+
                 const idToDisplay = getGoogleParticipantId(participantElement);
                 return `Google Participant (${idToDisplay})`;
               }
@@ -583,21 +424,36 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                 const relativeTimestampMs = Date.now() - sessionStartTime;
                 const participantId = getGoogleParticipantId(participantElement);
                 const participantName = getGoogleParticipantName(participantElement);
-                try {
-                  whisperLiveService.sendSpeakerEvent(
-                    eventType,
-                    participantName,
-                    participantId,
-                    relativeTimestampMs,
-                    botConfigData
-                  );
-                } catch {}
+                // Accumulate for persistence (direct bot accumulation)
+                (window as any).__vexaSpeakerEvents = (window as any).__vexaSpeakerEvents || [];
+                (window as any).__vexaSpeakerEvents.push({
+                  event_type: eventType,
+                  participant_name: participantName,
+                  participant_id: participantId,
+                  relative_timestamp_ms: relativeTimestampMs,
+                });
+              }
+
+              // Debug: log all class mutations to discover current Google Meet speaking classes
+              let classMutationCount = 0;
+              function debugClassMutation(participantElement: HTMLElement, mutatedClassList?: DOMTokenList) {
+                classMutationCount++;
+                // Log first 20 mutations and then every 50th to avoid spam
+                if (classMutationCount <= 20 || classMutationCount % 50 === 0) {
+                  const id = getGoogleParticipantId(participantElement);
+                  const name = getGoogleParticipantName(participantElement);
+                  const classes = mutatedClassList ? Array.from(mutatedClassList).join(' ') : '(no classList)';
+                  (window as any).logBot(`[SpeakerDebug] #${classMutationCount} ${name} (${id}): classes=[${classes}]`);
+                }
               }
 
               function logGoogleSpeakerEvent(participantElement: HTMLElement, mutatedClassList?: DOMTokenList) {
                 const participantId = getGoogleParticipantId(participantElement);
                 const participantName = getGoogleParticipantName(participantElement);
                 const previousLogicalState = speakingStates.get(participantId) || 'silent';
+
+                // Debug: log class mutations
+                debugClassMutation(participantElement, mutatedClassList);
 
                 // Primary: indicators; Fallback: classes
                 const indicatorSpeaking = hasSpeakingIndicator(participantElement);
@@ -606,13 +462,13 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
 
                 if (isCurrentlySpeaking) {
                   if (previousLogicalState !== 'speaking') {
-                    (window as any).logBot(`🎤 [Google] SPEAKER_START: ${participantName} (ID: ${participantId})`);
+                    (window as any).logBot(`[SpeakerDebug] SPEAKING START: ${participantName} (indicator=${indicatorSpeaking}, classInference=${classInference.speaking})`);
                     sendGoogleSpeakerEvent('SPEAKER_START', participantElement);
                   }
                   speakingStates.set(participantId, 'speaking');
                 } else {
                   if (previousLogicalState === 'speaking') {
-                    (window as any).logBot(`🔇 [Google] SPEAKER_END: ${participantName} (ID: ${participantId})`);
+                    (window as any).logBot(`[SpeakerDebug] SPEAKING END: ${participantName}`);
                     sendGoogleSpeakerEvent('SPEAKER_END', participantElement);
                   }
                   speakingStates.set(participantId, 'silent');
@@ -651,6 +507,19 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
 
               function scanForAllGoogleParticipants() {
                 const participantSelectors: string[] = selectorsTyped.participantSelectors || [];
+                // Debug: dump participant tile structure on first scan
+                (window as any).logBot(`[SpeakerDebug] Scanning for participants with selectors: ${participantSelectors.join(', ')}`);
+                let foundCount = 0;
+                for (const sel of participantSelectors) {
+                  document.querySelectorAll(sel).forEach((el) => {
+                    foundCount++;
+                    const elh = el as HTMLElement;
+                    const outerClasses = elh.className;
+                    const childClasses = Array.from(elh.querySelectorAll('*')).slice(0, 5).map(c => (c as HTMLElement).className).filter(Boolean);
+                    (window as any).logBot(`[SpeakerDebug] Participant tile (${sel}): classes=[${outerClasses}], children=[${childClasses.join(' | ')}], innerHTML=${elh.innerHTML.substring(0, 200)}`);
+                  });
+                }
+                (window as any).logBot(`[SpeakerDebug] Found ${foundCount} participant tiles total`);
                 for (const sel of participantSelectors) {
                   document.querySelectorAll(sel).forEach((el) => {
                     const elh = el as HTMLElement;
@@ -673,6 +542,30 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
               // Initialize
               scanForAllGoogleParticipants();
 
+              // Expose participant name lookup to Node (used by speaker-identity.ts)
+              // Returns a map of all known participant names from DOM tiles,
+              // keyed by participant-id, plus a list of currently-speaking names.
+              (window as any).__vexaGetAllParticipantNames = (): { names: Record<string, string>; speaking: string[] } => {
+                const names: Record<string, string> = {};
+                const speaking: string[] = [];
+                const participantSelectors: string[] = selectorsTyped.participantSelectors || [];
+                const seen = new Set<string>();
+                participantSelectors.forEach(sel => {
+                  document.querySelectorAll(sel).forEach(el => {
+                    const elh = el as HTMLElement;
+                    const id = getGoogleParticipantId(elh);
+                    if (seen.has(id)) return;
+                    seen.add(id);
+                    const name = getGoogleParticipantName(elh);
+                    names[id] = name;
+                    if (speakingStates.get(id) === 'speaking') {
+                      speaking.push(name);
+                    }
+                  });
+                });
+                return { names, speaking };
+              };
+
               // Polling fallback to catch speaking indicators not driven by class mutations
               const lastSpeakingById = new Map<string, boolean>();
               setInterval(() => {
@@ -686,12 +579,12 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                   const indicatorSpeaking = hasSpeakingIndicator(container) || inferSpeakingFromClasses(container).speaking;
                   const prev = lastSpeakingById.get(id) || false;
                   if (indicatorSpeaking && !prev) {
-                    (window as any).logBot(`[Google Poll] SPEAKER_START ${getGoogleParticipantName(container)}`);
+                    // Poll speaker start — debug level
                     sendGoogleSpeakerEvent('SPEAKER_START', container);
                     lastSpeakingById.set(id, true);
                     speakingStates.set(id, 'speaking');
                   } else if (!indicatorSpeaking && prev) {
-                    (window as any).logBot(`[Google Poll] SPEAKER_END ${getGoogleParticipantName(container)}`);
+                    // Poll speaker end — debug level
                     sendGoogleSpeakerEvent('SPEAKER_END', container);
                     lastSpeakingById.set(id, false);
                     speakingStates.set(id, 'silent');
@@ -702,51 +595,58 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
               }, 500);
             };
 
-            if (!degradedNoMedia && transcriptionEnabled && whisperLiveService) {
-              initializeGoogleSpeakerDetection(whisperLiveService, audioService, botConfigData);
+            if (!degradedNoMedia) {
+              initializeGoogleSpeakerDetection(audioService, botConfigData);
             }
 
-            // Simple single-strategy participant extraction from main video area
-            (window as any).logBot("Initializing simplified participant counting (main frame text scan)...");
+            // Participant counting: uses data-participant-id tiles, but falls back to
+            // "Leave call" button visibility to avoid false-positive "alone" during screen share.
+            // Google Meet removes participant tiles from the DOM during presentation mode,
+            // but the "Leave call" button remains visible as long as the bot is in the meeting.
+            (window as any).logBot("Initializing participant counting (data-participant-id + leave-button fallback)...");
 
-            const extractParticipantsFromMain = (botName: string | undefined): string[] => {
-              const participants: string[] = [];
-              const mainElement = document.querySelector('main');
-              if (mainElement) {
-                const nameElements = mainElement.querySelectorAll('*');
-                nameElements.forEach((el: Element) => {
-                  const element = el as HTMLElement;
-                  const text = (element.textContent || '').trim();
-                  if (text && element.children.length === 0) {
-                    // Basic length validation only (allow numbers, parentheses, etc.)
-                    if ((text.length > 1 && text.length < 50) || (botName && text === botName)) {
-                      participants.push(text);
-                    }
-                  }
-                });
-              }
-              const tooltips = document.querySelectorAll('main [role="tooltip"]');
-              tooltips.forEach((el: Element) => {
-                const text = (el.textContent || '').trim();
-                // Basic length validation only (allow numbers, parentheses, etc.)
-                if (text && ((text.length > 1 && text.length < 50) || (botName && text === botName))) {
-                  participants.push(text);
-                }
+            let lastKnownParticipantCount = 0;
+
+            const countParticipantTiles = (): number => {
+              const participantElements = document.querySelectorAll('[data-participant-id]');
+              const ids = new Set<string>();
+              participantElements.forEach((el: Element) => {
+                const id = el.getAttribute('data-participant-id');
+                if (id) ids.add(id);
               });
-              return Array.from(new Set(participants));
+              return ids.size;
+            };
+
+            const isBotStillInMeeting = (): boolean => {
+              // "Leave call" button is the most reliable signal — it's always visible while in a meeting
+              const leaveBtn = document.querySelector('button[aria-label*="Leave call"]');
+              return leaveBtn !== null;
             };
 
             (window as any).getGoogleMeetActiveParticipants = () => {
-              const names = extractParticipantsFromMain((botConfigData as any)?.botName);
-              (window as any).logBot(`🔍 [Google Meet Participants] ${JSON.stringify(names)}`);
-              return names;
+              const tileCount = countParticipantTiles();
+              const inMeeting = isBotStillInMeeting();
+              // If tiles show 0 but we're still in the meeting (e.g. screen share mode),
+              // keep the last known count (minimum 2) to avoid false "alone" triggers
+              if (tileCount === 0 && inMeeting && lastKnownParticipantCount > 1) {
+                (window as any).logBot(`🔍 [Google Meet Participants] 0 tiles but Leave button present — keeping last count ${lastKnownParticipantCount} (screen share mode)`);
+                return new Array(lastKnownParticipantCount).fill('placeholder');
+              }
+              if (tileCount > 0) {
+                lastKnownParticipantCount = tileCount;
+              }
+              // Only log participant count changes, not every poll
+              if (tileCount !== lastKnownParticipantCount) {
+                (window as any).logBot(`🔍 [Google Meet Participants] ${tileCount} tiles, inMeeting=${inMeeting}`);
+              }
+              return new Array(tileCount).fill('placeholder');
             };
             (window as any).getGoogleMeetActiveParticipantsCount = () => {
               return (window as any).getGoogleMeetActiveParticipants().length;
             };
             
             // Setup Google Meet meeting monitoring (browser context)
-            const setupGoogleMeetingMonitoring = (botConfigData: any, audioService: any, whisperLiveService: any, resolve: any) => {
+            const setupGoogleMeetingMonitoring = (botConfigData: any, audioService: any, resolve: any) => {
               (window as any).logBot("Setting up Google Meet meeting monitoring...");
               
               const leaveCfg = (botConfigData && (botConfigData as any).automaticLeave) || {};
@@ -781,9 +681,6 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                   );
                 }
                 audioService.disconnect();
-                if (whisperLiveService) {
-                  whisperLiveService.close();
-                }
                 finish();
               };
 
@@ -854,7 +751,7 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
               });
             };
 
-            setupGoogleMeetingMonitoring(botConfigData, audioService, whisperLiveService, resolve);
+            setupGoogleMeetingMonitoring(botConfigData, audioService, resolve);
           }).catch((err: any) => {
             reject(err);
           });
@@ -865,34 +762,9 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
         }
       });
 
-      // Define reconfiguration hook to update language/task and reconnect
-      (window as any).triggerWebSocketReconfigure = async (lang: string | null, task: string | null) => {
-        try {
-          const svc = (window as any).__vexaWhisperLiveService;
-          const cfg = (window as any).__vexaBotConfig || {};
-          if (!svc) {
-            (window as any).logBot?.('[Reconfigure] WhisperLive service not initialized.');
-            return;
-          }
-          cfg.language = lang;
-          cfg.task = task || 'transcribe';
-          (window as any).__vexaBotConfig = cfg;
-          try { svc.close(); } catch {}
-          await svc.connectToWhisperLive(
-            cfg,
-            (window as any).__vexaOnMessage,
-            (window as any).__vexaOnError,
-            (window as any).__vexaOnClose
-          );
-          (window as any).logBot?.(`[Reconfigure] Applied: language=${cfg.language}, task=${cfg.task}`);
-        } catch (e: any) {
-          (window as any).logBot?.(`[Reconfigure] Error applying new config: ${e?.message || e}`);
-        }
-      };
     },
-    { 
-      botConfigData: botConfig, 
-      whisperUrlForBrowser: whisperLiveUrl,
+    {
+      botConfigData: botConfig,
       selectors: {
         participantSelectors: googleParticipantSelectors,
         speakingClasses: googleSpeakingClassNames,
@@ -904,9 +776,4 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
       } as any
     }
   );
-  
-  // After page.evaluate finishes, cleanup services
-  if (whisperLiveService) {
-    await whisperLiveService.cleanup();
-  }
 }

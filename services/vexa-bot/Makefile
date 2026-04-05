@@ -1,10 +1,13 @@
 # Hot Dev Kit (local to vexa-bot)
-IMAGE_NAME ?= vexa-bot:test
+IMAGE_NAME ?= vexaai/vexa-bot:test
 MEETING_URL ?=
 DOCKER_NETWORK ?= vexa_dev_vexa_default
 HOT_CHANNEL := bot_commands:meeting:999
 
-.PHONY: build rebuild test publish publish-leave
+BOT := $(CURDIR)
+TEST := $(CURDIR)/../features/realtime-transcription/tests
+
+.PHONY: build rebuild test publish publish-leave play-replay
 
 # Build image + create local dist/ (one-time setup)
 build:
@@ -33,4 +36,9 @@ publish:
 # Usage: make publish-leave
 publish-leave:
 	@$(MAKE) publish DATA='{"action":"leave"}'
+
+# Replay a real Teams meeting through the full pipeline
+# Part A only (no Whisper): make play-replay ARGS=--part-a-only
+play-replay:
+	@cd $(BOT) && npx ts-node core/src/services/replay-meeting.test.ts $(TEST)/audio $(TEST) $(ARGS)
 

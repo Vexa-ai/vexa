@@ -1,9 +1,10 @@
 import { log } from "../utils";
 
-export type MeetingStatus = 
+export type MeetingStatus =
   | "joining"
-  | "awaiting_admission" 
+  | "awaiting_admission"
   | "active"
+  | "needs_human_help"
   | "completed"
   | "failed";
 
@@ -31,6 +32,7 @@ export interface UnifiedCallbackPayload {
   completion_reason?: CompletionReason;
   failure_stage?: FailureStage;
   timestamp?: string;
+  speaker_events?: any[];
 }
 
 /**
@@ -44,10 +46,11 @@ export async function callStatusChangeCallback(
   exitCode?: number,
   errorDetails?: any,
   completionReason?: CompletionReason,
-  failureStage?: FailureStage
+  failureStage?: FailureStage,
+  speakerEvents?: any[]
 ): Promise<void> {log(`🔥 UNIFIED CALLBACK: ${status.toUpperCase()} - reason: ${reason || 'none'}`);
   
-  if (!botConfig.botManagerCallbackUrl) {log("Warning: No bot manager callback URL configured. Cannot send status change callback.");
+  if (!botConfig.meetingApiCallbackUrl) {log("Warning: No callback URL configured. Cannot send status change callback.");
     return;
   }
 
@@ -63,7 +66,7 @@ export async function callStatusChangeCallback(
     let timeoutId: NodeJS.Timeout | null = null;
     try {
       // Convert the callback URL to the unified endpoint
-      const baseUrl = botConfig.botManagerCallbackUrl.replace('/exited', '/status_change');
+      const baseUrl = botConfig.meetingApiCallbackUrl.replace('/exited', '/status_change');
       
       const payload: UnifiedCallbackPayload = {
         connection_id: botConfig.connectionId,
@@ -74,7 +77,8 @@ export async function callStatusChangeCallback(
         error_details: errorDetails,
         completion_reason: completionReason,
         failure_stage: failureStage,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        speaker_events: speakerEvents,
       };
 
       log(`Sending unified status change callback to ${baseUrl} (attempt ${attempt + 1}/${maxRetries})`);
@@ -127,10 +131,13 @@ export async function callStatusChangeCallback(
         const delay = baseDelay * Math.pow(2, attempt);
         log(`Retrying in ${delay}ms...`);
         await new Promise(resolve => setTimeout(resolve, delay));
-      } else {log(`All ${maxRetries} callback attempts failed. Bot-manager may not have received the status change.`);
+      } else {log(`All ${maxRetries} callback attempts failed for ${status} status change.`);
+        throw new Error(`All ${maxRetries} callback attempts failed for ${status} status change`);
       }
     }
   }
+  // If we get here without returning (success), all retries were exhausted via non-exception path
+  throw new Error(`${status} callback failed: server rejected after ${maxRetries} attempts`);
 }
 
 /**
@@ -144,6 +151,7 @@ export function mapExitReasonToStatus(
     // Successful exits (completed)
     switch (reason) {
       case "admission_failed":
+      case "admission_timeout":
         return { status: "completed", completionReason: "awaiting_admission_timeout" };
       case "self_initiated_leave":
         return { status: "completed", completionReason: "stopped" };

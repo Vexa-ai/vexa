@@ -18,6 +18,14 @@ export async function callAwaitingAdmissionCallback(botConfig: any): Promise<voi
   await callStatusChangeCallback(botConfig, "awaiting_admission");
 }
 
+export async function callNeedsHumanHelpCallback(
+  botConfig: any,
+  reason: string,
+  screenshotPath?: string
+): Promise<void> {
+  await callStatusChangeCallback(botConfig, "needs_human_help", reason);
+}
+
 export async function callLeaveCallback(botConfig: any, reason: string = "manual_leave"): Promise<void> {
   // Note: Leave callback is typically handled by the exit callback with completion status
   // This function is kept for backward compatibility but may not be used

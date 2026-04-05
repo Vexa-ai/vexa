@@ -1,9 +1,8 @@
 import { Page } from "playwright";
 import { log } from "../../utils";
 import { BotConfig } from "../../types";
-import { WhisperLiveService } from "../../services/whisperlive";
 import { RecordingService } from "../../services/recording";
-import { setActiveRecordingService } from "../../index";
+import { setActiveRecordingService, getSegmentPublisher } from "../../index";
 import { ensureBrowserUtils } from "../../utils/injection";
 import {
   teamsParticipantSelectors,
@@ -17,25 +16,21 @@ import {
   teamsStreamTypeSelectors,
   teamsAudioActivitySelectors,
   teamsParticipantIdSelectors,
-  teamsMeetingContainerSelectors
+  teamsMeetingContainerSelectors,
+  teamsCaptionSelectors
 } from "./selectors";
 
 // Modified to use new services - Teams recording functionality
 export async function startTeamsRecording(page: Page, botConfig: BotConfig): Promise<void> {
-  const transcriptionEnabled = botConfig.transcribeEnabled !== false;
-  let whisperLiveService: WhisperLiveService | null = null;
-  let whisperLiveUrl: string | null = null;
-  if (transcriptionEnabled) {
-    whisperLiveService = new WhisperLiveService({
-      whisperLiveUrl: process.env.WHISPER_LIVE_URL
-    });
-    // Initialize WhisperLive connection with STUBBORN reconnection - NEVER GIVES UP!
-    whisperLiveUrl = await whisperLiveService.initializeWithStubbornReconnection("Teams");
-    log(`[Node.js] Using WhisperLive URL for Teams: ${whisperLiveUrl}`);
-  } else {
-    log("[Teams Recording] Transcription disabled by config; running recording-only mode.");
+  log("Starting Teams recording");
+
+  // Reset segment publisher session start to align with recording start.
+  // SegmentPublisher was created pre-admission; recording starts post-admission.
+  const publisher = getSegmentPublisher();
+  if (publisher) {
+    publisher.resetSessionStart();
+    log(`[Teams Recording] Session start reset to ${new Date(publisher.sessionStartMs).toISOString()}`);
   }
-  log("Starting Teams recording with WebSocket connection");
 
   const wantsAudioCapture =
     !!botConfig.recordingEnabled &&
@@ -78,13 +73,21 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
     log("[Teams Recording] Audio capture disabled by config.");
   }
 
+  // Expose callback so the browser can signal when MediaRecorder actually starts.
+  // This re-aligns sessionStartMs with the recording, fixing click-to-seek offset.
+  await page.exposeFunction("__vexaRecordingStarted", () => {
+    if (publisher) {
+      publisher.resetSessionStart();
+      log(`[Teams Recording] Session start re-aligned to MediaRecorder start: ${new Date(publisher.sessionStartMs).toISOString()}`);
+    }
+  });
+
   await ensureBrowserUtils(page, require('path').join(__dirname, '../../browser-utils.global.js'));
 
   // Pass the necessary config fields and the resolved URL into the page context
   await page.evaluate(
     async (pageArgs: {
       botConfigData: BotConfig;
-      whisperUrlForBrowser: string | null;
       selectors: {
         participantSelectors: string[];
         speakingClasses: string[];
@@ -98,29 +101,21 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
         audioActivitySelectors: string[];
         participantIdSelectors: string[];
         meetingContainerSelectors: string[];
+        captionSelectors: {
+          rendererWrapper: string;
+          captionItem: string;
+          authorName: string;
+          captionText: string;
+          virtualListContent: string;
+        };
       };
     }) => {
-      const { botConfigData, whisperUrlForBrowser, selectors } = pageArgs;
-      const transcriptionEnabled = (botConfigData as any)?.transcribeEnabled !== false;
+      const { botConfigData, selectors } = pageArgs;
       const selectorsTyped = selectors as any;
 
       // Use browser utility classes from the global bundle
-      const { BrowserAudioService, BrowserWhisperLiveService } = (window as any).VexaBrowserUtils;
+      const { BrowserAudioService } = (window as any).VexaBrowserUtils;
 
-      // --- Early reconfigure wiring (event listener only) ---
-      (window as any).__vexaPendingReconfigure = null;
-      try {
-        document.addEventListener('vexa:reconfigure', (ev: Event) => {
-          try {
-            const detail = (ev as CustomEvent).detail || {};
-            const { lang, task } = detail;
-            const fn = (window as any).triggerWebSocketReconfigure;
-            if (typeof fn === 'function') fn(lang, task);
-          } catch {}
-        });
-      } catch {}
-      // ---------------------------------------------
-      
       const audioService = new BrowserAudioService({
         targetSampleRate: 16000,
         bufferSize: 4096,
@@ -128,15 +123,6 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
         outputChannels: 1
       });
 
-      // Use BrowserWhisperLiveService with stubborn mode for Teams
-      const whisperLiveService = transcriptionEnabled
-        ? new BrowserWhisperLiveService({
-            whisperLiveUrl: whisperUrlForBrowser as string
-          }, true) // Enable stubborn mode for Teams
-        : null;
-
-      // Expose references for reconfiguration
-      (window as any).__vexaWhisperLiveService = whisperLiveService;
       (window as any).__vexaAudioService = audioService;
       (window as any).__vexaBotConfig = botConfigData;
       (window as any).__vexaMediaRecorder = null;
@@ -245,72 +231,12 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
 
       (window as any).__vexaFlushRecordingBlob = flushBrowserRecordingBlob;
 
-      // Replace with real reconfigure implementation and apply any queued update
-      (window as any).triggerWebSocketReconfigure = async (lang: string | null, task: string | null) => {
-        try {
-          const svc = (window as any).__vexaWhisperLiveService;
-          const cfg = (window as any).__vexaBotConfig || {};
-          if (!transcriptionEnabled) {
-            (window as any).logBot?.('[Reconfigure] Ignored because transcription is disabled.');
-            return;
-          }
-          if (!svc) {
-            // Service not ready yet, queue the update
-            (window as any).__vexaPendingReconfigure = { lang, task };
-            (window as any).logBot?.('[Reconfigure] WhisperLive service not ready; queued for later.');
-            return;
-          }
-          cfg.language = lang;
-          cfg.task = task || 'transcribe';
-          (window as any).__vexaBotConfig = cfg;
-          
-          // Close existing connection to establish new session from scratch
-          (window as any).logBot?.(`[Reconfigure] Closing existing connection to establish new session...`);
-          try { 
-            // Use closeForReconfigure to prevent auto-reconnect during manual reconfigure
-            if (svc?.closeForReconfigure) {
-              svc.closeForReconfigure();
-            } else {
-              svc.close();
-            }
-            // Reset audio service session start time so speaker events use new session timestamps
-            const audioSvc = (window as any).__vexaAudioService;
-            if (audioSvc?.resetSessionStartTime) {
-              audioSvc.resetSessionStartTime();
-            }
-            // Wait a brief moment to ensure socket is fully closed
-            await new Promise(resolve => setTimeout(resolve, 100));
-          } catch (closeErr: any) {
-            (window as any).logBot?.(`[Reconfigure] Error closing connection: ${closeErr?.message || closeErr}`);
-          }
-          
-          // Reconnect with new config - this will generate a new session_uid
-          (window as any).logBot?.(`[Reconfigure] Reconnecting with new config: language=${cfg.language}, task=${cfg.task}`);
-          await svc.connectToWhisperLive(
-            cfg,
-            (window as any).__vexaOnMessage,
-            (window as any).__vexaOnError,
-            (window as any).__vexaOnClose
-          );
-          (window as any).logBot?.(`[Reconfigure] Successfully reconnected with new session. Language=${cfg.language}, Task=${cfg.task}`);
-        } catch (e: any) {
-          (window as any).logBot?.(`[Reconfigure] Error applying new config: ${e?.message || e}`);
-        }
-      };
-      try {
-        const pending = (window as any).__vexaPendingReconfigure;
-        if (pending && typeof (window as any).triggerWebSocketReconfigure === 'function') {
-          (window as any).triggerWebSocketReconfigure(pending.lang, pending.task);
-          (window as any).__vexaPendingReconfigure = null;
-        }
-      } catch {}
-
       await new Promise<void>((resolve, reject) => {
         try {
           (window as any).logBot("Starting Teams recording process with new services.");
           
           // Find and create combined audio stream
-          audioService.findMediaElements().then(async (mediaElements: HTMLMediaElement[]) => {
+          audioService.findMediaElements(10, 3000).then(async (mediaElements: HTMLMediaElement[]) => {
             if (mediaElements.length === 0) {
               reject(
                 new Error(
@@ -347,6 +273,8 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
                 };
 
                 recorder.start(1000);
+                // Signal Node.js that recording started — re-aligns segment timestamps
+                (window as any).__vexaRecordingStarted?.();
                 (window as any).logBot?.(
                   `[Teams Recording] MediaRecorder started (${recorder.mimeType || mimeType || "default"}).`
                 );
@@ -360,81 +288,19 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
             // Initialize audio processor
             return await audioService.initializeAudioProcessor(combinedStream);
           }).then(async (processor: any) => {
-            // Setup audio data processing
-            audioService.setupAudioDataProcessor(async (audioData: Float32Array, sessionStartTime: number | null) => {
-              if (!transcriptionEnabled || !whisperLiveService) {
-                return;
-              }
-              // Only send after server ready
-              if (!whisperLiveService.isReady()) {
-                return;
-              }
-              // Compute simple RMS and peak for diagnostics
-              let sumSquares = 0;
-              let peak = 0;
-              for (let i = 0; i < audioData.length; i++) {
-                const v = audioData[i];
-                sumSquares += v * v;
-                const a = Math.abs(v);
-                if (a > peak) peak = a;
-              }
-              const rms = Math.sqrt(sumSquares / Math.max(1, audioData.length));
-              // Diagnostic: send metadata first
-              whisperLiveService.sendAudioChunkMetadata(audioData.length, 16000);
-              // Send audio data to WhisperLive
-              const success = whisperLiveService.sendAudioData(audioData);
-              if (!success) {
-                (window as any).logBot("Failed to send Teams audio data to WhisperLive");
-              }
+            // Audio data processor — no-op now; per-speaker pipeline handles transcription
+            audioService.setupAudioDataProcessor(async (_audioData: Float32Array, _sessionStartTime: number | null) => {
+              // Per-speaker pipeline (speaker-streams.ts) handles transcription.
+              // This processor is kept for MediaRecorder / recording only.
             });
 
-            // Initialize WhisperLive WebSocket connection with reusable callbacks
-            const onMessage = (data: any) => {
-              if (data["status"] === "ERROR") {
-                (window as any).logBot(`Teams WebSocket Server Error: ${data["message"]}`);
-              } else if (data["status"] === "WAIT") {
-                (window as any).logBot(`Teams Server busy: ${data["message"]}`);
-              } else if (!whisperLiveService.isReady() && data["status"] === "SERVER_READY") {
-                whisperLiveService.setServerReady(true);
-                (window as any).logBot("Teams Server is ready.");
-              } else if (data["language"]) {
-                (window as any).logBot(`Teams Language detected: ${data["language"]}`);
-              } else if (data["message"] === "DISCONNECT") {
-                (window as any).logBot("Teams Server requested disconnect.");
-                if (whisperLiveService) {
-                  whisperLiveService.close();
-                }
-              }
-            };
-            const onError = (event: Event) => {
-              (window as any).logBot(`[Teams Failover] WebSocket error. This will trigger retry logic.`);
-            };
-            const onClose = async (event: CloseEvent) => {
-              (window as any).logBot(`[Teams Failover] WebSocket connection closed. Code: ${event.code}, Reason: ${event.reason}.`);
-            };
-
-            // Save callbacks globally for reuse
-            (window as any).__vexaOnMessage = onMessage;
-            (window as any).__vexaOnError = onError;
-            (window as any).__vexaOnClose = onClose;
-
-            if (transcriptionEnabled && whisperLiveService) {
-              return await whisperLiveService.connectToWhisperLive(
-                (window as any).__vexaBotConfig,
-                onMessage,
-                onError,
-                onClose
-              );
-            }
             return null;
           }).then(() => {
             // Initialize Teams-specific speaker detection (browser context)
-            if (transcriptionEnabled && whisperLiveService) {
-              (window as any).logBot("Initializing Teams speaker detection...");
-            }
-            
+            (window as any).logBot("Initializing Teams speaker detection...");
+
             // Unified Teams speaker detection - NO FALLBACKS (signal-only approach)
-            const initializeTeamsSpeakerDetection = (whisperLiveService: any, audioService: any, botConfigData: any) => {
+            const initializeTeamsSpeakerDetection = (audioService: any, botConfigData: any) => {
               (window as any).logBot("Setting up ROBUST Teams speaker detection (NO FALLBACKS - signal-only)...");
               
               // Teams-specific configuration for speaker detection
@@ -473,6 +339,13 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
                   }
                   
                   return this.cache.get(element)!;
+                }
+
+                getNameById(id: string): string | null {
+                  const element = this.idToElement.get(id);
+                  if (!element) return null;
+                  const identity = this.cache.get(element);
+                  return identity?.name || null;
                 }
 
                 invalidate(element: HTMLElement) {
@@ -725,24 +598,21 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
               function sendTeamsSpeakerEvent(eventType: string, identity: ParticipantIdentity) {
                 const eventAbsoluteTimeMs = Date.now();
                 const sessionStartTime = audioService.getSessionAudioStartTime();
-                
+
                 if (sessionStartTime === null) {
                   return;
                 }
-                
+
                 const relativeTimestampMs = eventAbsoluteTimeMs - sessionStartTime;
-                
-                try {
-                  whisperLiveService.sendSpeakerEvent(
-                    eventType,
-                    identity.name,
-                    identity.id,
-                    relativeTimestampMs,
-                    botConfigData
-                  );
-                } catch (error: any) {
-                  // Handle errors silently
-                }
+
+                // Accumulate for persistence (direct bot accumulation)
+                (window as any).__vexaSpeakerEvents = (window as any).__vexaSpeakerEvents || [];
+                (window as any).__vexaSpeakerEvents.push({
+                  event_type: eventType,
+                  participant_name: identity.name,
+                  participant_id: identity.id,
+                  relative_timestamp_ms: relativeTimestampMs,
+                });
               }
               // Unified Observer System
               function observeParticipant(element: HTMLElement) {
@@ -977,6 +847,284 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
               // Do initial count immediately, then poll every 5 seconds
               countParticipants();
               setInterval(countParticipants, 5000);
+
+              // ─── Per-speaker audio routing with caption-driven boundaries ─
+              // Teams has ONE mixed audio stream. We use two speaker signals:
+              //   1. CAPTIONS (primary): Teams live captions provide speaker name
+              //      with each text segment. Captions only fire when Teams ASR
+              //      detects real speech, so no false activations from mic noise.
+              //   2. DOM blue squares (fallback): voice-level-stream-outline +
+              //      vdi-frame-occlusion class. Used when captions unavailable.
+              //
+              // A ring buffer stores recent audio so that when a caption arrives
+              // (with inherent delay), we can look back and attribute the audio
+              // to the correct speaker retroactively.
+
+              const RING_BUFFER_CHUNK_SIZE = 4096;
+              const RING_BUFFER_SAMPLE_RATE = 16000;
+
+              // ── Caption-driven audio routing ─────────────────────────
+              // Audio accumulates in a queue. Flushed to speaker when
+              // caption text GROWS (new words spoken). Refinements
+              // (punctuation, capitalization) are ignored — they would
+              // steal the next speaker's audio from the queue.
+              // Max queue age 3s. Speaker change clears queue.
+              const MAX_QUEUE_AGE_MS = 3000;
+              const MIN_TEXT_GROWTH = 3; // chars — below this = refinement
+              interface QueuedChunk {
+                data: Float32Array;
+                timestamp: number;
+              }
+              const audioQueue: QueuedChunk[] = [];
+              let captionsEnabled = false;
+              let lastCaptionSpeaker: string | null = null;
+              let lastCaptionText: string = '';
+              let lastCaptionTimestamp: number = 0;
+              let lastFlushedTextLength: number = 0;
+
+              const setupPerSpeakerAudioRouting = () => {
+                const audioEl = document.querySelector('audio') as HTMLAudioElement | null;
+                if (!audioEl || !(audioEl.srcObject instanceof MediaStream)) {
+                  (window as any).logBot?.('[Teams PerSpeaker] No audio element found, skipping per-speaker routing');
+                  return;
+                }
+
+                const stream = audioEl.srcObject as MediaStream;
+                if (stream.getAudioTracks().length === 0) {
+                  (window as any).logBot?.('[Teams PerSpeaker] Audio stream has no tracks');
+                  return;
+                }
+
+                const ctx = new AudioContext({ sampleRate: 16000 });
+                const source = ctx.createMediaStreamSource(stream);
+                const processor = ctx.createScriptProcessor(4096, 1, 1);
+                const botNameLower = ((botConfigData as any)?.botName || (botConfigData as any)?.name || 'vexa').toLowerCase();
+
+                processor.onaudioprocess = (e: AudioProcessingEvent) => {
+                  const data = e.inputBuffer.getChannelData(0);
+                  const now = Date.now();
+
+                  // Skip silence — don't queue chunks with no speech energy.
+                  // This prevents silence from being flushed to the wrong speaker
+                  // on speaker transitions.
+                  let sum = 0;
+                  for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
+                  const rms = Math.sqrt(sum / data.length);
+                  if (rms < 0.01) return;
+
+                  audioQueue.push({ data: new Float32Array(data), timestamp: now });
+
+                  // Drop entries older than MAX_QUEUE_AGE_MS
+                  while (audioQueue.length > 0 && now - audioQueue[0].timestamp > MAX_QUEUE_AGE_MS) {
+                    audioQueue.shift();
+                  }
+                };
+
+                source.connect(processor);
+                processor.connect(ctx.destination);
+                (window as any).logBot?.('[Teams PerSpeaker] Audio routing active (caption-aware with ring buffer)');
+              };
+
+              // ─── Caption observer ─────────────────────────────────────────
+              // Watches Teams live caption DOM for new entries. When a new
+              // caption appears with a speaker name, we:
+              //   1. Flush ring buffer audio to that speaker (lookback)
+              //   2. Set lastCaptionSpeaker so ongoing audio routes to them
+              //   3. Send caption text to Node.js for storage/matching
+              const captionSels = selectorsTyped.captionSelectors;
+              let captionObserver: MutationObserver | null = null;
+              let lastSeenCaptionCount = 0;
+
+              // ── Caption DOM variance ──────────────────────────────────────
+              // Teams renders captions differently for host vs guest:
+              //
+              //   HOST:  wrapper > window-wrapper > virtual-list-content
+              //            > items-renderer > ChatMessageCompact > author + text
+              //
+              //   GUEST: wrapper > window-wrapper > virtual-list-content
+              //            > (div) > author + text  (NO items-renderer wrapper)
+              //
+              // The ONLY stable elements across both views are:
+              //   [data-tid="author"]           — speaker name
+              //   [data-tid="closed-caption-text"] — caption text
+              //
+              // These always appear as sibling-adjacent pairs in document order
+              // inside the wrapper. We find them directly and pair by index.
+              // This is robust against any container restructuring Teams may do.
+              // ────────────────────────────────────────────────────────────────
+
+              let lastProcessedCaptionKey = '';
+
+              const processCaptions = () => {
+                const wrapper = document.querySelector(captionSels.rendererWrapper);
+                if (!wrapper) return;
+
+                // Find author/text atoms directly — the only stable data-tids
+                const authorEls = wrapper.querySelectorAll('[data-tid="author"]');
+                const textEls = wrapper.querySelectorAll('[data-tid="closed-caption-text"]');
+
+                if (authorEls.length === 0 || textEls.length === 0) return;
+
+                // Use the LAST pair — most recent caption entry.
+                // Authors and texts appear in matched pairs in document order.
+                const lastAuthor = authorEls[authorEls.length - 1];
+                const lastText = textEls[textEls.length - 1];
+
+                const speaker = (lastAuthor.textContent || '').trim();
+                const text = (lastText.textContent || '').trim();
+                if (!speaker || !text) return;
+
+                // Deduplicate: Teams updates text in-place as ASR refines.
+                // Only process when speaker changes or text grows significantly.
+                const captionKey = speaker + '::' + text;
+                if (captionKey === lastProcessedCaptionKey) return;
+                lastProcessedCaptionKey = captionKey;
+
+                const now = Date.now();
+                const botNameLower2 = ((botConfigData as any)?.botName || (botConfigData as any)?.name || 'vexa').toLowerCase();
+                const speakerLower = speaker.toLowerCase();
+                if (speakerLower.includes(botNameLower2) || speakerLower.includes('vexa')) return;
+
+                if (speaker !== lastCaptionSpeaker) {
+                  // Speaker changed. Queue contains new speaker's audio
+                  // (~1-1.5s accumulated during caption delay). Flush to
+                  // new speaker to preserve their opening words.
+                  lastFlushedTextLength = 0;
+                  const queued = audioQueue.length;
+                  if (queued > 0 && !speakerLower.includes(botNameLower2) && !speakerLower.includes('vexa')) {
+                    // Only flush recent chunks (last 2s) — the caption delay lookback.
+                    // Older chunks are stale silence from the gap between speakers.
+                    const lookbackCutoff = now - 2000;
+                    let discarded = 0;
+                    while (audioQueue.length > 0 && audioQueue[0].timestamp < lookbackCutoff) {
+                      audioQueue.shift();
+                      discarded++;
+                    }
+                    let flushed = 0;
+                    while (audioQueue.length > 0) {
+                      const entry = audioQueue.shift()!;
+                      if (typeof (window as any).__vexaTeamsAudioData === 'function') {
+                        (window as any).__vexaTeamsAudioData(speaker, Array.from(entry.data));
+                      }
+                      flushed++;
+                    }
+                    (window as any).logBot?.('[Teams Captions] Speaker change: ' +
+                      (lastCaptionSpeaker || '(none)') + ' → ' + speaker +
+                      ' (flushed ' + flushed + ' chunks, discarded ' + discarded + ' stale)');
+                  } else {
+                    (window as any).logBot?.('[Teams Captions] Speaker change: ' +
+                      (lastCaptionSpeaker || '(none)') + ' → ' + speaker);
+                  }
+                }
+
+                lastCaptionSpeaker = speaker;
+                lastCaptionText = text;
+                lastCaptionTimestamp = now;
+
+                // ── Flush only when text GREW (new words spoken) ─────
+                // Refinements (punctuation, case) change text by 1-2 chars.
+                // New words grow by 5+. Skip refinements to prevent
+                // stealing the next speaker's audio from the queue.
+                // Compare against PREVIOUS text length (not cumulative max)
+                // because Teams replaces caption text per entry, not appends.
+                const textGrowth = text.length - lastFlushedTextLength;
+                // Flush when: text grew by >3 chars (new words), OR text is
+                // shorter (new caption entry = new sentence, always flush)
+                if (textGrowth > MIN_TEXT_GROWTH || text.length < lastFlushedTextLength) {
+                  if (!speakerLower.includes(botNameLower2) && !speakerLower.includes('vexa')) {
+                    let flushed = 0;
+                    while (audioQueue.length > 0) {
+                      const entry = audioQueue.shift()!;
+                      if (typeof (window as any).__vexaTeamsAudioData === 'function') {
+                        (window as any).__vexaTeamsAudioData(speaker, Array.from(entry.data));
+                      }
+                      flushed++;
+                    }
+                    if (flushed > 0) {
+                      (window as any).logBot?.('[Teams Captions] Flushed ' + flushed + ' chunks to ' + speaker +
+                        ' (text ' + (textGrowth > 0 ? '+' + textGrowth : textGrowth) + ' chars)');
+                    }
+                  }
+                  lastFlushedTextLength = text.length;
+                }
+
+                if (typeof (window as any).__vexaTeamsCaptionData === 'function') {
+                  (window as any).__vexaTeamsCaptionData(speaker, text, now);
+                }
+              };
+
+              const startCaptionObserver = () => {
+                const wrapper = document.querySelector(captionSels.rendererWrapper);
+                if (!wrapper) {
+                  // Captions not enabled yet — check periodically
+                  return false;
+                }
+
+                captionsEnabled = true;
+                (window as any).logBot?.('[Teams Captions] Caption wrapper found — caption-driven routing ACTIVE');
+
+                let captionMutationCount = 0;
+                captionObserver = new MutationObserver((mutations) => {
+                  captionMutationCount++;
+                  if (captionMutationCount <= 3 || captionMutationCount % 50 === 0) {
+                    (window as any).logBot?.('[Teams Captions] MutationObserver fired (#' + captionMutationCount + ', ' + mutations.length + ' mutations)');
+                  }
+                  processCaptions();
+                });
+
+                captionObserver.observe(wrapper, {
+                  childList: true,
+                  subtree: true,
+                  characterData: true
+                });
+
+                // Initial scan
+                processCaptions();
+
+                // Backup: poll every 200ms in case MutationObserver misses changes
+                // (faster poll = tighter speaker transition gaps)
+                // (Teams may use virtual DOM updates that don't trigger mutations)
+                let pollCount = 0;
+                setInterval(() => {
+                  pollCount++;
+                  processCaptions();
+                  // Deep DOM inspection every 5 seconds for debugging
+                  if (pollCount % 10 === 0) {
+                    const w = document.querySelector(captionSels.rendererWrapper);
+                    if (w) {
+                      const items = w.querySelectorAll(captionSels.captionItem);
+                      const allTids = Array.from(w.querySelectorAll('[data-tid]')).map((el: any) => el.getAttribute('data-tid'));
+                      const childCount = w.children.length;
+                      const innerLen = w.innerHTML.length;
+                      (window as any).logBot?.('[Teams Captions POLL] wrapper children=' + childCount +
+                        ', items=' + items.length + ', data-tids=[' + allTids.join(',') + '], innerHTML.length=' + innerLen);
+                    } else {
+                      (window as any).logBot?.('[Teams Captions POLL] wrapper GONE');
+                    }
+                  }
+                }, 200);
+
+                return true;
+              };
+
+              // Try to detect if captions are already enabled; poll until found or give up
+              const captionDetectionInterval = setInterval(() => {
+                if (startCaptionObserver()) {
+                  clearInterval(captionDetectionInterval);
+                }
+              }, 2000);
+
+              // Also watch for the wrapper to appear via body mutation
+              const captionWrapperWatcher = new MutationObserver(() => {
+                if (!captionsEnabled && startCaptionObserver()) {
+                  captionWrapperWatcher.disconnect();
+                  clearInterval(captionDetectionInterval);
+                }
+              });
+              captionWrapperWatcher.observe(document.body, { childList: true, subtree: true });
+
+              // Delay slightly to ensure audio element is ready
+              setTimeout(setupPerSpeakerAudioRouting, 2000);
               
               // Expose participant count for meeting monitoring
               // Accessible-roles based participant collection (robust and simple)
@@ -1023,7 +1171,7 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
             };
 
             // Setup Teams meeting monitoring (browser context)
-            const setupTeamsMeetingMonitoring = (botConfigData: any, audioService: any, whisperLiveService: any, resolve: any) => {
+            const setupTeamsMeetingMonitoring = (botConfigData: any, audioService: any, resolve: any) => {
               (window as any).logBot("Setting up Teams meeting monitoring...");
               
               const leaveCfg = (botConfigData && (botConfigData as any).automaticLeave) || {};
@@ -1058,7 +1206,6 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
                   );
                 }
                 audioService.disconnect();
-                whisperLiveService.close();
                 finish();
               };
 
@@ -1183,12 +1330,10 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
             };
 
             // Initialize Teams-specific speaker detection
-            if (transcriptionEnabled && whisperLiveService) {
-              initializeTeamsSpeakerDetection(whisperLiveService, audioService, botConfigData);
-            }
+            initializeTeamsSpeakerDetection(audioService, botConfigData);
             
             // Setup Teams meeting monitoring
-            setupTeamsMeetingMonitoring(botConfigData, audioService, whisperLiveService, resolve);
+            setupTeamsMeetingMonitoring(botConfigData, audioService, resolve);
           }).catch((err: any) => {
             reject(err);
           });
@@ -1206,9 +1351,8 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
         }
       } catch {}
     },
-    { 
-      botConfigData: botConfig, 
-      whisperUrlForBrowser: whisperLiveUrl,
+    {
+      botConfigData: botConfig,
       selectors: {
         participantSelectors: teamsParticipantSelectors,
         speakingClasses: teamsSpeakingClassNames,
@@ -1221,13 +1365,9 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
         streamTypeSelectors: teamsStreamTypeSelectors,
         audioActivitySelectors: teamsAudioActivitySelectors,
         participantIdSelectors: teamsParticipantIdSelectors,
-        meetingContainerSelectors: teamsMeetingContainerSelectors
+        meetingContainerSelectors: teamsMeetingContainerSelectors,
+        captionSelectors: teamsCaptionSelectors
       } as any
     }
   );
-  
-  // After page.evaluate finishes, cleanup services
-  if (whisperLiveService) {
-    await whisperLiveService.cleanup();
-  }
 }

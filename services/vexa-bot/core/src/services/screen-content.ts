@@ -1202,11 +1202,17 @@ export function getVirtualCameraInitScript(): string {
         // Disable incoming video to save CPU/memory.
         // The bot only needs audio for transcription — receiving and rendering
         // all participants' video wastes ~87% CPU and ~2GB RAM per bot.
+        // Deferred via setTimeout(0) so Google Meet's track handlers create DOM
+        // elements first — the audio capture pipeline needs those elements.
         if (!window.__vexa_voice_agent_enabled) {
           pc.addEventListener('track', (event) => {
             if (event.track && event.track.kind === 'video') {
-              event.track.enabled = false;
-              console.log('[Vexa] Incoming video track disabled (id=' + event.track.id + ')');
+              const trackId = event.track.id;
+              const trackRef = event.track;
+              setTimeout(() => {
+                trackRef.enabled = false;
+                console.log('[Vexa] Incoming video track disabled (deferred, id=' + trackId + ')');
+              }, 0);
             }
           });
         }
@@ -1253,12 +1259,17 @@ export function getVirtualCameraInitScript(): string {
 /**
  * Lightweight init script for transcription-only bots (no avatar/voice agent).
  * Only patches RTCPeerConnection to:
- * 1. Disable incoming video tracks (track.enabled = false)
- * 2. Stop video transceivers to prevent Chrome from decoding video
- * 3. Block outgoing video by setting video transceiver direction to 'inactive'
+ * 1. Disable incoming video tracks (track.enabled = false) after a short delay
+ * 2. Preserve audio tracks so the audio capture pipeline can find media elements
  *
  * This avoids the heavy virtual camera setup (canvas, getUserMedia, addTrack patches)
  * while still reducing CPU/memory from incoming video decoding.
+ *
+ * IMPORTANT: Video track disabling is deferred via setTimeout so that Google Meet's
+ * own track handlers run first and attach the MediaStream to DOM elements (<video>).
+ * Without this delay, Google Meet sees the disabled video track synchronously and
+ * skips creating media elements, which breaks audio capture (the audio pipeline
+ * discovers audio by finding <audio>/<video> elements with srcObject.getAudioTracks()).
  */
 export function getVideoBlockInitScript(): string {
   return `
@@ -1274,23 +1285,26 @@ export function getVideoBlockInitScript(): string {
         window.RTCPeerConnection = function(...args) {
           const pc = new OrigRTC(...args);
 
-          // Block incoming video: disable tracks AND stop transceivers
+          // Block incoming video: disable track rendering only.
+          // IMPORTANT: Do NOT call track.stop() or set transceiver to inactive —
+          // that breaks WebRTC renegotiation and causes Google Meet to kick the bot
+          // when new video tracks arrive (e.g. screen share/presentation).
+          //
+          // The disabling is deferred (setTimeout 0) so Google Meet's own ontrack
+          // handlers execute first and create the DOM <video> elements with the
+          // MediaStream attached. The audio capture pipeline relies on finding
+          // these elements via querySelectorAll('audio, video') and reading
+          // srcObject.getAudioTracks(). If we disable the video track synchronously
+          // before Meet processes the event, Meet may skip DOM element creation
+          // entirely, leaving zero media elements for audio capture.
           pc.addEventListener('track', (event) => {
             if (event.track && event.track.kind === 'video') {
-              event.track.enabled = false;
-              event.track.stop();
-              console.log('[Vexa] Incoming video track stopped (id=' + event.track.id + ')');
-
-              // Also set the transceiver to recvonly->inactive to tell the
-              // remote peer we don't want video at all
-              if (event.transceiver) {
-                try {
-                  event.transceiver.direction = 'inactive';
-                  console.log('[Vexa] Video transceiver set to inactive (mid=' + event.transceiver.mid + ')');
-                } catch (e) {
-                  console.warn('[Vexa] Could not set transceiver direction:', e);
-                }
-              }
+              const trackId = event.track.id;
+              const trackRef = event.track;
+              setTimeout(() => {
+                trackRef.enabled = false;
+                console.log('[Vexa] Incoming video track disabled (deferred, id=' + trackId + ')');
+              }, 0);
             }
           });
 

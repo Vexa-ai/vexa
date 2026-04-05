@@ -80,13 +80,25 @@ FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS runtime
 WORKDIR /app/vexa-bot
 
 # Install runtime dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN export DEBIAN_FRONTEND=noninteractive && apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
     pulseaudio \
     xserver-xephyr \
     libssl3 \
     libxcb-xtest0 \
-    && rm -rf /var/lib/apt/lists/*
+    fluxbox \
+    x11vnc \
+    novnc \
+    python3-websockify \
+    awscli \
+    socat \
+    curl \
+    git \
+    openssh-server \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /run/sshd \
+    && sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config \
+    && sed -i 's/#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
 
 # Copy workspace package files (for runtime dependencies)
 COPY --from=native-builder /app/vexa-bot/package*.json ./
@@ -124,6 +136,9 @@ RUN chmod +x /app/vexa-bot/entrypoint.sh
 
 # Set environment
 ENV DISPLAY=:99
+
+# Expose noVNC web interface and SSH for browser session mode
+EXPOSE 6080 22
 
 # Set working directory for runtime
 WORKDIR /app/vexa-bot/core

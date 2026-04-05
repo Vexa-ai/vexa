@@ -1,0 +1,26 @@
+# Experiment image: vexa-bot + Claude CLI
+# Usage: docker build -f Dockerfile.experiment -t vexa-bot:experiment .
+#
+# Extends the production bot image with Claude CLI for interactive debugging.
+# When BOT_CONFIG is set → runs the bot (normal behavior).
+# When BOT_CONFIG is absent → sleeps, waiting for `docker exec ... claude -c`.
+
+FROM vexa-bot:dev
+
+# Install Claude CLI (already has Node.js from base image)
+RUN npm install -g @anthropic-ai/claude-code
+
+# Copy TypeScript source (not included in production image, needed for debugging)
+COPY core/src/ /app/vexa-bot/core/src/
+COPY core/tsconfig.json core/build-browser-utils.js /app/vexa-bot/core/
+
+# Workspace for agent state (bind-mounted at runtime)
+RUN mkdir -p /workspace
+
+WORKDIR /app/vexa-bot/core
+
+# Use the experiment entrypoint (supports agent-only mode)
+COPY core/entrypoint-experiment.sh /app/vexa-bot/entrypoint-experiment.sh
+RUN chmod +x /app/vexa-bot/entrypoint-experiment.sh
+
+CMD ["/app/vexa-bot/entrypoint-experiment.sh"]

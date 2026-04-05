@@ -16,6 +16,7 @@ export class RecordingService {
   private sampleRate: number;
   private channels: number;
   private isFinalized: boolean = false;
+  private startTime: number = 0;
 
   constructor(
     private meetingId: number,
@@ -38,6 +39,7 @@ export class RecordingService {
     this.writeStream.write(this.createWavHeader(0));
     this.totalSamples = 0;
     this.isFinalized = false;
+    this.startTime = Date.now();
   }
 
   /**
@@ -111,14 +113,21 @@ export class RecordingService {
   }
 
   /**
-   * Upload the finalized recording to the bot-manager's internal upload endpoint.
+   * Upload the finalized recording to the meeting-api internal upload endpoint.
+   * Retries up to 3 times with exponential backoff on transient failures.
    */
   async upload(callbackUrl: string, token: string): Promise<void> {
+    const maxRetries = 3;
+    const baseDelayMs = 1000;
+    const uploadTimeoutMs = 30_000;
+
     const filePath = this.isFinalized ? this.filePath : await this.finalize();
     const fileData = await fs.promises.readFile(filePath);
     const fileStats = await fs.promises.stat(filePath);
     const format = path.extname(filePath).slice(1) || 'wav';
-    const durationSeconds = format === 'wav' ? this.totalSamples / this.sampleRate : undefined;
+    const durationSeconds = format === 'wav'
+      ? this.totalSamples / this.sampleRate
+      : (this.startTime > 0 ? (Date.now() - this.startTime) / 1000 : undefined);
 
     log(`[Recording] Uploading ${fileStats.size} bytes to ${callbackUrl}`);
 
@@ -135,17 +144,33 @@ export class RecordingService {
 
     // Build multipart body
     const parts: Buffer[] = [];
-    // Metadata part
     parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="metadata"\r\nContent-Type: application/json\r\n\r\n`));
     parts.push(Buffer.from(metadata));
     parts.push(Buffer.from('\r\n'));
-    // File part
     parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="recording.${format}"\r\nContent-Type: audio/${format}\r\n\r\n`));
     parts.push(fileData);
     parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
 
     const body = Buffer.concat(parts);
 
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        await this._sendUpload(callbackUrl, token, boundary, body, uploadTimeoutMs);
+        return; // Success
+      } catch (err: any) {
+        const isLastAttempt = attempt === maxRetries;
+        if (isLastAttempt) {
+          log(`[Recording] ERROR: Upload failed after ${maxRetries + 1} attempts: ${err.message}`);
+          throw err;
+        }
+        const delay = baseDelayMs * Math.pow(2, attempt);
+        log(`[Recording] Upload attempt ${attempt + 1}/${maxRetries + 1} failed: ${err.message}. Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  private _sendUpload(callbackUrl: string, token: string, boundary: string, body: Buffer, timeoutMs: number): Promise<void> {
     return new Promise((resolve, reject) => {
       const url = new URL(callbackUrl);
       const transport = url.protocol === 'https:' ? https : http;
@@ -155,6 +180,7 @@ export class RecordingService {
           port: url.port,
           path: url.pathname,
           method: 'POST',
+          timeout: timeoutMs,
           headers: {
             'Content-Type': `multipart/form-data; boundary=${boundary}`,
             'Content-Length': body.length,
@@ -175,6 +201,10 @@ export class RecordingService {
           });
         }
       );
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error(`Upload timed out after ${timeoutMs}ms`));
+      });
       req.on('error', (err) => {
         log(`[Recording] Upload error: ${err.message}`);
         reject(err);
@@ -200,6 +230,10 @@ export class RecordingService {
 
   getFilePath(): string {
     return this.filePath;
+  }
+
+  getStartTime(): number {
+    return this.startTime;
   }
 
   getDurationSeconds(): number {
