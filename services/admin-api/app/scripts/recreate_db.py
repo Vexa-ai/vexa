@@ -13,7 +13,7 @@ if libs_dir not in sys.path:
     sys.path.insert(0, libs_dir)
 # --------------------
 
-from shared_models.database import recreate_db, logger as db_logger, Base 
+from admin_models.database import recreate_db, logger as db_logger, Base
 
 
 # Configure logging to see the warnings/errors from recreate_db
@@ -39,7 +39,7 @@ if __name__ == "__main__":
     print("+" * 60)
     print("!!! DANGER !!!")
     print("This script will permanently delete ALL data from the database")
-    print("by dropping and recreating all tables based on shared_models.")
+    print("by dropping and recreating all tables based on admin_models.")
     print("Make sure this is absolutely intended, especially in production!")
     print("+" * 60)
     

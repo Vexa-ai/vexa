@@ -1,27 +1,31 @@
+import hmac
 import logging
 import secrets
 import string
 import os
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Security, Response
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, status, Security, Response
 from fastapi.security import APIKeyHeader
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload, attributes
 from typing import List, Optional  # Import List for response model
-from datetime import datetime # Import datetime
-from sqlalchemy import func
+from datetime import datetime, timedelta
+from sqlalchemy import func, cast, literal
+from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy import Text
 from pydantic import BaseModel, Field, HttpUrl
 
-# Import shared models and schemas
-from shared_models.models import User, APIToken, Base, Meeting, Transcription, MeetingSession # Import Base for init_db and Meeting
-from shared_models.schemas import (UserCreate, UserResponse, TokenResponse, UserDetailResponse, UserBase, UserUpdate, MeetingResponse,
-                                 UserTableResponse, MeetingTableResponse, MeetingSessionResponse, TranscriptionStats, 
-                                 MeetingPerformanceMetrics, MeetingTelematicsResponse, UserMeetingStats, 
-                                 UserUsagePatterns, UserAnalyticsResponse) # Import analytics schemas
+# Import admin models (User, APIToken) from admin-models package
+from admin_models.models import User, APIToken, Base
+from admin_models.database import get_db, init_db
 
-# Database utilities (needs to be created)
-from shared_models.database import get_db, init_db  # New import
-from shared_models.webhook_url import validate_webhook_url
+# Import meeting models from meeting-api package
+from meeting_api.models import Meeting, Transcription, MeetingSession
+from meeting_api.schemas import (UserCreate, UserResponse, TokenResponse, UserDetailResponse, UserBase, UserUpdate, MeetingResponse,
+                                 UserTableResponse, MeetingTableResponse, MeetingSessionResponse, TranscriptionStats,
+                                 MeetingPerformanceMetrics, MeetingTelematicsResponse, UserMeetingStats,
+                                 UserUsagePatterns, UserAnalyticsResponse)
+from meeting_api.webhook_url import validate_webhook_url
 
 # Logging configuration
 logging.basicConfig(
@@ -30,8 +34,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger("admin_api")
 
+from admin_models.security_headers import SecurityHeadersMiddleware
+
 # App initialization
 app = FastAPI(title="Vexa Admin API")
+app.add_middleware(SecurityHeadersMiddleware)
 
 # --- Pydantic Schemas for new endpoint ---
 class WebhookUpdate(BaseModel):
@@ -45,10 +52,11 @@ class PaginatedMeetingUserStatResponse(BaseModel):
     total: int
     items: List[MeetingUserStat]
 
-# Security - Reuse logic from bot-manager/auth.py for admin token verification
+# Security - Reuse logic from meeting-api/auth.py for admin token verification
 API_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", auto_error=False) # Use a distinct header
 USER_API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False) # For user-facing endpoints
 ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN") # Read from environment
+ANALYTICS_API_TOKEN = os.getenv("ANALYTICS_API_TOKEN") # Read-only analytics token
 
 async def verify_admin_token(admin_api_key: str = Security(API_KEY_HEADER)):
     """Dependency to verify the admin API token."""
@@ -59,17 +67,40 @@ async def verify_admin_token(admin_api_key: str = Security(API_KEY_HEADER)):
             detail="Admin authentication is not configured on the server."
         )
     
-    if not admin_api_key or admin_api_key != ADMIN_API_TOKEN:
+    if not admin_api_key or not hmac.compare_digest(admin_api_key, ADMIN_API_TOKEN):
         logger.warning(f"Invalid admin token provided.")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid or missing admin token."
         )
     logger.info("Admin token verified successfully.")
-    # No need to return anything, just raises exception on failure 
+    # No need to return anything, just raises exception on failure
+
+async def verify_analytics_or_admin_token(api_key: str = Security(API_KEY_HEADER)):
+    """Dependency that accepts either the full admin token or the read-only analytics token."""
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Missing API key"
+        )
+    
+    # Check if it matches admin token
+    if ADMIN_API_TOKEN and hmac.compare_digest(api_key, ADMIN_API_TOKEN):
+        return
+
+    # Check if it matches analytics token
+    if ANALYTICS_API_TOKEN and hmac.compare_digest(api_key, ANALYTICS_API_TOKEN):
+        return
+    
+    logger.warning("Invalid token provided for analytics endpoint.")
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Invalid API key"
+    ) 
 
 async def get_current_user(api_key: str = Security(USER_API_KEY_HEADER), db: AsyncSession = Depends(get_db)) -> User:
-    """Dependency to verify user API key and return user object."""
+    """Dependency to verify user API key and return user object.
+    Checks scopes from DB column, not token prefix."""
     if not api_key:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing API Key")
 
@@ -80,7 +111,12 @@ async def get_current_user(api_key: str = Security(USER_API_KEY_HEADER), db: Asy
 
     if not db_token or not db_token.user:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid API Key")
-    
+
+    # Check scopes from DB, not prefix
+    token_scopes = set(db_token.scopes) if db_token.scopes else set()
+    if not token_scopes & VALID_SCOPES:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token scope not authorized for this endpoint")
+
     return db_token.user
 
 # Router setup (all routes require admin token verification)
@@ -90,6 +126,13 @@ admin_router = APIRouter(
     dependencies=[Depends(verify_admin_token)]
 )
 
+# Analytics router - accepts either admin or analytics token (read-only access)
+analytics_router = APIRouter(
+    prefix="/admin",
+    tags=["Analytics"],
+    dependencies=[Depends(verify_analytics_or_admin_token)]
+)
+
 # New router for user-facing actions
 user_router = APIRouter(
     prefix="/user",
@@ -97,10 +140,12 @@ user_router = APIRouter(
     dependencies=[Depends(get_current_user)]
 )
 
-# --- Helper Functions --- 
-def generate_secure_token(length=40):
-    alphabet = string.ascii_letters + string.digits
-    return ''.join(secrets.choice(alphabet) for i in range(length))
+# --- Helper Functions ---
+from admin_models.token_scope import generate_prefixed_token, check_token_scope, parse_token_scope, VALID_SCOPES
+from admin_models.database import engine as admin_engine
+
+def generate_secure_token(length=40, scope: str = "user"):
+    return generate_prefixed_token(scope, length)
 
 # --- User Endpoints ---
 @user_router.put("/webhook",
@@ -157,7 +202,71 @@ async def set_user_webhook(
 
     return UserResponse.model_validate(user)
 
-# --- Admin Endpoints (Copied and adapted from bot-manager/admin.py) --- 
+
+class WorkspaceGitUpdate(BaseModel):
+    repo: Optional[str] = None
+    token: Optional[str] = None
+    branch: Optional[str] = "main"
+
+@user_router.put("/workspace-git",
+             response_model=UserResponse,
+             summary="Set git workspace config",
+             description="Configure a GitHub repo for browser session workspace sync.")
+async def set_workspace_git(
+    config: WorkspaceGitUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    if user.data is None:
+        user.data = {}
+
+    if config.repo:
+        user.data['workspace_git'] = {
+            'repo': config.repo,
+            'token': config.token or '',
+            'branch': config.branch or 'main',
+        }
+    else:
+        user.data.pop('workspace_git', None)
+
+    attributes.flag_modified(user, "data")
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+
+    if user.created_at is None:
+        user.created_at = datetime.utcnow().replace(tzinfo=None)
+        db.add(user)
+        await db.commit()
+
+    logger.info(f"Updated workspace git config for user {user.email}")
+    return UserResponse.model_validate(user)
+
+
+@user_router.delete("/workspace-git",
+             response_model=UserResponse,
+             summary="Remove git workspace config")
+async def delete_workspace_git(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    if user.data is None:
+        user.data = {}
+
+    user.data.pop('workspace_git', None)
+    attributes.flag_modified(user, "data")
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+
+    if user.created_at is None:
+        user.created_at = datetime.utcnow().replace(tzinfo=None)
+        db.add(user)
+        await db.commit()
+
+    return UserResponse.model_validate(user)
+
+# --- Admin Endpoints (Copied and adapted from meeting-api/admin.py) ---
 @admin_router.post("/users",
              response_model=UserResponse,
              status_code=status.HTTP_201_CREATED,
@@ -209,7 +318,7 @@ async def create_user(user_in: UserCreate, response: Response, db: AsyncSession 
         await db.commit()
     return UserResponse.model_validate(db_user)
 
-@admin_router.get("/users", 
+@analytics_router.get("/users", 
             response_model=List[UserResponse], # Use List import
             summary="List all users")
 async def list_users(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)):
@@ -301,8 +410,6 @@ async def update_user(user_id: int, user_update: UserUpdate, db: AsyncSession = 
     Only provide the fields you want to change in the request body.
     Requires admin privileges.
     """
-    print(f"=== ADMIN PATCH USER {user_id} CALLED ===")
-    
     # Fetch the user to update
     result = await db.execute(select(User).where(User.id == user_id))
     db_user = result.scalars().first()
@@ -312,7 +419,6 @@ async def update_user(user_id: int, user_update: UserUpdate, db: AsyncSession = 
 
     # Get the update data, excluding unset fields to only update provided values
     update_data = user_update.model_dump(exclude_unset=True)
-    print(f"=== Raw update_data: {update_data} ===")
     logger.info(f"Admin PATCH for user {user_id}. Raw update_data: {update_data}")
 
     # Prevent changing email via this endpoint (if desired)
@@ -328,8 +434,8 @@ async def update_user(user_id: int, user_update: UserUpdate, db: AsyncSession = 
         if new_data is not None:
             logger.info(f"Admin updating data field for user ID: {user_id}. Current: {db_user.data}, New: {new_data}")
             
-            # Replace the data field entirely (rather than merging)
-            db_user.data = new_data
+            # Merge incoming keys into existing data (preserves keys not in the patch)
+            db_user.data = {**(db_user.data or {}), **new_data}
             
             # Flag the 'data' field as modified for SQLAlchemy to detect the change
             attributes.flag_modified(db_user, "data")
@@ -370,28 +476,54 @@ async def update_user(user_id: int, user_update: UserUpdate, db: AsyncSession = 
 
     return UserResponse.model_validate(db_user)
 
-@admin_router.post("/users/{user_id}/tokens", 
+@admin_router.post("/users/{user_id}/tokens",
              response_model=TokenResponse,
              status_code=status.HTTP_201_CREATED,
              summary="Generate a new API token for a user")
-async def create_token_for_user(user_id: int, db: AsyncSession = Depends(get_db)):
+async def create_token_for_user(
+    user_id: int,
+    scope: str = "user",
+    scopes: Optional[str] = None,
+    name: Optional[str] = None,
+    expires_in: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+):
     user = await db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    
-    token_value = generate_secure_token()
-    # Use the APIToken model from shared_models
-    # Use timezone-naive datetime for TIMESTAMP WITHOUT TIME ZONE column
+
+    # Parse scopes: ?scopes=bot,tx takes precedence over ?scope=bot
+    if scopes is not None:
+        scope_list = [s.strip() for s in scopes.split(",") if s.strip()]
+    else:
+        scope_list = [scope]
+
+    # Validate all scopes
+    invalid = [s for s in scope_list if s not in VALID_SCOPES]
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid scope(s): {invalid}. Valid: {sorted(VALID_SCOPES)}",
+        )
+
+    # Token prefix uses the first scope
+    token_value = generate_secure_token(scope=scope_list[0])
+    expires_at = None
+    if expires_in is not None and expires_in > 0:
+        expires_at = datetime.utcnow().replace(tzinfo=None) + timedelta(seconds=expires_in)
+
     db_token = APIToken(
-        token=token_value, 
+        token=token_value,
         user_id=user_id,
-        created_at=datetime.utcnow().replace(tzinfo=None)
+        scopes=scope_list,
+        name=name,
+        created_at=datetime.utcnow().replace(tzinfo=None),
+        expires_at=expires_at,
     )
     db.add(db_token)
     await db.commit()
     await db.refresh(db_token)
-    logger.info(f"Admin created token for user {user_id} ({user.email})")
-    # Use TokenResponse for consistency with schema definition (datetime object)
+    logger.info(f"Admin created token for user {user_id} ({user.email}), scopes={scope_list}, name={name}")
     return TokenResponse.model_validate(db_token)
 
 @admin_router.delete("/tokens/{token_id}", 
@@ -416,7 +548,7 @@ async def delete_token(token_id: int, db: AsyncSession = Depends(get_db)):
     return 
 
 # --- Usage Stats Endpoints ---
-@admin_router.get("/stats/meetings-users",
+@analytics_router.get("/stats/meetings-users",
             response_model=PaginatedMeetingUserStatResponse,
             summary="Get paginated list of meetings joined with users")
 async def list_meetings_with_users(
@@ -454,7 +586,7 @@ async def list_meetings_with_users(
     return PaginatedMeetingUserStatResponse(total=total, items=response_items)
 
 # --- Analytics Endpoints ---
-@admin_router.get("/analytics/users",
+@analytics_router.get("/analytics/users",
                   response_model=List[UserTableResponse],
                   summary="Get users table structure without sensitive data")
 async def get_users_table(
@@ -485,7 +617,7 @@ async def get_users_table(
     
     return [UserTableResponse.model_validate(u) for u in users]
 
-@admin_router.get("/analytics/meetings",
+@analytics_router.get("/analytics/meetings",
                   response_model=List[MeetingTableResponse], 
                   summary="Get meetings table structure without sensitive data")
 async def get_meetings_table(
@@ -668,16 +800,125 @@ async def get_user_details(
         api_tokens=[TokenResponse.model_validate(t) for t in user.api_tokens] if include_tokens else None
     )
 
+# --- Internal Endpoints (service-to-service, not in OpenAPI docs) ---
+INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET", "")
+DEV_MODE = os.getenv("DEV_MODE", "false").lower() == "true"
+
+@app.post("/internal/validate", include_in_schema=False)
+async def validate_token(request: Request, payload: dict, db: AsyncSession = Depends(get_db)):
+    """Validate an API token and return user identity info.
+    Called by api-gateway to inject X-User-ID headers."""
+    # Fail closed: if INTERNAL_API_SECRET is not configured, reject unless in dev mode
+    if not DEV_MODE and not INTERNAL_API_SECRET:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="INTERNAL_API_SECRET not configured")
+    # Authenticate the caller (gateway) via shared secret
+    if INTERNAL_API_SECRET:
+        provided = request.headers.get("X-Internal-Secret", "")
+        if not hmac.compare_digest(provided, INTERNAL_API_SECRET):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid internal secret")
+
+    token = payload.get("token", "")
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
+
+    result = await db.execute(
+        select(APIToken, User)
+        .join(User, APIToken.user_id == User.id)
+        .where(APIToken.token == token)
+    )
+    row = result.first()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+    api_token, user = row
+
+    # Reject expired tokens
+    if api_token.expires_at is not None and api_token.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
+
+    # Update last_used_at
+    api_token.last_used_at = datetime.utcnow().replace(tzinfo=None)
+    await db.commit()
+
+    # Read scopes from DB column, not prefix
+    scopes = list(api_token.scopes) if api_token.scopes else ["legacy"]
+
+    return {
+        "user_id": user.id,
+        "scopes": scopes,
+        "max_concurrent": user.max_concurrent_bots,
+        "email": user.email,
+    }
+
+
+async def backfill_token_scopes():
+    """Backfill scopes column for existing tokens (idempotent).
+
+    Handles two cases:
+    1. Tokens with empty/null scopes (fresh DB or new tokens before backfill)
+    2. Tokens with removed scopes (e.g. 'user', 'admin') — migrate to valid scopes
+
+    Result:
+    - vxa_bot_ tokens: scopes = ['bot']
+    - vxa_tx_ tokens: scopes = ['tx']
+    - vxa_user_ tokens: scopes = ['bot', 'tx'] (user scope removed, grant full access)
+    - Legacy tokens (no vxa_ prefix): scopes = ['bot', 'tx'] (full access)
+    - Tokens containing 'user' or 'admin' scope: replaced with ['bot', 'tx']
+    """
+    from sqlalchemy.sql import func
+    from sqlalchemy import or_, cast, String
+    full_access = sorted(VALID_SCOPES)
+
+    async with AsyncSession(admin_engine) as session:
+        # Find tokens that need updating: empty scopes OR containing removed scopes
+        # Use cardinality + raw text SQL to avoid asyncpg type mismatch with text[] comparisons
+        from sqlalchemy import text as sa_text
+        result = await session.execute(
+            select(APIToken).where(
+                or_(
+                    func.cardinality(APIToken.scopes) == 0,
+                    APIToken.scopes.is_(None),
+                    sa_text("scopes @> ARRAY['user']::text[]"),
+                    sa_text("scopes @> ARRAY['admin']::text[]"),
+                )
+            )
+        )
+        tokens = result.scalars().all()
+        if not tokens:
+            logger.info("Token backfill: all tokens have valid scopes — nothing to do.")
+            return
+
+        updated = 0
+        for token in tokens:
+            current = set(token.scopes) if token.scopes else set()
+            # Remove invalid scopes, keep valid ones
+            valid = current & VALID_SCOPES
+            if valid:
+                token.scopes = sorted(valid)
+            else:
+                # No valid scopes remain — check prefix for hint
+                scope = parse_token_scope(token.token)
+                if scope and scope in VALID_SCOPES:
+                    token.scopes = [scope]
+                else:
+                    # Legacy, vxa_user_, vxa_admin_, or unknown — full access
+                    token.scopes = full_access
+            updated += 1
+
+        await session.commit()
+        logger.info(f"Token backfill: migrated {updated} tokens to valid scopes.")
+
+
 # App events
 @app.on_event("startup")
 async def startup_event():
-    logger.info("Admin API starting up. Skipping automatic DB initialization.")
-    # The 'migrate-or-init' Makefile target is now responsible for all DB setup.
-    # await init_db()
-    pass
+    logger.info("Admin API starting up — running schema sync.")
+    await init_db()
+    await backfill_token_scopes()
 
-# Include the admin router
+# Include the routers
 app.include_router(admin_router)
+app.include_router(analytics_router)
 app.include_router(user_router)
 
 # Root endpoint (optional)
