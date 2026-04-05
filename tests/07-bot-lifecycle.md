@@ -43,10 +43,10 @@ Without this, bots silently time out and the test reports a false failure.
 ## Script
 
 ```bash
-eval $(./testing/bot-lifecycle.sh GATEWAY_URL API_TOKEN MEETING_PLATFORM NATIVE_MEETING_ID [MEETING_URL])
+eval $(./scripts/07-bot-lifecycle.sh GATEWAY_URL API_TOKEN MEETING_PLATFORM NATIVE_MEETING_ID [MEETING_URL])
 ```
 
-See [bot-lifecycle.sh](bot-lifecycle.sh) for implementation.
+See [07-bot-lifecycle.sh](scripts/07-bot-lifecycle.sh) for implementation.
 
 ## Steps
 

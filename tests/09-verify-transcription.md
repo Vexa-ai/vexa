@@ -37,7 +37,7 @@ Different users because one user can only have one bot per meeting.
 ## Script
 
 ```bash
-eval $(./testing/09-verify-transcription.sh GATEWAY_URL LISTENER_TOKEN SPEAKER_TOKEN MEETING_PLATFORM NATIVE_MEETING_ID)
+eval $(./scripts/09-verify-transcription.sh GATEWAY_URL LISTENER_TOKEN SPEAKER_TOKEN MEETING_PLATFORM NATIVE_MEETING_ID)
 ```
 
 ## Steps

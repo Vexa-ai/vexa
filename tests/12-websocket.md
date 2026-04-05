@@ -25,7 +25,7 @@ Connect to gateway WebSocket. Subscribe to meeting events. Verify auth, delivery
 ## Script
 
 ```bash
-eval $(./12-websocket.sh $GATEWAY_URL $API_TOKEN $MEETING_ID)
+eval $(./scripts/12-websocket.sh $GATEWAY_URL $API_TOKEN $MEETING_ID)
 ```
 
 ## Steps

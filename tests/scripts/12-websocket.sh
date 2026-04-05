@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEST_ID="test/w6a-websocket"
-source "$SCRIPT_DIR/test-lib.sh"
+source "$(dirname "$0")/test-lib.sh""
 
 GATEWAY_URL="${1:?Usage: 12-websocket.sh GATEWAY_URL API_TOKEN [MEETING_ID]}"
 API_TOKEN="${2:?Missing API_TOKEN}"

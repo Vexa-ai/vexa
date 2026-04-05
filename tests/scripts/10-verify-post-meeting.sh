@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEST_ID="test/verify-post-meeting"
-source "$SCRIPT_DIR/test-lib.sh"
+source "$(dirname "$0")/test-lib.sh""
 
 GATEWAY_URL="${1:?Usage: verify-post-meeting.sh GATEWAY_URL TOKEN PLATFORM NATIVE_ID MEETING_ID [LANGUAGE]}"
 TOKEN="${2:?Missing TOKEN}"

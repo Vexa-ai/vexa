@@ -26,14 +26,14 @@ Test all API endpoints that don't require real meetings or browsers. Covers admi
 ## Script
 
 ```bash
-eval $(./testing/api-full.sh GATEWAY_URL ADMIN_URL ADMIN_TOKEN)
+eval $(./scripts/02-api.sh GATEWAY_URL ADMIN_URL ADMIN_TOKEN)
 ```
 
-See [api-full.sh](api-full.sh) for implementation.
+See [02-api.sh](scripts/02-api.sh) for implementation.
 
 ## Steps
 
-1. Load test user from `secrets/staging.env` (TEST_USER_ID, TEST_USER_EMAIL, TEST_API_TOKEN). Create via `steps/create-test-user.sh` only if not present.
+1. Load test user from `secrets/staging.env` (TEST_USER_ID, TEST_USER_EMAIL, TEST_API_TOKEN). Create via `scripts/create-test-user.sh` only if not present.
 2. Admin API — list users, get user
 3. Meeting API — list meetings, list bots
 4. Runtime API — profiles (assert `meeting` exists)

@@ -26,7 +26,7 @@ Stop all bots for a meeting and verify clean shutdown. Validates the second half
 ## Script
 
 ```bash
-eval $(./11-finalization.sh GATEWAY_URL MEETING_PLATFORM NATIVE_MEETING_ID TOKEN1 TOKEN2 TOKEN3)
+eval $(./scripts/11-finalization.sh GATEWAY_URL MEETING_PLATFORM NATIVE_MEETING_ID TOKEN1 TOKEN2 TOKEN3)
 ```
 
 ## Steps

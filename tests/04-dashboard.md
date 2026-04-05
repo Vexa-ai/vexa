@@ -100,7 +100,7 @@ The dashboard proxy reads `vexa-token` cookie and forwards as `X-API-Key`. The 4
 ## Script
 
 ```bash
-eval $(./testing/04-dashboard.sh)
+eval $(./scripts/scripts/04-dashboard.sh)
 ```
 
 The script iterates the call map above from inside the dashboard container. Each call is exactly as the dashboard makes it. PASS = all respond. FAIL = specific call identified.
@@ -123,7 +123,7 @@ The script iterates the call map above from inside the dashboard container. Each
 | public API URL → 000 from inside | VEXA_PUBLIC_API_URL=localhost:8066 is host-only | Test from host, not inside container (SKIP_INSIDE) | Client-side URL — container can't reach host's localhost |
 | public API URL → 405 | wget --spider sends HEAD, gateway rejects | Use wget -S -O /dev/null (GET) instead of --spider | Some APIs don't support HEAD |
 | POST /bots → 422 `[object Object]` | Gateway rejects `meeting_url` field — requires `platform` + `native_meeting_id` | Gateway must accept `meeting_url` OR dashboard must always parse to platform+native_meeting_id | GET-only validation hid this — always test POST paths too |
-| Tests pass but dashboard broken | Validation only tested GET endpoints, missed POST /bots | Added POST tests to 04-dashboard.sh | GET connectivity ≠ user actions working |
+| Tests pass but dashboard broken | Validation only tested GET endpoints, missed POST /bots | Added POST tests to scripts/04-dashboard.sh | GET connectivity ≠ user actions working |
 | POST test passes but dashboard 422 | Test sent minimal payload, dashboard sends extra fields (workspaceGitRepo/Token/Branch from localStorage) | Test must send exact dashboard payload including all fields | Never sanitize test payloads — send what the real UI sends |
 | 422 `extra_forbidden` on browser create | MeetingCreate schema has `extra="forbid"`, dashboard sends workspace git fields | Add workspace fields to MeetingCreate schema | Dashboard and API schema must agree on accepted fields |
 | 403 on browser_session page load, gone on retry | First SSR fetch to `/api/vexa/transcripts/browser_session/{id}` doesn't include auth cookie — race between page render and cookie setup | Fix SSR fetch to pass cookie, or make client-side with proper auth | Intermittent 403 on first load wastes human time and looks broken. Test must create a browser_session then immediately fetch its transcript page |

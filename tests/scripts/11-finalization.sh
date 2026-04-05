@@ -10,7 +10,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEST_ID="test/verify-finalization"
-source "$SCRIPT_DIR/test-lib.sh"
+source "$(dirname "$0")/test-lib.sh""
 
 GATEWAY_URL="${1:?Usage: verify-finalization.sh GATEWAY_URL PLATFORM NATIVE_ID TOKEN1 [TOKEN2] [TOKEN3]}"
 MEETING_PLATFORM="${2:?Missing MEETING_PLATFORM}"

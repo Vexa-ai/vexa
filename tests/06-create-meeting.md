@@ -26,10 +26,10 @@ Open a new Google Meet meeting in a browser session that has saved login state. 
 ## Script
 
 ```bash
-eval $(./testing/create-live-meeting.sh CONTAINER [CDP_PORT])
+eval $(./scripts/06-create-meeting.sh CONTAINER [CDP_PORT])
 ```
 
-See [create-live-meeting.sh](create-live-meeting.sh) for implementation.
+See [06-create-meeting.sh](scripts/06-create-meeting.sh) for implementation.
 
 ## Prerequisite: authenticated session
 

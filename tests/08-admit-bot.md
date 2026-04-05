@@ -37,10 +37,10 @@ const page = browser.contexts()[0].pages().find(p => p.url().includes('meet.goog
 ## Script
 
 ```bash
-eval $(./testing/admit-bot.sh GATEWAY_URL API_TOKEN SESSION_TOKEN MEETING_PLATFORM NATIVE_MEETING_ID)
+eval $(./scripts/08-admit-bot.sh GATEWAY_URL API_TOKEN SESSION_TOKEN MEETING_PLATFORM NATIVE_MEETING_ID)
 ```
 
-See [admit-bot.sh](admit-bot.sh) for implementation.
+See [08-admit-bot.sh](scripts/08-admit-bot.sh) for implementation.
 
 ## Steps
 

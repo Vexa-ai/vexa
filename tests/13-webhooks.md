@@ -24,7 +24,7 @@ Configure webhook URL on a bot. Trigger lifecycle event. Verify delivery, HMAC s
 ## Script
 
 ```bash
-eval $(./13-webhooks.sh $GATEWAY_URL $API_TOKEN)
+eval $(./scripts/13-webhooks.sh $GATEWAY_URL $API_TOKEN)
 ```
 
 ## Steps
@@ -57,7 +57,7 @@ eval $(./13-webhooks.sh $GATEWAY_URL $API_TOKEN)
 | Symptom | Cause | Fix | Learned |
 |---------|-------|-----|---------|
 | "hook unreachable from container" | Target service not running or DNS fails inside Docker network | Verify the hook target container is running (`docker ps`) | Internal hooks use Docker service names (e.g. `http://agent-api:8100/...`) |
-| "POST /bots with webhook headers failed" | API token invalid, missing scopes, or gateway down | Run `02-api.sh` first to get a valid token | Script requires `test/api-full` as a prerequisite |
+| "POST /bots with webhook headers failed" | API token invalid, missing scopes, or gateway down | Run `scripts/02-api.sh` first to get a valid token | Script requires `test/api-full` as a prerequisite |
 | "could not run envelope check in container" | meeting-api container not running or Python import fails | Check `docker ps` for the meeting-api container | The script imports `meeting_api.webhook_delivery` inside the container |
 | "webhook_url not found in meeting data" | API response sanitizes webhook config from GET responses | This is acceptable security behavior — the config is stored server-side | webhook_secret should never appear in API responses |
 

@@ -2,7 +2,7 @@
 # test-lib.sh — Shared logging for test pipeline scripts
 # Source this at the top of every test script:
 #   TEST_ID="test/bot-lifecycle"
-#   source "$SCRIPT_DIR/test-lib.sh"
+#   source "$(dirname "$0")/test-lib.sh""
 #
 # Log format:
 #   YYYY-MM-DD HH:MM:SS — EVENT — procedure: message [duration] [parent]

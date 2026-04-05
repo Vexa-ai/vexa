@@ -50,7 +50,7 @@ After bots leave a meeting, verify that:
 ## Script
 
 ```bash
-eval $(./testing/10-verify-post-meeting.sh GATEWAY_URL LISTENER_TOKEN MEETING_PLATFORM NATIVE_MEETING_ID)
+eval $(./scripts/10-verify-post-meeting.sh GATEWAY_URL LISTENER_TOKEN MEETING_PLATFORM NATIVE_MEETING_ID)
 ```
 
 ## Outputs
