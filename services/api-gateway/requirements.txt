@@ -5,7 +5,8 @@ pydantic>=2.0.0
 python-dotenv==1.0.0
 # Documentation
 pyyaml==6.0
-python-multipart==0.0.6
+python-multipart>=0.0.22
 # Added for Pydantic email validation
 email-validator==2.0.0
 redis==5.0.6
+websockets>=12.0
