@@ -1,0 +1,13 @@
+[project]
+name = "schema-sync"
+version = "0.1.0"
+description = "Idempotent schema convergence for Postgres"
+requires-python = ">=3.10"
+dependencies = [
+    "sqlalchemy>=2.0",
+    "asyncpg",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
