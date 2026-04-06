@@ -130,11 +130,27 @@ if [ -z "$TEST_TOKEN" ]; then
   [ -f "$SECRETS_FILE" ] && source "$SECRETS_FILE" 2>/dev/null
   TEST_TOKEN="${TEST_API_TOKEN:-}"
 fi
+if [ -z "$TEST_TOKEN" ]; then
+  # Fall back to VEXA_API_KEY from root .env (set by make setup-api-key)
+  ROOT_ENV="$SCRIPT_DIR/../../.env"
+  [ -f "$ROOT_ENV" ] && TEST_TOKEN=$(grep -E '^VEXA_API_KEY=' "$ROOT_ENV" 2>/dev/null | cut -d= -f2)
+fi
+if [ -z "$TEST_TOKEN" ]; then
+  # Last resort: read from dashboard container env
+  TEST_TOKEN=$(docker exec "$CONTAINER" printenv VEXA_API_KEY 2>/dev/null || echo "")
+fi
 
 # Resolve user email for vexa-user-info cookie (needed by getAuthenticatedUserId)
+# Look up the email for this token's user from the admin API
 TEST_USER_EMAIL="${TEST_USER_EMAIL:-}"
+if [ -z "$TEST_USER_EMAIL" ] && [ -n "$TEST_TOKEN" ]; then
+  ADMIN_TK=$(docker exec "$CONTAINER" printenv VEXA_ADMIN_API_KEY 2>/dev/null || echo "")
+  ADMIN_URL_INTERNAL=$(docker exec "$CONTAINER" printenv VEXA_ADMIN_API_URL 2>/dev/null || echo "http://admin-api:8001")
+  TEST_USER_EMAIL=$(docker exec "$CONTAINER" sh -c "wget -q -O - --header='X-Admin-API-Key: $ADMIN_TK' '$ADMIN_URL_INTERNAL/admin/users?limit=1'" 2>/dev/null \
+    | python3 -c "import sys,json; u=json.load(sys.stdin); print(u[0]['email'] if u else '')" 2>/dev/null || echo "")
+fi
 if [ -z "$TEST_USER_EMAIL" ]; then
-  TEST_USER_EMAIL="staging@vexa.ai"
+  TEST_USER_EMAIL="admin@vexa.ai"
 fi
 USER_INFO_COOKIE=$(printf '{"email":"%s"}' "$TEST_USER_EMAIL" | python3 -c "import sys,urllib.parse; print(urllib.parse.quote(sys.stdin.read()))" 2>/dev/null || echo "")
 COOKIE_HEADER="vexa-token=$TEST_TOKEN; vexa-user-info=$USER_INFO_COOKIE"

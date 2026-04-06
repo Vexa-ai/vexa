@@ -11,15 +11,11 @@
 TRANSCRIPTION_SERVICE_URL=https://your-transcription-url/v1/audio/transcriptions
 TRANSCRIPTION_SERVICE_TOKEN=your-token
 
-# Dashboard source (absolute path to dashboard code)
-# The dashboard is included at services/dashboard/ in this repo
-DASHBOARD_PATH=./services/dashboard
-
 # ============================================================================
 # Ports — change these to avoid conflicts with other stacks
 # ============================================================================
 API_GATEWAY_HOST_PORT=8056
-ADMIN_API_HOST_PORT=8057
+ADMIN_API_PORT=8067
 RUNTIME_API_PORT=8090
 AGENT_API_PORT=8100
 CALENDAR_SERVICE_PORT=8050
@@ -34,7 +30,7 @@ MINIO_CONSOLE_HOST_PORT=9001
 # ============================================================================
 
 # Admin
-ADMIN_API_TOKEN=changeme
+ADMIN_TOKEN=changeme
 
 # Bot image (built by `make build`)
 BOT_IMAGE_NAME=vexaai/vexa-bot:dev
@@ -53,7 +49,7 @@ STORAGE_BACKEND=minio
 MINIO_ENDPOINT=minio:9000
 MINIO_ACCESS_KEY=vexa-access-key
 MINIO_SECRET_KEY=vexa-secret-key
-MINIO_BUCKET=vexa-recordings
+MINIO_BUCKET=vexa
 MINIO_SECURE=false
 
 # Local GPU transcription (uncomment to self-host)

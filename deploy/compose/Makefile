@@ -107,7 +107,7 @@ down: check_docker
 	@cd $(ROOT)/services/transcription-service && docker compose down 2>/dev/null || true
 
 # --- Service API key (dashboard WS auth) ---
-# Creates a bot+browser+tx API key for user 5 and writes it to .env as VEXA_API_KEY.
+# Creates a default user (if needed) and a bot+browser+tx API key, writes VEXA_API_KEY to .env.
 # The dashboard uses this for WebSocket auth and transcript reads.
 setup-api-key: check_docker
 	@if grep -qE '^VEXA_API_KEY=.+' $(ENV_FILE) 2>/dev/null; then \
@@ -115,17 +115,31 @@ setup-api-key: check_docker
 	else \
 		API_PORT=$$(grep -E '^API_GATEWAY_HOST_PORT=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
 		API_PORT=$${API_PORT:-8056}; \
-		ADMIN_TOKEN=$$(grep -E '^ADMIN_API_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
-		ADMIN_TOKEN=$${ADMIN_TOKEN:-changeme}; \
-		TOKEN=$$(curl -sf -X POST "http://localhost:$$API_PORT/admin/users/5/tokens?scopes=bot,browser,tx&name=dashboard-ws" \
-			-H "X-Admin-API-Key: $$ADMIN_TOKEN" 2>/dev/null \
-			| python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null); \
-		if [ -n "$$TOKEN" ]; then \
-			echo "VEXA_API_KEY=$$TOKEN" >> $(ENV_FILE); \
-			echo "Created VEXA_API_KEY for dashboard WS auth."; \
-			$(COMPOSE_CMD) up -d dashboard; \
+		ADMIN_TK=$$(grep -E '^ADMIN_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
+		ADMIN_TK=$${ADMIN_TK:-changeme}; \
+		USER_ID=$$(curl -sf "http://localhost:$$API_PORT/admin/users?limit=1" \
+			-H "X-Admin-API-Key: $$ADMIN_TK" 2>/dev/null \
+			| python3 -c "import sys,json; u=json.load(sys.stdin); print(u[0]['id'] if u else '')" 2>/dev/null); \
+		if [ -z "$$USER_ID" ]; then \
+			echo "No users found — creating default user..."; \
+			USER_ID=$$(curl -sf -X POST "http://localhost:$$API_PORT/admin/users" \
+				-H "X-Admin-API-Key: $$ADMIN_TK" -H "Content-Type: application/json" \
+				-d '{"email":"admin@vexa.ai","name":"Admin","max_concurrent_bots":10}' 2>/dev/null \
+				| python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null); \
+		fi; \
+		if [ -z "$$USER_ID" ]; then \
+			echo "WARNING: Could not find or create user (admin API not ready?). Dashboard WS will require login."; \
 		else \
-			echo "WARNING: Could not create VEXA_API_KEY (admin API not ready?). Dashboard WS will require login."; \
+			TOKEN=$$(curl -sf -X POST "http://localhost:$$API_PORT/admin/users/$$USER_ID/tokens?scopes=bot,browser,tx&name=dashboard-ws" \
+				-H "X-Admin-API-Key: $$ADMIN_TK" 2>/dev/null \
+				| python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null); \
+			if [ -n "$$TOKEN" ]; then \
+				echo "VEXA_API_KEY=$$TOKEN" >> $(ENV_FILE); \
+				echo "Created VEXA_API_KEY for user $$USER_ID (dashboard WS auth)."; \
+				$(COMPOSE_CMD) up -d dashboard; \
+			else \
+				echo "WARNING: Could not create API key for user $$USER_ID. Dashboard WS will require login."; \
+			fi; \
 		fi; \
 	fi
 
@@ -138,6 +152,13 @@ logs:
 
 # --- Test ---
 test: check_docker
+	@echo "Waiting for services to be ready..."
+	@DASH_PORT=$$(grep -E '^DASHBOARD_HOST_PORT=' $(ENV_FILE) 2>/dev/null | cut -d= -f2 || echo "3001"); \
+	DASH_PORT=$${DASH_PORT:-3001}; \
+	for i in 1 2 3 4 5; do \
+		curl -sf "http://localhost:$$DASH_PORT/" > /dev/null 2>&1 && break; \
+		sleep 2; \
+	done
 	@echo "Checking services..."
 	@API_PORT=$$(grep -E '^API_GATEWAY_HOST_PORT=' $(ENV_FILE) 2>/dev/null | cut -d= -f2 || echo "8056"); \
 	ADMIN_PORT=$$(grep -E '^ADMIN_API_PORT=' $(ENV_FILE) 2>/dev/null | cut -d= -f2 || echo "8067"); \
