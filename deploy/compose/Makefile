@@ -281,7 +281,8 @@ init-db: check_docker
 		done; \
 	fi; \
 	echo "Running idempotent schema sync..."; \
-	$(COMPOSE_CMD) exec -T meeting-api python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db())"; \
+	$(COMPOSE_CMD) exec -T meeting-api python -c "import asyncio; from admin_models.database import init_db; asyncio.run(init_db())"; \
+	$(COMPOSE_CMD) exec -T meeting-api python -c "import asyncio; from meeting_api.database import init_db; asyncio.run(init_db())"; \
 	echo "Schema sync complete."
 
 # Restore a production dump into the local postgres.
