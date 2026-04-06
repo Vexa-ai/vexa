@@ -21,6 +21,40 @@ POST /bots/{platform}/{id}/speak {text, voice} → Redis PUBLISH → bot contain
 | TTS service | `services/tts-service/` | Piper (local) or OpenAI proxy |
 | PulseAudio setup | `services/vexa-bot/core/entrypoint.sh` | tts_sink + virtual_mic + remap source |
 
+## How
+
+### 1. Make the bot speak in a meeting
+
+The bot must be in `active` state. The text is synthesized via TTS and played through the bot's virtual microphone.
+
+```bash
+curl -s -X POST http://localhost:8056/bots/gmeet/135/speak \
+  -H "X-API-Key: $VEXA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello everyone, I am taking notes for this meeting."}'
+# 202
+```
+
+### 2. Specify a voice
+
+```bash
+curl -s -X POST http://localhost:8056/bots/teams/125/speak \
+  -H "X-API-Key: $VEXA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Meeting summary is ready.", "voice": "echo"}'
+# 202
+```
+
+Available voices: `alloy`, `echo`, `fable` (and others supported by the TTS service).
+
+### 3. Interrupt speech playback
+
+```bash
+curl -s -X DELETE -H "X-API-Key: $VEXA_API_KEY" \
+  http://localhost:8056/bots/gmeet/135/speak
+# 200
+```
+
 ## DoD
 
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Test |

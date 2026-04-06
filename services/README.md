@@ -127,3 +127,15 @@ The scheduler is not a standalone service — it runs as an in-process worker in
 - **PostgreSQL** — persistent storage (meetings, transcripts, users, tokens)
 - **Redis** — streams (transcription segments, speaker events), pub/sub (bot commands), sorted sets (scheduler)
 - **S3/MinIO** — recording storage (audio, video)
+
+## DoD
+
+| # | Check | Weight | Ceiling | Status | Evidence | Last checked | Tests |
+|---|-------|--------|---------|--------|----------|--------------|-------|
+| 1 | All API-layer services (api-gateway, admin-api, agent-api, runtime-api) health endpoints return 200 | 25 | ceiling | untested | — | — | — |
+| 2 | Meeting transcription data flow works end-to-end: meeting-api -> vexa-bot -> transcription-service -> Redis -> dashboard | 25 | ceiling | untested | — | — | — |
+| 3 | Agent chat data flow works: agent-api -> runtime-api -> agent container -> SSE response | 20 | ceiling | untested | — | — | — |
+| 4 | PostgreSQL and Redis reachable by all services that depend on them | 15 | ceiling | untested | — | — | — |
+| 5 | Inter-service routing correct (api-gateway proxies to correct backend ports) | 15 | ceiling | untested | — | — | — |
+
+Confidence: 0 (untested)

@@ -21,6 +21,48 @@ POST /bots {mode: "browser_session"} → container with Playwright + Xvfb + VNC 
 | entrypoint | `services/vexa-bot/core/entrypoint.sh` | Xvfb, PulseAudio, VNC, websockify, SSH |
 | CDP proxy | `services/api-gateway/main.py` | Gateway proxies CDP WebSocket to container |
 
+## How
+
+### 1. Create a browser session
+
+```bash
+curl -s -X POST http://localhost:8056/bots \
+  -H "X-API-Key: $VEXA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "browser_session"}'
+# {"bot_id": 59, "status": "requested", "mode": "browser_session", ...}
+```
+
+### 2. Access the browser via CDP proxy
+
+The gateway proxies Chrome DevTools Protocol (CDP) WebSocket connections to the container:
+
+```bash
+# Check CDP is reachable through the gateway
+curl -s http://localhost:8056/cdp/59/json/version
+# {"Browser": "Chrome/...", "webSocketDebuggerUrl": "ws://..."}
+
+# Connect via CDP WebSocket (e.g., from Playwright or puppeteer)
+# ws://localhost:8056/cdp/59/devtools/browser/<guid>
+```
+
+### 3. Access VNC via the dashboard
+
+Open the dashboard at `http://localhost:3001`, navigate to the browser session, and interact with the remote browser via the embedded VNC iframe.
+
+### 4. Persist login state
+
+Log into a Google account in the browser session. The session cookies and auth state are saved to MinIO automatically. On the next `POST /bots {"mode": "browser_session"}`, the state is restored -- the account stays logged in.
+
+### 5. Stop the browser session
+
+```bash
+curl -s -X DELETE -H "X-API-Key: $VEXA_API_KEY" \
+  http://localhost:8056/bots/browser/59
+# 200 {"status": "stopping"}
+# Transitions: stopping -> completed (container removed)
+```
+
 ## DoD
 
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Test |

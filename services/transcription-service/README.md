@@ -194,6 +194,19 @@ TRANSCRIPTION_SERVICE_API_TOKEN=<same value as API_TOKEN above>
 - [Concepts](https://docs.vexa.ai/concepts)
 - [Recording & Storage](https://docs.vexa.ai/recording-storage)
 
+## DoD
+
+| # | Check | Weight | Ceiling | Status | Evidence | Last checked | Tests |
+|---|-------|--------|---------|--------|----------|--------------|-------|
+| 1 | `GET /health` returns 200 (Nginx + at least one worker up) | 15 | ceiling | untested | — | — | — |
+| 2 | `POST /v1/audio/transcriptions` returns transcript JSON for valid audio file | 30 | ceiling | untested | — | — | — |
+| 3 | Model loaded successfully on worker startup (logs confirm) | 20 | ceiling | untested | — | — | — |
+| 4 | Backpressure: returns 503 with Retry-After when all workers busy (`FAIL_FAST_WHEN_BUSY=true`) | 15 | — | untested | — | — | — |
+| 5 | Nginx load balancer distributes across configured workers (`GET /lb-status`) | 10 | — | untested | — | — | — |
+| 6 | `API_TOKEN` set and unauthenticated requests rejected | 10 | — | untested | — | — | — |
+
+Confidence: 0 (untested)
+
 ## License
 
 Apache-2.0

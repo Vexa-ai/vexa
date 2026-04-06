@@ -18,6 +18,44 @@ Write: POST /bots/{platform}/{id}/chat {text} → Redis PUBLISH → bot types in
 | chat endpoints | `services/meeting-api/meeting_api/voice_agent.py` | REST for read/write |
 | chat handler | `services/vexa-bot/core/src/browser-session.ts` | Playwright types into chat DOM |
 
+## How
+
+### 1. Send a chat message into a meeting
+
+The bot must be in `active` state. The message appears in the meeting chat for all participants.
+
+```bash
+# Google Meet
+curl -s -X POST http://localhost:8056/bots/gmeet/135/chat \
+  -H "X-API-Key: $VEXA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello from the bot!"}'
+# 200
+
+# Teams
+curl -s -X POST http://localhost:8056/bots/teams/125/chat \
+  -H "X-API-Key: $VEXA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello from the bot!"}'
+# 202
+```
+
+### 2. Read chat messages from a meeting
+
+Works for both active and completed meetings.
+
+```bash
+curl -s -H "X-API-Key: $VEXA_API_KEY" \
+  http://localhost:8056/bots/gmeet/135/chat
+# {
+#   "meeting_id": 137,
+#   "messages": [
+#     {"sender": "Alice", "text": "Hi everyone", "timestamp": "..."},
+#     {"sender": "Vexa Notetaker", "text": "Hello from the bot!", "timestamp": "..."}
+#   ]
+# }
+```
+
 ## DoD
 
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Test |

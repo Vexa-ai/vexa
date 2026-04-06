@@ -123,6 +123,19 @@ Requires the Agent API to be running. Set `TELEGRAM_BOT_TOKEN` to a valid bot to
 - State keyed by `(chat_id, user_id)` — concurrent users in the same group chat are isolated
 - README.md MUST be updated when behavior changes
 
+## DoD
+
+| # | Check | Weight | Ceiling | Status | Evidence | Last checked | Tests |
+|---|-------|--------|---------|--------|----------|--------------|-------|
+| 1 | `GET /health` internal trigger API returns 200 | 15 | ceiling | untested | — | — | — |
+| 2 | Bot starts polling with valid `TELEGRAM_BOT_TOKEN` | 20 | ceiling | untested | — | — | — |
+| 3 | Text message forwarded to agent-api and SSE response streamed back | 25 | ceiling | untested | — | — | — |
+| 4 | `POST /internal/trigger` sends message to user's agent | 15 | — | untested | — | — | — |
+| 5 | Auth token cached in Redis and refreshed on 403 | 15 | — | untested | — | — | — |
+| 6 | `CHAT_API_URL` (agent-api via gateway) reachable | 10 | ceiling | untested | — | — | — |
+
+Confidence: 0 (untested)
+
 ## Known Issues
 
 - No retry/backoff on API errors (single-shot with error message to user)

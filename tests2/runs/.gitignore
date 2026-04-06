@@ -1,0 +1,6 @@
+# Log artifacts — not source
+*.log
+*.jsonl
+*-latest.*
+!.gitkeep
+!.gitignore

@@ -174,3 +174,16 @@ Once you have completed the above steps:
 ---
 
 **For more information about the Vexa API , visit:** [https://vexa.ai](https://vexa.ai)
+
+## DoD
+
+| # | Check | Weight | Ceiling | Status | Evidence | Last checked | Tests |
+|---|-------|--------|---------|--------|----------|--------------|-------|
+| 1 | Service starts and MCP tool list discoverable via client | 20 | ceiling | untested | — | — | — |
+| 2 | `request_meeting_bot` tool creates bot via api-gateway proxy | 20 | ceiling | untested | — | — | — |
+| 3 | `get_meeting_transcript` tool returns transcript for valid meeting | 20 | — | untested | — | — | — |
+| 4 | `parse_meeting_link` correctly extracts platform, native_meeting_id, passcode | 15 | — | untested | — | — | — |
+| 5 | api-gateway reachable (stateless proxy, no DB/Redis) | 15 | ceiling | untested | — | — | — |
+| 6 | MCP prompts and resources return valid responses | 10 | — | untested | — | — | — |
+
+Confidence: 0 (untested)

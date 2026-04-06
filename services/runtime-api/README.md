@@ -468,6 +468,19 @@ tests/                         → 106 tests (85 pass, 21 skipped integration)
 - Auth disabled by default (empty `API_KEYS`) — must be explicitly configured
 - README.md MUST be updated when behavior changes
 
+## DoD
+
+| # | Check | Weight | Ceiling | Status | Evidence | Last checked | Tests |
+|---|-------|--------|---------|--------|----------|--------------|-------|
+| 1 | `GET /health` returns 200 with container counts | 15 | ceiling | untested | — | — | — |
+| 2 | `POST /containers` creates container from profile and returns 201 | 25 | ceiling | untested | — | — | — |
+| 3 | `DELETE /containers/{name}` stops and removes container | 15 | — | untested | — | — | — |
+| 4 | Redis reachable at `REDIS_URL` (state store) | 15 | ceiling | untested | — | — | — |
+| 5 | `profiles.yaml` loads and `GET /profiles` returns profile list | 15 | ceiling | untested | — | — | — |
+| 6 | Idle loop stops containers after `idle_timeout` without heartbeat | 15 | — | untested | — | — | — |
+
+Confidence: 0 (untested)
+
 ## Known Issues
 
 - `state.count_user_containers` does not exist — per-user concurrency limits (`max_per_user`) documented but never enforced

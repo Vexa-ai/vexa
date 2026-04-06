@@ -133,3 +133,16 @@ The service has solid domain logic, good test coverage of happy paths, and a wel
 
 **Projected score after all items: ~97/100**
 
+## DoD
+
+| # | Check | Weight | Ceiling | Status | Evidence | Last checked | Tests |
+|---|-------|--------|---------|--------|----------|--------------|-------|
+| 1 | `GET /health` returns `{"status": "ok"}` | 10 | ceiling | untested | — | — | — |
+| 2 | `POST /bots` creates meeting bot and triggers container via Runtime API | 25 | ceiling | untested | — | — | — |
+| 3 | `GET /bots/status` returns running bots for user | 10 | — | untested | — | — | — |
+| 4 | Internal callbacks (`/bots/internal/callback/*`) update meeting state | 15 | ceiling | untested | — | — | — |
+| 5 | PostgreSQL reachable at `DATABASE_URL` and Redis at `REDIS_URL` | 20 | ceiling | untested | — | — | — |
+| 6 | Runtime API reachable at `RUNTIME_API_URL` for container lifecycle | 20 | ceiling | untested | — | — | — |
+
+Confidence: 0 (untested)
+

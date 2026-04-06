@@ -229,6 +229,19 @@ tests/                         → 91 unit tests (auth, chat, endpoints, contain
 - `/internal/workspace/*` endpoints are internal — not exposed through api-gateway
 - README.md MUST be updated when behavior changes
 
+## DoD
+
+| # | Check | Weight | Ceiling | Status | Evidence | Last checked | Tests |
+|---|-------|--------|---------|--------|----------|--------------|-------|
+| 1 | `GET /health` returns 200 | 15 | ceiling | untested | — | — | — |
+| 2 | `POST /api/chat` streams SSE response with text_delta and done events | 25 | ceiling | untested | — | — | — |
+| 3 | `GET /api/sessions` returns session list for user | 15 | — | untested | — | — | — |
+| 4 | Redis reachable at `REDIS_URL` (session state store) | 15 | ceiling | untested | — | — | — |
+| 5 | Runtime API reachable at `RUNTIME_API_URL` (container lifecycle) | 15 | ceiling | untested | — | — | — |
+| 6 | `GET /api/workspace/files` lists files in user workspace | 15 | — | untested | — | — | — |
+
+Confidence: 0 (untested)
+
 ## Known Issues
 
 - S3 sync requires AWS CLI in agent container image — undocumented dependency, silently fails without it

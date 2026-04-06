@@ -199,3 +199,16 @@ open http://localhost:8000/docs
 - [ ] Add HEALTHCHECK to Dockerfile
 - [ ] Validate container hostname pattern in CDP proxy (`^vexa-bot-[a-z0-9]+$`)
 - [ ] Truncate downstream error messages to prevent topology leakage
+
+## DoD
+
+| # | Check | Weight | Ceiling | Status | Evidence | Last checked | Tests |
+|---|-------|--------|---------|--------|----------|--------------|-------|
+| 1 | `GET /` health endpoint returns 200 | 15 | ceiling | untested | — | — | — |
+| 2 | `POST /bots` proxied to meeting-api returns 201 with valid API key | 20 | ceiling | untested | — | — | — |
+| 3 | Token validation via admin-api caches in Redis (60s TTL) | 15 | — | untested | — | — | — |
+| 4 | `ADMIN_API_URL`, `MEETING_API_URL`, `TRANSCRIPTION_COLLECTOR_URL`, `MCP_URL` all set and reachable | 20 | ceiling | untested | — | — | — |
+| 5 | WebSocket `/ws` connects with valid key, receives meeting status via Redis pub/sub | 15 | — | untested | — | — | — |
+| 6 | CORS headers present for configured `CORS_ORIGINS` | 15 | — | untested | — | — | — |
+
+Confidence: 0 (untested)

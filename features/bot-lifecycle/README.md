@@ -33,6 +33,62 @@ POST /bots → requested → runtime-api creates container → joining
 | runtime container | `services/runtime-api/` | Container lifecycle management |
 | bot core | `services/vexa-bot/core/src/index.ts` | Meeting join, state machine |
 
+## How
+
+### 1. Create a bot (join a meeting)
+
+```bash
+curl -s -X POST http://localhost:8056/bots \
+  -H "X-API-Key: $VEXA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "meeting_url": "https://meet.google.com/abc-defg-hij",
+    "bot_name": "Vexa Notetaker"
+  }'
+# {"bot_id": 135, "status": "requested", "platform": "gmeet", ...}
+```
+
+### 2. Poll bot status
+
+```bash
+curl -s -H "X-API-Key: $VEXA_API_KEY" \
+  http://localhost:8056/bots/gmeet/135
+# {"bot_id": 135, "status": "active", "platform": "gmeet", ...}
+```
+
+State transitions: `requested` -> `joining` -> `awaiting_admission` -> `active` -> `stopping` -> `completed`.
+
+### 3. List all bots
+
+```bash
+curl -s -H "X-API-Key: $VEXA_API_KEY" \
+  http://localhost:8056/bots
+# [{"bot_id": 135, "status": "active", ...}, ...]
+```
+
+### 4. Stop a bot (leave the meeting)
+
+```bash
+curl -s -X DELETE -H "X-API-Key: $VEXA_API_KEY" \
+  http://localhost:8056/bots/gmeet/135
+# 200 {"status": "stopping"}
+```
+
+The bot uploads its recording, then transitions to `completed`.
+
+### 5. Teams example
+
+```bash
+curl -s -X POST http://localhost:8056/bots \
+  -H "X-API-Key: $VEXA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "meeting_url": "https://teams.microsoft.com/l/meetup-join/...",
+    "bot_name": "Vexa Notetaker"
+  }'
+# {"bot_id": 125, "status": "requested", "platform": "teams", ...}
+```
+
 ## DoD
 
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Tests |

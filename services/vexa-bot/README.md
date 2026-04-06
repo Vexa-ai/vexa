@@ -310,3 +310,16 @@ ls core/src/platforms/zoom/native/zoom_meeting_sdk/libmeetingsdk.so
 - [Google Meet](https://docs.vexa.ai/platforms/google-meet)
 - [Microsoft Teams](https://docs.vexa.ai/platforms/microsoft-teams)
 - [Zoom](https://docs.vexa.ai/platforms/zoom)
+
+## DoD
+
+| # | Check | Weight | Ceiling | Status | Evidence | Last checked | Tests |
+|---|-------|--------|---------|--------|----------|--------------|-------|
+| 1 | Bot container starts and sends `joining` callback to meeting-api | 20 | ceiling | untested | — | — | — |
+| 2 | Bot joins meeting (Google Meet or Teams) and reaches `active` state | 25 | ceiling | untested | — | — | — |
+| 3 | Per-speaker transcription segments published to Redis via XADD | 20 | ceiling | untested | — | — | — |
+| 4 | `TRANSCRIPTION_SERVICE_URL` reachable and returns transcript for audio POST | 15 | ceiling | untested | — | — | — |
+| 5 | Automatic leave fires on timeout (waitingRoom, everyoneLeft, noOneJoined) | 10 | — | untested | — | — | — |
+| 6 | Redis reachable at `REDIS_URL` for segment publishing and bot commands | 10 | ceiling | untested | — | — | — |
+
+Confidence: 0 (untested)

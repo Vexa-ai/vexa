@@ -87,3 +87,15 @@ curl -X POST http://localhost:8002/v1/audio/speech \
 - Voice models are downloaded on first use — first request for a new voice will be slower
 - Invalid voice names that can't be downloaded return 404
 - The `model` field is accepted but ignored (kept for OpenAI API compatibility)
+
+## DoD
+
+| # | Check | Weight | Ceiling | Status | Evidence | Last checked | Tests |
+|---|-------|--------|---------|--------|----------|--------------|-------|
+| 1 | `GET /health` returns 200 with loaded voices list | 20 | ceiling | untested | — | — | — |
+| 2 | `POST /v1/audio/speech` returns valid WAV audio for text input | 30 | ceiling | untested | — | — | — |
+| 3 | Default Piper voices downloaded and loaded on startup | 20 | ceiling | untested | — | — | — |
+| 4 | `GET /voices` returns available voice names and aliases | 15 | — | untested | — | — | — |
+| 5 | OpenAI voice name aliases resolve to correct Piper voices | 15 | — | untested | — | — | — |
+
+Confidence: 0 (untested)

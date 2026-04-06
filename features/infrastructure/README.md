@@ -21,6 +21,71 @@ make test → all services respond
 | Env config | `deploy/env/` | env-example, defaults |
 | Deploy scripts | `deploy/scripts/` | Fresh setup automation |
 
+## How
+
+### 1. Build images
+
+```bash
+cd deploy/compose
+make build
+# Builds all images with immutable tag (e.g., 260405-1517):
+#   api-gateway, admin-api, runtime-api, meeting-api,
+#   agent-api, mcp, dashboard, tts-service, vexa-bot, vexa-lite
+```
+
+### 2. Start the stack
+
+```bash
+make up
+# Starts all services via docker compose
+# Wait for postgres to be healthy, then all services start
+```
+
+### 3. Verify services are healthy
+
+```bash
+# Gateway
+curl -s -o /dev/null -w "%{http_code}" http://localhost:8056/health
+# 200
+
+# Admin API
+curl -s -o /dev/null -w "%{http_code}" http://localhost:8067/users
+# 200
+
+# Runtime API
+curl -s -o /dev/null -w "%{http_code}" http://localhost:8090/health
+# 200
+
+# Dashboard
+curl -s -o /dev/null -w "%{http_code}" http://localhost:3001
+# 200
+
+# Transcription service (GPU check)
+curl -s http://localhost:8085/health
+# {"status": "ok", "gpu_available": true}
+
+# Redis
+redis-cli ping
+# PONG
+```
+
+### 4. Check database
+
+```bash
+# Verify tables exist via API
+curl -s -H "X-API-Key: $VEXA_API_KEY" http://localhost:8056/bots
+# 200 [...]
+
+curl -s -H "X-API-Key: $VEXA_API_KEY" http://localhost:8056/meetings
+# 200 [...]
+```
+
+### 5. Tear down
+
+```bash
+make down
+```
+
 ## DoD
 
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Tests |

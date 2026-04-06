@@ -163,6 +163,19 @@ All backend calls validated from inside the dashboard container:
 - [Vexa Lite deployment guide](https://github.com/Vexa-ai/vexa/blob/main/docs/vexa-lite-deployment.mdx)
 - [Vexa API guide](https://github.com/Vexa-ai/vexa/blob/main/docs/user_api_guide.mdx)
 
+## DoD
+
+| # | Check | Weight | Ceiling | Status | Evidence | Last checked | Tests |
+|---|-------|--------|---------|--------|----------|--------------|-------|
+| 1 | Dashboard loads on port 3000 (Docker) / 3001 (dev) without errors | 20 | ceiling | untested | — | — | — |
+| 2 | `VEXA_API_URL` reachable and proxy `/api/vexa/*` returns upstream responses | 25 | ceiling | untested | — | — | — |
+| 3 | Login flow works (admin key or OAuth) and user session established | 20 | ceiling | untested | — | — | — |
+| 4 | Meeting list page loads via `GET /meetings` through gateway | 15 | — | untested | — | — | — |
+| 5 | `VEXA_ADMIN_API_KEY` set and admin endpoints accessible | 10 | ceiling | untested | — | — | — |
+| 6 | `npm test` passes (parseMeetingInput, parseUTCTimestamp, cn, language utils) | 10 | — | untested | — | — | — |
+
+Confidence: 0 (untested)
+
 ## License
 
 Apache-2.0 (`LICENSE`)

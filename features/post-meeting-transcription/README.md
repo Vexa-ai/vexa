@@ -21,6 +21,44 @@ Meeting ends → bot uploads recording to MinIO → POST /meetings/{id}/transcri
 | recording upload | `services/vexa-bot/core/src/services/recording.ts` | Upload webm to MinIO on bot exit |
 | speaker mapping | `services/meeting-api/meeting_api/meetings.py:_map_speakers_to_segments()` | Map Whisper timestamps to speaker events |
 
+## How
+
+### 1. Trigger deferred transcription after a meeting ends
+
+Once the bot is `completed` and the recording has been uploaded to MinIO:
+
+```bash
+curl -s -X POST http://localhost:8056/meetings/137/transcribe \
+  -H "X-API-Key: $VEXA_API_KEY"
+# 200 {"segments": 9, "duration_s": 120.5}
+
+# If realtime segments already exist:
+# 409 {"detail": "This meeting is already transcribed (15 segments). Multiple transcripts per meeting not implemented."}
+```
+
+### 2. Retrieve transcription segments
+
+```bash
+curl -s -H "X-API-Key: $VEXA_API_KEY" \
+  http://localhost:8056/transcripts/gmeet/137
+# {
+#   "meeting_id": 137,
+#   "segments": [
+#     {"start": 0.0, "end": 3.5, "text": "Hello everyone", "speaker": "Alice", "source": "realtime"},
+#     {"start": 3.5, "end": 7.2, "text": "Hi Alice", "speaker": "Bob", "source": "realtime"},
+#     ...
+#   ]
+# }
+```
+
+### 3. Check recording in MinIO
+
+```bash
+# Verify the recording exists (via mc CLI or S3 API)
+mc ls minio/vexa-recordings/
+# recording-137.webm
+```
+
 ## DoD
 
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Test |

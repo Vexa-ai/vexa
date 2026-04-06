@@ -32,6 +32,54 @@ User pastes URL → MCP /parse-meeting-link → {platform, native_meeting_id, pa
 | Validation | `services/meeting-api/meeting_api/schemas.py` | Validate extracted fields |
 | Bot creation | `services/meeting-api/meeting_api/meetings.py` | Construct meeting URL from parts |
 
+## How
+
+### 1. Parse a meeting URL via MCP
+
+```bash
+# Google Meet
+curl -s -X POST http://localhost:8056/mcp/parse-meeting-link \
+  -H "X-API-Key: $VEXA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://meet.google.com/abc-defg-hij"}'
+# {"platform": "gmeet", "native_meeting_id": "abc-defg-hij", "passcode": null}
+
+# Teams standard
+curl -s -X POST http://localhost:8056/mcp/parse-meeting-link \
+  -H "X-API-Key: $VEXA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0?context=..."}'
+# {"platform": "teams", "native_meeting_id": "19:meeting_abc@thread.v2", "passcode": null}
+
+# Teams short link with passcode
+curl -s -X POST http://localhost:8056/mcp/parse-meeting-link \
+  -H "X-API-Key: $VEXA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://teams.microsoft.com/meet/12345678?p=ABCDEF"}'
+# {"platform": "teams", "native_meeting_id": "12345678", "passcode": "ABCDEF"}
+
+# Teams custom enterprise domain
+curl -s -X POST http://localhost:8056/mcp/parse-meeting-link \
+  -H "X-API-Key: $VEXA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://acme.teams.microsoft.com/meet/12345?p=XYZ"}'
+# {"platform": "teams", "native_meeting_id": "12345", "passcode": "XYZ"}
+```
+
+### 2. Use parsed fields to create a bot
+
+```bash
+curl -s -X POST http://localhost:8056/bots \
+  -H "X-API-Key: $VEXA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "meeting_url": "https://teams.microsoft.com/meet/12345678?p=ABCDEF",
+    "bot_name": "Vexa Notetaker"
+  }'
+# meeting-api internally parses the URL and joins the correct meeting
+# {"bot_id": 126, "status": "requested", "platform": "teams", ...}
+```
+
 ## DoD
 
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Tests |

@@ -190,6 +190,19 @@ curl -X POST http://localhost:8001/admin/users \
 - SSRF validation on webhook URLs via `meeting_api.webhook_url.validate_webhook_url()`
 - README.md MUST be updated when behavior changes
 
+## DoD
+
+| # | Check | Weight | Ceiling | Status | Evidence | Last checked | Tests |
+|---|-------|--------|---------|--------|----------|--------------|-------|
+| 1 | `GET /` health endpoint returns 200 | 15 | ceiling | untested | — | — | — |
+| 2 | `POST /admin/users` find-or-create returns 200/201 with valid admin token | 20 | ceiling | untested | — | — | — |
+| 3 | `POST /admin/users/{id}/tokens` generates scoped token stored in DB | 15 | — | untested | — | — | — |
+| 4 | `POST /internal/validate` returns user_id + scopes for valid token, rejects expired | 20 | ceiling | untested | — | — | — |
+| 5 | `ADMIN_API_TOKEN` and `DB_*` env vars set and service starts without error | 15 | ceiling | untested | — | — | — |
+| 6 | PostgreSQL reachable and schema converged on startup (`ensure_schema`) | 15 | ceiling | untested | — | — | — |
+
+Confidence: 0 (untested)
+
 ## Known Issues
 
 - deploy/compose/docker-compose.yml missing INTERNAL_API_SECRET — agentic stack has it, prod compose does not

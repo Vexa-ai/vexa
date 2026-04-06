@@ -21,6 +21,53 @@ runtime-api creates container → monitors via Docker events
 | profiles | `services/runtime-api/profiles.yaml` | Resource limits, timeouts, auto_remove |
 | orphan cleanup | `services/runtime-api/` | Periodic scan for untracked containers |
 
+## How
+
+### 1. Observe container creation
+
+When a bot is created via `POST /bots`, the runtime-api creates a Docker container. Inspect running containers:
+
+```bash
+# List bot containers managed by runtime-api
+curl -s -H "X-API-Key: $VEXA_API_KEY" \
+  http://localhost:8090/containers
+# [{"container_id": "abc123...", "meeting_id": 135, "status": "running", ...}]
+```
+
+### 2. Verify container cleanup after meeting ends
+
+After `DELETE /bots/{platform}/{id}`, the container stops and is removed:
+
+```bash
+# Stop the bot
+curl -s -X DELETE -H "X-API-Key: $VEXA_API_KEY" \
+  http://localhost:8056/bots/gmeet/135
+
+# After a few seconds, check containers
+docker ps --filter "label=vexa" --format "{{.Names}} {{.Status}}"
+# (bot container no longer listed)
+```
+
+### 3. Check for orphan containers
+
+```bash
+# List all Vexa containers (including exited)
+docker ps -a --filter "label=vexa" --format "{{.Names}} {{.Status}}"
+
+# Check for zombie processes inside a running service container
+cat /proc/*/status 2>/dev/null | grep -c "^State.*Z"
+# 0
+```
+
+### 4. Inspect resource profiles
+
+Container resource limits (CPU, memory, shm-size) are defined in `profiles.yaml`:
+
+```bash
+curl -s http://localhost:8090/profiles
+# {"default": {"cpu_limit": "2.0", "memory_limit": "4g", "shm_size": "2g", ...}}
+```
+
 ## DoD
 
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Test |

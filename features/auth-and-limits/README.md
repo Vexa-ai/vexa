@@ -20,6 +20,63 @@ Request → API Gateway → validate X-API-Key → resolve user_id + scopes + li
 | rate limiting | `services/api-gateway/main.py` | Per-user RPM limiting |
 | concurrency limit | `services/meeting-api/meeting_api/meetings.py` | max_concurrent_bots per user |
 
+## How
+
+### 1. Authenticate a request
+
+Every API call requires an `X-API-Key` header. The gateway validates it against admin-api and injects user context headers downstream.
+
+```bash
+# Rejected (no token)
+curl -s -o /dev/null -w "%{http_code}" http://localhost:8056/bots
+# 401
+
+# Accepted (valid token)
+curl -s -o /dev/null -w "%{http_code}" \
+  -H "X-API-Key: $VEXA_API_KEY" http://localhost:8056/bots
+# 200
+```
+
+### 2. Create and revoke tokens (admin API)
+
+```bash
+# Create a token with specific scopes
+curl -s -X POST http://localhost:8067/tokens \
+  -H "Content-Type: application/json" \
+  -d '{"scopes": ["bot", "browser"], "max_concurrent_bots": 5}'
+# {"api_key": "vx-...", "user_id": "..."}
+
+# Revoke a token
+curl -s -X DELETE http://localhost:8067/tokens/vx-...
+# 204
+```
+
+### 3. Hit the concurrent bot limit
+
+The meeting-api enforces `max_concurrent_bots` per user. When the limit is exceeded, new bot creation is rejected.
+
+```bash
+# After reaching the limit (e.g., 5 active bots):
+curl -s -X POST http://localhost:8056/bots \
+  -H "X-API-Key: $VEXA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"meeting_url": "https://meet.google.com/abc-defg-hij"}'
+# 429 {"detail": "Concurrent bot limit reached"}
+```
+
+### 4. Trigger rate limiting
+
+Exceeding the per-user requests-per-minute limit returns a 429.
+
+```bash
+# Rapid-fire requests past the RPM limit:
+for i in $(seq 1 200); do
+  curl -s -o /dev/null -w "%{http_code}\n" \
+    -H "X-API-Key: $VEXA_API_KEY" http://localhost:8056/bots
+done
+# ... 200 200 200 ... 429 429 429
+```
+
 ## DoD
 
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Test |

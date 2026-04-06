@@ -1,10 +1,90 @@
 # Vexa Lite Deployment
 
-Single Docker container running all Vexa services via supervisord. Bots run as
-child processes (process backend), not separate Docker containers. Uses `--network host`
-so all ports bind directly to the host.
+## Why
 
-## Prerequisites
+You want to self-host Vexa with minimal infrastructure. The full Docker Compose stack runs 12+ containers, needs a Docker socket for bot spawning, and has more moving parts to debug. Lite puts everything -- all services, Redis, Xvfb, PulseAudio -- into a single container managed by supervisord. Bots run as child processes instead of separate Docker containers. One `docker run` command and you are up.
+
+Trade-off: less isolation, fewer concurrent bots (3-5 vs 10+), but drastically simpler to deploy, monitor, and reason about. If you outgrow it, switch to [compose](../compose/README.md).
+
+## What
+
+Single Docker container running all Vexa services via supervisord. Uses `--network host`
+so all ports bind directly to the host. Bots run as child processes (process backend),
+not separate Docker containers.
+
+### Services
+
+| Service | Port | Description |
+|---------|------|-------------|
+| API Gateway | 8056 | Main entry point -- routes to all backend services |
+| Admin API | 8057 | User/token management |
+| Meeting API | 8080 | Bot orchestration, transcription pipeline, status callbacks |
+| Runtime API | 8090 | Process lifecycle (spawns bots as child processes) |
+| Agent API | 8100 | AI agent chat runtime |
+| Dashboard | **3000** | Next.js web UI (note: 3000, not 3001 like compose) |
+| MCP | 18888 | Model Context Protocol server (SSE transport) |
+| TTS | 8059 | Text-to-speech service |
+| Redis | 6379 | Internal pub/sub, session state, bot commands |
+| Xvfb | :99 | Virtual display for headless Chrome |
+
+External-facing: Gateway (8056) and Dashboard (3000). Everything else is internal.
+
+### Architecture
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                      Lite Container                            │
+│                                                                │
+│  ┌──────────┐ ┌──────────┐ ┌───────────┐ ┌─────────────────┐ │
+│  │ Dashboard │ │API Gatew.│ │ Admin API │ │   MCP Service   │ │
+│  │  :3000   │ │  :8056   │ │   :8057   │ │     :18888      │ │
+│  └──────────┘ └────┬─────┘ └───────────┘ └─────────────────┘ │
+│                     │                                          │
+│         ┌───────────┼───────────┬──────────────┐              │
+│         ▼           ▼           ▼              ▼              │
+│  ┌───────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐       │
+│  │Meeting API│ │Runtime AP│ │Agent API │ │TTS Serv. │       │
+│  │   :8080   │ │  :8090   │ │  :8100   │ │  :8059   │       │
+│  └─────┬─────┘ └────┬─────┘ └──────────┘ └──────────┘       │
+│        │             │                                        │
+│        │      spawns processes                                │
+│        │             ▼                                        │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │         Bot Processes (Node.js/Playwright)               │ │
+│  └─────────────────────────────────────────────────────────┘ │
+│                                                                │
+│  ┌──────────┐  ┌────────────────┐  ┌───────────────────┐      │
+│  │  Redis   │  │     Xvfb       │  │   PulseAudio     │      │
+│  │  :6379   │  │     :99        │  │                   │      │
+│  └──────────┘  └────────────────┘  └──────────────────┘      │
+└────────────────────────────────────────────────────────────────┘
+              │                    │                │
+              ▼                    ▼                ▼
+       ┌──────────────┐     ┌──────────┐     ┌──────────┐
+       │ Transcription │     │ Postgres │     │  MinIO   │
+       │   Service     │     │  :5438   │     │  :9000   │
+       └──────────────┘     └──────────┘     └──────────┘
+```
+
+**Key difference from compose:** In lite mode, the runtime-api uses the **process
+backend** -- bots are spawned as child processes inside the same container, sharing
+Xvfb (:99), PulseAudio, and the host network. In compose mode, each bot gets its
+own Docker container.
+
+### Limitations vs. Compose
+
+| Feature | Lite | Compose |
+|---------|------|---------|
+| Bot isolation | Shared process space | Separate Docker containers |
+| Concurrent bots | 3-5 | 10+ |
+| Dashboard port | 3000 | 3001 |
+| GPU transcription | External only | External only |
+| Scaling | Single machine | Docker Swarm / multiple hosts |
+| Redis persistence | None (in-memory) | Configurable |
+
+## How
+
+### Prerequisites
 
 You need three external services running before starting the lite container:
 
@@ -16,7 +96,7 @@ You need three external services running before starting the lite container:
 
 You also need 2GB+ shared memory (`--shm-size=2g`) for Chrome/Playwright.
 
-## Quick Start
+### Quick Start
 
 ```bash
 # Build with immutable tag (never use :dev or :latest)
@@ -51,7 +131,7 @@ docker run -d \
   vexa-lite:$TAG
 ```
 
-## Startup Validation
+### Startup Validation
 
 The entrypoint performs three checks before starting services:
 
@@ -65,7 +145,7 @@ The entrypoint performs three checks before starting services:
 Set `SKIP_TRANSCRIPTION_CHECK=true` to bypass the transcription check (e.g. when
 running without a GPU transcription service).
 
-### What to check after start
+#### What to check after start
 
 ```bash
 # Transcription startup check passed?
@@ -83,68 +163,9 @@ docker logs vexa 2>&1 | grep -c "entered RUNNING state"
 curl -sf http://localhost:8056/
 ```
 
-## Services
+### Environment Variables
 
-| Service | Port | Description |
-|---------|------|-------------|
-| API Gateway | 8056 | Main entry point -- routes to all backend services |
-| Admin API | 8057 | User/token management |
-| Meeting API | 8080 | Bot orchestration, transcription pipeline, status callbacks |
-| Runtime API | 8090 | Process lifecycle (spawns bots as child processes) |
-| Agent API | 8100 | AI agent chat runtime |
-| Dashboard | **3000** | Next.js web UI (note: 3000, not 3001 like compose) |
-| MCP | 18888 | Model Context Protocol server (SSE transport) |
-| TTS | 8059 | Text-to-speech service |
-| Redis | 6379 | Internal pub/sub, session state, bot commands |
-| Xvfb | :99 | Virtual display for headless Chrome |
-
-External-facing: Gateway (8056) and Dashboard (3000). Everything else is internal.
-
-## Architecture
-
-```
-┌────────────────────────────────────────────────────────────────┐
-│                      Lite Container                            │
-│                                                                │
-│  ┌──────────┐ ┌──────────┐ ┌───────────┐ ┌─────────────────┐ │
-│  │ Dashboard │ │API Gatew.│ │ Admin API │ │   MCP Service   │ │
-│  │  :3000   │ │  :8056   │ │   :8057   │ │     :18888      │ │
-│  └──────────┘ └────┬─────┘ └───────────┘ └─────────────────┘ │
-│                     │                                          │
-│         ┌───────────┼───────────┬──────────────┐              │
-│         ▼           ▼           ▼              ▼              │
-│  ┌───────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐       │
-│  │Meeting API│ │Runtime AP│ │Agent API │ │TTS Serv. │       │
-│  │   :8080   │ │  :8090   │ │  :8100   │ │  :8059   │       │
-│  └─────┬─────┘ └────┬─────┘ └──────────┘ └──────────┘       │
-│        │             │                                        │
-│        │      spawns processes                                │
-│        │             ▼                                        │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │         Bot Processes (Node.js/Playwright)               │ │
-│  └─────────────────────────────────────────────────────────┘ │
-│                                                                │
-│  ┌──────────┐  ┌────────────────┐  ┌───────��──────────┐      │
-│  │  Redis   │  │     Xvfb       │  │   PulseAudio     │      │
-│  │  :6379   │  │     :99        │  │                   │      │
-│  └──────────┘  └────────────────┘  └──────────────────┘      │
-└────────────────────────────────────────────────────────────────┘
-              │                    │                │
-              ▼                    ▼                ▼
-       ┌──────────────┐     ┌──────────┐     ┌──────────┐
-       │ Transcription │     │ Postgres │     │  MinIO   │
-       │   Service     │     │  :5438   │     │  :9000   │
-       └──────────────┘     └──────────┘     └──────────┘
-```
-
-**Key difference from compose:** In lite mode, the runtime-api uses the **process
-backend** -- bots are spawned as child processes inside the same container, sharing
-Xvfb (:99), PulseAudio, and the host network. In compose mode, each bot gets its
-own Docker container.
-
-## Environment Variables
-
-### Required
+#### Required
 
 | Variable | Example | Description |
 |----------|---------|-------------|
@@ -153,7 +174,7 @@ own Docker container.
 | `TRANSCRIBER_URL` | `http://localhost:8085/v1/audio/transcriptions` | Transcription service endpoint (full URL with path) |
 | `TRANSCRIBER_API_KEY` | `32c59b9f...` | API key for the transcription service |
 
-### Database (parsed from DATABASE_URL, or set individually)
+#### Database (parsed from DATABASE_URL, or set individually)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -163,7 +184,7 @@ own Docker container.
 | `DB_USER` | from `DATABASE_URL` | Database user |
 | `DB_PASSWORD` | from `DATABASE_URL` | Database password |
 
-### Transcription
+#### Transcription
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -173,7 +194,7 @@ own Docker container.
 | `TRANSCRIPTION_SERVICE_URL` | derived from `TRANSCRIBER_URL` | Base URL (e.g. `http://localhost:8085`). Auto-derived by stripping `/v1/...` from TRANSCRIBER_URL. Override only if needed. |
 | `TRANSCRIPTION_SERVICE_TOKEN` | derived from `TRANSCRIBER_API_KEY` | Same as TRANSCRIBER_API_KEY. Override only if different. |
 
-### Storage (MinIO/S3)
+#### Storage (MinIO/S3)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -185,7 +206,7 @@ own Docker container.
 | `MINIO_SECURE` | `false` | Use HTTPS for MinIO |
 | `LOCAL_STORAGE_DIR` | `/var/lib/vexa/recordings` | Path for local storage backend |
 
-### Optional
+#### Optional
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -194,7 +215,15 @@ own Docker container.
 | `REDIS_PORT` | `6379` | Redis port |
 | `OPENAI_API_KEY` | (empty) | For OpenAI TTS voices |
 
-## Debugging
+### Storage
+
+**Local (default):** Recordings stored at `/var/lib/vexa/recordings`. Mount a volume
+for persistence. Browser userdata lives in-memory only (lost on restart).
+
+**MinIO/S3:** Set `STORAGE_BACKEND=minio` with the MinIO environment variables. Enables
+persistent recordings and browser state (login cookies survive container restarts).
+
+### Debugging
 
 ```bash
 # Was the transcription startup check OK?
@@ -222,7 +251,7 @@ docker inspect vexa --format '{{.Config.Image}}'
 docker exec vexa bash -c 'tr "\0" "\n" < /proc/$(pgrep -f meeting_api.main | head -1)/environ | grep TRANSCRIPTION_SERVICE'
 ```
 
-## Management
+### Management
 
 ```bash
 # View all supervisor service statuses
@@ -235,7 +264,7 @@ docker exec vexa supervisorctl restart meeting-api
 docker logs -f vexa
 ```
 
-## Testing
+### Testing
 
 ```bash
 # Create a user
@@ -261,36 +290,7 @@ curl -X POST http://localhost:8056/bots \
   -d '{"mode": "browser_session"}'
 ```
 
-## Known Issues
-
-| Issue | Impact | Workaround |
-|-------|--------|------------|
-| **Zombie process reaper** | Dead bot processes reported as "active" by the API. `_pid_alive()` uses `os.kill(pid, 0)` which succeeds on zombies. | Check `ps aux | grep Z` for actual state. Restart container to clear zombies. |
-| **CDP proxy port mismatch** | Gateway CDP proxy hardcodes port 9223, but lite Chrome uses 9222. Browser session VNC works but programmatic CDP connections through the gateway fail. | Connect to CDP on port 9222 directly (bypassing gateway). |
-| **Shared Chrome instance** | All browser sessions share one Xvfb display (:99). Multiple simultaneous browser sessions may interfere. | Run one browser session at a time. |
-| **Redis is ephemeral** | Internal Redis has no persistence. Bot state, session data, and pub/sub history are lost on container restart. | Mount `/var/lib/redis` as a volume if persistence needed. |
-| **3-5 concurrent bot limit** | All bots share container CPU/RAM. Performance degrades beyond 3-5 bots. | Use compose deployment for higher concurrency. |
-
-## Storage
-
-**Local (default):** Recordings stored at `/var/lib/vexa/recordings`. Mount a volume
-for persistence. Browser userdata lives in-memory only (lost on restart).
-
-**MinIO/S3:** Set `STORAGE_BACKEND=minio` with the MinIO environment variables. Enables
-persistent recordings and browser state (login cookies survive container restarts).
-
-## Limitations vs. Compose
-
-| Feature | Lite | Compose |
-|---------|------|---------|
-| Bot isolation | Shared process space | Separate Docker containers |
-| Concurrent bots | 3-5 | 10+ |
-| Dashboard port | 3000 | 3001 |
-| GPU transcription | External only | External only |
-| Scaling | Single machine | Docker Swarm / multiple hosts |
-| Redis persistence | None (in-memory) | Configurable |
-
-## Definition of Done
+## DoD
 
 | # | Item | Weight | Status | Evidence | Last checked |
 |---|------|--------|--------|----------|--------------|
@@ -303,6 +303,16 @@ persistent recordings and browser state (login cookies survive container restart
 | 7 | Dashboard on port 3000 | 5 | PASS | HTML served, backend calls work | 2026-04-05T17:38Z |
 | 8 | Known issues documented | 10 | PASS | Zombies (#20), CDP port (#21), PulseAudio (#30) | 2026-04-05T18:50Z |
 | 9 | Env vars table complete | 10 | PASS | All required + optional vars documented | 2026-04-05T18:50Z |
+
+## Known Issues
+
+| Issue | Impact | Workaround |
+|-------|--------|------------|
+| **Zombie process reaper** | Dead bot processes reported as "active" by the API. `_pid_alive()` uses `os.kill(pid, 0)` which succeeds on zombies. | Check `ps aux | grep Z` for actual state. Restart container to clear zombies. |
+| **CDP proxy port mismatch** | Gateway CDP proxy hardcodes port 9223, but lite Chrome uses 9222. Browser session VNC works but programmatic CDP connections through the gateway fail. | Connect to CDP on port 9222 directly (bypassing gateway). |
+| **Shared Chrome instance** | All browser sessions share one Xvfb display (:99). Multiple simultaneous browser sessions may interfere. | Run one browser session at a time. |
+| **Redis is ephemeral** | Internal Redis has no persistence. Bot state, session data, and pub/sub history are lost on container restart. | Mount `/var/lib/redis` as a volume if persistence needed. |
+| **3-5 concurrent bot limit** | All bots share container CPU/RAM. Performance degrades beyond 3-5 bots. | Use compose deployment for higher concurrency. |
 
 ## Confidence
 
