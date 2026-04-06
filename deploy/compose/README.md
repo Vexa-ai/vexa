@@ -20,24 +20,26 @@ Runs all Vexa services via Docker Compose:
 
 **You provide:** A transcription service — use [Vexa transcription](https://vexa.ai) (ready to go) or [self-host](../../services/transcription-service/README.md) with GPU.
 
+## Prerequisites
+
+Fresh Linux machine (tested on Ubuntu 24.04):
+
+```bash
+apt-get update && apt-get install -y make
+curl -fsSL https://get.docker.com | sh
+```
+
 ## How
 
 ### Quick start
 
 ```bash
-# From repo root:
+git clone https://github.com/Vexa-ai/vexa.git
+cd vexa/deploy/compose
 make all
 ```
 
-That's it. Copies env-example → .env, builds images, starts services, syncs DB schema, creates API key, tests connectivity.
-
-**Skip the build** — use pre-built images from DockerHub instead of building locally:
-
-```bash
-make env                        # create .env
-IMAGE_TAG=dev make up           # pull :dev images from DockerHub
-make init-db && make setup-api-key && make test
-```
+That's it. Pulls pre-built images from DockerHub, starts services, syncs DB schema, creates API key, tests connectivity. To build from source instead: `make all-build`.
 
 **Before running**, edit `.env`:
 
@@ -48,7 +50,8 @@ make init-db && make setup-api-key && make test
 
 | Target                 | What it does                                         |
 | ---------------------- | ---------------------------------------------------- |
-| `make all`             | Full setup: env → build → up → init-db → api-key → test |
+| `make all`             | Full setup: env → pull → up → init-db → api-key → test  |
+| `make all-build`       | Same but builds images from source                       |
 | `make env`             | Create .env from template, or patch missing vars     |
 | `make build`           | Build all images with immutable timestamp tag        |
 | `make up`              | Start services using last-built tag                  |

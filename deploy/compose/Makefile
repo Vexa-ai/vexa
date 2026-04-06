@@ -1,4 +1,4 @@
-.PHONY: all env build build-bot-image up down ps logs test init-db restore-db check_docker publish promote-staging promote-latest help-tags setup-api-key
+.PHONY: all all-build env build build-bot-image up down ps logs test init-db restore-db check_docker publish promote-staging promote-latest help-tags setup-api-key
 
 # --- Paths ---
 ROOT := $(shell git rev-parse --show-toplevel)
@@ -30,8 +30,11 @@ COMPOSE_CMD = docker compose --env-file $(ENV_FILE) -f $(COMPOSE_FILE)
 # Main targets
 # ============================================================================
 
-all: env build up init-db setup-api-key test
+all: env up init-db setup-api-key test
 	@echo "Vexa is running. API: http://localhost:$${API_GATEWAY_HOST_PORT:-8056}/docs"
+
+all-build: env build up init-db setup-api-key test
+	@echo "Vexa is running (built from source). API: http://localhost:$${API_GATEWAY_HOST_PORT:-8056}/docs"
 
 help-tags:
 	@echo "Image Tagging Workflow"
@@ -103,7 +106,8 @@ up: check_docker
 		export IMAGE_TAG=$$(cat $(LAST_TAG_FILE)); \
 		echo "Using image tag: $$IMAGE_TAG (from .last-tag)"; \
 	else \
-		echo "No .last-tag found — using IMAGE_TAG=$(IMAGE_TAG)"; \
+		export IMAGE_TAG=dev; \
+		echo "No .last-tag found — pulling pre-built images (IMAGE_TAG=dev)"; \
 	fi
 	@if ! docker network ls | grep -q "vexa-network"; then \
 		docker network create vexa-network || true; \
