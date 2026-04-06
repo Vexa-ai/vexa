@@ -25,13 +25,13 @@ Meeting ends → bot uploads recording to MinIO → POST /meetings/{id}/transcri
 
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Test |
 |---|-------|--------|---------|-------|--------|----------|--------------|------|
-| 1 | Recording uploaded to MinIO after meeting ends | 20 | ceiling | 0 | PASS | Recordings available for both platforms | 2026-04-05T19:40Z | 10-verify-post-meeting |
-| 2 | POST /meetings/{id}/transcribe returns segments | 25 | ceiling | 0 | PASS | GMeet 3 deferred segments, Teams 5 deferred segments | 2026-04-05T19:40Z | 10-verify-post-meeting |
-| 3 | Speaker names attributed (not all "Unknown") | 25 | ceiling | 0 | PARTIAL | GMeet: 3/3 correct. Teams: names are UUIDs (`Teams Participant (uuid)`), not display names — see Known Issues | 2026-04-05T19:40Z | 10-verify-post-meeting |
-| 4 | Deferred segments consistent with realtime | 15 | — | 0 | FAIL | Duplicate content: API returns both realtime and deferred segments for same utterances — see Known Issues | 2026-04-05T19:40Z | 10-verify-post-meeting |
-| 5 | Works for GMeet and Teams | 15 | — | 0 | PARTIAL | GMeet fully works. Teams speaker mapping broken — see Known Issues | 2026-04-05T19:40Z | 10-verify-post-meeting |
+| 1 | Recording uploaded to MinIO after meeting ends | 20 | ceiling | 0 | FAIL | GMeet: "[Google Recording] Audio capture disabled by config." — recording not uploaded. Teams: "No bot config for leave callback" — recording upload failed. Both platforms broken. | 2026-04-05T21:50Z | 10-verify-post-meeting |
+| 2 | POST /meetings/{id}/transcribe returns segments | 25 | ceiling | 0 | PARTIAL | Transcription engine works (GMeet: 9 segments from recording, Teams: 10 segments), but 0 deferred segments returned via API after transcription. 409 dedup prevention works when realtime segments exist. | 2026-04-05T21:50Z | 10-verify-post-meeting |
+| 3 | Speaker names attributed (not all "Unknown") | 25 | ceiling | 0 | PARTIAL | GMeet: 3/3 correct (Alice, Bob, Charlie). Teams: names are UUIDs (`Teams Participant (uuid)`) not display names — see Known Issues | 2026-04-05T21:50Z | 10-verify-post-meeting |
+| 4 | Deferred segments consistent with realtime | 15 | — | 0 | FAIL | 409 dedup prevents re-transcription when realtime segments exist. When deferred does run, API returns 0 deferred segments — persistence broken. | 2026-04-05T21:50Z | 10-verify-post-meeting |
+| 5 | Works for GMeet and Teams | 15 | — | 0 | FAIL | Recording upload broken on both platforms. Teams speaker mapping produces UUIDs. Pipeline code exists but never exercised end-to-end. | 2026-04-05T21:50Z | 10-verify-post-meeting |
 
-Confidence: 45 (ceiling items 1-2 pass, item 3 partial, items 4-5 have known bugs)
+Confidence: 20 (ceiling item 1 FAIL — recording upload broken both platforms. Item 2 PARTIAL — engine works but persistence broken. Item 3 PARTIAL — GMeet names correct, Teams UUIDs. Items 4-5 FAIL. Dedup prevention works correctly.)
 
 ## Known Issues
 

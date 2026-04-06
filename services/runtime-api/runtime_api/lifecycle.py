@@ -84,6 +84,10 @@ async def _fire_exit_callback(redis, name: str, exit_code: int = 0) -> None:
         return
 
     metadata = container_data.get("metadata", {})
+    if not metadata.get("connection_id"):
+        logger.warning(f"No connection_id in metadata for {name} — skipping exit callback")
+        return
+
     payload = {
         # Merge metadata first so domain-specific fields (e.g. connection_id)
         # appear as top-level keys in the callback payload.

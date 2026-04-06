@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEST_ID="test/verify-transcription"
-source "$(dirname "$0")/test-lib.sh""
+source "$(dirname "$0")/test-lib.sh"
 
 GATEWAY_URL="${1:?Usage: verify-transcription.sh GATEWAY_URL LISTENER_TOKEN SPEAKER_TOKEN PLATFORM MEETING_ID SESSION_TOKEN}"
 LISTENER_TOKEN="${2:?Missing LISTENER_TOKEN (test user)}"

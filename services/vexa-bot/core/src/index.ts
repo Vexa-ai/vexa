@@ -656,9 +656,9 @@ async function performGracefulLeave(
     try {
       log("[Graceful Leave] Attempting platform-specific leave...");
       if (currentPlatform === "google_meet") {
-         platformLeaveSuccess = await leaveGoogleMeet(page);
+         platformLeaveSuccess = await leaveGoogleMeet(page, currentBotConfig ?? undefined);
       } else if (currentPlatform === "teams") {
-         platformLeaveSuccess = await leaveMicrosoftTeams(page);
+         platformLeaveSuccess = await leaveMicrosoftTeams(page, currentBotConfig ?? undefined);
       } else {
          log(`[Graceful Leave] No platform-specific leave defined for ${currentPlatform}. Page will be closed.`);
          platformLeaveSuccess = true;

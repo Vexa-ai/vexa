@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEST_ID="test/admit-bot"
-source "$(dirname "$0")/test-lib.sh""
+source "$(dirname "$0")/test-lib.sh"
 
 GATEWAY_URL="${1:?Usage: admit-bot.sh GATEWAY_URL API_TOKEN SESSION_TOKEN PLATFORM MEETING_ID}"
 API_TOKEN="${2:?Missing API_TOKEN}"

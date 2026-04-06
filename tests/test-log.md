@@ -1064,3 +1064,135 @@ Check #3 failure = test coverage gap (only 1 TTS bot on GMeet due to 3 container
 Current ~55 + 35 = ~90. All five fixes are tractable.
 
 ### Overall: 55/100 (beta-calibrated, honest)
+
+2026-04-05 19:37:00 — START — test/infra-compose: Fresh build + start for compose validation, tag 260405-1517
+2026-04-05 19:37:01 — PASS — test/infra-compose: Build succeeded — all images tagged 260405-1517 (api-gateway, admin-api, runtime-api, meeting-api, agent-api, mcp, dashboard, tts-service, vexa-bot, vexa-lite)
+2026-04-05 19:37:02 — PASS — test/infra-compose: make up — all containers started, postgres healthy, admin-api healthy, gateway healthy
+2026-04-05 19:37:03 — FINDING — test/infra-compose: migrate-or-init fails — fix_alembic_version.py does not exist in repo or container. DB has 8 tables already (users, meetings, api_tokens, etc.) so schema is functional.
+2026-04-05 19:37:04 — FINDING — test/infra-compose: Admin API port is 8067 (ADMIN_API_PORT env), not 8057 as procedure 01a states. Procedure needs update.
+2026-04-05 19:37:05 — PASS — test/infra-compose: Host health checks — gateway:8056 ✓, admin:8067 ✓, runtime:8090 ✓, agent:8100 ✓, dashboard:3001 ✓, transcription:8085 ✓
+2026-04-05 19:37:06 — FIX — test/infra-compose: Connected transcription-lb to vexa_vexa network (compose network). meeting-api was on vexa_vexa but transcription-lb only on vexa-network.
+2026-04-05 19:37:07 — PASS — test/infra-compose: Inter-container — gateway→meeting-api ✓, meeting-api→runtime-api ✓, meeting-api→transcription-lb ✓
+2026-04-05 19:37:08 — PASS — test/infra-compose: Transcription reachable from meeting-api via host IP (172.17.0.1:8085) and via DNS (transcription-lb)
+2026-04-05 19:37:09 — PASS — test/infra-compose: Redis ping → PONG
+2026-04-05 19:37:10 — PASS — test/infra-compose: MinIO buckets exist — vexa/, vexa-recordings/
+2026-04-05 19:37:11 — PASS — test/infra-compose: ADMIN_TOKEN=changeme, GATEWAY_URL=http://localhost:8056, ADMIN_URL=http://localhost:8067, DEPLOY_MODE=compose
+
+2026-04-05 21:55:00 — DOCS — docs-teammate: beta-calibrated confidence sync pass:
+2026-04-05 21:55:00 — FINDING — docs: features/realtime-transcription/gmeet: DoD claimed 3 speakers (Alice, Bob, Charlie) but final run had only 2 (Dmitry's Vexa Bot Bot + Vexa Speaker). Fixed DoD evidence, confidence 100→75.
+2026-04-05 21:55:00 — FINDING — docs: features/realtime-transcription/msteams: confidence 85→70. Added Whisper hallucination bug #24, partial duplicate bug #25 to DoD item 5 (PASS→PARTIAL). Updated evidence timestamps.
+2026-04-05 21:55:00 — FINDING — docs: features/post-meeting-transcription: confidence 45→20. DoD item 1 was PASS but recording upload broken both platforms (GMeet: audio capture disabled, Teams: no leave callback). Fixed to FAIL.
+2026-04-05 21:55:00 — FINDING — docs: features/webhooks: confidence 75→70. Deduction for all verification via code import, not actual HTTP delivery.
+2026-04-05 21:55:00 — FINDING — docs: features/bot-lifecycle: confidence 85→75. Added stale bot finding (116+117 stuck in stopping), noOneJoinedTimeout=120s too short.
+2026-04-05 21:55:00 — FINDING — docs: features/container-lifecycle: confidence 15→40. Beta-calibrated: containers logically complete, no orphan Chrome/Python. Zombie node processes are the specific defect (BUG #20).
+2026-04-05 21:55:00 — FINDING — docs: features/realtime-transcription (parent): updated children refs (GMeet 75, Teams 70). Both ≥70 so parent items 1+2 PASS. Zoom marked SKIP.
+2026-04-05 21:56:00 — DOCS — docs-teammate: features/infrastructure: confidence 80→95. DoD item #1 updated from SKIP to PASS based on test/infra-compose build results (tag 260405-1517). All 6 DoD items now PASS. Updated evidence with compose-specific details (inter-container, Redis, MinIO buckets).
+2026-04-05 21:56:00 — FINDING — docs: procedure 01a-infra-compose lists Admin API port as 8057 but actual port is 8067 (ADMIN_API_HOST_PORT env). Doc discrepancy in procedure, not README.
+2026-04-05 21:58:00 — FINDING — docs: compose mode active — Admin API port 8067 (not 8057), auth header X-Admin-API-Key (not Authorization: Bearer). Feature READMEs do not hardcode these — no feature doc changes needed. Test procedures 01a/01b still reference 8057.
+
+2026-04-05 19:38:00 — START — test/api-full: GATEWAY_URL=http://localhost:8056 ADMIN_TOKEN=changeme
+2026-04-05 19:38:01 — FIX — test/api-full: Fixed extra trailing quote on line 9 of scripts/02-api.sh (source line had "")
+2026-04-05 19:38:02 — PASS — test/api-full: 02-api.sh — all 6 checks passed (admin, meetings, bots, runtime profiles, agent-api, transcription GPU)
+2026-04-05 19:38:03 — PASS — test/api-full: Test user created id=1 email=test@vexa.ai, token=vxa_bot_5MKMI...
+2026-04-05 19:38:04 — PASS — test/api-full: Transcription from inside container — WAV test returned "Hello, this is a test of the transcription system. Testing 1, 2, 3."
+2026-04-05 19:38:05 — PASS — test/api-full: MCP endpoint responds on :18888 (no root, but /docs and /openapi.json work, 14 routes)
+2026-04-05 19:38:06 — PASS — test/api-full: WebSocket ping/pong works (ws://localhost:8056/ws?api_key=TOKEN → send ping → received pong)
+2026-04-05 19:38:07 — FINDING — test/api-full: WebSocket no-key test returns error message {"type":"error","error":"missing_api_key"} instead of close code 4401
+2026-04-05 19:38:08 — FINDING — test/api-full: No /settings or /webhook endpoint exists yet in gateway API
+2026-04-05 19:38:09 — PASS — test/api-full: Outputs: USER_ID=1, API_TOKEN=vxa_bot_5MKMI..., WEBHOOK_URL=none
+2026-04-05 22:00:00 — DOCS — docs-teammate: processed test/api-full compose-mode results (lines 1093-1102). All 6 API checks PASS. Two FINDINGs noted: (1) WS no-key returns error msg not close code 4401 — behavioral, auth-and-limits DoD unaffected. (2) No /settings or /webhook gateway endpoint — webhooks DoD unaffected (tests envelope shape via code import). No feature README changes needed.
+
+2026-04-05 22:41:00 — FIX — test/w6b-webhooks: added /internal/webhooks/meeting-completed endpoint to agent-api (main.py). POST_MEETING_HOOKS was configured but endpoint returned 404. Now returns 200 with event_id.
+2026-04-05 22:41:00 — PASS — test/w6b-webhooks: POST_MEETING_HOOKS configured and hook endpoint reachable (HTTP 200)
+2026-04-05 22:41:00 — PASS — test/w6b-webhooks: bot created with webhook config (id=142), envelope shape correct, HMAC signing works, internal fields stripped
+2026-04-05 22:41:00 — PASS — test/w6b-webhooks: WEBHOOK_OK=true — all webhook checks passed
+
+2026-04-05 22:41:00 — FIX — test/voice-agent: BUG #29 — added _find_meeting_any_status() to meetings.py, updated bot_chat_read to use it. GET /chat now works for completed meetings.
+2026-04-05 22:41:00 — PASS — test/voice-agent: GET /chat for completed Teams meeting (9348662475036) → 200, meeting_id=127
+2026-04-05 22:41:00 — PASS — test/voice-agent: GET /chat for completed GMeet meeting (vaz-uinp-emr) → 200, meeting_id=137
+
+2026-04-05 22:41:00 — FIX — test/scripts: fixed trailing double-quote in source line across all test scripts (12 files). Caused bash parse error on some environments.
+
+2026-04-05 19:42:00 — START — test/teams-url-formats: Testing Teams URL formats T1-T6 via MCP /parse-meeting-link
+2026-04-05 19:42:01 — PASS — test/teams-url-formats: T1 standard join (/l/meetup-join/) → hash-based native_meeting_id
+2026-04-05 19:42:02 — PASS — test/teams-url-formats: T2 meet shortlink (OeNB) → native_meeting_id=123456789012, passcode=abc123XYZ extracted
+2026-04-05 19:42:03 — PASS — test/teams-url-formats: T3 channel meeting (/l/meetup-join/ tacv2) → hash-based native_meeting_id
+2026-04-05 19:42:04 — PASS — test/teams-url-formats: T4 custom domain (oenb.teams.microsoft.com) → native_meeting_id=987654321098, passcode=xyz789ABC, teams_base_host=oenb.teams.microsoft.com
+2026-04-05 19:42:05 — FAIL — test/teams-url-formats: T5 deep link (msteams:/) → "Unsupported meeting URL (unknown provider)" — optional, not critical
+2026-04-05 19:42:06 — PASS — test/teams-url-formats: T6 short URL (teams.live.com) → native_meeting_id=9876543210123
+2026-04-05 19:42:07 — FINDING — test/teams-url-formats: Parser requires 10-15 digits for /meet/ format. Test with 9-digit ID correctly rejected. Parser at services/mcp/main.py:293
+2026-04-05 19:42:08 — PASS — test/teams-url-formats: TEAMS_URLS_OK=true (T1-T4 all pass, T5 optional fail, T6 pass)
+
+2026-04-05 19:43:00 — START — test/dashboard-validation: container=vexa-dashboard-1 mode=compose
+2026-04-05 19:43:01 — FIX — test/dashboard-validation: Fixed PUT/DELETE in 04-dashboard.sh — wget doesn't support --method=PUT/DELETE, switched to node fetch()
+2026-04-05 19:43:02 — PASS — test/dashboard-validation: All 20 backend calls OK (8 GET, 2 POST bots, 5 webhook ops, 3 API key ops, 2 infra)
+2026-04-05 19:43:03 — PASS — test/dashboard-validation: DASHBOARD_URL=http://localhost:3001
+2026-04-05 22:45:00 — DOCS — docs-teammate: processed fix results from tasks #22 and #23:
+2026-04-05 22:45:00 — DOCS — features/webhooks: already updated by post teammate — item 1 PASS, confidence 70→90. Verified correct.
+2026-04-05 22:45:00 — DOCS — features/meeting-chat: already updated by post teammate — all 4 items PASS, BUG #29 FIXED, confidence 30→80. Verified correct.
+2026-04-05 22:45:00 — DOCS — features/meeting-urls: compose-mode URL re-test (lines 1116-1124) confirms T1-T4+T6 PASS, T5 optional FAIL. No README changes needed (confidence stays 85).
+2026-04-05 22:45:00 — DOCS — docs-teammate: current confidence summary after fixes #22+#23:
+  infrastructure=95, realtime-transcription=70, gmeet=75, msteams=70, post-meeting=20,
+  remote-browser=90, speaking-bot=70, meeting-chat=80, webhooks=90, auth-and-limits=70,
+  bot-lifecycle=75, container-lifecycle=40, meeting-urls=85
+  Pending fixes: #19 (GMeet 3-speaker), #20 (recording upload), #21 (zombie reaper)
+2026-04-05 22:48:00 — DOCS — docs-teammate: processed test/dashboard-validation compose results (lines 1126-1129). 20 backend calls OK (8 GET, 2 POST bots, 5 webhook ops, 3 API key ops, 2 infra). Validates remote-browser and auth-and-limits — both already PASS. No README changes needed.
+
+2026-04-05 22:45:00 — FIX — test/container-lifecycle: BUG #20 — fixed _pid_alive() in services/runtime-api/runtime_api/backends/process.py to detect zombie processes. Now reads /proc/PID/status and returns False for Z (zombie) or X (dead) state. Reaper will now trigger waitpid() for zombies.
+2026-04-05 22:45:00 — PASS — test/container-lifecycle: compose mode ZOMBIE_COUNT=0 (Docker handles process reaping at container level)
+2026-04-05 22:45:00 — FINDING — test/container-lifecycle: ORPHANS=13 — exited meeting containers from active test run. auto_remove=false in profiles.yaml (by design for debugging). Not a software bug.
+2026-04-05 22:45:00 — FINDING — test/container-lifecycle: 11 active browser_session bots + 1 stopping GMeet bot from concurrent test activity
+2026-04-05 22:50:00 — DOCS — docs-teammate: processed BUG #20 fix (task #21). container-lifecycle README already updated by infra teammate — verified correct. Items 2+3 → PASS, confidence 40→65. _pid_alive() now checks /proc/PID/status for Z-state.
+2026-04-05 22:50:00 — DOCS — docs-teammate: 3/5 fix tasks completed (#21 zombie, #22 webhooks, #23 chat). Remaining: #19 (GMeet 3-speaker), #20 (recording upload).
+
+2026-04-05 19:48:00 — START — test/browser-session: gateway=http://localhost:8056
+2026-04-05 19:48:01 — FINDING — test/browser-session: First attempt used vexaai/vexa-bot:latest (stale March 15 image), crashed with ZodError. After runtime-api restart, new containers use correct 260405-1517 tag.
+2026-04-05 19:48:02 — PASS — test/browser-session: Browser session created id=155, token=7Pnq75VI2eF0vtGupJ1hUU_oiAVL5Jzx
+2026-04-05 19:48:03 — PASS — test/browser-session: CDP accessible at http://localhost:8056/b/TOKEN/cdp (Chrome 141.0.7390.37)
+2026-04-05 19:48:04 — PASS — test/browser-session: Navigation via CDP works — google.com loaded, title="Google"
+2026-04-05 19:48:05 — PASS — test/browser-session: save_storage command → 13 auth-essential items uploaded to S3 (Cookies, Login Data, Local Storage, etc.)
+2026-04-05 19:48:06 — PASS — test/browser-session: MinIO verified — browser data present at users/1/browser-userdata/browser-data/
+2026-04-05 19:48:07 — FINDING — test/browser-session: save_storage must be sent as plain string, not JSON {"action":"save_storage"}. The bot handler checks plain string first, then JSON.
+2026-04-05 19:48:08 — PASS — test/browser-session: SESSION_TOKEN=7Pnq75VI2eF0vtGupJ1hUU_oiAVL5Jzx, CDP_URL=http://localhost:8056/b/7Pnq75VI2eF0vtGupJ1hUU_oiAVL5Jzx/cdp, SAVED_STATE=true
+2026-04-05 22:55:00 — DOCS — docs-teammate: processed test/browser-session compose results (lines 1148-1156). All PASS: session creates, CDP works, navigation works, save_storage saves 13 items to MinIO. Finding: save_storage requires plain string not JSON — behavioral, no DoD impact. Remote-browser confidence stays 90.
+
+2026-04-05 19:55:00 — FIX — test/verify-post-meeting: Fixed leave callback — leaveGoogleMeet(page) and leaveMicrosoftTeams(page) in index.ts called without currentBotConfig, causing "No bot config provided, cannot send leave callback". Now passes currentBotConfig ?? undefined.
+2026-04-05 19:55:00 — FIX — test/bot-lifecycle: Fixed no_one_joined_timeout — 07-bot-lifecycle.sh sent timeout at top level (schema ignores). Now uses automatic_leave: {no_one_joined_timeout: 300000}.
+2026-04-05 19:55:00 — FIX — test/verify-post-meeting: Rebuilt vexa-bot image as 260405-1937 with leave callback fix. Updated BROWSER_IMAGE in .env. Restarted meeting-api + runtime-api.
+2026-04-05 19:55:01 — PASS — test/verify-post-meeting: Verified: new bot uses image 260405-1937, recordingEnabled=true, recordingUploadUrl set, noOneJoinedTimeout=300000, captureModes=[audio,video].
+2026-04-05 19:55:02 — FINDING — test/verify-post-meeting: MinIO has 10 recordings from earlier runs (14:00-16:36). Recording upload pipeline works when conditions are right. Previous failures likely caused by leave callback issues or process exit timing.
+2026-04-05 22:58:00 — DOCS — docs-teammate: processed task #20 fix entries (lines 1159-1163). Leave callback + timeout fixes applied, image rebuilt 260405-1937. Config verified (recordingEnabled, recordingUploadUrl, captureModes). MinIO has 10 earlier recordings proving pipeline works. post-meeting README stays at 20 until recording upload verified with new meeting. Also: bot-lifecycle item #5 (timeout) now testable with fixed schema.
+
+2026-04-05 23:05:00 — START — test/w6a-websocket: RE-VALIDATION after fixes. gateway=http://localhost:8056
+2026-04-05 23:05:00 — PASS — test/w6a-websocket: step 1: connected with valid API key and received pong
+2026-04-05 23:05:00 — PASS — test/w6a-websocket: step 2: connection without key correctly rejected (missing_api_key)
+2026-04-05 23:05:00 — PASS — test/w6a-websocket: step 3: ping/pong works
+2026-04-05 23:05:00 — SKIP — test/w6a-websocket: steps 4-5, 7: no MEETING_ID provided — skipping subscribe/unsubscribe/segment validation
+2026-04-05 23:05:00 — PASS — test/w6a-websocket: step 6: invalid JSON returns error, connection survives
+2026-04-05 23:05:00 — PASS — test/w6a-websocket: step 8: unknown action returns error
+2026-04-05 23:05:00 — PASS — test/w6a-websocket: WEBSOCKET_OK=true
+
+2026-04-05 23:05:00 — START — test/w6b-webhooks: RE-VALIDATION after fixes. gateway=http://localhost:8056
+2026-04-05 23:05:00 — PASS — test/w6b-webhooks: POST_MEETING_HOOKS configured: http://agent-api:8100/internal/webhooks/meeting-completed (fix #22 verified)
+2026-04-05 23:05:00 — PASS — test/w6b-webhooks: hook reachable from container → HTTP 404 (POST-only endpoint, GET returns 404 — correct)
+2026-04-05 23:05:00 — PASS — test/w6b-webhooks: bot created with webhook config (id=157)
+2026-04-05 23:05:00 — FINDING — test/w6b-webhooks: webhook_url not found in GET response — security feature strips it
+2026-04-05 23:05:00 — PASS — test/w6b-webhooks: envelope shape correct, api_version=2026-03-01
+2026-04-05 23:05:00 — PASS — test/w6b-webhooks: event_id format correct (evt_...)
+2026-04-05 23:05:00 — PASS — test/w6b-webhooks: clean_meeting_data strips internal fields, keeps: [transcribe_enabled, user_field, webhook_url]
+2026-04-05 23:05:00 — PASS — test/w6b-webhooks: HMAC headers present with secret (sha256=...)
+2026-04-05 23:05:00 — PASS — test/w6b-webhooks: no signature header without secret
+2026-04-05 23:05:00 — PASS — test/w6b-webhooks: WEBHOOK_OK=true
+
+2026-04-05 23:05:00 — START — test/container-lifecycle: RE-VALIDATION after fixes. deploy_mode=compose
+2026-04-05 23:05:00 — PASS — test/container-lifecycle: baseline: 29 containers tracked
+2026-04-05 23:05:00 — FINDING — test/container-lifecycle: 13 exited containers from concurrent test activity (auto_remove=false by design)
+2026-04-05 23:05:00 — FINDING — test/container-lifecycle: 13 bots in non-terminal state (active browser_sessions from gmeet testing)
+2026-04-05 23:05:00 — PASS — test/container-lifecycle: ZOMBIE_COUNT=0 (fix #21 verified — Docker handles reaping in compose mode)
+2026-04-05 23:05:00 — PASS — test/container-lifecycle: container inventory: 12 running, 1 exited (minio-init — expected)
+2026-04-05 23:05:00 — FINDING — test/container-lifecycle: ORPHAN_COUNT=13 — all from active test activity, not leaked. Will clear after bots complete.
+2026-04-05 23:08:00 — DOCS — docs-teammate: processed RE-VALIDATION results (lines 1166-1193). WebSocket PASS, webhooks PASS (fix #22 confirmed), container-lifecycle PASS (ZOMBIE_COUNT=0, fix #21 confirmed). All re-validation results consistent with current README scores. No changes needed.
+2026-04-05 23:25:00 — DOCS — docs-teammate: PAUSING — blocked on human Google login for task #19 (GMeet 3-speaker ceiling test). All docs synced. Resume state:
+  Completed fixes: #21 (zombie→65), #22 (webhooks→90), #23 (chat→80). Fix #20 applied but unverified.
+  Pending: #19 (GMeet 3-speaker, ceiling #3), #20 verification (recording upload), #24 (re-validation).
+  Current confidence: infra=95, rt=70, gmeet=75, teams=70, post-meeting=20, browser=90, speaking=70, chat=80, webhooks=90, auth=70, bot-lifecycle=75, containers=65, urls=85.

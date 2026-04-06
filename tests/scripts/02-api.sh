@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEST_ID="test/api-full"
-source "$(dirname "$0")/test-lib.sh""
+source "$(dirname "$0")/test-lib.sh"
 
 GATEWAY_URL="${1:-http://localhost:8056}"
 ADMIN_TOKEN="${2:-}"

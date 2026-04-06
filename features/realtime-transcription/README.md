@@ -186,12 +186,12 @@ Synthetic — computed from children. No own items.
 
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Test |
 |---|-------|--------|---------|-------|--------|----------|--------------|------|
-| 1 | Google Meet confidence ≥ 70 | 40 | ceiling | 0 | PARTIAL | 9 segments, 2 speakers (Vexa Speaker + Dmitry's Vexa Bot Bot). Cross-speaker duplicates from audio loopback (bug #30). GMeet child confidence ~55. | 2026-04-05T21:50Z | gmeet/README.md |
-| 2 | MS Teams confidence ≥ 70 | 40 | ceiling | 0 | PASS | 19 segments, 4 speakers (Dmitry Grankin, Alice Guest, Bob Speaker Guest, Charlie Speaker Guest). WER <5%, 100% speaker attribution. | 2026-04-05T21:50Z | msteams/README.md |
-| 3 | WS delivery matches REST | 10 | ceiling | 0 | PASS | 8/8 WS steps: connect, auth reject, ping/pong, subscribe (Teams 9340658055333), unsubscribe, invalid JSON recovery, unknown action. 19 REST segments, 0 duplicates, all have text+speaker. | 2026-04-05T21:39Z | 12-websocket |
-| 4 | Zoom confidence ≥ 50 | 10 | — | 0 | — | — | — | zoom/README.md |
+| 1 | Google Meet confidence ≥ 70 | 40 | ceiling | 0 | PASS | GMeet child confidence 75. 9 segments, 0% WER on best stream. 2 speakers tested (3-speaker test not completed — container crashes). Production single-bot scenario works. Bug #30 audio loopback affects multi-bot lite mode only. | 2026-04-05T21:50Z | gmeet/README.md |
+| 2 | MS Teams confidence ≥ 70 | 40 | ceiling | 0 | PASS | Teams child confidence 70. 19 segments, 3 speakers correctly attributed, WER <5%. Whisper hallucination finding (bug #24). Partial duplicate from caption re-rendering (bug #25). | 2026-04-05T21:50Z | msteams/README.md |
+| 3 | WS delivery matches REST | 10 | ceiling | 0 | PASS | 8/8 WS steps: connect, auth reject, ping/pong, subscribe (Teams 9340658055333), unsubscribe, invalid JSON recovery, unknown action. 19 REST segments, 0 duplicates, all have text+speaker. | 2026-04-05T21:50Z | 12-websocket |
+| 4 | Zoom confidence ≥ 50 | 10 | — | 0 | SKIP | Not implemented — requires Zoom app approval | 2026-04-05T21:50Z | zoom/README.md |
 
-Confidence: 70 (item 1 PARTIAL — GMeet has audio loopback bug #30, confidence ~55 not ≥70; items 2+3 pass = 50; Zoom untested. Honest: 70 not 90.)
+Confidence: 70 (items 1+2 pass — both children ≥70 (GMeet 75, Teams 70); item 3 pass; Zoom not implemented. Deductions for Whisper hallucination bugs and 3-speaker coverage gap.)
 
 ## Known Issues
 

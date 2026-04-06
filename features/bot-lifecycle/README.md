@@ -37,15 +37,15 @@ POST /bots → requested → runtime-api creates container → joining
 
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Tests |
 |---|-------|--------|---------|-------|--------|----------|--------------|-------|
-| 1 | POST /bots creates bot and returns id | 15 | ceiling | 0 | PASS | Bot created on both platforms | 2026-04-05T19:40Z | 07-bot-lifecycle, 02-api |
-| 2 | Bot reaches active state in live meeting | 20 | ceiling | 0 | PASS | Full chain requested→joining→awaiting_admission→active on both platforms | 2026-04-05T19:40Z | 07-bot-lifecycle |
-| 3 | DELETE /bots stops bot, reaches completed | 15 | ceiling | 0 | PASS | 4/4 bots: completed, reason=stopped, end_time set. Chains: active→stopping→completed (GMeet 135, Teams 125, 126), stopping→completed (browser 131). 2 stale bots stuck in stopping from previous run. | 2026-04-05T21:40Z | 11-finalization |
-| 4 | Status visible via GET /bots | 15 | — | 0 | PASS | All state transitions observable via API | 2026-04-05T19:40Z | 07-bot-lifecycle, 04-dashboard |
-| 5 | Timeout auto-stop works (no infinite bots) | 15 | — | 0 | SKIP | Not tested this run | 2026-04-05T19:40Z | 14-container-lifecycle |
-| 6 | Works for GMeet, Teams, browser_session | 20 | — | 0 | PASS | Both GMeet and Teams verified | 2026-04-05T19:40Z | 07-bot-lifecycle, 05-browser-session |
+| 1 | POST /bots creates bot and returns id | 15 | ceiling | 0 | PASS | Bot created on both platforms (GMeet 135, Teams 125/126, browser 131) | 2026-04-05T21:50Z | 07-bot-lifecycle, 02-api |
+| 2 | Bot reaches active state in live meeting | 20 | ceiling | 0 | PASS | Full chain requested→joining→awaiting_admission→active on both platforms. All transitions from bot_callback. | 2026-04-05T21:50Z | 07-bot-lifecycle |
+| 3 | DELETE /bots stops bot, reaches completed | 15 | ceiling | 0 | PASS | 4/4 current-run bots: completed, reason=stopped, end_time set. Chains: active→stopping→completed (GMeet 135, Teams 125, 126), stopping→completed (browser 131). 2 stale bots (116, 117) stuck in stopping from previous run — process gone, state not reconciled. | 2026-04-05T21:50Z | 11-finalization |
+| 4 | Status visible via GET /bots | 15 | — | 0 | PASS | All state transitions observable via API | 2026-04-05T21:50Z | 07-bot-lifecycle, 04-dashboard |
+| 5 | Timeout auto-stop works (no infinite bots) | 15 | — | 0 | SKIP | Not tested this run. noOneJoinedTimeout=120s too short for human-in-loop tests. | 2026-04-05T21:50Z | 14-container-lifecycle |
+| 6 | Works for GMeet, Teams, browser_session | 20 | — | 0 | PASS | GMeet, Teams, and browser_session all verified. Browser session cleanup confirmed in finalization. | 2026-04-05T21:50Z | 07-bot-lifecycle, 05-browser-session |
 
 07 owns `requested → joining → awaiting_admission → active`.
 11-finalization owns `active → stopping → completed` (runs after transcription tests).
 14-container-lifecycle owns orphan sweep after everything stops.
 
-Confidence: 85 (ceiling items 1+2+3 pass = 50; items 4+6 = 35; timeout auto-stop not tested = 85/100)
+Confidence: 75 (ceiling items 1+2+3 pass = 50; items 4+6 = 35; timeout auto-stop not tested; 2 stale bots from previous run stuck in stopping = deduction for state reconciliation gap)

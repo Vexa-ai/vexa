@@ -564,6 +564,30 @@ async def _find_active_meeting(
     return meeting
 
 
+async def _find_meeting_any_status(
+    db: AsyncSession, user_id: int, platform_value: str, native_meeting_id: str,
+) -> Meeting:
+    """Like _find_active_meeting but returns the most recent meeting regardless of status."""
+    stmt = (
+        select(Meeting)
+        .where(
+            Meeting.user_id == user_id,
+            Meeting.platform == platform_value,
+            Meeting.platform_specific_id == native_meeting_id,
+        )
+        .order_by(desc(Meeting.created_at))
+        .limit(1)
+    )
+    result = await db.execute(stmt)
+    meeting = result.scalar_one_or_none()
+    if not meeting:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No meeting found for {platform_value}/{native_meeting_id}",
+        )
+    return meeting
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -669,7 +693,7 @@ async def request_bot(
 
         result = await _spawn_via_runtime_api(
             profile="meeting",
-            config={"env": {"BOT_CONFIG": json.dumps(bot_config), "BOT_MODE": "browser_session"}},
+            config={"image": BOT_IMAGE_NAME, "env": {"BOT_CONFIG": json.dumps(bot_config), "BOT_MODE": "browser_session"}},
             user_id=current_user.id,
             callback_url=f"{MEETING_API_URL}/bots/internal/callback/exited",
             metadata={"meeting_id": new_meeting.id},

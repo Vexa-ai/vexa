@@ -292,11 +292,21 @@ class ProcessBackend(Backend):
 def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
-        return True
     except (ProcessLookupError, PermissionError):
         return False
     except Exception:
         return False
+    # Signal 0 succeeded — but zombies also pass this check.
+    # Read /proc/PID/status to detect Z (zombie) or X (dead) state.
+    try:
+        with open(f"/proc/{pid}/status", "r") as f:
+            for line in f:
+                if line.startswith("State:"):
+                    state = line.split()[1]
+                    return state not in ("Z", "X", "x")
+    except (FileNotFoundError, OSError):
+        return False
+    return True
 
 
 def _terminate_process_group(pid: int, timeout: int = 10) -> bool:

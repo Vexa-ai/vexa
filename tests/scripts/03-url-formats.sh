@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEST_ID="test/teams-url-formats"
-source "$(dirname "$0")/test-lib.sh""
+source "$(dirname "$0")/test-lib.sh"
 
 SECRETS_FILE="$SCRIPT_DIR/../secrets/staging.env"
 [ -f "$SECRETS_FILE" ] && source "$SECRETS_FILE"

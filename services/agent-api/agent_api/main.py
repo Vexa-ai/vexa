@@ -470,6 +470,17 @@ async def workspace_save(req: UserIdRequest):
     return {"status": "saved"}
 
 
+@app.post("/internal/webhooks/meeting-completed")
+async def webhook_meeting_completed(request: Request):
+    """Receive post-meeting webhook from meeting-api."""
+    body = await request.json()
+    event_type = body.get("event_type", "unknown")
+    event_id = body.get("event_id", "?")
+    meeting_id = body.get("data", {}).get("meeting", {}).get("id", "?")
+    logger.info(f"[Webhook] Received {event_type} event_id={event_id} meeting={meeting_id}")
+    return {"status": "received", "event_id": event_id}
+
+
 @app.get("/internal/workspace/status")
 async def workspace_status(user_id: str):
     """Check workspace and container status."""

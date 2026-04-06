@@ -480,7 +480,7 @@ tests/                         → 106 tests (85 pass, 21 skipped integration)
 - K8s backend never tested (not even with mocks)
 - No rate limiting on any endpoint
 - CORS defaults to `*`
-- **Process backend: zombie reaper doesn't detect dead processes (bug #20)** — `_pid_alive()` in `process.py:292` uses `os.kill(pid, 0)` which succeeds for zombie processes (Z/defunct state). After meeting bots exit, child processes remain as zombies because the process backend never calls `waitpid()`. This leaks PIDs and prevents proper cleanup. Docker and Kubernetes backends are unaffected (container runtime handles reaping). Fix: add `waitpid(WNOHANG)` to the reaper loop, or install a SIGCHLD handler.
+- **Process backend: zombie reaper doesn't detect dead processes (bug #20) — FIXED 2026-04-05** — `_pid_alive()` in `process.py:292` now reads `/proc/PID/status` to detect Z (zombie) and X (dead) states. Previously used only `os.kill(pid, 0)` which succeeds for zombies. The reaper already called `waitpid(WNOHANG)` but never reached that code for zombies because `_pid_alive()` returned True.
 
 ## License
 

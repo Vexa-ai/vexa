@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEST_ID="test/bot-lifecycle"
-source "$(dirname "$0")/test-lib.sh""
+source "$(dirname "$0")/test-lib.sh"
 
 GATEWAY_URL="${1:?Usage: bot-lifecycle.sh GATEWAY_URL API_TOKEN PLATFORM MEETING_ID [MEETING_URL]}"
 API_TOKEN="${2:?Missing API_TOKEN}"
@@ -14,8 +14,8 @@ MEETING_PLATFORM="${3:?Missing MEETING_PLATFORM}"
 NATIVE_MEETING_ID="${4:?Missing NATIVE_MEETING_ID}"
 MEETING_URL="${5:-}"
 
-# Build request body
-BODY="{\"platform\": \"$MEETING_PLATFORM\", \"native_meeting_id\": \"$NATIVE_MEETING_ID\", \"bot_name\": \"Vexa Test Bot\""
+# Build request body — no_one_joined_timeout must go inside automatic_leave (schema ignores top-level)
+BODY="{\"platform\": \"$MEETING_PLATFORM\", \"native_meeting_id\": \"$NATIVE_MEETING_ID\", \"bot_name\": \"Vexa Test Bot\", \"automatic_leave\": {\"no_one_joined_timeout\": 300000}"
 if [ -n "$MEETING_URL" ]; then
   BODY="$BODY, \"meeting_url\": \"$MEETING_URL\""
 fi

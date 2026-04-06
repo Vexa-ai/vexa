@@ -135,6 +135,7 @@ Stops all bots and validates clean shutdown:
 | Bot `active→failed` instead of `completed` | runtime-api idle_timeout kills container after 600s | Set meeting profile `idle_timeout: 0` — meeting-api manages lifecycle | Runtime-api doesn't know bot is active in a meeting — always set 0 for meeting profile |
 | `completion_reason` empty | Bot container crashed (OOM, SIGKILL) instead of clean exit | Check container exit code, shm_size, memory limits | Clean exit = `stopped`, crash = empty reason + `failed` status |
 | Bot timed out in waiting room | Human didn't admit fast enough, `no_one_joined_timeout` (default 120s) expired | Set `no_one_joined_timeout: 300000` (5 min) in bot creation payload. Poll status actively and log `awaiting_admission` so humans know to act. | Default 120s is too short for test flows where humans context-switch between terminal and meeting UI. Always poll and log status changes — silent sleeps waste time and hide the problem. |
+| `no_one_joined_timeout` ignored | Sent at top level of POST /bots body — MeetingCreate schema has `extra="ignore"` | Must use `automatic_leave: {no_one_joined_timeout: 300000}` nested object | 2026-04-05: Script sent 300000 at top level, bot received 120000 (system default). Fixed in 07-bot-lifecycle.sh. |
 
 ## Docs ownership
 

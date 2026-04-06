@@ -15,7 +15,7 @@ from .database import get_db
 from .schemas import Platform, MeetingStatus
 
 from .auth import get_user_and_token
-from .meetings import _find_active_meeting, get_redis
+from .meetings import _find_active_meeting, _find_meeting_any_status, get_redis
 
 logger = logging.getLogger("meeting_api.voice_agent")
 
@@ -140,7 +140,7 @@ async def bot_chat_read(
     _, current_user = auth_data
     redis_client = get_redis()
 
-    meeting = await _find_active_meeting(db, current_user.id, platform.value, native_meeting_id)
+    meeting = await _find_meeting_any_status(db, current_user.id, platform.value, native_meeting_id)
 
     messages = []
     if redis_client:

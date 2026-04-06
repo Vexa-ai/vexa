@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEST_ID="test/transcription-service"
-source "$(dirname "$0")/test-lib.sh""
+source "$(dirname "$0")/test-lib.sh"
 
 TRANSCRIPTION_URL="${1:-http://localhost:8085}"
 TRANSCRIPTION_TOKEN="${2:-}"

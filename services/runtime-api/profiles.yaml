@@ -5,8 +5,8 @@
 profiles:
   # Meeting bot — Playwright browser for meeting transcription
   meeting:
-    image: "${BOT_IMAGE:-vexaai/vexa-bot:latest}"
-    command: ["node", "dist/docker.js"]
+    image: "${BROWSER_IMAGE:-vexaai/vexa-bot:latest}"
+    command: ["/app/vexa-bot/entrypoint.sh"]
     working_dir: "/app/vexa-bot"
     resources:
       cpu_request: "500m"

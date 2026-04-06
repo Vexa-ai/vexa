@@ -70,6 +70,7 @@ eval $(./scripts/10-verify-post-meeting.sh GATEWAY_URL LISTENER_TOKEN MEETING_PL
 | speaker=None on deferred segments | No speaker_events in meeting.data | Check bot persisted speaker events at exit | Bots must persist SPEAKER_START/END events from Google Meet active speaker detection or Teams captions |
 | 502 from transcription service | webm format not supported | Ensure ffmpeg installed in meeting-api container | meeting-api converts webm→wav via ffmpeg before sending to Whisper |
 | Schema rejects dashboard fields | MeetingCreate extra="forbid" | Change to extra="ignore" in schemas.py:405 | Dashboard sends workspaceGitRepo/Token/Branch from localStorage |
+| Recording blob flushed but upload fails | leaveGoogleMeet/leaveMicrosoftTeams called without botConfig — leave callback crashes, may disrupt graceful shutdown | Fixed: index.ts now passes currentBotConfig to leave functions | 2026-04-05: "No bot config provided, cannot send leave callback". Leave function parameter was optional but never passed from performGracefulLeave. |
 | Duplicate utterances in transcript | GET /transcripts returns both realtime and deferred segments for same content | Fixed: POST /meetings/{id}/transcribe returns 409 if segments already exist | 2026-04-05: dashboard showed every utterance twice. Fix: meetings.py rejects deferred if transcription exists. |
 
 ## Dashboard API Patterns
