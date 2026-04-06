@@ -1,21 +1,21 @@
-{{- if .Values.apiGateway.enabled }}
+{{- if .Values.ttsService.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "vexa.componentName" (list . "api-gateway") }}
+  name: {{ include "vexa.componentName" (list . "tts-service") }}
   labels:
     {{- include "vexa.labels" . | nindent 4 }}
 spec:
-  replicas: {{ .Values.apiGateway.replicaCount }}
+  replicas: {{ .Values.ttsService.replicaCount }}
   selector:
     matchLabels:
       {{- include "vexa.selectorLabels" . | nindent 6 }}
-      app.kubernetes.io/component: api-gateway
+      app.kubernetes.io/component: tts-service
   template:
     metadata:
       labels:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
-        app.kubernetes.io/component: api-gateway
+        app.kubernetes.io/component: tts-service
       annotations:
         {{- toYaml .Values.global.podAnnotations | nindent 8 }}
     spec:
@@ -26,44 +26,43 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
-        - name: api-gateway
+        - name: tts-service
           securityContext:
             {{- toYaml .Values.global.securityContext | nindent 12 }}
-          image: "{{ .Values.apiGateway.image.repository }}:{{ .Values.apiGateway.image.tag }}"
+          image: "{{ .Values.ttsService.image.repository }}:{{ .Values.ttsService.image.tag }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http
-              containerPort: 8000
+              containerPort: 8002
           env:
-            - name: ADMIN_API_URL
-              value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
-            - name: MEETING_API_URL
-              value: "http://{{ include "vexa.componentName" (list . "meeting-api") }}:{{ .Values.meetingApi.service.port }}"
-            - name: TRANSCRIPTION_COLLECTOR_URL
-              value: "http://{{ include "vexa.componentName" (list . "meeting-api") }}:{{ .Values.meetingApi.service.port }}"
-            - name: MCP_URL
-              value: {{ default (printf "http://%s:%d" (include "vexa.componentName" (list . "mcp")) (.Values.mcp.service.port | int)) .Values.apiGateway.mcpUrl | quote }}
-            - name: REDIS_URL
-              value: {{ include "vexa.redisUrl" . | quote }}
-            - name: REDIS_HOST
-              value: {{ include "vexa.redisUrl" . | quote }}
-            {{- with .Values.apiGateway.extraEnv }}
+            - name: TTS_API_TOKEN
+              value: {{ .Values.ttsService.apiToken | default "" | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.ttsService.logLevel | default "INFO" | quote }}
+            {{- with .Values.ttsService.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          volumeMounts:
+            - name: voices
+              mountPath: /app/voices
           readinessProbe:
             httpGet:
               path: /docs
               port: http
-            initialDelaySeconds: 10
+            initialDelaySeconds: 15
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /docs
               port: http
-            initialDelaySeconds: 30
+            initialDelaySeconds: 45
             periodSeconds: 20
           resources:
-            {{- toYaml .Values.apiGateway.resources | nindent 12 }}
+            {{- toYaml .Values.ttsService.resources | nindent 12 }}
+      volumes:
+        - name: voices
+          persistentVolumeClaim:
+            claimName: {{ include "vexa.componentName" (list . "tts-voices") }}
       {{- with .Values.global.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

@@ -1,0 +1,17 @@
+{{- if .Values.ttsService.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vexa.componentName" (list . "tts-service") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.ttsService.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.ttsService.service.port }}
+      targetPort: http
+  selector:
+    {{- include "vexa.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: tts-service
+{{- end }}

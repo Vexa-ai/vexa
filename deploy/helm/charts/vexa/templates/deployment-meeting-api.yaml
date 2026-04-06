@@ -1,0 +1,146 @@
+{{- if .Values.meetingApi.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vexa.componentName" (list . "meeting-api") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.meetingApi.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "vexa.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: meeting-api
+  template:
+    metadata:
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: meeting-api
+      annotations:
+        {{- toYaml .Values.global.podAnnotations | nindent 8 }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: meeting-api
+          securityContext:
+            {{- toYaml .Values.global.securityContext | nindent 12 }}
+          image: "{{ .Values.meetingApi.image.repository }}:{{ .Values.meetingApi.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: DB_HOST
+              value: {{ include "vexa.dbHost" . | quote }}
+            - name: DB_PORT
+              value: {{ .Values.database.port | quote }}
+            - name: DB_NAME
+              {{- if .Values.postgres.enabled }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.credentialsSecretName | quote }}
+                  key: POSTGRES_DB
+              {{- else }}
+              value: {{ .Values.database.name | quote }}
+              {{- end }}
+            - name: DB_USER
+              {{- if .Values.postgres.enabled }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.credentialsSecretName | quote }}
+                  key: POSTGRES_USER
+              {{- else }}
+              value: {{ .Values.database.user | quote }}
+              {{- end }}
+            - name: DB_SSL_MODE
+              value: {{ .Values.database.sslMode | quote }}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.credentialsSecretName | quote }}
+                  key: POSTGRES_PASSWORD
+            - name: REDIS_URL
+              value: {{ include "vexa.redisUrl" . | quote }}
+            - name: REDIS_HOST
+              value: {{ include "vexa.redisHost" . | quote }}
+            - name: REDIS_PORT
+              value: {{ include "vexa.redisPort" . | quote }}
+            - name: ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: ADMIN_API_TOKEN
+            - name: RUNTIME_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "runtime-api") }}:{{ .Values.runtimeApi.service.port }}"
+            - name: MEETING_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "meeting-api") }}:{{ .Values.meetingApi.service.port }}"
+            - name: TRANSCRIPTION_COLLECTOR_URL
+              value: "http://{{ include "vexa.componentName" (list . "meeting-api") }}:{{ .Values.meetingApi.service.port }}"
+            - name: BOT_IMAGE_NAME
+              value: {{ .Values.meetingApi.botImageName | default "vexaai/vexa-bot:latest" | quote }}
+            - name: TTS_SERVICE_URL
+              value: "http://{{ include "vexa.componentName" (list . "tts-service") }}:{{ .Values.ttsService.service.port }}"
+            - name: TRANSCRIPTION_SERVICE_URL
+              value: {{ .Values.meetingApi.transcriptionServiceUrl | default "" | quote }}
+            - name: TRANSCRIPTION_SERVICE_TOKEN
+              value: {{ .Values.meetingApi.transcriptionServiceToken | default "" | quote }}
+            - name: STORAGE_BACKEND
+              value: {{ .Values.meetingApi.storageBackend | default "minio" | quote }}
+            {{- if .Values.minio.enabled }}
+            - name: MINIO_ENDPOINT
+              value: "{{ include "vexa.componentName" (list . "minio") }}:{{ .Values.minio.service.port }}"
+            - name: MINIO_ACCESS_KEY
+              value: {{ .Values.minio.accessKey | quote }}
+            - name: MINIO_SECRET_KEY
+              value: {{ .Values.minio.secretKey | quote }}
+            - name: MINIO_BUCKET
+              value: {{ .Values.minio.bucket | quote }}
+            {{- else }}
+            - name: MINIO_ENDPOINT
+              value: {{ .Values.meetingApi.minioEndpoint | default "" | quote }}
+            - name: MINIO_ACCESS_KEY
+              value: {{ .Values.meetingApi.minioAccessKey | default "" | quote }}
+            - name: MINIO_SECRET_KEY
+              value: {{ .Values.meetingApi.minioSecretKey | default "" | quote }}
+            - name: MINIO_BUCKET
+              value: {{ .Values.meetingApi.minioBucket | default "vexa" | quote }}
+            {{- end }}
+            - name: MINIO_SECURE
+              value: {{ .Values.meetingApi.minioSecure | default "false" | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.meetingApi.logLevel | default "INFO" | quote }}
+            {{- with .Values.meetingApi.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /docs
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /docs
+              port: http
+            initialDelaySeconds: 45
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.meetingApi.resources | nindent 12 }}
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

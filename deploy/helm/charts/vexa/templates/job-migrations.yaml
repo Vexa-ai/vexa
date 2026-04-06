@@ -24,7 +24,7 @@ spec:
         - name: migrations
           securityContext:
             {{- toYaml .Values.global.securityContext | nindent 12 }}
-          image: "{{ default .Values.transcriptionCollector.image.repository .Values.migrations.image.repository }}:{{ default .Values.transcriptionCollector.image.tag .Values.migrations.image.tag }}"
+          image: "{{ default .Values.meetingApi.image.repository .Values.migrations.image.repository }}:{{ default .Values.meetingApi.image.tag .Values.migrations.image.tag }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           command:
             - /bin/sh

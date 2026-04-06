@@ -1,11 +1,11 @@
 # Default values for the Vexa Helm chart.
 # This chart is designed for LOCAL development builds:
 #   - imagePullPolicy defaults to IfNotPresent
-#   - images default to DockerHub repos with :latest tag
+#   - images default to DockerHub repos with :dev tag
 #   - Override tags with specific YYMMDD-HHMM timestamps for traceability
 
 global:
-  imagePullPolicy: IfNotPresent
+  imagePullPolicy: Always
   imagePullSecrets: []
   clusterDomain: cluster.local
 
@@ -23,12 +23,13 @@ secrets:
   adminApiToken: "CHANGE_ME"   # Used by Admin API auth & MeetingToken signing across services
   transcriberApiKey: ""
 
-# Shared database config (used by admin-api, transcription-collector/meeting-api)
+# Shared database config (used by admin-api, meeting-api, runtime-api)
 database:
   host: ""          # auto-filled if postgres.enabled=true, else REQUIRED
   port: 5432
   name: "vexa"
-  user: "vexa"
+  user: "postgres"
+  password: "postgres"
   sslMode: "disable"
 
 # Shared redis config
@@ -44,7 +45,7 @@ apiGateway:
   replicaCount: 1
   image:
     repository: vexaai/api-gateway
-    tag: latest
+    tag: dev
   mcpUrl: ""
   service:
     type: ClusterIP
@@ -63,7 +64,7 @@ adminApi:
   replicaCount: 1
   image:
     repository: vexaai/admin-api
-    tag: latest
+    tag: dev
   service:
     type: ClusterIP
     port: 8001
@@ -81,10 +82,16 @@ meetingApi:
   replicaCount: 1
   image:
     repository: vexaai/meeting-api
-    tag: latest
+    tag: dev
   service:
     type: ClusterIP
     port: 8080
+  storageBackend: minio
+  botImageName: "vexaai/vexa-bot:latest"
+  transcriptionServiceUrl: ""
+  transcriptionServiceToken: ""
+  minioSecure: "false"
+  logLevel: "INFO"
   resources:
     requests:
       cpu: 200m
@@ -94,55 +101,45 @@ meetingApi:
       memory: 1Gi
   extraEnv: []
 
-transcriptionCollector:
+runtimeApi:
   enabled: true
   replicaCount: 1
   image:
-    repository: vexaai/transcription-collector
-    tag: latest
+    repository: vexaai/runtime-api
+    tag: dev
   service:
     type: ClusterIP
-    port: 8000
+    port: 8090
+  profilesPath: "/app/profiles.yaml"
+  logLevel: "INFO"
   resources:
-    requests:
-      cpu: 200m
-      memory: 512Mi
     limits:
-      cpu: 2000m
-      memory: 2Gi
-
-  config:
-    # Defaults from the Transcription Collector docs
-    redisStreamName: "transcription_segments"
-    redisSpeakerEventsStreamName: "speaker_events_relative"
-    redisConsumerGroup: "transcription_collectors"
-    backgroundTaskIntervalSeconds: 30
-    immutabilityThresholdSeconds: 60
-    redisSegmentTtlSeconds: 86400
-    redisSpeakerEventTtlSeconds: 86400
-
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
   extraEnv: []
 
-transcriptionService:
-  enabled: false
+ttsService:
+  enabled: true
   replicaCount: 1
   image:
-    repository: vexaai/transcription-service
-    tag: latest
+    repository: vexaai/tts-service
+    tag: dev
   service:
     type: ClusterIP
-    port: 8000
-  azure:
-    endpoint: ""
-    apiKey: ""
-    apiVersion: "2025-03-01-preview"
+    port: 8002
+  apiToken: ""
+  logLevel: "INFO"
+  persistence:
+    size: 5Gi
+    storageClassName: ""
   resources:
-    requests:
-      cpu: 200m
-      memory: 512Mi
     limits:
-      cpu: 2000m
-      memory: 2Gi
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
   extraEnv: []
 
 mcp:
@@ -150,7 +147,7 @@ mcp:
   replicaCount: 1
   image:
     repository: vexaai/mcp
-    tag: latest
+    tag: dev
   service:
     type: ClusterIP
     port: 18888
@@ -168,7 +165,7 @@ dashboard:
   replicaCount: 1
   image:
     repository: vexaai/dashboard
-    tag: latest
+    tag: dev
   service:
     type: ClusterIP
     port: 3000
@@ -211,7 +208,7 @@ migrations:
 
 postgres:
   enabled: true
-  image: postgres:15-alpine
+  image: postgres:17-alpine
   credentialsSecretName: postgres-credentials
   service:
     port: 5432
@@ -243,6 +240,27 @@ redis:
     limits:
       cpu: 1000m
       memory: 1Gi
+
+minio:
+  enabled: true
+  image:
+    repository: minio/minio
+    tag: latest
+  accessKey: vexa-access-key
+  secretKey: vexa-secret-key
+  bucket: vexa
+  persistence:
+    size: 10Gi
+    storageClassName: ""
+  service:
+    type: ClusterIP
+    port: 9000
+  resources:
+    limits:
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
 
 # ---------- Ingress (optional; exposes api-gateway by default) ----------
 ingress:

@@ -1,21 +1,21 @@
-{{- if .Values.transcriptionCollector.enabled }}
+{{- if .Values.runtimeApi.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "vexa.componentName" (list . "transcription-collector") }}
+  name: {{ include "vexa.componentName" (list . "runtime-api") }}
   labels:
     {{- include "vexa.labels" . | nindent 4 }}
 spec:
-  replicas: {{ .Values.transcriptionCollector.replicaCount }}
+  replicas: {{ .Values.runtimeApi.replicaCount }}
   selector:
     matchLabels:
       {{- include "vexa.selectorLabels" . | nindent 6 }}
-      app.kubernetes.io/component: transcription-collector
+      app.kubernetes.io/component: runtime-api
   template:
     metadata:
       labels:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
-        app.kubernetes.io/component: transcription-collector
+        app.kubernetes.io/component: runtime-api
       annotations:
         {{- toYaml .Values.global.podAnnotations | nindent 8 }}
     spec:
@@ -26,21 +26,17 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
-        - name: transcription-collector
+        - name: runtime-api
           securityContext:
             {{- toYaml .Values.global.securityContext | nindent 12 }}
-          image: "{{ .Values.transcriptionCollector.image.repository }}:{{ .Values.transcriptionCollector.image.tag }}"
+          image: "{{ .Values.runtimeApi.image.repository }}:{{ .Values.runtimeApi.image.tag }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http
-              containerPort: 8000
+              containerPort: 8090
           env:
             - name: REDIS_URL
               value: {{ include "vexa.redisUrl" . | quote }}
-            - name: REDIS_HOST
-              value: {{ include "vexa.redisHost" . | quote }}
-            - name: REDIS_PORT
-              value: {{ include "vexa.redisPort" . | quote }}
             - name: DB_HOST
               value: {{ include "vexa.dbHost" . | quote }}
             - name: DB_PORT
@@ -70,44 +66,48 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.postgres.credentialsSecretName | quote }}
                   key: POSTGRES_PASSWORD
-            - name: ADMIN_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.adminTokenSecretName" . }}
-                  key: ADMIN_API_TOKEN
-            # Transcription Collector stream processing configuration
-            - name: REDIS_STREAM_NAME
-              value: {{ .Values.transcriptionCollector.config.redisStreamName | quote }}
-            - name: REDIS_SPEAKER_EVENTS_STREAM_NAME
-              value: {{ .Values.transcriptionCollector.config.redisSpeakerEventsStreamName | quote }}
-            - name: REDIS_CONSUMER_GROUP
-              value: {{ .Values.transcriptionCollector.config.redisConsumerGroup | quote }}
-            - name: BACKGROUND_TASK_INTERVAL
-              value: {{ .Values.transcriptionCollector.config.backgroundTaskIntervalSeconds | quote }}
-            - name: IMMUTABILITY_THRESHOLD
-              value: {{ .Values.transcriptionCollector.config.immutabilityThresholdSeconds | quote }}
-            - name: REDIS_SEGMENT_TTL
-              value: {{ .Values.transcriptionCollector.config.redisSegmentTtlSeconds | quote }}
-            - name: REDIS_SPEAKER_EVENT_TTL
-              value: {{ .Values.transcriptionCollector.config.redisSpeakerEventTtlSeconds | quote }}
-
-            {{- with .Values.transcriptionCollector.extraEnv }}
+            {{- if .Values.minio.enabled }}
+            - name: MINIO_ENDPOINT
+              value: "{{ include "vexa.componentName" (list . "minio") }}:{{ .Values.minio.service.port }}"
+            - name: MINIO_ACCESS_KEY
+              value: {{ .Values.minio.accessKey | quote }}
+            - name: MINIO_SECRET_KEY
+              value: {{ .Values.minio.secretKey | quote }}
+            - name: MINIO_BUCKET
+              value: {{ .Values.minio.bucket | quote }}
+            {{- else }}
+            - name: MINIO_ENDPOINT
+              value: {{ .Values.runtimeApi.minioEndpoint | default "" | quote }}
+            - name: MINIO_ACCESS_KEY
+              value: {{ .Values.runtimeApi.minioAccessKey | default "" | quote }}
+            - name: MINIO_SECRET_KEY
+              value: {{ .Values.runtimeApi.minioSecretKey | default "" | quote }}
+            - name: MINIO_BUCKET
+              value: {{ .Values.runtimeApi.minioBucket | default "vexa" | quote }}
+            {{- end }}
+            - name: ORCHESTRATOR_BACKEND
+              value: {{ .Values.runtimeApi.orchestrator | default "process" | quote }}
+            - name: PROFILES_PATH
+              value: {{ .Values.runtimeApi.profilesPath | default "/app/profiles.yaml" | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.runtimeApi.logLevel | default "INFO" | quote }}
+            {{- with .Values.runtimeApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           readinessProbe:
             httpGet:
               path: /docs
               port: http
-            initialDelaySeconds: 15
+            initialDelaySeconds: 10
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /docs
               port: http
-            initialDelaySeconds: 45
+            initialDelaySeconds: 30
             periodSeconds: 20
           resources:
-            {{- toYaml .Values.transcriptionCollector.resources | nindent 12 }}
+            {{- toYaml .Values.runtimeApi.resources | nindent 12 }}
       {{- with .Values.global.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
