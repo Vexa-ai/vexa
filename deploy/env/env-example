@@ -58,5 +58,9 @@ MINIO_SECURE=false
 # TTS uses Piper (local, no API key needed)
 # Voice models auto-download from HuggingFace on first use
 
+# Agent API — Claude credentials (optional, for agent-api service)
+CLAUDE_CREDENTIALS_PATH=
+CLAUDE_JSON_PATH=
+
 # Billing hooks (optional — for hosted service)
 # POST_MEETING_HOOKS=https://your-billing-webhook

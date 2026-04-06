@@ -1,4 +1,4 @@
-.PHONY: all all-build env build build-bot-image up down ps logs test init-db restore-db check_docker publish promote-staging promote-latest help-tags setup-api-key
+.PHONY: all all-build env build build-bot-image build-transcript-rendering up down ps logs test init-db restore-db check_docker publish promote-staging promote-latest help-tags setup-api-key
 
 # --- Paths ---
 ROOT := $(shell git rev-parse --show-toplevel)
@@ -91,7 +91,11 @@ build-lite: check_docker
 	@echo "Building $(DOCKERHUB_USER)/vexa-lite:$(IMAGE_TAG)..."
 	docker build --platform linux/amd64 -t $(DOCKERHUB_USER)/vexa-lite:$(IMAGE_TAG) -f $(ROOT)/deploy/lite/Dockerfile.lite $(ROOT)
 
-build: check_docker build-bot-image build-lite
+build-transcript-rendering:
+	@echo "Building transcript-rendering package..."
+	@cd $(ROOT)/packages/transcript-rendering && npm install && npm run build
+
+build: check_docker build-bot-image build-transcript-rendering build-lite
 	@echo "Building all images with tag: $(IMAGE_TAG)"
 	$(COMPOSE_CMD) build
 	@echo "$(IMAGE_TAG)" > $(LAST_TAG_FILE)
@@ -108,6 +112,10 @@ up: check_docker
 	else \
 		export IMAGE_TAG=dev; \
 		echo "No .last-tag found — pulling pre-built images (IMAGE_TAG=dev)"; \
+	fi; \
+	if [ -z "$${DOCKER_GID}" ]; then \
+		export DOCKER_GID=$$(getent group docker | cut -d: -f3); \
+		echo "Auto-detected DOCKER_GID=$$DOCKER_GID"; \
 	fi; \
 	if ! docker network ls | grep -q "vexa-network"; then \
 		docker network create vexa-network || true; \
@@ -152,6 +160,11 @@ setup-api-key: check_docker
 			if [ -n "$$TOKEN" ]; then \
 				echo "VEXA_API_KEY=$$TOKEN" >> $(ENV_FILE); \
 				echo "Created VEXA_API_KEY for user $$USER_ID (dashboard WS auth)."; \
+				if [ -f $(LAST_TAG_FILE) ]; then \
+					export IMAGE_TAG=$$(cat $(LAST_TAG_FILE)); \
+				else \
+					export IMAGE_TAG=dev; \
+				fi; \
 				$(COMPOSE_CMD) up -d dashboard; \
 			else \
 				echo "WARNING: Could not create API key for user $$USER_ID. Dashboard WS will require login."; \

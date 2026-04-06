@@ -11,10 +11,12 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+!packages/transcript-rendering/dist/
 downloads/
 eggs/
 .eggs/
 lib/
+!services/dashboard/src/lib/
 lib64/
 parts/
 sdist/
@@ -147,6 +149,7 @@ data/
 results/
 test_data/
 *.wav
+!tests/testdata/test-speech-en.wav
 *.webm
 *.mp4
 *.txt

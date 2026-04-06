@@ -180,7 +180,7 @@ docker run -d \
 
 ```bash
 git clone https://github.com/Vexa-ai/vexa.git
-cd vexa
+cd vexa/deploy/compose
 make all
 ```
 
