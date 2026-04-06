@@ -74,6 +74,13 @@ env:
 			echo ".env is up to date."; \
 		fi; \
 	fi
+	@if ! grep -qE '^DOCKER_GID=' $(ENV_FILE) 2>/dev/null; then \
+		GID=$$(getent group docker 2>/dev/null | cut -d: -f3); \
+		if [ -n "$$GID" ]; then \
+			echo "DOCKER_GID=$$GID" >> $(ENV_FILE); \
+			echo "Auto-detected DOCKER_GID=$$GID (written to .env)"; \
+		fi; \
+	fi
 
 # --- Docker check ---
 check_docker:
@@ -112,10 +119,6 @@ up: check_docker
 	else \
 		export IMAGE_TAG=dev; \
 		echo "No .last-tag found — pulling pre-built images (IMAGE_TAG=dev)"; \
-	fi; \
-	if [ -z "$${DOCKER_GID}" ]; then \
-		export DOCKER_GID=$$(getent group docker | cut -d: -f3); \
-		echo "Auto-detected DOCKER_GID=$$DOCKER_GID"; \
 	fi; \
 	if ! docker network ls | grep -q "vexa-network"; then \
 		docker network create vexa-network || true; \
