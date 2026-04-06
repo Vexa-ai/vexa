@@ -108,12 +108,12 @@ up: check_docker
 	else \
 		export IMAGE_TAG=dev; \
 		echo "No .last-tag found — pulling pre-built images (IMAGE_TAG=dev)"; \
-	fi
-	@if ! docker network ls | grep -q "vexa-network"; then \
+	fi; \
+	if ! docker network ls | grep -q "vexa-network"; then \
 		docker network create vexa-network || true; \
-	fi
-	$(COMPOSE_CMD) up -d
-	@if grep -qE '^LOCAL_TRANSCRIPTION=true' $(ENV_FILE) 2>/dev/null; then \
+	fi; \
+	$(COMPOSE_CMD) up -d; \
+	if grep -qE '^LOCAL_TRANSCRIPTION=true' $(ENV_FILE) 2>/dev/null; then \
 		echo "LOCAL_TRANSCRIPTION=true — starting transcription-service..."; \
 		cd $(ROOT)/services/transcription-service && docker compose up -d; \
 	fi
