@@ -49,7 +49,7 @@ make init-db && make setup-api-key && make test
 | Target                 | What it does                                         |
 | ---------------------- | ---------------------------------------------------- |
 | `make all`             | Full setup: env → build → up → init-db → api-key → test |
-| `make env`             | Create .env from template (if not exists)            |
+| `make env`             | Create .env from template, or patch missing vars     |
 | `make build`           | Build all images with immutable timestamp tag        |
 | `make up`              | Start services using last-built tag                  |
 | `make down`            | Stop all services                                    |

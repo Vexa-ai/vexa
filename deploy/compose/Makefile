@@ -57,7 +57,19 @@ env:
 		echo "  - Set TRANSCRIPTION_SERVICE_URL to your transcription endpoint"; \
 		echo "  - Set TRANSCRIPTION_SERVICE_TOKEN"; \
 	else \
-		echo ".env already exists. Delete it to regenerate from env-example."; \
+		added=0; \
+		while IFS= read -r line; do \
+			key=$$(echo "$$line" | sed -n 's/^#*[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p'); \
+			if [ -n "$$key" ] && ! grep -qE "^#*\s*$$key=" $(ENV_FILE); then \
+				echo "$$line" >> $(ENV_FILE); \
+				added=$$((added+1)); \
+			fi; \
+		done < $(ENV_EXAMPLE); \
+		if [ $$added -gt 0 ]; then \
+			echo ".env patched: $$added new variable(s) added from env-example."; \
+		else \
+			echo ".env is up to date."; \
+		fi; \
 	fi
 
 # --- Docker check ---

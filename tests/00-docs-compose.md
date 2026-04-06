@@ -55,21 +55,37 @@ Any uncovered README section is a gap — add a test section before proceeding.
 
 ## Phase 1 — Execute each section
 
-### S1. Quick start — fresh clone
+### S1. Quick start
 
-Start from a clean state: no running stack, no `.env`, no `.last-tag`.
+Stop any running stack and clear the build tag.
 
 ```bash
-make down 2>/dev/null; rm -f .env deploy/compose/.last-tag
+make down 2>/dev/null; rm -f deploy/compose/.last-tag
 ```
 
-Follow the Quick start section verbatim:
+**S1a. Upgrade path (`.env` exists):**
 
 1. Run `make all`
-2. Verify it completes the full chain: env → build → up → init-db → setup-api-key → test
-3. Verify the final output shows all services healthy
+2. Verify `make env` says ".env patched: N new variable(s)" or ".env is up to date" — never overwrites existing values
+3. Verify `init-db` runs idempotent schema sync (safe on existing data)
+4. Verify `setup-api-key` skips if `VEXA_API_KEY` is already set
+5. Verify `make test` passes
 
-Every step must succeed without manual intervention (except editing `.env` for TRANSCRIPTION_SERVICE_URL as documented).
+**S1b. Fresh clone path (no `.env`):**
+
+> **Destructive step** — only run this if you can afford to lose your current `.env`.
+> Back up first: `cp .env .env.backup`
+
+```bash
+rm -f .env
+```
+
+1. Run `make all`
+2. Verify `make env` creates `.env` from env-example
+3. Edit `.env` — set `TRANSCRIPTION_SERVICE_URL`
+4. Verify the full chain completes: env → build → up → init-db → setup-api-key → test
+5. Verify the final output shows all services healthy
+6. Restore your config: `cp .env.backup .env`
 
 ### S2. Verify "What" claims
 
