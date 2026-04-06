@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEST_ID="test/dashboard-validation"
-source "$(dirname "$0")/test-lib.sh""
+source "$(dirname "$0")/test-lib.sh"
 
 CONTAINER="${1:-}"
 
@@ -16,7 +16,7 @@ if [ -z "$CONTAINER" ]; then
     CONTAINER="vexa"
     DEPLOY_MODE="lite"
   else
-    CONTAINER="vexa-staging-dashboard-1"
+    CONTAINER="vexa-dashboard-1"
     DEPLOY_MODE="compose"
   fi
 fi
@@ -216,14 +216,15 @@ if [ -n "$TEST_TOKEN" ]; then
     --method=PUT \
     '$DASHBOARD_URL_INTERNAL/api/webhooks/config' 2>&1 | grep 'HTTP/' | tail -1 | grep -o '[0-9][0-9][0-9]'" 2>/dev/null || echo "000")
 
-  # wget may not support --method=PUT, fall back to POST-style
-  if [ "$WH_SAVE_HTTP" = "000" ]; then
-    WH_SAVE_HTTP=$(docker exec "$CONTAINER" sh -c "wget -q -S -O /dev/null \
-      --header='Content-Type: application/json' \
-      --header='Cookie: $COOKIE_HEADER' \
-      --header='X-HTTP-Method-Override: PUT' \
-      --post-data='{\"endpoint_url\":\"https://httpbin.org/post\",\"events\":{\"meeting.completed\":true}}' \
-      '$DASHBOARD_URL_INTERNAL/api/webhooks/config' 2>&1 | grep 'HTTP/' | tail -1 | grep -o '[0-9][0-9][0-9]'" 2>/dev/null || echo "000")
+  # wget may not support --method=PUT, fall back to node fetch
+  if [ "$WH_SAVE_HTTP" = "000" ] || [ "$WH_SAVE_HTTP" = "405" ]; then
+    WH_SAVE_HTTP=$(docker exec "$CONTAINER" node -e "
+      fetch('$DASHBOARD_URL_INTERNAL/api/webhooks/config', {
+        method: 'PUT',
+        headers: {'Content-Type':'application/json','Cookie':'$COOKIE_HEADER'},
+        body: JSON.stringify({endpoint_url:'https://httpbin.org/post',events:{'meeting.completed':true}})
+      }).then(r => console.log(r.status)).catch(() => console.log('000'))
+    " 2>/dev/null || echo "000")
   fi
 
   if [ "$WH_SAVE_HTTP" = "200" ]; then
@@ -341,10 +342,12 @@ if [ -n "$TEST_TOKEN" ]; then
 
   # DELETE /api/profile/keys/:id — revoke the test key we just created
   if [ -n "$KEY_ID" ]; then
-    KEY_DEL_HTTP=$(docker exec "$CONTAINER" sh -c "wget -q -S -O /dev/null \
-      --header='Cookie: $COOKIE_HEADER' \
-      --method=DELETE \
-      '$DASHBOARD_URL_INTERNAL/api/profile/keys/$KEY_ID' 2>&1 | grep 'HTTP/' | tail -1 | grep -o '[0-9][0-9][0-9]'" 2>/dev/null || echo "000")
+    KEY_DEL_HTTP=$(docker exec "$CONTAINER" node -e "
+      fetch('$DASHBOARD_URL_INTERNAL/api/profile/keys/$KEY_ID', {
+        method: 'DELETE',
+        headers: {'Cookie':'$COOKIE_HEADER'}
+      }).then(r => console.log(r.status)).catch(() => console.log('000'))
+    " 2>/dev/null || echo "000")
 
     if [ "$KEY_DEL_HTTP" = "200" ]; then
       log_pass "DELETE /api/profile/keys/$KEY_ID → key revoked"

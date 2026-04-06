@@ -36,7 +36,7 @@ Docker network. Host ports are mapped via `.env`.
 ### 1. Fresh build + start (always rebuild — G9)
 
 ```bash
-cd deploy/compose && make build && make up && make migrate-or-init
+cd deploy/compose && make build && make up && make init-db
 ```
 
 Or from scratch (creates .env if missing):
@@ -46,6 +46,10 @@ cd deploy/compose && make all
 
 `make build` generates an immutable timestamp tag (`YYMMDD-HHMM`), saves it
 to `.last-tag`, and `make up` uses it. No manual tag management needed.
+
+`make init-db` runs idempotent schema sync via `schema_sync.ensure_schema()` —
+creates missing tables/columns/indexes, never drops anything. No Alembic, no
+migration versions. Safe to run on empty DB, main-branch DB, or current DB.
 
 **Why rebuild every time:** Stale images cause false failures. The browser_session
 mode, bot config schema, and API contracts change frequently. A 3-day-old image

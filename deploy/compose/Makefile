@@ -1,4 +1,4 @@
-.PHONY: all env build build-bot-image up down ps logs test migrate migrate-or-init makemigrations init-db stamp-db migration-status check_docker publish promote-staging promote-latest help-tags setup-api-key
+.PHONY: all env build build-bot-image up down ps logs test init-db check_docker publish promote-staging promote-latest help-tags setup-api-key
 
 # --- Paths ---
 ROOT := $(shell git rev-parse --show-toplevel)
@@ -30,7 +30,7 @@ COMPOSE_CMD = docker compose --env-file $(ENV_FILE) -f $(COMPOSE_FILE)
 # Main targets
 # ============================================================================
 
-all: env build up migrate-or-init setup-api-key test
+all: env build up init-db setup-api-key test
 	@echo "Vexa is running. API: http://localhost:$${API_GATEWAY_HOST_PORT:-8056}/docs"
 
 help-tags:
@@ -225,10 +225,10 @@ promote-latest: check_docker
 	echo "Done. :latest now points to $$TAG_TO_USE"
 
 # ============================================================================
-# Database migrations
+# Database schema sync (idempotent — no Alembic, no migration versions)
 # ============================================================================
 
-migrate-or-init: check_docker
+init-db: check_docker
 	@set -e; \
 	if [ "$(REMOTE_DB)" != "true" ]; then \
 		if ! $(COMPOSE_CMD) ps -q postgres | grep -q .; then \
@@ -243,55 +243,6 @@ migrate-or-init: check_docker
 			sleep 5; count=$$((count+1)); \
 		done; \
 	fi; \
-	$(COMPOSE_CMD) exec -T meeting-api python /app/libs/shared-models/fix_alembic_version.py --repair-stale; \
-	HAS_ALEMBIC=$$($(COMPOSE_CMD) exec -T postgres psql -U $${DB_USER:-postgres} -d $${DB_NAME:-vexa} -t -c "SELECT 1 FROM information_schema.tables WHERE table_name = 'alembic_version';" 2>/dev/null | tr -d '[:space:]' || echo ""); \
-	if [ "$$HAS_ALEMBIC" = "1" ]; then \
-		$(MAKE) migrate; \
-	else \
-		$(COMPOSE_CMD) exec -T meeting-api python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db())"; \
-		$(COMPOSE_CMD) exec -T meeting-api python /app/libs/shared-models/fix_alembic_version.py --create-if-missing; \
-	fi
-
-migrate: check_docker
-	@set -e; \
-	if [ "$(REMOTE_DB)" != "true" ]; then \
-		DB_USER=$$(grep -E '^DB_USER=' $(ENV_FILE) 2>/dev/null | cut -d= -f2 || echo "postgres"); \
-		DB_NAME=$$(grep -E '^DB_NAME=' $(ENV_FILE) 2>/dev/null | cut -d= -f2 || echo "vexa"); \
-		DB_USER=$${DB_USER:-postgres}; DB_NAME=$${DB_NAME:-vexa}; \
-		if ! $(COMPOSE_CMD) ps postgres | grep -q "Up"; then \
-			echo "ERROR: postgres not running. Run 'make up' first."; exit 1; \
-		fi; \
-	fi; \
-	$(COMPOSE_CMD) exec -T meeting-api python /app/libs/shared-models/fix_alembic_version.py --repair-stale; \
-	current_version=$$($(COMPOSE_CMD) exec -T meeting-api alembic -c /app/alembic.ini current 2>/dev/null | grep -E '^[a-f0-9]{12}' | head -1 || echo ""); \
-	if [ "$$current_version" = "dc59a1c03d1f" ]; then \
-		if $(COMPOSE_CMD) exec -T postgres psql -U $${DB_USER:-postgres} -d $${DB_NAME:-vexa} -t -c "SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'data';" | grep -q 1; then \
-			$(COMPOSE_CMD) exec -T meeting-api alembic -c /app/alembic.ini stamp 5befe308fa8b; \
-		fi; \
-	fi; \
-	$(COMPOSE_CMD) exec -T meeting-api alembic -c /app/alembic.ini upgrade head
-
-makemigrations: check_docker
-	@if [ -z "$(M)" ]; then echo "Usage: make makemigrations M=\"your message\""; exit 1; fi
-	$(COMPOSE_CMD) exec -T meeting-api alembic -c /app/alembic.ini revision --autogenerate -m "$(M)"
-
-init-db: check_docker
-	$(COMPOSE_CMD) run --rm meeting-api python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db())"
-	$(COMPOSE_CMD) run --rm meeting-api alembic -c /app/alembic.ini stamp head
-
-stamp-db: check_docker
-	@if [ "$(REMOTE_DB)" != "true" ]; then \
-		if ! $(COMPOSE_CMD) ps postgres | grep -q "Up"; then \
-			echo "ERROR: postgres not running. Run 'make up' first."; exit 1; \
-		fi; \
-	fi
-	$(COMPOSE_CMD) exec -T meeting-api alembic -c /app/alembic.ini stamp head
-
-migration-status: check_docker
-	@if [ "$(REMOTE_DB)" != "true" ]; then \
-		if ! $(COMPOSE_CMD) ps postgres | grep -q "Up"; then \
-			echo "ERROR: postgres not running. Run 'make up' first."; exit 1; \
-		fi; \
-	fi
-	$(COMPOSE_CMD) exec -T meeting-api alembic -c /app/alembic.ini current
-	$(COMPOSE_CMD) exec -T meeting-api alembic -c /app/alembic.ini history --verbose
+	echo "Running idempotent schema sync..."; \
+	$(COMPOSE_CMD) exec -T meeting-api python -c "import asyncio; from meeting_api.database import init_db; asyncio.run(init_db())"; \
+	echo "Schema sync complete."

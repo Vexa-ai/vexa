@@ -31,25 +31,8 @@ spec:
             - -c
             - |
               set -e
-              echo "Checking database state..."
-              state=$(python /app/libs/shared-models/check_db_state.py 2>/dev/null || echo fresh)
-              echo "Database state: ${state}"
-              case "${state}" in
-                alembic)
-                  echo "Alembic-managed database detected, running migrations..."
-                  alembic -c /app/alembic.ini upgrade head || echo "WARNING: Migration failed, database may already be up to date"
-                  ;;
-                legacy)
-                  echo "Legacy database detected, stamping and migrating..."
-                  alembic -c /app/alembic.ini stamp base || true
-                  alembic -c /app/alembic.ini upgrade head || echo "WARNING: Migration failed"
-                  ;;
-                fresh|*)
-                  echo "Fresh database detected, initializing schema..."
-                  python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db()); print('Database schema initialized')"
-                  alembic -c /app/alembic.ini stamp head 2>/dev/null || true
-                  ;;
-              esac
+              echo "Running idempotent schema sync..."
+              python -c "import asyncio; from meeting_api.database import init_db; asyncio.run(init_db()); print('Schema sync complete.')"
           env:
             - name: DB_HOST
               value: {{ include "vexa.dbHost" . | quote }}
