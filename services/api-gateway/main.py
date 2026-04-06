@@ -466,6 +466,15 @@ async def get_bots_status_proxy(request: Request):
     return await forward_request(app.state.http_client, "GET", url, request)
 # --- END Route for GET /bots/status ---
 
+@app.get("/bots/{meeting_id}",
+         tags=["Bot Management"],
+         summary="Get a single meeting/bot by database ID",
+         dependencies=[Depends(api_key_scheme)])
+async def get_bot_by_id_proxy(meeting_id: int, request: Request):
+    """Forward to meeting-api GET /bots/{meeting_id}."""
+    url = f"{MEETING_API_URL}/bots/{meeting_id}"
+    return await forward_request(app.state.http_client, "GET", url, request)
+
 # --- Voice Agent Interaction Routes (proxy to Bot Manager) ---
 
 @app.post("/bots/{platform}/{native_meeting_id}/speak",

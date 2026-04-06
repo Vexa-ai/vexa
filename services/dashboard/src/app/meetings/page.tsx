@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { Plus, RefreshCw, CreditCard, Video, Loader2, Search, Monitor } from "lucide-react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
@@ -77,13 +77,26 @@ function formatDate(dateStr: string): string {
 export default function MeetingsPage() {
   usePendingMeeting();
   const router = useRouter();
-  const { meetings, isLoadingMeetings, fetchMeetings, error, subscriptionRequired } = useMeetingsStore();
+  const { meetings, isLoadingMeetings, isLoadingMore, hasMore, fetchMeetings, fetchMoreMeetings, error, subscriptionRequired } = useMeetingsStore();
   const openJoinModal = useJoinModalStore((state) => state.openModal);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [platformFilter, setPlatformFilter] = useState<Platform | "all">("all");
   const [statusFilter, setStatusFilter] = useState<MeetingStatus | "all">("all");
   const [isCreatingBrowser, setIsCreatingBrowser] = useState(false);
+
+  // Debounced server-side search
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>(null);
+  const filtersRef = useRef({ search: "", status: "" as string, platform: "" as string });
+
+  const applyFilters = useCallback((search: string, status: string, platform: string) => {
+    filtersRef.current = { search, status, platform };
+    fetchMeetings({
+      search: search || undefined,
+      status: status === "all" ? undefined : status,
+      platform: platform === "all" ? undefined : platform,
+    });
+  }, [fetchMeetings]);
 
   async function handleStartBrowserSession() {
     setIsCreatingBrowser(true);
@@ -116,25 +129,48 @@ export default function MeetingsPage() {
     }
   }
 
+  // Initial load
   useEffect(() => {
     fetchMeetings();
   }, [fetchMeetings]);
 
-  const filteredMeetings = useMemo(() => {
-    return meetings.filter((meeting) => {
-      if (platformFilter !== "all" && meeting.platform !== platformFilter) return false;
-      if (statusFilter !== "all" && meeting.status !== statusFilter) return false;
-      if (searchQuery.trim()) {
-        const q = searchQuery.trim().toLowerCase();
-        const name = (meeting.data?.name || meeting.data?.title || "").toLowerCase();
-        const nativeId = (meeting.platform_specific_id || "").toLowerCase();
-        if (!name.includes(q) && !nativeId.includes(q)) return false;
-      }
-      return true;
-    });
-  }, [meetings, platformFilter, statusFilter, searchQuery]);
+  // Re-fetch when dropdown filters change
+  useEffect(() => {
+    applyFilters(searchQuery, statusFilter, platformFilter);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter, platformFilter]);
 
-  const handleRefresh = () => fetchMeetings();
+  // Debounce search input (300ms)
+  const handleSearchChange = useCallback((value: string) => {
+    setSearchQuery(value);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      applyFilters(value, statusFilter, platformFilter);
+    }, 300);
+  }, [applyFilters, statusFilter, platformFilter]);
+
+  const filteredMeetings = meetings;
+
+  // Infinite scroll
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const handleLoadMore = useCallback(() => {
+    if (hasMore && !isLoadingMore && !isLoadingMeetings) {
+      fetchMoreMeetings();
+    }
+  }, [hasMore, isLoadingMore, isLoadingMeetings, fetchMoreMeetings]);
+
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) handleLoadMore(); },
+      { rootMargin: "200px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [handleLoadMore]);
+
+  const handleRefresh = () => applyFilters(searchQuery, statusFilter, platformFilter);
 
   const handleSubscribe = () => {
     window.open(`${getWebappUrl()}/pricing`, "_blank");
@@ -195,7 +231,7 @@ export default function MeetingsPage() {
             <Input
               placeholder="Search meetings..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => handleSearchChange(e.target.value)}
               className="w-full pl-8"
             />
           </div>
@@ -287,6 +323,11 @@ export default function MeetingsPage() {
               </tbody>
             </table>
           </div>
+          {(hasMore || isLoadingMore) && (
+            <div ref={sentinelRef} className="flex justify-center py-4">
+              {isLoadingMore && <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />}
+            </div>
+          )}
         </Card>
       )}
 

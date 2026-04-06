@@ -28,6 +28,10 @@ interface MeetingsState {
   _confirmed: Map<string, TranscriptSegment>;
   _pendingBySpeaker: Map<string, TranscriptSegment[]>;
 
+  // Pagination
+  hasMore: boolean;
+  isLoadingMore: boolean;
+
   // Loading states
   isLoadingMeetings: boolean;
   isLoadingMeeting: boolean;
@@ -38,8 +42,12 @@ interface MeetingsState {
   error: string | null;
   subscriptionRequired: boolean;
 
+  // Filters (server-side)
+  _filters: { search?: string; status?: string; platform?: string };
+
   // Actions
-  fetchMeetings: () => Promise<void>;
+  fetchMeetings: (filters?: { search?: string; status?: string; platform?: string }) => Promise<void>;
+  fetchMoreMeetings: () => Promise<void>;
   fetchMeeting: (id: string, options?: { silent?: boolean }) => Promise<void>;
   refreshMeeting: (id: string) => Promise<void>;
   fetchTranscripts: (platform: Platform, nativeId: string, meetingId?: string) => Promise<void>;
@@ -116,6 +124,9 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
   chatMessages: [],
   _confirmed: new Map(),
   _pendingBySpeaker: new Map(),
+  hasMore: false,
+  isLoadingMore: false,
+  _filters: {},
   isLoadingMeetings: false,
   isLoadingMeeting: false,
   isLoadingTranscripts: false,
@@ -123,19 +134,19 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
   error: null,
   subscriptionRequired: false,
 
-  // Fetch all meetings
-  fetchMeetings: async () => {
-    set({ isLoadingMeetings: true, error: null });
+  // Fetch first page of meetings (with optional server-side filters)
+  fetchMeetings: async (filters?: { search?: string; status?: string; platform?: string }) => {
+    const activeFilters = filters ?? get()._filters;
+    set({ isLoadingMeetings: true, error: null, _filters: activeFilters });
     try {
-      const meetings = (await vexaAPI.getMeetings()).filter((m) => !isHiddenDeletedMeeting(m));
-      // Sort by created_at descending (most recent first)
+      const result = await vexaAPI.getMeetings({ limit: 50, offset: 0, ...activeFilters });
+      const meetings = result.meetings.filter((m) => !isHiddenDeletedMeeting(m));
       meetings.sort((a, b) =>
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
       );
-      set({ meetings, isLoadingMeetings: false, subscriptionRequired: false });
+      set({ meetings, hasMore: result.has_more, isLoadingMeetings: false, subscriptionRequired: false });
     } catch (error) {
       if (error instanceof VexaAPIError && error.status === 402) {
-        // Subscription required — keep any cached meetings but flag the state
         set({
           subscriptionRequired: true,
           isLoadingMeetings: false,
@@ -150,34 +161,53 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
     }
   },
 
-  // Fetch single meeting (from list since API doesn't support /meetings/{id})
+  // Fetch next page and append
+  fetchMoreMeetings: async () => {
+    const { meetings, hasMore, isLoadingMore, _filters } = get();
+    if (!hasMore || isLoadingMore) return;
+    set({ isLoadingMore: true });
+    try {
+      const result = await vexaAPI.getMeetings({ limit: 50, offset: meetings.length, ..._filters });
+      const newMeetings = result.meetings.filter((m) => !isHiddenDeletedMeeting(m));
+      const merged = [...meetings, ...newMeetings];
+      merged.sort((a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+      set({ meetings: merged, hasMore: result.has_more, isLoadingMore: false });
+    } catch (error) {
+      set({ isLoadingMore: false });
+      console.error("Failed to load more meetings:", error);
+    }
+  },
+
+  // Fetch single meeting — checks loaded list first, then fetches by ID
   // Use silent: true to avoid showing loading state (for polling/refresh)
   fetchMeeting: async (id: string, options?: { silent?: boolean }) => {
     const { silent = false } = options || {};
 
-    // Only show loading state on initial load (when no currentMeeting exists)
     if (!silent) {
       set({ isLoadingMeeting: true, error: null });
     }
 
     try {
-      // Always fetch fresh data from the API to ensure we have the latest meeting state
-      const meetings = (await vexaAPI.getMeetings()).filter((m) => !isHiddenDeletedMeeting(m));
-      meetings.sort((a, b) =>
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      );
-      set({ meetings });
+      // Check already-loaded meetings first (may include paginated results)
+      const { meetings: existing } = get();
+      let meeting = existing.find((m) => m.id.toString() === id);
 
-      const meeting = meetings.find((m) => m.id.toString() === id);
-
-      if (meeting) {
-        set({ currentMeeting: meeting, isLoadingMeeting: false });
-      } else {
-        set({
-          error: `Meeting with ID ${id} not found`,
-          isLoadingMeeting: false
-        });
+      if (!meeting) {
+        // Not in local list — fetch directly by ID
+        try {
+          meeting = await vexaAPI.getMeeting(id);
+        } catch (e) {
+          if (e instanceof VexaAPIError && e.status === 404) {
+            set({ error: `Meeting with ID ${id} not found`, isLoadingMeeting: false });
+            return;
+          }
+          throw e;
+        }
       }
+
+      set({ currentMeeting: meeting, isLoadingMeeting: false });
     } catch (error) {
       if (error instanceof VexaAPIError && error.status === 402) {
         set({ subscriptionRequired: true, isLoadingMeeting: false, error: null });
@@ -193,21 +223,16 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
   // Silently refresh meeting data (for polling without UI flicker)
   refreshMeeting: async (id: string) => {
     try {
-      const meetings = (await vexaAPI.getMeetings()).filter((m) => !isHiddenDeletedMeeting(m));
-      meetings.sort((a, b) =>
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      );
-
-      const meeting = meetings.find((m) => m.id.toString() === id);
-
+      const meeting = await vexaAPI.getMeeting(id);
       if (meeting) {
-        // Only update if something changed
-        const { currentMeeting } = get();
+        const { currentMeeting, meetings } = get();
         if (currentMeeting?.status !== meeting.status ||
             currentMeeting?.updated_at !== meeting.updated_at) {
-          set({ meetings, currentMeeting: meeting });
-        } else {
-          set({ meetings });
+          // Update in meetings list if present
+          const updatedMeetings = meetings.map((m) =>
+            m.id.toString() === id ? meeting : m
+          );
+          set({ meetings: updatedMeetings, currentMeeting: meeting });
         }
       }
     } catch (error) {

@@ -64,11 +64,11 @@ export default function AdminBotsPage() {
   const fetchData = useCallback(async (showRefresh = false) => {
     if (showRefresh) setIsRefreshing(true);
     try {
-      const [meetingsData, botsData] = await Promise.all([
+      const [meetingsResult, botsData] = await Promise.all([
         vexaAPI.getMeetings(),
         vexaAPI.getBotStatus().catch(() => ({ running_bots: [] })),
       ]);
-      setMeetings(meetingsData);
+      setMeetings(meetingsResult.meetings);
       setRunningBots(botsData.running_bots || []);
     } catch (error) {
       console.error("Failed to fetch data:", error);

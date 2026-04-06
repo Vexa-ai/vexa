@@ -18,7 +18,7 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:17-alpine
     environment:
       - POSTGRES_DB=${DB_NAME:-vexa}
       - POSTGRES_USER=${DB_USER:-postgres}
@@ -78,7 +78,7 @@ services:
       dockerfile: services/admin-api/Dockerfile
     image: vexaai/admin-api:${IMAGE_TAG:-dev}
     ports:
-      - "${ADMIN_API_PORT:-8067}:8001"
+      - "${ADMIN_API_PORT:-8057}:8001"
     environment:
       - DB_HOST=postgres
       - DB_PORT=5432
@@ -86,7 +86,7 @@ services:
       - DB_USER=${DB_USER:-postgres}
       - DB_PASSWORD=${DB_PASSWORD:-postgres}
       - DB_SSL_MODE=disable
-      - ADMIN_API_TOKEN=${ADMIN_TOKEN:-vexa-admin-token}
+      - ADMIN_API_TOKEN=${ADMIN_TOKEN:-changeme}
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     healthcheck:
@@ -145,45 +145,46 @@ services:
       - vexa
     restart: unless-stopped
 
-  agent-api:
-    build:
-      context: ../..
-      dockerfile: services/agent-api/Dockerfile
-    image: vexaai/agent-api:${IMAGE_TAG:-dev}
-    ports:
-      - "${AGENT_API_PORT:-8100}:8100"
-    environment:
-      - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa
-      - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/vexa-agent:${IMAGE_TAG:-dev}}
-      - STORAGE_BACKEND=s3
-      - S3_ENDPOINT=http://minio:9000
-      - S3_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
-      - S3_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
-      - S3_BUCKET=${MINIO_BUCKET:-vexa}
-      - CLAUDE_CREDENTIALS_PATH=${CLAUDE_CREDENTIALS_PATH}
-      - CLAUDE_JSON_PATH=${CLAUDE_JSON_PATH}
-      - IDLE_TIMEOUT=${IDLE_TIMEOUT:-300}
-      - REDIS_URL=redis://redis:6379
-      - RUNTIME_API_URL=http://runtime-api:8090
-      - ADMIN_API_URL=http://admin-api:8001
-      - ADMIN_API_TOKEN=${ADMIN_TOKEN:-vexa-admin-token}
-      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
-      - AGENT_API_INTERNAL_URL=http://agent-api:8100
-      - API_KEY=${BOT_API_TOKEN:-}
-      - BOT_API_TOKEN=${BOT_API_TOKEN:-}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      minio-init:
-        condition: service_completed_successfully
-      redis:
-        condition: service_started
-      runtime-api:
-        condition: service_started
-    networks:
-      - vexa
-    restart: unless-stopped
+  # agent-api: NO-SHIP for 0.10 — not included in release
+  # agent-api:
+  #   build:
+  #     context: ../..
+  #     dockerfile: services/agent-api/Dockerfile
+  #   image: vexaai/agent-api:${IMAGE_TAG:-dev}
+  #   ports:
+  #     - "${AGENT_API_PORT:-8100}:8100"
+  #   environment:
+  #     - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa
+  #     - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/vexa-agent:${IMAGE_TAG:-dev}}
+  #     - STORAGE_BACKEND=s3
+  #     - S3_ENDPOINT=http://minio:9000
+  #     - S3_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
+  #     - S3_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
+  #     - S3_BUCKET=${MINIO_BUCKET:-vexa}
+  #     - CLAUDE_CREDENTIALS_PATH=${CLAUDE_CREDENTIALS_PATH}
+  #     - CLAUDE_JSON_PATH=${CLAUDE_JSON_PATH}
+  #     - IDLE_TIMEOUT=${IDLE_TIMEOUT:-300}
+  #     - REDIS_URL=redis://redis:6379
+  #     - RUNTIME_API_URL=http://runtime-api:8090
+  #     - ADMIN_API_URL=http://admin-api:8001
+  #     - ADMIN_API_TOKEN=${ADMIN_TOKEN:-vexa-admin-token}
+  #     - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
+  #     - AGENT_API_INTERNAL_URL=http://agent-api:8100
+  #     - API_KEY=${BOT_API_TOKEN:-}
+  #     - BOT_API_TOKEN=${BOT_API_TOKEN:-}
+  #     - LOG_LEVEL=${LOG_LEVEL:-INFO}
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #   depends_on:
+  #     minio-init:
+  #       condition: service_completed_successfully
+  #     redis:
+  #       condition: service_started
+  #     runtime-api:
+  #       condition: service_started
+  #   networks:
+  #     - vexa
+  #   restart: unless-stopped
 
   api-gateway:
     build:
@@ -216,8 +217,6 @@ services:
       admin-api:
         condition: service_healthy
       meeting-api:
-        condition: service_started
-      agent-api:
         condition: service_started
       redis:
         condition: service_started
@@ -278,25 +277,26 @@ services:
 
   # --- Optional services ---
 
-  telegram-bot:
-    build:
-      context: ../..
-      dockerfile: services/telegram-bot/Dockerfile
-    image: vexaai/telegram-bot:${IMAGE_TAG:-dev}
-    expose:
-      - "8200"
-    environment:
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - CHAT_API_URL=http://agent-api:8100
-      - CHAT_DEFAULT_USER_ID=${CHAT_DEFAULT_USER_ID:-}
-      - CHAT_USER_MAP=${CHAT_USER_MAP:-{}}
-      - TELEGRAM_BOT_PORT=8200
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    depends_on:
-      - agent-api
-    networks:
-      - vexa
-    restart: unless-stopped
+  # telegram-bot: NO-SHIP for 0.10 — not included in release
+  # telegram-bot:
+  #   build:
+  #     context: ../..
+  #     dockerfile: services/telegram-bot/Dockerfile
+  #   image: vexaai/telegram-bot:${IMAGE_TAG:-dev}
+  #   expose:
+  #     - "8200"
+  #   environment:
+  #     - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+  #     - CHAT_API_URL=http://agent-api:8100
+  #     - CHAT_DEFAULT_USER_ID=${CHAT_DEFAULT_USER_ID:-}
+  #     - CHAT_USER_MAP=${CHAT_USER_MAP:-{}}
+  #     - TELEGRAM_BOT_PORT=8200
+  #     - LOG_LEVEL=${LOG_LEVEL:-INFO}
+  #   depends_on:
+  #     - agent-api
+  #   networks:
+  #     - vexa
+  #   restart: unless-stopped
 
   mcp:
     build:

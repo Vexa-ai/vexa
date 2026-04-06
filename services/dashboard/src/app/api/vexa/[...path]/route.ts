@@ -26,13 +26,20 @@ async function proxyRequest(
   if (pathString === "meetings" && method === "GET") {
     // Try GET /bots first — returns all meetings from DB (active + completed)
     try {
-      const botsResp = await fetch(`${VEXA_API_URL}/bots`, {
+      const searchParams = request.nextUrl.searchParams;
+      const qs = new URLSearchParams();
+      qs.set("limit", searchParams.get("limit") || "50");
+      qs.set("offset", searchParams.get("offset") || "0");
+      if (searchParams.get("search")) qs.set("search", searchParams.get("search")!);
+      if (searchParams.get("status")) qs.set("status", searchParams.get("status")!);
+      if (searchParams.get("platform")) qs.set("platform", searchParams.get("platform")!);
+      const botsResp = await fetch(`${VEXA_API_URL}/bots?${qs.toString()}`, {
         headers: { "X-API-Key": VEXA_API_KEY },
         signal: AbortSignal.timeout(5000),
       });
       if (botsResp.ok) {
         const data = await botsResp.json();
-        return NextResponse.json({ meetings: data.meetings || [] });
+        return NextResponse.json({ meetings: data.meetings || [], has_more: data.has_more ?? false });
       }
     } catch (e) {
       console.error("[proxy] GET /bots failed, falling back to /bots/status:", e);

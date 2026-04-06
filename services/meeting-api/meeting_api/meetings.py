@@ -1114,16 +1114,29 @@ async def list_user_bots(
     auth_data: tuple = Depends(get_user_and_token),
     db: AsyncSession = Depends(get_db),
     limit: int = 50,
+    offset: int = 0,
+    search: Optional[str] = None,
+    status: Optional[str] = None,
+    platform: Optional[str] = None,
 ):
     """Returns recent meetings (all statuses) from the database."""
     _, current_user = auth_data
-    stmt = (
-        select(Meeting)
-        .where(Meeting.user_id == current_user.id)
-        .order_by(desc(Meeting.created_at))
-        .limit(limit)
-    )
+    stmt = select(Meeting).where(Meeting.user_id == current_user.id)
+    if search:
+        q = f"%{search}%"
+        stmt = stmt.where(
+            (Meeting.platform_specific_id.ilike(q))
+            | (Meeting.data["name"].astext.ilike(q))
+            | (Meeting.data["title"].astext.ilike(q))
+        )
+    if status:
+        stmt = stmt.where(Meeting.status == status)
+    if platform:
+        stmt = stmt.where(Meeting.platform == platform)
+    stmt = stmt.order_by(desc(Meeting.created_at)).offset(offset).limit(limit + 1)
     meetings = (await db.execute(stmt)).scalars().all()
+    has_more = len(meetings) > limit
+    meetings = meetings[:limit]
     return {
         "meetings": [
             {
@@ -1139,7 +1152,40 @@ async def list_user_bots(
                 "updated_at": m.updated_at.isoformat() if m.updated_at else None,
             }
             for m in meetings
-        ]
+        ],
+        "has_more": has_more,
+    }
+
+
+@router.get(
+    "/bots/{meeting_id}",
+    summary="Get a single meeting by database ID",
+    dependencies=[Depends(get_user_and_token)],
+)
+async def get_bot_by_id(
+    meeting_id: int,
+    auth_data: tuple = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """Returns a single meeting owned by the authenticated user."""
+    _, current_user = auth_data
+    stmt = select(Meeting).where(
+        and_(Meeting.id == meeting_id, Meeting.user_id == current_user.id)
+    )
+    meeting = (await db.execute(stmt)).scalar_one_or_none()
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    return {
+        "id": meeting.id,
+        "platform": meeting.platform,
+        "native_meeting_id": meeting.platform_specific_id,
+        "status": meeting.status,
+        "bot_container_id": meeting.bot_container_id,
+        "start_time": meeting.start_time.isoformat() if meeting.start_time else None,
+        "end_time": meeting.end_time.isoformat() if meeting.end_time else None,
+        "data": meeting.data or {},
+        "created_at": meeting.created_at.isoformat() if meeting.created_at else None,
+        "updated_at": meeting.updated_at.isoformat() if meeting.updated_at else None,
     }
 
 

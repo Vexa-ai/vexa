@@ -1,0 +1,97 @@
+services:
+  # Nginx load balancer
+  transcription-api:
+    image: nginx:alpine
+    container_name: transcription-lb
+    ports:
+      - "8083:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - transcription-worker-1
+      - transcription-worker-2
+    restart: unless-stopped
+    networks:
+      transcription-net:
+      vexa-network:
+        aliases:
+          - transcription-service
+
+  # Worker 1 (GPU)
+  transcription-worker-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: transcription-worker-1
+    environment:
+      - WORKER_ID=1
+      - MODEL_SIZE=${MODEL_SIZE:-large-v3-turbo}
+      - DEVICE=cuda
+      - COMPUTE_TYPE=${COMPUTE_TYPE:-int8}
+    volumes:
+      - ./models:/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    networks:
+      - transcription-net
+
+  # Worker 2 (GPU)
+  transcription-worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: transcription-worker-2
+    environment:
+      - WORKER_ID=2
+      - MODEL_SIZE=${MODEL_SIZE:-large-v3-turbo}
+      - DEVICE=cuda
+      - COMPUTE_TYPE=${COMPUTE_TYPE:-int8}
+    volumes:
+      - ./models:/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    networks:
+      - transcription-net
+
+  # # Worker 3 (GPU) — uncomment and add to nginx.conf upstream
+  # transcription-worker-3:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: transcription-worker-3
+  #   environment:
+  #     - WORKER_ID=3
+  #     - MODEL_SIZE=${MODEL_SIZE:-large-v3-turbo}
+  #     - DEVICE=cuda
+  #     - COMPUTE_TYPE=${COMPUTE_TYPE:-int8}
+  #   volumes:
+  #     - ./models:/app/models
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+  #   restart: unless-stopped
+  #   networks:
+  #     - transcription-net
+
+networks:
+  transcription-net:
+    driver: bridge
+  vexa-network:
+    external: true
+    name: vexa-network

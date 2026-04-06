@@ -1,4 +1,4 @@
-.PHONY: all env build build-bot-image up down ps logs test init-db check_docker publish promote-staging promote-latest help-tags setup-api-key
+.PHONY: all env build build-bot-image up down ps logs test init-db restore-db check_docker publish promote-staging promote-latest help-tags setup-api-key
 
 # --- Paths ---
 ROOT := $(shell git rev-parse --show-toplevel)
@@ -161,9 +161,9 @@ test: check_docker
 	done
 	@echo "Checking services..."
 	@API_PORT=$$(grep -E '^API_GATEWAY_HOST_PORT=' $(ENV_FILE) 2>/dev/null | cut -d= -f2 || echo "8056"); \
-	ADMIN_PORT=$$(grep -E '^ADMIN_API_PORT=' $(ENV_FILE) 2>/dev/null | cut -d= -f2 || echo "8067"); \
+	ADMIN_PORT=$$(grep -E '^ADMIN_API_PORT=' $(ENV_FILE) 2>/dev/null | cut -d= -f2 || echo "8057"); \
 	DASH_PORT=$$(grep -E '^DASHBOARD_HOST_PORT=' $(ENV_FILE) 2>/dev/null | cut -d= -f2 || echo "3001"); \
-	API_PORT=$${API_PORT:-8056}; ADMIN_PORT=$${ADMIN_PORT:-8067}; DASH_PORT=$${DASH_PORT:-3001}; \
+	API_PORT=$${API_PORT:-8056}; ADMIN_PORT=$${ADMIN_PORT:-8057}; DASH_PORT=$${DASH_PORT:-3001}; \
 	if curl -sf "http://localhost:$$API_PORT/" > /dev/null 2>&1; then \
 		echo "  ✓ API Gateway (port $$API_PORT)"; \
 	else \
@@ -265,5 +265,15 @@ init-db: check_docker
 		done; \
 	fi; \
 	echo "Running idempotent schema sync..."; \
+	$(COMPOSE_CMD) exec -T admin-api python -c "import asyncio; from admin_models.database import init_db; asyncio.run(init_db())"; \
 	$(COMPOSE_CMD) exec -T meeting-api python -c "import asyncio; from meeting_api.database import init_db; asyncio.run(init_db())"; \
 	echo "Schema sync complete."
+
+# Restore a production dump into the local postgres.
+# Extracts only the public schema, loads data, then runs schema sync.
+#   make restore-db DUMP=~/secrets/production-dump.sql
+restore-db: check_docker
+	@if [ -z "$(DUMP)" ]; then \
+		echo "Usage: make restore-db DUMP=<path-to-dump.sql>"; exit 1; \
+	fi
+	$(ROOT)/tests/scripts/restore-prod-dump.sh "$(DUMP)"

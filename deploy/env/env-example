@@ -15,7 +15,7 @@ TRANSCRIPTION_SERVICE_TOKEN=your-token
 # Ports — change these to avoid conflicts with other stacks
 # ============================================================================
 API_GATEWAY_HOST_PORT=8056
-ADMIN_API_PORT=8067
+ADMIN_API_PORT=8057
 RUNTIME_API_PORT=8090
 AGENT_API_PORT=8100
 CALENDAR_SERVICE_PORT=8050
