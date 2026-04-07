@@ -17,6 +17,7 @@ eggs/
 .eggs/
 lib/
 !services/dashboard/src/lib/
+!tests3/lib/
 lib64/
 parts/
 sdist/
