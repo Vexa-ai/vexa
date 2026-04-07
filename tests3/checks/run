@@ -27,6 +27,8 @@ ROOT = os.environ.get("ROOT", subprocess.check_output(
 STATE = os.environ.get("STATE", os.path.join(ROOT, "tests3", ".state"))
 REGISTRY = os.path.join(ROOT, "tests3", "checks", "registry.json")
 
+os.makedirs(STATE, exist_ok=True)
+
 
 LOG_FILE = os.path.join(STATE, "tests3.log")
 
