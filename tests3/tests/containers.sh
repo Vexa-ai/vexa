@@ -51,7 +51,37 @@ else
     exit 1
 fi
 
-sleep 5
+# Verify bot is actually running (not crashed immediately)
+sleep 10
+BOT_ALIVE=$(curl -sf -H "X-API-Key: $API_TOKEN" "$GATEWAY_URL/bots/status" | python3 -c "
+import sys,json
+bots=json.load(sys.stdin).get('running_bots',[])
+for b in bots:
+    if b.get('native_meeting_id')=='lifecycle-test-1':
+        print(b.get('status','?'))
+        break
+else: print('gone')
+" 2>/dev/null)
+
+if [ "$BOT_ALIVE" = "running" ]; then
+    pass "alive: bot process running after 10s"
+elif [ "$BOT_ALIVE" = "gone" ]; then
+    fail "alive: bot process died within 10s — check entrypoint/dependencies"
+    # Check meeting status for the reason
+    MEETING_STATUS=$(curl -sf -H "X-API-Key: $API_TOKEN" "$GATEWAY_URL/meetings" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+ms=d.get('meetings',[]) if isinstance(d,dict) else d
+for m in ms:
+    if m.get('native_meeting_id')=='lifecycle-test-1':
+        print(f'status={m.get(\"status\",\"?\")} reason={m.get(\"completion_reason\",\"?\")}')
+        break
+" 2>/dev/null)
+    info "meeting: $MEETING_STATUS"
+    exit 1
+else
+    info "alive: bot status=$BOT_ALIVE"
+fi
 
 # ── 2. Stop bot, verify container removed ─────────
 echo "  stopping bot..."
