@@ -222,6 +222,22 @@ ensure: DATASET_PATH              from: rt-collect      [human: admit bots]
  ▶ deploy                                               [human: approve fixes]
 ```
 
+### compose-validate
+```
+(no ensure — fresh VM, nothing exists)
+
+ ▶ provision (VM)
+ ▶ follow deploy/compose/README.md literally
+ ▶ infra health (all services)
+ ▶ api (admin, user, token, endpoints)
+ ▶ dashboard (backend keys, container connectivity)
+ ▶ inter-container + transcription
+ ▶ redis + postgres + minio
+ ▶ doc accuracy (make targets, ports, links, defaults)
+ ▶ score
+ ▶ keep alive → return DASHBOARD_URL                    [human: test dashboard]
+```
+
 ### media
 ```
 ensure: GATEWAY_URL, API_TOKEN    from: infra + api

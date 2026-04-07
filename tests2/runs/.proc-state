@@ -1,1 +1,1 @@
-{"mode":"execute","proc":"lifecycle-validate","confidence":91,"target":90,"hardened":true,"scope":["container-lifecycle","bot-lifecycle","browser-session","dashboard"]}
+{"mode":"execute","proc":"src/authenticated-meeting","confidence":78,"target":90,"hardened":true,"scope":["authenticated-meetings"]}

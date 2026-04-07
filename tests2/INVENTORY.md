@@ -194,6 +194,7 @@ A cookbook declares what it wants to validate. State resolution fills in the cha
 | **meeting-e2e** | browser → ... → sharing | SESSION_TOKEN → skip browser; MEETING_URL → skip meeting |
 | **full-stack** | everything | nothing (fresh) or everything resolved piecemeal |
 | **deploy** | deploy | nothing (standalone) |
+| **compose-validate** | provision → infra, api, dashboard, urls, containers (on VM) | nothing (fresh VM) |
 | **rt-quality** | rt-replay, rt-delivery | DATASET_PATH → skip rt-collect |
 | **media** | recordings, sharing | MEETING_ID + FINALIZATION_OK → skip entire meeting chain |
 
@@ -219,3 +220,4 @@ A cookbook declares what it wants to validate. State resolution fills in the cha
 | features/analytics/ | analytics | missing |
 | features/scheduler/ | scheduler | missing |
 | features/dashboard/ | dashboard | created |
+| features/authenticated-meetings/ | browser, bot | created |
