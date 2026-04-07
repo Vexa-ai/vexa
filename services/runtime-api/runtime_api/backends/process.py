@@ -74,12 +74,12 @@ class ProcessBackend(Backend):
         # Log file
         log_file = Path(config.PROCESS_LOGS_DIR) / f"{spec.name}.log"
 
-        # Resource limits from spec
+        # Process group isolation (for clean termination via killpg)
+        # Note: RLIMIT_AS is NOT applied — it limits virtual address space,
+        # not RSS. Chrome maps 2-4GB of virtual memory (GPU, shared libs)
+        # even when RSS is under 600MB. RLIMIT_AS kills it with SIGABRT (134).
         def _set_limits():
-            os.setsid()  # new process group for clean termination
-            if spec.memory_limit:
-                mem_bytes = parse_memory(spec.memory_limit)
-                resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
+            os.setsid()
 
         try:
             log_handle = open(log_file, "w")

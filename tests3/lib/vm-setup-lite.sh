@@ -64,6 +64,9 @@ info "starting lite container..."
 vm_ssh "docker run -d --name vexa --shm-size=2g --network host \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -e DATABASE_URL=postgresql://postgres:postgres@localhost:5432/vexa \
+    -e DB_PASSWORD=postgres \
+    -e DB_SSL_MODE=disable \
+    -e REDIS_URL=redis://localhost:6379/0 \
     -e ADMIN_API_TOKEN=changeme \
     -e TRANSCRIBER_URL=$TX_URL \
     -e TRANSCRIBER_API_KEY=$TX_TOKEN \
