@@ -75,10 +75,12 @@ use: env
    if OK: PASSED += 1; emit PASS "runtime-api"
    on_fail: continue
 
-8. agent
-   TESTED += 1
+8. agent [optional]
+   > agent-api is NO-SHIP for 0.10 — commented out in docker-compose.yml.
+   > Skip if not deployed. Not a failure.
    call: http.check_url(URL="http://localhost:8100/health")
-   if OK: PASSED += 1; emit PASS "agent-api"
+   if OK: TESTED += 1; PASSED += 1; emit PASS "agent-api"
+   else: emit SKIP "agent-api not deployed (NO-SHIP 0.10)"
    on_fail: continue
 
 9. transcription

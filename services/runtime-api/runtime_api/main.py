@@ -83,6 +83,10 @@ def create_app() -> FastAPI:
         # Start event listener for exit detection
         async def on_exit(name: str, exit_code: int):
             await handle_container_exit(app.state.redis, name, exit_code)
+            try:
+                await backend.remove(name)
+            except Exception:
+                logger.warning(f"Failed to remove exited container {name}", exc_info=True)
 
         await backend.listen_events(on_exit)
 

@@ -45,3 +45,9 @@ for FORMAT in [
    => TEAMS_URLS_OK = PASSED >= 4
    emit FINDING "urls: {PASSED}/{TESTED}"
 ```
+
+## Failure modes
+
+| Symptom | Cause | Fix | Learned |
+|---|---|---|---|
+| All 6 Teams URL formats return 422 | MeetingCreate schema ignored meeting_url — required platform + native_meeting_id directly | Added parse_meeting_url() to schemas.py + model_validator(mode='before') that extracts native_meeting_id from URL | MCP had the parser but meeting-api didn't — features must work at the API boundary, not just through indirect callers |

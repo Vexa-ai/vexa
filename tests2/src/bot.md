@@ -70,3 +70,11 @@ use: lib/http
    emit FINDING "lifecycle: {TRANSITIONS}"
    on_fail: continue
 ```
+
+## Failure modes
+
+| Symptom | Cause | Fix | Learned |
+|---|---|---|---|
+| Bot reaches "failed" after successful meeting | self_initiated_leave exits with code 1, meeting-api treats non-zero as failure | callbacks.py: added branch for self_initiated_leave during stopping → completed | 2026-04-06: 30 meetings in DB with "failed" status but transcripts. Exit code semantics matter — graceful leave is not a crash |
+| /bots/status returns 422 | Starlette matches /bots/{meeting_id} instead of /bots/status | Renamed to /bots/id/{meeting_id} in meetings.py and main.py | 2026-04-06: static and parameterized routes on same prefix are ambiguous |
+| Bot timeout in waiting room | no_one_joined_timeout default 120s too short | Set automatic_leave.no_one_joined_timeout: 300000 in POST /bots | Default is for production, tests need 5min for human context-switching |

@@ -91,6 +91,7 @@ This fires on every meeting completion, independent of per-bot webhook URLs.
 | 2 | Webhook envelope has correct shape (event_id, api_version, data) | 25 | ceiling | 0 | PASS | Re-validated: build_envelope() → event_id=evt_..., api_version=2026-03-01, required keys present | 2026-04-05T23:05Z | 13-webhooks |
 | 3 | HMAC signing works when secret provided | 20 | — | 0 | PASS | Re-validated: build_headers(secret) → X-Webhook-Signature: sha256=..., X-Webhook-Timestamp present. No signature header without secret. | 2026-04-05T23:05Z | 13-webhooks |
 | 4 | Delivery logged (success or failure) | 15 | — | 0 | PASS | No webhook log entries in last 10 min (no completed meetings recently). Retry worker running. | 2026-04-05T23:05Z | 13-webhooks |
-| 5 | No internal fields leaked in payload | 15 | — | 0 | PASS | Re-validated: clean_meeting_data strips webhook_secret, webhook_delivery, webhook_deliveries, webhook_events. Keeps: transcribe_enabled, user_field, webhook_url. | 2026-04-05T23:05Z | 13-webhooks |
+| 5 | No internal fields leaked in payload | 15 | — | 0 | PASS | Re-validated: clean_meeting_data strips internal keys in webhook delivery. | 2026-04-05 | webhooks |
+| 6 | webhook_secret not leaked in API responses (POST /bots, GET /bots/status) | 15 | — | 0 | PASS | FIX: `field_serializer` on MeetingResponse + `safe_data` filter in `_get_running_bots_from_runtime`. Secret "secret-v2-test" confirmed absent from both POST and GET responses. | 2026-04-07 | webhooks |
 
-Confidence: 90 (all items pass. POST_MEETING_HOOKS configured, endpoint exists and returns 200. Envelope+HMAC+security verified. Bot creation with webhook config works. -10: actual delivery on meeting.completed event not yet verified during a real meeting lifecycle.)
+Confidence: 90 (all items pass including secret leak fix. -10: actual delivery on meeting.completed not yet verified in live meeting.)

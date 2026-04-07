@@ -266,7 +266,7 @@ export async function createUser(data: {
  * Create API token for user
  */
 export async function createUserToken(userId: string): Promise<ApiResult<{ token: string }>> {
-  return adminRequest<{ token: string }>(`/admin/users/${userId}/tokens`, {
+  return adminRequest<{ token: string }>(`/admin/users/${userId}/tokens?scopes=bot,tx,browser`, {
     method: "POST",
   });
 }

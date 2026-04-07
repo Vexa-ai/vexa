@@ -112,7 +112,8 @@ export const vexaAPI = {
 
   async getMeeting(id: string): Promise<Meeting> {
     const response = await fetch(withBasePath(`/api/vexa/meetings/${id}`));
-    return handleResponse<Meeting>(response);
+    const raw = await handleResponse<RawMeeting>(response);
+    return mapMeeting(raw);
   },
 
   // Transcripts

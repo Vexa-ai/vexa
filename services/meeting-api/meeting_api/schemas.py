@@ -1,4 +1,6 @@
 from typing import List, Optional, Dict, Tuple, Any
+from urllib.parse import urlparse, parse_qs
+import hashlib
 from pydantic import BaseModel, Field, EmailStr, field_serializer, field_validator, model_validator, ValidationInfo
 from datetime import datetime
 from enum import Enum, auto
@@ -401,6 +403,114 @@ class AutomaticLeave(BaseModel):
         return self
 
 
+_TEAMS_ENTERPRISE_HOSTS = {
+    "teams.microsoft.com",
+    "gov.teams.microsoft.us",
+    "dod.teams.microsoft.us",
+}
+
+
+def _is_teams_host(host: str) -> bool:
+    return host in _TEAMS_ENTERPRISE_HOSTS or host.endswith(".teams.microsoft.us") or host.endswith(".teams.microsoft.com")
+
+
+def parse_meeting_url(url: str) -> dict:
+    """Parse a meeting URL into platform, native_meeting_id, passcode, etc.
+
+    Returns a dict with keys: platform, native_meeting_id, passcode, meeting_url, teams_base_host.
+    Raises ValueError on unrecognised or invalid URLs.
+    """
+    url = (url or "").strip()
+    if not url:
+        raise ValueError("meeting_url cannot be empty")
+
+    # Handle msteams: deep links by converting to https for urlparse
+    parse_url = url
+    if url.lower().startswith("msteams:"):
+        parse_url = "https://teams.microsoft.com" + url[len("msteams:"):]
+
+    parsed = urlparse(parse_url)
+    host = (parsed.hostname or "").lower()
+    path = parsed.path or ""
+    query = parse_qs(parsed.query or "")
+
+    # Google Meet
+    if host == "meet.google.com":
+        if path.startswith("/lookup/"):
+            raise ValueError("Google Meet /lookup/ URLs cannot be joined directly.")
+        code = path.strip("/").split("/")[0] if path else ""
+        if re.fullmatch(r"[a-z]{3}-[a-z]{4}-[a-z]{3}", code):
+            return {"platform": "google_meet", "native_meeting_id": code}
+        if re.fullmatch(r"[a-z0-9][a-z0-9-]{3,38}[a-z0-9]", code):
+            return {"platform": "google_meet", "native_meeting_id": code}
+        raise ValueError("Invalid Google Meet URL: expected https://meet.google.com/abc-defg-hij")
+
+    # Teams personal (teams.live.com/meet/<digits>?p=<passcode>)
+    if host.endswith("teams.live.com"):
+        m = re.match(r"^/meet/(\d{10,15})/?$", path)
+        if not m:
+            raise ValueError("Unsupported teams.live.com URL format. Expected /meet/<10-15 digit id>.")
+        return {
+            "platform": "teams",
+            "native_meeting_id": m.group(1),
+            "passcode": (query.get("p") or [None])[0],
+        }
+
+    # Teams enterprise
+    if _is_teams_host(host):
+        # Deep link: /v2/?meetingjoin=true#/meet/<id>?p=<passcode>
+        fragment = parsed.fragment or ""
+        if path.rstrip("/") in ("/v2", "") and fragment.startswith("/meet/"):
+            frag_parsed = urlparse("https://x" + fragment)
+            fm = re.match(r"^/meet/(\d{10,15})/?$", frag_parsed.path)
+            if fm:
+                frag_query = parse_qs(frag_parsed.query or "")
+                return {
+                    "platform": "teams",
+                    "native_meeting_id": fm.group(1),
+                    "passcode": (frag_query.get("p") or [None])[0],
+                    "teams_base_host": host,
+                }
+
+        # Short URL: /meet/<numeric_id>?p=<passcode>
+        m = re.match(r"^/meet/(\d{10,15})/?$", path)
+        if m:
+            return {
+                "platform": "teams",
+                "native_meeting_id": m.group(1),
+                "passcode": (query.get("p") or [None])[0],
+                "teams_base_host": host,
+            }
+
+        # Long legacy URL: /l/meetup-join/...
+        if "/l/meetup-join/" in path:
+            url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
+            return {
+                "platform": "teams",
+                "native_meeting_id": url_hash,
+                "meeting_url": url,
+            }
+        raise ValueError("Unsupported Teams URL format. Expected /meet/<id>?p=<passcode> or /l/meetup-join/...")
+
+    # Zoom
+    if "zoom.us" in host or "zoomgov.com" in host:
+        parts = [p for p in path.split("/") if p]
+        native_id = ""
+        if len(parts) >= 2 and parts[0] in {"j", "w"}:
+            native_id = parts[1]
+        elif len(parts) >= 3 and parts[0] == "wc" and parts[1] == "join":
+            native_id = parts[2]
+        if not re.fullmatch(r"\d{9,11}", native_id or ""):
+            raise ValueError("Unsupported Zoom URL format. Expected https://zoom.us/j/<9-11 digit id>.")
+        return {
+            "platform": "zoom",
+            "native_meeting_id": native_id,
+            "passcode": (query.get("pwd") or [None])[0],
+        }
+
+    raise ValueError("Unsupported meeting URL (unknown provider).")
+
+
 class MeetingCreate(BaseModel):
     model_config = {"extra": "ignore"}
 
@@ -424,7 +534,7 @@ class MeetingCreate(BaseModel):
     passcode: Optional[str] = Field(None, description="Optional passcode for the meeting (Teams only)")
     meeting_url: Optional[str] = Field(
         None,
-        description="Raw meeting URL for Teams legacy /l/meetup-join/ links that cannot be reconstructed from parts. When provided, used directly as the bot's meetingUrl."
+        description="Meeting URL. When provided without native_meeting_id, the URL is parsed to extract platform, native_meeting_id, and passcode automatically. Supports Google Meet, Teams (all formats), and Zoom URLs."
     )
     teams_base_host: Optional[str] = Field(
         None,
@@ -577,6 +687,31 @@ class MeetingCreate(BaseModel):
             raise ValueError(f"Invalid mode '{v}'. Must be one of: 'browser_session'")
         return v
 
+    @model_validator(mode='before')
+    @classmethod
+    def parse_meeting_url_if_provided(cls, data: Any) -> Any:
+        """When meeting_url is provided but native_meeting_id is missing, parse the URL."""
+        if not isinstance(data, dict):
+            return data
+        url = data.get("meeting_url")
+        if not url or data.get("native_meeting_id"):
+            return data
+        try:
+            parsed = parse_meeting_url(url)
+            if parsed.get("platform") and not data.get("platform"):
+                data["platform"] = parsed["platform"]
+            if parsed.get("native_meeting_id"):
+                data["native_meeting_id"] = parsed["native_meeting_id"]
+            if parsed.get("passcode") and not data.get("passcode"):
+                data["passcode"] = parsed["passcode"]
+            if parsed.get("meeting_url"):
+                data["meeting_url"] = parsed["meeting_url"]
+            if parsed.get("teams_base_host") and not data.get("teams_base_host"):
+                data["teams_base_host"] = parsed["teams_base_host"]
+        except ValueError:
+            pass  # let the downstream validators produce the error
+        return data
+
     @model_validator(mode='after')
     def validate_meeting_or_agent(self):
         """Ensure at least one of meeting info, agent_enabled, or browser_session mode is provided."""
@@ -643,6 +778,13 @@ class MeetingResponse(BaseModel): # Not inheriting from MeetingBase anymore to a
                 raise ValueError(f"Invalid failure_stage '{stage}'. Must be one of: {[s.value for s in MeetingFailureStage]}")
         
         return v
+
+    @field_serializer('data')
+    def exclude_webhook_secret_from_data(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Exclude webhook_secret from API responses for security."""
+        if data is None:
+            return None
+        return {k: v for k, v in data.items() if k != 'webhook_secret'}
 
     class Config:
         from_attributes = True

@@ -469,6 +469,9 @@ async def _get_running_bots_from_runtime(user_id: int) -> list:
                 except Exception:
                     pass
 
+            # Strip webhook_secret from response data for security
+            safe_data = {k: v for k, v in meeting_data.items() if k != "webhook_secret"} if meeting_data else {}
+
             bots_status.append({
                 "container_id": c.get("container_id"),
                 "container_name": name,
@@ -481,7 +484,7 @@ async def _get_running_bots_from_runtime(user_id: int) -> list:
                 "labels": {},
                 "meeting_id_from_name": meeting_id_from_name,
                 "meeting_status": meeting_status,
-                "data": meeting_data,
+                "data": safe_data,
             })
 
     return bots_status
@@ -1158,7 +1161,7 @@ async def list_user_bots(
 
 
 @router.get(
-    "/bots/{meeting_id}",
+    "/bots/id/{meeting_id}",
     summary="Get a single meeting by database ID",
     dependencies=[Depends(get_user_and_token)],
 )

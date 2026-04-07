@@ -31,6 +31,9 @@ STATE: + USER_ID, API_TOKEN
   │  urls ──────────────── gives: TEAMS_URLS_OK             │
   │  dashboard ─────────── gives: DASHBOARD_OK              │
   │  websocket ─────────── gives: WEBSOCKET_OK              │
+  │    tier 1: protocol (no meeting)                        │
+  │    tier 2: content delivery (needs active meeting)      │
+  │    debug: redis channel inspection (isolate pub vs relay)│
   │  webhooks ──────────── gives: WEBHOOK_OK                │
   │  containers ────────── gives: LIFECYCLE_OK              │
   │  analytics ─────────── gives: ANALYTICS_OK        (new) │

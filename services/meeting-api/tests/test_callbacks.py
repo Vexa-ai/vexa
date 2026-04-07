@@ -88,6 +88,46 @@ class TestExitCallback:
         assert call_args[0][1] == MeetingStatus.FAILED
 
     @pytest.mark.asyncio
+    async def test_self_initiated_leave_during_stopping_completes(self, client, mock_db, mock_redis):
+        """self_initiated_leave with exit code 1 during stopping → COMPLETED, not FAILED."""
+        meeting = make_meeting(status=MeetingStatus.STOPPING.value)
+
+        with _patch_find_meeting(meeting):
+            with patch("meeting_api.callbacks.update_meeting_status", new_callable=AsyncMock, return_value=True) as mock_update:
+                with patch("meeting_api.callbacks.publish_meeting_status_change", new_callable=AsyncMock):
+                    with patch("meeting_api.callbacks.run_all_tasks", new_callable=AsyncMock):
+                        resp = await client.post("/bots/internal/callback/exited", json={
+                            "connection_id": TEST_SESSION_UID,
+                            "exit_code": 1,
+                            "reason": "self_initiated_leave",
+                        })
+
+        assert resp.status_code == 200
+        mock_update.assert_called_once()
+        call_args = mock_update.call_args
+        assert call_args[0][1] == MeetingStatus.COMPLETED
+
+    @pytest.mark.asyncio
+    async def test_sigkill_during_stopping_completes(self, client, mock_db, mock_redis):
+        """Exit code 137 (SIGKILL from docker stop) during stopping → COMPLETED, not FAILED."""
+        meeting = make_meeting(status=MeetingStatus.STOPPING.value)
+
+        with _patch_find_meeting(meeting):
+            with patch("meeting_api.callbacks.update_meeting_status", new_callable=AsyncMock, return_value=True) as mock_update:
+                with patch("meeting_api.callbacks.publish_meeting_status_change", new_callable=AsyncMock):
+                    with patch("meeting_api.callbacks.run_all_tasks", new_callable=AsyncMock):
+                        resp = await client.post("/bots/internal/callback/exited", json={
+                            "connection_id": TEST_SESSION_UID,
+                            "exit_code": 137,
+                            "reason": "self_initiated_leave",
+                        })
+
+        assert resp.status_code == 200
+        mock_update.assert_called_once()
+        call_args = mock_update.call_args
+        assert call_args[0][1] == MeetingStatus.COMPLETED
+
+    @pytest.mark.asyncio
     async def test_exit_triggers_post_meeting(self, client, mock_db, mock_redis):
         """Exit callback triggers post-meeting background tasks."""
         meeting = make_meeting(status=MeetingStatus.ACTIVE.value)

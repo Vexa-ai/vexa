@@ -72,10 +72,18 @@ curl -s http://localhost:8090/profiles
 
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Test |
 |---|-------|--------|---------|-------|--------|----------|--------------|------|
-| 1 | Container created on POST /containers | 15 | ceiling | 0 | PASS | Containers created for all bots. All 13 supervisord-managed services running. Re-validated: 12 running, 29 tracked. | 2026-04-05T23:05Z | 14-container-lifecycle, 07-bot-lifecycle |
-| 2 | Container removed after meeting ends | 25 | ceiling | 0 | PASS | BUG #20 FIXED: _pid_alive() now checks /proc/PID/status for Z-state. Re-validated: ZOMBIE_COUNT=0 in compose mode. 13 exited containers from concurrent testing (auto_remove=false by design). | 2026-04-05T23:05Z | 14-container-lifecycle |
-| 3 | No orphan containers after test run | 25 | ceiling | 0 | PASS | BUG #20 FIXED. Re-validated: ZOMBIE_COUNT=0, ORPHANS=13 (from concurrent test activity, not leaked). Minio-init exited(0) expected. | 2026-04-05T23:05Z | 14-container-lifecycle |
-| 4 | Container respects resource limits (CPU, memory, shm) | 15 | — | 0 | SKIP | Not tested this run | 2026-04-05T21:50Z | 14-container-lifecycle |
-| 5 | idle_timeout stops inactive containers | 20 | — | 0 | SKIP | Not tested this run | 2026-04-05T21:50Z | 14-container-lifecycle, 07-bot-lifecycle |
+| 1 | Container created on POST /containers | 15 | ceiling | 0 | PASS | Bot container created (201), visible in docker ps within 10s | 2026-04-07 | containers, bot |
+| 2 | Container fully removed after meeting ends (not just stopped) | 25 | ceiling | 0 | PASS | FIX: added `backend.remove(name)` in `on_exit` callback (runtime-api/main.py). Container gone from `docker ps -a` after stop. ZOMBIE_COUNT=0. | 2026-04-07 | containers |
+| 3 | No orphan containers after test run | 25 | ceiling | 0 | PASS | ORPHAN_COUNT=0. Cleaned 20 pre-existing zombies from before fix. New runs leave zero exited containers. | 2026-04-07 | containers |
+| 4 | Container respects resource limits (CPU, memory, shm) | 15 | — | 0 | UNTESTED | | | containers |
+| 5 | idle_timeout stops inactive containers | 20 | — | 0 | UNTESTED | | | containers, bot |
+| 6 | Browser session container removed after destroy | 10 | — | 0 | PASS | browser tier 1: destroy→verify container count=0 in docker ps -a | 2026-04-07 | browser |
+| 7 | Graceful shutdown saves state before container removal | 10 | — | 0 | UNTESTED | browser session should save to S3 on SIGTERM before exit | | browser |
 
-Confidence: 65 (BUG #20 fixed — _pid_alive() now detects zombies. Compose mode clean: ZOMBIE_COUNT=0. Items 1-3 PASS. -15: auto_remove=false means exited containers accumulate until manual cleanup. -10: resource limits and idle_timeout not tested. -10: lite mode fix not yet verified in running lite container.)
+Confidence: 75 (ceiling items 1-3 PASS = 65. Browser cleanup PASS = +10. Resource limits and idle_timeout untested = -25.)
+
+### Fixes applied this run
+
+| Bug | Fix | File | Evidence |
+|-----|-----|------|----------|
+| Exited containers not removed (20 zombies accumulated) | Added `backend.remove(name)` in `on_exit` callback after `handle_container_exit` | `services/runtime-api/runtime_api/main.py:84-87` | ZOMBIE_COUNT went from 20 → 0 |

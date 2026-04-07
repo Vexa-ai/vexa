@@ -84,12 +84,14 @@ curl -s -X POST http://localhost:8056/bots \
 
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Tests |
 |---|-------|--------|---------|-------|--------|----------|--------------|-------|
-| 1 | Google Meet URL parsed correctly | 15 | ceiling | 0 | PASS | GMeet format parsed | 2026-04-05T19:40Z | 03-url-formats, 06-create-meeting |
-| 2 | Teams standard join URL parsed | 15 | ceiling | 0 | PASS | T1 standard format parsed | 2026-04-05T19:40Z | 03-url-formats, 06-create-meeting |
-| 3 | Teams short URL with passcode parsed (OeNB) | 20 | ceiling | 0 | PASS | T2 shortlink/OeNB format parsed | 2026-04-05T19:40Z | 03-url-formats, 06-create-meeting |
-| 4 | Teams channel meeting URL parsed | 10 | — | 0 | PASS | T3 channel format parsed | 2026-04-05T19:40Z | 03-url-formats |
-| 5 | Teams custom enterprise domain parsed | 15 | — | 0 | PASS | T4 custom domain format parsed | 2026-04-05T19:40Z | 03-url-formats |
-| 6 | Teams personal (teams.live.com) parsed | 10 | — | 0 | PASS | T6 teams.live.com format parsed | 2026-04-05T19:40Z | 03-url-formats, 06-create-meeting |
-| 7 | Invalid URLs rejected with clear error | 15 | — | 0 | SKIP | Not explicitly tested this run | 2026-04-05T19:40Z | 03-url-formats, 02-api |
+| 1 | Google Meet URL parsed correctly | 15 | ceiling | 0 | PASS | GMeet format parsed via MCP and POST /bots | 2026-04-07 | urls |
+| 2 | Teams standard join URL parsed | 15 | ceiling | 0 | PASS | T1 standard /l/meetup-join/ → 201. Server-side `parse_meeting_url()` in schemas.py. | 2026-04-07 | urls |
+| 3 | Teams short URL with passcode parsed | 20 | ceiling | 0 | PASS | T2 /meet/{id}?p= → 201. Passcode extracted. | 2026-04-07 | urls |
+| 4 | Teams channel meeting URL parsed | 10 | — | 0 | PASS | T3 /l/meetup-join/...tacv2 → 201. Hash-based native_meeting_id. | 2026-04-07 | urls |
+| 5 | Teams custom enterprise domain parsed | 15 | — | 0 | PASS | T4 myorg.teams.microsoft.com → 201. teams_base_host captured. | 2026-04-07 | urls |
+| 6 | Teams personal (teams.live.com) parsed | 10 | — | 0 | PASS | T6 teams.live.com/meet/{id} → 201. | 2026-04-07 | urls |
+| 7 | Teams deep link (msteams:/) parsed | 10 | — | 0 | PASS | T5 msteams:/l/meetup-join/ → 201. Converted to https for parsing. | 2026-04-07 | urls |
+| 8 | POST /bots accepts meeting_url directly (no MCP required) | 15 | ceiling | 0 | PASS | FIX: added `parse_meeting_url()` + `model_validator(mode='before')` in schemas.py. All 6 formats accepted without explicit platform field. | 2026-04-07 | urls |
+| 9 | Invalid URLs rejected with clear error | 10 | — | 0 | UNTESTED | | | urls |
 
-Confidence: 85 (ceiling items 1+2+3 pass = 50; items 4+5+6 = 35; invalid URL rejection not tested = 85/100)
+Confidence: 95 (all 7 URL formats PASS including new deep link. Server-side parsing added — no longer requires MCP intermediary. Invalid URL rejection not tested = -5.)

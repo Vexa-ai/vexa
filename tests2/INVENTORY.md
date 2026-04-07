@@ -54,6 +54,8 @@ dashboard            needs: GATEWAY_URL, ADMIN_URL, ADMIN_TOKEN, DASHBOARD_URL, 
 
 websocket            needs: GATEWAY_URL, API_TOKEN
                      gives: WEBSOCKET_OK
+                     tier 1: protocol (no meeting)
+                     tier 2: content + debug (needs MEETING_PLATFORM, NATIVE_MEETING_ID)
 
 webhooks             needs: GATEWAY_URL, API_TOKEN, DEPLOY_MODE
                      gives: WEBHOOK_OK
@@ -80,9 +82,10 @@ calendar             needs: GATEWAY_URL, API_TOKEN [human: OAuth]               
 ### Meeting chain (need a live meeting)
 
 ```
-browser              needs: GATEWAY_URL, API_TOKEN, DASHBOARD_URL
+browser              needs: GATEWAY_URL, API_TOKEN, DASHBOARD_URL, USER_ID
                      gives: SESSION_TOKEN, CDP_URL, SAVED_STATE
-                     [human: login]
+                     tier 1: auto (S3 roundtrip, no login)
+                     tier 2: [human: Google login] → verify persistence
 
 meeting              needs: GATEWAY_URL, API_TOKEN, MEETING_PLATFORM (+ SESSION_TOKEN for gmeet)
                      gives: MEETING_URL, NATIVE_MEETING_ID
@@ -199,15 +202,16 @@ A cookbook declares what it wants to validate. State resolution fills in the cha
 | **lib/storage** | `list`, `exists`, `download` | recordings, browser state, workspaces |
 | **lib/sse** | `stream`, `collect_events` | agent-chat |
 
-## Missing features/ docs
+## Feature docs
 
-| Feature doc needed | Proc that owns it |
-|---|---|
-| features/recordings/ | recordings |
-| features/transcript-sharing/ | sharing |
-| features/agent-chat/ | agent-chat |
-| features/calendar/ | calendar |
-| features/screen-share/ | screen-share |
-| features/analytics/ | analytics |
-| features/scheduler/ | scheduler |
-| features/dashboard/ | dashboard |
+| Feature doc | Proc that owns it | Status |
+|---|---|---|
+| features/browser-session/ | browser | created |
+| features/recordings/ | recordings | missing |
+| features/transcript-sharing/ | sharing | missing |
+| features/agent-chat/ | agent-chat | missing |
+| features/calendar/ | calendar | missing |
+| features/screen-share/ | screen-share | missing |
+| features/analytics/ | analytics | missing |
+| features/scheduler/ | scheduler | missing |
+| features/dashboard/ | dashboard | created |

@@ -15,7 +15,8 @@ async function proxyRequest(
   const cookieStore = await cookies();
   const userToken = cookieStore.get("vexa-token")?.value;
 
-  // Fall back to env variable for backwards compatibility
+  // VEXA_API_KEY from env is used ONLY for the meetings list endpoint
+  // (pre-login browsing). All other endpoints require a user cookie.
   const VEXA_API_KEY = userToken || process.env.VEXA_API_KEY || "";
 
   const { path } = await params;

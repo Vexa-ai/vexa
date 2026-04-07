@@ -126,6 +126,22 @@ async def bot_exit_callback(
                 transition_metadata=meta,
             )
             new_status = MeetingStatus.COMPLETED.value if success else None
+        elif meeting.status == MeetingStatus.STOPPING.value:
+            # Meeting was in stopping state — user requested stop.
+            # Any exit during stopping is a completed meeting, not a failure:
+            #   exit 1:   self_initiated_leave (bot left the meeting)
+            #   exit 137: SIGKILL from docker stop (container killed after timeout)
+            #   exit 143: SIGTERM caught (graceful container shutdown)
+            logger.info(f"Exit callback: session {session_uid} exit_code={exit_code} during stopping — treating as completed (reason={payload.reason})")
+            provided_reason = payload.completion_reason or MeetingCompletionReason.STOPPED
+            meta = {"exit_code": exit_code, "original_reason": payload.reason}
+            success = await update_meeting_status(
+                meeting, MeetingStatus.COMPLETED, db,
+                completion_reason=provided_reason,
+                transition_reason=payload.reason,
+                transition_metadata=meta,
+            )
+            new_status = MeetingStatus.COMPLETED.value if success else None
         else:
             provided_stage = payload.failure_stage or MeetingFailureStage.ACTIVE
             error_msg = f"Bot exited with code {exit_code}"

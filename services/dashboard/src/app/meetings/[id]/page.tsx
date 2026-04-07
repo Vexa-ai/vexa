@@ -655,8 +655,10 @@ export default function MeetingDetailPage() {
       return;
     }
 
-    // During non-WS states, use REST fetch as source of truth.
-    if (!shouldUseWebSocket && meetingPlatform && meetingNativeId) {
+    // Always bootstrap existing segments from REST on page load.
+    // WS only delivers new segments — without REST bootstrap, existing
+    // transcripts are invisible after page reload during active meetings.
+    if (meetingPlatform && meetingNativeId) {
       fetchTranscripts(meetingPlatform, meetingNativeId, meetingNumericId);
       fetchChatMessages(meetingPlatform, meetingNativeId);
     }

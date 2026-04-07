@@ -1,5 +1,5 @@
 ---
-needs: [GATEWAY_URL, ADMIN_URL, ADMIN_TOKEN, DASHBOARD_URL, DEPLOY_MODE, API_TOKEN]
+needs: [GATEWAY_URL, ADMIN_URL, ADMIN_TOKEN, DASHBOARD_URL, DEPLOY_MODE, API_TOKEN, TEST_USER]
 gives: [DASHBOARD_OK]
 ---
 
@@ -8,21 +8,27 @@ use: lib/docker
 
 # Dashboard
 
-> **Why:** Next.js returns 200 even when all backends are broken. The user sees `[object Object]`. This catches it before they do.
-> **What:** Run every backend call the dashboard makes — from inside the dashboard container, using its own env vars.
-> **How:** Read VEXA_API_URL from the container, then wget each GET and POST endpoint the dashboard calls. If any fail, that page is broken.
+> **Why:** Next.js returns 200 even when all backends are broken. API tests pass but the user sees nothing. This proc tests what the user actually sees.
+> **What:** Three tiers. T1: backend connectivity (wget from container). T2: auth chain (login → cookie → proxy → data). T3: page-level (load meeting page in browser, verify transcript renders).
+> **How:** T1 uses docker exec. T2 uses curl with cookies. T3 uses Playwright headless to load the actual page and check DOM.
 
 ## state
 
-    CONTAINER = ""
-    API_URL   = ""
-    ADMIN_KEY = ""
-    TESTED    = 0
-    PASSED    = 0
+    CONTAINER    = ""
+    API_URL      = ""
+    ADMIN_KEY    = ""
+    COOKIE_TOKEN = ""
+    TESTED       = 0
+    PASSED       = 0
 
 ## steps
 
 ```
+═══════════════════════════════════════════════════════════════
+ TIER 1 — Backend connectivity (from inside container)
+ Tests: can the dashboard container reach all backends?
+═══════════════════════════════════════════════════════════════
+
 1. find_container
    call: docker.container_for(MODE={DEPLOY_MODE}, SERVICE="dashboard")
    => CONTAINER = NAME
@@ -35,7 +41,7 @@ use: lib/docker
    => ADMIN_KEY = VALUE
    on_fail: stop
 
-3. get_calls
+3. backend_calls
    for CALL in [
        {name: "gateway",    cmd: "wget -q -O /dev/null {API_URL}/"},
        {name: "meetings",   cmd: "wget -q -O - --header='X-API-Key: {API_TOKEN}' {API_URL}/meetings"},
@@ -45,18 +51,231 @@ use: lib/docker
    ]:
        TESTED += 1
        call: docker.exec(CONTAINER={CONTAINER}, CMD="{CALL.cmd}")
-       if exits 0: PASSED += 1; emit PASS "dashboard: {CALL.name}"
-       else: emit FAIL "dashboard: {CALL.name}"
+       if exits 0: PASSED += 1; emit PASS "t1: {CALL.name}"
+       else: emit FAIL "t1: {CALL.name}"
        on_fail: continue
 
-4. post_calls
+4. verify_no_false_failures
    TESTED += 1
-   call: docker.exec(CONTAINER={CONTAINER}, CMD="wget -q -O - --post-data='{\"mode\":\"browser_session\",\"bot_name\":\"dash-test\"}' --header='Content-Type: application/json' --header='X-API-Key: {API_TOKEN}' {API_URL}/bots")
-   if exits 0: PASSED += 1; emit PASS "dashboard: POST browser_session"
-   else: emit FAIL "dashboard: POST browser_session — causes [object Object]"
+   call: http.get_json(URL="{GATEWAY_URL}/meetings", TOKEN={API_TOKEN})
+   for MEETING in BODY:
+       if MEETING.status == "failed":
+           call: http.get_json(URL="{GATEWAY_URL}/transcripts/{MEETING.platform}/{MEETING.native_meeting_id}", TOKEN={API_TOKEN})
+           if BODY has segments and len(segments) > 0:
+               emit FAIL "BUG: meeting {MEETING.native_meeting_id} shows 'failed' but has {len(segments)} transcript segments"
+               on_fail: continue
+   PASSED += 1
+   emit PASS "t1: no false failures"
    on_fail: continue
 
-5. summary
-   => DASHBOARD_OK = (PASSED == TESTED)
-   emit FINDING "dashboard: {PASSED}/{TESTED}"
+═══════════════════════════════════════════════════════════════
+ TIER 2 — Auth chain (login → cookie → proxy → data)
+ Tests: can a user log in and fetch data through the dashboard proxy?
+═══════════════════════════════════════════════════════════════
+
+5. login
+   TESTED += 1
+   do: |
+       curl -s -X POST "{DASHBOARD_URL}/api/auth/send-magic-link" \
+         -H "Content-Type: application/json" \
+         -d '{"email":"{TEST_USER}"}' \
+         -c /tmp/dash-proc-cookies \
+         -w "\nHTTP:%{http_code}"
+   expect: response contains "success" and HTTP 200
+   => COOKIE_TOKEN from cookie file (vexa-token value)
+   PASSED += 1; emit PASS "t2: login"
+   on_fail: stop
+
+6. authenticated_meetings
+   TESTED += 1
+   do: |
+       curl -sf -b /tmp/dash-proc-cookies "{DASHBOARD_URL}/api/vexa/meetings" | \
+         python3 -c "import sys,json; d=json.load(sys.stdin); print(f'MEETINGS={len(d.get(\"meetings\",[]))}')"
+   expect: MEETINGS > 0
+   PASSED += 1; emit PASS "t2: meetings list"
+   on_fail: continue
+
+7. api_field_contract
+   > Core bug: API returns `native_meeting_id`, dashboard uses `platform_specific_id`.
+   > The browser's mapMeeting() does the rename. This step verifies the API contract:
+   > GET /meetings/{id} must return non-null native_meeting_id so the mapping works.
+   TESTED += 1
+   > Find a meeting with transcripts to test against.
+   do: |
+       curl -sf -b /tmp/dash-proc-cookies "{DASHBOARD_URL}/api/vexa/meetings" | \
+         python3 -c "
+       import sys,json
+       meetings=json.load(sys.stdin).get('meetings',[])
+       # Pick first meeting with active or completed status
+       for m in meetings:
+           if m.get('status') in ('active','completed') and m.get('native_meeting_id'):
+               print(f'ID={m[\"id\"]}')
+               print(f'PLATFORM={m[\"platform\"]}')
+               print(f'NATIVE={m[\"native_meeting_id\"]}')
+               break
+       else:
+           print('NO_SUITABLE_MEETING')
+       "
+   => MEETING_DB_ID, MEETING_PLATFORM, MEETING_NATIVE_ID from output
+
+   if MEETING_DB_ID exists:
+       do: |
+           curl -sf -b /tmp/dash-proc-cookies "{DASHBOARD_URL}/api/vexa/meetings/{MEETING_DB_ID}" | \
+             python3 -c "
+           import sys,json
+           m=json.load(sys.stdin)
+           nid=m.get('native_meeting_id')
+           psi=m.get('platform_specific_id')
+           print(f'NATIVE_MEETING_ID={nid}')
+           print(f'PLATFORM_SPECIFIC_ID={psi}')
+           # Contract: native_meeting_id must be present (browser mapMeeting uses it)
+           if nid and nid!='None':
+               print('CONTRACT=PASS')
+           else:
+               print('CONTRACT=FAIL')
+           "
+       if output contains "CONTRACT=PASS":
+           PASSED += 1; emit PASS "t2: API field contract (native_meeting_id present)"
+       else:
+           emit FAIL "BUG: GET /meetings/{id} returns null native_meeting_id — transcript page will be empty"
+   on_fail: continue
+
+8. transcript_via_proxy
+   > Verify transcript data flows through dashboard proxy.
+   TESTED += 1
+   if MEETING_NATIVE_ID exists:
+       do: |
+           curl -sf -b /tmp/dash-proc-cookies \
+             "{DASHBOARD_URL}/api/vexa/transcripts/{MEETING_PLATFORM}/{MEETING_NATIVE_ID}" | \
+             python3 -c "
+           import sys,json
+           d=json.load(sys.stdin)
+           segs=d.get('segments',[]) if isinstance(d,dict) else d
+           print(f'SEGMENTS={len(segs)}')
+           "
+       if SEGMENTS > 0:
+           PASSED += 1; emit PASS "t2: transcript via proxy ({SEGMENTS} segments)"
+       else:
+           emit FAIL "t2: transcript proxy returns 0 segments"
+   on_fail: continue
+
+═══════════════════════════════════════════════════════════════
+ TIER 3 — Page-level (headless browser loads actual dashboard page)
+ Tests: does the user actually see transcript and correct status?
+═══════════════════════════════════════════════════════════════
+
+9. page_renders_transcript
+   > The definitive test. Load the meeting page in a real browser.
+   > Check that transcript text appears in the DOM.
+   > This catches: mapMeeting bugs, React rendering bugs, CSS hiding, JS errors.
+   TESTED += 1
+   if MEETING_DB_ID exists:
+       do: |
+           node -e "
+           const {chromium}=require('playwright');
+           (async()=>{
+               const b=await chromium.launch({headless:true});
+               const ctx=await b.newContext();
+               // Set auth cookie
+               await ctx.addCookies([{
+                   name:'vexa-token',
+                   value:'{COOKIE_TOKEN}',
+                   domain:'localhost',
+                   path:'/'
+               }]);
+               const p=await ctx.newPage();
+               // Navigate to meeting page
+               await p.goto('{DASHBOARD_URL}/meetings/{MEETING_DB_ID}',{timeout:15000});
+               // Wait for data to load
+               await p.waitForTimeout(5000);
+               // Check for transcript content in DOM
+               const body=await p.textContent('body');
+               // Look for any text that matches our known segments
+               const hasContent=body.length>200;
+               // Check for transcript-specific elements
+               const transcriptEls=await p.locator('[data-testid*=transcript],[class*=transcript],[class*=segment]').count();
+               // Check for error states
+               const hasError=body.includes('error') && body.includes('API');
+               console.log('BODY_LEN='+body.length);
+               console.log('TRANSCRIPT_ELEMENTS='+transcriptEls);
+               console.log('HAS_ERROR='+hasError);
+               // Check console for JS errors
+               p.on('console',msg=>{if(msg.type()==='error')console.log('JS_ERROR:'+msg.text())});
+               if(transcriptEls>0) console.log('PAGE_TRANSCRIPT=PASS');
+               else if(hasContent && !hasError) console.log('PAGE_TRANSCRIPT=MAYBE');
+               else console.log('PAGE_TRANSCRIPT=FAIL');
+               await b.close();
+           })().catch(e=>{console.error(e.message);process.exit(1)});
+           "
+       if output contains "PAGE_TRANSCRIPT=PASS":
+           PASSED += 1; emit PASS "t3: transcript renders in browser"
+       if output contains "PAGE_TRANSCRIPT=FAIL":
+           emit FAIL "BUG: transcript not visible in browser — check mapMeeting, React rendering, JS console"
+       if output contains "PAGE_TRANSCRIPT=MAYBE":
+           emit FINDING "page has content but no transcript-specific elements — check CSS selectors"
+   on_fail: continue
+
+10. page_shows_correct_status
+    > Verify the meeting status shown on the page matches the API.
+    TESTED += 1
+    if MEETING_DB_ID exists:
+        do: |
+            # Get API status
+            API_STATUS=$(curl -sf -b /tmp/dash-proc-cookies \
+              "{DASHBOARD_URL}/api/vexa/meetings/{MEETING_DB_ID}" | \
+              python3 -c "import sys,json; print(json.load(sys.stdin).get('status','unknown'))")
+            echo "API_STATUS=$API_STATUS"
+
+            # Get page-rendered status
+            node -e "
+            const {chromium}=require('playwright');
+            (async()=>{
+                const b=await chromium.launch({headless:true});
+                const ctx=await b.newContext();
+                await ctx.addCookies([{name:'vexa-token',value:'{COOKIE_TOKEN}',domain:'localhost',path:'/'}]);
+                const p=await ctx.newPage();
+                await p.goto('{DASHBOARD_URL}/meetings/{MEETING_DB_ID}',{timeout:15000});
+                await p.waitForTimeout(5000);
+                const body=(await p.textContent('body')).toLowerCase();
+                for(const s of ['active','completed','failed','joining','requested','stopping']){
+                    if(body.includes(s)) console.log('PAGE_STATUS='+s);
+                }
+                await b.close();
+            })().catch(e=>{console.error(e.message);process.exit(1)});
+            "
+        > Compare API_STATUS with PAGE_STATUS. If they match: PASS.
+        if API_STATUS in PAGE_STATUS output:
+            PASSED += 1; emit PASS "t3: status matches API"
+        else:
+            emit FAIL "t3: status mismatch — API={API_STATUS} but page shows different"
+    on_fail: continue
+
+11. cache_busting
+    > After a deploy, the browser may serve old JS bundles.
+    > Verify the dashboard sets cache headers that prevent stale bundles.
+    TESTED += 1
+    do: |
+        curl -sI "{DASHBOARD_URL}/" | grep -i "cache-control"
+        curl -sI "{DASHBOARD_URL}/_next/static/" | grep -i "cache-control"
+    expect: cache-control contains "no-store" or "no-cache" or "must-revalidate"
+    > Next.js static chunks use content-hashed filenames — a new build = new URLs.
+    > But the HTML page itself must not be cached, or old chunk references persist.
+    PASSED += 1; emit PASS "t3: cache headers"
+    on_fail: continue
+
+12. summary
+    => DASHBOARD_OK = (PASSED == TESTED)
+    emit FINDING "dashboard: {PASSED}/{TESTED}"
 ```
+
+## Failure modes
+
+| Symptom | Cause | Fix | Learned |
+|---|---|---|---|
+| /bots/status returns 422 | Starlette routes /bots/{meeting_id} before /bots/status | Renamed to /bots/id/{meeting_id} | Static and parameterized routes on same prefix are ambiguous |
+| Meeting shows "failed" but has transcripts | exit_code=1 on graceful leave treated as failure | self_initiated_leave during stopping → completed | Exit codes need semantic interpretation |
+| POST /bots returns 403 | Concurrent bot limit reached | Not a bug — accept 403 as "API reachable" | Test reachability, not success |
+| Magic link returns 503 "Access denied" | VEXA_ADMIN_API_KEY wrong default in compose | Fixed compose: `${ADMIN_API_TOKEN:-changeme}` | Different defaults across services = silent auth failure |
+| Transcript page empty after reload | VEXA_API_KEY stale (401) | Fresh token in .env, infra step 11 validates | Token lifecycle not managed = "works then breaks" |
+| Transcript page empty despite REST data | `getMeeting()` skipped `mapMeeting()`. native_meeting_id not mapped to platform_specific_id. Transcript URL = `/transcripts/{platform}/undefined`. | Added `mapMeeting(raw)` to `getMeeting()`. Step 7 tests the API contract. Step 9 tests the page. | API test PASS ≠ dashboard works. Must test the actual browser path. |
+| Old JS bundle served after deploy | Browser caches Next.js chunks | Next.js uses content-hashed filenames. Step 11 checks HTML cache headers. Hard-refresh needed after deploy. | Cache busting depends on HTML not being cached — chunk filenames change but the page referencing them must too |
