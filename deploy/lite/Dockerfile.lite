@@ -132,6 +132,7 @@ COPY services/tts-service/ /app/tts-service/
 # -----------------------------------------------------------------------------
 
 COPY services/vexa-bot/core/ /app/vexa-bot/
+RUN chmod +x /app/vexa-bot/entrypoint.sh
 WORKDIR /app/vexa-bot
 RUN npm ci --omit=dev 2>/dev/null || npm install \
     && npm run build
