@@ -67,6 +67,9 @@ browser: browser-session          ## browser without human gate
 
 # ═══ Meeting chain ════════════════════════════════════════════════
 
+meeting-tts: smoke                ## full meeting: create → bots → admit all → TTS → transcript (10min)
+	@$(T3)/tests/meeting-tts.sh
+
 meeting: smoke                    ## create meeting via CDP (60s)
 	@$(T3)/tests/meeting.sh
 

@@ -189,8 +189,15 @@ def check_contract(lock):
     token = state_read("api_token")
     admin_token = state_read("admin_token")
 
-    url = lock["url"].replace("$GATEWAY_URL", gw).replace("$ADMIN_URL", admin).replace("$DASHBOARD_URL", dash)
     method = lock.get("method", "GET")
+
+    # Special methods that don't use url
+    if method == "WS_PING":
+        return check_ws_ping(gw, token)
+    if method == "TRANSCRIPTION_TEST":
+        return check_transcription_token()
+
+    url = lock["url"].replace("$GATEWAY_URL", gw).replace("$ADMIN_URL", admin).replace("$DASHBOARD_URL", dash)
     expect = lock.get("expect_code", 200)
     headers = []
 
@@ -199,10 +206,6 @@ def check_contract(lock):
         headers.append(f"X-API-Key: {token}")
     elif auth == "admin_token" and admin_token:
         headers.append(f"X-Admin-API-Key: {admin_token}")
-
-    # WebSocket ping check
-    if method == "WS_PING":
-        return check_ws_ping(gw, token)
 
     if method == "GET":
         code, body = http_check(url, headers=headers)
@@ -230,6 +233,40 @@ def check_contract(lock):
         if code == expect:
             return True, ""
         return False, f"HTTP {code} (expected {expect})"
+
+
+def check_transcription_token():
+    """Send real audio to transcription service, verify token not rejected."""
+    env_file = os.path.join(ROOT, ".env")
+    tx_url = ""
+    tx_token = ""
+    for line in open(env_file):
+        if line.startswith("TRANSCRIPTION_SERVICE_URL="):
+            tx_url = line.strip().split("=", 1)[1]
+        if line.startswith("TRANSCRIPTION_SERVICE_TOKEN="):
+            tx_token = line.strip().split("=", 1)[1]
+    if not tx_url:
+        return False, "TRANSCRIPTION_SERVICE_URL not set in .env"
+
+    test_audio = os.path.join(ROOT, "tests", "testdata", "test-speech-en.wav")
+    if not os.path.isfile(test_audio):
+        return False, f"test audio not found: {test_audio}"
+
+    try:
+        r = subprocess.run(
+            ["curl", "-s", "-w", "\n%{http_code}", "-X", "POST", tx_url,
+             "-H", f"Authorization: Bearer {tx_token}",
+             "-F", f"file=@{test_audio}", "-F", "language=en"],
+            capture_output=True, text=True, timeout=30)
+        lines = r.stdout.strip().rsplit("\n", 1)
+        code = int(lines[-1]) if lines[-1].isdigit() else 0
+        if code == 200:
+            return True, ""
+        if code == 403:
+            return False, "token rejected (403) — expired or invalid"
+        return False, f"HTTP {code}"
+    except Exception as e:
+        return False, str(e)
 
 
 def check_ws_ping(gw, token):

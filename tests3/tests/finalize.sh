@@ -47,9 +47,9 @@ fi
 MODE=$(state_read deploy_mode)
 if [ "$MODE" = "compose" ]; then
     ORPHANS=$(docker ps -a --filter "name=meeting-" --filter "status=exited" \
-        --format '{{.Names}}' | grep -v meeting-api | wc -l)
+        --format '{{.Names}}' | { grep -vc meeting-api || true; })
 elif [ "$MODE" = "lite" ]; then
-    ORPHANS=$(docker exec vexa ps aux 2>/dev/null | grep -c '[Z]' || echo 0)
+    ORPHANS=$(docker exec vexa ps aux 2>/dev/null | { grep -c '[Z]' || true; })
 else
     ORPHANS=0
 fi

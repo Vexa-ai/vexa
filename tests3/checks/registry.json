@@ -414,6 +414,14 @@
       "expect_code": 200
     },
     {
+      "id": "TRANSCRIPTION_TOKEN_VALID",
+      "tier": "contract",
+      "found": "2026-04-07",
+      "proves": "transcription API token accepted — bots can convert audio to text",
+      "symptom": "Transcription returns 403 — TRANSCRIPTION_SERVICE_TOKEN expired or invalid. Bots capture audio but produce 0 segments.",
+      "method": "TRANSCRIPTION_TEST"
+    },
+    {
       "id": "CACHE_HEADERS",
       "tier": "contract",
       "found": "2026-04-07",

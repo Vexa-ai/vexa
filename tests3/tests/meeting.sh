@@ -11,6 +11,25 @@ echo ""
 echo "  meeting"
 echo "  ──────────────────────────────────────────────"
 
+# ── 0. Clean up stale bots ────────────────────────
+STALE=$(curl -sf -H "X-API-Key: $API_TOKEN" "$GATEWAY_URL/bots/status" | python3 -c "
+import sys,json
+for b in json.load(sys.stdin).get('running_bots',[]):
+    mid=b.get('native_meeting_id','')
+    p=b.get('platform','google_meet')
+    mode=b.get('data',{}).get('mode','')
+    if mode=='browser_session': print(f'browser_session/{mid}')
+    else: print(f'{p}/{mid}')
+" 2>/dev/null)
+if [ -n "$STALE" ]; then
+    info "cleaning up stale bots..."
+    echo "$STALE" | while read -r bp; do
+        curl -sf -X DELETE "$GATEWAY_URL/bots/$bp" -H "X-API-Key: $API_TOKEN" > /dev/null 2>&1 || true
+    done
+    sleep 10
+    pass "stale bots cleaned"
+fi
+
 # ── 1. Create browser session ─────────────────────
 
 echo "  creating browser session..."

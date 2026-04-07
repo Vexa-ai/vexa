@@ -1,4 +1,4 @@
-.PHONY: all all-build env build build-bot-image build-transcript-rendering up down ps logs test init-db restore-db check_docker publish promote-staging promote-latest help-tags setup-api-key
+.PHONY: all all-build env build build-bot-image build-transcript-rendering up down ps logs test test-transcription init-db restore-db check_docker preflight publish promote-staging promote-latest help-tags setup-api-key
 
 # --- Paths ---
 ROOT := $(shell git rev-parse --show-toplevel)
@@ -30,10 +30,10 @@ COMPOSE_CMD = docker compose --env-file $(ENV_FILE) -f $(COMPOSE_FILE)
 # Main targets
 # ============================================================================
 
-all: env up init-db setup-api-key test
+all: env preflight up init-db setup-api-key test
 	@echo "Vexa is running. API: http://localhost:$${API_GATEWAY_HOST_PORT:-8056}/docs"
 
-all-build: env build up init-db setup-api-key test
+all-build: env preflight build up init-db setup-api-key test
 	@echo "Vexa is running (built from source). API: http://localhost:$${API_GATEWAY_HOST_PORT:-8056}/docs"
 
 help-tags:
@@ -82,6 +82,30 @@ env:
 		fi; \
 	fi
 
+# --- Preflight — validate credentials before starting anything ---
+preflight:
+	@TX_URL=$$(grep -E '^TRANSCRIPTION_SERVICE_URL=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
+	TX_TOKEN=$$(grep -E '^TRANSCRIPTION_SERVICE_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
+	if [ -z "$$TX_URL" ]; then \
+		echo "  ✗ TRANSCRIPTION_SERVICE_URL not set in .env"; exit 1; \
+	fi; \
+	if [ -z "$$TX_TOKEN" ]; then \
+		echo "  ✗ TRANSCRIPTION_SERVICE_TOKEN not set in .env"; exit 1; \
+	fi; \
+	HTTP=$$(curl -s -o /dev/null -w '%{http_code}' -X POST "$$TX_URL" \
+		-H "Authorization: Bearer $$TX_TOKEN" \
+		-F "file=@$(ROOT)/tests/testdata/test-speech-en.wav" \
+		-F "language=en" --max-time 10 2>/dev/null); \
+	if [ "$$HTTP" = "200" ]; then \
+		echo "  ✓ Transcription token valid"; \
+	elif [ "$$HTTP" = "403" ]; then \
+		echo "  ✗ TRANSCRIPTION_SERVICE_TOKEN rejected (403). Token expired — get a new one."; exit 1; \
+	elif [ "$$HTTP" = "000" ]; then \
+		echo "  ⚠ Transcription unreachable ($$TX_URL). Continuing..."; \
+	else \
+		echo "  ⚠ Transcription HTTP $$HTTP. Continuing..."; \
+	fi
+
 # --- Docker check ---
 check_docker:
 	@if ! docker info > /dev/null 2>&1; then \
@@ -112,7 +136,7 @@ build: check_docker build-bot-image build-transcript-rendering build-lite
 	@docker images --format 'table {{.Repository}}\t{{.Tag}}\t{{.CreatedAt}}' | grep "$(IMAGE_TAG)" || true
 
 # --- Up / Down ---
-up: check_docker
+up: check_docker preflight
 	@if [ -f $(LAST_TAG_FILE) ]; then \
 		export IMAGE_TAG=$$(cat $(LAST_TAG_FILE)); \
 		echo "Using image tag: $$IMAGE_TAG (from .last-tag)"; \
@@ -124,6 +148,12 @@ up: check_docker
 		docker network create vexa-network || true; \
 	fi; \
 	$(COMPOSE_CMD) up -d; \
+	BOT_TAG=$$(cat $(LAST_TAG_FILE) 2>/dev/null || echo "dev"); \
+	BOT_IMG=$(DOCKERHUB_USER)/$(BOT_IMAGE):$$BOT_TAG; \
+	if ! docker image inspect $$BOT_IMG > /dev/null 2>&1; then \
+		echo "Pulling bot image: $$BOT_IMG..."; \
+		docker pull $$BOT_IMG; \
+	fi; \
 	if grep -qE '^LOCAL_TRANSCRIPTION=true' $(ENV_FILE) 2>/dev/null; then \
 		echo "LOCAL_TRANSCRIPTION=true — starting transcription-service..."; \
 		cd $(ROOT)/services/transcription-service && docker compose up -d; \
@@ -218,6 +248,49 @@ test: check_docker
 	echo ""; \
 	echo "Image tag: $$(cat $(LAST_TAG_FILE) 2>/dev/null || echo 'unknown')"; \
 	echo "To test: open the dashboard and join a Google Meet."
+	@$(MAKE) --no-print-directory test-transcription
+
+# --- Transcription test ---
+# Sends a real audio file to the transcription service and verifies text comes back.
+# Catches: wrong URL, wrong token, service down, model mismatch.
+TEST_AUDIO := $(ROOT)/tests/testdata/test-speech-en.wav
+
+test-transcription:
+	@TX_URL=$$(grep -E '^TRANSCRIPTION_SERVICE_URL=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
+	TX_TOKEN=$$(grep -E '^TRANSCRIPTION_SERVICE_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
+	if [ -z "$$TX_URL" ]; then \
+		echo "  ✗ Transcription: TRANSCRIPTION_SERVICE_URL not set in .env"; \
+		exit 1; \
+	fi; \
+	if [ ! -f "$(TEST_AUDIO)" ]; then \
+		echo "  ✗ Transcription: test audio file not found at $(TEST_AUDIO)"; \
+		exit 1; \
+	fi; \
+	echo "Testing transcription at $$TX_URL ..."; \
+	RESP=$$(curl -s -X POST "$$TX_URL" \
+		-H "Authorization: Bearer $$TX_TOKEN" \
+		-F "file=@$(TEST_AUDIO)" \
+		-F "language=en" \
+		-F "model=large-v3-turbo" \
+		-w "\n%{http_code}" 2>&1); \
+	HTTP=$$(echo "$$RESP" | tail -1); \
+	BODY=$$(echo "$$RESP" | head -n -1); \
+	if [ "$$HTTP" = "200" ]; then \
+		TEXT=$$(echo "$$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('text','')[:80])" 2>/dev/null); \
+		if [ -n "$$TEXT" ]; then \
+			echo "  ✓ Transcription works: \"$$TEXT\""; \
+		else \
+			echo "  ✗ Transcription returned 200 but no text"; \
+			exit 1; \
+		fi; \
+	elif [ "$$HTTP" = "401" ] || [ "$$HTTP" = "403" ]; then \
+		echo "  ✗ Transcription auth failed ($$HTTP). Check TRANSCRIPTION_SERVICE_TOKEN in .env"; \
+		exit 1; \
+	else \
+		echo "  ✗ Transcription failed (HTTP $$HTTP)"; \
+		echo "    $$BODY" | head -3; \
+		exit 1; \
+	fi
 
 # ============================================================================
 # Publishing & Promotion
