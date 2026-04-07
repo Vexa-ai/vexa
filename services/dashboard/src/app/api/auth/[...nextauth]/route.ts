@@ -3,6 +3,12 @@ import GoogleProvider from "next-auth/providers/google";
 import AzureADProvider from "next-auth/providers/azure-ad";
 import { cookies } from "next/headers";
 import { findUserByEmail, createUser, createUserToken } from "@/lib/vexa-admin-api";
+
+function isSecureRequest(): boolean {
+  return process.env.NEXTAUTH_URL?.startsWith("https://") ||
+         process.env.DASHBOARD_URL?.startsWith("https://") ||
+         false;
+}
 import { getRegistrationConfig, validateEmailForRegistration } from "@/lib/registration";
 
 // Check if Google OAuth is enabled
@@ -149,7 +155,7 @@ export const authOptions: NextAuthOptions = {
           const cookieStore = await cookies();
           cookieStore.set("vexa-token", apiToken, {
             httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
+            secure: isSecureRequest(),
             sameSite: "lax",
             maxAge: 60 * 60 * 24 * 30, // 30 days
             path: "/",

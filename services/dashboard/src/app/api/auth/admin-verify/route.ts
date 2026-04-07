@@ -3,6 +3,12 @@ import { cookies } from "next/headers";
 import crypto from "crypto";
 
 const ADMIN_COOKIE_NAME = "vexa-admin-session";
+
+function isSecureRequest(): boolean {
+  return process.env.NEXTAUTH_URL?.startsWith("https://") ||
+         process.env.DASHBOARD_URL?.startsWith("https://") ||
+         false;
+}
 const COOKIE_MAX_AGE = 60 * 60 * 24; // 24 hours
 
 function getSigningSecret(): string {
@@ -73,7 +79,7 @@ export async function POST(request: NextRequest) {
 
     cookieStore.set(ADMIN_COOKIE_NAME, sessionValue, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure: isSecureRequest(),
       sameSite: "lax",
       maxAge: COOKIE_MAX_AGE,
       path: "/",

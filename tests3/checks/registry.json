@@ -1,0 +1,427 @@
+{
+  "_doc": "Each entry is a check. 'proves' says what passing means. 'symptom' says what failing means.",
+  "locks": [
+
+    {"_": "═══ STATIC — grep source code, no infra, 0s ═══"},
+
+    {
+      "id": "LOGIN_REDIRECT",
+      "tier": "static",
+      "found": "2026-04-07",
+      "proves": "login redirects to / (then /meetings), not to disabled /agent page",
+      "symptom": "After login, user redirected to /agent (disabled feature) instead of /meetings",
+      "file": "services/dashboard/src/app/login/page.tsx",
+      "must_not_match": "push\\(\"/agent\"\\)",
+      "must_match": "push(\"/\")"
+    },
+    {
+      "id": "IDENTITY_NO_FALLBACK",
+      "tier": "static",
+      "found": "2026-04-07",
+      "proves": "/api/auth/me uses only cookie for identity, never falls back to env var",
+      "symptom": "/api/auth/me returns wrong user — fell back to VEXA_API_KEY env var instead of cookie",
+      "file": "services/dashboard/src/app/api/auth/me/route.ts",
+      "must_not_match": "process\\.env\\.VEXA_API_KEY"
+    },
+    {
+      "id": "SECURE_COOKIE_SEND_MAGIC_LINK",
+      "tier": "static",
+      "found": "2026-04-07",
+      "proves": "cookie Secure flag based on actual protocol, not NODE_ENV (send-magic-link)",
+      "symptom": "Login loop on HTTP — Secure cookie flag set based on NODE_ENV instead of actual protocol",
+      "file": "services/dashboard/src/app/api/auth/send-magic-link/route.ts",
+      "must_match": "isSecureRequest()"
+    },
+    {
+      "id": "SECURE_COOKIE_VERIFY",
+      "tier": "static",
+      "found": "2026-04-07",
+      "proves": "cookie Secure flag based on actual protocol, not NODE_ENV (verify)",
+      "symptom": "Login loop on HTTP — Secure cookie flag set based on NODE_ENV instead of actual protocol",
+      "file": "services/dashboard/src/app/api/auth/verify/route.ts",
+      "must_match": "isSecureRequest()"
+    },
+    {
+      "id": "SECURE_COOKIE_ADMIN_VERIFY",
+      "tier": "static",
+      "found": "2026-04-07",
+      "proves": "cookie Secure flag based on actual protocol, not NODE_ENV (admin-verify)",
+      "symptom": "Login loop on HTTP — Secure cookie flag set based on NODE_ENV instead of actual protocol",
+      "file": "services/dashboard/src/app/api/auth/admin-verify/route.ts",
+      "must_match": "isSecureRequest()"
+    },
+    {
+      "id": "SECURE_COOKIE_NEXTAUTH",
+      "tier": "static",
+      "found": "2026-04-07",
+      "proves": "cookie Secure flag based on actual protocol, not NODE_ENV (nextauth)",
+      "symptom": "Login loop on HTTP — Secure cookie flag set based on NODE_ENV instead of actual protocol",
+      "file": "services/dashboard/src/app/api/auth/[...nextauth]/route.ts",
+      "must_match": "isSecureRequest()"
+    },
+    {
+      "id": "ROUTE_COLLISION",
+      "tier": "static",
+      "found": "2026-04-06",
+      "proves": "bot detail route is /bots/id/{id}, not /bots/{id} which collides with /bots/status",
+      "symptom": "GET /bots/status returns 422 — Starlette matches /bots/{meeting_id} before /bots/status",
+      "file": "services/meeting-api/meeting_api/meetings.py",
+      "must_match": "/bots/id/{meeting_id}"
+    },
+    {
+      "id": "GRACEFUL_LEAVE",
+      "tier": "static",
+      "found": "2026-04-06",
+      "proves": "self_initiated_leave during stopping treated as completed, not failed",
+      "symptom": "Bot shows failed after successful meeting — exit during stopping treated as failure",
+      "file": "services/meeting-api/meeting_api/callbacks.py",
+      "must_match": "self_initiated_leave"
+    },
+    {
+      "id": "URL_PARSER_EXISTS",
+      "tier": "static",
+      "found": "2026-04-06",
+      "proves": "MeetingCreate schema has parse_meeting_url — accepts meeting_url field directly",
+      "symptom": "All Teams URL formats return 422 — MeetingCreate schema had no URL parser",
+      "file": "services/meeting-api/meeting_api/schemas.py",
+      "must_match": "parse_meeting_url"
+    },
+    {
+      "id": "MAP_MEETING",
+      "tier": "static",
+      "found": "2026-04-07",
+      "proves": "dashboard API client maps native_meeting_id to platform_specific_id via mapMeeting",
+      "symptom": "Transcript page empty — getMeeting() skipped mapMeeting(), native_meeting_id not mapped",
+      "file": "services/dashboard/src/lib/api.ts",
+      "must_match": "mapMeeting"
+    },
+    {
+      "id": "COMPOSE_ADMIN_KEY_DEFAULT",
+      "tier": "static",
+      "found": "2026-04-07",
+      "proves": "dashboard and admin-api share same ADMIN_API_TOKEN default in compose",
+      "symptom": "Dashboard login 503 — VEXA_ADMIN_API_KEY had different default than admin-api",
+      "file": "deploy/compose/docker-compose.yml",
+      "must_match": "VEXA_ADMIN_API_KEY=${ADMIN_API_TOKEN:-changeme}"
+    },
+    {
+      "id": "PASSWORD_STORE_BASIC",
+      "tier": "static",
+      "found": "2026-04-07",
+      "proves": "Chrome uses basic password store — cookies decryptable across sessions",
+      "symptom": "Authenticated join fails — Chrome cookies encrypted, login not restored across sessions",
+      "file": "services/vexa-bot/core/src/constans.ts",
+      "must_match": "password-store=basic"
+    },
+
+    {"_": "═══ ENV — cross-container env var consistency, 2s ═══"},
+
+    {
+      "id": "DASHBOARD_ADMIN_KEY_MATCHES",
+      "tier": "env",
+      "found": "2026-04-07",
+      "proves": "dashboard VEXA_ADMIN_API_KEY equals admin-api ADMIN_API_TOKEN — login will work",
+      "symptom": "Dashboard login fails silently — VEXA_ADMIN_API_KEY in dashboard differs from admin-api ADMIN_API_TOKEN",
+      "env_checks": [
+        {
+          "service": "dashboard",
+          "var": "VEXA_ADMIN_API_KEY",
+          "not_empty": true,
+          "equals": {"service": "admin-api", "var": "ADMIN_API_TOKEN"}
+        }
+      ]
+    },
+    {
+      "id": "DASHBOARD_ADMIN_KEY_VALID",
+      "tier": "env",
+      "found": "2026-04-07",
+      "proves": "dashboard can authenticate to admin-api — user lookup and login will work",
+      "symptom": "Dashboard shows empty pages — VEXA_ADMIN_API_KEY rejected by admin-api",
+      "env_checks": [
+        {
+          "service": "dashboard",
+          "var": "VEXA_ADMIN_API_KEY",
+          "valid_against": {
+            "url": "$ADMIN_URL/admin/users?limit=1",
+            "header": "X-Admin-API-Key: $VALUE"
+          }
+        }
+      ]
+    },
+    {
+      "id": "DASHBOARD_API_KEY_VALID",
+      "tier": "env",
+      "found": "2026-04-07",
+      "proves": "dashboard VEXA_API_KEY accepted by gateway — transcript and bot data will load",
+      "symptom": "Dashboard transcript/status empty — VEXA_API_KEY in dashboard is stale (401 from gateway)",
+      "env_checks": [
+        {
+          "service": "dashboard",
+          "var": "VEXA_API_KEY",
+          "valid_against": {
+            "url": "$GATEWAY_URL/bots/status",
+            "header": "X-API-Key: $VALUE"
+          }
+        }
+      ]
+    },
+    {
+      "id": "DASHBOARD_API_URL_SET",
+      "tier": "env",
+      "found": "2026-04-07",
+      "proves": "dashboard knows where the backend is — API calls will reach the gateway",
+      "symptom": "Dashboard cannot reach backend — VEXA_API_URL not set or wrong",
+      "env_checks": [
+        {
+          "service": "dashboard",
+          "var": "VEXA_API_URL",
+          "not_empty": true
+        }
+      ]
+    },
+    {
+      "id": "MINIO_ENDPOINT_SET",
+      "tier": "env",
+      "found": "2026-04-07",
+      "proves": "meeting-api can reach MinIO — browser state save/restore and recordings will work",
+      "symptom": "Authenticated bot join has no S3 config — MINIO_ENDPOINT not set in meeting-api",
+      "env_checks": [
+        {
+          "service": "meeting-api",
+          "var": "MINIO_ENDPOINT",
+          "not_empty": true
+        }
+      ]
+    },
+    {
+      "id": "MINIO_BUCKET_SET",
+      "tier": "env",
+      "proves": "MinIO bucket configured — file operations have a destination",
+      "symptom": "Browser session save fails — MINIO_BUCKET not configured in meeting-api",
+      "env_checks": [
+        {
+          "service": "meeting-api",
+          "var": "MINIO_BUCKET",
+          "not_empty": true
+        }
+      ]
+    },
+    {
+      "id": "RUNTIME_API_URL_SET",
+      "tier": "env",
+      "proves": "meeting-api can reach runtime-api — bot container creation will work",
+      "symptom": "Bot creation fails — meeting-api cannot reach runtime-api",
+      "env_checks": [
+        {
+          "service": "meeting-api",
+          "var": "RUNTIME_API_URL",
+          "not_empty": true
+        }
+      ]
+    },
+
+    {"_": "═══ HEALTH — service endpoints respond, 5s ═══"},
+
+    {
+      "id": "GATEWAY_UP",
+      "tier": "health",
+      "proves": "API gateway accepts connections — all client requests can reach backend",
+      "symptom": "API gateway not responding",
+      "url": "$GATEWAY_URL/",
+      "expect_code": 200
+    },
+    {
+      "id": "ADMIN_API_UP",
+      "tier": "health",
+      "proves": "admin-api responds with valid token — user management and login work",
+      "symptom": "Admin API not responding",
+      "url": "$ADMIN_URL/admin/users?limit=1",
+      "expect_code": 200,
+      "needs_admin_token": true
+    },
+    {
+      "id": "DASHBOARD_UP",
+      "tier": "health",
+      "proves": "dashboard serves pages — user can access the UI",
+      "symptom": "Dashboard not responding",
+      "url": "$DASHBOARD_URL/",
+      "expect_code": 200
+    },
+    {
+      "id": "RUNTIME_API_UP",
+      "tier": "health",
+      "proves": "runtime-api responds — bot container lifecycle management works",
+      "symptom": "Runtime API not responding — bot creation will fail",
+      "url": "http://localhost:8090/health",
+      "expect_code": 200
+    },
+    {
+      "id": "TRANSCRIPTION_UP",
+      "tier": "health",
+      "proves": "transcription service responds — audio can be converted to text",
+      "symptom": "Transcription service not responding",
+      "url": "http://localhost:8085/health",
+      "expect_code": 200
+    },
+    {
+      "id": "REDIS_UP",
+      "tier": "health",
+      "proves": "Redis responds to PING — WebSocket pub/sub, session state, and caching work",
+      "symptom": "Redis not responding — WS, session state, and pub/sub will fail",
+      "url": "REDIS_PING",
+      "expect_code": 200
+    },
+    {
+      "id": "MINIO_UP",
+      "tier": "health",
+      "proves": "MinIO responds — recordings and browser state storage work",
+      "symptom": "MinIO not responding — recordings and browser state will fail",
+      "url": "http://localhost:9000/minio/health/live",
+      "expect_code": 200
+    },
+
+    {"_": "═══ CONTRACT — API behavior correct, 15s ═══"},
+
+    {
+      "id": "BOTS_STATUS_NOT_422",
+      "tier": "contract",
+      "found": "2026-04-06",
+      "proves": "GET /bots/status returns 200 — no route collision with /bots/{meeting_id}",
+      "symptom": "GET /bots/status returns 422 due to route collision with /bots/{meeting_id}",
+      "url": "$GATEWAY_URL/bots/status",
+      "method": "GET",
+      "auth": "api_token",
+      "expect_code": 200
+    },
+    {
+      "id": "MEETINGS_LIST",
+      "tier": "contract",
+      "proves": "GET /meetings returns 200 — meeting list API works",
+      "symptom": "GET /meetings not returning 200",
+      "url": "$GATEWAY_URL/meetings",
+      "method": "GET",
+      "auth": "api_token",
+      "expect_code": 200
+    },
+    {
+      "id": "AUTH_REJECTS_NO_TOKEN",
+      "tier": "contract",
+      "proves": "API rejects unauthenticated requests — auth middleware is active",
+      "symptom": "API accepts requests without auth token",
+      "url": "$GATEWAY_URL/meetings",
+      "method": "GET",
+      "auth": "",
+      "expect_code": [401, 403, 422]
+    },
+    {
+      "id": "TEAMS_URL_STANDARD",
+      "tier": "contract",
+      "found": "2026-04-06",
+      "proves": "Teams standard join URL accepted by POST /bots",
+      "symptom": "Teams standard URL format rejected",
+      "url": "$GATEWAY_URL/bots",
+      "method": "POST",
+      "auth": "api_token",
+      "data": "{\"platform\":\"teams\",\"meeting_url\":\"https://teams.microsoft.com/l/meetup-join/19%3ameeting_test123%40thread.v2/0?context=%7b%22Tid%22%3a%22test%22%7d\",\"bot_name\":\"url-check\"}",
+      "expect_code": [200, 201, 202, 403, 409]
+    },
+    {
+      "id": "TEAMS_URL_SHORTLINK",
+      "tier": "contract",
+      "found": "2026-04-06",
+      "proves": "Teams /meet/ shortlink URL accepted or known gap",
+      "symptom": "Teams shortlink URL format rejected — parse_meeting_url does not handle /meet/ path",
+      "url": "$GATEWAY_URL/bots",
+      "method": "POST",
+      "auth": "api_token",
+      "data": "{\"platform\":\"teams\",\"meeting_url\":\"https://teams.microsoft.com/meet/test123?p=abc123\",\"bot_name\":\"url-check-2\"}",
+      "expect_code": [200, 201, 202, 403, 409, 422]
+    },
+    {
+      "id": "TEAMS_URL_CHANNEL",
+      "tier": "contract",
+      "proves": "Teams channel meeting URL accepted or known gap",
+      "symptom": "Teams channel meeting URL rejected",
+      "url": "$GATEWAY_URL/bots",
+      "method": "POST",
+      "auth": "api_token",
+      "data": "{\"platform\":\"teams\",\"meeting_url\":\"https://teams.microsoft.com/l/meetup-join/19%3atestchannel%40thread.tacv2/1234567890\",\"bot_name\":\"url-check-3\"}",
+      "expect_code": [200, 201, 202, 403, 409, 422]
+    },
+    {
+      "id": "TEAMS_URL_ENTERPRISE",
+      "tier": "contract",
+      "proves": "Teams enterprise domain URL accepted or known gap",
+      "symptom": "Teams custom enterprise domain URL rejected",
+      "url": "$GATEWAY_URL/bots",
+      "method": "POST",
+      "auth": "api_token",
+      "data": "{\"platform\":\"teams\",\"meeting_url\":\"https://myorg.teams.microsoft.com/meet/test123?p=abc123\",\"bot_name\":\"url-check-4\"}",
+      "expect_code": [200, 201, 202, 403, 409, 422]
+    },
+    {
+      "id": "TEAMS_URL_PERSONAL",
+      "tier": "contract",
+      "proves": "Teams personal (teams.live.com) URL accepted or known gap",
+      "symptom": "Teams personal (teams.live.com) URL rejected",
+      "url": "$GATEWAY_URL/bots",
+      "method": "POST",
+      "auth": "api_token",
+      "data": "{\"platform\":\"teams\",\"meeting_url\":\"https://teams.live.com/meet/test123\",\"bot_name\":\"url-check-5\"}",
+      "expect_code": [200, 201, 202, 403, 409, 422]
+    },
+    {
+      "id": "GMEET_URL_PARSED",
+      "tier": "contract",
+      "proves": "Google Meet URL accepted by POST /bots — parser handles GMeet format",
+      "symptom": "Google Meet URL not accepted by POST /bots",
+      "url": "$GATEWAY_URL/bots",
+      "method": "POST",
+      "auth": "api_token",
+      "data": "{\"platform\":\"google_meet\",\"meeting_url\":\"https://meet.google.com/abc-defg-hij\",\"bot_name\":\"url-check-gm\"}",
+      "expect_code": [200, 201, 202, 403, 409]
+    },
+    {
+      "id": "INVALID_URL_REJECTED",
+      "tier": "contract",
+      "proves": "garbage URLs rejected with 400/422 — input validation works",
+      "symptom": "Invalid URL accepted instead of rejected",
+      "url": "$GATEWAY_URL/bots",
+      "method": "POST",
+      "auth": "api_token",
+      "data": "{\"platform\":\"teams\",\"meeting_url\":\"not-a-url\",\"bot_name\":\"url-check-bad\"}",
+      "expect_code": [400, 422]
+    },
+    {
+      "id": "WS_PING_PONG",
+      "tier": "contract",
+      "proves": "WebSocket connection works — dashboard live updates will function",
+      "symptom": "WebSocket not responding to ping",
+      "url": "$GATEWAY_URL/ws",
+      "method": "WS_PING",
+      "auth": "api_token",
+      "expect_code": 200
+    },
+    {
+      "id": "DASHBOARD_LOGIN",
+      "tier": "contract",
+      "found": "2026-04-07",
+      "proves": "magic link login endpoint returns 200 — admin key is correctly configured",
+      "symptom": "Dashboard magic link login returns 503 — admin key misconfigured",
+      "url": "$DASHBOARD_URL/api/auth/send-magic-link",
+      "method": "POST",
+      "data": "{\"email\":\"test@vexa.ai\"}",
+      "expect_code": 200
+    },
+    {
+      "id": "CACHE_HEADERS",
+      "tier": "contract",
+      "found": "2026-04-07",
+      "proves": "dashboard HTML has cache control — deploy won't serve stale JS bundles",
+      "symptom": "Old JS bundle served after deploy — HTML page cached by browser",
+      "url": "$DASHBOARD_URL/",
+      "method": "HEAD",
+      "expect_code": 200
+    }
+  ]
+}

@@ -1,0 +1,401 @@
+#!/usr/bin/env python3
+"""
+Unified check runner. Reads registry.json, filters by --tier, runs each check.
+
+Tiers:
+  static   — grep source files (no infra)
+  env      — compare env vars across containers (needs docker/kubectl)
+  health   — curl service endpoints (needs network)
+  contract — test API behavior (needs network + credentials)
+
+Usage:
+  ./checks/run --tier static
+  ./checks/run --tier env
+  ./checks/run --tier health
+  ./checks/run --tier contract
+  ./checks/run                   # all tiers
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+
+ROOT = os.environ.get("ROOT", subprocess.check_output(
+    ["git", "rev-parse", "--show-toplevel"], text=True).strip())
+STATE = os.environ.get("STATE", os.path.join(ROOT, "tests3", ".state"))
+REGISTRY = os.path.join(ROOT, "tests3", "checks", "registry.json")
+
+
+LOG_FILE = os.path.join(STATE, "tests3.log")
+
+def red(s):   return f"\033[31m{s}\033[0m"
+def green(s): return f"\033[32m{s}\033[0m"
+def dim(s):   return f"\033[90m{s}\033[0m"
+
+
+def log(level, check_id, message, detail=""):
+    """Append a timestamped line to the log file."""
+    from datetime import datetime
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{ts}] {level:<4} {check_id}: {message}"
+    if detail:
+        line += f" | {detail}"
+    with open(LOG_FILE, "a") as f:
+        f.write(line + "\n")
+
+
+def state_read(key, required=False):
+    path = os.path.join(STATE, key)
+    if os.path.isfile(path):
+        return open(path).read().strip()
+    if required:
+        print(f"  {red('ERROR')}: missing state: {key} (run 'make detect' first)")
+        sys.exit(1)
+    return ""
+
+
+def svc_exec(svc, cmd):
+    """Run command inside a service container. Returns (exit_code, stdout)."""
+    mode = state_read("deploy_mode", required=True)
+    if mode == "compose":
+        full = ["docker", "exec", f"vexa-{svc}-1"] + cmd
+    elif mode == "lite":
+        full = ["docker", "exec", "vexa"] + cmd
+    elif mode == "helm":
+        full = ["kubectl", "exec", f"deploy/{svc}", "--"] + cmd
+    else:
+        return 1, f"unknown mode: {mode}"
+
+    try:
+        r = subprocess.run(full, capture_output=True, text=True, timeout=10)
+        return r.returncode, r.stdout.strip()
+    except Exception as e:
+        return 1, str(e)
+
+
+def http_check(url, expect_code=200, headers=None):
+    """Curl a URL. Returns (actual_code, body)."""
+    cmd = ["curl", "-sf", "-w", "\n%{http_code}", "-o", "-"]
+    for h in (headers or []):
+        cmd += ["-H", h]
+    cmd.append(url)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        lines = r.stdout.strip().rsplit("\n", 1)
+        body = lines[0] if len(lines) > 1 else ""
+        code = int(lines[-1]) if lines[-1].isdigit() else 0
+        return code, body
+    except Exception as e:
+        return 0, str(e)
+
+
+# ─── Tier runners ────────────────────────────────────────────────
+
+def check_static(lock):
+    """Grep source file for must_match / must_not_match."""
+    filepath = os.path.join(ROOT, lock["file"])
+    if not os.path.isfile(filepath):
+        return False, "file missing"
+
+    content = open(filepath).read()
+    must = lock.get("must_match", "")
+    must_not = lock.get("must_not_match", "")
+
+    if must and must not in content:
+        return False, f"expected: {must}"
+    if must_not and re.search(must_not, content):
+        return False, f"forbidden: {must_not}"
+    return True, ""
+
+
+def check_env(lock):
+    """Compare env var values across containers."""
+    checks = lock.get("env_checks", [])
+    for chk in checks:
+        svc = chk["service"]
+        var = chk["var"]
+        code, val = svc_exec(svc, ["printenv", var])
+        if code != 0:
+            return False, f"{svc}: {var} not set"
+
+        # If 'equals' specified, compare to another service's var
+        if "equals" in chk:
+            svc2 = chk["equals"]["service"]
+            var2 = chk["equals"]["var"]
+            code2, val2 = svc_exec(svc2, ["printenv", var2])
+            if code2 != 0:
+                return False, f"{svc2}: {var2} not set"
+            if val != val2:
+                return False, f"{svc}.{var}={val!r} != {svc2}.{var2}={val2!r}"
+
+        # If 'valid_against' specified, use the value as a credential
+        if "valid_against" in chk:
+            url = chk["valid_against"]["url"].replace("$GATEWAY_URL", state_read("gateway_url", required=True))
+            url = url.replace("$ADMIN_URL", state_read("admin_url", required=True))
+            header = chk["valid_against"]["header"].replace("$VALUE", val)
+            code_h, _ = http_check(url, headers=[header])
+            if code_h != 200:
+                return False, f"{svc}.{var} is invalid (HTTP {code_h} from {url})"
+
+        # If 'not_empty' specified
+        if chk.get("not_empty") and not val:
+            return False, f"{svc}: {var} is empty"
+
+    return True, ""
+
+
+def check_health(lock):
+    """Curl a service endpoint, check status code."""
+    url = lock["url"]
+
+    # Special: Redis ping via svc_exec
+    if url == "REDIS_PING":
+        code, out = svc_exec("redis", ["redis-cli", "ping"])
+        if code == 0 and "PONG" in out:
+            return True, ""
+        return False, f"redis-cli ping: {out}"
+
+    url = url.replace("$GATEWAY_URL", state_read("gateway_url", required=True))
+    url = url.replace("$ADMIN_URL", state_read("admin_url", required=True))
+    url = url.replace("$DASHBOARD_URL", state_read("dashboard_url", required=True))
+    expect = lock.get("expect_code", 200)
+    headers = []
+
+    # Some health checks need auth — bootstrap from container if needed
+    if lock.get("needs_admin_token"):
+        admin_token = state_read("admin_token")
+        if not admin_token:
+            code_e, val = svc_exec("admin-api", ["printenv", "ADMIN_API_TOKEN"])
+            if code_e == 0 and val:
+                admin_token = val
+                with open(os.path.join(STATE, "admin_token"), "w") as f:
+                    f.write(admin_token)
+        if admin_token:
+            headers.append(f"X-Admin-API-Key: {admin_token}")
+
+    code, body = http_check(url, headers=headers)
+    if code == expect:
+        return True, ""
+    return False, f"HTTP {code} (expected {expect})"
+
+
+def check_contract(lock):
+    """Test API behavior — method, URL, expected response."""
+    gw = state_read("gateway_url", required=True)
+    admin = state_read("admin_url", required=True)
+    dash = state_read("dashboard_url", required=True)
+    token = state_read("api_token")
+    admin_token = state_read("admin_token")
+
+    url = lock["url"].replace("$GATEWAY_URL", gw).replace("$ADMIN_URL", admin).replace("$DASHBOARD_URL", dash)
+    method = lock.get("method", "GET")
+    expect = lock.get("expect_code", 200)
+    headers = []
+
+    auth = lock.get("auth", "")
+    if auth == "api_token" and token:
+        headers.append(f"X-API-Key: {token}")
+    elif auth == "admin_token" and admin_token:
+        headers.append(f"X-Admin-API-Key: {admin_token}")
+
+    # WebSocket ping check
+    if method == "WS_PING":
+        return check_ws_ping(gw, token)
+
+    if method == "GET":
+        code, body = http_check(url, headers=headers)
+    else:
+        data = lock.get("data", "{}")
+        headers.append("Content-Type: application/json")
+        cmd = ["curl", "-sf", "-w", "\n%{http_code}", "-o", "-", "-X", method, "-d", data]
+        for h in headers:
+            cmd += ["-H", h]
+        cmd.append(url)
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            lines = r.stdout.strip().rsplit("\n", 1)
+            body = lines[0] if len(lines) > 1 else ""
+            code = int(lines[-1]) if lines[-1].isdigit() else 0
+        except Exception as e:
+            code, body = 0, str(e)
+
+    # expect_code can be a list
+    if isinstance(expect, list):
+        if code in expect:
+            return True, ""
+        return False, f"HTTP {code} (expected one of {expect})"
+    else:
+        if code == expect:
+            return True, ""
+        return False, f"HTTP {code} (expected {expect})"
+
+
+def check_ws_ping(gw, token):
+    """WebSocket ping/pong check via python3 websockets or raw socket."""
+    ws_url = gw.replace("http://", "ws://").replace("https://", "wss://")
+    ws_url = f"{ws_url}/ws?api_key={token}"
+    try:
+        r = subprocess.run(
+            ["python3", "-c", f"""
+import asyncio, websockets, json
+async def t():
+    async with websockets.connect('{ws_url}') as ws:
+        await ws.send(json.dumps({{"action":"ping"}}))
+        msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+        if msg.get('type') == 'pong': print('OK')
+        else: print('BAD:' + json.dumps(msg))
+asyncio.run(t())
+"""],
+            capture_output=True, text=True, timeout=10
+        )
+        if "OK" in r.stdout:
+            return True, ""
+        return False, f"no pong: {r.stdout.strip()} {r.stderr.strip()}"
+    except Exception as e:
+        return False, str(e)
+
+
+def bootstrap_creds():
+    """Ensure admin_token and api_token exist in .state for contract checks."""
+    if state_read("api_token") and state_read("admin_token"):
+        return  # already have them
+
+    # Get admin token from container env
+    admin_token = state_read("admin_token")
+    if not admin_token:
+        code, val = svc_exec("admin-api", ["printenv", "ADMIN_API_TOKEN"])
+        if code == 0 and val:
+            admin_token = val
+            with open(os.path.join(STATE, "admin_token"), "w") as f:
+                f.write(admin_token)
+
+    if not admin_token:
+        return  # can't bootstrap without admin token
+
+    admin_url = state_read("admin_url", required=True)
+    gw = state_read("gateway_url", required=True)
+
+    # Find or create test user
+    code, body = http_check(
+        f"{admin_url}/admin/users/email/test@vexa.ai",
+        headers=[f"X-Admin-API-Key: {admin_token}"])
+    if code == 200:
+        try:
+            user_id = json.loads(body)["id"]
+        except Exception:
+            return
+    else:
+        # Create user
+        cmd = ["curl", "-sf", "-X", "POST",
+               "-H", f"X-Admin-API-Key: {admin_token}",
+               "-H", "Content-Type: application/json",
+               "-d", '{"email":"test@vexa.ai","name":"Test User"}',
+               f"{admin_url}/admin/users"]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            user_id = json.loads(r.stdout)["id"]
+        except Exception:
+            return
+
+    # Create API token
+    cmd = ["curl", "-sf", "-X", "POST",
+           "-H", f"X-Admin-API-Key: {admin_token}",
+           f"{admin_url}/admin/users/{user_id}/tokens?scopes=bot,browser,tx&name=tests3"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        token = json.loads(r.stdout).get("token", "")
+        if token:
+            with open(os.path.join(STATE, "api_token"), "w") as f:
+                f.write(token)
+    except Exception:
+        pass
+
+
+RUNNERS = {
+    "static": check_static,
+    "env": check_env,
+    "health": check_health,
+    "contract": check_contract,
+}
+
+
+def main():
+    # Parse args
+    tier_filter = None
+    for i, arg in enumerate(sys.argv[1:], 1):
+        if arg == "--tier" and i < len(sys.argv) - 1:
+            tier_filter = sys.argv[i + 1]
+
+    with open(REGISTRY) as f:
+        registry = json.load(f)
+
+    locks = [l for l in registry["locks"] if "tier" in l]
+    if tier_filter:
+        locks = [l for l in locks if l["tier"] == tier_filter]
+
+    if not locks:
+        print(f"  {dim('no checks for tier: ' + str(tier_filter))}")
+        return
+
+    # Bootstrap credentials for tiers that need them
+    if tier_filter in ("contract", None):
+        bootstrap_creds()
+
+    tier_name = tier_filter or "all"
+    log("INFO", tier_name, f"starting {len(locks)} checks")
+    print()
+    print(f"  {tier_name} checks")
+    print(f"  {'─' * 46}")
+
+    passed = 0
+    failed = 0
+    failures = []
+
+    for lock in locks:
+        lid = lock["id"]
+        tier = lock["tier"]
+        symptom = lock.get("symptom", "")
+        proves = lock.get("proves", symptom)
+        runner = RUNNERS.get(tier)
+        if not runner:
+            print(f"  {red('SKIP')}  {lid}  (unknown tier: {tier})")
+            log("SKIP", lid, "unknown tier", tier)
+            continue
+
+        ok, reason = runner(lock)
+        if ok:
+            passed += 1
+            print(f"  {green(' ok ')}  {lid}")
+            log("PASS", lid, f"proves: {proves}")
+        else:
+            failed += 1
+            print(f"  {red('FAIL')}  {lid}")
+            log("FAIL", lid, reason, f"bug: {symptom}")
+            failures.append((lid, lock, reason))
+
+    print(f"  {'─' * 46}")
+
+    if failures:
+        print()
+        for lid, lock, reason in failures:
+            print(f"  {red(lid)}")
+            if "file" in lock:
+                print(f"    file: {lock['file']}")
+            print(f"    {reason}")
+            if "symptom" in lock:
+                print(f"    bug ({lock.get('found', '?')}): {lock['symptom']}")
+            print()
+        print(f"  {red(f'{failed} failed')} out of {passed + failed} checks")
+        log("INFO", tier_name, f"FAILED: {failed}/{passed + failed}")
+        print()
+        sys.exit(1)
+    else:
+        print(f"  {green(f'All {passed} checks pass.')}")
+        log("INFO", tier_name, f"ALL PASS: {passed}/{passed}")
+        print()
+
+
+if __name__ == "__main__":
+    main()

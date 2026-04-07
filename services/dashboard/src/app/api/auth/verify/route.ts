@@ -4,6 +4,12 @@ import jwt from "jsonwebtoken";
 import { getRegistrationConfig, validateEmailForRegistration } from "@/lib/registration";
 import { findUserByEmail, createUser, createUserToken, type ApiError } from "@/lib/vexa-admin-api";
 
+function isSecureRequest(): boolean {
+  return process.env.NEXTAUTH_URL?.startsWith("https://") ||
+         process.env.DASHBOARD_URL?.startsWith("https://") ||
+         false;
+}
+
 const JWT_SECRET = process.env.JWT_SECRET || process.env.VEXA_ADMIN_API_KEY || "default-secret-change-me";
 
 interface MagicLinkPayload {
@@ -182,7 +188,7 @@ export async function POST(request: NextRequest) {
     const cookieStore = await cookies();
     cookieStore.set("vexa-token", apiToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure: isSecureRequest(),
       sameSite: "lax",
       maxAge: 60 * 60 * 24 * 30, // 30 days
       path: "/",
@@ -190,7 +196,7 @@ export async function POST(request: NextRequest) {
     // Set user-info cookie so getAuthenticatedUserId can resolve the user
     cookieStore.set("vexa-user-info", JSON.stringify({ email: user!.email, name: user!.name }), {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure: isSecureRequest(),
       sameSite: "lax",
       maxAge: 60 * 60 * 24 * 30,
       path: "/",

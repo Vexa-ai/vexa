@@ -53,7 +53,11 @@ def get_redis_client() -> Any:
 WEBHOOK_API_VERSION = "2026-03-01"
 
 # Internal fields to strip from meeting.data before webhook delivery
-_INTERNAL_DATA_KEYS = {"webhook_delivery", "webhook_deliveries", "webhook_secret", "webhook_events"}
+_INTERNAL_DATA_KEYS = {
+    "webhook_delivery", "webhook_deliveries", "webhook_secret", "webhook_secrets",
+    "webhook_events", "webhook_url",
+    "bot_container_id", "container_name",
+}
 
 
 def build_envelope(event_type: str, data: Dict[str, Any], event_id: str | None = None) -> Dict[str, Any]:

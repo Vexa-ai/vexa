@@ -128,7 +128,7 @@ export default function LoginPage() {
       if (result.success) {
         if (result.mode === "direct") {
           toast.success(result.isNewUser ? "Account created! Welcome to Vexa." : "Welcome back!");
-          router.push("/agent");
+          router.push("/");
           return; // Keep submitting state during redirect
         } else {
           setState("sent");

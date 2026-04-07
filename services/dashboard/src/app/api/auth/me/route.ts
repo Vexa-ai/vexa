@@ -3,15 +3,15 @@ import { cookies } from "next/headers";
 
 /**
  * Get current user info from token.
- * Auth chain: cookie → VEXA_API_KEY env var.
- * User identity resolved via gateway /auth/me (no direct admin-api access needed).
+ * Auth chain: cookie only. No fallback to env vars.
+ * User identity resolved via gateway /auth/me.
  */
 export async function GET() {
   const VEXA_API_URL = process.env.VEXA_API_URL || "http://localhost:8056";
 
   const cookieStore = await cookies();
   const cookieToken = cookieStore.get("vexa-token")?.value;
-  const token = cookieToken || process.env.VEXA_API_KEY || "";
+  const token = cookieToken || "";
 
   if (!token) {
     return NextResponse.json(
@@ -37,8 +37,8 @@ export async function GET() {
     const data = await response.json();
     const user = {
       id: data.user_id,
-      email: data.email || "dev@local",
-      name: data.email || "Dev User",
+      email: data.email,
+      name: data.name || data.email,
     };
 
     return NextResponse.json({ authenticated: true, user, token });

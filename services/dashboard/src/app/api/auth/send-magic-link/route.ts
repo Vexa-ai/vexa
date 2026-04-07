@@ -72,6 +72,14 @@ async function checkUserExists(email: string): Promise<{ exists: boolean; error?
  * Direct login - authenticate user without email verification
  * Used when SMTP is not configured
  */
+function isSecureRequest(): boolean {
+  // Secure cookies only on HTTPS. NODE_ENV=production is always true in Next.js
+  // production builds, even when serving over HTTP (self-hosted).
+  return process.env.NEXTAUTH_URL?.startsWith("https://") ||
+         process.env.DASHBOARD_URL?.startsWith("https://") ||
+         false;
+}
+
 async function handleDirectLogin(email: string): Promise<NextResponse> {
   // Find or create user
   const findResult = await findUserByEmail(email);
@@ -128,7 +136,7 @@ async function handleDirectLogin(email: string): Promise<NextResponse> {
   const cookieStore = await cookies();
   cookieStore.set("vexa-token", apiToken, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: isSecureRequest(),
     sameSite: "lax",
     maxAge: 60 * 60 * 24 * 30, // 30 days
     path: "/",
@@ -137,7 +145,7 @@ async function handleDirectLogin(email: string): Promise<NextResponse> {
   // (mirrors what the verify endpoint and SSO flow set)
   cookieStore.set("vexa-user-info", JSON.stringify({ email: user!.email, name: user!.name }), {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: isSecureRequest(),
     sameSite: "lax",
     maxAge: 60 * 60 * 24 * 30,
     path: "/",
