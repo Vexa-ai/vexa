@@ -95,7 +95,7 @@ preflight:
 	HTTP=$$(curl -s -o /dev/null -w '%{http_code}' -X POST "$$TX_URL" \
 		-H "Authorization: Bearer $$TX_TOKEN" \
 		-F "file=@$(ROOT)/tests/testdata/test-speech-en.wav" \
-		-F "language=en" --max-time 10 2>/dev/null); \
+		-F "language=en" -F "model=large-v3-turbo" --max-time 10 2>/dev/null); \
 	if [ "$$HTTP" = "200" ]; then \
 		echo "  ✓ Transcription token valid"; \
 	elif [ "$$HTTP" = "403" ]; then \
