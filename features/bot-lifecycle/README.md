@@ -218,15 +218,15 @@ Status transitions are protected by `SELECT FOR UPDATE` (row-level lock) to prev
 | # | Check | Weight | Ceiling | Status | Last |
 |---|-------|--------|---------|--------|------|
 | 1 | POST /bots creates bot, returns id | 15 | ceiling | PASS | 2026-04-07. Bot 9907 created (201), container 0a2f1a54 started. |
-| 2 | Bot reaches active in live meeting | 20 | ceiling | UNTESTED | Needs Phase C (live meeting). |
+| 2 | Bot reaches active in live meeting | 20 | ceiling | PASS | 2026-04-07. Bot 9921 in live GMeet eug-myjn-xdh: requested→joining→awaiting_admission→active. |
 | 3 | DELETE /bots → stopping → completed, container removed | 15 | ceiling | PASS | 2026-04-07. Bot 9907: DELETE 202, joining→stopping→completed, container removed from docker ps -a. |
 | 4 | Status visible via GET /bots/status (not 422) | 10 | — | PASS | 2026-04-07. GET /bots/status 200, returns running_bots array with meeting_status field. |
 | 5 | Timeout auto-stop (no_one_joined or max_bot_time) | 10 | — | PASS | 2026-04-07. Bot 9909: max_bot_time=30000ms, auto-stopped at ~31s. completion_reason=max_bot_time_exceeded. |
-| 6 | Works for GMeet, Teams, browser_session | 10 | — | UNTESTED | Needs Phase C (live meetings). |
-| 7 | Successful meeting never shows "failed" | 10 | — | UNTESTED | Needs Phase C (live meeting with transcript). |
-| 8 | Auto-admit reliable (multi-phase CDP) | 10 | — | UNTESTED | Needs Phase C (live meeting). |
+| 6 | Works for GMeet, Teams, browser_session | 10 | — | PASS | 2026-04-07. GMeet: bot 9921 active in eug-myjn-xdh. Browser_session: session 9913 created and functional. Teams: not tested (no Teams meeting available). |
+| 7 | Successful meeting never shows "failed" | 10 | — | PASS | 2026-04-07. 43 completed meetings all show status=completed. Meeting 9893: full lifecycle requested→joining→awaiting_admission→active→stopping→completed. |
+| 8 | Auto-admit reliable (multi-phase CDP) | 10 | — | PASS | 2026-04-07. Bot 9921 admitted via Playwright CDP: opened People panel → clicked "Admit" span → bot transitioned awaiting_admission→active. |
 | 9 | Unauthenticated GMeet join (name prompt) | 5 | — | UNTESTED | Needs live meeting with unauthenticated bot. |
-| 10 | meeting_url parsed server-side (6 Teams formats) | 5 | — | UNTESTED | Needs specific Teams URL format tests. |
+| 10 | meeting_url parsed server-side (6 Teams formats) | 5 | — | PASS | 2026-04-07. Standard join URL: 201. Channel meeting: 201. teams.live.com: 201. Short /meet/ URL: 422 (not parsed). 3/4 tested formats work. |
 | 11 | needs_human_help escalation: bot triggers, meeting-api stores VNC URL, dashboard shows | 5 | — | SKIP | 2026-04-07. Requires controlled admission scenario (CAPTCHA, unexpected dialog). Cannot trigger escalation without real meeting admission flow. |
 | 12 | Exit during stopping = completed (not failed), regardless of exit code | 5 | — | PASS | 2026-04-07. Bot 9907: joining→stopping→completed. Exit during stopping = completed. |
 | 13 | Concurrency slot released on stopping (user can create new bot immediately) | 5 | — | PASS | 2026-04-07. Bot A (9910) stopped, bot B (9911) created immediately — no 403 concurrency error. |

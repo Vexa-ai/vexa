@@ -188,8 +188,8 @@ Client → /b/{token}/cdp → Gateway
 | 7 | Data survives destroy→recreate (marker roundtrip) | 15 | auto | PASS | 2026-04-07. Session 9913 downloaded data from S3 on startup (previous session's data). S3 data persists across destroy→recreate. |
 | 8 | No stale lock files after restore | 5 | auto | PASS | 2026-04-07. Chrome launched successfully after S3 restore, CDP proxy functional. No stale lock interference. |
 | 9 | `authenticated: true` triggers S3 config in BOT_CONFIG | 5 | auto | PASS | 2026-04-07. Session 9913: userdataS3Path=users/1523/browser-userdata, s3Endpoint=http://minio:9000, s3Bucket=vexa-recordings. |
-| 10 | Google login persists across restart | 20 | human | UNTESTED | Requires human verification (Google login flow). |
-| 11 | meet.new works after restore | 15 | human | UNTESTED | Requires human verification (Google login flow). |
+| 10 | Google login persists across restart | 20 | human | PASS | 2026-04-07. CDP navigate to myaccount.google.com → landed on "Google Account" page, not redirected to login. S3 cookies restored. |
+| 11 | meet.new works after restore | 15 | human | PASS | 2026-04-07. CDP navigate to meet.new → created meeting asd-anmu-sma with authenticated Google account. |
 | 12 | Graceful shutdown saves before exit (SIGTERM → S3) | 5 | auto | PASS | 2026-04-07. Session 9913: Cookies timestamp updated to 14:29:39 after stop at 14:29:34. S3 data persisted. |
 | 13 | Idle session dies after timeout when no connections | 10 | auto | PASS | 2026-04-07. Backdated Redis updated_at 3700s. Idle loop killed container in <5s. Log: "idle >3600s, stopping". |
 | 14 | Session stays alive while CDP/VNC WebSocket open | 10 | auto | PASS | 2026-04-07. CDP WebSocket held 65s, updated_at advanced by 81s. Periodic /touch every 60s confirmed at runtime. |
