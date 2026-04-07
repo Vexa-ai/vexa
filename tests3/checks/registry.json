@@ -260,7 +260,7 @@
       "tier": "health",
       "proves": "transcription service responds — audio can be converted to text",
       "symptom": "Transcription service not responding",
-      "url": "http://localhost:8085/health",
+      "url": "TRANSCRIPTION_HEALTH",
       "expect_code": 200
     },
     {

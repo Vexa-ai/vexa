@@ -63,7 +63,7 @@ sleep 15
 if [ "$MODE" = "compose" ]; then
     REMAINING=$(docker ps -a --filter "name=meeting-" --format '{{.Names}}' | { grep -c "lifecycle-test" || true; })
 elif [ "$MODE" = "lite" ]; then
-    REMAINING=$(docker exec vexa ps aux 2>/dev/null | grep -c "lifecycle-test" || echo 0)
+    REMAINING=$(docker exec vexa ps aux 2>/dev/null | { grep -c "lifecycle-test" || true; })
 else
     REMAINING=0
 fi
