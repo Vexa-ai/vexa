@@ -9,9 +9,15 @@ use: lib/vm
 
 # Compose Deployment Validation
 
-> **Why:** A self-hoster follows the README on a fresh VM. If anything is wrong — missing prereqs, wrong commands, broken services, stale docs — they're stuck. This catches it all before they do.
-> **What:** Provision a blank VM, follow deploy/compose/README.md literally, then validate everything a user would touch: services, API, dashboard, WebSocket, URL parsing, container lifecycle. Keep the deployment alive and return the dashboard URL for human testing.
-> **How:** Provision → clone → follow docs → health check → API → dashboard → protocols → score. No teardown.
+> **Why:** A self-hoster follows the README on a fresh VM. If anything is wrong — missing prereqs, wrong commands, broken services, wrong user shown, bot won't start, can't transcribe — they're stuck. This catches it all before they do.
+> **What:** Provision a blank VM, follow deploy/compose/README.md literally, then validate the core user flow: login as the right user, start a bot, verify transcription is reachable. Keep the deployment alive and return the dashboard URL for human testing.
+> **How:** Provision → clone → follow docs → core flow (login, identity, bot, transcription) → plumbing → docs → score. No teardown.
+
+## Weight philosophy
+
+> The score must reflect what the self-hoster experiences, not what the ops team monitors.
+> A deployment where redis PINGs but the user sees the wrong name after login is broken.
+> Core flow criteria are ceiling: if any fail, confidence cannot reach target.
 
 ## state
 
@@ -19,6 +25,9 @@ use: lib/vm
     VM_ID          = ""
     SSH            = ""
     REPO_DIR       = "/root/vexa"
+    ADMIN_TOKEN    = ""
+    USER_ID        = ""
+    API_TOKEN      = ""
     DOC_GAPS       = []
     CONFIDENCE     = 0
     TARGET         = 90
@@ -56,7 +65,6 @@ use: lib/vm
 
 4. prereqs
    > README says: apt-get update && apt-get install -y make; curl -fsSL https://get.docker.com | sh
-   > Follow it exactly.
 
    4a. install_make
        call: vm.ssh(IP={VM_IP}, CMD="apt-get update -qq && apt-get install -y -qq make git")
@@ -75,275 +83,305 @@ use: lib/vm
 5. clone
    call: vm.ssh(IP={VM_IP}, CMD="git clone {REPO_URL} {REPO_DIR} && cd {REPO_DIR} && git checkout {BRANCH}")
    expect: exits 0
-   call: log.emit(EVENT="PASS", MODULE="compose-validate", STEP="clone", MSG="repo cloned, branch={BRANCH}")
    on_fail: stop
 
-6. read_readme
-   > Read the README on the VM. Verify it exists and has the Quick Start section.
-   call: vm.ssh(IP={VM_IP}, CMD="cat {REPO_DIR}/deploy/compose/README.md")
-   => README_CONTENT
-   expect: README_CONTENT contains "make all"
-   if not: DOC_GAPS.append("README missing 'make all' quick start")
-   on_fail: continue
-
-7. configure_env
+6. configure_env
    > README says: edit .env, set TRANSCRIPTION_SERVICE_URL.
-   > Use make env to create .env from template, then set required vars.
    call: vm.ssh(IP={VM_IP}, CMD="cd {REPO_DIR}/deploy/compose && make env")
    expect: exits 0
-
-   > Set TRANSCRIPTION_SERVICE_URL from our env.
    call: vm.ssh(IP={VM_IP}, CMD="sed -i 's|^#*TRANSCRIPTION_SERVICE_URL=.*|TRANSCRIPTION_SERVICE_URL={TRANSCRIPTION_SERVICE_URL}|' {REPO_DIR}/.env")
    call: vm.ssh(IP={VM_IP}, CMD="sed -i 's|^#*TRANSCRIPTION_SERVICE_TOKEN=.*|TRANSCRIPTION_SERVICE_TOKEN={TRANSCRIPTION_SERVICE_TOKEN}|' {REPO_DIR}/.env")
    on_fail: stop
 
-8. make_all
-   > README says: make all — pulls images, starts services, syncs DB, creates API key, tests.
+7. make_all
    > This is the critical command. If it fails, the docs are wrong.
    call: vm.ssh(IP={VM_IP}, CMD="cd {REPO_DIR}/deploy/compose && make all 2>&1 | tail -50")
    expect: exits 0 and output contains "Vexa is running"
    if fails:
-       DOC_GAPS.append("make all failed — see output")
-       call: log.emit(EVENT="FAIL", MODULE="compose-validate", STEP="make_all", MSG="make all failed")
+       DOC_GAPS.append("make all failed")
        on_fail: stop
-   call: log.emit(EVENT="PASS", MODULE="compose-validate", STEP="make_all", MSG="make all succeeded")
+   emit PASS "make all succeeded"
 
 ═══════════════════════════════════════════════════════════════
- PHASE 3 — Validate from user's perspective
- Everything below runs on the VM via SSH.
- Checks what the self-hoster would check after deploying.
+ PHASE 3 — Core user flow                          weight: 60
+ What the self-hoster actually does after deploying.
+ Every step here is ceiling — if it fails, score cannot reach 90.
 ═══════════════════════════════════════════════════════════════
 
-9. services_health
-   > Check every service listed in the README port table.
-   for EP in [
-       {name: "gateway",       port: 8056, path: "/",        weight: 10},
-       {name: "admin-api",     port: 8057, path: "/docs",    weight: 5},
-       {name: "dashboard",     port: 3001, path: "/",        weight: 10},
-       {name: "runtime-api",   port: 8090, path: "/health",  weight: 3},
-       {name: "transcription", port: 8085, path: "/health",  weight: 5}
-   ]:
-       call: vm.ssh(IP={VM_IP}, CMD="curl -sf -o /dev/null -w '%{http_code}' http://localhost:{EP.port}{EP.path}")
-       if output == "200":
-           emit PASS "{EP.name}: healthy (port {EP.port})"
-           CONFIDENCE += EP.weight
+8. login_and_identity [ceiling]
+   > Self-hoster logs in. They must see THEIR name, not someone else's.
+   > weight: 15
+
+   8a. magic_link
+       call: vm.ssh(IP={VM_IP}, CMD="curl -sv -X POST http://localhost:3001/api/auth/send-magic-link -H 'Content-Type: application/json' -d '{\"email\":\"test@vexa.ai\"}' -c /tmp/test-cookies 2>&1")
+       => LOGIN_RESP_AND_HEADERS
+       expect: response contains "success":true
+       if fails:
+           emit FAIL "login failed"
+           on_fail: stop
+
+   8b. correct_user
+       do: parse LOGIN_RESP → user.email
+       expect: user.email == "test@vexa.ai"
+       if fails:
+           emit FAIL "BUG: login as test@vexa.ai returned different user"
+           on_fail: stop
+
+   8c. cookie_flags
+       > Bug found 2026-04-07: cookie has Secure flag on HTTP deployment.
+       > Browsers reject Secure cookies on non-HTTPS → login redirect loop.
+       do: grep Set-Cookie header for vexa-token
+       expect: on HTTP deployment, Secure flag must NOT be present
+       if Secure flag present on HTTP:
+           emit FAIL "BUG: Secure cookie on HTTP — browser will reject it, login loops"
+           on_fail: stop
+
+   8d. identity_via_cookie
+       > /api/auth/me must return the logged-in user, not the VEXA_API_KEY user.
+       call: vm.ssh(IP={VM_IP}, CMD="curl -s -b /tmp/test-cookies http://localhost:3001/api/auth/me")
+       => ME_RESP
+       do: parse ME_RESP → user.email
+       expect: user.email == "test@vexa.ai"
+       if user.email != "test@vexa.ai":
+           emit FAIL "BUG: /api/auth/me returns {user.email} instead of test@vexa.ai"
        else:
-           emit FAIL "{EP.name}: not responding (port {EP.port})"
-           DOC_GAPS.append("{EP.name} not healthy on port {EP.port}")
+           emit PASS "identity: login + cookie flags + /me all correct"
+           CONFIDENCE += 15
        on_fail: continue
 
-10. verify_ports_match_docs
-    > README lists ports. Verify they match what's actually exposed.
-    > If the README says 3001 for dashboard but compose exposes 3000, that's a doc gap.
-    call: vm.ssh(IP={VM_IP}, CMD="cd {REPO_DIR}/deploy/compose && docker compose ps --format '{{.Service}} {{.Ports}}' 2>/dev/null || docker compose ps")
-    => COMPOSE_PS
-    emit FINDING "compose services: {COMPOSE_PS}"
+9. login_redirect [ceiling]
+   > After login, the user must land on /meetings, not a disabled feature page.
+   > weight: 5
+   call: vm.ssh(IP={VM_IP}, CMD="grep -n 'router.push' {REPO_DIR}/services/dashboard/src/app/login/page.tsx")
+   > The direct-login path (result.mode === "direct") must push "/" or "/meetings".
+   if output contains 'push("/agent")' or 'push("/admin")':
+       emit FAIL "BUG: login redirects to wrong page"
+   else:
+       emit PASS "login redirects to / (→ /meetings)"
+       CONFIDENCE += 5
+   on_fail: continue
 
-    > Check that ports from README port table match compose output.
-    for CHECK in [
-        {service: "api-gateway", doc_port: 8056},
-        {service: "admin-api",   doc_port: 8057},
-        {service: "dashboard",   doc_port: 3001}
-    ]:
-        if COMPOSE_PS does not contain "{CHECK.doc_port}":
-            DOC_GAPS.append("README says {CHECK.service} on port {CHECK.doc_port} but compose shows different")
-            emit FAIL "port mismatch: {CHECK.service} doc={CHECK.doc_port}"
+10. bot_creation [ceiling]
+    > The self-hoster clicks "Start Bot". It must work.
+    > weight: 15
+
+    10a. bot_image_exists
+        > Bot containers are not in docker-compose. The image must be pulled separately.
+        call: vm.ssh(IP={VM_IP}, CMD="docker images --format '{{.Repository}}:{{.Tag}}' | grep vexa-bot || echo 'NO_BOT_IMAGE'")
+        if output contains "NO_BOT_IMAGE":
+            emit FAIL "no bot image — bot creation will fail"
+            > Don't stop — continue to test POST /bots and confirm the 500.
         else:
-            emit PASS "port matches: {CHECK.service}={CHECK.doc_port}"
-    on_fail: continue
+            emit PASS "bot image present"
 
-11. admin_api
-    > Create a test user and API token — the foundation for everything else.
-    > Uses the admin token from .env (default: changeme).
-    call: vm.ssh(IP={VM_IP}, CMD="grep '^ADMIN_TOKEN=' {REPO_DIR}/.env | cut -d= -f2")
-    => ADMIN_TOKEN
-    if ADMIN_TOKEN is empty: => ADMIN_TOKEN = "changeme"
+    10b. create_user_and_token
+        > Need an API token to test bot creation.
+        call: vm.ssh(IP={VM_IP}, CMD="grep '^ADMIN_TOKEN=' {REPO_DIR}/.env | cut -d= -f2")
+        => ADMIN_TOKEN
+        if ADMIN_TOKEN is empty: => ADMIN_TOKEN = "changeme"
 
-    11a. list_users
-        call: vm.ssh(IP={VM_IP}, CMD="curl -sf http://localhost:8057/admin/users -H 'X-Admin-API-Key: {ADMIN_TOKEN}'")
-        expect: returns JSON array
-        if fails:
-            emit FAIL "admin API unreachable or token wrong"
-            DOC_GAPS.append("admin API auth failed with documented default token")
-            on_fail: stop
-        emit PASS "admin API: reachable"
-        CONFIDENCE += 5
-
-    11b. create_user
         call: vm.ssh(IP={VM_IP}, CMD="curl -sf http://localhost:8057/admin/users/email/test@vexa.ai -H 'X-Admin-API-Key: {ADMIN_TOKEN}'")
         if STATUS_CODE == 200:
             => USER_ID from response
         else:
             call: vm.ssh(IP={VM_IP}, CMD="curl -sf -X POST http://localhost:8057/admin/users -H 'X-Admin-API-Key: {ADMIN_TOKEN}' -H 'Content-Type: application/json' -d '{\"email\":\"test@vexa.ai\",\"name\":\"Test User\"}'")
             => USER_ID from response
-        on_fail: stop
 
-    11c. create_token
         call: vm.ssh(IP={VM_IP}, CMD="curl -sf -X POST 'http://localhost:8057/admin/users/{USER_ID}/tokens?scopes=bot,browser,tx&name=validate' -H 'X-Admin-API-Key: {ADMIN_TOKEN}'")
         => API_TOKEN from response
-        emit PASS "API token created"
-        CONFIDENCE += 5
         on_fail: stop
 
-12. api_endpoints
-    > Hit every API endpoint a self-hoster would use.
-    for EP in [
-        {name: "meetings list", cmd: "curl -sf http://localhost:8056/meetings -H 'X-API-Key: {API_TOKEN}'",                    weight: 5},
-        {name: "bots status",   cmd: "curl -sf http://localhost:8056/bots/status -H 'X-API-Key: {API_TOKEN}'",                 weight: 5},
-        {name: "ws ping",       cmd: "python3 -c \"import asyncio,websockets,json;asyncio.run((lambda:websockets.connect('ws://localhost:8056/ws?api_key={API_TOKEN}').__aenter__())())\" 2>&1 || echo 'ws-needs-lib'", weight: 3}
-    ]:
-        call: vm.ssh(IP={VM_IP}, CMD="{EP.cmd}")
-        if exits 0 and output is valid:
-            emit PASS "api: {EP.name}"
-            CONFIDENCE += EP.weight
+    10c. post_bots
+        call: vm.ssh(IP={VM_IP}, CMD="curl -s -X POST http://localhost:8056/bots -H 'X-API-Key: {API_TOKEN}' -H 'Content-Type: application/json' -d '{\"platform\":\"google_meet\",\"native_meeting_id\":\"validate-test\",\"bot_name\":\"validate-test\"}' -w '\nHTTP:%{http_code}'")
+        => BOT_RESP, HTTP_CODE
+        if HTTP_CODE in [200, 201, 202]:
+            emit PASS "POST /bots → {HTTP_CODE}, bot created"
+            CONFIDENCE += 15
+            > Clean up: stop the test bot
+            call: vm.ssh(IP={VM_IP}, CMD="curl -s -X DELETE http://localhost:8056/bots/google_meet/validate-test -H 'X-API-Key: {API_TOKEN}'")
+        elif HTTP_CODE == 403:
+            > Concurrent limit. API works, just can't start more bots.
+            emit PASS "POST /bots → 403 (limit reached, API works)"
+            CONFIDENCE += 10
+        elif HTTP_CODE == 500:
+            emit FAIL "POST /bots → 500"
+            > Diagnose
+            call: vm.ssh(IP={VM_IP}, CMD="curl -sf http://localhost:8090/health && echo 'runtime=UP' || echo 'runtime=DOWN'")
+            call: vm.ssh(IP={VM_IP}, CMD="docker images --format '{{.Repository}}:{{.Tag}}' | grep bot || echo 'NO_BOT_IMAGE'")
+            call: vm.ssh(IP={VM_IP}, CMD="docker logs vexa-meeting-api-1 --tail 10 2>&1 | grep -i 'error\\|fail' | tail -3")
         else:
-            emit FAIL "api: {EP.name}"
+            emit FAIL "POST /bots → unexpected {HTTP_CODE}"
         on_fail: continue
 
-13. dashboard_backend
-    > The dashboard container must reach all its backends.
-    > This is the #1 source of "dashboard shows nothing" bugs.
+11. transcription_works [ceiling]
+    > Without transcription, the product doesn't work. This is not optional.
+    > A health check proves nothing — the real test is sending audio and getting text back.
+    > `make test-transcription` sends tests/testdata/test-speech-en.wav to the
+    > configured TRANSCRIPTION_SERVICE_URL with TRANSCRIPTION_SERVICE_TOKEN.
+    > If it returns text: transcription works. If 401/403: wrong token. If 000: unreachable.
+    > weight: 15
+
+    call: vm.ssh(IP={VM_IP}, CMD="cd {REPO_DIR}/deploy/compose && make test-transcription 2>&1")
+    if output contains "✓ Transcription works":
+        emit PASS "transcription: real audio → real text"
+        CONFIDENCE += 15
+    elif output contains "auth failed":
+        emit FAIL "transcription: token rejected — check TRANSCRIPTION_SERVICE_TOKEN"
+    elif output contains "not set":
+        emit FAIL "transcription: TRANSCRIPTION_SERVICE_URL not configured"
+    else:
+        emit FAIL "transcription: make test-transcription failed"
+    on_fail: continue
+
+12. dashboard_shows_meetings [ceiling]
+    > After login, the dashboard must show the meetings page with data.
+    > weight: 10
+    call: vm.ssh(IP={VM_IP}, CMD="curl -s -b /tmp/test-cookies http://localhost:3001/api/vexa/meetings -w '\nHTTP:%{http_code}'")
+    => MEETINGS_RESP, HTTP_CODE
+    if HTTP_CODE == 200:
+        emit PASS "dashboard: meetings endpoint returns 200 with cookie"
+        CONFIDENCE += 10
+    else:
+        emit FAIL "dashboard: meetings endpoint returns {HTTP_CODE} — user sees empty page"
+    on_fail: continue
+
+═══════════════════════════════════════════════════════════════
+ PHASE 4 — Plumbing                                weight: 25
+ Infrastructure that supports the core flow.
+ Important but not ceiling — plumbing failures don't hide behind
+ a passing score when core flow is broken.
+═══════════════════════════════════════════════════════════════
+
+13. services_health
+    for EP in [
+        {name: "gateway",     port: 8056, path: "/",       weight: 3},
+        {name: "admin-api",   port: 8057, path: "/docs",   weight: 2},
+        {name: "dashboard",   port: 3001, path: "/",       weight: 3},
+        {name: "runtime-api", port: 8090, path: "/health",  weight: 2}
+    ]:
+        call: vm.ssh(IP={VM_IP}, CMD="curl -sf -o /dev/null -w '%{http_code}' http://localhost:{EP.port}{EP.path}")
+        if output == "200":
+            emit PASS "{EP.name}: healthy"
+            CONFIDENCE += EP.weight
+        else:
+            emit FAIL "{EP.name}: not responding"
+        on_fail: continue
+
+14. dashboard_backend
     call: vm.ssh(IP={VM_IP}, CMD="docker ps --filter 'name=dashboard' --format '{{.Names}}'")
     => DASH_CONTAINER
-
     if DASH_CONTAINER:
-        13a. admin_key_valid
+        14a. admin_key_valid
             call: vm.ssh(IP={VM_IP}, CMD="docker exec {DASH_CONTAINER} sh -c 'wget -q -O - --header=\"X-Admin-API-Key: \$VEXA_ADMIN_API_KEY\" \$VEXA_API_URL/admin/users?limit=1' 2>&1 | head -5")
             if exits 0 and returns JSON:
                 emit PASS "dashboard: admin key valid"
-                CONFIDENCE += 5
-            else:
-                emit FAIL "BUG: dashboard VEXA_ADMIN_API_KEY is wrong — login will fail"
-                DOC_GAPS.append("dashboard VEXA_ADMIN_API_KEY doesn't match admin-api token")
-            on_fail: continue
-
-        13b. api_key_valid
-            call: vm.ssh(IP={VM_IP}, CMD="docker exec {DASH_CONTAINER} sh -c 'wget -q -O - --header=\"X-API-Key: \$VEXA_API_KEY\" \$VEXA_API_URL/bots/status' 2>&1 | head -5")
-            if exits 0 and returns JSON:
-                emit PASS "dashboard: API key valid"
-                CONFIDENCE += 5
-            else:
-                emit FAIL "dashboard VEXA_API_KEY is stale or missing"
-            on_fail: continue
-
-        13c. gateway_reachable
-            call: vm.ssh(IP={VM_IP}, CMD="docker exec {DASH_CONTAINER} sh -c 'wget -q -O /dev/null \$VEXA_API_URL/' 2>&1")
-            if exits 0:
-                emit PASS "dashboard: gateway reachable from container"
                 CONFIDENCE += 3
             else:
-                emit FAIL "dashboard: cannot reach gateway from inside container"
+                emit FAIL "dashboard: VEXA_ADMIN_API_KEY wrong"
             on_fail: continue
-    on_fail: continue
 
-14. inter_container
-    > Verify containers can talk to each other (gateway → meeting-api).
+        14b. api_key_valid
+            call: vm.ssh(IP={VM_IP}, CMD="docker exec {DASH_CONTAINER} sh -c 'wget -q -O - --header=\"X-API-Key: \$VEXA_API_KEY\" \$VEXA_API_URL/bots' 2>&1 | head -5")
+            if exits 0 and returns JSON:
+                emit PASS "dashboard: API key valid"
+                CONFIDENCE += 3
+            else:
+                emit FAIL "dashboard: VEXA_API_KEY wrong"
+            on_fail: continue
+
+15. infra_services
+    for SVC in [
+        {name: "redis",    cmd: "docker exec $(docker ps --filter name=redis -q | head -1) redis-cli ping 2>/dev/null", weight: 1},
+        {name: "postgres", cmd: "docker exec $(docker ps --filter name=postgres -q | head -1) pg_isready -U postgres 2>/dev/null", weight: 1},
+        {name: "minio",    cmd: "curl -sf http://localhost:9000/minio/health/live 2>/dev/null", weight: 1}
+    ]:
+        call: vm.ssh(IP={VM_IP}, CMD="{SVC.cmd}")
+        if exits 0:
+            emit PASS "infra: {SVC.name}"
+            CONFIDENCE += SVC.weight
+        else:
+            emit FAIL "infra: {SVC.name}"
+        on_fail: continue
+
+16. inter_container
     call: vm.ssh(IP={VM_IP}, CMD="docker ps --filter 'name=gateway' --format '{{.Names}}'")
     => GW_CONTAINER
     if GW_CONTAINER:
         call: vm.ssh(IP={VM_IP}, CMD="docker exec {GW_CONTAINER} python3 -c \"import urllib.request; urllib.request.urlopen('http://meeting-api:8080/health').read()\" 2>&1")
         if exits 0:
             emit PASS "inter-container: gateway → meeting-api"
-            CONFIDENCE += 3
-        else:
-            emit FAIL "inter-container: gateway cannot reach meeting-api"
-    on_fail: continue
-
-15. transcription_reachable
-    > The meeting-api must reach the transcription service.
-    > This is listed as "ceiling" in the compose DoD — if it fails, bots can't transcribe.
-    call: vm.ssh(IP={VM_IP}, CMD="curl -sf http://localhost:8085/health")
-    if exits 0 and output contains "gpu_available":
-        emit PASS "transcription: healthy and reachable"
-        CONFIDENCE += 5
-    else:
-        emit FINDING "transcription: not reachable from host (may be external)"
-        > Check if TRANSCRIPTION_SERVICE_URL points to an external service.
-        call: vm.ssh(IP={VM_IP}, CMD="grep TRANSCRIPTION_SERVICE_URL {REPO_DIR}/.env | head -1")
-        emit FINDING "transcription URL: {output}"
-    on_fail: continue
-
-16. redis_postgres_minio
-    > Infrastructure services must be running.
-    for SVC in [
-        {name: "redis",    cmd: "docker exec $(docker ps --filter name=redis -q | head -1) redis-cli ping 2>/dev/null"},
-        {name: "postgres", cmd: "docker exec $(docker ps --filter name=postgres -q | head -1) pg_isready -U postgres 2>/dev/null"},
-        {name: "minio",    cmd: "curl -sf http://localhost:9000/minio/health/live 2>/dev/null"}
-    ]:
-        call: vm.ssh(IP={VM_IP}, CMD="{SVC.cmd}")
-        if exits 0:
-            emit PASS "infra: {SVC.name}"
             CONFIDENCE += 2
         else:
-            emit FAIL "infra: {SVC.name} not responding"
-        on_fail: continue
+            emit FAIL "inter-container: broken"
+    on_fail: continue
 
 17. container_cleanup
-    > Verify no orphan bot containers exist (fresh deploy should be clean).
-    call: vm.ssh(IP={VM_IP}, CMD="docker ps -a --filter 'name=meeting-' --format '{{.Names}}' | wc -l")
+    call: vm.ssh(IP={VM_IP}, CMD="docker ps -a --filter 'name=meeting-' --format '{{.Names}}' | grep -v meeting-api | wc -l")
     => ORPHAN_COUNT
     if ORPHAN_COUNT == 0:
         emit PASS "no orphan bot containers"
-        CONFIDENCE += 2
+        CONFIDENCE += 1
     else:
-        emit FINDING "{ORPHAN_COUNT} bot containers found on fresh deploy"
+        emit FINDING "{ORPHAN_COUNT} orphan containers"
     on_fail: continue
 
 18. make_test
-    > README says `make test` should work. Verify it passes.
     call: vm.ssh(IP={VM_IP}, CMD="cd {REPO_DIR}/deploy/compose && make test 2>&1")
-    => MAKE_TEST_OUTPUT
-    if output contains "✓" or "Gateway" or "Dashboard":
+    if output contains "✓" or output contains "Gateway":
         emit PASS "make test passes"
         CONFIDENCE += 3
     else:
         emit FAIL "make test failed"
-        DOC_GAPS.append("make test does not pass on fresh deploy")
     on_fail: continue
 
 ═══════════════════════════════════════════════════════════════
- PHASE 4 — Doc accuracy
- Verify the README claims match reality.
+ PHASE 5 — Doc accuracy                            weight: 5
 ═══════════════════════════════════════════════════════════════
 
 19. doc_accuracy
-    > Check specific README claims against reality.
 
     19a. make_targets
-        > README lists make targets. Verify they all exist.
-        call: vm.ssh(IP={VM_IP}, CMD="cd {REPO_DIR}/deploy/compose && make -n all 2>&1; make -n build 2>&1; make -n down 2>&1; make -n init-db 2>&1; make -n setup-api-key 2>&1; make -n test 2>&1; make -n logs 2>&1; make -n ps 2>&1")
-        > Any "No rule to make target" = doc gap.
-        if output contains "No rule":
-            DOC_GAPS.append("make target in README does not exist in Makefile")
+        call: vm.ssh(IP={VM_IP}, CMD="cd {REPO_DIR}/deploy/compose && for t in all build down init-db setup-api-key test logs ps env; do make -n $t >/dev/null 2>&1 || echo \"MISSING: $t\"; done")
+        if output contains "MISSING":
+            DOC_GAPS.append("make target missing")
             emit FAIL "missing make target"
         else:
-            emit PASS "all documented make targets exist"
-            CONFIDENCE += 3
+            emit PASS "all make targets exist"
+            CONFIDENCE += 2
         on_fail: continue
 
-    19b. env_defaults
-        > README says ADMIN_TOKEN default is "changeme". Verify.
-        call: vm.ssh(IP={VM_IP}, CMD="grep 'ADMIN_TOKEN' {REPO_DIR}/deploy/env/env-example | head -1")
-        => ENV_EXAMPLE_ADMIN
-        call: vm.ssh(IP={VM_IP}, CMD="grep 'ADMIN_TOKEN' {REPO_DIR}/.env | head -1")
-        => ENV_ADMIN
-        emit FINDING "env-example: {ENV_EXAMPLE_ADMIN}, .env: {ENV_ADMIN}"
+    19b. ports_match
+        call: vm.ssh(IP={VM_IP}, CMD="cd {REPO_DIR}/deploy/compose && docker compose ps --format '{{.Service}} {{.Ports}}' 2>/dev/null")
+        => COMPOSE_PS
+        for CHECK in [{service: "api-gateway", port: 8056}, {service: "admin-api", port: 8057}, {service: "dashboard", port: 3001}]:
+            if COMPOSE_PS does not contain "{CHECK.port}":
+                DOC_GAPS.append("port mismatch: {CHECK.service}")
         on_fail: continue
 
     19c. links_resolve
-        > README has internal links. Verify they point to files that exist.
-        call: vm.ssh(IP={VM_IP}, CMD="grep -oP '\\(\\.\\./.+?\\)' {REPO_DIR}/deploy/compose/README.md | tr -d '()' | while read link; do test -e {REPO_DIR}/deploy/compose/$link && echo \"OK: $link\" || echo \"BROKEN: $link\"; done")
+        call: vm.ssh(IP={VM_IP}, CMD="cd {REPO_DIR}/deploy/compose && grep -oP '\\(\\.\\./.+?\\)' README.md | tr -d '()' | while read link; do test -e $link || echo \"BROKEN: $link\"; done")
         if output contains "BROKEN":
-            DOC_GAPS.append("broken internal links in README")
-            emit FAIL "broken links in README"
+            DOC_GAPS.append("broken links")
+            emit FAIL "broken README links"
         else:
-            emit PASS "all README links resolve"
+            emit PASS "all links resolve"
+            CONFIDENCE += 1
+        on_fail: continue
+
+    19d. env_defaults
+        call: vm.ssh(IP={VM_IP}, CMD="grep '^ADMIN_TOKEN=' {REPO_DIR}/deploy/env/env-example | cut -d= -f2")
+        => EXAMPLE_TOKEN
+        call: vm.ssh(IP={VM_IP}, CMD="docker exec vexa-admin-api-1 sh -c 'echo \$ADMIN_API_TOKEN' 2>/dev/null")
+        => CONTAINER_TOKEN
+        if EXAMPLE_TOKEN != CONTAINER_TOKEN:
+            DOC_GAPS.append("admin token default mismatch: env-example={EXAMPLE_TOKEN} container={CONTAINER_TOKEN}")
+        else:
+            emit PASS "env defaults agree"
             CONFIDENCE += 2
         on_fail: continue
 
 ═══════════════════════════════════════════════════════════════
- PHASE 5 — Score and keep alive
- No teardown. Dashboard URL returned for human testing.
+ PHASE 6 — Score and keep alive
 ═══════════════════════════════════════════════════════════════
 
 20. score
@@ -354,13 +392,12 @@ use: lib/vm
 
     => COMPOSE_OK = (CONFIDENCE >= TARGET and len(DOC_GAPS) == 0)
     if COMPOSE_OK:
-        emit PASS "compose deployment validated: {CONFIDENCE}/{TARGET}, 0 doc gaps"
+        emit PASS "compose deployment validated: {CONFIDENCE}/{TARGET}"
     else:
         emit FAIL "compose deployment: {CONFIDENCE}/{TARGET}, {len(DOC_GAPS)} doc gaps"
 
 21. keep_alive
     > Do NOT destroy the VM. The deployment stays up for human testing.
-    > Print connection details.
     => DASHBOARD_URL = "http://{VM_IP}:3001"
     emit FINDING "═══════════════════════════════════════════════════════"
     emit FINDING "DEPLOYMENT KEPT ALIVE FOR HUMAN TESTING"
@@ -371,20 +408,58 @@ use: lib/vm
     emit FINDING "  VM ID:     {VM_ID} (destroy with: linode-cli linodes delete {VM_ID})"
     emit FINDING "═══════════════════════════════════════════════════════"
 
-    ask: "Dashboard URL: http://{VM_IP}:3001 — VM kept alive. Destroy manually when done: linode-cli linodes delete {VM_ID}"
+    ask: "Dashboard URL: http://{VM_IP}:3001 — VM kept alive. Destroy when done: linode-cli linodes delete {VM_ID}"
 
 22. finish
     call: log.summary(MODULE="compose-validate", TOTAL_STEPS={step_count}, PASSED={pass_count}, FAILED={fail_count}, FIXED=0, SKIPPED={skip_count})
     call: log.close()
 ```
 
+## Weight budget
+
+| Phase | Weight | What it proves |
+|---|---|---|
+| Core flow | 60 | The product works for the user |
+| Plumbing | 25 | Infrastructure supports the product |
+| Doc accuracy | 5 | Docs aren't lying |
+| **Total** | **90** | **= target** |
+
+### Core flow breakdown (all ceiling)
+
+| Step | Weight | What it proves |
+|---|---|---|
+| 8. login + identity | 15 | User logs in, sees their own name |
+| 9. login redirect | 5 | User lands on /meetings |
+| 10. bot creation | 15 | User can start a bot |
+| 11. transcription | 15 | Audio can be transcribed |
+| 12. dashboard shows meetings | 10 | User sees their data |
+
+If ANY core flow step fails, max possible = 90 - weight = below target. Cannot reach 90 with broken core.
+
+### Plumbing breakdown
+
+| Step | Weight | What it proves |
+|---|---|---|
+| 13. service health (4 services) | 10 | Services respond |
+| 14. dashboard keys | 6 | Dashboard auth chain |
+| 15. redis/postgres/minio | 3 | Backing services |
+| 16. inter-container | 2 | Containers can talk |
+| 17. no orphans | 1 | Clean state |
+| 18. make test | 3 | README's test works |
+| **Subtotal** | **25** | |
+
 ## Failure modes
 
 | Symptom | Cause | Fix | Learned |
 |---|---|---|---|
-| make all fails on fresh VM | Missing prereq not in README | Add prereq to README Prerequisites section | Docker install script sometimes needs reboot for group membership |
-| Dashboard shows empty pages | VEXA_ADMIN_API_KEY or VEXA_API_KEY wrong | make setup-api-key; step 13 validates both keys | Keys must be validated from inside the container, not from outside |
-| Ports in README don't match compose | README edited without updating compose or vice versa | Fix the stale document | Port table is a contract — both sides must agree |
-| make test passes but dashboard is broken | make test only checks HTTP 200, not auth chain or data flow | Steps 13a/13b check the full auth chain from inside the container | Health check PASS ≠ feature works |
-| Inter-container connectivity fails | Docker network not created or service name changed | Check docker-compose.yml service names match code expectations | Compose service names are the DNS names — a rename breaks callers |
-| Admin token "changeme" doesn't work | compose uses different default than admin-api | Three-way check: env-example, .env, container env | Every default must agree across all config sources |
+| make all fails on fresh VM | Missing prereq not in README | Add prereq to README | Docker install sometimes needs reboot for group membership |
+| Dashboard shows empty pages | VEXA_ADMIN_API_KEY or VEXA_API_KEY wrong | make setup-api-key; step 14 validates | Keys must be validated from inside the container |
+| Login shows wrong user | /api/auth/me falls back to VEXA_API_KEY env var | Remove fallback — cookie is the only identity source | Two identity sources = wrong user |
+| Login redirects to /agent | login/page.tsx hardcodes router.push("/agent") | Change to router.push("/") | Disabled features must not be default |
+| Bot creation 500 | Bot image not pulled by make all | Added docker pull in Makefile up target | Service images ≠ bot image. Bot is a sidecar. |
+| Bot image 404 | make all pulls compose images but bot spawns outside compose | Makefile up target pulls bot image if missing | compose-managed ≠ all images needed |
+| Transcription health OK but auth fails | /health doesn't require auth — returns OK for anyone. Real endpoint returns 403. | `make test-transcription` sends real audio with real token. Health check replaced. | Health check ≠ function. Must test the actual API with actual credentials. |
+| Transcription token mismatch | Local token used against hosted service (or vice versa). 403. | `make test-transcription` catches 403 with clear message. Runs on every `make all`. | Different services need different tokens. The test proves the configured pair works. |
+| Score inflated by plumbing | Infrastructure checks weighted same as core flow | Core = 60, plumbing = 25, docs = 5 | redis PONG doesn't mean the product works |
+| Login loops back to /login after "Welcome back" | Cookie set with `Secure` flag on HTTP. Browser rejects it. Every page load has no cookie → /api/auth/me 401 → redirect to login. | `secure: isSecureRequest()` checks protocol, not NODE_ENV. All 4 auth routes fixed. Step 8c checks cookie flags. | NODE_ENV=production ≠ HTTPS. Self-hosters deploy on HTTP. curl ignores Secure flag so proc must check explicitly. |
+| make test passes but product broken | make test checks HTTP 200 only | Core flow phase tests actual user experience | Health check ≠ feature works |

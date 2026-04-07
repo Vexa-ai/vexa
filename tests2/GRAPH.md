@@ -227,14 +227,17 @@ ensure: DATASET_PATH              from: rt-collect      [human: admit bots]
 (no ensure — fresh VM, nothing exists)
 
  ▶ provision (VM)
- ▶ follow deploy/compose/README.md literally
- ▶ infra health (all services)
- ▶ api (admin, user, token, endpoints)
- ▶ dashboard (backend keys, container connectivity)
- ▶ inter-container + transcription
- ▶ redis + postgres + minio
- ▶ doc accuracy (make targets, ports, links, defaults)
- ▶ score
+ ▶ follow deploy/compose/README.md literally (make all)
+ ▶ CORE FLOW (weight 60, all ceiling):
+   ▶ login + identity (/me returns correct user, not VEXA_API_KEY user)
+   ▶ login redirect (lands on /meetings, not /agent)
+   ▶ bot creation (POST /bots → 201, container spawns)
+   ▶ transcription reachable (from host AND from meeting-api container)
+   ▶ dashboard shows meetings (proxy works with cookie)
+ ▶ PLUMBING (weight 25):
+   ▶ service health, dashboard keys, redis/postgres/minio, inter-container
+ ▶ DOC ACCURACY (weight 5):
+   ▶ make targets, ports, links, env defaults
  ▶ keep alive → return DASHBOARD_URL                    [human: test dashboard]
 ```
 

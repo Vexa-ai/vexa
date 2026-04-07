@@ -1,1 +1,1 @@
-{"mode":"execute","proc":"src/authenticated-meeting","confidence":78,"target":90,"hardened":true,"scope":["authenticated-meetings"]}
+{"mode":"author","proc":"tests3","confidence":95,"target":90,"hardened":true}

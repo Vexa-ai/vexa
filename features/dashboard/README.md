@@ -29,6 +29,9 @@ Login (magic link or direct) → meetings list → click meeting → meeting det
 | 10 | Dashboard credentials valid (VEXA_ADMIN_API_KEY, VEXA_API_KEY) | 10 | ceiling | T1 | infra/11 | PASS | 2026-04-07. Login succeeded, meetings list loaded — credentials valid. |
 | 11 | Platform icons render (no broken images) | 5 | — | T1 | — | PASS | 2026-04-07. Headless Playwright: 44 images on meetings list, 0 broken. |
 | 12 | Meetings list paginates (limit/offset/has_more) | 10 | — | T2 | dashboard/pagination | PASS | 2026-04-07. limit=3: PAGE1=3, has_more=true. PAGE2=3, no overlap. PAGINATION=PASS. |
+| 13 | Login as email X → dashboard shows user X (not another user) | 10 | ceiling | T2 | dashboard/12 | PASS | 2026-04-07. Three fixes deployed: (1) /api/auth/me VEXA_API_KEY fallback removed (2) Cookie Secure flag → isSecureRequest() (3) "dev@local" fallback removed. Verified on VM: login=test@vexa.ai, no Secure flag on HTTP, /me=test@vexa.ai, meetings=200. |
+| 14 | After login, redirects to /meetings (not /agent) | 5 | — | T2 | dashboard/13 | PASS | 2026-04-07. Fixed login/page.tsx:131 router.push("/agent") → router.push("/"). Deployed to VM. grep confirms line 131 pushes "/". |
+| 15 | Bot creation through dashboard returns bot or actionable error | 10 | — | T2 | dashboard/14 | PASS | 2026-04-07. Fixed Makefile: up target pulls bot image. Deployed to VM. POST /bots → 201, bot id=7, container spawned, cleaned up. |
 
 **Confidence target:** 90
 
@@ -40,3 +43,7 @@ Login (magic link or direct) → meetings list → click meeting → meeting det
 | Dashboard credentials wrong after restart | **FIXED** | Compose defaulted `VEXA_ADMIN_API_KEY` to `vexa-admin-token` instead of `changeme`. VEXA_API_KEY stale. |
 | REST transcript not fetched for active meetings | **FIXED** | `!shouldUseWebSocket` guard prevented REST fetch during active state. |
 | Meeting icons broken | **FIXED** | PNG files removed from repo. Restored from git history. |
+| Login as test@vexa.ai shows admin@vexa.ai | **FIXED** | `/api/auth/me` fell back to `VEXA_API_KEY` env var (user 1). Removed fallback — cookie is the only identity source. |
+| Login redirect loop on HTTP (self-hosted) | **FIXED** | Cookie `Secure` flag set via `NODE_ENV === "production"` — always true in prod builds. Changed to `isSecureRequest()` checking URL protocol. All 4 auth routes fixed. |
+| After login, redirects to /agent instead of /meetings | **FIXED** | `login/page.tsx:131` changed from `router.push("/agent")` to `router.push("/")`. |
+| "Start bot" fails with generic server error | **FIXED** | Bot image not pulled on fresh deploy. Makefile `up` target now pulls bot image. |

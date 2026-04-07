@@ -300,7 +300,102 @@ use: lib/docker
     PASSED += 1; emit PASS "t3: cache headers"
     on_fail: continue
 
-12. summary
+═══════════════════════════════════════════════════════════════
+ TIER 2b — Identity and navigation
+ Tests: does the right user see the right page?
+═══════════════════════════════════════════════════════════════
+
+12. login_identity
+    > Bugs found 2026-04-07:
+    > 1. /api/auth/me fell back to VEXA_API_KEY env var → wrong user
+    > 2. Cookie set with Secure flag on HTTP → browser rejects it → redirect loop
+    >
+    > Four checks:
+    > 1. Magic link API returns correct user
+    > 2. Cookie flags correct for deployment protocol (no Secure on HTTP)
+    > 3. /api/auth/me with cookie returns correct user
+    > 4. Meetings proxy works with the cookie
+    TESTED += 1
+    do: |
+        # Step 1: Login + inspect cookie flags
+        HEADERS=$(curl -sv -X POST "{DASHBOARD_URL}/api/auth/send-magic-link" \
+          -H "Content-Type: application/json" \
+          -d '{"email":"{TEST_USER}"}' \
+          -c /tmp/dash-identity-cookies 2>&1)
+        LOGIN_EMAIL=$(echo "$HEADERS" | grep -v "^[*<>]" | python3 -c "import sys,json; print(json.load(sys.stdin).get('user',{}).get('email','MISSING'))" 2>/dev/null || echo "PARSE_FAIL")
+        echo "LOGIN_EMAIL=$LOGIN_EMAIL"
+
+        # Step 2: Cookie flags — Secure must NOT be set on HTTP deployments
+        COOKIE_LINE=$(echo "$HEADERS" | grep -i "set-cookie.*vexa-token" | head -1)
+        echo "COOKIE_FLAGS=$COOKIE_LINE"
+        PROTOCOL=$(echo "{DASHBOARD_URL}" | grep -o "^https\?")
+        if [ "$PROTOCOL" = "http" ] && echo "$COOKIE_LINE" | grep -qi "Secure"; then
+            echo "COOKIE_BUG=Secure flag on HTTP — browser will reject cookie"
+            echo "IDENTITY=FAIL"
+        else:
+            # Step 3: /api/auth/me with cookie
+            ME_RESP=$(curl -s -b /tmp/dash-identity-cookies "{DASHBOARD_URL}/api/auth/me")
+            ME_EMAIL=$(echo "$ME_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('user',{}).get('email','MISSING'))")
+            echo "ME_EMAIL=$ME_EMAIL"
+
+            # Step 4: Meetings proxy
+            MEETINGS_HTTP=$(curl -s -o /dev/null -w '%{http_code}' -b /tmp/dash-identity-cookies "{DASHBOARD_URL}/api/vexa/meetings")
+            echo "MEETINGS_HTTP=$MEETINGS_HTTP"
+
+            if [ "$LOGIN_EMAIL" = "{TEST_USER}" ] && [ "$ME_EMAIL" = "{TEST_USER}" ] && [ "$MEETINGS_HTTP" = "200" ]; then
+                echo "IDENTITY=PASS"
+            else
+                echo "IDENTITY=FAIL"
+                [ "$ME_EMAIL" != "{TEST_USER}" ] && echo "BUG: /api/auth/me returns $ME_EMAIL instead of {TEST_USER}"
+            fi
+        fi
+    if output contains "IDENTITY=PASS":
+        PASSED += 1; emit PASS "t2: login identity end-to-end ({TEST_USER})"
+    else:
+        emit FAIL "BUG: identity or cookie flags broken"
+    on_fail: continue
+
+13. login_redirect
+    > Bug found 2026-04-07: after direct login, page.tsx:131 redirects to /agent
+    > instead of /meetings. Agent feature is disabled/experimental.
+    TESTED += 1
+    do: |
+        # Check what the login page hardcodes as redirect target
+        grep -n 'router.push' services/dashboard/src/app/login/page.tsx | head -5
+    expect: first router.push after direct login is "/" or "/meetings"
+    > If it's "/agent", that's the bug. Root "/" redirects to /meetings (app/page.tsx).
+    if output contains 'push("/agent")':
+        emit FAIL "BUG: login redirects to /agent — should be / or /meetings"
+    else:
+        PASSED += 1; emit PASS "t2: login redirects to /meetings"
+    on_fail: continue
+
+14. bot_create_via_proxy
+    > Bug found 2026-04-07: "Start bot" in dashboard fails with generic
+    > "The server encountered an issue". POST /bots through proxy → 500.
+    > Must test bot creation through the dashboard proxy, not just the gateway.
+    TESTED += 1
+    do: |
+        curl -s -X POST "{DASHBOARD_URL}/api/vexa/bots" \
+          -H "Content-Type: application/json" \
+          -b /tmp/dash-proc-cookies \
+          -d '{"platform":"google_meet","meeting_url":"https://meet.google.com/abc-defg-hij","bot_name":"dashboard-test"}' \
+          -w "\nHTTP:%{http_code}"
+    => BOT_RESP, HTTP_CODE
+    if HTTP_CODE in [200, 201, 202]:
+        PASSED += 1; emit PASS "t2: bot creation via dashboard proxy"
+    elif HTTP_CODE == 403:
+        > 403 = concurrent limit. API is reachable, proxy works. Acceptable.
+        PASSED += 1; emit PASS "t2: bot creation via proxy — 403 (limit reached, proxy works)"
+    elif HTTP_CODE == 500:
+        > 500 = the bug. Check if it's a bot image issue or runtime-api issue.
+        emit FAIL "BUG: POST /bots via dashboard proxy returns 500"
+        emit FINDING "check: is bot image pullable? is runtime-api reachable from meeting-api?"
+    else:
+        emit FAIL "t2: bot creation via proxy returned {HTTP_CODE}"
+    on_fail: continue
+
+15. summary
     => DASHBOARD_OK = (PASSED == TESTED)
     emit FINDING "dashboard: {PASSED}/{TESTED}"
 ```
@@ -317,3 +412,7 @@ use: lib/docker
 | Transcript page empty despite REST data | `getMeeting()` skipped `mapMeeting()`. native_meeting_id not mapped to platform_specific_id. Transcript URL = `/transcripts/{platform}/undefined`. | Added `mapMeeting(raw)` to `getMeeting()`. Step 7 tests the API contract. Step 9 tests the page. | API test PASS ≠ dashboard works. Must test the actual browser path. |
 | Old JS bundle served after deploy | Browser caches Next.js chunks | Next.js uses content-hashed filenames. Step 11 checks HTML cache headers. Hard-refresh needed after deploy. | Cache busting depends on HTML not being cached — chunk filenames change but the page referencing them must too |
 | Meetings list shows only running bots, no history | GET /bots times out (5s), proxy falls back to /bots/status which only returns running containers | Increase timeout or remove fallback (per "no fallbacks" rule). Step 8 tests pagination with limit/offset. | Fallback hides the failure — user sees 1 meeting instead of 47 with no error message |
+| Login as test@vexa.ai shows admin@vexa.ai | `/api/auth/me` line 14: `token = cookieToken \|\| process.env.VEXA_API_KEY`. Falls back to VEXA_API_KEY (user 1) when cookie is missing or on server-side fetch. UI calls /me on every page load → shows admin. | Remove VEXA_API_KEY fallback from /api/auth/me. Cookie is the only identity source. Step 12 now checks /api/auth/me returns the logged-in user. | Fallback identity sources are a security bug. If cookie is missing, user is unauthenticated — don't guess. |
+| Login redirect loop on HTTP | Cookie set with `Secure` flag. `secure: process.env.NODE_ENV === "production"` is always true in Next.js prod builds, even on HTTP. Browser rejects cookie → no session → redirect to /login. | Changed to `secure: isSecureRequest()` which checks NEXTAUTH_URL/DASHBOARD_URL protocol. Fixed in all 4 auth routes. Step 12 checks cookie flags. | curl ignores Secure flag — proc must check Set-Cookie headers explicitly. NODE_ENV ≠ protocol. |
+| After login, redirects to /agent | login/page.tsx:131 hardcodes `router.push("/agent")` | Change to `router.push("/")` — root redirects to /meetings via app/page.tsx | Redirect targets must match the feature set. Agent is experimental/disabled. |
+| "Start bot" generic 500 via dashboard | POST /bots → meeting-api → _spawn_via_runtime_api() → runtime-api /containers fails | Check: bot image pullable? runtime-api reachable? error-messages.ts hides detail. | Step 14 tests through proxy. 500 with no detail = user can't self-diagnose. |
