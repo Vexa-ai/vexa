@@ -1,3 +1,10 @@
+---
+services: [meeting-api, vexa-bot]
+tests3:
+  targets: []
+  checks: []
+---
+
 # Zoom Transcription
 
 **Not shipped.** MVP1 blocked (speaker identity broken by SFU track remapping).

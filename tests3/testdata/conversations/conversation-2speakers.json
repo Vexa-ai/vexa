@@ -1,0 +1,81 @@
+{
+  "name": "2-speaker turn-taking with overlap",
+  "description": "Two speakers alternate with pauses, then overlap once. Tests speaker attribution and timing.",
+  "timing_notes": "Each utterance needs: ~1s TTS synthesis + audio_duration + 1.5s pause. At ~150wpm Piper rate, 10 words ≈ 4s audio. Total per utterance slot: synthesis(1s) + audio(3-5s) + pause(1.5s) = 5.5-7.5s",
+  "speakers": [
+    {"id": "A", "voice": "alloy", "label": "Speaker A"},
+    {"id": "B", "voice": "echo", "label": "Speaker B"}
+  ],
+  "utterances": [
+    {
+      "speaker": "A",
+      "text": "Good morning everyone. Let's start with the quarterly review.",
+      "start_after_ms": 0,
+      "estimated_duration_ms": 4000,
+      "notes": "10 words, ~4s audio"
+    },
+    {
+      "speaker": "B",
+      "text": "Thanks for setting this up. I have the numbers ready.",
+      "start_after_ms": 7000,
+      "estimated_duration_ms": 3500,
+      "notes": "synthesis(1s) + audio(4s) + pause(2s) = 7s after A starts"
+    },
+    {
+      "speaker": "A",
+      "text": "Great. Revenue was up twelve percent compared to last quarter.",
+      "start_after_ms": 14000,
+      "estimated_duration_ms": 4000,
+      "notes": "7s after B starts (1s synth + 3.5s audio + 2.5s pause)"
+    },
+    {
+      "speaker": "B",
+      "text": "That's impressive. And the customer count?",
+      "start_after_ms": 21000,
+      "estimated_duration_ms": 3000,
+      "notes": "7s after A starts"
+    },
+    {
+      "speaker": "A",
+      "text": "We added forty three new customers this quarter, which is a record.",
+      "start_after_ms": 27000,
+      "estimated_duration_ms": 4500,
+      "notes": "6s after B starts (shorter B utterance)"
+    },
+    {
+      "speaker": "B",
+      "text": "Excellent work by the sales team.",
+      "start_after_ms": 35000,
+      "estimated_duration_ms": 2500,
+      "notes": "8s after A starts (longer A utterance). Overlap test next."
+    },
+    {
+      "speaker": "A",
+      "text": "I agree completely.",
+      "start_after_ms": 37000,
+      "estimated_duration_ms": 2000,
+      "notes": "overlap: A starts 2s after B (while B still playing)"
+    },
+    {
+      "speaker": "B",
+      "text": "Let's move on to the roadmap for next quarter.",
+      "start_after_ms": 44000,
+      "estimated_duration_ms": 3500,
+      "notes": "5s after overlap clears (both done by ~39s)"
+    }
+  ],
+  "ground_truth": {
+    "total_utterances": 8,
+    "speakers": ["A", "B"],
+    "expected_segments_min": 6,
+    "expected_segments_max": 12,
+    "overlap_region_ms": [35000, 39000],
+    "key_phrases": [
+      "quarterly review",
+      "twelve percent",
+      "forty three new customers",
+      "sales team",
+      "roadmap"
+    ]
+  }
+}

@@ -1,3 +1,10 @@
+---
+services: [vexa-bot, api-gateway, runtime-api]
+tests3:
+  targets: [browser-session, smoke]
+  checks: [MINIO_ENDPOINT_SET]
+---
+
 # Remote Browser
 
 ## Why

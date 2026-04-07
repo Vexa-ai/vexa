@@ -1,3 +1,10 @@
+---
+services: [api-gateway, admin-api, meeting-api, runtime-api, dashboard]
+tests3:
+  targets: [smoke]
+  checks: [GATEWAY_UP, ADMIN_API_UP, DASHBOARD_UP, RUNTIME_API_UP, TRANSCRIPTION_UP, REDIS_UP, MINIO_UP]
+---
+
 # Infrastructure
 
 ## Why

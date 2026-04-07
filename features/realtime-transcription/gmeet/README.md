@@ -1,3 +1,10 @@
+---
+services: [meeting-api, vexa-bot, tts-service]
+tests3:
+  targets: [meeting-tts, contracts]
+  checks: [GMEET_URL_PARSED, GRACEFUL_LEAVE]
+---
+
 # Google Meet Transcription
 
 ## Why
@@ -61,12 +68,12 @@ POST /bots {"meeting_url": "$MEETING_URL"}                                      
 
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Test |
 |---|-------|--------|---------|-------|--------|----------|--------------|------|
-| 1 | Bot joins and captures per-speaker audio | 20 | ceiling | 0 | PASS | Bot 135 active in rxf-gxis-ozd, 9 segments from 2 speakers (Dmitry's Vexa Bot Bot + Vexa Speaker). 0% WER on best stream. | 2026-04-05T21:50Z | tests/graphs/full-stack.md |
-| 2 | Each GT line: correct speaker attributed | 25 | ceiling | 0 | PARTIAL | 2/2 speakers correctly attributed per audio stream. 3-speaker test not completed — only 1 TTS bot launched due to container crashes + concurrent limit. Speaker attribution works for all speakers present. | 2026-04-05T21:50Z | tests/graphs/full-stack.md |
-| 3 | Each GT line: content matches (≥ 70% similarity) | 25 | ceiling | 0 | PASS | 3/3 TTS utterances: 0% WER on best stream (punctuation-only diffs). "farmer's" vs "farmers", added commas. | 2026-04-05T21:50Z | tests/graphs/full-stack.md |
-| 4 | No hallucinated segments (0 output lines without GT match) | 10 | — | 0 | PASS | 9 segments, all match ground truth TTS input. No phantom content. | 2026-04-05T21:50Z | tests/graphs/full-stack.md |
-| 5 | No missed GT lines (completeness 100%) | 10 | — | 0 | PASS | 3/3 TTS utterances transcribed (each appears twice due to separate audio streams — expected GMeet behavior) | 2026-04-05T21:50Z | tests/graphs/full-stack.md |
-| 6 | DOM selectors current (bot joins successfully) | 10 | ceiling | 0 | PASS | Bot joined, admitted via auto-admit, reached active state. Selectors current as of Chrome 141. | 2026-04-05T21:50Z | tests/graphs/full-stack.md |
+| 1 | Bot joins and captures per-speaker audio | 20 | ceiling | 0 | PASS | Bot 135 active in rxf-gxis-ozd, 9 segments from 2 speakers (Dmitry's Vexa Bot Bot + Vexa Speaker). 0% WER on best stream. | 2026-04-05T21:50Z | `make meeting-tts` (bot.sh, meeting.sh) |
+| 2 | Each GT line: correct speaker attributed | 25 | ceiling | 0 | PARTIAL | 2/2 speakers correctly attributed per audio stream. 3-speaker test not completed — only 1 TTS bot launched due to container crashes + concurrent limit. Speaker attribution works for all speakers present. | 2026-04-05T21:50Z | `make meeting-tts` (transcribe.sh) |
+| 3 | Each GT line: content matches (≥ 70% similarity) | 25 | ceiling | 0 | PASS | 3/3 TTS utterances: 0% WER on best stream (punctuation-only diffs). "farmer's" vs "farmers", added commas. | 2026-04-05T21:50Z | `make meeting-tts` (transcribe.sh) |
+| 4 | No hallucinated segments (0 output lines without GT match) | 10 | — | 0 | PASS | 9 segments, all match ground truth TTS input. No phantom content. | 2026-04-05T21:50Z | `make meeting-tts` (transcribe.sh) |
+| 5 | No missed GT lines (completeness 100%) | 10 | — | 0 | PASS | 3/3 TTS utterances transcribed (each appears twice due to separate audio streams — expected GMeet behavior) | 2026-04-05T21:50Z | `make meeting-tts` (transcribe.sh) |
+| 6 | DOM selectors current (bot joins successfully) | 10 | ceiling | 0 | PASS | Bot joined, admitted via auto-admit, reached active state. Selectors current as of Chrome 141. | 2026-04-05T21:50Z | `make contracts` (GMEET_URL_PARSED) + `make meeting-tts` (admit.sh) |
 
 Confidence: 75 (item 2 PARTIAL — only 2 speakers tested, 3-speaker attribution unproven. Production single-bot scenario works with 0% WER and correct attribution. Multi-bot lite mode has audio loopback issue bug #30.)
 

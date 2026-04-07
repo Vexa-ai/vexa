@@ -1,3 +1,10 @@
+---
+services: [vexa-bot, api-gateway, runtime-api, meeting-api]
+tests3:
+  targets: [browser-session, smoke]
+  checks: [PASSWORD_STORE_BASIC, MINIO_ENDPOINT_SET, MINIO_BUCKET_SET]
+---
+
 # Browser Session
 
 > Proc: `tests2/src/browser.md`

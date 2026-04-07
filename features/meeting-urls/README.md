@@ -1,3 +1,10 @@
+---
+services: [meeting-api, mcp]
+tests3:
+  targets: [contracts]
+  checks: [URL_PARSER_EXISTS, GMEET_URL_PARSED, INVALID_URL_REJECTED, TEAMS_URL_STANDARD, TEAMS_URL_SHORTLINK, TEAMS_URL_CHANNEL, TEAMS_URL_ENTERPRISE, TEAMS_URL_PERSONAL]
+---
+
 # Meeting URLs
 
 ## Why

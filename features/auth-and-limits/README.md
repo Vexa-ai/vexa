@@ -1,3 +1,10 @@
+---
+services: [api-gateway, admin-api, meeting-api]
+tests3:
+  targets: [contracts, smoke]
+  checks: [AUTH_REJECTS_NO_TOKEN, DASHBOARD_ADMIN_KEY_MATCHES, DASHBOARD_ADMIN_KEY_VALID, DASHBOARD_API_KEY_VALID]
+---
+
 # Auth and Limits
 
 ## Why

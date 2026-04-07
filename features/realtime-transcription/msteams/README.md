@@ -1,3 +1,10 @@
+---
+services: [meeting-api, vexa-bot, tts-service]
+tests3:
+  targets: [meeting-tts, contracts]
+  checks: [TEAMS_URL_STANDARD, TEAMS_URL_SHORTLINK, TEAMS_URL_CHANNEL, TEAMS_URL_ENTERPRISE, TEAMS_URL_PERSONAL]
+---
+
 # MS Teams Transcription
 
 ## Why

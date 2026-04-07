@@ -1,0 +1,12 @@
+{
+  "gt_count": 9,
+  "seg_count": 13,
+  "pass": 9,
+  "missed": 0,
+  "speaker_fail": 0,
+  "content_fail": 0,
+  "hallucinations": 4,
+  "speaker_accuracy": 1.0,
+  "avg_similarity": 0.932167,
+  "completeness": 1.0
+}

@@ -1,3 +1,10 @@
+---
+services: [meeting-api, api-gateway]
+tests3:
+  targets: [webhooks, smoke]
+  checks: []
+---
+
 # Webhooks
 
 ## Why

@@ -1,3 +1,10 @@
+---
+services: [meeting-api, vexa-bot, tts-service]
+tests3:
+  targets: [meeting-tts, smoke]
+  checks: []
+---
+
 # Speaking Bot
 
 ## Why

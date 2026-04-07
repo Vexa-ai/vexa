@@ -3,10 +3,12 @@
        containers browser-session browser-login browser \
        meeting-tts meeting bot admit transcribe finalize post-meeting meeting-chain \
        webhooks auth-meeting \
+       collect score \
        e2e full \
        vm-compose vm-lite \
        vm-provision-compose vm-provision-lite vm-smoke-compose vm-smoke-lite \
        vm-destroy vm-ssh vm-status \
+       what-changed \
        clean help
 
 SHELL := /bin/bash
@@ -177,7 +179,21 @@ vm-status:                         ## show VM state
 	@echo "  VM_MODE:  $$(cat $(STATE)/vm_mode 2>/dev/null || echo '-')"
 	@echo "  VM_SETUP: $$(cat $(STATE)/vm_setup 2>/dev/null || echo '-')"
 
+# ═══ Data collection ══════════════════════════════════════════════
+
+collect: $(SMOKE_STAMP)             ## collect: run live meeting, capture dataset (CONVERSATION=3speakers)
+	@CONVERSATION=$${CONVERSATION:-3speakers} $(T3)/tests/collect.sh
+
+score:                              ## score: re-score existing dataset offline (DATASET=gmeet-compose-260405)
+	@DATASET=$${DATASET} $(T3)/tests/score.sh
+
 # ═══ Util ═════════════════════════════════════════════════════════
+
+what-changed:                      ## resolve changed files to test targets
+	@TARGETS=$$(git diff --name-only $${BASE:-main} | python3 $(T3)/resolve.py); \
+	if [ -n "$$TARGETS" ]; then \
+		echo "→ make -C tests3 $$TARGETS"; \
+	fi
 
 clean:                             ## clear .state/
 	@rm -f $(STATE)/*

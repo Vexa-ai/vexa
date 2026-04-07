@@ -1,3 +1,10 @@
+---
+services: [runtime-api]
+tests3:
+  targets: [containers, smoke]
+  checks: [RUNTIME_API_UP]
+---
+
 # Container Lifecycle
 
 > Proc: `tests2/src/containers.md`

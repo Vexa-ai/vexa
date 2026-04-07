@@ -1,3 +1,10 @@
+---
+services: [meeting-api, vexa-bot]
+tests3:
+  targets: [post-meeting, smoke]
+  checks: [MINIO_ENDPOINT_SET, MINIO_BUCKET_SET]
+---
+
 # Post-Meeting Transcription
 
 ## Why

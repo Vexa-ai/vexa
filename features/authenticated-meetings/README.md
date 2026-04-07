@@ -1,3 +1,10 @@
+---
+services: [meeting-api, vexa-bot]
+tests3:
+  targets: [auth-meeting, smoke]
+  checks: [PASSWORD_STORE_BASIC, MINIO_ENDPOINT_SET]
+---
+
 # Authenticated Meetings
 
 > Procs: `tests2/src/browser.md` (cookie save/restore), `tests2/src/bot.md` (authenticated join)

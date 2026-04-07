@@ -1,3 +1,10 @@
+---
+services: [meeting-api, runtime-api, vexa-bot]
+tests3:
+  targets: [containers, bot, smoke]
+  checks: [GRACEFUL_LEAVE, ROUTE_COLLISION, BOTS_STATUS_NOT_422]
+---
+
 # Bot Lifecycle
 
 > Procs: `tests2/src/bot.md`, `tests2/src/admit.md`, `tests2/src/finalize.md`

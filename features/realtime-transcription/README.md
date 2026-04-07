@@ -1,3 +1,10 @@
+---
+services: [meeting-api, vexa-bot, tts-service]
+tests3:
+  targets: [meeting-tts, contracts, smoke]
+  checks: [GMEET_URL_PARSED, TRANSCRIPTION_UP, WS_PING_PONG]
+---
+
 # Realtime Transcription
 
 ## Why
