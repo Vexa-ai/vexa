@@ -32,11 +32,10 @@ MINIO_CONSOLE_HOST_PORT=9001
 # Admin
 ADMIN_TOKEN=changeme
 
-# Image tag — pre-built from DockerHub. `make build` overrides with a local tag.
+# Image tag — pre-built from DockerHub by default.
+# `make build` writes a local tag to .last-tag which overrides this.
 IMAGE_TAG=dev
 
-# Bot image
-BOT_IMAGE_NAME=vexaai/vexa-bot:dev
 
 # Database (embedded postgres by default)
 DB_NAME=vexa
