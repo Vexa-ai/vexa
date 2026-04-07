@@ -214,24 +214,30 @@ echo "  │  Polling until all are active...              │"
 echo "  └──────────────────────────────────────────────┘"
 echo ""
 
+# Collect ALL tokens to check (test user + each speaker)
+ALL_TOKENS=("$API_TOKEN")
+for SPEAKER in "${SPEAKERS[@]}"; do
+    ALL_TOKENS+=("${SPEAKER_TOKENS[$SPEAKER]}")
+done
+
 for i in $(seq 1 60); do
-    ACTIVE=$(curl -sf -H "X-API-Key: $API_TOKEN" "$GATEWAY_URL/bots/status" | python3 -c "
+    ACTIVE=0
+    for TK in "${ALL_TOKENS[@]}"; do
+        A=$(curl -sf -H "X-API-Key: $TK" "$GATEWAY_URL/bots/status" | python3 -c "
 import sys,json
-bots=[b for b in json.load(sys.stdin).get('running_bots',[]) if b.get('native_meeting_id')=='$NATIVE_ID']
-active=sum(1 for b in bots if b.get('meeting_status','')=='active')
-total=len(bots)
-print(f'{active} {total}')" 2>/dev/null)
-    A=$(echo "$ACTIVE" | awk '{print $1}')
-    T=$(echo "$ACTIVE" | awk '{print $2}')
-    info "[$i] $A/$TOTAL_BOTS active"
-    [ "${A:-0}" -ge "$TOTAL_BOTS" ] && break
+bots=[b for b in json.load(sys.stdin).get('running_bots',[]) if b.get('native_meeting_id')=='$NATIVE_ID' and b.get('meeting_status','')=='active']
+print(len(bots))" 2>/dev/null)
+        ACTIVE=$(( ACTIVE + ${A:-0} ))
+    done
+    info "[$i] $ACTIVE/$TOTAL_BOTS active"
+    [ "$ACTIVE" -ge "$TOTAL_BOTS" ] && break
     sleep 5
 done
 
-if [ "${A:-0}" -ge "$TOTAL_BOTS" ]; then
+if [ "$ACTIVE" -ge "$TOTAL_BOTS" ]; then
     pass "all $TOTAL_BOTS bots active"
 else
-    fail "only $A/$TOTAL_BOTS bots active after 5 min"
+    fail "only $ACTIVE/$TOTAL_BOTS bots active after 5 min"
     exit 1
 fi
 

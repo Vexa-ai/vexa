@@ -256,7 +256,7 @@ def check_transcription_token():
         r = subprocess.run(
             ["curl", "-s", "-w", "\n%{http_code}", "-X", "POST", tx_url,
              "-H", f"Authorization: Bearer {tx_token}",
-             "-F", f"file=@{test_audio}", "-F", "language=en"],
+             "-F", f"file=@{test_audio}", "-F", "language=en", "-F", "model=large-v3-turbo"],
             capture_output=True, text=True, timeout=30)
         lines = r.stdout.strip().rsplit("\n", 1)
         code = int(lines[-1]) if lines[-1].isdigit() else 0
