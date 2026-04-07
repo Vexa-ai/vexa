@@ -47,6 +47,7 @@ RUN apt-get update && \
     x11vnc \
     novnc \
     python3-websockify \
+    fluxbox \
     pulseaudio \
     ffmpeg \
     libsndfile1 \
@@ -133,6 +134,8 @@ COPY services/tts-service/ /app/tts-service/
 
 COPY services/vexa-bot/core/ /app/vexa-bot/
 RUN chmod +x /app/vexa-bot/entrypoint.sh
+# Entrypoint references /app/vexa-bot/core/ — symlink to self for compatibility
+RUN ln -sf /app/vexa-bot /app/vexa-bot/core
 WORKDIR /app/vexa-bot
 RUN npm ci --omit=dev 2>/dev/null || npm install \
     && npm run build
