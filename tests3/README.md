@@ -44,16 +44,41 @@ tests3/
 └── .state/               # runtime state (gitignored)
 ```
 
+## Workflow
+
+Work locally. Deploy-test last.
+
+```
+1. Code change
+   └─→ make -C tests3 locks          <1s    catch regressions before anything else
+
+2. After restart / deploy
+   └─→ make -C tests3 smoke          30s    env + health + contracts
+
+3. Feature validation
+   └─→ make -C tests3 dashboard      30s    login, proxy, pagination
+   └─→ make -C tests3 containers     2min   bot lifecycle
+   └─→ make -C tests3 webhooks       15s    envelope, HMAC
+   └─→ make -C tests3 meeting-tts    10min  live meeting + TTS + transcript (human admits)
+
+4. Before release (final gate)
+   └─→ make -C tests3 vm-compose     6min   fresh VM, pull :dev, full smoke
+   └─→ make -C tests3 vm-lite        5min   fresh VM, pull lite:dev, smoke
+   └─→ make -C tests3 vm-destroy            tear down
+```
+
+Steps 1-3 are local, fast, iterative. Step 4 runs once when everything else is green. Don't iterate on VMs — debug locally, verify remotely.
+
 ## How
 
 ### Quick start
 
 ```bash
-make -C tests3 smoke     # 39 checks, ~30s, no meetings
-make -C tests3 e2e       # smoke + live meeting chain, ~10min
-make -C tests3 locks     # just static regression locks, <1s
-make -C tests3 clean     # clear state from previous runs
-make -C tests3 help      # list all targets
+make -C tests3 smoke         # 40 checks, ~30s, no meetings
+make -C tests3 meeting-tts   # smoke + live meeting + TTS + transcript, ~10min
+make -C tests3 locks         # just static regression locks, <1s
+make -C tests3 clean         # clear state from previous runs
+make -C tests3 help          # list all targets
 ```
 
 ### Adding a regression lock
@@ -220,16 +245,16 @@ Every check is a JSON entry in `checks/registry.json`:
 
 ## Coverage
 
-39 registry checks + 13 test scripts, covering ~120 of 153 DoD criteria (78%).
+40 registry checks + 14 test scripts. Validated across local compose, VM compose, and VM lite — 40/40 smoke on all three.
 
-### Registry checks (39)
+### Registry checks (40)
 
 | Tier     | Count | What                                                                                                                            |
 | -------- | ----- | ------------------------------------------------------------------------------------------------------------------------------- |
 | static   | 12    | Regression locks: redirect, identity, cookies, routes, graceful leave, URL parser, mapMeeting, compose defaults, password-store |
 | env      | 7     | Dashboard keys match admin-api, keys valid against API, VEXA_API_URL set, MINIO_ENDPOINT, MINIO_BUCKET, RUNTIME_API_URL         |
 | health   | 7     | Gateway, admin-api, dashboard, runtime-api, transcription, redis, minio                                                         |
-| contract | 13    | /bots/status, /meetings, auth rejection, 5 Teams URL formats, GMeet URL, invalid URL, WS ping, dashboard login, cache headers   |
+| contract | 14    | /bots/status, /meetings, auth rejection, 5 Teams URL formats, GMeet URL, invalid URL, WS ping, dashboard login, transcription token, cache headers |
 
 ### Test scripts (13)
 
