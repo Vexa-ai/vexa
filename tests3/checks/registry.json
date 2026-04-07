@@ -277,7 +277,8 @@
       "proves": "MinIO responds — recordings and browser state storage work",
       "symptom": "MinIO not responding — recordings and browser state will fail",
       "url": "http://localhost:9000/minio/health/live",
-      "expect_code": 200
+      "expect_code": 200,
+      "skip_modes": ["lite"]
     },
 
     {"_": "═══ CONTRACT — API behavior correct, 15s ═══"},

@@ -24,7 +24,7 @@ pass "local creds: TX_URL=${TX_URL:0:40}..."
 
 # ── 2. Install prereqs ───────────────────────────
 info "installing prereqs..."
-vm_ssh "apt-get update -qq && apt-get install -y -qq make git curl jq python3" 2>&1 | tail -1
+vm_ssh "apt-get update -qq && apt-get install -y -qq make git curl jq python3 python3-pip && pip3 install --break-system-packages websockets 2>/dev/null" 2>&1 | tail -1
 pass "prereqs: make, git, curl, jq, python3"
 
 info "installing docker..."
