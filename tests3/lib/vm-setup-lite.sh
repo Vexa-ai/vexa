@@ -92,8 +92,8 @@ done
 
 # ── 8. Init DB + create user ─────────────────────
 info "initializing database..."
-vm_ssh "docker exec vexa python3 -c 'import asyncio; from admin_models.database import init_db; asyncio.run(init_db())'" 2>&1 | tail -1
-vm_ssh "docker exec vexa python3 -c 'import asyncio; from meeting_api.database import init_db; asyncio.run(init_db())'" 2>&1 | tail -1
+vm_ssh "docker exec -e DB_PASSWORD=postgres -e DB_SSL_MODE=disable vexa python3 -c 'import asyncio; from admin_models.database import init_db; asyncio.run(init_db())'" 2>&1 | tail -1
+vm_ssh "docker exec -e DB_PASSWORD=postgres -e DB_SSL_MODE=disable vexa python3 -c 'import asyncio; from meeting_api.database import init_db; asyncio.run(init_db())'" 2>&1 | tail -1
 pass "database initialized"
 
 state_write vm_setup complete

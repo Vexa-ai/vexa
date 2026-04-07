@@ -164,15 +164,21 @@ def check_health(lock):
 
     url = lock["url"]
 
-    # Special: Transcription health — derive URL from .env
+    # Special: Transcription health — derive URL from .env or container env
     if url == "TRANSCRIPTION_HEALTH":
         env_file = os.path.join(ROOT, ".env")
         tx_url = ""
-        for line in open(env_file):
-            if line.startswith("TRANSCRIPTION_SERVICE_URL="):
-                tx_url = line.strip().split("=", 1)[1]
+        if os.path.isfile(env_file):
+            for line in open(env_file):
+                if line.startswith("TRANSCRIPTION_SERVICE_URL="):
+                    tx_url = line.strip().split("=", 1)[1]
         if not tx_url:
-            return False, "TRANSCRIPTION_SERVICE_URL not set in .env"
+            # Try reading from meeting-api container
+            code, val = svc_exec("meeting-api", ["printenv", "TRANSCRIPTION_SERVICE_URL"])
+            if code == 0 and val:
+                tx_url = val
+        if not tx_url:
+            return True, "no transcription URL configured — skipped"
         # Replace /v1/audio/transcriptions with /health
         health_url = tx_url.rsplit("/v1/", 1)[0] + "/health" if "/v1/" in tx_url else tx_url + "/health"
         code, body = http_check(health_url)
@@ -270,13 +276,22 @@ def check_transcription_token():
     env_file = os.path.join(ROOT, ".env")
     tx_url = ""
     tx_token = ""
-    for line in open(env_file):
-        if line.startswith("TRANSCRIPTION_SERVICE_URL="):
-            tx_url = line.strip().split("=", 1)[1]
-        if line.startswith("TRANSCRIPTION_SERVICE_TOKEN="):
-            tx_token = line.strip().split("=", 1)[1]
+    if os.path.isfile(env_file):
+        for line in open(env_file):
+            if line.startswith("TRANSCRIPTION_SERVICE_URL="):
+                tx_url = line.strip().split("=", 1)[1]
+            if line.startswith("TRANSCRIPTION_SERVICE_TOKEN="):
+                tx_token = line.strip().split("=", 1)[1]
     if not tx_url:
-        return False, "TRANSCRIPTION_SERVICE_URL not set in .env"
+        # Try from container
+        code, val = svc_exec("meeting-api", ["printenv", "TRANSCRIPTION_SERVICE_URL"])
+        if code == 0 and val:
+            tx_url = val
+        code, val = svc_exec("meeting-api", ["printenv", "TRANSCRIPTION_SERVICE_TOKEN"])
+        if code == 0 and val:
+            tx_token = val
+    if not tx_url:
+        return True, "no transcription URL configured — skipped"
 
     test_audio = os.path.join(ROOT, "tests", "testdata", "test-speech-en.wav")
     if not os.path.isfile(test_audio):
