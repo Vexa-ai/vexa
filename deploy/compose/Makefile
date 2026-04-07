@@ -9,10 +9,10 @@ ENV_EXAMPLE := $(ROOT)/deploy/env/env-example
 LAST_TAG_FILE := $(ROOT)/deploy/compose/.last-tag
 
 # --- Image tagging ---
-# Every build gets an immutable VERSION-YYMMDD-HHMM tag.
-# Mutable tags (dev, staging, latest) are pointers updated only during publish/promote.
+# BUILD_TAG: always a fresh timestamp for `make build`. Never from .env.
+# IMAGE_TAG: what `make up` runs. Comes from .env (default: dev) or .last-tag after build.
 VERSION := $(shell cat $(ROOT)/VERSION 2>/dev/null || echo "0.0.0")
-IMAGE_TAG ?= $(VERSION)-$(shell date +%y%m%d-%H%M)
+BUILD_TAG := $(VERSION)-$(shell date +%y%m%d-%H%M)
 export IMAGE_TAG
 
 # DockerHub namespace
@@ -39,16 +39,18 @@ all-build: env preflight build up init-db setup-api-key test
 help-tags:
 	@echo "Image Tagging Workflow"
 	@echo ""
-	@echo "  make build              - Build all images with timestamp tag (saved to .last-tag)"
-	@echo "  make up                 - Start services using last-built tag"
+	@echo "  make build              - Build all images with fresh timestamp tag (saved to .last-tag)"
+	@echo "  make up                 - Start services (uses .last-tag if built, else IMAGE_TAG from .env)"
 	@echo "  make publish            - Push all images to DockerHub + update :dev pointer"
 	@echo "  make promote-staging    - Set :staging tag to TAG= (or last published)"
 	@echo "  make promote-latest     - Set :latest tag to TAG= (or last published)"
 	@echo ""
-	@echo "Current tag: $$(cat $(LAST_TAG_FILE) 2>/dev/null || echo '(none — run make build)')"
+	@echo "Last built: $$(cat $(LAST_TAG_FILE) 2>/dev/null || echo '(none — using IMAGE_TAG from .env)')"
+	@echo "IMAGE_TAG in .env: $(IMAGE_TAG)"
 	@echo ""
 	@echo "Examples:"
-	@echo "  make build                         # builds all as vexaai/*:260330-1415"
+	@echo "  make all                           # pulls IMAGE_TAG from .env (default: dev)"
+	@echo "  make all-build                     # builds fresh + starts"
 	@echo "  make publish                       # pushes + sets :dev"
 	@echo "  make promote-staging TAG=260330-1415"
 
@@ -115,25 +117,25 @@ check_docker:
 
 # --- Build ---
 build-bot-image: check_docker
-	@echo "Building $(DOCKERHUB_USER)/$(BOT_IMAGE):$(IMAGE_TAG)..."
-	docker build --platform linux/amd64 -t $(DOCKERHUB_USER)/$(BOT_IMAGE):$(IMAGE_TAG) -f $(ROOT)/services/vexa-bot/Dockerfile $(ROOT)/services/vexa-bot
+	@echo "Building $(DOCKERHUB_USER)/$(BOT_IMAGE):$(BUILD_TAG)..."
+	docker build --platform linux/amd64 -t $(DOCKERHUB_USER)/$(BOT_IMAGE):$(BUILD_TAG) -f $(ROOT)/services/vexa-bot/Dockerfile $(ROOT)/services/vexa-bot
 
 build-lite: check_docker
-	@echo "Building $(DOCKERHUB_USER)/vexa-lite:$(IMAGE_TAG)..."
-	docker build --platform linux/amd64 -t $(DOCKERHUB_USER)/vexa-lite:$(IMAGE_TAG) -f $(ROOT)/deploy/lite/Dockerfile.lite $(ROOT)
+	@echo "Building $(DOCKERHUB_USER)/vexa-lite:$(BUILD_TAG)..."
+	docker build --platform linux/amd64 -t $(DOCKERHUB_USER)/vexa-lite:$(BUILD_TAG) -f $(ROOT)/deploy/lite/Dockerfile.lite $(ROOT)
 
 build-transcript-rendering:
 	@echo "Building transcript-rendering package..."
 	@cd $(ROOT)/packages/transcript-rendering && npm install && npm run build
 
 build: check_docker build-bot-image build-transcript-rendering build-lite
-	@echo "Building all images with tag: $(IMAGE_TAG)"
-	$(COMPOSE_CMD) build
-	@echo "$(IMAGE_TAG)" > $(LAST_TAG_FILE)
+	@echo "Building all images with tag: $(BUILD_TAG)"
+	IMAGE_TAG=$(BUILD_TAG) $(COMPOSE_CMD) build
+	@echo "$(BUILD_TAG)" > $(LAST_TAG_FILE)
 	@echo ""
-	@echo "All images tagged: $(IMAGE_TAG)"
+	@echo "All images tagged: $(BUILD_TAG)"
 	@echo "Tag saved to $(LAST_TAG_FILE)"
-	@docker images --format 'table {{.Repository}}\t{{.Tag}}\t{{.CreatedAt}}' | grep "$(IMAGE_TAG)" || true
+	@docker images --format 'table {{.Repository}}\t{{.Tag}}\t{{.CreatedAt}}' | grep "$(BUILD_TAG)" || true
 
 # --- Up / Down ---
 # IMAGE_TAG comes from .env (default: dev = pre-built from DockerHub).
