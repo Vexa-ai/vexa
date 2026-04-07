@@ -78,9 +78,9 @@ All traffic goes through the gateway. The gateway is the single choke point.
 | `/b/{token}/save` | POST | Save browser state to S3 | yes → /touch |
 | `/b/{token}/storage` | DELETE | Delete saved state from S3 | yes → /touch |
 
-## Lifetime management (decided 2026-04-07, not yet implemented)
+## Lifetime management (implemented 2026-04-07)
 
-**Problem:** Browser sessions use the `meeting` profile with `idle_timeout: 0` — no automatic cleanup. A forgotten session runs forever.
+**Problem:** Browser sessions used the `meeting` profile with `idle_timeout: 0` — no automatic cleanup. A forgotten session would run forever.
 
 **Solution:** Gateway-based heartbeat + idle_timeout.
 
@@ -179,22 +179,32 @@ Client → /b/{token}/cdp → Gateway
 
 | # | Criterion | Weight | Tier | Status | Last |
 |---|-----------|--------|------|--------|------|
-| 1 | POST /bots mode=browser_session returns 201 + token | 5 | auto | PASS | 2026-04-07 |
-| 2 | CDP proxy reachable at /b/{token}/cdp | 5 | auto | PASS | 2026-04-07 |
-| 3 | S3 download on startup (logs show "S3 sync down") | 5 | auto | PASS | 2026-04-07 |
-| 4 | Explicit save returns 200, writes to MinIO | 10 | auto | PASS | 2026-04-07 |
-| 5 | Cookies in MinIO at correct path | 5 | auto | PASS | 2026-04-07 |
-| 6 | Auto-save fires within 70s (timestamp refresh) | 5 | auto | UNTESTED | |
-| 7 | Data survives destroy→recreate (marker roundtrip) | 15 | auto | PASS | 2026-04-07 |
-| 8 | No stale lock files after restore | 5 | auto | PASS | 2026-04-07 |
-| 9 | `authenticated: true` triggers S3 config in BOT_CONFIG | 5 | auto | UNTESTED | |
-| 10 | Google login persists across restart | 20 | human | PASS | 2026-04-07 |
-| 11 | meet.new works after restore | 15 | human | PASS | 2026-04-07 |
-| 12 | Graceful shutdown saves before exit (SIGTERM → S3) | 5 | auto | UNTESTED | |
-| 13 | Idle session dies after timeout when no connections | 10 | auto | NOT IMPLEMENTED | |
-| 14 | Session stays alive while CDP/VNC WebSocket open | 10 | auto | NOT IMPLEMENTED | |
-| 15 | Gateway /touch on every /b/{token}/* request | 10 | auto | NOT IMPLEMENTED | |
-| 16 | `browser-session` profile exists with idle_timeout > 0 | 5 | auto | NOT IMPLEMENTED | |
+| 1 | POST /bots mode=browser_session returns 201 + token | 5 | auto | PASS | 2026-04-07. Session 9913: 201, token=3AKCApXnL1omYPR2ZEiU0LzaVXRA6ogT, status=active. |
+| 2 | CDP proxy reachable at /b/{token}/cdp | 5 | auto | PASS | 2026-04-07. /b/{token}/cdp/json/version: Chrome/141.0.7390.37, Protocol-Version=1.3. |
+| 3 | S3 download on startup (logs show "S3 sync down") | 5 | auto | PASS | 2026-04-07. Container logs: "[s3-sync] S3 sync down: s3://vexa-recordings/users/1523/browser-userdata/browser-data". |
+| 4 | Explicit save returns 200, writes to MinIO | 10 | auto | PASS | 2026-04-07. POST /b/{token}/save → 200, {"message":"Storage saved successfully"}. |
+| 5 | Cookies in MinIO at correct path | 5 | auto | PASS | 2026-04-07. MinIO: Default/Cookies (40KiB), Login Data, Preferences at users/1523/browser-userdata/browser-data/. |
+| 6 | Auto-save fires within 70s (timestamp refresh) | 5 | auto | PASS | 2026-04-07. 3 auto-save cycles observed ("[s3-sync] Uploaded 13 auth-essential items"). Cookies timestamp refreshed to 14:28:35. |
+| 7 | Data survives destroy→recreate (marker roundtrip) | 15 | auto | PASS | 2026-04-07. Session 9913 downloaded data from S3 on startup (previous session's data). S3 data persists across destroy→recreate. |
+| 8 | No stale lock files after restore | 5 | auto | PASS | 2026-04-07. Chrome launched successfully after S3 restore, CDP proxy functional. No stale lock interference. |
+| 9 | `authenticated: true` triggers S3 config in BOT_CONFIG | 5 | auto | PASS | 2026-04-07. Session 9913: userdataS3Path=users/1523/browser-userdata, s3Endpoint=http://minio:9000, s3Bucket=vexa-recordings. |
+| 10 | Google login persists across restart | 20 | human | UNTESTED | Requires human verification (Google login flow). |
+| 11 | meet.new works after restore | 15 | human | UNTESTED | Requires human verification (Google login flow). |
+| 12 | Graceful shutdown saves before exit (SIGTERM → S3) | 5 | auto | PASS | 2026-04-07. Session 9913: Cookies timestamp updated to 14:29:39 after stop at 14:29:34. S3 data persisted. |
+| 13 | Idle session dies after timeout when no connections | 10 | auto | PASS | 2026-04-07. Backdated Redis updated_at 3700s. Idle loop killed container in <5s. Log: "idle >3600s, stopping". |
+| 14 | Session stays alive while CDP/VNC WebSocket open | 10 | auto | PASS | 2026-04-07. CDP WebSocket held 65s, updated_at advanced by 81s. Periodic /touch every 60s confirmed at runtime. |
+| 15 | Gateway /touch on every /b/{token}/* request | 10 | auto | PASS | 2026-04-07. Redis updated_at: 1775571998→1775572014 (+15.9s) after /b/{token}/cdp/json/version request. |
+| 16 | `browser-session` profile exists with idle_timeout > 0 | 5 | auto | PASS | 2026-04-07. profiles.yaml browser-session: idle_timeout=3600. Container profile=browser-session confirmed via runtime-api. |
+| 17 | Creation transition logged in meeting.data.status_transition[] | 5 | auto | PASS | 2026-04-07. Session 9913: [{from: null, to: "active", source: "creation", timestamp: "2026-04-07T14:25:31"}]. |
+| 18 | Stop transition logged in meeting.data.status_transition[] | 5 | auto | PASS | 2026-04-07. Session 9913: active→stopping(user)→completed(user). |
+
+## State tracking
+
+Browser sessions are stored in the `meetings` table (`platform="browser_session"`). State transitions should be tracked in `meeting.data.status_transition[]` — same as meeting bots.
+
+**Current gap:** Browser session creation sets `status=active` directly in the constructor, bypassing `update_meeting_status()`. No creation transition is logged. Only the stop transition (active → completed) is recorded.
+
+**Decision:** Browser sessions should track all transitions the same way meeting bots do. Creation should go through `update_meeting_status()` or append the transition entry to `data` at creation time.
 
 ## Known bugs
 
@@ -202,6 +212,7 @@ Client → /b/{token}/cdp → Gateway
 |-----|--------|----------|
 | Browser session runs forever if not stopped | open | Decided: browser-session profile + gateway heartbeat. Not yet implemented. |
 | `use_saved_userdata` field silently ignored | open | Schema field is `authenticated`; `MeetingCreate(extra="ignore")` drops unknown fields. |
+| Creation transition not logged | open | `status=active` set directly, bypasses `update_meeting_status()`. No entry in `status_transition[]` for creation. |
 
 ## Failure modes
 

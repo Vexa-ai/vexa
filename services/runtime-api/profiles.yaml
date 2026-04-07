@@ -13,12 +13,11 @@ profiles:
     command: ["/app/vexa-bot/entrypoint.sh"]
     working_dir: "/app/vexa-bot"
     resources:
-      cpu_request: "500m"
-      cpu_limit: "2000m"
-      memory_request: "512Mi"
-      # No memory_limit — Chrome's virtual address space far exceeds physical RAM usage.
-      # RLIMIT_AS kills Chrome with SIGTRAP if set too low.
-      shm_size: 2147483648   # 2GB shared memory for browser
+      cpu_request: "250m"      # measured steady state: 250m (baseline 2026-03-12)
+      cpu_limit: "1000m"       # 4x headroom for browser spikes
+      memory_request: "600Mi"  # measured steady state: 597Mi
+      memory_limit: "1Gi"      # ~1.7x headroom
+      shm_size: 2147483648     # 2GB shared memory for browser
     idle_timeout: 0          # managed by meeting-api (scheduler + bot-side timers)
     auto_remove: false
     env:
@@ -37,10 +36,11 @@ profiles:
     command: ["/app/vexa-bot/entrypoint.sh"]
     working_dir: "/app/vexa-bot"
     resources:
-      cpu_request: "500m"
-      cpu_limit: "2000m"
-      memory_request: "512Mi"
-      shm_size: 2147483648   # 2GB shared memory for browser
+      cpu_request: "250m"      # same baseline as meeting bot
+      cpu_limit: "1000m"
+      memory_request: "600Mi"
+      memory_limit: "1Gi"
+      shm_size: 2147483648     # 2GB shared memory for browser
     idle_timeout: 3600       # 1h — gateway /touch keeps alive while connected
     auto_remove: false
     env:

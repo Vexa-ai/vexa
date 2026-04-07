@@ -36,6 +36,10 @@ Like `make`: don't rebuild targets that are up to date.
 ### Base (produce credentials)
 
 ```
+provision            needs: DEPLOY_TARGET, BRANCH
+                     gives: VM_IP, VM_ID, SSH, K8S_NAMESPACE, GATEWAY_URL, ADMIN_URL, ADMIN_TOKEN, DEPLOY_MODE, DASHBOARD_URL, USER_ID, API_TOKEN
+                     calls: infra, api
+
 infra                needs: —
                      gives: GATEWAY_URL, ADMIN_URL, ADMIN_TOKEN, DEPLOY_MODE, DASHBOARD_URL
 

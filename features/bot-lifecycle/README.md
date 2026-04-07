@@ -75,6 +75,19 @@ Meeting bots join Google Meet / Teams, transcribe audio, and leave. Each bot is 
 | stopping | completed | Bot exit (any exit code during stopping = completed) |
 | stopping | failed | Bot exit with error before stop processed |
 
+## Escalation (needs_human_help)
+
+When a bot is stuck in an unknown state during admission (not clearly in lobby, not admitted, not rejected), it triggers escalation:
+
+1. Bot-side: `triggerEscalation(botConfig, reason)` → calls status change callback with `needs_human_help`
+2. Meeting-api: stores `meeting.data.escalation = {reason, escalated_at, session_token, vnc_url}`
+3. Meeting-api: registers container in Redis for gateway VNC proxy (`browser_session:{meeting_id}`)
+4. Dashboard: receives status change via WS, can show VNC link to user
+5. User: connects via VNC at `/b/{meeting_id}/vnc/`, manually resolves the issue
+6. Resolution: bot detects admission → status changes to `active`. Or user gives up → `failed`.
+
+Implemented for: Google Meet, Teams, Zoom admission flows.
+
 ## Completion reasons
 
 | Reason | Trigger |
@@ -162,6 +175,19 @@ When user calls DELETE /bots or scheduler fires:
 
 Browser sessions: delay = 0s (no meeting to leave).
 
+## Concurrency
+
+Users have a `max_concurrent_bots` limit. The concurrency check counts meetings in non-terminal states: `requested`, `joining`, `awaiting_admission`, `active`.
+
+`stopping` is NOT counted. When user calls DELETE:
+1. Status → stopping → concurrency slot released immediately
+2. Container still running (up to 90s delayed stop)
+3. User can create a new bot right away
+
+This is by design — user shouldn't wait 90s for the slot. Two containers may run simultaneously briefly, but only one "active" meeting counts against the limit.
+
+Browser sessions are included in the concurrency count (same query). They release the slot on stop (delay=0, immediate).
+
 ## Callbacks (bot → meeting-api)
 
 | Endpoint | Called when |
@@ -191,16 +217,20 @@ Status transitions are protected by `SELECT FOR UPDATE` (row-level lock) to prev
 
 | # | Check | Weight | Ceiling | Status | Last |
 |---|-------|--------|---------|--------|------|
-| 1 | POST /bots creates bot, returns id | 15 | ceiling | PASS | 2026-04-07 |
-| 2 | Bot reaches active in live meeting | 20 | ceiling | PASS | 2026-04-07 |
-| 3 | DELETE /bots → stopping → completed, container removed | 15 | ceiling | PASS | 2026-04-07 |
-| 4 | Status visible via GET /bots/status (not 422) | 10 | — | PASS | 2026-04-07 |
-| 5 | Timeout auto-stop (no_one_joined or max_bot_time) | 10 | — | UNTESTED | |
-| 6 | Works for GMeet, Teams, browser_session | 10 | — | PASS | 2026-04-07 |
-| 7 | Successful meeting never shows "failed" | 10 | — | PASS | 2026-04-07 |
-| 8 | Auto-admit reliable (multi-phase CDP) | 10 | — | PASS | 2026-04-07 |
-| 9 | Unauthenticated GMeet join (name prompt) | 5 | — | FAIL | 2026-04-07 |
-| 10 | meeting_url parsed server-side (6 Teams formats) | 5 | — | PASS | 2026-04-07 |
+| 1 | POST /bots creates bot, returns id | 15 | ceiling | PASS | 2026-04-07. Bot 9907 created (201), container 0a2f1a54 started. |
+| 2 | Bot reaches active in live meeting | 20 | ceiling | UNTESTED | Needs Phase C (live meeting). |
+| 3 | DELETE /bots → stopping → completed, container removed | 15 | ceiling | PASS | 2026-04-07. Bot 9907: DELETE 202, joining→stopping→completed, container removed from docker ps -a. |
+| 4 | Status visible via GET /bots/status (not 422) | 10 | — | PASS | 2026-04-07. GET /bots/status 200, returns running_bots array with meeting_status field. |
+| 5 | Timeout auto-stop (no_one_joined or max_bot_time) | 10 | — | PASS | 2026-04-07. Bot 9909: max_bot_time=30000ms, auto-stopped at ~31s. completion_reason=max_bot_time_exceeded. |
+| 6 | Works for GMeet, Teams, browser_session | 10 | — | UNTESTED | Needs Phase C (live meetings). |
+| 7 | Successful meeting never shows "failed" | 10 | — | UNTESTED | Needs Phase C (live meeting with transcript). |
+| 8 | Auto-admit reliable (multi-phase CDP) | 10 | — | UNTESTED | Needs Phase C (live meeting). |
+| 9 | Unauthenticated GMeet join (name prompt) | 5 | — | UNTESTED | Needs live meeting with unauthenticated bot. |
+| 10 | meeting_url parsed server-side (6 Teams formats) | 5 | — | UNTESTED | Needs specific Teams URL format tests. |
+| 11 | needs_human_help escalation: bot triggers, meeting-api stores VNC URL, dashboard shows | 5 | — | SKIP | 2026-04-07. Requires controlled admission scenario (CAPTCHA, unexpected dialog). Cannot trigger escalation without real meeting admission flow. |
+| 12 | Exit during stopping = completed (not failed), regardless of exit code | 5 | — | PASS | 2026-04-07. Bot 9907: joining→stopping→completed. Exit during stopping = completed. |
+| 13 | Concurrency slot released on stopping (user can create new bot immediately) | 5 | — | PASS | 2026-04-07. Bot A (9910) stopped, bot B (9911) created immediately — no 403 concurrency error. |
+| 14 | Status transitions tracked in meeting.data.status_transition[] | 5 | — | PASS | 2026-04-07. Bot 9907: [{requested→joining, bot_callback}, {joining→stopping, user}, {stopping→completed, user}]. |
 
 ## Failure modes
 

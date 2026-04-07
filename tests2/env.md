@@ -7,7 +7,7 @@
 ## state
 
     REPO_URL          = "https://github.com/Vexa-ai/vexa.git"
-    BRANCH            = "clean"
+    BRANCH            = "clean-aligned"
 
     VM_TYPE           = "g6-standard-6"
     VM_IMAGE          = "linode/ubuntu24.04"

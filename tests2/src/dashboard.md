@@ -140,7 +140,44 @@ use: lib/docker
            emit FAIL "BUG: GET /meetings/{id} returns null native_meeting_id — transcript page will be empty"
    on_fail: continue
 
-8. transcript_via_proxy
+8. pagination
+   > Bug: if GET /bots is slow (>5s timeout), proxy falls back to /bots/status
+   > which returns only running bots — no completed meetings, no pagination.
+   > This tests that the primary path works AND that pagination params pass through.
+   TESTED += 1
+   do: |
+       python3 -c "
+       import json, urllib.request
+       # Test 1: small page
+       req=urllib.request.Request('{DASHBOARD_URL}/api/vexa/meetings?limit=3&offset=0')
+       req.add_header('Cookie','vexa-token={COOKIE_TOKEN}')
+       d=json.load(urllib.request.urlopen(req))
+       page1=d.get('meetings',[])
+       has_more=d.get('has_more',False)
+       print(f'PAGE1={len(page1)} has_more={has_more}')
+       # Test 2: second page
+       req2=urllib.request.Request('{DASHBOARD_URL}/api/vexa/meetings?limit=3&offset=3')
+       req2.add_header('Cookie','vexa-token={COOKIE_TOKEN}')
+       d2=json.load(urllib.request.urlopen(req2))
+       page2=d2.get('meetings',[])
+       print(f'PAGE2={len(page2)}')
+       # Test 3: pages don't overlap
+       ids1=set(m.get('id') for m in page1)
+       ids2=set(m.get('id') for m in page2)
+       overlap=ids1 & ids2
+       print(f'OVERLAP={len(overlap)}')
+       if len(page1)==3 and has_more and len(page2)>0 and len(overlap)==0:
+           print('PAGINATION=PASS')
+       else:
+           print('PAGINATION=FAIL')
+       "
+   if output contains "PAGINATION=PASS":
+       PASSED += 1; emit PASS "t2: pagination works (limit/offset/has_more, no overlap)"
+   else:
+       emit FAIL "t2: pagination broken — check proxy /bots timeout or backend response"
+   on_fail: continue
+
+9. transcript_via_proxy
    > Verify transcript data flows through dashboard proxy.
    TESTED += 1
    if MEETING_NATIVE_ID exists:
@@ -279,3 +316,4 @@ use: lib/docker
 | Transcript page empty after reload | VEXA_API_KEY stale (401) | Fresh token in .env, infra step 11 validates | Token lifecycle not managed = "works then breaks" |
 | Transcript page empty despite REST data | `getMeeting()` skipped `mapMeeting()`. native_meeting_id not mapped to platform_specific_id. Transcript URL = `/transcripts/{platform}/undefined`. | Added `mapMeeting(raw)` to `getMeeting()`. Step 7 tests the API contract. Step 9 tests the page. | API test PASS ≠ dashboard works. Must test the actual browser path. |
 | Old JS bundle served after deploy | Browser caches Next.js chunks | Next.js uses content-hashed filenames. Step 11 checks HTML cache headers. Hard-refresh needed after deploy. | Cache busting depends on HTML not being cached — chunk filenames change but the page referencing them must too |
+| Meetings list shows only running bots, no history | GET /bots times out (5s), proxy falls back to /bots/status which only returns running containers | Increase timeout or remove fallback (per "no fallbacks" rule). Step 8 tests pagination with limit/offset. | Fallback hides the failure — user sees 1 meeting instead of 47 with no error message |

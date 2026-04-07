@@ -59,10 +59,10 @@ curl -s -X DELETE -H "X-API-Key: $VEXA_API_KEY" \
 
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Test |
 |---|-------|--------|---------|-------|--------|----------|--------------|------|
-| 1 | POST /speak returns 202 and bot speaks | 30 | ceiling | 0 | PASS | TTS /speak API works | 2026-04-05T19:40Z | 07-bot-lifecycle |
-| 2 | Other participants hear the speech | 30 | ceiling | 0 | PASS | Listener bot transcribes speaker output | 2026-04-05T19:40Z | 09-verify-transcription |
+| 1 | POST /speak returns 202 and bot speaks | 30 | ceiling | 0 | UNTESTED | TTS /speak API works | 2026-04-05T19:40Z | 07-bot-lifecycle |
+| 2 | Other participants hear the speech | 30 | ceiling | 0 | UNTESTED | Listener bot transcribes speaker output | 2026-04-05T19:40Z | 09-verify-transcription |
 | 3 | Multiple voices (alloy, echo, fable) distinguishable | 20 | — | 0 | SKIP | Only default voice tested this run | 2026-04-05T19:40Z | 09-verify-transcription |
 | 4 | Interrupt (DELETE /speak) stops playback | 10 | — | 0 | SKIP | Not tested this run | 2026-04-05T19:40Z | 07-bot-lifecycle |
-| 5 | Works on GMeet and Teams | 10 | — | 0 | PASS | Both platforms verified | 2026-04-05T19:40Z | 09-verify-transcription |
+| 5 | Works on GMeet and Teams | 10 | — | 0 | UNTESTED | Both platforms verified | 2026-04-05T19:40Z | 09-verify-transcription |
 
 Confidence: 70 (ceiling items 1+2 pass = 60; item 5 = 10; total 70/100)

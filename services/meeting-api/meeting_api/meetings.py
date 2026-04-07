@@ -393,14 +393,15 @@ async def _get_running_bots_from_runtime(user_id: int) -> list:
     """Get running containers for a user from Runtime API + enrich with DB data."""
     try:
         client = _get_httpx_client()
-        resp = await client.get(
-            f"{RUNTIME_API_URL}/containers",
-            params={"user_id": str(user_id), "profile": "meeting"},
-            timeout=15.0,
-        )
-        if resp.status_code != 200:
-            return []
-        containers = resp.json()
+        containers = []
+        for profile in ("meeting", "browser-session"):
+            resp = await client.get(
+                f"{RUNTIME_API_URL}/containers",
+                params={"user_id": str(user_id), "profile": profile},
+                timeout=15.0,
+            )
+            if resp.status_code == 200:
+                containers.extend(resp.json())
     except httpx.RequestError as e:
         logger.error(f"Runtime API list failed for user {user_id}: {e}")
         return []
@@ -670,6 +671,13 @@ async def request_bot(
         await db.commit()
         await db.refresh(new_meeting)
 
+        # Record initial status transition
+        meeting_data = dict(new_meeting.data or {})
+        meeting_data["status_transition"] = [{"from": None, "to": "active", "timestamp": datetime.utcnow().isoformat(), "source": "creation"}]
+        new_meeting.data = meeting_data
+        await db.commit()
+        await db.refresh(new_meeting)
+
         # S3/MinIO config for browser data persistence.
         # When MINIO_ENDPOINT is set, browser userdata syncs to S3 (survives restarts).
         # When empty, userdata lives only in the container filesystem (local-only mode).
@@ -695,7 +703,7 @@ async def request_bot(
         }
 
         result = await _spawn_via_runtime_api(
-            profile="meeting",
+            profile="browser-session",
             config={"image": BOT_IMAGE_NAME, "env": {"BOT_CONFIG": json.dumps(bot_config), "BOT_MODE": "browser_session"}},
             user_id=current_user.id,
             callback_url=f"{MEETING_API_URL}/bots/internal/callback/exited",

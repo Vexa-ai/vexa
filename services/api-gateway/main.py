@@ -1,5 +1,5 @@
 import uvicorn
-from fastapi import FastAPI, Request, Response, HTTPException, status, Depends, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, Response, HTTPException, status, Depends, WebSocket, WebSocketDisconnect, Path
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -17,6 +17,7 @@ import redis.asyncio as aioredis
 from datetime import datetime, timedelta, timezone
 import secrets
 import time
+import re
 import hashlib
 
 # Import schemas for documentation
@@ -39,6 +40,7 @@ TRANSCRIPTION_COLLECTOR_URL = os.getenv("TRANSCRIPTION_COLLECTOR_URL")
 MCP_URL = os.getenv("MCP_URL")
 CALENDAR_SERVICE_URL = os.getenv("CALENDAR_SERVICE_URL")  # Optional — calendar-service
 AGENT_API_URL = os.getenv("AGENT_API_URL")  # Optional — agent-api for chat
+RUNTIME_API_URL = os.getenv("RUNTIME_API_URL", "http://runtime-api:8090")
 
 # Public share-link settings (for "ChatGPT read from URL" flows)
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")  # Optional override, e.g. https://api.vexa.ai
@@ -466,13 +468,13 @@ async def get_bots_status_proxy(request: Request):
     return await forward_request(app.state.http_client, "GET", url, request)
 # --- END Route for GET /bots/status ---
 
-@app.get("/bots/{meeting_id}",
+@app.get("/bots/id/{meeting_id}",
          tags=["Bot Management"],
          summary="Get a single meeting/bot by database ID",
          dependencies=[Depends(api_key_scheme)])
 async def get_bot_by_id_proxy(meeting_id: int, request: Request):
     """Forward to meeting-api GET /bots/{meeting_id}."""
-    url = f"{MEETING_API_URL}/bots/{meeting_id}"
+    url = f"{MEETING_API_URL}/bots/id/{meeting_id}"
     return await forward_request(app.state.http_client, "GET", url, request)
 
 # --- Voice Agent Interaction Routes (proxy to Bot Manager) ---
@@ -742,6 +744,15 @@ async def transcribe_meeting_proxy(meeting_id: int, request: Request):
 async def get_meetings_proxy(request: Request):
     """Forward request to Transcription Collector to get meetings."""
     url = f"{TRANSCRIPTION_COLLECTOR_URL}/meetings"
+    return await forward_request(app.state.http_client, "GET", url, request)
+
+@app.get("/meetings/{meeting_id}",
+        tags=["Transcriptions"],
+        summary="Get a single meeting by database ID",
+        dependencies=[Depends(api_key_scheme)])
+async def get_meeting_by_id_proxy(meeting_id: int, request: Request):
+    """Forward to meeting-api GET /bots/id/{meeting_id}."""
+    url = f"{MEETING_API_URL}/bots/id/{meeting_id}"
     return await forward_request(app.state.http_client, "GET", url, request)
 
 @app.get("/transcripts/{platform}/{native_meeting_id}",
@@ -1458,6 +1469,32 @@ async def auth_me(request: Request):
 logger = logging.getLogger("api-gateway.browser")
 
 
+_touch_timestamps: dict[str, float] = {}
+_TOUCH_DEBOUNCE = 30  # seconds — don't /touch same container more often than this
+
+
+async def _fire_touch(container_name: str) -> None:
+    """Fire-and-forget POST /containers/{name}/touch to runtime-api.
+
+    Debounced: skips if same container was touched within _TOUCH_DEBOUNCE seconds.
+    Validates container_name to prevent SSRF via crafted Redis values.
+    """
+    if not re.match(r'^[a-zA-Z0-9_-]+$', container_name):
+        logger.warning("Suspicious container_name in touch: %s", container_name[:20])
+        return
+    now = time.time()
+    if now - _touch_timestamps.get(container_name, 0) < _TOUCH_DEBOUNCE:
+        return
+    _touch_timestamps[container_name] = now
+    try:
+        await app.state.http_client.post(
+            f"{RUNTIME_API_URL}/containers/{container_name}/touch",
+            timeout=5.0,
+        )
+    except Exception as exc:
+        logger.debug("touch failed for %s: %s", container_name, exc)
+
+
 async def resolve_browser_session(token: str) -> Optional[dict]:
     """Resolve session token to container info from Redis.
 
@@ -1473,14 +1510,19 @@ async def resolve_browser_session(token: str) -> Optional[dict]:
     try:
         data = await app.state.redis.get(f"browser_session:{token}")
     except Exception as exc:
-        logger.warning("Redis error resolving browser session %s: %s", token, exc)
+        logger.warning("Redis error resolving browser session %s...: %s", token[:8], exc)
         return None
     if not data:
         return None
     try:
-        return json.loads(data)
+        session = json.loads(data)
     except (json.JSONDecodeError, TypeError):
         return None
+    # Fire-and-forget touch to keep container alive
+    container_name = session.get("container_name")
+    if container_name:
+        asyncio.create_task(_fire_touch(container_name))
+    return session
 
 
 def _browser_dashboard_html(token: str, session: dict) -> str:
@@ -1695,10 +1737,19 @@ async def browser_vnc_ws(websocket: WebSocket, token: str):
                 except Exception:
                     pass
 
-            # Run both directions concurrently; when one ends, cancel the other
+            async def periodic_touch():
+                try:
+                    while True:
+                        await asyncio.sleep(60)
+                        await _fire_touch(container)
+                except asyncio.CancelledError:
+                    pass
+
+            # Run both directions + periodic touch; when one proxy ends, cancel all
             done, pending = await asyncio.wait(
                 [asyncio.create_task(client_to_upstream()),
-                 asyncio.create_task(upstream_to_client())],
+                 asyncio.create_task(upstream_to_client()),
+                 asyncio.create_task(periodic_touch())],
                 return_when=asyncio.FIRST_COMPLETED,
             )
             for task in pending:
@@ -1806,9 +1857,18 @@ async def browser_cdp_ws(websocket: WebSocket, token: str):
                 except Exception:
                     pass
 
+            async def periodic_touch():
+                try:
+                    while True:
+                        await asyncio.sleep(60)
+                        await _fire_touch(container)
+                except asyncio.CancelledError:
+                    pass
+
             done, pending = await asyncio.wait(
                 [asyncio.create_task(client_to_upstream()),
-                 asyncio.create_task(upstream_to_client())],
+                 asyncio.create_task(upstream_to_client()),
+                 asyncio.create_task(periodic_touch())],
                 return_when=asyncio.FIRST_COMPLETED,
             )
             for task in pending:

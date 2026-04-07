@@ -142,6 +142,21 @@ async def bot_exit_callback(
                 transition_metadata=meta,
             )
             new_status = MeetingStatus.COMPLETED.value if success else None
+        elif meeting.status == MeetingStatus.ACTIVE.value and payload.completion_reason:
+            # Bot was active and self-exited with a known completion reason
+            # (e.g., evicted, left_alone, self_initiated_leave).
+            # These exit with code != 0 but are normal completions, not failures.
+            logger.info(f"Exit callback: session {session_uid} exit_code={exit_code} from active with completion_reason={payload.completion_reason} — treating as completed")
+            meta = {"exit_code": exit_code, "original_reason": payload.reason}
+            if payload.platform_specific_error:
+                meta["platform_specific_error"] = payload.platform_specific_error
+            success = await update_meeting_status(
+                meeting, MeetingStatus.COMPLETED, db,
+                completion_reason=payload.completion_reason,
+                transition_reason=payload.reason,
+                transition_metadata=meta,
+            )
+            new_status = MeetingStatus.COMPLETED.value if success else None
         else:
             provided_stage = payload.failure_stage or MeetingFailureStage.ACTIVE
             error_msg = f"Bot exited with code {exit_code}"

@@ -67,11 +67,11 @@ curl -s -X DELETE -H "X-API-Key: $VEXA_API_KEY" \
 
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Test |
 |---|-------|--------|---------|-------|--------|----------|--------------|------|
-| 1 | Browser session creates and container runs | 20 | ceiling | 0 | PASS | Session created via API (id=59) | 2026-04-05T19:40Z | 05-browser-session |
-| 2 | CDP accessible through gateway proxy | 20 | ceiling | 0 | PASS | CDP accessible through gateway proxy | 2026-04-05T19:40Z | 05-browser-session |
-| 3 | Login state persists across sessions (save + load) | 25 | ceiling | 0 | PASS | Google login persists across sessions | 2026-04-05T19:40Z | 05-browser-session |
-| 4 | VNC accessible via dashboard | 15 | — | 0 | PASS | Dashboard POST browser_session → 201, CDP proxy verified, VNC path operational | 2026-04-05T19:40Z | 04-dashboard, 05-browser-session |
-| 5 | Container stops cleanly on DELETE /bots | 10 | — | 0 | PASS | Browser session 131 (bs-c9559233): completed, reason=stopped, chain=stopping→completed | 2026-04-05T21:40Z | 11-finalization |
+| 1 | Browser session creates and container runs | 20 | ceiling | 0 | UNTESTED | Session created via API (id=59) | 2026-04-05T19:40Z | 05-browser-session |
+| 2 | CDP accessible through gateway proxy | 20 | ceiling | 0 | UNTESTED | CDP accessible through gateway proxy | 2026-04-05T19:40Z | 05-browser-session |
+| 3 | Login state persists across sessions (save + load) | 25 | ceiling | 0 | UNTESTED | Google login persists across sessions | 2026-04-05T19:40Z | 05-browser-session |
+| 4 | VNC accessible via dashboard | 15 | — | 0 | UNTESTED | Dashboard POST browser_session → 201, CDP proxy verified, VNC path operational | 2026-04-05T19:40Z | 04-dashboard, 05-browser-session |
+| 5 | Container stops cleanly on DELETE /bots | 10 | — | 0 | UNTESTED | Browser session 131 (bs-c9559233): completed, reason=stopped, chain=stopping→completed | 2026-04-05T21:40Z | 11-finalization |
 | 6 | No orphan containers after session ends | 10 | — | 0 | PARTIAL | No orphan Chrome processes. But 7 zombie node processes from meeting bots exist in container (BUG #20). Browser session itself cleaned up. | 2026-04-05T21:41Z | 14-container-lifecycle |
 
 Confidence: 90 (ceiling items 1+2+3 = 65, items 4+5 = 25; item 6 partial — browser session cleaned up but zombie node processes exist from other bots)
