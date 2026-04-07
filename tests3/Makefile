@@ -1,11 +1,12 @@
 .PHONY: detect locks env health contracts smoke \
        dashboard-auth dashboard-proxy dashboard \
        containers browser-session browser-login browser \
-       meeting bot admit transcribe finalize post-meeting meeting-chain \
+       meeting-tts meeting bot admit transcribe finalize post-meeting meeting-chain \
        webhooks auth-meeting \
        e2e full \
-       vm-compose vm-lite vm-provision vm-wait vm-setup-compose vm-setup-lite \
-       vm-smoke vm-dashboard vm-containers vm-webhooks vm-full vm-destroy vm-ssh vm-status \
+       vm-compose vm-lite \
+       vm-provision-compose vm-provision-lite vm-smoke-compose vm-smoke-lite \
+       vm-destroy vm-ssh vm-status \
        clean help
 
 SHELL := /bin/bash
@@ -13,14 +14,19 @@ ROOT  := $(shell git rev-parse --show-toplevel)
 T3    := $(ROOT)/tests3
 STATE := $(T3)/.state
 
-DEPLOY_MODE   ?= auto
+# Override for non-local deployments (e.g. DEPLOY_MODE=helm GATEWAY_URL=https://...)
+DEPLOY_MODE   ?=
 GATEWAY_URL   ?=
 ADMIN_URL     ?=
 DASHBOARD_URL ?=
 
 export ROOT DEPLOY_MODE GATEWAY_URL ADMIN_URL DASHBOARD_URL STATE
 
-# ═══ Checks (registry-driven, instant) ═══════════════════════════
+# Smoke runs once per session via a stamp file.
+# `make clean` resets it. Individual tier targets always run.
+SMOKE_STAMP := $(STATE)/.smoke-passed
+
+# ═══ Checks (registry-driven) ════════════════════════════════════
 
 detect:                           ## auto-detect deploy mode and URLs
 	@$(T3)/lib/detect.sh
@@ -38,11 +44,16 @@ contracts: detect                 ## API behavior (15s)
 	@$(T3)/checks/run --tier contract
 
 smoke: locks env health contracts ## all checks, no meetings (30s)
+	@touch $(SMOKE_STAMP)
 	@echo ""; echo "  Smoke passed."
+
+# Gate: run smoke once, skip if already passed this session
+$(SMOKE_STAMP):
+	@$(MAKE) --no-print-directory smoke
 
 # ═══ Dashboard ════════════════════════════════════════════════════
 
-dashboard-auth: smoke             ## login + identity + cookie (5s)
+dashboard-auth: $(SMOKE_STAMP)    ## login + identity + cookie (5s)
 	@$(T3)/tests/dashboard-auth.sh
 
 dashboard-proxy: dashboard-auth   ## proxy: meetings, pagination, transcript, bot create (15s)
@@ -52,12 +63,12 @@ dashboard: dashboard-proxy        ## all dashboard tests
 
 # ═══ Container lifecycle ══════════════════════════════════════════
 
-containers: smoke                 ## create/stop/remove, timeout, orphans (60s)
+containers: $(SMOKE_STAMP)        ## create/stop/remove, timeout, orphans (60s)
 	@$(T3)/tests/containers.sh
 
 # ═══ Browser session ══════════════════════════════════════════════
 
-browser-session: smoke            ## CDP, S3 roundtrip, auto-save (120s)
+browser-session: $(SMOKE_STAMP)   ## CDP, S3 roundtrip, auto-save (120s)
 	@$(T3)/tests/browser-session.sh
 
 browser-login: browser-session    ## [human] Google login persistence
@@ -67,10 +78,10 @@ browser: browser-session          ## browser without human gate
 
 # ═══ Meeting chain ════════════════════════════════════════════════
 
-meeting-tts: smoke                ## full meeting: create → bots → admit all → TTS → transcript (10min)
+meeting-tts: $(SMOKE_STAMP)       ## full meeting: create → bots → admit → TTS → transcript (10min)
 	@$(T3)/tests/meeting-tts.sh
 
-meeting: smoke                    ## create meeting via CDP (60s)
+meeting: $(SMOKE_STAMP)           ## create meeting via CDP (60s)
 	@$(T3)/tests/meeting.sh
 
 bot: meeting                      ## launch recorder, poll until active (5min)
@@ -88,24 +99,24 @@ finalize: transcribe              ## stop bots, verify cleanup (30s)
 post-meeting: finalize            ## recordings, deferred transcription (60s)
 	@$(T3)/tests/post-meeting.sh
 
-meeting-chain: post-meeting       ## full meeting lifecycle
+meeting-chain: post-meeting       ## full meeting lifecycle (step-by-step)
 
 # ═══ Webhooks ═════════════════════════════════════════════════════
 
-webhooks: smoke                   ## envelope, HMAC, no secret leak (10s)
+webhooks: $(SMOKE_STAMP)          ## envelope, HMAC, no secret leak (10s)
 	@$(T3)/tests/webhooks.sh
 
 # ═══ Authenticated meetings ═══════════════════════════════════════
 
-auth-meeting: smoke               ## authenticated join: S3 config, cookies, join type (60s)
+auth-meeting: $(SMOKE_STAMP)      ## authenticated join: S3 config, cookies, join type (60s)
 	@$(T3)/tests/auth-meeting.sh
 
-# ═══ Composites (local) ══════════════════════════════════════════
+# ═══ Composites ═══════════════════════════════════════════════════
 
-e2e: meeting-chain                ## smoke + full meeting chain
+e2e: meeting-tts                  ## smoke + full meeting (single script)
 	@echo ""; echo "  E2E passed."
 
-full: dashboard containers browser webhooks auth-meeting meeting-chain ## everything
+full: dashboard containers browser webhooks auth-meeting meeting-tts ## everything
 	@echo ""; echo "  Full passed."
 
 # ═══ VM — compose ═════════════════════════════════════════════════
@@ -124,7 +135,7 @@ vm-provision-compose:              ## provision VM + deploy compose
 	@$(T3)/lib/vm.sh wait
 	@$(T3)/lib/vm-setup-compose.sh
 
-vm-smoke-compose:                  ## run smoke + dashboard + containers on VM (compose)
+vm-smoke-compose:                  ## run smoke + dashboard + containers + webhooks on VM
 	@$(T3)/lib/vm-run.sh smoke
 	@$(T3)/lib/vm-run.sh dashboard-auth
 	@$(T3)/lib/vm-run.sh dashboard-proxy
@@ -147,7 +158,7 @@ vm-provision-lite:                 ## provision VM + deploy lite
 	@$(T3)/lib/vm.sh wait
 	@$(T3)/lib/vm-setup-lite.sh
 
-vm-smoke-lite:                     ## run smoke + dashboard + containers on VM (lite)
+vm-smoke-lite:                     ## run smoke + dashboard + containers on VM
 	@$(T3)/lib/vm-run.sh smoke
 	@$(T3)/lib/vm-run.sh dashboard-auth
 	@$(T3)/lib/vm-run.sh containers
@@ -161,10 +172,10 @@ vm-ssh:                            ## open SSH to the VM
 	@ssh -o StrictHostKeyChecking=no root@$$(cat $(STATE)/vm_ip)
 
 vm-status:                         ## show VM state
-	@echo "  VM_IP:    $$(cat $(STATE)/vm_ip 2>/dev/null || echo 'none')"
-	@echo "  VM_ID:    $$(cat $(STATE)/vm_id 2>/dev/null || echo 'none')"
-	@echo "  VM_MODE:  $$(cat $(STATE)/vm_mode 2>/dev/null || echo 'none')"
-	@echo "  VM_SETUP: $$(cat $(STATE)/vm_setup 2>/dev/null || echo 'none')"
+	@echo "  VM_IP:    $$(cat $(STATE)/vm_ip 2>/dev/null || echo '-')"
+	@echo "  VM_ID:    $$(cat $(STATE)/vm_id 2>/dev/null || echo '-')"
+	@echo "  VM_MODE:  $$(cat $(STATE)/vm_mode 2>/dev/null || echo '-')"
+	@echo "  VM_SETUP: $$(cat $(STATE)/vm_setup 2>/dev/null || echo '-')"
 
 # ═══ Util ═════════════════════════════════════════════════════════
 

@@ -61,6 +61,7 @@ That's it. Pulls pre-built images from DockerHub, starts services, syncs DB sche
 | `make ps`              | Show running containers                              |
 | `make logs`            | Tail all service logs                                |
 | `make test`            | Health check all services + show URLs + current tag  |
+| `make test-transcription` | Send test audio to transcription service, verify text comes back |
 | `make restore-db`      | Restore a `pg_dump` into local postgres              |
 | `make publish`         | Push all images to DockerHub + update `:dev` pointer |
 | `make promote-staging` | Set `:staging` to TAG= (or last built)               |
@@ -106,6 +107,7 @@ Everything else has working defaults for local dev.
 
 | Variable              | Default                      | Description                                      |
 | --------------------- | ---------------------------- | ------------------------------------------------ |
+| IMAGE_TAG             | dev                          | Docker image tag. `dev` pulls from DockerHub. `make build` overrides with local tag. |
 | DASHBOARD_HOST_PORT   | 3001                         | Dashboard port                                   |
 | REMOTE_DB             | false                        | Use external Postgres instead of local           |
 | LOCAL_TRANSCRIPTION   | false                        | Run transcription-service locally (needs GPU)    |
@@ -221,7 +223,7 @@ Validated by [tests/00-docs-compose.md](../../tests/00-docs-compose.md).
 | 9  | REMOTE_DB path works | 7 | S8 | PASS | 2026-04-06 |
 | 10 | LOCAL_TRANSCRIPTION path works | 5 | S9 | PASS | 2026-04-06 |
 | 11 | Schema migration (pre-0.10 upgrade) | 7 | S10 | PASS | 2026-04-06 |
-| 12 | Pre-built images (skip build) | 5 | S11 | SKIP | — |
+| 12 | Pre-built images (skip build) | 5 | S11 | PASS | 2026-04-08 |
 | 13 | restore-db works | 4 | S13 | PASS | 2026-04-06 |
 | 14 | Dependency order matches compose | 4 | S6 | PASS | 2026-04-06 |
 | 15 | Cleanup leaves no containers | 2 | S7 | PASS | 2026-04-06 |
@@ -232,7 +234,7 @@ Validated by [tests/00-docs-compose.md](../../tests/00-docs-compose.md).
 
 ## Confidence
 
-Score: 88/100
-Last validated: 2026-04-06
-Ceiling: Transcription not tested from inside containers; pre-built image path not yet validated
+Score: 93/100
+Last validated: 2026-04-08
+Ceiling: Transcription not tested from inside containers
 

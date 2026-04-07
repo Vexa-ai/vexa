@@ -136,19 +136,22 @@ build: check_docker build-bot-image build-transcript-rendering build-lite
 	@docker images --format 'table {{.Repository}}\t{{.Tag}}\t{{.CreatedAt}}' | grep "$(IMAGE_TAG)" || true
 
 # --- Up / Down ---
+# IMAGE_TAG comes from .env (default: dev = pre-built from DockerHub).
+# `make build` writes a local tag to .last-tag which overrides .env.
 up: check_docker preflight
 	@if [ -f $(LAST_TAG_FILE) ]; then \
 		export IMAGE_TAG=$$(cat $(LAST_TAG_FILE)); \
-		echo "Using image tag: $$IMAGE_TAG (from .last-tag)"; \
+		echo "Using locally-built images (IMAGE_TAG=$$IMAGE_TAG from .last-tag)"; \
+	elif [ -n "$(IMAGE_TAG)" ]; then \
+		echo "Using images (IMAGE_TAG=$(IMAGE_TAG) from .env)"; \
 	else \
-		export IMAGE_TAG=dev; \
-		echo "No .last-tag found — pulling pre-built images (IMAGE_TAG=dev)"; \
+		echo "ERROR: IMAGE_TAG not set. Run 'make build' or set IMAGE_TAG in .env"; exit 1; \
 	fi; \
 	if ! docker network ls | grep -q "vexa-network"; then \
 		docker network create vexa-network || true; \
 	fi; \
-	$(COMPOSE_CMD) up -d; \
-	BOT_TAG=$$(cat $(LAST_TAG_FILE) 2>/dev/null || echo "dev"); \
+	$(COMPOSE_CMD) up -d --pull=missing; \
+	BOT_TAG=$$(cat $(LAST_TAG_FILE) 2>/dev/null || echo "$(IMAGE_TAG)"); \
 	BOT_IMG=$(DOCKERHUB_USER)/$(BOT_IMAGE):$$BOT_TAG; \
 	if ! docker image inspect $$BOT_IMG > /dev/null 2>&1; then \
 		echo "Pulling bot image: $$BOT_IMG..."; \

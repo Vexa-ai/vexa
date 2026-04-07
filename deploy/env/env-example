@@ -32,7 +32,10 @@ MINIO_CONSOLE_HOST_PORT=9001
 # Admin
 ADMIN_TOKEN=changeme
 
-# Bot image (built by `make build`)
+# Image tag — pre-built from DockerHub. `make build` overrides with a local tag.
+IMAGE_TAG=dev
+
+# Bot image
 BOT_IMAGE_NAME=vexaai/vexa-bot:dev
 
 # Database (embedded postgres by default)
