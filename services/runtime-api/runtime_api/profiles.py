@@ -68,66 +68,19 @@ PROFILE_DEFAULTS = {
 }
 
 
+# Builtin profiles — minimal fallbacks for the two profiles actually in use.
+# profiles.yaml overrides these. No :latest tags, no localhost fallbacks.
 BUILTIN_PROFILES = {
     "meeting": {
-        "image": "${BOT_IMAGE:-vexaai/vexa-bot:latest}",
-        "resources": {
-            "cpu_request": "500m",
-            "cpu_limit": "2000m",
-            "memory_request": "512Mi",
-            "memory_limit": "2Gi",
-            "shm_size": 2147483648,
-        },
-        "idle_timeout": 600,
+        "image": "${BROWSER_IMAGE}",
+        "idle_timeout": 0,
         "auto_remove": False,
-        "ports": {"6080/tcp": {}},
-        "gpu": False,
-    },
-    "browser": {
-        "image": "mcr.microsoft.com/playwright:v1.48.0-jammy",
-        "command": ["npx", "playwright", "run-server", "--port", "3000"],
-        "resources": {
-            "cpu_request": "500m",
-            "cpu_limit": "2000m",
-            "memory_request": "512Mi",
-            "memory_limit": "2Gi",
-            "shm_size": 2147483648,
-        },
-        "idle_timeout": 600,
-        "auto_remove": False,
-        "ports": {"3000/tcp": {}},
-        "gpu": False,
     },
     "agent": {
-        "image": "${AGENT_IMAGE:-vexaai/vexa-agent:latest}",
+        "image": "${AGENT_IMAGE}",
         "command": ["sleep", "infinity"],
-        "resources": {
-            "cpu_request": "500m",
-            "cpu_limit": "2000m",
-            "memory_request": "512Mi",
-            "memory_limit": "2Gi",
-        },
         "idle_timeout": 300,
         "auto_remove": False,
-        "env": {
-            "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY:-}",
-            "LOG_LEVEL": "${LOG_LEVEL:-INFO}",
-        },
-    },
-    "sandbox": {
-        "image": "ubuntu:24.04",
-        "command": ["sleep", "infinity"],
-        "resources": {
-            "cpu_request": "500m",
-            "cpu_limit": "2000m",
-            "memory_request": "512Mi",
-            "memory_limit": "2Gi",
-            "shm_size": 2147483648,
-        },
-        "idle_timeout": 600,
-        "auto_remove": False,
-        "ports": {"8080/tcp": {}},
-        "gpu": False,
     },
 }
 

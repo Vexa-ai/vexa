@@ -1,132 +1,212 @@
 # Bot Lifecycle
 
-## Why
-
-Bots must progress through a predictable lifecycle: requested → joining → awaiting_admission → active → stopping → completed. Each state transition must be observable via API and trigger appropriate side effects.
+> Procs: `tests2/src/bot.md`, `tests2/src/admit.md`, `tests2/src/finalize.md`
 
 ## What
 
+Meeting bots join Google Meet / Teams, transcribe audio, and leave. Each bot is a Docker container running Playwright that navigates to a meeting URL, joins, captures audio, and reports state changes back to meeting-api via HTTP callbacks.
+
+## State machine
+
 ```
-POST /bots → requested → runtime-api creates container → joining
-  → platform-specific join → awaiting_admission → host admits → active
-  → DELETE /bots or timeout → stopping → recording upload → completed
+    POST /bots
+        │
+        ▼
+  ┌───────────┐
+  │ requested  │  meeting record created, container spawning
+  └─────┬─────┘
+        │ bot callback: joining
+        ▼
+  ┌───────────┐
+  │  joining   │  container running, navigating to meeting URL
+  └──┬──┬─────┘
+     │  │
+     │  └── bot callback: needs_human_help ──► ┌──────────────────┐
+     │                                         │ needs_human_help  │
+     │  bot callback: awaiting_admission       └────┬─────────────┘
+     │                                              │ user resolves via VNC
+     ▼                                              ▼
+  ┌────────────────────┐                     back to active
+  │ awaiting_admission  │  in lobby, waiting for host to admit
+  └──────┬─────────────┘
+         │ bot callback: active (host admitted)
+         ▼
+  ┌───────────┐
+  │  active    │  in meeting, capturing audio, transcribing
+  └──┬──┬─────┘
+     │  │
+     │  └── DELETE /bots (user) ─────────────┐
+     │  └── scheduler timeout (max_bot_time) ─┤
+     │  └── bot self-exit (evicted, alone)    │
+     │                                        ▼
+     │                                  ┌───────────┐
+     │                                  │ stopping   │  leave cmd sent, uploading recording
+     │                                  └─────┬─────┘
+     │                                        │ bot exit callback (exit_code)
+     │                                        ▼
+     │                                  ┌───────────┐
+     │                                  │ completed  │  terminal: end_time set, container removed
+     │                                  └───────────┘
+     │
+     └── error at any point ──────────► ┌───────────┐
+                                        │  failed    │  terminal: failure_stage + error_details
+                                        └───────────┘
 ```
 
-### States
+## Transition rules
 
-| State | Meaning | Transitions to |
-|-------|---------|---------------|
-| requested | API accepted, container creating | joining |
-| joining | Container running, navigating to meeting | awaiting_admission |
-| awaiting_admission | In lobby, waiting for host | active |
-| active | In meeting, capturing audio | stopping |
-| stopping | Leave requested, uploading recording | completed |
-| completed | Done, container stopped | — |
-| failed | Error at any point | — |
+| From | To | Trigger |
+|------|----|---------|
+| requested | joining | Bot callback |
+| requested | failed | Validation error, spawn failure |
+| requested | stopping | User DELETE |
+| joining | awaiting_admission | Bot callback |
+| joining | active | Bot callback (no waiting room) |
+| joining | needs_human_help | Bot escalation |
+| joining | failed | Platform error |
+| awaiting_admission | active | Bot callback (admitted) |
+| awaiting_admission | needs_human_help | Bot escalation |
+| awaiting_admission | failed | Rejected, timeout |
+| needs_human_help | active | User resolved via VNC |
+| needs_human_help | failed | User gave up |
+| active | stopping | User DELETE, scheduler timeout |
+| active | completed | Bot self-exit (evicted, alone) |
+| active | failed | Crash, disconnect |
+| stopping | completed | Bot exit (any exit code during stopping = completed) |
+| stopping | failed | Bot exit with error before stop processed |
 
-### Components
+## Completion reasons
+
+| Reason | Trigger |
+|--------|---------|
+| `stopped` | User called DELETE /bots |
+| `awaiting_admission_timeout` | Waited > max_wait_for_admission |
+| `awaiting_admission_rejected` | Host rejected bot from lobby |
+| `left_alone` | No participants > max_time_left_alone |
+| `evicted` | Host removed bot from meeting |
+| `max_bot_time_exceeded` | Scheduler timeout fired |
+| `validation_error` | Request validation failed |
+
+## Failure stages
+
+| Stage | When |
+|-------|------|
+| `requested` | Pre-spawn validation fails |
+| `joining` | Platform join error (wrong URL, auth, network) |
+| `awaiting_admission` | Waiting room error |
+| `active` | Runtime crash after admission |
+
+## Lifetime management
+
+Meeting bots use **model 1** (consumer-managed) from runtime-api. `idle_timeout: 0` — runtime-api never auto-stops them. Meeting-api owns the full lifecycle through four mechanisms:
+
+### 1. Server-side kill switch: scheduler job (max_bot_time)
+
+When a bot is created, meeting-api schedules a deferred HTTP job in runtime-api's scheduler:
+- `execute_at = now + max_bot_time` (default 2h)
+- Job: `DELETE /bots/internal/timeout/{meeting_id}`
+- When fired: sets `pending_completion_reason=MAX_BOT_TIME_EXCEEDED`, transitions to stopping
+- Job cancelled when meeting reaches terminal state (completed/failed)
+
+This is the **hard limit**. No meeting bot can run longer than `max_bot_time`.
+
+### 2. Bot-side timers (client-enforced)
+
+The bot process runs timers internally. When triggered, bot self-exits with a specific reason:
+
+| Timer | Default | What happens |
+|-------|---------|-------------|
+| `no_one_joined_timeout` | 120s (2min) | Nobody joined after bot entered meeting → exit |
+| `max_wait_for_admission` | 900s (15min) | Stuck in lobby → exit |
+| `max_time_left_alone` | 900s (15min) | All participants left → exit |
+
+Bot exit → Docker "die" event → runtime-api `on_exit` → meeting-api exit callback → status updated.
+
+### 3. User DELETE
+
+`DELETE /bots/{platform}/{native_id}` → Redis `{"action": "leave"}` → bot exits → completed.
+
+### 4. Platform events
+
+Bot detects: evicted by host, meeting ended, connection lost → self-exit with appropriate reason.
+
+### Timeout configuration
+
+Resolution order: per-request `automatic_leave` → `user.data.bot_config` → system defaults.
+
+| Timeout | Default | Enforced by | Configurable |
+|---------|---------|-------------|-------------|
+| `max_bot_time` | 7,200,000ms (2h) | Scheduler job (server) | per-request, per-user |
+| `max_wait_for_admission` | 900,000ms (15min) | Bot timer (client) | per-request, per-user |
+| `max_time_left_alone` | 900,000ms (15min) | Bot timer (client) | per-request, per-user |
+| `no_one_joined_timeout` | 120,000ms (2min) | Bot timer (client) | per-request, per-user |
+
+### Contrast with other container types
+
+| | Meeting bot | Browser session | Agent |
+|---|-----------|----------------|-------|
+| Who manages lifetime | meeting-api | gateway (planned) | agent-api |
+| Server-side kill | scheduler job (max_bot_time) | idle_timeout (planned) | idle_timeout (300s) |
+| Client-side kill | bot timers (alone, admission, join) | none | none |
+| Heartbeat | none needed (scheduler is the safety net) | gateway /touch on /b/* traffic (planned) | agent-api /touch |
+| runtime-api idle_timeout | 0 (disabled) | >0 (planned) | 300s |
+
+## Delayed stop mechanism
+
+When user calls DELETE /bots or scheduler fires:
+1. Send Redis command `{"action": "leave"}` to bot
+2. Transition to `stopping`
+3. Schedule `_delayed_container_stop(container_name, meeting_id, delay=90s)`
+4. If bot exits naturally within 90s → exit callback fires → completed
+5. If 90s expires → force stop container → safety finalizer sets completed
+
+Browser sessions: delay = 0s (no meeting to leave).
+
+## Callbacks (bot → meeting-api)
+
+| Endpoint | Called when |
+|----------|-----------|
+| `/bots/internal/callback/status_change` | Any state transition (unified) |
+| `/bots/internal/callback/exited` | Bot process exits |
+| `/bots/internal/callback/joining` | Bot navigating to meeting |
+| `/bots/internal/callback/awaiting_admission` | Bot in lobby |
+| `/bots/internal/callback/started` | Bot admitted, active |
+
+All callbacks: 3 retries, exponential backoff (1s, 2s, 4s), 5s timeout per attempt.
+
+Status transitions are protected by `SELECT FOR UPDATE` (row-level lock) to prevent TOCTOU races.
+
+## Components
 
 | Component | File | Role |
 |-----------|------|------|
-| bot creation | `services/meeting-api/meeting_api/meetings.py` | Create meeting record, spawn container |
-| status callbacks | `services/meeting-api/meeting_api/meetings.py` | Bot container reports status changes |
-| runtime container | `services/runtime-api/` | Container lifecycle management |
-| bot core | `services/vexa-bot/core/src/index.ts` | Meeting join, state machine |
-
-## How
-
-### 1. Create a bot (join a meeting)
-
-```bash
-curl -s -X POST http://localhost:8056/bots \
-  -H "X-API-Key: $VEXA_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "meeting_url": "https://meet.google.com/abc-defg-hij",
-    "bot_name": "Vexa Notetaker"
-  }'
-# {"bot_id": 135, "status": "requested", "platform": "gmeet", ...}
-```
-
-### 2. Poll bot status
-
-```bash
-curl -s -H "X-API-Key: $VEXA_API_KEY" \
-  http://localhost:8056/bots/gmeet/135
-# {"bot_id": 135, "status": "active", "platform": "gmeet", ...}
-```
-
-State transitions: `requested` -> `joining` -> `awaiting_admission` -> `active` -> `stopping` -> `completed`.
-
-### 3. List all bots
-
-```bash
-curl -s -H "X-API-Key: $VEXA_API_KEY" \
-  http://localhost:8056/bots
-# [{"bot_id": 135, "status": "active", ...}, ...]
-```
-
-### 4. Stop a bot (leave the meeting)
-
-```bash
-curl -s -X DELETE -H "X-API-Key: $VEXA_API_KEY" \
-  http://localhost:8056/bots/gmeet/135
-# 200 {"status": "stopping"}
-```
-
-The bot uploads its recording, then transitions to `completed`.
-
-### 5. Teams example
-
-```bash
-curl -s -X POST http://localhost:8056/bots \
-  -H "X-API-Key: $VEXA_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "meeting_url": "https://teams.microsoft.com/l/meetup-join/...",
-    "bot_name": "Vexa Notetaker"
-  }'
-# {"bot_id": 125, "status": "requested", "platform": "teams", ...}
-```
+| Bot creation | `services/meeting-api/meeting_api/meetings.py:598-1011` | POST /bots, spawn container |
+| Status callbacks | `services/meeting-api/meeting_api/callbacks.py` | Bot → meeting-api state updates |
+| Stop/timeout | `services/meeting-api/meeting_api/meetings.py:1269-1440` | DELETE /bots, scheduler timeout |
+| Bot core | `services/vexa-bot/core/src/platforms/shared/meetingFlow.ts` | Join, admit, capture flow |
+| Unified callback | `services/vexa-bot/core/src/services/unified-callback.ts` | Bot → API state reporting |
+| Scheduler | `services/runtime-api/runtime_api/scheduler.py` | max_bot_time enforcement |
 
 ## DoD
 
-| # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Tests |
-|---|-------|--------|---------|-------|--------|----------|--------------|-------|
-| 1 | POST /bots creates bot and returns id | 15 | ceiling | 0 | PASS | 201 on create. Also accepts meeting_url (6/6 Teams URL formats parsed server-side). | 2026-04-07 | api, urls, bot |
-| 2 | Bot reaches active state in live meeting | 20 | ceiling | 0 | PASS | Full chain requested→joining→awaiting_admission→active on both platforms. | 2026-04-05 | bot |
-| 3 | DELETE /bots stops bot, reaches completed | 15 | ceiling | 0 | PASS | 202 on delete. Container fully removed from docker ps -a (zombie fix applied). | 2026-04-07 | containers, finalize |
-| 4 | Status visible via GET /bots/status | 15 | — | 0 | PASS | 200 with running_bots array. webhook_secret stripped from response (security fix). | 2026-04-07 | api, webhooks |
-| 5 | Timeout auto-stop works (no infinite bots) | 15 | — | 0 | UNTESTED | noOneJoinedTimeout=120s too short for human-in-loop tests. | | containers |
-| 6 | Works for GMeet, Teams, browser_session | 20 | — | 0 | PASS | GMeet: bot create+stop. Teams: 6 URL formats. Browser: tier 1 roundtrip. | 2026-04-07 | urls, browser, bot |
-| 7 | Successful meeting never shows "failed" in dashboard | 10 | — | 0 | PASS | Fix verified: self_initiated_leave → completed (not failed). Dashboard: 7/7. | 2026-04-07 | dashboard |
-| 8 | GET /bots/status returns running bots (not 422) | 5 | — | 0 | PASS | Route /bots/id/{meeting_id} avoids Starlette ambiguity. 200 confirmed. | 2026-04-07 | api |
-| 9 | GET /meetings/{id} returns meeting after creation | 5 | — | 0 | PASS | Gateway route exists. | 2026-04-06 | dashboard |
-| 10 | meeting_url parsed server-side (Teams, GMeet, Zoom) | 10 | — | 0 | PASS | FIX: added parse_meeting_url() + model_validator in schemas.py. 6/6 Teams formats, GMeet standard. | 2026-04-07 | urls |
-| 11 | webhook_secret not leaked in API responses | 5 | — | 0 | PASS | FIX: field_serializer on MeetingResponse + safe_data in bots/status builder. Secret absent from both POST and GET responses. | 2026-04-07 | webhooks |
-| 12 | Bot without `authenticated: true` handles GMeet name prompt | 5 | — | 0 | FAIL | BUG: Bot stuck on "Attempting to find name input field" when launched without saved cookies. Meeting 9876 stuck in joining until force-stopped. Bot should either enter name programmatically or fail fast with clear error. | 2026-04-07 | bot |
-| 13 | Auto-admit works reliably (single-shot) | 10 | — | 0 | PASS | FIX: Multi-phase CDP script (panel→expand→click). Validated 4 consecutive rounds. Old script used text selector that hit non-clickable text node. | 2026-04-07 | admit |
-| 14 | Dashboard refreshes bot/meeting status in real-time | 5 | — | 0 | INVESTIGATING | Dashboard WS handler does update status on `meeting.status` events (use-live-transcripts.ts:266). Stale "joining" may be from no WS connection on that page (wasn't subscribed). REST transcript fetch fix applied — status header uses `currentMeeting.status` from the store. | 2026-04-07 | dashboard |
+| # | Check | Weight | Ceiling | Status | Last |
+|---|-------|--------|---------|--------|------|
+| 1 | POST /bots creates bot, returns id | 15 | ceiling | PASS | 2026-04-07 |
+| 2 | Bot reaches active in live meeting | 20 | ceiling | PASS | 2026-04-07 |
+| 3 | DELETE /bots → stopping → completed, container removed | 15 | ceiling | PASS | 2026-04-07 |
+| 4 | Status visible via GET /bots/status (not 422) | 10 | — | PASS | 2026-04-07 |
+| 5 | Timeout auto-stop (no_one_joined or max_bot_time) | 10 | — | UNTESTED | |
+| 6 | Works for GMeet, Teams, browser_session | 10 | — | PASS | 2026-04-07 |
+| 7 | Successful meeting never shows "failed" | 10 | — | PASS | 2026-04-07 |
+| 8 | Auto-admit reliable (multi-phase CDP) | 10 | — | PASS | 2026-04-07 |
+| 9 | Unauthenticated GMeet join (name prompt) | 5 | — | FAIL | 2026-04-07 |
+| 10 | meeting_url parsed server-side (6 Teams formats) | 5 | — | PASS | 2026-04-07 |
 
-### Proc ownership
+## Failure modes
 
-| Proc | Owns |
-|------|------|
-| bot | #1 create, #2 active state, #6 platforms |
-| containers | #3 stop+remove, #5 timeout |
-| finalize | #3 completed state |
-| api | #1 endpoint, #4 status, #8 route |
-| urls | #10 URL parsing |
-| webhooks | #11 secret leak |
-| dashboard | #7 false failures, #9 meetings/{id} |
-| browser | #6 browser_session |
-
-### Fixes applied this run
-
-| Bug | Fix | File |
-|-----|-----|------|
-| Teams URL parsing missing | Added `parse_meeting_url()` + `model_validator(mode='before')` | `services/meeting-api/meeting_api/schemas.py` |
-| webhook_secret in response | Added `field_serializer` on MeetingResponse + `safe_data` filter in bots/status | `schemas.py`, `meetings.py` |
-| Zombie containers | Added `backend.remove(name)` in on_exit | `services/runtime-api/runtime_api/main.py` |
-
-Confidence: 90 (ceiling 1+2+3 = 50, items 4+6+7+8+9+10+11 = 70, timeout untested = -15, meeting chain not re-run today = -5 on #2)
+| Symptom | Cause | Fix | Learned |
+|---|---|---|---|
+| Bot shows "failed" after successful meeting | exit_code=1 on self_initiated_leave treated as failure | callbacks.py: exit during stopping → completed | Graceful leave ≠ crash |
+| Bot stuck on name input (unauthenticated GMeet) | No saved cookies, Google shows "Your name" prompt | Bot should fill name or fail fast | Open bug |
+| Auto-admit clicks text node instead of button | `text=/Admit/i` matched non-clickable element | Multi-phase CDP: panel → expand → `button[aria-label^="Admit "]` | Always use element-type + aria-label for clicks |
+| "Waiting to join" section collapsed | Google Meet collapses lobby list after ~10s | Expand before looking for admit button | Check visibility before assuming DOM state |
