@@ -106,6 +106,8 @@ meetingApi:
 runtimeApi:
   enabled: true
   replicaCount: 1
+  orchestrator: "process"       # "process" (default), "kubernetes" (K8s pods), or "docker"
+  browserImage: ""              # Bot container image (defaults to meetingApi image if empty)
   image:
     repository: vexaai/runtime-api
     tag: dev

@@ -1,0 +1,40 @@
+{{- if and .Values.runtimeApi.enabled (eq (default "process" .Values.runtimeApi.orchestrator) "kubernetes") }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "vexa.componentName" (list . "runtime-api") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "vexa.componentName" (list . "runtime-api") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "delete", "get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "vexa.componentName" (list . "runtime-api") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "vexa.componentName" (list . "runtime-api") }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "vexa.componentName" (list . "runtime-api") }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

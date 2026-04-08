@@ -340,6 +340,17 @@
     {"_": "═══ CONTRACT — API behavior correct, 15s ═══"},
 
     {
+      "id": "BOT_CREATE_OK",
+      "tier": "contract",
+      "proves": "POST /bots creates a bot without server error — runtime-api orchestrator is functional",
+      "symptom": "Bot creation returns 500 — runtime-api cannot spawn bot containers (wrong orchestrator, missing image, or broken config)",
+      "url": "$GATEWAY_URL/bots",
+      "method": "POST",
+      "auth": "api_token",
+      "data": "{\"platform\":\"google_meet\",\"native_meeting_id\":\"healthcheck-bot\",\"bot_name\":\"Health Check\",\"automatic_leave\":{\"no_one_joined_timeout\":30000}}",
+      "expect_code": [200, 201, 202, 403, 409]
+    },
+    {
       "id": "BOTS_STATUS_NOT_422",
       "tier": "contract",
       "found": "2026-04-06",

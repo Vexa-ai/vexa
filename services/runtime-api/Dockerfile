@@ -6,7 +6,7 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY runtime_api/ runtime_api/
 COPY profiles.example.yaml profiles.yaml
-RUN pip install --no-cache-dir . \
+RUN pip install --no-cache-dir ".[kubernetes]" \
     && groupadd -r runtime && useradd -r -g runtime runtime \
     && chown -R runtime:runtime /app
 
