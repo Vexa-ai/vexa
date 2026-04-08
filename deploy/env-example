@@ -8,7 +8,7 @@
 
 # Transcription service
 # Get a key at vexa.ai OR self-host services/transcription-service/ with GPU
-TRANSCRIPTION_SERVICE_URL=https://your-transcription-url/v1/audio/transcriptions
+TRANSCRIPTION_SERVICE_URL=https://transcription.vexa.ai/v1/audio/transcriptions
 TRANSCRIPTION_SERVICE_TOKEN=your-token
 
 # ============================================================================
