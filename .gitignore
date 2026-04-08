@@ -91,7 +91,7 @@ celerybeat-schedule
 .env
 .venv
 env/
-!deploy/env/
+!deploy/env-example
 venv/
 ENV/
 env.bak/

@@ -25,7 +25,7 @@ make test → all services respond
 |-----------|------|------|
 | Compose stack | `deploy/compose/` | Docker Compose, Makefile, env |
 | Helm charts | `deploy/helm/` | Kubernetes deployment |
-| Env config | `deploy/env/` | env-example, defaults |
+| Env config | `deploy/env-example` | env template with defaults |
 | Deploy scripts | `deploy/scripts/` | Fresh setup automation |
 
 ## How

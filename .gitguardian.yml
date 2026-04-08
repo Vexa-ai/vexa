@@ -9,7 +9,7 @@ secret:
     - "**/conftest.py"
     - "**/*.test.*"
     - "**/testdata/**"
-    - "deploy/env/env-example"
+    - "deploy/env-example"
     - "features/**/tests/**"
     - "tests2/**"
 

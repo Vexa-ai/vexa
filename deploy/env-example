@@ -1,5 +1,5 @@
 # --- Vexa Environment ---
-# Copy to repo root as .env:  cp deploy/env/env-example .env
+# Copy to repo root as .env:  cp deploy/env-example .env
 # Then edit the REQUIRED fields below.
 
 # ============================================================================

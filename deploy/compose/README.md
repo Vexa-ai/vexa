@@ -90,7 +90,7 @@ make promote-latest TAG=260330-1415  # re-points :latest
 
 ### Configuration
 
-Edit `.env` at repo root. Created from [deploy/env/env-example](../env/env-example).
+Edit `.env` at repo root. Created from [deploy/env-example](../env-example).
 
 **Required:**
 
@@ -117,7 +117,7 @@ Everything else has working defaults for local dev.
 | ADMIN_TOKEN           | changeme                     | Admin API authentication token                   |
 
 
-Full env reference: [deploy/env/](../env/README.md)
+Full env reference: [deploy/env-example](../env-example)
 
 ### External database
 

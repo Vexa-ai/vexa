@@ -4,7 +4,7 @@
 ROOT := $(shell git rev-parse --show-toplevel)
 COMPOSE_FILE := $(ROOT)/deploy/compose/docker-compose.yml
 ENV_FILE := $(ROOT)/.env
-ENV_EXAMPLE := $(ROOT)/deploy/env/env-example
+ENV_EXAMPLE := $(ROOT)/deploy/env-example
 
 LAST_TAG_FILE := $(ROOT)/deploy/compose/.last-tag
 

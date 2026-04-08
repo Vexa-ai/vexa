@@ -30,7 +30,7 @@ All self-hosted deployments need a transcription service:
 
 ```bash
 git clone https://github.com/Vexa-ai/vexa.git && cd vexa
-cp deploy/env/env-example .env
+cp deploy/env-example .env
 # Edit .env — set TRANSCRIPTION_SERVICE_URL and TRANSCRIPTION_SERVICE_TOKEN
 make all
 ```
@@ -59,7 +59,7 @@ If you change code later, just run `make all` again — it rebuilds what's neede
 ```bash
 git clone https://github.com/Vexa-ai/vexa.git && cd vexa
 sudo ./deploy/scripts/fresh_setup.sh --gpu    # or --cpu for CPU-only hosts
-cp deploy/env/env-example .env
+cp deploy/env-example .env
 # Edit .env
 make all
 ```
@@ -97,7 +97,7 @@ sudo systemctl restart docker
 
 # Deploy
 git clone https://github.com/Vexa-ai/vexa.git && cd vexa
-cp deploy/env/env-example .env
+cp deploy/env-example .env
 # Edit .env
 make all
 ```
@@ -106,7 +106,7 @@ make all
 Install Docker Desktop, then:
 ```bash
 git clone https://github.com/Vexa-ai/vexa.git && cd vexa
-cp deploy/env/env-example .env
+cp deploy/env-example .env
 # Edit .env — set TRANSCRIPTION_SERVICE_URL
 make all
 ```
