@@ -398,6 +398,8 @@ def check_contract(lock):
         return check_transcription_token()
     if method == "BOT_STATUS_CHECK":
         return check_bot_status_transitions(gw, token)
+    if method == "SEGMENT_PIPELINE":
+        return check_segment_pipeline(gw, token, admin_token)
 
     url = lock["url"].replace("$GATEWAY_URL", gw).replace("$ADMIN_URL", admin).replace("$DASHBOARD_URL", dash)
     expect = lock.get("expect_code", 200)
@@ -435,6 +437,102 @@ def check_contract(lock):
         if code == expect:
             return True, ""
         return False, f"HTTP {code} (expected {expect})"
+
+
+def check_segment_pipeline(gw, token, admin_token):
+    """Create bot, inject synthetic segment into Redis, verify it appears in REST transcript."""
+    import time
+    import uuid
+
+    if not token:
+        return True, "no API token — skipped"
+
+    native_id = f"pipeline-check-{int(time.time())}"
+    session_uid = str(uuid.uuid4())
+
+    # 1. Create bot to get a valid meeting + JWT
+    create_data = json.dumps({
+        "platform": "google_meet",
+        "native_meeting_id": native_id,
+        "bot_name": "Pipeline Check",
+        "automatic_leave": {"no_one_joined_timeout": 30000},
+    })
+    code, body = http_check(
+        f"{gw}/bots",
+        headers=[f"X-API-Key: {token}", "Content-Type: application/json"])
+    # Use POST manually
+    try:
+        r = subprocess.run(
+            ["curl", "-s", "-w", "\n%{http_code}", "-X", "POST", "-d", create_data,
+             "-H", f"X-API-Key: {token}", "-H", "Content-Type: application/json",
+             f"{gw}/bots"],
+            capture_output=True, text=True, timeout=15)
+        lines = r.stdout.strip().rsplit("\n", 1)
+        code = int(lines[-1]) if lines[-1].isdigit() else 0
+        resp_body = lines[0] if len(lines) > 1 else ""
+        if code == 403:
+            return True, "concurrency limit — skipped"
+        if code not in (200, 201, 202):
+            return False, f"bot creation failed: HTTP {code}"
+
+        meeting_data = json.loads(resp_body)
+        meeting_id = meeting_data.get("id")
+    except Exception as e:
+        return False, f"bot creation error: {e}"
+
+    # 2. Wait for bot pod + session_start
+    time.sleep(10)
+
+    # 3. Inject synthetic transcription segment into Redis
+    # Use "transcription" type with "segments" array — matches the collector's expected format
+    seg_id = f"pipeline-seg-{int(time.time())}"
+    segment_payload = json.dumps({
+        "type": "transcription",
+        "uid": session_uid,
+        "meeting_id": str(meeting_id),
+        "platform": "google_meet",
+        "segments": [{
+            "segment_id": seg_id,
+            "speaker": "Pipeline Test Speaker",
+            "text": f"pipeline check {native_id}",
+            "start": 1.0,
+            "end": 3.0,
+            "language": "en",
+            "completed": True,
+        }],
+    })
+    rc, out = svc_exec("redis", [
+        "redis-cli", "XADD", "transcription_segments", "*",
+        "payload", segment_payload
+    ])
+    if rc != 0:
+        # Clean up bot
+        subprocess.run(["curl", "-sf", "-X", "DELETE", f"{gw}/bots/google_meet/{native_id}",
+                        "-H", f"X-API-Key: {token}"], capture_output=True, timeout=10)
+        return False, f"redis inject failed: {out}"
+
+    # 4. Wait for collector to process
+    time.sleep(15)
+
+    # 5. Check transcript via REST
+    try:
+        r = subprocess.run(
+            ["curl", "-sf", "-H", f"X-API-Key: {token}",
+             f"{gw}/transcripts/google_meet/{native_id}"],
+            capture_output=True, text=True, timeout=10)
+        transcript = json.loads(r.stdout)
+        segments = transcript.get("segments", [])
+    except Exception as e:
+        segments = []
+
+    # 6. Clean up
+    subprocess.run(["curl", "-sf", "-X", "DELETE", f"{gw}/bots/google_meet/{native_id}",
+                    "-H", f"X-API-Key: {token}"], capture_output=True, timeout=10)
+
+    if len(segments) > 0:
+        texts = [s.get("text", "") for s in segments]
+        return True, f"{len(segments)} segments: {texts[0][:50]}"
+    return False, "0 segments after injecting into Redis — collector pipeline broken"
 
 
 def check_bot_status_transitions(gw, token):

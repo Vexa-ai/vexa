@@ -340,6 +340,13 @@
     {"_": "═══ CONTRACT — API behavior correct, 15s ═══"},
 
     {
+      "id": "SEGMENT_PIPELINE",
+      "tier": "contract",
+      "proves": "segments injected into Redis appear in the REST transcript — collector pipeline works end-to-end",
+      "symptom": "Transcript empty despite audio being captured — collector not processing Redis stream, or segments not reaching Postgres",
+      "method": "SEGMENT_PIPELINE"
+    },
+    {
       "id": "BOT_STATUS_TRANSITIONS",
       "tier": "contract",
       "proves": "bot status transitions from requested within 30s — callbacks from bot→meeting-api work",
