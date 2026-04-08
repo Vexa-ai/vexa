@@ -10,7 +10,7 @@ global:
 secrets:
   existingSecretName: ""
   adminApiToken: ""       # REQUIRED: set via --set secrets.adminApiToken=...
-  transcriberApiKey: ""   # Must match BBB transcription-service API_TOKEN
+  transcriptionServiceToken: ""  # Must match BBB transcription-service API_TOKEN
 
 # ---------- Database ----------
 # Bundled Postgres for staging (switch to managed DB for prod)

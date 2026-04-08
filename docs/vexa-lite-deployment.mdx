@@ -50,8 +50,8 @@ docker run -d \
   -e DATABASE_URL="postgresql://user:password@your-db-host:5432/vexa" \
   -e DB_SSL_MODE="require" \
   -e ADMIN_API_TOKEN="your-secret-admin-token" \
-  -e TRANSCRIBER_URL="https://transcription.vexa.ai/v1/audio/transcriptions" \
-  -e TRANSCRIBER_API_KEY="your-transcription-api-key" \
+  -e TRANSCRIPTION_SERVICE_URL="https://transcription.vexa.ai/v1/audio/transcriptions" \
+  -e TRANSCRIPTION_SERVICE_TOKEN="your-transcription-api-key" \
   -e OPENAI_API_KEY="sk-your-openai-key" \
   vexaai/vexa-lite:latest
 ```
@@ -81,8 +81,8 @@ docker run -d \
   -p 8056:8056 \
   -e DATABASE_URL="postgresql://postgres:your_password@vexa-postgres:5432/vexa" \
   -e ADMIN_API_TOKEN="your-secret-admin-token" \
-  -e TRANSCRIBER_URL="https://transcription.vexa.ai/v1/audio/transcriptions" \
-  -e TRANSCRIBER_API_KEY="your-transcription-api-key" \
+  -e TRANSCRIPTION_SERVICE_URL="https://transcription.vexa.ai/v1/audio/transcriptions" \
+  -e TRANSCRIPTION_SERVICE_TOKEN="your-transcription-api-key" \
   -e OPENAI_API_KEY="sk-your-openai-key" \
   vexaai/vexa-lite:latest
 ```
@@ -109,13 +109,13 @@ The container automatically runs database migrations on startup. Fresh databases
   Secret token for [admin operations](self-hosted-management) (creating users, minting API tokens).
 </ResponseField>
 
-<ResponseField name="TRANSCRIBER_URL" type="string" required>
+<ResponseField name="TRANSCRIPTION_SERVICE_URL" type="string" required>
   Transcription service endpoint.
 
   Default: `https://transcription.vexa.ai/v1/audio/transcriptions`
 </ResponseField>
 
-<ResponseField name="TRANSCRIBER_API_KEY" type="string" required>
+<ResponseField name="TRANSCRIPTION_SERVICE_TOKEN" type="string" required>
   API key for the transcription service. Get yours from [vexa.ai/dashboard/api-keys](https://vexa.ai/dashboard/api-keys).
 </ResponseField>
 
@@ -269,8 +269,8 @@ docker run -d \
   -e AWS_REGION="us-east-1" \
   -e DATABASE_URL="postgresql://user:pass@host/vexa" \
   -e ADMIN_API_TOKEN="your-admin-token" \
-  -e TRANSCRIBER_URL="https://transcription.vexa.ai/v1/audio/transcriptions" \
-  -e TRANSCRIBER_API_KEY="your-api-key" \
+  -e TRANSCRIPTION_SERVICE_URL="https://transcription.vexa.ai/v1/audio/transcriptions" \
+  -e TRANSCRIPTION_SERVICE_TOKEN="your-api-key" \
   vexaai/vexa-lite:latest
 ```
 

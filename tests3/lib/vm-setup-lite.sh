@@ -68,8 +68,8 @@ vm_ssh "docker run -d --name vexa --shm-size=2g --network host \
     -e DB_SSL_MODE=disable \
     -e REDIS_URL=redis://localhost:6379/0 \
     -e ADMIN_API_TOKEN=changeme \
-    -e TRANSCRIBER_URL=$TX_URL \
-    -e TRANSCRIBER_API_KEY=$TX_TOKEN \
+    -e TRANSCRIPTION_SERVICE_URL=$TX_URL \
+    -e TRANSCRIPTION_SERVICE_TOKEN=$TX_TOKEN \
     vexaai/vexa-lite:dev" 2>&1 | tail -1
 
 # ── 7. Wait for services ─────────────────────────

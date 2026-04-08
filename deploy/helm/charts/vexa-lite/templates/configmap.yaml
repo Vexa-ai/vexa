@@ -6,8 +6,8 @@ metadata:
 {{ include "vexa-lite.labels" . | nindent 4 }}
 data:
   ORCHESTRATOR: {{ .Values.vexa.orchestrator | quote }}
-{{ if .Values.vexa.transcriberUrl }}
-  TRANSCRIBER_URL: {{ .Values.vexa.transcriberUrl | quote }}
+{{ if .Values.vexa.transcriptionServiceUrl }}
+  TRANSCRIPTION_SERVICE_URL: {{ .Values.vexa.transcriptionServiceUrl | quote }}
 {{ end }}
 {{ if .Values.vexa.dbSslMode }}
   DB_SSL_MODE: {{ .Values.vexa.dbSslMode | quote }}

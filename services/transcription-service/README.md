@@ -178,15 +178,15 @@ docker compose exec transcription-api nginx -t
 | **Certainty** | HIGH | API and config well documented |
 | **Single GPU capacity** | Known | Single GPU on BBB handles ~2 concurrent meetings. Beyond that, queuing increases and LIFO skipping kicks in. |
 | **Whisper hallucination on silence (bug #24)** | Known | When audio contains silence or very low-level noise, Whisper can hallucinate content (e.g., phantom "fema.gov" segment). Mitigation: bot-side hallucination filter in `core/src/services/hallucinations/`. New patterns should be added to the filter list. Also: `REPETITION_PENALTY=1.1` and `NO_REPEAT_NGRAM_SIZE=3` help reduce repetitive hallucinations. |
-| **Naming mismatch: TRANSCRIBER_URL vs TRANSCRIPTION_SERVICE_URL** | Known | Bot containers use `TRANSCRIPTION_SERVICE_URL`, meeting-api supervisord config used to reference `TRANSCRIBER_URL`. Fixed in bug #23 (2026-04-05). When adding new deployment modes, ensure the correct env var name is used. |
+| **Naming mismatch: TRANSCRIBER_URL vs TRANSCRIPTION_SERVICE_URL** | Fixed | Standardized on `TRANSCRIPTION_SERVICE_URL` and `TRANSCRIPTION_SERVICE_TOKEN` everywhere. Old names (`TRANSCRIBER_URL`, `TRANSCRIBER_API_KEY`) accepted as backward-compat aliases in lite entrypoint. |
 
 ## Integration with Vexa
 
 Set these in the Vexa gateway environment:
 
 ```bash
-REMOTE_TRANSCRIBER_URL=http://localhost:8083/v1/audio/transcriptions
-TRANSCRIPTION_SERVICE_API_TOKEN=<same value as API_TOKEN above>
+TRANSCRIPTION_SERVICE_URL=http://localhost:8083/v1/audio/transcriptions
+TRANSCRIPTION_SERVICE_TOKEN=<same value as API_TOKEN above>
 ```
 
 ## Public Docs

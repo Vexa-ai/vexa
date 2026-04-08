@@ -162,8 +162,8 @@ docker run -d \
   -p 8056:8056 \
   -e DATABASE_URL="postgresql://user:pass@host/vexa" \
   -e ADMIN_API_TOKEN="your-admin-token" \
-  -e TRANSCRIBER_URL="https://transcription.service" \
-  -e TRANSCRIBER_API_KEY="transcriber-token" \
+  -e TRANSCRIPTION_SERVICE_URL="https://transcription.service/v1/audio/transcriptions" \
+  -e TRANSCRIPTION_SERVICE_TOKEN="transcriber-token" \
   vexaai/vexa-lite:latest
 ```
 

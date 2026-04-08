@@ -103,7 +103,7 @@ echo "Configuration:"
 echo "  - Redis URL: ${REDIS_URL}"
 echo "  - Database URL: ${DATABASE_URL}"
 echo "  - Database SSL Mode: ${DB_SSL_MODE}"
-echo "  - Transcriber URL: ${TRANSCRIBER_URL:-NOT SET}"
+echo "  - Transcription URL: ${TRANSCRIPTION_SERVICE_URL:-${TRANSCRIBER_URL:-NOT SET}}"
 echo "  - Log Level: ${LOG_LEVEL}"
 echo "  - Storage Backend: ${STORAGE_BACKEND:-local}"
 echo ""
@@ -210,21 +210,16 @@ echo ""
 # -----------------------------------------------------------------------------
 
 echo "Verifying transcription service..."
-TRANSCRIBER_URL="${TRANSCRIBER_URL:-${REMOTE_TRANSCRIBER_URL:-}}"
-TRANSCRIBER_API_KEY="${TRANSCRIBER_API_KEY:-${REMOTE_TRANSCRIBER_API_KEY:-}}"
+# Canonical names: TRANSCRIPTION_SERVICE_URL + TRANSCRIPTION_SERVICE_TOKEN
+# Backward compat: TRANSCRIBER_URL -> TRANSCRIPTION_SERVICE_URL
+#                   TRANSCRIBER_API_KEY -> TRANSCRIPTION_SERVICE_TOKEN
+#                   REMOTE_TRANSCRIBER_URL -> TRANSCRIPTION_SERVICE_URL
+export TRANSCRIPTION_SERVICE_URL="${TRANSCRIPTION_SERVICE_URL:-${TRANSCRIBER_URL:-${REMOTE_TRANSCRIBER_URL:-}}}"
+export TRANSCRIPTION_SERVICE_TOKEN="${TRANSCRIPTION_SERVICE_TOKEN:-${TRANSCRIBER_API_KEY:-${REMOTE_TRANSCRIBER_API_KEY:-}}}"
 
-# Derive TRANSCRIPTION_SERVICE_URL/TOKEN from TRANSCRIBER_URL/API_KEY.
-# meeting-api reads these names to build BOT_CONFIG for bots.
-# TRANSCRIBER_URL is the full endpoint (http://host:port/v1/audio/transcriptions)
-# TRANSCRIPTION_SERVICE_URL is the base URL (http://host:port)
-if [ -n "$TRANSCRIBER_URL" ]; then
-    export TRANSCRIPTION_SERVICE_URL="${TRANSCRIPTION_SERVICE_URL:-$(echo "$TRANSCRIBER_URL" | sed 's|/v1/.*||')}"
-    export TRANSCRIPTION_SERVICE_TOKEN="${TRANSCRIPTION_SERVICE_TOKEN:-$TRANSCRIBER_API_KEY}"
-fi
-
-if [ -z "$TRANSCRIBER_URL" ]; then
-    echo "  ERROR: TRANSCRIBER_URL is not set — transcription will not work"
-    echo "  Set TRANSCRIBER_URL and TRANSCRIBER_API_KEY for transcription"
+if [ -z "$TRANSCRIPTION_SERVICE_URL" ]; then
+    echo "  ERROR: TRANSCRIPTION_SERVICE_URL is not set — transcription will not work"
+    echo "  Set TRANSCRIPTION_SERVICE_URL and TRANSCRIPTION_SERVICE_TOKEN"
     exit 1
 elif [ "${SKIP_TRANSCRIPTION_CHECK:-false}" = "true" ]; then
     echo "  Skipping transcription check (SKIP_TRANSCRIPTION_CHECK=true)"
@@ -232,34 +227,34 @@ else
     # Send a real audio file to the transcription service and verify text comes back.
     # This catches: wrong URL, bad API key, service down, GPU not loaded, model broken.
     AUTH_HEADER=""
-    if [ -n "$TRANSCRIBER_API_KEY" ]; then
-        AUTH_HEADER="Authorization: Bearer $TRANSCRIBER_API_KEY"
+    if [ -n "$TRANSCRIPTION_SERVICE_TOKEN" ]; then
+        AUTH_HEADER="Authorization: Bearer $TRANSCRIPTION_SERVICE_TOKEN"
     fi
 
     if [ -n "$AUTH_HEADER" ]; then
         HTTP_CODE=$(curl -s --max-time 15 -X POST \
             -F file=@/app/test-speech-en.wav -F model=large-v3-turbo -F language=en \
             -H "$AUTH_HEADER" \
-            -o /tmp/transcription-check.json -w '%{http_code}' "$TRANSCRIBER_URL" 2>/dev/null)
+            -o /tmp/transcription-check.json -w '%{http_code}' "$TRANSCRIPTION_SERVICE_URL" 2>/dev/null)
     else
         HTTP_CODE=$(curl -s --max-time 15 -X POST \
             -F file=@/app/test-speech-en.wav -F model=large-v3-turbo -F language=en \
-            -o /tmp/transcription-check.json -w '%{http_code}' "$TRANSCRIBER_URL" 2>/dev/null)
+            -o /tmp/transcription-check.json -w '%{http_code}' "$TRANSCRIPTION_SERVICE_URL" 2>/dev/null)
     fi
     RESULT=$(cat /tmp/transcription-check.json 2>/dev/null)
     rm -f /tmp/transcription-check.json
 
     if [ "$HTTP_CODE" = "000" ]; then
-        echo "  ERROR: Transcription service not reachable at $TRANSCRIBER_URL"
+        echo "  ERROR: Transcription service not reachable at $TRANSCRIPTION_SERVICE_URL"
         echo "  Set SKIP_TRANSCRIPTION_CHECK=true to start without transcription"
         exit 1
     fi
 
     if [ "$HTTP_CODE" -ge 400 ] 2>/dev/null; then
         echo "  ERROR: Transcription service returned HTTP $HTTP_CODE"
-        echo "  URL: $TRANSCRIBER_URL"
+        echo "  URL: $TRANSCRIPTION_SERVICE_URL"
         echo "  Response: $RESULT"
-        echo "  Check TRANSCRIBER_API_KEY is set correctly"
+        echo "  Check TRANSCRIPTION_SERVICE_TOKEN is set correctly"
         echo "  Set SKIP_TRANSCRIPTION_CHECK=true to start without transcription"
         exit 1
     fi
@@ -361,8 +356,8 @@ else
     FAILED=$((FAILED + 1))
 fi
 
-if [ "${SKIP_TRANSCRIPTION_CHECK:-false}" != "true" ] && [ -n "$TRANSCRIBER_URL" ]; then
-    BASE_URL=$(echo "$TRANSCRIBER_URL" | sed 's|/v1/.*||')
+if [ "${SKIP_TRANSCRIPTION_CHECK:-false}" != "true" ] && [ -n "$TRANSCRIPTION_SERVICE_URL" ]; then
+    BASE_URL=$(echo "$TRANSCRIPTION_SERVICE_URL" | sed 's|/v1/.*||')
     check "Transcription" "$BASE_URL/health"
 fi
 

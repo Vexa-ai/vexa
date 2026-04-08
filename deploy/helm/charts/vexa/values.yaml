@@ -21,7 +21,9 @@ global:
 secrets:
   existingSecretName: ""
   adminApiToken: "CHANGE_ME"   # Used by Admin API auth & MeetingToken signing across services
-  transcriberApiKey: ""
+  transcriptionServiceToken: ""
+  internalApiSecret: ""        # Shared secret for gateway↔admin-api internal calls (defaults to "vexa-internal-secret")
+  vexaApiKey: ""               # Pre-provisioned API key for dashboard proxy (optional, create via admin API)
 
 # Shared database config (used by admin-api, meeting-api, runtime-api)
 database:

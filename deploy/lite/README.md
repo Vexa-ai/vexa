@@ -119,8 +119,8 @@ docker run -d \
   -e DB_USER="postgres" \
   -e DB_PASSWORD="postgres" \
   -e ADMIN_API_TOKEN="changeme" \
-  -e TRANSCRIBER_URL="http://localhost:8085/v1/audio/transcriptions" \
-  -e TRANSCRIBER_API_KEY="$TRANSCRIPTION_TOKEN" \
+  -e TRANSCRIPTION_SERVICE_URL="http://localhost:8085/v1/audio/transcriptions" \
+  -e TRANSCRIPTION_SERVICE_TOKEN="$TRANSCRIPTION_TOKEN" \
   -e MINIO_ENDPOINT="localhost:9000" \
   -e MINIO_ACCESS_KEY="vexa-access-key" \
   -e MINIO_SECRET_KEY="vexa-secret-key" \
@@ -136,7 +136,7 @@ docker run -d \
 The entrypoint performs three checks before starting services:
 
 1. **Database** -- connects to PostgreSQL, runs schema init
-2. **Transcription** -- sends a real WAV file to `TRANSCRIBER_URL` and verifies
+2. **Transcription** -- sends a real WAV file to `TRANSCRIPTION_SERVICE_URL` and verifies
    text comes back. Catches: wrong URL, bad API key, service down, GPU not loaded.
    Container **exits 1** if this fails.
 3. **Post-startup self-check** -- runs ~20s after supervisor starts, health-checks
@@ -171,8 +171,8 @@ curl -sf http://localhost:8056/
 |----------|---------|-------------|
 | `DATABASE_URL` | `postgresql://postgres:postgres@localhost:5438/vexa` | Full PostgreSQL connection string |
 | `ADMIN_API_TOKEN` | `changeme` | Secret token for admin API operations |
-| `TRANSCRIBER_URL` | `http://localhost:8085/v1/audio/transcriptions` | Transcription service endpoint (full URL with path) |
-| `TRANSCRIBER_API_KEY` | `32c59b9f...` | API key for the transcription service |
+| `TRANSCRIPTION_SERVICE_URL` | `http://localhost:8085/v1/audio/transcriptions` | Transcription service endpoint (full URL with path) |
+| `TRANSCRIPTION_SERVICE_TOKEN` | `32c59b9f...` | API key/token for the transcription service |
 
 #### Database (parsed from DATABASE_URL, or set individually)
 
@@ -188,11 +188,9 @@ curl -sf http://localhost:8056/
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TRANSCRIBER_URL` | (required) | Full transcription endpoint URL |
-| `TRANSCRIBER_API_KEY` | (required) | API key for transcription |
+| `TRANSCRIPTION_SERVICE_URL` | (required) | Full transcription endpoint URL (e.g. `http://host:8085/v1/audio/transcriptions`) |
+| `TRANSCRIPTION_SERVICE_TOKEN` | (required) | API key/token for transcription |
 | `SKIP_TRANSCRIPTION_CHECK` | `false` | Set `true` to skip startup validation |
-| `TRANSCRIPTION_SERVICE_URL` | derived from `TRANSCRIBER_URL` | Base URL (e.g. `http://localhost:8085`). Auto-derived by stripping `/v1/...` from TRANSCRIBER_URL. Override only if needed. |
-| `TRANSCRIPTION_SERVICE_TOKEN` | derived from `TRANSCRIBER_API_KEY` | Same as TRANSCRIBER_API_KEY. Override only if different. |
 
 #### Storage (MinIO/S3)
 

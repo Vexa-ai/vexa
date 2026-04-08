@@ -41,7 +41,7 @@ Install the full chart from this repo:
 ```bash
 helm install vexa ./deploy/helm/charts/vexa \
   --set secrets.adminApiToken=CHANGE_ME \
-  --set secrets.transcriberApiKey=CHANGE_ME \
+  --set secrets.transcriptionServiceToken=CHANGE_ME \
   --set database.host=postgres \
   --set redisConfig.url=redis://redis:6379
 ```
@@ -52,7 +52,7 @@ Install the lite chart:
 helm install vexa-lite ./deploy/helm/charts/vexa-lite \
   --set vexa.databaseUrl=postgres://USER:PASS@HOST:5432/vexa \
   --set vexa.adminApiToken=CHANGE_ME \
-  --set vexa.transcriberApiKey=CHANGE_ME
+  --set vexa.transcriptionServiceToken=CHANGE_ME
 ```
 
 ### Configuration
@@ -61,7 +61,7 @@ helm install vexa-lite ./deploy/helm/charts/vexa-lite \
 
 Key values in `charts/vexa/values.yaml`:
 
-- `secrets.adminApiToken`, `secrets.transcriberApiKey`: Required for auth and service communication.
+- `secrets.adminApiToken`, `secrets.transcriptionServiceToken`: Required for auth and service communication.
 - `database.host`, `database.user`, `database.name`: Used by admin-api, meeting-api.
 - `redisConfig.url` (or `redisConfig.host`/`port`): Required if `redis.enabled=false`.
 - `meetingApi.orchestrator`: `process` (default), `kubernetes` (PoC), or `docker`.
@@ -76,7 +76,7 @@ Bundled dev dependencies:
 
 Key values in `charts/vexa-lite/values.yaml`:
 
-- `vexa.databaseUrl`, `vexa.adminApiToken`, `vexa.transcriberApiKey`: Required unless `vexa.existingSecret` is set.
+- `vexa.databaseUrl`, `vexa.adminApiToken`, `vexa.transcriptionServiceToken`: Required unless `vexa.existingSecret` is set.
 - `vexa.orchestrator`: Defaults to `process` (no Docker socket required).
 - `dashboard.enabled`: Deploys a separate dashboard container.
 - `ingress.*`: Optional ingress for the lite API and dashboard.

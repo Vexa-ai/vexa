@@ -21,8 +21,8 @@
 #     -p 8056:8056 -p 3000:3000 \
 #     -e DATABASE_URL="postgresql://user:pass@host:5432/vexa" \
 #     -e ADMIN_API_TOKEN="your-secret-token" \
-#     -e TRANSCRIBER_URL="http://host:8083/v1/audio/transcriptions" \
-#     -e TRANSCRIBER_API_KEY="your-api-key" \
+#     -e TRANSCRIPTION_SERVICE_URL="http://host:8083/v1/audio/transcriptions" \
+#     -e TRANSCRIPTION_SERVICE_TOKEN="your-api-key" \
 #     vexa-lite
 # =============================================================================
 

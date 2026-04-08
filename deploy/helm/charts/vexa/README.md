@@ -73,7 +73,7 @@ See `values.yaml` for all options. Key overrides for production:
 ```yaml
 secrets:
   adminApiToken: "strong-random-token"
-  transcriberApiKey: "match-transcription-service-API_TOKEN"
+  transcriptionServiceToken: "match-transcription-service-API_TOKEN"
 
 database:
   host: "your-postgres-host"

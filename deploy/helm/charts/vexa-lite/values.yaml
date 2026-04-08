@@ -76,16 +76,16 @@ probes:
 vexa:
   # If set, the chart will NOT create a Secret and will instead reference this one.
   # The Secret must contain keys:
-  #   DATABASE_URL, ADMIN_API_TOKEN, TRANSCRIBER_API_KEY
+  #   DATABASE_URL, ADMIN_API_TOKEN, TRANSCRIPTION_SERVICE_TOKEN
   existingSecret: ""
 
   # REQUIRED (stored in Secret if existingSecret is empty)
   databaseUrl: ""
   adminApiToken: ""
-  transcriberApiKey: ""
+  transcriptionServiceToken: ""
 
   # OPTIONAL (stored in ConfigMap)
-  transcriberUrl: ""      # if omitted, Vexa Lite may have a default depending on your setup
+  transcriptionServiceUrl: ""  # full transcription endpoint URL
   dbSslMode: "require"    # optional; upstream examples often use require
 
   # IMPORTANT: no Docker socket in Kubernetes → use process orchestrator.
