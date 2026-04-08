@@ -248,6 +248,14 @@
       "expect_code": 200
     },
     {
+      "id": "DASHBOARD_WS_URL",
+      "tier": "health",
+      "found": "2026-04-08",
+      "proves": "dashboard /api/config returns a browser-resolvable wsUrl — WebSocket will connect",
+      "symptom": "Dashboard WS broken — wsUrl contains internal Docker hostname (api-gateway, etc.) instead of localhost or public host",
+      "url": "DASHBOARD_WS_URL"
+    },
+    {
       "id": "RUNTIME_API_UP",
       "tier": "health",
       "proves": "runtime-api responds — bot container lifecycle management works",

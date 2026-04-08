@@ -411,6 +411,24 @@ def check_health(lock):
         except Exception as e:
             return False, str(e)
 
+    # Special: Dashboard WS URL — /api/config must return browser-resolvable wsUrl
+    if url == "DASHBOARD_WS_URL":
+        dash = state_read("dashboard_url", required=True)
+        code, body = http_check(f"{dash}/api/config")
+        if code != 200:
+            return False, f"HTTP {code} from {dash}/api/config"
+        try:
+            ws_url = json.loads(body).get("wsUrl", "")
+        except Exception as e:
+            return False, f"JSON parse error: {e}"
+        if not ws_url:
+            return False, "wsUrl field missing or empty"
+        internal_hosts = ["api-gateway", "meeting-api", "admin-api", "redis", "minio"]
+        for h in internal_hosts:
+            if h in ws_url:
+                return False, f"wsUrl contains internal hostname '{h}': {ws_url}"
+        return True, ws_url
+
     url = url.replace("$GATEWAY_URL", state_read("gateway_url", required=True))
     url = url.replace("$ADMIN_URL", state_read("admin_url", required=True))
     url = url.replace("$DASHBOARD_URL", state_read("dashboard_url", required=True))

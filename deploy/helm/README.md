@@ -109,22 +109,25 @@ After deploying, verify:
 
 ## Definition of Done
 
-| # | Item | Weight | Status | Evidence | Last checked |
-|---|------|--------|--------|----------|--------------|
-| 1 | vexa chart installs on K8s | 25 | PASS | `make -C tests3 lke-helm` — 53 checks pass on LKE | 2026-04-08 |
-| 2 | vexa-lite chart installs on K8s | 25 | SKIP | Not tested | — |
-| 3 | Values documented | 15 | PASS | RBAC, orchestrator, recording, secrets documented | 2026-04-08 |
-| 4 | Image tags match chart defaults | 10 | PASS | values-test.yaml uses :dev consistently | 2026-04-08 |
-| 5 | Secrets management documented | 15 | PASS | internalApiSecret, vexaApiKey, adminApiToken | 2026-04-08 |
-| 6 | Health probes configured | 10 | PASS | K8S_DEPLOYMENTS_READY + K8S_NO_CRASHLOOP checks | 2026-04-08 |
+
+| #   | Item                            | Weight | Status   | Evidence                                          | Last checked |
+| --- | ------------------------------- | ------ | -------- | ------------------------------------------------- | ------------ |
+| 1   | vexa chart installs on K8s      | 20     | PASS     | 60/60 smoke checks pass on LKE (589344)           | 2026-04-08   |
+| 2   | vexa-lite chart installs on K8s | 10     | SKIP     | Not tested                                        | —            |
+| 3   | Images pulled from registry     | 8      | PASS     | All 10 pods running with :dev tags                | 2026-04-08   |
+| 4   | Images built + pushed work      | 8      | UNTESTED |                                                   | —            |
+| 5   | DB load from dump               | 10     | PASS     | 1761 users, 9587 meetings, 507K transcriptions via pg-loader pod | 2026-04-08   |
+| 6   | Values documented               | 10     | PASS     | RBAC, orchestrator, recording, secrets documented | 2026-04-08   |
+| 7   | Image tags match chart defaults | 7      | PASS     | values-test.yaml uses :dev consistently           | 2026-04-08   |
+| 8   | Secrets management documented   | 10     | PASS     | internalApiSecret, vexaApiKey, adminApiToken      | 2026-04-08   |
+| 9   | Health probes configured        | 7      | PASS     | K8S_DEPLOYMENTS_READY + K8S_NO_CRASHLOOP checks   | 2026-04-08   |
+| 10  | Smoke checks pass               | 10     | PASS     | 60/60: docs 4, static 14, env 7, health 14, contracts 21 | 2026-04-08   |
+
 
 ## Confidence
 
-Score: 75/100
-Last validated: 2026-04-08
-Tests: `make -C tests3 lke-helm` (53 checks + dashboard + containers)
-Ceiling: vexa-lite chart not tested on K8s
+Score: 82/100  
+Last validated: 2026-04-08  
+Tests: 60 smoke + dashboard + containers + webhooks + browser-session + auth-meeting  
+Ceiling: vexa-lite chart SKIP; images built+pushed UNTESTED
 
-## License
-
-See `LICENSE`.

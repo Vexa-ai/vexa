@@ -1,0 +1,2037 @@
+[Larry Thompson] 10:03:12
+Good morning, good morning
+
+[Marco Rivera] 10:03:26
+That's…
+
+[Marco Rivera] 10:03:28
+And then we get started.
+
+[Marco Rivera] 10:04:02
+Okay, I think we can start. I know that some maintainers are gonna be late.
+
+[Marco Rivera] 10:04:07
+Can you hear me?
+
+[Marco Rivera] 10:04:11
+Yeah, okay, cool.
+
+[Marco Rivera] 10:04:13
+So guys, I'm not going to read the meeting notices, because…
+
+[Marco Rivera] 10:04:16
+We are a small, familiar crowd here today.
+
+[Marco Rivera] 10:04:20
+Um, if you're new,
+
+[Marco Rivera] 10:04:22
+Feel free to jump in and present yourself, you can raise your hand.
+
+[Marco Rivera] 10:04:30
+I'm just screen sharing the agenda right now.
+
+[Marco Rivera] 10:04:35
+Hi, Sara.
+
+[Sara Dawson] 10:04:38
+Hi, Lika. I'm new.
+
+[Sara Dawson] 10:04:39
+I'm, um… I'm here from…
+
+[Marco Rivera] 10:04:41
+message.
+
+[Sara Dawson] 10:04:43
+Morgan Stanley, um…
+
+[Sara Dawson] 10:04:44
+I have listened in on one of these
+
+[Sara Dawson] 10:04:48
+post… but I think it was the end of last year, or maybe earlier this year, it was quite a while ago, and I expect things have moved on significantly since then.
+
+[Sara Dawson] 10:04:57
+Um, but…
+
+[Sara Dawson] 10:04:59
+very interested in this space. I'm a…
+
+[Sara Dawson] 10:05:02
+Enterprise Architect, uh, specialising in governance.
+
+[Sara Dawson] 10:05:04
+And work quite closely with the team that are using Calm.
+
+[Marco Rivera] 10:05:08
+Super.
+
+[Sara Dawson] 10:05:09
+Um, and were involved in the calm, um,
+
+[Sara Dawson] 10:05:11
+FINOS project as well, so…
+
+[Sara Dawson] 10:05:14
+Um, yeah, obviously, first time, so I'm just gonna listen. I've been in listening mode, and um…
+
+[Sara Dawson] 10:05:21
+And try and catch up.
+
+[Marco Rivera] 10:05:23
+No, that's great. Nice to meet you, Sara. And, uh, I'm going to give you an overview
+
+[Marco Rivera] 10:05:29
+Uh, so I think it's, uh, yeah, good that you're here today.
+
+[Sara Dawson] 10:05:34
+Thank you.
+
+[Marco Rivera] 10:05:39
+Anybody else?
+
+[Marco Rivera] 10:05:45
+Cool. So, we are gonna… we're gonna talk about…
+
+[Marco Rivera] 10:05:47
+Toronto Workshop is coming up next week, on Monday.
+
+[Marco Rivera] 10:05:51
+Um, yeah, you have the link for the, uh, for the overview.
+
+[Marco Rivera] 10:05:55
+It's a workshop that we've been working on for a while. It's a four-hour workshop, it's hybrid.
+
+[Marco Rivera] 10:06:02
+So you can join virtually if you're not gonna be in Toronto next week for open sourcing Finance Forum.
+
+[Marco Rivera] 10:06:10
+Um, you can simply go to the coranda.finos.org,
+
+[Marco Rivera] 10:06:13
+you'll find the link. 1PM Eastern Time?
+
+[Marco Rivera] 10:06:18
+Um…
+
+[Marco Rivera] 10:06:19
+I want to show you some mappings that, uh, I…
+
+[Marco Rivera] 10:06:24
+I worked on, over the weekend, to show you how can we expand the AI governance framework to the Canadian
+
+[Marco Rivera] 10:06:32
+jurisdiction, and then I would like to review the one-pager that we are putting together.
+
+[Marco Rivera] 10:06:38
+by the end of this review of one-pager, I think we should have the maintainers.
+
+[Marco Rivera] 10:06:45
+As well in this call. I know Chamin, that I'm calling and I'm gonna join
+
+[Marco Rivera] 10:06:49
+Later. So, when they… when they're gonna be here,
+
+[Marco Rivera] 10:06:54
+I would like to have a discussion around
+
+[Marco Rivera] 10:06:57
+P3, uh, agarosphere of V3 release.
+
+[Marco Rivera] 10:07:01
+And then there are some PRs to be reviewed.
+
+[Marco Rivera] 10:07:07
+if you guys want to add anything on the agenda, it's quite… it's quite packed already, but if you… if you guys have any pressing issue,
+
+[Marco Rivera] 10:07:07
+Um…
+
+[Marco Rivera] 10:07:15
+Let me know. I don't have to pick it.
+
+[Marco Rivera] 10:07:22
+Oh? Alright, so let me start with the…
+
+[Marco Rivera] 10:07:27
+So, first of all, do we have any…
+
+[Marco Rivera] 10:07:29
+Canadians or anyone working for Canadian bank here today?
+
+[Mike Palmer] 10:07:36
+Hey, Marco, it's Mike from TD, yeah.
+
+[Marco Rivera] 10:07:38
+Hey, Mike. Hey, Mike.
+
+[Marco Rivera] 10:07:40
+Cool.
+
+[Mike Palmer] 10:07:40
+So I was gonna say, looking forward to seeing you, uh…
+
+[Mike Palmer] 10:07:42
+Next week, uh, hopefully it doesn't snow. It snowed yesterday, but next week it's supposed to be warm, so it just…
+
+[Mike Palmer] 10:07:48
+prepare for cold, yeah.
+
+[Marco Rivera] 10:07:52
+Good, thanks, thanks for… thanks for that. Um, so there is a why I wanted to…
+
+[Marco Rivera] 10:07:58
+I was… yeah, I'm happy that you guys are here also today, because maybe we can test some of the work that we're gonna do
+
+[Marco Rivera] 10:08:06
+next week in person. Um, so…
+
+[Marco Rivera] 10:08:11
+Some of you might already know that
+
+[Marco Rivera] 10:08:14
+the AI governance framework comes with a catalog of risks and mitigations,
+
+[Marco Rivera] 10:08:18
+And that catalog is already…
+
+[Marco Rivera] 10:08:21
+mapped against, uh, regulations,
+
+[Marco Rivera] 10:08:25
+In Europe, some regulations in the US.
+
+[Marco Rivera] 10:08:29
+Specifically for financial services.
+
+[Marco Rivera] 10:08:32
+Uh, and also mapped against some, uh…
+
+[Marco Rivera] 10:08:36
+industry framework, like NIST or ISO.
+
+[Marco Rivera] 10:08:39
+What we are trying to do…
+
+[Marco Rivera] 10:08:42
+today, I would like to show you a very mini, mini prototype of how we can add
+
+[Marco Rivera] 10:08:49
+new jurisdict… specific jurisdiction regulations to their governance framework.
+
+[Marco Rivera] 10:08:53
+And I'm gonna show you step-by-step, so that…
+
+[Marco Rivera] 10:08:57
+you can, you know, in case you want to expand it by yourself,
+
+[Marco Rivera] 10:09:00
+You can do it, but then also, in order to prepare for next week.
+
+[Marco Rivera] 10:09:04
+Okay, any…
+
+[Marco Rivera] 10:09:06
+is it clear that what we are… what I'm going to show you?
+
+[Alex Chen (Meridian Labs)] 10:09:14
+Basically, the composability of this to a jurisdictional level.
+
+[Marco Rivera] 10:09:18
+Yeah, yeah. So the… there is an issue here.
+
+[Marco Rivera] 10:09:23
+Uh, Canadian mappings…
+
+[Marco Rivera] 10:09:26
+Basically, here, I try to explain why this is a good idea, and how it would work.
+
+[Marco Rivera] 10:09:31
+Uh, and then I have raised, uh…
+
+[Marco Rivera] 10:09:34
+pull request, where basically…
+
+[Marco Rivera] 10:09:38
+I created a new…
+
+[Marco Rivera] 10:09:42
+a new file in, uh…
+
+[Marco Rivera] 10:09:45
+in docs. Oh, let me do a step back. So, when you…
+
+[Marco Rivera] 10:09:50
+look at the AI governance framework, you have…
+
+[Marco Rivera] 10:09:54
+risk mitigations in the catalog.
+
+[Marco Rivera] 10:09:56
+And you have…
+
+[Marco Rivera] 10:09:59
+an inventory of regulations that you can map… you can map against.
+
+[Marco Rivera] 10:10:04
+And that inventory is in data.
+
+[Marco Rivera] 10:10:08
+And here you have…
+
+[Marco Rivera] 10:10:10
+For example, the EUI Act,
+
+[Marco Rivera] 10:10:14
+is, um…
+
+[Marco Rivera] 10:10:17
+represented in a YAML format.
+
+[Marco Rivera] 10:10:20
+So that we can link a specific
+
+[Marco Rivera] 10:10:24
+mandate from the EUI Act to…
+
+[Marco Rivera] 10:10:27
+the AI governance framework risk and mitigations.
+
+[Marco Rivera] 10:10:31
+Right? So that's the way we… that's the way it works, and we have the EUAI Act here, for example.
+
+[Marco Rivera] 10:10:36
+Uh, we have, um…
+
+[Marco Rivera] 10:10:41
+niece 600, we have OWASP,
+
+[Marco Rivera] 10:10:44
+And hundreds.
+
+[Marco Rivera] 10:10:46
+So, what I have done, basically,
+
+[Marco Rivera] 10:10:50
+I created a similar one.
+
+[Marco Rivera] 10:10:54
+for 3…
+
+[Marco Rivera] 10:10:57
+core… 3 or 4 core regulations in Canada.
+
+[Marco Rivera] 10:11:01
+And thanks for… if you… if I… if I bothered you for feedback, thanks for providing the feedback, because that was useful. So, OSFI,
+
+[Marco Rivera] 10:11:11
+Um…
+
+[Marco Rivera] 10:11:14
+specify…
+
+[Marco Rivera] 10:11:16
+OPC.
+
+[Marco Rivera] 10:11:20
+CSA, which stays for the Canadian Security Administrators.
+
+[Marco Rivera] 10:11:24
+And the CIO.
+
+[Marco Rivera] 10:11:28
+the Canadian Investment Regulatory Organization.
+
+[Marco Rivera] 10:11:30
+And they basically white-coded this in a way that I asked…
+
+[Marco Rivera] 10:11:35
+codecs, in this case.
+
+[Marco Rivera] 10:11:37
+Can you extract from the regulation?
+
+[Marco Rivera] 10:11:40
+some, um…
+
+[Marco Rivera] 10:11:42
+requirements, and then that basically was created by Codex, uh…
+
+[Marco Rivera] 10:11:48
+In a few minutes. And then…
+
+[Marco Rivera] 10:11:52
+what I have done is…
+
+[Marco Rivera] 10:11:54
+I added to the…
+
+[Marco Rivera] 10:11:56
+I added basically a field.
+
+[Marco Rivera] 10:11:58
+for these regulations in the template of each mitigation and risk.
+
+[Marco Rivera] 10:12:06
+um… yeah. Each…
+
+[Marco Rivera] 10:12:08
+mitigation risk, they are created based on a template, so I create… I added
+
+[Marco Rivera] 10:12:14
+This…
+
+[Marco Rivera] 10:12:15
+to the mitigation template.
+
+[Marco Rivera] 10:12:18
+And this…
+
+[Marco Rivera] 10:12:19
+to the risk template.
+
+[Marco Rivera] 10:12:22
+Now I'll do another step, and please, let's…
+
+[Marco Rivera] 10:12:26
+keep the question, if you have a question, because maybe that's gonna answer.
+
+[Marco Rivera] 10:12:31
+When… once you want to close the loop, what I've done, I…
+
+[Marco Rivera] 10:12:35
+mapped a specific risk.
+
+[Marco Rivera] 10:12:37
+Uh, sorry, a specific mitigation, which is age and decisions, audit and explainability.
+
+[Marco Rivera] 10:12:43
+And I mapped to this specific mitigation,
+
+[Marco Rivera] 10:12:48
+all the references to the specific Canadian regulations.
+
+[Marco Rivera] 10:12:51
+So, by doing this, I've connected the catalog risks,
+
+[Marco Rivera] 10:12:56
+and mitigations with
+
+[Marco Rivera] 10:12:59
+the specific jurisdiction regulation in Canada, in this case.
+
+[Marco Rivera] 10:13:04
+And this is just a very, very mini, mini…
+
+[Marco Rivera] 10:13:06
+MVP, uh, because obviously…
+
+[Marco Rivera] 10:13:10
+we will have to do this for all mitigations. We have 23 mitigations in the catalog today.
+
+[Marco Rivera] 10:13:16
+And also, some of the risks, probably.
+
+[Marco Rivera] 10:13:20
+And maybe this is something that we're gonna do next week during the workshop, but I wanted to show you how it works in practice, so that if you are, I don't know,
+
+[Marco Rivera] 10:13:30
+based out of UAE, or…
+
+[Marco Rivera] 10:13:32
+China, or…
+
+[Marco Rivera] 10:13:35
+other jurisdictions that we don't cover,
+
+[Marco Rivera] 10:13:37
+you can potentially…
+
+[Marco Rivera] 10:13:39
+Added by yourself.
+
+[Marco Rivera] 10:13:44
+I stop here. I hope, guys, you have some questions. I hope it was, uh…
+
+[Marco Rivera] 10:13:48
+I hope I managed to explain what is done.
+
+[Marco Rivera] 10:13:52
+and our works.
+
+[Mike Palmer] 10:13:53
+Yeah, that… that makes total sense to me, and again, I…
+
+[Mike Palmer] 10:13:57
+you know, from TD Bank now, but I worked at CIBC, um, in the audit group.
+
+[Mike Palmer] 10:14:03
+And generally, how controls work within
+
+[Mike Palmer] 10:14:07
+at least the Canadian banks is…
+
+[Mike Palmer] 10:14:10
+Um, they map to, you know, several relevant standards. So you would start with something like…
+
+[Mike Palmer] 10:14:16
+COBIT or NIST, but then you would map those controls
+
+[Mike Palmer] 10:14:20
+Um, to relevant standards, whether it's in Canada or the US or EU.
+
+[Mike Palmer] 10:14:26
+Um, so once you make that mapping
+
+[Mike Palmer] 10:14:29
+to a regulation
+
+[Mike Palmer] 10:14:31
+then you get that kind of parent-child mapping as well to control. So, um…
+
+[Mike Palmer] 10:14:36
+I think this will resonate with anyone, um, from the Canadian bank, so, yeah.
+
+[Marco Rivera] 10:14:43
+Super. Thanks for the feedback.
+
+[Marco Rivera] 10:14:50
+Good. Any other feedback on this, or ideas?
+
+[Mike Palmer] 10:14:57
+Oh, just… I just one more thing, uh, sorry, just, um…
+
+[Mike Palmer] 10:15:01
+popped into my head. I think we talked about it, um,
+
+[Mike Palmer] 10:15:03
+before, but again, you know, treating this as…
+
+[Mike Palmer] 10:15:08
+like, something that's like an augmentation, as opposed to replace, um, existing
+
+[Mike Palmer] 10:15:14
+standards, um, within the banks, I think is…
+
+[Mike Palmer] 10:15:18
+kind of obvious, um, but it, um…
+
+[Mike Palmer] 10:15:21
+Uh, it might be a good call-out, uh, because there's going to be people from the workshop next week, um,
+
+[Mike Palmer] 10:15:26
+from CIBC who are running their AI governance work there, so just…
+
+[Mike Palmer] 10:15:32
+you know, kind of a… you know, call out that, you know, this isn't going to replace what you have. Think of it as, like, an augmentation.
+
+[Mike Palmer] 10:15:39
+Um, I think makes a lot of sense, too.
+
+[Marco Rivera] 10:15:41
+Yeah.
+
+[Marco Rivera] 10:15:45
+Yeah, this is a very good topic, because we are also going to present or preview the AI governance framework training course next week.
+
+[Marco Rivera] 10:15:54
+And in the module number 3,
+
+[Marco Rivera] 10:15:58
+Uh, we are going to explain how this is augmenting
+
+[Marco Rivera] 10:16:03
+existing MRM, model risk management, and…
+
+[Marco Rivera] 10:16:07
+and enterprise risk management. So, how AI governance framework augment
+
+[Marco Rivera] 10:16:12
+those two pieces, and how you bring everything together. So this is going to be…
+
+[Marco Rivera] 10:16:18
+also discussed, um, next week, at the beginning of the workshop.
+
+[Marco Rivera] 10:16:26
+Cool, let me see what… if we have…
+
+[Marco Rivera] 10:16:31
+Any mundaneer, not yet.
+
+[Marco Rivera] 10:16:33
+Okay? So maybe I can…
+
+[Marco Rivera] 10:16:36
+ask you another feedback, guys, stay with me.
+
+[Marco Rivera] 10:16:40
+Um, we have been working on the one-pager.
+
+[Marco Rivera] 10:16:45
+And… I have a version here I want to show you, and…
+
+[Marco Rivera] 10:16:52
+gather live feedback.
+
+[Marco Rivera] 10:16:58
+Here we go.
+
+[Marco Rivera] 10:17:42
+So this is the… this is the version…
+
+[Marco Rivera] 10:17:47
+0.
+
+[Marco Rivera] 10:17:49
+3 something? Um…
+
+[Marco Rivera] 10:17:53
+if I can minimize…
+
+[Marco Rivera] 10:18:02
+Sorry, give me a second.
+
+[Marco Rivera] 10:18:36
+Um, I… don't…
+
+[Marco Rivera] 10:18:39
+I cannot be able to show you these files in a second.
+
+[Marco Rivera] 10:19:10
+Mm-hmm. Okay.
+
+[Marco Rivera] 10:19:13
+Maybe now works.
+
+[Marco Rivera] 10:19:20
+Can anyone…
+
+[Marco Rivera] 10:19:22
+Help me out here. Can you guys…
+
+[Larry Thompson] 10:19:24
+Yeah, if you hit right ne… that little up-down arrow box to the right of the…
+
+[Larry Thompson] 10:19:30
+25%, and the plus sign?
+
+[Larry Thompson] 10:19:32
+That'll just put the whole thing to a single page.
+
+[Marco Rivera] 10:19:34
+This… this one?
+
+[Larry Thompson] 10:19:35
+Yeah.
+
+[Marco Rivera] 10:19:36
+Yeah, okay.
+
+[Larry Thompson] 10:19:37
+Is it working? Um…
+
+[Larry Thompson] 10:19:40
+I wouldn't just do…
+
+[Larry Thompson] 10:19:44
+It looked…
+
+[Marco Rivera] 10:19:51
+Okay, don't… I… maybe… maybe we can take this, uh, for later. I…
+
+[Marco Rivera] 10:19:58
+I guess if anyone can open it, and maybe we can come back to this item later.
+
+[Marco Rivera] 10:20:06
+I wanted to show you live, uh, looks like, but I think…
+
+[Marco Rivera] 10:20:10
+I think I have some issue on this side.
+
+[Marco Rivera] 10:20:12
+All right, no worries. So, go to the next.
+
+[Marco Rivera] 10:20:16
+topic, so the taxronomy, and I see Chris has just joined. Hi, Chris, nice to see you.
+
+[Marco Rivera] 10:20:20
+I'm… I was… I wanted to spend a few minutes on… on the taxonomy
+
+[Marco Rivera] 10:20:28
+a pull request merge, because I think it's a very important…
+
+[Marco Rivera] 10:20:31
+uh, asset that now we have.
+
+[Marco Rivera] 10:20:33
+And I don't think…
+
+[Marco Rivera] 10:20:35
+is where… is very widely…
+
+[Marco Rivera] 10:20:39
+Um, recognized at the moment.
+
+[Marco Rivera] 10:20:41
+So, I'm going to spend 5 minutes on this, and then maybe
+
+[Marco Rivera] 10:20:46
+If you want, you can chip in and…
+
+[Marco Rivera] 10:20:49
+And thank you, Victoria, your… to the… to the pull request. What do you think?
+
+[Chris Davis] 10:20:54
+Yeah, go ahead, Marco.
+
+[Marco Rivera] 10:20:56
+Cool. So…
+
+[Marco Rivera] 10:20:58
+I… for those… for those of you that are… that do not really understand the agonist framework inside out, I…
+
+[Marco Rivera] 10:21:05
+This is the… all the components that we are…
+
+[Marco Rivera] 10:21:10
+building in the context of the governance framework, there is
+
+[Marco Rivera] 10:21:14
+On the left-hand side, the risk mitigation catalog.
+
+[Marco Rivera] 10:21:17
+Which is, uh…
+
+[Marco Rivera] 10:21:19
+I wish I show you how…
+
+[Marco Rivera] 10:21:22
+risk can be mapped to…
+
+[Marco Rivera] 10:21:25
+external regulations.
+
+[Marco Rivera] 10:21:27
+the catalog as our relationship with the library,
+
+[Marco Rivera] 10:21:31
+there is a dedicated working session tomorrow on the library.
+
+[Marco Rivera] 10:21:35
+But the library basically is, uh…
+
+[Marco Rivera] 10:21:37
+is an initiative that wants to build
+
+[Marco Rivera] 10:21:40
+track model, um…
+
+[Marco Rivera] 10:21:42
+reference architectures and group them in a library.
+
+[Marco Rivera] 10:21:47
+Um, and then now we have this concept of taxonomy.
+
+[Marco Rivera] 10:21:50
+Which is very important, because kind of close the loops.
+
+[Marco Rivera] 10:21:54
+from business,
+
+[Marco Rivera] 10:21:57
+to engineering, to risk,
+
+[Marco Rivera] 10:21:59
+Um, so I wanted to spend, really, 5 minutes and show you what the taxonomy pull request is.
+
+[Marco Rivera] 10:22:05
+because it was merged a couple of weeks ago.
+
+[Marco Rivera] 10:22:08
+I think it makes sense that you guys understand this and, you know, keep an eye.
+
+[Marco Rivera] 10:22:12
+Um, and then I'm going to hand over to Chris, who wants to…
+
+[Marco Rivera] 10:22:16
+Maybe present the rest. Um, so what the taxonomy is…
+
+[Marco Rivera] 10:22:22
+You can go to the pull request and check by yourself, but basically the taxonomy
+
+[Marco Rivera] 10:22:27
+brings a number of new files into the framework.
+
+[Marco Rivera] 10:22:32
+Um, I have listed here, so there is a, uh…
+
+[Marco Rivera] 10:22:35
+AI deployment model, AI use cases, data classification,
+
+[Marco Rivera] 10:22:40
+the new metadata fields.
+
+[Marco Rivera] 10:22:42
+And, uh, the taxonomy is, uh, to me, I see the taxonomy as a funnel.
+
+[Marco Rivera] 10:22:50
+Um, as a funnel that connects, uh, use cases.
+
+[Marco Rivera] 10:22:53
+to the rest of the ecosystem of the governance framework.
+
+[Marco Rivera] 10:22:57
+I want to show you how this…
+
+[Marco Rivera] 10:22:59
+use cases, taxonomy, funnel works.
+
+[Marco Rivera] 10:23:04
+Um, so right now, we have…
+
+[Marco Rivera] 10:23:07
+And the AI use cases catalog.
+
+[Marco Rivera] 10:23:09
+Which is at the very top.
+
+[Marco Rivera] 10:23:11
+The catalog right now is…
+
+[Marco Rivera] 10:23:13
+you know, quite limited. I think we have 2 or 3 use cases.
+
+[Marco Rivera] 10:23:17
+But now, what we have is a process to…
+
+[Marco Rivera] 10:23:22
+add new use cases to this catalog.
+
+[Marco Rivera] 10:23:25
+And we can do that by simply, basically, using, uh…
+
+[Marco Rivera] 10:23:31
+very simple form that Charmander is going to show you in a bit.
+
+[Marco Rivera] 10:23:35
+through the form, the business user can add
+
+[Marco Rivera] 10:23:39
+details of the use case.
+
+[Marco Rivera] 10:23:42
+can add the risks.
+
+[Marco Rivera] 10:23:44
+that issue thinks are related to the use case,
+
+[Marco Rivera] 10:23:47
+And by simply submitting this form,
+
+[Marco Rivera] 10:23:50
+a new GitHub issue is created,
+
+[Marco Rivera] 10:23:53
+And these GitHub issues can… can be…
+
+[Marco Rivera] 10:23:57
+discussed during one of these meetings.
+
+[Marco Rivera] 10:23:59
+And then approved.
+
+[Marco Rivera] 10:24:01
+And by doing that, we are creating
+
+[Marco Rivera] 10:24:04
+catalog of use cases.
+
+[Marco Rivera] 10:24:07
+Once we have the catalog use cases, what we want to do is…
+
+[Marco Rivera] 10:24:11
+We want to create a formula.
+
+[Marco Rivera] 10:24:14
+So to speak. That…
+
+[Marco Rivera] 10:24:17
+Uh, based on the use case.
+
+[Marco Rivera] 10:24:19
+And based on the data that the use case is consuming, and based on the type of architecture that the use case is.
+
+[Marco Rivera] 10:24:26
+is designed for, then it computes a level of risk.
+
+[Marco Rivera] 10:24:32
+Once we have the risk,
+
+[Marco Rivera] 10:24:34
+then we're gonna have…
+
+[Marco Rivera] 10:24:37
+so-called controls packages. I couldn't find a better word than maybe, you know, you guys have a better way of
+
+[Marco Rivera] 10:24:44
+of, you know, calling this, but it's basically… yeah.
+
+[Frank @ CloudBridge] 10:24:47
+If I may say, I would probably call it baseline.
+
+[Frank @ CloudBridge] 10:24:50
+control baseline.
+
+[Marco Rivera] 10:24:51
+Thank you. Thank you very much. Very good one.
+
+[Frank @ CloudBridge] 10:24:52
+Yeah, sure
+
+[Marco Rivera] 10:24:55
+Control Phase 9.
+
+[Marco Rivera] 10:24:59
+The control baseline is important because it gives you, basically, as the name says, the baseline of controls that you have to put in place for… in place for this use case.
+
+[Marco Rivera] 10:25:11
+Uh, then what we are building, or what the EVALS framework…
+
+[Marco Rivera] 10:25:17
+Uh, people are building is…
+
+[Marco Rivera] 10:25:20
+a way to consume this, um…
+
+[Marco Rivera] 10:25:23
+controlled baseline, together with… for the specific use case,
+
+[Marco Rivera] 10:25:27
+and build a reference implementation of that use case.
+
+[Marco Rivera] 10:25:32
+And the reference implementation…
+
+[Marco Rivera] 10:25:35
+Um, can be more than one for a given use case.
+
+[Marco Rivera] 10:25:38
+In fact, each…
+
+[Marco Rivera] 10:25:41
+reference implementation, we'll have its own
+
+[Marco Rivera] 10:25:45
+Phenos Labs repository.
+
+[Marco Rivera] 10:25:48
+So by doing that, we are connecting
+
+[Marco Rivera] 10:25:51
+a use case.
+
+[Marco Rivera] 10:25:52
+through the taxonomy, we have a control baseline,
+
+[Marco Rivera] 10:25:58
+And based on that control baseline, we…
+
+[Marco Rivera] 10:26:01
+go through the EVALS framework and create a reference implementations of that use case.
+
+[Marco Rivera] 10:26:06
+So this is how the entire flow will work.
+
+[Marco Rivera] 10:26:10
+it's still…
+
+[Marco Rivera] 10:26:13
+some parts are there, some are not, so I don't want to oversell you, you know, that this is
+
+[Marco Rivera] 10:26:18
+This is time, but basically, I wanted to give you basically an overview of how this works,
+
+[Marco Rivera] 10:26:24
+um… very high level, but I think it's important for you guys to know.
+
+[Marco Rivera] 10:26:28
+the direction where we're going.
+
+[Chris Davis] 10:26:36
+That's a good overview. I think Victor has a question.
+
+[Marco Rivera] 10:26:40
+Hi, Victor.
+
+[Victor Lee] 10:26:41
+Well, actually, two, two questions, actually. One is, um…
+
+[Victor Lee] 10:26:46
+I guess this is region-specific, for you, because of, like, EUI Act and all that act,
+
+[Victor Lee] 10:26:53
+Where do you see the governance, um, frameworks, et cetera, uh, is going?
+
+[Victor Lee] 10:26:59
+Because in the past, there's no law, so the directives from, um, for example, U.S. NIST, et cetera, is, is, uh…
+
+[Victor Lee] 10:27:07
+kind of a guidance, but at least in EU, there's EU Act, so the law is the ultimate, um,
+
+[Victor Lee] 10:27:14
+kind of guidance, and so how does the framework, um…
+
+[Victor Lee] 10:27:19
+I guess, kind of support that.
+
+[Victor Lee] 10:27:23
+direct… direction or requirement?
+
+[Victor Lee] 10:27:26
+Yeah, let me just stop there first with the first question.
+
+[Chris Davis] 10:27:31
+Yep, so…
+
+[Marco Rivera] 10:27:32
+So, yeah.
+
+[Chris Davis] 10:27:33
+Go ahead, Marco.
+
+[Marco Rivera] 10:27:35
+Yeah, thank you. If you… if you want, I mean, I don't have really… I have my view, but I don't know if you want to go first.
+
+[Chris Davis] 10:27:41
+So, I think in the use cases,
+
+[Chris Davis] 10:27:44
+Um, we want to bring that domain and regulatory perspective. So, in, uh, enumerated in the use cases are also relevant.
+
+[Chris Davis] 10:27:54
+regulations that have…
+
+[Chris Davis] 10:27:56
+might affect that use case.
+
+[Chris Davis] 10:27:57
+So we are classifying it by region, and jurisdiction.
+
+[Chris Davis] 10:28:01
+As well, so…
+
+[Chris Davis] 10:28:03
+So, I think having that laid out with the use case,
+
+[Chris Davis] 10:28:09
+Not that we'll get it right the first time.
+
+[Chris Davis] 10:28:11
+Um, and bringing that…
+
+[Chris Davis] 10:28:14
+regularly linked to the use case.
+
+[Chris Davis] 10:28:16
+And what we were thinking was, no, it's some of this regulation is at use case level,
+
+[Chris Davis] 10:28:22
+links, and some of those regulations are at the reference architecture, or the architecture level.
+
+[Chris Davis] 10:28:27
+Right, so some of those things that impact, uh, what is relevant.
+
+[Chris Davis] 10:28:31
+And that's why the whole package is then analyzed.
+
+[Chris Davis] 10:28:34
+Because some of the controls, or some of the relevant…
+
+[Chris Davis] 10:28:39
+regularly crosses impact at different levels.
+
+[Chris Davis] 10:28:41
+So, I can maybe… maybe show you an example of a use case, so you can see what this kind of looks like.
+
+[Chris Davis] 10:28:47
+Um, unless, uh, Marco, you have more to say here. But I think that was a good overview.
+
+[Chris Davis] 10:28:51
+In terms of where we're going, but I'd also like to say,
+
+[Chris Davis] 10:28:53
+It's a little bit decoupled use case is supposed to be independent of the implementation.
+
+[Chris Davis] 10:28:59
+And you can implement it in multiple ways, using different words. For example, you might implement a use case with Agentic framework.
+
+[Chris Davis] 10:29:06
+You might implement that with a rag base.
+
+[Chris Davis] 10:29:08
+system, um, and that might even lower the risk, right? So, um…
+
+[Chris Davis] 10:29:12
+So, you have different means by which you might implement the use case.
+
+[Chris Davis] 10:29:16
+And those two in combination,
+
+[Chris Davis] 10:29:19
+give you a thread profile that gives you a relevant
+
+[Chris Davis] 10:29:22
+set of controls.
+
+[Chris Davis] 10:29:24
+If that makes sense.
+
+[Victor Lee] 10:29:26
+Okay, yeah, I think I understand. So my second question is,
+
+[Victor Lee] 10:29:31
+Uh, right now, in the SPDX community, with SPX is basically a graph language on ontology.
+
+[Victor Lee] 10:29:39
+So, you can say it's more kind of a strict
+
+[Victor Lee] 10:29:43
+taxonomy, uh, because it's, uh, not only the definition of the
+
+[Victor Lee] 10:29:48
+the word, but also the relationship between the words, the terminologies.
+
+[Victor Lee] 10:29:54
+Um, so, um, in… in the past
+
+[Victor Lee] 10:29:58
+one month, um, the…
+
+[Victor Lee] 10:30:01
+the FAIR Institute, uh, I'm not sure you work with, uh, heard of an organization called ISACA?
+
+[Victor Lee] 10:30:07
+their kind of inventor of COVID.
+
+[Victor Lee] 10:30:11
+the Creator COVID and a lot of, um, kind of regulation-related things. So we've been…
+
+[Victor Lee] 10:30:15
+working together to make the tool ontology
+
+[Victor Lee] 10:30:19
+stash taxonomy interoperable.
+
+[Victor Lee] 10:30:21
+Um, because in the past, ISACA stuff is very high level,
+
+[Victor Lee] 10:30:26
+It doesn't… so it doesn't have a lot of foundational technology, uh, ontologies.
+
+[Victor Lee] 10:30:32
+That's available to quantify, um,
+
+[Victor Lee] 10:30:35
+their actual, uh, risk, because they try to quantify it, but they don't have the foundation.
+
+[Victor Lee] 10:30:39
+Do you think it would be helpful for maybe for you to also, um, maybe
+
+[Victor Lee] 10:30:47
+Uh…
+
+[Victor Lee] 10:30:48
+to be joining those meetings sometimes to share this, uh, your risk, um,
+
+[Victor Lee] 10:30:55
+From your perspective, what… how to quantify risk?
+
+[Victor Lee] 10:30:58
+Um, this way, there'll be a kind of a… because what we find is there's actually some interesting
+
+[Victor Lee] 10:31:04
+Even if the goal is the same, uh, the way you think of a term and how to measure risk is actually totally different. So it was quite helpful, even just
+
+[Victor Lee] 10:31:13
+just, I think, only 3 sessions that had the fair, um, Jack from FAIR, he created FAIR, joined the SPX meeting.
+
+[Victor Lee] 10:31:22
+Uh, yeah, so, um…
+
+[Victor Lee] 10:31:24
+Do you think that's something that you'll be interested in as well?
+
+[Chris Davis] 10:31:29
+I think that that risk
+
+[Chris Davis] 10:31:31
+Um, the risk… level of risk, or the risk score, is what maybe…
+
+[Chris Davis] 10:31:36
+related to what you're talking about, potentially. But yes, I'll be interested to find out more, and I think what we're trying to do is to link to
+
+[Chris Davis] 10:31:44
+all these different standards as much as we can.
+
+[Chris Davis] 10:31:46
+Uh, including things like Evident AI, just linked in that, but then what we have here is…
+
+[Chris Davis] 10:31:51
+something that's very connected, that's referencing all those different standards.
+
+[Chris Davis] 10:31:55
+As much as possible, and then that helps it also be utilized in things like Agentic tools that we want to use, really.
+
+[Chris Davis] 10:32:02
+to apply this, uh, for different organizations.
+
+[Chris Davis] 10:32:05
+So yes, I would be interested in that. I don't know if I have enough time right now, but I think that'd be a good thing to look at.
+
+[Victor Lee] 10:32:13
+I'll share the meeting information in the chat. Yeah, if you'd love to have you join to, uh…
+
+[Victor Lee] 10:32:18
+to make sure, when we're talking about a risk and how a risk is quantified and calculated,
+
+[Chris Davis] 10:32:22
+Yeah.
+
+[Victor Lee] 10:32:23
+at least those high-level concepts in sync.
+
+[Chris Davis] 10:32:26
+I don't think we are quantifying the risk in the base framework, um…
+
+[Chris Davis] 10:32:31
+But when Marco talked about the risk score,
+
+[Chris Davis] 10:32:34
+I think that's the quantification mechanism.
+
+[Chris Davis] 10:32:37
+Um, which could be an optional thing here, then I think that's where we need to look at.
+
+[Chris Davis] 10:32:41
+Um, this from a risk scoring perspective, and how we quantify the risk.
+
+[Victor Lee] 10:32:47
+Right, sounds good.
+
+[Chris Davis] 10:32:47
+So that'd be good if there's another reference to how do you do that.
+
+[Chris Davis] 10:32:50
+definitely we would want to like to adopt some of that.
+
+[Chris Davis] 10:32:56
+probably Luke, I think, Marco, this is your idea, the risk-code mechanism, probably you can…
+
+[Chris Davis] 10:33:01
+participate in this.
+
+[Marco Rivera] 10:33:01
+Yeah. Yeah, yeah, Victor, keep me in the loop, uh…
+
+[Marco Rivera] 10:33:06
+always happy to join.
+
+[Marco Rivera] 10:33:08
+Viktor, what's your…
+
+[Marco Rivera] 10:33:13
+Sure.
+
+[Victor Lee] 10:33:15
+Uh, yeah, uh, um…
+
+[Victor Lee] 10:33:18
+Uh, I need to find out. I'll put it in
+
+[Marco Rivera] 10:33:21
+Okay, no worries.
+
+[Marco Rivera] 10:33:24
+Let me see if now it is worth…
+
+[Marco Rivera] 10:33:29
+No, I think I… I have some issues. Okay, let me, uh, stop now presenting.
+
+[Marco Rivera] 10:33:37
+who wants to…
+
+[Marco Rivera] 10:33:40
+Excuse me that you want to take over?
+
+[Chris Davis] 10:33:44
+Okay, I'll just share my pull request item.
+
+[Chris Davis] 10:33:48
+So, let me just share my screen.
+
+[Marco Rivera] 10:33:49
+Oh, maybe, maybe, maybe before you go, is there any other question from, um, participants?
+
+[Alex Chen (Meridian Labs)] 10:33:55
+Yeah, I just put it in the chat. In the slide you had there, there's… obviously there's an output there, and
+
+[Alex Chen (Meridian Labs)] 10:34:02
+It says reference implementation. What is the form of that?
+
+[Alex Chen (Meridian Labs)] 10:34:06
+output, and how is it intended to be used?
+
+[Marco Rivera] 10:34:10
+Yeah, let me show you an example.
+
+[Chris Davis] 10:34:12
+Uh, let me stop sharing.
+
+[Marco Rivera] 10:34:12
+So, yeah, so… yeah, sorry.
+
+[Marco Rivera] 10:34:21
+Here.
+
+[Marco Rivera] 10:34:30
+This is one.
+
+[Marco Rivera] 10:34:33
+This is a reference implementation. Um…
+
+[Marco Rivera] 10:34:36
+This is an agent that…
+
+[Marco Rivera] 10:34:41
+uses…
+
+[Marco Rivera] 10:34:44
+a transcript of earning calls?
+
+[Marco Rivera] 10:34:46
+And generate, uh, trading signals.
+
+[Marco Rivera] 10:34:50
+I think that was the… I think that's the scope. And this is the first rough implementation that…
+
+[Marco Rivera] 10:34:58
+Probably is not yet, uh, fully aligned with, you know, with the vision that I showed you before, but…
+
+[Marco Rivera] 10:35:04
+that's definitely the first…
+
+[Marco Rivera] 10:35:07
+proof of concept of this reference implementations. So you have all the information, you have
+
+[Marco Rivera] 10:35:13
+Um…
+
+[Marco Rivera] 10:35:14
+Let me show you a quick clip.
+
+[Marco Rivera] 10:35:17
+You have a number of… oh yeah, the architecture,
+
+[Marco Rivera] 10:35:21
+Um…
+
+[Marco Rivera] 10:35:23
+you have the…
+
+[Marco Rivera] 10:35:28
+how the…
+
+[Marco Rivera] 10:35:29
+Sorry, I'm trying to find the risks.
+
+[Marco Rivera] 10:35:33
+you have different… you have different components you can have a look later, but I'm gonna put in the chat here.
+
+[Marco Rivera] 10:35:39
+And all these components
+
+[Marco Rivera] 10:35:41
+We'd be eventually linked back to the AI governance framework risk communications.
+
+[Alex Chen (Meridian Labs)] 10:35:46
+Yeah, that's what I was curious to see, how the output
+
+[Alex Chen (Meridian Labs)] 10:35:51
+demonstrates that
+
+[Alex Chen (Meridian Labs)] 10:35:53
+particular identified risks.
+
+[Alex Chen (Meridian Labs)] 10:35:56
+are being mitigated in one way, uh, shape, or form, whether it's they're being measured, whether they're being, uh, avoided, etc.
+
+[Marco Rivera] 10:36:05
+Correct. And the… the…
+
+[Marco Rivera] 10:36:09
+TLBRA's use case,
+
+[Marco Rivera] 10:36:12
+Risks, metrics.
+
+[Alex Chen (Meridian Labs)] 10:36:13
+Yep.
+
+[Marco Rivera] 10:36:13
+Meaning that for each use case, there are some risks, and for the risk, you have to
+
+[Marco Rivera] 10:36:19
+uh, monitoring the risk using metrics.
+
+[Marco Rivera] 10:36:22
+So each reference implementation will have its own metrics based on the risks,
+
+[Marco Rivera] 10:36:27
+based on the use case and the…
+
+[Marco Rivera] 10:36:30
+And the way the use case is implemented.
+
+[Alex Chen (Meridian Labs)] 10:36:34
+Okay, very good. Thank you.
+
+[Marco Rivera] 10:36:37
+Thank you, the question.
+
+[Chris Davis] 10:36:46
+Should I shut out?
+
+[Marco Rivera] 10:36:47
+Thank you, yeah.
+
+[Chris Davis] 10:36:51
+Okay, so, um…
+
+[Chris Davis] 10:36:54
+So again, uh, right now we've…
+
+[Chris Davis] 10:36:57
+We've not made it navigable, but there is a use case section to their governance framework.
+
+[Chris Davis] 10:37:02
+Um, until we have a proper catalogue.
+
+[Chris Davis] 10:37:04
+And we've put in a property, we've just…
+
+[Chris Davis] 10:37:07
+I kept it here. So you can go to it with slash use cases if you want to just try it out locally.
+
+[Chris Davis] 10:37:14
+Um, and then we just have two sample use cases right now.
+
+[Chris Davis] 10:37:17
+Uh, and like I said, we won't have a proper process by which we review this and accept it into the framework.
+
+[Chris Davis] 10:37:22
+So these are just two samples, uh, like the credit risk analyst, which…
+
+[Chris Davis] 10:37:27
+have an example. Again, we bringing in, certainly, what we have to bring in.
+
+[Chris Davis] 10:37:32
+is the financial industry flavor to this framework. So this is bringing in
+
+[Chris Davis] 10:37:37
+Some key use cases, probably some common AI use cases,
+
+[Chris Davis] 10:37:41
+And again, we're defining
+
+[Chris Davis] 10:37:43
+What are the types of data that is?
+
+[Chris Davis] 10:37:45
+going to be processed within this use case.
+
+[Chris Davis] 10:37:48
+Uh, with regard to risk, what kind of regulations might be relevant to it at this level?
+
+[Chris Davis] 10:37:54
+Um, and also further reading is
+
+[Chris Davis] 10:37:57
+Basically, here's where we want to link to things like Evident AI.
+
+[Chris Davis] 10:38:00
+And put in links to
+
+[Chris Davis] 10:38:02
+Um, either reference to the same use case.
+
+[Chris Davis] 10:38:05
+Right, so it started bringing it into this whole…
+
+[Chris Davis] 10:38:08
+Um, structure.
+
+[Chris Davis] 10:38:10
+And then at this level, there might be a related lists for that use Addis use case level.
+
+[Chris Davis] 10:38:17
+Um…
+
+[Chris Davis] 10:38:18
+Uh, but like I said, it could be potentially at the architecture level.
+
+[Chris Davis] 10:38:22
+Right, so, but there might be risks and mitigations that you can think about.
+
+[Chris Davis] 10:38:27
+at the use case-specific level.
+
+[Marco Rivera] 10:38:29
+Yeah.
+
+[Chris Davis] 10:38:29
+Um, so we just want to bring in that element as well.
+
+[Chris Davis] 10:38:33
+And, um, so that is one example. What I've added here in my pull request is…
+
+[Chris Davis] 10:38:38
+the ability to create a use case. So, for example, you can…
+
+[Chris Davis] 10:38:43
+propose a new use case?
+
+[Chris Davis] 10:38:45
+And using that same taxonomy,
+
+[Chris Davis] 10:38:48
+Um, you can then put in some data points.
+
+[Chris Davis] 10:38:52
+Right?
+
+[Chris Davis] 10:38:58
+Whatever it is, um, put a category.
+
+[Chris Davis] 10:39:03
+some descriptions who the users will be.
+
+[Chris Davis] 10:39:06
+And then it's linked to the framework, so this will create the links.
+
+[Chris Davis] 10:39:10
+Alright, so you can look to see which…
+
+[Chris Davis] 10:39:13
+things are related within the framework, we might need to add more.
+
+[Chris Davis] 10:39:17
+But you can do that with your pull request. And then you can say what are the…
+
+[Chris Davis] 10:39:20
+data classification levels. Now, we did a few meetings to define what is those data classifications.
+
+[Chris Davis] 10:39:26
+We've come up with the initial kind of set of classifications.
+
+[Chris Davis] 10:39:30
+And this is something that I think is particularly relevant in the finance industry. We might need to do a few further reviews. I'm not saying this is final.
+
+[Chris Davis] 10:39:38
+But we might need to just do a few more reviews of this before we perfect it.
+
+[Chris Davis] 10:39:42
+So you can tell what kind of data is in this, being processed in this use case.
+
+[Chris Davis] 10:39:47
+And then you can put your other stuff.
+
+[Chris Davis] 10:39:50
+In here. And then we submit the proposal, what it does is it creates a pull request.
+
+[Chris Davis] 10:39:56
+Well, not… sorry, not the request, a new issue.
+
+[Chris Davis] 10:40:00
+Um, and it generates the YAML.
+
+[Chris Davis] 10:40:02
+kind of how it will be structured.
+
+[Chris Davis] 10:40:04
+And I'll show you what this… what this looks like.
+
+[Chris Davis] 10:40:08
+And with that, we can go through a process of review.
+
+[Chris Davis] 10:40:12
+Uh, in, um, Git itself. I'll just show you what it looks like on… in the code.
+
+[Chris Davis] 10:40:18
+And the good thing is that you don't have to know the YAML to do this.
+
+[Chris Davis] 10:40:22
+Um, it creates that structure, and you just annotate on it.
+
+[Chris Davis] 10:40:26
+Um, but…
+
+[Chris Davis] 10:40:28
+If you do want to.
+
+[Chris Davis] 10:40:30
+then you can always pull this code.
+
+[Chris Davis] 10:40:33
+And it looks something like…
+
+[Chris Davis] 10:40:38
+this. Alright, so this is… this is the curtainment, so this is…
+
+[Chris Davis] 10:40:42
+the YAML structure for that use case I just showed you.
+
+[Chris Davis] 10:40:47
+Um, and these are…
+
+[Chris Davis] 10:40:50
+connected, right? So it's all continuously connected to the risks.
+
+[Chris Davis] 10:40:53
+And the mitigations, and to the data classifications.
+
+[Chris Davis] 10:40:56
+Uh, that we have also defined here.
+
+[Chris Davis] 10:41:00
+Uh, and even things like UAI Act and stuff like that.
+
+[Chris Davis] 10:41:05
+The data classifications…
+
+[Chris Davis] 10:41:09
+are here…
+
+[Chris Davis] 10:41:11
+And I also… we also had things like SR117.
+
+[Chris Davis] 10:41:16
+that we can add.
+
+[Chris Davis] 10:41:21
+Sorry, I have…
+
+[Marco Rivera] 10:41:23
+Alex has a question.
+
+[Chris Davis] 10:41:24
+Yeah.
+
+[Alex Chen (Meridian Labs)] 10:41:25
+Oh, sorry, I apologize, I just have too much coffee this morning. Chaddy here.
+
+[Chris Davis] 10:41:29
+Sure.
+
+[Alex Chen (Meridian Labs)] 10:41:30
+Um, where you're creating the use case, and you saw you have to… you're selecting different classifications, or, you know, different attributes of the use case. A lot of that is going to be very, um, regulatory region specific.
+
+[Alex Chen (Meridian Labs)] 10:41:44
+Uh, some regions consider IP address being PII, using it as a privacy example.
+
+[Chris Davis] 10:41:48
+Yes, yeah.
+
+[Alex Chen (Meridian Labs)] 10:41:49
+Others don't. Um, I'm wondering, you know, given what Marco had mentioned earlier with the, uh, kind of modularity or, you know,
+
+[Alex Chen (Meridian Labs)] 10:41:58
+Um, composability on a regional basis, to have an additional
+
+[Alex Chen (Meridian Labs)] 10:42:03
+element in there that speaks to, you know, primary or in a jurisdiction,
+
+[Alex Chen (Meridian Labs)] 10:42:08
+Uh, this is, uh, um…
+
+[Alex Chen (Meridian Labs)] 10:42:12
+tied to, which can make it maybe more directly usable in those particular regions.
+
+[Alex Chen (Meridian Labs)] 10:42:18
+Um, and were relevant to particular regions. So, just a thought there, given what…
+
+[Alex Chen (Meridian Labs)] 10:42:24
+Go ahead and mention.
+
+[Chris Davis] 10:42:24
+Yeah, I agree. I think, um…
+
+[Chris Davis] 10:42:27
+Thirdly, it could be more improvement to this, but there is even place for jurisdiction.
+
+[Chris Davis] 10:42:32
+Um, but yes, coming up with a common denominator for everyone will be tough.
+
+[Chris Davis] 10:42:37
+But we can maybe have variants of this, or we can maybe have…
+
+[Chris Davis] 10:42:41
+variants of the data classification for different regions as well.
+
+[Chris Davis] 10:42:44
+But in here, we have some reference, some jurisdictional references as well.
+
+[Alex Chen (Meridian Labs)] 10:42:48
+Yep.
+
+[Alex Chen (Meridian Labs)] 10:42:49
+No, no, that's great. And again, you can go crazy with all this.
+
+[Chris Davis] 10:42:53
+Yeah, exactly.
+
+[Alex Chen (Meridian Labs)] 10:42:54
+they want to start something at a reasonable, common level.
+
+[Alex Chen (Meridian Labs)] 10:43:00
+Uh, which is what you have here. So, um, just some thoughts. Thank you.
+
+[Marco Rivera] 10:43:05
+Alex, maybe you can add the comments.
+
+[Chris Davis] 10:43:05
+Yeah, a valid thought, yeah.
+
+[Marco Rivera] 10:43:07
+Yeah, exactly. You can add your comments.
+
+[Chris Davis] 10:43:08
+Uh, please do review this as well, and if you have improvements to the clarification.
+
+[Chris Davis] 10:43:13
+Please do make comments and make people requests.
+
+[Alex Chen (Meridian Labs)] 10:43:17
+Got it. Thank you. Thanks, Marco.
+
+[Chris Davis] 10:43:24
+Any other questions?
+
+[Chris Davis] 10:43:36
+Cool. Thanks.
+
+[Marco Rivera] 10:43:41
+Thank you, Chris, thank you. Um…
+
+[Marco Rivera] 10:43:46
+Yeah. Uh, Raj, you also wanted to chat briefly…
+
+[Marco Rivera] 10:43:51
+on your pull request.
+
+[Raj] 10:43:52
+Yep. Yep, yep, yep. Hi, everyone. So, I've got a value quest open. It's number…
+
+[Raj] 10:44:00
+221, um…
+
+[Raj] 10:44:02
+Basically, it's where, uh, we talked about this briefly before as well, as we know open pending for a few months. It's basically, uh, enables
+
+[Raj] 10:44:09
+a single-page view of OGAF.
+
+[Raj] 10:44:13
+Uh, so a printable view or a PDF view, you would say, so you can print a PDF, or…
+
+[Raj] 10:44:19
+print to page as well. Uh, it needed a few updates, so that's done now.
+
+[Raj] 10:44:23
+If you can have a look, uh, that'd be great.
+
+[Raj] 10:44:27
+And any comments on there would be much appreciated. So, looking to get this merged in.
+
+[Raj] 10:44:33
+within this week, then, if we get all the approvals and feedback.
+
+[Marco Rivera] 10:44:38
+Maybe, Raj, do you want to briefly talk about why you needed it? Why, I mean, for the people that maybe are new and they want to use the iGovernance framework,
+
+[Marco Rivera] 10:44:47
+the way you're using it, maybe you can briefly briefly explain this.
+
+[Raj] 10:44:50
+Sure, sure, sure. Yeah, sorry, Azure Select a little bit better. So, uh, OGAF on the website allows you to navigate it in… in…
+
+[Raj] 10:44:59
+If you know what you're looking for, in a sense.
+
+[Raj] 10:45:01
+Uh, and so for us, within Northbank, it's much easier to
+
+[Raj] 10:45:05
+send this around as a PDF document.
+
+[Raj] 10:45:09
+to people rather than just a website that you're searching around, and uh…
+
+[Raj] 10:45:12
+If you know the framework better, I think there's a…
+
+[Raj] 10:45:17
+There's a bit of a learning curve, and so you can know exactly where you… what you're looking for, what are the risks and mitigations.
+
+[Raj] 10:45:26
+Uh, that you're targeting. Uh, the single-page view essentially allows you to ingest
+
+[Raj] 10:45:34
+basically better understand
+
+[Raj] 10:45:35
+what the risks and mitigations are, uh, in one view.
+
+[Raj] 10:45:38
+And so the PDF version kind of enables that use case a little bit more.
+
+[Marco Rivera] 10:45:45
+Gotcha. How many pages are gonna be this big PDF of you?
+
+[Raj] 10:45:49
+Uh, I should have checked, actually. I don't know, off the top of my head.
+
+[Marco Rivera] 10:45:53
+Maybe, like, 50 or 60 or something, could be.
+
+[Raj] 10:45:55
+I don't think, like, let's see, I'll spin it up locally, I don't know.
+
+[Marco Rivera] 10:45:58
+It's a book, so we can say that we have published the book.
+
+[Raj] 10:46:03
+But if she had GF as a book, yeah.
+
+[Raj] 10:46:05
+Hopefully not too, uh, wasteful.
+
+[Raj] 10:46:08
+In terms of faith.
+
+[Marco Rivera] 10:46:08
+I was thinking… I was thinking, maybe we should… we should print it out for Toronto, and…
+
+[Marco Rivera] 10:46:13
+I bring it to the OGAF project table.
+
+[Raj] 10:46:17
+Yeah, yeah.
+
+[Raj] 10:46:21
+Maybe, uh, we'll see how big it turns out to be as a page.
+
+[Raj] 10:46:26
+as BDF. So if it's not too wasteful or expensive, uh…
+
+[Marco Rivera] 10:46:32
+Yeah.
+
+[Raj] 10:46:33
+Then, yeah, sure, we should.
+
+[Marco Rivera] 10:46:34
+Yeah, yeah, so… I would say call to action for the participants here today.
+
+[Marco Rivera] 10:46:40
+Please review…
+
+[Marco Rivera] 10:46:43
+the two pull requests.
+
+[Marco Rivera] 10:46:45
+Uh, that I'm also in the agenda.
+
+[Marco Rivera] 10:46:48
+I guess the first one, the one from Chris, is a kind of new and early, so we are looking for comments.
+
+[Marco Rivera] 10:46:56
+more, like, for the Assad, uh, pull requests is…
+
+[Marco Rivera] 10:47:00
+kind of almost done. We want to merge as soon as possible.
+
+[Marco Rivera] 10:47:06
+Um, any questions?
+
+[Marco Rivera] 10:47:07
+By the way, I managed to get the one-pager online.
+
+[Raj] 10:47:11
+Oh, cool.
+
+[Marco Rivera] 10:47:13
+Any question before we move to the one-pager?
+
+[Marco Rivera] 10:47:25
+No, okay. So this is the one-pager that, uh, our friends also, especially the Dean from MigrateLab, put together.
+
+[Marco Rivera] 10:47:33
+Uh, I wanted to hear your… your feedback. What do you think? Does it…
+
+[Marco Rivera] 10:47:40
+how does it look like? Is it…
+
+[Marco Rivera] 10:47:41
+Is it gonna help you?
+
+[Marco Rivera] 10:47:44
+you know, in your…
+
+[Marco Rivera] 10:47:49
+in… to… to bring internally the agonist framework to your colleagues? Is it explaining what…
+
+[Marco Rivera] 10:47:55
+we briefly talked about today.
+
+[Marco Rivera] 10:47:57
+I'm really looking for feedback. I'm going to print this out tomorrow, or Friday.
+
+[Marco Rivera] 10:48:03
+So I'm looking for feedback before I do that.
+
+[Marco Rivera] 10:48:08
+I'm gonna leave it here for 5 minutes.
+
+[Chris Davis] 10:48:18
+I mean, I would add that…
+
+[Chris Davis] 10:48:19
+This will support the MRM.
+
+[Chris Davis] 10:48:22
+process?
+
+[Marco Rivera] 10:48:25
+Hmm.
+
+[Marco Rivera] 10:48:27
+And where? Where would you put this?
+
+[Marco Rivera] 10:48:30
+Topic?
+
+[Chris Davis] 10:48:31
+It's an accelerated ROI thing.
+
+[Marco Rivera] 10:48:34
+Okay.
+
+[Chris Davis] 10:48:36
+That's what I'm thinking.
+
+[Marco Rivera] 10:48:38
+So, go to markets faster will pre-build compliant reference implementation, and…
+
+[Chris Davis] 10:48:44
+Yeah, because, um, if we are able to reference this…
+
+[Chris Davis] 10:48:50
+that we can get to our conclusion on the MARM process faster.
+
+[Chris Davis] 10:48:56
+Hopefully.
+
+[Marco Rivera] 10:49:00
+So, where would you put MRM?
+
+[Chris Davis] 10:49:09
+I mean, I don't think we've… this is for the training, right?
+
+[Chris Davis] 10:49:14
+Businesses of training, or… this is not the training? Okay, sorry, okay, okay.
+
+[Marco Rivera] 10:49:14
+No, no, no, no. This is more, like, for, you know, if you're new to the governance framework, this is the one-pager.
+
+[Chris Davis] 10:49:21
+Oh, okay, sorry, yeah, sorry, I got those two mixed up, I got those two mixed up.
+
+[Marco Rivera] 10:49:22
+to basically get you up to speed.
+
+[Marco Rivera] 10:49:25
+No, sorry, maybe it's may well. So yeah, the first part is what it is, and…
+
+[Marco Rivera] 10:49:31
+No, sorry, why we… why we have it?
+
+[Marco Rivera] 10:49:34
+what it encompasses, and…
+
+[Marco Rivera] 10:49:36
+how you use it at the bottom… at the very bottom, right? So you select the use case…
+
+[Marco Rivera] 10:49:42
+Then, for a given use case, you have the mitigations and the controls,
+
+[Marco Rivera] 10:49:45
+And then eventually…
+
+[Marco Rivera] 10:49:48
+you have a certified reference and implementation.
+
+[Marco Rivera] 10:49:52
+So, those three blocks…
+
+[Marco Rivera] 10:49:54
+why, what, and how.
+
+[Marco Rivera] 10:49:59
+That was the idea.
+
+[Chris Davis] 10:50:06
+Yeah, that looks good from that perspective, yeah.
+
+[Raj] 10:50:28
+One thing I would say is it looks pretty good, but there's a lot of detail in here.
+
+[Raj] 10:50:31
+Right, for a one-pager.
+
+[Raj] 10:50:34
+Now, the way you've described, like, the top part is about what and how, and then how to implement.
+
+[Raj] 10:50:41
+Without that narrative, it kind of…
+
+[Raj] 10:50:43
+Yeah, it is hard to understand exactly, or flow through.
+
+[Marco Rivera] 10:50:47
+Yeah. Yeah.
+
+[Raj] 10:50:47
+Maybe we make it a little bit…
+
+[Larry Thompson] 10:50:48
+Yeah,
+
+[Raj] 10:50:51
+less, uh…
+
+[Raj] 10:50:53
+Yeah, that's worthy.
+
+[Marco Rivera] 10:50:54
+Yeah.
+
+[Larry Thompson] 10:50:56
+Um, I… I agree with that. I think where it says accelerate, strengthen, and build trust, those benefits,
+
+[Larry Thompson] 10:51:03
+I think that'd be better after, like, before certification, but after your…
+
+[Larry Thompson] 10:51:07
+description of what OGAF encompasses, because
+

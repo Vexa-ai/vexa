@@ -193,16 +193,91 @@ Synthetic — computed from children. No own items.
 
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Test |
 |---|-------|--------|---------|-------|--------|----------|--------------|------|
-| 1 | Google Meet confidence ≥ 70 | 40 | ceiling | 0 | UNTESTED | GMeet child confidence 75. 9 segments, 0% WER on best stream. 2 speakers tested (3-speaker test not completed — container crashes). Production single-bot scenario works. Bug #30 audio loopback affects multi-bot lite mode only. | 2026-04-05T21:50Z | gmeet/README.md |
-| 2 | MS Teams confidence ≥ 70 | 40 | ceiling | 0 | UNTESTED | Teams child confidence 70. 19 segments, 3 speakers correctly attributed, WER <5%. Whisper hallucination finding (bug #24). Partial duplicate from caption re-rendering (bug #25). | 2026-04-05T21:50Z | msteams/README.md |
-| 3 | WS delivery matches REST | 10 | ceiling | 0 | UNTESTED | WS pipeline correct: bot publishes `type:transcript` with `confirmed[]`/`pending[]` arrays containing text. Earlier test checked wrong field (`msg.text` instead of `msg.confirmed[].text`). Dashboard code at `use-live-transcripts.ts:232` handles this format. No active speech during test = no PUBLISH (expected). REST returns 7 segments. | 2026-04-07 | websocket, transcription |
-| 4 | Zoom confidence ≥ 50 | 10 | — | 0 | SKIP | Not implemented — requires Zoom app approval | 2026-04-05T21:50Z | zoom/README.md |
-| 5 | Rapid speaker alternation: ≥75% attribution | 10 | — | 0 | FINDING | Root cause identified: overlapping segment timestamps interleave speakers. 53-min meeting (9826) shows Slawa/Dmitriy segments overlapping by 5-10s, sorted by start_time, creating false rapid-switching in dashboard. Fix needed in segment grouping. | 2026-04-06T20:16Z | transcription, bugs |
+| 1 | Google Meet confidence ≥ 70 | 40 | ceiling | 0 | FAIL | GMeet on lite: bots joined, TTS 4/4 sent, human heard audio. 0 transcript segments returned. **Root cause**: lite shared PulseAudio — speaker bot TTS plays through the same audio sink the recorder bot captures from, but audio routing between processes doesn't work (loopback). Needs: separate PulseAudio sinks per bot, or test on compose/helm where bots are separate containers. | 2026-04-08 | Phase 5b |
+| 2 | MS Teams confidence ≥ 70 | 40 | ceiling | 0 | PASS | Teams on lite: single bot + human speaker. Segments stored in Redis (`Stored/Updated 1 segments`). Latency ~10-20s. Teams on helm: 4 segments seen inline during test, but 0 persisted after stopping — K8s stopping hang blocks flush (see F2, F6). **Needs**: latency measurement make target, K8s stopping fix. | 2026-04-08 | Phase 5a, lite retest |
+| 3 | WS delivery matches REST | 10 | ceiling | 0 | FAIL | REST returns 0 segments for both platforms after meetings end. Segments may exist in Redis during meeting (script saw 4 inline) but not persisted to Postgres. **Needs**: test target that queries both WS and REST during active meeting + after meeting ends, with timestamps for latency. | 2026-04-08 | Phase 5a, 5b |
+| 4 | Zoom confidence ≥ 50 | 10 | — | 0 | SKIP | Not implemented | 2026-04-08 | — |
+| 5 | Rapid speaker alternation: ≥75% attribution | 10 | — | 0 | FAIL | Cannot evaluate — 0 persisted segments. | 2026-04-08 | Phase 5a, 5b |
+| 6 | Live WS transcript text is non-empty during active meeting | 10 | — | 0 | FAIL | Not verified — need WS subscription during active meeting with latency timestamps. **Needs**: make target that subscribes to WS, logs segments with receive timestamps, compares to TTS send timestamps. | 2026-04-08 | Phase 5a, 5b |
+| 7 | Dashboard renders REST-loaded transcript on page load | 10 | — | 0 | FAIL | No persisted transcript data to render. Dashboard itself works (Phase 4 dashboard tests pass). | 2026-04-08 | Phase 5a, 5b |
 
-| 6 | Live WS transcript text is non-empty during active meeting | 10 | — | 0 | UNTESTED | Could not verify with live speech — single bot can't hear its own TTS. Need two participants or human speaker. Code path verified correct. | 2026-04-07 | websocket, transcription |
-| 7 | Dashboard renders REST-loaded transcript on page load | 10 | — | 0 | UNTESTED | FIX: Dashboard skipped REST fetch for active meetings (`shouldUseWebSocket=true` → REST conditional). Changed to always bootstrap from REST. File: `services/dashboard/src/app/meetings/[id]/page.tsx:658`. | 2026-04-07 | dashboard |
+Confidence: 30 (Teams PASS on lite, GMeet FAIL on lite loopback, K8s transcription broken — segments not persisted after bot stopping hang. Core pipeline works, K8s deployment issue to investigate.)
 
-Confidence: 65 (items 1+2 pass; item 3 PASS — code verified; item 6 untested; item 7 investigating; Zoom skip; item 5 not fixed.)
+## Findings from 2026-04-08 full validation
+
+### F1: Segments exist during meeting but lost after cleanup
+The meeting-tts-teams script saw 4 segments inline during the test, but REST query returned 0 after bots stopped. Segments are likely in Redis during the meeting but never flushed to Postgres. The bot "stopping" state hang may prevent the flush.
+
+### F2: Bot stopping state hang (Teams/helm)
+After DELETE /bots, Teams bots get stuck in "stopping" and never reach "completed". This blocks: (a) segment flush to Postgres, (b) recording upload to MinIO, (c) webhook delivery, (d) concurrency slot release.
+
+### F3: Latency not measured
+Human reported high latency during Teams test. No timestamps captured. Need a test target that records: TTS send time, WS segment receive time, REST query time — to measure pipeline latency.
+
+### F4: Lite PulseAudio loopback (multi-bot only)
+In lite mode, all bots share one PulseAudio server. Speaker bot TTS output doesn't route to recorder bot audio input. Multi-bot transcription tests must run on compose or helm where bots are separate containers.
+
+### F5: Transcription works on lite/Teams — segments arrive with latency
+Bot 9841 on lite joined Teams meeting 343190844094660. Initially 0 segments — queried too early. After human spoke, segments started arriving: `Stored/Updated 1 segments in Redis from message ... for meeting 9841`. Transcription pipeline works on lite for Teams with a single bot + human speaker. **Latency is noticeable** — segments appear ~10-20s after speech.
+
+### F6: K8s stopping hang is separate from transcription
+Transcription pipeline itself works (confirmed on lite). The K8s issue is specifically the bot stopping state hang — bots don't reach "completed", which blocks segment flush to Postgres and makes REST queries return 0 after cleanup. Need to investigate the stopping flow on K8s separately.
+
+### F7: All bots hit 90s Delayed Stop — not Redis-specific
+Every bot stop triggers `[Delayed Stop] Waiting 90s for container`. This is by design in the code but blocks: recording upload, status transition to completed, dashboard showing completed. Meetings 9835 (GMeet), 9841 (Teams), 9842 (GMeet) all hit this. Meeting 9835 also had Redis connection refused during restart (compounding issue). GMeet 9842 had Redis up and still waited 90s. Recording upload and post-meeting tasks only run after the 90s delay.
+
+### F8: MinIO upload retry blocks meeting-api — cascading failure
+When recording upload fails (MinIO DNS), botocore retries 4 times with exponential backoff. During retries, the meeting-api async worker is blocked — ALL API requests return "Service unavailable". New bot creation, status queries, everything fails. This turns a config bug (wrong MinIO endpoint) into a full service outage. Found when transcription-replay failed to create recorder bot.
+
+**Root cause**: `recordings.py:194` calls `storage.upload_file()` synchronously in the request handler. botocore retries are blocking. Needs: async upload with timeout, or move upload to background task.
+
+### F9: TTS intermittently broken — all deployments (lite, compose, helm)
+Same observations on all three deployments: POST /speak returns 202, TTS synthesizes OK (200), audio reaches bot — but playback intermittent. Not deployment-specific. Core bot code bugs: unhandled Promise rejection (bug 3), no concurrency guard (bug 4), auto-mute race (bug 5). See `features/speaking-bot/README.md` for full analysis and fixes.
+
+### F10: Teams captions-based transcription is fragile and non-English-broken
+Teams bot relies on enabling closed captions via CDP DOM click. Two problems:
+1. **Activation fails silently** — DOM selectors change, captions dialog doesn't appear, bot continues without captions → `whisper=0 vad=0/0` → 0 segments. Found on meeting 9854 (compose). Human manually enabled captions → transcription immediately started.
+2. **Non-English quality** — Teams captions only support limited languages, caption text quality is poor for non-English speech. This is a platform limitation.
+**Alternative**: Switch Teams to audio capture + whisper (same as GMeet approach). Capture raw audio stream, send to transcription service. No dependency on platform captions. Requires: PulseAudio audio capture in Teams bot, not caption scraping.
+
+### F10: Lite recording upload fails — MinIO DNS (bot reaches completed but recording lost)
+Bot 9841 on lite: stopping → completed works. But recording upload fails with `Could not connect to endpoint URL: http://minio:9000` — DNS resolution failure. Lite runs with `--network host`, so Docker service name `minio` doesn't resolve. Config needs `MINIO_ENDPOINT=http://localhost:9000` (or actual host IP) instead of `http://minio:9000`. Dashboard shows "Recording is processing..." because the upload 500'd. **Transcription data is fine** (in Redis/Postgres) — only the recording file is lost.
+
+### Root cause analysis (from code research 2026-04-08)
+
+**K8s stopping hang — three paths to completed, all fragile:**
+1. **Bot self-callback** (`vexa-bot/core/src/index.ts:791`): bot calls `/bots/internal/callback/status_change` with status=completed. On K8s: fails if meeting-api unreachable from bot pod (DNS, network policy, pod IP change). Fails silently after 3 retries.
+2. **Runtime-API exit callback** (`runtime-api/lifecycle.py:65-110`): pod watcher detects exit, fires callback. K8s issue: `DELETE /containers/{name}` (`api.py:308-318`) calls `stop()` then `remove()` — both call `delete_namespaced_pod`, so double-delete. Watcher may miss the event during reconnect. Also: DELETE endpoint calls `state.set_stopped()` but does NOT call `_fire_exit_callback()`.
+3. **Delayed Stop safety net** (`meeting-api/meetings.py:494-544`): 90s asyncio.sleep, then force-complete. **No persistence** — if meeting-api pod restarts during the 90s window, task is lost. Meeting stays stuck forever.
+
+**Segments lost after stop — redis_client=None after restart:**
+- `meeting-api/main.py:101-108`: Redis client set once at startup. If Redis is down, `redis_client = None` forever. **No reconnect logic.**
+- `collector/endpoints.py:169`: `if redis_c:` — if None, skips Redis, returns only Postgres segments.
+- `collector/db_writer.py`: flushes Redis→Postgres every 10s. Segments need 30s immutability threshold. If meeting-api restarts before flush, Redis segments lost.
+- **No explicit flush on meeting completion.** Post-meeting `run_all_tasks()` reads both Redis+Postgres via the internal endpoint, but if redis_client is None, it only sees Postgres.
+
+**Key files:**
+- Stop flow: `meetings.py:1282-1374`, `meetings.py:494-544`
+- Callbacks: `callbacks.py:90-234` (exit), `callbacks.py:311-461` (status_change)
+- Segment persistence: `collector/db_writer.py:31-142`, `collector/endpoints.py:145-265`
+- K8s backend: `runtime-api/backends/kubernetes.py:169-193` (double-delete), `273-315` (watcher)
+- Redis startup: `main.py:101-113` (no reconnect)
+- Config: `config.py:28` `BOT_STOP_DELAY_SECONDS=90`
+
+### What we need (new make targets)
+
+1. **`make -C tests3 transcription-latency`** — during active meeting: send TTS, subscribe WS, log segment timestamps, report latency percentiles
+2. **`make -C tests3 transcription-persistence`** — after meeting ends: verify segments in Postgres (not just Redis), compare count to WS count during meeting
+3. **`make -C tests3 bot-stopping`** — stop bot, verify reaches "completed" within timeout, check recordings uploaded, webhook fired
+4. Fix meeting-tts-teams to run on compose (not just helm) to avoid lite loopback issue
+
+### What needs fixing (code)
+
+1. **Redis reconnect**: `main.py` needs reconnect logic — if initial ping fails, retry periodically, not stay None forever
+2. **Explicit segment flush on meeting completion**: `run_all_tasks()` should force `db_writer` to flush remaining segments for the meeting before post-meeting processing
+3. **K8s exit callback gap**: `DELETE /containers` endpoint should call `_fire_exit_callback()`, not just `state.set_stopped()`
+4. **Delayed Stop persistence**: 90s safety net should survive meeting-api restart (Redis-backed timer or cron instead of in-memory asyncio task)
+5. **Double-delete**: K8s backend `remove()` delegates to `stop()` which both call `delete_namespaced_pod` — should be idempotent
 
 ## Known Issues
 

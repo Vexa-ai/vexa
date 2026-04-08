@@ -70,13 +70,13 @@ mc ls minio/vexa-recordings/
 
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Test |
 |---|-------|--------|---------|-------|--------|----------|--------------|------|
-| 1 | Recording uploaded to MinIO after meeting ends | 20 | ceiling | 0 | UNTESTED | GMeet: "[Google Recording] Audio capture disabled by config." — recording not uploaded. Teams: "No bot config for leave callback" — recording upload failed. Both platforms broken. | 2026-04-05T21:50Z | 10-verify-post-meeting |
+| 1 | Recording uploaded to MinIO after meeting ends | 20 | ceiling | 0 | FAIL | Lite: bot reaches completed but recording upload fails — `http://minio:9000` DNS unresolvable in host-network mode. K8s: bot stuck in stopping, upload never attempted. Config needs MINIO_ENDPOINT=localhost for lite. | 2026-04-08 | Phase 5a, 5b |
 | 2 | POST /meetings/{id}/transcribe returns segments | 25 | ceiling | 0 | PARTIAL | Transcription engine works (GMeet: 9 segments from recording, Teams: 10 segments), but 0 deferred segments returned via API after transcription. 409 dedup prevention works when realtime segments exist. | 2026-04-05T21:50Z | 10-verify-post-meeting |
 | 3 | Speaker names attributed (not all "Unknown") | 25 | ceiling | 0 | PARTIAL | GMeet: 3/3 correct (Alice, Bob, Charlie). Teams: names are UUIDs (`Teams Participant (uuid)`) not display names — see Known Issues | 2026-04-05T21:50Z | 10-verify-post-meeting |
-| 4 | Deferred segments consistent with realtime | 15 | — | 0 | UNTESTED | 409 dedup prevents re-transcription when realtime segments exist. When deferred does run, API returns 0 deferred segments — persistence broken. | 2026-04-05T21:50Z | 10-verify-post-meeting |
-| 5 | Works for GMeet and Teams | 15 | — | 0 | UNTESTED | Recording upload broken on both platforms. Teams speaker mapping produces UUIDs. Pipeline code exists but never exercised end-to-end. | 2026-04-05T21:50Z | 10-verify-post-meeting |
+| 4 | Deferred segments consistent with realtime | 15 | — | 0 | FAIL | 0 segments persisted on both platforms. Pipeline not delivering to storage. | 2026-04-08 | Phase 5a, 5b |
+| 5 | Works for GMeet and Teams | 15 | — | 0 | FAIL | Both platforms: TTS heard, 0 segments persisted. Teams: bot stuck in stopping. GMeet lite: loopback prevents transcription. | 2026-04-08 | Phase 5a, 5b |
 
-Confidence: 20 (ceiling item 1 FAIL — recording upload broken both platforms. Item 2 PARTIAL — engine works but persistence broken. Item 3 PARTIAL — GMeet names correct, Teams UUIDs. Items 4-5 FAIL. Dedup prevention works correctly.)
+Confidence: 10 (ceiling item 1 FAIL, items 4-5 FAIL. Items 2-3 PARTIAL from previous test. Transcription pipeline broken end-to-end.)
 
 ## Known Issues
 

@@ -2,7 +2,7 @@
        dashboard-auth dashboard-proxy dashboard \
        containers browser-session browser-login browser \
        meeting-tts meeting bot admit transcribe finalize post-meeting meeting-chain \
-       webhooks auth-meeting \
+       webhooks auth-meeting bot-stop-timing transcription-replay tts-reliability \
        collect score \
        e2e full \
        vm-compose vm-lite \
@@ -30,7 +30,7 @@ ifneq ($(LKE_KUBECONFIG),)
   export KUBECONFIG := $(LKE_KUBECONFIG)
 endif
 
-export ROOT DEPLOY_MODE GATEWAY_URL ADMIN_URL DASHBOARD_URL STATE
+export ROOT DEPLOY_MODE GATEWAY_URL ADMIN_URL DASHBOARD_URL STATE MEETING_URL
 
 # Smoke runs once per session via a stamp file.
 # `make clean` resets it. Individual tier targets always run.
@@ -96,6 +96,15 @@ meeting-tts: $(SMOKE_STAMP)       ## full meeting: create → bots → admit →
 
 meeting-tts-teams: $(SMOKE_STAMP) ## Teams meeting: bots → admit → TTS → transcript (TEAMS_MEETING_URL required)
 	@$(T3)/tests/meeting-tts-teams.sh
+
+transcription-replay: $(SMOKE_STAMP)  ## replay GT transcript as TTS, score accuracy (MEETING_URL required, ~7min)
+	@$(T3)/tests/transcription-replay.sh
+
+bot-stop-timing: $(SMOKE_STAMP)   ## measure bot stop lifecycle timing (MEETING_URL required)
+	@$(T3)/tests/bot-stop-timing.sh
+
+tts-reliability: $(SMOKE_STAMP)   ## test TTS reliability: 10 speak commands, check transcript (MEETING_URL required)
+	@$(T3)/tests/tts-reliability.sh
 
 meeting: $(SMOKE_STAMP)           ## create meeting via CDP (60s)
 	@$(T3)/tests/meeting.sh
@@ -264,9 +273,13 @@ what-changed:                      ## resolve changed files to test targets
 		echo "→ make -C tests3 $$TARGETS"; \
 	fi
 
-clean:                             ## clear .state/
+clean:                             ## clear .state/ (keeps logs, credentials, infra state)
+	@rm -f $(STATE)/.smoke-passed $(STATE)/.http_code $(STATE)/deploy_mode
+	@echo "Smoke stamp cleared. Logs and credentials preserved."
+
+clean-all:                         ## nuke all .state/ (destructive — loses logs, tokens, kubeconfig)
 	@rm -f $(STATE)/*
-	@echo "State cleared."
+	@echo "All state cleared."
 
 help:                              ## show targets
 	@grep -E '^[a-z].*:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | column -ts$$'\t'

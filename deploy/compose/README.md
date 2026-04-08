@@ -18,7 +18,7 @@ Runs all Vexa services via Docker Compose:
 - Bots spawn as Docker containers (needs Docker socket)
 - **Experimental (commented out):** Agent API, Calendar Service — uncomment in `docker-compose.yml` to enable
 
-**You provide:** A transcription service — use [Vexa transcription](https://vexa.ai) (ready to go) or [self-host](../../services/transcription-service/README.md) with GPU.
+**You provide:** A transcription service — get your API key at [staging.vexa.ai/dashboard/transcription](https://staging.vexa.ai/dashboard/transcription), endpoint is `https://transcription.vexa.ai`. Or [self-host](../../services/transcription-service/README.md) with GPU.
 
 ## Prerequisites
 
@@ -43,30 +43,30 @@ That's it. Pulls pre-built images from DockerHub, starts services, syncs DB sche
 
 **Before running**, edit `.env`:
 
-1. Set `TRANSCRIPTION_SERVICE_URL` — get a key at [vexa.ai](https://vexa.ai) or [self-host](../../services/transcription-service/README.md)
+1. Set `TRANSCRIPTION_SERVICE_URL` — get your API key at [staging.vexa.ai/dashboard/transcription](https://staging.vexa.ai/dashboard/transcription), endpoint is `https://transcription.vexa.ai`. Or [self-host](../../services/transcription-service/README.md) with GPU.
 
 ### Make targets
 
 
-| Target                 | What it does                                         |
-| ---------------------- | ---------------------------------------------------- |
-| `make all`             | Full setup: env → pull → up → init-db → api-key → test  |
-| `make all-build`       | Same but builds images from source                       |
-| `make env`             | Create .env from template, or patch missing vars     |
-| `make build`           | Build all images with immutable timestamp tag        |
-| `make up`              | Start services using last-built tag                  |
-| `make down`            | Stop all services                                    |
-| `make init-db`         | Idempotent schema sync (creates tables if missing)   |
-| `make setup-api-key`   | Create default user + VEXA_API_KEY for dashboard     |
-| `make ps`              | Show running containers                              |
-| `make logs`            | Tail all service logs                                |
-| `make test`            | Health check all services + show URLs + current tag  |
+| Target                    | What it does                                                     |
+| ------------------------- | ---------------------------------------------------------------- |
+| `make all`                | Full setup: env → pull → up → init-db → api-key → test           |
+| `make all-build`          | Same but builds images from source                               |
+| `make env`                | Create .env from template, or patch missing vars                 |
+| `make build`              | Build all images with immutable timestamp tag                    |
+| `make up`                 | Start services using last-built tag                              |
+| `make down`               | Stop all services                                                |
+| `make init-db`            | Idempotent schema sync (creates tables if missing)               |
+| `make setup-api-key`      | Create default user + VEXA_API_KEY for dashboard                 |
+| `make ps`                 | Show running containers                                          |
+| `make logs`               | Tail all service logs                                            |
+| `make test`               | Health check all services + show URLs + current tag              |
 | `make test-transcription` | Send test audio to transcription service, verify text comes back |
-| `make restore-db`      | Restore a `pg_dump` into local postgres              |
-| `make publish`         | Push all images to DockerHub + update `:dev` pointer |
-| `make promote-staging` | Set `:staging` to TAG= (or last built)               |
-| `make promote-latest`  | Set `:latest` to TAG= (or last built)                |
-| `make help-tags`       | Show tagging workflow help                           |
+| `make restore-db`         | Restore a `pg_dump` into local postgres                          |
+| `make publish`            | Push all images to DockerHub + update `:dev` pointer             |
+| `make promote-staging`    | Set `:staging` to TAG= (or last built)                           |
+| `make promote-latest`     | Set `:latest` to TAG= (or last built)                            |
+| `make help-tags`          | Show tagging workflow help                                       |
 
 
 ### Image tagging
@@ -95,8 +95,8 @@ Edit `.env` at repo root. Created from [deploy/env-example](../env-example).
 **Required:**
 
 
-| Variable                  | Description                                                                                                           |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Variable                  | Description                                                                                                                    |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | TRANSCRIPTION_SERVICE_URL | Your transcription endpoint. Get at [vexa.ai](https://vexa.ai) or [self-host](../../services/transcription-service/README.md). |
 
 
@@ -105,16 +105,16 @@ Everything else has working defaults for local dev.
 **Optional:**
 
 
-| Variable              | Default                      | Description                                      |
-| --------------------- | ---------------------------- | ------------------------------------------------ |
-| IMAGE_TAG             | dev                          | Docker image tag. `dev` pulls from DockerHub. `make build` overrides with local tag. |
-| DASHBOARD_HOST_PORT   | 3001                         | Dashboard port                                   |
-| REMOTE_DB             | false                        | Use external Postgres instead of local           |
-| LOCAL_TRANSCRIPTION   | false                        | Run transcription-service locally (needs GPU)    |
-| BOT_IMAGE_NAME        | vexaai/vexa-bot:dev          | Bot Docker image (follows IMAGE_TAG when built)  |
-| API_GATEWAY_HOST_PORT | 8056                         | API Gateway port                                 |
-| ADMIN_API_PORT        | 8057                         | Admin API port                                   |
-| ADMIN_TOKEN           | changeme                     | Admin API authentication token                   |
+| Variable              | Default             | Description                                                                          |
+| --------------------- | ------------------- | ------------------------------------------------------------------------------------ |
+| IMAGE_TAG             | dev                 | Docker image tag. `dev` pulls from DockerHub. `make build` overrides with local tag. |
+| DASHBOARD_HOST_PORT   | 3001                | Dashboard port                                                                       |
+| REMOTE_DB             | false               | Use external Postgres instead of local                                               |
+| LOCAL_TRANSCRIPTION   | false               | Run transcription-service locally (needs GPU)                                        |
+| BOT_IMAGE_NAME        | vexaai/vexa-bot:dev | Bot Docker image (follows IMAGE_TAG when built)                                      |
+| API_GATEWAY_HOST_PORT | 8056                | API Gateway port                                                                     |
+| ADMIN_API_PORT        | 8057                | Admin API port                                                                       |
+| ADMIN_TOKEN           | changeme            | Admin API authentication token                                                       |
 
 
 Full env reference: [deploy/env-example](../env-example)
@@ -153,19 +153,19 @@ LOCAL_TRANSCRIPTION=true
 ### Service ports (internal)
 
 
-| Service                 | Port  | Health/Verify                 |
-| ----------------------- | ----- | ----------------------------- |
-| API Gateway             | 8056  | `curl http://localhost:8056/` |
-| Admin API               | 8057  | Swagger at `/docs`            |
-| Meeting API             | 8080  | `/health`                     |
-| Runtime API             | 8090  | `/health`                     |
-| Agent API *(experimental)* | 8100  | `/health`                     |
-| MCP                     | 18888 | MCP protocol                  |
-| TTS Service             | 8002  | (internal only)               |
+| Service                           | Port  | Health/Verify                 |
+| --------------------------------- | ----- | ----------------------------- |
+| API Gateway                       | 8056  | `curl http://localhost:8056/` |
+| Admin API                         | 8057  | Swagger at `/docs`            |
+| Meeting API                       | 8080  | `/health`                     |
+| Runtime API                       | 8090  | `/health`                     |
+| Agent API *(experimental)*        | 8100  | `/health`                     |
+| MCP                               | 18888 | MCP protocol                  |
+| TTS Service                       | 8002  | (internal only)               |
 | Calendar Service *(experimental)* | 8050  | `/health`                     |
-| Dashboard               | 3001  | HTML page loads               |
-| PostgreSQL              | 5458  | `pg_isready` (host port)      |
-| MinIO                   | 9000  | Bucket `vexa-recordings`      |
+| Dashboard                         | 3001  | HTML page loads               |
+| PostgreSQL                        | 5458  | `pg_isready` (host port)      |
+| MinIO                             | 9000  | Bucket `vexa-recordings`      |
 
 
 ### Startup dependency order
@@ -183,13 +183,15 @@ Services should start in this order due to dependencies:
 
 New columns added in 0.10:
 
-| Table          | Column         | Default   |
-| -------------- | -------------- | --------- |
-| api_tokens     | scopes         | `'{}'`    |
-| api_tokens     | name           | `''`      |
-| api_tokens     | last_used_at   | NULL      |
-| api_tokens     | expires_at     | NULL      |
-| transcriptions | segment_id     | NULL      |
+
+| Table          | Column       | Default |
+| -------------- | ------------ | ------- |
+| api_tokens     | scopes       | `'{}'`  |
+| api_tokens     | name         | `''`    |
+| api_tokens     | last_used_at | NULL    |
+| api_tokens     | expires_at   | NULL    |
+| transcriptions | segment_id   | NULL    |
+
 
 If you have an existing database (local or external), just run `make all` — the schema sync will converge it. No manual migration needed.
 
@@ -208,33 +210,33 @@ make down && docker compose ps  # should be empty
 
 ## Definition of Done
 
-Validated by [tests/00-docs-compose.md](../../tests/00-docs-compose.md).
 
-| #  | Item | Weight | Test | Status | Last checked |
-|----|------|--------|------|--------|--------------|
-| 1  | `make all` from clean clone | 10 | S1 | PASS | 2026-04-06 |
-| 2  | `make build` produces VERSION-YYMMDD-HHMM tags | 8 | S12 | PASS | 2026-04-06 |
-| 3  | `make up` starts all healthy | 8 | S2 | PASS | 2026-04-06 |
-| 4  | Port table matches compose + env-example | 8 | S3 | PASS | 2026-04-06 |
-| 5  | Configuration defaults three-way agree | 8 | S5 | PASS | 2026-04-06 |
-| 6  | Make targets exist and match descriptions | 5 | S4 | PASS | 2026-04-06 |
-| 7  | Transcription reachable from containers | 5 | S3 | SKIP | — |
-| 8  | Dashboard accessible | 4 | S3 | PASS | 2026-04-06 |
-| 9  | REMOTE_DB path works | 7 | S8 | PASS | 2026-04-06 |
-| 10 | LOCAL_TRANSCRIPTION path works | 5 | S9 | PASS | 2026-04-06 |
-| 11 | Schema migration (pre-0.10 upgrade) | 7 | S10 | PASS | 2026-04-06 |
-| 12 | Pre-built images (skip build) | 5 | S11 | PASS | 2026-04-08 |
-| 13 | restore-db works | 4 | S13 | PASS | 2026-04-06 |
-| 14 | Dependency order matches compose | 4 | S6 | PASS | 2026-04-06 |
-| 15 | Cleanup leaves no containers | 2 | S7 | PASS | 2026-04-06 |
-| 16 | Files table entries exist | 2 | S14 | PASS | 2026-04-06 |
-| 17 | All internal links resolve | 3 | S15 | PASS | 2026-04-06 |
-| 18 | No secrets logged | 3 | S16 | PASS | 2026-04-06 |
-| 19 | DoD cross-refs complete | 2 | S17 | PASS | 2026-04-06 |
+
+| #   | Item                                           | Weight | Test | Status | Last checked |
+| --- | ---------------------------------------------- | ------ | ---- | ------ | ------------ |
+| 1   | `make all` from clean clone                    | 10     | S1   | PASS   | 2026-04-08   |
+| 2   | `make build` produces VERSION-YYMMDD-HHMM tags | 8      | S12  | PASS   | 2026-04-08   |
+| 3   | `make up` starts all healthy                   | 8      | S2   | PASS   | 2026-04-08   |
+| 4   | Port table matches compose + env-example       | 8      | S3   | PASS   | 2026-04-08   |
+| 5   | Configuration defaults three-way agree         | 8      | S5   | PASS   | 2026-04-08   |
+| 6   | Make targets exist and match descriptions      | 5      | S4   | PASS   | 2026-04-08   |
+| 7   | Transcription reachable from containers        | 5      | S3   | SKIP   | —            |
+| 8   | Dashboard accessible                           | 4      | S3   | PASS   | 2026-04-08   |
+| 9   | REMOTE_DB path works                           | 7      | S8   | PASS   | 2026-04-08   |
+| 10  | LOCAL_TRANSCRIPTION path works                 | 5      | S9   | PASS   | 2026-04-08   |
+| 11  | Schema migration (pre-0.10 upgrade)            | 7      | S10  | PASS   | 2026-04-08   |
+| 12  | Pre-built images (skip build)                  | 5      | S11  | PASS   | 2026-04-08   |
+| 13  | restore-db works                               | 4      | S13  | PASS   | 2026-04-08   |
+| 14  | Dependency order matches compose               | 4      | S6   | PASS   | 2026-04-08   |
+| 15  | Cleanup leaves no containers                   | 2      | S7   | PASS   | 2026-04-08   |
+| 16  | Files table entries exist                      | 2      | S14  | PASS   | 2026-04-08   |
+| 17  | All internal links resolve                     | 3      | S15  | PASS   | 2026-04-08   |
+| 18  | No secrets logged                              | 3      | S16  | PASS   | 2026-04-08   |
+| 19  | DoD cross-refs complete                        | 2      | S17  | PASS   | 2026-04-08   |
+
 
 ## Confidence
 
 Score: 93/100
 Last validated: 2026-04-08
 Ceiling: Transcription not tested from inside containers
-

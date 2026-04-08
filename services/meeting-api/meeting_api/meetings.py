@@ -793,7 +793,7 @@ async def request_bot(
     elif req.recording_enabled is not None:
         meeting_data["recording_enabled"] = bool(req.recording_enabled)
     else:
-        meeting_data["recording_enabled"] = True
+        meeting_data["recording_enabled"] = os.getenv("RECORDING_ENABLED", "false").lower() == "true"
 
     # Store webhook config in meeting.data (from gateway headers or user config)
     webhook_url = request.headers.get("X-User-Webhook-URL", "")

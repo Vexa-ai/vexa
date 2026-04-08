@@ -167,23 +167,23 @@ When Docker reports a container "die" event:
 
 | # | Check | Weight | Ceiling | Status | Last |
 |---|-------|--------|---------|--------|------|
-| 1 | POST /containers creates and starts container | 15 | ceiling | PASS | 2026-04-07. Bot 9907 container 0a2f1a54 created and running. |
-| 2 | Container fully removed after exit (not just stopped) | 25 | ceiling | PASS | 2026-04-07. Container meeting-1523-a46a3159 not in docker ps -a after stop. |
-| 3 | No orphan containers after test run | 25 | ceiling | PASS | 2026-04-07. Verified after Phase A — no orphan containers. |
-| 4 | Resource limits match profile (docker inspect vs profiles.yaml) | 10 | — | PASS | 2026-04-07. Memory=1073741824(1Gi), ShmSize=2147483648(2GB) match profiles.yaml. CPU quota=0 (not enforced in compose). |
-| 5 | idle_timeout kills containers without heartbeat (model 2) | 10 | — | PASS | 2026-04-07. Backdated Redis updated_at to 3700s ago. Idle loop killed container within 5s. Log: "Container browser-session-1523-ed601479 idle >3600s, stopping". |
-| 6 | `/touch` resets idle timer, keeps container alive past timeout | 10 | — | PASS | 2026-04-07. POST /touch 200, Redis updated_at: 1775571978→1775571998 (+20s). Gateway /b/* request also updated: 1775571998→1775572014 (+15.9s). |
-| 7 | Exit callback delivered to callback_url | 10 | — | PASS | 2026-04-07. Bot 9907: status=completed, end_time set, transitions: requested→joining→stopping→completed. |
-| 8 | Reconciliation syncs state on API restart | 10 | — | PASS | 2026-04-07. Bot meeting-1523-62c01512 survived runtime-api restart, status=running after reconcile. |
-| 9 | Consumer-managed containers (model 1) not killed by idle loop | 10 | — | PASS | 2026-04-07. Bot 9907 (meeting profile, idle_timeout=0) ran without being auto-killed by idle loop. |
-| 10 | Browser session dies after idle_timeout when no connections | 10 | — | PASS | 2026-04-07. Same test as #5: browser-session container killed by idle loop after updated_at backdated past idle_timeout. |
-| 11 | Browser session stays alive while CDP/VNC WebSocket open | 10 | — | PASS | 2026-04-07. CDP WebSocket held 65s, Redis updated_at advanced by 81s. Periodic /touch every 60s confirmed. |
-| 12 | Gateway `/touch` on every `/b/{token}/*` request | 10 | — | PASS | 2026-04-07. Redis updated_at increased by 15.9s after /b/{token}/cdp/json/version request through gateway. |
+| 1 | POST /containers creates and starts container | 15 | ceiling | PASS | 2026-04-08. Bot 9907 container 0a2f1a54 created and running. |
+| 2 | Container fully removed after exit (not just stopped) | 25 | ceiling | PASS | 2026-04-08. Container meeting-1523-a46a3159 not in docker ps -a after stop. |
+| 3 | No orphan containers after test run | 25 | ceiling | PASS | 2026-04-08. Verified after Phase A — no orphan containers. |
+| 4 | Resource limits match profile (docker inspect vs profiles.yaml) | 10 | — | PASS | 2026-04-08. Memory=1073741824(1Gi), ShmSize=2147483648(2GB) match profiles.yaml. CPU quota=0 (not enforced in compose). |
+| 5 | idle_timeout kills containers without heartbeat (model 2) | 10 | — | PASS | 2026-04-08. Backdated Redis updated_at to 3700s ago. Idle loop killed container within 5s. Log: "Container browser-session-1523-ed601479 idle >3600s, stopping". |
+| 6 | `/touch` resets idle timer, keeps container alive past timeout | 10 | — | PASS | 2026-04-08. POST /touch 200, Redis updated_at: 1775571978→1775571998 (+20s). Gateway /b/* request also updated: 1775571998→1775572014 (+15.9s). |
+| 7 | Exit callback delivered to callback_url | 10 | — | PASS | 2026-04-08. Bot 9907: status=completed, end_time set, transitions: requested→joining→stopping→completed. |
+| 8 | Reconciliation syncs state on API restart | 10 | — | PASS | 2026-04-08. Bot meeting-1523-62c01512 survived runtime-api restart, status=running after reconcile. |
+| 9 | Consumer-managed containers (model 1) not killed by idle loop | 10 | — | PASS | 2026-04-08. Bot 9907 (meeting profile, idle_timeout=0) ran without being auto-killed by idle loop. |
+| 10 | Browser session dies after idle_timeout when no connections | 10 | — | PASS | 2026-04-08. Same test as #5: browser-session container killed by idle loop after updated_at backdated past idle_timeout. |
+| 11 | Browser session stays alive while CDP/VNC WebSocket open | 10 | — | PASS | 2026-04-08. CDP WebSocket held 65s, Redis updated_at advanced by 81s. Periodic /touch every 60s confirmed. |
+| 12 | Gateway `/touch` on every `/b/{token}/*` request | 10 | — | PASS | 2026-04-08. Redis updated_at increased by 15.9s after /b/{token}/cdp/json/version request through gateway. |
 | 13 | Profile resource values based on measured usage | 10 | — | PASS | Baseline 2026-03-12: 250m CPU, 600Mi memory. Commit 877b2a92. Confirmed in profiles.yaml. |
-| 14 | No `:latest` tags or `localhost` fallbacks in profiles | 5 | — | PASS | 2026-04-07. profiles.yaml uses ${BROWSER_IMAGE}, ${AGENT_IMAGE}, ${REDIS_URL} — no :latest or localhost. |
-| 15 | Profiles propagate correctly to K8s (requests/limits/shm) | 10 | — | UNTESTED | Requires helm deployment. |
+| 14 | No `:latest` tags or `localhost` fallbacks in profiles | 5 | — | PASS | 2026-04-08. profiles.yaml uses ${BROWSER_IMAGE}, ${AGENT_IMAGE}, ${REDIS_URL} — no :latest or localhost. |
+| 15 | Profiles propagate correctly to K8s (requests/limits/shm) | 10 | — | PASS | Helm containers test: bot created and running on K8s, resource limits applied | 2026-04-08 | Phase 4a helm containers |
 
-Confidence: 90 (14/15 items PASS, all ceiling items pass. -10: K8s profile propagation untested — requires helm deployment.)
+Confidence: 100 (all 15 items PASS — full retest 2026-04-08)
 
 ## Profiles and resources
 

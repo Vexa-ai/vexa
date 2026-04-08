@@ -93,7 +93,7 @@ fi
 # ── 2. Stop bot, verify container removed ─────────
 echo "  stopping bot..."
 curl -sf -X DELETE "$GATEWAY_URL/bots/google_meet/lifecycle-test-1" \
-    -H "X-API-Key: $API_TOKEN" > /dev/null 2>&1
+    -H "X-API-Key: $API_TOKEN" > /dev/null 2>&1 || true
 
 sleep 15
 
@@ -102,7 +102,7 @@ if [ "$MODE" = "compose" ]; then
 elif [ "$MODE" = "lite" ]; then
     REMAINING=$(docker exec vexa ps aux 2>/dev/null | { grep -c "lifecycle-test" || true; })
 elif [ "$MODE" = "helm" ]; then
-    REMAINING=$(kubectl get pods --no-headers 2>/dev/null | { grep -c "lifecycle-test" || true; })
+    REMAINING=$(kubectl get pods --no-headers 2>/dev/null | { grep -c "lifecycle-test" || true; }) || true
 else
     REMAINING=0
 fi
@@ -189,7 +189,7 @@ if [ "$CC_A_OK" = "ok" ]; then
 
     # Clean up
     curl -sf -X DELETE "$GATEWAY_URL/bots/google_meet/concurrency-b" \
-        -H "X-API-Key: $API_TOKEN" > /dev/null 2>&1
+        -H "X-API-Key: $API_TOKEN" > /dev/null 2>&1 || true
 else
     fail "concurrency: could not create bot A"
 fi
@@ -203,7 +203,7 @@ if [ "$MODE" = "compose" ]; then
 elif [ "$MODE" = "lite" ]; then
     ORPHANS=$(docker exec vexa ps aux 2>/dev/null | { grep -c '[Z]' || true; })
 elif [ "$MODE" = "helm" ]; then
-    ORPHANS=$(kubectl get pods --field-selector=status.phase!=Running --no-headers -l app.kubernetes.io/name=vexa 2>/dev/null | { grep -c "meeting-\|bot-" || true; })
+    ORPHANS=$(kubectl get pods --field-selector=status.phase!=Running --no-headers -l app.kubernetes.io/name=vexa 2>/dev/null | { grep -c "meeting-\|bot-" || true; }) || true
 else
     ORPHANS=0
 fi

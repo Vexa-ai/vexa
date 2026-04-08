@@ -115,15 +115,15 @@ This is not silent failure — the warning is logged. The bot still joins, just 
 
 | # | Criterion | Weight | Ceiling | Status | Last |
 |---|-----------|--------|---------|--------|------|
-| 1 | `authenticated: true` adds S3 config to BOT_CONFIG | 10 | ceiling | PASS | 2026-04-07 |
-| 2 | Bot downloads cookies from S3 before launching Chrome | 10 | ceiling | PASS | 2026-04-07 |
-| 3 | Authenticated bot sees "Join now" on Google Meet (not "Ask to join") | 15 | ceiling | PASS | 2026-04-07 |
-| 4 | Bot joins meeting as Google account identity (name + avatar) | 10 | — | PASS | 2026-04-07 |
-| 5 | Fallback: expired cookies → bot falls back to anonymous join with warning | 10 | — | FAIL | 2026-04-07 |
-| 6 | `--password-store=basic` ensures cookie decryption across containers | 10 | — | PASS | 2026-04-07 |
-| 7 | Same S3 path works for both browser sessions and authenticated bots | 5 | — | PASS | 2026-04-07 |
-| 8 | Bot logs diagnostic screenshot at auth lobby | 5 | — | PASS | 2026-04-07 |
-| 9 | `use_saved_userdata` field silently dropped (schema field is `authenticated`) | 5 | — | PASS | 2026-04-07 |
+| 1 | `authenticated: true` adds S3 config to BOT_CONFIG | 10 | ceiling | PASS | 2026-04-08 |
+| 2 | Bot downloads cookies from S3 before launching Chrome | 10 | ceiling | PASS | 2026-04-08 |
+| 3 | Authenticated bot sees "Join now" on Google Meet (not "Ask to join") | 15 | ceiling | PASS | 2026-04-08 |
+| 4 | Bot joins meeting as Google account identity (name + avatar) | 10 | — | PASS | 2026-04-08 |
+| 5 | Fallback: expired cookies → bot falls back to anonymous join with warning | 10 | — | FAIL | 2026-04-08 |
+| 6 | `--password-store=basic` ensures cookie decryption across containers | 10 | — | PASS | 2026-04-08 |
+| 7 | Same S3 path works for both browser sessions and authenticated bots | 5 | — | PASS | 2026-04-08 |
+| 8 | Bot logs diagnostic screenshot at auth lobby | 5 | — | PASS | 2026-04-08 |
+| 9 | `use_saved_userdata` field silently dropped (schema field is `authenticated`) | 5 | — | PASS | 2026-04-08 |
 | 10 | Teams authenticated join (enterprise links) | 10 | — | NOT IMPLEMENTED | |
 
 Confidence: 75 (8/10 items PASS, all ceiling items pass. -10: fallback to anonymous join FAIL — bot stuck on name input. -10: Teams authenticated join not implemented. -5: use_saved_userdata silently dropped.)

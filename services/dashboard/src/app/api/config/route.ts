@@ -11,10 +11,18 @@ export async function GET(request: NextRequest) {
   const decisionListenerUrl =
     process.env.NEXT_PUBLIC_DECISION_LISTENER_URL || "http://localhost:8765";
 
-  // WS goes through the dashboard via Next.js rewrite — derive from request host
-  const host = request.headers.get('host')!;
-  const proto = request.headers.get('x-forwarded-proto') === 'https' ? 'wss' : 'ws';
-  const wsUrl = `${proto}://${host}/ws`;
+  // WS goes through the dashboard via Next.js rewrite — derive from public app URL or request host
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+  let wsUrl: string;
+  if (appUrl) {
+    const wsProto = appUrl.startsWith('https') ? 'wss' : 'ws';
+    const wsHost = appUrl.replace(/^https?:\/\//, '');
+    wsUrl = `${wsProto}://${wsHost}/ws`;
+  } else {
+    const host = request.headers.get('host')!;
+    const proto = request.headers.get('x-forwarded-proto') === 'https' ? 'wss' : 'ws';
+    wsUrl = `${proto}://${host}/ws`;
+  }
 
   // Auth token for WebSocket: same fallback chain as the HTTP proxy in /api/vexa/[...path].
   // cookie (logged-in user) → VEXA_API_KEY env var (self-hosted service token)
