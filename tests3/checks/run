@@ -396,6 +396,8 @@ def check_contract(lock):
         return check_ws_ping(gw, token)
     if method == "TRANSCRIPTION_TEST":
         return check_transcription_token()
+    if method == "BOT_STATUS_CHECK":
+        return check_bot_status_transitions(gw, token)
 
     url = lock["url"].replace("$GATEWAY_URL", gw).replace("$ADMIN_URL", admin).replace("$DASHBOARD_URL", dash)
     expect = lock.get("expect_code", 200)
@@ -433,6 +435,64 @@ def check_contract(lock):
         if code == expect:
             return True, ""
         return False, f"HTTP {code} (expected {expect})"
+
+
+def check_bot_status_transitions(gw, token):
+    """Create a bot, wait up to 30s for status to leave 'requested', then clean up."""
+    import time
+
+    if not token:
+        return True, "no API token — skipped"
+
+    # Create bot
+    native_id = f"status-check-{int(time.time())}"
+    create_data = json.dumps({
+        "platform": "google_meet",
+        "native_meeting_id": native_id,
+        "bot_name": "Status Check",
+        "automatic_leave": {"no_one_joined_timeout": 30000},
+    })
+    headers = ["Content-Type: application/json", f"X-API-Key: {token}"]
+    cmd = ["curl", "-s", "-w", "\n%{http_code}", "-X", "POST", "-d", create_data,
+           f"{gw}/bots"] + [h for hdr in headers for h in ["-H", hdr]]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        lines = r.stdout.strip().rsplit("\n", 1)
+        code = int(lines[-1]) if lines[-1].isdigit() else 0
+        if code == 403:
+            return True, "concurrency limit — skipped (another bot running)"
+        if code not in (200, 201, 202):
+            return False, f"bot creation failed: HTTP {code}"
+    except Exception as e:
+        return False, f"bot creation error: {e}"
+
+    # Poll for status transition (max 30s)
+    final_status = "requested"
+    for i in range(6):
+        time.sleep(5)
+        try:
+            r = subprocess.run(
+                ["curl", "-sf", "-H", f"X-API-Key: {token}", f"{gw}/bots/status"],
+                capture_output=True, text=True, timeout=10)
+            bots = json.loads(r.stdout).get("running_bots", [])
+            for b in bots:
+                if b.get("native_meeting_id") == native_id:
+                    final_status = b.get("data", {}).get("meeting_status") or b.get("meeting_status", "requested")
+                    break
+        except Exception:
+            pass
+        if final_status != "requested":
+            break
+
+    # Clean up
+    subprocess.run(
+        ["curl", "-sf", "-X", "DELETE", f"{gw}/bots/google_meet/{native_id}",
+         "-H", f"X-API-Key: {token}"],
+        capture_output=True, timeout=10)
+
+    if final_status == "requested":
+        return False, "bot stuck in 'requested' after 30s — status callbacks not working"
+    return True, f"status transitioned to '{final_status}'"
 
 
 def check_transcription_token():

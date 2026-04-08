@@ -340,6 +340,13 @@
     {"_": "═══ CONTRACT — API behavior correct, 15s ═══"},
 
     {
+      "id": "BOT_STATUS_TRANSITIONS",
+      "tier": "contract",
+      "proves": "bot status transitions from requested within 30s — callbacks from bot→meeting-api work",
+      "symptom": "Bot stuck in 'requested' — status change callbacks not reaching meeting-api (wrong image, missing callback URL, network issue)",
+      "method": "BOT_STATUS_CHECK"
+    },
+    {
       "id": "BOT_CREATE_OK",
       "tier": "contract",
       "proves": "POST /bots creates a bot without server error — runtime-api orchestrator is functional",

@@ -28,6 +28,7 @@ adminApi:
 
 meetingApi:
   enabled: true
+  botImageName: "vexaai/vexa-bot:dev"
   image:
     repository: vexaai/meeting-api
     tag: dev
