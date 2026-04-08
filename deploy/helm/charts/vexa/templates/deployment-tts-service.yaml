@@ -7,6 +7,8 @@ metadata:
     {{- include "vexa.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.ttsService.replicaCount }}
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "vexa.selectorLabels" . | nindent 6 }}
@@ -29,7 +31,7 @@ spec:
         - name: tts-service
           securityContext:
             {{- toYaml .Values.global.securityContext | nindent 12 }}
-          image: "{{ .Values.ttsService.image.repository }}:{{ .Values.ttsService.image.tag }}"
+          image: "{{ .Values.ttsService.image.repository }}:{{ .Values.global.imageTag | default .Values.ttsService.image.tag }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http

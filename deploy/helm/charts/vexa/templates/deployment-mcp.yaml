@@ -29,7 +29,7 @@ spec:
         - name: mcp
           securityContext:
             {{- toYaml .Values.global.securityContext | nindent 12 }}
-          image: "{{ .Values.mcp.image.repository }}:{{ .Values.mcp.image.tag }}"
+          image: "{{ .Values.mcp.image.repository }}:{{ .Values.global.imageTag | default .Values.mcp.image.tag }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http

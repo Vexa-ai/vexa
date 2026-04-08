@@ -115,7 +115,7 @@ After deploying, verify:
 | 1   | vexa chart installs on K8s      | 20     | PASS     | 60/60 smoke checks pass on LKE (589344)           | 2026-04-08   |
 | 2   | vexa-lite chart installs on K8s | 10     | SKIP     | Not tested                                        | —            |
 | 3   | Images pulled from registry     | 8      | PASS     | All 10 pods running with :dev tags                | 2026-04-08   |
-| 4   | Images built + pushed work      | 8      | UNTESTED |                                                   | —            |
+| 4   | Images built + pushed work      | 8      | PASS     | global.imageTag=0.10.0-260408-1826, all 7 pods running | 2026-04-09   |
 | 5   | DB load from dump               | 10     | PASS     | 1761 users, 9587 meetings, 507K transcriptions via pg-loader pod | 2026-04-08   |
 | 6   | Values documented               | 10     | PASS     | RBAC, orchestrator, recording, secrets documented | 2026-04-08   |
 | 7   | Image tags match chart defaults | 7      | PASS     | values-test.yaml uses :dev consistently           | 2026-04-08   |
@@ -129,5 +129,5 @@ After deploying, verify:
 Score: 82/100  
 Last validated: 2026-04-08  
 Tests: 60 smoke + dashboard + containers + webhooks + browser-session + auth-meeting  
-Ceiling: vexa-lite chart SKIP; images built+pushed UNTESTED
+Ceiling: vexa-lite chart SKIP
 

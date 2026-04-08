@@ -5,6 +5,7 @@
 #   - Override tags with specific YYMMDD-HHMM timestamps for traceability
 
 global:
+  imageTag: ""              # When set, overrides all service image tags
   imagePullPolicy: Always
   imagePullSecrets: []
   clusterDomain: cluster.local

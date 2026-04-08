@@ -29,7 +29,7 @@ spec:
         - name: meeting-api
           securityContext:
             {{- toYaml .Values.global.securityContext | nindent 12 }}
-          image: "{{ .Values.meetingApi.image.repository }}:{{ .Values.meetingApi.image.tag }}"
+          image: "{{ .Values.meetingApi.image.repository }}:{{ .Values.global.imageTag | default .Values.meetingApi.image.tag }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http

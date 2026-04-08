@@ -32,7 +32,7 @@ spec:
         - name: runtime-api
           securityContext:
             {{- toYaml .Values.global.securityContext | nindent 12 }}
-          image: "{{ .Values.runtimeApi.image.repository }}:{{ .Values.runtimeApi.image.tag }}"
+          image: "{{ .Values.runtimeApi.image.repository }}:{{ .Values.global.imageTag | default .Values.runtimeApi.image.tag }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http

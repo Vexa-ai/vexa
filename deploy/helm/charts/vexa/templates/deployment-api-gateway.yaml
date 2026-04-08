@@ -29,7 +29,7 @@ spec:
         - name: api-gateway
           securityContext:
             {{- toYaml .Values.global.securityContext | nindent 12 }}
-          image: "{{ .Values.apiGateway.image.repository }}:{{ .Values.apiGateway.image.tag }}"
+          image: "{{ .Values.apiGateway.image.repository }}:{{ .Values.global.imageTag | default .Values.apiGateway.image.tag }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http

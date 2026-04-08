@@ -7,6 +7,8 @@ metadata:
     {{- include "vexa.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "vexa.selectorLabels" . | nindent 6 }}
