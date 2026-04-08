@@ -59,10 +59,14 @@ spec:
             - name: DB_SSL_MODE
               value: {{ .Values.database.sslMode | quote }}
             - name: DB_PASSWORD
+              {{- if .Values.postgres.enabled }}
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.postgres.credentialsSecretName | quote }}
                   key: POSTGRES_PASSWORD
+              {{- else }}
+              value: {{ .Values.database.password | quote }}
+              {{- end }}
           resources:
             {{- toYaml .Values.migrations.resources | nindent 12 }}
 {{- end }}
