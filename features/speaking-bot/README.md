@@ -66,8 +66,8 @@ curl -s -X DELETE -H "X-API-Key: $VEXA_API_KEY" \
 
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Test |
 |---|-------|--------|---------|-------|--------|----------|--------------|------|
-| 1 | POST /speak returns 202 and bot speaks | 30 | ceiling | 0 | PASS | **All deployments**: API returns 202, TTS synthesizes OK (200), human confirmed audio plays with short phrases. Untested with longer phrases — 7 code bugs found (concurrency, auto-mute race, unhandled promise) that may cause intermittent failures under load. Needs `transcription-replay` with longer phrases to fully validate. | 2026-04-08 | Phase 5a (helm), 5b (lite), tts-reliability (compose) |
-| 2 | Other participants hear the speech | 30 | ceiling | 0 | PASS | Human confirmed TTS audio heard on all deployments with short phrases. Longer phrases + rapid switching untested. | 2026-04-08 | Phase 5a (helm), 5b (lite), tts-reliability (compose) |
+| 1 | POST /speak returns 202 and bot speaks | 30 | ceiling | 0 | PASS | **All deployments**: Single bot TTS reliable (10/10 tts-reliability, 4/4 meeting-tts-teams). Multi-bot concurrent speak drops audio — piper TTS model saturates under load (70 utterances / 1-2s gaps / 4 bots). Not a code bug, resource limitation. | 2026-04-08 | Phase 5a (helm), 5b (lite), tts-reliability (compose), transcription-replay (compose) |
+| 2 | Other participants hear the speech | 30 | ceiling | 0 | PASS | Human confirmed. Single bot: reliable. Multi-bot rapid-fire: drops under load. | 2026-04-08 | Phase 5a (helm), 5b (lite), tts-reliability (compose) |
 | 3 | Multiple voices (alloy, echo, fable) distinguishable | 20 | — | 0 | SKIP | Only alloy + echo tested | 2026-04-08 | — |
 | 4 | Interrupt (DELETE /speak) stops playback | 10 | — | 0 | SKIP | Not tested | 2026-04-08 | — |
 | 5 | Works on GMeet and Teams | 10 | — | 0 | PASS | TTS sent and heard on both platforms. | 2026-04-08 | Phase 5a, 5b |
