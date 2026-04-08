@@ -35,6 +35,7 @@ tests3/
 │   └── run               # unified runner (python3)
 ├── tests/
 │   ├── meeting.sh        # create GMeet via CDP
+│   ├── meeting-tts-teams.sh # Teams e2e: URL → bots → TTS → transcript
 │   ├── bot.sh            # launch + poll recorder
 │   ├── transcribe.sh     # send TTS, fetch transcript, score
 │   └── finalize.sh       # stop bots, verify cleanup
@@ -59,7 +60,8 @@ Work locally. Deploy-test last.
    └─→ make -C tests3 dashboard      30s    login, proxy, pagination
    └─→ make -C tests3 containers     2min   bot lifecycle
    └─→ make -C tests3 webhooks       15s    envelope, HMAC
-   └─→ make -C tests3 meeting-tts    10min  live meeting + TTS + transcript (human admits)
+   └─→ make -C tests3 meeting-tts    10min  live GMeet + TTS + transcript (human admits)
+   └─→ TEAMS_MEETING_URL=... make -C tests3 meeting-tts-teams  10min  live Teams + TTS + transcript
 
 4. Before release (final gate)
    └─→ make -C tests3 vm-compose     6min   fresh VM, pull :dev, full smoke
@@ -255,7 +257,7 @@ Every check is a JSON entry in `checks/registry.json`:
 
 ## Coverage
 
-53 registry checks + 16 test scripts. Validated across compose, lite, and helm (LKE). Helm support: K8s health checks, bot lifecycle, browser session CDP, segment pipeline, recording config.
+56 registry checks + 17 test scripts. Validated across compose, lite, and helm (LKE). Helm support: K8s health checks, bot lifecycle, browser session CDP, segment pipeline, recording config.
 
 ### Registry checks (53)
 
@@ -263,10 +265,10 @@ Every check is a JSON entry in `checks/registry.json`:
 | -------- | ----- | ------------------------------------------------------------------------------------------------------------------------------- |
 | static   | 14    | Regression locks (12) + helm chart lint + helm template render                                                                  |
 | env      | 7     | Dashboard keys match admin-api, keys valid against API, VEXA_API_URL set, MINIO_ENDPOINT, MINIO_BUCKET, RUNTIME_API_URL         |
-| health   | 11    | Gateway, admin-api, dashboard, runtime-api, transcription, redis, minio + K8s: deployments ready, no crashloop, no restarts, secrets exist |
-| contract | 21    | Browser session CDP, bot recording, MinIO writable, segment pipeline, bot status transitions, bot create, /bots/status, /meetings, auth, URL formats, WS ping, dashboard login, transcription token, cache headers |
+| health   | 14    | Gateway, admin-api, dashboard, runtime-api, transcription, redis, minio, DB schema/users/token-scopes + K8s: deployments ready, no crashloop, no restarts, secrets exist |
+| contract | 21    | Browser session CDP, bot recording, MinIO writable, segment pipeline, bot status transitions, bot create, /bots/status, /meetings, auth, URL formats (5 Teams + GMeet + invalid), WS ping, dashboard login, transcription token, cache headers |
 
-### Test scripts (13)
+### Test scripts (14)
 
 | Script               | Feature                   | DoDs covered                                                                             |
 | -------------------- | ------------------------- | ---------------------------------------------------------------------------------------- |
@@ -283,6 +285,7 @@ Every check is a JSON entry in `checks/registry.json`:
 | `post-meeting.sh`    | Post-meeting              | Recordings, deferred transcription, dedup, speaker attribution                           |
 | `webhooks.sh`        | Webhooks                  | Envelope shape, HMAC, no secret leak, no internal fields                                 |
 | `auth-meeting.sh`    | Authenticated meetings    | S3 config, cookie download, Chrome context, screenshot, shared path, use_saved_userdata  |
+| `meeting-tts-teams.sh` | Teams meeting (e2e)    | Teams URL parse → bot join → human admit → TTS → transcript → score. Requires `TEAMS_MEETING_URL` env var |
 
 ### Remaining gaps (~33 DoDs)
 
