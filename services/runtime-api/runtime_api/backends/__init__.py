@@ -48,6 +48,7 @@ class ContainerInfo:
     labels: dict[str, str] = field(default_factory=dict)
     created_at: float | None = None
     image: str | None = None
+    ip: str | None = None
 
 
 class Backend(abc.ABC):

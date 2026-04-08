@@ -720,7 +720,12 @@ async def request_bot(
 
         # Store in Redis for gateway proxy (by session_token for backward compat + by meeting ID)
         if redis_client:
-            container_info = json.dumps({"container_name": result.get("name"), "meeting_id": new_meeting.id, "user_id": current_user.id})
+            container_info = json.dumps({
+                "container_name": result.get("name"),
+                "container_ip": result.get("ip"),
+                "meeting_id": new_meeting.id,
+                "user_id": current_user.id,
+            })
             await redis_client.set(f"browser_session:{session_token}", container_info, ex=86400)
             await redis_client.set(f"browser_session:{new_meeting.id}", container_info, ex=86400)
 

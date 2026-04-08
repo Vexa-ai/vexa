@@ -340,6 +340,13 @@
     {"_": "═══ CONTRACT — API behavior correct, 15s ═══"},
 
     {
+      "id": "BROWSER_SESSION_CDP",
+      "tier": "contract",
+      "proves": "browser session CDP proxy is reachable — gateway can connect to browser container",
+      "symptom": "Failed to reach browser container: Name or service not known — pod IP not resolved in K8s",
+      "method": "BROWSER_SESSION_CDP_CHECK"
+    },
+    {
       "id": "BROWSER_SESSION_OK",
       "tier": "contract",
       "proves": "POST /bots with mode=browser_session returns 201 — browser-session profile exists and works",

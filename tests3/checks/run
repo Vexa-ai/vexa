@@ -398,6 +398,8 @@ def check_contract(lock):
         return check_transcription_token()
     if method == "BOT_STATUS_CHECK":
         return check_bot_status_transitions(gw, token)
+    if method == "BROWSER_SESSION_CDP_CHECK":
+        return check_browser_session_cdp(gw, token)
     if method == "BOT_RECORDING_CHECK":
         return check_bot_recording_enabled(gw, token)
     if method == "MINIO_WRITABLE":
@@ -441,6 +443,67 @@ def check_contract(lock):
         if code == expect:
             return True, ""
         return False, f"HTTP {code} (expected {expect})"
+
+
+def check_browser_session_cdp(gw, token):
+    """Create browser session, verify CDP proxy responds (not 502)."""
+    import time
+
+    if not token:
+        return True, "no API token — skipped"
+
+    # Create session
+    try:
+        r = subprocess.run(
+            ["curl", "-s", "-w", "\n%{http_code}", "-X", "POST",
+             "-H", f"X-API-Key: {token}", "-H", "Content-Type: application/json",
+             "-d", '{"mode":"browser_session","bot_name":"CDP Check"}',
+             f"{gw}/bots"],
+            capture_output=True, text=True, timeout=15)
+        lines = r.stdout.strip().rsplit("\n", 1)
+        code = int(lines[-1]) if lines[-1].isdigit() else 0
+        body = lines[0] if len(lines) > 1 else ""
+        if code == 403:
+            return True, "concurrency limit — skipped"
+        if code not in (200, 201, 202):
+            return False, f"session creation failed: HTTP {code}"
+
+        session_data = json.loads(body)
+        session_token = session_data.get("data", {}).get("session_token", "")
+        native_id = session_data.get("native_meeting_id", "")
+    except Exception as e:
+        return False, f"session creation error: {e}"
+
+    if not session_token:
+        return False, "no session_token in response"
+
+    # Wait for container to start
+    time.sleep(15)
+
+    # Hit CDP proxy
+    try:
+        r = subprocess.run(
+            ["curl", "-sL", "-w", "\n%{http_code}",
+             f"{gw}/b/{session_token}/cdp/json/version"],
+            capture_output=True, text=True, timeout=15)
+        lines = r.stdout.strip().rsplit("\n", 1)
+        cdp_code = int(lines[-1]) if lines[-1].isdigit() else 0
+        cdp_body = lines[0] if len(lines) > 1 else ""
+    except Exception as e:
+        cdp_code = 0
+        cdp_body = str(e)
+
+    # Clean up
+    subprocess.run(
+        ["curl", "-sf", "-X", "DELETE", f"{gw}/bots/browser_session/{native_id}",
+         "-H", f"X-API-Key: {token}"],
+        capture_output=True, timeout=10)
+
+    if cdp_code == 200 and "webSocketDebuggerUrl" in cdp_body:
+        return True, "CDP proxy reachable"
+    if cdp_code == 502:
+        return False, f"CDP proxy 502 — gateway cannot reach browser container: {cdp_body[:100]}"
+    return False, f"CDP proxy HTTP {cdp_code}: {cdp_body[:100]}"
 
 
 def check_bot_recording_enabled(gw, token):

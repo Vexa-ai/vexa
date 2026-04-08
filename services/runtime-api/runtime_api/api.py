@@ -53,6 +53,7 @@ class ContainerResponse(BaseModel):
     ports: dict = Field(default_factory=dict)
     created_at: Optional[float] = None
     metadata: dict = Field(default_factory=dict)
+    ip: Optional[str] = None
 
 
 class ExecRequest(BaseModel):
@@ -148,6 +149,7 @@ def _container_response(name: str, data: dict) -> dict:
         "ports": data.get("ports", {}),
         "created_at": data.get("created_at"),
         "metadata": data.get("metadata", {}),
+        "ip": data.get("ip"),
     }
 
 
@@ -249,17 +251,19 @@ async def create_container(req: CreateContainerRequest, request: Request):
         await state.delete_container(redis, name)
         raise HTTPException(500, f"Container creation failed: {e}")
 
-    # Get ports from backend
+    # Get ports and IP from backend
     info = await backend.inspect(name)
     result_ports = info.ports if info else {}
+    result_ip = info.ip if info else None
 
-    # Update state with container_id and ports (only if not already stopped
+    # Update state with container_id, ports, and IP (only if not already stopped
     # by the exit handler — avoids overwriting stopped/failed status).
     current = await state.get_container(redis, name)
     if current and current.get("status") in ("creating", "running"):
         container_data["status"] = "running"
         container_data["ports"] = result_ports
         container_data["container_id"] = container_id
+        container_data["ip"] = result_ip
         await state.set_container(redis, name, container_data)
     else:
         # Container already exited and callback was fired; just update
@@ -267,6 +271,7 @@ async def create_container(req: CreateContainerRequest, request: Request):
         container_data["status"] = "running"
         container_data["ports"] = result_ports
         container_data["container_id"] = container_id
+        container_data["ip"] = result_ip
 
     return _container_response(name, container_data)
 

@@ -336,6 +336,8 @@ def _pod_to_info(pod) -> Optional[ContainerInfo]:
     if pod.metadata.creation_timestamp:
         created_at = pod.metadata.creation_timestamp.timestamp()
 
+    pod_ip = pod.status.pod_ip if pod.status else None
+
     return ContainerInfo(
         id=pod.metadata.uid or pod.metadata.name,
         name=pod.metadata.name,
@@ -344,4 +346,5 @@ def _pod_to_info(pod) -> Optional[ContainerInfo]:
         labels=pod.metadata.labels or {},
         created_at=created_at,
         image=pod.spec.containers[0].image if pod.spec and pod.spec.containers else None,
+        ip=pod_ip,
     )

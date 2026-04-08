@@ -1666,7 +1666,7 @@ async def browser_vnc_proxy(token: str, path: str, request: Request):
     if not session:
         raise HTTPException(status_code=404, detail="Browser session not found or expired")
 
-    container = session["container_name"]
+    container = session.get("container_ip") or session["container_name"]
     # In single-container (lite) deployments, VNC runs on localhost, not a container hostname
     vnc_host = os.getenv("VNC_HOST") or container
     target_url = f"http://{vnc_host}:6080/{path}"
@@ -1702,7 +1702,7 @@ async def browser_vnc_ws(websocket: WebSocket, token: str):
         await websocket.close(code=4404)
         return
 
-    container = session["container_name"]
+    container = session.get("container_ip") or session["container_name"]
     vnc_host = os.getenv("VNC_HOST") or container
     upstream_url = f"ws://{vnc_host}:6080/websockify"
 
@@ -1771,7 +1771,7 @@ async def browser_cdp_http(token: str, path: str, request: Request):
     session = await resolve_browser_session(token)
     if not session:
         raise HTTPException(status_code=404, detail="Browser session not found")
-    container = session["container_name"]
+    container = session.get("container_ip") or session.get("container_ip") or session["container_name"]
     try:
         qs = f"?{request.url.query}" if request.url.query else ""
         resp = await app.state.http_client.get(
@@ -1805,7 +1805,7 @@ async def browser_cdp_ws(websocket: WebSocket, token: str):
         await websocket.close(code=4404)
         return
 
-    container = session["container_name"]
+    container = session.get("container_ip") or session["container_name"]
 
     # Discover CDP WebSocket URL from the browser's /json/version endpoint
     try:
