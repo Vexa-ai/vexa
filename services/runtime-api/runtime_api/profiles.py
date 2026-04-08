@@ -79,6 +79,14 @@ BUILTIN_PROFILES = {
             "shm_size": 2147483648,  # 2GB — Chrome needs /dev/shm for audio capture
         },
     },
+    "browser-session": {
+        "image": "${BROWSER_IMAGE}",
+        "idle_timeout": 3600,
+        "auto_remove": False,
+        "resources": {
+            "shm_size": 2147483648,  # 2GB — Chrome needs /dev/shm
+        },
+    },
     "agent": {
         "image": "${AGENT_IMAGE}",
         "command": ["sleep", "infinity"],

@@ -89,6 +89,8 @@ spec:
               value: {{ .Values.meetingApi.transcriptionServiceUrl | default "" | quote }}
             - name: TRANSCRIPTION_SERVICE_TOKEN
               value: {{ .Values.meetingApi.transcriptionServiceToken | default "" | quote }}
+            - name: RECORDING_ENABLED
+              value: {{ required "meetingApi.recordingEnabled must be set" .Values.meetingApi.recordingEnabled | quote }}
             - name: STORAGE_BACKEND
               value: {{ .Values.meetingApi.storageBackend | default "minio" | quote }}
             {{- if .Values.minio.enabled }}

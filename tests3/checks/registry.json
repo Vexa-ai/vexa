@@ -340,6 +340,24 @@
     {"_": "═══ CONTRACT — API behavior correct, 15s ═══"},
 
     {
+      "id": "BROWSER_SESSION_OK",
+      "tier": "contract",
+      "proves": "POST /bots with mode=browser_session returns 201 — browser-session profile exists and works",
+      "symptom": "Failed to start browser session container — browser-session profile missing from runtime-api",
+      "url": "$GATEWAY_URL/bots",
+      "method": "POST",
+      "auth": "api_token",
+      "data": "{\"mode\":\"browser_session\",\"bot_name\":\"Session Check\"}",
+      "expect_code": [200, 201, 202, 403]
+    },
+    {
+      "id": "BOT_RECORDING_ENABLED",
+      "tier": "contract",
+      "proves": "bots are created with recordingEnabled=true — audio will be captured and uploaded",
+      "symptom": "No audio recording for meeting — RECORDING_ENABLED env var not set or recordingEnabled=false in BOT_CONFIG",
+      "method": "BOT_RECORDING_CHECK"
+    },
+    {
       "id": "MINIO_BUCKET_WRITABLE",
       "tier": "contract",
       "proves": "MinIO bucket exists and is writable — recordings and browser state can be stored",

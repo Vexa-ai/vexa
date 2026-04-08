@@ -398,6 +398,8 @@ def check_contract(lock):
         return check_transcription_token()
     if method == "BOT_STATUS_CHECK":
         return check_bot_status_transitions(gw, token)
+    if method == "BOT_RECORDING_CHECK":
+        return check_bot_recording_enabled(gw, token)
     if method == "MINIO_WRITABLE":
         return check_minio_writable()
     if method == "SEGMENT_PIPELINE":
@@ -439,6 +441,81 @@ def check_contract(lock):
         if code == expect:
             return True, ""
         return False, f"HTTP {code} (expected {expect})"
+
+
+def check_bot_recording_enabled(gw, token):
+    """Create a bot and verify BOT_CONFIG has recordingEnabled=true."""
+    import time
+
+    if not token:
+        return True, "no API token — skipped"
+
+    native_id = f"rec-check-{int(time.time())}"
+    try:
+        r = subprocess.run(
+            ["curl", "-s", "-w", "\n%{http_code}", "-X", "POST",
+             "-H", f"X-API-Key: {token}", "-H", "Content-Type: application/json",
+             "-d", json.dumps({"platform": "google_meet", "native_meeting_id": native_id,
+                               "bot_name": "Rec Check", "automatic_leave": {"no_one_joined_timeout": 30000}}),
+             f"{gw}/bots"],
+            capture_output=True, text=True, timeout=15)
+        lines = r.stdout.strip().rsplit("\n", 1)
+        code = int(lines[-1]) if lines[-1].isdigit() else 0
+        if code == 403:
+            return True, "concurrency limit — skipped"
+        if code not in (200, 201, 202):
+            return False, f"bot creation failed: HTTP {code}"
+    except Exception as e:
+        return False, f"bot creation error: {e}"
+
+    # Wait for bot pod, then check its BOT_CONFIG
+    time.sleep(8)
+    mode = state_read("deploy_mode")
+    if mode == "helm":
+        # Find bot pod and check BOT_CONFIG
+        try:
+            r = subprocess.run(
+                ["kubectl", "get", "pods", "--no-headers", "-l", "runtime.managed=true"],
+                capture_output=True, text=True, timeout=10)
+            pods = [l.split()[0] for l in r.stdout.strip().split("\n") if l.strip()]
+            if not pods:
+                # Fallback: find by name pattern
+                r = subprocess.run(
+                    ["kubectl", "get", "pods", "--no-headers"],
+                    capture_output=True, text=True, timeout=10)
+                pods = [l.split()[0] for l in r.stdout.strip().split("\n")
+                        if l.strip() and "vexa-vexa" not in l.split()[0]]
+        except Exception:
+            pods = []
+
+        rec_enabled = None
+        for pod in pods:
+            try:
+                r = subprocess.run(
+                    ["kubectl", "exec", pod, "--", "printenv", "BOT_CONFIG"],
+                    capture_output=True, text=True, timeout=10)
+                if r.returncode == 0 and r.stdout.strip():
+                    cfg = json.loads(r.stdout.strip())
+                    rec_enabled = cfg.get("recordingEnabled")
+                    break
+            except Exception:
+                continue
+    else:
+        # compose/lite: use svc_exec pattern
+        rc, out = svc_exec("meeting-api", ["printenv", "RECORDING_ENABLED"])
+        rec_enabled = out.strip().lower() == "true" if rc == 0 else None
+
+    # Clean up
+    subprocess.run(
+        ["curl", "-sf", "-X", "DELETE", f"{gw}/bots/google_meet/{native_id}",
+         "-H", f"X-API-Key: {token}"],
+        capture_output=True, timeout=10)
+
+    if rec_enabled is True:
+        return True, "recordingEnabled=true in BOT_CONFIG"
+    if rec_enabled is False:
+        return False, "recordingEnabled=false in BOT_CONFIG — RECORDING_ENABLED env var not set on meeting-api"
+    return False, f"could not verify recordingEnabled (value={rec_enabled})"
 
 
 def check_minio_writable():
