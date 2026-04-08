@@ -64,7 +64,11 @@ Key values in `charts/vexa/values.yaml`:
 - `secrets.adminApiToken`, `secrets.transcriptionServiceToken`: Required for auth and service communication.
 - `database.host`, `database.user`, `database.name`: Used by admin-api, meeting-api.
 - `redisConfig.url` (or `redisConfig.host`/`port`): Required if `redis.enabled=false`.
-- `meetingApi.orchestrator`: `process` (default), `kubernetes` (PoC), or `docker`.
+- `meetingApi.recordingEnabled`: `"true"` (required) — enables audio recording in bot containers.
+- `runtimeApi.orchestrator`: `process` (default), `kubernetes` (K8s pods with RBAC), or `docker`.
+- `runtimeApi.browserImage`: Bot container image (defaults to meetingApi image).
+- `secrets.internalApiSecret`: Shared secret for gateway↔admin-api internal calls.
+- `secrets.vexaApiKey`: Pre-provisioned API key for dashboard proxy (optional).
 - `whisperLive.profile`: `cpu` or `gpu` (use with GPU resources and node selectors).
 - `ingress.*`: Optional ingress for `api-gateway`.
 
@@ -107,18 +111,19 @@ After deploying, verify:
 
 | # | Item | Weight | Status | Evidence | Last checked |
 |---|------|--------|--------|----------|--------------|
-| 1 | vexa chart installs on K8s | 25 | SKIP | Not tested | — |
+| 1 | vexa chart installs on K8s | 25 | PASS | `make -C tests3 lke-helm` — 53 checks pass on LKE | 2026-04-08 |
 | 2 | vexa-lite chart installs on K8s | 25 | SKIP | Not tested | — |
-| 3 | Values documented | 15 | SKIP | Not audited | — |
-| 4 | Image tags match chart defaults | 10 | SKIP | Not verified | — |
-| 5 | Secrets management documented | 15 | SKIP | Not audited | — |
-| 6 | Health probes configured | 10 | SKIP | Not verified | — |
+| 3 | Values documented | 15 | PASS | RBAC, orchestrator, recording, secrets documented | 2026-04-08 |
+| 4 | Image tags match chart defaults | 10 | PASS | values-test.yaml uses :dev consistently | 2026-04-08 |
+| 5 | Secrets management documented | 15 | PASS | internalApiSecret, vexaApiKey, adminApiToken | 2026-04-08 |
+| 6 | Health probes configured | 10 | PASS | K8S_DEPLOYMENTS_READY + K8S_NO_CRASHLOOP checks | 2026-04-08 |
 
 ## Confidence
 
-Score: 0/100
-Last validated: never
-Ceiling: Never tested on a real cluster
+Score: 75/100
+Last validated: 2026-04-08
+Tests: `make -C tests3 lke-helm` (53 checks + dashboard + containers)
+Ceiling: vexa-lite chart not tested on K8s
 
 ## License
 

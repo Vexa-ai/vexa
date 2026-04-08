@@ -255,16 +255,16 @@ Every check is a JSON entry in `checks/registry.json`:
 
 ## Coverage
 
-48 registry checks + 16 test scripts. Validated across local compose, VM compose, and VM lite. Helm support added with 8 K8s-specific checks (4 health, 2 static, auto-skipped on compose/lite).
+53 registry checks + 16 test scripts. Validated across compose, lite, and helm (LKE). Helm support: K8s health checks, bot lifecycle, browser session CDP, segment pipeline, recording config.
 
-### Registry checks (48)
+### Registry checks (53)
 
 | Tier     | Count | What                                                                                                                            |
 | -------- | ----- | ------------------------------------------------------------------------------------------------------------------------------- |
 | static   | 14    | Regression locks (12) + helm chart lint + helm template render                                                                  |
 | env      | 7     | Dashboard keys match admin-api, keys valid against API, VEXA_API_URL set, MINIO_ENDPOINT, MINIO_BUCKET, RUNTIME_API_URL         |
 | health   | 11    | Gateway, admin-api, dashboard, runtime-api, transcription, redis, minio + K8s: deployments ready, no crashloop, no restarts, secrets exist |
-| contract | 14    | /bots/status, /meetings, auth rejection, 5 Teams URL formats, GMeet URL, invalid URL, WS ping, dashboard login, transcription token, cache headers |
+| contract | 21    | Browser session CDP, bot recording, MinIO writable, segment pipeline, bot status transitions, bot create, /bots/status, /meetings, auth, URL formats, WS ping, dashboard login, transcription token, cache headers |
 
 ### Test scripts (13)
 
