@@ -21,15 +21,15 @@ RESP=$(http_post "$GATEWAY_URL/bots" \
 BOT_OK=$(echo "$RESP" | python3 -c "import sys,json; print('ok' if json.load(sys.stdin).get('id') else 'fail')" 2>/dev/null)
 
 if [ "$BOT_OK" != "ok" ]; then
-    fail "create: could not create authenticated bot (HTTP $HTTP_CODE)"
+    fail "create: could not create authenticated bot (HTTP $(http_code))"
     exit 1
 fi
 
 sleep 8
-AUTH_CONTAINER=$(docker ps --filter "name=meeting-" --format '{{.Names}}' | grep -v meeting-api | head -1)
+AUTH_CONTAINER=$(find_bot_pod "")
 
 if [ -n "$AUTH_CONTAINER" ]; then
-    S3_CHECK=$(docker exec "$AUTH_CONTAINER" printenv BOT_CONFIG 2>/dev/null | python3 -c "
+    S3_CHECK=$(pod_exec "$AUTH_CONTAINER" printenv BOT_CONFIG 2>/dev/null | python3 -c "
 import sys,json
 try:
     c=json.load(sys.stdin)
@@ -54,21 +54,21 @@ except: print('FAIL:no BOT_CONFIG')
     fi
 
     # ── 2. Cookie download on startup ─────────────
-    if docker logs "$AUTH_CONTAINER" 2>&1 | grep -qE "S3 sync down|downloading userdata|syncBrowserData"; then
+    if pod_logs "$AUTH_CONTAINER" | grep -qE "S3 sync down|downloading userdata|syncBrowserData"; then
         pass "cookies: S3 download logged"
     else
         info "cookies: no S3 download log (may not have saved data)"
     fi
 
     # ── 3. Chrome persistent context ─────────────
-    if docker logs "$AUTH_CONTAINER" 2>&1 | grep -qE "password-store|persistent.*context|authenticated.*context"; then
+    if pod_logs "$AUTH_CONTAINER" | grep -qE "password-store|persistent.*context|authenticated.*context"; then
         pass "chrome: persistent context launched"
     else
         info "chrome: could not confirm persistent context from logs"
     fi
 
     # ── 4. Diagnostic screenshot ──────────────────
-    if docker exec "$AUTH_CONTAINER" ls /app/storage/screenshots/ 2>/dev/null | grep -qE "auth|lobby|join"; then
+    if pod_exec "$AUTH_CONTAINER" ls /app/storage/screenshots/ 2>/dev/null | grep -qE "auth|lobby|join"; then
         pass "screenshot: diagnostic screenshot taken"
     else
         info "screenshot: not found (may not have reached lobby)"
@@ -88,10 +88,10 @@ FIELD_RESP=$(http_post "$GATEWAY_URL/bots" \
     '{"platform":"google_meet","native_meeting_id":"field-test","bot_name":"Field Test","use_saved_userdata":true,"automatic_leave":{"no_one_joined_timeout":30000}}' \
     "$API_TOKEN")
 sleep 5
-FIELD_CONTAINER=$(docker ps --filter "name=meeting-" --format '{{.Names}}' | grep -v meeting-api | head -1)
+FIELD_CONTAINER=$(find_bot_pod "")
 
 if [ -n "$FIELD_CONTAINER" ]; then
-    HAS_S3=$(docker exec "$FIELD_CONTAINER" printenv BOT_CONFIG 2>/dev/null | python3 -c "
+    HAS_S3=$(pod_exec "$FIELD_CONTAINER" printenv BOT_CONFIG 2>/dev/null | python3 -c "
 import sys,json
 try: print('yes' if json.load(sys.stdin).get('userdataS3Path') else 'no')
 except: print('no')
@@ -118,15 +118,24 @@ AUTH_RESP2=$(http_post "$GATEWAY_URL/bots" \
     "$API_TOKEN")
 sleep 8
 
-PATHS=$(docker ps --filter "name=meeting-" --format '{{.Names}}' | grep -v meeting-api | while read c; do
-    docker exec "$c" printenv BOT_CONFIG 2>/dev/null | python3 -c "
+PATHS=$(
+    MODE_DETECT=$(cat "$STATE/deploy_mode" 2>/dev/null || echo "compose")
+    if [ "$MODE_DETECT" = "compose" ]; then
+        docker ps --filter "name=meeting-" --format '{{.Names}}' | grep -v meeting-api
+    elif [ "$MODE_DETECT" = "helm" ]; then
+        kubectl get pods --no-headers -l app.kubernetes.io/name=vexa 2>/dev/null | grep -v meeting-api | awk '{print $1}'
+    else
+        echo "vexa"
+    fi | while read c; do
+        pod_exec "$c" printenv BOT_CONFIG 2>/dev/null | python3 -c "
 import sys,json
 try:
     c=json.load(sys.stdin)
     print(c.get('userdataS3Path',''))
 except: pass
 " 2>/dev/null
-done | sort -u | grep -v '^$')
+    done | sort -u | grep -v '^$'
+)
 
 PATH_COUNT=$(echo "$PATHS" | wc -l)
 if [ "$PATH_COUNT" -eq 1 ] && [ -n "$PATHS" ]; then

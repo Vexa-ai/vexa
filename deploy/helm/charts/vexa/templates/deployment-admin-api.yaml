@@ -69,6 +69,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: ADMIN_API_TOKEN
+            - name: INTERNAL_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: INTERNAL_API_SECRET
             {{- with .Values.adminApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

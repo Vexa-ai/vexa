@@ -24,7 +24,7 @@ BOT_ID=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).
 
 if [ -z "$BOT_ID" ]; then
     fail "could not create bot"
-    info "response: $RESP (HTTP $HTTP_CODE)"
+    info "response: $RESP (HTTP $(http_code))"
     exit 1
 fi
 

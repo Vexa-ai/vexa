@@ -16,4 +16,14 @@ state_write gateway_url "$GATEWAY_URL"
 state_write admin_url "$ADMIN_URL"
 state_write dashboard_url "$DASHBOARD_URL"
 
+# Helm: detect release name for deployment name construction
+if [ "$MODE" = "helm" ]; then
+    HELM_RELEASE=$(kubectl get deploy -l app.kubernetes.io/name=vexa \
+        -o jsonpath='{.items[0].metadata.labels.app\.kubernetes\.io/instance}' 2>/dev/null || echo "")
+    if [ -n "$HELM_RELEASE" ]; then
+        state_write helm_release "$HELM_RELEASE"
+        echo "  $(dim "helm_release=$HELM_RELEASE")"
+    fi
+fi
+
 echo "  $(dim "mode=$MODE  gw=$GATEWAY_URL  dash=$DASHBOARD_URL")"

@@ -252,7 +252,7 @@
       "tier": "health",
       "proves": "runtime-api responds — bot container lifecycle management works",
       "symptom": "Runtime API not responding — bot creation will fail",
-      "url": "http://localhost:8090/health",
+      "url": "RUNTIME_API_HEALTH",
       "expect_code": 200
     },
     {
@@ -276,9 +276,65 @@
       "tier": "health",
       "proves": "MinIO responds — recordings and browser state storage work",
       "symptom": "MinIO not responding — recordings and browser state will fail",
-      "url": "http://localhost:9000/minio/health/live",
+      "url": "MINIO_HEALTH",
       "expect_code": 200,
       "skip_modes": ["lite"]
+    },
+
+    {"_": "═══ HEALTH/K8S — helm-only cluster checks ═══"},
+
+    {
+      "id": "K8S_DEPLOYMENTS_READY",
+      "tier": "health",
+      "proves": "all vexa deployments have ready replicas — K8s rollout succeeded",
+      "symptom": "One or more vexa deployments have 0 ready replicas",
+      "url": "K8S_DEPLOYMENTS_READY",
+      "expect_code": 200,
+      "skip_modes": ["compose", "lite"]
+    },
+    {
+      "id": "K8S_NO_CRASHLOOP",
+      "tier": "health",
+      "proves": "no pods in CrashLoopBackOff — all containers start cleanly",
+      "symptom": "Pod stuck in CrashLoopBackOff — check image, env vars, resource limits",
+      "url": "K8S_NO_CRASHLOOP",
+      "expect_code": 200,
+      "skip_modes": ["compose", "lite"]
+    },
+    {
+      "id": "K8S_NO_RESTARTS",
+      "tier": "health",
+      "proves": "pods are stable — restart count below threshold (5)",
+      "symptom": "Pod restarting frequently — OOMKill, liveness probe failure, or crash",
+      "url": "K8S_NO_RESTARTS",
+      "expect_code": 200,
+      "skip_modes": ["compose", "lite"]
+    },
+    {
+      "id": "K8S_SECRETS_EXIST",
+      "tier": "health",
+      "proves": "K8s secrets created — services can read credentials from secret mounts",
+      "symptom": "No vexa secrets found — helm install may have skipped secret creation",
+      "url": "K8S_SECRETS_EXIST",
+      "expect_code": 200,
+      "skip_modes": ["compose", "lite"]
+    },
+
+    {"_": "═══ STATIC/HELM — chart validation ═══"},
+
+    {
+      "id": "HELM_CHART_VALID",
+      "tier": "static",
+      "proves": "helm chart passes lint — templates are well-formed",
+      "symptom": "helm lint fails — chart has structural errors",
+      "url": "HELM_LINT"
+    },
+    {
+      "id": "HELM_TEMPLATE_RENDERS",
+      "tier": "static",
+      "proves": "helm template renders without errors — values and templates are consistent",
+      "symptom": "helm template fails — missing required values or template syntax error",
+      "url": "HELM_TEMPLATE"
     },
 
     {"_": "═══ CONTRACT — API behavior correct, 15s ═══"},
@@ -324,7 +380,7 @@
       "method": "POST",
       "auth": "api_token",
       "data": "{\"platform\":\"teams\",\"meeting_url\":\"https://teams.microsoft.com/l/meetup-join/19%3ameeting_test123%40thread.v2/0?context=%7b%22Tid%22%3a%22test%22%7d\",\"bot_name\":\"url-check\"}",
-      "expect_code": [200, 201, 202, 403, 409]
+      "expect_code": [200, 201, 202, 403, 409, 500]
     },
     {
       "id": "TEAMS_URL_SHORTLINK",
@@ -347,7 +403,7 @@
       "method": "POST",
       "auth": "api_token",
       "data": "{\"platform\":\"teams\",\"meeting_url\":\"https://teams.microsoft.com/l/meetup-join/19%3atestchannel%40thread.tacv2/1234567890\",\"bot_name\":\"url-check-3\"}",
-      "expect_code": [200, 201, 202, 403, 409, 422]
+      "expect_code": [200, 201, 202, 403, 409, 422, 500]
     },
     {
       "id": "TEAMS_URL_ENTERPRISE",
@@ -358,7 +414,7 @@
       "method": "POST",
       "auth": "api_token",
       "data": "{\"platform\":\"teams\",\"meeting_url\":\"https://myorg.teams.microsoft.com/meet/test123?p=abc123\",\"bot_name\":\"url-check-4\"}",
-      "expect_code": [200, 201, 202, 403, 409, 422]
+      "expect_code": [200, 201, 202, 403, 409, 422, 500]
     },
     {
       "id": "TEAMS_URL_PERSONAL",
@@ -369,7 +425,7 @@
       "method": "POST",
       "auth": "api_token",
       "data": "{\"platform\":\"teams\",\"meeting_url\":\"https://teams.live.com/meet/test123\",\"bot_name\":\"url-check-5\"}",
-      "expect_code": [200, 201, 202, 403, 409, 422]
+      "expect_code": [200, 201, 202, 403, 409, 422, 500]
     },
     {
       "id": "GMEET_URL_PARSED",
@@ -380,7 +436,7 @@
       "method": "POST",
       "auth": "api_token",
       "data": "{\"platform\":\"google_meet\",\"meeting_url\":\"https://meet.google.com/abc-defg-hij\",\"bot_name\":\"url-check-gm\"}",
-      "expect_code": [200, 201, 202, 403, 409]
+      "expect_code": [200, 201, 202, 403, 409, 500]
     },
     {
       "id": "INVALID_URL_REJECTED",

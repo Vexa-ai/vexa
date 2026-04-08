@@ -50,6 +50,8 @@ if [ "$MODE" = "compose" ]; then
         --format '{{.Names}}' | { grep -vc meeting-api || true; })
 elif [ "$MODE" = "lite" ]; then
     ORPHANS=$(docker exec vexa ps aux 2>/dev/null | { grep -c '[Z]' || true; })
+elif [ "$MODE" = "helm" ]; then
+    ORPHANS=$(kubectl get pods --field-selector=status.phase!=Running --no-headers -l app.kubernetes.io/name=vexa 2>/dev/null | { grep -c "meeting-\|bot-" || true; })
 else
     ORPHANS=0
 fi

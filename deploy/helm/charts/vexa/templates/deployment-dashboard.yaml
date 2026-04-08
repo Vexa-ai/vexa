@@ -44,6 +44,13 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: ADMIN_API_TOKEN
+            {{- if .Values.secrets.vexaApiKey }}
+            - name: VEXA_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_API_KEY
+            {{- end }}
             {{- with .Values.dashboard.env }}
             {{- range $name, $value := . }}
             - name: {{ $name }}

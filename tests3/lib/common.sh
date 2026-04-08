@@ -47,8 +47,8 @@ detect_mode() {
         return
     fi
 
-    # Check for helm/k8s
-    if kubectl get deploy api-gateway -o name 2>/dev/null | grep -q api-gateway; then
+    # Check for helm/k8s (deployments use release-prefixed names via helm labels)
+    if kubectl get deploy -l app.kubernetes.io/name=vexa --no-headers 2>/dev/null | grep -q .; then
         echo "helm"
         return
     fi
@@ -70,13 +70,14 @@ detect_urls() {
             : "${DASHBOARD_URL:=http://localhost:3000}"
             ;;
         helm)
-            # Must be set explicitly for helm
+            # Read from state if not set via env
+            : "${GATEWAY_URL:=$(cat "$STATE/gateway_url" 2>/dev/null || echo "")}"
             if [ -z "${GATEWAY_URL:-}" ]; then
                 echo "ERROR: GATEWAY_URL must be set for helm deployments" >&2
                 exit 1
             fi
-            : "${ADMIN_URL:=$GATEWAY_URL}"
-            : "${DASHBOARD_URL:=$GATEWAY_URL}"
+            : "${ADMIN_URL:=$(cat "$STATE/admin_url" 2>/dev/null || echo "$GATEWAY_URL")}"
+            : "${DASHBOARD_URL:=$(cat "$STATE/dashboard_url" 2>/dev/null || echo "$GATEWAY_URL")}"
             ;;
     esac
     export GATEWAY_URL ADMIN_URL DASHBOARD_URL
@@ -94,8 +95,52 @@ svc_exec() {
     case "$mode" in
         compose) docker exec "vexa-${svc}-1" "$@" ;;
         lite)    docker exec vexa "$@" ;;
-        helm)    kubectl exec "deploy/${svc}" -- "$@" ;;
+        helm)
+            local release
+            release=$(cat "$STATE/helm_release" 2>/dev/null || echo "")
+            if [ -n "$release" ]; then
+                kubectl exec "deploy/${release}-vexa-${svc}" -- "$@"
+            else
+                kubectl exec "deploy/${svc}" -- "$@"
+            fi
+            ;;
         *)       echo "ERROR: unknown deploy mode: $mode" >&2; return 1 ;;
+    esac
+}
+
+# ─── Pod helpers (individual bot pods, not service deploys) ──────
+
+find_bot_pod() {
+    # find_bot_pod [pattern] → first matching bot pod/container name
+    local pattern="${1:-}"
+    local mode
+    mode=$(cat "$STATE/deploy_mode" 2>/dev/null || detect_mode)
+    case "$mode" in
+        compose) docker ps --filter "name=meeting-" --format '{{.Names}}' | grep -v meeting-api | { grep "$pattern" || true; } | head -1 ;;
+        lite)    echo "vexa" ;;
+        helm)    kubectl get pods --no-headers -l app.kubernetes.io/name=vexa 2>/dev/null | grep -v meeting-api | awk '{print $1}' | { grep "$pattern" || true; } | head -1 ;;
+    esac
+}
+
+pod_exec() {
+    # pod_exec <pod_name> <command...>
+    local pod="$1"; shift
+    local mode
+    mode=$(cat "$STATE/deploy_mode" 2>/dev/null || detect_mode)
+    case "$mode" in
+        compose|lite) docker exec "$pod" "$@" ;;
+        helm)         kubectl exec "$pod" -- "$@" ;;
+    esac
+}
+
+pod_logs() {
+    # pod_logs <pod_name> → stdout
+    local pod="$1"
+    local mode
+    mode=$(cat "$STATE/deploy_mode" 2>/dev/null || detect_mode)
+    case "$mode" in
+        compose|lite) docker logs "$pod" 2>&1 ;;
+        helm)         kubectl logs "$pod" 2>&1 ;;
     esac
 }
 
@@ -122,25 +167,36 @@ state_exists() {
 
 # ─── HTTP helpers ─────────────────────────────────────────────────
 
+_HTTP_CODE_FILE="$STATE/.http_code"
+
 http_get() {
-    # http_get <url> [api_token] → stdout (body), sets HTTP_CODE
+    # http_get <url> [api_token] → stdout (body), sets HTTP_CODE via file
     local url="$1"
     local token="${2:-}"
     local headers=()
     [ -n "$token" ] && headers+=(-H "X-API-Key: $token")
     local resp
-    resp=$(curl -sf -w '\n%{http_code}' "${headers[@]}" "$url" 2>/dev/null) || true
-    HTTP_CODE=$(echo "$resp" | tail -1)
+    resp=$(curl -s -w '\n%{http_code}' "${headers[@]}" "$url" 2>/dev/null) || true
+    local code
+    code=$(echo "$resp" | tail -1)
+    echo "${code:-000}" > "$_HTTP_CODE_FILE"
     echo "$resp" | head -n -1
 }
 
 http_post() {
-    # http_post <url> <data> [api_token] → stdout (body), sets HTTP_CODE
+    # http_post <url> <data> [api_token] → stdout (body), sets HTTP_CODE via file
     local url="$1" data="$2" token="${3:-}"
     local headers=(-H "Content-Type: application/json")
     [ -n "$token" ] && headers+=(-H "X-API-Key: $token")
     local resp
-    resp=$(curl -sf -w '\n%{http_code}' "${headers[@]}" -X POST -d "$data" "$url" 2>/dev/null) || true
-    HTTP_CODE=$(echo "$resp" | tail -1)
+    resp=$(curl -s -w '\n%{http_code}' "${headers[@]}" -X POST -d "$data" "$url" 2>/dev/null) || true
+    local code
+    code=$(echo "$resp" | tail -1)
+    echo "${code:-000}" > "$_HTTP_CODE_FILE"
     echo "$resp" | head -n -1
+}
+
+# Read the HTTP status code from the last http_get/http_post call
+http_code() {
+    cat "$_HTTP_CODE_FILE" 2>/dev/null || echo "000"
 }

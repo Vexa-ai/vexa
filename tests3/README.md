@@ -132,6 +132,16 @@ That's it. The check runs automatically on every `make smoke`.
 | `vm-destroy` | Tear down VM                               |
 | `vm-ssh`     | SSH into provisioned VM                    |
 
+#### Helm (staging cluster)
+
+| Target            | What it does                                    |
+| ----------------- | ----------------------------------------------- |
+| `helm-check`      | Verify kubectl can reach the cluster            |
+| `helm-smoke`      | helm-check + smoke (includes K8s-only checks)   |
+| `helm-dashboard`  | helm-smoke + dashboard tests                    |
+| `helm-containers` | helm-smoke + container lifecycle tests          |
+| `helm-full`       | helm-check + full suite                         |
+
 #### Utility
 
 | Target  | What it does                       |
@@ -171,7 +181,7 @@ State files (`.state/vm_ip`, `.state/vm_id`, `.state/vm_mode`) track the active 
 | ------- | ---------- | --------------------------------------------- | ------------------------------------------------------ |
 | compose | ~6 min     | Multi-container (one per service)              | smoke, dashboard-auth, dashboard-proxy, containers, webhooks |
 | lite    | ~5 min     | Single container + external Postgres           | smoke, dashboard-auth, containers                      |
-| helm    | manual     | K8s cluster (not yet automated in VM pipeline) | smoke with explicit URLs                               |
+| helm    | 0 (cluster exists) | K8s cluster (staging)            | smoke + K8s checks, dashboard, containers, full        |
 
 #### Why fresh VMs
 
@@ -196,9 +206,9 @@ make -C tests3 smoke DEPLOY_MODE=helm \
 
 | Mode    | `svc_exec dashboard printenv X` becomes       |
 | ------- | --------------------------------------------- |
-| compose | `docker exec vexa-dashboard-1 printenv X`     |
-| lite    | `docker exec vexa printenv X`                 |
-| helm    | `kubectl exec deploy/dashboard -- printenv X` |
+| compose | `docker exec vexa-dashboard-1 printenv X`                   |
+| lite    | `docker exec vexa printenv X`                               |
+| helm    | `kubectl exec deploy/{release}-vexa-dashboard -- printenv X` |
 
 ### Registry format
 
@@ -245,15 +255,15 @@ Every check is a JSON entry in `checks/registry.json`:
 
 ## Coverage
 
-40 registry checks + 14 test scripts. Validated across local compose, VM compose, and VM lite — 40/40 smoke on all three.
+48 registry checks + 16 test scripts. Validated across local compose, VM compose, and VM lite. Helm support added with 8 K8s-specific checks (4 health, 2 static, auto-skipped on compose/lite).
 
-### Registry checks (40)
+### Registry checks (48)
 
 | Tier     | Count | What                                                                                                                            |
 | -------- | ----- | ------------------------------------------------------------------------------------------------------------------------------- |
-| static   | 12    | Regression locks: redirect, identity, cookies, routes, graceful leave, URL parser, mapMeeting, compose defaults, password-store |
+| static   | 14    | Regression locks (12) + helm chart lint + helm template render                                                                  |
 | env      | 7     | Dashboard keys match admin-api, keys valid against API, VEXA_API_URL set, MINIO_ENDPOINT, MINIO_BUCKET, RUNTIME_API_URL         |
-| health   | 7     | Gateway, admin-api, dashboard, runtime-api, transcription, redis, minio                                                         |
+| health   | 11    | Gateway, admin-api, dashboard, runtime-api, transcription, redis, minio + K8s: deployments ready, no crashloop, no restarts, secrets exist |
 | contract | 14    | /bots/status, /meetings, auth rejection, 5 Teams URL formats, GMeet URL, invalid URL, WS ping, dashboard login, transcription token, cache headers |
 
 ### Test scripts (13)
@@ -285,7 +295,7 @@ Every check is a JSON entry in `checks/registry.json`:
 | Rate limiting (429)                  | Not implemented                   | --                                     |
 | Zoom                                 | Not implemented                   | --                                     |
 | Speaker accuracy (WER < 15%)         | Needs human speech, not just TTS  | tests2 rt-replay proc                  |
-| K8s profile propagation              | Needs helm deployment             | Registry entries with DEPLOY_MODE=helm |
+| K8s profile propagation              | Covered by K8S_DEPLOYMENTS_READY + K8S_NO_CRASHLOOP | `make helm-smoke`  |
 
 ## Relationship to tests2
 

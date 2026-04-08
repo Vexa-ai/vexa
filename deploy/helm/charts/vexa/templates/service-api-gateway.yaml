@@ -11,6 +11,9 @@ spec:
     - name: http
       port: {{ .Values.apiGateway.service.port }}
       targetPort: http
+      {{- if .Values.apiGateway.service.nodePort }}
+      nodePort: {{ .Values.apiGateway.service.nodePort }}
+      {{- end }}
   selector:
     {{- include "vexa.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: api-gateway

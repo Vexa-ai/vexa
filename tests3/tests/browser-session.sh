@@ -67,7 +67,7 @@ else
 fi
 
 # ── 4. S3 download on startup ─────────────────────
-if docker logs "$CONTAINER" 2>&1 | grep -q "S3 sync down\|downloading userdata\|syncBrowserData"; then
+if pod_logs "$CONTAINER" | grep -q "S3 sync down\|downloading userdata\|syncBrowserData"; then
     pass "S3: download on startup"
 else
     info "S3: no download log (first run or no saved data)"
@@ -158,9 +158,9 @@ AUTH_RESP=$(http_post "$GATEWAY_URL/bots" \
     '{"platform":"google_meet","native_meeting_id":"auth-flag-test","bot_name":"Auth Flag","authenticated":true,"automatic_leave":{"no_one_joined_timeout":30000}}' \
     "$API_TOKEN")
 sleep 5
-AUTH_CONTAINER=$(docker ps --filter "name=meeting-" --format '{{.Names}}' | grep -v meeting-api | tail -1)
+AUTH_CONTAINER=$(find_bot_pod "")
 if [ -n "$AUTH_CONTAINER" ]; then
-    HAS_S3=$(docker exec "$AUTH_CONTAINER" printenv BOT_CONFIG 2>/dev/null | python3 -c "
+    HAS_S3=$(pod_exec "$AUTH_CONTAINER" printenv BOT_CONFIG 2>/dev/null | python3 -c "
 import sys,json
 try:
     c=json.load(sys.stdin)

@@ -1,0 +1,94 @@
+# Test values for automated LKE cluster provisioning.
+# No ingress, no TLS — uses NodePort to expose gateway + dashboard.
+# Usage: helm install vexa ./deploy/helm/charts/vexa -f ./deploy/helm/charts/vexa/values-test.yaml
+
+global:
+  imagePullPolicy: Always
+
+secrets:
+  adminApiToken: "test-admin-token-t3"
+
+# ---------- Components ----------
+
+apiGateway:
+  enabled: true
+  image:
+    repository: vexaai/api-gateway
+    tag: dev
+  service:
+    type: NodePort
+    port: 8000
+    nodePort: 30056
+
+adminApi:
+  enabled: true
+  image:
+    repository: vexaai/admin-api
+    tag: dev
+
+meetingApi:
+  enabled: true
+  image:
+    repository: vexaai/meeting-api
+    tag: dev
+
+runtimeApi:
+  enabled: true
+  image:
+    repository: vexaai/runtime-api
+    tag: dev
+
+ttsService:
+  enabled: true
+  image:
+    repository: vexaai/tts-service
+    tag: dev
+
+mcp:
+  enabled: true
+  image:
+    repository: vexaai/mcp
+    tag: dev
+
+dashboard:
+  enabled: true
+  image:
+    repository: vexaai/dashboard
+    tag: dev
+  service:
+    type: NodePort
+    port: 3000
+    nodePort: 30001
+  env:
+    VEXA_PUBLIC_API_URL: ""       # set at install time via --set
+    NEXT_PUBLIC_APP_URL: ""       # set at install time via --set
+    NEXT_PUBLIC_HOSTED_MODE: "false"
+
+# Bundled deps
+postgres:
+  enabled: true
+  image: postgres:17-alpine
+  persistence:
+    enabled: true
+    size: 10Gi
+
+redis:
+  enabled: true
+  persistence:
+    enabled: true
+    size: 2Gi
+
+minio:
+  enabled: true
+  persistence:
+    size: 10Gi
+
+# No ingress — NodePort only
+ingress:
+  enabled: false
+
+migrations:
+  enabled: true
+  image:
+    repository: vexaai/meeting-api
+    tag: dev

@@ -47,6 +47,11 @@ spec:
               value: {{ include "vexa.redisUrl" . | quote }}
             - name: REDIS_HOST
               value: {{ include "vexa.redisUrl" . | quote }}
+            - name: INTERNAL_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: INTERNAL_API_SECRET
             {{- with .Values.apiGateway.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

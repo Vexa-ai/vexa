@@ -11,6 +11,9 @@ spec:
     - name: http
       port: {{ .Values.dashboard.service.port }}
       targetPort: http
+      {{- if .Values.dashboard.service.nodePort }}
+      nodePort: {{ .Values.dashboard.service.nodePort }}
+      {{- end }}
   selector:
     {{- include "vexa.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: dashboard
