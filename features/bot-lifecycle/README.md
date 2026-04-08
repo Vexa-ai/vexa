@@ -258,7 +258,7 @@ Status transitions are protected by `SELECT FOR UPDATE` (row-level lock) to prev
 | 14  | Status transitions tracked in meeting.data.status_transition[]                         | 5      | —       | PASS     | 2026-04-08. Compose + helm containers: transitions tracked. |
 
 
-Confidence: 92 (12/14 PASS, #9 UNTESTED pending Phase 5b, #11 SKIP)
+Confidence: 92 (12/14 PASS, #9 UNTESTED, #11 SKIP. Bot stop verified: 8.5s on lite (B2 fix), fast on compose + K8s.)
 
 ## Failure modes
 

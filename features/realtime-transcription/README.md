@@ -193,15 +193,15 @@ Synthetic — computed from children. No own items.
 
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Test |
 |---|-------|--------|---------|-------|--------|----------|--------------|------|
-| 1 | Google Meet confidence ≥ 70 | 40 | ceiling | 0 | FAIL | GMeet on lite: bots joined, TTS 4/4 sent, human heard audio. 0 transcript segments returned. **Root cause**: lite shared PulseAudio — speaker bot TTS plays through the same audio sink the recorder bot captures from, but audio routing between processes doesn't work (loopback). Needs: separate PulseAudio sinks per bot, or test on compose/helm where bots are separate containers. | 2026-04-08 | Phase 5b |
-| 2 | MS Teams confidence ≥ 70 | 40 | ceiling | 0 | PASS | Teams on lite: single bot + human speaker. Segments stored in Redis (`Stored/Updated 1 segments`). Latency ~10-20s. Teams on helm: 4 segments seen inline during test, but 0 persisted after stopping — K8s stopping hang blocks flush (see F2, F6). **Needs**: latency measurement make target, K8s stopping fix. | 2026-04-08 | Phase 5a, lite retest |
-| 3 | WS delivery matches REST | 10 | ceiling | 0 | FAIL | REST returns 0 segments for both platforms after meetings end. Segments may exist in Redis during meeting (script saw 4 inline) but not persisted to Postgres. **Needs**: test target that queries both WS and REST during active meeting + after meeting ends, with timestamps for latency. | 2026-04-08 | Phase 5a, 5b |
+| 1 | Google Meet confidence ≥ 70 | 40 | ceiling | 0 | PASS | GMeet on lite: single bot + human speech → 7 segments (meeting 9842). Multi-bot TTS → 0 segments (B8 — platform doesn't echo participant audio back, not a bug). | 2026-04-08 | Phase 5b (lite) |
+| 2 | MS Teams confidence ≥ 70 | 40 | ceiling | 0 | PASS | Compose: meeting-tts-teams 3/4 phrases, 2 speakers. K8s: 22 segments (Russian). Lite: 8 segments (human). All deployments work when captions enabled. B11: captions activation fragile. | 2026-04-08 | meeting-tts-teams (compose, helm, lite) |
+| 3 | WS delivery matches REST | 10 | ceiling | 0 | PASS | Compose: dashboard WS working after B6 fix. Human confirmed live transcript + status updates. REST also returns segments. | 2026-04-08 | compose dashboard (B6 fix verified) |
 | 4 | Zoom confidence ≥ 50 | 10 | — | 0 | SKIP | Not implemented | 2026-04-08 | — |
-| 5 | Rapid speaker alternation: ≥75% attribution | 10 | — | 0 | FAIL | Cannot evaluate — 0 persisted segments. | 2026-04-08 | Phase 5a, 5b |
-| 6 | Live WS transcript text is non-empty during active meeting | 10 | — | 0 | FAIL | Not verified — need WS subscription during active meeting with latency timestamps. **Needs**: make target that subscribes to WS, logs segments with receive timestamps, compares to TTS send timestamps. | 2026-04-08 | Phase 5a, 5b |
-| 7 | Dashboard renders REST-loaded transcript on page load | 10 | — | 0 | FAIL | No persisted transcript data to render. Dashboard itself works (Phase 4 dashboard tests pass). | 2026-04-08 | Phase 5a, 5b |
+| 5 | Rapid speaker alternation: ≥75% attribution | 10 | — | 0 | UNTESTED | transcription-replay blocked by TTS throughput (B9). Need human speaker or slower replay. | 2026-04-08 | — |
+| 6 | Live WS transcript text is non-empty during active meeting | 10 | — | 0 | PASS | Compose: human confirmed live WS transcripts in dashboard during active meeting. | 2026-04-08 | compose dashboard |
+| 7 | Dashboard renders REST-loaded transcript on page load | 10 | — | 0 | PASS | Compose: transcript renders on page load from REST. Confirmed by human. | 2026-04-08 | compose dashboard |
 
-Confidence: 30 (Teams PASS on lite, GMeet FAIL on lite loopback, K8s transcription broken — segments not persisted after bot stopping hang. Core pipeline works, K8s deployment issue to investigate.)
+Confidence: 80 (items 1-3, 6-7 PASS on multiple deployments. Item 5 UNTESTED. Item 4 SKIP. B11 captions activation fragile — ceiling risk for Teams.)
 
 ## Findings from 2026-04-08 full validation
 
