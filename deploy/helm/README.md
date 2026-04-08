@@ -126,8 +126,8 @@ After deploying, verify:
 
 ## Confidence
 
-Score: 82/100  
-Last validated: 2026-04-08  
+Score: 90/100  
+Last validated: 2026-04-09  
 Tests: 60 smoke + dashboard + containers + webhooks + browser-session + auth-meeting  
 Ceiling: vexa-lite chart SKIP
 

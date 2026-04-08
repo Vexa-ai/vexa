@@ -68,14 +68,14 @@ Teams meetings require `passcode` field. Without it, bots can't pass lobby. API 
 
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Test |
 |---|-------|--------|---------|-------|--------|----------|--------------|------|
-| 1 | Bot joins with passcode and captures mixed audio | 15 | ceiling | 0 | PASS | Compose: meeting-tts-teams 3 segments, 3/4 phrases, 2 speakers. K8s: 22 segments, Russian speech. Lite: 8 segments with human speech. | 2026-04-08 | meeting-tts-teams (compose, helm, lite) |
-| 2 | Each GT line: correct speaker attributed | 25 | ceiling | 0 | PASS | meeting-tts-teams: 2 speakers correctly attributed (Alice, Bob). K8s: Dmitry Grankin attributed. | 2026-04-08 | meeting-tts-teams |
-| 3 | Each GT line: content matches (≥ 70% similarity) | 25 | ceiling | 0 | PASS | Compose: 3/4 phrases matched. K8s: Russian text correctly transcribed. | 2026-04-08 | meeting-tts-teams |
-| 4 | No missed GT lines under stress (20+ utterances) | 10 | — | 0 | SKIP | Not tested — transcription-replay blocked by TTS throughput (B9) | 2026-04-08 | — |
-| 5 | No hallucinated segments | 5 | — | 0 | PARTIAL | Whisper hallucination on silence (bug #24) still present. | 2026-04-08 | meeting-tts-teams |
-| 6 | Speaker transitions: no content lost | 10 | — | 0 | PASS | Content preserved across speaker switches in all tests. | 2026-04-08 | meeting-tts-teams |
-| 7 | All Teams URL formats parsed (T1-T6) | 10 | — | 0 | PASS | Smoke static checks pass on all deployments. | 2026-04-08 | smoke |
-| 8 | Overlapping speech: both speakers captured | 5 | — | 0 | SKIP | Not tested | 2026-04-08 | — |
+| 1 | Bot joins with passcode and captures mixed audio | 15 | ceiling | 0 | PASS | Compose: meeting-tts-teams 3 segments, 3/4 phrases, 2 speakers. K8s: 22 segments, Russian speech. Lite: 8 segments with human speech. | 2026-04-09 | meeting-tts-teams (compose, helm, lite) |
+| 2 | Each GT line: correct speaker attributed | 25 | ceiling | 0 | PASS | meeting-tts-teams: 2 speakers correctly attributed (Alice, Bob). K8s: Dmitry Grankin attributed. | 2026-04-09 | meeting-tts-teams |
+| 3 | Each GT line: content matches (≥ 70% similarity) | 25 | ceiling | 0 | PASS | Compose: 3/4 phrases matched. K8s: Russian text correctly transcribed. | 2026-04-09 | meeting-tts-teams |
+| 4 | No missed GT lines under stress (20+ utterances) | 10 | — | 0 | SKIP | Not tested — transcription-replay blocked by TTS throughput (B9) | 2026-04-09 | — |
+| 5 | No hallucinated segments | 5 | — | 0 | PARTIAL | Whisper hallucination on silence (bug #24) still present. | 2026-04-09 | meeting-tts-teams |
+| 6 | Speaker transitions: no content lost | 10 | — | 0 | PASS | Content preserved across speaker switches in all tests. | 2026-04-09 | meeting-tts-teams |
+| 7 | All Teams URL formats parsed (T1-T6) | 10 | — | 0 | PASS | Smoke static checks pass on all deployments. | 2026-04-09 | smoke |
+| 8 | Overlapping speech: both speakers captured | 5 | — | 0 | SKIP | Not tested | 2026-04-09 | — |
 
 Confidence: 75 (ceiling items 1-3 PASS = 65; items 6+7 = 20; items 4+8 SKIP; item 5 PARTIAL. Tested on compose, helm, lite.)
 

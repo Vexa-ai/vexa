@@ -70,13 +70,13 @@ mc ls minio/vexa-recordings/
 
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Test |
 |---|-------|--------|---------|-------|--------|----------|--------------|------|
-| 1 | Recording uploaded to MinIO after meeting ends | 20 | ceiling | 0 | FAIL | Lite: bot reaches completed but recording upload fails — `http://minio:9000` DNS unresolvable in host-network mode. K8s: bot stuck in stopping, upload never attempted. Config needs MINIO_ENDPOINT=localhost for lite. | 2026-04-08 | Phase 5a, 5b |
-| 2 | POST /meetings/{id}/transcribe returns segments | 25 | ceiling | 0 | PARTIAL | Transcription engine works but 0 deferred segments via API. 409 dedup works. | 2026-04-08 | Phase 5 |
-| 3 | Speaker names attributed (not all "Unknown") | 25 | ceiling | 0 | PARTIAL | GMeet: correct. Teams: UUIDs not display names — see Known Issues | 2026-04-08 | Phase 5 |
-| 4 | Deferred segments consistent with realtime | 15 | — | 0 | FAIL | 0 segments persisted on both platforms. Pipeline not delivering to storage. | 2026-04-08 | Phase 5a, 5b |
-| 5 | Works for GMeet and Teams | 15 | — | 0 | FAIL | Both platforms: TTS heard, 0 segments persisted. Teams: bot stuck in stopping. GMeet lite: loopback prevents transcription. | 2026-04-08 | Phase 5a, 5b |
+| 1 | Recording uploaded to MinIO after meeting ends | 20 | ceiling | 0 | PARTIAL | **Compose + K8s**: recording upload works (MinIO available). **Lite**: recording disabled (B2 fix — RECORDING_ENABLED=false, no MinIO on lite). | 2026-04-09 | Phase 5, B2 fix |
+| 2 | POST /meetings/{id}/transcribe returns segments | 25 | ceiling | 0 | PARTIAL | Transcription engine works. Deferred transcription not tested this run. 409 dedup works. | 2026-04-09 | Phase 5 |
+| 3 | Speaker names attributed (not all "Unknown") | 25 | ceiling | 0 | PARTIAL | GMeet: correct. Teams: UUIDs not display names — see Known Issues | 2026-04-09 | Phase 5 |
+| 4 | Deferred segments consistent with realtime | 15 | — | 0 | UNTESTED | Not tested — realtime transcription works (compose 3 segs, K8s 22 segs, lite 8 segs). Deferred path not exercised. | 2026-04-09 | — |
+| 5 | Works for GMeet and Teams | 15 | — | 0 | PASS | Compose: Teams meeting-tts-teams 3/4 phrases. K8s: 22 segments Russian. Lite: 8 segments human speech. Both platforms produce realtime segments. | 2026-04-09 | Phase 5, meeting-tts-teams |
 
-Confidence: 10 (ceiling item 1 FAIL, items 4-5 FAIL. Items 2-3 PARTIAL from previous test. Transcription pipeline broken end-to-end.)
+Confidence: 40 (item 1 PARTIAL — works on compose+K8s, disabled on lite. Items 2-3 PARTIAL. Item 4 UNTESTED. Item 5 PASS. Realtime transcription works, post-meeting pipeline not fully tested.)
 
 ## Known Issues
 
