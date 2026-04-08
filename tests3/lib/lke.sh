@@ -94,7 +94,7 @@ lke_wait() {
     done
 
     export KUBECONFIG="$STATE/lke_kubeconfig"
-    state_write lke_kubeconfig_path "$STATE/lke_kubeconfig"
+    state_write lke_kubeconfig_path "$(cd "$STATE" && pwd)/lke_kubeconfig"
 
     # Wait for nodes
     info "waiting for nodes..."
