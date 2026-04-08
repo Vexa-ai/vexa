@@ -519,7 +519,7 @@ def check_transcription_token():
 
     test_audio = os.path.join(ROOT, "tests", "testdata", "test-speech-en.wav")
     if not os.path.isfile(test_audio):
-        return True, "test audio not found — skipped (not a regression)"
+        return False, f"test audio not found: {test_audio} — copy from services/transcription-service/tests/test_audio.wav"
 
     try:
         r = subprocess.run(
