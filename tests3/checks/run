@@ -398,6 +398,8 @@ def check_contract(lock):
         return check_transcription_token()
     if method == "BOT_STATUS_CHECK":
         return check_bot_status_transitions(gw, token)
+    if method == "MINIO_WRITABLE":
+        return check_minio_writable()
     if method == "SEGMENT_PIPELINE":
         return check_segment_pipeline(gw, token, admin_token)
 
@@ -437,6 +439,37 @@ def check_contract(lock):
         if code == expect:
             return True, ""
         return False, f"HTTP {code} (expected {expect})"
+
+
+def check_minio_writable():
+    """Verify MinIO bucket exists and accepts writes — needed for recordings and browser state."""
+    mode = state_read("deploy_mode")
+    if mode == "lite":
+        return True, "skipped for lite (no local MinIO)"
+
+    rc, out = svc_exec("meeting-api", [
+        "python3", "-c",
+        "import os,boto3;"
+        "ep=os.environ.get('MINIO_ENDPOINT','');"
+        "ak=os.environ.get('MINIO_ACCESS_KEY','');"
+        "sk=os.environ.get('MINIO_SECRET_KEY','');"
+        "bk=os.environ.get('MINIO_BUCKET','vexa');"
+        "sc=os.environ.get('MINIO_SECURE','false').lower()=='true';"
+        "proto='https' if sc else 'http';"
+        "s3=boto3.client('s3',endpoint_url=f'{proto}://{ep}',aws_access_key_id=ak,aws_secret_access_key=sk);"
+        "s3.head_bucket(Bucket=bk);"
+        "s3.put_object(Bucket=bk,Key='_healthcheck/test.txt',Body=b'ok');"
+        "s3.delete_object(Bucket=bk,Key='_healthcheck/test.txt');"
+        "print('OK')"
+    ])
+    if rc == 0 and "OK" in out:
+        return True, ""
+
+    rc2, ep = svc_exec("meeting-api", ["printenv", "MINIO_ENDPOINT"])
+    if rc2 != 0 or not ep:
+        return True, "no MINIO_ENDPOINT configured — skipped"
+
+    return False, f"MinIO bucket not writable — bucket may not exist or credentials wrong. Detail: {out}"
 
 
 def check_segment_pipeline(gw, token, admin_token):

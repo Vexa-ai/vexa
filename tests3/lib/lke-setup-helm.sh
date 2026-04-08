@@ -86,7 +86,22 @@ for ep in "$GATEWAY_URL|gateway" "$DASHBOARD_URL|dashboard"; do
     fi
 done
 
-# ── 6. Bootstrap API token ──────────────────────
+# ── 6. Verify MinIO bucket ───────────────────────
+info "verifying MinIO bucket..."
+for attempt in 1 2 3; do
+    BUCKET_OK=$(kubectl run minio-check-$attempt --image=minio/mc:latest --restart=Never --rm --quiet \
+        --command -- sh -c "mc alias set vexa http://vexa-vexa-minio:9000 vexa-access-key vexa-secret-key 2>/dev/null && mc mb --ignore-existing vexa/vexa 2>/dev/null && echo OK" 2>&1 | grep -c OK || true)
+    if [ "$BUCKET_OK" -ge 1 ]; then
+        pass "MinIO bucket: vexa"
+        break
+    fi
+    if [ "$attempt" -eq 3 ]; then
+        fail "MinIO bucket creation failed"
+    fi
+    sleep 5
+done
+
+# ── 7. Bootstrap API token ──────────────────────
 info "bootstrapping credentials..."
 ADMIN_TOKEN=$(kubectl exec deploy/vexa-vexa-admin-api -- printenv ADMIN_API_TOKEN 2>/dev/null)
 
@@ -123,7 +138,7 @@ if [ -n "$API_TOKEN" ]; then
     pass "dashboard configured with API key"
 fi
 
-# ── 8. Write state for tests ────────────────────
+# ── 9. Write state for tests ────────────────────
 state_write deploy_mode "helm"
 state_write gateway_url "$GATEWAY_URL"
 state_write admin_url "$ADMIN_URL"

@@ -340,6 +340,13 @@
     {"_": "═══ CONTRACT — API behavior correct, 15s ═══"},
 
     {
+      "id": "MINIO_BUCKET_WRITABLE",
+      "tier": "contract",
+      "proves": "MinIO bucket exists and is writable — recordings and browser state can be stored",
+      "symptom": "No audio recording for meeting — MinIO bucket not created or not writable",
+      "method": "MINIO_WRITABLE"
+    },
+    {
       "id": "SEGMENT_PIPELINE",
       "tier": "contract",
       "proves": "segments injected into Redis appear in the REST transcript — collector pipeline works end-to-end",
