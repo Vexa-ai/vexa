@@ -233,7 +233,7 @@ ENV LOG_LEVEL=info \
     PYTHONUNBUFFERED=1
 
 # Recording storage defaults (lite — local filesystem)
-ENV RECORDING_ENABLED=true \
+ENV RECORDING_ENABLED=false \
     STORAGE_BACKEND=local \
     LOCAL_STORAGE_DIR=/var/lib/vexa/recordings \
     LOCAL_STORAGE_FSYNC=true \
