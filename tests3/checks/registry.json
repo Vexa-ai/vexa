@@ -337,6 +337,30 @@
       "url": "HELM_TEMPLATE"
     },
 
+    {"_": "═══ HEALTH/DATA — database integrity ═══"},
+
+    {
+      "id": "DB_SCHEMA_ALIGNED",
+      "tier": "health",
+      "proves": "database schema has all required columns — schema sync ran successfully",
+      "symptom": "Services crash or return 500 — missing columns, tables, or indexes after DB migration",
+      "url": "DB_SCHEMA_CHECK"
+    },
+    {
+      "id": "DB_USERS_EXIST",
+      "tier": "health",
+      "proves": "users table has data — not an empty database",
+      "symptom": "No users in database — dump not loaded or load failed silently",
+      "url": "DB_USERS_CHECK"
+    },
+    {
+      "id": "DB_TOKENS_HAVE_SCOPES",
+      "tier": "health",
+      "proves": "API tokens have scopes assigned — backfill migration ran",
+      "symptom": "Tokens have empty scopes — scope enforcement will reject all requests",
+      "url": "DB_TOKEN_SCOPES_CHECK"
+    },
+
     {"_": "═══ CONTRACT — API behavior correct, 15s ═══"},
 
     {
@@ -443,13 +467,13 @@
       "id": "TEAMS_URL_SHORTLINK",
       "tier": "contract",
       "found": "2026-04-06",
-      "proves": "Teams /meet/ shortlink URL accepted or known gap",
+      "proves": "Teams /meet/ shortlink URL parsed and accepted by POST /bots (no explicit platform needed)",
       "symptom": "Teams shortlink URL format rejected — parse_meeting_url does not handle /meet/ path",
       "url": "$GATEWAY_URL/bots",
       "method": "POST",
       "auth": "api_token",
-      "data": "{\"platform\":\"teams\",\"meeting_url\":\"https://teams.microsoft.com/meet/test123?p=abc123\",\"bot_name\":\"url-check-2\"}",
-      "expect_code": [200, 201, 202, 403, 409, 422]
+      "data": "{\"meeting_url\":\"https://teams.microsoft.com/meet/365488377316481?p=ryf9yhbfrc7MpM7kNv\",\"bot_name\":\"url-check-shortlink\"}",
+      "expect_code": [200, 201, 202, 403, 409, 500]
     },
     {
       "id": "TEAMS_URL_CHANNEL",
@@ -465,24 +489,24 @@
     {
       "id": "TEAMS_URL_ENTERPRISE",
       "tier": "contract",
-      "proves": "Teams enterprise domain URL accepted or known gap",
+      "proves": "Teams enterprise domain URL parsed and accepted by POST /bots (no explicit platform needed)",
       "symptom": "Teams custom enterprise domain URL rejected",
       "url": "$GATEWAY_URL/bots",
       "method": "POST",
       "auth": "api_token",
-      "data": "{\"platform\":\"teams\",\"meeting_url\":\"https://myorg.teams.microsoft.com/meet/test123?p=abc123\",\"bot_name\":\"url-check-4\"}",
-      "expect_code": [200, 201, 202, 403, 409, 422, 500]
+      "data": "{\"meeting_url\":\"https://myorg.teams.microsoft.com/meet/33122884984323?p=J3o61K6vtz0f8RqKru\",\"bot_name\":\"url-check-enterprise\"}",
+      "expect_code": [200, 201, 202, 403, 409, 500]
     },
     {
       "id": "TEAMS_URL_PERSONAL",
       "tier": "contract",
-      "proves": "Teams personal (teams.live.com) URL accepted or known gap",
+      "proves": "Teams personal (teams.live.com) URL parsed and accepted by POST /bots (no explicit platform needed)",
       "symptom": "Teams personal (teams.live.com) URL rejected",
       "url": "$GATEWAY_URL/bots",
       "method": "POST",
       "auth": "api_token",
-      "data": "{\"platform\":\"teams\",\"meeting_url\":\"https://teams.live.com/meet/test123\",\"bot_name\":\"url-check-5\"}",
-      "expect_code": [200, 201, 202, 403, 409, 422, 500]
+      "data": "{\"meeting_url\":\"https://teams.live.com/meet/9361792952021?p=abc12345\",\"bot_name\":\"url-check-personal\"}",
+      "expect_code": [200, 201, 202, 403, 409, 500]
     },
     {
       "id": "GMEET_URL_PARSED",

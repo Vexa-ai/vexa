@@ -2,7 +2,15 @@
 # Auto-detect deployment mode and URLs. Writes results to .state/.
 source "$(dirname "$0")/common.sh"
 
-MODE=$(detect_mode)
+# If DEPLOY_MODE is explicitly set, use it. Otherwise auto-detect.
+# Honor existing state for helm (avoids local lite overriding remote cluster).
+if [ "${DEPLOY_MODE:-auto}" != "auto" ]; then
+    MODE="$DEPLOY_MODE"
+elif state_exists deploy_mode && [ "$(cat "$STATE/deploy_mode")" = "helm" ] && state_exists lke_kubeconfig_path; then
+    MODE="helm"
+else
+    MODE=$(detect_mode)
+fi
 
 if [ "$MODE" = "none" ]; then
     echo "$(red "ERROR"): No deployment found (no compose, no lite container, no k8s)."

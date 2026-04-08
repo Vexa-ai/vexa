@@ -94,6 +94,9 @@ browser: browser-session          ## browser without human gate
 meeting-tts: $(SMOKE_STAMP)       ## full meeting: create → bots → admit → TTS → transcript (10min)
 	@$(T3)/tests/meeting-tts.sh
 
+meeting-tts-teams: $(SMOKE_STAMP) ## Teams meeting: bots → admit → TTS → transcript (TEAMS_MEETING_URL required)
+	@$(T3)/tests/meeting-tts-teams.sh
+
 meeting: $(SMOKE_STAMP)           ## create meeting via CDP (60s)
 	@$(T3)/tests/meeting.sh
 
@@ -231,6 +234,9 @@ lke-smoke:                             ## run smoke + dashboard + containers on 
 	@$(MAKE) --no-print-directory smoke DEPLOY_MODE=helm
 	@$(MAKE) --no-print-directory dashboard-auth DEPLOY_MODE=helm || true
 	@$(MAKE) --no-print-directory containers DEPLOY_MODE=helm || true
+
+lke-load-db:                           ## load production DB dump into cluster Postgres
+	@$(T3)/lib/lke-load-db.sh $(DUMP_FILE)
 
 lke-destroy:                           ## tear down LKE cluster
 	@$(T3)/lib/lke.sh destroy

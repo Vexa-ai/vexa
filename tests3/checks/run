@@ -195,6 +195,60 @@ def check_health(lock):
             return True, ""
         return False, f"HTTP {code} from {health_url}"
 
+    # Special: Database integrity checks
+    if url == "DB_SCHEMA_CHECK":
+        required_columns = {
+            "api_tokens": ["scopes", "name", "last_used_at", "expires_at"],
+            "transcriptions": ["segment_id"],
+            "users": ["max_concurrent_bots", "data"],
+            "meetings": ["data", "updated_at"],
+        }
+        errors = []
+        for table, columns in required_columns.items():
+            for col in columns:
+                rc, out = svc_exec("admin-api", [
+                    "python3", "-c",
+                    f"import os; from sqlalchemy import create_engine, text;"
+                    f"e=create_engine(f\"postgresql://{{os.environ['DB_USER']}}:{{os.environ['DB_PASSWORD']}}@{{os.environ['DB_HOST']}}:{{os.environ['DB_PORT']}}/{{os.environ['DB_NAME']}}\");"
+                    f"c=e.connect(); r=c.execute(text(\"SELECT column_name FROM information_schema.columns WHERE table_name='{table}' AND column_name='{col}'\")).fetchone(); c.close();"
+                    f"print('OK' if r else 'MISSING')"
+                ])
+                if "MISSING" in out:
+                    errors.append(f"{table}.{col}")
+        if errors:
+            return False, f"missing columns: {', '.join(errors)}"
+        return True, f"all required columns present"
+
+    if url == "DB_USERS_CHECK":
+        rc, out = svc_exec("admin-api", [
+            "python3", "-c",
+            "import os; from sqlalchemy import create_engine, text;"
+            "e=create_engine(f\"postgresql://{os.environ['DB_USER']}:{os.environ['DB_PASSWORD']}@{os.environ['DB_HOST']}:{os.environ['DB_PORT']}/{os.environ['DB_NAME']}\");"
+            "c=e.connect(); r=c.execute(text('SELECT count(*) FROM users')).scalar(); c.close();"
+            "print(r)"
+        ])
+        if rc == 0 and out.strip().isdigit() and int(out.strip()) > 0:
+            return True, f"{out.strip()} users"
+        return False, f"users count: {out.strip()}"
+
+    if url == "DB_TOKEN_SCOPES_CHECK":
+        rc, out = svc_exec("admin-api", [
+            "python3", "-c",
+            "import os; from sqlalchemy import create_engine, text;"
+            "e=create_engine(f\"postgresql://{os.environ['DB_USER']}:{os.environ['DB_PASSWORD']}@{os.environ['DB_HOST']}:{os.environ['DB_PORT']}/{os.environ['DB_NAME']}\");"
+            "c=e.connect(); total=c.execute(text('SELECT count(*) FROM api_tokens')).scalar();"
+            "empty=c.execute(text(\"SELECT count(*) FROM api_tokens WHERE scopes = '{}'\")).scalar(); c.close();"
+            "print(f'{total},{empty}')"
+        ])
+        if rc == 0 and "," in out.strip():
+            total, empty = out.strip().split(",")
+            if int(total) > 0 and int(empty) == 0:
+                return True, f"{total} tokens, all have scopes"
+            if int(total) == 0:
+                return True, "no tokens yet"
+            return False, f"{empty}/{total} tokens have empty scopes — backfill needed"
+        return False, f"could not check: {out.strip()}"
+
     # Special: Redis ping via svc_exec
     if url == "REDIS_PING":
         code, out = svc_exec("redis", ["redis-cli", "ping"])
