@@ -477,8 +477,9 @@ def check_browser_session_cdp(gw, token):
     if not session_token:
         return False, "no session_token in response"
 
-    # Wait for container to start
-    time.sleep(15)
+    # Wait for container to start — then test CDP twice:
+    # once after pod ready, once immediately after to catch IP resolution races
+    time.sleep(20)
 
     # Hit CDP proxy
     try:

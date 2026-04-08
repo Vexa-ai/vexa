@@ -1522,6 +1522,29 @@ async def resolve_browser_session(token: str) -> Optional[dict]:
     container_name = session.get("container_name")
     if container_name:
         asyncio.create_task(_fire_touch(container_name))
+
+    # Resolve container IP if missing (K8s pods don't have DNS names)
+    if not session.get("container_ip") and container_name:
+        try:
+            resp = await app.state.http_client.get(
+                f"{RUNTIME_API_URL}/containers/{container_name}",
+                timeout=5.0,
+            )
+            if resp.status_code == 200:
+                info = resp.json()
+                ip = info.get("ip")
+                if ip:
+                    session["container_ip"] = ip
+                    # Cache in Redis for next request
+                    try:
+                        updated = json.dumps(session)
+                        await app.state.redis.set(
+                            f"browser_session:{token}", updated, ex=86400)
+                    except Exception:
+                        pass
+        except Exception as exc:
+            logger.debug("Failed to resolve container IP for %s: %s", container_name, exc)
+
     return session
 
 

@@ -39,6 +39,8 @@ spec:
               value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
             - name: MEETING_API_URL
               value: "http://{{ include "vexa.componentName" (list . "meeting-api") }}:{{ .Values.meetingApi.service.port }}"
+            - name: RUNTIME_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "runtime-api") }}:{{ .Values.runtimeApi.service.port }}"
             - name: TRANSCRIPTION_COLLECTOR_URL
               value: "http://{{ include "vexa.componentName" (list . "meeting-api") }}:{{ .Values.meetingApi.service.port }}"
             - name: MCP_URL

@@ -292,9 +292,16 @@ async def list_containers(
 async def get_container(name: str, request: Request):
     """Get container details."""
     redis = _get_redis(request)
+    backend = _get_backend(request)
     data = await state.get_container(redis, name)
     if not data:
         raise HTTPException(404, f"Container {name} not found")
+    # Enrich with live IP from backend (K8s pods don't have DNS names)
+    if not data.get("ip") and data.get("status") == "running":
+        info = await backend.inspect(name)
+        if info and info.ip:
+            data["ip"] = info.ip
+            await state.set_container(redis, name, data)
     return _container_response(name, data)
 
 
