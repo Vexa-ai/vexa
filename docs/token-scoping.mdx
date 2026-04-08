@@ -13,10 +13,9 @@ vxa_<scope>_<random>
 ```
 
 Examples:
-- `vxa_user_pZqJ5dEQK47Mc7YeVTR53wAefBCs7Nf6d0fHbHs8` — user scope
 - `vxa_bot_VDXyV683YBvsCRrlUtnWWKLC0qTtGNaxGgVS8F5s` — bot scope
 - `vxa_tx_eFgh1234abcd5678...` — transcription scope
-- `vxa_admin_xyz789...` — admin scope
+- `vxa_browser_xyz789...` — browser scope
 
 Legacy tokens (without the `vxa_` prefix) retain full access for backward compatibility.
 
@@ -24,10 +23,9 @@ Legacy tokens (without the `vxa_` prefix) retain full access for backward compat
 
 | Scope | Prefix | Access |
 |-------|--------|--------|
-| `user` | `vxa_user_` | Standard user operations: manage bots, view meetings, read transcripts |
-| `bot` | `vxa_bot_` | Bot operations only: start/stop bots, check bot status |
-| `tx` | `vxa_tx_` | Transcription read-only: view meetings, read transcripts |
-| `admin` | `vxa_admin_` | Full admin access: all operations |
+| `bot` | `vxa_bot_` | Bot operations: start/stop bots, check bot status, webhooks, voice agent |
+| `tx` | `vxa_tx_` | Transcription and meeting data access: view meetings, read transcripts |
+| `browser` | `vxa_browser_` | Browser sessions: VNC, CDP, workspace |
 
 ## Enforcement
 
@@ -35,9 +33,9 @@ Scope enforcement happens at the service level, not the gateway. Each backend se
 
 | Service | Endpoint examples | Allowed scopes |
 |---------|-------------------|---------------|
-| meeting-api | `POST /bots`, `GET /bots/status` | `bot`, `user`, `admin` |
-| meeting-api | `GET /meetings`, `GET /transcripts` | `tx`, `user`, `admin` |
-| admin-api | `POST /admin/users`, `GET /admin/tokens` | `user`, `admin` |
+| meeting-api | `POST /bots`, `GET /bots/status` | `bot` |
+| meeting-api | `GET /meetings`, `GET /transcripts` | `tx` |
+| api-gateway | `POST /browser-sessions` | `browser` |
 
 A request with an out-of-scope token receives `403 Forbidden`:
 
@@ -51,8 +49,17 @@ A request with an out-of-scope token receives `403 Forbidden`:
 
 Create tokens via the admin API:
 
+Single scope:
+
 ```bash
 curl -X POST "https://your-vexa-host/admin/users/{user_id}/tokens?scope=bot" \
+  -H "X-Admin-API-Key: YOUR_ADMIN_KEY"
+```
+
+Multiple scopes (comma-separated):
+
+```bash
+curl -X POST "https://your-vexa-host/admin/users/{user_id}/tokens?scopes=bot,tx" \
   -H "X-Admin-API-Key: YOUR_ADMIN_KEY"
 ```
 
@@ -67,7 +74,7 @@ Response:
 }
 ```
 
-The `scope` parameter accepts: `user`, `bot`, `tx`, `admin`. If omitted, defaults to `user`.
+The `scope` parameter accepts: `bot`, `tx`, `browser`. Use `scopes` (plural) with comma-separated values to grant multiple scopes to a single token.
 
 ## Using scoped tokens
 
@@ -78,9 +85,9 @@ Use scoped tokens the same way as regular tokens — via the `X-API-Key` header:
 curl -H "X-API-Key: vxa_bot_VDXyV683Y..." \
   https://your-vexa-host/bots/status
 
-# This fails with 403 — bot scope cannot access transcripts
+# This fails with 403 — bot scope cannot access transcript endpoints
 curl -H "X-API-Key: vxa_bot_VDXyV683Y..." \
-  https://your-vexa-host/meetings
+  https://your-vexa-host/transcripts/google_meet/abc-defg-hij
 ```
 
 ## Legacy tokens

@@ -30,7 +30,9 @@ Bot lifecycle management service. Handles meeting CRUD, voice agent controls (TT
 - `POST /bots/{platform}/{meeting_id}/screen` — screen content
 
 #### Recordings
-- `GET /bots/{platform}/{meeting_id}/recordings` — list recordings
+- `GET /recordings` — list recordings for the authenticated user
+- `GET /recordings/{recording_id}` — get a single recording
+- `GET /recordings/{recording_id}/media/{media_file_id}/download` — get download URL
 
 #### Browser Sessions
 - `POST /internal/browser-sessions/{token}/save` — trigger browser data save to S3

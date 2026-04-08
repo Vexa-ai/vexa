@@ -22,7 +22,7 @@ curl -X PUT "$API_BASE/user/webhook" \
 Notes:
 
 - `webhook_url` must be publicly reachable. Private/internal URLs are rejected (SSRF protection).
-- If you set `webhook_secret`, Vexa will include `Authorization: Bearer <secret>` on webhook requests.
+- If you set `webhook_secret`, Vexa will include `Authorization: Bearer <secret>` on webhook requests. Note: the secret is stored in plaintext — use a dedicated secret, not a password you use elsewhere.
 - For local development, use a tunnel (ngrok/cloudflared): [Local webhook development](local-webhook-development)
 
 ## Delivery
