@@ -7,8 +7,6 @@ tests3:
 
 # Authenticated Meetings
 
-> Procs: `tests2/src/browser.md` (cookie save/restore), `tests2/src/bot.md` (authenticated join)
-
 ## What
 
 Meeting bots can join Google Meet as a logged-in Google account instead of as an anonymous guest. This changes the join flow: authenticated bots see "Join now" instead of "Your name" + "Ask to join". They appear with the Google account's name and avatar, skip the name prompt, and may bypass waiting rooms that block anonymous guests.
@@ -127,6 +125,8 @@ This is not silent failure — the warning is logged. The bot still joins, just 
 | 8 | Bot logs diagnostic screenshot at auth lobby | 5 | — | PASS | 2026-04-07 |
 | 9 | `use_saved_userdata` field silently dropped (schema field is `authenticated`) | 5 | — | PASS | 2026-04-07 |
 | 10 | Teams authenticated join (enterprise links) | 10 | — | NOT IMPLEMENTED | |
+
+Confidence: 75 (8/10 items PASS, all ceiling items pass. -10: fallback to anonymous join FAIL — bot stuck on name input. -10: Teams authenticated join not implemented. -5: use_saved_userdata silently dropped.)
 
 ## Known bugs
 

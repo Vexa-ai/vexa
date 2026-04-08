@@ -7,9 +7,6 @@ tests3:
 
 # Container Lifecycle
 
-> Proc: `tests2/src/containers.md`
-> Infra: `tests2/src/infra.md`
-
 ## What
 
 Runtime-api is a generic container orchestrator. It manages Docker containers for meeting bots, browser sessions, and agent containers. It handles creation, monitoring, and removal. It does NOT manage meeting logic, transcription, or platform-specific behavior — those are the consumer's responsibility (meeting-api, agent-api).
@@ -185,6 +182,8 @@ When Docker reports a container "die" event:
 | 13 | Profile resource values based on measured usage | 10 | — | PASS | Baseline 2026-03-12: 250m CPU, 600Mi memory. Commit 877b2a92. Confirmed in profiles.yaml. |
 | 14 | No `:latest` tags or `localhost` fallbacks in profiles | 5 | — | PASS | 2026-04-07. profiles.yaml uses ${BROWSER_IMAGE}, ${AGENT_IMAGE}, ${REDIS_URL} — no :latest or localhost. |
 | 15 | Profiles propagate correctly to K8s (requests/limits/shm) | 10 | — | UNTESTED | Requires helm deployment. |
+
+Confidence: 90 (14/15 items PASS, all ceiling items pass. -10: K8s profile propagation untested — requires helm deployment.)
 
 ## Profiles and resources
 

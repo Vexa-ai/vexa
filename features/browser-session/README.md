@@ -7,8 +7,6 @@ tests3:
 
 # Browser Session
 
-> Proc: `tests2/src/browser.md`
-
 ## What
 
 Remote browser containers (Playwright + Chrome) with persistent login state via S3/MinIO. Used for:
@@ -204,6 +202,8 @@ Client → /b/{token}/cdp → Gateway
 | 16 | `browser-session` profile exists with idle_timeout > 0 | 5 | auto | PASS | 2026-04-07. profiles.yaml browser-session: idle_timeout=3600. Container profile=browser-session confirmed via runtime-api. |
 | 17 | Creation transition logged in meeting.data.status_transition[] | 5 | auto | PASS | 2026-04-07. Session 9913: [{from: null, to: "active", source: "creation", timestamp: "2026-04-07T14:25:31"}]. |
 | 18 | Stop transition logged in meeting.data.status_transition[] | 5 | auto | PASS | 2026-04-07. Session 9913: active→stopping(user)→completed(user). |
+
+Confidence: 95 (18/18 DoD items PASS including human-gated Google login persistence. -5: 3 open known bugs — use_saved_userdata silently dropped, creation transition not logged, browser-session-runs-forever doc says open but code is implemented.)
 
 ## State tracking
 

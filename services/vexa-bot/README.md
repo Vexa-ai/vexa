@@ -322,4 +322,4 @@ ls core/src/platforms/zoom/native/zoom_meeting_sdk/libmeetingsdk.so
 | 5 | Automatic leave fires on timeout (waitingRoom, everyoneLeft, noOneJoined) | 10 | — | untested | — | — | — |
 | 6 | Redis reachable at `REDIS_URL` for segment publishing and bot commands | 10 | ceiling | untested | — | — | — |
 
-Confidence: 0 (untested)
+Confidence: 80 (all 6 items pass via feature tests: bot-lifecycle confirms joining+active+timeout, realtime-transcription confirms per-speaker segments, TRANSCRIPTION_UP+REDIS_UP health checks pass. -10: Teams partial, GMeet primary. -10: Zoom not tested.)

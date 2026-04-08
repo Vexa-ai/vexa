@@ -535,25 +535,49 @@ You don't pay complexity tax for features you don't use. Each service is a separ
 
 ## Features — Honest Status
 
-Each feature has its own README with business context, competitive positioning, architecture, and validation gates. **Confidence scores are evidence-based** — 0 means untested, 90+ means validated with real tests. We update these continuously.
+Each feature has its own README with business context, architecture, DoD table, and confidence score. **Confidence scores are evidence-based** — calculated from DoD pass/fail items and tests3 checks. We update these continuously.
 
-| Feature | Confidence | What's tested | What's not | Contributions welcome |
-|---------|-----------|--------------|-----------|----------------------|
-| [realtime-transcription](./features/realtime-transcription/) | Teams 90, GMeet 90, Zoom 0 | E2E both platforms, 92.7% accuracy | Zoom (not implemented), human speaker identity (40) | Zoom implementation, speaker locking for humans |
-| [multi-platform](./features/multi-platform/) | GMeet 75, Teams 65, Zoom 0 | Join flows for GMeet + Teams | Zoom SDK broken, Teams admission edge cases | Zoom browser-based impl, Teams bug [#171](https://github.com/Vexa-ai/vexa/issues/171) |
-| [agentic-runtime](./features/agentic-runtime/) | 85 | MVP0-3 validated (32 checks), all CLI commands | BOT_API_TOKEN wiring, post-meeting auto-trigger | Webhook receiver (~20 LOC), server-side chat history |
-| [mcp-integration](./features/mcp-integration/) | 90 | 10/10 tools discoverable, auth enforced | list_meetings pagination (returns 2.7MB unbounded) | Pagination fix, interactive bot tools [#127](https://github.com/Vexa-ai/vexa/issues/127) |
-| [post-meeting-transcription](./features/post-meeting-transcription/) | 85 | Pipeline works, 100% speaker accuracy (2 speakers) | Dashboard playback offset, re-transcription | Playback seek fix, multi-speaker accuracy testing |
-| [webhooks](./features/webhooks/) | 85 | Envelope standardized, signing fixed | E2E delivery with public URL, retry mechanism | Retry via scheduler, circuit breaker |
-| [token-scoping](./features/token-scoping/) | 90 | 14/14 tests pass, all 4 scopes enforced | Per-endpoint granularity (currently per-service) | Per-meeting RBAC [#158](https://github.com/Vexa-ai/vexa/issues/158) |
-| [scheduler](./features/scheduler/) | 90 (unit) | 16/16 unit tests, crash recovery, idempotency | Executor not wired to services, REST API not built | Wire executor, REST API endpoints |
-| [speaking-bot](./features/speaking-bot/) | 0 | Code complete, **not E2E tested** | Everything — needs live meeting test | E2E validation, voice selection |
-| [chat](./features/chat/) | 0 | Code complete (~700 LOC), **not E2E tested** | Everything — needs live meeting test | E2E validation, Teams bug [#133](https://github.com/Vexa-ai/vexa/issues/133) |
-| [remote-browser](./features/remote-browser/) | 30 | Container builds, VNC accessible | Persistence, authenticated bot flow | MinIO sync, authenticated meeting join |
-| [calendar-integration](./features/calendar-integration/) | 0 | Research complete, **not built** | Everything — new feature | Google OAuth flow, calendar-service (2-3 week project) |
-| [knowledge-workspace](./features/knowledge-workspace/) | 60 | Template + persistence + agent chat working | Entity extraction, git backing, index injection | Entity extraction from transcripts, git-backed workspaces |
+| Feature | Confidence | Status |
+|---------|-----------|--------|
+| [meeting-urls](./features/meeting-urls/) | 100 | All 9 checks PASS. Teams e2e validated. |
+| [browser-session](./features/browser-session/) | 95 | 18/18 DoD PASS. Google login persistence validated. |
+| [infrastructure](./features/infrastructure/) | 95 | All items pass including build. |
+| [bot-lifecycle](./features/bot-lifecycle/) | 92 | 12/14 PASS. Unauthenticated join + escalation untested. |
+| [container-lifecycle](./features/container-lifecycle/) | 90 | 14/15 PASS. K8s profiles untested. |
+| [webhooks](./features/webhooks/) | 90 | All items pass. Live delivery not yet verified. |
+| [remote-browser](./features/remote-browser/) | 90 | CDP, S3, idle timeout validated. Zombie processes remain. |
+| [dashboard](./features/dashboard/) | 90 | Login, proxy, pagination, transcript all tested via tests3. |
+| [meeting-chat](./features/meeting-chat/) | 80 | All items pass. No multi-message e2e flow tested. |
+| [authenticated-meetings](./features/authenticated-meetings/) | 75 | 8/10 PASS. Fallback FAIL, Teams auth not implemented. |
+| [speaking-bot](./features/speaking-bot/) | 70 | Ceiling items pass. E2E TTS in live meeting works. |
+| [auth-and-limits](./features/auth-and-limits/) | 70 | Ceiling items pass. Rate limiting + token CRUD untested. |
+| [realtime-transcription](./features/realtime-transcription/) | 65 | GMeet + Teams work. Zoom not implemented. |
+| [post-meeting-transcription](./features/post-meeting-transcription/) | 20 | Recording upload broken both platforms. |
 
-**Blockers affecting all features:** 7 open bot join/leave bugs block live testing. See [features/README.md](./features/README.md) for the full issue matrix.
+### Services
+
+| Service | Confidence | Status |
+|---------|-----------|--------|
+| [agent-api](./services/agent-api/) | 90 | 32 checks, CLI commands validated. |
+| [vexa-bot](./services/vexa-bot/) | 80 | All items covered via feature tests. Zoom untested. |
+| [dashboard](./services/dashboard/) | 75 | 5/6 items via tests3 checks. npm test not run. |
+| [api-gateway](./services/api-gateway/) | 68 | Core routing, auth, WebSocket validated. |
+| [admin-api](./services/admin-api/) | 62 | User/token CRUD, schema sync tested. |
+| [transcription-service](./services/transcription-service/) | 55 | Health + transcription + auth pass. Backpressure untested. |
+| [runtime-api](./services/runtime-api/) | 52 | Container CRUD, idle, callbacks tested. |
+| [meeting-api](./services/meeting-api/) | 52 | Bot create, status, URL parsing. Tech debt remains. |
+| [tts-service](./services/tts-service/) | 30 | Indirect only — works via speaking-bot feature. |
+| [mcp](./services/mcp/) | 0 | Untested. |
+| [calendar-service](./services/calendar-service/) | 0 | Experimental, not in default compose. |
+| [telegram-bot](./services/telegram-bot/) | 0 | No bot token configured in dev/CI. |
+
+### Deployments
+
+| Mode | Confidence | Status |
+|------|-----------|--------|
+| [compose](./deploy/compose/) | 93 | 18/19 DoD PASS. Transcription not tested from inside containers. |
+| [lite](./deploy/lite/) | 80 | 9/9 DoD PASS. Zombie reaper bug caps reliability. |
+| [helm](./deploy/helm/) | 75 | vexa chart validated on LKE. vexa-lite chart not tested. |
 
 ## Related Projects
 

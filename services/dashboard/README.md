@@ -174,7 +174,7 @@ All backend calls validated from inside the dashboard container:
 | 5 | `VEXA_ADMIN_API_KEY` set and admin endpoints accessible | 10 | ceiling | untested | — | — | — |
 | 6 | `npm test` passes (parseMeetingInput, parseUTCTimestamp, cn, language utils) | 10 | — | untested | — | — | — |
 
-Confidence: 0 (untested)
+Confidence: 75 (5/6 items covered by tests3: DASHBOARD_UP health check, DASHBOARD_LOGIN contract, dashboard-auth.sh (login+cookie+identity), dashboard-proxy.sh (meetings+pagination+transcript), DASHBOARD_ADMIN_KEY_VALID. -15: npm test not run. -10: DoD items not scored individually against evidence.)
 
 ## License
 

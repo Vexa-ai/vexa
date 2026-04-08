@@ -134,7 +134,7 @@ Requires the Agent API to be running. Set `TELEGRAM_BOT_TOKEN` to a valid bot to
 | 5 | Auth token cached in Redis and refreshed on 403 | 15 | — | untested | — | — | — |
 | 6 | `CHAT_API_URL` (agent-api via gateway) reachable | 10 | ceiling | untested | — | — | — |
 
-Confidence: 0 (untested)
+Confidence: 0 (untested — no TELEGRAM_BOT_TOKEN configured in dev/CI, no tests3 checks)
 
 ## Known Issues
 

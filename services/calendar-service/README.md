@@ -60,4 +60,4 @@ Requires PostgreSQL with the shared database schema initialized.
 | 5 | `DATABASE_URL` set and PostgreSQL reachable | 15 | ceiling | untested | — | — | — |
 | 6 | `DELETE /calendar/disconnect` removes OAuth tokens and stops syncing | 10 | — | untested | — | — | — |
 
-Confidence: 0 (untested)
+Confidence: 0 (untested — experimental service, not in default compose, no tests3 checks)

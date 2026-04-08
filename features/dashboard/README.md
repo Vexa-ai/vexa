@@ -7,8 +7,6 @@ tests3:
 
 # Dashboard
 
-> Proc: `tests2/src/dashboard.md`
-
 ## What
 
 Next.js dashboard at `/meetings`. Shows meeting list, per-meeting transcript, live status updates via WebSocket, recordings, chat.

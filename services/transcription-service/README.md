@@ -205,7 +205,7 @@ TRANSCRIPTION_SERVICE_TOKEN=<same value as API_TOKEN above>
 | 5 | Nginx load balancer distributes across configured workers (`GET /lb-status`) | 10 | — | untested | — | — | — |
 | 6 | `API_TOKEN` set and unauthenticated requests rejected | 10 | — | untested | — | — | — |
 
-Confidence: 0 (untested)
+Confidence: 55 (3/6 items pass: TRANSCRIPTION_UP health check, POST /v1/audio/transcriptions works via realtime-transcription feature + compose test-transcription, TRANSCRIPTION_TOKEN_VALID auth check. -20: backpressure 503 untested. -15: load balancer status untested. -10: model startup only implied.)
 
 ## License
 

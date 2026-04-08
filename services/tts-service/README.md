@@ -98,4 +98,4 @@ curl -X POST http://localhost:8002/v1/audio/speech \
 | 4 | `GET /voices` returns available voice names and aliases | 15 | — | untested | — | — | — |
 | 5 | OpenAI voice name aliases resolve to correct Piper voices | 15 | — | untested | — | — | — |
 
-Confidence: 0 (untested)
+Confidence: 30 (indirect evidence only: speaking-bot feature uses POST /v1/audio/speech and produces audible TTS in meetings. No direct tests3 coverage — no TTS health check, /voices endpoint, or alias mapping tested.)

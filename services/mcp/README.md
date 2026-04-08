@@ -186,4 +186,4 @@ Once you have completed the above steps:
 | 5 | api-gateway reachable (stateless proxy, no DB/Redis) | 15 | ceiling | untested | — | — | — |
 | 6 | MCP prompts and resources return valid responses | 10 | — | untested | — | — | — |
 
-Confidence: 0 (untested)
+Confidence: 0 (untested — no tests3 checks, no feature coverage)

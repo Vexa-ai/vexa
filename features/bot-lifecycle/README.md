@@ -7,8 +7,6 @@ tests3:
 
 # Bot Lifecycle
 
-> Procs: `tests2/src/bot.md`, `tests2/src/admit.md`, `tests2/src/finalize.md`
-
 ## What
 
 Meeting bots join Google Meet / Teams, transcribe audio, and leave. Each bot is a Docker container running Playwright that navigates to a meeting URL, joins, captures audio, and reports state changes back to meeting-api via HTTP callbacks.
@@ -238,6 +236,8 @@ Status transitions are protected by `SELECT FOR UPDATE` (row-level lock) to prev
 | 12 | Exit during stopping = completed (not failed), regardless of exit code | 5 | — | PASS | 2026-04-07. Bot 9907: joining→stopping→completed. Exit during stopping = completed. |
 | 13 | Concurrency slot released on stopping (user can create new bot immediately) | 5 | — | PASS | 2026-04-07. Bot A (9910) stopped, bot B (9911) created immediately — no 403 concurrency error. |
 | 14 | Status transitions tracked in meeting.data.status_transition[] | 5 | — | PASS | 2026-04-07. Bot 9907: [{requested→joining, bot_callback}, {joining→stopping, user}, {stopping→completed, user}]. |
+
+Confidence: 92 (12/14 items PASS, all ceiling items pass. -5: unauthenticated GMeet join untested. -3: needs_human_help escalation not triggerable in test.)
 
 ## Failure modes
 
