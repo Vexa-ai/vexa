@@ -8,17 +8,19 @@ export type MeetingStatus =
   | "completed"
   | "failed";
 
-export type CompletionReason = 
+export type CompletionReason =
   | "stopped"
   | "validation_error"
   | "awaiting_admission_timeout"
   | "awaiting_admission_rejected"
   | "left_alone"
-  | "evicted";
+  | "evicted"
+  | "max_bot_time_exceeded";
 
-export type FailureStage = 
+export type FailureStage =
   | "requested"
   | "joining"
+  | "awaiting_admission"
   | "active";
 
 export interface UnifiedCallbackPayload {
