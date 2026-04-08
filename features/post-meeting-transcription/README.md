@@ -71,8 +71,8 @@ mc ls minio/vexa-recordings/
 | # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Test |
 |---|-------|--------|---------|-------|--------|----------|--------------|------|
 | 1 | Recording uploaded to MinIO after meeting ends | 20 | ceiling | 0 | FAIL | Lite: bot reaches completed but recording upload fails — `http://minio:9000` DNS unresolvable in host-network mode. K8s: bot stuck in stopping, upload never attempted. Config needs MINIO_ENDPOINT=localhost for lite. | 2026-04-08 | Phase 5a, 5b |
-| 2 | POST /meetings/{id}/transcribe returns segments | 25 | ceiling | 0 | PARTIAL | Transcription engine works (GMeet: 9 segments from recording, Teams: 10 segments), but 0 deferred segments returned via API after transcription. 409 dedup prevention works when realtime segments exist. | 2026-04-05T21:50Z | 10-verify-post-meeting |
-| 3 | Speaker names attributed (not all "Unknown") | 25 | ceiling | 0 | PARTIAL | GMeet: 3/3 correct (Alice, Bob, Charlie). Teams: names are UUIDs (`Teams Participant (uuid)`) not display names — see Known Issues | 2026-04-05T21:50Z | 10-verify-post-meeting |
+| 2 | POST /meetings/{id}/transcribe returns segments | 25 | ceiling | 0 | PARTIAL | Transcription engine works but 0 deferred segments via API. 409 dedup works. | 2026-04-08 | Phase 5 |
+| 3 | Speaker names attributed (not all "Unknown") | 25 | ceiling | 0 | PARTIAL | GMeet: correct. Teams: UUIDs not display names — see Known Issues | 2026-04-08 | Phase 5 |
 | 4 | Deferred segments consistent with realtime | 15 | — | 0 | FAIL | 0 segments persisted on both platforms. Pipeline not delivering to storage. | 2026-04-08 | Phase 5a, 5b |
 | 5 | Works for GMeet and Teams | 15 | — | 0 | FAIL | Both platforms: TTS heard, 0 segments persisted. Teams: bot stuck in stopping. GMeet lite: loopback prevents transcription. | 2026-04-08 | Phase 5a, 5b |
 

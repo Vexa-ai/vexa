@@ -313,7 +313,7 @@ curl -X POST http://localhost:8056/bots \
 | 4   | Transcription startup check works        | 8      | PASS     | Transcription verified during startup                            | 2026-04-08        |
 | 5   | Post-startup self-check reports healthy  | 8      | PASS     | "ALL SERVICES HEALTHY" in logs                                   | 2026-04-08        |
 | 6   | DB restore from dump                     | 10     | PASS     | 1761 users, 9587 meetings, 507K transcriptions loaded            | 2026-04-08        |
-| 7   | Bots join meetings + produce transcripts | 12     | PASS     | Pending re-confirm Phase 5b                                      | 2026-04-05T18:40Z |
+| 7   | Bots join meetings + produce transcripts | 12     | PASS     | Teams: 8 segments (meeting 9841). GMeet: 7 segments (meeting 9842). Human speech. | 2026-04-08        |
 | 8   | Browser sessions with saved login        | 8      | PASS     | CDP proxy 502 on lite (host networking limitation), creation OK   | 2026-04-08        |
 | 9   | Dashboard on port 3000                   | 5      | PASS     | Dashboard-auth + dashboard-proxy all pass                        | 2026-04-08        |
 | 10  | Known issues documented                  | 7      | PASS     | Zombies (#20), CDP port (#21), PulseAudio (#30)                  | 2026-04-08        |
@@ -339,5 +339,5 @@ curl -X POST http://localhost:8056/bots \
 ## Confidence
 
 Score: 80/100
-Last validated: 2026-04-05 (full-stack-lite run)
+Last validated: 2026-04-08 (full validation run — smoke 21/21, dashboard, containers, transcription)
 Ceiling: Zombie reaper bug (#20) caps operational reliability
