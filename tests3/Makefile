@@ -1,4 +1,4 @@
-.PHONY: detect locks env health contracts smoke \
+.PHONY: detect docs locks env health contracts smoke \
        dashboard-auth dashboard-proxy dashboard \
        containers browser-session browser-login browser \
        meeting-tts meeting bot admit transcribe finalize post-meeting meeting-chain \
@@ -8,6 +8,8 @@
        vm-compose vm-lite \
        vm-provision-compose vm-provision-lite vm-smoke-compose vm-smoke-lite \
        vm-destroy vm-ssh vm-status \
+       lke-helm lke-provision lke-setup lke-smoke lke-destroy lke-status \
+       helm-check helm-smoke helm-dashboard helm-containers helm-full \
        what-changed \
        clean help
 
@@ -22,6 +24,12 @@ GATEWAY_URL   ?=
 ADMIN_URL     ?=
 DASHBOARD_URL ?=
 
+# Auto-detect LKE kubeconfig if provisioned
+LKE_KUBECONFIG := $(shell cat $(STATE)/lke_kubeconfig_path 2>/dev/null)
+ifneq ($(LKE_KUBECONFIG),)
+  export KUBECONFIG := $(LKE_KUBECONFIG)
+endif
+
 export ROOT DEPLOY_MODE GATEWAY_URL ADMIN_URL DASHBOARD_URL STATE
 
 # Smoke runs once per session via a stamp file.
@@ -32,6 +40,9 @@ SMOKE_STAMP := $(STATE)/.smoke-passed
 
 detect:                           ## auto-detect deploy mode and URLs
 	@$(T3)/lib/detect.sh
+
+docs:                             ## doc drift checks (static, 0s)
+	@python3 $(T3)/docs/check.py
 
 locks:                            ## static regression locks (0s)
 	@$(T3)/checks/run --tier static
@@ -45,7 +56,7 @@ health: detect                    ## service endpoints respond (5s)
 contracts: detect                 ## API behavior (15s)
 	@$(T3)/checks/run --tier contract
 
-smoke: locks env health contracts ## all checks, no meetings (30s)
+smoke: docs locks env health contracts ## all checks, no meetings (30s)
 	@touch $(SMOKE_STAMP)
 	@echo ""; echo "  Smoke passed."
 
@@ -178,6 +189,58 @@ vm-status:                         ## show VM state
 	@echo "  VM_ID:    $$(cat $(STATE)/vm_id 2>/dev/null || echo '-')"
 	@echo "  VM_MODE:  $$(cat $(STATE)/vm_mode 2>/dev/null || echo '-')"
 	@echo "  VM_SETUP: $$(cat $(STATE)/vm_setup 2>/dev/null || echo '-')"
+
+# ═══ Helm — staging ═══════════════════════════════════════════════
+
+helm-check:                            ## verify kubectl can reach cluster
+	@kubectl cluster-info > /dev/null 2>&1 || (echo "  ERROR: kubectl not configured" && exit 1)
+	@echo "  $$(printf '\033[90m%s\033[0m' 'kubectl: connected')"
+
+helm-smoke: helm-check smoke           ## smoke against helm (includes K8s checks)
+	@echo ""; echo "  Helm smoke passed."
+
+helm-dashboard: helm-smoke dashboard   ## dashboard tests against helm
+	@echo ""
+
+helm-containers: helm-smoke containers ## container lifecycle against helm
+	@echo ""
+
+helm-full: helm-check full             ## full suite against helm
+	@echo ""; echo "  Helm full passed."
+
+# ═══ LKE — provision + helm deploy + test ════════════════════════
+
+lke-helm: locks lke-provision lke-setup lke-smoke ## fresh LKE cluster + helm + smoke
+	@echo ""
+	@echo "  ══════════════════════════════════════════"
+	@echo "  LKE helm validation passed."
+	@echo "  Gateway:   http://$$(cat $(STATE)/lke_node_ip):30056"
+	@echo "  Dashboard: http://$$(cat $(STATE)/lke_node_ip):30001"
+	@echo "  kubectl:   export KUBECONFIG=$$(cat $(STATE)/lke_kubeconfig_path)"
+	@echo "  Destroy:   make -C tests3 lke-destroy"
+	@echo "  ══════════════════════════════════════════"
+
+lke-provision:                         ## provision LKE cluster + wait for nodes
+	@$(T3)/lib/lke.sh provision
+	@$(T3)/lib/lke.sh wait
+
+lke-setup:                             ## deploy helm chart to LKE cluster
+	@$(T3)/lib/lke-setup-helm.sh
+
+lke-smoke:                             ## run smoke + dashboard + containers on LKE
+	@$(MAKE) --no-print-directory smoke DEPLOY_MODE=helm
+	@$(MAKE) --no-print-directory dashboard-auth DEPLOY_MODE=helm || true
+	@$(MAKE) --no-print-directory containers DEPLOY_MODE=helm || true
+
+lke-destroy:                           ## tear down LKE cluster
+	@$(T3)/lib/lke.sh destroy
+
+lke-status:                            ## show LKE cluster state
+	@echo "  LKE_ID:     $$(cat $(STATE)/lke_id 2>/dev/null || echo '-')"
+	@echo "  LKE_LABEL:  $$(cat $(STATE)/lke_label 2>/dev/null || echo '-')"
+	@echo "  LKE_NODE:   $$(cat $(STATE)/lke_node_ip 2>/dev/null || echo '-')"
+	@echo "  LKE_SETUP:  $$(cat $(STATE)/lke_setup 2>/dev/null || echo '-')"
+	@echo "  KUBECONFIG: $$(cat $(STATE)/lke_kubeconfig_path 2>/dev/null || echo '-')"
 
 # ═══ Data collection ══════════════════════════════════════════════
 

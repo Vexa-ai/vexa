@@ -30,6 +30,12 @@ INFRA_PREFIXES = [
 # tests3 changes — run the modified target directly.
 TESTS3_PREFIX = "tests3/"
 
+# Doc-adjacent paths — trigger doc drift checks.
+DOC_PREFIXES = [
+    "docs/",
+    "tests3/docs/",
+]
+
 
 def parse_frontmatter(readme_path):
     """Extract YAML frontmatter from a feature README.
@@ -93,6 +99,8 @@ def resolve(changed_files):
     infra_change = False
     tests3_change = False
 
+    docs_change = False
+
     for f in changed_files:
         f = f.strip()
         if not f:
@@ -105,6 +113,14 @@ def resolve(changed_files):
         # tests3 change → flag it
         if f.startswith(TESTS3_PREFIX):
             tests3_change = True
+
+        # Doc-adjacent change → run doc drift checks
+        if any(f.startswith(p) for p in DOC_PREFIXES):
+            docs_change = True
+
+        # Service README change → run doc drift checks
+        if "/README.md" in f and (f.startswith("services/") or f.startswith("deploy/") or f.startswith("libs/")):
+            docs_change = True
 
         # Map to services
         affected_services.update(file_to_services(f))
@@ -120,6 +136,10 @@ def resolve(changed_files):
     if tests3_change:
         targets.add("smoke")
         reasons["smoke"] = "tests3 files changed"
+
+    if docs_change:
+        targets.add("docs")
+        reasons["docs"] = "doc-adjacent files changed"
 
     # Walk feature READMEs, find features whose services overlap
     features_dir = REPO_ROOT / "features"

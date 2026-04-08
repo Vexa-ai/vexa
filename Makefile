@@ -1,4 +1,4 @@
-.PHONY: build up down smoke test what-changed full \
+.PHONY: build up down docs smoke test what-changed full \
        collect score \
        vm-compose vm-lite vm-destroy vm-ssh \
        help
@@ -15,6 +15,9 @@ down:                              ## stop the stack
 	@$(MAKE) --no-print-directory -C deploy/compose down
 
 # ═══ Test ════════════════════════════════════════════════════════
+
+docs:                              ## check docs for drift (static, 0s)
+	@$(MAKE) --no-print-directory -C tests3 docs
 
 smoke:                             ## run all checks (~30s)
 	@$(MAKE) --no-print-directory -C tests3 smoke

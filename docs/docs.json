@@ -54,7 +54,7 @@
           },
           {
             "group": "Concepts",
-            "pages": ["concepts", "errors-and-retries"]
+            "pages": ["concepts", "bot-overview", "meeting-ids", "errors-and-retries"]
           },
           {
             "group": "Platforms",
@@ -85,7 +85,7 @@
           },
           {
             "group": "Security",
-            "pages": ["security"]
+            "pages": ["security", "token-scoping"]
           }
         ]
       },

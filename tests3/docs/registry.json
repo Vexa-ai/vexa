@@ -1,0 +1,66 @@
+{
+  "_doc": "Machine-readable ownership map: service → README → doc pages. Source of truth for tests3/docs/check.py. Replaces the manual table in docs/README.md.",
+  "owners": [
+    {
+      "service": "api-gateway",
+      "readme": "services/api-gateway/README.md",
+      "pages": ["quickstart", "getting-started", "errors-and-retries", "websocket", "token-scoping", "security", "user_api_guide"]
+    },
+    {
+      "service": "meeting-api",
+      "readme": "services/meeting-api/README.md",
+      "pages": ["bot-overview", "api/bots", "interactive-bots", "api/interactive-bots"]
+    },
+    {
+      "service": "vexa-bot",
+      "readme": "services/vexa-bot/README.md",
+      "pages": ["bot-overview", "meeting-ids", "platforms/google-meet", "platforms/microsoft-teams", "platforms/zoom"]
+    },
+    {
+      "service": "transcription-collector",
+      "readme": "services/transcription-collector/README.md",
+      "pages": ["api/transcripts", "api/meetings", "api/recordings"]
+    },
+    {
+      "service": "transcription-service",
+      "readme": "services/transcription-service/README.md",
+      "pages": ["concepts", "recording-storage"]
+    },
+    {
+      "service": "admin-api",
+      "readme": "services/admin-api/README.md",
+      "pages": ["self-hosted-management", "api/settings"]
+    },
+    {
+      "service": "dashboard",
+      "readme": "services/dashboard/README.md",
+      "pages": ["ui-dashboard", "zoom-app-setup"]
+    },
+    {
+      "service": "mcp",
+      "readme": "services/mcp/README.md",
+      "pages": ["vexa-mcp"]
+    },
+    {
+      "service": "shared-models",
+      "readme": "libs/shared-models/README.md",
+      "pages": ["webhooks", "token-scoping"]
+    },
+    {
+      "service": "deploy-lite",
+      "readme": "deploy/lite/README.md",
+      "pages": ["vexa-lite-deployment"]
+    },
+    {
+      "service": "deploy-compose",
+      "readme": "deploy/compose/README.md",
+      "pages": ["deployment"]
+    },
+    {
+      "service": "deploy-helm",
+      "readme": "deploy/helm/README.md",
+      "pages": ["deployment"]
+    }
+  ],
+  "unowned": ["index", "integrations", "local-webhook-development", "chatgpt-transcript-share-links", "troubleshooting"]
+}
