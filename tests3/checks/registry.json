@@ -376,7 +376,8 @@
       "tier": "contract",
       "proves": "browser session CDP proxy is reachable — gateway can connect to browser container",
       "symptom": "Failed to reach browser container: Name or service not known — pod IP not resolved in K8s",
-      "method": "BROWSER_SESSION_CDP_CHECK"
+      "method": "BROWSER_SESSION_CDP_CHECK",
+      "skip_modes": ["lite"]
     },
     {
       "id": "BROWSER_SESSION_OK",
@@ -394,7 +395,8 @@
       "tier": "contract",
       "proves": "bots are created with recordingEnabled=true — audio will be captured and uploaded",
       "symptom": "No audio recording for meeting — RECORDING_ENABLED env var not set or recordingEnabled=false in BOT_CONFIG",
-      "method": "BOT_RECORDING_CHECK"
+      "method": "BOT_RECORDING_CHECK",
+      "skip_modes": ["lite"]
     },
     {
       "id": "MINIO_BUCKET_WRITABLE",

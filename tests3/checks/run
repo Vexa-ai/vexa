@@ -455,6 +455,12 @@ def check_health(lock):
 
 def check_contract(lock):
     """Test API behavior — method, URL, expected response."""
+    skip_modes = lock.get("skip_modes", [])
+    if skip_modes:
+        mode = state_read("deploy_mode")
+        if mode in skip_modes:
+            return True, f"skipped for {mode} mode"
+
     gw = state_read("gateway_url", required=True)
     admin = state_read("admin_url", required=True)
     dash = state_read("dashboard_url", required=True)
