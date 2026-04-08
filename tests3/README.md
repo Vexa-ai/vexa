@@ -259,7 +259,7 @@ Every check is a JSON entry in `checks/registry.json`:
 
 56 registry checks + 17 test scripts. Validated across compose, lite, and helm (LKE). Helm support: K8s health checks, bot lifecycle, browser session CDP, segment pipeline, recording config.
 
-### Registry checks (53)
+### Registry checks (56)
 
 | Tier     | Count | What                                                                                                                            |
 | -------- | ----- | ------------------------------------------------------------------------------------------------------------------------------- |
