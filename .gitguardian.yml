@@ -1,0 +1,48 @@
+# GitGuardian configuration
+# See: https://docs.gitguardian.com/ggshield-docs/reference/gitguardian-yaml
+
+secret:
+  # Paths that contain test fixtures, not real secrets
+  ignored-paths:
+    - "**/tests/**"
+    - "**/test_*"
+    - "**/conftest.py"
+    - "**/*.test.*"
+    - "**/testdata/**"
+    - "deploy/env/env-example"
+    - "features/**/tests/**"
+    - "tests2/**"
+
+  # Known test/dev patterns that are not real secrets
+  ignored-matches:
+    # Test admin tokens (hardcoded in test fixtures)
+    - name: "test-admin-token"
+      match: "test-admin-token*"
+    - name: "changeme-default"
+      match: "changeme"
+
+    # Test API key prefixes (fake tokens in unit tests)
+    - name: "test-vxa-bot-tokens"
+      match: "vxa_bot_abc*"
+    - name: "test-vxa-bot-testkey"
+      match: "vxa_bot_testkey*"
+
+    # Chrome password-store flag (not a secret)
+    - name: "chrome-password-store"
+      match: "password-store=basic"
+
+    # Helm chart template placeholders
+    - name: "helm-changeme"
+      match: "CHANGE_ME"
+
+    # vexa-internal-secret default (used in dev only)
+    - name: "internal-secret-default"
+      match: "vexa-internal-secret"
+
+    # staging admin token (dev-only, not production)
+    - name: "staging-admin-token"
+      match: "staging-admin-token"
+
+    # test-admin-token-t3 (tests3 test cluster)
+    - name: "test-cluster-token"
+      match: "test-admin-token-t3"
