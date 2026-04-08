@@ -114,12 +114,14 @@ if [ -n "$API_TOKEN" ]; then
     CHART_PATH="$ROOT/deploy/helm/charts/vexa"
     TX_URL=$(grep -E '^TRANSCRIPTION_SERVICE_URL=' "$ROOT/.env" 2>/dev/null | cut -d= -f2- || echo "")
     TX_TOKEN=$(grep -E '^TRANSCRIPTION_SERVICE_TOKEN=' "$ROOT/.env" 2>/dev/null | cut -d= -f2- || echo "")
+    IMAGE_TAG=$(grep -E '^IMAGE_TAG=' "$ROOT/.env" 2>/dev/null | cut -d= -f2- || echo "")
     HELM_ARGS=(
         --values "$CHART_PATH/values-test.yaml"
         --set "dashboard.env.VEXA_PUBLIC_API_URL=$GATEWAY_URL"
         --set "dashboard.env.NEXT_PUBLIC_APP_URL=$(state_read dashboard_url)"
         --set "secrets.vexaApiKey=$API_TOKEN"
     )
+    [ -n "$IMAGE_TAG" ] && HELM_ARGS+=(--set "global.imageTag=$IMAGE_TAG")
     [ -n "$TX_URL" ] && HELM_ARGS+=(--set "meetingApi.transcriptionServiceUrl=$TX_URL" --set "meetingApi.transcriptionServiceToken=$TX_TOKEN")
     helm upgrade vexa "$CHART_PATH" "${HELM_ARGS[@]}" --wait --timeout 5m > /dev/null 2>&1
     kubectl rollout restart deploy/vexa-vexa-dashboard > /dev/null 2>&1
