@@ -94,24 +94,22 @@ preflight:
 	TX_TOKEN=$$(grep -E '^TRANSCRIPTION_SERVICE_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
 	if [ -z "$$TX_TOKEN" ] || [ "$$TX_TOKEN" = "your-token" ]; then \
 		echo ""; \
-		echo "  Transcription service configuration"; \
-		echo "  ──────────────────────────────────────────────"; \
-		echo "  Get a token at: https://staging.vexa.ai/dashboard/transcription"; \
+		echo "  Vexa uses transcription.vexa.ai to process meeting audio."; \
+		echo "  If you use a different provider, edit .env and re-run make all."; \
 		echo ""; \
-		DEFAULT_URL="https://transcription.vexa.ai/v1/audio/transcriptions"; \
-		printf "  Transcription URL [$$DEFAULT_URL]: "; \
-		read -r INPUT_URL < /dev/tty; \
-		TX_URL=$${INPUT_URL:-$$DEFAULT_URL}; \
-		printf "  Transcription token: "; \
+		printf "  Press Enter to continue: "; \
+		read -r CONFIRM < /dev/tty; \
+		echo ""; \
+		echo "  Get your token at: https://staging.vexa.ai/dashboard/transcription"; \
+		echo ""; \
+		printf "  Paste your transcription token: "; \
 		read -r TX_TOKEN < /dev/tty; \
-		if [ -z "$$TX_TOKEN" ]; then \
-			echo "  ✗ No token provided."; exit 1; \
-		fi; \
-		sed -i "s|^TRANSCRIPTION_SERVICE_URL=.*|TRANSCRIPTION_SERVICE_URL=$$TX_URL|" $(ENV_FILE); \
-		sed -i "s|^TRANSCRIPTION_SERVICE_TOKEN=.*|TRANSCRIPTION_SERVICE_TOKEN=$$TX_TOKEN|" $(ENV_FILE); \
-		echo "  ──────────────────────────────────────────────"; \
-		echo "  Saved to .env"; \
 		echo ""; \
+		if [ -z "$$TX_TOKEN" ]; then \
+			echo "  ✗ No token provided. Run 'make all' again when you have one."; exit 1; \
+		fi; \
+		sed -i "s|^TRANSCRIPTION_SERVICE_TOKEN=.*|TRANSCRIPTION_SERVICE_TOKEN=$$TX_TOKEN|" $(ENV_FILE); \
+		echo "  ✓ Token saved to .env"; \
 	fi; \
 	if [ -z "$$TX_URL" ]; then \
 		echo "  ✗ TRANSCRIPTION_SERVICE_URL not set in .env"; exit 1; \
