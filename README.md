@@ -261,7 +261,7 @@ Each service and feature has its own README with architecture, DoD table, and ev
 
 We use **GitHub Issues** as our main feedback channel — triaged within **72 hours**. Look for `good-first-issue` to get started. Join [Discord](https://discord.gg/Ga9duGkVz9) to discuss ideas and get assigned.
 
-Licensed under **Apache-2.0** — see [LICENSE](LICENSE).
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE)
 
 ## Links
 
