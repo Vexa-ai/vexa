@@ -1,5 +1,3 @@
-
-
 # **Vexa**
 
 **Open-source meeting bot API & transcription API**
@@ -20,7 +18,7 @@ meeting bots • real-time transcription • interactive bots • MCP server •
 
 **Data sovereignty** — self-host so meeting data never leaves your infrastructure
 
-**Cost** — replace $17/seat SaaS with your own infrastructure
+**Cost** — replace $20/seat SaaS with your own infrastructure
 
 **Embed in your product** — multi-tenant meeting bot API with scoped tokens
 
@@ -31,16 +29,15 @@ meeting bots • real-time transcription • interactive bots • MCP server •
 ### Capabilities
 
 
-| | |
-| --- | --- |
 | **Meeting bot API** | Send a bot to any meeting: auto-join, record, speak, chat, share screen. Open-source alternative to [Recall.ai](https://recall.ai). |
+| --- | --- |
 | **Meeting transcription API** | Real-time transcripts via REST API and WebSocket. Self-hosted alternative to Otter.ai and Fireflies.ai. |
-| **Real-time transcription** | Sub-second per-speaker transcripts during the call. 100+ languages via Whisper. WebSocket streaming. |
-| **Interactive bots** | Make bots speak, send/read chat, share screen content, and set avatar in live meetings. |
-| **Browser bots** | CDP + Playwright browser automation with persistent authenticated sessions via S3. |
-| **MCP server** | 17 meeting tools for Claude, Cursor, Windsurf. AI agents join calls, read transcripts, speak in meetings. |
-| **Multi-tenant** | Users, scoped API tokens, isolated containers. Deploy once, serve your team. |
-| **Self-hostable** | Run on your infra. Meeting data never leaves your infrastructure. |
+| **Real-time transcription**   | Sub-second per-speaker transcripts during the call. 100+ languages via Whisper. WebSocket streaming.                                |
+| **Interactive bots**          | Make bots speak, send/read chat, share screen content, and set avatar in live meetings.                                             |
+| **Browser bots**              | CDP + Playwright browser automation with persistent authenticated sessions via S3.                                                  |
+| **MCP server**                | 17 meeting tools for Claude, Cursor, Windsurf. AI agents join calls, read transcripts, speak in meetings.                           |
+| **Multi-tenant**              | Users, scoped API tokens, isolated containers. Deploy once, serve your team.                                                        |
+| **Self-hostable**             | Run on your infra. Meeting data never leaves your infrastructure.                                                                   |
 
 
 Every feature is a separate service. Pick what you need, skip what you don't. Self-host everything or use [vexa.ai](https://vexa.ai) hosted.
