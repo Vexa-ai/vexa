@@ -41,28 +41,29 @@
 
 **Vexa** is an open-source, self-hostable meeting bot API and meeting transcription API for Google Meet, Microsoft Teams, and Zoom. Alternative to Recall.ai, Otter.ai, and Fireflies.ai — self-host so meeting data never leaves your infrastructure, or use [vexa.ai](https://vexa.ai) hosted.
 
-**Can't send meeting data to third parties?**
-Self-host Vexa. Meeting data never leaves your infrastructure.
+---
 
-**Paying $17/seat for transcription?**
-Self-host and drop to infrastructure cost.
+<table>
+<tr><td><strong>Can't send meeting data to third parties?</strong><br/>Self-host Vexa. Meeting data never leaves your infrastructure.</td></tr>
+<tr><td><strong>Paying $17/seat for transcription?</strong><br/>Self-host and drop to infrastructure cost.</td></tr>
+<tr><td><strong>Building a product that needs meeting data?</strong><br/>Embed the meeting bot API. Multi-tenant, scoped tokens, your branding.</td></tr>
+<tr><td><strong>Want AI agents in meetings?</strong><br/>MCP server with 17 tools. Agents join calls, read transcripts, speak.</td></tr>
+</table>
 
-**Building a product that needs meeting data?**
-Embed the meeting bot API. Multi-tenant, scoped tokens, your branding.
-
-**Want AI agents in meetings?**
-MCP server with 17 tools. Agents join calls, read transcripts, speak.
+---
 
 ### Capabilities
 
-- **Meeting bot API** — send a bot to any meeting: auto-join, record, speak, chat, share screen. Open-source alternative to [Recall.ai](https://recall.ai).
-- **Meeting transcription API** — real-time transcripts via REST API and WebSocket. Self-hosted alternative to Otter.ai and Fireflies.ai.
-- **Real-time transcription** — sub-second per-speaker transcripts during the call. 100+ languages via Whisper. WebSocket streaming.
-- **Interactive bots** — make bots speak, send/read chat, share screen content, and set avatar in live meetings.
-- **Browser bots** — CDP + Playwright browser automation with persistent authenticated sessions via S3.
-- **MCP server** — 17 meeting tools for Claude, Cursor, Windsurf. AI agents join calls, read transcripts, speak in meetings.
-- **Multi-tenant** — users, scoped API tokens, isolated containers. Deploy once, serve your team.
-- **Self-hostable** — run on your infra. Meeting data never leaves your infrastructure.
+| | |
+|---|---|
+| **Meeting bot API** | Send a bot to any meeting: auto-join, record, speak, chat, share screen. Open-source alternative to [Recall.ai](https://recall.ai). |
+| **Meeting transcription API** | Real-time transcripts via REST API and WebSocket. Self-hosted alternative to Otter.ai and Fireflies.ai. |
+| **Real-time transcription** | Sub-second per-speaker transcripts during the call. 100+ languages via Whisper. WebSocket streaming. |
+| **Interactive bots** | Make bots speak, send/read chat, share screen content, and set avatar in live meetings. |
+| **Browser bots** | CDP + Playwright browser automation with persistent authenticated sessions via S3. |
+| **MCP server** | 17 meeting tools for Claude, Cursor, Windsurf. AI agents join calls, read transcripts, speak in meetings. |
+| **Multi-tenant** | Users, scoped API tokens, isolated containers. Deploy once, serve your team. |
+| **Self-hostable** | Run on your infra. Meeting data never leaves your infrastructure. |
 
 Every feature is a separate service. Pick what you need, skip what you don't. Self-host everything or use [vexa.ai](https://vexa.ai) hosted.
 
