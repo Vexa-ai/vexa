@@ -868,8 +868,8 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
               // caption text GROWS (new words spoken). Refinements
               // (punctuation, capitalization) are ignored — they would
               // steal the next speaker's audio from the queue.
-              // Max queue age 3s. Speaker change clears queue.
-              const MAX_QUEUE_AGE_MS = 3000;
+              // Max queue age 10s — longer buffer for non-English captions which fire slower.
+              const MAX_QUEUE_AGE_MS = 10000;
               const MIN_TEXT_GROWTH = 3; // chars — below this = refinement
               interface QueuedChunk {
                 data: Float32Array;

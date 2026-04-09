@@ -1,0 +1,236 @@
+{
+  "name": "10-minute executive briefing with Q&A",
+  "description": "Four speakers, long monologues interleaved with rapid Q&A. Tests DOM+VAD routing across sustained speech, quick speaker changes, and natural pauses.",
+  "timing_notes": "At ~150 wpm TTS: 30 words ≈ 12s audio. Each utterance has start_after_ms timed so the previous one finishes + 2-3s pause. Total: ~600s (10 min).",
+  "speakers": [
+    {"id": "Alice", "voice": "alloy", "label": "CEO"},
+    {"id": "Bob", "voice": "echo", "label": "CFO"},
+    {"id": "Charlie", "voice": "fable", "label": "CTO"},
+    {"id": "Diana", "voice": "onyx", "label": "VP Sales"}
+  ],
+  "utterances": [
+    {
+      "speaker": "Alice",
+      "text": "Good morning everyone. Thank you for joining this quarterly business review. We have a lot to cover today so let us get started right away. I want to hear updates from each department before we discuss strategy for next quarter.",
+      "start_after_ms": 0,
+      "estimated_duration_ms": 14000
+    },
+    {
+      "speaker": "Bob",
+      "text": "Thanks Alice. Let me start with the financial overview. Total revenue for Q1 came in at forty seven point three million dollars which is twelve percent above our forecast. Operating expenses were thirty one million keeping us well within budget. Our gross margin improved to sixty eight percent up from sixty three percent last quarter.",
+      "start_after_ms": 18000,
+      "estimated_duration_ms": 22000
+    },
+    {
+      "speaker": "Alice",
+      "text": "That is excellent. What drove the margin improvement?",
+      "start_after_ms": 44000,
+      "estimated_duration_ms": 4000
+    },
+    {
+      "speaker": "Bob",
+      "text": "Two main factors. First we renegotiated our cloud hosting contracts which saved us about one point five million annually. Second the automation work Charlie's team did on the deployment pipeline reduced our infrastructure team from eight engineers to five.",
+      "start_after_ms": 51000,
+      "estimated_duration_ms": 18000
+    },
+    {
+      "speaker": "Charlie",
+      "text": "I want to add some context on that. The three engineers we freed up moved to the platform reliability team. We did not reduce headcount we reallocated talent. Those engineers are now working on reducing our incident response time which was averaging forty two minutes and is now down to eleven minutes.",
+      "start_after_ms": 73000,
+      "estimated_duration_ms": 20000
+    },
+    {
+      "speaker": "Alice",
+      "text": "That is a huge improvement. Diana how did sales perform?",
+      "start_after_ms": 97000,
+      "estimated_duration_ms": 5000
+    },
+    {
+      "speaker": "Diana",
+      "text": "Sales had a strong quarter. We closed eighty nine new enterprise deals compared to sixty two last quarter. Average contract value increased from one hundred twenty thousand to one hundred fifty five thousand dollars. The biggest win was the Meridian Healthcare deal which came in at two point eight million over three years.",
+      "start_after_ms": 106000,
+      "estimated_duration_ms": 24000
+    },
+    {
+      "speaker": "Bob",
+      "text": "The Meridian deal is particularly important because it validates our pricing model for the healthcare vertical.",
+      "start_after_ms": 134000,
+      "estimated_duration_ms": 8000
+    },
+    {
+      "speaker": "Diana",
+      "text": "Exactly. And it opens the door to four other hospital systems in their network. Our pipeline for Q2 already includes three warm introductions from the Meridian CIO.",
+      "start_after_ms": 146000,
+      "estimated_duration_ms": 12000
+    },
+    {
+      "speaker": "Charlie",
+      "text": "On the product side we shipped three major features this quarter. First the real time collaboration engine which reduced document sync latency from eight hundred milliseconds to under fifty milliseconds. Second the new API gateway that handles twelve thousand requests per second up from three thousand. And third the mobile app redesign which improved our app store rating from three point two to four point seven stars.",
+      "start_after_ms": 162000,
+      "estimated_duration_ms": 28000
+    },
+    {
+      "speaker": "Alice",
+      "text": "Those are impressive numbers Charlie. What is on the roadmap for Q2?",
+      "start_after_ms": 194000,
+      "estimated_duration_ms": 5000
+    },
+    {
+      "speaker": "Charlie",
+      "text": "Three priorities. First we are building an AI powered search feature that will let users query their data using natural language. Second we need to complete the SOC 2 Type 2 certification which is blocking several enterprise deals. Third is the European data residency requirement for GDPR compliance.",
+      "start_after_ms": 203000,
+      "estimated_duration_ms": 20000
+    },
+    {
+      "speaker": "Diana",
+      "text": "The SOC 2 certification is critical. I have at least fifteen deals in the pipeline worth a combined four point two million that are blocked on it. Every week we delay costs us roughly two hundred thousand in deferred revenue.",
+      "start_after_ms": 227000,
+      "estimated_duration_ms": 14000
+    },
+    {
+      "speaker": "Bob",
+      "text": "I agree on the urgency. What resources do you need Charlie?",
+      "start_after_ms": 245000,
+      "estimated_duration_ms": 5000
+    },
+    {
+      "speaker": "Charlie",
+      "text": "We need two dedicated security engineers and a compliance consultant. I estimate six weeks to complete the audit if we start immediately. The total cost would be around two hundred fifty thousand dollars.",
+      "start_after_ms": 254000,
+      "estimated_duration_ms": 14000
+    },
+    {
+      "speaker": "Alice",
+      "text": "Approved. Bob please allocate the budget this week. Now let us talk about the competitive landscape. Diana what are you seeing in the field?",
+      "start_after_ms": 272000,
+      "estimated_duration_ms": 10000
+    },
+    {
+      "speaker": "Diana",
+      "text": "Our main competitor Nexus launched a similar product last month at a thirty percent lower price point. However their platform lacks real time collaboration and their uptime has been inconsistent. We lost two deals to them in Q1 but won back one customer who switched after experiencing reliability issues. The key differentiator remains our API performance and enterprise grade security.",
+      "start_after_ms": 286000,
+      "estimated_duration_ms": 26000
+    },
+    {
+      "speaker": "Bob",
+      "text": "Should we consider adjusting our pricing to be more competitive?",
+      "start_after_ms": 316000,
+      "estimated_duration_ms": 5000
+    },
+    {
+      "speaker": "Diana",
+      "text": "No I do not recommend a price war. Our win rate actually increased from sixty one percent to seventy three percent this quarter. Customers who evaluate both products choose us because of reliability and support quality.",
+      "start_after_ms": 325000,
+      "estimated_duration_ms": 14000
+    },
+    {
+      "speaker": "Alice",
+      "text": "I agree. Let us compete on value not on price. Charlie what about the technical debt situation?",
+      "start_after_ms": 343000,
+      "estimated_duration_ms": 8000
+    },
+    {
+      "speaker": "Charlie",
+      "text": "We made significant progress. We paid down about thirty five percent of our identified technical debt this quarter. The legacy authentication system has been completely replaced. The database migration from PostgreSQL version ten to version sixteen is finished. And we eliminated four hundred twelve unused API endpoints that were creating maintenance burden. The remaining debt is mostly in the notification system which I plan to address in Q3.",
+      "start_after_ms": 355000,
+      "estimated_duration_ms": 28000
+    },
+    {
+      "speaker": "Bob",
+      "text": "How does the technical debt reduction translate to cost savings?",
+      "start_after_ms": 387000,
+      "estimated_duration_ms": 5000
+    },
+    {
+      "speaker": "Charlie",
+      "text": "Directly it saves us about ninety thousand per month in reduced on call incidents and faster deployment cycles. Indirectly it means we ship features thirty percent faster because engineers spend less time working around legacy code.",
+      "start_after_ms": 396000,
+      "estimated_duration_ms": 14000
+    },
+    {
+      "speaker": "Alice",
+      "text": "Let us move on to hiring. Bob where do we stand on headcount?",
+      "start_after_ms": 414000,
+      "estimated_duration_ms": 6000
+    },
+    {
+      "speaker": "Bob",
+      "text": "We are currently at two hundred thirty seven employees against a plan of two hundred fifty. We have twenty three open positions across engineering sales and customer success. Our biggest challenge is senior backend engineers. The average time to fill is sixty two days which is up from forty five days last quarter.",
+      "start_after_ms": 424000,
+      "estimated_duration_ms": 22000
+    },
+    {
+      "speaker": "Diana",
+      "text": "On the sales side I need three more account executives and two solutions engineers by end of Q2. The pipeline is growing faster than the team can handle. We are leaving revenue on the table.",
+      "start_after_ms": 450000,
+      "estimated_duration_ms": 14000
+    },
+    {
+      "speaker": "Alice",
+      "text": "That is concerning. Let us prioritize the revenue generating roles. Bob work with Diana to fast track those five hires.",
+      "start_after_ms": 468000,
+      "estimated_duration_ms": 8000
+    },
+    {
+      "speaker": "Bob",
+      "text": "Will do. I will also look at whether we can use recruiting agencies to shorten the timeline for the engineering positions.",
+      "start_after_ms": 480000,
+      "estimated_duration_ms": 8000
+    },
+    {
+      "speaker": "Charlie",
+      "text": "Before we wrap up I want to flag a risk. Our main data center lease expires in September and the landlord is proposing a forty percent rent increase. We should consider migrating to a co location facility or going fully cloud. I have been evaluating options and can present a cost comparison next week.",
+      "start_after_ms": 492000,
+      "estimated_duration_ms": 22000
+    },
+    {
+      "speaker": "Bob",
+      "text": "Good timing. That aligns with the cloud contract renegotiation I mentioned earlier. Let us evaluate both options together.",
+      "start_after_ms": 518000,
+      "estimated_duration_ms": 8000
+    },
+    {
+      "speaker": "Diana",
+      "text": "One more thing. Customer retention rate this quarter was ninety four point five percent. We had three enterprise churns all citing the same reason. They needed features we have not built yet specifically advanced analytics and custom reporting dashboards.",
+      "start_after_ms": 530000,
+      "estimated_duration_ms": 16000
+    },
+    {
+      "speaker": "Charlie",
+      "text": "The analytics platform is in our Q3 roadmap. I can pull it forward if we consider it a retention critical feature.",
+      "start_after_ms": 550000,
+      "estimated_duration_ms": 8000
+    },
+    {
+      "speaker": "Alice",
+      "text": "Yes pull it forward. Retention is more important than new features right now. OK let me summarize the action items. Bob allocate budget for SOC 2 and fast track the five sales hires. Charlie start SOC 2 immediately and pull analytics into Q2. Diana prepare the Meridian case study for marketing. Let us reconvene in two weeks. Great work everyone.",
+      "start_after_ms": 562000,
+      "estimated_duration_ms": 24000
+    }
+  ],
+  "ground_truth": {
+    "total_utterances": 33,
+    "speakers": ["Alice", "Bob", "Charlie", "Diana"],
+    "expected_segments_min": 25,
+    "expected_segments_max": 45,
+    "key_phrases": [
+      "forty seven point three million",
+      "gross margin improved to sixty eight percent",
+      "cloud hosting contracts",
+      "incident response time",
+      "eighty nine new enterprise deals",
+      "Meridian Healthcare",
+      "real time collaboration engine",
+      "SOC 2 Type 2",
+      "European data residency",
+      "Nexus launched",
+      "win rate",
+      "PostgreSQL version ten to version sixteen",
+      "four hundred twelve unused API endpoints",
+      "two hundred thirty seven employees",
+      "customer retention rate",
+      "ninety four point five percent",
+      "analytics platform"
+    ]
+  }
+}
