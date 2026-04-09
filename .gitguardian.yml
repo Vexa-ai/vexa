@@ -2,7 +2,7 @@
 # See: https://docs.gitguardian.com/ggshield-docs/reference/gitguardian-yaml
 
 secret:
-  # Paths that contain test fixtures, not real secrets
+  # Paths that contain test fixtures, example files, and dev configs — not real secrets
   ignored-paths:
     - "**/tests/**"
     - "**/test_*"
@@ -12,6 +12,20 @@ secret:
     - "deploy/env-example"
     - "features/**/tests/**"
     - "tests2/**"
+    - "tests3/**"
+    # Backup env files (deleted from tree, exist only in git history)
+    - ".env.backup"
+    - "deploy/compose/.env.bak"
+    # Notebook test fixtures with test API keys
+    - "packages/vexa-client/tests.ipynb"
+    - "packages/vexa-client/tests/tutorial.ipynb"
+    # Example/template files with placeholder credentials
+    - "**/.pypirc.example"
+    # Dashboard validation scripts with test tokens
+    - "services/dashboard/agent-inspect.js"
+    - "services/dashboard/agent-flow.js"
+    - "services/dashboard/auth-validate*.js"
+    - "services/dashboard/feature-validate.js"
 
   # Known test/dev patterns that are not real secrets
   ignored-matches:
@@ -26,6 +40,8 @@ secret:
       match: "vxa_bot_abc*"
     - name: "test-vxa-bot-testkey"
       match: "vxa_bot_testkey*"
+    - name: "test-vxa-user-tokens"
+      match: "vxa_user_*"
 
     # Chrome password-store flag (not a secret)
     - name: "chrome-password-store"
@@ -46,3 +62,27 @@ secret:
     # test-admin-token-t3 (tests3 test cluster)
     - name: "test-cluster-token"
       match: "test-admin-token-t3"
+
+    # Dev-only default database password (postgres:postgres for local dev)
+    - name: "dev-postgres-password"
+      match: "POSTGRES_PASSWORD=postgres"
+    - name: "dev-db-password"
+      match: "DB_PASSWORD=postgres"
+    - name: "dev-db-password-value"
+      match: "password: \"postgres\""
+    - name: "dev-db-url-password"
+      match: "postgres:postgres@"
+
+    # Dev-only MinIO defaults (non-production)
+    - name: "dev-minio-access-key"
+      match: "vexa-access-key"
+    - name: "dev-minio-secret-key"
+      match: "vexa-secret-key"
+
+    # Dev-only JWT secret
+    - name: "dev-jwt-secret"
+      match: "vexa-dev-jwt-secret"
+
+    # PyPI example placeholder
+    - name: "pypi-placeholder"
+      match: "your-pypi-api-token-here"

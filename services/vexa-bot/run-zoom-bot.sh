@@ -10,10 +10,10 @@
 
 set -e
 
-MEETING_URL="${ZOOM_MEETING_URL:-https://us05web.zoom.us/j/81137509581?pwd=swiL9I4MliS99mTVV1FXDCWsgaiRvy.1}"
+MEETING_URL="${ZOOM_MEETING_URL:?Set ZOOM_MEETING_URL (e.g. https://us05web.zoom.us/j/12345?pwd=xxx)}"
 BOT_NAME="${ZOOM_BOT_NAME:-Vexa Bot}"
 REDIS_URL="${REDIS_URL:-redis://redis:6379/0}"
-ZOOM_CLIENT_ID="${ZOOM_CLIENT_ID:-6gMe9aY8R8OG1pqsmTFBBg}"
+ZOOM_CLIENT_ID="${ZOOM_CLIENT_ID:?Set ZOOM_CLIENT_ID}"
 ZOOM_CLIENT_SECRET="${ZOOM_CLIENT_SECRET:?Set ZOOM_CLIENT_SECRET}"
 
 # Extract meeting number and passcode from URL (e.g. .../j/81137509581?pwd=xxx)
