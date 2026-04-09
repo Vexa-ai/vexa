@@ -195,73 +195,23 @@ See [Recording Storage](https://docs.vexa.ai/recording-storage) for configuratio
 
 ## Meeting API — Send Bots, Get Transcripts
 
-The Meeting API is the foundation of the platform. It sends bots to meetings, captures real-time transcripts with per-speaker audio, and provides interactive controls (speak, chat, share screen). This is the data layer that feeds everything else — agents, webhooks, knowledge extraction.
-
-### 1. Send bot to meeting:
-
-Set `API_BASE` to your deployment:
-
-- Hosted: `https://api.cloud.vexa.ai`
-- Self-hosted Lite: `http://localhost:8056`
-- Self-hosted full stack (default): `http://localhost:8056`
+Send a bot, get real-time transcripts with per-speaker audio and interactive controls (speak, chat, share screen).
 
 ```bash
-export API_BASE="http://localhost:8056"
-```
-
-### Request a bot for Microsoft Teams
-
-```bash
+# Send a bot to Google Meet
 curl -X POST "$API_BASE/bots" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: <API_KEY>" \
-  -d '{
-    "platform": "teams",
-    "native_meeting_id": "<NUMERIC_MEETING_ID>",
-    "passcode": "<MEETING_PASSCODE>"
-  }'
-```
+  -d '{"platform": "google_meet", "native_meeting_id": "abc-defg-hij"}'
 
-### Or request a bot for Google Meet
-
-```bash
-curl -X POST "$API_BASE/bots" \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <API_KEY>" \
-  -d '{
-    "platform": "google_meet",
-    "native_meeting_id": "abc-defg-hij"
-  }'
-```
-
-### Or request a bot for Zoom *(experimental)*
-
-> **Zoom status:** Initial Zoom Meeting SDK support. Requires Zoom app setup and Marketplace approval. Before approval, bots can only join meetings created by the authorizing account. Not yet validated end-to-end in production. Google Meet and Teams are the recommended platforms.
-
-```bash
-curl -X POST "$API_BASE/bots" \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: <API_KEY>" \
-  -d '{
-    "platform": "zoom",
-    "native_meeting_id": "YOUR_MEETING_ID",
-    "passcode": "YOUR_PWD"
-  }'
-```
-
-### 2. Get transcripts:
-
-### Get transcripts over REST
-
-```bash
+# Get transcripts
 curl -H "X-API-Key: <API_KEY>" \
-  "$API_BASE/transcripts/<platform>/<native_meeting_id>"
+  "$API_BASE/transcripts/google_meet/abc-defg-hij"
 ```
 
-For real-time streaming (sub‑second), see the [WebSocket guide](https://docs.vexa.ai/websocket).
-For full REST details, see the [User API Guide](https://docs.vexa.ai/user_api_guide).
+Works with Google Meet, Microsoft Teams, and Zoom. Set `API_BASE` to `https://api.cloud.vexa.ai` (hosted) or `http://localhost:8056` (self-hosted).
 
-Note: Meeting IDs are user-provided (Google Meet code like `xxx-xxxx-xxx` or Teams numeric ID and passcode). Vexa does not generate meeting IDs.
+For real-time WebSocket streaming, see the [WebSocket guide](https://docs.vexa.ai/websocket). For full REST details, see the [User API Guide](https://docs.vexa.ai/user_api_guide).
 
 ---
 
@@ -312,191 +262,25 @@ For the up-to-date roadmap and priorities, see GitHub Issues and Milestones. Iss
 
 > For discussion/support, join our [Discord](https://discord.gg/Ga9duGkVz9).
 
-## Architecture
+## Architecture & Feature Status
 
-**Core API services** (always running):
+Each service and feature has its own README with architecture, DoD table, and evidence-based confidence scores.
 
+- **Services:** [api-gateway](./services/api-gateway) • [meeting-api](./services/meeting-api) • [admin-api](./services/admin-api) • [runtime-api](./services/runtime-api) • [vexa-bot](./services/vexa-bot) • [transcription-service](./services/transcription-service) • [tts-service](./services/tts-service) • [mcp](./services/mcp) • [dashboard](./services/dashboard) • [agent-api](./services/agent-api) *(experimental)*
+- **Features:** [realtime-transcription](./features/realtime-transcription) • [bot-lifecycle](./features/bot-lifecycle) • [browser-session](./features/browser-session) • [remote-browser](./features/remote-browser) • [speaking-bot](./features/speaking-bot) • [meeting-chat](./features/meeting-chat) • [webhooks](./features/webhooks) • [authenticated-meetings](./features/authenticated-meetings)
+- **Deploy:** [Docker Compose](./deploy/compose) • [Vexa Lite](./deploy/lite) • [Helm/K8s](./deploy/helm)
+- **Guides:** [Vexa Lite Deployment](https://docs.vexa.ai/vexa-lite-deployment) • [Docker Compose Deployment](https://docs.vexa.ai/deployment) • [Self-Hosted Management](https://docs.vexa.ai/self-hosted-management) • [Recording Storage](https://docs.vexa.ai/recording-storage)
 
-| Service                               | Purpose                                                                                                                        |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| [api-gateway](./services/api-gateway) | Reverse proxy — routes REST, WebSocket, VNC, CDP to backends                                                                   |
-| [admin-api](./services/admin-api)     | User/org CRUD, scoped API tokens, team management                                                                              |
-| [meeting-api](./services/meeting-api) | **Data layer** — bot lifecycle, meeting CRUD, recordings, transcription collector, interactive bot controls                    |
-| [agent-api](./services/agent-api)     | **Intelligence layer** *(experimental)* — agent sessions, Claude CLI streaming, workspace sync                                 |
-| [runtime-api](./services/runtime-api) | **Infrastructure layer** — container CRUD, spawn/stop/exec, port mapping, idle timeout. Docker, Kubernetes, or process backend |
-
-
-**Meeting & AI services:**
-
-
-| Service                                                   | Purpose                                                                       |
-| --------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| [vexa-bot](./services/vexa-bot)                           | Joins meetings, captures per-speaker audio, transcribes, interactive controls |
-| [transcription-service](./services/transcription-service) | GPU inference — OpenAI-compatible Whisper API                                 |
-| [tts-service](./services/tts-service)                     | Text-to-speech for bot voice                                                  |
-| [mcp](./services/mcp)                                     | 17-tool MCP server for AI agents (Claude, Cursor, etc.)                       |
-
-
-**Frontends & clients:**
-
-
-| Service                           | Purpose                                                                          |
-| --------------------------------- | -------------------------------------------------------------------------------- |
-| [dashboard](./services/dashboard) | Open-source Next.js web UI — meetings, transcripts, agent chat, browser sessions |
-
-
-**Ephemeral containers** (spawned on demand, auto-reclaimed):
-
-
-| Profile     | RAM    | Use case                                                       |
-| ----------- | ------ | -------------------------------------------------------------- |
-| **browser** | ~1.5GB | Meeting attendance, authenticated browser sessions (VNC + CDP) |
-| **agent**   | ~200MB | Claude CLI, post-meeting processing, automation                |
-| **worker**  | ~50MB  | Webhook delivery, file processing                              |
-
-
-- Database models: `libs/admin-models/` (users, tokens), `services/meeting-api/` (meetings, transcriptions)
-
-> If you're building with Vexa, we'd love your support! [Star our repo](https://github.com/Vexa-ai/vexa/stargazers) to help us reach 2000 stars.
-
-### Features
-
-**Meeting bot API:**
-
-- **Send bots to any meeting** — Google Meet, Microsoft Teams, Zoom — one API, all platforms, auto-detected from URL
-- **Per-speaker audio** — no diarization needed, speaker labels from the platform itself
-- **Recording** — persist recording artifacts to S3-compatible storage (or local)
-
-**Real-time meeting transcription:**
-
-- **Sub-second WebSocket streaming** — real-time transcript delivery during the call
-- **100+ languages** via Whisper — transcription + translation
-- **Post-meeting transcription** — record during meeting, transcribe on demand with full-audio context
-
-**Interactive meeting bots:**
-
-- **Speaking bot** — TTS voice in meetings
-- **Chat** — read/write meeting chat for AI-powered in-meeting interaction
-- **Screen sharing** — display content to meeting participants programmatically
-- **Avatar** — set bot avatar/display name per meeting
-
-**Platform:**
-
-- **Multi-tenant** — users, orgs, scoped API tokens, container isolation
-- **Webhooks** — push events for post-meeting automation pipelines
-- **REST API** — complete API for bots, users, transcripts, recordings
-- **Self-hostable** — meeting data never leaves your infrastructure. Apache-2.0 licensed
-- **Open-source frontends** — [Vexa Dashboard](./services/dashboard)
-
-**Deployment & Management Guides:**
-
-- [Vexa Lite Deployment Guide](https://docs.vexa.ai/vexa-lite-deployment) - Single container deployment
-- [Docker Compose Deployment](https://docs.vexa.ai/deployment) - Full stack for development
-- [Self-Hosted Management Guide](https://docs.vexa.ai/self-hosted-management) - Managing users and API tokens
-- [Recording Storage](https://docs.vexa.ai/recording-storage) - S3, MinIO, and local storage configuration
-
-## Features — Honest Status
-
-Each feature has its own README with business context, architecture, DoD table, and confidence score. **Confidence scores are evidence-based** — calculated from DoD pass/fail items and tests3 checks. We update these continuously.
-
-
-| Feature                                                              | Confidence | Status                                                       |
-| -------------------------------------------------------------------- | ---------- | ------------------------------------------------------------ |
-| [meeting-urls](./features/meeting-urls/)                             | 100        | All 9 checks PASS. Teams e2e validated.                      |
-| [browser-session](./features/browser-session/)                       | 95         | 18/18 DoD PASS. Google login persistence validated.          |
-| [infrastructure](./features/infrastructure/)                         | 95         | All items pass including build.                              |
-| [bot-lifecycle](./features/bot-lifecycle/)                           | 92         | 12/14 PASS. Unauthenticated join + escalation untested.      |
-| [container-lifecycle](./features/container-lifecycle/)               | 100        | 15/15 PASS including K8s profiles.                           |
-| [webhooks](./features/webhooks/)                                     | 100        | All 6 items PASS.                                            |
-| [remote-browser](./features/remote-browser/)                         | 100        | All 6 items PASS.                                            |
-| [dashboard](./features/dashboard/)                                   | 90         | 14/15 PASS. 1 false-failed meeting in production data.       |
-| [meeting-chat](./features/meeting-chat/)                             | 0          | Not tested. No test target.                                  |
-| [authenticated-meetings](./features/authenticated-meetings/)         | 75         | 8/10 PASS. Fallback FAIL, Teams auth not implemented.        |
-| [speaking-bot](./features/speaking-bot/)                             | 70         | Single bot TTS reliable. Multi-bot drops under load.         |
-| [auth-and-limits](./features/auth-and-limits/)                       | 70         | Ceiling items pass. Rate limiting + token CRUD untested.     |
-| [realtime-transcription](./features/realtime-transcription/)         | 80         | GMeet + Teams work on all deployments. Zoom not implemented. |
-| [post-meeting-transcription](./features/post-meeting-transcription/) | 40         | Realtime works. Recording on compose+K8s. Deferred untested. |
-
-
-### Services
-
-
-| Service                                                    | Confidence | Status                                                     |
-| ---------------------------------------------------------- | ---------- | ---------------------------------------------------------- |
-| [agent-api](./services/agent-api/)                         | 90         | 32 checks, CLI commands validated.                         |
-| [vexa-bot](./services/vexa-bot/)                           | 80         | All items covered via feature tests. Zoom untested.        |
-| [dashboard](./services/dashboard/)                         | 75         | 5/6 items via tests3 checks. npm test not run.             |
-| [api-gateway](./services/api-gateway/)                     | 68         | Core routing, auth, WebSocket validated.                   |
-| [admin-api](./services/admin-api/)                         | 62         | User/token CRUD, schema sync tested.                       |
-| [transcription-service](./services/transcription-service/) | 55         | Health + transcription + auth pass. Backpressure untested. |
-| [runtime-api](./services/runtime-api/)                     | 52         | Container CRUD, idle, callbacks tested.                    |
-| [meeting-api](./services/meeting-api/)                     | 52         | Bot create, status, URL parsing. Tech debt remains.        |
-| [tts-service](./services/tts-service/)                     | 30         | Indirect only — works via speaking-bot feature.            |
-| [mcp](./services/mcp/)                                     | 0          | Untested.                                                  |
-| [calendar-service](./services/calendar-service/)           | 0          | Experimental, not in default compose.                      |
-| [telegram-bot](./services/telegram-bot/)                   | 0          | Experimental, not in default compose.                      |
-
-
-### Deployments
-
-
-| Mode                         | Confidence | Status                                                          |
-| ---------------------------- | ---------- | --------------------------------------------------------------- |
-| [compose](./deploy/compose/) | 93         | 19/19 DoD PASS. Full stack validated.                           |
-| [lite](./deploy/lite/)       | 85         | 12/12 DoD PASS. Recording disabled (no MinIO).                  |
-| [helm](./deploy/helm/)       | 90         | 9/10 DoD PASS. Built images + global.imageTag validated on LKE. |
-
-
-## Related Projects
-
-Vexa is part of an ecosystem of open-source tools:
-
-### [Vexa Dashboard](./services/dashboard)
-
-100% open-source web interface for Vexa, included in this monorepo at `services/dashboard/`. Join meetings, view transcripts, chat with agents, manage browser sessions, and more. Self-host everything with no cloud dependencies.
+---
 
 ## Contributing
 
-We use **GitHub Issues** as our main feedback channel. New issues are triaged within **72 hours** (you'll get a label + short response). Not every feature will be implemented, but every issue will be acknowledged. Look for `**good-first-issue`** if you want to contribute.
-
-Contributors are welcome! Join our community and help shape Vexa's future. Here's how to get involved:
-
-1. **Understand Our Direction**:
-2. **Engage on Discord** ([Discord Community](https://discord.gg/Ga9duGkVz9)):
-  - **Introduce Yourself**: Start by saying hello in the introductions channel.
-  - **Stay Informed**: Check the Discord channel for known issues, feature requests, and ongoing discussions. Issues actively being discussed often have dedicated channels.
-  - **Discuss Ideas**: Share your feature requests, report bugs, and participate in conversations about a specific issue you're interested in delivering.
-  - **Get Assigned**: If you feel ready to contribute, discuss the issue you'd like to work on and ask to get assigned on Discord.
-3. **Development Process**:
-  - Browse available **tasks** (often linked from Discord discussions or the roadmap).
-  - Request task assignment through Discord if not already assigned.
-  - Submit **pull requests** for review.
-
-- **Critical Tasks & Bounties**:
-  - Selected **high-priority tasks** may be marked with **bounties**.
-  - Bounties are sponsored by the **Vexa core team**.
-  - Check task descriptions (often on the roadmap or Discord) for bounty details and requirements.
-
-We look forward to your contributions!
+We use **GitHub Issues** as our main feedback channel — triaged within **72 hours**. Look for `good-first-issue` to get started. Join [Discord](https://discord.gg/Ga9duGkVz9) to discuss ideas and get assigned.
 
 Licensed under **Apache-2.0** — see [LICENSE](LICENSE).
 
-## Project Links
+## Links
 
-- 🌐 [Vexa Website](https://vexa.ai)
-- 💼 [LinkedIn](https://www.linkedin.com/company/vexa-ai/)
-- 🐦 [X (@grankin_d)](https://x.com/grankin_d)
-- 💬 [Discord Community](https://discord.gg/Ga9duGkVz9)
+[Website](https://vexa.ai) • [Docs](https://docs.vexa.ai) • [Discord](https://discord.gg/Ga9duGkVz9) • [LinkedIn](https://www.linkedin.com/company/vexa-ai/) • [X (@grankin_d)](https://x.com/grankin_d) • [Meet Founder](https://www.linkedin.com/in/dmitry-grankin/)
 
-## Repository Structure
-
-This is the main Vexa repository containing the core API and services. For related projects:
-
-- **[vexa-lite-deploy](https://github.com/Vexa-ai/vexa-lite-deploy)** - Deployment configurations for Vexa Lite
-- **[Vexa Dashboard](./services/dashboard)** - Web UI for managing Vexa instances (included in this monorepo)
-
-[Meet Founder](https://www.linkedin.com/in/dmitry-grankin/)
-
-[Join Discord](https://discord.gg/Ga9duGkVz9)
-
-The Vexa name and logo are trademarks of **Vexa.ai Inc**.
+**Related:** [vexa-lite-deploy](https://github.com/Vexa-ai/vexa-lite-deploy) • [Vexa Dashboard](./services/dashboard)
