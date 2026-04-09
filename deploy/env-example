@@ -34,7 +34,7 @@ ADMIN_TOKEN=changeme
 
 # Image tag — pre-built from DockerHub by default.
 # `make build` writes a local tag to .last-tag which overrides this.
-IMAGE_TAG=dev
+IMAGE_TAG=latest
 
 
 # Database (embedded postgres by default)
