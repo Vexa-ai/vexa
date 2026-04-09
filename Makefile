@@ -1,18 +1,27 @@
-.PHONY: build up down docs smoke test what-changed full \
+.PHONY: all lite build up down lite-down docs smoke test what-changed full \
        collect score \
        vm-compose vm-lite vm-destroy vm-ssh \
        help
 
-# ═══ Deploy (compose by default) ═════════════════════════════════
+# ═══ Deploy ═════════════════════════════════════════════════════
+
+all:                               ## full stack via Docker Compose
+	@$(MAKE) --no-print-directory -C deploy/compose all
+
+lite:                              ## single-container deploy (Vexa Lite)
+	@$(MAKE) --no-print-directory -C deploy/lite all
 
 build:                             ## build all images from source
 	@$(MAKE) --no-print-directory -C deploy/compose build
 
-up:                                ## start the stack (pulls if not built)
+up:                                ## start compose stack (alias for all)
 	@$(MAKE) --no-print-directory -C deploy/compose all
 
-down:                              ## stop the stack
+down:                              ## stop compose stack
 	@$(MAKE) --no-print-directory -C deploy/compose down
+
+lite-down:                         ## stop lite containers
+	@$(MAKE) --no-print-directory -C deploy/lite down
 
 # ═══ Test ════════════════════════════════════════════════════════
 

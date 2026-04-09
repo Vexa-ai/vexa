@@ -135,69 +135,32 @@ Run everything including your own GPU transcription service.
 
 ## Quickstart
 
-### Option 1: Hosted (no deployment needed)
+### Self-host with Docker
 
-Get your API key at [vexa.ai/dashboard/api-keys](https://vexa.ai/dashboard/api-keys) and start sending bots immediately. No infrastructure needed.
-
-### Option 2: Vexa Lite (recommended for self-hosting)
-
-**Single Docker container. Easiest way to self-host Vexa.**
-
-- **Self-hosted multiuser service** - Multiple users, API tokens, and team management
-- **Single container** - Easy to deploy on any platform
-- **No GPU required** - Transcription runs externally
-- **Choose your frontend** - Pick from open-source user interfaces like [Vexa Dashboard](./services/dashboard)
-- **Production-ready** - Stateless, scalable, serverless-friendly
-
-Needs external Postgres + transcription service. Use Vexa transcription (sign up at [vexa.ai](https://vexa.ai) for a transcription API key — ready to go, no GPU needed), or self-host your own GPU transcription for full data sovereignty.
-
-**Quick start:**
+On a fresh Linux machine (Ubuntu 24.04):
 
 ```bash
-docker run -d \
-  --name vexa \
-  -p 8056:8056 \
-  -e DATABASE_URL="postgresql://user:pass@host/vexa" \
-  -e ADMIN_API_TOKEN="your-admin-token" \
-  -e TRANSCRIPTION_SERVICE_URL="https://transcription.service/v1/audio/transcriptions" \
-  -e TRANSCRIPTION_SERVICE_TOKEN="transcriber-token" \
-  vexaai/vexa-lite:latest
+apt-get update && apt-get install -y make git curl
+curl -fsSL https://get.docker.com | sh
+git clone https://github.com/Vexa-ai/vexa.git && cd vexa
 ```
 
-> **Production:** Use immutable tags (e.g., `0.10.0-260405-0108`) instead of `:latest` for reproducible deployments.
+Then choose:
 
-**Deployment options:**
 
-- **One-click platform deployments**: [vexa-lite-deploy repository](https://github.com/Vexa-ai/vexa-lite-deploy) (Fly.io ready, more platforms coming)
-- **Complete setup guide**: [Vexa Lite Deployment Guide](https://docs.vexa.ai/vexa-lite-deployment)
-- **Frontend options**: [Vexa Dashboard](./services/dashboard)
+| Command      | What you get                     | Best for                    |
+| ------------ | -------------------------------- | --------------------------- |
+| `make lite`  | Single container, all services   | Quick evaluation, small teams |
+| `make all`   | Full stack, each service separate | Development, production     |
 
-### Option 3: Docker Compose (development)
 
-**Full stack deployment with all services. Perfect for development and testing.**
+Both prompt for a transcription token on first run. Get one at [staging.vexa.ai/dashboard/transcription](https://staging.vexa.ai/dashboard/transcription), or [self-host transcription](./services/transcription-service/README.md) with a GPU.
 
-```bash
-git clone https://github.com/Vexa-ai/vexa.git
-cd vexa/deploy/compose
-make all
-```
+Guides: [Vexa Lite](deploy/lite/README.md) | [Docker Compose](deploy/compose/README.md) | [Helm (K8s)](deploy/helm/README.md)
 
-`make all` prompts for a transcription token (get one at [staging.vexa.ai/dashboard/transcription](https://staging.vexa.ai/dashboard/transcription)), then pulls images, starts all containers, syncs DB schema, creates API key, and verifies connectivity.
+### Hosted (no deployment needed)
 
-Full guide: [deploy/compose/README.md](deploy/compose/README.md)
-
-### Option 4: Helm (production K8s)
-
-For Kubernetes production deployments. See [deploy/helm/README.md](deploy/helm/README.md).
-
-### Vexa CLI *(experimental)*
-
-Local terminal client for the agent runtime. See [packages/vexa-cli/README.md](packages/vexa-cli/README.md).
-
-### Recording storage (local and cloud)
-
-Recording supports local filesystem, MinIO, and cloud S3-compatible backends.
-See [Recording Storage](https://docs.vexa.ai/recording-storage) for configuration details.
+Get your API key at [vexa.ai/dashboard/api-keys](https://vexa.ai/dashboard/api-keys) and start sending bots immediately.
 
 ## Meeting API — Send Bots, Get Transcripts
 
