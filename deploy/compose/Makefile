@@ -31,10 +31,14 @@ COMPOSE_CMD = docker compose --env-file $(ENV_FILE) -f $(COMPOSE_FILE)
 # ============================================================================
 
 all: env preflight up init-db setup-api-key test
-	@echo "Vexa is running. API: http://localhost:$${API_GATEWAY_HOST_PORT:-8056}/docs"
+	@HOST_IP=$$(hostname -I 2>/dev/null | awk '{print $$1}'); \
+	HOST=$${HOST_IP:-localhost}; \
+	echo "Vexa is running. API: http://$$HOST:$${API_GATEWAY_HOST_PORT:-8056}/docs"
 
 all-build: env preflight build up init-db setup-api-key test
-	@echo "Vexa is running (built from source). API: http://localhost:$${API_GATEWAY_HOST_PORT:-8056}/docs"
+	@HOST_IP=$$(hostname -I 2>/dev/null | awk '{print $$1}'); \
+	HOST=$${HOST_IP:-localhost}; \
+	echo "Vexa is running (built from source). API: http://$$HOST:$${API_GATEWAY_HOST_PORT:-8056}/docs"
 
 help-tags:
 	@echo "Image Tagging Workflow"
@@ -88,6 +92,27 @@ env:
 preflight:
 	@TX_URL=$$(grep -E '^TRANSCRIPTION_SERVICE_URL=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
 	TX_TOKEN=$$(grep -E '^TRANSCRIPTION_SERVICE_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
+	if [ -z "$$TX_TOKEN" ] || [ "$$TX_TOKEN" = "your-token" ]; then \
+		echo ""; \
+		echo "  Transcription service configuration"; \
+		echo "  ──────────────────────────────────────────────"; \
+		echo "  Get a token at: https://staging.vexa.ai/dashboard/transcription"; \
+		echo ""; \
+		DEFAULT_URL="https://transcription.vexa.ai/v1/audio/transcriptions"; \
+		printf "  Transcription URL [$$DEFAULT_URL]: "; \
+		read -r INPUT_URL < /dev/tty; \
+		TX_URL=$${INPUT_URL:-$$DEFAULT_URL}; \
+		printf "  Transcription token: "; \
+		read -r TX_TOKEN < /dev/tty; \
+		if [ -z "$$TX_TOKEN" ]; then \
+			echo "  ✗ No token provided."; exit 1; \
+		fi; \
+		sed -i "s|^TRANSCRIPTION_SERVICE_URL=.*|TRANSCRIPTION_SERVICE_URL=$$TX_URL|" $(ENV_FILE); \
+		sed -i "s|^TRANSCRIPTION_SERVICE_TOKEN=.*|TRANSCRIPTION_SERVICE_TOKEN=$$TX_TOKEN|" $(ENV_FILE); \
+		echo "  ──────────────────────────────────────────────"; \
+		echo "  Saved to .env"; \
+		echo ""; \
+	fi; \
 	if [ -z "$$TX_URL" ]; then \
 		echo "  ✗ TRANSCRIPTION_SERVICE_URL not set in .env"; exit 1; \
 	fi; \
@@ -247,9 +272,16 @@ test: check_docker
 		echo "  ✗ Dashboard not responding (port $$DASH_PORT)"; \
 	fi; \
 	echo ""; \
-	echo "Dashboard: http://localhost:$$DASH_PORT"; \
-	echo "API docs:  http://localhost:$$API_PORT/docs"; \
-	echo "Admin:     http://localhost:$$ADMIN_PORT/docs"; \
+	HOST_IP=$$(hostname -I 2>/dev/null | awk '{print $$1}'); \
+	if [ -n "$$HOST_IP" ] && [ "$$HOST_IP" != "127.0.0.1" ]; then \
+		echo "Dashboard: http://$$HOST_IP:$$DASH_PORT"; \
+		echo "API docs:  http://$$HOST_IP:$$API_PORT/docs"; \
+		echo "Admin:     http://$$HOST_IP:$$ADMIN_PORT/docs"; \
+	else \
+		echo "Dashboard: http://localhost:$$DASH_PORT"; \
+		echo "API docs:  http://localhost:$$API_PORT/docs"; \
+		echo "Admin:     http://localhost:$$ADMIN_PORT/docs"; \
+	fi; \
 	echo ""; \
 	echo "Image tag: $$(cat $(LAST_TAG_FILE) 2>/dev/null || echo 'unknown')"; \
 	echo "To test: open the dashboard and join a Google Meet."

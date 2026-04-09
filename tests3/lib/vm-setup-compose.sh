@@ -50,7 +50,8 @@ pass ".env configured with transcription creds"
 # ── 5. Copy tests3 to VM (not in git yet) ─────────
 info "syncing tests3 to VM..."
 VM_IP=$(state_read vm_ip)
-scp -r -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+rsync -az --exclude='.state/' \
+    -e "ssh $SSH_OPTS" \
     "$ROOT/tests3" "root@$VM_IP:/root/vexa/" 2>/dev/null
 pass "tests3 synced to VM"
 

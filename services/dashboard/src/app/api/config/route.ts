@@ -11,16 +11,17 @@ export async function GET(request: NextRequest) {
   const decisionListenerUrl =
     process.env.NEXT_PUBLIC_DECISION_LISTENER_URL || "http://localhost:8765";
 
-  // WS goes through the dashboard via Next.js rewrite — derive from public app URL or request host
+  // WS goes through the dashboard via Next.js rewrite — derive from request host.
+  // Explicit NEXT_PUBLIC_APP_URL takes precedence, but localhost is ignored for remote access.
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+  const host = request.headers.get('host')!;
+  const proto = request.headers.get('x-forwarded-proto') === 'https' ? 'wss' : 'ws';
   let wsUrl: string;
-  if (appUrl) {
+  if (appUrl && !appUrl.includes('localhost')) {
     const wsProto = appUrl.startsWith('https') ? 'wss' : 'ws';
     const wsHost = appUrl.replace(/^https?:\/\//, '');
     wsUrl = `${wsProto}://${wsHost}/ws`;
   } else {
-    const host = request.headers.get('host')!;
-    const proto = request.headers.get('x-forwarded-proto') === 'https' ? 'wss' : 'ws';
     wsUrl = `${proto}://${host}/ws`;
   }
 
@@ -39,10 +40,12 @@ export async function GET(request: NextRequest) {
   const webappUrl = process.env.NEXT_PUBLIC_WEBAPP_URL || "https://vexa.ai";
 
   // Public API URL for client-facing configs (MCP, docs, etc.)
-  // Falls back to VEXA_PUBLIC_API_URL -> NEXT_PUBLIC_VEXA_API_URL -> apiUrl
-  const publicApiUrl = process.env.VEXA_PUBLIC_API_URL
-    || process.env.NEXT_PUBLIC_VEXA_API_URL
-    || apiUrl;
+  // Explicit values take precedence, but localhost is ignored for remote access — derive from request host.
+  const gatewayPort = process.env.API_GATEWAY_HOST_PORT || "8056";
+  const explicitPublicApi = process.env.VEXA_PUBLIC_API_URL || process.env.NEXT_PUBLIC_VEXA_API_URL || "";
+  const publicApiUrl = (explicitPublicApi && !explicitPublicApi.includes('localhost'))
+    ? explicitPublicApi
+    : `${request.headers.get('x-forwarded-proto') || 'http'}://${host.replace(/:\d+$/, '')}:${gatewayPort}`;
 
   return NextResponse.json({
     wsUrl,

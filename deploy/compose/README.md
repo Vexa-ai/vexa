@@ -25,7 +25,7 @@ Runs all Vexa services via Docker Compose:
 Fresh Linux machine (tested on Ubuntu 24.04):
 
 ```bash
-apt-get update && apt-get install -y make
+apt-get update && apt-get install -y make git curl
 curl -fsSL https://get.docker.com | sh
 ```
 
@@ -39,11 +39,9 @@ cd vexa/deploy/compose
 make all
 ```
 
-That's it. Pulls pre-built images from DockerHub, starts services, syncs DB schema, creates API key, tests connectivity. To build from source instead: `make all-build`.
+`make all` will prompt you for a transcription token (get one at [staging.vexa.ai/dashboard/transcription](https://staging.vexa.ai/dashboard/transcription)), then pull pre-built images from DockerHub, start all services, sync the DB schema, create an API key, and verify connectivity. To build from source instead: `make all-build`.
 
-**Before running**, edit `.env`:
-
-1. Set `TRANSCRIPTION_SERVICE_URL` — get your API key at [staging.vexa.ai/dashboard/transcription](https://staging.vexa.ai/dashboard/transcription), endpoint is `https://transcription.vexa.ai`. Or [self-host](../../services/transcription-service/README.md) with GPU.
+You can also [self-host transcription](../../services/transcription-service/README.md) with a GPU.
 
 ### Make targets
 

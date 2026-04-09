@@ -4,7 +4,7 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-LINODE_CLI="${LINODE_CLI:-/home/dima/anaconda3/bin/linode-cli}"
+LINODE_CLI="${LINODE_CLI:-linode-cli}"
 VM_TYPE="${VM_TYPE:-g6-standard-6}"
 VM_IMAGE="${VM_IMAGE:-linode/ubuntu24.04}"
 VM_REGION="${VM_REGION:-us-ord}"

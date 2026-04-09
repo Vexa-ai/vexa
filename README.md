@@ -182,14 +182,9 @@ cd vexa/deploy/compose
 make all
 ```
 
-**What `make all` does:**
+`make all` prompts for a transcription token (get one at [staging.vexa.ai/dashboard/transcription](https://staging.vexa.ai/dashboard/transcription)), then pulls images, starts all containers, syncs DB schema, creates API key, and verifies connectivity.
 
-- Builds all Docker images
-- Spins up all containers (API, bots, transcription services, database)
-- Runs database migrations
-- Starts a simple test to verify everything works
-
-Full guide: [Deployment Guide](https://docs.vexa.ai/deployment)
+Full guide: [deploy/compose/README.md](deploy/compose/README.md)
 
 ### Option 4: Helm (production K8s)
 
