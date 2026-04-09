@@ -1,75 +1,65 @@
+# **Vexa — Open-Source Meeting Bot & Transcription API**
 
+**Meeting bot API & real-time meeting transcription — self-hosted or hosted**
 
-# **Vexa**
+meeting bots • real-time transcription • interactive bots • MCP server • self-hosted
 
-**Open-source meeting transcription API & agent runtime**
-
-meeting bots • real-time transcription • interactive agents • MCP server • self-hosted
-
-**Google Meet**     •     **Microsoft Teams**     •     **Zoom** (experimental)
-
-       
+**Google Meet**     •     **Microsoft Teams**     •     **Zoom** (experimental)
 
 [Meeting API](#meeting-api) • [Quickstart](#quickstart) • [Docs](https://docs.vexa.ai) • [Roadmap](#roadmap) • [Discord](https://discord.gg/Ga9duGkVz9)
 
 ---
 
-## What is Vexa?
+**Vexa** is an open-source, self-hostable meeting bot API and meeting transcription API for Google Meet, Microsoft Teams, and Zoom. Alternative to Recall.ai, Otter.ai, and Fireflies.ai — self-host so meeting data never leaves your infrastructure, or use [vexa.ai](https://vexa.ai) hosted.
 
-**Vexa** is an open-source, self-hostable meeting transcription API and agent runtime for Google Meet, Microsoft Teams, and Zoom. Modular by design — twelve independent features, use one or all:
+**Can't send meeting data to third parties?**
+Self-host Vexa. Meeting data never leaves your infrastructure.
 
-- **Meeting transcription API** — send a bot to any meeting, get real-time transcripts via REST API and WebSocket. Self-hosted alternative to Otter.ai, Fireflies.ai.
-- **Meeting bot API** — auto-join, record, speak, chat, share screen. Open-source alternative to Recall.ai.
-- **Agent runtime** — ephemeral containers for AI agents with zero idle cost. Post-meeting automation, scheduled pipelines.
-- **MCP server** — 17 meeting tools for Claude, Cursor, Windsurf. Agents join calls, read transcripts, speak in meetings.
+**Paying $17/seat for transcription?**
+Self-host and drop to infrastructure cost.
+
+**Building a product that needs meeting data?**
+Embed the meeting bot API. Multi-tenant, scoped tokens, your branding.
+
+**Want AI agents in meetings?**
+MCP server with 17 tools. Agents join calls, read transcripts, speak.
+
+### Capabilities
+
+- **Meeting bot API** — send a bot to any meeting: auto-join, record, speak, chat, share screen. Open-source alternative to [Recall.ai](https://recall.ai).
+- **Meeting transcription API** — real-time transcripts via REST API and WebSocket. Self-hosted alternative to Otter.ai and Fireflies.ai.
+- **Real-time transcription** — sub-second per-speaker transcripts during the call. 100+ languages via Whisper. WebSocket streaming.
+- **Interactive bots** — make bots speak, send/read chat, share screen content, and set avatar in live meetings.
+- **Browser bots** — CDP + Playwright browser automation with persistent authenticated sessions via S3.
+- **MCP server** — 17 meeting tools for Claude, Cursor, Windsurf. AI agents join calls, read transcripts, speak in meetings.
+- **Multi-tenant** — users, scoped API tokens, isolated containers. Deploy once, serve your team.
+- **Self-hostable** — run on your infra. Meeting data never leaves your infrastructure.
 
 Every feature is a separate service. Pick what you need, skip what you don't. Self-host everything or use [vexa.ai](https://vexa.ai) hosted.
 
-### At a glance
-
-
-
-| Capability                          | What it means                                                                               |
-| ----------------------------------- | ------------------------------------------------------------------------------------------- |
-| **Meeting bots**                    | Automatically joins Google Meet, Microsoft Teams, and Zoom meetings                         |
-| **Browser bots**                    | CDP + Playwright browser automation with persistent authenticated sessions via S3           |
-| **Real-time transcription**         | Sub-second transcript delivery during the call                                              |
-| **Interactive bots**                | Make bots speak, send/read chat, share screen content, and set avatar in live meetings      |
-| **Agent runtime** *(experimental)*  | Ephemeral containers for AI agents — browser, agent, worker profiles. Zero cost when idle   |
-| **MCP server**                      | 17 tools for Claude/Cursor/Windsurf — join calls, read transcripts, speak in meetings       |
-| **Multilingual**                    | 100+ languages via Whisper (transcription + translation)                                    |
-| **Multi-tenant**                    | Users, scoped API tokens, isolated containers — deploy once, serve your team                |
-| **Self-hostable**                   | Run on your infra for complete data sovereignty                                             |
-| **Accessible anywhere**             | Same agent via web dashboard, meeting chat, or any chat client                              |
-
-
-### Who it's for
-
-
-| You are...              | You want...                                                                         |
-| ----------------------- | ----------------------------------------------------------------------------------- |
-| **Enterprises**         | Self-hosted transcription with strict privacy — replace $17-20/seat SaaS            |
-| **AI product builders** | Give your agents meeting superpowers via MCP or API                                 |
-| **SaaS developers**     | Multi-tenant meeting API to embed in your product                                   |
-| **Platform teams**      | Deploy one service for your org — isolated agents, scoped tokens, no per-user infra |
-| **Automation builders** | Post-meeting pipelines via webhooks: meeting ends → your system processes transcript |
-
-
 ---
 
-## Build on Top. In Hours, Not Months
+## Why Self-Host Meeting Transcription?
 
-**Build powerful meeting assistants (like Otter.ai, Fireflies.ai, Fathom) for your startup, internal use, or custom integrations.** Or build a meeting bot API like [Recall.ai](https://recall.ai) — but open-source and self-hosted. Go further — build AI agents that don't just transcribe, but actively participate in and act on meetings.
+**For regulated industries** — banks, financial services, healthcare — meeting data can't leave your infrastructure. Self-hosting Vexa means zero external data transmission and full audit trail on your own infrastructure.
 
-The Vexa API provides powerful abstractions and a clear separation of concerns, enabling you to build sophisticated applications on top with a safe and enjoyable coding experience.
+**For cost-conscious teams** — replace per-seat SaaS pricing. A team paying $17/seat/mo for meeting transcription can self-host Vexa and drop that to infrastructure cost.
 
-## 🛡️ Built for Data Sovereignty
+**For developers** — embed a meeting bot API in your product. Multi-tenant, scoped API tokens, no per-user infrastructure.
 
-Vexa is open-source and self-hostable — ideal for regulated industries and teams that cannot compromise on privacy. 
+Build meeting assistants like Otter.ai, Fireflies.ai, or Fathom — or build a meeting bot API like [Recall.ai](https://recall.ai) — self-hosted on your infrastructure.
 
-Modular architecture scales from edge devices to millions of users. You choose what to self-host and what to use as a service.
+- **Vexa (self-host)** — your infra cost. Data never leaves your infrastructure. Meeting bot API, real-time transcription, interactive bots, MCP server. Open source, Apache 2.0. Google Meet, Teams, Zoom*.
+- **Recall.ai** — $0.50/hr. No self-hosting. Meeting bot API, real-time transcription. No MCP, limited interactive bots. Closed source. Meet, Teams, Zoom, Webex.
+- **Otter.ai** — $17-20/seat/mo. No self-hosting. No API. Limited real-time transcription. Closed source. Meet, Teams, Zoom.
 
-**You control everything:**
+ Zoom support is experimental
+
+Or use [vexa.ai](https://vexa.ai) hosted — get an API key and start sending bots immediately, no infrastructure needed.
+
+## Built for Data Sovereignty
+
+Meeting data never leaves your infrastructure. Self-host for complete control. Modular architecture scales from edge devices to millions of users.
 
 **1. Hosted service**
 At [vexa.ai](https://vexa.ai) — get an API key and start sending bots. No infrastructure needed.
@@ -85,7 +75,7 @@ Run Vexa yourself, use vexa.ai for transcription — ready to go, no GPU needed.
 
 **3. Fully self-host**
 Run everything including your own GPU transcription service.
-*Full data sovereignty for regulated industries* — see [deploy/](./deploy/) for setup guides.
+*Meeting data never leaves your infrastructure* — see [deploy/](./deploy/) for setup guides.
 
 ## What's new
 
@@ -95,7 +85,7 @@ Run everything including your own GPU transcription service.
 - **Interactive Bots API** — live controls for speak/chat/screen/avatar during active meetings
 - **MCP server** — 17 tools for AI agents — join, transcribe, speak, chat, share screen
 - **Recordings** — persist recording artifacts to S3-compatible storage (or local)
-- **Agent API** *(experimental)* — ephemeral containers, Claude CLI streaming, workspace sync, scheduling. See [Agent API](#agent-api-experimental).
+- **Agent API** *(experimental)* — ephemeral containers for AI agents. See [services/agent-api/](./services/agent-api/).
 
 ---
 
@@ -165,8 +155,6 @@ Full guide: [Deployment Guide](https://docs.vexa.ai/deployment)
 
 For Kubernetes production deployments. See [deploy/helm/README.md](deploy/helm/README.md).
 
-
-
 ### Vexa CLI *(experimental)*
 
 Local terminal client for the agent runtime. See [packages/vexa-cli/README.md](packages/vexa-cli/README.md).
@@ -176,23 +164,7 @@ Local terminal client for the agent runtime. See [packages/vexa-cli/README.md](p
 Recording supports local filesystem, MinIO, and cloud S3-compatible backends.
 See [Recording Storage](https://docs.vexa.ai/recording-storage) for configuration details.
 
-
-
-## Agent API *(experimental)*
-
-Ephemeral containers for AI agents with meeting-native capabilities. Agents join calls, read transcripts, speak, and act — without gluing together separate sandboxes and meeting APIs.
-
-- **Ephemeral containers** — browser/agent/worker profiles, zero idle cost
-- **MCP server** — 17 tools for Claude, Cursor, Windsurf — read + write + control meetings
-- **Multi-tenant** — isolated containers, scoped API tokens, user/team management
-
-See [services/agent-api/](./services/agent-api/) for details.
-
----
-
-
-
-## Meeting API — The Data Layer
+## Meeting API — Send Bots, Get Transcripts
 
 The Meeting API is the foundation of the platform. It sends bots to meetings, captures real-time transcripts with per-speaker audio, and provides interactive controls (speak, chat, share screen). This is the data layer that feeds everything else — agents, webhooks, knowledge extraction.
 
@@ -264,6 +236,42 @@ Note: Meeting IDs are user-provided (Google Meet code like `xxx-xxxx-xxx` or Tea
 
 ---
 
+## Browser Bots — Persistent Browser Containers for Agents
+
+Remote browser containers with CDP + Playwright access and persistent session storage via S3. Agents get a real browser that stays logged in across restarts — Google, Microsoft, or any web session.
+
+- **CDP + Playwright** — full browser automation via Chrome DevTools Protocol
+- **Persistent sessions** — authenticated browser state saved to S3, restored on next spin-up
+- **VNC access** — humans can observe and control the browser in real time alongside agents
+- **On-demand containers** — spin up in seconds, auto-reclaim when idle
+
+See [features/browser-session/](./features/browser-session/) and [features/remote-browser/](./features/remote-browser/) for details.
+
+---
+
+## MCP Server — Meeting Tools for AI Agents
+
+17 tools that let AI agents join meetings, read transcripts, speak, chat, and share screen. Works with Claude, Cursor, Windsurf, and any MCP-compatible client.
+
+Your AI agent can join a meeting, listen to the conversation, and participate — all through MCP tool calls. See [services/mcp/](./services/mcp/) for setup and tool reference.
+
+---
+
+## Modular — Pick What You Need
+
+Vexa is a toolkit, not a monolith. Every feature works independently. Use one or all — they compose when you need them to.
+
+
+| You're building...                   | Features you need                              | Skip the rest                     |
+| ------------------------------------ | ---------------------------------------------- | --------------------------------- |
+| **Self-hosted Otter replacement**    | transcription + multi-platform + webhooks      | agent runtime, scheduler, MCP     |
+| **Meeting data pipeline**            | transcription + webhooks + post-meeting        | speaking-bot, chat, agent runtime |
+| **AI meeting assistant product**     | transcription + MCP + speaking-bot + chat      | remote-browser, scheduler         |
+| **Meeting bot API (like Recall.ai)** | multi-platform + transcription + token-scoping | agent runtime, workspaces         |
+
+
+You don't pay complexity tax for features you don't use. Each service is a separate container. Don't need agents? Don't run agent-api. Don't need TTS? Don't run tts-service. Services communicate via REST and Redis, not tight coupling.
+
 ---
 
 ## Roadmap
@@ -320,39 +328,35 @@ For the up-to-date roadmap and priorities, see GitHub Issues and Milestones. Iss
 
 - Database models: `libs/admin-models/` (users, tokens), `services/meeting-api/` (meetings, transcriptions)
 
-
-
 > If you're building with Vexa, we'd love your support! [Star our repo](https://github.com/Vexa-ai/vexa/stargazers) to help us reach 2000 stars.
 
 ### Features
 
-**Meeting transcription:**
+**Meeting bot API:**
 
-- **Real-time multilingual transcription** supporting **100 languages** with **Whisper** — replace $17-20/seat SaaS
-- **Post-meeting transcription** — record during meeting, transcribe on demand with full-audio context
+- **Send bots to any meeting** — Google Meet, Microsoft Teams, Zoom — one API, all platforms, auto-detected from URL
 - **Per-speaker audio** — no diarization needed, speaker labels from the platform itself
-- **WebSocket streaming** — sub-second transcript delivery via WebSocket
-- **Google Meet, Microsoft Teams, Zoom** — one API, all platforms, auto-detected from URL
+- **Recording** — persist recording artifacts to S3-compatible storage (or local)
 
-**Interactive bots:**
+**Real-time meeting transcription:**
 
-- **Speaking bot** — TTS voice in meetings (like Recall.ai's Output Media API, but open-source)
+- **Sub-second WebSocket streaming** — real-time transcript delivery during the call
+- **100+ languages** via Whisper — transcription + translation
+- **Post-meeting transcription** — record during meeting, transcribe on demand with full-audio context
+
+**Interactive meeting bots:**
+
+- **Speaking bot** — TTS voice in meetings
 - **Chat** — read/write meeting chat for AI-powered in-meeting interaction
 - **Screen sharing** — display content to meeting participants programmatically
 - **Avatar** — set bot avatar/display name per meeting
-
-**Agent runtime** *(experimental)*:
-
-- **Ephemeral containers** — browser/agent/worker profiles, zero idle cost, ~5s spin-up
-- **Remote browser** — VNC for human control + CDP for agent automation, persistent auth
-- **MCP server** — 17 tools for Claude, Cursor, Windsurf — read + write + control meetings
 
 **Platform:**
 
 - **Multi-tenant** — users, orgs, scoped API tokens, container isolation
 - **Webhooks** — push events for post-meeting automation pipelines
 - **REST API** — complete API for bots, users, transcripts, recordings
-- **Self-hostable** — full data sovereignty, Apache-2.0 licensed
+- **Self-hostable** — meeting data never leaves your infrastructure. Apache-2.0 licensed
 - **Open-source frontends** — [Vexa Dashboard](./services/dashboard)
 
 **Deployment & Management Guides:**
@@ -362,43 +366,27 @@ For the up-to-date roadmap and priorities, see GitHub Issues and Milestones. Iss
 - [Self-Hosted Management Guide](https://docs.vexa.ai/self-hosted-management) - Managing users and API tokens
 - [Recording Storage](https://docs.vexa.ai/recording-storage) - S3, MinIO, and local storage configuration
 
-## Modular — Pick What You Need
-
-Vexa is a toolkit, not a monolith. Every feature works independently. Use one or all twelve — they compose when you need them to.
-
-
-| You're building...                   | Features you need                                      | Skip the rest                     |
-| ------------------------------------ | ------------------------------------------------------ | --------------------------------- |
-| **Self-hosted Otter replacement**    | transcription + multi-platform + webhooks              | agent runtime, scheduler, MCP     |
-| **Meeting data pipeline**            | transcription + webhooks + post-meeting                | speaking-bot, chat, agent runtime |
-| **AI meeting assistant product**     | transcription + MCP + speaking-bot + chat              | remote-browser, scheduler         |
-| **Personal AI assistant**            | agentic-runtime + workspaces + MCP                     | multi-platform, webhooks          |
-| **Meeting bot API (like Recall.ai)** | multi-platform + transcription + token-scoping         | agent runtime, workspaces         |
-
-
-You don't pay complexity tax for features you don't use. Each service is a separate container. Don't need agents? Don't run agent-api. Don't need TTS? Don't run tts-service. The architecture is modular by design — services communicate via REST and Redis, not tight coupling.
-
 ## Features — Honest Status
 
 Each feature has its own README with business context, architecture, DoD table, and confidence score. **Confidence scores are evidence-based** — calculated from DoD pass/fail items and tests3 checks. We update these continuously.
 
 
-| Feature                                                              | Confidence | Status                                                      |
-| -------------------------------------------------------------------- | ---------- | ----------------------------------------------------------- |
-| [meeting-urls](./features/meeting-urls/)                             | 100        | All 9 checks PASS. Teams e2e validated.                     |
-| [browser-session](./features/browser-session/)                       | 95         | 18/18 DoD PASS. Google login persistence validated.         |
-| [infrastructure](./features/infrastructure/)                         | 95         | All items pass including build.                             |
-| [bot-lifecycle](./features/bot-lifecycle/)                           | 92         | 12/14 PASS. Unauthenticated join + escalation untested.     |
-| [container-lifecycle](./features/container-lifecycle/)               | 100        | 15/15 PASS including K8s profiles.                          |
-| [webhooks](./features/webhooks/)                                     | 100        | All 6 items PASS.                                           |
-| [remote-browser](./features/remote-browser/)                         | 100        | All 6 items PASS.                                           |
-| [dashboard](./features/dashboard/)                                   | 90         | 14/15 PASS. 1 false-failed meeting in production data.      |
-| [meeting-chat](./features/meeting-chat/)                             | 0          | Not tested. No test target.                                 |
-| [authenticated-meetings](./features/authenticated-meetings/)         | 75         | 8/10 PASS. Fallback FAIL, Teams auth not implemented.       |
-| [speaking-bot](./features/speaking-bot/)                             | 70         | Single bot TTS reliable. Multi-bot drops under load.        |
-| [auth-and-limits](./features/auth-and-limits/)                       | 70         | Ceiling items pass. Rate limiting + token CRUD untested.    |
-| [realtime-transcription](./features/realtime-transcription/)         | 80         | GMeet + Teams work on all deployments. Zoom not implemented.|
-| [post-meeting-transcription](./features/post-meeting-transcription/) | 40         | Realtime works. Recording on compose+K8s. Deferred untested.|
+| Feature                                                              | Confidence | Status                                                       |
+| -------------------------------------------------------------------- | ---------- | ------------------------------------------------------------ |
+| [meeting-urls](./features/meeting-urls/)                             | 100        | All 9 checks PASS. Teams e2e validated.                      |
+| [browser-session](./features/browser-session/)                       | 95         | 18/18 DoD PASS. Google login persistence validated.          |
+| [infrastructure](./features/infrastructure/)                         | 95         | All items pass including build.                              |
+| [bot-lifecycle](./features/bot-lifecycle/)                           | 92         | 12/14 PASS. Unauthenticated join + escalation untested.      |
+| [container-lifecycle](./features/container-lifecycle/)               | 100        | 15/15 PASS including K8s profiles.                           |
+| [webhooks](./features/webhooks/)                                     | 100        | All 6 items PASS.                                            |
+| [remote-browser](./features/remote-browser/)                         | 100        | All 6 items PASS.                                            |
+| [dashboard](./features/dashboard/)                                   | 90         | 14/15 PASS. 1 false-failed meeting in production data.       |
+| [meeting-chat](./features/meeting-chat/)                             | 0          | Not tested. No test target.                                  |
+| [authenticated-meetings](./features/authenticated-meetings/)         | 75         | 8/10 PASS. Fallback FAIL, Teams auth not implemented.        |
+| [speaking-bot](./features/speaking-bot/)                             | 70         | Single bot TTS reliable. Multi-bot drops under load.         |
+| [auth-and-limits](./features/auth-and-limits/)                       | 70         | Ceiling items pass. Rate limiting + token CRUD untested.     |
+| [realtime-transcription](./features/realtime-transcription/)         | 80         | GMeet + Teams work on all deployments. Zoom not implemented. |
+| [post-meeting-transcription](./features/post-meeting-transcription/) | 40         | Realtime works. Recording on compose+K8s. Deferred untested. |
 
 
 ### Services
@@ -423,11 +411,11 @@ Each feature has its own README with business context, architecture, DoD table, 
 ### Deployments
 
 
-| Mode                         | Confidence | Status                                                           |
-| ---------------------------- | ---------- | ---------------------------------------------------------------- |
-| [compose](./deploy/compose/) | 93         | 19/19 DoD PASS. Full stack validated.                            |
-| [lite](./deploy/lite/)       | 85         | 12/12 DoD PASS. Recording disabled (no MinIO).                   |
-| [helm](./deploy/helm/)       | 90         | 9/10 DoD PASS. Built images + global.imageTag validated on LKE.  |
+| Mode                         | Confidence | Status                                                          |
+| ---------------------------- | ---------- | --------------------------------------------------------------- |
+| [compose](./deploy/compose/) | 93         | 19/19 DoD PASS. Full stack validated.                           |
+| [lite](./deploy/lite/)       | 85         | 12/12 DoD PASS. Recording disabled (no MinIO).                  |
+| [helm](./deploy/helm/)       | 90         | 9/10 DoD PASS. Built images + global.imageTag validated on LKE. |
 
 
 ## Related Projects
