@@ -85,13 +85,20 @@ Run everything including your own GPU transcription service.
 
 ## What's new
 
-**v0.10**
+**v0.10 — full architecture refactor**
 
-- **Zoom** *(experimental)* — initial Zoom Meeting SDK support. Requires Zoom app setup and Marketplace approval. Before approval, bots can only join meetings created by the authorizing account. Not yet validated in production.
-- **Interactive Bots API** — live controls for speak/chat/screen/avatar during active meetings
-- **MCP server** — 17 tools for AI agents — join, transcribe, speak, chat, share screen
-- **Recordings** — persist recording artifacts to S3-compatible storage (or local)
+- **Services refactored** — runtime-api as infrastructure layer (container orchestration), meeting-api as data layer, agent-api as high-level intelligence layer. Clean separation of concerns.
+- **Real-time pipeline moved into bots** — transcription pipeline now runs inside bot containers, eliminating external dependencies
+- **Vexa Lite** — single-container deployment for self-hosting. One Docker image, no GPU required.
+- **Helm/K8s** — production Kubernetes deployment with built images and global.imageTag support
 - **Agent API** *(experimental)* — ephemeral containers for AI agents. See [services/agent-api/](./services/agent-api/).
+
+**v0.9**
+
+- **Zoom** *(experimental)* — initial Zoom Meeting SDK support
+- **Interactive Bots API** — speak, chat, screen share, avatar controls during live meetings
+- **MCP server** — 17 tools for AI agents
+- **Recordings** — S3-compatible storage
 
 ---
 
