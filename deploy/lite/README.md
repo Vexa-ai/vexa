@@ -4,12 +4,12 @@ Single Docker container with all Vexa services. Simplest way to self-host.
 
 ## Why
 
-Everything runs in one container -- API, dashboard, bots, Redis, audio stack. No Docker Compose, no orchestration. PostgreSQL is the only external dependency, and `make lite` provisions it for you.
+Everything runs in one container -- API, dashboard, bots, Redis, audio stack. No Docker Compose, no orchestration. `make lite` provisions PostgreSQL and configures the transcription API for you.
 
 - One container instead of 10+
 - Full API + dashboard + meeting bots
-- 3-5 concurrent bots (use [compose](../compose/README.md) for more)
-- No GPU required -- transcription runs externally
+- Concurrent bots scale with machine resources
+- No GPU required -- transcription runs via external API
 
 ## Quick start
 
@@ -122,7 +122,7 @@ docker logs -f vexa-lite
 | Feature         | Lite                        | Compose                    |
 | --------------- | --------------------------- | -------------------------- |
 | Bot isolation   | Shared process space        | Separate Docker containers |
-| Concurrent bots | 3-5                         | 10+                        |
+| Concurrent bots | Scales with machine resources | Scales with machine resources |
 | Dashboard port  | 3000                        | 3001                       |
 | Redis           | Internal (ephemeral)        | Configurable               |
 | Scaling         | Single machine              | Multiple hosts             |
