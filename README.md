@@ -5,19 +5,19 @@
 <h1 align="center" style="margin-top: 0.25em; margin-bottom: 0.5em; font-size: 2.5em; font-weight: 700; letter-spacing: -0.02em;">Vexa</h1>
 
 <p align="center" style="font-size: 1.75em; margin-top: 0.5em; margin-bottom: 0.75em; font-weight: 700; line-height: 1.3; letter-spacing: -0.01em;">
-  <strong>Open-source meeting bot API &amp; transcription API</strong>
+  <strong>Open-source meeting bot API & transcription API</strong>
 </p>
 
 <p align="center" style="font-size: 1em; color: #a0a0a0; margin-top: 0.5em; margin-bottom: 1.5em; letter-spacing: 0.01em;">
-  meeting bots &bull; real-time transcription &bull; interactive bots &bull; MCP server &bull; self-hosted
+  meeting bots • real-time transcription • interactive bots • MCP server • self-hosted
 </p>
 
 <p align="center" style="margin: 1.5em 0; font-size: 1em;">
   <img height="24" src="assets/google-meet.svg" alt="Google Meet" style="vertical-align: middle; margin-right: 10px;"/> <strong style="font-size: 1em; font-weight: 600;">Google Meet</strong>
-  &nbsp;&nbsp;&nbsp;&nbsp;&bull;&nbsp;&nbsp;&nbsp;&nbsp;
+  &nbsp;&nbsp;&nbsp;&nbsp;•&nbsp;&nbsp;&nbsp;&nbsp;
   <img height="24" src="assets/microsoft-teams.svg" alt="Microsoft Teams" style="vertical-align: middle; margin-right: 10px;"/> <strong style="font-size: 1em; font-weight: 600;">Microsoft Teams</strong>
-  &nbsp;&nbsp;&nbsp;&nbsp;&bull;&nbsp;&nbsp;&nbsp;&nbsp;
-  <img height="24" src="assets/icons8-zoom.svg" alt="Zoom" style="vertical-align: middle; margin-right: 10px;"/> <strong style="font-size: 1em; font-weight: 600;">Zoom</strong> (experimental)
+  &nbsp;&nbsp;&nbsp;&nbsp;•&nbsp;&nbsp;&nbsp;&nbsp;
+  <img height="24" src="assets/icons8-zoom.svg" alt="Zoom" style="vertical-align: middle; margin-right: 10px;"/> <strong style="font-size: 1em; font-weight: 600;">Zoom</strong>
 </p>
 
 <p align="center" style="margin: 1.75em 0 1.25em 0;">
@@ -29,11 +29,11 @@
 </p>
 
 <p align="center">
-  <a href="#whats-new">What's new</a> &bull;
-  <a href="#quickstart">Quickstart</a> &bull;
-  <a href="#meeting-api--send-bots-get-transcripts">API</a> &bull;
-  <a href="https://docs.vexa.ai">Docs</a> &bull;
-  <a href="#roadmap">Roadmap</a> &bull;
+  <a href="#whats-new">What's new</a> •
+  <a href="#quickstart">Quickstart</a> •
+  <a href="#meeting-api--send-bots-get-transcripts">API</a> •
+  <a href="https://docs.vexa.ai">Docs</a> •
+  <a href="#roadmap">Roadmap</a> •
   <a href="https://discord.gg/Ga9duGkVz9">Discord</a>
 </p>
 
