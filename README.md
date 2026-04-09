@@ -31,7 +31,7 @@ meeting bots • real-time transcription • interactive bots • MCP server •
 ### Capabilities
 
 
-| Capability | Description |
+| | |
 | --- | --- |
 | **Meeting bot API** | Send a bot to any meeting: auto-join, record, speak, chat, share screen. Open-source alternative to [Recall.ai](https://recall.ai). |
 | **Meeting transcription API** | Real-time transcripts via REST API and WebSocket. Self-hosted alternative to Otter.ai and Fireflies.ai. |
