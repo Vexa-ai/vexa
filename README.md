@@ -43,17 +43,17 @@
 
 ---
 
-> **Can't send meeting data to third parties?**
-> Self-host Vexa. Meeting data never leaves your infrastructure.
+### Can't send meeting data to third parties?
+Self-host Vexa. Meeting data never leaves your infrastructure.
 
-> **Paying $17/seat for transcription?**
-> Self-host and drop to infrastructure cost.
+### Paying $17/seat for transcription?
+Self-host and drop to infrastructure cost.
 
-> **Building a product that needs meeting data?**
-> Embed the meeting bot API. Multi-tenant, scoped tokens, your branding.
+### Building a product that needs meeting data?
+Embed the meeting bot API. Multi-tenant, scoped tokens, your branding.
 
-> **Want AI agents in meetings?**
-> MCP server with 17 tools. Agents join calls, read transcripts, speak.
+### Want AI agents in meetings?
+MCP server with 17 tools. Agents join calls, read transcripts, speak.
 
 ---
 
