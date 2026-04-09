@@ -38,6 +38,7 @@ meeting bots • real-time transcription • interactive bots • MCP server •
 | **Browser bots**              | CDP + Playwright browser automation with persistent authenticated sessions via S3.                                                  |
 | **MCP server**                | 17 meeting tools for Claude, Cursor, Windsurf. AI agents join calls, read transcripts, speak in meetings.                           |
 | **Multi-tenant**              | Users, scoped API tokens, isolated containers. Deploy once, serve your team.                                                        |
+| **Dashboard**                 | Open-source Next.js web UI — meetings, transcripts, agent chat, browser sessions. Ready to use out of the box.                      |
 | **Self-hostable**             | Run on your infra. Meeting data never leaves your infrastructure.                                                                   |
 
 
@@ -89,9 +90,8 @@ Run everything including your own GPU transcription service.
 
 - **Services refactored** — runtime-api as infrastructure layer (container orchestration), meeting-api as data layer, agent-api as high-level intelligence layer. Clean separation of concerns.
 - **Real-time pipeline moved into bots** — transcription pipeline now runs inside bot containers, eliminating external dependencies
-- **Vexa Lite** — single-container deployment for self-hosting. One Docker image, no GPU required.
-- **Helm/K8s** — production Kubernetes deployment with built images and global.imageTag support
 - **Agent API** *(experimental)* — ephemeral containers for AI agents. See [services/agent-api/](./services/agent-api/).
+- **Helm/K8s** — production Kubernetes deployment with built images and global.imageTag support
 
 **v0.9**
 
