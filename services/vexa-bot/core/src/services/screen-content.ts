@@ -1202,6 +1202,8 @@ export function getVirtualCameraInitScript(): string {
         // Disable incoming video to save CPU/memory.
         // The bot only needs audio for transcription — receiving and rendering
         // all participants' video wastes ~87% CPU and ~2GB RAM per bot.
+        // track.enabled=false only hides rendering; the decoder still runs.
+        // We must also set transceiver direction to stop the decoder.
         // Deferred via setTimeout(0) so Google Meet's track handlers create DOM
         // elements first — the audio capture pipeline needs those elements.
         if (!window.__vexa_voice_agent_enabled) {
@@ -1211,6 +1213,19 @@ export function getVirtualCameraInitScript(): string {
               const trackRef = event.track;
               setTimeout(() => {
                 trackRef.enabled = false;
+                // Stop the transceiver to prevent WebRTC from decoding video
+                try {
+                  const transceivers = pc.getTransceivers();
+                  for (const t of transceivers) {
+                    if (t.receiver && t.receiver.track === trackRef) {
+                      t.direction = t.direction === 'sendrecv' ? 'sendonly' : 'inactive';
+                      console.log('[Vexa] Video transceiver stopped (id=' + trackId + ', dir=' + t.direction + ')');
+                      break;
+                    }
+                  }
+                } catch (e) {
+                  // transceiver API may not be available in all contexts
+                }
                 console.log('[Vexa] Incoming video track disabled (deferred, id=' + trackId + ')');
               }, 0);
             }
