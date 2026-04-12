@@ -13,10 +13,10 @@ profiles:
     command: ["/app/vexa-bot/entrypoint.sh"]
     working_dir: "/app/vexa-bot"
     resources:
-      cpu_request: "250m"      # measured steady state: 250m (baseline 2026-03-12)
-      cpu_limit: "1000m"       # 4x headroom for browser spikes
-      memory_request: "600Mi"  # measured steady state: 597Mi
-      memory_limit: "1Gi"      # ~1.7x headroom
+      cpu_request: "500m"      # measured steady state: 800-1000m (2026-04-12, recording off)
+      cpu_limit: "2000m"       # join phase bursts to 2.1 cores (Google Meet/Teams)
+      memory_request: "800Mi"  # measured steady state: 780Mi (Meet), 770-840Mi (Teams)
+      memory_limit: "1280Mi"   # Teams peaks at 972Mi during JS load — 30% headroom
       shm_size: 2147483648     # 2GB shared memory for browser
     idle_timeout: 0          # managed by meeting-api (scheduler + bot-side timers)
     auto_remove: false
@@ -36,10 +36,10 @@ profiles:
     command: ["/app/vexa-bot/entrypoint.sh"]
     working_dir: "/app/vexa-bot"
     resources:
-      cpu_request: "250m"      # same baseline as meeting bot
-      cpu_limit: "1000m"
-      memory_request: "600Mi"
-      memory_limit: "1Gi"
+      cpu_request: "500m"      # same as meeting bot
+      cpu_limit: "2000m"
+      memory_request: "800Mi"
+      memory_limit: "1280Mi"
       shm_size: 2147483648     # 2GB shared memory for browser
     idle_timeout: 3600       # 1h — gateway /touch keeps alive while connected
     auto_remove: false

@@ -136,6 +136,11 @@ webhooks: $(SMOKE_STAMP)          ## envelope, HMAC, no secret leak (10s)
 auth-meeting: $(SMOKE_STAMP)      ## authenticated join: S3 config, cookies, join type (60s)
 	@$(T3)/tests/auth-meeting.sh
 
+# ═══ Recording segments ═══════════════════════════════════════════
+
+recording-segments: $(SMOKE_STAMP)  ## test incremental recording WAV segment concatenation (5s)
+	@$(T3)/tests/recording-segments.sh
+
 # ═══ Composites ═══════════════════════════════════════════════════
 
 e2e: meeting-tts                  ## smoke + full meeting (single script)

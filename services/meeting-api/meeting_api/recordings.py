@@ -7,9 +7,10 @@ import asyncio
 import json
 import logging
 import os
+import struct
 import uuid as uuid_lib
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from sqlalchemy import and_, desc, text
@@ -116,6 +117,95 @@ async def _find_meeting_data_recording(db: AsyncSession, user_id: int, recording
 
 
 # ---------------------------------------------------------------------------
+# Segment concatenation helpers
+# ---------------------------------------------------------------------------
+
+WAV_HEADER_SIZE = 44
+
+
+def _segment_storage_path(user_id: int, storage_id: int, session_uid: str, segment_index: int, media_format: str) -> str:
+    """Build the storage key for an individual segment file."""
+    return f"recordings/{user_id}/{storage_id}/segments/{session_uid}_seg_{segment_index:04d}.{media_format}"
+
+
+def _concatenate_wav_segments(
+    storage,
+    user_id: int,
+    storage_id: int,
+    session_uid: str,
+    media_format: str,
+    final_segment_data: Optional[bytes] = None,
+) -> Tuple[bytes, float]:
+    """Download all segment files, concatenate WAV data, return (bytes, duration_seconds).
+
+    The first segment's 44-byte header is kept intact.  Subsequent segments
+    have their headers stripped.  The RIFF file-size (bytes 4-7) and data
+    chunk size (bytes 40-43) are rewritten to match the actual payload.
+    """
+    prefix = f"recordings/{user_id}/{storage_id}/segments/{session_uid}_seg_"
+    keys = storage.list_files(prefix)
+    if not keys:
+        raise ValueError(f"No segment files found for prefix {prefix}")
+
+    # Download all segments in order (lexicographic = correct because of zero-padding)
+    segment_blobs: List[bytes] = []
+    for key in keys:
+        segment_blobs.append(storage.download_file(key))
+
+    # Append final_segment_data if provided (the segment that arrived with is_final)
+    if final_segment_data:
+        segment_blobs.append(final_segment_data)
+
+    if not segment_blobs:
+        raise ValueError("No segment data to concatenate")
+
+    # Use first segment header as the canonical header
+    first_header = segment_blobs[0][:WAV_HEADER_SIZE]
+
+    # Parse sample_rate from bytes 24-27 (little-endian uint32)
+    sample_rate = struct.unpack_from("<I", first_header, 24)[0]
+    # Parse bits-per-sample (bytes 34-35) and channels (bytes 22-23) for duration calc
+    bits_per_sample = struct.unpack_from("<H", first_header, 34)[0]
+    num_channels = struct.unpack_from("<H", first_header, 22)[0]
+
+    # Collect raw PCM data: full first segment after header, rest stripped
+    pcm_chunks: List[bytes] = []
+    pcm_chunks.append(segment_blobs[0][WAV_HEADER_SIZE:])
+    for blob in segment_blobs[1:]:
+        pcm_chunks.append(blob[WAV_HEADER_SIZE:])
+
+    total_data_size = sum(len(c) for c in pcm_chunks)
+
+    # Rewrite RIFF size (bytes 4-7) and data chunk size (bytes 40-43)
+    header = bytearray(first_header)
+    struct.pack_into("<I", header, 4, 36 + total_data_size)  # RIFF size
+    struct.pack_into("<I", header, 40, total_data_size)       # data size
+
+    concatenated = bytes(header) + b"".join(pcm_chunks)
+
+    # Compute duration
+    bytes_per_sample = max(bits_per_sample // 8, 1)
+    bytes_per_second = sample_rate * num_channels * bytes_per_sample
+    duration = total_data_size / bytes_per_second if bytes_per_second > 0 else 0.0
+
+    return concatenated, duration
+
+
+def _cleanup_segments(storage, user_id: int, storage_id: int, session_uid: str) -> int:
+    """Delete all segment files for a session. Returns count of files deleted."""
+    prefix = f"recordings/{user_id}/{storage_id}/segments/{session_uid}_seg_"
+    keys = storage.list_files(prefix)
+    deleted = 0
+    for key in keys:
+        try:
+            storage.delete_file(key)
+            deleted += 1
+        except Exception as e:
+            logger.warning(f"Failed to delete segment {key}: {e}")
+    return deleted
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -131,6 +221,8 @@ async def internal_upload_recording(
     is_final: bool = Form(default=True),
     db: AsyncSession = Depends(get_db),
 ):
+    segment_index: Optional[int] = None
+
     if metadata:
         try:
             meta = json.loads(metadata)
@@ -143,6 +235,9 @@ async def internal_upload_recording(
         sample_rate = meta.get("sample_rate", sample_rate)
         if "is_final" in meta:
             is_final = _to_bool(meta.get("is_final"), default=True)
+        if "segment_index" in meta:
+            raw_seg = meta.get("segment_index")
+            segment_index = int(raw_seg) if raw_seg is not None else None
 
     if not session_uid:
         raise HTTPException(status_code=422, detail="session_uid is required")
@@ -185,20 +280,120 @@ async def internal_upload_recording(
         await db.flush()
     storage_id = legacy_id if use_meeting_data else recording.id
 
-    storage_path = f"recordings/{user_id}/{storage_id}/{session_uid}.{media_format}"
+    # Determine whether this is a segmented upload
+    is_segmented = segment_index is not None and segment_index >= 0
+    is_final_signal_only = segment_index is not None and segment_index == -1
+
     content_types = {"wav": "audio/wav", "webm": "video/webm", "opus": "audio/opus", "mp3": "audio/mpeg", "jpg": "image/jpeg", "png": "image/png"}
     content_type = content_types.get(media_format, "application/octet-stream")
+    final_storage_path = f"recordings/{user_id}/{storage_id}/{session_uid}.{media_format}"
+    storage = get_storage_client()
 
-    try:
-        storage = get_storage_client()
-        storage.upload_file(storage_path, file_data, content_type=content_type)
-    except Exception as e:
-        logger.error(f"Storage upload failed for {session_uid}: {e}", exc_info=True)
-        if recording:
-            recording.status = "failed"
-            recording.error_message = str(e)
-            await db.commit()
-        raise HTTPException(status_code=500, detail="Failed to upload recording to storage")
+    # ---- Segmented upload path ----
+    if is_segmented or is_final_signal_only:
+        # Upload the segment file (unless this is the -1 sentinel with no real data)
+        if is_segmented and file_size > 0:
+            seg_path = _segment_storage_path(user_id, storage_id, session_uid, segment_index, media_format)
+            try:
+                storage.upload_file(seg_path, file_data, content_type=content_type)
+                logger.info(f"Uploaded segment {segment_index} for {session_uid} ({file_size} bytes)")
+            except Exception as e:
+                logger.error(f"Segment upload failed for {session_uid} seg {segment_index}: {e}", exc_info=True)
+                if recording:
+                    recording.status = "failed"
+                    recording.error_message = str(e)
+                    await db.commit()
+                raise HTTPException(status_code=500, detail="Failed to upload segment to storage")
+
+        # If not final, update in-progress status and return
+        if not is_final:
+            if use_meeting_data:
+                existing_media = (existing_rec.get("media_files", [{}])[0] if existing_rec else {})
+                media_file_id = existing_media.get("id") or _new_recording_numeric_id()
+                created_at = existing_rec.get("created_at") if existing_rec else datetime.utcnow().isoformat()
+                rec_payload = {
+                    "id": legacy_id,
+                    "meeting_id": meeting.id,
+                    "user_id": user_id,
+                    "session_uid": session_uid,
+                    "source": RecordingSource.BOT.value,
+                    "status": RecordingStatus.IN_PROGRESS.value,
+                    "created_at": created_at,
+                    "completed_at": None,
+                    "media_files": [],
+                }
+                if existing_idx is None:
+                    recordings_list.append(rec_payload)
+                else:
+                    recordings_list[existing_idx] = rec_payload
+                meeting_data_dict["recordings"] = recordings_list
+                meeting.data = meeting_data_dict
+                attributes.flag_modified(meeting, "data")
+                await db.commit()
+            return {
+                "status": "segment_uploaded",
+                "segment_index": segment_index,
+                "session_uid": session_uid,
+                "storage_id": storage_id,
+            }
+
+        # ---- is_final=True: concatenate all segments ----
+        try:
+            # For the -1 sentinel, no new segment data to append;
+            # for a real final segment, it was already uploaded above so pass None
+            concatenated_data, concat_duration = _concatenate_wav_segments(
+                storage, user_id, storage_id, session_uid, media_format,
+                final_segment_data=None,
+            )
+            concat_size = len(concatenated_data)
+            # Parse sample_rate from the concatenated header for metadata
+            concat_sample_rate = struct.unpack_from("<I", concatenated_data, 24)[0]
+
+            # Upload the final concatenated file
+            storage.upload_file(final_storage_path, concatenated_data, content_type=content_type)
+            logger.info(f"Concatenated {session_uid}: {concat_size} bytes, {concat_duration:.2f}s -> {final_storage_path}")
+
+            # Clean up segment files only after successful concatenation
+            try:
+                deleted_count = _cleanup_segments(storage, user_id, storage_id, session_uid)
+                logger.info(f"Cleaned up {deleted_count} segment files for {session_uid}")
+            except Exception as e:
+                logger.warning(f"Segment cleanup failed for {session_uid} (segments kept as backup): {e}")
+
+            # Use concatenated values for the final metadata
+            file_size = concat_size
+            duration_seconds = concat_duration
+            sample_rate = concat_sample_rate
+            file_data = concatenated_data
+
+        except Exception as e:
+            logger.error(f"Segment concatenation failed for {session_uid}: {e}", exc_info=True)
+            # Don't delete segments — they serve as backup
+            if recording:
+                recording.status = "failed"
+                recording.error_message = f"Concatenation failed: {e}"
+                await db.commit()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to concatenate recording segments: {e}",
+            )
+
+        storage_path = final_storage_path
+
+    # ---- Legacy single-file upload path ----
+    else:
+        storage_path = final_storage_path
+        try:
+            storage.upload_file(storage_path, file_data, content_type=content_type)
+        except Exception as e:
+            logger.error(f"Storage upload failed for {session_uid}: {e}", exc_info=True)
+            if recording:
+                recording.status = "failed"
+                recording.error_message = str(e)
+                await db.commit()
+            raise HTTPException(status_code=500, detail="Failed to upload recording to storage")
+
+    # ---- Persist metadata (common for both paths) ----
 
     if use_meeting_data:
         existing_media = (existing_rec.get("media_files", [{}])[0] if existing_rec else {})
