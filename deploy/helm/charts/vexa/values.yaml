@@ -89,7 +89,7 @@ meetingApi:
   service:
     type: ClusterIP
     port: 8080
-  recordingEnabled: "true"
+  recordingEnabled: "false"
   storageBackend: minio
   botImageName: "vexaai/vexa-bot:latest"
   transcriptionServiceUrl: ""
