@@ -375,6 +375,21 @@ async def _spawn_via_runtime_api(
         return None
 
 
+async def _get_container_info(container_name: str) -> Optional[dict]:
+    """Get container info from Runtime API GET /containers/{name}."""
+    try:
+        client = _get_httpx_client()
+        resp = await client.get(
+            f"{RUNTIME_API_URL}/containers/{container_name}",
+            timeout=5.0,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except httpx.RequestError:
+        pass
+    return None
+
+
 async def _stop_via_runtime_api(container_name: str) -> bool:
     """Stop a container via Runtime API DELETE /containers/{name}."""
     try:
@@ -720,9 +735,24 @@ async def request_bot(
 
         # Store in Redis for gateway proxy (by session_token for backward compat + by meeting ID)
         if redis_client:
+            container_name = result.get("name")
+            container_ip = result.get("ip")
+
+            # K8s: pod IP may not be available at creation time. Poll for it.
+            if not container_ip and container_name:
+                for _attempt in range(10):
+                    await asyncio.sleep(1)
+                    try:
+                        info = await _get_container_info(container_name)
+                        if info and info.get("ip"):
+                            container_ip = info["ip"]
+                            break
+                    except Exception:
+                        pass
+
             container_info = json.dumps({
-                "container_name": result.get("name"),
-                "container_ip": result.get("ip"),
+                "container_name": container_name,
+                "container_ip": container_ip,
                 "meeting_id": new_meeting.id,
                 "user_id": current_user.id,
             })

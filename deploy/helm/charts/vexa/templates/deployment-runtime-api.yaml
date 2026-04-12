@@ -127,8 +127,20 @@ spec:
               port: http
             initialDelaySeconds: 30
             periodSeconds: 20
+          {{- if .Values.runtimeApi.profilesConfigMap }}
+          volumeMounts:
+            - name: profiles
+              mountPath: /app/profiles.yaml
+              subPath: profiles.yaml
+          {{- end }}
           resources:
             {{- toYaml .Values.runtimeApi.resources | nindent 12 }}
+      {{- if .Values.runtimeApi.profilesConfigMap }}
+      volumes:
+        - name: profiles
+          configMap:
+            name: {{ .Values.runtimeApi.profilesConfigMap }}
+      {{- end }}
       {{- with .Values.global.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

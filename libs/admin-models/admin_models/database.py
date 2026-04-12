@@ -78,8 +78,11 @@ engine = create_async_engine(
     DATABASE_URL,
     connect_args=connect_args,
     echo=os.environ.get("LOG_LEVEL", "INFO").upper() == "DEBUG",
-    pool_size=10, # Example pool size
-    max_overflow=20 # Example overflow
+    pool_size=int(os.environ.get("DB_POOL_SIZE", "5")),
+    max_overflow=int(os.environ.get("DB_MAX_OVERFLOW", "5")),
+    pool_timeout=int(os.environ.get("DB_POOL_TIMEOUT", "30")),
+    pool_recycle=1800,
+    pool_pre_ping=True,
 )
 async_session_local = sessionmaker(
     bind=engine,

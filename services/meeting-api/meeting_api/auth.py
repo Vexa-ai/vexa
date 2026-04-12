@@ -26,10 +26,20 @@ async def validate_request(request: Request) -> dict:
     # 1. Gateway mode: trusted headers (set by api-gateway after token validation)
     user_id = request.headers.get("X-User-ID")
     if user_id:
+        limits_raw = request.headers.get("X-User-Limits", "1")
+        try:
+            max_concurrent = int(limits_raw)
+        except ValueError:
+            import json
+            try:
+                limits = json.loads(limits_raw)
+                max_concurrent = int(limits.get("max_concurrent_bots", limits.get("max_concurrent", 1)))
+            except (json.JSONDecodeError, TypeError):
+                max_concurrent = 1
         return {
             "user_id": int(user_id),
             "scopes": request.headers.get("X-User-Scopes", "").split(","),
-            "max_concurrent": int(request.headers.get("X-User-Limits", "1")),
+            "max_concurrent": max_concurrent,
         }
 
     # 2. Standalone mode: API key check
