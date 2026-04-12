@@ -114,6 +114,61 @@
       "must_match": "password-store=basic"
     },
 
+    {
+      "id": "VIDEO_DEFAULT_OFF",
+      "tier": "static",
+      "found": "2026-04-12",
+      "proves": "video field defaults to False — bots don't start ffmpeg screen recording (saves ~400MB RAM)",
+      "symptom": "Bot OOM at 97% memory — video=True forces captureModes=['audio','video'] which launches ffmpeg x11grab",
+      "file": "services/meeting-api/meeting_api/schemas.py",
+      "must_match": "Default: off"
+    },
+    {
+      "id": "RECORDING_ENABLED_DEFAULT_TRUE",
+      "tier": "static",
+      "found": "2026-04-12",
+      "proves": "RECORDING_ENABLED defaults to true in compose — audio recording is captured for every meeting",
+      "symptom": "No audio recording saved — RECORDING_ENABLED defaulted to false, disabling audio capture",
+      "file": "deploy/compose/docker-compose.yml",
+      "must_match": "RECORDING_ENABLED:-true"
+    },
+    {
+      "id": "SOFTWARE_RASTERIZER_DISABLED",
+      "tier": "static",
+      "found": "2026-04-12",
+      "proves": "Chrome software rasterizer disabled — saves ~58MB RAM on Edge GPU process",
+      "symptom": "Bot using extra 160MB for SwiftShader software rendering nobody sees",
+      "file": "services/vexa-bot/core/src/constans.ts",
+      "must_match": "disable-software-rasterizer"
+    },
+    {
+      "id": "VIDEO_IN_BLOCKED",
+      "tier": "static",
+      "found": "2026-04-12",
+      "proves": "incoming video is blocked at WebRTC level — saves CPU and bandwidth",
+      "symptom": "Bot receiving video streams it doesn't need — wasting CPU and memory",
+      "file": "services/vexa-bot/core/src/constans.ts",
+      "must_match": "use-file-for-fake-video-capture=/dev/null"
+    },
+    {
+      "id": "INCREMENTAL_RECORDING",
+      "tier": "static",
+      "found": "2026-04-12",
+      "proves": "RecordingService has incremental upload mode — segments uploaded every 10s to MinIO",
+      "symptom": "Recording lost on container crash — entire audio buffered in /tmp until meeting end",
+      "file": "services/vexa-bot/core/src/services/recording.ts",
+      "must_match": "startIncremental"
+    },
+    {
+      "id": "SEGMENT_CONCATENATION",
+      "tier": "static",
+      "found": "2026-04-12",
+      "proves": "meeting-api can concatenate WAV segments into final recording",
+      "symptom": "Incremental recording segments never assembled into final file",
+      "file": "services/meeting-api/meeting_api/recordings.py",
+      "must_match": "_concatenate_wav_segments"
+    },
+
     {"_": "═══ ENV — cross-container env var consistency, 2s ═══"},
 
     {
