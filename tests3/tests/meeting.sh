@@ -73,7 +73,12 @@ pass "browser session active"
 
 # ── 3. Navigate to meet.new ───────────────────────
 
-CDP_URL="$GATEWAY_URL/b/$SESSION_TOKEN/cdp"
+# Build CDP URL — use wss:// for HTTPS gateways
+if [[ "$GATEWAY_URL" == https://* ]]; then
+    CDP_URL="wss://${GATEWAY_URL#https://}/b/$SESSION_TOKEN/cdp"
+else
+    CDP_URL="$GATEWAY_URL/b/$SESSION_TOKEN/cdp"
+fi
 echo "  creating meeting via meet.new..."
 
 MEET_OUTPUT=$(node -e "

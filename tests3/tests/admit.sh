@@ -9,7 +9,14 @@ API_TOKEN=$(state_read api_token)
 SESSION_TOKEN=$(state_read session_token)
 NATIVE_ID=$(state_read native_meeting_id)
 PLATFORM=$(state_read meeting_platform)
-CDP_URL="$GATEWAY_URL/b/$SESSION_TOKEN/cdp"
+
+# Build CDP URL — use wss:// for HTTPS gateways (Playwright's connectOverCDP
+# fetches the URL then downgrades to ws://, which fails behind TLS terminators)
+if [[ "$GATEWAY_URL" == https://* ]]; then
+    CDP_URL="wss://${GATEWAY_URL#https://}/b/$SESSION_TOKEN/cdp"
+else
+    CDP_URL="$GATEWAY_URL/b/$SESSION_TOKEN/cdp"
+fi
 
 echo ""
 echo "  admit"
@@ -55,48 +62,92 @@ if [ "$STATUS" = "active" ]; then
     exit 0
 fi
 
-# ── CDP auto-admit ────────────────────────────────
+# ── CDP auto-admit (with retry loop) ─────────────
 echo "  running CDP auto-admit..."
 
-if [ "$PLATFORM" = "google_meet" ]; then
-    ADMIT_RESULT=$(node -e "
+# Retry up to 6 times (30s total) — the admit UI can take a few seconds to appear
+ADMIT_RESULT="FAIL:not_attempted"
+for attempt in $(seq 1 6); do
+    if [ "$PLATFORM" = "google_meet" ]; then
+        ADMIT_RESULT=$(node -e "
 const {chromium}=require('playwright');
 (async()=>{
     const b=await chromium.connectOverCDP('$CDP_URL',{timeout:15000});
-    const p=b.contexts()[0].pages().find(p=>p.url().includes('meet.google.com'));
+    const ctx=b.contexts()[0];
+    const p=ctx.pages().find(p=>p.url().includes('meet.google.com'));
     if(!p){console.log('FAIL:no_meeting_page');await b.close();return}
-    async function findAdmit(){
-        const s=p.locator('button[aria-label^=\"Admit \"]').first();
-        if(await s.isVisible().catch(()=>false)) return s;
-        const a=p.locator('button:has-text(\"Admit all\")').first();
-        if(await a.isVisible().catch(()=>false)) return a;
+
+    // All known admit button patterns
+    const admitSelectors=[
+        'button[aria-label^=\"Admit \"]',
+        'button[aria-label*=\"Admit\"]',
+        'button:has-text(\"Admit\")',
+        'button:has-text(\"Let in\")',
+        'button:has-text(\"Accept\")',
+    ];
+
+    async function findAndClick(selectors){
+        for(const sel of selectors){
+            const el=p.locator(sel).first();
+            if(await el.isVisible({timeout:500}).catch(()=>false)){
+                await el.click();
+                return sel;
+            }
+        }
         return null;
     }
-    // Phase 1: already visible
-    let btn=await findAdmit();
-    if(btn){await btn.click();console.log('ADMITTED:phase1');await b.close();return}
-    // Phase 2: open people panel
-    for(const sel of ['button[aria-label*=\"Show everyone\"]','button[aria-label*=\"People\"]']){
+
+    // Phase 1: admit button already visible
+    let hit=await findAndClick(admitSelectors);
+    if(hit){console.log('ADMITTED:phase1:'+hit);await b.close();return}
+
+    // Phase 2: open people/participants panel to reveal waiting guests
+    const panelSelectors=[
+        'button[aria-label*=\"Show everyone\"]',
+        'button[aria-label*=\"People\"]',
+        'button[aria-label*=\"people\"]',
+        'button[aria-label*=\"Participants\"]',
+        'button[aria-label*=\"participants\"]',
+        'button[data-tooltip*=\"People\"]',
+        'button[data-tooltip*=\"people\"]',
+    ];
+    for(const sel of panelSelectors){
         const el=p.locator(sel).first();
-        if(await el.isVisible().catch(()=>false)){await el.click();break}
+        if(await el.isVisible({timeout:300}).catch(()=>false)){await el.click();break}
     }
-    await p.waitForTimeout(2000);
-    btn=await findAdmit();
-    if(btn){await btn.click();console.log('ADMITTED:phase2');await b.close();return}
-    // Phase 3: expand waiting section
-    for(const sel of ['text=/Admit \\\\d+ guest/i','text=/Waiting to join/i']){
+    await p.waitForTimeout(1500);
+    hit=await findAndClick(admitSelectors);
+    if(hit){console.log('ADMITTED:phase2:'+hit);await b.close();return}
+
+    // Phase 3: expand the 'waiting to join' / 'N guests' section
+    const expandSelectors=[
+        'text=/Waiting to join/i',
+        'text=/waiting to join/i',
+        'text=/Admit \\\\d+ guest/i',
+        'text=/\\\\d+ waiting/i',
+    ];
+    for(const sel of expandSelectors){
         const el=p.locator(sel).first();
-        if(await el.isVisible().catch(()=>false)){await el.click();break}
+        if(await el.isVisible({timeout:300}).catch(()=>false)){await el.click();break}
     }
-    await p.waitForTimeout(2000);
-    btn=await findAdmit();
-    if(btn){await btn.click();console.log('ADMITTED:phase3');await b.close();return}
-    console.log('FAIL:all_phases');
+    await p.waitForTimeout(1500);
+    hit=await findAndClick(admitSelectors);
+    if(hit){console.log('ADMITTED:phase3:'+hit);await b.close();return}
+
+    // Phase 4: try 'Admit all' as last resort
+    const admitAll=p.locator('button:has-text(\"Admit all\")').first();
+    if(await admitAll.isVisible({timeout:500}).catch(()=>false)){
+        await admitAll.click();
+        console.log('ADMITTED:phase4:admit_all');
+        await b.close();return;
+    }
+
+    console.log('RETRY:no_admit_button');
     await b.close();
-})().catch(e=>{console.error(e.message);process.exit(1)});
+})().catch(e=>{console.error('ERROR:'+e.message);process.exit(1)});
 " 2>&1)
-elif [ "$PLATFORM" = "teams" ]; then
-    ADMIT_RESULT=$(node -e "
+    elif [ "$PLATFORM" = "teams" ]; then
+        ADMIT_RESULT=$(node -e "
 const {chromium}=require('playwright');
 (async()=>{
     const b=await chromium.connectOverCDP('$CDP_URL',{timeout:15000});
@@ -104,18 +155,24 @@ const {chromium}=require('playwright');
     if(!p){console.log('FAIL:no_teams_page');await b.close();return}
     const btn=p.locator('[data-tid=\"lobby-admit-all\"],button[aria-label*=\"Admit\"]').first();
     if(!await btn.isVisible().catch(()=>false))
-        await p.waitForSelector('[data-tid=\"lobby-admit-all\"],button[aria-label*=\"Admit\"]',{timeout:30000}).catch(()=>{});
+        await p.waitForSelector('[data-tid=\"lobby-admit-all\"],button[aria-label*=\"Admit\"]',{timeout:10000}).catch(()=>{});
     if(await btn.isVisible().catch(()=>false)){await btn.click();console.log('ADMITTED')}
-    else console.log('FAIL:no_admit_button');
+    else console.log('RETRY:no_admit_button');
     await b.close();
-})().catch(e=>{console.error(e.message);process.exit(1)});
+})().catch(e=>{console.error('ERROR:'+e.message);process.exit(1)});
 " 2>&1)
-fi
+    fi
 
-if echo "$ADMIT_RESULT" | grep -q "ADMITTED"; then
-    pass "CDP admit: $ADMIT_RESULT"
-else
-    fail "CDP admit failed: $ADMIT_RESULT"
+    if echo "$ADMIT_RESULT" | grep -q "ADMITTED"; then
+        pass "CDP admit ($attempt/6): $ADMIT_RESULT"
+        break
+    fi
+    info "attempt $attempt/6: $ADMIT_RESULT"
+    sleep 5
+done
+
+if ! echo "$ADMIT_RESULT" | grep -q "ADMITTED"; then
+    fail "CDP admit failed after 6 attempts: $ADMIT_RESULT"
     echo ""
     echo "  ┌─────────────────────────────────────────┐"
     echo "  │  Auto-admit failed.                      │"
