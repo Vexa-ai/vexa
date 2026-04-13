@@ -23,11 +23,7 @@ export async function startZoomRecording(page: Page | null, botConfig: BotConfig
     if (botConfig.recordingEnabled) {
       const sessionUid = botConfig.connectionId || `zoom_${Date.now()}`;
       recordingService = new RecordingService(botConfig.meeting_id, sessionUid);
-      if (botConfig.recordingUploadUrl && botConfig.token) {
-        recordingService.startIncremental(botConfig.recordingUploadUrl, botConfig.token);
-      } else {
-        recordingService.start();
-      }
+      recordingService.start();
       setActiveRecordingService(recordingService);
       log('[Zoom] Audio recording service started');
     }

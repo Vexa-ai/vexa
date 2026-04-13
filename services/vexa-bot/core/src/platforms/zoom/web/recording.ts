@@ -40,11 +40,7 @@ export async function startZoomWebRecording(page: Page | null, botConfig: BotCon
   if (wantsAudioCapture) {
     recordingService = new RecordingService(botConfig.meeting_id, sessionUid);
     setActiveRecordingService(recordingService);
-    if (botConfig.recordingUploadUrl && botConfig.token) {
-      recordingService.startIncremental(botConfig.recordingUploadUrl, botConfig.token);
-    } else {
-      recordingService.start();
-    }
+    recordingService.start();
     log('[Zoom Web] Recording service started');
   }
 

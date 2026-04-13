@@ -6,11 +6,10 @@ MinIO is the default for development (Docker Compose) and production.
 Local filesystem is available for testing without object storage.
 """
 
-import glob as globmod
 import os
 import logging
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +40,6 @@ class StorageClient(ABC):
     @abstractmethod
     def file_exists(self, path: str) -> bool:
         """Check if a file exists in storage."""
-        ...
-
-    @abstractmethod
-    def list_files(self, prefix: str) -> List[str]:
-        """List object keys matching the given prefix."""
         ...
 
 
@@ -127,14 +121,6 @@ class MinIOStorageClient(StorageClient):
         except self.client.exceptions.ClientError:
             return False
 
-    def list_files(self, prefix: str) -> List[str]:
-        keys: List[str] = []
-        paginator = self.client.get_paginator("list_objects_v2")
-        for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
-            for obj in page.get("Contents", []):
-                keys.append(obj["Key"])
-        return sorted(keys)
-
 
 class LocalStorageClient(StorageClient):
     """Filesystem-based storage client for development/testing."""
@@ -186,17 +172,6 @@ class LocalStorageClient(StorageClient):
 
     def file_exists(self, path: str) -> bool:
         return os.path.exists(self._full_path(path))
-
-    def list_files(self, prefix: str) -> List[str]:
-        normalized = self._normalize_path(prefix)
-        pattern = os.path.join(self.base_dir, normalized) + "*"
-        matches = globmod.glob(pattern)
-        keys = []
-        for full_path in sorted(matches):
-            if os.path.isfile(full_path):
-                rel = os.path.relpath(full_path, self.base_dir)
-                keys.append(rel.replace("\\", "/"))
-        return keys
 
 
 def create_storage_client(backend: Optional[str] = None) -> StorageClient:
