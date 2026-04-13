@@ -329,25 +329,23 @@ test-transcription:
 # Publishing & Promotion
 # ============================================================================
 
-# Push all images to DockerHub with immutable tag, then update :dev pointer
+# Push all images to DockerHub with immutable tag, then tag as :dev
+# Uses docker tag + push (same manifest/SHA) instead of imagetools create (wraps in manifest list)
 publish: check_docker
 	@if [ ! -f $(LAST_TAG_FILE) ]; then \
 		echo "ERROR: No .last-tag found. Run 'make build' first."; exit 1; \
 	fi
 	@TAG=$$(cat $(LAST_TAG_FILE)); \
 	echo "Publishing all images with tag: $$TAG"; \
-	for img in $(IMAGES); do \
+	for img in $(IMAGES) $(BOT_IMAGE); do \
 		echo "  Pushing $(DOCKERHUB_USER)/$$img:$$TAG..."; \
 		docker push $(DOCKERHUB_USER)/$$img:$$TAG; \
-		echo "  Updating $(DOCKERHUB_USER)/$$img:dev → $$TAG"; \
-		docker buildx imagetools create -t $(DOCKERHUB_USER)/$$img:dev $(DOCKERHUB_USER)/$$img:$$TAG; \
+		echo "  Tagging $(DOCKERHUB_USER)/$$img:dev → $$TAG"; \
+		docker tag $(DOCKERHUB_USER)/$$img:$$TAG $(DOCKERHUB_USER)/$$img:dev; \
+		docker push $(DOCKERHUB_USER)/$$img:dev; \
 	done; \
-	echo "  Pushing $(DOCKERHUB_USER)/$(BOT_IMAGE):$$TAG..."; \
-	docker push $(DOCKERHUB_USER)/$(BOT_IMAGE):$$TAG; \
-	echo "  Updating $(DOCKERHUB_USER)/$(BOT_IMAGE):dev → $$TAG"; \
-	docker buildx imagetools create -t $(DOCKERHUB_USER)/$(BOT_IMAGE):dev $(DOCKERHUB_USER)/$(BOT_IMAGE):$$TAG; \
 	echo ""; \
-	echo "Published $$TAG. :dev pointers updated."
+	echo "Published $$TAG. :dev tags updated."
 
 # Promote a tag to :staging
 promote-staging: check_docker
@@ -362,7 +360,9 @@ promote-staging: check_docker
 	echo "Promoting $$TAG_TO_USE → :staging"; \
 	for img in $(IMAGES) $(BOT_IMAGE); do \
 		echo "  $(DOCKERHUB_USER)/$$img:staging → $$TAG_TO_USE"; \
-		docker buildx imagetools create -t $(DOCKERHUB_USER)/$$img:staging $(DOCKERHUB_USER)/$$img:$$TAG_TO_USE; \
+		docker pull $(DOCKERHUB_USER)/$$img:$$TAG_TO_USE; \
+		docker tag $(DOCKERHUB_USER)/$$img:$$TAG_TO_USE $(DOCKERHUB_USER)/$$img:staging; \
+		docker push $(DOCKERHUB_USER)/$$img:staging; \
 	done; \
 	echo "Done. :staging now points to $$TAG_TO_USE"
 
@@ -379,7 +379,9 @@ promote-latest: check_docker
 	echo "Promoting $$TAG_TO_USE → :latest"; \
 	for img in $(IMAGES) $(BOT_IMAGE); do \
 		echo "  $(DOCKERHUB_USER)/$$img:latest → $$TAG_TO_USE"; \
-		docker buildx imagetools create -t $(DOCKERHUB_USER)/$$img:latest $(DOCKERHUB_USER)/$$img:$$TAG_TO_USE; \
+		docker pull $(DOCKERHUB_USER)/$$img:$$TAG_TO_USE; \
+		docker tag $(DOCKERHUB_USER)/$$img:$$TAG_TO_USE $(DOCKERHUB_USER)/$$img:latest; \
+		docker push $(DOCKERHUB_USER)/$$img:latest; \
 	done; \
 	echo "Done. :latest now points to $$TAG_TO_USE"
 
