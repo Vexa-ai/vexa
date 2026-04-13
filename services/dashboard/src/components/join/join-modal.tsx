@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Video, Loader2, Sparkles, Globe, ChevronDown, Mic, Monitor, UserCheck } from "lucide-react";
+import { Video, Loader2, Sparkles, Globe, Mic, Monitor, UserCheck } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -20,7 +20,7 @@ import { useJoinModalStore } from "@/stores/join-modal-store";
 import { useMeetingsStore } from "@/stores/meetings-store";
 import { useRuntimeConfig } from "@/hooks/use-runtime-config";
 import type { Platform, CreateBotRequest } from "@/types/vexa";
-import { LanguagePicker } from "@/components/language-picker";
+import { MultiLanguagePicker } from "@/components/language-picker";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { getUserFriendlyError } from "@/lib/error-messages";
@@ -43,18 +43,39 @@ export function JoinModal() {
   const [mode, setMode] = useState<"meeting" | "browser">("meeting");
   const [meetingInput, setMeetingInput] = useState("");
   const [platform, setPlatform] = useState<Platform>("google_meet");
-  const [language, setLanguage] = useState("auto");
+  const [allowedLanguages, setAllowedLanguages] = useState<string[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const stored = localStorage.getItem("vexa-join-allowed-languages");
+        if (stored) return JSON.parse(stored);
+      } catch {}
+    }
+    return [];
+  });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [transcribeEnabled, setTranscribeEnabled] = useState(true);
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [botName, setBotName] = useState("");
+  const [botName, setBotName] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("vexa-join-bot-name") || "Vexa";
+    }
+    return "Vexa";
+  });
   const [passcode, setPasscode] = useState("");
   const [authenticated, setAuthenticated] = useState(false);
 
-  // Default is "auto" so we don't send a language and the transcription service can auto-detect.
-  // (Previously we set getBrowserLanguage() here, which sent e.g. "en" and skipped detection.)
+  // Persist bot name and allowed languages to localStorage
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("vexa-join-bot-name", botName);
+    }
+  }, [botName]);
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("vexa-join-allowed-languages", JSON.stringify(allowedLanguages));
+    }
+  }, [allowedLanguages]);
 
-  // Reset form when modal closes
+  // Reset form when modal closes (preserve bot name and languages)
   useEffect(() => {
     if (!isOpen) {
       setMode("meeting");
@@ -62,8 +83,6 @@ export function JoinModal() {
       setPlatform("google_meet");
       setIsSubmitting(false);
       setTranscribeEnabled(true);
-      setShowAdvanced(false);
-      setBotName("");
       setPasscode("");
       setAuthenticated(false);
     }
@@ -78,7 +97,6 @@ export function JoinModal() {
   useEffect(() => {
     if (parsedInput) {
       setPlatform(parsedInput.platform);
-      // Auto-populate passcode if detected from URL
       if (parsedInput.passcode) {
         setPasscode(parsedInput.passcode);
       }
@@ -97,8 +115,6 @@ export function JoinModal() {
       return;
     }
 
-    // Validate Teams passcode requirement and prepare final passcode
-    // Use passcode from parsed URL first, then fall back to manually entered passcode
     const finalPasscode = parsedInput.passcode || passcode.trim() || undefined;
     if (parsedInput.platform === "teams" && !finalPasscode) {
       toast.error("Passcode required", {
@@ -114,21 +130,21 @@ export function JoinModal() {
         native_meeting_id: parsedInput.meetingId,
       };
 
-    // Add passcode for Teams and Zoom meetings
     if ((parsedInput.platform === "teams" || parsedInput.platform === "zoom") && finalPasscode) {
       request.passcode = finalPasscode;
     }
 
-    // Pass original URL for Teams to preserve exact domain
     if (parsedInput.originalUrl) {
       request.meeting_url = parsedInput.originalUrl;
     }
 
-    // Set bot name - use custom name or configured default
-    request.bot_name = botName.trim() || config?.defaultBotName || "Vexa - Open Source Bot";
+    request.bot_name = botName.trim() || config?.defaultBotName || "Vexa";
 
-    if (language && language !== "auto") {
-      request.language = language;
+    // Language: allowed_languages list, or single language for backward compat
+    if (allowedLanguages.length === 1) {
+      request.language = allowedLanguages[0];
+    } else if (allowedLanguages.length > 1) {
+      request.allowed_languages = allowedLanguages;
     }
 
     if (!transcribeEnabled) {
@@ -146,17 +162,14 @@ export function JoinModal() {
         description: "The transcription bot is connecting...",
       });
 
-      // Set meeting in both stores to ensure fresh data is used immediately
       setActiveMeeting(meeting);
       setCurrentMeeting(meeting);
       closeModal();
 
-      // Navigate to the meeting page
       router.push(`/meetings/${meeting.id}`);
     } catch (error) {
       console.error("Failed to create bot:", error);
 
-      // Subscription required — redirect to pricing
       if (error instanceof VexaAPIError && error.status === 402) {
         toast.error("Subscription required", {
           description: "Subscribe to a plan to create bots.",
@@ -196,13 +209,12 @@ export function JoinModal() {
     } finally {
       setIsSubmitting(false);
     }
-  }, [parsedInput, passcode, botName, language, transcribeEnabled, authenticated, config, setActiveMeeting, setCurrentMeeting, closeModal, router, user]);
+  }, [parsedInput, passcode, botName, allowedLanguages, transcribeEnabled, authenticated, config, setActiveMeeting, setCurrentMeeting, closeModal, router, user]);
 
   const handleBrowserSession = useCallback(async () => {
     setIsSubmitting(true);
     try {
       const body: Record<string, string> = { mode: "browser_session" };
-      // Read git workspace config from profile settings (localStorage)
       try {
         const git = JSON.parse(localStorage.getItem("vexa-browser-git") || "{}");
         if (git.repo && git.token) {
@@ -305,7 +317,6 @@ export function JoinModal() {
               Meeting URL or Code
             </Label>
             <div className="relative">
-              {/* Platform Icon - appears when detected */}
               {parsedInput && (
                 <div className="absolute left-3 top-1/2 -translate-y-1/2 z-10 animate-fade-in">
                   {parsedInput.platform === "google_meet" ? (
@@ -348,7 +359,6 @@ export function JoinModal() {
                 autoFocus
                 autoComplete="off"
               />
-              {/* Valid indicator */}
               {meetingInput && isValid && (
                 <div className="absolute right-3 top-1/2 -translate-y-1/2">
                   <div className={cn(
@@ -374,7 +384,6 @@ export function JoinModal() {
               )}
             </div>
 
-            {/* Detected platform indicator */}
             {parsedInput && (
               <div className="flex items-center gap-2 text-sm animate-fade-in">
                 <span className={cn(
@@ -405,23 +414,19 @@ export function JoinModal() {
             )}
           </div>
 
-          {/* Language Selection - only shown when transcription is enabled */}
-          {transcribeEnabled && <div className="space-y-2">
-            <Label htmlFor="language" className="text-sm flex items-center gap-2">
-              <Globe className="h-3.5 w-3.5" />
-              Transcription Language
+          {/* Bot Name */}
+          <div className="space-y-2">
+            <Label htmlFor="botName" className="text-sm">
+              Bot Name
             </Label>
-            <LanguagePicker
-              value={language}
-              onValueChange={setLanguage}
-              triggerClassName="h-10 w-full justify-between"
+            <Input
+              id="botName"
+              placeholder="Vexa"
+              value={botName}
+              onChange={(e) => setBotName(e.target.value)}
+              className="h-10"
             />
-            {language === "auto" && (
-              <p className="text-xs text-muted-foreground">
-                Auto-detect: the service will detect the language when the meeting starts. You can change it anytime from the meeting page.
-              </p>
-            )}
-          </div>}
+          </div>
 
           {/* Transcription Toggle */}
           <div className="flex items-center justify-between">
@@ -441,69 +446,53 @@ export function JoinModal() {
             </p>
           )}
 
-          {/* Authenticated Toggle */}
-          <div className="flex items-center justify-between">
-            <Label htmlFor="authenticated" className="text-sm flex items-center gap-2 cursor-pointer">
+          {/* Language Selection - multi-select, only shown when transcription is enabled */}
+          {transcribeEnabled && (
+            <div className="space-y-2">
+              <Label htmlFor="language" className="text-sm flex items-center gap-2">
+                <Globe className="h-3.5 w-3.5" />
+                Allowed Languages
+              </Label>
+              <MultiLanguagePicker
+                value={allowedLanguages}
+                onValueChange={setAllowedLanguages}
+                triggerClassName="h-10 w-full justify-between"
+              />
+              {allowedLanguages.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Auto-detect: the service will detect the language automatically.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Authenticated Toggle — coming soon */}
+          <div className="flex items-center justify-between opacity-50">
+            <Label htmlFor="authenticated" className="text-sm flex items-center gap-2 cursor-not-allowed">
               <UserCheck className="h-3.5 w-3.5" />
               Authenticated
+              <span className="text-[10px] font-medium bg-muted px-1.5 py-0.5 rounded">Soon</span>
             </Label>
             <Switch
               id="authenticated"
-              checked={authenticated}
-              onCheckedChange={setAuthenticated}
+              checked={false}
+              disabled
             />
           </div>
-          {authenticated && (
-            <p className="text-xs text-muted-foreground -mt-2">
-              Bot will join using your stored browser credentials instead of as a guest.
-            </p>
-          )}
 
-          {/* Advanced Options Toggle */}
-          <button
-            type="button"
-            onClick={() => setShowAdvanced(!showAdvanced)}
-            className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <ChevronDown className={cn(
-              "h-4 w-4 transition-transform",
-              showAdvanced && "rotate-180"
-            )} />
-            Advanced options
-          </button>
-
-          {/* Advanced Options */}
-          {showAdvanced && (
-            <div className="space-y-4 animate-fade-in pt-2 border-t">
-              {/* Bot Name */}
-              <div className="space-y-2">
-                <Label htmlFor="botName" className="text-sm">
-                  Bot Name (optional)
-                </Label>
-                <Input
-                  id="botName"
-                  placeholder="Meeting Assistant"
-                  value={botName}
-                  onChange={(e) => setBotName(e.target.value)}
-                  className="h-10"
-                />
-              </div>
-
-              {/* Passcode for Teams and Zoom */}
-              {(platform === "teams" || platform === "zoom") && (
-                <div className="space-y-2">
-                  <Label htmlFor="passcode" className="text-sm">
-                    Passcode {platform === "teams" ? "(required for Teams)" : "(optional for Zoom)"}
-                  </Label>
-                  <Input
-                    id="passcode"
-                    placeholder="Enter meeting passcode"
-                    value={passcode}
-                    onChange={(e) => setPasscode(e.target.value)}
-                    className="h-10"
-                  />
-                </div>
-              )}
+          {/* Passcode for Teams and Zoom */}
+          {(platform === "teams" || platform === "zoom") && (
+            <div className="space-y-2">
+              <Label htmlFor="passcode" className="text-sm">
+                Passcode {platform === "teams" ? "(required for Teams)" : "(optional for Zoom)"}
+              </Label>
+              <Input
+                id="passcode"
+                placeholder="Enter meeting passcode"
+                value={passcode}
+                onChange={(e) => setPasscode(e.target.value)}
+                className="h-10"
+              />
             </div>
           )}
 

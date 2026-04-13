@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Check, ChevronDown, Search } from "lucide-react";
+import { Check, ChevronDown, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,13 +19,14 @@ import {
   getLanguageDisplayName,
 } from "@/lib/languages";
 
+// --- Single-select (original API) ---
+
 export interface LanguagePickerProps {
   value: string;
   onValueChange: (value: string) => void;
   disabled?: boolean;
   triggerClassName?: string;
   placeholder?: string;
-  /** Compact trigger (e.g. for mobile header) */
   compact?: boolean;
 }
 
@@ -104,7 +105,6 @@ export function LanguagePicker({
         </div>
         <ScrollArea className="h-[280px]">
           <div className="p-1">
-            {/* Auto-detect always first */}
             <button
               type="button"
               onClick={() => handleSelect("auto")}
@@ -118,13 +118,9 @@ export function LanguagePicker({
               </span>
               Auto-detect
             </button>
-
-            {/* Recent (only if not searching and we have recent) */}
             {!searchLower && recentCodes.length > 0 && (
               <>
-                <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-                  Recent
-                </div>
+                <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Recent</div>
                 {recentCodes.map((code) => (
                   <button
                     key={code}
@@ -141,17 +137,11 @@ export function LanguagePicker({
                     {WHISPER_LANGUAGE_NAMES[code]} ({code})
                   </button>
                 ))}
-                <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-                  All languages
-                </div>
+                <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">All languages</div>
               </>
             )}
-
-            {/* All / filtered list */}
             {filteredCodes.length === 0 ? (
-              <p className="py-6 text-center text-sm text-muted-foreground">
-                No language found.
-              </p>
+              <p className="py-6 text-center text-sm text-muted-foreground">No language found.</p>
             ) : (
               filteredCodes.map((code) => (
                 <button
@@ -174,5 +164,185 @@ export function LanguagePicker({
         </ScrollArea>
       </PopoverContent>
     </Popover>
+  );
+}
+
+// --- Multi-select ---
+
+export interface MultiLanguagePickerProps {
+  value: string[];
+  onValueChange: (value: string[]) => void;
+  disabled?: boolean;
+  triggerClassName?: string;
+}
+
+export function MultiLanguagePicker({
+  value,
+  onValueChange,
+  disabled,
+  triggerClassName,
+}: MultiLanguagePickerProps) {
+  const [open, setOpen] = React.useState(false);
+  const [search, setSearch] = React.useState("");
+  const inputRef = React.useRef<HTMLInputElement>(null);
+  const recentCodes = React.useMemo(() => getRecentLanguageCodes(), [open]);
+
+  const isAutoDetect = value.length === 0;
+  const selected = new Set(value);
+
+  const searchLower = search.trim().toLowerCase();
+  const filteredCodes = React.useMemo(() => {
+    if (!searchLower) return WHISPER_LANGUAGE_CODES;
+    return WHISPER_LANGUAGE_CODES.filter(
+      (code) =>
+        code.toLowerCase().includes(searchLower) ||
+        WHISPER_LANGUAGE_NAMES[code]?.toLowerCase().includes(searchLower)
+    );
+  }, [searchLower]);
+
+  const toggleCode = React.useCallback(
+    (code: string) => {
+      saveRecentLanguage(code);
+      if (selected.has(code)) {
+        onValueChange(value.filter((c) => c !== code));
+      } else {
+        onValueChange([...value, code]);
+      }
+    },
+    [value, selected, onValueChange]
+  );
+
+  const clearAll = React.useCallback(() => {
+    onValueChange([]);
+  }, [onValueChange]);
+
+  const removeCode = React.useCallback(
+    (code: string) => {
+      onValueChange(value.filter((c) => c !== code));
+    },
+    [value, onValueChange]
+  );
+
+  return (
+    <div className="space-y-2">
+      {/* Selected language badges */}
+      {value.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {value.map((code) => (
+            <span
+              key={code}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-primary/10 text-primary text-xs font-medium"
+            >
+              {code.toUpperCase()}
+              <button
+                type="button"
+                onClick={() => removeCode(code)}
+                className="hover:text-destructive"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            variant="outline"
+            role="combobox"
+            aria-expanded={open}
+            disabled={disabled}
+            className={cn("justify-between font-normal", triggerClassName)}
+          >
+            <span className="truncate">
+              {isAutoDetect ? "Auto-detect (all languages)" : "Add language..."}
+            </span>
+            <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent
+          className="w-[var(--radix-popover-trigger-width)] min-w-[220px] p-0"
+          align="start"
+          onOpenAutoFocus={(e) => {
+            e.preventDefault();
+            inputRef.current?.focus();
+          }}
+        >
+          <div className="flex items-center border-b px-2">
+            <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <Input
+              ref={inputRef}
+              placeholder="Search languages..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="border-0 focus-visible:ring-0 focus-visible:ring-offset-0 h-9"
+            />
+          </div>
+          <ScrollArea className="h-[280px]">
+            <div className="p-1">
+              {/* Auto-detect = clear all */}
+              <button
+                type="button"
+                onClick={clearAll}
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-sm py-2 px-2 text-sm outline-none hover:bg-accent hover:text-accent-foreground",
+                  isAutoDetect && "bg-accent text-accent-foreground"
+                )}
+              >
+                <span className="flex h-4 w-4 items-center justify-center">
+                  {isAutoDetect ? <Check className="h-4 w-4" /> : null}
+                </span>
+                Auto-detect (all languages)
+              </button>
+
+              {!searchLower && recentCodes.length > 0 && (
+                <>
+                  <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Recent</div>
+                  {recentCodes.map((code) => (
+                    <button
+                      key={`recent-${code}`}
+                      type="button"
+                      onClick={() => toggleCode(code)}
+                      className={cn(
+                        "flex w-full items-center gap-2 rounded-sm py-2 px-2 text-sm outline-none hover:bg-accent hover:text-accent-foreground",
+                        selected.has(code) && "bg-accent text-accent-foreground"
+                      )}
+                    >
+                      <span className="flex h-4 w-4 items-center justify-center">
+                        {selected.has(code) ? <Check className="h-4 w-4" /> : null}
+                      </span>
+                      {WHISPER_LANGUAGE_NAMES[code]} ({code})
+                    </button>
+                  ))}
+                  <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">All languages</div>
+                </>
+              )}
+
+              {filteredCodes.length === 0 ? (
+                <p className="py-6 text-center text-sm text-muted-foreground">No language found.</p>
+              ) : (
+                filteredCodes.map((code) => (
+                  <button
+                    key={code}
+                    type="button"
+                    onClick={() => toggleCode(code)}
+                    className={cn(
+                      "flex w-full items-center gap-2 rounded-sm py-2 px-2 text-sm outline-none hover:bg-accent hover:text-accent-foreground",
+                      selected.has(code) && "bg-accent text-accent-foreground"
+                    )}
+                  >
+                    <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                      {selected.has(code) ? <Check className="h-4 w-4" /> : null}
+                    </span>
+                    {WHISPER_LANGUAGE_NAMES[code]} ({code})
+                  </button>
+                ))
+              )}
+            </div>
+          </ScrollArea>
+        </PopoverContent>
+      </Popover>
+    </div>
   );
 }

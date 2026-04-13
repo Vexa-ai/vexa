@@ -12,7 +12,7 @@ import { useLiveStore } from "@/stores/live-store";
 import { useRuntimeConfig } from "@/hooks/use-runtime-config";
 import type { Platform, CreateBotRequest } from "@/types/vexa";
 import { PLATFORM_CONFIG } from "@/types/vexa";
-import { LanguagePicker } from "@/components/language-picker";
+import { MultiLanguagePicker } from "@/components/language-picker";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { DocsLink } from "@/components/docs/docs-link";
@@ -35,8 +35,21 @@ export function JoinForm({ onSuccess }: JoinFormProps) {
   const [platform, setPlatform] = useState<Platform>("google_meet");
   const [meetingId, setMeetingId] = useState("");
   const [passcode, setPasscode] = useState("");
-  const [botName, setBotName] = useState("");
-  const [language, setLanguage] = useState("auto");
+  const [botName, setBotName] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("vexa-join-bot-name") || "Vexa";
+    }
+    return "Vexa";
+  });
+  const [allowedLanguages, setAllowedLanguages] = useState<string[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const stored = localStorage.getItem("vexa-join-allowed-languages");
+        if (stored) return JSON.parse(stored);
+      } catch {}
+    }
+    return [];
+  });
   const [transcribeEnabled, setTranscribeEnabled] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -99,10 +112,18 @@ export function JoinForm({ onSuccess }: JoinFormProps) {
     }
 
     // Set bot name - use custom name or configured default
-    request.bot_name = botName.trim() || config?.defaultBotName || "Vexa - Open Source Bot";
+    request.bot_name = botName.trim() || config?.defaultBotName || "Vexa";
 
-    if (language && language !== "auto") {
-      request.language = language;
+    // Persist to localStorage
+    if (typeof window !== "undefined") {
+      localStorage.setItem("vexa-join-bot-name", request.bot_name);
+      localStorage.setItem("vexa-join-allowed-languages", JSON.stringify(allowedLanguages));
+    }
+
+    if (allowedLanguages.length === 1) {
+      request.language = allowedLanguages[0];
+    } else if (allowedLanguages.length > 1) {
+      request.allowed_languages = allowedLanguages;
     }
 
     if (!transcribeEnabled) {
@@ -421,38 +442,34 @@ export function JoinForm({ onSuccess }: JoinFormProps) {
             )}
           </div>
 
-          {/* Authenticated Toggle */}
+          {/* Authenticated Toggle — coming soon */}
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label htmlFor="authenticated" className="flex items-center gap-2 cursor-pointer">
+            <div className="flex items-center justify-between opacity-50">
+              <Label htmlFor="authenticated" className="flex items-center gap-2 cursor-not-allowed">
                 <UserCheck className="h-3.5 w-3.5" />
                 Authenticated
+                <span className="text-[10px] font-medium bg-muted px-1.5 py-0.5 rounded">Soon</span>
               </Label>
               <Switch
                 id="authenticated"
-                checked={authenticated}
-                onCheckedChange={setAuthenticated}
+                checked={false}
+                disabled
               />
             </div>
-            {authenticated && (
-              <p className="text-xs text-muted-foreground">
-                Bot will join using your stored browser credentials instead of as a guest.
-              </p>
-            )}
           </div>
 
-          {/* Language - backend detects if not set; user can change from meeting page */}
+          {/* Language - multi-select whitelist */}
           {transcribeEnabled && (
           <div className="space-y-2">
-            <Label htmlFor="language">Transcription Language</Label>
-            <LanguagePicker
-              value={language}
-              onValueChange={setLanguage}
+            <Label htmlFor="language">Allowed Languages</Label>
+            <MultiLanguagePicker
+              value={allowedLanguages}
+              onValueChange={setAllowedLanguages}
               triggerClassName="w-full justify-between"
             />
-            {language === "auto" && (
+            {allowedLanguages.length === 0 && (
               <p className="text-xs text-muted-foreground">
-                Auto-detect: the service will detect the language when the meeting starts. You can change it anytime from the meeting page.
+                Auto-detect: the service will detect the language automatically.
               </p>
             )}
           </div>

@@ -55,13 +55,13 @@ import { useMeetingsStore } from "@/stores/meetings-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { useLiveTranscripts } from "@/hooks/use-live-transcripts";
 import { PLATFORM_CONFIG, getDetailedStatus } from "@/types/vexa";
-import type { MeetingStatus, Meeting } from "@/types/vexa";
+import type { MeetingStatus, Meeting, BotConfigUpdate } from "@/types/vexa";
 import { StatusHistory } from "@/components/meetings/status-history";
 import { cn } from "@/lib/utils";
 import { vexaAPI } from "@/lib/api";
 import { withBasePath } from "@/lib/base-path";
 import { toast } from "sonner";
-import { LanguagePicker } from "@/components/language-picker";
+import { LanguagePicker, MultiLanguagePicker } from "@/components/language-picker";
 import { WHISPER_LANGUAGE_CODES, getLanguageDisplayName } from "@/lib/languages";
 import {
   AlertDialog,
@@ -169,6 +169,9 @@ export default function MeetingDetailPage() {
   // Bot config state
   const [currentLanguage, setCurrentLanguage] = useState<string | undefined>(
     currentMeeting?.data?.languages?.[0] || "auto"
+  );
+  const [allowedLanguages, setAllowedLanguages] = useState<string[]>(
+    currentMeeting?.data?.languages?.filter((l: string) => l !== "auto") || []
   );
   const [isUpdatingConfig, setIsUpdatingConfig] = useState(false);
 
@@ -366,7 +369,7 @@ export default function MeetingDetailPage() {
     try {
       await vexaAPI.updateBotConfig(currentMeeting.platform, currentMeeting.platform_specific_id, {
         language: newLanguage === "auto" ? undefined : newLanguage,
-        task: "transcribe", // Always use transcribe mode
+        task: "transcribe",
       });
       setCurrentLanguage(newLanguage);
       updateMeetingData(currentMeeting.platform, currentMeeting.platform_specific_id, {
@@ -381,6 +384,33 @@ export default function MeetingDetailPage() {
       setIsUpdatingConfig(false);
     }
   }, [currentMeeting, updateMeetingData]);
+
+  const handleAllowedLanguagesChange = useCallback(async (newLanguages: string[]) => {
+    if (!currentMeeting) return;
+    setAllowedLanguages(newLanguages);
+    setIsUpdatingConfig(true);
+    try {
+      const config: BotConfigUpdate = { task: "transcribe" };
+      if (newLanguages.length === 1) {
+        config.language = newLanguages[0];
+      } else if (newLanguages.length > 1) {
+        config.allowed_languages = newLanguages;
+        config.language = undefined;
+      } else {
+        config.language = undefined;
+        config.allowed_languages = [];
+      }
+      await vexaAPI.updateBotConfig(currentMeeting.platform, currentMeeting.platform_specific_id, config);
+      setCurrentLanguage(newLanguages.length === 1 ? newLanguages[0] : "auto");
+      toast.success(newLanguages.length === 0 ? "Auto-detect enabled" : "Languages updated");
+    } catch (error) {
+      toast.error("Failed to update languages", {
+        description: (error as Error).message,
+      });
+    } finally {
+      setIsUpdatingConfig(false);
+    }
+  }, [currentMeeting]);
 
   const handleDeleteMeeting = useCallback(async () => {
     if (!currentMeeting) return;
@@ -1870,44 +1900,7 @@ export default function MeetingDetailPage() {
                 </div>
               )}
 
-              {/* Bot Settings - Only show when active */}
-              {currentMeeting.status === "active" && (
-                <>
-                  <Separator />
-                  <div className="space-y-3">
-                    <p className="text-sm font-medium">Bot Settings</p>
-                    
-                    {/* Language Selection - shows detected language from backend first, user can change */}
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <label className="text-xs text-muted-foreground">Language</label>
-                        <DocsLink href="/docs/rest/bots#update-bot-configuration" />
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        When not set, the service detects the language automatically. You can change it below if needed.
-                      </p>
-                      <div className="flex items-center gap-2">
-                        <LanguagePicker
-                          value={currentLanguage ?? "auto"}
-                          onValueChange={handleLanguageChange}
-                          disabled={isUpdatingConfig}
-                          triggerClassName="h-9 w-full justify-between"
-                        />
-                        {isUpdatingConfig && (
-                          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                        )}
-                      </div>
-                    </div>
-
-                    {isUpdatingConfig && (
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                        <span>Updating...</span>
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
+              {/* Bot Settings - hidden for now, available via API */}
 
               {/* Languages (read-only when not active) */}
               {currentMeeting.status !== "active" &&
