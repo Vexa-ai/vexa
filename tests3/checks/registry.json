@@ -665,6 +665,15 @@
       "method": "TRANSCRIPTION_TEST"
     },
     {
+      "id": "CORS_PREFLIGHT",
+      "tier": "contract",
+      "found": "2026-04-13",
+      "proves": "OPTIONS preflight returns 200 for any origin — CORS_ORIGINS defaults to wildcard",
+      "symptom": "OPTIONS /bots/status returns 400 for external origins — browser clients blocked by CORS",
+      "method": "CORS_PREFLIGHT",
+      "expect_code": 200
+    },
+    {
       "id": "CACHE_HEADERS",
       "tier": "contract",
       "found": "2026-04-07",

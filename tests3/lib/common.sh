@@ -41,8 +41,8 @@ detect_mode() {
         return
     fi
 
-    # Check for single lite container
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx vexa; then
+    # Check for single lite container (named "vexa" or "vexa-lite")
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qxE 'vexa|vexa-lite'; then
         echo "lite"
         return
     fi
@@ -85,6 +85,11 @@ detect_urls() {
 
 # ─── Container execution ─────────────────────────────────────────
 
+_lite_container() {
+    # Return the name of the running lite container ("vexa" or "vexa-lite")
+    docker ps --format '{{.Names}}' 2>/dev/null | grep -xE 'vexa|vexa-lite' | head -1
+}
+
 svc_exec() {
     # svc_exec <service> <command...>
     # Runs a command inside the container for the given service.
@@ -94,7 +99,7 @@ svc_exec() {
 
     case "$mode" in
         compose) docker exec "vexa-${svc}-1" "$@" ;;
-        lite)    docker exec vexa "$@" ;;
+        lite)    docker exec "$(_lite_container)" "$@" ;;
         helm)
             local release
             release=$(cat "$STATE/helm_release" 2>/dev/null || echo "")
@@ -117,7 +122,7 @@ find_bot_pod() {
     mode=$(cat "$STATE/deploy_mode" 2>/dev/null || detect_mode)
     case "$mode" in
         compose) docker ps --filter "name=meeting-" --format '{{.Names}}' | grep -v meeting-api | { grep "$pattern" || true; } | head -1 ;;
-        lite)    echo "vexa" ;;
+        lite)    _lite_container ;;
         helm)    kubectl get pods --no-headers -l app.kubernetes.io/name=vexa 2>/dev/null | grep -v meeting-api | awk '{print $1}' | { grep "$pattern" || true; } | head -1 ;;
     esac
 }

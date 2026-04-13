@@ -205,7 +205,7 @@ services:
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
       - RATE_LIMIT_RPM=${RATE_LIMIT_RPM:-120}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - CORS_ORIGINS=http://localhost:${DASHBOARD_HOST_PORT:-3001},http://localhost:3000,http://localhost:3001
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
       interval: 30s

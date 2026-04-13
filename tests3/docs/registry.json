@@ -62,5 +62,5 @@
       "pages": ["deployment"]
     }
   ],
-  "unowned": ["index", "integrations", "local-webhook-development", "chatgpt-transcript-share-links", "troubleshooting"]
+  "unowned": ["index", "integrations", "local-webhook-development", "chatgpt-transcript-share-links", "troubleshooting", "authentication", "changelog", "n8n", "scaling", "speaker-identification", "transcription-quality"]
 }
