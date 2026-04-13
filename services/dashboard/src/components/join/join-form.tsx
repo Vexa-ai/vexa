@@ -41,12 +41,7 @@ export function JoinForm({ onSuccess }: JoinFormProps) {
     }
     return "Vexa";
   });
-  const [language, setLanguage] = useState(() => {
-    if (typeof window !== "undefined") {
-      return localStorage.getItem("vexa-join-language") || "auto";
-    }
-    return "auto";
-  });
+  const [language, setLanguage] = useState("auto");
   const [transcribeEnabled, setTranscribeEnabled] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -114,7 +109,6 @@ export function JoinForm({ onSuccess }: JoinFormProps) {
     // Persist to localStorage
     if (typeof window !== "undefined") {
       localStorage.setItem("vexa-join-bot-name", request.bot_name);
-      localStorage.setItem("vexa-join-language", language);
     }
 
     if (language && language !== "auto") {

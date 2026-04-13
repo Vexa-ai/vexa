@@ -43,12 +43,7 @@ export function JoinModal() {
   const [mode, setMode] = useState<"meeting" | "browser">("meeting");
   const [meetingInput, setMeetingInput] = useState("");
   const [platform, setPlatform] = useState<Platform>("google_meet");
-  const [language, setLanguage] = useState(() => {
-    if (typeof window !== "undefined") {
-      return localStorage.getItem("vexa-join-language") || "auto";
-    }
-    return "auto";
-  });
+  const [language, setLanguage] = useState("auto");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [transcribeEnabled, setTranscribeEnabled] = useState(true);
   const [botName, setBotName] = useState(() => {
@@ -68,7 +63,6 @@ export function JoinModal() {
   }, [botName]);
   useEffect(() => {
     if (typeof window !== "undefined") {
-      localStorage.setItem("vexa-join-language", language);
     }
   }, [language]);
 
