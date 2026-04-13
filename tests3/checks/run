@@ -572,11 +572,12 @@ def check_browser_session_cdp(gw, token):
         cdp_code = 0
         cdp_body = str(e)
 
-    # Clean up
+    # Clean up — wait for container to fully stop before next check
     subprocess.run(
         ["curl", "-sf", "-X", "DELETE", f"{gw}/bots/browser_session/{native_id}",
          "-H", f"X-API-Key: {token}"],
         capture_output=True, timeout=10)
+    time.sleep(10)
 
     if cdp_code == 200 and "webSocketDebuggerUrl" in cdp_body:
         return True, "CDP proxy reachable"

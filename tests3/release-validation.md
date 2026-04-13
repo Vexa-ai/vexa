@@ -1,97 +1,93 @@
 # Release Validation
 
-Full release workflow: build, publish, VM test, human validation, promote to `:latest`.
+## Branch model
 
-## 1. Build all images
+- **`main`**: stable, `IMAGE_TAG=latest`. Always matches `:latest` on DockerHub.
+- **`dev`**: active development, `IMAGE_TAG=dev`. Builds publish to `:dev`.
 
-```bash
-make -C deploy/compose build
-```
+## Release cycle
 
-Builds all images (api-gateway, admin-api, runtime-api, meeting-api, agent-api, mcp, dashboard, tts-service, vexa-lite, vexa-bot) with a fresh timestamp tag. Tag saved to `deploy/compose/.last-tag`.
-
-## 2. Publish to DockerHub
+### 1. Build + publish (on dev branch)
 
 ```bash
-make -C deploy/compose publish
+make release-build
 ```
 
-Pushes all images and updates `:dev` pointers. Must complete before VM tests (VMs pull `:dev` from DockerHub).
+Builds all images with a fresh timestamp tag and pushes to DockerHub. Updates `:dev` pointers.
 
-## 3. VM tests — lite + compose in parallel
-
-Use separate STATE directories so both VMs can run simultaneously:
+### 2. VM test
 
 ```bash
-make -C tests3 vm-lite STATE=$(pwd)/tests3/.state-lite &
-make -C tests3 vm-compose STATE=$(pwd)/tests3/.state-compose &
-wait
+make release-test
 ```
 
-### Automated tests run on each VM
+Provisions two fresh Linode VMs in parallel. Deploys lite on one, compose on the other. Runs automated smoke suite (docs, static, env, health, contracts). VMs stay running for human validation.
 
-**Lite**: smoke, dashboard-auth, containers
-**Compose**: smoke, dashboard-auth, dashboard-proxy, containers, webhooks
+### 3. Human validation
 
-VMs stay running after automated tests pass.
-
-### VM access
-
-**Lite VM**:
-- Dashboard: `http://<LITE_VM_IP>:3000`
-- API docs: `http://<LITE_VM_IP>:8056/docs`
-- SSH: `ssh root@<LITE_VM_IP>`
-- Get IP: `cat tests3/.state-lite/vm_ip`
-
-**Compose VM**:
-- Dashboard: `http://<COMPOSE_VM_IP>:3001`
-- API docs: `http://<COMPOSE_VM_IP>:8056/docs`
-- SSH: `ssh root@<COMPOSE_VM_IP>`
-- Get IP: `cat tests3/.state-compose/vm_ip`
-
-## 4. Human validation
-
-### Lite VM
-
+**Lite VM** (dashboard on port 3000):
 - [ ] Dashboard loads, login works
 - [ ] API docs page renders
-- [ ] Create a bot via API or dashboard — bot container starts
+- [ ] Create a bot via API — bot container starts
 - [ ] Bot joins a Google Meet, audio is captured
 - [ ] Transcript segments appear in the API
 - [ ] Bot stops cleanly, container removed
 - [ ] No errors in logs: `docker logs vexa 2>&1 | grep -i error | tail -20`
 
-### Compose VM
-
+**Compose VM** (dashboard on port 3001):
 - [ ] Dashboard loads, login works
 - [ ] API docs page renders
-- [ ] Create a bot via API or dashboard — bot container starts
+- [ ] Create a bot via API — bot container starts
 - [ ] Bot joins a Google Meet, audio is captured
 - [ ] Transcript segments appear in the API
 - [ ] Bot stops cleanly, container removed
-- [ ] No errors in service logs: `cd /root/vexa && docker compose -f deploy/compose/docker-compose.yml logs --tail=50 2>&1 | grep -i error`
+- [ ] No errors in logs: `cd /root/vexa && docker compose -f deploy/compose/docker-compose.yml logs --tail=50 2>&1 | grep -i error`
 
-### Optional: run meeting-tts on VM
-
+Optional — run full meeting test on VM:
 ```bash
-# SSH into either VM, then:
-cd /root/vexa
-make -C tests3 meeting-tts
+ssh root@<VM_IP>
+cd /root/vexa && make -C tests3 meeting-tts
 ```
 
-## 5. Destroy VMs
+### 4. Validate + destroy VMs
 
 ```bash
+make release-validate
+```
+
+Pushes a `release/vm-validated` commit status to GitHub on the current HEAD and destroys both VMs. This status is required by branch protection to merge to main.
+
+### 5. Open PR dev → main
+
+```bash
+gh pr create --base main --head dev --title "Release $(cat VERSION)-$(cat deploy/compose/.last-tag)"
+```
+
+The PR requires the `release/vm-validated` status check to pass. If you push new commits, the status resets — must re-validate.
+
+### 6. Merge + promote
+
+After PR is merged:
+
+```bash
+git checkout main && git pull
+make release-promote
+```
+
+Re-points `:latest` for all images to the validated build tag.
+
+## VM access
+
+```bash
+# Get IPs
+cat tests3/.state-lite/vm_ip
+cat tests3/.state-compose/vm_ip
+
+# SSH
+ssh root@$(cat tests3/.state-lite/vm_ip)
+ssh root@$(cat tests3/.state-compose/vm_ip)
+
+# Destroy manually
 make -C tests3 vm-destroy STATE=$(pwd)/tests3/.state-lite
 make -C tests3 vm-destroy STATE=$(pwd)/tests3/.state-compose
 ```
-
-## 6. Promote to `:latest`
-
-```bash
-make -C deploy/compose promote-latest
-```
-
-Re-points `:latest` for all images to the build tag from `deploy/compose/.last-tag`.
-
-Verify: `cat deploy/compose/.last-tag` shows the promoted tag.

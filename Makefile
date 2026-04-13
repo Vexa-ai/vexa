@@ -1,6 +1,7 @@
 .PHONY: all lite build up down lite-down docs smoke test what-changed full \
        collect score \
        vm-compose vm-lite vm-destroy vm-ssh \
+       release-build release-test release-validate release-promote \
        help
 
 # ═══ Deploy ═════════════════════════════════════════════════════
@@ -68,6 +69,37 @@ vm-destroy:                        ## tear down VM
 
 vm-ssh:                            ## SSH into VM
 	@$(MAKE) --no-print-directory -C tests3 vm-ssh
+
+# ═══ Release ═════════════════════════════════════════════════════
+
+release-build:                     ## build + publish :dev to DockerHub
+	@$(MAKE) --no-print-directory -C deploy/compose build
+	@$(MAKE) --no-print-directory -C deploy/compose publish
+
+release-test:                      ## VM test lite + compose in parallel
+	@mkdir -p tests3/.state-lite tests3/.state-compose
+	@$(MAKE) --no-print-directory -C tests3 vm-lite STATE=$(CURDIR)/tests3/.state-lite &
+	@$(MAKE) --no-print-directory -C tests3 vm-compose STATE=$(CURDIR)/tests3/.state-compose &
+	@wait
+	@echo ""
+	@echo "  VMs ready for validation:"
+	@echo "  Lite:    http://$$(cat tests3/.state-lite/vm_ip):3000"
+	@echo "  Compose: http://$$(cat tests3/.state-compose/vm_ip):3001"
+	@echo ""
+	@echo "  Run 'make release-validate' after manual validation."
+
+release-validate:                  ## push GitHub status + destroy VMs
+	@SHA=$$(git rev-parse HEAD); \
+	gh api repos/Vexa-ai/vexa/statuses/$$SHA \
+		-f state=success \
+		-f context=release/vm-validated \
+		-f description="VM tests passed + human validated on $$(date +%Y-%m-%d)" && \
+	echo "  ✓ Commit status pushed: release/vm-validated on $$SHA"
+	@$(MAKE) --no-print-directory -C tests3 vm-destroy STATE=$(CURDIR)/tests3/.state-lite 2>/dev/null || true
+	@$(MAKE) --no-print-directory -C tests3 vm-destroy STATE=$(CURDIR)/tests3/.state-compose 2>/dev/null || true
+
+release-promote:                   ## promote :dev → :latest on DockerHub
+	@$(MAKE) --no-print-directory -C deploy/compose promote-latest
 
 # ═══ Util ════════════════════════════════════════════════════════
 
