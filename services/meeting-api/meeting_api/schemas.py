@@ -517,7 +517,8 @@ class MeetingCreate(BaseModel):
     platform: Optional[Platform] = Field(None, description="Meeting platform. Required unless agent_enabled=true with no meeting.")
     native_meeting_id: Optional[str] = Field(None, description="The platform-specific ID for the meeting (e.g., Google Meet code, Teams ID). Required unless agent_enabled=true with no meeting.")
     bot_name: Optional[str] = Field(None, description="Optional name for the bot in the meeting")
-    language: Optional[str] = Field(None, description="Optional language code for transcription (e.g., 'en', 'es')")
+    language: Optional[str] = Field(None, description="Optional language code for transcription (e.g., 'en', 'es'). Forces this single language.")
+    allowed_languages: Optional[list[str]] = Field(None, description="Whitelist of allowed language codes (e.g., ['en', 'de', 'fr']). Whisper auto-detects, segments in other languages are discarded. Single entry forces that language. Ignored if 'language' is set.")
     task: Optional[str] = Field(None, description="Optional task for the transcription model (e.g., 'transcribe', 'translate')")
     transcription_tier: Optional[str] = Field(
         "realtime",
