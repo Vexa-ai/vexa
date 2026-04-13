@@ -201,7 +201,7 @@ RUN chmod +x /entrypoint.sh
 RUN mkdir -p /var/lib/vexa/recordings /var/log/vexa-bots
 
 # Test audio for transcription startup check
-COPY tests/testdata/test-speech-en.wav /app/test-speech-en.wav
+COPY tests3/testdata/test-speech-en.wav /app/test-speech-en.wav
 
 # -----------------------------------------------------------------------------
 # Environment Variables (defaults)
