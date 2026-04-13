@@ -1228,49 +1228,7 @@ export default function MeetingDetailPage() {
             </div>
           )}
 
-          {/* Agent panel toggle */}
-          {(currentMeeting.status === "active" || currentMeeting.status === "completed") && (
-            <Button
-              variant={agentPanelOpen ? "secondary" : "outline"}
-              size="sm"
-              className="gap-1.5 h-9"
-              onClick={() => {
-                setAgentPanelOpen((v) => {
-                  const next = !v;
-                  // Close conflicting panels when opening
-                  if (next) {
-                    setApiViewOpen(false);
-                  }
-                  return next;
-                });
-              }}
-            >
-              <Bot className="h-4 w-4 text-violet-500" />
-              <span className="hidden sm:inline">Agent</span>
-            </Button>
-          )}
-
-          {/* API view toggle */}
-          <Button
-            ref={apiButtonRef}
-            variant={apiViewOpen ? "secondary" : "outline"}
-            size="sm"
-            className={cn(
-              "gap-1.5 h-9 transition-all duration-300",
-              apiButtonHighlight && "ring-2 ring-gray-950 dark:ring-white ring-offset-2 ring-offset-background animate-pulse"
-            )}
-            onClick={() => {
-              setApiViewOpen((v) => {
-                const next = !v;
-                if (next) setAgentPanelOpen(false);
-                return next;
-              });
-              setApiButtonHighlight(false);
-            }}
-          >
-            <Code className="h-4 w-4 text-emerald-500" />
-            <span className="hidden sm:inline">API</span>
-          </Button>
+          {/* Agent and API buttons hidden for now */}
 
         </div>
       </div>

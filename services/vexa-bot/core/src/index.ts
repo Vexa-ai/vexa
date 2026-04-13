@@ -1237,11 +1237,12 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
 
       // Language strategy:
       // - If user explicitly set a language → always use it (respect the choice)
-      // - If allowedLanguages has exactly 1 entry → force that language (more accurate than auto-detect)
-      // - Otherwise → auto-detect (null), filter by allowedLanguages whitelist post-detection
+      // - If allowedLanguages is set → force the first language (Whisper is more accurate
+      //   with an explicit hint than auto-detect; never discard real speech)
+      // - Otherwise → auto-detect (null)
       const explicitLang = currentLanguage && currentLanguage !== 'auto' ? currentLanguage : null;
-      const singleAllowed = !explicitLang && allowedLanguages?.length === 1 ? allowedLanguages[0] : null;
-      const lang = explicitLang || singleAllowed || null;
+      const firstAllowed = !explicitLang && allowedLanguages?.length ? allowedLanguages[0] : null;
+      const lang = explicitLang || firstAllowed || null;
 
       const whisperStartMs = Date.now();
       try {
@@ -1262,14 +1263,6 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
           if (!lang && prob > 0 && prob < 0.3) {
             telemetry.segmentsDiscarded++;
             log(`[🚫 LOW CONFIDENCE] ${speakerName} | lang_prob=${prob.toFixed(2)} | "${result.text}" — discarded`);
-            speakerManager!.handleTranscriptionResult(speakerId, '');
-            return;
-          }
-
-          // 1b. Language whitelist (when allowedLanguages has 2+ entries and auto-detecting)
-          if (allowedLanguages && allowedLanguages.length > 1 && result.language && !allowedLanguages.includes(result.language)) {
-            telemetry.segmentsDiscarded++;
-            log(`[🚫 LANG BLOCKED] ${speakerName} | detected=${result.language} not in [${allowedLanguages}] | "${result.text}" — discarded`);
             speakerManager!.handleTranscriptionResult(speakerId, '');
             return;
           }

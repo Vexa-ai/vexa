@@ -498,7 +498,7 @@ export function JoinForm({ onSuccess }: JoinFormProps) {
                 </>
               )}
             </Button>
-            <DocsLink href="/docs/rest/bots#create-bot" />
+            {/* <DocsLink href="/docs/rest/bots#create-bot" /> */}
           </div>
 
           {/* Helpful tip */}

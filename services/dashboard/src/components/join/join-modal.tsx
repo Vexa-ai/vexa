@@ -518,7 +518,7 @@ export function JoinModal() {
                 </>
               )}
             </Button>
-            <DocsLink href="/docs/rest/bots#create-bot" />
+            {/* <DocsLink href="/docs/rest/bots#create-bot" /> */}
           </div>
         </form>
         )}
