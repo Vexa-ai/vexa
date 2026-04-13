@@ -399,7 +399,8 @@
       "proves": "env-example uses IMAGE_TAG=latest — main branch always deploys stable released images",
       "symptom": "Merging dev overwrites IMAGE_TAG to dev — new users pull untested dev images instead of latest",
       "file": "deploy/env-example",
-      "must_match": "IMAGE_TAG=latest"
+      "must_match": "IMAGE_TAG=latest",
+      "only_branches": ["main"]
     },
     {
       "id": "LITE_RECORDING_ENABLED",
