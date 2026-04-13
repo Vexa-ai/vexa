@@ -99,6 +99,17 @@ def http_check(url, expect_code=200, headers=None):
 
 def check_static(lock):
     """Grep source file for must_match / must_not_match, or run special static checks."""
+    # Branch filter: skip checks that only apply to specific branches
+    only_branches = lock.get("only_branches")
+    if only_branches:
+        try:
+            branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                                    capture_output=True, text=True, cwd=ROOT).stdout.strip()
+            if branch not in only_branches:
+                return True, f"skipped on {branch}"
+        except Exception:
+            pass
+
     # Special: helm chart validation (no file to grep, runs CLI commands)
     url = lock.get("url", "")
     if url in ("HELM_LINT", "HELM_TEMPLATE"):
