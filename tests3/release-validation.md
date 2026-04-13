@@ -57,49 +57,23 @@ ssh root@<VM_IP>
 cd /root/vexa && make -C tests3 meeting-tts
 ```
 
-### 4. Validate + destroy VMs
+### 4. Ship
 
 ```bash
-make release-validate
+make release-ship
 ```
 
-Pushes a `release/vm-validated` commit status to GitHub on the current HEAD and destroys both VMs. This status is required by branch protection to merge to main.
+One command that does everything after human validation:
+1. Pushes `release/vm-validated` commit status to GitHub
+2. Destroys VMs
+3. Creates PR dev → main (or merges existing one)
+4. Fixes env-example on main (IMAGE_TAG=latest)
+5. Promotes all images to `:latest` (same SHA as build tag)
 
-### 5. Open PR dev → main
-
-```bash
-gh pr create --base main --head dev --title "Release $(cat VERSION)-$(cat deploy/compose/.last-tag)"
-```
-
-The PR requires the `release/vm-validated` status check to pass. If you push new commits, the status resets — must re-validate.
-
-### 6. Merge + fix env-example + promote
-
-After PR is merged:
+### 5. Verify
 
 ```bash
-git checkout main && git pull
-
-# Fix env-example (merge overwrites IMAGE_TAG to dev)
-sed -i 's/IMAGE_TAG=dev/IMAGE_TAG=latest/' deploy/env-example
-sed -i 's/BROWSER_IMAGE=vexaai\/vexa-bot:dev/BROWSER_IMAGE=vexaai\/vexa-bot:latest/' deploy/env-example
-git add deploy/env-example && git commit -m "fix: restore IMAGE_TAG=latest on main after dev merge"
-git push origin main
-
-# Promote to :latest (identical SHA as build tag)
-make release-promote
-```
-
-### 7. Verify tag propagation
-
-```bash
-make -C tests3 locks   # ENV_EXAMPLE_LATEST_ON_MAIN must pass
-```
-
-All tags (build, dev, latest) should have identical SHA:
-```bash
-docker buildx imagetools inspect vexaai/vexa-lite:latest 2>&1 | grep '^Digest:'
-docker buildx imagetools inspect vexaai/vexa-lite:0.10.0-YYMMDD-HHMM 2>&1 | grep '^Digest:'
+make -C tests3 locks   # all 24 checks must pass on main
 ```
 
 ## GitHub gate

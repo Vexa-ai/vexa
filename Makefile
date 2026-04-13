@@ -1,7 +1,7 @@
 .PHONY: all lite build up down lite-down docs docs-dev smoke test what-changed full \
        collect score \
        vm-compose vm-lite vm-destroy vm-ssh \
-       release-build release-test release-validate release-promote \
+       release-build release-test release-validate release-ship release-promote \
        help
 
 # ═══ Deploy ═════════════════════════════════════════════════════
@@ -101,7 +101,42 @@ release-validate:                  ## push GitHub status + destroy VMs
 	@$(MAKE) --no-print-directory -C tests3 vm-destroy STATE=$(CURDIR)/tests3/.state-lite 2>/dev/null || true
 	@$(MAKE) --no-print-directory -C tests3 vm-destroy STATE=$(CURDIR)/tests3/.state-compose 2>/dev/null || true
 
-release-promote:                   ## promote :dev → :latest on DockerHub
+release-ship:                      ## validate + PR + merge + fix env + promote (after human validation)
+	@echo "  ── Step 1: Push validation status + destroy VMs ──"
+	@$(MAKE) --no-print-directory release-validate
+	@echo ""
+	@echo "  ── Step 2: Create + merge PR ──"
+	@TAG=$$(cat deploy/compose/.last-tag); \
+	EXISTING=$$(gh pr list --head dev --base main --json number --jq '.[0].number' 2>/dev/null); \
+	if [ -n "$$EXISTING" ]; then \
+		echo "  PR #$$EXISTING already exists, merging..."; \
+		gh pr merge $$EXISTING --merge; \
+	else \
+		gh pr create --base main --head dev \
+			--title "Release $$TAG" \
+			--body "Validated release $$TAG" && \
+		EXISTING=$$(gh pr list --head dev --base main --json number --jq '.[0].number'); \
+		gh pr merge $$EXISTING --merge; \
+	fi
+	@echo ""
+	@echo "  ── Step 3: Fix env-example on main ──"
+	@git checkout main && git pull && \
+	sed -i 's|^IMAGE_TAG=dev|IMAGE_TAG=latest|' deploy/env-example && \
+	sed -i 's|^BROWSER_IMAGE=vexaai/vexa-bot:dev|BROWSER_IMAGE=vexaai/vexa-bot:latest|' deploy/env-example && \
+	git add deploy/env-example && \
+	git commit -m "fix: restore IMAGE_TAG=latest on main after dev merge" && \
+	git push origin main
+	@echo ""
+	@echo "  ── Step 4: Promote :latest ──"
+	@$(MAKE) --no-print-directory -C deploy/compose promote-latest
+	@echo ""
+	@TAG=$$(cat deploy/compose/.last-tag); \
+	echo "  ══════════════════════════════════════════"; \
+	echo "  Release $$TAG shipped."; \
+	echo "  :latest = :dev = $$TAG (same SHA)"; \
+	echo "  ══════════════════════════════════════════"
+
+release-promote:                   ## promote :dev → :latest on DockerHub (standalone)
 	@$(MAKE) --no-print-directory -C deploy/compose promote-latest
 
 # ═══ Util ════════════════════════════════════════════════════════
