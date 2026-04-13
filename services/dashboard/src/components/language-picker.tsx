@@ -19,13 +19,14 @@ import {
   getLanguageDisplayName,
 } from "@/lib/languages";
 
+// --- Single-select (original API) ---
+
 export interface LanguagePickerProps {
   value: string;
   onValueChange: (value: string) => void;
   disabled?: boolean;
   triggerClassName?: string;
   placeholder?: string;
-  /** Compact trigger (e.g. for mobile header) */
   compact?: boolean;
 }
 
@@ -104,7 +105,6 @@ export function LanguagePicker({
         </div>
         <ScrollArea className="h-[280px]">
           <div className="p-1">
-            {/* Auto-detect always first */}
             <button
               type="button"
               onClick={() => handleSelect("auto")}
@@ -118,13 +118,9 @@ export function LanguagePicker({
               </span>
               Auto-detect
             </button>
-
-            {/* Recent (only if not searching and we have recent) */}
             {!searchLower && recentCodes.length > 0 && (
               <>
-                <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-                  Recent
-                </div>
+                <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Recent</div>
                 {recentCodes.map((code) => (
                   <button
                     key={code}
@@ -141,17 +137,11 @@ export function LanguagePicker({
                     {WHISPER_LANGUAGE_NAMES[code]} ({code})
                   </button>
                 ))}
-                <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-                  All languages
-                </div>
+                <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">All languages</div>
               </>
             )}
-
-            {/* All / filtered list */}
             {filteredCodes.length === 0 ? (
-              <p className="py-6 text-center text-sm text-muted-foreground">
-                No language found.
-              </p>
+              <p className="py-6 text-center text-sm text-muted-foreground">No language found.</p>
             ) : (
               filteredCodes.map((code) => (
                 <button

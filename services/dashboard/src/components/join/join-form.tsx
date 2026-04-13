@@ -35,7 +35,12 @@ export function JoinForm({ onSuccess }: JoinFormProps) {
   const [platform, setPlatform] = useState<Platform>("google_meet");
   const [meetingId, setMeetingId] = useState("");
   const [passcode, setPasscode] = useState("");
-  const [botName, setBotName] = useState("");
+  const [botName, setBotName] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("vexa-join-bot-name") || "Vexa";
+    }
+    return "Vexa";
+  });
   const [language, setLanguage] = useState("auto");
   const [transcribeEnabled, setTranscribeEnabled] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
@@ -99,7 +104,12 @@ export function JoinForm({ onSuccess }: JoinFormProps) {
     }
 
     // Set bot name - use custom name or configured default
-    request.bot_name = botName.trim() || config?.defaultBotName || "Vexa - Open Source Bot";
+    request.bot_name = botName.trim() || config?.defaultBotName || "Vexa";
+
+    // Persist to localStorage
+    if (typeof window !== "undefined") {
+      localStorage.setItem("vexa-join-bot-name", request.bot_name);
+    }
 
     if (language && language !== "auto") {
       request.language = language;
@@ -421,27 +431,23 @@ export function JoinForm({ onSuccess }: JoinFormProps) {
             )}
           </div>
 
-          {/* Authenticated Toggle */}
+          {/* Authenticated Toggle — coming soon */}
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label htmlFor="authenticated" className="flex items-center gap-2 cursor-pointer">
+            <div className="flex items-center justify-between opacity-50">
+              <Label htmlFor="authenticated" className="flex items-center gap-2 cursor-not-allowed">
                 <UserCheck className="h-3.5 w-3.5" />
                 Authenticated
+                <span className="text-[10px] font-medium bg-muted px-1.5 py-0.5 rounded">Soon</span>
               </Label>
               <Switch
                 id="authenticated"
-                checked={authenticated}
-                onCheckedChange={setAuthenticated}
+                checked={false}
+                disabled
               />
             </div>
-            {authenticated && (
-              <p className="text-xs text-muted-foreground">
-                Bot will join using your stored browser credentials instead of as a guest.
-              </p>
-            )}
           </div>
 
-          {/* Language - backend detects if not set; user can change from meeting page */}
+          {/* Language */}
           {transcribeEnabled && (
           <div className="space-y-2">
             <Label htmlFor="language">Transcription Language</Label>
@@ -452,7 +458,7 @@ export function JoinForm({ onSuccess }: JoinFormProps) {
             />
             {language === "auto" && (
               <p className="text-xs text-muted-foreground">
-                Auto-detect: the service will detect the language when the meeting starts. You can change it anytime from the meeting page.
+                Auto-detect: the service will detect the language automatically.
               </p>
             )}
           </div>
@@ -481,7 +487,7 @@ export function JoinForm({ onSuccess }: JoinFormProps) {
                 </>
               )}
             </Button>
-            <DocsLink href="/docs/rest/bots#create-bot" />
+            {/* <DocsLink href="/docs/rest/bots#create-bot" /> */}
           </div>
 
           {/* Helpful tip */}

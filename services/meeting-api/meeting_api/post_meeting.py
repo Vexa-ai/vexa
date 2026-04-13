@@ -8,6 +8,7 @@ import logging
 import os
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import Meeting
@@ -73,6 +74,18 @@ async def fire_post_meeting_hooks(meeting: Meeting, db: AsyncSession):
     if not meeting.start_time or not meeting.end_time:
         return
 
+    # Resolve real email from users table — billing hooks need it to meter usage
+    try:
+        from admin_models.models import User
+        user = (await db.execute(select(User).where(User.id == meeting.user_id))).scalars().first()
+        if not user or not user.email:
+            logger.error(f"Cannot resolve email for user {meeting.user_id} — skipping billing hook")
+            return
+        user_email = user.email
+    except Exception as e:
+        logger.error(f"DB error resolving email for user {meeting.user_id} — skipping billing hook: {e}")
+        return
+
     duration_seconds = (meeting.end_time - meeting.start_time).total_seconds()
     meeting_data = meeting.data or {}
 
@@ -80,7 +93,7 @@ async def fire_post_meeting_hooks(meeting: Meeting, db: AsyncSession):
         "meeting": {
             "id": meeting.id,
             "user_id": meeting.user_id,
-            "user_email": f"user-{meeting.user_id}",
+            "user_email": user_email,
             "platform": meeting.platform,
             "status": meeting.status,
             "duration_seconds": duration_seconds,

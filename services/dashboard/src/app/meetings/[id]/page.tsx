@@ -366,7 +366,7 @@ export default function MeetingDetailPage() {
     try {
       await vexaAPI.updateBotConfig(currentMeeting.platform, currentMeeting.platform_specific_id, {
         language: newLanguage === "auto" ? undefined : newLanguage,
-        task: "transcribe", // Always use transcribe mode
+        task: "transcribe",
       });
       setCurrentLanguage(newLanguage);
       updateMeetingData(currentMeeting.platform, currentMeeting.platform_specific_id, {
@@ -381,6 +381,7 @@ export default function MeetingDetailPage() {
       setIsUpdatingConfig(false);
     }
   }, [currentMeeting, updateMeetingData]);
+
 
   const handleDeleteMeeting = useCallback(async () => {
     if (!currentMeeting) return;
@@ -1198,49 +1199,7 @@ export default function MeetingDetailPage() {
             </div>
           )}
 
-          {/* Agent panel toggle */}
-          {(currentMeeting.status === "active" || currentMeeting.status === "completed") && (
-            <Button
-              variant={agentPanelOpen ? "secondary" : "outline"}
-              size="sm"
-              className="gap-1.5 h-9"
-              onClick={() => {
-                setAgentPanelOpen((v) => {
-                  const next = !v;
-                  // Close conflicting panels when opening
-                  if (next) {
-                    setApiViewOpen(false);
-                  }
-                  return next;
-                });
-              }}
-            >
-              <Bot className="h-4 w-4 text-violet-500" />
-              <span className="hidden sm:inline">Agent</span>
-            </Button>
-          )}
-
-          {/* API view toggle */}
-          <Button
-            ref={apiButtonRef}
-            variant={apiViewOpen ? "secondary" : "outline"}
-            size="sm"
-            className={cn(
-              "gap-1.5 h-9 transition-all duration-300",
-              apiButtonHighlight && "ring-2 ring-gray-950 dark:ring-white ring-offset-2 ring-offset-background animate-pulse"
-            )}
-            onClick={() => {
-              setApiViewOpen((v) => {
-                const next = !v;
-                if (next) setAgentPanelOpen(false);
-                return next;
-              });
-              setApiButtonHighlight(false);
-            }}
-          >
-            <Code className="h-4 w-4 text-emerald-500" />
-            <span className="hidden sm:inline">API</span>
-          </Button>
+          {/* Agent and API buttons hidden for now */}
 
         </div>
       </div>
@@ -1870,44 +1829,7 @@ export default function MeetingDetailPage() {
                 </div>
               )}
 
-              {/* Bot Settings - Only show when active */}
-              {currentMeeting.status === "active" && (
-                <>
-                  <Separator />
-                  <div className="space-y-3">
-                    <p className="text-sm font-medium">Bot Settings</p>
-                    
-                    {/* Language Selection - shows detected language from backend first, user can change */}
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <label className="text-xs text-muted-foreground">Language</label>
-                        <DocsLink href="/docs/rest/bots#update-bot-configuration" />
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        When not set, the service detects the language automatically. You can change it below if needed.
-                      </p>
-                      <div className="flex items-center gap-2">
-                        <LanguagePicker
-                          value={currentLanguage ?? "auto"}
-                          onValueChange={handleLanguageChange}
-                          disabled={isUpdatingConfig}
-                          triggerClassName="h-9 w-full justify-between"
-                        />
-                        {isUpdatingConfig && (
-                          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                        )}
-                      </div>
-                    </div>
-
-                    {isUpdatingConfig && (
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                        <span>Updating...</span>
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
+              {/* Bot Settings - hidden for now, available via API */}
 
               {/* Languages (read-only when not active) */}
               {currentMeeting.status !== "active" &&
