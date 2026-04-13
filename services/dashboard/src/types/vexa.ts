@@ -80,14 +80,12 @@ export interface CreateBotRequest {
   meeting_url?: string;
   bot_name?: string;
   language?: string;
-  allowed_languages?: string[];
   transcribe_enabled?: boolean;
   authenticated?: boolean;
 }
 
 export interface BotConfigUpdate {
   language?: string;
-  allowed_languages?: string[];
   task?: "transcribe" | "translate";
   bot_name?: string;
 }

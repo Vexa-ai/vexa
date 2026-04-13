@@ -12,7 +12,7 @@ import { useLiveStore } from "@/stores/live-store";
 import { useRuntimeConfig } from "@/hooks/use-runtime-config";
 import type { Platform, CreateBotRequest } from "@/types/vexa";
 import { PLATFORM_CONFIG } from "@/types/vexa";
-import { MultiLanguagePicker } from "@/components/language-picker";
+import { LanguagePicker } from "@/components/language-picker";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { DocsLink } from "@/components/docs/docs-link";
@@ -41,14 +41,11 @@ export function JoinForm({ onSuccess }: JoinFormProps) {
     }
     return "Vexa";
   });
-  const [allowedLanguages, setAllowedLanguages] = useState<string[]>(() => {
+  const [language, setLanguage] = useState(() => {
     if (typeof window !== "undefined") {
-      try {
-        const stored = localStorage.getItem("vexa-join-allowed-languages");
-        if (stored) return JSON.parse(stored);
-      } catch {}
+      return localStorage.getItem("vexa-join-language") || "auto";
     }
-    return [];
+    return "auto";
   });
   const [transcribeEnabled, setTranscribeEnabled] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
@@ -117,13 +114,11 @@ export function JoinForm({ onSuccess }: JoinFormProps) {
     // Persist to localStorage
     if (typeof window !== "undefined") {
       localStorage.setItem("vexa-join-bot-name", request.bot_name);
-      localStorage.setItem("vexa-join-allowed-languages", JSON.stringify(allowedLanguages));
+      localStorage.setItem("vexa-join-language", language);
     }
 
-    if (allowedLanguages.length === 1) {
-      request.language = allowedLanguages[0];
-    } else if (allowedLanguages.length > 1) {
-      request.allowed_languages = allowedLanguages;
+    if (language && language !== "auto") {
+      request.language = language;
     }
 
     if (!transcribeEnabled) {
@@ -458,18 +453,18 @@ export function JoinForm({ onSuccess }: JoinFormProps) {
             </div>
           </div>
 
-          {/* Language - multi-select whitelist */}
+          {/* Language */}
           {transcribeEnabled && (
           <div className="space-y-2">
-            <Label htmlFor="language">Preferred Languages</Label>
-            <MultiLanguagePicker
-              value={allowedLanguages}
-              onValueChange={setAllowedLanguages}
+            <Label htmlFor="language">Transcription Language</Label>
+            <LanguagePicker
+              value={language}
+              onValueChange={setLanguage}
               triggerClassName="w-full justify-between"
             />
-            {allowedLanguages.length === 0 && (
+            {language === "auto" && (
               <p className="text-xs text-muted-foreground">
-                No preference set — language will be auto-detected.
+                Auto-detect: the service will detect the language automatically.
               </p>
             )}
           </div>

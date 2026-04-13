@@ -20,7 +20,7 @@ import { useJoinModalStore } from "@/stores/join-modal-store";
 import { useMeetingsStore } from "@/stores/meetings-store";
 import { useRuntimeConfig } from "@/hooks/use-runtime-config";
 import type { Platform, CreateBotRequest } from "@/types/vexa";
-import { MultiLanguagePicker } from "@/components/language-picker";
+import { LanguagePicker } from "@/components/language-picker";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { getUserFriendlyError } from "@/lib/error-messages";
@@ -43,14 +43,11 @@ export function JoinModal() {
   const [mode, setMode] = useState<"meeting" | "browser">("meeting");
   const [meetingInput, setMeetingInput] = useState("");
   const [platform, setPlatform] = useState<Platform>("google_meet");
-  const [allowedLanguages, setAllowedLanguages] = useState<string[]>(() => {
+  const [language, setLanguage] = useState(() => {
     if (typeof window !== "undefined") {
-      try {
-        const stored = localStorage.getItem("vexa-join-allowed-languages");
-        if (stored) return JSON.parse(stored);
-      } catch {}
+      return localStorage.getItem("vexa-join-language") || "auto";
     }
-    return [];
+    return "auto";
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [transcribeEnabled, setTranscribeEnabled] = useState(true);
@@ -63,7 +60,7 @@ export function JoinModal() {
   const [passcode, setPasscode] = useState("");
   const [authenticated, setAuthenticated] = useState(false);
 
-  // Persist bot name and allowed languages to localStorage
+  // Persist bot name and language to localStorage
   useEffect(() => {
     if (typeof window !== "undefined") {
       localStorage.setItem("vexa-join-bot-name", botName);
@@ -71,9 +68,9 @@ export function JoinModal() {
   }, [botName]);
   useEffect(() => {
     if (typeof window !== "undefined") {
-      localStorage.setItem("vexa-join-allowed-languages", JSON.stringify(allowedLanguages));
+      localStorage.setItem("vexa-join-language", language);
     }
-  }, [allowedLanguages]);
+  }, [language]);
 
   // Reset form when modal closes (preserve bot name and languages)
   useEffect(() => {
@@ -140,11 +137,8 @@ export function JoinModal() {
 
     request.bot_name = botName.trim() || config?.defaultBotName || "Vexa";
 
-    // Language: allowed_languages list, or single language for backward compat
-    if (allowedLanguages.length === 1) {
-      request.language = allowedLanguages[0];
-    } else if (allowedLanguages.length > 1) {
-      request.allowed_languages = allowedLanguages;
+    if (language && language !== "auto") {
+      request.language = language;
     }
 
     if (!transcribeEnabled) {
@@ -209,7 +203,7 @@ export function JoinModal() {
     } finally {
       setIsSubmitting(false);
     }
-  }, [parsedInput, passcode, botName, allowedLanguages, transcribeEnabled, authenticated, config, setActiveMeeting, setCurrentMeeting, closeModal, router, user]);
+  }, [parsedInput, passcode, botName, language, transcribeEnabled, authenticated, config, setActiveMeeting, setCurrentMeeting, closeModal, router, user]);
 
   const handleBrowserSession = useCallback(async () => {
     setIsSubmitting(true);
@@ -451,16 +445,16 @@ export function JoinModal() {
             <div className="space-y-2">
               <Label htmlFor="language" className="text-sm flex items-center gap-2">
                 <Globe className="h-3.5 w-3.5" />
-                Preferred Languages
+                Transcription Language
               </Label>
-              <MultiLanguagePicker
-                value={allowedLanguages}
-                onValueChange={setAllowedLanguages}
+              <LanguagePicker
+                value={language}
+                onValueChange={setLanguage}
                 triggerClassName="h-10 w-full justify-between"
               />
-              {allowedLanguages.length === 0 && (
+              {language === "auto" && (
                 <p className="text-xs text-muted-foreground">
-                  No preference set — language will be auto-detected.
+                  Auto-detect: the service will detect the language automatically.
                 </p>
               )}
             </div>

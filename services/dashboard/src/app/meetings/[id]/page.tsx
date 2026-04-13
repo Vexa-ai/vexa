@@ -55,13 +55,13 @@ import { useMeetingsStore } from "@/stores/meetings-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { useLiveTranscripts } from "@/hooks/use-live-transcripts";
 import { PLATFORM_CONFIG, getDetailedStatus } from "@/types/vexa";
-import type { MeetingStatus, Meeting, BotConfigUpdate } from "@/types/vexa";
+import type { MeetingStatus, Meeting } from "@/types/vexa";
 import { StatusHistory } from "@/components/meetings/status-history";
 import { cn } from "@/lib/utils";
 import { vexaAPI } from "@/lib/api";
 import { withBasePath } from "@/lib/base-path";
 import { toast } from "sonner";
-import { LanguagePicker, MultiLanguagePicker } from "@/components/language-picker";
+import { LanguagePicker } from "@/components/language-picker";
 import { WHISPER_LANGUAGE_CODES, getLanguageDisplayName } from "@/lib/languages";
 import {
   AlertDialog,
@@ -169,9 +169,6 @@ export default function MeetingDetailPage() {
   // Bot config state
   const [currentLanguage, setCurrentLanguage] = useState<string | undefined>(
     currentMeeting?.data?.languages?.[0] || "auto"
-  );
-  const [allowedLanguages, setAllowedLanguages] = useState<string[]>(
-    currentMeeting?.data?.languages?.filter((l: string) => l !== "auto") || []
   );
   const [isUpdatingConfig, setIsUpdatingConfig] = useState(false);
 
@@ -385,32 +382,6 @@ export default function MeetingDetailPage() {
     }
   }, [currentMeeting, updateMeetingData]);
 
-  const handleAllowedLanguagesChange = useCallback(async (newLanguages: string[]) => {
-    if (!currentMeeting) return;
-    setAllowedLanguages(newLanguages);
-    setIsUpdatingConfig(true);
-    try {
-      const config: BotConfigUpdate = { task: "transcribe" };
-      if (newLanguages.length === 1) {
-        config.language = newLanguages[0];
-      } else if (newLanguages.length > 1) {
-        config.allowed_languages = newLanguages;
-        config.language = undefined;
-      } else {
-        config.language = undefined;
-        config.allowed_languages = [];
-      }
-      await vexaAPI.updateBotConfig(currentMeeting.platform, currentMeeting.platform_specific_id, config);
-      setCurrentLanguage(newLanguages.length === 1 ? newLanguages[0] : "auto");
-      toast.success(newLanguages.length === 0 ? "Auto-detect enabled" : "Languages updated");
-    } catch (error) {
-      toast.error("Failed to update languages", {
-        description: (error as Error).message,
-      });
-    } finally {
-      setIsUpdatingConfig(false);
-    }
-  }, [currentMeeting]);
 
   const handleDeleteMeeting = useCallback(async () => {
     if (!currentMeeting) return;

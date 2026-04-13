@@ -1236,14 +1236,12 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
       if (!transcriptionClient) return;
 
       // Language strategy:
-      // - If user explicitly set a single language → force it to Whisper
-      // - If preferredLanguages has exactly 1 entry → force that language
-      // - If preferredLanguages has 2+ entries → auto-detect (Whisper only accepts one
-      //   language; forcing one would produce garbage when the other is spoken)
+      // - If user explicitly set a language → always use it (respect the choice)
+      // - If allowedLanguages has exactly 1 entry → force that language (more accurate than auto-detect)
       // - Otherwise → auto-detect (null)
       const explicitLang = currentLanguage && currentLanguage !== 'auto' ? currentLanguage : null;
-      const singlePreferred = !explicitLang && allowedLanguages?.length === 1 ? allowedLanguages[0] : null;
-      const lang = explicitLang || singlePreferred || null;
+      const singleAllowed = !explicitLang && allowedLanguages?.length === 1 ? allowedLanguages[0] : null;
+      const lang = explicitLang || singleAllowed || null;
 
       const whisperStartMs = Date.now();
       try {

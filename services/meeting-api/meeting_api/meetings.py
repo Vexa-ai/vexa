@@ -929,7 +929,6 @@ async def request_bot(
         "nativeMeetingId": native_meeting_id,
         "connectionId": connection_id,
         "language": req.language,
-        "allowedLanguages": req.allowed_languages,
         "task": req.task,
         "transcriptionTier": req.transcription_tier or "realtime",
         "redisUrl": REDIS_URL,
