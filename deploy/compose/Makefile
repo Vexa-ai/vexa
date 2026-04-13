@@ -13,7 +13,6 @@ LAST_TAG_FILE := $(ROOT)/deploy/compose/.last-tag
 # IMAGE_TAG: what `make up` runs. Comes from .env (default: dev) or .last-tag after build.
 VERSION := $(shell cat $(ROOT)/VERSION 2>/dev/null || echo "0.0.0")
 BUILD_TAG := $(VERSION)-$(shell date +%y%m%d-%H%M)
-export IMAGE_TAG
 
 # DockerHub namespace
 DOCKERHUB_USER ?= vexaai
