@@ -1,4 +1,4 @@
-.PHONY: all lite build up down lite-down docs smoke test what-changed full \
+.PHONY: all lite build up down lite-down docs docs-dev smoke test what-changed full \
        collect score \
        vm-compose vm-lite vm-destroy vm-ssh \
        release-build release-test release-validate release-promote \
@@ -28,6 +28,9 @@ lite-down:                         ## stop lite containers
 
 docs:                              ## check docs for drift (static, 0s)
 	@$(MAKE) --no-print-directory -C tests3 docs
+
+docs-dev:                          ## start mintlify dev server on localhost:3000
+	@$(MAKE) --no-print-directory -C docs dev
 
 smoke:                             ## run all checks (~30s)
 	@$(MAKE) --no-print-directory -C tests3 smoke
