@@ -252,7 +252,7 @@ async def rate_limit_middleware(request: Request, call_next):
 # Use a single client instance for connection pooling
 @app.on_event("startup")
 async def startup_event():
-    app.state.http_client = httpx.AsyncClient()
+    app.state.http_client = httpx.AsyncClient(timeout=30.0)
     # Initialize Redis for Pub/Sub used by WS
     redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
     app.state.redis = await aioredis.from_url(redis_url, encoding="utf-8", decode_responses=True)
