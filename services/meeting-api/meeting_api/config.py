@@ -18,7 +18,7 @@ MEETING_API_URL = os.environ.get("MEETING_API_URL", "http://meeting-api:8080")
 BOT_IMAGE_NAME = os.environ.get("BOT_IMAGE_NAME", "vexaai/vexa-bot:latest")
 
 # CORS
-_cors_raw = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001").strip()
+_cors_raw = os.getenv("CORS_ORIGINS", "*").strip()
 CORS_WILDCARD = _cors_raw == "*"
 CORS_ORIGINS = ["*"] if CORS_WILDCARD else [
     origin.strip()

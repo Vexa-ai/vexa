@@ -158,7 +158,7 @@ def custom_openapi():
 app.openapi = custom_openapi
 
 # Add CORS middleware
-_cors_raw = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001").strip()
+_cors_raw = os.getenv("CORS_ORIGINS", "*").strip()
 _cors_wildcard = _cors_raw == "*"
 CORS_ORIGINS = ["*"] if _cors_wildcard else [
     origin.strip()

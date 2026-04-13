@@ -504,6 +504,8 @@ def check_contract(lock):
         return check_minio_writable()
     if method == "SEGMENT_PIPELINE":
         return check_segment_pipeline(gw, token, admin_token)
+    if method == "CORS_PREFLIGHT":
+        return check_cors_preflight(gw)
 
     url = lock["url"].replace("$GATEWAY_URL", gw).replace("$ADMIN_URL", admin).replace("$DASHBOARD_URL", dash)
     expect = lock.get("expect_code", 200)
@@ -842,6 +844,34 @@ def check_transcription_token():
         return False, f"HTTP {code}"
     except Exception as e:
         return False, str(e)
+
+
+def check_cors_preflight(gw):
+    """CORS preflight must return 200 for any origin — API is origin-agnostic."""
+    origins = [
+        "https://app.example.com",
+        "http://192.168.1.50:3000",
+        "https://customer-dashboard.io",
+    ]
+    failed = []
+    for origin in origins:
+        try:
+            r = subprocess.run(
+                ["curl", "-sf", "-o", "/dev/null", "-w", "%{http_code}",
+                 "-X", "OPTIONS", f"{gw}/bots/status",
+                 "-H", f"Origin: {origin}",
+                 "-H", "Access-Control-Request-Method: GET",
+                 "-H", "Access-Control-Request-Headers: x-api-key"],
+                capture_output=True, text=True, timeout=10,
+            )
+            code = r.stdout.strip()
+            if code != "200":
+                failed.append(f"{origin} → HTTP {code}")
+        except Exception as e:
+            failed.append(f"{origin} → {e}")
+    if failed:
+        return False, "; ".join(failed)
+    return True, ""
 
 
 def check_ws_ping(gw, token):
