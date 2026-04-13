@@ -119,7 +119,7 @@ preflight:
 	fi; \
 	HTTP=$$(curl -s -o /dev/null -w '%{http_code}' -X POST "$$TX_URL" \
 		-H "Authorization: Bearer $$TX_TOKEN" \
-		-F "file=@$(ROOT)/tests/testdata/test-speech-en.wav" \
+		-F "file=@$(ROOT)/tests3/testdata/test-speech-en.wav" \
 		-F "language=en" -F "model=large-v3-turbo" --max-time 10 2>/dev/null); \
 	if [ "$$HTTP" = "200" ]; then \
 		echo "  ✓ Transcription token valid"; \
@@ -167,10 +167,9 @@ up: check_docker preflight
 	@if [ -f $(LAST_TAG_FILE) ]; then \
 		export IMAGE_TAG=$$(cat $(LAST_TAG_FILE)); \
 		echo "Using locally-built images (IMAGE_TAG=$$IMAGE_TAG from .last-tag)"; \
-	elif [ -n "$(IMAGE_TAG)" ]; then \
-		echo "Using images (IMAGE_TAG=$(IMAGE_TAG) from .env)"; \
 	else \
-		echo "ERROR: IMAGE_TAG not set. Run 'make build' or set IMAGE_TAG in .env"; exit 1; \
+		export IMAGE_TAG=$$(grep -E '^IMAGE_TAG=' $(ENV_FILE) 2>/dev/null | cut -d= -f2 || echo "dev"); \
+		echo "Using images (IMAGE_TAG=$$IMAGE_TAG from .env)"; \
 	fi; \
 	if ! docker network ls | grep -q "vexa-network"; then \
 		docker network create vexa-network || true; \
@@ -288,7 +287,7 @@ test: check_docker
 # --- Transcription test ---
 # Sends a real audio file to the transcription service and verifies text comes back.
 # Catches: wrong URL, wrong token, service down, model mismatch.
-TEST_AUDIO := $(ROOT)/tests/testdata/test-speech-en.wav
+TEST_AUDIO := $(ROOT)/tests3/testdata/test-speech-en.wav
 
 test-transcription:
 	@TX_URL=$$(grep -E '^TRANSCRIPTION_SERVICE_URL=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
@@ -416,4 +415,4 @@ restore-db: check_docker
 	@if [ -z "$(DUMP)" ]; then \
 		echo "Usage: make restore-db DUMP=<path-to-dump.sql>"; exit 1; \
 	fi
-	$(ROOT)/tests/scripts/restore-prod-dump.sh "$(DUMP)"
+	$(ROOT)/deploy/compose/scripts/restore-prod-dump.sh "$(DUMP)"
