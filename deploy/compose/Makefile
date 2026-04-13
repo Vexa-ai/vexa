@@ -86,6 +86,14 @@ env:
 			echo "Auto-detected DOCKER_GID=$$GID (written to .env)"; \
 		fi; \
 	fi
+	@BRANCH=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main"); \
+	if [ "$$BRANCH" = "main" ]; then TAG=latest; else TAG=dev; fi; \
+	CURRENT=$$(grep -E '^IMAGE_TAG=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
+	if [ "$$CURRENT" != "$$TAG" ]; then \
+		sed -i "s|^IMAGE_TAG=.*|IMAGE_TAG=$$TAG|" $(ENV_FILE); \
+		sed -i "s|^BROWSER_IMAGE=.*|BROWSER_IMAGE=vexaai/vexa-bot:$$TAG|" $(ENV_FILE); \
+		echo "Auto-set IMAGE_TAG=$$TAG (branch=$$BRANCH)"; \
+	fi
 
 # --- Preflight — validate credentials before starting anything ---
 preflight:
