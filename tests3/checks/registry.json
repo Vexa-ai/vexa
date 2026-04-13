@@ -384,6 +384,15 @@
       "must_match": "BROWSER_IMAGE="
     },
     {
+      "id": "NO_IMAGETOOLS_CREATE",
+      "tier": "static",
+      "found": "2026-04-13",
+      "proves": "publish/promote uses docker tag+push, not imagetools create (same SHA across tags)",
+      "symptom": "imagetools create wraps image in manifest list — latest/dev get different SHA than build tag, breaking traceability",
+      "file": "deploy/compose/Makefile",
+      "must_not_match": "^[^#]*imagetools create"
+    },
+    {
       "id": "ENV_EXAMPLE_LATEST_ON_MAIN",
       "tier": "static",
       "found": "2026-04-13",
