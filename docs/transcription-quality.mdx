@@ -1,0 +1,106 @@
+---
+title: "Transcription Quality"
+description: "Transcription engines, language support, and hallucination filtering"
+---
+
+Vexa uses OpenAI's Whisper model family for speech-to-text. This page covers engine selection, language support, quality tuning, and known issues.
+
+## Transcription Engines
+
+| Engine | Config value | GPU required | Best for |
+|--------|-------------|-------------|----------|
+| **Vexa remote** (default) | `WHISPER_BACKEND=remote` | No | Production — uses Vexa's hosted transcription service |
+| **faster-whisper** | `WHISPER_BACKEND=faster_whisper` | Recommended | Self-hosted with GPU — runs locally via CTranslate2 |
+
+### Vexa remote transcription
+
+The default and recommended option. Audio is sent to Vexa's transcription service, which runs optimized Whisper inference. No GPU needed on your side.
+
+```bash
+TRANSCRIPTION_SERVICE_URL="https://transcription.vexa.ai/v1/audio/transcriptions"
+TRANSCRIPTION_SERVICE_TOKEN="your-api-key"
+```
+
+Get a transcription API key at [vexa.ai/dashboard/api-keys](https://vexa.ai/dashboard/api-keys).
+
+### Self-hosted faster-whisper
+
+For full data sovereignty, run `services/transcription-service/` on your own GPU:
+
+| Model | VRAM (INT8) | Quality | Speed |
+|-------|------------|---------|-------|
+| `large-v3-turbo` (default) | ~2.1 GB | Excellent | Very fast |
+| `medium` | ~1.5 GB | Good | Fast |
+| `small` | ~0.5 GB | Moderate | Very fast |
+| `base` | ~150 MB | Basic | Instant |
+| `tiny` | ~75 MB | Low | Instant |
+
+Configure via environment variables:
+
+```bash
+WHISPER_MODEL_SIZE=large-v3-turbo  # Model selection
+WHISPER_COMPUTE_TYPE=int8          # int8 (default), float16, float32
+WHISPER_DEVICE=cuda                # cuda or cpu
+```
+
+A single GPU handles approximately **2 concurrent meetings** with `large-v3-turbo`. Beyond that, requests queue and latency increases.
+
+## Language Support
+
+Whisper models are multilingual and support **99+ languages** automatically. Language detection happens per audio segment — no configuration needed for most use cases.
+
+### Hallucination filtering by language
+
+Vexa includes phrase-based hallucination filtering for these languages:
+
+| Language | Phrases | File |
+|----------|---------|------|
+| English | 135 | `hallucinations/en.txt` |
+| Spanish | 26 | `hallucinations/es.txt` |
+| Portuguese | 13 | `hallucinations/pt.txt` |
+| Russian | 13 | `hallucinations/ru.txt` |
+
+Other languages are transcribed correctly but lack dedicated hallucination filtering. Community contributions for additional language lists are welcome — see the collection script at `services/WhisperLive/hallucinations/collect_hallucinations.py`.
+
+## Hallucination Filtering
+
+Whisper can produce phantom text during silence or low-level noise. Vexa filters these at three points in the pipeline:
+
+### 1. Phrase database
+
+Known hallucination phrases (e.g., "Thank you for watching", "Abonnez-vous") are matched and removed. Matching is case-insensitive with punctuation normalization.
+
+### 2. Repetition detection
+
+If the same 3-6 word phrase repeats 3+ times in a row, the segment is filtered as a hallucination loop.
+
+### 3. Single-word heuristic
+
+Single words under 10 characters that appear as standalone segments are filtered (commonly produced during silence).
+
+## Known Issues
+
+### Silence hallucinations
+
+During extended silence, Whisper may generate repetitive or nonsensical text. The hallucination filter catches most of these, but some may slip through. If you notice recurring phantom phrases in a specific language, report them so they can be added to the filter list.
+
+### Timestamp shifting
+
+When silence is removed from recordings, transcript timestamps can appear shifted. Timestamps are relative to the **start of audio capture**, not wall-clock time. During silence gaps, timestamps may not advance linearly.
+
+### Dashboard transcript merging
+
+The dashboard UI may merge transcript segments from adjacent time ranges when there are silence gaps between them. This is a display issue, not a data issue — the underlying segments retain correct timestamps.
+
+## Tuning (Advanced)
+
+The transcription pipeline has configurable voice activity detection (VAD) parameters:
+
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `minSilenceDurationMs` | 160ms | Minimum silence to split segments. Increase for fewer, longer segments. |
+| `maxSpeechDurationSec` | 15s | Maximum segment length before forced boundary. |
+| `minAudioDuration` | 2s | Minimum audio before submitting to Whisper. |
+| `idleTimeoutSec` | 15s | Seconds of silence before final submission and buffer reset. |
+
+These are configurable in the bot's transcription client. For most use cases, defaults work well.

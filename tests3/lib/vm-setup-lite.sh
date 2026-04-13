@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Deploy lite on a freshly provisioned VM.
+# Uses the same `make lite` path that a new user would follow.
 # Reads: .state/vm_ip, .state/vm_branch
 # Reads local: .env (for TRANSCRIPTION_SERVICE_URL + TOKEN)
 set -euo pipefail
@@ -37,51 +38,49 @@ info "cloning repo (branch=$BRANCH)..."
 vm_ssh "git clone --branch $BRANCH $REPO_URL /root/vexa" 2>&1 | tail -1
 pass "repo cloned at /root/vexa"
 
-# ── 4. Start postgres (lite needs external pg) ───
-info "starting postgres..."
-vm_ssh "docker run -d --name pg --network host \
-    -e POSTGRES_DB=vexa \
-    -e POSTGRES_USER=postgres \
-    -e POSTGRES_PASSWORD=postgres \
-    postgres:17-alpine" 2>&1 | tail -1
+# ── 4. Configure .env ────────────────────────────
+info "configuring .env..."
+vm_ssh "cd /root/vexa/deploy/lite && make env" 2>&1 | tail -1
 
-# Wait for postgres ready
-for i in $(seq 1 12); do
-    if vm_ssh "docker exec pg pg_isready -U postgres -d vexa -q" 2>/dev/null; then
-        break
-    fi
-    sleep 5
-done
-pass "postgres ready"
+# Inject transcription creds
+vm_ssh "cd /root/vexa && \
+    sed -i 's|^#*TRANSCRIPTION_SERVICE_URL=.*|TRANSCRIPTION_SERVICE_URL=$TX_URL|' .env && \
+    sed -i 's|^#*TRANSCRIPTION_SERVICE_TOKEN=.*|TRANSCRIPTION_SERVICE_TOKEN=$TX_TOKEN|' .env"
+pass ".env configured with transcription creds"
 
-# ── 5. Pull lite image ───────────────────────────
-info "pulling lite image (vexaai/vexa-lite:dev)..."
-vm_ssh "docker pull vexaai/vexa-lite:dev" 2>&1 | tail -3
-pass "lite image pulled"
-
-# ── 6. Start lite container ──────────────────────
-info "starting lite container..."
-vm_ssh "docker run -d --name vexa --shm-size=2g --network host \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    -e DATABASE_URL=postgresql://postgres:postgres@localhost:5432/vexa \
-    -e DB_PASSWORD=postgres \
-    -e DB_SSL_MODE=disable \
-    -e REDIS_URL=redis://localhost:6379/0 \
-    -e ADMIN_API_TOKEN=changeme \
-    -e TRANSCRIPTION_SERVICE_URL=$TX_URL \
-    -e TRANSCRIPTION_SERVICE_TOKEN=$TX_TOKEN \
-    vexaai/vexa-lite:dev" 2>&1 | tail -1
-
-# ── 7. Wait for services ─────────────────────────
-info "waiting for services (up to 2 min)..."
-for i in $(seq 1 24); do
-    if vm_ssh "curl -sf -o /dev/null http://localhost:8056/" 2>/dev/null; then
-        break
-    fi
-    sleep 5
-done
-
+# ── 5. Copy tests3 to VM ─────────────────────────
+info "syncing tests3 to VM..."
 VM_IP=$(state_read vm_ip)
+rsync -az --exclude='.state/' \
+    -e "ssh $SSH_OPTS" \
+    "$ROOT/tests3" "root@$VM_IP:/root/vexa/" 2>/dev/null
+pass "tests3 synced to VM"
+
+# ── 6. Deploy (same as user: make lite) ──────────
+info "running make lite (this pulls images — may take 3-5 minutes)..."
+DEPLOY_OK=false
+for attempt in 1 2 3; do
+    if vm_ssh "cd /root/vexa && make lite 2>&1 | tail -5"; then
+        DEPLOY_OK=true
+        break
+    fi
+    if [ "$attempt" -lt 3 ]; then
+        info "attempt $attempt failed (docker pull may have timed out), retrying..."
+        sleep 10
+    fi
+done
+
+if [ "$DEPLOY_OK" = true ]; then
+    pass "make lite succeeded"
+else
+    fail "make lite failed after 3 attempts"
+    info "SSH in to debug: make -C tests3 vm-ssh"
+    exit 1
+fi
+
+# ── 7. Verify ─────────────────────────────────────
+VM_IP=$(state_read vm_ip)
+info "verifying services..."
 for ep in "8056:gateway" "8057:admin-api" "3000:dashboard"; do
     PORT=${ep%%:*}
     NAME=${ep##*:}
@@ -92,19 +91,6 @@ for ep in "8056:gateway" "8057:admin-api" "3000:dashboard"; do
         fail "$NAME: HTTP $CODE"
     fi
 done
-
-# ── 8. Init DB + create user ─────────────────────
-info "initializing database..."
-vm_ssh "docker exec -e DB_PASSWORD=postgres -e DB_SSL_MODE=disable vexa python3 -c 'import asyncio; from admin_models.database import init_db; asyncio.run(init_db())'" 2>&1 | tail -1
-vm_ssh "docker exec -e DB_PASSWORD=postgres -e DB_SSL_MODE=disable vexa python3 -c 'import asyncio; from meeting_api.database import init_db; asyncio.run(init_db())'" 2>&1 | tail -1
-pass "database initialized"
-
-# ── 9. Create default user + API key ────────────
-info "creating default user..."
-vm_ssh "curl -sf -X POST http://localhost:8057/admin/users \
-    -H 'X-Admin-API-Key: changeme' -H 'Content-Type: application/json' \
-    -d '{\"email\":\"admin@vexa.ai\",\"name\":\"Admin\",\"max_concurrent_bots\":10}'" 2>&1 | tail -1
-pass "default user created"
 
 state_write vm_setup complete
 

@@ -1,0 +1,94 @@
+---
+title: "Changelog"
+description: "Version history, migration guides, and breaking changes"
+---
+
+## 0.10.0 (April 2026)
+
+Major architectural refactor. If upgrading from 0.9.x or earlier, read the migration guide below.
+
+### What's new
+
+- **Monorepo architecture** — All services now live in a single repository under `services/`
+- **Meeting API** — New dedicated service for bot lifecycle, recordings, and webhooks (replaces the bot-manager monolith)
+- **Runtime API** — Container orchestration with Docker, Kubernetes, and process backends
+- **Agent API** — AI agent chat runtime with ephemeral containers
+- **Interactive bots** — Speak (TTS), chat read/write, screen share, virtual camera via REST API
+- **Vexa Lite** — Single-container deployment with all services bundled via supervisord
+- **Recording storage** — S3, MinIO, and local storage backends for audio recordings
+- **MCP server** — 17 tools for Claude, Cursor, and Windsurf integration
+- **Dashboard** — Next.js web UI for meetings, transcripts, agent chat, and recordings
+
+### Breaking changes
+
+| Change | Before (0.9.x) | After (0.10.0) | Action required |
+|--------|----------------|-----------------|-----------------|
+| Service split | `bot-manager` monolith | `meeting-api` + `runtime-api` | Update compose/helm configs |
+| Package layout | `packages/` | `services/` | Update any custom scripts referencing package paths |
+| Auth header | `Bearer` token (some endpoints) | `X-API-Key` header everywhere | Update API clients |
+| API URL (hosted) | `gateway.dev.vexa.ai` | `api.cloud.vexa.ai` | Update integration URLs |
+| Docker images | `vexaai/vexa-bot:dev` | `vexaai/vexa-bot:latest` or immutable tag | Update image references |
+| Transcription config | `WHISPER_*` env vars in bot | `TRANSCRIPTION_SERVICE_URL` + `TRANSCRIPTION_SERVICE_TOKEN` | Set new env vars |
+
+### Migration guide (self-hosted)
+
+<Steps>
+  <Step title="Back up your database">
+    The schema migration is additive-only (new columns, never drops). Rollback is safe, but back up first.
+
+    ```bash
+    pg_dump -Fc your_vexa_db > vexa-backup-pre-0.10.sql
+    ```
+  </Step>
+  <Step title="Pull the new code">
+    ```bash
+    cd vexa
+    git fetch origin
+    git checkout main
+    git pull
+    ```
+  </Step>
+  <Step title="Update environment variables">
+    Compare your `.env` with `deploy/env-example`:
+
+    ```bash
+    diff .env deploy/env-example
+    ```
+
+    Key new variables:
+    - `TRANSCRIPTION_SERVICE_URL` (required) — transcription endpoint
+    - `TRANSCRIPTION_SERVICE_TOKEN` (required) — transcription API key
+    - `OPENAI_API_KEY` (optional) — for TTS/speaking bot feature
+    - `STORAGE_BACKEND` (optional) — `local`, `minio`, or `s3`
+  </Step>
+  <Step title="Rebuild and restart">
+    ```bash
+    make all
+    ```
+
+    This rebuilds images from the new architecture and runs migrations automatically.
+  </Step>
+  <Step title="Verify">
+    ```bash
+    # Check services are running
+    make ps
+
+    # Quick API test
+    curl http://localhost:8056/docs
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+**API URL change for hosted users:** If your integrations use `gateway.dev.vexa.ai`, update them to `api.cloud.vexa.ai`. The old URL may stop working.
+</Warning>
+
+### Vexa Lite (new deployment option)
+
+If you were running Docker Compose for a simple self-hosted setup, consider switching to [Vexa Lite](vexa-lite-deployment) — a single container that bundles all services. Much simpler to operate.
+
+---
+
+## 0.9.x and earlier
+
+See [GitHub releases](https://github.com/Vexa-ai/vexa/releases) for historical changelog.

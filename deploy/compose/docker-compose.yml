@@ -76,7 +76,7 @@ services:
     build:
       context: ../..
       dockerfile: services/admin-api/Dockerfile
-    image: vexaai/admin-api:${IMAGE_TAG:-dev}
+    image: vexaai/admin-api:${IMAGE_TAG}
     ports:
       - "${ADMIN_API_PORT:-8057}:8001"
     environment:
@@ -107,15 +107,15 @@ services:
     build:
       context: ../../services/runtime-api
       dockerfile: Dockerfile
-    image: vexaai/runtime-api:${IMAGE_TAG:-dev}
+    image: vexaai/runtime-api:${IMAGE_TAG}
     group_add:
       - "${DOCKER_GID:-998}"
     ports:
       - "${RUNTIME_API_PORT:-8090}:8090"
     environment:
       - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa
-      - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/vexa-agent:dev}
-      - BROWSER_IMAGE=${BROWSER_IMAGE:-vexaai/vexa-bot:dev}
+      - AGENT_IMAGE=${AGENT_IMAGE}
+      - BROWSER_IMAGE=${BROWSER_IMAGE}
       - REDIS_URL=redis://redis:6379
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
@@ -150,12 +150,12 @@ services:
   #   build:
   #     context: ../..
   #     dockerfile: services/agent-api/Dockerfile
-  #   image: vexaai/agent-api:${IMAGE_TAG:-dev}
+  #   image: vexaai/agent-api:${IMAGE_TAG}
   #   ports:
   #     - "${AGENT_API_PORT:-8100}:8100"
   #   environment:
   #     - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa
-  #     - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/vexa-agent:${IMAGE_TAG:-dev}}
+  #     - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/vexa-agent:${IMAGE_TAG}}
   #     - STORAGE_BACKEND=s3
   #     - S3_ENDPOINT=http://minio:9000
   #     - S3_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
@@ -190,7 +190,7 @@ services:
     build:
       context: ../..
       dockerfile: services/api-gateway/Dockerfile
-    image: vexaai/api-gateway:${IMAGE_TAG:-dev}
+    image: vexaai/api-gateway:${IMAGE_TAG}
     mem_limit: 1g
     ports:
       - "${API_GATEWAY_HOST_PORT:-8056}:8000"
@@ -228,7 +228,7 @@ services:
     build:
       context: ../..
       dockerfile: services/meeting-api/Dockerfile
-    image: vexaai/meeting-api:${IMAGE_TAG:-dev}
+    image: vexaai/meeting-api:${IMAGE_TAG}
     mem_limit: 1g
     expose:
       - "8080"
@@ -246,7 +246,7 @@ services:
       - RUNTIME_API_URL=http://runtime-api:8090
       - RUNTIME_API_TOKEN=${BOT_API_TOKEN:-}
       - MEETING_API_URL=http://meeting-api:8080
-      - BOT_IMAGE_NAME=${BROWSER_IMAGE:-vexaai/vexa-bot:dev}
+      - BOT_IMAGE_NAME=${BROWSER_IMAGE}
       - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa
       - TTS_SERVICE_URL=http://tts-service:8002
       - POST_MEETING_HOOKS=${POST_MEETING_HOOKS:-http://agent-api:8100/internal/webhooks/meeting-completed}
@@ -282,7 +282,7 @@ services:
   #   build:
   #     context: ../..
   #     dockerfile: services/telegram-bot/Dockerfile
-  #   image: vexaai/telegram-bot:${IMAGE_TAG:-dev}
+  #   image: vexaai/telegram-bot:${IMAGE_TAG}
   #   expose:
   #     - "8200"
   #   environment:
@@ -302,7 +302,7 @@ services:
     build:
       context: ../..
       dockerfile: services/mcp/Dockerfile
-    image: vexaai/mcp:${IMAGE_TAG:-dev}
+    image: vexaai/mcp:${IMAGE_TAG}
     mem_limit: 512m
     ports:
       - "${MCP_HOST_PORT:-18888}:18888"
@@ -320,7 +320,7 @@ services:
     build:
       context: ../..
       dockerfile: services/dashboard/Dockerfile
-    image: vexaai/dashboard:${IMAGE_TAG:-dev}
+    image: vexaai/dashboard:${IMAGE_TAG}
     mem_limit: 1g
     ports:
       - "${DASHBOARD_HOST_PORT:-3001}:3000"
@@ -344,7 +344,7 @@ services:
     build:
       context: ../..
       dockerfile: services/tts-service/Dockerfile
-    image: vexaai/tts-service:${IMAGE_TAG:-dev}
+    image: vexaai/tts-service:${IMAGE_TAG}
     mem_limit: 1g
     expose:
       - "8002"
@@ -363,7 +363,7 @@ services:
   #   build:
   #     context: ../..
   #     dockerfile: services/calendar-service/Dockerfile
-  #   image: vexaai/calendar-service:${IMAGE_TAG:-dev}
+  #   image: vexaai/calendar-service:${IMAGE_TAG}
   #   ports:
   #     - "${CALENDAR_SERVICE_PORT:-8050}:8050"
   #   environment:

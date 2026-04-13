@@ -1,0 +1,135 @@
+---
+title: "n8n Integration"
+description: "Automate meeting transcription workflows with n8n and Vexa"
+---
+
+Connect Vexa to [n8n](https://n8n.io) to automatically send bots to meetings, retrieve transcripts, and pipe them into your workflow (Slack, email, CRM, LLM summarization, etc.).
+
+<Warning>
+**API URL has changed.** If you imported an n8n workflow that uses `gateway.dev.vexa.ai`, replace it with `api.cloud.vexa.ai`. The old URL returns errors.
+</Warning>
+
+## Prerequisites
+
+- A Vexa API key — get one from [vexa.ai/dashboard/api-keys](https://vexa.ai/dashboard/api-keys) (hosted) or mint one via [Admin API](self-hosted-management) (self-hosted)
+- An n8n instance (cloud or self-hosted)
+
+## API Base URL
+
+| Deployment | URL |
+|-----------|-----|
+| **Hosted (Vexa Cloud)** | `https://api.cloud.vexa.ai` |
+| **Self-hosted** | `http://your-server:8056` |
+
+<Note>
+Published n8n workflow templates on n8n.io may use the old URL `gateway.dev.vexa.ai`. Always replace it with the correct URL above.
+</Note>
+
+## Basic Workflow: Calendar to Transcript to Summary
+
+This workflow triggers on a Google Calendar event, sends a bot, waits for the meeting to end, fetches the transcript, and sends a summary.
+
+### Step 1: Google Calendar Trigger
+
+Add a **Google Calendar Trigger** node:
+- **Trigger on:** Event Started
+- **Calendar:** Select your calendar
+
+<Info>
+The Google Calendar Trigger returns the *earliest matching event*, not the most recent. If you tag events (e.g., adding "WB" to the title), ensure only one event matches the filter at a time. Alternatively, use a **Schedule Trigger** that polls for upcoming events.
+</Info>
+
+### Step 2: Extract Meeting URL
+
+Add a **Code** node to extract the Google Meet link:
+
+```javascript
+const event = $input.first().json;
+const meetLink = event.hangoutLink || '';
+const meetingId = meetLink.match(/meet\.google\.com\/([a-z]{3}-[a-z]{4}-[a-z]{3})/)?.[1] || '';
+
+return [{ json: { meetingId, meetLink, eventName: event.summary } }];
+```
+
+### Step 3: Send Bot to Meeting
+
+Add an **HTTP Request** node:
+
+- **Method:** POST
+- **URL:** `https://api.cloud.vexa.ai/bots`
+- **Authentication:** Header Auth
+  - **Name:** `X-API-Key`
+  - **Value:** `{{ $credentials.vexaApiKey }}` (or paste your key directly)
+- **Body (JSON):**
+
+```json
+{
+  "platform": "google_meet",
+  "native_meeting_id": "{{ $json.meetingId }}",
+  "recording_enabled": true,
+  "transcribe_enabled": true,
+  "transcription_tier": "realtime"
+}
+```
+
+### Step 4: Wait for Meeting to End
+
+Add a **Wait** node:
+- **Resume:** On Webhook
+- Configure a [Vexa webhook](webhooks) to call this n8n webhook URL when the meeting completes
+
+**Or** use a simpler polling approach:
+
+Add a **Wait** node (fixed delay, e.g., 60 minutes), then check bot status:
+
+```
+GET https://api.cloud.vexa.ai/bots/google_meet/{{ $json.meetingId }}
+```
+
+### Step 5: Fetch Transcript
+
+Add an **HTTP Request** node:
+
+- **Method:** GET
+- **URL:** `https://api.cloud.vexa.ai/transcripts/google_meet/{{ $json.meetingId }}`
+- **Headers:** `X-API-Key: your-api-key`
+
+### Step 6: Summarize with LLM (optional)
+
+Add an **AI Agent** or **HTTP Request** node to send the transcript to your preferred LLM for summarization, then pipe the result to Slack, email, or your CRM.
+
+## Credentials Setup in n8n
+
+Create a **Header Auth** credential in n8n:
+
+| Field | Value |
+|-------|-------|
+| **Name** | `X-API-Key` |
+| **Value** | Your Vexa API key |
+
+Use this credential on all Vexa HTTP Request nodes.
+
+## Common Issues
+
+### "Forbidden - perhaps check your credentials?"
+
+- Verify you're using `api.cloud.vexa.ai` (not `gateway.dev.vexa.ai`)
+- Check your API key is active — new keys work immediately, but free-tier keys expire after 1 hour
+- Generate a fresh API key if in doubt
+
+### Google Calendar returns the wrong event
+
+The Google Calendar Trigger node returns the earliest event matching the filter, not the latest. Workarounds:
+- Use unique event tags and ensure only one matches at a time
+- Use a Schedule Trigger + Calendar node instead of Calendar Trigger
+- Store processed event IDs to skip duplicates
+
+### "Fetch meeting audio file" node fails
+
+The `audio file` endpoint referenced in some published n8n templates does not exist in the current Vexa API. Use `GET /transcripts/{platform}/{meeting_id}` to get transcript segments and `GET /recordings/{recording_id}/media/{media_file_id}/raw` for audio.
+
+## Reference Workflows
+
+- [Google Meet transcription with n8n](https://vexa.ai/blog/google-meet-transcription-n8n-workflow) — blog tutorial
+- [Vexa API Reference](user_api_guide) — full endpoint documentation
+- [Webhooks](webhooks) — event-driven workflow triggers

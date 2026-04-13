@@ -345,6 +345,81 @@
       "url": "HELM_TEMPLATE"
     },
 
+    {"_": "═══ RELEASE REGRESSION LOCKS (2026-04-13 session) ═══"},
+
+    {
+      "id": "NO_NESTED_COMPOSE_VARS",
+      "tier": "static",
+      "found": "2026-04-13",
+      "proves": "docker-compose.yml has no nested ${VAR:-${VAR}} on active (uncommented) lines",
+      "symptom": "BROWSER_IMAGE silently falls back to :dev — bots use wrong image, container creation 404/500",
+      "file": "deploy/compose/docker-compose.yml",
+      "must_not_match": "^[^#]*\\$\\{[^}]+:-[^}]*\\$\\{"
+    },
+    {
+      "id": "NO_DEV_FALLBACK_COMPOSE",
+      "tier": "static",
+      "found": "2026-04-13",
+      "proves": "docker-compose.yml has no silent :-dev fallbacks on active (uncommented) lines",
+      "symptom": "IMAGE_TAG unset silently falls back to :dev — deploys untested dev images in production",
+      "file": "deploy/compose/docker-compose.yml",
+      "must_not_match": "^[^#]*:-dev\\}"
+    },
+    {
+      "id": "NO_EXPORT_IMAGE_TAG",
+      "tier": "static",
+      "found": "2026-04-13",
+      "proves": "compose Makefile does not export IMAGE_TAG globally — prevents empty env var poisoning",
+      "symptom": "Make exports empty IMAGE_TAG before .env is read. Docker Compose inherits empty string which takes precedence over --env-file, causing ${IMAGE_TAG:-dev} to resolve to dev",
+      "file": "deploy/compose/Makefile",
+      "must_not_match": "^export IMAGE_TAG"
+    },
+    {
+      "id": "BROWSER_IMAGE_IN_ENV",
+      "tier": "static",
+      "found": "2026-04-13",
+      "proves": "BROWSER_IMAGE is set explicitly in env-example — not derived from IMAGE_TAG substitution",
+      "symptom": "BROWSER_IMAGE not in .env — docker-compose.yml variable substitution fails silently, bots get wrong image",
+      "file": "deploy/env-example",
+      "must_match": "BROWSER_IMAGE="
+    },
+    {
+      "id": "LITE_RECORDING_ENABLED",
+      "tier": "static",
+      "found": "2026-04-13",
+      "proves": "Dockerfile.lite has RECORDING_ENABLED=true — lite records audio by default",
+      "symptom": "Recording disabled in lite — bots join meetings but produce no audio recordings",
+      "file": "deploy/lite/Dockerfile.lite",
+      "must_match": "RECORDING_ENABLED=true"
+    },
+    {
+      "id": "GATEWAY_TIMEOUT_ADEQUATE",
+      "tier": "static",
+      "found": "2026-04-13",
+      "proves": "API gateway HTTP client timeout >= 15s — browser session creation needs time",
+      "symptom": "Gateway returns 503 on browser session creation — default 5s httpx timeout too short for process spawn",
+      "file": "services/api-gateway/main.py",
+      "must_match": "AsyncClient(timeout=30"
+    },
+    {
+      "id": "LITE_PROCESS_BACKEND",
+      "tier": "static",
+      "found": "2026-04-13",
+      "proves": "Dockerfile.lite uses process backend — lite is single-container, no Docker needed",
+      "symptom": "Lite tries to spawn Docker containers for bots — fails without Docker socket, defeats single-container purpose",
+      "file": "deploy/lite/Dockerfile.lite",
+      "must_match": "ORCHESTRATOR_BACKEND=process"
+    },
+    {
+      "id": "VM_LITE_USES_MAKE",
+      "tier": "static",
+      "found": "2026-04-13",
+      "proves": "VM lite setup uses make lite — tests the same path as new users",
+      "symptom": "VM setup uses manual docker commands that diverge from user docs, hiding deployment bugs",
+      "file": "tests3/lib/vm-setup-lite.sh",
+      "must_match": "make lite"
+    },
+
     {"_": "═══ HEALTH/DATA — database integrity ═══"},
 
     {
