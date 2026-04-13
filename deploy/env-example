@@ -35,6 +35,7 @@ ADMIN_TOKEN=changeme
 # Image tag — pre-built from DockerHub by default.
 # `make build` writes a local tag to .last-tag which overrides this.
 IMAGE_TAG=dev
+BROWSER_IMAGE=vexaai/vexa-bot:dev
 
 
 # Database (embedded postgres by default)

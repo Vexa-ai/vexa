@@ -62,7 +62,6 @@ pass "lite image pulled"
 # ── 6. Start lite container ──────────────────────
 info "starting lite container..."
 vm_ssh "docker run -d --name vexa --shm-size=2g --network host \
-    -v /var/run/docker.sock:/var/run/docker.sock \
     -e DATABASE_URL=postgresql://postgres:postgres@localhost:5432/vexa \
     -e DB_PASSWORD=postgres \
     -e DB_SSL_MODE=disable \

@@ -1,0 +1,78 @@
+---
+title: "Speaker Identification"
+description: "How Vexa identifies who said what in meetings"
+---
+
+Vexa attributes transcript segments to individual speakers using platform-specific detection. This page explains how it works and what to expect.
+
+## How It Works
+
+Vexa uses **DOM-based speaker correlation** — not audio-based diarization. The bot observes the meeting platform's UI to detect who is currently speaking, then correlates that with the audio transcription stream.
+
+### Detection by Platform
+
+| Platform | Method | Accuracy |
+|----------|--------|----------|
+| **Google Meet** | Speaking indicator query via injected JavaScript. Detects which participant tile shows the "speaking" animation. | High (when visible) |
+| **Microsoft Teams** | DOM traversal from media elements to participant display name containers. | High (when visible) |
+| **Zoom** | Dual-path: active speaker bar detection + DOM traversal with audio activity correlation within 500ms window. | Moderate |
+
+### Voting and Locking
+
+Vexa uses a voting system to build confidence before committing a speaker identity:
+
+1. Each time a participant is detected as speaking, they get a **vote** (1.0 for single speaker, 0.5 each for simultaneous speakers)
+2. Once a speaker reaches **2 votes at 70%+ confidence**, the mapping is **permanently locked**
+3. Locked mappings are never re-evaluated — this prevents flip-flopping
+
+## What You Get
+
+Transcript segments include a `speaker` field:
+
+```json
+{
+  "text": "I think we should ship this next week.",
+  "speaker": "Jane Smith",
+  "start_time": 125.4,
+  "end_time": 128.7
+}
+```
+
+Speaker names come from the platform's display names (what participants set as their meeting name).
+
+## Known Limitations
+
+### Screen sharing
+
+During screen sharing, the speaking indicators may be **hidden or reduced** depending on the platform. On Google Meet, speaker detection works if there are 3+ participants (the speaking indicator appears in the speaker bar). With only 2 participants during screen share, detection degrades.
+
+### Single device, multiple speakers
+
+If multiple people speak through a single microphone (e.g., a conference room), Vexa sees them as **one speaker** (the display name of the device/participant). Audio-based diarization (separating speakers from a mixed audio stream) is not currently implemented.
+
+<Note>
+Audio-based speaker diarization (e.g., via pyannote) was explored early in Vexa's development but did not meet real-time latency requirements. This may be revisited in future versions.
+</Note>
+
+### Teams DOM changes
+
+Speaker detection on Teams relies on specific DOM selectors. Microsoft may change these across Teams versions, which can temporarily break detection until selectors are updated.
+
+### Speaker labels
+
+If a participant joins without setting a display name, their segments may be attributed as `"Unknown"` or a generic label.
+
+## Configuration
+
+Speaker detection is enabled by default and requires no configuration. The bot automatically uses the appropriate platform-specific detection method.
+
+Detection timing can be tuned in the bot's configuration:
+- **Zoom audio activity window:** 500ms (only attributes speech to the most recently active speaker)
+- **Vote threshold:** 2 votes at 70% confidence ratio for permanent lock
+
+## Tips for Best Results
+
+1. **Ask participants to set display names** — speaker attribution is only as good as the names the platform provides
+2. **Avoid single-device multi-speaker setups** — use individual devices per speaker for accurate attribution
+3. **Minimize screen sharing during critical attribution** — speaking indicators are more reliable without screen share active
+4. **3+ participants on Google Meet** — speaker bar appears with 3+ participants, improving detection during screen share

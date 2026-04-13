@@ -803,7 +803,7 @@ def check_transcription_token():
     if not tx_url:
         return True, "no transcription URL configured — skipped"
 
-    test_audio = os.path.join(ROOT, "tests", "testdata", "test-speech-en.wav")
+    test_audio = os.path.join(ROOT, "tests3", "testdata", "test-speech-en.wav")
     if not os.path.isfile(test_audio):
         return False, f"test audio not found: {test_audio} — copy from services/transcription-service/tests/test_audio.wav"
 

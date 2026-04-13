@@ -1,4 +1,4 @@
-.PHONY: all lite build up down lite-down docs smoke test what-changed full \
+.PHONY: all lite build up down lite-down docs docs-dev smoke test what-changed full \
        collect score \
        vm-compose vm-lite vm-destroy vm-ssh \
        release-build release-test release-validate release-promote \
@@ -28,6 +28,9 @@ lite-down:                         ## stop lite containers
 
 docs:                              ## check docs for drift (static, 0s)
 	@$(MAKE) --no-print-directory -C tests3 docs
+
+docs-dev:                          ## start mintlify dev server on localhost:3000
+	@$(MAKE) --no-print-directory -C docs dev
 
 smoke:                             ## run all checks (~30s)
 	@$(MAKE) --no-print-directory -C tests3 smoke
@@ -78,15 +81,15 @@ release-build:                     ## build + publish :dev to DockerHub
 
 release-test:                      ## VM test lite + compose in parallel
 	@mkdir -p tests3/.state-lite tests3/.state-compose
-	@$(MAKE) --no-print-directory -C tests3 vm-lite STATE=$(CURDIR)/tests3/.state-lite &
-	@$(MAKE) --no-print-directory -C tests3 vm-compose STATE=$(CURDIR)/tests3/.state-compose &
-	@wait
-	@echo ""
-	@echo "  VMs ready for validation:"
-	@echo "  Lite:    http://$$(cat tests3/.state-lite/vm_ip):3000"
-	@echo "  Compose: http://$$(cat tests3/.state-compose/vm_ip):3001"
-	@echo ""
-	@echo "  Run 'make release-validate' after manual validation."
+	@$(MAKE) --no-print-directory -C tests3 vm-lite STATE=$(CURDIR)/tests3/.state-lite & \
+	$(MAKE) --no-print-directory -C tests3 vm-compose STATE=$(CURDIR)/tests3/.state-compose & \
+	wait && \
+	echo "" && \
+	echo "  VMs ready for validation:" && \
+	echo "  Lite:    http://$$(cat tests3/.state-lite/vm_ip):3000" && \
+	echo "  Compose: http://$$(cat tests3/.state-compose/vm_ip):3001" && \
+	echo "" && \
+	echo "  Run 'make release-validate' after manual validation."
 
 release-validate:                  ## push GitHub status + destroy VMs
 	@SHA=$$(git rev-parse HEAD); \

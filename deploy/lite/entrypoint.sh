@@ -99,8 +99,8 @@ export DB_SSL_MODE="${DB_SSL_MODE:-disable}"
 export LOG_LEVEL="${LOG_LEVEL:-info}"
 export DISPLAY="${DISPLAY:-:99}"
 
-# Recording disabled by default in lite (no MinIO/S3 available)
-export RECORDING_ENABLED="${RECORDING_ENABLED:-false}"
+# Recording enabled by default in lite (uses local filesystem)
+export RECORDING_ENABLED="${RECORDING_ENABLED:-true}"
 
 echo "Configuration:"
 echo "  - Redis URL: ${REDIS_URL}"

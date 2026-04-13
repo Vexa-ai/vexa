@@ -388,7 +388,8 @@
       "method": "POST",
       "auth": "api_token",
       "data": "{\"mode\":\"browser_session\",\"bot_name\":\"Session Check\"}",
-      "expect_code": [200, 201, 202, 403]
+      "expect_code": [200, 201, 202, 403],
+      "skip_modes": ["lite"]
     },
     {
       "id": "BOT_RECORDING_ENABLED",

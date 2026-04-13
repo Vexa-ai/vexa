@@ -1,0 +1,83 @@
+---
+title: "Authentication"
+description: "API keys, admin tokens, and SSO integration"
+---
+
+Vexa uses API key authentication for all requests. This page covers authentication for both hosted and self-hosted deployments.
+
+## API Keys
+
+All user-facing API requests use the `X-API-Key` header:
+
+```bash
+curl -H "X-API-Key: YOUR_API_KEY" \
+  "https://api.cloud.vexa.ai/bots"
+```
+
+### Hosted (Vexa Cloud)
+
+Get your API key from [vexa.ai/dashboard/api-keys](https://vexa.ai/dashboard/api-keys).
+
+- Keys are active immediately
+- Free-tier keys are valid for 1 hour after generation
+- Paid plan keys do not expire
+
+### Self-hosted
+
+Create users and mint API tokens via the Admin API:
+
+```bash
+# Create a user
+curl -X POST "http://localhost:8056/admin/users" \
+  -H "Content-Type: application/json" \
+  -H "X-Admin-API-Key: $ADMIN_TOKEN" \
+  -d '{"email": "user@example.com", "name": "User", "max_concurrent_bots": 5}'
+
+# Mint an API token (save it — cannot be retrieved later)
+curl -X POST "http://localhost:8056/admin/users/1/tokens" \
+  -H "X-Admin-API-Key: $ADMIN_TOKEN"
+```
+
+Full guide: [Self-Hosted Management](self-hosted-management)
+
+## Two Auth Headers
+
+Vexa has two authentication scopes:
+
+| Header | Scope | Used for |
+|--------|-------|----------|
+| `X-API-Key` | User API | Sending bots, fetching transcripts, recordings, webhooks |
+| `X-Admin-API-Key` | Admin API | Creating users, minting tokens, managing settings |
+
+The admin token is set via the `ADMIN_API_TOKEN` environment variable at deployment time. User tokens are generated via the Admin API.
+
+<Warning>
+The auto-generated Swagger UI at `/docs` may show `X-API-Key` for admin endpoints. Admin endpoints require `X-Admin-API-Key` instead. ([#80](https://github.com/Vexa-ai/vexa/issues/80))
+</Warning>
+
+## Token Scoping
+
+API tokens can be scoped to limit access. See [Token Scoping](token-scoping) for details on creating restricted tokens.
+
+## SSO / Enterprise Authentication
+
+<Info>
+**Status: In development.** SSO support via OAuth 2.0 / OpenID Connect is planned, with Okta and Microsoft Entra ID (Azure AD) as the first providers. Track progress at [#135](https://github.com/Vexa-ai/vexa/issues/135).
+</Info>
+
+### Planned capabilities
+
+- **Okta** — OIDC-based login for dashboard and API
+- **Microsoft Entra ID** — For organizations using Microsoft 365 (e.g., enterprises running Teams)
+- **Self-hosted SSO** — SSO will be available in both hosted and self-hosted deployments
+
+### Current workaround
+
+For enterprise deployments that require SSO before it's natively supported:
+1. Place an OAuth2 proxy (e.g., [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/)) in front of the Vexa API gateway
+2. Map authenticated users to Vexa API tokens via the Admin API
+3. Use token scoping to restrict per-user access
+
+## Zoom OAuth
+
+Zoom integration requires a separate OAuth flow for the Zoom Meeting SDK. This is unrelated to Vexa API authentication. See [Zoom Integration Setup](zoom-app-setup) for details.

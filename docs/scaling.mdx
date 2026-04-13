@@ -1,0 +1,144 @@
+---
+title: "Scaling & Architecture"
+description: "Resource requirements, concurrent bot limits, and Kubernetes deployment"
+---
+
+This page covers Vexa's architecture, resource requirements per bot, and how to scale for concurrent meetings.
+
+## Architecture Overview
+
+Vexa follows a one-browser-per-bot model. Each meeting bot runs as an isolated container with its own Chromium instance:
+
+```
+Meeting Bot (per meeting)           Shared Services
+┌──────────────────────┐    ┌─────────────────────────────┐
+│ Chromium (Playwright) │    │ API Gateway (port 8056)     │
+│ Audio capture         │───>│ Meeting API (port 8080)     │
+│ Speaker detection     │    │ Runtime API (port 8090)     │
+│ Transcription client  │    │ Transcription Service (GPU) │
+└──────────────────────┘    │ Redis, PostgreSQL            │
+                            └─────────────────────────────┘
+```
+
+Bot containers are ephemeral — they are created when you request a bot and destroyed after the meeting ends (or after an idle timeout).
+
+## Resource Requirements Per Bot
+
+| Resource | Request (steady-state) | Limit (peak) |
+|----------|----------------------|--------------|
+| **CPU** | 250m | 1000m |
+| **Memory** | 600 Mi | 1 Gi |
+| **Shared memory** | 2 GB (`/dev/shm`) | 2 GB |
+
+These numbers were measured on production workloads (March 2026). The 2 GB shared memory is required by Chromium for canvas and media operations.
+
+### Estimating capacity
+
+On a node with 4 CPU cores and 8 GB RAM:
+
+| Constraint | Concurrent bots |
+|-----------|----------------|
+| CPU (by limit, worst case) | 4 |
+| CPU (by request, typical) | 16 |
+| Memory (by limit) | 8 |
+| **Practical recommendation** | **4-8** |
+
+Scale horizontally by adding more nodes rather than increasing node size.
+
+## Orchestration Backends
+
+Vexa's Runtime API supports three container backends, configured via `ORCHESTRATOR_BACKEND`:
+
+| Backend | Value | CPU limits | Memory limits | Best for |
+|---------|-------|-----------|---------------|----------|
+| **Kubernetes** | `kubernetes` | Enforced (pod limits) | Enforced (OOMKill) | Production |
+| **Docker** | `docker` | Not enforced | Enforced (cgroups) | Single-host, dev |
+| **Process** | `process` | Not enforced | Best-effort | Vexa Lite, lightweight dev |
+
+<Warning>
+The Docker backend **silently ignores CPU limits**. Bot containers get unlimited CPU access. Use Kubernetes for production workloads where resource isolation matters.
+</Warning>
+
+### Kubernetes deployment
+
+Vexa provides Helm charts at `deploy/helm/`:
+
+```bash
+# Install
+helm install vexa deploy/helm/charts/vexa \
+  -f your-values.yaml \
+  --namespace vexa --create-namespace
+
+# Upgrade
+helm upgrade vexa deploy/helm/charts/vexa \
+  -f your-values.yaml \
+  --namespace vexa
+```
+
+Service resource allocations in the Helm chart:
+
+| Service | CPU request | Memory limit |
+|---------|------------|-------------|
+| api-gateway | 100m | 512 Mi |
+| meeting-api | 200m | 1 Gi |
+| runtime-api | 100m | 512 Mi |
+| redis | 100m | 1 Gi |
+| postgres | 200m | 4 Gi |
+
+Bot containers are dynamically created as Kubernetes pods by the Runtime API — they are not part of the Helm release.
+
+### Docker Compose deployment
+
+For single-host development and testing:
+
+```bash
+cd vexa
+make all
+```
+
+Memory limits per service are defined in `deploy/compose/docker-compose.yml`. See [Docker Compose Deployment](deployment) for the full guide.
+
+## Bot Lifecycle and Cleanup
+
+Bot containers have automatic timeouts:
+
+| Timeout | Default | Description |
+|---------|---------|-------------|
+| Waiting room | 15 min | Bot leaves if not admitted within 15 minutes |
+| Everyone left | 15 min | Bot leaves 15 minutes after last participant leaves |
+| No one joined | 2 min | Bot leaves if no participant joins within 2 minutes |
+| Idle TTL | 5-60 min | Container removed after idle timeout (configurable per profile) |
+
+Containers are automatically cleaned up after meetings end. The Runtime API uses Redis-backed heartbeats to track liveness.
+
+## Per-User Concurrency Limits
+
+The Admin API supports per-user bot limits:
+
+```bash
+curl -X POST "$API_BASE/admin/users" \
+  -H "X-Admin-API-Key: $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"email": "user@example.com", "max_concurrent_bots": 5}'
+```
+
+Set `max_concurrent_bots` to limit how many simultaneous bots a user can run.
+
+## Transcription Service Scaling
+
+If self-hosting transcription, a single GPU handles approximately 2 concurrent meetings with `large-v3-turbo`. The service returns `503` when the queue is full.
+
+For higher concurrency:
+- Run multiple transcription service replicas behind a load balancer
+- Use smaller models (`small`, `base`) for higher throughput at lower quality
+- Use `INT8` compute type (default) for 50-60% VRAM reduction
+
+See [Transcription Quality](transcription-quality) for model selection details.
+
+## Deployment Options Summary
+
+| Option | Bots | Scaling | Complexity |
+|--------|------|---------|------------|
+| [Vexa Lite](vexa-lite-deployment) | Process-based (in-container) | Vertical only | Lowest |
+| [Docker Compose](deployment) | Docker containers | Single-host | Low |
+| [Helm / Kubernetes](https://github.com/Vexa-ai/vexa/tree/main/deploy/helm) | K8s pods | Horizontal | Medium |
