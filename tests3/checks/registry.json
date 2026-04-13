@@ -384,6 +384,15 @@
       "must_match": "BROWSER_IMAGE="
     },
     {
+      "id": "ENV_EXAMPLE_LATEST_ON_MAIN",
+      "tier": "static",
+      "found": "2026-04-13",
+      "proves": "env-example uses IMAGE_TAG=latest — main branch always deploys stable released images",
+      "symptom": "Merging dev overwrites IMAGE_TAG to dev — new users pull untested dev images instead of latest",
+      "file": "deploy/env-example",
+      "must_match": "IMAGE_TAG=latest"
+    },
+    {
       "id": "LITE_RECORDING_ENABLED",
       "tier": "static",
       "found": "2026-04-13",
