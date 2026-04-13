@@ -158,9 +158,11 @@ def custom_openapi():
 app.openapi = custom_openapi
 
 # Add CORS middleware
-CORS_ORIGINS = [
+_cors_raw = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001").strip()
+_cors_wildcard = _cors_raw == "*"
+CORS_ORIGINS = ["*"] if _cors_wildcard else [
     origin.strip()
-    for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001").split(",")
+    for origin in _cors_raw.split(",")
     if origin.strip()
 ]
 from meeting_api.security_headers import SecurityHeadersMiddleware
@@ -169,7 +171,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
-    allow_credentials=True,
+    allow_credentials=not _cors_wildcard,
     allow_methods=["*"],
     allow_headers=["*"],
 )

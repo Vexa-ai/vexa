@@ -24,7 +24,7 @@ from .webhook_retry_worker import (
     set_session_factory as set_retry_session_factory,
 )
 
-from .config import REDIS_URL, CORS_ORIGINS
+from .config import REDIS_URL, CORS_ORIGINS, CORS_WILDCARD
 from .security_headers import SecurityHeadersMiddleware
 from .meetings import router as meetings_router, set_redis
 from .callbacks import router as callbacks_router
@@ -65,7 +65,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
-    allow_credentials=True,
+    allow_credentials=not CORS_WILDCARD,
     allow_methods=["*"],
     allow_headers=["*"],
 )
