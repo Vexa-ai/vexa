@@ -99,6 +99,13 @@ vm_ssh "docker exec -e DB_PASSWORD=postgres -e DB_SSL_MODE=disable vexa python3 
 vm_ssh "docker exec -e DB_PASSWORD=postgres -e DB_SSL_MODE=disable vexa python3 -c 'import asyncio; from meeting_api.database import init_db; asyncio.run(init_db())'" 2>&1 | tail -1
 pass "database initialized"
 
+# ── 9. Create default user + API key ────────────
+info "creating default user..."
+vm_ssh "curl -sf -X POST http://localhost:8057/admin/users \
+    -H 'X-Admin-API-Key: changeme' -H 'Content-Type: application/json' \
+    -d '{\"email\":\"admin@vexa.ai\",\"name\":\"Admin\",\"max_concurrent_bots\":10}'" 2>&1 | tail -1
+pass "default user created"
+
 state_write vm_setup complete
 
 echo "  ──────────────────────────────────────────────"

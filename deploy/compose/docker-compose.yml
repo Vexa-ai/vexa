@@ -114,8 +114,8 @@ services:
       - "${RUNTIME_API_PORT:-8090}:8090"
     environment:
       - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa
-      - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/vexa-agent:${IMAGE_TAG:-dev}}
-      - BROWSER_IMAGE=${BROWSER_IMAGE:-vexaai/vexa-bot:${IMAGE_TAG:-dev}}
+      - AGENT_IMAGE=vexaai/vexa-agent:${IMAGE_TAG:-dev}
+      - BROWSER_IMAGE=vexaai/vexa-bot:${IMAGE_TAG:-dev}
       - REDIS_URL=redis://redis:6379
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
@@ -246,7 +246,7 @@ services:
       - RUNTIME_API_URL=http://runtime-api:8090
       - RUNTIME_API_TOKEN=${BOT_API_TOKEN:-}
       - MEETING_API_URL=http://meeting-api:8080
-      - BOT_IMAGE_NAME=${BROWSER_IMAGE:-vexaai/vexa-bot:${IMAGE_TAG:-dev}}
+      - BOT_IMAGE_NAME=vexaai/vexa-bot:${IMAGE_TAG:-dev}
       - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa
       - TTS_SERVICE_URL=http://tts-service:8002
       - POST_MEETING_HOOKS=${POST_MEETING_HOOKS:-http://agent-api:8100/internal/webhooks/meeting-completed}
