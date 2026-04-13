@@ -461,7 +461,7 @@ export function JoinForm({ onSuccess }: JoinFormProps) {
           {/* Language - multi-select whitelist */}
           {transcribeEnabled && (
           <div className="space-y-2">
-            <Label htmlFor="language">Allowed Languages</Label>
+            <Label htmlFor="language">Preferred Languages</Label>
             <MultiLanguagePicker
               value={allowedLanguages}
               onValueChange={setAllowedLanguages}
@@ -469,7 +469,7 @@ export function JoinForm({ onSuccess }: JoinFormProps) {
             />
             {allowedLanguages.length === 0 && (
               <p className="text-xs text-muted-foreground">
-                Auto-detect: the service will detect the language automatically.
+                No preference set — language will be auto-detected.
               </p>
             )}
           </div>

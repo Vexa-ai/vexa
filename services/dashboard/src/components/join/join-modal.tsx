@@ -451,7 +451,7 @@ export function JoinModal() {
             <div className="space-y-2">
               <Label htmlFor="language" className="text-sm flex items-center gap-2">
                 <Globe className="h-3.5 w-3.5" />
-                Allowed Languages
+                Preferred Languages
               </Label>
               <MultiLanguagePicker
                 value={allowedLanguages}
@@ -460,7 +460,7 @@ export function JoinModal() {
               />
               {allowedLanguages.length === 0 && (
                 <p className="text-xs text-muted-foreground">
-                  Auto-detect: the service will detect the language automatically.
+                  No preference set — language will be auto-detected.
                 </p>
               )}
             </div>
