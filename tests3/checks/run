@@ -64,7 +64,16 @@ def svc_exec(svc, cmd):
     if mode == "compose":
         full = ["docker", "exec", f"vexa-{svc}-1"] + cmd
     elif mode == "lite":
-        full = ["docker", "exec", "vexa"] + cmd
+        # Container may be named "vexa" or "vexa-lite"
+        r = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        cname = next(
+            (n for n in r.stdout.strip().splitlines() if n in ("vexa", "vexa-lite")),
+            "vexa-lite",
+        )
+        full = ["docker", "exec", cname] + cmd
     elif mode == "helm":
         release = state_read("helm_release")
         deploy_name = f"{release}-vexa-{svc}" if release else svc
