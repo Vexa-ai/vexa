@@ -130,10 +130,15 @@ release-ship:                      ## validate + PR + merge + fix env + promote 
 	@echo "  ── Step 4: Promote :latest ──"
 	@$(MAKE) --no-print-directory -C deploy/compose promote-latest
 	@echo ""
+	@echo ""
+	@echo "  ── Step 5: Switch back to dev ──"
+	@git checkout dev && git merge main --no-edit
 	@TAG=$$(cat deploy/compose/.last-tag); \
+	echo ""; \
 	echo "  ══════════════════════════════════════════"; \
 	echo "  Release $$TAG shipped."; \
 	echo "  :latest = :dev = $$TAG (same SHA)"; \
+	echo "  Now on dev branch. Ready for next cycle."; \
 	echo "  ══════════════════════════════════════════"
 
 release-promote:                   ## promote :dev → :latest on DockerHub (standalone)
