@@ -39,6 +39,21 @@ export interface SegmentGroup<T extends TranscriptSegment = TranscriptSegment> {
 }
 
 /**
+ * Mutable state container for the two-map transcript model.
+ *
+ * - `confirmed`: segments keyed by segment_id (or absolute_start_time fallback).
+ *   Append-only — each confirmed segment upserts by key.
+ * - `pendingBySpeaker`: per-speaker array of draft segments, fully replaced on
+ *   each WebSocket tick for that speaker.
+ *
+ * Passed to `bootstrapConfirmed`, `applyTranscriptTick`, and `recomputeTranscripts`.
+ */
+export interface TranscriptState<T extends TranscriptSegment = TranscriptSegment> {
+  confirmed: Map<string, T>;
+  pendingBySpeaker: Map<string, T[]>;
+}
+
+/**
  * Configuration for segment grouping.
  */
 export interface GroupingOptions {

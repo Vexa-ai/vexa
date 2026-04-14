@@ -153,8 +153,8 @@ RUN mkdir -p /app/dashboard-build
 COPY packages/transcript-rendering/package.json /transcript-rendering/package.json
 COPY packages/transcript-rendering/dist/ /transcript-rendering/dist/
 
-# Copy dashboard source
-COPY services/dashboard/package*.json /app/dashboard-build/
+# Copy dashboard source (package.json only — no lockfile, to avoid path mismatch after sed)
+COPY services/dashboard/package.json /app/dashboard-build/
 RUN cd /app/dashboard-build && \
     sed -i 's|file:../../../packages/transcript-rendering|file:/transcript-rendering|' package.json && \
     npm install --ignore-scripts && \

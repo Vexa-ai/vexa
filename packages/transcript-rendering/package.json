@@ -1,7 +1,7 @@
 {
   "name": "@vexaai/transcript-rendering",
-  "version": "0.2.0",
-  "description": "WebSocket transcript rendering: deduplication, speaker grouping, timestamp utilities",
+  "version": "0.4.0",
+  "description": "Real-time transcript state management: confirmed/pending two-map model, deduplication, speaker grouping",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

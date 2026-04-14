@@ -227,3 +227,43 @@ export function sortSegments<T extends TranscriptSegment>(segments: T[]): T[] {
     a.absolute_start_time.localeCompare(b.absolute_start_time)
   );
 }
+
+/**
+ * Sort segments by speech time (`start_time` seconds), not buffer confirmation time.
+ *
+ * `start_time` is relative to meeting start and reflects when speech occurred.
+ * `absolute_start_time` reflects when the buffer was processed, which can be
+ * out of order for different speakers with independent audio buffers.
+ *
+ * Falls back to `absolute_start_time` string comparison for segments with the
+ * same `start_time`.
+ */
+export function sortByStartTime<T extends TranscriptSegment>(segments: T[]): T[] {
+  return [...segments].sort((a, b) => {
+    const aStart = a.start_time ?? 0;
+    const bStart = b.start_time ?? 0;
+    if (aStart !== bStart) return aStart - bStart;
+    return a.absolute_start_time.localeCompare(b.absolute_start_time);
+  });
+}
+
+/**
+ * Deduplicate segments by identity key (`segment_id` or `absolute_start_time`).
+ *
+ * When two segments share the same key, the one with the newer `updated_at`
+ * timestamp wins. This is a lightweight, identity-only dedup — it does not
+ * inspect text overlap or time containment (use `deduplicateSegments` for that).
+ *
+ * Returns a new array in **encounter order** (not sorted).
+ */
+export function deduplicateByIdentity<T extends TranscriptSegment>(segments: T[]): T[] {
+  const seen = new Map<string, T>();
+  for (const seg of segments) {
+    const key = seg.segment_id || seg.absolute_start_time;
+    const existing = seen.get(key);
+    if (!existing || (seg.updated_at && existing.updated_at && seg.updated_at > existing.updated_at)) {
+      seen.set(key, seg);
+    }
+  }
+  return Array.from(seen.values());
+}
