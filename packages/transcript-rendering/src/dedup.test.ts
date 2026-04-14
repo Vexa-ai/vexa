@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deduplicateSegments, upsertSegments, sortSegments } from './dedup';
+import { deduplicateSegments, upsertSegments, sortSegments, sortByStartTime, deduplicateByIdentity } from './dedup';
 import type { TranscriptSegment } from './types';
 
 function seg(
@@ -159,5 +159,95 @@ describe('upsertSegments', () => {
       { text: 'no timestamp', speaker: 'Alice', absolute_start_time: '', absolute_end_time: '' },
     ]);
     expect(map.size).toBe(0);
+  });
+});
+
+describe('sortByStartTime', () => {
+  it('sorts by start_time (speech time)', () => {
+    const input = [
+      seg('Bob', 10, 15, 'second'),
+      seg('Alice', 0, 5, 'first'),
+      seg('Carol', 5, 10, 'middle'),
+    ];
+    const result = sortByStartTime(input);
+    expect(result[0].text).toBe('first');
+    expect(result[1].text).toBe('middle');
+    expect(result[2].text).toBe('second');
+  });
+
+  it('falls back to absolute_start_time for same start_time', () => {
+    const base = new Date('2026-03-21T12:00:00Z');
+    const a = seg('Alice', 5, 10, 'earlier buffer', {
+      absolute_start_time: new Date(base.getTime() + 1000).toISOString(),
+    });
+    const b = seg('Bob', 5, 10, 'later buffer', {
+      absolute_start_time: new Date(base.getTime() + 2000).toISOString(),
+    });
+    const result = sortByStartTime([b, a]);
+    expect(result[0].text).toBe('earlier buffer');
+    expect(result[1].text).toBe('later buffer');
+  });
+
+  it('handles missing start_time (defaults to 0)', () => {
+    const withTime = seg('Alice', 5, 10, 'has time');
+    const withoutTime = seg('Bob', 0, 0, 'no time', { start_time: undefined });
+    const result = sortByStartTime([withTime, withoutTime]);
+    expect(result[0].text).toBe('no time');
+    expect(result[1].text).toBe('has time');
+  });
+
+  it('does not mutate input', () => {
+    const input = [seg('Bob', 10, 15, 'b'), seg('Alice', 0, 5, 'a')];
+    const result = sortByStartTime(input);
+    expect(input[0].text).toBe('b'); // unchanged
+    expect(result[0].text).toBe('a');
+  });
+});
+
+describe('deduplicateByIdentity', () => {
+  it('deduplicates by segment_id', () => {
+    const result = deduplicateByIdentity([
+      seg('Alice', 0, 5, 'v1', { segment_id: 'seg-1', updated_at: '2026-03-21T12:00:00Z' }),
+      seg('Alice', 0, 5, 'v2', { segment_id: 'seg-1', updated_at: '2026-03-21T12:00:01Z' }),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0].text).toBe('v2'); // newer updated_at wins
+  });
+
+  it('keeps older version when updated_at is older', () => {
+    const result = deduplicateByIdentity([
+      seg('Alice', 0, 5, 'v2', { segment_id: 'seg-1', updated_at: '2026-03-21T12:00:01Z' }),
+      seg('Alice', 0, 5, 'v1', { segment_id: 'seg-1', updated_at: '2026-03-21T12:00:00Z' }),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0].text).toBe('v2'); // v2 has newer updated_at, stays
+  });
+
+  it('falls back to absolute_start_time when no segment_id', () => {
+    const s1 = seg('Alice', 0, 5, 'v1');
+    const s2 = seg('Alice', 0, 5, 'v2');
+    // Same absolute_start_time → same key
+    const result = deduplicateByIdentity([s1, s2]);
+    expect(result).toHaveLength(1);
+  });
+
+  it('keeps different segments with different keys', () => {
+    const result = deduplicateByIdentity([
+      seg('Alice', 0, 5, 'first', { segment_id: 'seg-1' }),
+      seg('Alice', 5, 10, 'second', { segment_id: 'seg-2' }),
+    ]);
+    expect(result).toHaveLength(2);
+  });
+
+  it('handles segments without updated_at (last seen wins)', () => {
+    const result = deduplicateByIdentity([
+      seg('Alice', 0, 5, 'v1', { segment_id: 'seg-1' }),
+      seg('Alice', 0, 5, 'v2', { segment_id: 'seg-1' }),
+    ]);
+    expect(result).toHaveLength(1);
+    // Without updated_at, the comparison `seg.updated_at > existing.updated_at` is false,
+    // so the second one doesn't replace the first unless it has a newer updated_at.
+    // With no updated_at on either, the first one wins.
+    expect(result[0].text).toBe('v1');
   });
 });

@@ -33,7 +33,7 @@ import { cn } from "@/lib/utils";
 import { vexaAPI } from "@/lib/api";
 import { toast } from "sonner";
 import { LanguagePicker } from "@/components/language-picker";
-import { type SegmentGroup } from "@vexaai/transcript-rendering";
+import { type SegmentGroup, deduplicateByIdentity, sortByStartTime } from "@vexaai/transcript-rendering";
 import { format } from "date-fns";
 
 // Linkify URLs in chat message text — splits text into plain strings and clickable <a> elements
@@ -222,25 +222,7 @@ export function TranscriptViewer({
   // Dedup by segment_id when available, otherwise by absolute_start_time.
   const groupedSegments = useMemo(() => {
     const cleaned = segments.filter((seg) => !seg.text?.trimStart().startsWith("[Chat]") && seg.text?.trim());
-
-    // Dedup by segment_id
-    const seen = new Map<string, typeof cleaned[0]>();
-    for (const seg of cleaned) {
-      const key = (seg as any).segment_id || seg.absolute_start_time;
-      const existing = seen.get(key);
-      if (!existing || (seg.updated_at && existing.updated_at && seg.updated_at > existing.updated_at)) {
-        seen.set(key, seg);
-      }
-    }
-    const deduped = Array.from(seen.values()).sort((a, b) => {
-      // Sort by start_time (speech time) for correct chronological order,
-      // not absolute_start_time (buffer confirmation time) which can be
-      // out of order for different speakers with independent audio buffers.
-      const aStart = a.start_time ?? 0;
-      const bStart = b.start_time ?? 0;
-      if (aStart !== bStart) return aStart - bStart;
-      return a.absolute_start_time.localeCompare(b.absolute_start_time);
-    });
+    const deduped = sortByStartTime(deduplicateByIdentity(cleaned));
 
     // Wrap each segment as its own group (1 segment per group)
     return deduped.map((seg): SegmentGroup<typeof seg> => ({

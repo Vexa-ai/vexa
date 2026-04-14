@@ -41,7 +41,7 @@ const MAX_RECONNECT_ATTEMPTS = 10;
  * 2. Connect to WebSocket and subscribe to meeting
  * 3. Process "transcript" bundle messages (per-speaker confirmed + pending)
  * 4. Two-map model: _confirmed (by segment_id, append-only) + _pendingBySpeaker (replaced per tick)
- * 5. Dedup via containment, expansion, and tail-repeat detection (transcript-dedup.ts)
+ * 5. State management delegated to @vexaai/transcript-rendering (bootstrapConfirmed, applyTranscriptTick)
  */
 export function useLiveTranscripts(
   options: UseLiveTranscriptsOptions

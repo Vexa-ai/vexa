@@ -3,11 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "npm run sync-packages",
     "dev": "next dev -p 3001",
+    "prebuild": "npm run sync-packages",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "sync-packages": "test -d ../../packages/transcript-rendering && rm -rf node_modules/@vexaai/transcript-rendering && cp -r ../../packages/transcript-rendering node_modules/@vexaai/transcript-rendering || true"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^2.0.54",

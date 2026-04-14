@@ -136,6 +136,25 @@ function sortSegments(segments) {
     (a, b) => a.absolute_start_time.localeCompare(b.absolute_start_time)
   );
 }
+function sortByStartTime(segments) {
+  return [...segments].sort((a, b) => {
+    const aStart = a.start_time ?? 0;
+    const bStart = b.start_time ?? 0;
+    if (aStart !== bStart) return aStart - bStart;
+    return a.absolute_start_time.localeCompare(b.absolute_start_time);
+  });
+}
+function deduplicateByIdentity(segments) {
+  const seen = /* @__PURE__ */ new Map();
+  for (const seg of segments) {
+    const key = seg.segment_id || seg.absolute_start_time;
+    const existing = seen.get(key);
+    if (!existing || seg.updated_at && existing.updated_at && seg.updated_at > existing.updated_at) {
+      seen.set(key, seg);
+    }
+  }
+  return Array.from(seen.values());
+}
 
 // src/grouping.ts
 var DEFAULT_MAX_CHARS = 512;
@@ -198,10 +217,150 @@ function groupSegments(segments, options = {}) {
   }
   return groups;
 }
+
+// src/state.ts
+function createTranscriptState() {
+  return { confirmed: /* @__PURE__ */ new Map(), pendingBySpeaker: /* @__PURE__ */ new Map() };
+}
+function segKey(seg) {
+  return seg.segment_id || seg.absolute_start_time;
+}
+function bootstrapConfirmed(state, segments) {
+  state.confirmed.clear();
+  state.pendingBySpeaker.clear();
+  for (const seg of segments) {
+    if (!seg.absolute_start_time || !(seg.text || "").trim()) continue;
+    state.confirmed.set(segKey(seg), seg);
+  }
+  return recomputeTranscripts(state);
+}
+function applyTranscriptTick(state, confirmed, pending, speaker) {
+  let changed = false;
+  for (const seg of confirmed) {
+    if (!seg.absolute_start_time || !(seg.text || "").trim()) continue;
+    state.confirmed.set(segKey(seg), seg);
+    changed = true;
+  }
+  if (speaker !== void 0 && speaker !== null) {
+    const validPending = (pending || []).filter(
+      (s) => s.absolute_start_time && (s.text || "").trim()
+    );
+    if (validPending.length > 0) {
+      state.pendingBySpeaker.set(speaker, validPending);
+    } else {
+      state.pendingBySpeaker.delete(speaker);
+    }
+    changed = true;
+  }
+  if (!changed) return null;
+  return recomputeTranscripts(state);
+}
+function recomputeTranscripts(state) {
+  const confirmedBySpeaker = /* @__PURE__ */ new Map();
+  for (const seg of state.confirmed.values()) {
+    const speaker = seg.speaker || "";
+    if (!confirmedBySpeaker.has(speaker)) confirmedBySpeaker.set(speaker, /* @__PURE__ */ new Set());
+    confirmedBySpeaker.get(speaker).add((seg.text || "").trim());
+  }
+  const all = [...state.confirmed.values()];
+  for (const [speaker, segs] of state.pendingBySpeaker) {
+    const confirmedTexts = confirmedBySpeaker.get(speaker);
+    for (const seg of segs) {
+      const pt = (seg.text || "").trim();
+      let isStale = false;
+      if (confirmedTexts) {
+        for (const ct of confirmedTexts) {
+          if (pt === ct || pt.startsWith(ct) || ct.startsWith(pt)) {
+            isStale = true;
+            break;
+          }
+        }
+      }
+      if (isStale) continue;
+      all.push(seg);
+    }
+  }
+  all.sort((a, b) => a.absolute_start_time.localeCompare(b.absolute_start_time));
+  return all;
+}
+function addSegment(segments, segment) {
+  const key = segKey(segment);
+  const existingIndex = segments.findIndex((t) => segKey(t) === key);
+  let updated;
+  if (existingIndex !== -1) {
+    updated = [...segments];
+    updated[existingIndex] = segment;
+  } else {
+    updated = [...segments, segment];
+    if (segment.completed && segment.speaker) {
+      const segStart = segment.start_time ?? 0;
+      const segEnd = segment.end_time ?? segStart;
+      updated = updated.filter((t) => {
+        if (t === segment) return true;
+        if (t.completed) return true;
+        if (t.speaker !== segment.speaker) return true;
+        const tStart = t.start_time ?? 0;
+        const tEnd = t.end_time ?? tStart;
+        const overlaps = tStart < segEnd && tEnd > segStart;
+        return !overlaps;
+      });
+    }
+  }
+  return updated;
+}
+function bootstrapSegments(segments) {
+  const valid = segments.filter(
+    (seg) => seg.absolute_start_time && (seg.text || "").trim()
+  );
+  const map = /* @__PURE__ */ new Map();
+  for (const seg of valid) {
+    map.set(segKey(seg), seg);
+  }
+  return Array.from(map.values());
+}
+
+// src/manager.ts
+function createTranscriptManager() {
+  let state = createTranscriptState();
+  function finalize(segments) {
+    return sortByStartTime(deduplicateSegments(sortSegments(deduplicateByIdentity(segments))));
+  }
+  return {
+    bootstrap(segments) {
+      return finalize(bootstrapConfirmed(state, segments));
+    },
+    handleMessage(message) {
+      if (message.type !== "transcript") return null;
+      const confirmed = message.confirmed || [];
+      const pending = message.pending || [];
+      const speaker = message.speaker ?? void 0;
+      const result = applyTranscriptTick(state, confirmed, pending, speaker);
+      return result ? finalize(result) : null;
+    },
+    getSegments() {
+      return finalize(recomputeTranscripts(state));
+    },
+    getState() {
+      return state;
+    },
+    clear() {
+      state = createTranscriptState();
+    }
+  };
+}
 export {
+  addSegment,
+  applyTranscriptTick,
+  bootstrapConfirmed,
+  bootstrapSegments,
+  createTranscriptManager,
+  createTranscriptState,
+  deduplicateByIdentity,
   deduplicateSegments,
   groupSegments,
   parseUTCTimestamp,
+  recomputeTranscripts,
+  sortByStartTime,
   sortSegments,
   upsertSegments
 };

@@ -7,11 +7,10 @@ WORKDIR /app
 COPY packages/transcript-rendering/package.json /transcript-rendering/package.json
 COPY packages/transcript-rendering/dist/ /transcript-rendering/dist/
 
-# Install dependencies
-# Patch package.json to use local transcript-rendering path
-COPY services/dashboard/package*.json ./
-RUN sed -i 's|file:../../../packages/transcript-rendering|file:/transcript-rendering|' package.json
-RUN npm install --ignore-scripts
+# Install dependencies (package.json only — no lockfile, to avoid path mismatch after sed)
+COPY services/dashboard/package.json ./
+RUN sed -i 's|"@vexaai/transcript-rendering":.*|"@vexaai/transcript-rendering": "file:/transcript-rendering",|' package.json && \
+    npm install --ignore-scripts
 # Ensure transcript-rendering is physically copied (not symlinked)
 RUN rm -rf node_modules/@vexaai/transcript-rendering && \
     cp -r /transcript-rendering node_modules/@vexaai/transcript-rendering

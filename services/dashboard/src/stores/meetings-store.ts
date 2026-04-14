@@ -1,6 +1,10 @@
 import { create } from "zustand";
 import type { Meeting, TranscriptSegment, Platform, MeetingStatus, RecordingData, ChatMessage } from "@/types/vexa";
 import { VexaAPIError, vexaAPI } from "@/lib/api";
+import {
+  type TranscriptManager,
+  createTranscriptManager,
+} from "@vexaai/transcript-rendering";
 
 interface MeetingDataUpdate {
   name?: string;
@@ -25,8 +29,7 @@ interface MeetingsState {
   chatMessages: ChatMessage[];
 
   // Internal state for best-known-transcript model
-  _confirmed: Map<string, TranscriptSegment>;
-  _pendingBySpeaker: Map<string, TranscriptSegment[]>;
+  _manager: TranscriptManager<TranscriptSegment>;
 
   // Pagination
   hasMore: boolean;
@@ -74,47 +77,6 @@ interface MeetingsState {
 let isChatRouteUnavailable = false;
 let hasLoggedChatRouteUnavailable = false;
 
-/**
- * Recompute the sorted transcripts array from confirmed + pending maps.
- * Confirmed segments (by segment_id) + non-stale pending, sorted by absolute_start_time.
- * Pending is skipped if confirmed already has the same text for that speaker
- * (stale pending that hasn't been replaced by the speaker's next tick yet).
- */
-function recomputeTranscripts(
-  confirmed: Map<string, TranscriptSegment>,
-  pendingBySpeaker: Map<string, TranscriptSegment[]>,
-): TranscriptSegment[] {
-  // Build set of confirmed texts per speaker for stale-pending filtering
-  const confirmedBySpeaker = new Map<string, Set<string>>();
-  for (const seg of confirmed.values()) {
-    const speaker = seg.speaker || "";
-    if (!confirmedBySpeaker.has(speaker)) confirmedBySpeaker.set(speaker, new Set());
-    confirmedBySpeaker.get(speaker)!.add((seg.text || "").trim());
-  }
-
-  const all: TranscriptSegment[] = [...confirmed.values()];
-  for (const [speaker, segs] of pendingBySpeaker) {
-    const confirmedTexts = confirmedBySpeaker.get(speaker);
-    for (const seg of segs) {
-      // Skip stale pending that overlaps with a confirmed segment
-      const pt = (seg.text || "").trim();
-      let isStale = false;
-      if (confirmedTexts) {
-        for (const ct of confirmedTexts) {
-          if (pt === ct || pt.startsWith(ct) || ct.startsWith(pt)) {
-            isStale = true;
-            break;
-          }
-        }
-      }
-      if (isStale) continue;
-      all.push(seg);
-    }
-  }
-  all.sort((a, b) => a.absolute_start_time.localeCompare(b.absolute_start_time));
-  return all;
-}
-
 export const useMeetingsStore = create<MeetingsState>((set, get) => ({
   // Initial state
   meetings: [],
@@ -122,8 +84,7 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
   transcripts: [],
   recordings: [],
   chatMessages: [],
-  _confirmed: new Map(),
-  _pendingBySpeaker: new Map(),
+  _manager: createTranscriptManager(),
   hasMore: false,
   isLoadingMore: false,
   _filters: {},
@@ -310,7 +271,7 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
 
     set({
       meetings: updatedMeetings,
-      ...(shouldClearCurrent ? { currentMeeting: null, transcripts: [], recordings: [], chatMessages: [], _confirmed: new Map(), _pendingBySpeaker: new Map() } : {}),
+      ...(shouldClearCurrent ? { currentMeeting: null, transcripts: [], recordings: [], chatMessages: [], _manager: createTranscriptManager() } : {}),
     });
   },
 
@@ -321,21 +282,14 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
   clearCurrentMeeting: () => {
     set({
       currentMeeting: null, transcripts: [], recordings: [], chatMessages: [],
-      _confirmed: new Map(), _pendingBySpeaker: new Map(),
+      _manager: createTranscriptManager(),
     });
   },
 
   // Bootstrap from REST API: confirmed segments only, clears pending
   bootstrapTranscripts: (segments: TranscriptSegment[]) => {
-    const confirmed = new Map<string, TranscriptSegment>();
-    for (const seg of segments) {
-      if (!seg.absolute_start_time || !seg.text?.trim()) continue;
-      const key = seg.segment_id || seg.absolute_start_time;
-      confirmed.set(key, seg);
-    }
-
-    const pendingBySpeaker = new Map<string, TranscriptSegment[]>();
-    const transcripts = recomputeTranscripts(confirmed, pendingBySpeaker);
+    const { _manager } = get();
+    const transcripts = _manager.bootstrap(segments);
 
     const firstTime = transcripts.length > 0 ? transcripts[0].absolute_start_time : null;
     const { currentMeeting } = get();
@@ -344,44 +298,22 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
       : currentMeeting;
 
     set({
-      _confirmed: confirmed, _pendingBySpeaker: pendingBySpeaker, transcripts,
+      transcripts,
       ...(updatedMeeting !== currentMeeting ? { currentMeeting: updatedMeeting } : {}),
     });
   },
 
   // WS update: append confirmed (by segment_id), replace pending for speaker
   upsertTranscriptSegments: (confirmedSegs: TranscriptSegment[], pendingSegs?: TranscriptSegment[], speaker?: string) => {
-    const { _confirmed, _pendingBySpeaker } = get();
+    const { _manager } = get();
+    const transcripts = _manager.handleMessage({
+      type: 'transcript',
+      speaker: speaker ?? undefined,
+      confirmed: confirmedSegs,
+      pending: pendingSegs,
+    });
 
-    // Append confirmed segments (keyed by segment_id — no duplicates possible)
-    let changed = false;
-    for (const seg of confirmedSegs) {
-      if (!seg.absolute_start_time || !seg.text?.trim()) continue;
-      const key = seg.segment_id || seg.absolute_start_time;
-      _confirmed.set(key, seg);
-      changed = true;
-      // NOTE: do NOT clear other speakers' pending here.
-      // Confirmed for speaker A often arrives inside speaker B's tick.
-      // Clearing A's pending would make A's text vanish until A's next tick.
-      // The stale pending is cleaned up naturally when A's next tick replaces it.
-    }
-
-    // Replace pending snapshot for THIS speaker only (full replace)
-    if (speaker !== undefined && speaker !== null) {
-      const validPending = (pendingSegs || []).filter(s =>
-        s.absolute_start_time && s.text?.trim()
-      );
-      if (validPending.length > 0) {
-        _pendingBySpeaker.set(speaker, validPending);
-      } else {
-        _pendingBySpeaker.delete(speaker);
-      }
-      changed = true;
-    }
-
-    if (!changed) return;
-
-    const transcripts = recomputeTranscripts(_confirmed, _pendingBySpeaker);
+    if (!transcripts) return;
 
     const firstTime = transcripts.length > 0 ? transcripts[0].absolute_start_time : null;
     const { currentMeeting } = get();
@@ -390,7 +322,7 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
       : currentMeeting;
 
     set({
-      _confirmed, _pendingBySpeaker, transcripts,
+      transcripts,
       ...(updatedMeeting !== currentMeeting ? { currentMeeting: updatedMeeting } : {}),
     });
   },
