@@ -108,6 +108,10 @@ spec:
             - name: K8S_IMAGE_PULL_POLICY
               value: {{ .Values.global.imagePullPolicy | quote }}
             {{- end }}
+            - name: TRANSCRIPTION_SERVICE_URL
+              value: {{ .Values.meetingApi.transcriptionServiceUrl | default "" | quote }}
+            - name: TRANSCRIPTION_SERVICE_TOKEN
+              value: {{ .Values.meetingApi.transcriptionServiceToken | default "" | quote }}
             - name: PROFILES_PATH
               value: {{ .Values.runtimeApi.profilesPath | default "/app/profiles.yaml" | quote }}
             - name: LOG_LEVEL
