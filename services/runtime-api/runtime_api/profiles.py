@@ -68,33 +68,6 @@ PROFILE_DEFAULTS = {
 }
 
 
-# Builtin profiles — minimal fallbacks for the two profiles actually in use.
-# profiles.yaml overrides these. No :latest tags, no localhost fallbacks.
-BUILTIN_PROFILES = {
-    "meeting": {
-        "image": "${BROWSER_IMAGE}",
-        "idle_timeout": 0,
-        "auto_remove": False,
-        "resources": {
-            "shm_size": 2147483648,  # 2GB — Chrome needs /dev/shm for audio capture
-        },
-    },
-    "browser-session": {
-        "image": "${BROWSER_IMAGE}",
-        "idle_timeout": 3600,
-        "auto_remove": False,
-        "resources": {
-            "shm_size": 2147483648,  # 2GB — Chrome needs /dev/shm
-        },
-    },
-    "agent": {
-        "image": "${AGENT_IMAGE}",
-        "command": ["sleep", "infinity"],
-        "idle_timeout": 300,
-        "auto_remove": False,
-    },
-}
-
 
 def load_profiles(path: str | None = None) -> dict[str, dict]:
     """Load profiles from YAML file, merged on top of built-in defaults. Thread-safe."""
@@ -102,14 +75,8 @@ def load_profiles(path: str | None = None) -> dict[str, dict]:
     path = path or config.PROFILES_PATH
 
     if not Path(path).exists():
-        logger.info(f"No profiles file at {path} — using built-in defaults")
-        with _lock:
-            _profiles = {
-                name: {**PROFILE_DEFAULTS, **_expand_env_vars(spec),
-                       "resources": {**PROFILE_DEFAULTS["resources"], **_expand_env_vars(spec).get("resources", {})}}
-                for name, spec in BUILTIN_PROFILES.items()
-            }
-        return _profiles
+        logger.error(f"No profiles file at {path} — cannot start without profiles.yaml")
+        raise FileNotFoundError(f"Required profiles file not found: {path}")
 
     try:
         current_mtime = Path(path).stat().st_mtime
@@ -120,13 +87,8 @@ def load_profiles(path: str | None = None) -> dict[str, dict]:
         with open(path) as f:
             raw = yaml.safe_load(f) or {}
 
-        # Start with builtins, then overlay YAML definitions
         profiles = {}
-        all_specs = {**BUILTIN_PROFILES}
         for name, spec in raw.get("profiles", raw).items():
-            all_specs[name] = spec  # YAML overrides builtins
-
-        for name, spec in all_specs.items():
             spec = _expand_env_vars(spec)
             merged = {**PROFILE_DEFAULTS}
             merged.update(spec)
