@@ -1012,7 +1012,7 @@ export default function MeetingDetailPage() {
               </Button>
             </div>
           )}
-          {(currentMeeting.status === "active" || currentMeeting.status === "completed") && transcripts.length > 0 && (
+          {(currentMeeting.status === "active" || currentMeeting.status === "completed" || currentMeeting.status === "failed") && transcripts.length > 0 && (
             <div className="flex items-center gap-2">
               <AIChatPanel
                 meeting={currentMeeting}
@@ -1696,8 +1696,8 @@ export default function MeetingDetailPage() {
             </Card>
           )}
 
-          {/* Show failed indicator */}
-          {currentMeeting.status === "failed" && (
+          {/* Show failed indicator only when no transcripts exist */}
+          {currentMeeting.status === "failed" && transcripts.length === 0 && (
             <BotFailedIndicator
               status={currentMeeting.status}
               errorMessage={currentMeeting.data?.error || currentMeeting.data?.failure_reason || currentMeeting.data?.status_message}
@@ -1705,10 +1705,11 @@ export default function MeetingDetailPage() {
             />
           )}
 
-          {/* Keep transcript visible through stopping -> completed transition */}
+          {/* Keep transcript visible through stopping -> completed transition, and for failed meetings with data */}
           {(currentMeeting.status === "active" ||
             currentMeeting.status === "stopping" ||
-            currentMeeting.status === "completed") && (
+            currentMeeting.status === "completed" ||
+            (currentMeeting.status === "failed" && transcripts.length > 0)) && (
             <TranscriptViewer
               meeting={currentMeeting}
               segments={transcripts}
