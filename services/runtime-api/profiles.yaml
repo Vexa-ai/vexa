@@ -15,7 +15,7 @@ profiles:
     resources:
       cpu_request: "1000m"     # measured p95: 780m (load test 2026-04-15, 19 bots)
       cpu_limit: "1500m"       # 1.5x headroom for browser spikes
-      memory_request: "1024Mi" # measured p95: 977Mi (load test 2026-04-15, 19 bots)
+      memory_request: "1100Mi" # measured p95: 977Mi (load test 2026-04-15, 19 bots)
       memory_limit: "1536Mi"   # 1.5x headroom for Chrome memory spikes
       shm_size: 2147483648     # 2GB shared memory for browser
     idle_timeout: 0          # managed by meeting-api (scheduler + bot-side timers)
@@ -38,7 +38,7 @@ profiles:
     resources:
       cpu_request: "1000m"     # same as meeting bot
       cpu_limit: "1500m"
-      memory_request: "1024Mi"
+      memory_request: "1100Mi"
       memory_limit: "1536Mi"
       shm_size: 2147483648     # 2GB shared memory for browser
     idle_timeout: 3600       # 1h — gateway /touch keeps alive while connected
