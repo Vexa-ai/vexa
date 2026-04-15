@@ -78,8 +78,8 @@ def test_profile_ports(profiles_yaml):
 
 
 def test_missing_file():
-    profiles = load_profiles("/nonexistent/path.yaml")
-    assert profiles == {}
+    with pytest.raises(FileNotFoundError):
+        load_profiles("/nonexistent/path.yaml")
 
 
 def test_get_profile_returns_none_for_unknown(profiles_yaml):
