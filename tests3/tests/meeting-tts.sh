@@ -145,8 +145,6 @@ SPEAKERS=($(printf '%s\n' "${GROUND_TRUTH[@]}" | cut -d'|' -f1 | sort -u))
 info "launching recorder..."
 REC_RESP=$(curl -s -X POST "$GATEWAY_URL/bots" \
     -H "X-API-Key: $API_TOKEN" -H "Content-Type: application/json" \
-    -H "X-User-Webhook-URL: https://httpbin.org/post" \
-    -H "X-User-Webhook-Events: meeting.completed,meeting.started" \
     -d "{\"platform\":\"google_meet\",\"native_meeting_id\":\"$NATIVE_ID\",\"bot_name\":\"Recorder\",\"transcribe_enabled\":true,\"automatic_leave\":{\"no_one_joined_timeout\":300000}}")
 RECORDER_ID=$(echo "$REC_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
 if [ -z "$RECORDER_ID" ]; then

@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# Webhooks: create bot with webhook → verify envelope → HMAC → no secret leak
-# Covers DoDs: webhooks#1-#6
-# Reads: .state/gateway_url, .state/api_token, .state/deploy_mode
+# Webhooks: set user webhook config → gateway injects → meeting-api stores → verify envelope → HMAC → no secret leak
+# Covers DoDs: webhooks#1-#7
+# Reads: .state/gateway_url, .state/admin_url, .state/api_token, .state/admin_key, .state/deploy_mode
 source "$(dirname "$0")/../lib/common.sh"
 
 GATEWAY_URL=$(state_read gateway_url)
+ADMIN_URL=$(state_read admin_url)
 API_TOKEN=$(state_read api_token)
+ADMIN_KEY=$(state_read admin_key)
 MODE=$(state_read deploy_mode)
 
 SECRET="test-secret-12345"
+WEBHOOK_URL="https://httpbin.org/post"
 
 echo ""
 echo "  webhooks"
@@ -32,19 +35,39 @@ if [ -n "$STALE" ]; then
     sleep 10
 fi
 
-# ── 1. Create bot with webhook config ─────────────
+# ── 1. Set user webhook config via admin-api (PUT /user/webhook) ──
+# The gateway will inject X-User-Webhook-* headers from the user's stored config
+WH_RESP=$(curl -s -X PUT "$GATEWAY_URL/user/webhook" \
+    -H "X-API-Key: $API_TOKEN" -H "Content-Type: application/json" \
+    -d "{\"webhook_url\":\"$WEBHOOK_URL\",\"webhook_secret\":\"$SECRET\"}" \
+    -w "\n%{http_code}")
+WH_CODE=$(echo "$WH_RESP" | tail -1)
+
+if [ "$WH_CODE" = "200" ]; then
+    pass "config: user webhook set via PUT /user/webhook"
+else
+    fail "config: PUT /user/webhook returned HTTP $WH_CODE"
+    info "$(echo "$WH_RESP" | head -n -1)"
+    exit 1
+fi
+
+# Wait a moment for the gateway token cache to expire (60s) or bypass via cache clear
+# The gateway caches validate_token responses for 60s. To test immediately, we rely on
+# either (a) fresh cache or (b) short test delay. Skip cache wait in tests by including
+# a note.
+info "waiting 3s for token state to propagate..."
+sleep 3
+
+# ── 2. Create bot WITHOUT webhook headers — gateway should inject them ──
 RESP=$(curl -s -X POST "$GATEWAY_URL/bots" \
     -H "X-API-Key: $API_TOKEN" -H "Content-Type: application/json" \
-    -H "X-User-Webhook-URL: https://httpbin.org/post" \
-    -H "X-User-Webhook-Secret: $SECRET" \
-    -H "X-User-Webhook-Events: bot.status_change,meeting.ended" \
     -d '{"platform":"google_meet","native_meeting_id":"webhook-test","bot_name":"Webhook Test","automatic_leave":{"no_one_joined_timeout":30000}}' \
     -w "\n%{http_code}")
 HTTP_CODE=$(echo "$RESP" | tail -1)
 BODY=$(echo "$RESP" | head -n -1)
 
 if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ] || [ "$HTTP_CODE" = "202" ]; then
-    pass "create: bot with webhook config"
+    pass "create: bot created (no headers — gateway must inject from user config)"
 elif [ "$HTTP_CODE" = "500" ] && [ "$MODE" = "helm" ]; then
     info "create: HTTP 500 — bot runtime not configured in helm (expected)"
     info "skipping webhook tests that need a running bot"
@@ -57,27 +80,66 @@ else
     exit 1
 fi
 
-# ── 2. Webhook config stored in meeting.data ──────
-# Verify the response contains webhook config (gateway forwarded headers)
-CONFIG_CHECK=$(echo "$BODY" | python3 -c "
+# ── 3. Gateway injection: webhook_url ended up in meeting.data ──
+# This is THE critical check: proves admin-api → gateway → meeting-api flow works
+# (may have false negative if token cache is stale; retry once)
+check_config() {
+    echo "$1" | python3 -c "
 import sys,json
 d=json.load(sys.stdin).get('data',{})
-has_url=bool(d.get('webhook_url'))
-has_events=bool(d.get('webhook_events'))
-if has_url and has_events: print('PASS')
-elif has_url: print('PASS:url_only')
-else: print('FAIL:no_webhook_config')
-" 2>/dev/null || echo "SKIP")
+url=d.get('webhook_url')
+if url: print('PASS:'+url)
+else: print('FAIL:no_webhook_url')
+" 2>/dev/null || echo "PARSE_ERROR"
+}
 
-if echo "$CONFIG_CHECK" | grep -q "PASS"; then
-    pass "config: webhook_url + webhook_events in meeting.data"
-elif echo "$CONFIG_CHECK" | grep -q "SKIP"; then
-    info "config: skipped (parse error)"
+CONFIG_CHECK=$(check_config "$BODY")
+if echo "$CONFIG_CHECK" | grep -q "^PASS"; then
+    pass "inject: gateway injected webhook_url into meeting.data"
 else
-    fail "config: webhook config not in meeting.data ($CONFIG_CHECK)"
+    # Token cache may be stale — wait 60s and retry with a new bot
+    info "retry: gateway token cache may be stale, waiting 60s..."
+    curl -sf -X DELETE "$GATEWAY_URL/bots/google_meet/webhook-test" -H "X-API-Key: $API_TOKEN" > /dev/null 2>&1
+    sleep 60
+    RESP2=$(curl -s -X POST "$GATEWAY_URL/bots" \
+        -H "X-API-Key: $API_TOKEN" -H "Content-Type: application/json" \
+        -d '{"platform":"google_meet","native_meeting_id":"webhook-test","bot_name":"Webhook Test","automatic_leave":{"no_one_joined_timeout":30000}}' \
+        -w "\n%{http_code}")
+    BODY=$(echo "$RESP2" | head -n -1)
+    CONFIG_CHECK=$(check_config "$BODY")
+    if echo "$CONFIG_CHECK" | grep -q "^PASS"; then
+        pass "inject: gateway injected webhook_url into meeting.data (after cache expiry)"
+    else
+        fail "inject: gateway did NOT inject webhook_url — check admin-api validate_token + gateway forward_request ($CONFIG_CHECK)"
+    fi
 fi
 
-# ── 3. Envelope shape ─────────────────────────────
+# ── 4. Spoof protection: client-supplied webhook headers are stripped ──
+SPOOF_RESP=$(curl -s -X POST "$GATEWAY_URL/bots" \
+    -H "X-API-Key: $API_TOKEN" -H "Content-Type: application/json" \
+    -H "X-User-Webhook-URL: https://attacker.example.com/steal" \
+    -d '{"platform":"google_meet","native_meeting_id":"spoof-test","bot_name":"Spoof"}' \
+    -w "\n%{http_code}")
+SPOOF_CODE=$(echo "$SPOOF_RESP" | tail -1)
+SPOOF_BODY=$(echo "$SPOOF_RESP" | head -n -1)
+
+if [ "$SPOOF_CODE" = "200" ] || [ "$SPOOF_CODE" = "201" ]; then
+    SPOOF_URL=$(echo "$SPOOF_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('webhook_url',''))" 2>/dev/null)
+    if [ "$SPOOF_URL" = "https://attacker.example.com/steal" ]; then
+        fail "spoof: client-supplied X-User-Webhook-URL was NOT stripped — security bug"
+    elif [ "$SPOOF_URL" = "$WEBHOOK_URL" ]; then
+        pass "spoof: client header stripped, user config used instead"
+    elif [ -z "$SPOOF_URL" ]; then
+        pass "spoof: client header stripped (no webhook applied)"
+    else
+        fail "spoof: unexpected webhook_url=$SPOOF_URL"
+    fi
+    curl -sf -X DELETE "$GATEWAY_URL/bots/google_meet/spoof-test" -H "X-API-Key: $API_TOKEN" > /dev/null 2>&1
+else
+    info "spoof: bot creation failed (HTTP $SPOOF_CODE), skipping spoof check"
+fi
+
+# ── 5. Envelope shape ─────────────────────────────
 ENVELOPE_OK=$(svc_exec meeting-api python3 -c "
 from meeting_api.webhook_delivery import build_envelope
 import json
@@ -99,7 +161,7 @@ else
     fail "envelope: $ENVELOPE_OK"
 fi
 
-# ── 4. No internal fields leak ────────────────────
+# ── 6. No internal fields leak ────────────────────
 LEAK_CHECK=$(svc_exec meeting-api python3 -c "
 from meeting_api.webhook_delivery import clean_meeting_data
 import json
@@ -119,7 +181,7 @@ else
     fail "leak: $LEAK_CHECK"
 fi
 
-# ── 5. HMAC signing ──────────────────────────────
+# ── 7. HMAC signing ──────────────────────────────
 HMAC_OK=$(svc_exec meeting-api python3 -c "
 import hmac,hashlib,json
 from meeting_api.webhook_delivery import build_envelope
@@ -137,7 +199,7 @@ else
     fail "HMAC: $HMAC_OK"
 fi
 
-# ── 6. Secret not in API response ─────────────────
+# ── 8. Secret not in API response ─────────────────
 STATUS_RESP=$(curl -sf -H "X-API-Key: $API_TOKEN" "$GATEWAY_URL/bots/status")
 if echo "$STATUS_RESP" | grep -q "$SECRET"; then
     fail "secret leak: webhook secret visible in GET /bots/status"
@@ -145,9 +207,48 @@ else
     pass "no leak: secret not in /bots/status response"
 fi
 
-# ── 7. Cleanup ────────────────────────────────────
-curl -sf -X DELETE "$GATEWAY_URL/bots/google_meet/webhook-test" \
-    -H "X-API-Key: $API_TOKEN" > /dev/null 2>&1
+# ── 9. End-to-end webhook delivery: stop bot → webhook fires ──
+# Stop the webhook-test bot, wait for delivery, verify webhook_delivery status in meeting.data
+MEETING_ID=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+if [ -n "$MEETING_ID" ]; then
+    curl -sf -X DELETE "$GATEWAY_URL/bots/google_meet/webhook-test" -H "X-API-Key: $API_TOKEN" > /dev/null 2>&1
+    info "waiting 20s for webhook delivery..."
+    sleep 20
+
+    # Check webhook_delivery status in meeting.data
+    DELIVERY_CHECK=$(svc_exec meeting-api python3 -c "
+import asyncio
+async def check():
+    from meeting_api.database import async_session_local
+    from meeting_api.models import Meeting
+    async with async_session_local() as db:
+        m = await db.get(Meeting, $MEETING_ID)
+        if not m: return 'NOT_FOUND'
+        d = m.data or {}
+        if not d.get('webhook_url'): return 'NO_WEBHOOK_URL'
+        wd = d.get('webhook_delivery')
+        if not wd: return 'NO_DELIVERY_STATUS'
+        s = wd.get('status')
+        if s == 'delivered': return 'DELIVERED'
+        if s == 'queued': return 'QUEUED'
+        if s == 'failed': return 'FAILED:' + str(wd.get('status_code',''))
+        return 'UNKNOWN:' + str(s)
+print(asyncio.run(check()))
+" 2>/dev/null || echo "")
+
+    case "$DELIVERY_CHECK" in
+        DELIVERED) pass "e2e: webhook delivered to user endpoint" ;;
+        QUEUED)    pass "e2e: webhook queued for retry (delivery in progress)" ;;
+        NO_WEBHOOK_URL)
+            fail "e2e: meeting.data has no webhook_url (gateway injection failed end-to-end)" ;;
+        NO_DELIVERY_STATUS)
+            info "e2e: post-meeting webhook not yet fired (only meeting.completed triggers via run_all_tasks)" ;;
+        FAILED*)   fail "e2e: webhook delivery failed ($DELIVERY_CHECK)" ;;
+        NOT_FOUND) fail "e2e: meeting $MEETING_ID not found" ;;
+        "")        info "e2e: skipped (cannot exec into meeting-api)" ;;
+        *)         info "e2e: delivery status = $DELIVERY_CHECK" ;;
+    esac
+fi
 
 echo "  ──────────────────────────────────────────────"
 echo ""
