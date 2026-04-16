@@ -160,12 +160,14 @@ vm-provision-compose:              ## provision VM + deploy compose
 	@$(T3)/lib/vm.sh wait
 	@$(T3)/lib/vm-setup-compose.sh
 
-vm-smoke-compose:                  ## run smoke + dashboard + containers + webhooks on VM
+vm-smoke-compose:                  ## run smoke + dashboard + containers + webhooks + meeting-tts + post-meeting on VM
 	@$(T3)/lib/vm-run.sh smoke
 	@$(T3)/lib/vm-run.sh dashboard-auth
 	@$(T3)/lib/vm-run.sh dashboard-proxy
 	@$(T3)/lib/vm-run.sh containers
 	@$(T3)/lib/vm-run.sh webhooks
+	@$(T3)/lib/vm-run.sh meeting-tts
+	@$(T3)/lib/vm-run.sh post-meeting
 
 # ═══ VM — lite ════════════════════════════════════════════════════
 
