@@ -843,12 +843,26 @@ async def validate_token(request: Request, payload: dict, db: AsyncSession = Dep
     # Read scopes from DB column, not prefix
     scopes = list(api_token.scopes) if api_token.scopes else ["legacy"]
 
-    return {
+    response = {
         "user_id": user.id,
         "scopes": scopes,
         "max_concurrent": user.max_concurrent_bots,
         "email": user.email,
     }
+
+    # Include webhook config if present (gateway injects as X-User-Webhook-* headers)
+    user_data_blob = user.data if isinstance(user.data, dict) else {}
+    webhook_url = user_data_blob.get("webhook_url")
+    if webhook_url:
+        response["webhook_url"] = webhook_url
+        wh_secret = user_data_blob.get("webhook_secret")
+        if wh_secret:
+            response["webhook_secret"] = wh_secret
+        wh_events = user_data_blob.get("webhook_events")
+        if wh_events:
+            response["webhook_events"] = wh_events
+
+    return response
 
 
 async def backfill_token_scopes():

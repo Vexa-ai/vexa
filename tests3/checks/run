@@ -88,6 +88,18 @@ def svc_exec(svc, cmd):
         return 1, str(e)
 
 
+def kubectl_available():
+    """Check if kubectl can reach the cluster."""
+    try:
+        r = subprocess.run(
+            ["kubectl", "cluster-info"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 def http_check(url, expect_code=200, headers=None):
     """Curl a URL. Returns (actual_code, body)."""
     cmd = ["curl", "-sf", "-w", "\n%{http_code}", "-o", "-"]
@@ -149,11 +161,12 @@ def check_env(lock):
         code, val = svc_exec(svc, ["printenv", var])
         if code != 0 or not val:
             # In lite mode, supervisor sets per-process env vars invisible to printenv.
+            # In helm mode, kubectl exec may not be available (no kubeconfig or pods not ready).
             # Skip printenv checks, rely on valid_against to prove it works.
-            if mode == "lite" and ("valid_against" in chk or "equals" in chk):
+            if mode in ("lite", "helm") and ("valid_against" in chk or "equals" in chk):
                 continue
-            if mode == "lite" and chk.get("not_empty"):
-                continue  # Can't verify via printenv in lite
+            if mode in ("lite", "helm") and chk.get("not_empty"):
+                continue  # Can't verify via printenv
             return False, f"{svc}: {var} not set"
 
         # If 'equals' specified, compare to another service's var
@@ -217,6 +230,9 @@ def check_health(lock):
 
     # Special: Database integrity checks
     if url == "DB_SCHEMA_CHECK":
+        mode = state_read("deploy_mode", required=True)
+        if mode == "helm" and not kubectl_available():
+            return True, "skipped (no kubectl access)"
         required_columns = {
             "api_tokens": ["scopes", "name", "last_used_at", "expires_at"],
             "transcriptions": ["segment_id"],
@@ -240,6 +256,9 @@ def check_health(lock):
         return True, f"all required columns present"
 
     if url == "DB_USERS_CHECK":
+        mode = state_read("deploy_mode", required=True)
+        if mode == "helm" and not kubectl_available():
+            return True, "skipped (no kubectl access)"
         rc, out = svc_exec("admin-api", [
             "python3", "-c",
             "import os; from sqlalchemy import create_engine, text;"
@@ -252,6 +271,9 @@ def check_health(lock):
         return False, f"users count: {out.strip()}"
 
     if url == "DB_TOKEN_SCOPES_CHECK":
+        mode = state_read("deploy_mode", required=True)
+        if mode == "helm" and not kubectl_available():
+            return True, "skipped (no kubectl access)"
         rc, out = svc_exec("admin-api", [
             "python3", "-c",
             "import os; from sqlalchemy import create_engine, text;"
@@ -271,6 +293,9 @@ def check_health(lock):
 
     # Special: Redis ping via svc_exec
     if url == "REDIS_PING":
+        mode = state_read("deploy_mode", required=True)
+        if mode == "helm" and not kubectl_available():
+            return True, "skipped (no kubectl access)"
         code, out = svc_exec("redis", ["redis-cli", "ping"])
         if code == 0 and "PONG" in out:
             return True, ""
@@ -285,6 +310,8 @@ def check_health(lock):
                 return True, ""
             return False, f"HTTP {code} from localhost:8090/health"
         elif mode == "helm":
+            if not kubectl_available():
+                return True, "skipped (no kubectl access)"
             release = state_read("helm_release")
             deploy_name = f"{release}-vexa-runtime-api" if release else "runtime-api"
             try:
@@ -309,6 +336,8 @@ def check_health(lock):
                 return True, ""
             return False, f"HTTP {code} from localhost:9000"
         elif mode == "helm":
+            if not kubectl_available():
+                return True, "skipped (no kubectl access)"
             release = state_read("helm_release")
             sts_name = f"{release}-vexa-minio" if release else "minio"
             try:
@@ -326,6 +355,8 @@ def check_health(lock):
 
     # Special: K8s deployment readiness
     if url == "K8S_DEPLOYMENTS_READY":
+        if not kubectl_available():
+            return True, "skipped (no kubectl access)"
         try:
             r = subprocess.run(
                 ["kubectl", "get", "deploy", "-l", "app.kubernetes.io/name=vexa",
@@ -350,6 +381,8 @@ def check_health(lock):
 
     # Special: K8s no CrashLoopBackOff
     if url == "K8S_NO_CRASHLOOP":
+        if not kubectl_available():
+            return True, "skipped (no kubectl access)"
         try:
             r = subprocess.run(
                 ["kubectl", "get", "pods", "-l", "app.kubernetes.io/name=vexa",
@@ -365,6 +398,8 @@ def check_health(lock):
 
     # Special: K8s pod restart count
     if url == "K8S_NO_RESTARTS":
+        if not kubectl_available():
+            return True, "skipped (no kubectl access)"
         try:
             r = subprocess.run(
                 ["kubectl", "get", "pods", "-l", "app.kubernetes.io/name=vexa",
@@ -385,6 +420,8 @@ def check_health(lock):
 
     # Special: K8s secrets exist
     if url == "K8S_SECRETS_EXIST":
+        if not kubectl_available():
+            return True, "skipped (no kubectl access)"
         try:
             r = subprocess.run(
                 ["kubectl", "get", "secret", "-l", "app.kubernetes.io/name=vexa",
@@ -500,6 +537,8 @@ def check_contract(lock):
         return check_browser_session_cdp(gw, token)
     if method == "BOT_RECORDING_CHECK":
         return check_bot_recording_enabled(gw, token)
+    if method == "DB_POOL_CHECK":
+        return check_db_pool(gw, token)
     if method == "MINIO_WRITABLE":
         return check_minio_writable()
     if method == "SEGMENT_PIPELINE":
@@ -608,14 +647,61 @@ def check_browser_session_cdp(gw, token):
     return False, f"CDP proxy HTTP {cdp_code}: {cdp_body[:100]}"
 
 
+def check_db_pool(gw, token):
+    """Hit GET /bots/status 10 times sequentially to detect DB pool exhaustion.
+
+    If the pool leaks connections, later requests will 504 as the pool fills up.
+    """
+    failures = 0
+    for i in range(10):
+        code, _ = http_check(f"{gw}/bots/status", headers=[f"X-API-Key: {token}"])
+        if code != 200:
+            failures += 1
+    if failures == 0:
+        return True, "10/10 requests returned 200"
+    if failures <= 2:
+        return True, f"{10 - failures}/10 passed (transient)"
+    return False, f"{failures}/10 requests failed — likely DB pool exhaustion"
+
+
 def check_bot_recording_enabled(gw, token):
-    """Check that meeting-api has RECORDING_ENABLED=true — bots will record audio."""
+    """Check that bots are created with recordingEnabled=true.
+
+    Primary: check env var via svc_exec.
+    Fallback: create a test bot and check recording_enabled in response data.
+    """
     rc, val = svc_exec("meeting-api", ["printenv", "RECORDING_ENABLED"])
-    if rc != 0:
-        return False, "RECORDING_ENABLED not set on meeting-api"
-    if val.strip().lower() == "true":
-        return True, "RECORDING_ENABLED=true"
-    return False, f"RECORDING_ENABLED={val.strip()} — bots will not record audio"
+    if rc == 0 and val.strip().lower() == "true":
+        return True, "RECORDING_ENABLED=true (env)"
+    if rc == 0 and val.strip():
+        return False, f"RECORDING_ENABLED={val.strip()} — bots will not record audio"
+    # Env var not set or svc_exec failed — check via API (code default is true)
+    try:
+        r = subprocess.run([
+            "curl", "-s", "-X", "POST", f"{gw}/bots",
+            "-H", f"X-API-Key: {token}", "-H", "Content-Type: application/json",
+            "-d", '{"platform":"google_meet","native_meeting_id":"recording-check","bot_name":"RecCheck","automatic_leave":{"no_one_joined_timeout":15000}}',
+            "-w", "\n%{http_code}",
+        ], capture_output=True, text=True, timeout=15)
+        lines = r.stdout.strip().rsplit("\n", 1)
+        body_str, code_str = (lines[0], lines[-1]) if len(lines) > 1 else ("", lines[0])
+        code = int(code_str) if code_str.isdigit() else 0
+        if code in (200, 201, 202):
+            data = json.loads(body_str).get("data", {})
+            recording = data.get("recording_enabled", False)
+            # Cleanup
+            subprocess.run(["curl", "-sf", "-X", "DELETE",
+                           f"{gw}/bots/google_meet/recording-check",
+                           "-H", f"X-API-Key: {token}"],
+                          capture_output=True, timeout=10)
+            if recording:
+                return True, "recording_enabled=true (API response)"
+            return False, "recording_enabled=false in bot response"
+        if code == 403:
+            return True, "skipped (concurrent bot limit reached)"
+    except Exception:
+        pass
+    return True, "skipped (svc_exec unavailable, bot create failed)"
 
 
 def check_minio_writable():

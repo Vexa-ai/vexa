@@ -71,6 +71,41 @@ class TestHeaderStripping:
         assert captured_headers.get("x-user-scopes") == "bot"
         assert captured_headers.get("x-user-limits") == "3"
 
+    @pytest.mark.asyncio
+    async def test_strips_spoofed_webhook_headers(self):
+        """Client-supplied X-User-Webhook-* headers are stripped and replaced."""
+        captured_headers = {}
+        user_data = {
+            "user_id": 5, "scopes": ["bot"], "max_concurrent": 3, "email": "test@x.com",
+            "webhook_url": "https://real.com/hook",
+        }
+
+        async def mock_request(method, url, headers=None, params=None, content=None):
+            captured_headers.update(headers or {})
+            resp = MagicMock()
+            resp.content = b"{}"
+            resp.status_code = 200
+            resp.headers = {}
+            return resp
+
+        client = AsyncMock()
+        client.request = mock_request
+        client.post = AsyncMock(return_value=_make_validate_response(200, user_data))
+
+        app.state.redis = None
+
+        req = _make_request(headers={
+            "x-api-key": "vxa_bot_abc123",
+            "x-user-webhook-url": "https://attacker.com/steal",
+            "x-user-webhook-secret": "SPOOFED",
+        })
+
+        await forward_request(client, "POST", "http://meeting-api:8000/bots", req)
+
+        # Should use real URL from validated token, not spoofed
+        assert captured_headers.get("x-user-webhook-url") == "https://real.com/hook"
+        assert "x-user-webhook-secret" not in captured_headers  # real user has no secret
+
 
 class TestHeaderInjection:
     """Valid tokens produce X-User-ID/X-User-Scopes/X-User-Limits headers."""
@@ -102,6 +137,67 @@ class TestHeaderInjection:
         assert captured_headers["x-user-id"] == "5"
         assert captured_headers["x-user-scopes"] == "bot"
         assert captured_headers["x-user-limits"] == "3"
+
+    @pytest.mark.asyncio
+    async def test_valid_token_injects_webhook_headers(self):
+        """When validate response includes webhook config, headers are injected."""
+        captured_headers = {}
+        user_data = {
+            "user_id": 5, "scopes": ["bot"], "max_concurrent": 3, "email": "test@x.com",
+            "webhook_url": "https://example.com/hook",
+            "webhook_secret": "whsec_test",
+            "webhook_events": {"meeting.completed": True, "meeting.started": True, "bot.failed": False},
+        }
+
+        async def mock_request(method, url, headers=None, params=None, content=None):
+            captured_headers.update(headers or {})
+            resp = MagicMock()
+            resp.content = b"{}"
+            resp.status_code = 200
+            resp.headers = {}
+            return resp
+
+        client = AsyncMock()
+        client.request = mock_request
+        client.post = AsyncMock(return_value=_make_validate_response(200, user_data))
+
+        app.state.redis = None
+
+        req = _make_request(headers={"x-api-key": "vxa_bot_abc123"})
+        await forward_request(client, "POST", "http://meeting-api:8000/bots", req)
+
+        assert captured_headers["x-user-webhook-url"] == "https://example.com/hook"
+        assert captured_headers["x-user-webhook-secret"] == "whsec_test"
+        # bot.failed is False, so only meeting.completed and meeting.started
+        events = set(captured_headers["x-user-webhook-events"].split(","))
+        assert events == {"meeting.completed", "meeting.started"}
+
+    @pytest.mark.asyncio
+    async def test_no_webhook_headers_when_not_configured(self):
+        """When validate response has no webhook fields, no webhook headers are injected."""
+        captured_headers = {}
+        user_data = {"user_id": 5, "scopes": ["bot"], "max_concurrent": 3, "email": "test@x.com"}
+
+        async def mock_request(method, url, headers=None, params=None, content=None):
+            captured_headers.update(headers or {})
+            resp = MagicMock()
+            resp.content = b"{}"
+            resp.status_code = 200
+            resp.headers = {}
+            return resp
+
+        client = AsyncMock()
+        client.request = mock_request
+        client.post = AsyncMock(return_value=_make_validate_response(200, user_data))
+
+        app.state.redis = None
+
+        req = _make_request(headers={"x-api-key": "vxa_bot_abc123"})
+        await forward_request(client, "GET", "http://meeting-api:8000/bots", req)
+
+        assert "x-user-webhook-url" not in captured_headers
+        assert "x-user-webhook-secret" not in captured_headers
+        assert "x-user-webhook-events" not in captured_headers
 
 
 class TestFailClosed:

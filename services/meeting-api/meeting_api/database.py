@@ -63,6 +63,7 @@ engine = create_async_engine(
     pool_timeout=int(os.environ.get("DB_POOL_TIMEOUT", "30")),
     pool_recycle=1800,
     pool_pre_ping=True,
+    pool_reset_on_return="rollback",
 )
 async_session_local = sessionmaker(
     bind=engine,

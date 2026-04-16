@@ -494,6 +494,13 @@
       "skip_modes": ["lite"]
     },
     {
+      "id": "DB_POOL_NO_EXHAUSTION",
+      "tier": "contract",
+      "proves": "meeting-api DB connection pool does not exhaust under sequential requests",
+      "symptom": "meeting-api returns 504 after a few requests — DB connection pool exhausted (idle in transaction leak)",
+      "method": "DB_POOL_CHECK"
+    },
+    {
       "id": "MINIO_BUCKET_WRITABLE",
       "tier": "contract",
       "proves": "MinIO bucket exists and is writable — recordings and browser state can be stored",

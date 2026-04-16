@@ -183,10 +183,11 @@ vm-provision-lite:                 ## provision VM + deploy lite
 	@$(T3)/lib/vm.sh wait
 	@$(T3)/lib/vm-setup-lite.sh
 
-vm-smoke-lite:                     ## run smoke + dashboard + containers on VM
+vm-smoke-lite:                     ## run smoke + dashboard + containers + webhooks on VM
 	@$(T3)/lib/vm-run.sh smoke
 	@$(T3)/lib/vm-run.sh dashboard-auth
 	@$(T3)/lib/vm-run.sh containers
+	@$(T3)/lib/vm-run.sh webhooks
 
 # ═══ VM — shared ══════════════════════════════════════════════════
 
@@ -239,10 +240,11 @@ lke-provision:                         ## provision LKE cluster + wait for nodes
 lke-setup:                             ## deploy helm chart to LKE cluster
 	@$(T3)/lib/lke-setup-helm.sh
 
-lke-smoke:                             ## run smoke + dashboard + containers on LKE
+lke-smoke:                             ## run smoke + dashboard + containers + webhooks on LKE
 	@$(MAKE) --no-print-directory smoke DEPLOY_MODE=helm
 	@$(MAKE) --no-print-directory dashboard-auth DEPLOY_MODE=helm || true
 	@$(MAKE) --no-print-directory containers DEPLOY_MODE=helm || true
+	@$(MAKE) --no-print-directory webhooks DEPLOY_MODE=helm || true
 
 lke-load-db:                           ## load production DB dump into cluster Postgres
 	@$(T3)/lib/lke-load-db.sh $(DUMP_FILE)

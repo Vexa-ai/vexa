@@ -28,7 +28,7 @@ Provisions two fresh Linode VMs in parallel. Deploys using the exact user path:
 - **Lite VM**: `make lite` (single container + postgres)
 - **Compose VM**: `make all` (full multi-service stack)
 
-Runs automated smoke suite (docs, static, env, health, contracts). VMs stay running for human validation.
+Runs automated smoke suite (docs, static, env, health, contracts, webhooks). VMs stay running for human validation.
 
 ### 3. Human validation
 
@@ -49,6 +49,8 @@ Runs automated smoke suite (docs, static, env, health, contracts). VMs stay runn
 - [ ] Bot joins a Google Meet, audio is captured
 - [ ] Transcript segments appear in the API
 - [ ] Bot stops cleanly, container removed
+- [ ] Webhooks: configure webhook_url via dashboard, create bot, verify `webhook_delivery` in meeting data after completion
+- [ ] Webhooks: status change webhooks fire for enabled event types (meeting.started, meeting.completed)
 - [ ] No errors in logs: `cd /root/vexa && docker compose -f deploy/compose/docker-compose.yml logs --tail=50 2>&1 | grep -i error`
 
 Optional — run full meeting test on VM:
