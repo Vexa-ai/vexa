@@ -5,9 +5,7 @@
 source "$(dirname "$0")/../lib/common.sh"
 
 GATEWAY_URL=$(state_read gateway_url)
-ADMIN_URL=$(state_read admin_url)
 API_TOKEN=$(state_read api_token)
-ADMIN_KEY=$(state_read admin_key)
 MODE=$(state_read deploy_mode)
 
 SECRET="test-secret-12345"
