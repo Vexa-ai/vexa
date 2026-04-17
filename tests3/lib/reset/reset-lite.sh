@@ -39,3 +39,17 @@ for i in $(seq 1 60); do
     fi
     sleep 2
 done
+
+# Re-populate tests3/.state/ URLs. We wiped the state dir above.
+echo "  [reset-lite] re-running detect to populate URLs"
+DEPLOY_MODE=lite bash /root/vexa/tests3/lib/detect.sh 2>&1 | tail -3 || true
+
+# Wait for dashboard
+echo "  [reset-lite] waiting for dashboard..."
+for i in $(seq 1 30); do
+    if curl -sf -o /dev/null http://localhost:3000/ 2>/dev/null; then
+        echo "  [reset-lite] dashboard up (after ${i}s)"
+        break
+    fi
+    sleep 2
+done

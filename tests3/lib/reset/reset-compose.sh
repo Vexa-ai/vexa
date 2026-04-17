@@ -45,3 +45,19 @@ for i in $(seq 1 45); do
     fi
     sleep 2
 done
+
+# Re-populate tests3/.state/ URLs (gateway_url, admin_url, dashboard_url, deploy_mode).
+# We wiped the state dir above; subsequent tests need these to be present.
+echo "  [reset-compose] re-running detect to populate URLs"
+DEPLOY_MODE=compose bash /root/vexa/tests3/lib/detect.sh 2>&1 | tail -3 || true
+
+# Also wait briefly for the dashboard (not just gateway) — dashboard-auth.sh
+# hits the dashboard directly and needs it up at test-start time.
+echo "  [reset-compose] waiting for dashboard..."
+for i in $(seq 1 30); do
+    if curl -sf -o /dev/null http://localhost:3001/ 2>/dev/null; then
+        echo "  [reset-compose] dashboard up (after ${i}s)"
+        break
+    fi
+    sleep 2
+done
