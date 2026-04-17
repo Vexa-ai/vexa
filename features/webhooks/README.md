@@ -283,22 +283,25 @@ Fires on every meeting completion, independent of per-user webhook URLs. Does no
 
 ## DoD
 
-| # | Check | Weight | Status | Evidence | Last checked | Test |
-|---|-------|--------|--------|----------|--------------|------|
-| 1 | Gateway strips spoofed `X-User-Webhook-*` headers | 10 | PASS | `test_strips_spoofed_webhook_headers` + smoke `spoof:` check | 2026-04-17 | api-gateway unit + `tests3/tests/webhooks.sh` #4 |
-| 2 | Gateway injects webhook config from validated user data | 15 | PASS | `test_valid_token_injects_webhook_headers` + smoke `inject:` check | 2026-04-17 | api-gateway unit + `tests3/tests/webhooks.sh` #3 |
-| 3 | `PUT /user/webhook` accepts and persists `webhook_events` | 10 | PASS | `WebhookUpdate` schema + `set_user_webhook` handler | 2026-04-17 | admin-api unit |
-| 4 | `meeting.completed` webhook delivered to user endpoint | 15 | PASS | `e2e: meeting.completed webhook delivered` | 2026-04-17 | `tests3/tests/webhooks.sh` #9 |
-| 5 | Status webhooks fire when enabled via `webhook_events` | 15 | PASS | `e2e: status webhooks fired (N events: meeting.stopping, meeting.completed)` | 2026-04-17 | `tests3/tests/webhooks.sh` #9 |
-| 6 | Status webhooks filtered when NOT enabled | 10 | PASS | `test_status_webhook_skips_disabled_event` | 2026-04-17 | meeting-api unit |
-| 7 | Envelope shape (event_id, event_type, api_version, created_at, data) | 10 | PASS | `build_envelope()` contract test + smoke `envelope:` check | 2026-04-17 | contracts + `tests3/tests/webhooks.sh` #5 |
-| 8 | HMAC signing with timestamp (replay protection) | 10 | PASS | `X-Webhook-Signature: sha256=...`, `X-Webhook-Timestamp` present; absent without secret | 2026-04-17 | contracts + `tests3/tests/webhooks.sh` #7 |
-| 9 | Internal fields stripped from payload | 10 | PASS | `clean_meeting_data` strips `webhook_secret`, `webhook_url`, `bot_container_id`, etc. | 2026-04-17 | `tests3/tests/webhooks.sh` #6 |
-| 10 | `webhook_secret` never in API responses | 10 | PASS | `MeetingResponse.field_serializer` + `safe_data` filter; smoke `no leak:` check | 2026-04-17 | `tests3/tests/webhooks.sh` #8 |
-| 11 | Failed deliveries persist to Redis retry queue | 10 | PASS | `deliver()` enqueues on 5xx after retries; `webhook_delivery.status=queued` | 2026-04-17 | meeting-api unit + integration |
-| 12 | Retry worker backoff schedule (1m→5m→30m→2h, 24h max) | 5 | PASS | `webhook_retry_worker.py` constants verified | 2026-04-17 | meeting-api unit |
-| 13 | SSRF protection blocks private/internal URLs | 10 | PASS | `validate_webhook_url()` rejects RFC1918, localhost, metadata, internal hostnames | 2026-04-17 | meeting-api unit |
-| 14 | DB connection pool does not exhaust (webhook callers no longer hold session during HTTP) | 15 | PASS | `DB_POOL_NO_EXHAUSTION` contract: 10× GET /bots/status sequential, no 504 | 2026-04-17 | `tests3/checks/run` |
-| 15 | Collector recovers from Redis group loss (NOGROUP) — transcripts keep persisting | 15 | PASS | `_ensure_group()` on `redis.exceptions.ResponseError` containing "NOGROUP" | 2026-04-17 | meeting-api collector + VM smoke |
 
-Confidence: 100 (all 15 items PASS — verified on VM 2026-04-17)
+<!-- BEGIN AUTO-DOD -->
+<!-- Auto-written by tests3/lib/aggregate.py from release tag `unknown`. Do not edit by hand — edit the `tests3.dods:` frontmatter + re-run `make -C tests3 report --write-features`. -->
+
+**Confidence: 0%** (gate: 95%, status: ❌ below gate)
+
+| # | Behavior | Weight | Status | Evidence (modes) |
+|---|----------|-------:|:------:|------------------|
+| events-meeting-completed | meeting.completed fires on every bot exit (default-enabled) | 10 | ⬜ missing | `compose`: no report for test=webhooks |
+| events-status-webhooks | Status-change webhooks fire when enabled via webhook_events (meeting.started / bot.failed / meeting.status_change) | 10 | ⬜ missing | `compose`: no report for test=webhooks |
+| envelope-shape | Every webhook carries envelope: event_id, event_type, api_version, created_at, data | 10 | ⬜ missing | `compose`: no report for test=webhooks; `helm`: no report for test=webhooks |
+| headers-hmac | X-Webhook-Signature = HMAC-SHA256(timestamp + '.' + payload) when secret is set | 10 | ⬜ missing | `compose`: no report for test=webhooks; `helm`: no report for test=webhooks |
+| security-spoof-protection | Client-supplied X-User-Webhook-* headers cannot override stored config | 10 | ⬜ missing | `compose`: no report for test=webhooks; `helm`: no report for test=webhooks |
+| security-secret-not-exposed | webhook_secret never appears in any API response (POST /bots, GET /bots/status) | 10 | ⬜ missing | `compose`: no report for test=webhooks; `helm`: no report for test=webhooks |
+| security-payload-hygiene | Internal fields (secret, url, container ids, delivery state) stripped from webhook payloads | 5 | ⬜ missing | `compose`: no report for test=webhooks; `helm`: no report for test=webhooks |
+| flow-user-config | PUT /user/webhook persists webhook_url + webhook_secret + webhook_events to User.data | 10 | ⬜ missing | `compose`: no report for test=webhooks |
+| flow-gateway-inject | Gateway injects validated webhook config into meeting.data on POST /bots | 15 | ⬜ missing | `compose`: no report for test=webhooks |
+| reliability-db-pool | DB connection pool doesn't exhaust under repeated status requests | 10 | ⬜ missing | `lite`: check DB_POOL_NO_EXHAUSTION not found in any smoke-* report; `compose`: check DB_POOL_NO_EXHAUSTION not found in any smoke-* report; `helm`: check DB_POOL_NO_EXHAUSTION not found in any smoke-* report |
+
+<!-- END AUTO-DOD -->
+
+

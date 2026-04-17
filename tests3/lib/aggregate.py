@@ -360,6 +360,74 @@ def render_markdown_report(
 # Output: per-mode summary JSON
 # ─────────────────────────────────────────────────────────────────
 
+AUTO_DOD_BEGIN = "<!-- BEGIN AUTO-DOD -->"
+AUTO_DOD_END = "<!-- END AUTO-DOD -->"
+
+
+def render_dod_table(feature: Feature, tag: str) -> str:
+    """Render the feature's DoD table rows based on current evidence.
+
+    Inserted between AUTO_DOD_BEGIN / AUTO_DOD_END markers in the README.
+    """
+    lines: List[str] = []
+    lines.append(AUTO_DOD_BEGIN)
+    lines.append(f"<!-- Auto-written by tests3/lib/aggregate.py from release tag `{tag}`. Do not edit by hand — edit the `tests3.dods:` frontmatter + re-run `make -C tests3 report --write-features`. -->")
+    lines.append("")
+    lines.append(f"**Confidence: {feature.confidence}%** "
+                 f"(gate: {feature.gate_confidence_min}%, "
+                 f"status: {'✅ pass' if feature.confidence >= feature.gate_confidence_min else '❌ below gate'})")
+    lines.append("")
+    lines.append("| # | Behavior | Weight | Status | Evidence (modes) |")
+    lines.append("|---|----------|-------:|:------:|------------------|")
+    for d in feature.dods:
+        msgs_raw = "; ".join(f"`{m}`: {msg}" for m, msg in d.evidence_msgs) or "—"
+        if len(msgs_raw) > 300:
+            msgs_raw = msgs_raw[:297] + "…"
+        msgs = msgs_raw.replace("|", "\\|")
+        label = d.label.replace("|", "\\|")
+        lines.append(f"| {d.id} | {label} | {d.weight} | {status_glyph(d.status)} {d.status} | {msgs} |")
+    lines.append("")
+    lines.append(AUTO_DOD_END)
+    return "\n".join(lines)
+
+
+def write_feature_readme(feature: Feature, tag: str) -> bool:
+    """Rewrite the AUTO-DOD section in a feature README in place.
+
+    Returns True if the file was modified, False if no markers or already up-to-date.
+    """
+    try:
+        with open(feature.path) as f:
+            content = f.read()
+    except Exception as e:
+        print(f"WARN: could not read {feature.path}: {e}", file=sys.stderr)
+        return False
+
+    begin_idx = content.find(AUTO_DOD_BEGIN)
+    end_idx = content.find(AUTO_DOD_END)
+    new_block = render_dod_table(feature, tag)
+
+    if begin_idx == -1 or end_idx == -1:
+        # Markers missing — find the "## DoD" heading and add markers after it.
+        dod_match = re.search(r"^## DoD\s*$", content, re.MULTILINE)
+        if not dod_match:
+            print(f"SKIP: {feature.path} has no '## DoD' heading; add one + markers manually or re-run after adding", file=sys.stderr)
+            return False
+        insert_pos = dod_match.end()
+        new_content = content[:insert_pos] + "\n\n" + new_block + "\n" + content[insert_pos:]
+    else:
+        end_marker_len = len(AUTO_DOD_END)
+        new_content = content[:begin_idx] + new_block + content[end_idx + end_marker_len:]
+
+    if new_content == content:
+        return False
+
+    with open(feature.path, "w") as f:
+        f.write(new_content)
+    print(f"  wrote DoD table → {os.path.relpath(feature.path, ROOT)} (confidence {feature.confidence}%)", file=sys.stderr)
+    return True
+
+
 def write_mode_summary(mode: str, reports: Dict[str, TestReport]) -> None:
     path = os.path.join(STATE, "reports", mode, "summary.json")
     total = len(reports)
