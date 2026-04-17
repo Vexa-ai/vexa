@@ -319,12 +319,14 @@ def check_health(lock):
         pg_svc = "postgres"
         if mode == "lite":
             pg_svc = "vexa-lite"
+        # -h localhost forces TCP (lite Postgres binds TCP, not the default
+        # unix socket path; plain `psql` fails on the lite container).
         rc, out = svc_exec(pg_svc, [
-            "psql", "-U", "postgres", "-tAc",
+            "psql", "-h", "localhost", "-U", "postgres", "-tAc",
             "SELECT datname FROM pg_database WHERE datname LIKE 'readme%' OR datname LIKE '%recover%'"
         ])
         if rc != 0:
-            return False, f"psql failed: {out.strip()[:120]}"
+            return False, f"psql failed: {out.strip()[:120] or '(empty; rc='+str(rc)+')'}"
         hits = [ln.strip() for ln in out.splitlines() if ln.strip()]
         if hits:
             return False, f"Linode disk-pressure marker present: {hits} — data volume likely replaced"

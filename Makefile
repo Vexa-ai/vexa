@@ -177,7 +177,7 @@ release-full:                      ## stage 6: fresh-reset + full cheap-tier mat
 		case $$mode in \
 			lite)    $(MAKE) --no-print-directory -C tests3 vm-smoke-lite STATE=$(CURDIR)/tests3/.state-lite & ;; \
 			compose) $(MAKE) --no-print-directory -C tests3 vm-smoke-compose STATE=$(CURDIR)/tests3/.state-compose & ;; \
-			helm)    $(MAKE) --no-print-directory -C tests3 lke-smoke STATE=$(CURDIR)/tests3/.state-helm & ;; \
+			helm)    $(MAKE) --no-print-directory -C tests3 lke-smoke STATE=$(CURDIR)/tests3/.state-helm SCOPE= & ;; \
 		esac; \
 	done; wait
 	@$(MAKE) --no-print-directory release-report
