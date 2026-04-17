@@ -1,205 +1,118 @@
 ---
 name: release
-description: "Invoke this skill for ANY release work on the Vexa repo: planning a release from GitHub issues, provisioning deployments, iterating on targeted tests against live VMs, running the full authoritative validation, filling the human validation checklist, merging to main, or tearing down the infra afterward. This is the single entry point for the 7-stage commanded release process defined in /home/dima/dev/vexa/tests3/release-validation.md. Use when the user says things like 'let's ship', 'release this', 'validate', 'start a release', 'run the pipeline', 'provision VMs', 'iterate on the fix', 'gate check', 'merge to main', 'tear down', 'new release cycle', or refers to scope.yaml / release-validation.md / validate-<mode> / the 7-stage flow."
+description: "Master orchestrator for the Vexa release cycle. Invoke this when the user talks about 'releasing', 'shipping', 'validating a release', 'the release pipeline', 'where are we in the release', 'what's next', 'run the whole cycle' — or when you need to pick the correct next stage in the numbered flow. This skill determines the current stage from on-disk state and points at the correct per-stage skill / command. Do NOT invoke for a specific stage the user has already named — go directly to that stage's skill (`0-groom` / `1-plan` / `2-provision` / `3-develop` / `4-deploy` / `5-iterate` / `6-full` / `7-human` / `8-ship` / `9-teardown`)."
 ---
 
-## What this replaces
+## You are the orchestrator
 
-The old `master`, `dev`, `dev-init`, `dev-develop`, `dev-develop-report`,
-`dev-finalize`, `dev-cleanup`, and `deployment` skills. They described an
-ad-hoc flow that drifted from run to run. The new flow is **7 explicit
-commands**, one per stage, driven by a per-release scope file. No drift:
-if you find yourself running `docker compose …` ad-hoc during a release,
-stop and look up the correct `make release-*` command.
+Ten stages, one master flow. Each stage has its own skill. Your job: determine the current stage and direct the user to the correct per-stage skill or make command. Refuse to skip stages.
 
-## The 7 stages
+## Stage map
 
-Every release cycle on the `vexa` repo follows this sequence. Each stage
-is ONE command. Refuse to deviate.
+| # | Stage | Skill | Command | Produces |
+|---|-------|-------|---------|----------|
+| 0 | groom | `0-groom` | *(manual + `gh issue` + Discord)* | packs of issues ready for planning |
+| 1 | plan | `1-plan` | `make release-plan ID=<slug>` | `tests3/releases/<id>/scope.yaml` |
+| 2 | provision | `2-provision` | `make release-provision SCOPE=$SCOPE` | `tests3/.state-{lite,compose,helm}/` |
+| 3 | develop | `3-develop` | *(local code + tests)* | commits on `dev` |
+| 4 | deploy | `4-deploy` | `make release-deploy SCOPE=$SCOPE` | `:dev` images on every VM |
+| 5 | iterate | `5-iterate` | `make release-iterate SCOPE=$SCOPE` | scope-filtered report (dev loop) |
+| 6 | full | `6-full` | `make release-full SCOPE=$SCOPE` | automated gate: fresh-reset + full matrix |
+| 7 | human | `7-human` | `make release-human-sheet SCOPE=$SCOPE` + edit + `release-human-gate` | signed-off `human-checklist.md` |
+| 8 | ship | `8-ship` | `make release-ship SCOPE=$SCOPE` | dev merged to main, `:latest` promoted |
+| 9 | teardown | `9-teardown` | `make release-teardown SCOPE=$SCOPE` | infra destroyed |
 
-| # | Stage       | Command                                             | When           |
-|---|-------------|-----------------------------------------------------|----------------|
-| 1 | plan        | `make release-plan ID=<slug>`                       | once, up front |
-| 2 | provision   | `make release-provision SCOPE=$SCOPE`               | after plan     |
-| 3 | develop     | *(local dev — edit code + tests + frontmatter)*     | parallel to #2 |
-| 4 | deploy      | `make release-deploy SCOPE=$SCOPE`                  | after 2 + 3    |
-| 5 | iterate     | `make release-iterate SCOPE=$SCOPE`                 | loop until green |
-| 6 | full + human | `make release-full SCOPE=$SCOPE` + `make release-human-sheet SCOPE=$SCOPE` | after iterate green |
-| 7 | ship        | `make release-ship SCOPE=$SCOPE`                    | both gates green |
-| 8 | teardown    | `make release-teardown SCOPE=$SCOPE`                | after ship     |
+Stages 2 and 3 run **in parallel**. Every other stage gates on the previous.
 
-Set `export SCOPE=tests3/releases/<id>/scope.yaml` once after stage 1; every
-subsequent command reads it.
+## Detecting the current stage
 
-## Stage 1: plan
-
-Create the scope file. The scope is the contract between the dev work and
-the validation — it lists every issue in flight, its root-cause hypothesis,
-the commits that fix it, and **which test steps / registry checks would
-go fail→pass once the fix is correct**. It also pins which deployments
-must prove the release out (lite / compose / helm — default all three).
+Run these checks top-to-bottom; the first miss is your current stage:
 
 ```bash
-cd ~/dev/vexa
-make release-plan ID=260417-webhooks-dbpool     # writes tests3/releases/260417-webhooks-dbpool/scope.yaml
-$EDITOR tests3/releases/260417-webhooks-dbpool/scope.yaml
-export SCOPE=tests3/releases/260417-webhooks-dbpool/scope.yaml
+# 0. Is there a scope file?
+if [ -z "${SCOPE:-}" ] || [ ! -f "$SCOPE" ]; then
+    # Before 1 — are there fresh issues to groom?
+    GH_OPEN=$(gh issue list --repo Vexa-ai/vexa --state open --json number --jq length 2>/dev/null)
+    echo "NEXT: 0-groom (issues open: $GH_OPEN) → then 1-plan"
+    exit 0
+fi
+
+# 1. Is every mode in the scope provisioned?
+python3 - <<'PY'
+import os, yaml
+s = yaml.safe_load(open(os.environ["SCOPE"]))
+for m in s["deployments"]["modes"]:
+    ip = f"tests3/.state-{m}/vm_ip" if m != "helm" else "tests3/.state-helm/lke_node_ip"
+    if not os.path.isfile(ip):
+        print(f"NEXT: 2-provision ({m} not up)"); exit()
+PY
+
+# 2. Has :dev been built and deployed since the last commit?
+HEAD=$(git rev-parse --short HEAD)
+LAST_TAG=$(cat deploy/compose/.last-tag 2>/dev/null || echo none)
+[ "$LAST_TAG" = "none" ] && echo "NEXT: 3-develop or 4-deploy (no :dev tag yet)"
+
+# 3. Is there a report for the current tag?
+if [ ! -f "tests3/reports/release-${LAST_TAG}.md" ]; then
+    echo "NEXT: 5-iterate (no report for $LAST_TAG)"
+    exit 0
+fi
+
+# 4. Did release-full pass?
+grep -q "Release gate PASSED" "tests3/reports/release-${LAST_TAG}.md" 2>/dev/null \
+    || { echo "NEXT: 6-full (automated gate red)"; exit 0; }
+
+# 5. Is there a human checklist?
+CHECKLIST="$(dirname "$SCOPE")/human-checklist.md"
+if [ ! -f "$CHECKLIST" ]; then
+    echo "NEXT: 7-human (no checklist yet)"; exit 0
+fi
+
+# 6. Is it signed off?
+UNCHECKED=$(grep -c '^- \[ \]' "$CHECKLIST" || echo 0)
+if [ "$UNCHECKED" != "0" ]; then
+    echo "NEXT: 7-human ($UNCHECKED unchecked — edit $CHECKLIST)"; exit 0
+fi
+
+# 7. Did this commit pass the release status?
+SHA=$(git rev-parse origin/main 2>/dev/null || git rev-parse HEAD)
+STATE=$(gh api "repos/Vexa-ai/vexa/commits/$SHA/statuses" --jq '.[] | select(.context=="release/vm-validated") | .state' 2>/dev/null | head -1)
+[ "$STATE" != "success" ] && echo "NEXT: 8-ship"
+
+# 8. Any .state-<mode>/vm_id still around?
+[ -f tests3/.state-lite/vm_id ] || [ -f tests3/.state-compose/vm_id ] || [ -f tests3/.state-helm/lke_id ] \
+    && echo "NEXT: 9-teardown"
 ```
 
-Fill in for each issue:
+Tell the user **which stage is next**, **which command to run**, and **why that's the next step** (e.g. "because webhook-status-fast-path is still ❌ fail on compose in the latest report"). Don't just recite the stage list — diagnose.
 
-- `problem`: user-visible symptom.
-- `hypothesis`: root-cause theory.
-- `fix_commits`: git SHAs (grow as you commit).
-- `proves`: list of `{test, step, modes}` or `{check, modes}` bindings.
-- `required_modes`: deployments that must go green for this issue.
-- `human_verify`: list of `{mode, do, expect}` steps for the human sheet.
+## Ground rules
 
-Source issues from `gh issue list --repo Vexa-ai/vexa` and human reports.
+1. **One command per stage.** If the user wants to do something mid-release that isn't a `make release-*` target, STOP. Either (a) they're in the wrong stage, or (b) we have a drift — file it as a follow-up.
+2. **Scope is the contract.** Written once at stage 1, read by every stage after. Add new issues mid-cycle yes; changing existing `proves:` bindings no.
+3. **Both gates before ship.** Stage 6 (automated) AND stage 7 (human) must be green. `8-ship` enforces this.
+4. **Teardown happens last.** Don't destroy VMs before ship — you lose the validated state if ship fails.
 
-## Stage 2: provision (parallel with stage 3)
-
-Spins up every deployment listed in `scope.deployments.modes` in parallel.
-Takes ~10 min — kick it off early so it runs while you develop.
-
-```bash
-make release-provision SCOPE=$SCOPE
-```
-
-Creates `tests3/.state-{lite,compose,helm}/` with per-deployment credentials
-(vm_ip, kubeconfig, etc). Reruns are idempotent — will reuse existing infra.
-
-## Stage 3: develop (local, out-of-band)
-
-Edit code + tests + frontmatter in parallel with the provision job. Any new
-DoD goes in the feature's `features/*/README.md` frontmatter `tests3.dods:`
-block. Any new test step goes in `tests3/test-registry.yaml` AND as a
-`step_pass`/`step_fail` call in the test script. `tests3/lib/common.sh`
-exposes `test_begin` / `step_pass` / `step_fail` / `step_skip` / `test_end`.
-
-No stdout parsing — JSON reports under `.state/reports/<mode>/<test>.json`
-are the only source of truth. Commit to `dev` when the local unit tests pass.
-
-## Stage 4: deploy
-
-Builds a fresh `:dev` timestamp tag, publishes to DockerHub, pulls on each
-provisioned deployment, restarts the stack (keeps volumes).
-
-```bash
-make release-deploy SCOPE=$SCOPE
-```
-
-## Stage 5: iterate (fast inner loop)
-
-Runs **only** the tests the scope's `proves[]` references for each mode.
-Fast (~2-3 min), scope-filtered. Produces a report with a "Scope status"
-section showing per-issue verdicts across each mode.
-
-```bash
-make release-iterate SCOPE=$SCOPE
-# → tests3/reports/release-<tag>.md
-```
-
-Loop: if something is red → edit code → commit → `make release-deploy
-SCOPE=$SCOPE && make release-iterate SCOPE=$SCOPE` → repeat.
-
-Reports show per-feature confidence. The iterate step does NOT gate merge —
-it's the dev loop. Gating happens at stage 6.
-
-## Stage 6: full + human
-
-Two gates; both must pass before ship.
-
-### 6a. full automated (fresh state)
-
-```bash
-make release-full SCOPE=$SCOPE
-```
-
-This does: reset every deployment (wipe stack + volumes, keep VMs/cluster)
-→ redeploy latest `:dev` → run the full cheap-tier matrix across every
-mode → aggregate → gate-check. The gate fails if:
-
-- any feature's confidence drops below its `gate.confidence_min` in its
-  README frontmatter (or below 100% if the feature is listed in
-  `scope.strict_features`), OR
-- any `scope.issues[]` has a `fail` status in one of its `required_modes`.
-
-### 6b. human checklist
-
-```bash
-make release-human-sheet SCOPE=$SCOPE
-# → tests3/releases/<id>/human-checklist.md
-```
-
-The generated checklist has two parts:
-- **ALWAYS**: static checks from `tests3/human-always.yaml` — dashboard
-  loads, bot joins a real meeting, transcripts persist, no error spike in
-  logs. Applies every release regardless of scope.
-- **THIS RELEASE**: scope-specific checks from `scope.issues[].human_verify`
-  (one line per `mode × do × expect`).
-
-Edit the markdown, change each `- [ ]` to `- [x]` as you verify. Any
-unchecked box blocks ship (enforced by `release-human-gate`).
-
-## Stage 7: ship
-
-Refuses to run unless both gates are green.
-
-```bash
-make release-ship SCOPE=$SCOPE
-```
-
-Does: verify human checklist → push `release/vm-validated` GitHub status
-→ PR dev→main → merge → fix `env-example` on main (`IMAGE_TAG=latest`) →
-promote every image `:dev → :latest`.
-
-## Stage 8: teardown
-
-Destroys every VM + LKE cluster. Irreversible — only run after ship is
-green.
-
-```bash
-make release-teardown SCOPE=$SCOPE
-```
-
-## Escape hatches
-
-- **Cold-start full pipeline**: `make release-test SCOPE=$SCOPE` runs
-  provision + deploy + full in sequence. Useful for one-shot validation
-  of an existing scope.
-- **Partial teardown**: `make -C tests3 vm-destroy STATE=tests3/.state-<mode>`
-  removes a single deployment.
-- **Debug a live deployment**: SSH info is in `tests3/.state-<mode>/vm_ip`;
-  kubeconfig is in `tests3/.state-helm/lke_kubeconfig_path`.
-- **Inspect reports**: `tests3/reports/release-<tag>.md` is the current
-  authoritative report; `features/*/README.md` DoD tables are auto-written
-  from the same evidence.
-
-## Key files
+## Files to know
 
 ```
 tests3/
-├── release-validation.md              # the doc — single source of truth
-├── test-registry.yaml                 # test catalog (tier, runs_in, steps, features)
-├── human-always.yaml                  # static human checks (every release)
-├── checks/registry.json               # static + env + health + contract checks
-├── lib/
-│   ├── common.sh                      # test_begin/step_* helpers
-│   ├── run-matrix.sh                  # run tests for a mode (±--scope)
-│   ├── aggregate.py                   # build release report + update feature READMEs
-│   ├── human-checklist.py             # generate + gate the human sheet
-│   └── reset/                         # per-mode reset scripts
-└── releases/
-    ├── _template/scope.yaml           # scope file template
-    └── <id>/
-        ├── scope.yaml                 # this release's issues + bindings
-        └── human-checklist.md         # generated at stage 6b
+├── release-validation.md            # authoritative doc
+├── test-registry.yaml               # test catalog
+├── human-always.yaml                # static human checks
+├── checks/registry.json             # check catalog (static/env/health/contract)
+├── skills/                          # you are here
+│   ├── release/                     # this skill
+│   ├── 0-groom/ 1-plan/ ... 9-teardown/
+├── releases/
+│   ├── _template/scope.yaml         # scope schema
+│   └── <id>/
+│       ├── scope.yaml               # stage 1 output
+│       └── human-checklist.md       # stage 7 output
+└── reports/
+    └── release-<tag>.md             # stages 5 + 6 outputs
 ```
 
-## Escalation
+## When in doubt
 
-If the release keeps failing the same check across modes: stop iterating.
-The hypothesis is wrong. Go back to stage 1 — re-read the problem
-statement, write a new hypothesis as a new `issues:` entry. Don't
-workaround in the test.
+Re-read `tests3/release-validation.md`. That's the ground truth. This skill is its orchestration layer; the stage skills are its drill-downs.
