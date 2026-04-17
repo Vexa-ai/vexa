@@ -37,6 +37,15 @@ issues:
     # Deployments that MUST go green for this issue before release ships.
     # If omitted, defaults to every mode listed in proves[].modes.
     required_modes: [compose]
+    # Human verification steps for this fix — surfaced in the per-release
+    # human-checklist.md alongside the static always-checks. Keep each item
+    # a single action + an observable outcome (click X, see Y).
+    # Templated: {vm_ip} / {node_ip} / {dashboard_url} substituted by the
+    # human-checklist generator from tests3/.state-<mode>/.
+    human_verify:
+      - mode: compose
+        do: "Configure a webhook via PUT /user/webhook (webhook_events: {meeting.completed: true, meeting.stopping: true})"
+        expect: "meeting.data.webhook_deliveries contains >= 1 entry after a bot stop"
 
 # Optional: expensive-tier tests to run during release-full (not release-iterate).
 # These usually need external dependencies (Google Meet account, TTS, etc.).

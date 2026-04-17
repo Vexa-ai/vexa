@@ -28,6 +28,13 @@ issues:
       - {test: webhooks, step: inject, modes: [compose, helm]}
       - {test: webhooks, step: spoof, modes: [compose, helm]}
     required_modes: [compose]
+    human_verify:
+      - mode: compose
+        do: "PUT /user/webhook with {webhook_url: https://httpbin.org/post, webhook_events: {meeting.completed:true}}"
+        expect: "POST /bots (no X-User-Webhook-* header) → response.data.webhook_url == your URL"
+      - mode: compose
+        do: "Repeat POST /bots but WITH a client-supplied X-User-Webhook-URL: https://attacker.example.com/steal"
+        expect: "response.data.webhook_url is your URL, NOT the attacker URL (header stripped)"
 
   - id: webhook-status-fast-path
     source: human
@@ -45,6 +52,10 @@ issues:
       - {test: webhooks, step: e2e_completion, modes: [compose]}
       - {test: webhooks, step: e2e_status, modes: [compose]}
     required_modes: [compose]
+    human_verify:
+      - mode: compose
+        do: "PUT /user/webhook with webhook_events={meeting.completed:true, meeting.status_change:true}; POST /bots with a fake google_meet URL; DELETE immediately (<5s → hits fast-path)"
+        expect: "After 20s, meeting.data has webhook_delivery.status=delivered AND webhook_deliveries[] has >= 1 entry"
 
   - id: db-pool-exhaustion
     source: human
@@ -61,6 +72,13 @@ issues:
     proves:
       - {check: DB_POOL_NO_EXHAUSTION, modes: [lite, compose, helm]}
     required_modes: [lite, compose, helm]
+    human_verify:
+      - mode: compose
+        do: "Hit GET /bots/status 30 times in a loop (`for i in $(seq 1 30); do curl -sf -H 'X-API-Key: ...' http://{vm_ip}:8056/bots/status -o /dev/null -w '%{http_code}\\n'; done`)"
+        expect: "Every response is 200; no 504s"
+      - mode: compose
+        do: "Check Postgres for idle-in-transaction connections: `docker exec vexa-postgres-1 psql -U postgres -d vexa -c \"SELECT count(*) FROM pg_stat_activity WHERE state='idle in transaction';\"`"
+        expect: "count is 0 (or near 0) even after sustained load"
 
   - id: transcripts-gone-after-stop
     source: human
@@ -78,6 +96,13 @@ issues:
       # alive end to end; verify separately via the recovery drill below.
       - {test: webhooks, step: e2e_completion, modes: [lite, compose]}
     required_modes: [lite, compose]
+    human_verify:
+      - mode: lite
+        do: "Force Redis group loss: `docker exec vexa-lite redis-cli XGROUP DESTROY transcription_segments collector_group; docker exec vexa-lite redis-cli XGROUP DESTROY speaker_events_relative collector_speaker_group` — wait 15s"
+        expect: "Logs show `Recreated consumer group 'collector_group'` within 10s; `docker exec vexa-lite redis-cli XINFO GROUPS transcription_segments` shows the group back"
+      - mode: lite
+        do: "Run a real ~60s meeting end-to-end (bot + audio), stop bot"
+        expect: "meeting.data.end_time set AND `SELECT COUNT(*) FROM transcriptions WHERE meeting_id=<id>` > 0"
 
   - id: recording-enabled-default
     source: human
@@ -92,6 +117,10 @@ issues:
     proves:
       - {check: BOT_RECORDING_ENABLED, modes: [compose, helm]}
     required_modes: [compose]
+    human_verify:
+      - mode: compose
+        do: "POST /bots without `recording_enabled` in the body"
+        expect: "response.data.recording_enabled == true"
 
 expensive_tests: []
 

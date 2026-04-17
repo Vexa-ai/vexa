@@ -182,6 +182,14 @@ release-full:                      ## stage 6: fresh-reset + full cheap-tier mat
 	done; wait
 	@$(MAKE) --no-print-directory release-report
 
+release-human-sheet:               ## stage 6b: generate tests3/releases/<id>/human-checklist.md (always + scope-specific)
+	@test -n "$(SCOPE)" || (echo "  ERROR: set SCOPE" && exit 2)
+	@python3 $(CURDIR)/tests3/lib/human-checklist.py generate --scope $(SCOPE)
+
+release-human-gate:                ## verify the human checklist — every `- [ ]` must be `- [x]`
+	@test -n "$(SCOPE)" || (echo "  ERROR: set SCOPE" && exit 2)
+	@python3 $(CURDIR)/tests3/lib/human-checklist.py gate --scope $(SCOPE)
+
 release-teardown:                  ## stage 8: destroy all provisioned infra (call AFTER release-ship)
 	@MODES="lite compose helm"; \
 	if [ -n "$(SCOPE)" ] && [ -f "$(SCOPE)" ]; then MODES="$(_SCOPE_MODES)"; fi; \
@@ -232,8 +240,14 @@ release-validate:                  ## push GitHub status + destroy VMs + destroy
 	@$(MAKE) --no-print-directory -C tests3 vm-destroy STATE=$(CURDIR)/tests3/.state-compose 2>/dev/null || true
 	@$(MAKE) --no-print-directory -C tests3 lke-destroy STATE=$(CURDIR)/tests3/.state-helm 2>/dev/null || true
 
-release-ship:                      ## validate + PR + merge + fix env + promote (after human validation)
-	@echo "  ── Step 1: Push validation status + destroy VMs ──"
+release-ship:                      ## stage 7: verify both gates + PR dev→main + promote :latest
+	@echo "  ── Stage 7.1: Human checklist gate ──"
+	@if [ -n "$(SCOPE)" ]; then \
+		$(MAKE) --no-print-directory release-human-gate SCOPE=$(SCOPE); \
+	else \
+		echo "  SKIP: no SCOPE given (legacy flow — human gate not enforced)"; \
+	fi
+	@echo "  ── Stage 7.2: Push GitHub validation status ──"
 	@$(MAKE) --no-print-directory release-validate
 	@echo ""
 	@echo "  ── Step 2: Create + merge PR ──"

@@ -1,0 +1,48 @@
+# Static human-validation checks that apply to EVERY release.
+# Appended to tests3/releases/<id>/human-checklist.md by human-checklist.py.
+#
+# These are the irreducible "the product works" checks that the automated
+# matrix can't fully prove — dashboard UX, real meeting join, transcript UX.
+#
+# Structure:
+#   modes: applies to these deployments (referenced by scope.deployments.modes)
+#   items: list of human actions; each shows as `- [ ] text` in the checklist.
+
+always:
+  - modes: [lite]
+    section: "Lite VM"
+    items:
+      - "Dashboard at http://{vm_ip}:3000 loads; magic-link login works (test@vexa.ai)."
+      - "/meetings page renders (even if empty)."
+      - "Create a browser session via API; CDP URL returns a working session."
+      - "Logs clean: `docker logs vexa-lite 2>&1 | grep -i error | tail -20` shows nothing concerning."
+      - "Container stays under ~2 GB: `docker stats --no-stream vexa-lite`."
+
+  - modes: [compose]
+    section: "Compose VM"
+    items:
+      - "Dashboard at http://{vm_ip}:3001 loads; magic-link login works."
+      - "API docs page at http://{vm_ip}:8056/docs renders."
+      - "Create a bot via dashboard UI with a REAL Google Meet URL; bot container appears (`docker ps --filter name=meeting-`)."
+      - "Bot joins the meeting within 60s; status transitions to active."
+      - "Transcript segments appear live (WS) and via REST at `/transcripts/<platform>/<native_id>`."
+      - "DELETE bot; container fully removed; meeting status=completed."
+      - "Logs clean: `cd /root/vexa && docker compose -f deploy/compose/docker-compose.yml logs --tail=50 2>&1 | grep -i error`."
+      - "Post-meeting transcript persisted: same /transcripts endpoint returns non-empty segments after bot stop."
+
+  - modes: [helm]
+    section: "Helm / LKE cluster"
+    items:
+      - "`kubectl get pods` shows every vexa component in Running state (no CrashLoopBackOff)."
+      - "Gateway reachable at http://{node_ip}:30056/."
+      - "Dashboard reachable at http://{node_ip}:30001/."
+      - "`kubectl get events --field-selector type=Warning --sort-by=.lastTimestamp` has no new warnings."
+      - "Create a bot via API (X-API-Key); bot pod spawns; no scheduling errors."
+
+  # Cross-cutting — applies to every mode:
+  - modes: [lite, compose, helm]
+    section: "Release integrity"
+    items:
+      - "Versions: all running images carry the SAME timestamp tag. `docker inspect` (compose/lite) or `kubectl describe pod` (helm) agrees with the build tag in `deploy/compose/.last-tag`."
+      - "No stale containers from prior test runs: `docker ps -a | grep -E 'lifecycle-|webhook-test|spoof-test'` empty."
+      - "No error spike in last 5 minutes of meeting-api logs."
