@@ -12,77 +12,74 @@ No ad-hoc runs. No fallbacks. No legacy paths.
 
 ## Flow diagram
 
+One release = one big loop, two exit gates (automated test + human).
+
 ```
-                                    ┌────────────────────────────────┐
-                                    │  0. groom                      │
-                                    │    Triage GH issues + Discord; │
-                                    │    pick what lands in scope.   │
-                                    └──────────────┬─────────────────┘
-                                                   ▼
-                                    ┌────────────────────────────────┐
-                                    │  1. plan                       │
-                                    │    make release-plan ID=<slug> │
-                                    │    → tests3/releases/<id>/scope.yaml
-                                    └──────────────┬─────────────────┘
-                                                   ▼
-                    ┌──────────────────────────────┴──────────────────────────────┐
-                    ▼ (parallel)                                                  ▼
-    ┌───────────────────────────────┐               ┌─────────────────────────────────┐
-    │  2. provision                 │               │  3. develop  (out-of-band)      │
-    │    make release-provision     │               │    code + tests + feature DoDs   │
-    │    → Linode VMs + LKE cluster │               │    commit to `dev`               │
-    └──────────────┬────────────────┘               └─────────────────────────────────┘
-                   ▼
-    ┌───────────────────────────────┐
-    │  4. deploy                    │◀─────────────────── (loop, on every fix) ──┐
-    │    make release-deploy        │                                            │
-    │    → build :dev + push + up   │                                            │
-    └──────────────┬────────────────┘                                            │
-                   ▼                                                             │
-    ┌───────────────────────────────┐    any required issue still red?           │
-    │  5. iterate                   │──────▶ edit code, git commit, push ────────┘
-    │    make release-iterate       │
-    │    → scope-filtered tests     │
-    │    → report + feature DoDs    │
-    └──────────────┬────────────────┘
-                   ▼ all scope issues green
-    ┌───────────────────────────────┐
-    │  6. full                      │◀─────────────── (loop, on every regression) ──┐
-    │    make release-full          │                                               │
-    │    → fresh-reset every mode   │                                               │
-    │    → full cheap-tier matrix   │                                               │
-    │    → per-feature confidence   │                                               │
-    │    → gate-check               │                                               │
-    └──────────────┬────────────────┘                                               │
-                   ▼ gate PASSED                                                    │
-    ┌───────────────────────────────┐                                               │
-    │  7. human                     │                                               │
-    │    make release-human-sheet   │                                               │
-    │    → human-checklist.md       │                                               │
-    │    (fill in by inspection)    │                                               │
-    │    make release-human-gate    │                                               │
-    └──────────────┬────────────────┘                                               │
-                   ▼ all boxes checked                                              │
-    ┌───────────────────────────────┐         human finds a bug during the sheet?   │
-    │   Did the human find a bug?   │──yes──▶ make release-issue-add SOURCE=human  │
-    │                               │         (requires GAP + NEW_CHECKS fields) ───┘
-    └──────────────┬────────────────┘              ▲
-                   ▼ no                            │
-                                                   │ (loop cap: 3 rounds, then
-                                                   │  restructure scope)
-    ┌───────────────────────────────┐
-    │  8. ship                      │
-    │    make release-ship          │
-    │    → GitHub status, PR→main,  │
-    │      promote :dev → :latest   │
-    └──────────────┬────────────────┘
-                   ▼
-    ┌───────────────────────────────┐
-    │  9. teardown                  │
-    │    make release-teardown      │
-    │    → destroy VMs + LKE        │
-    └───────────────────────────────┘
+              ┌──────────────────────────────┐
+              │  0. groom                    │  triage GH + Discord
+              │  1. plan → scope.yaml        │  decide what lands
+              └──────────────┬───────────────┘
+                             │
+                  ┌──────────┴──────────┐
+                  ▼ (in parallel)       ▼
+          ┌───────────────┐     ┌───────────────┐
+          │ 2. provision  │     │ 3. develop    │  (code + tests + DoDs,
+          │   VMs + LKE   │     │   on `dev`    │   out of band)
+          └───────┬───────┘     └───────┬───────┘
+                  └──────────┬──────────┘
+                             ▼
+                    ┌─────────────────┐
+                    │  4. deploy      │  ◀──┐
+                    │   build+push    │     │
+                    │   :dev → stacks │     │
+                    └────────┬────────┘     │
+                             ▼              │
+                    ┌─────────────────┐     │
+                    │  5. test        │     │  ─── automated gate ───
+                    │   scope-filter  │     │
+                    │   → clean-reset │     │
+                    │     full matrix │     │
+                    │   → gate-check  │     │
+                    └───┬──────┬──────┘     │
+                       fail   pass          │
+                        │      │            │
+                        └──▶ develop ───────┘  (fix code, re-deploy, re-test)
+                               ▲
+                               │
+                    ┌──────────┴──────┐
+                    │                 │
+                    │  pass           │
+                    ▼                 │
+              ┌─────────────┐         │
+              │  6. human   │         │  ─── human gate ───
+              │   checklist │         │
+              │   (hash-    │         │
+              │   tagged)   │         │
+              └──┬───────┬──┘         │
+                fail    pass          │
+                 │       │            │
+                 │       └────▶ 7. ship ─▶ 8. teardown
+                 │                    ▲
+                 │                    │
+                 │  human found a bug │
+                 └─▶ stage 3b ────────┘
+                   (release-issue-add SOURCE=human
+                    requires GAP + NEW_CHECKS;
+                    implement the check, goto develop)
 ```
+
+**There is one loop, not two.** `make release-iterate` and
+`make release-full` are the **same test stage** at two fidelities:
+
+- `release-iterate` — scope-filtered, dirty state, ~2–3 min. The fast
+  feedback inside the develop → deploy → test → develop loop.
+- `release-full` — clean-reset, full cheap matrix, ~15 min. The
+  authoritative exit check before handing off to human. Run it once
+  when iterate is green.
+
+Both write to the same report. Both call the same aggregator. Both
+enforce the same gate. `release-iterate` is an optimization — it is NOT
+a separate stage in the protocol.
 
 ---
 
@@ -130,17 +127,23 @@ pipeline, not "just this release".
 
 | # | Stage | Command | Produces | Gate |
 |---|-------|---------|----------|------|
-| 0 | groom | `skills/0-groom` | Short list: candidate issues (GH + Discord + internal) | — |
+| 0 | groom | *(skill)* `0-groom` | Short list: candidate issues (GH + Discord + internal) | — |
 | 1 | plan | `make release-plan ID=<slug>` | `tests3/releases/<id>/scope.yaml` | — |
 | 2 | provision | `make release-provision SCOPE=…` | VMs + LKE cluster; `tests3/.state-<mode>/*` | — |
-| 3 | develop | *(local)* | Commits on `dev`; test scripts; feature DoDs | — |
-| 3b | *(human bug intake)* | `make release-issue-add SOURCE=human GAP=… NEW_CHECKS=…` | Appends an issue to `scope.yaml`; blocks ship until the new check passes | schema enforced by helper |
-| 4 | deploy | `make release-deploy SCOPE=…` | `:dev` pushed; stack up on every mode | — |
-| 5 | iterate | `make release-iterate SCOPE=…` | Per-test JSON reports; `tests3/reports/release-<tag>.md`; feature DoD tables | — (not authoritative) |
-| 6 | full | `make release-full SCOPE=…` | Reset + full cheap-tier matrix; aggregated report | per-feature confidence + scope required_modes |
-| 7 | human | `make release-human-sheet SCOPE=…` / `make release-human-gate SCOPE=…` | `tests3/releases/<id>/human-checklist.md` with hash-tagged ticks | every `- [ ]` must be `- [x]` |
-| 8 | ship | `make release-ship SCOPE=…` | `release/vm-validated` GH status; PR dev→main; `:dev → :latest` promotion | aggregator gate + human gate |
-| 9 | teardown | `make release-teardown SCOPE=…` | Destroyed VMs + cluster | — |
+| 3 | develop | *(local; commits on `dev`)* | Code + tests + feature DoDs | — |
+| 3b | *(human bug intake, entered from 6)* | `make release-issue-add SOURCE=human GAP=… NEW_CHECKS=…` | Appends an issue to `scope.yaml`; blocks ship until the new check passes | schema enforced by helper + aggregator |
+| 4 | deploy | `make release-deploy SCOPE=…` | `:dev` pushed; stacks up on every mode | — |
+| 5 | test | `make release-iterate SCOPE=…` (fast) **or** `make release-full SCOPE=…` (authoritative) | Per-test JSON reports; `tests3/reports/release-<tag>.md`; feature DoD tables | per-feature confidence + scope required_modes (both commands use the same gate) |
+| 6 | human | `make release-human-sheet SCOPE=…` → fill in → `make release-human-gate SCOPE=…` | `tests3/releases/<id>/human-checklist.md` with hash-tagged ticks | every `- [ ]` must be `- [x]` |
+| 7 | ship | `make release-ship SCOPE=…` | `release/vm-validated` GH status; PR dev→main; `:dev → :latest` promotion | both gates (5 + 6) must have passed |
+| 8 | teardown | `make release-teardown SCOPE=…` | Destroyed VMs + cluster | — |
+
+**Stage 5 has two commands, one gate.** `release-iterate` is the fast
+inner-loop variant (scope-filtered, dirty state). `release-full` is the
+authoritative exit variant (clean-reset, full cheap-tier matrix). They
+share the aggregator + the gate. Protocol-wise they are **one stage**.
+You iterate until green, then run full once to confirm clean-state
+doesn't regress, then hand off to stage 6.
 
 ### Stage 3b — human bug intake (the iteration loop)
 

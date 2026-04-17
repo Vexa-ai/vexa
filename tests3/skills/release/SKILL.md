@@ -1,26 +1,52 @@
 ---
 name: release
-description: "Master orchestrator for the Vexa release cycle. Invoke this when the user talks about 'releasing', 'shipping', 'validating a release', 'the release pipeline', 'where are we in the release', 'what's next', 'run the whole cycle' — or when you need to pick the correct next stage in the numbered flow. This skill determines the current stage from on-disk state and points at the correct per-stage skill / command. Do NOT invoke for a specific stage the user has already named — go directly to that stage's skill (`0-groom` / `1-plan` / `2-provision` / `3-develop` / `4-deploy` / `5-iterate` / `6-full` / `7-human` / `8-ship` / `9-teardown`)."
+description: "Master orchestrator for the Vexa release cycle. Invoke this when the user talks about 'releasing', 'shipping', 'validating a release', 'the release pipeline', 'where are we in the release', 'what's next', 'run the whole cycle' — or when you need to pick the correct next stage. This skill determines the current stage from on-disk state and points at the correct per-stage skill / command. Do NOT invoke for a specific stage the user has already named — go directly to that stage's skill (`0-groom` / `1-plan` / `2-provision` / `3-develop` / `4-deploy` / `5-iterate` / `6-full` / `7-human` / `8-ship` / `9-teardown`)."
 ---
 
 ## You are the orchestrator
 
-Ten stages, one master flow. Each stage has its own skill. Your job: determine the current stage and direct the user to the correct per-stage skill or make command. Refuse to skip stages.
+**The single source of truth for the protocol is `tests3/release-validation.md`.**
+Read it first when anything below seems ambiguous. This skill is the dispatch
+layer; the SoT is the definition.
+
+## The loop, at a glance
+
+```
+develop → deploy → test ──fail──▶ develop
+                    │
+                   pass
+                    ▼
+                  human ──fail, new issue (stage 3b)──▶ develop
+                    │
+                   pass
+                    ▼
+                   ship ──▶ teardown
+```
+
+One loop, two exit gates (automated test + human). `release-iterate` (fast,
+scope-filtered) and `release-full` (clean-reset, authoritative) are two
+fidelities of the **same** test stage — not two stages.
 
 ## Stage map
 
-| # | Stage | Skill | Command | Produces |
-|---|-------|-------|---------|----------|
+| # | Stage | Skill dir | Command | Produces |
+|---|-------|-----------|---------|----------|
 | 0 | groom | `0-groom` | *(manual + `gh issue` + Discord)* | packs of issues ready for planning |
 | 1 | plan | `1-plan` | `make release-plan ID=<slug>` | `tests3/releases/<id>/scope.yaml` |
 | 2 | provision | `2-provision` | `make release-provision SCOPE=$SCOPE` | `tests3/.state-{lite,compose,helm}/` |
-| 3 | develop | `3-develop` | *(local code + tests)* | commits on `dev` |
-| 4 | deploy | `4-deploy` | `make release-deploy SCOPE=$SCOPE` | `:dev` images on every VM |
-| 5 | iterate | `5-iterate` | `make release-iterate SCOPE=$SCOPE` | scope-filtered report (dev loop) |
-| 6 | full | `6-full` | `make release-full SCOPE=$SCOPE` | automated gate: fresh-reset + full matrix |
-| 7 | human | `7-human` | `make release-human-sheet SCOPE=$SCOPE` + edit + `release-human-gate` | signed-off `human-checklist.md` |
-| 8 | ship | `8-ship` | `make release-ship SCOPE=$SCOPE` | dev merged to main, `:latest` promoted |
-| 9 | teardown | `9-teardown` | `make release-teardown SCOPE=$SCOPE` | infra destroyed |
+| 3 | develop | `3-develop` | *(local)* | commits on `dev` |
+| 3b | human bug intake (entered from stage 7) | — | `make release-issue-add SOURCE=human GAP=… NEW_CHECKS=…` | new issue appended to `scope.yaml` |
+| 4 | deploy | `4-deploy` | `make release-deploy SCOPE=$SCOPE` | `:dev` on every stack |
+| 5 | test (fast) | `5-iterate` | `make release-iterate SCOPE=$SCOPE` | scope-filtered report |
+| 5 | test (authoritative) | `6-full` | `make release-full SCOPE=$SCOPE` | fresh-reset + full matrix report + gate |
+| 6 | human | `7-human` | `release-human-sheet` + edit + `release-human-gate` | signed-off checklist |
+| 7 | ship | `8-ship` | `make release-ship SCOPE=$SCOPE` | dev → main, `:latest` promoted |
+| 8 | teardown | `9-teardown` | `make release-teardown SCOPE=$SCOPE` | infra destroyed |
+
+> Historical note: the on-disk skill directories are numbered 0-9 because both
+> test fidelities (`5-iterate`, `6-full`) have their own skill files. The
+> protocol stages are 0-8. When the user names a numbered skill, use it;
+> when they ask about the "stage", point at `release-validation.md`.
 
 Stages 2 and 3 run **in parallel**. Every other stage gates on the previous.
 
@@ -89,9 +115,11 @@ Tell the user **which stage is next**, **which command to run**, and **why that'
 ## Ground rules
 
 1. **One command per stage.** If the user wants to do something mid-release that isn't a `make release-*` target, STOP. Either (a) they're in the wrong stage, or (b) we have a drift — file it as a follow-up.
-2. **Scope is the contract.** Written once at stage 1, read by every stage after. Add new issues mid-cycle yes; changing existing `proves:` bindings no.
-3. **Both gates before ship.** Stage 6 (automated) AND stage 7 (human) must be green. `8-ship` enforces this.
-4. **Teardown happens last.** Don't destroy VMs before ship — you lose the validated state if ship fails.
+2. **Scope is the contract.** Written once at stage 1, read by every stage after. Add new issues mid-cycle **only** via `make release-issue-add` (stage 3b).
+3. **Human-found bugs require a regression check.** `source: human` issues MUST include `gap_analysis` and `new_checks[]`. Every id in `new_checks[]` MUST appear in `proves[]`. The helper enforces field presence; the aggregator gate enforces the binding. No ad-hoc fix without landing a check.
+4. **Both gates before ship.** Automated test gate (stage 5) AND human gate (stage 6) must be green. `ship` enforces this.
+5. **Loop cap: 3 rounds.** If human validation surfaces a new bug 3 times in a row, the scope is wrong — go back to stage 1 and split the release.
+6. **Teardown happens last.** Don't destroy VMs before ship — you lose the validated state if ship fails.
 
 ## Files to know
 

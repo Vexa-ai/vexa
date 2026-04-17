@@ -136,12 +136,12 @@ make down
 <!-- BEGIN AUTO-DOD -->
 <!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260417-1454`. Do not edit by hand — edit the `tests3.dods:` frontmatter + re-run `make -C tests3 report --write-features`. -->
 
-**Confidence: 100%** (gate: 100%, status: ✅ pass)
+**Confidence: 90%** (gate: 100%, status: ❌ below gate)
 
 | # | Behavior | Weight | Status | Evidence (modes) |
 |---|----------|-------:|:------:|------------------|
 | gateway-up | API gateway responds to /admin/users via valid admin token | 10 | ✅ pass | `lite`: smoke-health/GATEWAY_UP: API gateway accepts connections — all client requests can reach backend; `compose`: smoke-health/GATEWAY_UP: API gateway accepts connections — all client requests can reach backend; `helm`: smoke-health/GATEWAY_UP: API gateway accepts connections — all client requ… |
-| admin-api-up | admin-api responds with a valid list | 10 | ✅ pass | `lite`: smoke-health/ADMIN_API_UP: admin-api responds with valid token — user management and login work; `compose`: smoke-health/ADMIN_API_UP: admin-api responds with valid token — user management and login work; `helm`: smoke-health/ADMIN_API_UP: admin-api responds with valid token — user manage… |
+| admin-api-up | admin-api responds with a valid list | 10 | ❌ fail | `lite`: smoke-health/ADMIN_API_UP: HTTP 500 (expected 200); `compose`: smoke-health/ADMIN_API_UP: admin-api responds with valid token — user management and login work; `helm`: smoke-health/ADMIN_API_UP: admin-api responds with valid token — user management and login work |
 | dashboard-up | dashboard root page responds | 10 | ✅ pass | `lite`: smoke-health/DASHBOARD_UP: dashboard serves pages — user can access the UI; `compose`: smoke-health/DASHBOARD_UP: dashboard serves pages — user can access the UI; `helm`: smoke-health/DASHBOARD_UP: dashboard serves pages — user can access the UI |
 | runtime-api-up | runtime-api (bot orchestrator) is reachable / has ready replicas | 15 | ✅ pass | `lite`: smoke-health/RUNTIME_API_UP: runtime-api responds — bot container lifecycle management works; `compose`: smoke-health/RUNTIME_API_UP: runtime-api responds — bot container lifecycle management works; `helm`: smoke-health/RUNTIME_API_UP: 1 ready replicas |
 | transcription-up | transcription service /health returns ok + gpu_available | 15 | ✅ pass | `lite`: smoke-health/TRANSCRIPTION_UP: transcription service responds — audio can be converted to text; `compose`: smoke-health/TRANSCRIPTION_UP: transcription service responds — audio can be converted to text; `helm`: smoke-health/TRANSCRIPTION_UP: transcription service responds — audio can be c… |

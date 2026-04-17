@@ -22,36 +22,31 @@ _Source: `tests3/human-always.yaml`. These verify the product works regardless o
 
 ### Lite VM
 
-- [ ] Dashboard at http://172.239.194.217:3000 loads; magic-link login works (test@vexa.ai).
-- [ ] /meetings page renders (even if empty).
-- [ ] Create a browser session via API; CDP URL returns a working session.
-- [ ] Logs clean: `docker logs vexa-lite 2>&1 | grep -i error | tail -20` shows nothing concerning.
-- [ ] Container stays under ~2 GB: `docker stats --no-stream vexa-lite`.
+- [ ] Open http://172.239.194.217:3000 → magic-link login as test@vexa.ai → /meetings renders <!-- h:252bcda9 -->
+- [ ] `docker logs vexa-lite 2>&1 | grep -i error | tail -5` → no new errors <!-- h:9a306a4e -->
+- [ ] `docker stats --no-stream vexa-lite` → MEM < 2 GiB <!-- h:a540221d -->
 
 ### Compose VM
 
-- [ ] Dashboard at http://172.239.194.222:3001 loads; magic-link login works.
-- [ ] API docs page at http://172.239.194.222:8056/docs renders.
-- [ ] Create a bot via dashboard UI with a REAL Google Meet URL; bot container appears (`docker ps --filter name=meeting-`).
-- [ ] Bot joins the meeting within 60s; status transitions to active.
-- [ ] Transcript segments appear live (WS) and via REST at `/transcripts/<platform>/<native_id>`.
-- [ ] DELETE bot; container fully removed; meeting status=completed.
-- [ ] Logs clean: `cd /root/vexa && docker compose -f deploy/compose/docker-compose.yml logs --tail=50 2>&1 | grep -i error`.
-- [ ] Post-meeting transcript persisted: same /transcripts endpoint returns non-empty segments after bot stop.
+- [ ] Open http://172.239.194.222:3001 → magic-link login → /meetings renders <!-- h:0743882c -->
+- [ ] Open http://172.239.194.222:8056/docs → OpenAPI page renders <!-- h:5706e604 -->
+- [ ] POST /bots with a real Google Meet URL → 201 + container `meeting-*` appears in `docker ps` <!-- h:3c154567 -->
+- [ ] Within 60s bot.status → active; `/transcripts/<platform>/<native_id>` returns segments <!-- h:3da4668a -->
+- [ ] DELETE the bot → container gone, meeting.status=completed <!-- h:b5649b66 -->
+- [ ] `docker compose -f deploy/compose/docker-compose.yml logs --tail=50 | grep -i error` → no new errors <!-- h:d80a145b -->
+- [ ] Re-GET `/transcripts/...` after stop → segments still returned (post-meeting persistence) <!-- h:bfa2e8ac -->
 
-### Helm / LKE cluster
+### Helm / LKE
 
-- [ ] `kubectl get pods` shows every vexa component in Running state (no CrashLoopBackOff).
-- [ ] Gateway reachable at http://172.238.169.249:30056/.
-- [ ] Dashboard reachable at http://172.238.169.249:30001/.
-- [ ] `kubectl get events --field-selector type=Warning --sort-by=.lastTimestamp` has no new warnings.
-- [ ] Create a bot via API (X-API-Key); bot pod spawns; no scheduling errors.
+- [ ] `kubectl get pods` → all Running, 0 CrashLoopBackOff <!-- h:3bcaa667 -->
+- [ ] Open http://172.238.169.249:30056/ → gateway root JSON <!-- h:f354a411 -->
+- [ ] Open http://172.238.169.249:30001/ → dashboard renders <!-- h:0ff40a16 -->
+- [ ] `kubectl get events --field-selector type=Warning --sort-by=.lastTimestamp | tail` → no new warnings <!-- h:c274d6b8 -->
 
 ### Release integrity
 
-- [ ] Versions: all running images carry the SAME timestamp tag. `docker inspect` (compose/lite) or `kubectl describe pod` (helm) agrees with the build tag in `deploy/compose/.last-tag`.
-- [ ] No stale containers from prior test runs: `docker ps -a | grep -E 'lifecycle-|webhook-test|spoof-test'` empty.
-- [ ] No error spike in last 5 minutes of meeting-api logs.
+- [ ] Every running image tag == `cat deploy/compose/.last-tag` <!-- h:ef0fc4f8 -->
+- [ ] `docker ps -a | grep -E 'lifecycle-|webhook-test|spoof-test'` → empty <!-- h:be779868 -->
 
 ## THIS RELEASE — scope-specific
 
@@ -61,34 +56,52 @@ _Source: `tests3/releases/260417-webhooks-dbpool/scope.yaml` → `issues[].human
 
 **Problem**: User-configured webhooks (via PUT /user/webhook) are not delivered — user.data has webhook_url/secret/events but meeting.data on new bots never gets them. "We only see meeting.completed; status webhooks never arrive."
 
-- [ ] **[compose]** Do: PUT /user/webhook with {webhook_url: https://httpbin.org/post, webhook_events: {meeting.completed:true}}  →  Expect: POST /bots (no X-User-Webhook-* header) → response.data.webhook_url == your URL
-- [ ] **[compose]** Do: Repeat POST /bots but WITH a client-supplied X-User-Webhook-URL: https://attacker.example.com/steal  →  Expect: response.data.webhook_url is your URL, NOT the attacker URL (header stripped)
+- [ ] **[compose]** Do: PUT /user/webhook {webhook_url:httpbin.org/post}; POST /bots  →  Expect: response.data.webhook_url == httpbin URL <!-- h:2f661dbb -->
+- [ ] **[compose]** Do: POST /bots with `X-User-Webhook-URL: attacker.example.com/steal`  →  Expect: response.data.webhook_url is user's URL, not attacker's <!-- h:1ece2438 -->
 
 ### `webhook-status-fast-path`  _(required modes: compose)_
 
 **Problem**: Status-change webhooks (meeting.started, meeting.stopping, bot.failed) never fire end-to-end even after gateway injection works. Completion webhook fires once but webhook_deliveries[] stays empty.
 
-- [ ] **[compose]** Do: PUT /user/webhook with webhook_events={meeting.completed:true, meeting.status_change:true}; POST /bots with a fake google_meet URL; DELETE immediately (<5s → hits fast-path)  →  Expect: After 20s, meeting.data has webhook_delivery.status=delivered AND webhook_deliveries[] has >= 1 entry
+- [ ] **[compose]** Do: POST /bots with fake URL → DELETE within 5s → wait 20s  →  Expect: meeting.data.webhook_delivery.status=delivered AND webhook_deliveries[] not empty <!-- h:331b2d9a -->
 
 ### `db-pool-exhaustion`  _(required modes: compose, helm, lite)_
 
 **Problem**: GET /bots/status returns 504 after ~10 sequential requests in compose and helm. Pool (5+5=10) fills; new requests block 30s on pool_timeout then fail.
 
-- [ ] **[compose]** Do: Hit GET /bots/status 30 times in a loop (`for i in $(seq 1 30); do curl -sf -H 'X-API-Key: ...' http://172.239.194.222:8056/bots/status -o /dev/null -w '%<unknown:http_code>\n'; done`)  →  Expect: Every response is 200; no 504s
-- [ ] **[compose]** Do: Check Postgres for idle-in-transaction connections: `docker exec vexa-postgres-1 psql -U postgres -d vexa -c "SELECT count(*) FROM pg_stat_activity WHERE state='idle in transaction';"`  →  Expect: count is 0 (or near 0) even after sustained load
+- [ ] **[compose]** Do: `for i in $(seq 1 30); do curl -sfo/dev/null -w '%<unknown:http_code>\n' -H "X-API-Key: $T" http://172.239.194.222:8056/bots/status; done`  →  Expect: 30× 200, zero 504 <!-- h:e340e33d -->
+- [ ] **[compose]** Do: `docker exec vexa-postgres-1 psql -U postgres -d vexa -c "SELECT count(*) FROM pg_stat_activity WHERE state='idle in transaction'"`  →  Expect: count ≤ 1 <!-- h:1bcea834 -->
 
 ### `transcripts-gone-after-stop`  _(required modes: compose, lite)_
 
 **Problem**: Short meetings show transcripts during recording but 0 rows in transcriptions table after completion. Reported on lite meeting 2.
 
-- [ ] **[lite]** Do: Force Redis group loss: `docker exec vexa-lite redis-cli XGROUP DESTROY transcription_segments collector_group; docker exec vexa-lite redis-cli XGROUP DESTROY speaker_events_relative collector_speaker_group` — wait 15s  →  Expect: Logs show `Recreated consumer group 'collector_group'` within 10s; `docker exec vexa-lite redis-cli XINFO GROUPS transcription_segments` shows the group back
-- [ ] **[lite]** Do: Run a real ~60s meeting end-to-end (bot + audio), stop bot  →  Expect: meeting.data.end_time set AND `SELECT COUNT(*) FROM transcriptions WHERE meeting_id=<id>` > 0
+- [ ] **[lite]** Do: `docker exec vexa-lite redis-cli XGROUP DESTROY transcription_segments collector_group` → wait 15s  →  Expect: `docker logs vexa-lite 2>&1 | grep 'Recreated consumer group'` matches within 15s <!-- h:2bc630e3 -->
+- [ ] **[lite]** Do: Run a live ~60s meeting, stop bot  →  Expect: `SELECT COUNT(*) FROM transcriptions WHERE meeting_id=<id>` > 0 <!-- h:c8307383 -->
 
 ### `recording-enabled-default`  _(required modes: compose)_
 
 **Problem**: Lite bots recorded by default but compose/helm defaulted to no recording (BOT_CONFIG recordingEnabled=false), so recordings were empty unless RECORDING_ENABLED=true was explicitly set.
 
-- [ ] **[compose]** Do: POST /bots without `recording_enabled` in the body  →  Expect: response.data.recording_enabled == true
+- [ ] **[compose]** Do: POST /bots without `recording_enabled` in body  →  Expect: response.data.recording_enabled == true <!-- h:02dc0fe7 -->
+
+### `dashboard-webhooks-ui-rollup`  _(required modes: compose)_
+
+**Problem**: /webhooks dashboard page shows only meeting.completed deliveries; backend delivered all event types (verified via psql) but the UI hid them.
+
+- [ ] **[compose]** Do: Load http://172.239.194.222:3001/webhooks after a meeting with status-change events  →  Expect: Delivery History table has rows with event column = meeting.started AND meeting.status_change, not only meeting.completed <!-- h:63c05a0f -->
+
+### `lite-vexa-db-missing`  _(required modes: compose, lite)_
+
+**Problem**: Lite /login returned 500 'Server Configuration Error' hours after a successful validation run. admin-api crashed on every request with asyncpg.InvalidCatalogNameError: database vexa does not exist. pg_database only had template0/template1/postgres and a Linode-injected readme_to_recover marker.
+
+- [ ] **[lite]** Do: After 1h idle on the lite VM, curl http://172.239.194.217:3000/login AND docker exec vexa-lite psql -U postgres -l  →  Expect: /login returns 200 (not 500) AND psql list shows vexa DB AND no readme_to_recover DB <!-- h:47fcc278 -->
+
+### `helm-meetings-all-failed-pollution`  _(required modes: compose, helm, lite)_
+
+**Problem**: /meetings on helm dashboard shows 27 rows, all status=failed. Human reads this as 'everything broken'; actual cause is accumulated test-pollution from multiple validation runs without a reset between them.
+
+- [ ] **[helm]** Do: Load http://172.238.169.249:30001/meetings after release-full completes (fresh reset)  →  Expect: Either no meetings (fresh) or mixed status (not 100% failed) <!-- h:7b405bd4 -->
 
 ## Issues found
 
@@ -97,8 +110,8 @@ _Leave empty if clean. Any bug surfaced here must be resolved (fix + new pipelin
 
 ## Sign-off
 
-- [ ] All ALWAYS items checked.
-- [ ] All THIS RELEASE items checked.
-- [ ] No unresolved entries in `Issues found`.
+- [ ] All ALWAYS items checked. <!-- h:5b828958 -->
+- [ ] All THIS RELEASE items checked. <!-- h:5a288caf -->
+- [ ] No unresolved entries in `Issues found`. <!-- h:d7dd9f2b -->
 
 Once all three boxes are checked AND `make release-full SCOPE=...` succeeded, `make release-ship` is unblocked.
