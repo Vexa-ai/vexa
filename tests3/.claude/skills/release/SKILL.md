@@ -52,58 +52,73 @@ Stages 2 and 3 run **in parallel**. Every other stage gates on the previous.
 
 ## Detecting the current stage
 
-Run these checks top-to-bottom; the first miss is your current stage:
+**CRITICAL — ordering rules**:
+1. Always resolve paths from the git toplevel (`ROOT=$(git rev-parse --show-toplevel)`); the user's cwd may be any subdir (e.g. `tests3/releases/<id>/`).
+2. Never conclude a later stage just because its output file exists. Each stage's prerequisite must also hold: checklist existing does NOT mean stage 5 passed. Walk the list top-to-bottom; first miss is the current stage.
 
 ```bash
-# 0. Is there a scope file?
+ROOT=$(git rev-parse --show-toplevel) || { echo "not inside a git repo"; exit 2; }
+cd "$ROOT"
+
+# 0. Is there a scope file? (either $SCOPE env, or exactly one release dir)
 if [ -z "${SCOPE:-}" ] || [ ! -f "$SCOPE" ]; then
-    # Before 1 — are there fresh issues to groom?
+    SCOPES=( tests3/releases/*/scope.yaml )
+    [ -f "${SCOPES[0]}" ] && SCOPE="${SCOPES[-1]}"      # newest by sort
+fi
+if [ -z "${SCOPE:-}" ] || [ ! -f "$SCOPE" ]; then
     GH_OPEN=$(gh issue list --repo Vexa-ai/vexa --state open --json number --jq length 2>/dev/null)
     echo "NEXT: 0-groom (issues open: $GH_OPEN) → then 1-plan"
     exit 0
 fi
 
 # 1. Is every mode in the scope provisioned?
-python3 - <<'PY'
-import os, yaml
-s = yaml.safe_load(open(os.environ["SCOPE"]))
+python3 - "$SCOPE" <<'PY'
+import os, sys, yaml
+s = yaml.safe_load(open(sys.argv[1]))
 for m in s["deployments"]["modes"]:
-    ip = f"tests3/.state-{m}/vm_ip" if m != "helm" else "tests3/.state-helm/lke_node_ip"
-    if not os.path.isfile(ip):
-        print(f"NEXT: 2-provision ({m} not up)"); exit()
+    marker = f"tests3/.state-{m}/vm_ip" if m != "helm" else "tests3/.state-helm/lke_node_ip"
+    if not os.path.isfile(marker):
+        print(f"NEXT: 2-provision ({m} not up)"); sys.exit(1)
 PY
+[ $? -ne 0 ] && exit 0
 
-# 2. Has :dev been built and deployed since the last commit?
-HEAD=$(git rev-parse --short HEAD)
+# 2. Has :dev been built and deployed?
 LAST_TAG=$(cat deploy/compose/.last-tag 2>/dev/null || echo none)
-[ "$LAST_TAG" = "none" ] && echo "NEXT: 3-develop or 4-deploy (no :dev tag yet)"
+[ "$LAST_TAG" = "none" ] && { echo "NEXT: 4-deploy (no :dev tag yet)"; exit 0; }
 
 # 3. Is there a report for the current tag?
-if [ ! -f "tests3/reports/release-${LAST_TAG}.md" ]; then
-    echo "NEXT: 5-iterate (no report for $LAST_TAG)"
+REPORT="tests3/reports/release-${LAST_TAG}.md"
+if [ ! -f "$REPORT" ]; then
+    echo "NEXT: 5-test (no report for $LAST_TAG — run release-iterate or release-full)"
     exit 0
 fi
 
-# 4. Did release-full pass?
-grep -q "Release gate PASSED" "tests3/reports/release-${LAST_TAG}.md" 2>/dev/null \
-    || { echo "NEXT: 6-full (automated gate red)"; exit 0; }
+# 4. Did stage-5 gate pass?
+#    HARD PREREQ for stage 6. If gate is RED, stage 5 is current, even if
+#    human-checklist.md exists from an earlier green run.
+if ! grep -q "Release gate PASSED" "$REPORT"; then
+    FAILS=$(grep -E '^  - ' "$REPORT" | head -3)
+    echo "NEXT: 5-test (automated gate RED in $REPORT)"
+    [ -n "$FAILS" ] && echo "$FAILS"
+    exit 0
+fi
 
 # 5. Is there a human checklist?
 CHECKLIST="$(dirname "$SCOPE")/human-checklist.md"
 if [ ! -f "$CHECKLIST" ]; then
-    echo "NEXT: 7-human (no checklist yet)"; exit 0
+    echo "NEXT: 6-human (no checklist yet — release-human-sheet)"; exit 0
 fi
 
 # 6. Is it signed off?
 UNCHECKED=$(grep -c '^- \[ \]' "$CHECKLIST" || echo 0)
 if [ "$UNCHECKED" != "0" ]; then
-    echo "NEXT: 7-human ($UNCHECKED unchecked — edit $CHECKLIST)"; exit 0
+    echo "NEXT: 6-human ($UNCHECKED unchecked — edit $CHECKLIST)"; exit 0
 fi
 
 # 7. Did this commit pass the release status?
 SHA=$(git rev-parse origin/main 2>/dev/null || git rev-parse HEAD)
 STATE=$(gh api "repos/Vexa-ai/vexa/commits/$SHA/statuses" --jq '.[] | select(.context=="release/vm-validated") | .state' 2>/dev/null | head -1)
-[ "$STATE" != "success" ] && echo "NEXT: 8-ship"
+[ "$STATE" != "success" ] && echo "NEXT: 7-ship"
 
 # 8. Any .state-<mode>/vm_id still around?
 [ -f tests3/.state-lite/vm_id ] || [ -f tests3/.state-compose/vm_id ] || [ -f tests3/.state-helm/lke_id ] \
