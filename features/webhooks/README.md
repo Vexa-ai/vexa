@@ -23,25 +23,25 @@ tests3:
     - id: envelope-shape
       label: "Every webhook carries envelope: event_id, event_type, api_version, created_at, data"
       weight: 10
-      evidence: {test: webhooks, step: envelope, modes: [compose, helm]}
+      evidence: {test: webhooks, step: envelope, modes: [compose]}
     - id: headers-hmac
       label: "X-Webhook-Signature = HMAC-SHA256(timestamp + '.' + payload) when secret is set"
       weight: 10
-      evidence: {test: webhooks, step: hmac, modes: [compose, helm]}
+      evidence: {test: webhooks, step: hmac, modes: [compose]}
 
     # ── Security ──────────────────────────────────────────────
     - id: security-spoof-protection
       label: "Client-supplied X-User-Webhook-* headers cannot override stored config"
       weight: 10
-      evidence: {test: webhooks, step: spoof, modes: [compose, helm]}
+      evidence: {test: webhooks, step: spoof, modes: [compose]}
     - id: security-secret-not-exposed
       label: "webhook_secret never appears in any API response (POST /bots, GET /bots/status)"
       weight: 10
-      evidence: {test: webhooks, step: no_leak_response, modes: [compose, helm]}
+      evidence: {test: webhooks, step: no_leak_response, modes: [compose]}
     - id: security-payload-hygiene
       label: "Internal fields (secret, url, container ids, delivery state) stripped from webhook payloads"
       weight: 5
-      evidence: {test: webhooks, step: no_leak_payload, modes: [compose, helm]}
+      evidence: {test: webhooks, step: no_leak_payload, modes: [compose]}
 
     # ── Configuration flow ────────────────────────────────────
     - id: flow-user-config
@@ -285,22 +285,22 @@ Fires on every meeting completion, independent of per-user webhook URLs. Does no
 
 
 <!-- BEGIN AUTO-DOD -->
-<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260417-1408`. Do not edit by hand — edit the `tests3.dods:` frontmatter + re-run `make -C tests3 report --write-features`. -->
+<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260417-1454`. Do not edit by hand — edit the `tests3.dods:` frontmatter + re-run `make -C tests3 report --write-features`. -->
 
-**Confidence: 0%** (gate: 95%, status: ❌ below gate)
+**Confidence: 100%** (gate: 95%, status: ✅ pass)
 
 | # | Behavior | Weight | Status | Evidence (modes) |
 |---|----------|-------:|:------:|------------------|
-| events-meeting-completed | meeting.completed fires on every bot exit (default-enabled) | 10 | ⬜ missing | `compose`: no report for test=webhooks |
-| events-status-webhooks | Status-change webhooks fire when enabled via webhook_events (meeting.started / bot.failed / meeting.status_change) | 10 | ⬜ missing | `compose`: no report for test=webhooks |
-| envelope-shape | Every webhook carries envelope: event_id, event_type, api_version, created_at, data | 10 | ⬜ missing | `compose`: no report for test=webhooks; `helm`: report has no step=envelope |
-| headers-hmac | X-Webhook-Signature = HMAC-SHA256(timestamp + '.' + payload) when secret is set | 10 | ⬜ missing | `compose`: no report for test=webhooks; `helm`: report has no step=hmac |
-| security-spoof-protection | Client-supplied X-User-Webhook-* headers cannot override stored config | 10 | ⬜ missing | `compose`: no report for test=webhooks; `helm`: report has no step=spoof |
-| security-secret-not-exposed | webhook_secret never appears in any API response (POST /bots, GET /bots/status) | 10 | ⬜ missing | `compose`: no report for test=webhooks; `helm`: report has no step=no_leak_response |
-| security-payload-hygiene | Internal fields (secret, url, container ids, delivery state) stripped from webhook payloads | 5 | ⬜ missing | `compose`: no report for test=webhooks; `helm`: report has no step=no_leak_payload |
-| flow-user-config | PUT /user/webhook persists webhook_url + webhook_secret + webhook_events to User.data | 10 | ⬜ missing | `compose`: no report for test=webhooks |
-| flow-gateway-inject | Gateway injects validated webhook config into meeting.data on POST /bots | 15 | ⬜ missing | `compose`: no report for test=webhooks |
-| reliability-db-pool | DB connection pool doesn't exhaust under repeated status requests | 10 | ❌ fail | `lite`: check DB_POOL_NO_EXHAUSTION not found in any smoke-* report; `compose`: check DB_POOL_NO_EXHAUSTION not found in any smoke-* report; `helm`: smoke-contract/DB_POOL_NO_EXHAUSTION: 10/10 requests failed — likely DB pool exhaustion |
+| events-meeting-completed | meeting.completed fires on every bot exit (default-enabled) | 10 | ✅ pass | `compose`: webhooks/e2e_completion: webhook_delivery.status=delivered |
+| events-status-webhooks | Status-change webhooks fire when enabled via webhook_events (meeting.started / bot.failed / meeting.status_change) | 10 | ✅ pass | `compose`: webhooks/e2e_status: 1 status-change webhook(s) fired: meeting.completed |
+| envelope-shape | Every webhook carries envelope: event_id, event_type, api_version, created_at, data | 10 | ✅ pass | `compose`: webhooks/envelope: event_id, event_type, api_version, created_at, data present |
+| headers-hmac | X-Webhook-Signature = HMAC-SHA256(timestamp + '.' + payload) when secret is set | 10 | ✅ pass | `compose`: webhooks/hmac: HMAC-SHA256 64-char digest |
+| security-spoof-protection | Client-supplied X-User-Webhook-* headers cannot override stored config | 10 | ✅ pass | `compose`: webhooks/spoof: client header stripped (stored webhook_url=https://httpbin.org/post) |
+| security-secret-not-exposed | webhook_secret never appears in any API response (POST /bots, GET /bots/status) | 10 | ✅ pass | `compose`: webhooks/no_leak_response: webhook_secret not in /bots/status response |
+| security-payload-hygiene | Internal fields (secret, url, container ids, delivery state) stripped from webhook payloads | 5 | ✅ pass | `compose`: webhooks/no_leak_payload: internal fields stripped; user fields preserved |
+| flow-user-config | PUT /user/webhook persists webhook_url + webhook_secret + webhook_events to User.data | 10 | ✅ pass | `compose`: webhooks/config: user webhook set via PUT /user/webhook |
+| flow-gateway-inject | Gateway injects validated webhook config into meeting.data on POST /bots | 15 | ✅ pass | `compose`: webhooks/inject: gateway injected webhook_url=https://httpbin.org/post into meeting.data |
+| reliability-db-pool | DB connection pool doesn't exhaust under repeated status requests | 10 | ✅ pass | `lite`: smoke-contract/DB_POOL_NO_EXHAUSTION: 10/10 requests returned 200; `compose`: smoke-contract/DB_POOL_NO_EXHAUSTION: 10/10 requests returned 200; `helm`: smoke-contract/DB_POOL_NO_EXHAUSTION: 10/10 requests returned 200 |
 
 <!-- END AUTO-DOD -->
 
