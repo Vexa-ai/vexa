@@ -55,6 +55,18 @@ def _write_delivery_status(meeting: Meeting, status: dict):
     flag_modified(meeting, "data")
 
 
+def _append_delivery_log(meeting: Meeting, entry: dict, max_entries: int = 20):
+    """Append a delivery record to meeting.data.webhook_deliveries (bounded list)."""
+    data = dict(meeting.data) if meeting.data else {}
+    log = list(data.get("webhook_deliveries") or [])
+    log.append(entry)
+    if len(log) > max_entries:
+        log = log[-max_entries:]
+    data["webhook_deliveries"] = log
+    meeting.data = data
+    flag_modified(meeting, "data")
+
+
 def _get_webhook_config(meeting: Meeting) -> tuple[Optional[str], Optional[str]]:
     """Extract webhook_url and webhook_secret from meeting.data."""
     data = meeting.data if isinstance(meeting.data, dict) else {}
@@ -165,13 +177,28 @@ async def send_status_webhook(
             }
 
         payload = build_envelope(event_type, event_data)
-        await deliver(
+        now = datetime.now(timezone.utc).isoformat()
+        resp = await deliver(
             url=webhook_url,
             payload=payload,
             webhook_secret=webhook_secret,
             timeout=30.0,
             label=f"status-webhook meeting={meeting.id} status={meeting.status}",
+            metadata={"meeting_id": meeting.id},
         )
+
+        # Record this delivery attempt in meeting.data.webhook_deliveries (bounded log)
+        entry = {
+            "event_type": event_type,
+            "url": webhook_url,
+            "timestamp": now,
+        }
+        if resp is not None:
+            entry["status"] = "delivered"
+            entry["status_code"] = resp.status_code
+        else:
+            entry["status"] = "queued" if get_redis_client() is not None else "failed"
+        _append_delivery_log(meeting, entry)
     except Exception as e:
         logger.error(f"Unexpected error sending status webhook for meeting {meeting.id}: {e}", exc_info=True)
 

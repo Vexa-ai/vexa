@@ -34,10 +34,11 @@ if [ -n "$STALE" ]; then
 fi
 
 # ── 1. Set user webhook config via admin-api (PUT /user/webhook) ──
-# The gateway will inject X-User-Webhook-* headers from the user's stored config
+# The gateway will inject X-User-Webhook-* headers from the user's stored config.
+# Enable status change events so send_status_webhook doesn't filter them out.
 WH_RESP=$(curl -s -X PUT "$GATEWAY_URL/user/webhook" \
     -H "X-API-Key: $API_TOKEN" -H "Content-Type: application/json" \
-    -d "{\"webhook_url\":\"$WEBHOOK_URL\",\"webhook_secret\":\"$SECRET\"}" \
+    -d "{\"webhook_url\":\"$WEBHOOK_URL\",\"webhook_secret\":\"$SECRET\",\"webhook_events\":{\"meeting.completed\":true,\"meeting.started\":true,\"meeting.status_change\":true,\"bot.failed\":true}}" \
     -w "\n%{http_code}")
 WH_CODE=$(echo "$WH_RESP" | tail -1)
 
@@ -205,17 +206,17 @@ else
     pass "no leak: secret not in /bots/status response"
 fi
 
-# ── 9. End-to-end webhook delivery: stop bot → webhook fires ──
-# Stop the webhook-test bot, wait for delivery, verify webhook_delivery status in meeting.data
+# ── 9. End-to-end webhook delivery: stop bot → status + completion webhooks fire ──
+# meeting.data.webhook_delivery   = meeting.completed delivery (from send_completion_webhook)
+# meeting.data.webhook_deliveries = list of all status webhook deliveries (from send_status_webhook)
 MEETING_ID=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
 if [ -n "$MEETING_ID" ]; then
     curl -sf -X DELETE "$GATEWAY_URL/bots/google_meet/webhook-test" -H "X-API-Key: $API_TOKEN" > /dev/null 2>&1
     info "waiting 20s for webhook delivery..."
     sleep 20
 
-    # Check webhook_delivery status in meeting.data
     DELIVERY_CHECK=$(svc_exec meeting-api python3 -c "
-import asyncio
+import asyncio, json as _j
 async def check():
     from meeting_api.database import async_session_local
     from meeting_api.models import Meeting
@@ -224,28 +225,43 @@ async def check():
         if not m: return 'NOT_FOUND'
         d = m.data or {}
         if not d.get('webhook_url'): return 'NO_WEBHOOK_URL'
-        wd = d.get('webhook_delivery')
-        if not wd: return 'NO_DELIVERY_STATUS'
-        s = wd.get('status')
-        if s == 'delivered': return 'DELIVERED'
-        if s == 'queued': return 'QUEUED'
-        if s == 'failed': return 'FAILED:' + str(wd.get('status_code',''))
-        return 'UNKNOWN:' + str(s)
-print(asyncio.run(check()))
+        completion = d.get('webhook_delivery') or {}
+        status_deliveries = d.get('webhook_deliveries') or []
+        event_types = sorted({e.get('event_type','?') for e in status_deliveries})
+        print(_j.dumps({
+            'completion_status': completion.get('status'),
+            'status_count': len(status_deliveries),
+            'status_events': event_types,
+        }))
+asyncio.run(check())
 " 2>/dev/null || echo "")
 
-    case "$DELIVERY_CHECK" in
-        DELIVERED) pass "e2e: webhook delivered to user endpoint" ;;
-        QUEUED)    pass "e2e: webhook queued for retry (delivery in progress)" ;;
-        NO_WEBHOOK_URL)
-            fail "e2e: meeting.data has no webhook_url (gateway injection failed end-to-end)" ;;
-        NO_DELIVERY_STATUS)
-            info "e2e: post-meeting webhook not yet fired (only meeting.completed triggers via run_all_tasks)" ;;
-        FAILED*)   fail "e2e: webhook delivery failed ($DELIVERY_CHECK)" ;;
-        NOT_FOUND) fail "e2e: meeting $MEETING_ID not found" ;;
-        "")        info "e2e: skipped (cannot exec into meeting-api)" ;;
-        *)         info "e2e: delivery status = $DELIVERY_CHECK" ;;
-    esac
+    if [ -z "$DELIVERY_CHECK" ]; then
+        info "e2e: skipped (cannot exec into meeting-api)"
+    elif echo "$DELIVERY_CHECK" | grep -q "NO_WEBHOOK_URL"; then
+        fail "e2e: meeting.data has no webhook_url (gateway injection failed)"
+    elif echo "$DELIVERY_CHECK" | grep -q "NOT_FOUND"; then
+        fail "e2e: meeting $MEETING_ID not found"
+    else
+        COMP=$(echo "$DELIVERY_CHECK" | python3 -c "import sys,json; print(json.load(sys.stdin).get('completion_status',''))" 2>/dev/null)
+        STATUS_CNT=$(echo "$DELIVERY_CHECK" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status_count',0))" 2>/dev/null)
+        STATUS_EVENTS=$(echo "$DELIVERY_CHECK" | python3 -c "import sys,json; print(','.join(json.load(sys.stdin).get('status_events',[])))" 2>/dev/null)
+
+        # Completion webhook (meeting.completed) — should always fire on stop
+        case "$COMP" in
+            delivered) pass "e2e: meeting.completed webhook delivered" ;;
+            queued)    pass "e2e: meeting.completed queued for retry" ;;
+            failed)    fail "e2e: meeting.completed webhook failed" ;;
+            *)         fail "e2e: meeting.completed not delivered (status=$COMP)" ;;
+        esac
+
+        # Status change webhooks — should fire on stopping/completed transitions
+        if [ "${STATUS_CNT:-0}" -gt 0 ]; then
+            pass "e2e: status webhooks fired ($STATUS_CNT events: $STATUS_EVENTS)"
+        else
+            fail "e2e: no status change webhooks fired — schedule_status_webhook_task not wired, or _is_event_enabled filtered them"
+        fi
+    fi
 fi
 
 echo "  ──────────────────────────────────────────────"
