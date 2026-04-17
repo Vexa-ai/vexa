@@ -58,9 +58,13 @@ engine = create_async_engine(
     DATABASE_URL,
     connect_args=connect_args,
     echo=os.environ.get("LOG_LEVEL", "INFO").upper() == "DEBUG",
-    pool_size=int(os.environ.get("DB_POOL_SIZE", "5")),
-    max_overflow=int(os.environ.get("DB_MAX_OVERFLOW", "5")),
-    pool_timeout=int(os.environ.get("DB_POOL_TIMEOUT", "30")),
+    # Defaults bumped from 5/5/30 → 20/20/10: gives headroom against future
+    # connection leaks and fails fast (10s) when the pool is exhausted.
+    # Pair with Postgres-side `idle_in_transaction_session_timeout=60s` to
+    # auto-kill orphaned transactions (see deploy/compose + deploy/helm).
+    pool_size=int(os.environ.get("DB_POOL_SIZE", "20")),
+    max_overflow=int(os.environ.get("DB_MAX_OVERFLOW", "20")),
+    pool_timeout=int(os.environ.get("DB_POOL_TIMEOUT", "10")),
     pool_recycle=1800,
     pool_pre_ping=True,
     pool_reset_on_return="rollback",

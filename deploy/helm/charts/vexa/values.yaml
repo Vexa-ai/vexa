@@ -216,6 +216,10 @@ postgres:
   enabled: true
   image: postgres:17-alpine
   credentialsSecretName: postgres-credentials
+  # idle_in_transaction_session_timeout (ms) — Postgres auto-kills connections
+  # that hold a transaction open past this threshold. Defense-in-depth against
+  # DB session leaks in meeting-api (see services/meeting-api/meeting_api/database.py).
+  idleInTransactionTimeoutMs: 60000
   service:
     port: 5432
   persistence:
