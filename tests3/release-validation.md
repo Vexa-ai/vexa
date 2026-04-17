@@ -12,74 +12,36 @@ No ad-hoc runs. No fallbacks. No legacy paths.
 
 ## Flow diagram
 
-One release = one big loop, two exit gates (automated test + human).
+One loop, two gates. `release-iterate` (fast, scope-filtered) and
+`release-full` (clean-reset, authoritative) are the same stage 5 at two
+fidelities — not separate stages.
 
 ```
-              ┌──────────────────────────────┐
-              │  0. groom                    │  triage GH + Discord
-              │  1. plan → scope.yaml        │  decide what lands
-              └──────────────┬───────────────┘
-                             │
-                  ┌──────────┴──────────┐
-                  ▼ (in parallel)       ▼
-          ┌───────────────┐     ┌───────────────┐
-          │ 2. provision  │     │ 3. develop    │  (code + tests + DoDs,
-          │   VMs + LKE   │     │   on `dev`    │   out of band)
-          └───────┬───────┘     └───────┬───────┘
-                  └──────────┬──────────┘
-                             ▼
-                    ┌─────────────────┐
-                    │  4. deploy      │  ◀──┐
-                    │   build+push    │     │
-                    │   :dev → stacks │     │
-                    └────────┬────────┘     │
-                             ▼              │
-                    ┌─────────────────┐     │
-                    │  5. test        │     │  ─── automated gate ───
-                    │   scope-filter  │     │
-                    │   → clean-reset │     │
-                    │     full matrix │     │
-                    │   → gate-check  │     │
-                    └───┬──────┬──────┘     │
-                       fail   pass          │
-                        │      │            │
-                        └──▶ develop ───────┘  (fix code, re-deploy, re-test)
-                               ▲
-                               │
-                    ┌──────────┴──────┐
-                    │                 │
-                    │  pass           │
-                    ▼                 │
-              ┌─────────────┐         │
-              │  6. human   │         │  ─── human gate ───
-              │   checklist │         │
-              │   (hash-    │         │
-              │   tagged)   │         │
-              └──┬───────┬──┘         │
-                fail    pass          │
-                 │       │            │
-                 │       └────▶ 7. ship ─▶ 8. teardown
-                 │                    ▲
-                 │                    │
-                 │  human found a bug │
-                 └─▶ stage 3b ────────┘
-                   (release-issue-add SOURCE=human
-                    requires GAP + NEW_CHECKS;
-                    implement the check, goto develop)
+  0 groom  →  1 plan (scope.yaml)
+                │
+        ┌───────┴────────┐
+        ▼                ▼      parallel
+  2 provision       3 develop
+        └───────┬────────┘
+                ▼
+           4 deploy ◀──────────┐
+                │              │
+                ▼              │
+           5 test ─── fail ────┘
+                │
+              pass
+                ▼
+           6 human ─── fail ──▶ 3b release-issue-add
+                │               (SOURCE=human: GAP + NEW_CHECKS required)
+              pass                        │
+                ▼                         ▼
+           7 ship                   3 develop (implement the check, loop)
+                │
+                ▼
+           8 teardown
 ```
 
-**There is one loop, not two.** `make release-iterate` and
-`make release-full` are the **same test stage** at two fidelities:
-
-- `release-iterate` — scope-filtered, dirty state, ~2–3 min. The fast
-  feedback inside the develop → deploy → test → develop loop.
-- `release-full` — clean-reset, full cheap matrix, ~15 min. The
-  authoritative exit check before handing off to human. Run it once
-  when iterate is green.
-
-Both write to the same report. Both call the same aggregator. Both
-enforce the same gate. `release-iterate` is an optimization — it is NOT
-a separate stage in the protocol.
+**3-round cap** on human-found bugs in one cycle — after that, split the scope.
 
 ---
 

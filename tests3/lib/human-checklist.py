@@ -129,6 +129,40 @@ def _tag_items(rendered: str, prior: Dict[str, bool]) -> str:
 
 # ───────────────────────── Generate ─────────────────────────
 
+def _mode_urls(mode: str, v: Dict[str, str]) -> List[str]:
+    """Every URL a human needs for that mode — one bullet per URL, clickable."""
+    out = []
+    if mode == "lite" and "vm_ip" in v:
+        ip = v["vm_ip"]
+        out += [
+            f"dashboard:   http://{ip}:3000",
+            f"gateway:     http://{ip}:8056",
+            f"admin:       http://{ip}:18056",
+            f"ssh:         `ssh root@{ip}`",
+        ]
+    elif mode == "compose" and "vm_ip" in v:
+        ip = v["vm_ip"]
+        out += [
+            f"dashboard:   http://{ip}:3001",
+            f"/meetings:   http://{ip}:3001/meetings",
+            f"/webhooks:   http://{ip}:3001/webhooks",
+            f"gateway:     http://{ip}:8056",
+            f"/docs:       http://{ip}:8056/docs",
+            f"admin:       http://{ip}:18056",
+            f"ssh:         `ssh root@{ip}`",
+        ]
+    elif mode == "helm":
+        node = v.get("node_ip", "?")
+        kc = v.get("lke_kubeconfig_path", "?")
+        out += [
+            f"dashboard:   http://{node}:30001",
+            f"/meetings:   http://{node}:30001/meetings",
+            f"gateway:     http://{node}:30056",
+            f"kubectl:     `export KUBECONFIG={kc}`",
+        ]
+    return out
+
+
 def generate(scope_path: str) -> str:
     with open(scope_path) as f:
         scope = yaml.safe_load(f)
@@ -137,102 +171,67 @@ def generate(scope_path: str) -> str:
 
     scope_modes: List[str] = list((scope.get("deployments") or {}).get("modes") or [])
     release_id = scope.get("release_id", "?")
-    summary = (scope.get("summary") or "").strip()
 
-    # Resolve per-mode variables
     mode_vars = {m: load_mode_vars(m) for m in scope_modes}
 
-    lines: List[str] = []
-    lines.append(f"# Human validation — `{release_id}`\n")
-    lines.append(f"> {summary}\n")
-    lines.append("")
-    lines.append("Check each box by editing `- [ ]` → `- [x]`. **`make release-ship` "
-                 "refuses to run until every box is checked.** If something fails, "
-                 "note it in the `## Issues found` section at the bottom and resolve "
-                 "(either re-run the pipeline with a fix, or annotate the exception) "
-                 "before merging.\n")
+    L: List[str] = []
+    L.append(f"# {release_id} — human checklist\n")
+    L.append(f"Tick boxes. `release-ship` blocks until all are `[x]`. "
+             f"Bugs → `make release-issue-add SOURCE=human` (requires GAP + NEW_CHECKS).\n")
 
-    # ── Deployment access table ──
-    lines.append("## Access\n")
-    lines.append("| Mode | URL | SSH / kubectl |")
-    lines.append("|------|-----|---------------|")
+    # URLs — one block per mode, every endpoint a human might click.
+    L.append("## URLs")
     for m in scope_modes:
-        v = mode_vars[m]
-        if m == "lite" and "vm_ip" in v:
-            lines.append(f"| lite | http://{v['vm_ip']}:3000 | `ssh root@{v['vm_ip']}` |")
-        elif m == "compose" and "vm_ip" in v:
-            lines.append(f"| compose | http://{v['vm_ip']}:3001 | `ssh root@{v['vm_ip']}` |")
-        elif m == "helm":
-            node = v.get("node_ip", "?")
-            kubeconfig = v.get("lke_kubeconfig_path", "?")
-            lines.append(f"| helm | http://{node}:30001 | `export KUBECONFIG={kubeconfig}` |")
-    lines.append("")
+        L.append(f"\n**{m}**")
+        for ln in _mode_urls(m, mode_vars[m]):
+            L.append(f"- {ln}")
+    L.append("")
 
-    # ── Always checks ──
-    lines.append("## ALWAYS — applies to every release\n")
-    lines.append("_Source: `tests3/human-always.yaml`. These verify the product works regardless of what changed._\n")
+    # ALWAYS — terse bullets grouped by mode. No preamble.
+    L.append("## Always")
     for block in (always.get("always") or []):
         block_modes = set(block.get("modes") or [])
-        # Only emit if at least one of this block's modes is in scope
         applicable = [m for m in scope_modes if m in block_modes]
         if not applicable:
             continue
-        section = block.get("section", "")
-        lines.append(f"### {section}\n")
-        # For cross-mode sections we substitute per applicable mode into each item;
-        # for mode-specific blocks only the first applicable mode is used.
+        L.append(f"\n**{block.get('section','')}**")
         for item in (block.get("items") or []):
             if len(applicable) == 1:
-                lines.append(f"- [ ] {fmt(item, mode_vars[applicable[0]])}")
+                L.append(f"- [ ] {fmt(item, mode_vars[applicable[0]])}")
             else:
-                # Cross-cutting: emit once, not per-mode, but resolve {vm_ip}
-                # using the first mode that has it.
                 resolved = item
                 for m in applicable:
                     resolved = fmt(resolved, mode_vars[m])
                     if "<unknown:" not in resolved:
                         break
-                lines.append(f"- [ ] {resolved}")
-        lines.append("")
+                L.append(f"- [ ] {resolved}")
+    L.append("")
 
-    # ── Scope-specific checks ──
-    lines.append("## THIS RELEASE — scope-specific\n")
-    lines.append(f"_Source: `{os.path.relpath(scope_path, ROOT)}` → `issues[].human_verify[]`._\n")
+    # THIS RELEASE — one line header per issue (id + required modes),
+    # then terse `[mode] do → expect` items. No problem paragraphs.
+    L.append("## This release")
     for issue in (scope.get("issues") or []):
         iid = issue.get("id", "?")
-        problem = (issue.get("problem") or "").strip().replace("\n", " ")
-        required = ", ".join(sorted(issue.get("required_modes") or [])) or "(any)"
-        lines.append(f"### `{iid}`  _(required modes: {required})_\n")
-        lines.append(f"**Problem**: {problem}\n")
+        required = ",".join(sorted(issue.get("required_modes") or [])) or "any"
         hv = issue.get("human_verify") or []
         if not hv:
-            lines.append("- [ ] _No explicit human-verify steps defined for this issue — confirm the automated report (§Scope status) reflects your observation on the deployed system._")
-            lines.append("")
+            L.append(f"\n**{iid}** _({required})_ — no human-verify steps; trust the automated report.")
             continue
+        L.append(f"\n**{iid}** _({required})_")
         for entry in hv:
             m = entry.get("mode", "")
             if m and m not in scope_modes:
                 continue
             do = fmt(entry.get("do", ""), mode_vars.get(m, {}))
             expect = fmt(entry.get("expect", ""), mode_vars.get(m, {}))
-            lines.append(f"- [ ] **[{m}]** Do: {do}  →  Expect: {expect}")
-        lines.append("")
+            L.append(f"- [ ] [{m}] {do} → {expect}")
+    L.append("")
 
-    # ── Tail sections ──
-    lines.append("## Issues found\n")
-    lines.append("_Leave empty if clean. Any bug surfaced here must be resolved "
-                 "(fix + new pipeline run) before this checklist is signed off._\n")
-    lines.append("")
+    L.append("## Issues found")
+    L.append("_List anything that failed. Each entry → `release-issue-add SOURCE=human` before ship._")
+    L.append("")
 
-    lines.append("## Sign-off\n")
-    lines.append("- [ ] All ALWAYS items checked.")
-    lines.append("- [ ] All THIS RELEASE items checked.")
-    lines.append("- [ ] No unresolved entries in `Issues found`.")
-    lines.append("")
-    lines.append("Once all three boxes are checked AND `make release-full SCOPE=...` "
-                 "succeeded, `make release-ship` is unblocked.\n")
-
-    return "\n".join(lines)
+    return "\n".join(L)
 
 
 # ───────────────────────── Gate ─────────────────────────
