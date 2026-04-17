@@ -1,15 +1,70 @@
 ---
 services: [meeting-api, api-gateway, admin-api]
 tests3:
-  targets: [webhooks, smoke]
-  checks: [DB_POOL_NO_EXHAUSTION]
+  # Gate: release-ship blocks if this feature's confidence falls below the threshold.
+  gate:
+    confidence_min: 95
+  # DoDs are behavioral assertions mirroring the "Expected Behavior" section below.
+  # Each has an `evidence` binding to a test step (tests3/test-registry.yaml) or
+  # a named check (tests3/checks/registry.json). The aggregator
+  # (tests3/lib/aggregate.py) computes confidence = sum(weight for pass) / sum(weight) * 100.
+  dods:
+    # ── Event catalog ─────────────────────────────────────────
+    - id: events-meeting-completed
+      label: "meeting.completed fires on every bot exit (default-enabled)"
+      weight: 10
+      evidence: {test: webhooks, step: e2e_completion, modes: [compose]}
+    - id: events-status-webhooks
+      label: "Status-change webhooks fire when enabled via webhook_events (meeting.started / bot.failed / meeting.status_change)"
+      weight: 10
+      evidence: {test: webhooks, step: e2e_status, modes: [compose]}
+
+    # ── Envelope + headers ────────────────────────────────────
+    - id: envelope-shape
+      label: "Every webhook carries envelope: event_id, event_type, api_version, created_at, data"
+      weight: 10
+      evidence: {test: webhooks, step: envelope, modes: [compose, helm]}
+    - id: headers-hmac
+      label: "X-Webhook-Signature = HMAC-SHA256(timestamp + '.' + payload) when secret is set"
+      weight: 10
+      evidence: {test: webhooks, step: hmac, modes: [compose, helm]}
+
+    # ── Security ──────────────────────────────────────────────
+    - id: security-spoof-protection
+      label: "Client-supplied X-User-Webhook-* headers cannot override stored config"
+      weight: 10
+      evidence: {test: webhooks, step: spoof, modes: [compose, helm]}
+    - id: security-secret-not-exposed
+      label: "webhook_secret never appears in any API response (POST /bots, GET /bots/status)"
+      weight: 10
+      evidence: {test: webhooks, step: no_leak_response, modes: [compose, helm]}
+    - id: security-payload-hygiene
+      label: "Internal fields (secret, url, container ids, delivery state) stripped from webhook payloads"
+      weight: 5
+      evidence: {test: webhooks, step: no_leak_payload, modes: [compose, helm]}
+
+    # ── Configuration flow ────────────────────────────────────
+    - id: flow-user-config
+      label: "PUT /user/webhook persists webhook_url + webhook_secret + webhook_events to User.data"
+      weight: 10
+      evidence: {test: webhooks, step: config, modes: [compose]}
+    - id: flow-gateway-inject
+      label: "Gateway injects validated webhook config into meeting.data on POST /bots"
+      weight: 15
+      evidence: {test: webhooks, step: inject, modes: [compose]}
+
+    # ── Reliability ───────────────────────────────────────────
+    - id: reliability-db-pool
+      label: "DB connection pool doesn't exhaust under repeated status requests"
+      weight: 10
+      evidence: {check: DB_POOL_NO_EXHAUSTION, modes: [lite, compose, helm]}
 ---
 
 # Webhooks
 
 ## Why
 
-External systems need to react to meeting lifecycle events (bot joined, status changed, transcription ready, meeting ended) without polling. Vexa pushes events to user-configured URLs with HMAC-signed payloads and durable retry.
+External systems need to react to meeting lifecycle events (bot joined, status changed, recording finalized, meeting ended) without polling. Vexa pushes events to user-configured URLs with HMAC-signed payloads and durable retry.
 
 ## What
 
@@ -42,7 +97,7 @@ Delivery status recorded in meeting.data.{webhook_delivery | webhook_deliveries}
 | Meeting data capture | `services/meeting-api/meeting_api/meetings.py` | Reads headers at bot creation, persists into `meeting.data` |
 | Status webhooks | `services/meeting-api/meeting_api/webhooks.py:send_status_webhook` | Fires on every transition that passes `_is_event_enabled` |
 | Completion webhook | `services/meeting-api/meeting_api/webhooks.py:send_completion_webhook` | Fires unconditionally on `meeting.completed` from `run_all_tasks` |
-| Event webhook | `services/meeting-api/meeting_api/webhooks.py:send_event_webhook` | Recording/transcription ready events |
+| Event webhook | `services/meeting-api/meeting_api/webhooks.py:send_event_webhook` | `recording.completed` events (fire-and-forget) |
 | Delivery + retry | `services/meeting-api/meeting_api/webhook_delivery.py` | HMAC sign + HTTP POST + Redis retry queue |
 | Retry worker | `services/meeting-api/meeting_api/webhook_retry_worker.py` | Exponential backoff: 1m → 5m → 30m → 2h (24h max age) |
 | Internal hooks | `services/meeting-api/meeting_api/post_meeting.py:fire_post_meeting_hooks` | Server-side `POST_MEETING_HOOKS` for billing/analytics |
@@ -57,8 +112,9 @@ Delivery status recorded in meeting.data.{webhook_delivery | webhook_deliveries}
 | `meeting.started` | Meeting status → `active` | no — requires `webhook_events["meeting.started"] = true` | `meeting.data.webhook_deliveries[]` (bounded list, 20 entries) |
 | `bot.failed` | Meeting status → `failed` | no — requires `webhook_events["bot.failed"] = true` | `meeting.data.webhook_deliveries[]` |
 | `meeting.status_change` | Any other status transition (joining, awaiting_admission, stopping, needs_human_help) | no — requires `webhook_events["meeting.status_change"] = true` | `meeting.data.webhook_deliveries[]` |
-| `recording.ready` | Recording finalized (fire-and-forget) | no | not tracked |
-| `transcription.ready` | Transcription segment pipeline completion | no | not tracked |
+| `recording.completed` | Recording finalized (fire-and-forget from `recordings.py`) | no — requires `webhook_events["recording.completed"] = true` | not tracked |
+
+> **Note**: `transcription.completed` / `transcription.ready` are **not implemented**. Transcript segments become available via `GET /transcripts/...` after `meeting.completed` fires, but no dedicated transcription webhook exists yet.
 
 **Status transition sources that fire webhooks** (all gated by `_is_event_enabled`):
 - Bot container callbacks (`/bots/internal/callback/status_change`, `/started`, `/joining`, `/awaiting_admission`, `/exited`)

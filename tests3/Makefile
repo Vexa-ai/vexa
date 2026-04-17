@@ -4,6 +4,8 @@
        meeting-tts meeting bot admit transcribe finalize post-meeting meeting-chain \
        webhooks auth-meeting bot-stop-timing transcription-replay tts-reliability \
        collect score \
+       validate-lite validate-compose validate-helm validate-all \
+       report report-gate \
        e2e full \
        vm-compose vm-lite \
        vm-provision-compose vm-provision-lite vm-smoke-compose vm-smoke-lite \
@@ -135,6 +137,33 @@ webhooks: $(SMOKE_STAMP)          ## envelope, HMAC, no secret leak (10s)
 
 auth-meeting: $(SMOKE_STAMP)      ## authenticated join: S3 config, cookies, join type (60s)
 	@$(T3)/tests/auth-meeting.sh
+
+# ═══ Matrix validation (reads test-registry.yaml) ══════════════
+# validate-<mode> runs every cheap-tier test registered for that mode,
+# writes .state/reports/<mode>/<test>.json, exits non-zero on any failure.
+# Reports drive the aggregator (Phase C+) and release-ship gate (Phase D).
+
+validate-lite:                     ## run cheap-tier tests for lite mode + write JSON reports
+	@$(T3)/lib/run-matrix.sh lite
+
+validate-compose:                  ## run cheap-tier tests for compose mode + write JSON reports
+	@$(T3)/lib/run-matrix.sh compose
+
+validate-helm:                     ## run cheap-tier tests for helm mode + write JSON reports
+	@$(T3)/lib/run-matrix.sh helm
+
+report:                            ## aggregate .state/reports/* into tests3/reports/release-<tag>.md
+	@mkdir -p $(ROOT)/tests3/reports
+	@TAG=$$(cat $(STATE)/image_tag 2>/dev/null || echo "unknown"); \
+	python3 $(T3)/lib/aggregate.py --out $(ROOT)/tests3/reports/release-$$TAG.md; \
+	echo "  report → tests3/reports/release-$$TAG.md"
+
+report-gate:                       ## like `report` but exits non-zero if any feature is below its confidence_min
+	@mkdir -p $(ROOT)/tests3/reports
+	@TAG=$$(cat $(STATE)/image_tag 2>/dev/null || echo "unknown"); \
+	python3 $(T3)/lib/aggregate.py --out $(ROOT)/tests3/reports/release-$$TAG.md --gate-check
+
+validate-all: validate-lite validate-compose validate-helm report  ## run all cheap tests on all modes + aggregate
 
 # ═══ Composites ═══════════════════════════════════════════════════
 

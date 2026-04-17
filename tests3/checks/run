@@ -21,6 +21,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 ROOT = os.environ.get("ROOT", subprocess.check_output(
     ["git", "rev-parse", "--show-toplevel"], text=True).strip())
@@ -1081,9 +1082,16 @@ RUNNERS = {
 def main():
     # Parse args
     tier_filter = None
-    for i, arg in enumerate(sys.argv[1:], 1):
-        if arg == "--tier" and i < len(sys.argv) - 1:
-            tier_filter = sys.argv[i + 1]
+    json_out = None
+    argv = sys.argv[1:]
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--tier" and i + 1 < len(argv):
+            tier_filter = argv[i + 1]; i += 2
+        elif argv[i] == "--json-out" and i + 1 < len(argv):
+            json_out = argv[i + 1]; i += 2
+        else:
+            i += 1
 
     with open(REGISTRY) as f:
         registry = json.load(f)
@@ -1094,6 +1102,10 @@ def main():
 
     if not locks:
         print(f"  {dim('no checks for tier: ' + str(tier_filter))}")
+        # Still emit an empty JSON report if requested, so downstream tooling
+        # doesn't have to special-case "tier had no checks".
+        if json_out:
+            _write_json_report(json_out, tier_filter, [], 0)
         return
 
     # Bootstrap credentials for tiers that need them
@@ -1109,6 +1121,8 @@ def main():
     passed = 0
     failed = 0
     failures = []
+    steps = []  # JSON report entries, one per check
+    t0 = time.time()
 
     for lock in locks:
         lid = lock["id"]
@@ -1119,6 +1133,7 @@ def main():
         if not runner:
             print(f"  {red('SKIP')}  {lid}  (unknown tier: {tier})")
             log("SKIP", lid, "unknown tier", tier)
+            steps.append({"id": lid, "status": "skip", "message": f"unknown tier: {tier}"})
             continue
 
         ok, reason = runner(lock)
@@ -1126,13 +1141,20 @@ def main():
             passed += 1
             print(f"  {green(' ok ')}  {lid}")
             log("PASS", lid, f"proves: {proves}")
+            # "skipped for <mode> mode" reason from skip_modes should show as skip in report
+            status = "skip" if isinstance(reason, str) and reason.startswith("skipped") else "pass"
+            steps.append({"id": lid, "status": status, "message": reason or proves})
         else:
             failed += 1
             print(f"  {red('FAIL')}  {lid}")
             log("FAIL", lid, reason, f"bug: {symptom}")
             failures.append((lid, lock, reason))
+            steps.append({"id": lid, "status": "fail", "message": reason, "symptom": symptom})
 
     print(f"  {'─' * 46}")
+
+    if json_out:
+        _write_json_report(json_out, tier_filter, steps, int((time.time() - t0) * 1000))
 
     if failures:
         print()
@@ -1152,6 +1174,27 @@ def main():
         print(f"  {green(f'All {passed} checks pass.')}")
         log("INFO", tier_name, f"ALL PASS: {passed}/{passed}")
         print()
+
+
+def _write_json_report(path, tier, steps, duration_ms):
+    """Write a JSON artifact in the same shape as tests3/lib/common.sh test reports."""
+    import os, datetime
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    mode = state_read("deploy_mode") or ""
+    image_tag = state_read("image_tag") or ""
+    status = "pass" if not any(s["status"] == "fail" for s in steps) else "fail"
+    report = {
+        "test": f"smoke-{tier}" if tier else "smoke-all",
+        "mode": mode,
+        "image_tag": image_tag,
+        "started_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "ended_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "duration_ms": duration_ms,
+        "status": status,
+        "steps": steps,
+    }
+    with open(path, "w") as f:
+        json.dump(report, f, indent=None, separators=(",", ":"))
 
 
 if __name__ == "__main__":
