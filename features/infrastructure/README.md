@@ -1,8 +1,45 @@
 ---
 services: [api-gateway, admin-api, meeting-api, runtime-api, dashboard]
 tests3:
-  targets: [smoke]
-  checks: [GATEWAY_UP, ADMIN_API_UP, DASHBOARD_UP, RUNTIME_API_UP, TRANSCRIPTION_UP, REDIS_UP, MINIO_UP]
+  gate:
+    confidence_min: 100         # Every deployment must have every service up.
+  dods:
+    - id: gateway-up
+      label: "API gateway responds to /admin/users via valid admin token"
+      weight: 10
+      evidence: {check: GATEWAY_UP, modes: [lite, compose, helm]}
+    - id: admin-api-up
+      label: "admin-api responds with a valid list"
+      weight: 10
+      evidence: {check: ADMIN_API_UP, modes: [lite, compose, helm]}
+    - id: dashboard-up
+      label: "dashboard root page responds"
+      weight: 10
+      evidence: {check: DASHBOARD_UP, modes: [lite, compose, helm]}
+    - id: runtime-api-up
+      label: "runtime-api (bot orchestrator) is reachable / has ready replicas"
+      weight: 15
+      evidence: {check: RUNTIME_API_UP, modes: [lite, compose, helm]}
+    - id: transcription-up
+      label: "transcription service /health returns ok + gpu_available"
+      weight: 15
+      evidence: {check: TRANSCRIPTION_UP, modes: [lite, compose, helm]}
+    - id: redis-up
+      label: "Redis responds to PING"
+      weight: 10
+      evidence: {check: REDIS_UP, modes: [lite, compose, helm]}
+    - id: minio-up
+      label: "MinIO is healthy / has ready replicas"
+      weight: 10
+      evidence: {check: MINIO_UP, modes: [compose, helm]}
+    - id: db-schema
+      label: "Database schema is aligned with the current model"
+      weight: 10
+      evidence: {check: DB_SCHEMA_ALIGNED, modes: [lite, compose, helm]}
+    - id: gateway-timeout
+      label: "Gateway proxy timeout is ≥30s (prevents premature 504s under load)"
+      weight: 10
+      evidence: {check: GATEWAY_TIMEOUT_ADEQUATE, modes: [lite, compose, helm]}
 ---
 
 # Infrastructure
@@ -95,13 +132,23 @@ make down
 
 ## DoD
 
-| # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Tests |
-|---|-------|--------|---------|-------|--------|----------|--------------|-------|
-| 1 | make build produces immutable tagged images | 20 | ceiling | 0 | PASS | Compose build: all images tagged 0.10.0-260408-1826 (api-gateway, admin-api, runtime-api, meeting-api, agent-api, mcp, dashboard, tts-service, vexa-bot, vexa-lite) | 2026-04-08 | Phase 2a compose build |
-| 2 | make up starts all services healthy | 25 | ceiling | 0 | PASS | Compose pull: all containers started, gateway:8056, admin:8057, dashboard:3001 responding. Transcription verified. | 2026-04-08 | Phase 1a compose pull |
-| 3 | Gateway, admin, dashboard respond | 20 | ceiling | 0 | PASS | gateway 200, admin 200, dashboard 200. Transcription test: "Hello, this is a test..." | 2026-04-08 | Phase 1a compose pull |
-| 4 | Transcription service has GPU | 15 | — | 0 | PASS | Transcription works: test WAV → "Hello, this is a test of the transcription service" | 2026-04-08 | Phase 1a compose test |
-| 5 | Database migrated and accessible | 10 | — | 0 | PASS | restore-db: 1761 users, 9587 meetings, 507233 transcriptions loaded. Schema sync complete. Services healthy after restore. | 2026-04-08 | Phase 3a compose restore-db |
-| 6 | MinIO bucket exists | 10 | — | 0 | PASS | Smoke health checks pass: MINIO_ENDPOINT_SET, MINIO_BUCKET_SET. Browser session S3 roundtrip works on helm. | 2026-04-08 | Phase 4 smoke |
 
-Confidence: 100 (all 6 items PASS — full retest 2026-04-08)
+<!-- BEGIN AUTO-DOD -->
+<!-- Auto-written by tests3/lib/aggregate.py from release tag `unknown`. Do not edit by hand — edit the `tests3.dods:` frontmatter + re-run `make -C tests3 report --write-features`. -->
+
+**Confidence: 0%** (gate: 100%, status: ❌ below gate)
+
+| # | Behavior | Weight | Status | Evidence (modes) |
+|---|----------|-------:|:------:|------------------|
+| gateway-up | API gateway responds to /admin/users via valid admin token | 10 | ⬜ missing | `lite`: check GATEWAY_UP not found in any smoke-* report; `compose`: check GATEWAY_UP not found in any smoke-* report; `helm`: check GATEWAY_UP not found in any smoke-* report |
+| admin-api-up | admin-api responds with a valid list | 10 | ⬜ missing | `lite`: check ADMIN_API_UP not found in any smoke-* report; `compose`: check ADMIN_API_UP not found in any smoke-* report; `helm`: check ADMIN_API_UP not found in any smoke-* report |
+| dashboard-up | dashboard root page responds | 10 | ⬜ missing | `lite`: check DASHBOARD_UP not found in any smoke-* report; `compose`: check DASHBOARD_UP not found in any smoke-* report; `helm`: check DASHBOARD_UP not found in any smoke-* report |
+| runtime-api-up | runtime-api (bot orchestrator) is reachable / has ready replicas | 15 | ⬜ missing | `lite`: check RUNTIME_API_UP not found in any smoke-* report; `compose`: check RUNTIME_API_UP not found in any smoke-* report; `helm`: check RUNTIME_API_UP not found in any smoke-* report |
+| transcription-up | transcription service /health returns ok + gpu_available | 15 | ⬜ missing | `lite`: check TRANSCRIPTION_UP not found in any smoke-* report; `compose`: check TRANSCRIPTION_UP not found in any smoke-* report; `helm`: check TRANSCRIPTION_UP not found in any smoke-* report |
+| redis-up | Redis responds to PING | 10 | ⬜ missing | `lite`: check REDIS_UP not found in any smoke-* report; `compose`: check REDIS_UP not found in any smoke-* report; `helm`: check REDIS_UP not found in any smoke-* report |
+| minio-up | MinIO is healthy / has ready replicas | 10 | ⬜ missing | `compose`: check MINIO_UP not found in any smoke-* report; `helm`: check MINIO_UP not found in any smoke-* report |
+| db-schema | Database schema is aligned with the current model | 10 | ⬜ missing | `lite`: check DB_SCHEMA_ALIGNED not found in any smoke-* report; `compose`: check DB_SCHEMA_ALIGNED not found in any smoke-* report; `helm`: check DB_SCHEMA_ALIGNED not found in any smoke-* report |
+| gateway-timeout | Gateway proxy timeout is ≥30s (prevents premature 504s under load) | 10 | ⬜ missing | `lite`: check GATEWAY_TIMEOUT_ADEQUATE not found in any smoke-* report; `compose`: check GATEWAY_TIMEOUT_ADEQUATE not found in any smoke-* report; `helm`: check GATEWAY_TIMEOUT_ADEQUATE not found in any smoke-* report |
+
+<!-- END AUTO-DOD -->
+

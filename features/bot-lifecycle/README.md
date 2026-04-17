@@ -1,9 +1,61 @@
 ---
-
-## services: [meeting-api, runtime-api, vexa-bot]
+services: [meeting-api, runtime-api, vexa-bot]
 tests3:
-  targets: [containers, bot, smoke]
-  checks: [GRACEFUL_LEAVE, ROUTE_COLLISION, BOTS_STATUS_NOT_422]
+  gate:
+    confidence_min: 90
+  dods:
+    # ── Creation ──────────────────────────────────────────────
+    - id: create-ok
+      label: "POST /bots spawns a bot container and returns a bot id"
+      weight: 15
+      evidence: {test: containers, step: create, modes: [compose, helm]}
+    - id: create-alive
+      label: "Bot process is running 10s after creation (not crash-looping)"
+      weight: 15
+      evidence: {test: containers, step: alive, modes: [compose, helm]}
+    - id: bots-status-not-422
+      label: "GET /bots/status never returns 422 (schema stable under concurrent writes)"
+      weight: 5
+      evidence: {check: BOTS_STATUS_NOT_422, modes: [lite, compose, helm]}
+
+    # ── Teardown ──────────────────────────────────────────────
+    - id: removal
+      label: "Container fully removed after DELETE /bots/..."
+      weight: 10
+      evidence: {test: containers, step: removal, modes: [compose]}
+    - id: status-completed
+      label: "Meeting.status=completed after stop (not failed/stuck)"
+      weight: 10
+      evidence: {test: containers, step: status_completed, modes: [compose, helm]}
+    - id: graceful-leave
+      label: "Bot leaves the meeting gracefully on stop (no force-kill by default)"
+      weight: 5
+      evidence: {check: GRACEFUL_LEAVE, modes: [lite, compose, helm]}
+    - id: route-collision
+      label: "No Starlette route collisions — /bots/{id} and /bots/{platform}/{native_id} do not clash"
+      weight: 5
+      evidence: {check: ROUTE_COLLISION, modes: [lite, compose, helm]}
+
+    # ── Lifecycle rules ───────────────────────────────────────
+    - id: timeout-stop
+      label: "Bot auto-stops after automatic_leave timeout (no_one_joined_timeout)"
+      weight: 10
+      evidence: {test: containers, step: timeout_stop, modes: [compose]}
+    - id: concurrency-slot
+      label: "Concurrent-bot slot released immediately on stop — next create succeeds"
+      weight: 10
+      evidence: {test: containers, step: concurrency_slot, modes: [compose, helm]}
+    - id: no-orphans
+      label: "No zombie/exited bot containers left after a lifecycle run"
+      weight: 10
+      evidence: {test: containers, step: no_orphans, modes: [compose]}
+
+    # ── Status transitions (webhook-observable) ───────────────
+    - id: status-webhooks-fire
+      label: "Status-change webhooks fire for every transition when enabled in webhook_events"
+      weight: 5
+      evidence: {test: webhooks, step: e2e_status, modes: [compose]}
+---
 
 # Bot Lifecycle
 
@@ -237,28 +289,29 @@ Status transitions are protected by `SELECT FOR UPDATE` (row-level lock) to prev
 | Scheduler        | `services/runtime-api/runtime_api/scheduler.py`              | max_bot_time enforcement        |
 
 
-## Definition of Done
+## DoD
 
 
-| #   | Check                                                                                  | Weight | Ceiling | Status   | Last                                                                                                                                                      |
-| --- | -------------------------------------------------------------------------------------- | ------ | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | POST /bots creates bot, returns id                                                     | 15     | ceiling | PASS     | 2026-04-08. Compose + helm containers test: bot created (201). |
-| 2   | Bot reaches active in live meeting                                                     | 20     | ceiling | PASS     | 2026-04-08. Helm containers: bot running and alive after 10s. |
-| 3   | DELETE /bots → stopping → completed, container removed                                 | 15     | ceiling | PASS     | 2026-04-08. Compose + helm: DELETE → completed, container fully removed. |
-| 4   | Status visible via GET /bots/status (not 422)                                          | 10     | —       | PASS     | 2026-04-08. Compose + helm: GET /bots/status 200. |
-| 5   | Timeout auto-stop (no_one_joined or max_bot_time)                                      | 10     | —       | PASS     | 2026-04-08. Compose containers: timeout behavior observed. |
-| 6   | Works for GMeet, Teams, browser_session                                                | 10     | —       | PASS     | 2026-04-08. Helm: browser-session created. Teams pending Phase 5a. |
-| 7   | Successful meeting never shows "failed"                                                | 10     | —       | PASS     | 2026-04-08. Compose + helm: completed meetings show completed status. |
-| 8   | Auto-admit reliable (multi-phase CDP)                                                  | 10     | —       | PASS     | 2026-04-08. Pending re-confirm in Phase 5. |
-| 9   | Unauthenticated GMeet join (name prompt)                                               | 5      | —       | UNTESTED | Pending Phase 5b GMeet meeting test. |
-| 10  | meeting_url parsed server-side (6 Teams formats)                                       | 5      | —       | PASS     | 2026-04-08. Smoke static: all Teams URL formats pass. |
-| 11  | needs_human_help escalation: bot triggers, meeting-api stores VNC URL, dashboard shows | 5      | —       | SKIP     | Cannot trigger without real CAPTCHA scenario. |
-| 12  | Exit during stopping = completed (not failed), regardless of exit code                 | 5      | —       | PASS     | 2026-04-08. Compose + helm containers: exit during stopping = completed. |
-| 13  | Concurrency slot released on stopping (user can create new bot immediately)            | 5      | —       | PASS     | 2026-04-08. Compose + helm: slot released, second bot created. |
-| 14  | Status transitions tracked in meeting.data.status_transition[]                         | 5      | —       | PASS     | 2026-04-08. Compose + helm containers: transitions tracked. |
+<!-- BEGIN AUTO-DOD -->
+<!-- Auto-written by tests3/lib/aggregate.py from release tag `unknown`. Do not edit by hand — edit the `tests3.dods:` frontmatter + re-run `make -C tests3 report --write-features`. -->
 
+**Confidence: 0%** (gate: 90%, status: ❌ below gate)
 
-Confidence: 92 (12/14 PASS, #9 UNTESTED, #11 SKIP. Bot stop verified: 8.5s on lite (B2 fix), fast on compose + K8s.)
+| # | Behavior | Weight | Status | Evidence (modes) |
+|---|----------|-------:|:------:|------------------|
+| create-ok | POST /bots spawns a bot container and returns a bot id | 15 | ⬜ missing | `compose`: no report for test=containers; `helm`: no report for test=containers |
+| create-alive | Bot process is running 10s after creation (not crash-looping) | 15 | ⬜ missing | `compose`: no report for test=containers; `helm`: no report for test=containers |
+| bots-status-not-422 | GET /bots/status never returns 422 (schema stable under concurrent writes) | 5 | ⬜ missing | `lite`: check BOTS_STATUS_NOT_422 not found in any smoke-* report; `compose`: check BOTS_STATUS_NOT_422 not found in any smoke-* report; `helm`: check BOTS_STATUS_NOT_422 not found in any smoke-* report |
+| removal | Container fully removed after DELETE /bots/... | 10 | ⬜ missing | `compose`: no report for test=containers |
+| status-completed | Meeting.status=completed after stop (not failed/stuck) | 10 | ⬜ missing | `compose`: no report for test=containers; `helm`: no report for test=containers |
+| graceful-leave | Bot leaves the meeting gracefully on stop (no force-kill by default) | 5 | ⬜ missing | `lite`: check GRACEFUL_LEAVE not found in any smoke-* report; `compose`: check GRACEFUL_LEAVE not found in any smoke-* report; `helm`: check GRACEFUL_LEAVE not found in any smoke-* report |
+| route-collision | No Starlette route collisions — /bots/{id} and /bots/{platform}/{native_id} do not clash | 5 | ⬜ missing | `lite`: check ROUTE_COLLISION not found in any smoke-* report; `compose`: check ROUTE_COLLISION not found in any smoke-* report; `helm`: check ROUTE_COLLISION not found in any smoke-* report |
+| timeout-stop | Bot auto-stops after automatic_leave timeout (no_one_joined_timeout) | 10 | ⬜ missing | `compose`: no report for test=containers |
+| concurrency-slot | Concurrent-bot slot released immediately on stop — next create succeeds | 10 | ⬜ missing | `compose`: no report for test=containers; `helm`: no report for test=containers |
+| no-orphans | No zombie/exited bot containers left after a lifecycle run | 10 | ⬜ missing | `compose`: no report for test=containers |
+| status-webhooks-fire | Status-change webhooks fire for every transition when enabled in webhook_events | 5 | ⬜ missing | `compose`: no report for test=webhooks |
+
+<!-- END AUTO-DOD -->
 
 ## Failure modes
 
