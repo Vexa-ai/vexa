@@ -22,10 +22,11 @@ Commands:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import sys
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 try:
     import yaml
@@ -69,6 +70,61 @@ def fmt(template: str, vars: Dict[str, str]) -> str:
         k = m.group(1)
         return vars.get(k, f"<unknown:{k}>")
     return re.sub(r"\{(\w+)\}", repl, template)
+
+
+# ───────────────────────── Checkmark preservation ─────────────────────────
+
+ITEM_HASH_RE = re.compile(r"^- \[([ x])\] (.+?)(?:\s*<!--\s*h:([0-9a-f]{8})\s*-->)?\s*$",
+                          re.MULTILINE)
+
+
+def _item_hash(text: str) -> str:
+    """Stable 8-char hash of an item's visible text, ignoring the hash marker
+    itself. Substituted {vm_ip} etc. are part of the hash — if the VM changes,
+    checkmarks reset (correct: the target changed)."""
+    normalized = re.sub(r"\s+", " ", text).strip()
+    return hashlib.sha1(normalized.encode()).hexdigest()[:8]
+
+
+def _load_prior_ticks(path: str) -> Dict[str, bool]:
+    """Read an existing checklist and return {hash: checked_bool} for every
+    tagged item. Untagged items are ignored (fresh generation)."""
+    if not os.path.isfile(path):
+        return {}
+    ticks: Dict[str, bool] = {}
+    with open(path) as f:
+        content = f.read()
+    for m in ITEM_HASH_RE.finditer(content):
+        checked = m.group(1) == "x"
+        h = m.group(3)
+        if h:
+            ticks[h] = checked
+    return ticks
+
+
+def _tag_items(rendered: str, prior: Dict[str, bool]) -> str:
+    """After `generate` produces the markdown, walk each `- [ ] …` line,
+    append ` <!-- h:XXXXXXXX -->`, and if the hash exists in `prior` as
+    checked, flip `[ ]` → `[x]`."""
+    out_lines: List[str] = []
+    preserved = 0
+    for line in rendered.splitlines():
+        m = re.match(r"^- \[ \] (.+)$", line)
+        if not m:
+            out_lines.append(line)
+            continue
+        body = m.group(1).strip()
+        # Strip any accidentally-present old marker so hash is stable
+        body_bare = re.sub(r"\s*<!--\s*h:[0-9a-f]{8}\s*-->\s*$", "", body)
+        h = _item_hash(body_bare)
+        checked = prior.get(h, False)
+        mark = "x" if checked else " "
+        if checked:
+            preserved += 1
+        out_lines.append(f"- [{mark}] {body_bare} <!-- h:{h} -->")
+    if preserved:
+        print(f"  preserved {preserved} checkmark(s) from prior checklist", file=sys.stderr)
+    return "\n".join(out_lines)
 
 
 # ───────────────────────── Generate ─────────────────────────
@@ -188,7 +244,9 @@ def gate(checklist_path: str) -> int:
         return 1
     with open(checklist_path) as f:
         content = f.read()
-    unchecked = re.findall(r"^- \[ \] (.+)$", content, flags=re.MULTILINE)
+    # Tolerate the optional trailing `<!-- h:XXXXXXXX -->` marker.
+    unchecked = re.findall(r"^- \[ \] (.+?)(?:\s*<!--\s*h:[0-9a-f]{8}\s*-->)?\s*$",
+                           content, flags=re.MULTILINE)
     if unchecked:
         print(f"GATE FAILED: {len(unchecked)} unchecked item(s) in {checklist_path}", file=sys.stderr)
         for item in unchecked[:10]:
@@ -219,7 +277,12 @@ def main() -> int:
     gen = sub.add_parser("generate", help="write tests3/releases/<id>/human-checklist.md")
     gen.add_argument("--scope", required=True, help="Path to scope.yaml")
     gen.add_argument("--out", help="Override output path (default: same dir as scope, named human-checklist.md)")
-    gen.add_argument("--force", action="store_true", help="Overwrite existing checklist (loses in-progress checkmarks)")
+    gen.add_argument("--force", action="store_true",
+                     help="Regenerate. Checkmarks on items whose text is unchanged are PRESERVED "
+                          "(via per-item hash markers); only new/changed items reset to `- [ ]`. "
+                          "Pass --wipe to discard all prior checkmarks instead.")
+    gen.add_argument("--wipe", action="store_true",
+                     help="Discard all prior checkmarks (implies --force).")
 
     g = sub.add_parser("gate", help="exit non-zero if any `- [ ]` remains")
     g.add_argument("--scope", required=True, help="Path to scope.yaml")
@@ -229,10 +292,15 @@ def main() -> int:
 
     if args.cmd == "generate":
         out = args.out or os.path.join(os.path.dirname(os.path.abspath(args.scope)), "human-checklist.md")
-        if os.path.isfile(out) and not args.force:
-            print(f"WARN: {out} already exists; not overwriting. Use --force to regenerate (resets checkmarks).", file=sys.stderr)
+        exists = os.path.isfile(out)
+        if exists and not (args.force or args.wipe):
+            print(f"WARN: {out} already exists; not overwriting. "
+                  f"Use --force to regenerate (preserves checkmarks for unchanged items).",
+                  file=sys.stderr)
             return 0
+        prior = {} if args.wipe else _load_prior_ticks(out)
         content = generate(args.scope)
+        content = _tag_items(content, prior)
         os.makedirs(os.path.dirname(out), exist_ok=True)
         with open(out, "w") as f:
             f.write(content)

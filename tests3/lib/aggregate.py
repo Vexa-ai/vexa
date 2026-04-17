@@ -588,15 +588,41 @@ def main() -> int:
         # Also surface any scope-level required-mode failure (issue with a fail in a required mode).
         if scope:
             for issue in scope.get("issues") or []:
+                iid = issue.get("id", "?")
                 req = set(issue.get("required_modes") or [])
-                for p in issue.get("proves") or []:
+                proves = issue.get("proves") or []
+                for p in proves:
                     per_mode = _eval_proof(p, reports)
                     for mode, status in per_mode.items():
                         if req and mode not in req:
                             continue
                         if status == "fail":
-                            failures.append(f"issue {issue.get('id')}: fail in required mode '{mode}' on "
+                            failures.append(f"issue {iid}: fail in required mode '{mode}' on "
                                             + (f"{p.get('test')}/{p.get('step')}" if 'test' in p else f"check {p.get('check')}"))
+
+                # Protocol rule (human-feedback loop):
+                # source: human REQUIRES gap_analysis + new_checks, AND every
+                # id in new_checks MUST appear in proves[] so the aggregator
+                # actually evaluates it. This enforces "every human-found bug
+                # lands a regression check before the release ships."
+                if issue.get("source") == "human":
+                    if not str(issue.get("gap_analysis") or "").strip():
+                        failures.append(f"issue {iid}: source=human missing gap_analysis")
+                    nc = issue.get("new_checks") or []
+                    if not nc:
+                        failures.append(f"issue {iid}: source=human missing new_checks (cannot close a human-found bug without a regression check)")
+                    else:
+                        # Collect every check/step id this issue's proves[] binds.
+                        bound: Set[str] = set()
+                        for p in proves:
+                            if "check" in p:
+                                bound.add(p["check"])
+                            elif "test" in p and "step" in p:
+                                bound.add(f"{p['test']}:{p['step']}")
+                        for c in nc:
+                            if c not in bound:
+                                failures.append(f"issue {iid}: new_check '{c}' not bound in proves[] "
+                                                f"(add a proves entry referencing it, so the gate can evaluate it)")
         if failures:
             print(f"GATE FAILED ({len(failures)}):", file=sys.stderr)
             for f in failures:

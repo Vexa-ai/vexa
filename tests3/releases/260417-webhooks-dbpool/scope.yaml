@@ -1,130 +1,328 @@
 release_id: 260417-webhooks-dbpool
 branch: dev
-summary: |
-  Webhook delivery hardening (gateway injection + status webhooks + delivery
+summary: 'Webhook delivery hardening (gateway injection + status webhooks + delivery
+
   tracking), DB connection pool fix + Postgres-side timeout, collector
+
   NOGROUP recovery, structured test reports + per-feature DoD rollup, and
+
   release validation refactor into a 7-step commanded process.
 
+  '
 deployments:
-  modes: [lite, compose, helm]
-
+  modes:
+  - lite
+  - compose
+  - helm
 issues:
-  - id: webhook-gateway-injection
-    source: human
-    problem: |
-      User-configured webhooks (via PUT /user/webhook) are not delivered —
-      user.data has webhook_url/secret/events but meeting.data on new bots
-      never gets them. "We only see meeting.completed; status webhooks never
-      arrive."
-    hypothesis: |
-      Gateway's forward_request() injects X-User-Id/Scopes/Limits but never
-      X-User-Webhook-*. Admin-api's validate_token() never returns webhook
-      fields. Meeting-api reads headers from request but they're always
-      missing. Close by: strip client-supplied X-User-Webhook-* too (anti-spoof).
-    fix_commits: [fd2526c, b953d44]
-    proves:
-      - {test: webhooks, step: config, modes: [compose]}
-      - {test: webhooks, step: inject, modes: [compose, helm]}
-      - {test: webhooks, step: spoof, modes: [compose, helm]}
-    required_modes: [compose]
-    human_verify:
-      - mode: compose
-        do: "PUT /user/webhook with {webhook_url: https://httpbin.org/post, webhook_events: {meeting.completed:true}}"
-        expect: "POST /bots (no X-User-Webhook-* header) → response.data.webhook_url == your URL"
-      - mode: compose
-        do: "Repeat POST /bots but WITH a client-supplied X-User-Webhook-URL: https://attacker.example.com/steal"
-        expect: "response.data.webhook_url is your URL, NOT the attacker URL (header stripped)"
+- id: webhook-gateway-injection
+  source: human
+  problem: "User-configured webhooks (via PUT /user/webhook) are not delivered \u2014\nuser.data has webhook_url/secret/events\
+    \ but meeting.data on new bots\nnever gets them. \"We only see meeting.completed; status webhooks\
+    \ never\narrive.\"\n"
+  hypothesis: 'Gateway''s forward_request() injects X-User-Id/Scopes/Limits but never
 
-  - id: webhook-status-fast-path
-    source: human
-    problem: |
-      Status-change webhooks (meeting.started, meeting.stopping, bot.failed)
-      never fire end-to-end even after gateway injection works. Completion
-      webhook fires once but webhook_deliveries[] stays empty.
-    hypothesis: |
-      schedule_status_webhook_task is only wired into the unified callback
-      and the STOPPING transition. Misses 4 paths: no-container fast-path,
-      <5s pre-active fast-path, scheduler_timeout no-container, and
-      delayed_stop_finalizer. send_status_webhook has no delivery log.
-    fix_commits: [b953d44, 0ac59fe]
-    proves:
-      - {test: webhooks, step: e2e_completion, modes: [compose]}
-      - {test: webhooks, step: e2e_status, modes: [compose]}
-    required_modes: [compose]
-    human_verify:
-      - mode: compose
-        do: "PUT /user/webhook with webhook_events={meeting.completed:true, meeting.status_change:true}; POST /bots with a fake google_meet URL; DELETE immediately (<5s → hits fast-path)"
-        expect: "After 20s, meeting.data has webhook_delivery.status=delivered AND webhook_deliveries[] has >= 1 entry"
+    X-User-Webhook-*. Admin-api''s validate_token() never returns webhook
 
-  - id: db-pool-exhaustion
-    source: human
-    problem: |
-      GET /bots/status returns 504 after ~10 sequential requests in compose
-      and helm. Pool (5+5=10) fills; new requests block 30s on pool_timeout
-      then fail.
-    hypothesis: |
-      Sessions held open during async I/O (Redis ttl refresh, httpx calls
-      to transcription-collector, run_all_tasks) leave transactions idle.
-      Pool defaults (5/5/30) are too tight even after the code fix. No
-      Postgres-side timeout to kill zombie transactions.
-    fix_commits: [fd2526c, c797e9f]
-    proves:
-      - {check: DB_POOL_NO_EXHAUSTION, modes: [lite, compose, helm]}
-    required_modes: [lite, compose, helm]
-    human_verify:
-      - mode: compose
-        do: "Hit GET /bots/status 30 times in a loop (`for i in $(seq 1 30); do curl -sf -H 'X-API-Key: ...' http://{vm_ip}:8056/bots/status -o /dev/null -w '%{http_code}\\n'; done`)"
-        expect: "Every response is 200; no 504s"
-      - mode: compose
-        do: "Check Postgres for idle-in-transaction connections: `docker exec vexa-postgres-1 psql -U postgres -d vexa -c \"SELECT count(*) FROM pg_stat_activity WHERE state='idle in transaction';\"`"
-        expect: "count is 0 (or near 0) even after sustained load"
+    fields. Meeting-api reads headers from request but they''re always
 
-  - id: transcripts-gone-after-stop
-    source: human
-    problem: |
-      Short meetings show transcripts during recording but 0 rows in
-      transcriptions table after completion. Reported on lite meeting 2.
-    hypothesis: |
-      Collector creates consumer groups at startup. If Redis loses them
-      (eviction / FLUSHALL / restart while meeting-api stays up), the
-      loop traps NOGROUP as generic Exception, sleeps 5s, never recovers.
-    fix_commits: [aace988]
-    proves:
-      # No dedicated test yet — tracked as Phase D gap.
-      # Current proxy: if the full webhook e2e delivers, the pipeline is
-      # alive end to end; verify separately via the recovery drill below.
-      - {test: webhooks, step: e2e_completion, modes: [lite, compose]}
-    required_modes: [lite, compose]
-    human_verify:
-      - mode: lite
-        do: "Force Redis group loss: `docker exec vexa-lite redis-cli XGROUP DESTROY transcription_segments collector_group; docker exec vexa-lite redis-cli XGROUP DESTROY speaker_events_relative collector_speaker_group` — wait 15s"
-        expect: "Logs show `Recreated consumer group 'collector_group'` within 10s; `docker exec vexa-lite redis-cli XINFO GROUPS transcription_segments` shows the group back"
-      - mode: lite
-        do: "Run a real ~60s meeting end-to-end (bot + audio), stop bot"
-        expect: "meeting.data.end_time set AND `SELECT COUNT(*) FROM transcriptions WHERE meeting_id=<id>` > 0"
+    missing. Close by: strip client-supplied X-User-Webhook-* too (anti-spoof).
 
-  - id: recording-enabled-default
-    source: human
-    problem: |
-      Lite bots recorded by default but compose/helm defaulted to no
-      recording (BOT_CONFIG recordingEnabled=false), so recordings were
-      empty unless RECORDING_ENABLED=true was explicitly set.
-    hypothesis: |
-      Code defaults `os.getenv("RECORDING_ENABLED","false")` in meeting-api
-      used 4 times; should default "true" to match user expectation.
-    fix_commits: [fd2526c]
-    proves:
-      - {check: BOT_RECORDING_ENABLED, modes: [compose, helm]}
-    required_modes: [compose]
-    human_verify:
-      - mode: compose
-        do: "POST /bots without `recording_enabled` in the body"
-        expect: "response.data.recording_enabled == true"
+    '
+  fix_commits:
+  - fd2526c
+  - b953d44
+  proves:
+  - test: webhooks
+    step: config
+    modes:
+    - compose
+  - test: webhooks
+    step: inject
+    modes:
+    - compose
+    - helm
+  - test: webhooks
+    step: spoof
+    modes:
+    - compose
+    - helm
+  required_modes:
+  - compose
+  human_verify:
+  - mode: compose
+    do: PUT /user/webhook {webhook_url:httpbin.org/post}; POST /bots
+    expect: response.data.webhook_url == httpbin URL
+  - mode: compose
+    do: 'POST /bots with `X-User-Webhook-URL: attacker.example.com/steal`'
+    expect: response.data.webhook_url is user's URL, not attacker's
+  gap_analysis: "Before this release, no test asserted the gateway's forward_request() actually INJECTED\
+    \ the X-User-Webhook-* headers \u2014 tests only checked admin-api persisted the config. The inject\
+    \ / spoof / config steps were added as part of this fix.\n"
+  new_checks:
+  - webhooks:config
+  - webhooks:inject
+  - webhooks:spoof
+- id: webhook-status-fast-path
+  source: human
+  problem: 'Status-change webhooks (meeting.started, meeting.stopping, bot.failed)
 
+    never fire end-to-end even after gateway injection works. Completion
+
+    webhook fires once but webhook_deliveries[] stays empty.
+
+    '
+  hypothesis: 'schedule_status_webhook_task is only wired into the unified callback
+
+    and the STOPPING transition. Misses 4 paths: no-container fast-path,
+
+    <5s pre-active fast-path, scheduler_timeout no-container, and
+
+    delayed_stop_finalizer. send_status_webhook has no delivery log.
+
+    '
+  fix_commits:
+  - b953d44
+  - 0ac59fe
+  proves:
+  - test: webhooks
+    step: e2e_completion
+    modes:
+    - compose
+  - test: webhooks
+    step: e2e_status
+    modes:
+    - compose
+  required_modes:
+  - compose
+  human_verify:
+  - mode: compose
+    do: "POST /bots with fake URL \u2192 DELETE within 5s \u2192 wait 20s"
+    expect: meeting.data.webhook_delivery.status=delivered AND webhook_deliveries[] not empty
+  gap_analysis: 'webhooks.sh existed but only had e2e_completion; no step exercised the four status-webhook
+    code paths (no-container fast-path, <5s pre-active, scheduler_timeout, delayed_stop_finalizer). e2e_status
+    was added as part of this fix.
+
+    '
+  new_checks:
+  - webhooks:e2e_completion
+  - webhooks:e2e_status
+- id: db-pool-exhaustion
+  source: human
+  problem: 'GET /bots/status returns 504 after ~10 sequential requests in compose
+
+    and helm. Pool (5+5=10) fills; new requests block 30s on pool_timeout
+
+    then fail.
+
+    '
+  hypothesis: 'Sessions held open during async I/O (Redis ttl refresh, httpx calls
+
+    to transcription-collector, run_all_tasks) leave transactions idle.
+
+    Pool defaults (5/5/30) are too tight even after the code fix. No
+
+    Postgres-side timeout to kill zombie transactions.
+
+    '
+  fix_commits:
+  - fd2526c
+  - c797e9f
+  proves:
+  - check: DB_POOL_NO_EXHAUSTION
+    modes:
+    - lite
+    - compose
+    - helm
+  required_modes:
+  - lite
+  - compose
+  - helm
+  human_verify:
+  - mode: compose
+    do: '`for i in $(seq 1 30); do curl -sfo/dev/null -w ''%{http_code}\n'' -H "X-API-Key: $T" http://{vm_ip}:8056/bots/status;
+      done`'
+    expect: "30\xD7 200, zero 504"
+  - mode: compose
+    do: '`docker exec vexa-postgres-1 psql -U postgres -d vexa -c "SELECT count(*) FROM pg_stat_activity
+      WHERE state=''idle in transaction''"`'
+    expect: "count \u2264 1"
+  gap_analysis: 'No load probe on /bots/status existed. DB_POOL_NO_EXHAUSTION check was added as part
+    of this fix to catch the 504-after-N-requests regression.
+
+    '
+  new_checks:
+  - DB_POOL_NO_EXHAUSTION
+- id: transcripts-gone-after-stop
+  source: human
+  problem: 'Short meetings show transcripts during recording but 0 rows in
+
+    transcriptions table after completion. Reported on lite meeting 2.
+
+    '
+  hypothesis: 'Collector creates consumer groups at startup. If Redis loses them
+
+    (eviction / FLUSHALL / restart while meeting-api stays up), the
+
+    loop traps NOGROUP as generic Exception, sleeps 5s, never recovers.
+
+    '
+  fix_commits:
+  - aace988
+  proves:
+  - test: webhooks
+    step: e2e_completion
+    modes:
+    - lite
+    - compose
+  required_modes:
+  - lite
+  - compose
+  human_verify:
+  - mode: lite
+    do: "`docker exec vexa-lite redis-cli XGROUP DESTROY transcription_segments collector_group` \u2192\
+      \ wait 15s"
+    expect: '`docker logs vexa-lite 2>&1 | grep ''Recreated consumer group''` matches within 15s'
+  - mode: lite
+    do: Run a live ~60s meeting, stop bot
+    expect: '`SELECT COUNT(*) FROM transcriptions WHERE meeting_id=<id>` > 0'
+  gap_analysis: 'Collector NOGROUP recovery had no dedicated test. We use webhooks e2e_completion as a
+    proxy (pipeline-alive signal); a dedicated collector_recovery test is tracked as a Phase-D follow-up.
+
+    '
+  new_checks:
+  - webhooks:e2e_completion
+- id: recording-enabled-default
+  source: human
+  problem: 'Lite bots recorded by default but compose/helm defaulted to no
+
+    recording (BOT_CONFIG recordingEnabled=false), so recordings were
+
+    empty unless RECORDING_ENABLED=true was explicitly set.
+
+    '
+  hypothesis: 'Code defaults `os.getenv("RECORDING_ENABLED","false")` in meeting-api
+
+    used 4 times; should default "true" to match user expectation.
+
+    '
+  fix_commits:
+  - fd2526c
+  proves:
+  - check: BOT_RECORDING_ENABLED
+    modes:
+    - compose
+    - helm
+  required_modes:
+  - compose
+  human_verify:
+  - mode: compose
+    do: POST /bots without `recording_enabled` in body
+    expect: response.data.recording_enabled == true
+  gap_analysis: "BOT_RECORDING_ENABLED check did not exist \u2014 the RECORDING_ENABLED default was only\
+    \ implicit in code. The check was added as part of this fix to pin the expected default across deployments.\n"
+  new_checks:
+  - BOT_RECORDING_ENABLED
+- id: dashboard-webhooks-ui-rollup
+  source: human
+  ref: human validation http://172.239.194.222:3001/webhooks 2026-04-17
+  problem: '/webhooks dashboard page shows only meeting.completed deliveries; backend delivered all event
+    types (verified via psql) but the UI hid them.
+
+    '
+  hypothesis: 'Dashboard /api/webhooks/deliveries route reads only meeting.data.webhook_delivery (singular
+    completion), ignores meeting.data.webhook_deliveries (plural status history).
+
+    '
+  gap_analysis: 'Webhook test (webhooks.sh) only inspected meeting.data in DB; no test hit the dashboard
+    /api/webhooks/deliveries route, so the UI rollup regressed silently.
+
+    '
+  new_checks:
+  - DASHBOARD_WEBHOOKS_ALL_EVENT_TYPES
+  fix_commits: []
+  proves:
+  - check: DASHBOARD_WEBHOOKS_ALL_EVENT_TYPES
+    modes: &id001
+    - compose
+  required_modes: *id001
+  human_verify:
+  - mode: compose
+    do: Load http://{vm_ip}:3001/webhooks after a meeting with status-change events
+    expect: Delivery History table has rows with event column = meeting.started AND meeting.status_change,
+      not only meeting.completed
+  added: '2026-04-17'
+- id: lite-vexa-db-missing
+  source: human
+  ref: human validation http://172.239.194.217:3000/login 2026-04-17
+  problem: 'Lite /login returned 500 ''Server Configuration Error'' hours after a successful validation
+    run. admin-api crashed on every request with asyncpg.InvalidCatalogNameError: database vexa does not
+    exist. pg_database only had template0/template1/postgres and a Linode-injected readme_to_recover marker.
+
+    '
+  hypothesis: 'Linode detected low disk on the VM and replaced the data volume with a recovery image,
+    wiping the vexa DB. No automated check notices because DB_USERS_EXIST only runs during validation
+    (right after bootstrap re-created the DB), not as a continuous health probe.
+
+    '
+  gap_analysis: 'All DB-existence checks run at validation time, immediately after reset repopulates the
+    DB. No check detects later DB-loss (Linode auto-recovery, disk pressure, manual intervention). No
+    check looks for Linode''s readme_to_recover marker.
+
+    '
+  new_checks:
+  - ADMIN_API_DB_EXISTS
+  - POSTGRES_NO_DISK_WARNING
+  fix_commits: []
+  proves:
+  - check: ADMIN_API_DB_EXISTS
+    modes: &id002
+    - lite
+    - compose
+  - check: POSTGRES_NO_DISK_WARNING
+    modes: *id002
+  required_modes: *id002
+  human_verify:
+  - mode: lite
+    do: After 1h idle on the lite VM, curl http://{vm_ip}:3000/login AND docker exec vexa-lite psql -U
+      postgres -l
+    expect: /login returns 200 (not 500) AND psql list shows vexa DB AND no readme_to_recover DB
+  added: '2026-04-17'
+- id: helm-meetings-all-failed-pollution
+  source: human
+  ref: human validation http://172.238.169.249:30001/meetings 2026-04-17
+  problem: '/meetings on helm dashboard shows 27 rows, all status=failed. Human reads this as ''everything
+    broken''; actual cause is accumulated test-pollution from multiple validation runs without a reset
+    between them.
+
+    '
+  hypothesis: 'release-iterate does not wipe the DB between runs. Each iteration''s tests intentionally
+    fail bot joins (testing error paths) and leave failed meeting rows behind. After N iterations the
+    UI is dominated by these rows, making a human validator believe the product is broken.
+
+    '
+  gap_analysis: 'No check flags the degenerate UI state ''N meetings, all failed''. release-iterate skips
+    reset by design (to preserve fast-feedback loop), but there is no rate-limit or summary-stat that
+    warns the human the UI picture is misleading.
+
+    '
+  new_checks:
+  - DASHBOARD_MEETINGS_NOT_ALL_FAILED
+  fix_commits: []
+  proves:
+  - check: DASHBOARD_MEETINGS_NOT_ALL_FAILED
+    modes: &id003
+    - helm
+    - compose
+    - lite
+  required_modes: *id003
+  human_verify:
+  - mode: helm
+    do: Load http://{node_ip}:30001/meetings after release-full completes (fresh reset)
+    expect: Either no meetings (fresh) or mixed status (not 100% failed)
+  added: '2026-04-17'
 expensive_tests: []
-
 strict_features:
-  - webhooks
-  - infrastructure
-  - meeting-urls
+- webhooks
+- infrastructure
+- meeting-urls

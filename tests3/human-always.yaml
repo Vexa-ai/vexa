@@ -1,48 +1,36 @@
-# Static human-validation checks that apply to EVERY release.
-# Appended to tests3/releases/<id>/human-checklist.md by human-checklist.py.
-#
-# These are the irreducible "the product works" checks that the automated
-# matrix can't fully prove — dashboard UX, real meeting join, transcript UX.
-#
-# Structure:
-#   modes: applies to these deployments (referenced by scope.deployments.modes)
-#   items: list of human actions; each shows as `- [ ] text` in the checklist.
+# Static human-validation checks — every release, every deployment.
+# One item = one action + one observable outcome. No prose.
+# Placeholders {vm_ip}, {node_ip}, {dashboard_url} resolved per mode at generate time.
 
 always:
   - modes: [lite]
     section: "Lite VM"
     items:
-      - "Dashboard at http://{vm_ip}:3000 loads; magic-link login works (test@vexa.ai)."
-      - "/meetings page renders (even if empty)."
-      - "Create a browser session via API; CDP URL returns a working session."
-      - "Logs clean: `docker logs vexa-lite 2>&1 | grep -i error | tail -20` shows nothing concerning."
-      - "Container stays under ~2 GB: `docker stats --no-stream vexa-lite`."
+      - "Open http://{vm_ip}:3000 → magic-link login as test@vexa.ai → /meetings renders"
+      - "`docker logs vexa-lite 2>&1 | grep -i error | tail -5` → no new errors"
+      - "`docker stats --no-stream vexa-lite` → MEM < 2 GiB"
 
   - modes: [compose]
     section: "Compose VM"
     items:
-      - "Dashboard at http://{vm_ip}:3001 loads; magic-link login works."
-      - "API docs page at http://{vm_ip}:8056/docs renders."
-      - "Create a bot via dashboard UI with a REAL Google Meet URL; bot container appears (`docker ps --filter name=meeting-`)."
-      - "Bot joins the meeting within 60s; status transitions to active."
-      - "Transcript segments appear live (WS) and via REST at `/transcripts/<platform>/<native_id>`."
-      - "DELETE bot; container fully removed; meeting status=completed."
-      - "Logs clean: `cd /root/vexa && docker compose -f deploy/compose/docker-compose.yml logs --tail=50 2>&1 | grep -i error`."
-      - "Post-meeting transcript persisted: same /transcripts endpoint returns non-empty segments after bot stop."
+      - "Open http://{vm_ip}:3001 → magic-link login → /meetings renders"
+      - "Open http://{vm_ip}:8056/docs → OpenAPI page renders"
+      - "POST /bots with a real Google Meet URL → 201 + container `meeting-*` appears in `docker ps`"
+      - "Within 60s bot.status → active; `/transcripts/<platform>/<native_id>` returns segments"
+      - "DELETE the bot → container gone, meeting.status=completed"
+      - "`docker compose -f deploy/compose/docker-compose.yml logs --tail=50 | grep -i error` → no new errors"
+      - "Re-GET `/transcripts/...` after stop → segments still returned (post-meeting persistence)"
 
   - modes: [helm]
-    section: "Helm / LKE cluster"
+    section: "Helm / LKE"
     items:
-      - "`kubectl get pods` shows every vexa component in Running state (no CrashLoopBackOff)."
-      - "Gateway reachable at http://{node_ip}:30056/."
-      - "Dashboard reachable at http://{node_ip}:30001/."
-      - "`kubectl get events --field-selector type=Warning --sort-by=.lastTimestamp` has no new warnings."
-      - "Create a bot via API (X-API-Key); bot pod spawns; no scheduling errors."
+      - "`kubectl get pods` → all Running, 0 CrashLoopBackOff"
+      - "Open http://{node_ip}:30056/ → gateway root JSON"
+      - "Open http://{node_ip}:30001/ → dashboard renders"
+      - "`kubectl get events --field-selector type=Warning --sort-by=.lastTimestamp | tail` → no new warnings"
 
-  # Cross-cutting — applies to every mode:
   - modes: [lite, compose, helm]
     section: "Release integrity"
     items:
-      - "Versions: all running images carry the SAME timestamp tag. `docker inspect` (compose/lite) or `kubectl describe pod` (helm) agrees with the build tag in `deploy/compose/.last-tag`."
-      - "No stale containers from prior test runs: `docker ps -a | grep -E 'lifecycle-|webhook-test|spoof-test'` empty."
-      - "No error spike in last 5 minutes of meeting-api logs."
+      - "Every running image tag == `cat deploy/compose/.last-tag`"
+      - "`docker ps -a | grep -E 'lifecycle-|webhook-test|spoof-test'` → empty"

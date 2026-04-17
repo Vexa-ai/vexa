@@ -182,6 +182,22 @@ release-full:                      ## stage 6: fresh-reset + full cheap-tier mat
 	done; wait
 	@$(MAKE) --no-print-directory release-report
 
+release-issue-add:                 ## add an issue to scope.yaml (enforces gap_analysis + new_checks when SOURCE=human)
+	@test -n "$(SCOPE)" || (echo "  ERROR: set SCOPE=tests3/releases/<id>/scope.yaml" && exit 2)
+	@test -n "$(ID)" || (echo "  ERROR: set ID=<bug-slug>" && exit 2)
+	@test -n "$(SOURCE)" || (echo "  ERROR: set SOURCE=human|gh-issue|internal|regression" && exit 2)
+	@test -n "$(PROBLEM)" || (echo "  ERROR: set PROBLEM='...'" && exit 2)
+	@python3 $(CURDIR)/tests3/lib/release-issue-add.py \
+	  --scope $(SCOPE) --id "$(ID)" --source "$(SOURCE)" --problem "$(PROBLEM)" \
+	  $(if $(REF),--ref "$(REF)") \
+	  $(if $(HYPOTHESIS),--hypothesis "$(HYPOTHESIS)") \
+	  $(if $(GAP),--gap "$(GAP)") \
+	  $(if $(NEW_CHECKS),--new-checks "$(NEW_CHECKS)") \
+	  $(if $(MODES),--modes "$(MODES)") \
+	  $(if $(HV_MODE),--human-verify-mode "$(HV_MODE)") \
+	  $(if $(HV_DO),--human-verify-do "$(HV_DO)") \
+	  $(if $(HV_EXPECT),--human-verify-expect "$(HV_EXPECT)")
+
 release-human-sheet:               ## stage 6b: generate tests3/releases/<id>/human-checklist.md (always + scope-specific)
 	@test -n "$(SCOPE)" || (echo "  ERROR: set SCOPE" && exit 2)
 	@python3 $(CURDIR)/tests3/lib/human-checklist.py generate --scope $(SCOPE)

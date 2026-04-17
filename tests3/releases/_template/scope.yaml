@@ -27,6 +27,16 @@ issues:
       Observable symptom, from the user's point of view. What breaks?
     hypothesis: |
       Root cause theory. What do we believe is actually happening?
+    # REQUIRED when source: human  — why did the automated matrix miss this?
+    # Must name the specific test/check absence (not "tests are flaky").
+    gap_analysis: |
+      e.g. "No test exercised the UI rollup path; webhook tests only verified
+      backend DB state, never the /api/webhooks/deliveries route response."
+    # REQUIRED when source: human  — IDs of checks / test steps that must
+    # EXIST AND PASS before this issue is considered closed. The aggregator
+    # blocks the gate unless each id shows up in this issue's `proves:` list.
+    # This enforces: every human-found bug lands a regression check.
+    new_checks: [DASHBOARD_WEBHOOKS_ALL_EVENT_TYPES]
     fix_commits: []          # git SHAs that implement the fix; grow as you commit
     # Each `proves:` entry binds the fix to a test artifact that would change
     # from fail → pass once the fix is correct. Use `{test, step, modes}` or
