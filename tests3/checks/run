@@ -1049,13 +1049,23 @@ def bootstrap_creds():
         cmd = ["curl", "-sf", "-X", "POST",
                "-H", f"X-Admin-API-Key: {admin_token}",
                "-H", "Content-Type: application/json",
-               "-d", '{"email":"test@vexa.ai","name":"Test User"}',
+               "-d", '{"email":"test@vexa.ai","name":"Test User","max_concurrent_bots":3}',
                f"{admin_url}/admin/users"]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             user_id = json.loads(r.stdout)["id"]
         except Exception:
             return
+
+    # Ensure max_concurrent_bots >= 3 (tests create multiple bots in parallel —
+    # webhook-test + spoof-test etc). Safe to re-patch even on existing users.
+    subprocess.run([
+        "curl", "-sf", "-X", "PATCH",
+        "-H", f"X-Admin-API-Key: {admin_token}",
+        "-H", "Content-Type: application/json",
+        "-d", '{"max_concurrent_bots":3}',
+        f"{admin_url}/admin/users/{user_id}"
+    ], capture_output=True, text=True, timeout=10)
 
     # Create API token
     cmd = ["curl", "-sf", "-X", "POST",

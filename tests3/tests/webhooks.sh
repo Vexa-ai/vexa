@@ -118,7 +118,7 @@ else
     fi
 fi
 
-# ── Step: spoof ──────────────────────────────────────────────
+# ── Step: spoof (runs early to avoid concurrent-bot collision with webhook-test) ──
 # Client-supplied X-User-Webhook-URL must be stripped (anti-spoofing).
 SPOOF_RESP=$(curl -s -X POST "$GATEWAY_URL/bots" \
     -H "X-API-Key: $API_TOKEN" -H "Content-Type: application/json" \
