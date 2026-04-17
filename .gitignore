@@ -162,3 +162,10 @@ hub
 test.log
 .worktrees/
 secrets/
+
+# tests3: per-deployment state (VM IPs, tokens, kubeconfigs, per-run reports).
+# Credentials live here. Never commit.
+tests3/.state
+tests3/.state-lite
+tests3/.state-compose
+tests3/.state-helm

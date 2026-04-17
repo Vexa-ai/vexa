@@ -1,72 +1,65 @@
 ---
 name: 7-human
-description: "Invoke when the user needs the human-validation step of a Vexa release — generate the per-release human checklist (always-checks + scope-specific checks), fill it in while verifying the deployed system, then gate on every box being checked. Mandatory between stage 6 (full) and stage 8 (ship). Use when the user says 'generate the human sheet', 'what does the human need to verify', 'check the live deployment', 'sign off', 'human gate', or after `release-full` passes."
+description: "Invoke for the human-validation stage of a release. Two sub-modes: (a) generate/regenerate the checklist and gate on it; (b) translate human bug reports (plain English, screenshots, URLs) into a formal `release-issue-add` call. The human describes; the agent fills in GAP + NEW_CHECKS + modes + proves bindings and executes. Use when the user says 'human checklist', 'generate the sheet', 'sign off', 'gate', or reports any failure while stepping through the checklist — 'X is broken on compose', 'look at /webhooks', 'it shows wrong stuff'."
 ---
 
-## Stage 7 of 9 — human validation
+## Stage 6 — human validation
 
-Stage 6 (full) proved the automated matrix is green. Stage 7 proves the product works as a human sees it — UI loads, real bot joins a real meeting, transcripts persist, nothing weird in the logs. Both gates must pass before `release-ship` will run.
+The human clicks through the checklist. The agent handles protocol mechanics.
 
-## Commands
+## Commands the agent runs
 
 ```bash
-# (a) Generate the checklist — writes tests3/releases/<id>/human-checklist.md
-make release-human-sheet SCOPE=$SCOPE
-
-# (b) Edit the file, change `- [ ]` → `- [x]` as you verify each item
-
-# (c) Gate-check
-make release-human-gate SCOPE=$SCOPE
+make release-human-sheet SCOPE=$SCOPE          # first generate
+make release-human-sheet SCOPE=$SCOPE --force  # regenerate (preserves ticks)
+make release-human-gate   SCOPE=$SCOPE         # gate — exits non-zero if any [ ] remains
 ```
 
-## What's in the checklist
+## When the human reports a failure
 
-**ALWAYS** — from `tests3/human-always.yaml`. Same every release:
+**The human's job is to describe what broke.** Examples:
 
-- Lite: dashboard loads, session creation works, logs clean.
-- Compose: dashboard loads, bot joins a real Google Meet, transcript appears live + persists after stop, logs clean.
-- Helm: every pod Running, gateway + dashboard reachable via NodePort, no Warning events.
-- Release integrity: all running images carry the same tag, no stale containers.
+> "the /webhooks page on compose only shows meeting.completed"
+> "helm /meetings is all red"
+> "lite login gives 500 after an hour"
 
-**THIS RELEASE** — from `scope.issues[].human_verify[]`. Per issue, the release author writes at stage 1 a list of `{mode, do, expect}` tuples. E.g.:
+**The agent's job is to file the issue.** Do NOT ask the human for gap/checks/modes — derive them:
 
-```yaml
-human_verify:
-  - mode: compose
-    do: "PUT /user/webhook with webhook_events={meeting.completed:true, meeting.status_change:true}; POST /bots; DELETE within 5s"
-    expect: "After 20s, meeting.data has webhook_delivery.status=delivered AND webhook_deliveries[] has >= 1 entry"
+1. **Reproduce / confirm** by inspection (curl, `kubectl logs`, DB query) — one-shot verification that the observation is real.
+2. **Derive fields** yourself:
+   - `ID` — kebab-case slug from the symptom.
+   - `PROBLEM` — one sentence, what the human observed, including the specific URL/command.
+   - `HYPOTHESIS` — your best guess at root cause.
+   - `GAP` — "why didn't the automated matrix catch this?" Point at the missing test/step/check. If there is no gap (an existing check already fails), still record it: "check X is already failing but required_modes excluded this mode" or similar.
+   - `NEW_CHECKS` — ID(s) of the regression check(s) that will catch this next time. If a suitable check exists in the registry, use its ID. If not, invent a new ID (UPPER_SNAKE for registry check, `test:step` for a test step) — you will implement it in stage 3.
+   - `MODES` — the deployments this affects. If unsure, use scope.deployments.modes.
+   - `HV_MODE` + `HV_DO` + `HV_EXPECT` — the smallest repro a future human can run.
+3. **Show the call in one line** and execute it. Example:
+
+```bash
+make release-issue-add \
+  SCOPE=$SCOPE ID=dashboard-webhooks-ui-rollup SOURCE=human \
+  PROBLEM="/webhooks on compose shows only meeting.completed rows" \
+  HYPOTHESIS="Dashboard route reads webhook_delivery (singular) not webhook_deliveries[]" \
+  GAP="webhooks.sh never hits the dashboard /api/webhooks/deliveries route" \
+  NEW_CHECKS="DASHBOARD_WEBHOOKS_ALL_EVENT_TYPES" \
+  MODES=compose \
+  HV_MODE=compose \
+  HV_DO="open http://{vm_ip}:3001/webhooks after a run with status events" \
+  HV_EXPECT="table rows include meeting.started / meeting.status_change not only meeting.completed"
 ```
 
-Each becomes one `- [ ]` item referencing the correct VM IP (auto-substituted from `.state-<mode>/`).
+The command refuses if GAP or NEW_CHECKS are empty — that's the protocol enforcement; the agent must fill them in, not ask the human to.
 
-## Workflow
+4. **After filing**, move to stage 3 (develop) to implement the check + any code fix, stage 4 (deploy), stage 5 (test). Regenerate the checklist with `--force` (ticks auto-preserve). Hand back to the human only the new item to verify.
 
-1. Run `make release-human-sheet SCOPE=$SCOPE`.
-2. Open `tests3/releases/<id>/human-checklist.md`.
-3. For each item: perform the action on the referenced deployment, confirm the expectation, change `- [ ]` to `- [x]`.
-4. If something fails: add a note in the `## Issues found` section. Fix → commit → push → stage 5 (iterate) → stage 6 (full) → regenerate checklist with `--force`.
-5. When everything is ticked, run `make release-human-gate SCOPE=$SCOPE`. It exits non-zero if any box is still empty.
+## Loop cap
 
-## Why this gate can't be skipped
+3 rounds of human-found bugs in one cycle → the scope is wrong. Go back to stage 1 and split.
 
-Automated tests prove the code does what we think it does. Human tests prove the product does what the user thinks it does. They catch different classes of bugs:
+## What the agent never does
 
-- **Automated catches**: HTTP status codes, JSON shape, HMAC signatures, DB pool behavior, consumer-group recovery.
-- **Human catches**: dashboard UX regressions, magic-link emails formatted correctly, transcript rendering at scale, error messages that make sense, meeting-join behavior on the actual Google Meet UI (not a mock).
-
-`release-ship` calls `release-human-gate` first; any unchecked box blocks merge.
-
-## Tips
-
-- Open all three VMs in side-by-side terminal panes before starting.
-- For the "real meeting" item, keep a spare Google Meet URL handy.
-- If a human check fails for a reason outside the release's scope (e.g. Google Meet UI changed), log it in `## Issues found` AND file a new GH issue — don't silently `- [x]` around it.
-
-## Don't regenerate mid-validation
-
-`release-human-sheet` refuses to overwrite an existing checklist by default. Use `--force` only after `release-full` has been re-run with a new fix — otherwise you lose in-progress checkmarks.
-
-## Next
-
-Once the human gate passes:
-→ stage 8: `make release-ship SCOPE=$SCOPE`.
+- Ask the human to fill in `GAP` / `NEW_CHECKS` / `MODES` / structured fields.
+- Edit `scope.yaml` by hand instead of calling `release-issue-add`.
+- Narrow `required_modes` to dodge a failing check.
+- Skip re-running stage 5 before resuming the checklist.
