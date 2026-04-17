@@ -295,13 +295,13 @@ Status transitions are protected by `SELECT FOR UPDATE` (row-level lock) to prev
 <!-- BEGIN AUTO-DOD -->
 <!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260417-1454`. Do not edit by hand — edit the `tests3.dods:` frontmatter + re-run `make -C tests3 report --write-features`. -->
 
-**Confidence: 85%** (gate: 90%, status: ❌ below gate)
+**Confidence: 90%** (gate: 90%, status: ✅ pass)
 
 | # | Behavior | Weight | Status | Evidence (modes) |
 |---|----------|-------:|:------:|------------------|
 | create-ok | POST /bots spawns a bot container and returns a bot id | 15 | ✅ pass | `compose`: containers/create: bot 1 created |
 | create-alive | Bot process is running 10s after creation (not crash-looping) | 15 | ✅ pass | `compose`: containers/alive: bot process running after 10s |
-| bots-status-not-422 | GET /bots/status never returns 422 (schema stable under concurrent writes) | 5 | ❌ fail | `lite`: smoke-contract/BOTS_STATUS_NOT_422: HTTP 401 (expected 200); `compose`: smoke-contract/BOTS_STATUS_NOT_422: GET /bots/status returns 200 — no route collision with /bots/{meeting_id}; `helm`: smoke-contract/BOTS_STATUS_NOT_422: GET /bots/status returns 200 — no route collision with /bots/{… |
+| bots-status-not-422 | GET /bots/status never returns 422 (schema stable under concurrent writes) | 5 | ✅ pass | `lite`: smoke-contract/BOTS_STATUS_NOT_422: GET /bots/status returns 200 — no route collision with /bots/{meeting_id}; `compose`: smoke-contract/BOTS_STATUS_NOT_422: GET /bots/status returns 200 — no route collision with /bots/{meeting_id}; `helm`: smoke-contract/BOTS_STATUS_NOT_422: GET /bots/st… |
 | removal | Container fully removed after DELETE /bots/... | 10 | ✅ pass | `compose`: containers/removal: container fully removed after stop |
 | status-completed | Meeting.status=completed after stop (not failed/stuck) | 10 | ✅ pass | `compose`: containers/status_completed: meeting.status=completed after stop |
 | graceful-leave | Bot leaves the meeting gracefully on stop (no force-kill by default) | 5 | ✅ pass | `lite`: smoke-static/GRACEFUL_LEAVE: self_initiated_leave during stopping treated as completed, not failed; `compose`: smoke-static/GRACEFUL_LEAVE: self_initiated_leave during stopping treated as completed, not failed; `helm`: smoke-static/GRACEFUL_LEAVE: self_initiated_leave during stopping trea… |

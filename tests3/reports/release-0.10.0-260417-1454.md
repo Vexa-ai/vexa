@@ -1,6 +1,6 @@
 # Release validation report — `0.10.0-260417-1454`
 
-_Generated 2026-04-17T19:36:51.329912Z from `tests3/.state/reports/`._
+_Generated 2026-04-17T20:31:42.423709Z from `tests3/.state/reports/`._
 
 ## Scope status
 
@@ -13,9 +13,9 @@ _Generated 2026-04-17T19:36:51.329912Z from `tests3/.state/reports/`._
 | `db-pool-exhaustion` | compose, helm, lite | lite `DB_POOL_NO_EXHAUSTION`: ✅ pass<br>compose `DB_POOL_NO_EXHAUSTION`: ✅ pass<br>helm `DB_POOL_NO_EXHAUSTION`: ✅ pass | **✅ pass** |
 | `transcripts-gone-after-stop` | compose, lite | lite `webhooks/e2e_completion`: ✅ pass<br>compose `webhooks/e2e_completion`: ✅ pass | **✅ pass** |
 | `recording-enabled-default` | compose | compose `BOT_RECORDING_ENABLED`: ✅ pass<br>helm `BOT_RECORDING_ENABLED`: ✅ pass | **✅ pass** |
-| `dashboard-webhooks-ui-rollup` | compose | compose `DASHBOARD_WEBHOOKS_ALL_EVENT_TYPES`: ⬜ missing | **⬜ missing** |
-| `lite-vexa-db-missing` | compose, lite | lite `ADMIN_API_DB_EXISTS`: ⬜ missing<br>compose `ADMIN_API_DB_EXISTS`: ⬜ missing<br>lite `POSTGRES_NO_DISK_WARNING`: ⬜ missing<br>compose `POSTGRES_NO_DISK_WARNING`: ⬜ missing | **⬜ missing** |
-| `helm-meetings-all-failed-pollution` | compose, helm, lite | helm `DASHBOARD_MEETINGS_NOT_ALL_FAILED`: ⬜ missing<br>compose `DASHBOARD_MEETINGS_NOT_ALL_FAILED`: ⬜ missing<br>lite `DASHBOARD_MEETINGS_NOT_ALL_FAILED`: ⬜ missing | **⬜ missing** |
+| `dashboard-webhooks-ui-rollup` | compose | compose `DASHBOARD_WEBHOOKS_ALL_EVENT_TYPES`: ✅ pass | **✅ pass** |
+| `lite-vexa-db-missing` | compose, lite | lite `ADMIN_API_DB_EXISTS`: ✅ pass<br>compose `ADMIN_API_DB_EXISTS`: ✅ pass<br>lite `POSTGRES_NO_DISK_WARNING`: ✅ pass<br>compose `POSTGRES_NO_DISK_WARNING`: ✅ pass | **✅ pass** |
+| `helm-meetings-all-failed-pollution` | compose, helm, lite | helm `DASHBOARD_MEETINGS_NOT_ALL_FAILED`: ❌ fail<br>compose `DASHBOARD_MEETINGS_NOT_ALL_FAILED`: ✅ pass<br>lite `DASHBOARD_MEETINGS_NOT_ALL_FAILED`: ✅ pass | **❌ fail** |
 
 ## Deployment coverage
 
@@ -64,7 +64,7 @@ _Generated 2026-04-17T19:36:51.329912Z from `tests3/.state/reports/`._
 | login-redirect | Magic-link click redirects to /meetings (not disabled /agent) | 5 | ✅ pass | lite: smoke-static/LOGIN_REDIRECT: login redirects to / (then /meetings), not to disabled /agent page; compose: smoke-static/LOGIN_REDIRECT: login redirects to / (then /meetings), not to disabled /… |
 | identity-no-fallback | /api/auth/me uses only the cookie for identity, never env fallback | 5 | ✅ pass | lite: smoke-static/IDENTITY_NO_FALLBACK: /api/auth/me uses only cookie for identity, never falls back to env var; compose: smoke-static/IDENTITY_NO_FALLBACK: /api/auth/me uses only cookie for ident… |
 | proxy-reachable | GET /api/vexa/meetings via cookie returns 200 | 10 | ✅ pass | lite: dashboard-auth/proxy_reachable: /api/vexa/meetings → 200; compose: dashboard-auth/proxy_reachable: /api/vexa/meetings → 200; helm: dashboard-auth/proxy_reachable: /api/vexa/meetings → 200 |
-| meetings-list | /api/vexa/meetings returns a meeting list through the dashboard proxy | 5 | ✅ pass | compose: dashboard-proxy/meetings_list: 4 meetings; helm: dashboard-proxy/meetings_list: 13 meetings |
+| meetings-list | /api/vexa/meetings returns a meeting list through the dashboard proxy | 5 | ✅ pass | compose: dashboard-proxy/meetings_list: 4 meetings; helm: dashboard-proxy/meetings_list: 15 meetings |
 | pagination | limit/offset pagination works (no overlap between pages) | 5 | ✅ pass | compose: dashboard-proxy/pagination: limit/offset works, no overlap; helm: dashboard-proxy/pagination: limit/offset works, no overlap |
 | field-contract | Meeting records include native_meeting_id / platform_specific_id | 5 | ✅ pass | compose: dashboard-proxy/field_contract: native_meeting_id present; helm: dashboard-proxy/field_contract: native_meeting_id present |
 | transcript-proxy | Transcript reachable through dashboard proxy | 5 | ⚠️ skip | compose: dashboard-proxy/transcript_proxy: no meetings with transcripts; helm: dashboard-proxy/transcript_proxy: no meetings with transcripts |
@@ -112,7 +112,7 @@ _Generated 2026-04-17T19:36:51.329912Z from `tests3/.state/reports/`._
 | security-secret-not-exposed | webhook_secret never appears in any API response (POST /bots, GET /bots/status) | 10 | ✅ pass | compose: webhooks/no_leak_response: webhook_secret not in /bots/status response |
 | security-payload-hygiene | Internal fields (secret, url, container ids, delivery state) stripped from webhook payloads | 5 | ✅ pass | compose: webhooks/no_leak_payload: internal fields stripped; user fields preserved |
 | flow-user-config | PUT /user/webhook persists webhook_url + webhook_secret + webhook_events to User.data | 10 | ✅ pass | compose: webhooks/config: user webhook set via PUT /user/webhook |
-| flow-gateway-inject | Gateway injects validated webhook config into meeting.data on POST /bots | 15 | ✅ pass | compose: webhooks/inject: gateway injected webhook_url=https://httpbin.org/post into meeting.data |
+| flow-gateway-inject | Gateway injects validated webhook config into meeting.data on POST /bots | 15 | ✅ pass | compose: webhooks/inject: gateway injected webhook_url=https://httpbin.org/post (after cache expiry) |
 | reliability-db-pool | DB connection pool doesn't exhaust under repeated status requests | 10 | ✅ pass | lite: smoke-contract/DB_POOL_NO_EXHAUSTION: 10/10 requests returned 200; compose: smoke-contract/DB_POOL_NO_EXHAUSTION: 10/10 requests returned 200; helm: smoke-contract/DB_POOL_NO_EXHAUSTION: 10/1… |
 
 ## Raw test results
@@ -121,36 +121,36 @@ _Generated 2026-04-17T19:36:51.329912Z from `tests3/.state/reports/`._
 
 | Test | Status | Duration | Steps (pass / total) |
 |------|:------:|---------:|---------------------:|
-| `containers` | ✅ pass | 108967 ms | 6 / 7 |
-| `dashboard-auth` | ✅ pass | 510 ms | 4 / 4 |
-| `dashboard-proxy` | ✅ pass | 1052 ms | 5 / 6 |
-| `smoke-contract` | ✅ pass | 8771 ms | 23 / 23 |
-| `smoke-env` | ❌ fail | 563 ms | 6 / 7 |
-| `smoke-health` | ✅ pass | 4817 ms | 11 / 15 |
+| `containers` | ✅ pass | 108942 ms | 6 / 7 |
+| `dashboard-auth` | ✅ pass | 499 ms | 4 / 4 |
+| `dashboard-proxy` | ✅ pass | 1086 ms | 5 / 6 |
+| `smoke-contract` | ✅ pass | 91213 ms | 25 / 25 |
+| `smoke-env` | ❌ fail | 594 ms | 6 / 7 |
+| `smoke-health` | ✅ pass | 5013 ms | 13 / 17 |
 | `smoke-static` | ✅ pass | 5 ms | 23 / 24 |
-| `webhooks` | ✅ pass | 26124 ms | 9 / 9 |
+| `webhooks` | ✅ pass | 96786 ms | 9 / 9 |
 
 ### `helm`
 
 | Test | Status | Duration | Steps (pass / total) |
 |------|:------:|---------:|---------------------:|
-| `containers` | ✅ pass | 1269 ms | 0 / 7 |
-| `dashboard-auth` | ✅ pass | 1450 ms | 4 / 4 |
-| `dashboard-proxy` | ❌ fail | 5741 ms | 3 / 6 |
-| `smoke-contract` | ❌ fail | 29420 ms | 18 / 23 |
-| `smoke-env` | ✅ pass | 9770 ms | 7 / 7 |
-| `smoke-health` | ✅ pass | 30456 ms | 15 / 15 |
-| `smoke-static` | ✅ pass | 208 ms | 23 / 24 |
-| `webhooks` | ✅ pass | 4902 ms | 1 / 8 |
+| `containers` | ✅ pass | 1297 ms | 0 / 7 |
+| `dashboard-auth` | ✅ pass | 1468 ms | 4 / 4 |
+| `dashboard-proxy` | ❌ fail | 6119 ms | 3 / 6 |
+| `smoke-contract` | ❌ fail | 20928 ms | 18 / 25 |
+| `smoke-env` | ✅ pass | 9741 ms | 7 / 7 |
+| `smoke-health` | ✅ pass | 35603 ms | 17 / 17 |
+| `smoke-static` | ✅ pass | 212 ms | 23 / 24 |
+| `webhooks` | ✅ pass | 4756 ms | 1 / 8 |
 
 ### `lite`
 
 | Test | Status | Duration | Steps (pass / total) |
 |------|:------:|---------:|---------------------:|
-| `containers` | ❌ fail | 25413 ms | 2 / 2 |
-| `dashboard-auth` | ✅ pass | 436 ms | 4 / 4 |
-| `smoke-contract` | ✅ pass | 37990 ms | 19 / 23 |
-| `smoke-env` | ✅ pass | 735 ms | 7 / 7 |
-| `smoke-health` | ✅ pass | 4791 ms | 10 / 15 |
+| `containers` | ❌ fail | 25658 ms | 2 / 2 |
+| `dashboard-auth` | ✅ pass | 717 ms | 4 / 4 |
+| `smoke-contract` | ✅ pass | 40852 ms | 21 / 25 |
+| `smoke-env` | ✅ pass | 1059 ms | 7 / 7 |
+| `smoke-health` | ✅ pass | 8332 ms | 12 / 17 |
 | `smoke-static` | ✅ pass | 6 ms | 23 / 24 |
-| `webhooks` | ✅ pass | 95921 ms | 8 / 9 |
+| `webhooks` | ✅ pass | 37715 ms | 9 / 9 |
