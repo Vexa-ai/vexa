@@ -194,7 +194,7 @@ tier=`static`. Every past bug lands one here.
 ## What this doc replaces
 
 - The old `tests3/VALIDATION.md` (archived).
-- The per-stage `tests3/skills/N-*/SKILL.md` are still there, but they are
+- The per-stage `tests3/.claude/skills/N-*/SKILL.md` are still there, but they are
   thin command-wrappers that point at this doc. When the protocol changes,
   change this doc first, then update the skills.
 - The Makefile comments on `release-*` targets should link here, not

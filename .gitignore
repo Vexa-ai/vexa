@@ -169,3 +169,7 @@ tests3/.state
 tests3/.state-lite
 tests3/.state-compose
 tests3/.state-helm
+
+# Claude Code runtime + per-user settings at repo root
+/.claude/scheduled_tasks.lock
+/.claude/settings.local.json
