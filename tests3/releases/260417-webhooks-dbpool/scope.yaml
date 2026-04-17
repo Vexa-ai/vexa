@@ -316,6 +316,7 @@ issues:
     - compose
     - lite
   required_modes:
+  - helm
   - compose
   - lite
   human_verify:
