@@ -77,7 +77,7 @@ Tick boxes. `release-ship` blocks until all are `[x]`. Bugs → `make release-is
 **lite-vexa-db-missing** _(compose,lite)_
 - [ ] [lite] After 1h idle on the lite VM, curl http://172.239.194.217:3000/login AND docker exec vexa-lite psql -U postgres -l → /login returns 200 (not 500) AND psql list shows vexa DB AND no readme_to_recover DB <!-- h:11a5715e -->
 
-**helm-meetings-all-failed-pollution** _(compose,lite)_
+**helm-meetings-all-failed-pollution** _(compose,helm,lite)_
 - [ ] [helm] Load http://172.238.169.249:30001/meetings after release-full completes (fresh reset) → Either no meetings (fresh) or mixed status (not 100% failed) <!-- h:3ff630b9 -->
 
 ## Issues found
