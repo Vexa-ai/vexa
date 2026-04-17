@@ -1,0 +1,101 @@
+release_id: 260417-webhooks-dbpool
+branch: dev
+summary: |
+  Webhook delivery hardening (gateway injection + status webhooks + delivery
+  tracking), DB connection pool fix + Postgres-side timeout, collector
+  NOGROUP recovery, structured test reports + per-feature DoD rollup, and
+  release validation refactor into a 7-step commanded process.
+
+deployments:
+  modes: [lite, compose, helm]
+
+issues:
+  - id: webhook-gateway-injection
+    source: human
+    problem: |
+      User-configured webhooks (via PUT /user/webhook) are not delivered —
+      user.data has webhook_url/secret/events but meeting.data on new bots
+      never gets them. "We only see meeting.completed; status webhooks never
+      arrive."
+    hypothesis: |
+      Gateway's forward_request() injects X-User-Id/Scopes/Limits but never
+      X-User-Webhook-*. Admin-api's validate_token() never returns webhook
+      fields. Meeting-api reads headers from request but they're always
+      missing. Close by: strip client-supplied X-User-Webhook-* too (anti-spoof).
+    fix_commits: [fd2526c, b953d44]
+    proves:
+      - {test: webhooks, step: config, modes: [compose]}
+      - {test: webhooks, step: inject, modes: [compose, helm]}
+      - {test: webhooks, step: spoof, modes: [compose, helm]}
+    required_modes: [compose]
+
+  - id: webhook-status-fast-path
+    source: human
+    problem: |
+      Status-change webhooks (meeting.started, meeting.stopping, bot.failed)
+      never fire end-to-end even after gateway injection works. Completion
+      webhook fires once but webhook_deliveries[] stays empty.
+    hypothesis: |
+      schedule_status_webhook_task is only wired into the unified callback
+      and the STOPPING transition. Misses 4 paths: no-container fast-path,
+      <5s pre-active fast-path, scheduler_timeout no-container, and
+      delayed_stop_finalizer. send_status_webhook has no delivery log.
+    fix_commits: [b953d44, 0ac59fe]
+    proves:
+      - {test: webhooks, step: e2e_completion, modes: [compose]}
+      - {test: webhooks, step: e2e_status, modes: [compose]}
+    required_modes: [compose]
+
+  - id: db-pool-exhaustion
+    source: human
+    problem: |
+      GET /bots/status returns 504 after ~10 sequential requests in compose
+      and helm. Pool (5+5=10) fills; new requests block 30s on pool_timeout
+      then fail.
+    hypothesis: |
+      Sessions held open during async I/O (Redis ttl refresh, httpx calls
+      to transcription-collector, run_all_tasks) leave transactions idle.
+      Pool defaults (5/5/30) are too tight even after the code fix. No
+      Postgres-side timeout to kill zombie transactions.
+    fix_commits: [fd2526c, c797e9f]
+    proves:
+      - {check: DB_POOL_NO_EXHAUSTION, modes: [lite, compose, helm]}
+    required_modes: [lite, compose, helm]
+
+  - id: transcripts-gone-after-stop
+    source: human
+    problem: |
+      Short meetings show transcripts during recording but 0 rows in
+      transcriptions table after completion. Reported on lite meeting 2.
+    hypothesis: |
+      Collector creates consumer groups at startup. If Redis loses them
+      (eviction / FLUSHALL / restart while meeting-api stays up), the
+      loop traps NOGROUP as generic Exception, sleeps 5s, never recovers.
+    fix_commits: [aace988]
+    proves:
+      # No dedicated test yet — tracked as Phase D gap.
+      # Current proxy: if the full webhook e2e delivers, the pipeline is
+      # alive end to end; verify separately via the recovery drill below.
+      - {test: webhooks, step: e2e_completion, modes: [lite, compose]}
+    required_modes: [lite, compose]
+
+  - id: recording-enabled-default
+    source: human
+    problem: |
+      Lite bots recorded by default but compose/helm defaulted to no
+      recording (BOT_CONFIG recordingEnabled=false), so recordings were
+      empty unless RECORDING_ENABLED=true was explicitly set.
+    hypothesis: |
+      Code defaults `os.getenv("RECORDING_ENABLED","false")` in meeting-api
+      used 4 times; should default "true" to match user expectation.
+    fix_commits: [fd2526c]
+    proves:
+      - {check: BOT_RECORDING_ENABLED, modes: [compose, helm]}
+    required_modes: [compose]
+
+expensive_tests: []
+
+strict_features:
+  - webhooks
+  - infrastructure
+  - meeting-urls

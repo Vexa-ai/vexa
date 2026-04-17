@@ -292,14 +292,82 @@ def status_glyph(s: str) -> str:
     return {"pass": "✅", "fail": "❌", "skip": "⚠️", "missing": "⬜"}.get(s, "?")
 
 
+def _eval_proof(proof: Dict[str, Any], reports: Dict[str, Dict[str, TestReport]]) -> Dict[str, str]:
+    """Return {mode: status} for a single proves[] entry.
+    status ∈ {pass, fail, skip, missing}.
+    """
+    out: Dict[str, str] = {}
+    target_modes = proof.get("modes") or list(reports.keys())
+    for mode in target_modes:
+        mode_reports = reports.get(mode, {})
+        if "test" in proof and "step" in proof:
+            report = mode_reports.get(proof["test"])
+            if not report:
+                out[mode] = "missing"
+                continue
+            step = report.steps.get(proof["step"])
+            out[mode] = step.status if step else "missing"
+        elif "check" in proof:
+            found = False
+            for rname, rep in mode_reports.items():
+                if not rname.startswith("smoke-"):
+                    continue
+                step = rep.steps.get(proof["check"])
+                if step:
+                    out[mode] = step.status
+                    found = True
+                    break
+            if not found:
+                out[mode] = "missing"
+        else:
+            out[mode] = "missing"
+    return out
+
+
+def render_scope_section(scope: Dict[str, Any], reports: Dict[str, Dict[str, TestReport]]) -> str:
+    """Render the per-issue status for the scope at the top of the report."""
+    lines: List[str] = []
+    lines.append("## Scope status\n")
+    lines.append(f"**Release**: `{scope.get('release_id', '?')}` "
+                 f"— {scope.get('summary', '').splitlines()[0] if scope.get('summary') else ''}\n")
+    lines.append("| Issue | Required modes | Status per proof | Verdict |")
+    lines.append("|-------|----------------|-------------------|---------|")
+    for issue in scope.get("issues") or []:
+        iid = issue.get("id", "?")
+        required = set(issue.get("required_modes") or [])
+        proofs = issue.get("proves") or []
+        # Flatten every (proof, mode) into cells
+        cells = []
+        worst = "pass"
+        rank = {"pass": 0, "skip": 1, "missing": 2, "fail": 3}
+        for p in proofs:
+            eval_per_mode = _eval_proof(p, reports)
+            for mode, status in eval_per_mode.items():
+                tag = p.get("test", p.get("check", "?")) + ("/" + p["step"] if "step" in p else "")
+                cells.append(f"{mode} `{tag}`: {status_glyph(status)} {status}")
+                if required and mode not in required:
+                    continue  # don't let non-required modes drag the verdict
+                if rank.get(status, 4) > rank.get(worst, 0):
+                    worst = status
+        cells_str = "<br>".join(cells) if cells else "—"
+        req_str = ", ".join(sorted(required)) if required else "(any)"
+        verdict = {"pass": "✅ pass", "skip": "⚠️ skip", "missing": "⬜ missing", "fail": "❌ fail"}[worst]
+        lines.append(f"| `{iid}` | {req_str} | {cells_str} | **{verdict}** |")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def render_markdown_report(
     tag: str,
     features: List[Feature],
     reports: Dict[str, Dict[str, TestReport]],
+    scope: Optional[Dict[str, Any]] = None,
 ) -> str:
     out: List[str] = []
     out.append(f"# Release validation report — `{tag}`\n")
     out.append(f"_Generated {datetime.utcnow().isoformat()}Z from `tests3/.state/reports/`._\n")
+    if scope:
+        out.append(render_scope_section(scope, reports))
 
     modes = sorted(reports.keys())
     out.append("## Deployment coverage\n")
@@ -461,8 +529,14 @@ def main() -> int:
     ap.add_argument("--mode", action="append",
                     help="Restrict aggregation to specific mode(s); default = all modes with reports")
     ap.add_argument("--write-features", action="store_true",
-                    help="[Phase D] Rewrite DoD table rows in feature README files (not implemented yet)")
+                    help="Rewrite DoD table rows in feature README files between AUTO-DOD markers")
+    ap.add_argument("--scope", help="Path to tests3/releases/<id>/scope.yaml; adds a Scope status section to the report and factors strict_features into the gate")
     args = ap.parse_args()
+
+    scope = None
+    if args.scope:
+        with open(args.scope) as f:
+            scope = yaml.safe_load(f)
 
     registry = load_registry()
     reports = load_reports(args.mode)
@@ -487,7 +561,7 @@ def main() -> int:
     else:
         tag = "unknown"
 
-    md = render_markdown_report(tag, features, reports)
+    md = render_markdown_report(tag, features, reports, scope=scope)
 
     if args.out:
         os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
@@ -502,11 +576,31 @@ def main() -> int:
             write_feature_readme(f, tag)
 
     if args.gate_check:
-        below = [f for f in features if f.confidence < f.gate_confidence_min]
-        if below:
-            print(f"GATE FAILED: {len(below)} feature(s) below confidence_min:", file=sys.stderr)
-            for f in below:
-                print(f"  - {f.name}: {f.confidence}% < {f.gate_confidence_min}%", file=sys.stderr)
+        strict = set()
+        if scope:
+            strict = set(scope.get("strict_features") or [])
+        failures: List[str] = []
+        for f in features:
+            required_min = 100 if f.name in strict else f.gate_confidence_min
+            if f.confidence < required_min:
+                failures.append(f"{f.name}: {f.confidence}% < {required_min}%"
+                                + (" [strict]" if f.name in strict else ""))
+        # Also surface any scope-level required-mode failure (issue with a fail in a required mode).
+        if scope:
+            for issue in scope.get("issues") or []:
+                req = set(issue.get("required_modes") or [])
+                for p in issue.get("proves") or []:
+                    per_mode = _eval_proof(p, reports)
+                    for mode, status in per_mode.items():
+                        if req and mode not in req:
+                            continue
+                        if status == "fail":
+                            failures.append(f"issue {issue.get('id')}: fail in required mode '{mode}' on "
+                                            + (f"{p.get('test')}/{p.get('step')}" if 'test' in p else f"check {p.get('check')}"))
+        if failures:
+            print(f"GATE FAILED ({len(failures)}):", file=sys.stderr)
+            for f in failures:
+                print(f"  - {f}", file=sys.stderr)
             return 1
 
     return 0

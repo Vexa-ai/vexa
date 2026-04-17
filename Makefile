@@ -89,21 +89,114 @@ release-build:                     ## build + publish :dev to DockerHub + record
 		echo "$$TAG" > tests3/.state-helm/image_tag; \
 	fi
 
-release-test:                      ## VM test lite + compose + helm in parallel → aggregate report
-	@mkdir -p tests3/.state-lite tests3/.state-compose tests3/.state-helm
-	@$(MAKE) --no-print-directory -C tests3 vm-lite STATE=$(CURDIR)/tests3/.state-lite & \
-	$(MAKE) --no-print-directory -C tests3 vm-compose STATE=$(CURDIR)/tests3/.state-compose & \
-	$(MAKE) --no-print-directory -C tests3 lke-helm STATE=$(CURDIR)/tests3/.state-helm & \
-	wait
-	@# Gather per-mode reports from the 3 deployments into a single tests3/.state/reports/ tree
+## ─────────────────────────────────────────────────────────────────────
+## Release cycle — scope-driven 7-stage process (see tests3/release-validation.md)
+##
+##   1. release-plan        — scaffold scope.yaml (one-off per release)
+##   2. release-provision   — parallel: provision VMs + LKE per scope.deployments.modes
+##   3. (develop code + tests locally, in parallel with #2)
+##   4. release-deploy      — build :dev + push + redeploy to each provisioned mode
+##   5. release-iterate     — targeted tests (scope-filtered); loop until green
+##   6. release-full        — fresh-reset all modes + run full matrix + gate
+##   7. release-ship        — push GitHub status + PR dev→main + promote :latest
+##   8. release-teardown    — destroy all provisioned infra
+##
+## Each stage is ONE command. Scope drives: SCOPE=tests3/releases/<id>/scope.yaml
+## ─────────────────────────────────────────────────────────────────────
+
+# Resolve which modes this scope touches (used by every stage below).
+define _SCOPE_MODES
+$$(python3 -c "import yaml,sys; s=yaml.safe_load(open('$(SCOPE)')); print(' '.join(s['deployments']['modes']))")
+endef
+
+release-plan:                      ## stage 1: scaffold tests3/releases/<ID>/scope.yaml
+	@ID=$${ID:?set ID=<slug>, e.g. ID=260417-webhooks-dbpool}; \
+	mkdir -p tests3/releases/$$ID; \
+	if [ -f tests3/releases/$$ID/scope.yaml ]; then \
+		echo "  scope already exists: tests3/releases/$$ID/scope.yaml"; \
+	else \
+		cp tests3/releases/_template/scope.yaml tests3/releases/$$ID/scope.yaml; \
+		sed -i "s/REPLACE-WITH-YYMMDD-SLUG/$$ID/" tests3/releases/$$ID/scope.yaml; \
+		echo "  created tests3/releases/$$ID/scope.yaml — fill in issues + fix_commits"; \
+	fi
+	@echo "  → next: export SCOPE=tests3/releases/$$ID/scope.yaml"
+
+release-provision:                 ## stage 2: provision deployments in parallel per scope
+	@test -n "$(SCOPE)" || (echo "  ERROR: set SCOPE=tests3/releases/<id>/scope.yaml" && exit 2)
+	@MODES="$(_SCOPE_MODES)"; echo "  provisioning modes: $$MODES"; \
+	mkdir -p tests3/.state-lite tests3/.state-compose tests3/.state-helm; \
+	for mode in $$MODES; do \
+		case $$mode in \
+			lite)    $(MAKE) --no-print-directory -C tests3 vm-provision-lite STATE=$(CURDIR)/tests3/.state-lite & ;; \
+			compose) $(MAKE) --no-print-directory -C tests3 vm-provision-compose STATE=$(CURDIR)/tests3/.state-compose & ;; \
+			helm)    $(MAKE) --no-print-directory -C tests3 lke-provision lke-setup STATE=$(CURDIR)/tests3/.state-helm & ;; \
+		esac; \
+	done; wait
+
+release-deploy:                    ## stage 4: build + push :dev + redeploy to all provisioned modes
+	@test -n "$(SCOPE)" || (echo "  ERROR: set SCOPE" && exit 2)
+	@$(MAKE) --no-print-directory release-build
+	@MODES="$(_SCOPE_MODES)"; \
+	for mode in $$MODES; do \
+		case $$mode in \
+			lite)    $(MAKE) --no-print-directory -C tests3 vm-redeploy-lite STATE=$(CURDIR)/tests3/.state-lite & ;; \
+			compose) $(MAKE) --no-print-directory -C tests3 vm-redeploy-compose STATE=$(CURDIR)/tests3/.state-compose & ;; \
+			helm)    $(MAKE) --no-print-directory -C tests3 lke-upgrade STATE=$(CURDIR)/tests3/.state-helm & ;; \
+		esac; \
+	done; wait
+
+release-iterate:                   ## stage 5: run scope-filtered targeted tests on all modes + aggregate
+	@test -n "$(SCOPE)" || (echo "  ERROR: set SCOPE" && exit 2)
+	@MODES="$(_SCOPE_MODES)"; \
+	mkdir -p tests3/.state; cp -f $(SCOPE) tests3/.state/scope.yaml; \
+	for mode in $$MODES; do \
+		case $$mode in \
+			lite)    $(MAKE) --no-print-directory -C tests3 vm-validate-scope-lite STATE=$(CURDIR)/tests3/.state-lite SCOPE=$(CURDIR)/$(SCOPE) & ;; \
+			compose) $(MAKE) --no-print-directory -C tests3 vm-validate-scope-compose STATE=$(CURDIR)/tests3/.state-compose SCOPE=$(CURDIR)/$(SCOPE) & ;; \
+			helm)    $(MAKE) --no-print-directory -C tests3 validate-helm STATE=$(CURDIR)/tests3/.state-helm SCOPE=$(CURDIR)/$(SCOPE) & ;; \
+		esac; \
+	done; wait
 	@$(MAKE) --no-print-directory release-report
 
-release-test-no-helm:              ## VM test lite + compose (skip helm — faster, cheaper)
-	@mkdir -p tests3/.state-lite tests3/.state-compose
-	@$(MAKE) --no-print-directory -C tests3 vm-lite STATE=$(CURDIR)/tests3/.state-lite & \
-	$(MAKE) --no-print-directory -C tests3 vm-compose STATE=$(CURDIR)/tests3/.state-compose & \
-	wait
+release-reset:                     ## stage 6a: wipe stack+volumes on all provisioned modes (keeps VMs/cluster)
+	@test -n "$(SCOPE)" || (echo "  ERROR: set SCOPE" && exit 2)
+	@MODES="$(_SCOPE_MODES)"; \
+	for mode in $$MODES; do \
+		case $$mode in \
+			lite)    $(MAKE) --no-print-directory -C tests3 vm-reset-lite STATE=$(CURDIR)/tests3/.state-lite & ;; \
+			compose) $(MAKE) --no-print-directory -C tests3 vm-reset-compose STATE=$(CURDIR)/tests3/.state-compose & ;; \
+			helm)    bash $(CURDIR)/tests3/lib/reset/reset-helm.sh STATE=$(CURDIR)/tests3/.state-helm & ;; \
+		esac; \
+	done; wait
+
+release-full:                      ## stage 6: fresh-reset + full cheap-tier matrix on all modes + aggregate + gate
+	@test -n "$(SCOPE)" || (echo "  ERROR: set SCOPE" && exit 2)
+	@$(MAKE) --no-print-directory release-reset SCOPE=$(SCOPE)
+	@MODES="$(_SCOPE_MODES)"; \
+	for mode in $$MODES; do \
+		case $$mode in \
+			lite)    $(MAKE) --no-print-directory -C tests3 vm-smoke-lite STATE=$(CURDIR)/tests3/.state-lite & ;; \
+			compose) $(MAKE) --no-print-directory -C tests3 vm-smoke-compose STATE=$(CURDIR)/tests3/.state-compose & ;; \
+			helm)    $(MAKE) --no-print-directory -C tests3 lke-smoke STATE=$(CURDIR)/tests3/.state-helm & ;; \
+		esac; \
+	done; wait
 	@$(MAKE) --no-print-directory release-report
+
+release-teardown:                  ## stage 8: destroy all provisioned infra (call AFTER release-ship)
+	@MODES="lite compose helm"; \
+	if [ -n "$(SCOPE)" ] && [ -f "$(SCOPE)" ]; then MODES="$(_SCOPE_MODES)"; fi; \
+	for mode in $$MODES; do \
+		case $$mode in \
+			lite)    $(MAKE) --no-print-directory -C tests3 vm-destroy STATE=$(CURDIR)/tests3/.state-lite 2>/dev/null || true ;; \
+			compose) $(MAKE) --no-print-directory -C tests3 vm-destroy STATE=$(CURDIR)/tests3/.state-compose 2>/dev/null || true ;; \
+			helm)    $(MAKE) --no-print-directory -C tests3 lke-destroy STATE=$(CURDIR)/tests3/.state-helm 2>/dev/null || true ;; \
+		esac; \
+	done
+
+# ── Compatibility aliases (old names) ──
+release-test: release-provision release-deploy release-full  ## alias: full pipeline up through the gate (requires SCOPE)
+release-test-no-helm:              ## alias: old 2-VM pipeline (creates a transient scope for compatibility)
+	@echo "  release-test-no-helm is deprecated; use release-plan + release-provision + release-full with SCOPE." && exit 2
 
 release-report:                    ## aggregate .state-{lite,compose,helm}/reports/* → tests3/reports/release-<tag>.md
 	@mkdir -p tests3/.state/reports
@@ -113,16 +206,20 @@ release-report:                    ## aggregate .state-{lite,compose,helm}/repor
 			cp -a tests3/.state-$$mode/reports/$$mode/. tests3/.state/reports/$$mode/ 2>/dev/null || true; \
 		fi; \
 	done
-	@# Pick up image_tag from any of the mode-state dirs
 	@for mode in lite compose helm; do \
 		if [ -f "tests3/.state-$$mode/image_tag" ]; then \
 			cp tests3/.state-$$mode/image_tag tests3/.state/image_tag; \
 			break; \
 		fi; \
 	done
-	@$(MAKE) --no-print-directory -C tests3 report-gate && \
-		echo "" && echo "  Release gate PASSED." || \
-		(echo "" && echo "  Release gate FAILED — see tests3/reports/release-*.md" && exit 1)
+	@TAG=$$(cat tests3/.state/image_tag 2>/dev/null || echo "unknown"); \
+	SCOPE_ARG=""; \
+	if [ -n "$(SCOPE)" ] && [ -f "$(SCOPE)" ]; then SCOPE_ARG="--scope $(SCOPE)"; fi; \
+	python3 tests3/lib/aggregate.py --write-features \
+		--out tests3/reports/release-$$TAG.md \
+		$$SCOPE_ARG --gate-check && \
+		echo "" && echo "  Release gate PASSED. Report → tests3/reports/release-$$TAG.md" || \
+		(echo "" && echo "  Release gate FAILED — see tests3/reports/release-$$TAG.md" && exit 1)
 
 release-validate:                  ## push GitHub status + destroy VMs + destroy LKE cluster
 	@SHA=$$(git rev-parse HEAD); \

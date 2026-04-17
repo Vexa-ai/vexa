@@ -9,8 +9,10 @@
        e2e full \
        vm-compose vm-lite \
        vm-provision-compose vm-provision-lite vm-smoke-compose vm-smoke-lite \
+       vm-redeploy-compose vm-redeploy-lite vm-reset-compose vm-reset-lite \
+       vm-validate-scope-compose vm-validate-scope-lite \
        vm-destroy vm-ssh vm-status \
-       lke-helm lke-provision lke-setup lke-smoke lke-destroy lke-status \
+       lke-helm lke-provision lke-setup lke-upgrade lke-smoke lke-destroy lke-status \
        helm-check helm-smoke helm-dashboard helm-containers helm-full \
        what-changed \
        clean help
@@ -143,14 +145,17 @@ auth-meeting: $(SMOKE_STAMP)      ## authenticated join: S3 config, cookies, joi
 # writes .state/reports/<mode>/<test>.json, exits non-zero on any failure.
 # Reports drive the aggregator (Phase C+) and release-ship gate (Phase D).
 
-validate-lite:                     ## run cheap-tier tests for lite mode + write JSON reports
-	@$(T3)/lib/run-matrix.sh lite
+# validate-<mode>: run tests for that mode.
+# With no SCOPE: runs ALL cheap-tier tests registered for the mode (full matrix).
+# With SCOPE=<path>: runs only the tests scope.issues[].proves[] lists for this mode.
+validate-lite:                     ## run tests for lite mode + write JSON reports
+	@$(T3)/lib/run-matrix.sh lite $(if $(SCOPE),--scope $(SCOPE),)
 
-validate-compose:                  ## run cheap-tier tests for compose mode + write JSON reports
-	@$(T3)/lib/run-matrix.sh compose
+validate-compose:                  ## run tests for compose mode + write JSON reports
+	@$(T3)/lib/run-matrix.sh compose $(if $(SCOPE),--scope $(SCOPE),)
 
-validate-helm:                     ## run cheap-tier tests for helm mode + write JSON reports
-	@$(T3)/lib/run-matrix.sh helm
+validate-helm:                     ## run tests for helm mode + write JSON reports
+	@$(T3)/lib/run-matrix.sh helm $(if $(SCOPE),--scope $(SCOPE),)
 
 report:                            ## aggregate .state/reports/* → tests3/reports/release-<tag>.md + update feature READMEs
 	@mkdir -p $(ROOT)/tests3/reports
@@ -192,6 +197,16 @@ vm-provision-compose:              ## provision VM + deploy compose
 vm-smoke-compose:                  ## run the validate-compose matrix on VM (writes JSON reports)
 	@$(T3)/lib/vm-run.sh validate-compose
 
+vm-redeploy-compose:               ## pull latest :dev on compose VM and restart stack (keeps volumes)
+	@$(T3)/lib/vm-reset.sh $(T3)/lib/reset/redeploy-compose.sh
+
+vm-reset-compose:                  ## fresh reset on compose VM (stack+volumes, keeps VM)
+	@$(T3)/lib/vm-reset.sh $(T3)/lib/reset/reset-compose.sh
+
+vm-validate-scope-compose:         ## run scope-filtered tests on compose VM
+	@test -n "$(SCOPE)" || (echo "  ERROR: set SCOPE" && exit 2)
+	@$(T3)/lib/vm-run.sh "validate-compose SCOPE=$(SCOPE)"
+
 # ═══ VM — lite ════════════════════════════════════════════════════
 
 vm-lite: locks vm-provision-lite vm-smoke-lite ## fresh VM + lite + smoke (~5min)
@@ -210,6 +225,16 @@ vm-provision-lite:                 ## provision VM + deploy lite
 
 vm-smoke-lite:                     ## run the validate-lite matrix on VM (writes JSON reports)
 	@$(T3)/lib/vm-run.sh validate-lite
+
+vm-redeploy-lite:                  ## pull latest :dev on lite VM and re-run make lite (keeps volumes)
+	@$(T3)/lib/vm-reset.sh $(T3)/lib/reset/redeploy-lite.sh
+
+vm-reset-lite:                     ## fresh reset on lite VM (stack+volumes, keeps VM)
+	@$(T3)/lib/vm-reset.sh $(T3)/lib/reset/reset-lite.sh
+
+vm-validate-scope-lite:            ## run scope-filtered tests on lite VM
+	@test -n "$(SCOPE)" || (echo "  ERROR: set SCOPE" && exit 2)
+	@$(T3)/lib/vm-run.sh "validate-lite SCOPE=$(SCOPE)"
 
 # ═══ VM — shared ══════════════════════════════════════════════════
 
@@ -260,6 +285,9 @@ lke-provision:                         ## provision LKE cluster + wait for nodes
 	@$(T3)/lib/lke.sh wait
 
 lke-setup:                             ## deploy helm chart to LKE cluster
+	@$(T3)/lib/lke-setup-helm.sh
+
+lke-upgrade:                           ## pull latest :dev + `helm upgrade` on LKE (keeps state)
 	@$(T3)/lib/lke-setup-helm.sh
 
 lke-smoke:                             ## run the validate-helm matrix + write JSON reports on LKE

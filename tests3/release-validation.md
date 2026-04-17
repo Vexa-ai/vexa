@@ -1,139 +1,191 @@
 # Release Validation
 
+A scope-driven, 7-stage process. Each stage is **one command**. Drift is the enemy —
+if you find yourself running tests ad-hoc, open an issue against this document.
+
 ## Branch model
 
 - **`main`**: stable, `IMAGE_TAG=latest`. Always matches `:latest` on DockerHub.
 - **`dev`**: active development, `IMAGE_TAG=dev`. Builds publish to `:dev`.
 
-**Important**: merging dev → main will overwrite `IMAGE_TAG=dev` into env-example. The `ENV_EXAMPLE_LATEST_ON_MAIN` static lock catches this — fix it immediately after merge.
+Merging `dev → main` overwrites `IMAGE_TAG=dev` into env-example; the
+`ENV_EXAMPLE_LATEST_ON_MAIN` static lock catches this — fix it immediately
+after merge (handled automatically by `make release-ship`).
 
-## Release cycle
+## The scope file
 
-### 1. Build + publish (on dev branch)
+Every release starts with a **scope file** at `tests3/releases/<id>/scope.yaml`.
+It is the contract between the dev work and the validation:
 
-```bash
-git checkout dev
-make release-build
+```yaml
+release_id: 260417-webhooks-dbpool
+branch: dev
+summary: ...
+
+deployments:
+  modes: [lite, compose, helm]         # which deployments must prove out the release
+
+issues:
+  - id: webhook-status-fast-path
+    problem: "Status-change webhooks never fire on short meetings."
+    hypothesis: "schedule_status_webhook_task isn't wired into the fast-path transitions."
+    fix_commits: [0ac59fe]
+    proves:
+      - {test: webhooks, step: e2e_status, modes: [compose]}
+    required_modes: [compose]
+  # ... more issues
+
+strict_features: [webhooks, infrastructure]
 ```
 
-Builds all images with a fresh timestamp tag (e.g. `0.10.0-260413-1504`) and pushes to DockerHub. Tags each image as `:dev` with identical SHA (uses `docker tag + push`, not `imagetools create`).
+The scope drives every stage: which deployments to provision, which tests to
+run in the iterate loop, which features must go strict in the gate.
 
-### 2. Deployment validation — 3 deployments in parallel
+See `tests3/releases/_template/scope.yaml` for the full schema.
 
-```bash
-make release-test
-```
+## The 7 stages — one command each
 
-Provisions **three fresh deployments in parallel** and runs `validate-<mode>` on each. Every test emits a JSON artifact under `.state/reports/<mode>/<test>.json`:
+| # | Stage | Command | What it does |
+|---|-------|---------|--------------|
+| 1 | Plan | `make release-plan ID=<slug>` | Scaffold `tests3/releases/<id>/scope.yaml` from the template. Fill in issues + fix_commits. |
+| 2 | Provision | `make release-provision SCOPE=tests3/releases/<id>/scope.yaml` | Parallel: provision every deployment listed in `scope.deployments.modes` (Linode VMs + LKE cluster). Takes ~10 min. **Run in parallel with stage 3.** |
+| 3 | Develop | *(local iteration)* | Edit code + tests + features/README frontmatter. Commit to dev. The `proves:` bindings in the scope tell you which test steps / checks must go green. |
+| 4 | Deploy | `make release-deploy SCOPE=...` | Build & publish `:dev`, pull on each provisioned deployment, restart stack (keeps volumes). |
+| 5 | Iterate | `make release-iterate SCOPE=...` | Run **only** the scope-filtered tests (per `issues[].proves[]`) on each mode. Writes reports to `tests3/reports/release-<tag>.md`. Loop: edit code → `release-deploy` → `release-iterate` until all `required_modes` in the scope go green. Fast (~2-3 min). |
+| 6 | Full | `make release-full SCOPE=...` | Fresh-reset every deployment (wipe stack + volumes, keep VMs/cluster) → redeploy latest `:dev` → run the **full cheap-tier matrix** on all modes → aggregate → gate-check. This is the authoritative pass. |
+| 7 | Ship | `make release-ship` | Push `release/vm-validated` GitHub status, PR dev→main, merge, fix `env-example` on main, promote all images `:dev → :latest`. |
+| 8 | Teardown | `make release-teardown SCOPE=...` | Destroy every provisioned deployment (VMs + LKE cluster). |
 
-| Deployment | Path | Infrastructure |
-|---|---|---|
-| **Lite VM** | `make lite` | single container + postgres (Linode VM) |
-| **Compose VM** | `make all` | full multi-service stack (Linode VM) |
-| **Helm / LKE** | `lke-provision + lke-setup` | fresh LKE cluster + helm chart |
+### Why stages 2 and 3 run in parallel
 
-Each deployment runs the cheap-tier tests registered in `test-registry.yaml` for its mode (`smoke-static`, `smoke-env`, `smoke-health`, `smoke-contract`, `webhooks`, `containers`, `dashboard-auth`, `dashboard-proxy`).
+Provisioning takes ~10 minutes (Linode + LKE). Development takes much longer.
+Starting them sequentially wastes 10 min per cycle. Starting the provision
+command early and iterating on code meanwhile means the deployment is ready
+the moment your code is.
 
-After all three finish, `make release-report` aggregates per-deployment reports into **`tests3/reports/release-<tag>.md`** with per-feature confidence computed from the DoDs declared in each `features/*/README.md` frontmatter. The release gate fails if any feature is below its `gate.confidence_min`.
+### Why iterate + full are separate
 
-```bash
-# Skip helm (faster, cheaper, but lower coverage):
-make release-test-no-helm
-```
+- **iterate** (stage 5): scope-filtered, fast, dirty state. You're debugging —
+  you want fast feedback on *the specific thing you're fixing*.
+- **full** (stage 6): fresh-reset, authoritative, every cheap test on every
+  mode. This is what gates the merge. Running it once is enough; its job is
+  to say "the whole product works on a clean install".
 
-Deployments stay up after the run for optional human cross-checking. `make release-validate` (step 4) tears them all down.
+Running the full matrix on dirty state (from prior iterations) would mask
+regressions that only show on first-boot state.
 
-### 3. Review the report + optional human cross-check
+### Why fresh-reset, not reprovision
 
-Open **`tests3/reports/release-<tag>.md`** — this is now the gate. It shows:
+Reprovisioning VMs from scratch costs ~10 minutes per mode. Reset wipes
+state (containers + volumes + DB) in ~30 seconds per mode. Over a release
+cycle that's 50-60 minutes saved without weakening the gate (same clean
+start from Postgres/Redis/MinIO's perspective).
 
-- Deployment coverage table (tests run / passed / failed per mode).
-- Per-feature confidence with gate threshold and pass/fail.
-- DoD details per feature with live evidence from each deployment.
-- Raw test results per deployment.
+## Stage details
 
-The CLI gate runs as part of `release-test`; if any feature is below its `gate.confidence_min`, the build exits non-zero and ship is blocked.
+### 1. `make release-plan ID=<slug>`
 
-Optional human cross-check (SSH into any VM):
+Creates `tests3/releases/<ID>/scope.yaml` from the template. Edit it:
 
-**Lite VM** (dashboard on port 3000):
-- [ ] Dashboard loads, login works
-- [ ] API docs page renders
-- [ ] Create a browser session — works (process backend, no Docker needed)
-- [ ] Create a bot via API — bot starts as child process
-- [ ] Bot joins a Google Meet, audio is captured
-- [ ] Transcript segments appear in the API
-- [ ] Bot stops cleanly
-- [ ] No errors in logs: `docker logs vexa 2>&1 | grep -i error | tail -20`
+1. Write one `issues:` entry per discrete problem you're fixing.
+2. For each issue: problem statement → root-cause hypothesis → `fix_commits`
+   (grow as you commit) → `proves:` bindings.
+3. Set `deployments.modes` — if unsure, keep all three.
+4. Set `strict_features:` for any feature whose gate should require 100% for
+   this release (overrides the `confidence_min` in its README frontmatter).
 
-**Compose VM** (dashboard on port 3001):
-- [ ] Dashboard loads, login works
-- [ ] API docs page renders
-- [ ] Create a bot via API — bot container starts
-- [ ] Bot joins a Google Meet, audio is captured
-- [ ] Transcript segments appear in the API
-- [ ] Bot stops cleanly, container removed
-- [ ] Webhooks: configure webhook_url via dashboard, create bot, verify `webhook_delivery` in meeting data after completion
-- [ ] Webhooks: status change webhooks fire for enabled event types (meeting.started, meeting.completed)
-- [ ] No errors in logs: `cd /root/vexa && docker compose -f deploy/compose/docker-compose.yml logs --tail=50 2>&1 | grep -i error`
+### 2. `make release-provision SCOPE=...`
 
-Optional — run full meeting test on VM:
-```bash
-ssh root@<VM_IP>
-cd /root/vexa && make -C tests3 meeting-tts
-```
+Reads `scope.deployments.modes`; for each mode:
 
-### 4. Ship
+- `lite` → Linode VM + install Docker + clone vexa + run `make lite`
+- `compose` → Linode VM + install Docker + clone vexa + run `make all`
+- `helm` → LKE cluster + `lke-setup-helm.sh` (provision + kubectl + helm install)
 
-```bash
-make release-ship
-```
+All modes run in parallel. Writes state to `tests3/.state-<mode>/`.
 
-One command that does everything after human validation:
-1. Pushes `release/vm-validated` commit status to GitHub
-2. Destroys VMs
-3. Creates PR dev → main (or merges existing one)
-4. Fixes env-example on main (IMAGE_TAG=latest)
-5. Promotes all images to `:latest` (same SHA as build tag)
+### 3. Develop (out-of-band)
 
-### 5. Verify
+Edit code + tests + `features/*/README.md` frontmatter. Commit to `dev`.
+Every new DoD goes in the feature's README frontmatter `tests3.dods:` block;
+every new test step goes in `tests3/test-registry.yaml` and in the test
+script itself (via `step_pass`/`step_fail` from `tests3/lib/common.sh`).
+No stdout parsing — JSON reports are the only truth.
 
-```bash
-make -C tests3 locks   # all 24 checks must pass on main
-```
+### 4. `make release-deploy SCOPE=...`
 
-## GitHub gate
+1. `make release-build` — publishes `:dev` with a fresh timestamp tag.
+2. For each mode in the scope: pull latest `:dev` + restart stack (keeps volumes).
 
-Branch protection on `main` requires `release/vm-validated` status. This status is per-commit — new commits reset it. Only `make release-validate` can set it.
+### 5. `make release-iterate SCOPE=...`
 
-`enforce_admins` is off — repo admins can bypass (direct push shows "Bypassed rule violations" warning).
+For each mode in the scope: runs only the tests referenced in
+`issues[].proves[]` for that mode. Reports land in
+`tests3/.state-<mode>/reports/<mode>/<test>.json`. `release-report`
+aggregates into `tests3/reports/release-<tag>.md` with per-feature
+confidence.
+
+Output lives at `tests3/reports/release-<tag>.md`. Every feature's DoD
+table in `features/*/README.md` is auto-rewritten with live evidence
+(idempotent — re-runs produce no diff if evidence unchanged).
+
+If any required issue doesn't go green, edit code, `git commit`, `make
+release-deploy SCOPE=…`, then re-run `release-iterate`.
+
+### 6. `make release-full SCOPE=...`
+
+1. `release-reset` → wipe every mode's stack + volumes (keeps infrastructure).
+2. Redeploy latest `:dev` on each mode.
+3. Run full cheap-tier `validate-<mode>` on each mode.
+4. Aggregate into `tests3/reports/release-<tag>.md` + update feature READMEs.
+5. Gate-check: fails if any feature is below its `confidence_min`.
+
+### 7. `make release-ship`
+
+Only run after `release-full` exits 0.
+
+1. Push `release/vm-validated` commit status on HEAD (required by branch protection on main).
+2. PR dev → main, merge.
+3. Fix `env-example` on main (IMAGE_TAG=latest).
+4. Promote `:dev` → `:latest` for every image.
+
+### 8. `make release-teardown SCOPE=...`
+
+Destroys every VM + LKE cluster listed in the scope. **Irreversible** — only
+run after `release-ship` is green.
 
 ## Static regression locks (24 checks)
 
-Run `make -C tests3 locks` to verify. Key release-related locks:
+Independent of the release cycle. Run `make -C tests3 locks` to verify.
+These are purely source-file checks, run on every deployment in the
+`smoke-static` tier. Key:
+
 - `ENV_EXAMPLE_LATEST_ON_MAIN` — IMAGE_TAG=latest in env-example
 - `BROWSER_IMAGE_IN_ENV` — BROWSER_IMAGE set explicitly
 - `NO_IMAGETOOLS_CREATE` — docker tag+push, not imagetools create
 - `NO_DEV_FALLBACK_COMPOSE` — no silent :-dev fallbacks
-- `NO_NESTED_COMPOSE_VARS` — no nested ${} in docker-compose
+- `NO_NESTED_COMPOSE_VARS` — no nested `${...}` in docker-compose
 - `NO_EXPORT_IMAGE_TAG` — no Make-level export IMAGE_TAG
 - `LITE_RECORDING_ENABLED` — recording on in lite
 - `LITE_PROCESS_BACKEND` — process backend in lite
 - `GATEWAY_TIMEOUT_ADEQUATE` — gateway timeout >= 30s
-- `VM_LITE_USES_MAKE` — VM setup uses make lite
+- `VM_LITE_USES_MAKE` — VM setup uses `make lite`
 
-## VM access
+## GitHub gate
 
-```bash
-# Get IPs
-cat tests3/.state-lite/vm_ip
-cat tests3/.state-compose/vm_ip
+Branch protection on `main` requires the `release/vm-validated` status.
+That status is per-commit — new commits reset it. Only `make release-ship`
+(after `release-full` passed) sets it.
 
-# SSH
-ssh root@$(cat tests3/.state-lite/vm_ip)
-ssh root@$(cat tests3/.state-compose/vm_ip)
+`enforce_admins` is off — repo admins can bypass (direct push shows
+"Bypassed rule violations" warning).
 
-# Destroy manually
-make -C tests3 vm-destroy STATE=$(pwd)/tests3/.state-lite
-make -C tests3 vm-destroy STATE=$(pwd)/tests3/.state-compose
-```
+## Escape hatches
+
+- **Compatibility**: `make release-test SCOPE=...` is an alias for
+  `release-provision && release-deploy && release-full`. Useful for a
+  cold-start "full pipeline from zero" run.
+- **Inspection**: each deployment's VM IP / kubeconfig is in `tests3/.state-<mode>/`. SSH in for
+  debugging; nothing writes to those state dirs during an iterate loop.
+- **Partial teardown**: `make -C tests3 vm-destroy STATE=…` removes just
+  one VM; `lke-destroy STATE=…` removes just the LKE cluster.

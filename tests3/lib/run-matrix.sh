@@ -1,39 +1,90 @@
 #!/usr/bin/env bash
-# Run the cheap-tier tests registered in tests3/test-registry.yaml for the given
-# deployment mode. Each test emits a JSON artifact at .state/reports/<mode>/<name>.json
+# Run tests registered in tests3/test-registry.yaml for the given deployment mode.
+# Each test emits a JSON artifact at .state/reports/<mode>/<name>.json
 # (via test_begin/step_* in tests3/lib/common.sh).
 #
 # Exits 0 if every test ran and its report has status=pass.
 # Exits non-zero if any test failed or its report is missing.
 #
-# Usage: tests3/lib/run-matrix.sh <lite|compose|helm>
+# Usage:
+#   tests3/lib/run-matrix.sh <mode>                       # all cheap tests for mode
+#   tests3/lib/run-matrix.sh <mode> --scope <scope.yaml>  # only tests listed in scope.proves[] for mode
 set -euo pipefail
 
-MODE="${1:?usage: run-matrix.sh <lite|compose|helm>}"
+MODE="${1:?usage: run-matrix.sh <mode> [--scope <scope.yaml>]}"
+shift
+SCOPE=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --scope) SCOPE="$2"; shift 2 ;;
+        *) echo "unknown arg: $1" >&2; exit 2 ;;
+    esac
+done
 
 ROOT="$(git rev-parse --show-toplevel)"
 T3="$ROOT/tests3"
 STATE="$T3/.state"
 REGISTRY="$T3/test-registry.yaml"
 
-# Expose MODE to tests (needed by the $STATE/$MODE substitution in registry scripts)
 export MODE
 export STATE
 
-# Make sure .state/deploy_mode matches the mode we're running (tests read it).
 echo "$MODE" > "$STATE/deploy_mode"
 mkdir -p "$STATE/reports/$MODE"
 
-# Extract the list of tests to run for this mode.
-# A test runs if: tier=cheap AND mode is in runs_in AND awaiting_retrofit is not true.
+# Build the test list.
+# With --scope: only the tests referenced in scope.issues[].proves[].test that include this mode,
+#               plus smoke-* tiers whenever a scope check ID is referenced (so the aggregator
+#               finds the check in a report). Scope filtering never runs expensive tier.
+# Without --scope: every cheap-tier test whose runs_in includes this mode.
 TESTS=$(python3 - <<PY
-import sys, yaml
+import yaml
 with open("$REGISTRY") as f:
     reg = yaml.safe_load(f)
-for name, spec in reg.get("tests", {}).items():
-    if spec.get("tier") != "cheap":
+tests = reg.get("tests", {})
+scope_path = "$SCOPE"
+mode = "$MODE"
+
+def want_runs_in(name):
+    spec = tests.get(name) or {}
+    return mode in (spec.get("runs_in") or [])
+
+selected = set()
+
+if scope_path:
+    with open(scope_path) as f:
+        scope = yaml.safe_load(f)
+    for issue in (scope.get("issues") or []):
+        for p in (issue.get("proves") or []):
+            proof_modes = p.get("modes") or []
+            if proof_modes and mode not in proof_modes:
+                continue
+            if "test" in p:
+                selected.add(p["test"])
+            elif "check" in p:
+                # Check ID → include every smoke-* tier that runs in this mode.
+                # Aggregator will pick out the specific check from whatever tier
+                # reports it. Cheap (< 2min total) so no reason to be clever.
+                for t in tests:
+                    if t.startswith("smoke-") and want_runs_in(t):
+                        selected.add(t)
+else:
+    for name, spec in tests.items():
+        if spec.get("tier") != "cheap":
+            continue
+        if not want_runs_in(name):
+            continue
+        if spec.get("awaiting_retrofit"):
+            continue
+        selected.add(name)
+
+# Filter to tests that actually have runs_in for this mode
+for name in sorted(selected):
+    spec = tests.get(name) or {}
+    if not want_runs_in(name):
         continue
-    if "$MODE" not in (spec.get("runs_in") or []):
+    if spec.get("tier") not in ("cheap",):
+        # Safety: scope might list a test that isn't cheap; skip in targeted runs.
         continue
     if spec.get("awaiting_retrofit"):
         continue
