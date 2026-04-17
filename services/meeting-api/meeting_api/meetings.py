@@ -537,6 +537,7 @@ async def _delayed_container_stop(container_name: str, meeting_id: int, delay_se
     session_token_for_redis = None
     should_run_post_tasks = False
     publish_info = None
+    status_transition_info = None
     try:
         async with async_session_local() as db:
             meeting = await db.get(Meeting, meeting_id)
@@ -558,6 +559,7 @@ async def _delayed_container_stop(container_name: str, meeting_id: int, delay_se
                             reason = MeetingCompletionReason(pending)
                         except ValueError:
                             pass
+                old_status = meeting.status
                 success = await update_meeting_status(
                     meeting,
                     MeetingStatus.COMPLETED,
@@ -569,6 +571,12 @@ async def _delayed_container_stop(container_name: str, meeting_id: int, delay_se
                 if success:
                     publish_info = (meeting.id, meeting.platform, meeting.platform_specific_id, meeting.user_id)
                     should_run_post_tasks = True
+                    status_transition_info = {
+                        "old_status": old_status,
+                        "new_status": MeetingStatus.COMPLETED.value,
+                        "reason": "delayed_stop_finalizer",
+                        "transition_source": "delayed_stop",
+                    }
         # DB session closed here — Redis/HTTP calls below are safe
 
         if publish_info:
@@ -578,6 +586,11 @@ async def _delayed_container_stop(container_name: str, meeting_id: int, delay_se
             )
         if should_run_post_tasks:
             asyncio.create_task(run_all_tasks(meeting_id))
+            # Fire status webhook for the COMPLETED transition (post-meeting fires completion webhook too,
+            # but status webhook is for users who enabled webhook_events=meeting.status_change etc.)
+            if status_transition_info:
+                from .post_meeting import run_status_webhook_task
+                asyncio.create_task(run_status_webhook_task(meeting_id, status_transition_info))
 
         # Clean up browser_session Redis keys
         if redis_client and meeting_id_for_redis is not None:
@@ -1389,9 +1402,15 @@ async def stop_bot(
                 logger.warning(f"Runtime API lookup failed for meeting {meeting.id}: {e}")
 
         if not container_name:
+            old_status = meeting.status
             success = await update_meeting_status(meeting, MeetingStatus.COMPLETED, db, completion_reason=MeetingCompletionReason.STOPPED)
             if success:
                 await publish_meeting_status_change(meeting.id, MeetingStatus.COMPLETED.value, redis_client, platform_value, native_meeting_id, meeting.user_id)
+                await schedule_status_webhook_task(
+                    meeting=meeting, background_tasks=background_tasks,
+                    old_status=old_status, new_status=MeetingStatus.COMPLETED.value,
+                    reason="User requested stop (no container)", transition_source="user_stop",
+                )
             background_tasks.add_task(run_all_tasks, meeting.id)
             continue
 
@@ -1407,9 +1426,15 @@ async def stop_bot(
             meeting.data["stop_requested"] = True
             await db.commit()
             background_tasks.add_task(_delayed_container_stop, container_name, meeting.id, 0)
+            old_status = meeting.status
             success = await update_meeting_status(meeting, MeetingStatus.COMPLETED, db, completion_reason=MeetingCompletionReason.STOPPED)
             if success:
                 await publish_meeting_status_change(meeting.id, MeetingStatus.COMPLETED.value, redis_client, platform_value, native_meeting_id, meeting.user_id)
+                await schedule_status_webhook_task(
+                    meeting=meeting, background_tasks=background_tasks,
+                    old_status=old_status, new_status=MeetingStatus.COMPLETED.value,
+                    reason="User requested stop (fast-path)", transition_source="user_stop",
+                )
             background_tasks.add_task(run_all_tasks, meeting.id)
             continue
 
@@ -1473,6 +1498,7 @@ async def scheduler_timeout_stop(
     container_name = meeting.bot_container_id
     if not container_name:
         # No container — just complete the meeting
+        old_status = meeting.status
         success = await update_meeting_status(
             meeting, MeetingStatus.COMPLETED, db,
             completion_reason=MeetingCompletionReason.MAX_BOT_TIME_EXCEEDED,
@@ -1482,6 +1508,11 @@ async def scheduler_timeout_stop(
             await publish_meeting_status_change(
                 meeting.id, MeetingStatus.COMPLETED.value, redis_client,
                 platform_value, native_meeting_id, meeting.user_id,
+            )
+            await schedule_status_webhook_task(
+                meeting=meeting, background_tasks=background_tasks,
+                old_status=old_status, new_status=MeetingStatus.COMPLETED.value,
+                reason="max_bot_time_exceeded (no container)", transition_source="scheduler_timeout",
             )
             background_tasks.add_task(run_all_tasks, meeting.id)
         return {"message": "Bot timed out (no container)"}
