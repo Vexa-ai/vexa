@@ -294,26 +294,21 @@ def check_health(lock):
 
     # Special: verify the `vexa` database actually exists (catches post-bootstrap
     # DB loss — e.g. Linode low-disk auto-recovery wipes PG data volume).
+    # Uses sync SQLAlchemy (same pattern as DB_USERS_CHECK) to avoid
+    # async-def-in-`python3 -c` escaping issues.
     if url == "ADMIN_API_DB_EXISTS_CHECK":
         mode = state_read("deploy_mode", required=True)
         if mode == "helm" and not kubectl_available():
             return True, "skipped (no kubectl access)"
-        # Direct SELECT — fails with InvalidCatalogNameError if DB is gone.
         rc, out = svc_exec("admin-api", [
             "python3", "-c",
-            "import os, asyncio, asyncpg, sys;"
-            "async def go():"
-            " c=await asyncpg.connect(host=os.environ['DB_HOST'],port=int(os.environ['DB_PORT']),"
-            " user=os.environ['DB_USER'],password=os.environ['DB_PASSWORD'],database=os.environ['DB_NAME']);"
-            " await c.execute('SELECT 1');"
-            " await c.close();"
-            " print('OK')\n"
-            "try: asyncio.run(go())\n"
-            "except Exception as e: print('FAIL:'+type(e).__name__+':'+str(e)[:120]); sys.exit(1)"
+            "import os, sys; from sqlalchemy import create_engine, text;"
+            "e=create_engine(f\"postgresql://{os.environ['DB_USER']}:{os.environ['DB_PASSWORD']}@{os.environ['DB_HOST']}:{os.environ['DB_PORT']}/{os.environ['DB_NAME']}\");"
+            "\ntry:\n c=e.connect()\n c.execute(text('SELECT 1'))\n c.close()\n print('OK')\nexcept Exception as ex:\n print('FAIL:'+type(ex).__name__+':'+str(ex)[:120]); sys.exit(1)"
         ])
         if rc == 0 and "OK" in out:
-            return True, "DB reachable"
-        return False, f"DB unreachable: {out.strip()[:200]}"
+            return True, f"DB '{os.environ.get('DB_NAME','vexa')}' reachable"
+        return False, f"DB unreachable: {out.strip()[:200] or '(empty output, rc='+str(rc)+')'}"
 
     # Special: Linode low-disk corruption leaves a `readme_to_recover` DB behind.
     if url == "POSTGRES_NO_DISK_WARNING_CHECK":
@@ -334,76 +329,6 @@ def check_health(lock):
         if hits:
             return False, f"Linode disk-pressure marker present: {hits} — data volume likely replaced"
         return True, "no disk-pressure markers"
-
-    # Special: surface "everything looks failed" in the dashboard UI. Protects
-    # against accumulated test pollution making a release look broken to a
-    # human validator. Passes if meetings=0 (fresh) or ≥1 non-failed exists.
-    if url == "DASHBOARD_MEETINGS_NOT_ALL_FAILED_CHECK":
-        mode = state_read("deploy_mode", required=True)
-        if mode == "helm" and not kubectl_available():
-            return True, "skipped (no kubectl access)"
-        rc, out = svc_exec("admin-api", [
-            "python3", "-c",
-            "import os, asyncio, asyncpg\n"
-            "async def go():\n"
-            " c=await asyncpg.connect(host=os.environ['DB_HOST'],port=int(os.environ['DB_PORT']),"
-            "user=os.environ['DB_USER'],password=os.environ['DB_PASSWORD'],database=os.environ['DB_NAME'])\n"
-            " total=await c.fetchval('SELECT count(*) FROM meetings')\n"
-            " failed=await c.fetchval(\"SELECT count(*) FROM meetings WHERE status='failed'\")\n"
-            " await c.close()\n"
-            " print(f'{total},{failed}')\n"
-            "asyncio.run(go())"
-        ])
-        if rc != 0 or "," not in out:
-            return False, f"DB query failed: {out.strip()[:120]}"
-        total_s, failed_s = out.strip().split(",", 1)
-        total, failed = int(total_s), int(failed_s)
-        if total == 0:
-            return True, "meetings table empty (fresh)"
-        if total < 5:
-            return True, f"{total} meetings, {failed} failed (below pollution threshold)"
-        if failed == total:
-            return False, f"all {total} meetings are status=failed — pollution or systemic failure"
-        return True, f"{total} meetings, {failed} failed, {total-failed} healthy"
-
-    # Special: /webhooks dashboard rollup includes non-completion event types.
-    # Test strategy: create a meeting row with webhook_deliveries[] containing
-    # multiple event_types, call the dashboard's /api/webhooks/deliveries
-    # endpoint, assert every event_type surfaces.
-    if url == "DASHBOARD_WEBHOOKS_ALL_EVENT_TYPES_CHECK":
-        mode = state_read("deploy_mode", required=True)
-        if mode == "helm":
-            return True, "skipped (helm — dashboard route identical, covered in compose)"
-        import json as _json
-        # Query admin-api directly for the test user's meetings (mirrors what the
-        # dashboard route reads: meeting.data.webhook_deliveries[]).
-        rc, out = svc_exec("admin-api", [
-            "python3", "-c",
-            "import os, asyncio, asyncpg, json;\n"
-            "async def go():\n"
-            " c=await asyncpg.connect(host=os.environ['DB_HOST'],port=int(os.environ['DB_PORT']),"
-            "user=os.environ['DB_USER'],password=os.environ['DB_PASSWORD'],database=os.environ['DB_NAME'])\n"
-            " rows=await c.fetch(\"SELECT data FROM meetings WHERE data ? 'webhook_deliveries' ORDER BY id DESC LIMIT 20\")\n"
-            " await c.close()\n"
-            " types=set()\n"
-            " for r in rows:\n"
-            "  d=r['data']\n"
-            "  if isinstance(d,str): d=json.loads(d)\n"
-            "  for e in (d.get('webhook_deliveries') or []):\n"
-            "   t=e.get('event_type')\n"
-            "   if t: types.add(t)\n"
-            " print(','.join(sorted(types)))\n"
-            "asyncio.run(go())"
-        ])
-        if rc != 0:
-            return False, f"DB query failed: {out.strip()[:160]}"
-        types = [t for t in out.strip().split(",") if t]
-        non_completion = [t for t in types if t != "meeting.completed"]
-        if not types:
-            return True, "no webhook_deliveries yet (test run hasn't exercised this)"
-        if not non_completion:
-            return False, f"only meeting.completed present in webhook_deliveries — status/started/failed never fired"
-        return True, f"event types: {','.join(types)}"
 
     # Special: Redis ping via svc_exec
     if url == "REDIS_PING":
@@ -624,6 +549,60 @@ def check_health(lock):
     return False, f"HTTP {code} (expected {expect})"
 
 
+def _check_meetings_not_all_failed():
+    """Contract: /meetings dashboard must not be a wall of failures.
+    Passes if meetings=0 OR at least one non-failed meeting exists.
+    Catches test-pollution from repeated iterate runs without reset."""
+    mode = state_read("deploy_mode", required=True)
+    if mode == "helm" and not kubectl_available():
+        return True, "skipped (no kubectl access)"
+    rc, out = svc_exec("admin-api", [
+        "python3", "-c",
+        "import os, sys; from sqlalchemy import create_engine, text;"
+        "e=create_engine(f\"postgresql://{os.environ['DB_USER']}:{os.environ['DB_PASSWORD']}@{os.environ['DB_HOST']}:{os.environ['DB_PORT']}/{os.environ['DB_NAME']}\");"
+        "\ntry:\n c=e.connect()\n total=c.execute(text('SELECT count(*) FROM meetings')).scalar()\n failed=c.execute(text(\"SELECT count(*) FROM meetings WHERE status='failed'\")).scalar()\n c.close()\n print(f'{total},{failed}')\nexcept Exception as ex:\n print('FAIL:'+type(ex).__name__+':'+str(ex)[:120]); sys.exit(1)"
+    ])
+    if rc != 0 or "," not in out:
+        return False, f"DB query failed: {out.strip()[:160] or '(rc='+str(rc)+')'}"
+    total_s, failed_s = out.strip().splitlines()[-1].split(",", 1)
+    try:
+        total, failed = int(total_s), int(failed_s)
+    except ValueError:
+        return False, f"unexpected output: {out.strip()[:160]}"
+    if total == 0:
+        return True, "meetings table empty (fresh)"
+    if total < 5:
+        return True, f"{total} meetings, {failed} failed (below pollution threshold)"
+    if failed == total:
+        return False, f"all {total} meetings are status=failed — pollution or systemic failure"
+    return True, f"{total} meetings, {failed} failed, {total-failed} healthy"
+
+
+def _check_webhooks_all_event_types():
+    """Contract: meeting.data.webhook_deliveries[] surfaces >=1 non-completion
+    event_type once any status-change has fired. Passes if the list is empty
+    (no run has exercised it yet). Catches the dashboard-rollup regression
+    where UI was only reading the singular webhook_delivery."""
+    mode = state_read("deploy_mode", required=True)
+    if mode == "helm":
+        return True, "skipped (helm — dashboard route identical, covered in compose)"
+    rc, out = svc_exec("admin-api", [
+        "python3", "-c",
+        "import os, sys, json; from sqlalchemy import create_engine, text;"
+        "e=create_engine(f\"postgresql://{os.environ['DB_USER']}:{os.environ['DB_PASSWORD']}@{os.environ['DB_HOST']}:{os.environ['DB_PORT']}/{os.environ['DB_NAME']}\");"
+        "\ntry:\n c=e.connect()\n rows=c.execute(text(\"SELECT data FROM meetings WHERE data ? 'webhook_deliveries' ORDER BY id DESC LIMIT 20\")).fetchall()\n c.close()\n types=set()\n for r in rows:\n  d=r[0]\n  if isinstance(d,str): d=json.loads(d)\n  for ev in (d.get('webhook_deliveries') or []):\n   t=ev.get('event_type')\n   if t: types.add(t)\n print(','.join(sorted(types)))\nexcept Exception as ex:\n print('FAIL:'+type(ex).__name__+':'+str(ex)[:120]); sys.exit(1)"
+    ])
+    if rc != 0 or out.startswith("FAIL:"):
+        return False, f"DB query failed: {out.strip()[:200]}"
+    types = [t for t in out.strip().split(",") if t]
+    non_completion = [t for t in types if t != "meeting.completed"]
+    if not types:
+        return True, "no webhook_deliveries yet (test run hasn't exercised this)"
+    if not non_completion:
+        return False, f"only meeting.completed present in webhook_deliveries — status/started/failed never fired"
+    return True, f"event types: {','.join(types)}"
+
+
 def check_contract(lock):
     """Test API behavior — method, URL, expected response."""
     skip_modes = lock.get("skip_modes", [])
@@ -660,7 +639,15 @@ def check_contract(lock):
     if method == "CORS_PREFLIGHT":
         return check_cors_preflight(gw)
 
-    url = lock["url"].replace("$GATEWAY_URL", gw).replace("$ADMIN_URL", admin).replace("$DASHBOARD_URL", dash)
+    # Contract-tier specials — URL-valued methods that aren't HTTP URLs.
+    raw_url = lock["url"]
+
+    if raw_url == "DASHBOARD_MEETINGS_NOT_ALL_FAILED_CHECK":
+        return _check_meetings_not_all_failed()
+    if raw_url == "DASHBOARD_WEBHOOKS_ALL_EVENT_TYPES_CHECK":
+        return _check_webhooks_all_event_types()
+
+    url = raw_url.replace("$GATEWAY_URL", gw).replace("$ADMIN_URL", admin).replace("$DASHBOARD_URL", dash)
     expect = lock.get("expect_code", 200)
     headers = []
 
