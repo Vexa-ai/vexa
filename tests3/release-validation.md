@@ -18,19 +18,43 @@ make release-build
 
 Builds all images with a fresh timestamp tag (e.g. `0.10.0-260413-1504`) and pushes to DockerHub. Tags each image as `:dev` with identical SHA (uses `docker tag + push`, not `imagetools create`).
 
-### 2. VM test
+### 2. Deployment validation — 3 deployments in parallel
 
 ```bash
 make release-test
 ```
 
-Provisions two fresh Linode VMs in parallel. Deploys using the exact user path:
-- **Lite VM**: `make lite` (single container + postgres)
-- **Compose VM**: `make all` (full multi-service stack)
+Provisions **three fresh deployments in parallel** and runs `validate-<mode>` on each. Every test emits a JSON artifact under `.state/reports/<mode>/<test>.json`:
 
-Runs automated smoke suite (docs, static, env, health, contracts, webhooks). VMs stay running for human validation.
+| Deployment | Path | Infrastructure |
+|---|---|---|
+| **Lite VM** | `make lite` | single container + postgres (Linode VM) |
+| **Compose VM** | `make all` | full multi-service stack (Linode VM) |
+| **Helm / LKE** | `lke-provision + lke-setup` | fresh LKE cluster + helm chart |
 
-### 3. Human validation
+Each deployment runs the cheap-tier tests registered in `test-registry.yaml` for its mode (`smoke-static`, `smoke-env`, `smoke-health`, `smoke-contract`, `webhooks`, `containers`, `dashboard-auth`, `dashboard-proxy`).
+
+After all three finish, `make release-report` aggregates per-deployment reports into **`tests3/reports/release-<tag>.md`** with per-feature confidence computed from the DoDs declared in each `features/*/README.md` frontmatter. The release gate fails if any feature is below its `gate.confidence_min`.
+
+```bash
+# Skip helm (faster, cheaper, but lower coverage):
+make release-test-no-helm
+```
+
+Deployments stay up after the run for optional human cross-checking. `make release-validate` (step 4) tears them all down.
+
+### 3. Review the report + optional human cross-check
+
+Open **`tests3/reports/release-<tag>.md`** — this is now the gate. It shows:
+
+- Deployment coverage table (tests run / passed / failed per mode).
+- Per-feature confidence with gate threshold and pass/fail.
+- DoD details per feature with live evidence from each deployment.
+- Raw test results per deployment.
+
+The CLI gate runs as part of `release-test`; if any feature is below its `gate.confidence_min`, the build exits non-zero and ship is blocked.
+
+Optional human cross-check (SSH into any VM):
 
 **Lite VM** (dashboard on port 3000):
 - [ ] Dashboard loads, login works

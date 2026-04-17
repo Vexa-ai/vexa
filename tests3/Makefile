@@ -189,12 +189,8 @@ vm-provision-compose:              ## provision VM + deploy compose
 	@$(T3)/lib/vm.sh wait
 	@$(T3)/lib/vm-setup-compose.sh
 
-vm-smoke-compose:                  ## run smoke + dashboard + containers + webhooks on VM
-	@$(T3)/lib/vm-run.sh smoke
-	@$(T3)/lib/vm-run.sh dashboard-auth
-	@$(T3)/lib/vm-run.sh dashboard-proxy
-	@$(T3)/lib/vm-run.sh containers
-	@$(T3)/lib/vm-run.sh webhooks
+vm-smoke-compose:                  ## run the validate-compose matrix on VM (writes JSON reports)
+	@$(T3)/lib/vm-run.sh validate-compose
 
 # ═══ VM — lite ════════════════════════════════════════════════════
 
@@ -212,11 +208,8 @@ vm-provision-lite:                 ## provision VM + deploy lite
 	@$(T3)/lib/vm.sh wait
 	@$(T3)/lib/vm-setup-lite.sh
 
-vm-smoke-lite:                     ## run smoke + dashboard + containers + webhooks on VM
-	@$(T3)/lib/vm-run.sh smoke
-	@$(T3)/lib/vm-run.sh dashboard-auth
-	@$(T3)/lib/vm-run.sh containers
-	@$(T3)/lib/vm-run.sh webhooks
+vm-smoke-lite:                     ## run the validate-lite matrix on VM (writes JSON reports)
+	@$(T3)/lib/vm-run.sh validate-lite
 
 # ═══ VM — shared ══════════════════════════════════════════════════
 
@@ -269,11 +262,8 @@ lke-provision:                         ## provision LKE cluster + wait for nodes
 lke-setup:                             ## deploy helm chart to LKE cluster
 	@$(T3)/lib/lke-setup-helm.sh
 
-lke-smoke:                             ## run smoke + dashboard + containers + webhooks on LKE
-	@$(MAKE) --no-print-directory smoke DEPLOY_MODE=helm
-	@$(MAKE) --no-print-directory dashboard-auth DEPLOY_MODE=helm || true
-	@$(MAKE) --no-print-directory containers DEPLOY_MODE=helm || true
-	@$(MAKE) --no-print-directory webhooks DEPLOY_MODE=helm || true
+lke-smoke:                             ## run the validate-helm matrix + write JSON reports on LKE
+	@$(MAKE) --no-print-directory validate-helm DEPLOY_MODE=helm
 
 lke-load-db:                           ## load production DB dump into cluster Postgres
 	@$(T3)/lib/lke-load-db.sh $(DUMP_FILE)
