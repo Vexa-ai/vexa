@@ -41,13 +41,16 @@ export async function GET(request: NextRequest) {
       const meetingsData = await meetingsRes.json();
       const meetings = meetingsData.meetings || [];
       for (const m of meetings) {
+        const mName = m.data?.name || m.native_meeting_id || `Meeting ${m.id}`;
+
+        // 1a. Completion webhook (meeting.data.webhook_delivery — singular)
         const wd = m.data?.webhook_delivery;
         if (wd && wd.url) {
           allDeliveries.push({
-            id: `meeting-${m.id}`,
+            id: `meeting-${m.id}-completion`,
             event: "meeting.completed",
             meeting_id: String(m.id),
-            meeting_name: m.data?.name || m.native_meeting_id || `Meeting ${m.id}`,
+            meeting_name: mName,
             status: wd.status === "delivered" ? "delivered" : wd.status === "queued" ? "retrying" : "failed",
             attempts: wd.attempts || 1,
             max_attempts: wd.attempts || 1,
@@ -58,6 +61,35 @@ export async function GET(request: NextRequest) {
             last_attempt_at: wd.delivered_at || wd.queued_at || wd.failed_at || m.updated_at,
           });
         }
+
+        // 1b. Status-change / started / failed / recording deliveries
+        // (meeting.data.webhook_deliveries — plural array written by send_status_webhook)
+        const wdList = Array.isArray(m.data?.webhook_deliveries)
+          ? m.data.webhook_deliveries
+          : [];
+        wdList.forEach((entry: Record<string, unknown>, idx: number) => {
+          if (!entry || typeof entry !== "object" || !entry.url) return;
+          const status = entry.status === "delivered"
+            ? "delivered"
+            : entry.status === "queued" || entry.status === "retrying"
+              ? "retrying"
+              : "failed";
+          const ts = (entry.timestamp as string) || (entry.delivered_at as string) || m.updated_at;
+          allDeliveries.push({
+            id: `meeting-${m.id}-status-${idx}`,
+            event: (entry.event_type as string) || "meeting.status_change",
+            meeting_id: String(m.id),
+            meeting_name: mName,
+            status,
+            attempts: (entry.attempts as number) || 1,
+            max_attempts: (entry.attempts as number) || 1,
+            response_status: (entry.status_code as number) ?? null,
+            response_time_ms: null,
+            endpoint_url: entry.url as string,
+            created_at: ts,
+            last_attempt_at: ts,
+          });
+        });
       }
     }
 
