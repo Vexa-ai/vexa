@@ -22,6 +22,12 @@ echo "  [reset-compose] env file: $ENV_FILE"
 echo "  [reset-compose] docker compose down -v"
 docker compose --env-file "$ENV_FILE" down --volumes --remove-orphans 2>&1 | tail -5 || true
 
+# Wipe tests3/.state on the VM — otherwise stale api_token etc. from pre-reset
+# survive and point at DB rows that no longer exist.
+echo "  [reset-compose] wiping tests3/.state (stale creds from prior run)"
+rm -rf /root/vexa/tests3/.state 2>/dev/null || true
+mkdir -p /root/vexa/tests3/.state
+
 # Purge any stragglers
 for c in $(docker ps -a --format '{{.Names}}' | grep -E '^(vexa-|meeting-)' || true); do
     docker rm -f "$c" 2>/dev/null || true

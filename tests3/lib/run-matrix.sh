@@ -38,18 +38,22 @@ mkdir -p "$STATE/reports/$MODE"
 # Bootstrap credentials BEFORE any user-level test script runs — some tests
 # source common.sh and state_read api_token at top level. Contract-tier checks
 # bootstrap implicitly, but we may run user tests that alphabetize before the
-# contract tier. Call bootstrap_creds explicitly up front.
-python3 - <<PY
-import sys
-sys.path.insert(0, "$T3/checks")
-import importlib.util
-spec = importlib.util.spec_from_file_location("checks_run", "$T3/checks/run")
-m = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(m)
+# contract tier. Call bootstrap_creds explicitly up front. Uses SourceFileLoader
+# because tests3/checks/run has no .py extension (spec_from_file_location returns
+# None for those).
+python3 - <<PY || true
+import sys, importlib.util, importlib.machinery
 try:
+    loader = importlib.machinery.SourceFileLoader("checks_run", "$T3/checks/run")
+    spec = importlib.util.spec_from_loader("checks_run", loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
     m.bootstrap_creds()
+    print("  bootstrap_creds: ok", file=sys.stderr)
 except Exception as e:
-    print(f"WARN: bootstrap_creds failed: {e}", file=sys.stderr)
+    import traceback
+    print(f"  WARN: bootstrap_creds failed: {e}", file=sys.stderr)
+    traceback.print_exc(file=sys.stderr)
 PY
 
 # Build the test list.

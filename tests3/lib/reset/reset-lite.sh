@@ -12,6 +12,12 @@ echo "  [reset-lite] git fetch + reset to origin/dev"
 git fetch origin dev 2>&1 | tail -3
 git reset --hard origin/dev 2>&1 | tail -2
 
+# Wipe tests3/.state on the VM — otherwise stale api_token etc. from pre-reset
+# survive and point at DB rows that no longer exist.
+echo "  [reset-lite] wiping tests3/.state (stale creds from prior run)"
+rm -rf /root/vexa/tests3/.state 2>/dev/null || true
+mkdir -p /root/vexa/tests3/.state
+
 echo "  [reset-lite] stopping containers"
 docker stop vexa-lite 2>/dev/null || true
 docker rm -f vexa-lite 2>/dev/null || true
