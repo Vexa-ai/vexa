@@ -7,8 +7,13 @@ set -euo pipefail
 
 cd /root/vexa/deploy/compose
 
+# compose needs --env-file; IMAGE_TAG lives in the repo's .env
+ENV_FILE="/root/vexa/.env"
+[ -f /root/.env ] && ENV_FILE="/root/.env"
+echo "  [reset-compose] env file: $ENV_FILE"
+
 echo "  [reset-compose] docker compose down -v"
-docker compose down --volumes --remove-orphans 2>&1 | tail -5 || true
+docker compose --env-file "$ENV_FILE" down --volumes --remove-orphans 2>&1 | tail -5 || true
 
 # Purge any stragglers
 for c in $(docker ps -a --format '{{.Names}}' | grep -E '^(vexa-|meeting-)' || true); do
@@ -16,11 +21,11 @@ for c in $(docker ps -a --format '{{.Names}}' | grep -E '^(vexa-|meeting-)' || t
 done
 
 echo "  [reset-compose] docker compose up -d --pull always"
-docker compose up -d --pull always 2>&1 | tail -5
+docker compose --env-file "$ENV_FILE" up -d --pull always 2>&1 | tail -5
 
 # Wait for core services to become healthy
 echo "  [reset-compose] waiting for services..."
-for i in $(seq 1 30); do
+for i in $(seq 1 45); do
     if curl -sf http://localhost:8056/ > /dev/null 2>&1; then
         echo "  [reset-compose] gateway up (after ${i}s)"
         break

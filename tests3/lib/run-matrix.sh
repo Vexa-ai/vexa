@@ -23,14 +23,34 @@ done
 
 ROOT="$(git rev-parse --show-toplevel)"
 T3="$ROOT/tests3"
-STATE="$T3/.state"
+# Respect an incoming STATE (e.g. from `make STATE=$PWD/tests3/.state-helm`); fall
+# back to the repo-level .state dir.
+STATE="${STATE:-$T3/.state}"
 REGISTRY="$T3/test-registry.yaml"
 
 export MODE
 export STATE
 
+mkdir -p "$STATE"
 echo "$MODE" > "$STATE/deploy_mode"
 mkdir -p "$STATE/reports/$MODE"
+
+# Bootstrap credentials BEFORE any user-level test script runs — some tests
+# source common.sh and state_read api_token at top level. Contract-tier checks
+# bootstrap implicitly, but we may run user tests that alphabetize before the
+# contract tier. Call bootstrap_creds explicitly up front.
+python3 - <<PY
+import sys
+sys.path.insert(0, "$T3/checks")
+import importlib.util
+spec = importlib.util.spec_from_file_location("checks_run", "$T3/checks/run")
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+try:
+    m.bootstrap_creds()
+except Exception as e:
+    print(f"WARN: bootstrap_creds failed: {e}", file=sys.stderr)
+PY
 
 # Build the test list.
 # With --scope: only the tests referenced in scope.issues[].proves[].test that include this mode,

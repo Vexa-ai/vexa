@@ -208,11 +208,14 @@ release-test-no-helm:              ## alias: old 2-VM pipeline (creates a transi
 
 release-report:                    ## aggregate .state-{lite,compose,helm}/reports/* → tests3/reports/release-<tag>.md
 	@mkdir -p tests3/.state/reports
+	@# VM modes (lite + compose): reports land at tests3/.state-<mode>/reports/<mode>/ (pulled via vm-run.sh).
+	@# helm mode: validate-helm runs locally against STATE=tests3/.state-helm, so reports land at
+	@# tests3/.state-helm/reports/helm/ OR tests3/.state/reports/helm/ depending on STATE propagation.
 	@for mode in lite compose helm; do \
-		if [ -d "tests3/.state-$$mode/reports/$$mode" ]; then \
-			mkdir -p tests3/.state/reports/$$mode; \
-			cp -a tests3/.state-$$mode/reports/$$mode/. tests3/.state/reports/$$mode/ 2>/dev/null || true; \
-		fi; \
+		mkdir -p tests3/.state/reports/$$mode; \
+		for src in tests3/.state-$$mode/reports/$$mode tests3/.state/reports/$$mode; do \
+			[ -d "$$src" ] && find "$$src" -maxdepth 1 -name "*.json" -exec cp {} tests3/.state/reports/$$mode/ \; 2>/dev/null || true; \
+		done; \
 	done
 	@for mode in lite compose helm; do \
 		if [ -f "tests3/.state-$$mode/image_tag" ]; then \
