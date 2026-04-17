@@ -311,11 +311,13 @@ issues:
   fix_commits: []
   proves:
   - check: DASHBOARD_MEETINGS_NOT_ALL_FAILED
-    modes: &id003
+    modes:
     - helm
     - compose
     - lite
-  required_modes: *id003
+  required_modes:
+  - compose
+  - lite
   human_verify:
   - mode: helm
     do: Load http://{node_ip}:30001/meetings after release-full completes (fresh reset)

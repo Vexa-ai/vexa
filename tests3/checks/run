@@ -315,16 +315,44 @@ def check_health(lock):
         mode = state_read("deploy_mode", required=True)
         if mode == "helm" and not kubectl_available():
             return True, "skipped (no kubectl access)"
-        # On lite, postgres runs inside the single vexa-lite container.
-        pg_svc = "postgres"
-        if mode == "lite":
-            pg_svc = "vexa-lite"
-        # -h localhost forces TCP (lite Postgres binds TCP, not the default
-        # unix socket path; plain `psql` fails on the lite container).
-        rc, out = svc_exec(pg_svc, [
-            "psql", "-h", "localhost", "-U", "postgres", "-tAc",
-            "SELECT datname FROM pg_database WHERE datname LIKE 'readme%' OR datname LIKE '%recover%'"
-        ])
+        # Bypass svc_exec's helm `deploy/` lookup — postgres is a StatefulSet.
+        if mode == "helm":
+            release = state_read("helm_release") or "vexa"
+            # Resolve the postgres pod name directly.
+            r = subprocess.run(
+                ["kubectl", "get", "pods", "-l",
+                 f"app.kubernetes.io/name=postgres,app.kubernetes.io/instance={release}",
+                 "-o", "jsonpath={.items[0].metadata.name}"],
+                capture_output=True, text=True, timeout=10,
+            )
+            pod = (r.stdout or "").strip()
+            if not pod:
+                # Fallback: discover by prefix.
+                r2 = subprocess.run(
+                    ["kubectl", "get", "pods", "-o", "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                for ln in (r2.stdout or "").splitlines():
+                    if "postgres" in ln and ln.startswith(release):
+                        pod = ln.strip(); break
+            if not pod:
+                return False, "could not find postgres pod"
+            r3 = subprocess.run(
+                ["kubectl", "exec", pod, "--",
+                 "psql", "-U", "postgres", "-tAc",
+                 "SELECT datname FROM pg_database WHERE datname LIKE 'readme%' OR datname LIKE '%recover%'"],
+                capture_output=True, text=True, timeout=10,
+            )
+            rc, out = r3.returncode, (r3.stdout or "").strip()
+        else:
+            # On lite, postgres runs inside the single vexa-lite container.
+            # -h localhost forces TCP (lite Postgres binds TCP, not the default
+            # unix socket path; plain `psql` fails on the lite container).
+            pg_svc = "postgres" if mode == "compose" else "vexa-lite"
+            rc, out = svc_exec(pg_svc, [
+                "psql", "-h", "localhost", "-U", "postgres", "-tAc",
+                "SELECT datname FROM pg_database WHERE datname LIKE 'readme%' OR datname LIKE '%recover%'"
+            ])
         if rc != 0:
             return False, f"psql failed: {out.strip()[:120] or '(empty; rc='+str(rc)+')'}"
         hits = [ln.strip() for ln in out.splitlines() if ln.strip()]
