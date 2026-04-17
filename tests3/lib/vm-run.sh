@@ -24,8 +24,18 @@ if [ -f "$STATE/image_tag" ]; then
         "$STATE/image_tag" "root@$VM_IP:/root/vexa/tests3/.state/image_tag" 2>/dev/null || true
 fi
 
+# Translate host-absolute paths inside $TARGET to VM-absolute paths. The host repo
+# lives at "$ROOT" (e.g. /home/dima/dev/vexa); on the VM it lives at /root/vexa.
+# Every VAR=<path-under-root> in $TARGET gets rewritten. Example:
+#   SCOPE=/home/dima/dev/vexa/tests3/releases/foo/scope.yaml
+#     → SCOPE=/root/vexa/tests3/releases/foo/scope.yaml
+TARGET_VM="${TARGET//$ROOT/\/root\/vexa}"
+if [ "$TARGET" != "$TARGET_VM" ]; then
+    info "translated paths: host $ROOT → VM /root/vexa"
+fi
+
 set +e
-vm_ssh "cd /root/vexa && make -C tests3 $TARGET DEPLOY_MODE=$VM_MODE"
+vm_ssh "cd /root/vexa && make -C tests3 $TARGET_VM DEPLOY_MODE=$VM_MODE"
 EXIT=$?
 set -e
 

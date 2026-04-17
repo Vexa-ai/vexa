@@ -124,20 +124,20 @@ curl -s -X POST http://localhost:8056/bots \
 
 
 <!-- BEGIN AUTO-DOD -->
-<!-- Auto-written by tests3/lib/aggregate.py from release tag `unknown`. Do not edit by hand — edit the `tests3.dods:` frontmatter + re-run `make -C tests3 report --write-features`. -->
+<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260417-1408`. Do not edit by hand — edit the `tests3.dods:` frontmatter + re-run `make -C tests3 report --write-features`. -->
 
 **Confidence: 0%** (gate: 100%, status: ❌ below gate)
 
 | # | Behavior | Weight | Status | Evidence (modes) |
 |---|----------|-------:|:------:|------------------|
-| url-parser-exists | meeting-api has a URL parser module (url_parser.py) that handles platform detection | 10 | ⬜ missing | `lite`: check URL_PARSER_EXISTS not found in any smoke-* report; `compose`: check URL_PARSER_EXISTS not found in any smoke-* report; `helm`: check URL_PARSER_EXISTS not found in any smoke-* report |
-| gmeet-parsed | Google Meet URL (meet.google.com/xxx-xxxx-xxx) parses correctly | 15 | ⬜ missing | `lite`: check GMEET_URL_PARSED not found in any smoke-* report; `compose`: check GMEET_URL_PARSED not found in any smoke-* report; `helm`: check GMEET_URL_PARSED not found in any smoke-* report |
-| invalid-rejected | Invalid meeting URL returns 400 (not 500) | 10 | ⬜ missing | `lite`: check INVALID_URL_REJECTED not found in any smoke-* report; `compose`: check INVALID_URL_REJECTED not found in any smoke-* report; `helm`: check INVALID_URL_REJECTED not found in any smoke-* report |
-| teams-standard | Teams standard link (teams.microsoft.com/l/meetup-join/...) parses | 15 | ⬜ missing | `lite`: check TEAMS_URL_STANDARD not found in any smoke-* report; `compose`: check TEAMS_URL_STANDARD not found in any smoke-* report; `helm`: check TEAMS_URL_STANDARD not found in any smoke-* report |
-| teams-shortlink | Teams shortlink (teams.live.com, teams.microsoft.com/meet) parses | 10 | ⬜ missing | `lite`: check TEAMS_URL_SHORTLINK not found in any smoke-* report; `compose`: check TEAMS_URL_SHORTLINK not found in any smoke-* report; `helm`: check TEAMS_URL_SHORTLINK not found in any smoke-* report |
-| teams-channel | Teams channel meeting URL parses | 10 | ⬜ missing | `lite`: check TEAMS_URL_CHANNEL not found in any smoke-* report; `compose`: check TEAMS_URL_CHANNEL not found in any smoke-* report; `helm`: check TEAMS_URL_CHANNEL not found in any smoke-* report |
-| teams-enterprise | Teams enterprise-tenant URL parses (custom domain) | 15 | ⬜ missing | `lite`: check TEAMS_URL_ENTERPRISE not found in any smoke-* report; `compose`: check TEAMS_URL_ENTERPRISE not found in any smoke-* report; `helm`: check TEAMS_URL_ENTERPRISE not found in any smoke-* report |
-| teams-personal | Teams personal-account URL parses | 15 | ⬜ missing | `lite`: check TEAMS_URL_PERSONAL not found in any smoke-* report; `compose`: check TEAMS_URL_PERSONAL not found in any smoke-* report; `helm`: check TEAMS_URL_PERSONAL not found in any smoke-* report |
+| url-parser-exists | meeting-api has a URL parser module (url_parser.py) that handles platform detection | 10 | ⬜ missing | `lite`: check URL_PARSER_EXISTS not found in any smoke-* report; `compose`: check URL_PARSER_EXISTS not found in any smoke-* report; `helm`: smoke-static/URL_PARSER_EXISTS: MeetingCreate schema has parse_meeting_url — accepts meeting_url field directly |
+| gmeet-parsed | Google Meet URL (meet.google.com/xxx-xxxx-xxx) parses correctly | 15 | ❌ fail | `lite`: check GMEET_URL_PARSED not found in any smoke-* report; `compose`: check GMEET_URL_PARSED not found in any smoke-* report; `helm`: smoke-contract/GMEET_URL_PARSED: HTTP 401 (expected one of [200, 201, 202, 403, 409, 500]) |
+| invalid-rejected | Invalid meeting URL returns 400 (not 500) | 10 | ❌ fail | `lite`: check INVALID_URL_REJECTED not found in any smoke-* report; `compose`: check INVALID_URL_REJECTED not found in any smoke-* report; `helm`: smoke-contract/INVALID_URL_REJECTED: HTTP 401 (expected one of [400, 422]) |
+| teams-standard | Teams standard link (teams.microsoft.com/l/meetup-join/...) parses | 15 | ❌ fail | `lite`: check TEAMS_URL_STANDARD not found in any smoke-* report; `compose`: check TEAMS_URL_STANDARD not found in any smoke-* report; `helm`: smoke-contract/TEAMS_URL_STANDARD: HTTP 401 (expected one of [200, 201, 202, 403, 409, 500]) |
+| teams-shortlink | Teams shortlink (teams.live.com, teams.microsoft.com/meet) parses | 10 | ❌ fail | `lite`: check TEAMS_URL_SHORTLINK not found in any smoke-* report; `compose`: check TEAMS_URL_SHORTLINK not found in any smoke-* report; `helm`: smoke-contract/TEAMS_URL_SHORTLINK: HTTP 401 (expected one of [200, 201, 202, 403, 409, 500]) |
+| teams-channel | Teams channel meeting URL parses | 10 | ❌ fail | `lite`: check TEAMS_URL_CHANNEL not found in any smoke-* report; `compose`: check TEAMS_URL_CHANNEL not found in any smoke-* report; `helm`: smoke-contract/TEAMS_URL_CHANNEL: HTTP 401 (expected one of [200, 201, 202, 403, 409, 422, 500]) |
+| teams-enterprise | Teams enterprise-tenant URL parses (custom domain) | 15 | ❌ fail | `lite`: check TEAMS_URL_ENTERPRISE not found in any smoke-* report; `compose`: check TEAMS_URL_ENTERPRISE not found in any smoke-* report; `helm`: smoke-contract/TEAMS_URL_ENTERPRISE: HTTP 401 (expected one of [200, 201, 202, 403, 409, 500]) |
+| teams-personal | Teams personal-account URL parses | 15 | ❌ fail | `lite`: check TEAMS_URL_PERSONAL not found in any smoke-* report; `compose`: check TEAMS_URL_PERSONAL not found in any smoke-* report; `helm`: smoke-contract/TEAMS_URL_PERSONAL: HTTP 401 (expected one of [200, 201, 202, 403, 409, 500]) |
 
 <!-- END AUTO-DOD -->
 

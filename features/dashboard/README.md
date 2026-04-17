@@ -88,7 +88,7 @@ Login (magic link or direct) → meetings list → click meeting → meeting det
 
 
 <!-- BEGIN AUTO-DOD -->
-<!-- Auto-written by tests3/lib/aggregate.py from release tag `unknown`. Do not edit by hand — edit the `tests3.dods:` frontmatter + re-run `make -C tests3 report --write-features`. -->
+<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260417-1408`. Do not edit by hand — edit the `tests3.dods:` frontmatter + re-run `make -C tests3 report --write-features`. -->
 
 **Confidence: 0%** (gate: 90%, status: ❌ below gate)
 
@@ -97,18 +97,18 @@ Login (magic link or direct) → meetings list → click meeting → meeting det
 | login-flow | POST /api/auth/send-magic-link → 200 + success=true + sets vexa-token cookie | 10 | ⬜ missing | `lite`: no report for test=dashboard-auth; `compose`: no report for test=dashboard-auth; `helm`: no report for test=dashboard-auth |
 | cookie-flags | vexa-token cookie Secure flag matches deployment (Secure iff https) | 10 | ⬜ missing | `lite`: no report for test=dashboard-auth; `compose`: no report for test=dashboard-auth; `helm`: no report for test=dashboard-auth |
 | identity-me | GET /api/auth/me returns logged-in user's email (never falls back to env) | 10 | ⬜ missing | `lite`: no report for test=dashboard-auth; `compose`: no report for test=dashboard-auth; `helm`: no report for test=dashboard-auth |
-| cookie-security | HttpOnly + SameSite cookies on magic-link send/verify + admin-verify + nextauth | 10 | ⬜ missing | `lite`: check SECURE_COOKIE_SEND_MAGIC_LINK not found in any smoke-* report; `compose`: check SECURE_COOKIE_SEND_MAGIC_LINK not found in any smoke-* report; `helm`: check SECURE_COOKIE_SEND_MAGIC_LINK not found in any smoke-* report |
-| login-redirect | Magic-link click redirects to /meetings (not disabled /agent) | 5 | ⬜ missing | `lite`: check LOGIN_REDIRECT not found in any smoke-* report; `compose`: check LOGIN_REDIRECT not found in any smoke-* report; `helm`: check LOGIN_REDIRECT not found in any smoke-* report |
-| identity-no-fallback | /api/auth/me uses only the cookie for identity, never env fallback | 5 | ⬜ missing | `lite`: check IDENTITY_NO_FALLBACK not found in any smoke-* report; `compose`: check IDENTITY_NO_FALLBACK not found in any smoke-* report; `helm`: check IDENTITY_NO_FALLBACK not found in any smoke-* report |
+| cookie-security | HttpOnly + SameSite cookies on magic-link send/verify + admin-verify + nextauth | 10 | ⬜ missing | `lite`: check SECURE_COOKIE_SEND_MAGIC_LINK not found in any smoke-* report; `compose`: check SECURE_COOKIE_SEND_MAGIC_LINK not found in any smoke-* report; `helm`: smoke-static/SECURE_COOKIE_SEND_MAGIC_LINK: cookie Secure flag based on actual protocol, not NODE_ENV (send-magic-link) |
+| login-redirect | Magic-link click redirects to /meetings (not disabled /agent) | 5 | ⬜ missing | `lite`: check LOGIN_REDIRECT not found in any smoke-* report; `compose`: check LOGIN_REDIRECT not found in any smoke-* report; `helm`: smoke-static/LOGIN_REDIRECT: login redirects to / (then /meetings), not to disabled /agent page |
+| identity-no-fallback | /api/auth/me uses only the cookie for identity, never env fallback | 5 | ⬜ missing | `lite`: check IDENTITY_NO_FALLBACK not found in any smoke-* report; `compose`: check IDENTITY_NO_FALLBACK not found in any smoke-* report; `helm`: smoke-static/IDENTITY_NO_FALLBACK: /api/auth/me uses only cookie for identity, never falls back to env var |
 | proxy-reachable | GET /api/vexa/meetings via cookie returns 200 | 10 | ⬜ missing | `lite`: no report for test=dashboard-auth; `compose`: no report for test=dashboard-auth; `helm`: no report for test=dashboard-auth |
 | meetings-list | /api/vexa/meetings returns a meeting list through the dashboard proxy | 5 | ⬜ missing | `compose`: no report for test=dashboard-proxy; `helm`: no report for test=dashboard-proxy |
 | pagination | limit/offset pagination works (no overlap between pages) | 5 | ⬜ missing | `compose`: no report for test=dashboard-proxy; `helm`: no report for test=dashboard-proxy |
 | field-contract | Meeting records include native_meeting_id / platform_specific_id | 5 | ⬜ missing | `compose`: no report for test=dashboard-proxy; `helm`: no report for test=dashboard-proxy |
 | transcript-proxy | Transcript reachable through dashboard proxy | 5 | ⬜ missing | `compose`: no report for test=dashboard-proxy; `helm`: no report for test=dashboard-proxy |
 | bot-create-proxy | POST /api/vexa/bots reaches the gateway and creates a bot (or returns 403/409) | 5 | ⬜ missing | `compose`: no report for test=dashboard-proxy; `helm`: no report for test=dashboard-proxy |
-| dashboard-up | Dashboard root page responds | 5 | ⬜ missing | `lite`: check DASHBOARD_UP not found in any smoke-* report; `compose`: check DASHBOARD_UP not found in any smoke-* report; `helm`: check DASHBOARD_UP not found in any smoke-* report |
-| dashboard-ws-url | NEXT_PUBLIC_WS_URL is set — live updates can connect | 5 | ⬜ missing | `lite`: check DASHBOARD_WS_URL not found in any smoke-* report; `compose`: check DASHBOARD_WS_URL not found in any smoke-* report; `helm`: check DASHBOARD_WS_URL not found in any smoke-* report |
-| dashboard-admin-key-valid | Dashboard's VEXA_ADMIN_API_KEY is accepted by admin-api (login path works) | 5 | ⬜ missing | `lite`: check DASHBOARD_ADMIN_KEY_VALID not found in any smoke-* report; `compose`: check DASHBOARD_ADMIN_KEY_VALID not found in any smoke-* report; `helm`: check DASHBOARD_ADMIN_KEY_VALID not found in any smoke-* report |
+| dashboard-up | Dashboard root page responds | 5 | ⬜ missing | `lite`: check DASHBOARD_UP not found in any smoke-* report; `compose`: check DASHBOARD_UP not found in any smoke-* report; `helm`: smoke-health/DASHBOARD_UP: dashboard serves pages — user can access the UI |
+| dashboard-ws-url | NEXT_PUBLIC_WS_URL is set — live updates can connect | 5 | ⬜ missing | `lite`: check DASHBOARD_WS_URL not found in any smoke-* report; `compose`: check DASHBOARD_WS_URL not found in any smoke-* report; `helm`: smoke-health/DASHBOARD_WS_URL: wss://dashboard.staging.vexa.ai/ws |
+| dashboard-admin-key-valid | Dashboard's VEXA_ADMIN_API_KEY is accepted by admin-api (login path works) | 5 | ⬜ missing | `lite`: check DASHBOARD_ADMIN_KEY_VALID not found in any smoke-* report; `compose`: check DASHBOARD_ADMIN_KEY_VALID not found in any smoke-* report; `helm`: smoke-env/DASHBOARD_ADMIN_KEY_VALID: dashboard can authenticate to admin-api — user lookup and login will work |
 
 <!-- END AUTO-DOD -->
 

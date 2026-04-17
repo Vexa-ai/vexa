@@ -134,21 +134,21 @@ make down
 
 
 <!-- BEGIN AUTO-DOD -->
-<!-- Auto-written by tests3/lib/aggregate.py from release tag `unknown`. Do not edit by hand — edit the `tests3.dods:` frontmatter + re-run `make -C tests3 report --write-features`. -->
+<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260417-1408`. Do not edit by hand — edit the `tests3.dods:` frontmatter + re-run `make -C tests3 report --write-features`. -->
 
 **Confidence: 0%** (gate: 100%, status: ❌ below gate)
 
 | # | Behavior | Weight | Status | Evidence (modes) |
 |---|----------|-------:|:------:|------------------|
-| gateway-up | API gateway responds to /admin/users via valid admin token | 10 | ⬜ missing | `lite`: check GATEWAY_UP not found in any smoke-* report; `compose`: check GATEWAY_UP not found in any smoke-* report; `helm`: check GATEWAY_UP not found in any smoke-* report |
-| admin-api-up | admin-api responds with a valid list | 10 | ⬜ missing | `lite`: check ADMIN_API_UP not found in any smoke-* report; `compose`: check ADMIN_API_UP not found in any smoke-* report; `helm`: check ADMIN_API_UP not found in any smoke-* report |
-| dashboard-up | dashboard root page responds | 10 | ⬜ missing | `lite`: check DASHBOARD_UP not found in any smoke-* report; `compose`: check DASHBOARD_UP not found in any smoke-* report; `helm`: check DASHBOARD_UP not found in any smoke-* report |
-| runtime-api-up | runtime-api (bot orchestrator) is reachable / has ready replicas | 15 | ⬜ missing | `lite`: check RUNTIME_API_UP not found in any smoke-* report; `compose`: check RUNTIME_API_UP not found in any smoke-* report; `helm`: check RUNTIME_API_UP not found in any smoke-* report |
-| transcription-up | transcription service /health returns ok + gpu_available | 15 | ⬜ missing | `lite`: check TRANSCRIPTION_UP not found in any smoke-* report; `compose`: check TRANSCRIPTION_UP not found in any smoke-* report; `helm`: check TRANSCRIPTION_UP not found in any smoke-* report |
-| redis-up | Redis responds to PING | 10 | ⬜ missing | `lite`: check REDIS_UP not found in any smoke-* report; `compose`: check REDIS_UP not found in any smoke-* report; `helm`: check REDIS_UP not found in any smoke-* report |
-| minio-up | MinIO is healthy / has ready replicas | 10 | ⬜ missing | `compose`: check MINIO_UP not found in any smoke-* report; `helm`: check MINIO_UP not found in any smoke-* report |
-| db-schema | Database schema is aligned with the current model | 10 | ⬜ missing | `lite`: check DB_SCHEMA_ALIGNED not found in any smoke-* report; `compose`: check DB_SCHEMA_ALIGNED not found in any smoke-* report; `helm`: check DB_SCHEMA_ALIGNED not found in any smoke-* report |
-| gateway-timeout | Gateway proxy timeout is ≥30s (prevents premature 504s under load) | 10 | ⬜ missing | `lite`: check GATEWAY_TIMEOUT_ADEQUATE not found in any smoke-* report; `compose`: check GATEWAY_TIMEOUT_ADEQUATE not found in any smoke-* report; `helm`: check GATEWAY_TIMEOUT_ADEQUATE not found in any smoke-* report |
+| gateway-up | API gateway responds to /admin/users via valid admin token | 10 | ⬜ missing | `lite`: check GATEWAY_UP not found in any smoke-* report; `compose`: check GATEWAY_UP not found in any smoke-* report; `helm`: smoke-health/GATEWAY_UP: API gateway accepts connections — all client requests can reach backend |
+| admin-api-up | admin-api responds with a valid list | 10 | ⬜ missing | `lite`: check ADMIN_API_UP not found in any smoke-* report; `compose`: check ADMIN_API_UP not found in any smoke-* report; `helm`: smoke-health/ADMIN_API_UP: admin-api responds with valid token — user management and login work |
+| dashboard-up | dashboard root page responds | 10 | ⬜ missing | `lite`: check DASHBOARD_UP not found in any smoke-* report; `compose`: check DASHBOARD_UP not found in any smoke-* report; `helm`: smoke-health/DASHBOARD_UP: dashboard serves pages — user can access the UI |
+| runtime-api-up | runtime-api (bot orchestrator) is reachable / has ready replicas | 15 | ❌ fail | `lite`: check RUNTIME_API_UP not found in any smoke-* report; `compose`: check RUNTIME_API_UP not found in any smoke-* report; `helm`: smoke-health/RUNTIME_API_UP: runtime-api: 0 ready replicas |
+| transcription-up | transcription service /health returns ok + gpu_available | 15 | ⬜ missing | `lite`: check TRANSCRIPTION_UP not found in any smoke-* report; `compose`: check TRANSCRIPTION_UP not found in any smoke-* report; `helm`: smoke-health/TRANSCRIPTION_UP: transcription service responds — audio can be converted to text |
+| redis-up | Redis responds to PING | 10 | ❌ fail | `lite`: check REDIS_UP not found in any smoke-* report; `compose`: check REDIS_UP not found in any smoke-* report; `helm`: smoke-health/REDIS_UP: redis-cli ping:  |
+| minio-up | MinIO is healthy / has ready replicas | 10 | ❌ fail | `compose`: check MINIO_UP not found in any smoke-* report; `helm`: smoke-health/MINIO_UP: minio: 0 ready replicas |
+| db-schema | Database schema is aligned with the current model | 10 | ⬜ missing | `lite`: check DB_SCHEMA_ALIGNED not found in any smoke-* report; `compose`: check DB_SCHEMA_ALIGNED not found in any smoke-* report; `helm`: smoke-health/DB_SCHEMA_ALIGNED: all required columns present |
+| gateway-timeout | Gateway proxy timeout is ≥30s (prevents premature 504s under load) | 10 | ⬜ missing | `lite`: check GATEWAY_TIMEOUT_ADEQUATE not found in any smoke-* report; `compose`: check GATEWAY_TIMEOUT_ADEQUATE not found in any smoke-* report; `helm`: smoke-static/GATEWAY_TIMEOUT_ADEQUATE: API gateway HTTP client timeout >= 15s — browser session creation needs time |
 
 <!-- END AUTO-DOD -->
 

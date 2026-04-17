@@ -285,7 +285,7 @@ Fires on every meeting completion, independent of per-user webhook URLs. Does no
 
 
 <!-- BEGIN AUTO-DOD -->
-<!-- Auto-written by tests3/lib/aggregate.py from release tag `unknown`. Do not edit by hand — edit the `tests3.dods:` frontmatter + re-run `make -C tests3 report --write-features`. -->
+<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260417-1408`. Do not edit by hand — edit the `tests3.dods:` frontmatter + re-run `make -C tests3 report --write-features`. -->
 
 **Confidence: 0%** (gate: 95%, status: ❌ below gate)
 
@@ -293,14 +293,14 @@ Fires on every meeting completion, independent of per-user webhook URLs. Does no
 |---|----------|-------:|:------:|------------------|
 | events-meeting-completed | meeting.completed fires on every bot exit (default-enabled) | 10 | ⬜ missing | `compose`: no report for test=webhooks |
 | events-status-webhooks | Status-change webhooks fire when enabled via webhook_events (meeting.started / bot.failed / meeting.status_change) | 10 | ⬜ missing | `compose`: no report for test=webhooks |
-| envelope-shape | Every webhook carries envelope: event_id, event_type, api_version, created_at, data | 10 | ⬜ missing | `compose`: no report for test=webhooks; `helm`: no report for test=webhooks |
-| headers-hmac | X-Webhook-Signature = HMAC-SHA256(timestamp + '.' + payload) when secret is set | 10 | ⬜ missing | `compose`: no report for test=webhooks; `helm`: no report for test=webhooks |
-| security-spoof-protection | Client-supplied X-User-Webhook-* headers cannot override stored config | 10 | ⬜ missing | `compose`: no report for test=webhooks; `helm`: no report for test=webhooks |
-| security-secret-not-exposed | webhook_secret never appears in any API response (POST /bots, GET /bots/status) | 10 | ⬜ missing | `compose`: no report for test=webhooks; `helm`: no report for test=webhooks |
-| security-payload-hygiene | Internal fields (secret, url, container ids, delivery state) stripped from webhook payloads | 5 | ⬜ missing | `compose`: no report for test=webhooks; `helm`: no report for test=webhooks |
+| envelope-shape | Every webhook carries envelope: event_id, event_type, api_version, created_at, data | 10 | ⬜ missing | `compose`: no report for test=webhooks; `helm`: report has no step=envelope |
+| headers-hmac | X-Webhook-Signature = HMAC-SHA256(timestamp + '.' + payload) when secret is set | 10 | ⬜ missing | `compose`: no report for test=webhooks; `helm`: report has no step=hmac |
+| security-spoof-protection | Client-supplied X-User-Webhook-* headers cannot override stored config | 10 | ⬜ missing | `compose`: no report for test=webhooks; `helm`: report has no step=spoof |
+| security-secret-not-exposed | webhook_secret never appears in any API response (POST /bots, GET /bots/status) | 10 | ⬜ missing | `compose`: no report for test=webhooks; `helm`: report has no step=no_leak_response |
+| security-payload-hygiene | Internal fields (secret, url, container ids, delivery state) stripped from webhook payloads | 5 | ⬜ missing | `compose`: no report for test=webhooks; `helm`: report has no step=no_leak_payload |
 | flow-user-config | PUT /user/webhook persists webhook_url + webhook_secret + webhook_events to User.data | 10 | ⬜ missing | `compose`: no report for test=webhooks |
 | flow-gateway-inject | Gateway injects validated webhook config into meeting.data on POST /bots | 15 | ⬜ missing | `compose`: no report for test=webhooks |
-| reliability-db-pool | DB connection pool doesn't exhaust under repeated status requests | 10 | ⬜ missing | `lite`: check DB_POOL_NO_EXHAUSTION not found in any smoke-* report; `compose`: check DB_POOL_NO_EXHAUSTION not found in any smoke-* report; `helm`: check DB_POOL_NO_EXHAUSTION not found in any smoke-* report |
+| reliability-db-pool | DB connection pool doesn't exhaust under repeated status requests | 10 | ❌ fail | `lite`: check DB_POOL_NO_EXHAUSTION not found in any smoke-* report; `compose`: check DB_POOL_NO_EXHAUSTION not found in any smoke-* report; `helm`: smoke-contract/DB_POOL_NO_EXHAUSTION: 10/10 requests failed — likely DB pool exhaustion |
 
 <!-- END AUTO-DOD -->
 

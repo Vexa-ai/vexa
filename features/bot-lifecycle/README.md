@@ -293,7 +293,7 @@ Status transitions are protected by `SELECT FOR UPDATE` (row-level lock) to prev
 
 
 <!-- BEGIN AUTO-DOD -->
-<!-- Auto-written by tests3/lib/aggregate.py from release tag `unknown`. Do not edit by hand — edit the `tests3.dods:` frontmatter + re-run `make -C tests3 report --write-features`. -->
+<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260417-1408`. Do not edit by hand — edit the `tests3.dods:` frontmatter + re-run `make -C tests3 report --write-features`. -->
 
 **Confidence: 0%** (gate: 90%, status: ❌ below gate)
 
@@ -301,11 +301,11 @@ Status transitions are protected by `SELECT FOR UPDATE` (row-level lock) to prev
 |---|----------|-------:|:------:|------------------|
 | create-ok | POST /bots spawns a bot container and returns a bot id | 15 | ⬜ missing | `compose`: no report for test=containers; `helm`: no report for test=containers |
 | create-alive | Bot process is running 10s after creation (not crash-looping) | 15 | ⬜ missing | `compose`: no report for test=containers; `helm`: no report for test=containers |
-| bots-status-not-422 | GET /bots/status never returns 422 (schema stable under concurrent writes) | 5 | ⬜ missing | `lite`: check BOTS_STATUS_NOT_422 not found in any smoke-* report; `compose`: check BOTS_STATUS_NOT_422 not found in any smoke-* report; `helm`: check BOTS_STATUS_NOT_422 not found in any smoke-* report |
+| bots-status-not-422 | GET /bots/status never returns 422 (schema stable under concurrent writes) | 5 | ❌ fail | `lite`: check BOTS_STATUS_NOT_422 not found in any smoke-* report; `compose`: check BOTS_STATUS_NOT_422 not found in any smoke-* report; `helm`: smoke-contract/BOTS_STATUS_NOT_422: HTTP 401 (expected 200) |
 | removal | Container fully removed after DELETE /bots/... | 10 | ⬜ missing | `compose`: no report for test=containers |
 | status-completed | Meeting.status=completed after stop (not failed/stuck) | 10 | ⬜ missing | `compose`: no report for test=containers; `helm`: no report for test=containers |
-| graceful-leave | Bot leaves the meeting gracefully on stop (no force-kill by default) | 5 | ⬜ missing | `lite`: check GRACEFUL_LEAVE not found in any smoke-* report; `compose`: check GRACEFUL_LEAVE not found in any smoke-* report; `helm`: check GRACEFUL_LEAVE not found in any smoke-* report |
-| route-collision | No Starlette route collisions — /bots/{id} and /bots/{platform}/{native_id} do not clash | 5 | ⬜ missing | `lite`: check ROUTE_COLLISION not found in any smoke-* report; `compose`: check ROUTE_COLLISION not found in any smoke-* report; `helm`: check ROUTE_COLLISION not found in any smoke-* report |
+| graceful-leave | Bot leaves the meeting gracefully on stop (no force-kill by default) | 5 | ⬜ missing | `lite`: check GRACEFUL_LEAVE not found in any smoke-* report; `compose`: check GRACEFUL_LEAVE not found in any smoke-* report; `helm`: smoke-static/GRACEFUL_LEAVE: self_initiated_leave during stopping treated as completed, not failed |
+| route-collision | No Starlette route collisions — /bots/{id} and /bots/{platform}/{native_id} do not clash | 5 | ⬜ missing | `lite`: check ROUTE_COLLISION not found in any smoke-* report; `compose`: check ROUTE_COLLISION not found in any smoke-* report; `helm`: smoke-static/ROUTE_COLLISION: bot detail route is /bots/id/{id}, not /bots/{id} which collides with /bots/status |
 | timeout-stop | Bot auto-stops after automatic_leave timeout (no_one_joined_timeout) | 10 | ⬜ missing | `compose`: no report for test=containers |
 | concurrency-slot | Concurrent-bot slot released immediately on stop — next create succeeds | 10 | ⬜ missing | `compose`: no report for test=containers; `helm`: no report for test=containers |
 | no-orphans | No zombie/exited bot containers left after a lifecycle run | 10 | ⬜ missing | `compose`: no report for test=containers |

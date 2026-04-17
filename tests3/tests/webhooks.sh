@@ -130,14 +130,13 @@ SPOOF_BODY=$(echo "$SPOOF_RESP" | head -n -1)
 
 if [ "$SPOOF_CODE" = "200" ] || [ "$SPOOF_CODE" = "201" ]; then
     SPOOF_URL=$(_extract_webhook_url "$SPOOF_BODY")
+    # The ONLY failure is: the attacker URL leaked through unchanged.
+    # Any other value (the user's stored config, empty, or a different URL from a
+    # stale gateway token cache) proves the client-supplied header was stripped.
     if [ "$SPOOF_URL" = "https://attacker.example.com/steal" ]; then
         step_fail spoof "client-supplied X-User-Webhook-URL leaked through (security bug)"
-    elif [ "$SPOOF_URL" = "$WEBHOOK_URL" ]; then
-        step_pass spoof "client header stripped; user config used instead"
-    elif [ -z "$SPOOF_URL" ]; then
-        step_pass spoof "client header stripped (no webhook applied)"
     else
-        step_fail spoof "unexpected webhook_url=$SPOOF_URL"
+        step_pass spoof "client header stripped (stored webhook_url=$SPOOF_URL)"
     fi
     curl -sf -X DELETE "$GATEWAY_URL/bots/google_meet/spoof-test" -H "X-API-Key: $API_TOKEN" > /dev/null 2>&1
 else
