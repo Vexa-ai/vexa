@@ -41,10 +41,14 @@ set -e
 
 # Pull JSON reports from the VM back to the host .state/reports/<mode>/ so the
 # aggregator can include them in the release report (even if the test failed).
+# Use tar-over-ssh rather than scp so glob expansion works reliably.
 mkdir -p "$STATE/reports/$VM_MODE"
-scp -q -r -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    "root@$VM_IP:/root/vexa/tests3/.state/reports/$VM_MODE/." \
-    "$STATE/reports/$VM_MODE/" 2>/dev/null || true
+ssh -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@$VM_IP" \
+    "cd /root/vexa/tests3/.state/reports/$VM_MODE 2>/dev/null && tar cf - *.json 2>/dev/null" \
+    | tar xf - -C "$STATE/reports/$VM_MODE/" 2>/dev/null || true
+
+PULLED=$(find "$STATE/reports/$VM_MODE" -maxdepth 1 -name "*.json" 2>/dev/null | wc -l)
+info "pulled $PULLED report(s) from $VM_IP"
 
 echo "  ──────────────────────────────────────────────"
 

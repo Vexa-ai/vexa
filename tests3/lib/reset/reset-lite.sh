@@ -7,6 +7,11 @@ set -euo pipefail
 
 cd /root/vexa
 
+# Pull latest dev branch first so the reset uses current test + deploy scripts.
+echo "  [reset-lite] git fetch + reset to origin/dev"
+git fetch origin dev 2>&1 | tail -3
+git reset --hard origin/dev 2>&1 | tail -2
+
 echo "  [reset-lite] stopping containers"
 docker stop vexa-lite 2>/dev/null || true
 docker rm -f vexa-lite 2>/dev/null || true

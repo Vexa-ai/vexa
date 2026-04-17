@@ -5,6 +5,13 @@
 # Runs on the compose VM via vm-run.sh. Assumes /root/vexa exists.
 set -euo pipefail
 
+cd /root/vexa
+
+# Pull latest dev branch first so the reset uses current test + deploy scripts.
+echo "  [reset-compose] git fetch + reset to origin/dev"
+git fetch origin dev 2>&1 | tail -3
+git reset --hard origin/dev 2>&1 | tail -2
+
 cd /root/vexa/deploy/compose
 
 # compose needs --env-file; IMAGE_TAG lives in the repo's .env
