@@ -1,48 +1,15 @@
 ---
-services: [api-gateway, admin-api, meeting-api, runtime-api, dashboard]
-tests3:
-  gate:
-    confidence_min: 100         # Every deployment must have every service up.
-  dods:
-    - id: gateway-up
-      label: "API gateway responds to /admin/users via valid admin token"
-      weight: 10
-      evidence: {check: GATEWAY_UP, modes: [lite, compose, helm]}
-    - id: admin-api-up
-      label: "admin-api responds with a valid list"
-      weight: 10
-      evidence: {check: ADMIN_API_UP, modes: [lite, compose, helm]}
-    - id: dashboard-up
-      label: "dashboard root page responds"
-      weight: 10
-      evidence: {check: DASHBOARD_UP, modes: [lite, compose, helm]}
-    - id: runtime-api-up
-      label: "runtime-api (bot orchestrator) is reachable / has ready replicas"
-      weight: 15
-      evidence: {check: RUNTIME_API_UP, modes: [lite, compose, helm]}
-    - id: transcription-up
-      label: "transcription service /health returns ok + gpu_available"
-      weight: 15
-      evidence: {check: TRANSCRIPTION_UP, modes: [lite, compose, helm]}
-    - id: redis-up
-      label: "Redis responds to PING"
-      weight: 10
-      evidence: {check: REDIS_UP, modes: [lite, compose, helm]}
-    - id: minio-up
-      label: "MinIO is healthy / has ready replicas"
-      weight: 10
-      evidence: {check: MINIO_UP, modes: [compose, helm]}
-    - id: db-schema
-      label: "Database schema is aligned with the current model"
-      weight: 10
-      evidence: {check: DB_SCHEMA_ALIGNED, modes: [lite, compose, helm]}
-    - id: gateway-timeout
-      label: "Gateway proxy timeout is ≥30s (prevents premature 504s under load)"
-      weight: 10
-      evidence: {check: GATEWAY_TIMEOUT_ADEQUATE, modes: [lite, compose, helm]}
+services:
+- api-gateway
+- admin-api
+- meeting-api
+- runtime-api
+- dashboard
 ---
 
 # Infrastructure
+
+**DoDs:** see [`./dods.yaml`](./dods.yaml) · Gate: **confidence ≥ 100%**
 
 ## Why
 

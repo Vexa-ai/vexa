@@ -1,63 +1,13 @@
 ---
-services: [meeting-api, runtime-api, vexa-bot]
-tests3:
-  gate:
-    confidence_min: 90
-  dods:
-    # ── Creation ──────────────────────────────────────────────
-    - id: create-ok
-      label: "POST /bots spawns a bot container and returns a bot id"
-      weight: 15
-      evidence: {test: containers, step: create, modes: [compose]}
-    - id: create-alive
-      label: "Bot process is running 10s after creation (not crash-looping)"
-      weight: 15
-      evidence: {test: containers, step: alive, modes: [compose]}
-    - id: bots-status-not-422
-      label: "GET /bots/status never returns 422 (schema stable under concurrent writes)"
-      weight: 5
-      evidence: {check: BOTS_STATUS_NOT_422, modes: [lite, compose, helm]}
-
-    # ── Teardown ──────────────────────────────────────────────
-    - id: removal
-      label: "Container fully removed after DELETE /bots/..."
-      weight: 10
-      evidence: {test: containers, step: removal, modes: [compose]}
-    - id: status-completed
-      label: "Meeting.status=completed after stop (not failed/stuck)"
-      weight: 10
-      evidence: {test: containers, step: status_completed, modes: [compose]}
-    - id: graceful-leave
-      label: "Bot leaves the meeting gracefully on stop (no force-kill by default)"
-      weight: 5
-      evidence: {check: GRACEFUL_LEAVE, modes: [lite, compose, helm]}
-    - id: route-collision
-      label: "No Starlette route collisions — /bots/{id} and /bots/{platform}/{native_id} do not clash"
-      weight: 5
-      evidence: {check: ROUTE_COLLISION, modes: [lite, compose, helm]}
-
-    # ── Lifecycle rules ───────────────────────────────────────
-    - id: timeout-stop
-      label: "Bot auto-stops after automatic_leave timeout (no_one_joined_timeout)"
-      weight: 10
-      evidence: {test: containers, step: timeout_stop, modes: [compose]}
-    - id: concurrency-slot
-      label: "Concurrent-bot slot released immediately on stop — next create succeeds"
-      weight: 10
-      evidence: {test: containers, step: concurrency_slot, modes: [compose]}
-    - id: no-orphans
-      label: "No zombie/exited bot containers left after a lifecycle run"
-      weight: 10
-      evidence: {test: containers, step: no_orphans, modes: [compose]}
-
-    # ── Status transitions (webhook-observable) ───────────────
-    - id: status-webhooks-fire
-      label: "Status-change webhooks fire for every transition when enabled in webhook_events"
-      weight: 5
-      evidence: {test: webhooks, step: e2e_status, modes: [compose]}
+services:
+- meeting-api
+- runtime-api
+- vexa-bot
 ---
 
 # Bot Lifecycle
+
+**DoDs:** see [`./dods.yaml`](./dods.yaml) · Gate: **confidence ≥ 90%**
 
 ## What
 

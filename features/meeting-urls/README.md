@@ -1,44 +1,12 @@
 ---
-services: [meeting-api, mcp]
-tests3:
-  gate:
-    confidence_min: 100         # URL parsing is 100% deterministic — any failure is a correctness bug.
-  dods:
-    - id: url-parser-exists
-      label: "meeting-api has a URL parser module (url_parser.py) that handles platform detection"
-      weight: 10
-      evidence: {check: URL_PARSER_EXISTS, modes: [lite, compose, helm]}
-    - id: gmeet-parsed
-      label: "Google Meet URL (meet.google.com/xxx-xxxx-xxx) parses correctly"
-      weight: 15
-      evidence: {check: GMEET_URL_PARSED, modes: [lite, compose, helm]}
-    - id: invalid-rejected
-      label: "Invalid meeting URL returns 400 (not 500)"
-      weight: 10
-      evidence: {check: INVALID_URL_REJECTED, modes: [lite, compose, helm]}
-    - id: teams-standard
-      label: "Teams standard link (teams.microsoft.com/l/meetup-join/...) parses"
-      weight: 15
-      evidence: {check: TEAMS_URL_STANDARD, modes: [lite, compose, helm]}
-    - id: teams-shortlink
-      label: "Teams shortlink (teams.live.com, teams.microsoft.com/meet) parses"
-      weight: 10
-      evidence: {check: TEAMS_URL_SHORTLINK, modes: [lite, compose, helm]}
-    - id: teams-channel
-      label: "Teams channel meeting URL parses"
-      weight: 10
-      evidence: {check: TEAMS_URL_CHANNEL, modes: [lite, compose, helm]}
-    - id: teams-enterprise
-      label: "Teams enterprise-tenant URL parses (custom domain)"
-      weight: 15
-      evidence: {check: TEAMS_URL_ENTERPRISE, modes: [lite, compose, helm]}
-    - id: teams-personal
-      label: "Teams personal-account URL parses"
-      weight: 15
-      evidence: {check: TEAMS_URL_PERSONAL, modes: [lite, compose, helm]}
+services:
+- meeting-api
+- mcp
 ---
 
 # Meeting URLs
+
+**DoDs:** see [`./dods.yaml`](./dods.yaml) · Gate: **confidence ≥ 100%**
 
 ## Why
 

@@ -1,0 +1,142 @@
+gate:
+  confidence_min: 90
+dods:
+- id: login-flow
+  label: "POST /api/auth/send-magic-link \u2192 200 + success=true + sets vexa-token cookie"
+  weight: 10
+  evidence:
+    test: dashboard-auth
+    step: login
+    modes:
+    - lite
+    - compose
+    - helm
+- id: cookie-flags
+  label: vexa-token cookie Secure flag matches deployment (Secure iff https)
+  weight: 10
+  evidence:
+    test: dashboard-auth
+    step: cookie_flags
+    modes:
+    - lite
+    - compose
+    - helm
+- id: identity-me
+  label: GET /api/auth/me returns logged-in user's email (never falls back to env)
+  weight: 10
+  evidence:
+    test: dashboard-auth
+    step: identity
+    modes:
+    - lite
+    - compose
+    - helm
+- id: cookie-security
+  label: HttpOnly + SameSite cookies on magic-link send/verify + admin-verify + nextauth
+  weight: 10
+  evidence:
+    check: SECURE_COOKIE_SEND_MAGIC_LINK
+    modes:
+    - lite
+    - compose
+    - helm
+- id: login-redirect
+  label: Magic-link click redirects to /meetings (not disabled /agent)
+  weight: 5
+  evidence:
+    check: LOGIN_REDIRECT
+    modes:
+    - lite
+    - compose
+    - helm
+- id: identity-no-fallback
+  label: /api/auth/me uses only the cookie for identity, never env fallback
+  weight: 5
+  evidence:
+    check: IDENTITY_NO_FALLBACK
+    modes:
+    - lite
+    - compose
+    - helm
+- id: proxy-reachable
+  label: GET /api/vexa/meetings via cookie returns 200
+  weight: 10
+  evidence:
+    test: dashboard-auth
+    step: proxy_reachable
+    modes:
+    - lite
+    - compose
+    - helm
+- id: meetings-list
+  label: /api/vexa/meetings returns a meeting list through the dashboard proxy
+  weight: 5
+  evidence:
+    test: dashboard-proxy
+    step: meetings_list
+    modes:
+    - compose
+    - helm
+- id: pagination
+  label: limit/offset pagination works (no overlap between pages)
+  weight: 5
+  evidence:
+    test: dashboard-proxy
+    step: pagination
+    modes:
+    - compose
+    - helm
+- id: field-contract
+  label: Meeting records include native_meeting_id / platform_specific_id
+  weight: 5
+  evidence:
+    test: dashboard-proxy
+    step: field_contract
+    modes:
+    - compose
+    - helm
+- id: transcript-proxy
+  label: Transcript reachable through dashboard proxy
+  weight: 5
+  evidence:
+    test: dashboard-proxy
+    step: transcript_proxy
+    modes:
+    - compose
+    - helm
+- id: bot-create-proxy
+  label: POST /api/vexa/bots reaches the gateway and creates a bot (or returns 403/409)
+  weight: 5
+  evidence:
+    test: dashboard-proxy
+    step: bot_create_proxy
+    modes:
+    - compose
+    - helm
+- id: dashboard-up
+  label: Dashboard root page responds
+  weight: 5
+  evidence:
+    check: DASHBOARD_UP
+    modes:
+    - lite
+    - compose
+    - helm
+- id: dashboard-ws-url
+  label: "NEXT_PUBLIC_WS_URL is set \u2014 live updates can connect"
+  weight: 5
+  evidence:
+    check: DASHBOARD_WS_URL
+    modes:
+    - lite
+    - compose
+    - helm
+- id: dashboard-admin-key-valid
+  label: Dashboard's VEXA_ADMIN_API_KEY is accepted by admin-api (login path works)
+  weight: 5
+  evidence:
+    check: DASHBOARD_ADMIN_KEY_VALID
+    modes:
+    - lite
+    - compose
+    - helm
