@@ -22,7 +22,7 @@ scope_approved:
     hypothesis: true          # dual-cause framing — test gap + possible runtime dispatch/storage misbehavior
     gap_analysis: true        # accurate description of why the 260417 matrix missed this
     proves: true              # {test: webhooks, step: e2e_status_non_completed} + {test: webhooks, step: e2e_status}
-    new_checks: true          # [webhooks.e2e_status_non_completed] — the regression lock (dotted test.step form)
+    new_checks: true          # [webhooks:e2e_status_non_completed] — regression lock (colon test:step form per aggregate.py:629)
     required_modes: true      # [compose] only (widen to helm/lite only if runtime regression proven)
     human_verify: true        # PUT /user/webhook with all event types + observe non-completed deliveries
 
@@ -58,7 +58,7 @@ registry_changes_approved:
   # emits webhooks.json, so a standalone named check can't resolve.
   # Instead, we add a NEW STEP to the existing `webhooks:` script-type
   # registry entry. Bindings use {test: webhooks, step: e2e_status_non_completed}.
-  - id: webhooks.e2e_status_non_completed
+  - id: webhooks:e2e_status_non_completed
     change: add-step-to-existing-script-entry
     parent: webhooks          # the script-type registry entry in tests3/registry.yaml
     step: e2e_status_non_completed
