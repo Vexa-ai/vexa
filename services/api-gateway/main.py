@@ -278,7 +278,8 @@ async def forward_request(client: httpx.AsyncClient, method: str, url: str, requ
     headers = {k.lower(): v for k, v in request.headers.items() if k.lower() not in excluded_headers}
 
     # Security: strip any client-supplied identity headers (prevent spoofing)
-    for h in ["x-user-id", "x-user-scopes", "x-user-limits"]:
+    for h in ["x-user-id", "x-user-scopes", "x-user-limits",
+              "x-user-webhook-url", "x-user-webhook-secret", "x-user-webhook-events"]:
         headers.pop(h, None)
 
     # Determine target service based on URL path prefix
@@ -310,6 +311,19 @@ async def forward_request(client: httpx.AsyncClient, method: str, url: str, requ
                 headers["x-user-id"] = str(user_data["user_id"])
                 headers["x-user-scopes"] = ",".join(user_scopes)
                 headers["x-user-limits"] = str(user_data.get("max_concurrent", 1))
+
+                # Inject webhook config headers (meeting-api stores in meeting.data)
+                wh_url = user_data.get("webhook_url")
+                if wh_url:
+                    headers["x-user-webhook-url"] = wh_url
+                    wh_secret = user_data.get("webhook_secret")
+                    if wh_secret:
+                        headers["x-user-webhook-secret"] = wh_secret
+                    wh_events = user_data.get("webhook_events")
+                    if wh_events and isinstance(wh_events, dict):
+                        enabled = [evt for evt, on in wh_events.items() if on]
+                        if enabled:
+                            headers["x-user-webhook-events"] = ",".join(enabled)
 
                 # Scope enforcement: check if token has required scope for this route
                 req_path = request.url.path
@@ -1219,7 +1233,8 @@ async def agent_chat_proxy(request: Request):
     # Build forwarding headers
     excluded = {"host", "content-length", "transfer-encoding"}
     headers = {k.lower(): v for k, v in request.headers.items() if k.lower() not in excluded}
-    for h in ["x-user-id", "x-user-scopes", "x-user-limits"]:
+    for h in ["x-user-id", "x-user-scopes", "x-user-limits",
+              "x-user-webhook-url", "x-user-webhook-secret", "x-user-webhook-events"]:
         headers.pop(h, None)
 
     # Auth: inject identity headers

@@ -104,6 +104,22 @@ async def claim_stale_messages(redis_c: aioredis.Redis):
 
     logger.info(f"Stale message check finished. Total claimed: {messages_claimed_total}, Processed: {processed_claim_count}, Acked: {acked_claim_count}, Errors: {error_claim_count}")
 
+async def _ensure_group(redis_c: aioredis.Redis, stream: str, group: str) -> bool:
+    """Create consumer group if missing. Returns True if group exists or was created."""
+    try:
+        await redis_c.xgroup_create(name=stream, groupname=group, id='0', mkstream=True)
+        logger.info(f"Recreated consumer group '{group}' on stream '{stream}'.")
+        return True
+    except redis.exceptions.ResponseError as e:
+        if "BUSYGROUP" in str(e):
+            return True
+        logger.error(f"Failed to create consumer group '{group}' on '{stream}': {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error creating consumer group '{group}': {e}")
+        return False
+
+
 async def consume_redis_stream(redis_c: aioredis.Redis):
     """Background task to consume transcription segments from Redis Stream."""
     last_processed_id = '>'
@@ -157,6 +173,15 @@ async def consume_redis_stream(redis_c: aioredis.Redis):
         except redis.exceptions.ConnectionError as e:
             logger.error(f"Redis connection error in stream consumer: {e}. Retrying after delay...", exc_info=True)
             await asyncio.sleep(5)
+        except redis.exceptions.ResponseError as e:
+            if "NOGROUP" in str(e):
+                # Redis lost the group (eviction, flush, or restart). Recreate it.
+                logger.warning(f"NOGROUP on stream '{REDIS_STREAM_NAME}' — recreating group '{REDIS_CONSUMER_GROUP}'")
+                await _ensure_group(redis_c, REDIS_STREAM_NAME, REDIS_CONSUMER_GROUP)
+                await asyncio.sleep(1)
+            else:
+                logger.error(f"Redis response error in stream consumer: {e}", exc_info=True)
+                await asyncio.sleep(5)
         except Exception as e:
             logger.error(f"Unhandled error in Redis Stream consumer loop: {e}", exc_info=True)
             await asyncio.sleep(5)
@@ -219,6 +244,14 @@ async def consume_speaker_events_stream(redis_c: aioredis.Redis):
         except redis.exceptions.ConnectionError as e:
             logger.error(f"[SpeakerConsumer] Redis connection error in speaker event stream consumer: {e}. Retrying after delay...", exc_info=True)
             await asyncio.sleep(5)
+        except redis.exceptions.ResponseError as e:
+            if "NOGROUP" in str(e):
+                logger.warning(f"[SpeakerConsumer] NOGROUP on stream '{REDIS_SPEAKER_EVENTS_STREAM_NAME}' — recreating group '{REDIS_SPEAKER_EVENTS_CONSUMER_GROUP}'")
+                await _ensure_group(redis_c, REDIS_SPEAKER_EVENTS_STREAM_NAME, REDIS_SPEAKER_EVENTS_CONSUMER_GROUP)
+                await asyncio.sleep(1)
+            else:
+                logger.error(f"[SpeakerConsumer] Redis response error in speaker event stream consumer: {e}", exc_info=True)
+                await asyncio.sleep(5)
         except Exception as e:
             logger.error(f"[SpeakerConsumer] Unhandled error in Speaker Events Redis Stream consumer loop: {e}", exc_info=True)
             await asyncio.sleep(5)

@@ -106,5 +106,35 @@ else
     fail "speakers: all Unknown"
 fi
 
+# ── 6. Webhook delivery ─────────────────────────
+# If the meeting had a webhook_url configured, check delivery status
+WEBHOOK_STATUS=$(curl -sf -H "X-API-Key: $API_TOKEN" "$GATEWAY_URL/bots/$PLATFORM/$NATIVE_ID" | python3 -c "
+import sys,json
+try:
+    d=json.load(sys.stdin)
+    data=d.get('data',{})
+    wh=data.get('webhook_delivery',{})
+    if not data.get('webhook_url'):
+        print('NO_URL')
+    elif wh.get('status')=='delivered':
+        print('DELIVERED')
+    elif wh.get('status')=='queued':
+        print('QUEUED')
+    elif wh.get('status')=='failed':
+        print('FAILED:'+wh.get('failed_at',''))
+    else:
+        print('MISSING')
+except: print('SKIP')
+" 2>/dev/null)
+
+case "$WEBHOOK_STATUS" in
+    DELIVERED) pass "webhook: delivered" ;;
+    QUEUED)    pass "webhook: queued for retry" ;;
+    NO_URL)    info "webhook: no webhook_url configured (skipped)" ;;
+    MISSING)   fail "webhook: webhook_url set but no delivery status" ;;
+    FAILED*)   fail "webhook: delivery failed ($WEBHOOK_STATUS)" ;;
+    *)         info "webhook: could not check ($WEBHOOK_STATUS)" ;;
+esac
+
 echo "  ──────────────────────────────────────────────"
 echo ""

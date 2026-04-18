@@ -117,6 +117,11 @@ runtimeApi:
     type: ClusterIP
     port: 8090
   profilesPath: "/app/profiles.yaml"
+  # ConfigMap name holding the profiles.yaml mounted at profilesPath. Without
+  # this set, the pod falls back to the baked-in demo profiles from the image
+  # and every POST /containers {profile: "meeting"} returns 400 "Unknown
+  # profile: meeting". Keep this set for any real deployment.
+  profilesConfigMap: "vexa-runtime-profiles"
   logLevel: "INFO"
   resources:
     limits:
@@ -216,6 +221,10 @@ postgres:
   enabled: true
   image: postgres:17-alpine
   credentialsSecretName: postgres-credentials
+  # idle_in_transaction_session_timeout (ms) — Postgres auto-kills connections
+  # that hold a transaction open past this threshold. Defense-in-depth against
+  # DB session leaks in meeting-api (see services/meeting-api/meeting_api/database.py).
+  idleInTransactionTimeoutMs: 60000
   service:
     port: 5432
   persistence:
@@ -280,3 +289,53 @@ ingress:
       pathType: Prefix
       service: api-gateway
       servicePort: 8000
+
+# ──────────────────────────────────────────────────────────────────────
+# runtime-api container profiles — mounted as ConfigMap into the pod
+# when runtimeApi.profilesConfigMap is non-empty.
+#
+# Mirrors the vexa-platform production profiles; override in your own
+# values file if you need different resource envelopes.
+# ──────────────────────────────────────────────────────────────────────
+runtimeProfiles: |
+  profiles:
+    meeting:
+      image: "${BROWSER_IMAGE}"
+      command: ["/app/vexa-bot/entrypoint.sh"]
+      working_dir: "/app/vexa-bot"
+      resources:
+        cpu_request: "1000m"
+        cpu_limit: "1500m"
+        memory_request: "1100Mi"
+        memory_limit: "1536Mi"
+        shm_size: 2147483648
+      idle_timeout: 0
+      auto_remove: false
+      env:
+        DISPLAY: "${DISPLAY:-:99}"
+        NODE_ENV: "production"
+        REDIS_URL: "${REDIS_URL}"
+        TRANSCRIPTION_SERVICE_URL: "${TRANSCRIPTION_SERVICE_URL}"
+        TRANSCRIPTION_SERVICE_TOKEN: "${TRANSCRIPTION_SERVICE_TOKEN}"
+      ports:
+        "9222/tcp": {}
+    browser-session:
+      image: "${BROWSER_IMAGE}"
+      command: ["/app/vexa-bot/entrypoint.sh"]
+      working_dir: "/app/vexa-bot"
+      resources:
+        cpu_request: "1000m"
+        cpu_limit: "1500m"
+        memory_request: "1100Mi"
+        memory_limit: "1536Mi"
+        shm_size: 2147483648
+      idle_timeout: 0
+      auto_remove: false
+      env:
+        DISPLAY: "${DISPLAY:-:99}"
+        NODE_ENV: "production"
+        REDIS_URL: "${REDIS_URL}"
+      ports:
+        "6080/tcp": {}
+        "9222/tcp": {}
+        "9223/tcp": {}

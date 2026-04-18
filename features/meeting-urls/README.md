@@ -1,11 +1,12 @@
 ---
-services: [meeting-api, mcp]
-tests3:
-  targets: [contracts]
-  checks: [URL_PARSER_EXISTS, GMEET_URL_PARSED, INVALID_URL_REJECTED, TEAMS_URL_STANDARD, TEAMS_URL_SHORTLINK, TEAMS_URL_CHANNEL, TEAMS_URL_ENTERPRISE, TEAMS_URL_PERSONAL]
+services:
+- meeting-api
+- mcp
 ---
 
 # Meeting URLs
+
+**DoDs:** see [`./dods.yaml`](./dods.yaml) · Gate: **confidence ≥ 100%**
 
 ## Why
 
@@ -89,16 +90,22 @@ curl -s -X POST http://localhost:8056/bots \
 
 ## DoD
 
-| # | Check | Weight | Ceiling | Floor | Status | Evidence | Last checked | Tests |
-|---|-------|--------|---------|-------|--------|----------|--------------|-------|
-| 1 | Google Meet URL parsed correctly | 15 | ceiling | 0 | PASS | GMEET_URL_PARSED contract check: POST /bots with `meet.google.com/abc-defg-hij` → accepted | 2026-04-08 | GMEET_URL_PARSED |
-| 2 | Teams standard join URL parsed | 15 | ceiling | 0 | PASS | TEAMS_URL_STANDARD contract check: POST /bots with `/l/meetup-join/` → accepted | 2026-04-08 | TEAMS_URL_STANDARD |
-| 3 | Teams short URL with passcode parsed | 20 | ceiling | 0 | PASS | TEAMS_URL_SHORTLINK contract check: POST /bots with `meeting_url` only (no explicit platform) → accepted. Live e2e: `meeting-tts-teams.sh` — 3 bots joined, 4/4 TTS sent, 5 segments transcribed, 3/4 phrases matched | 2026-04-08 | TEAMS_URL_SHORTLINK, meeting-tts-teams.sh |
-| 4 | Teams channel meeting URL parsed | 10 | — | 0 | PASS | TEAMS_URL_CHANNEL contract check: POST /bots with `/l/meetup-join/...tacv2` → accepted | 2026-04-08 | TEAMS_URL_CHANNEL |
-| 5 | Teams custom enterprise domain parsed | 15 | — | 0 | PASS | TEAMS_URL_ENTERPRISE contract check: POST /bots with `myorg.teams.microsoft.com/meet/` (no explicit platform) → accepted | 2026-04-08 | TEAMS_URL_ENTERPRISE |
-| 6 | Teams personal (teams.live.com) parsed | 10 | — | 0 | PASS | TEAMS_URL_PERSONAL contract check: POST /bots with `teams.live.com/meet/` (no explicit platform) → accepted | 2026-04-08 | TEAMS_URL_PERSONAL |
-| 7 | Teams deep link (msteams:/) parsed | 10 | — | 0 | PASS | Unit test: `test_v2_deep_link` in `services/mcp/tests/test_parse_meeting_url.py`. Server-side `parse_meeting_url()` converts `msteams:` → `https://` | 2026-04-08 | unit test |
-| 8 | POST /bots accepts meeting_url directly (no MCP required) | 15 | ceiling | 0 | PASS | All 3 Teams contract checks (SHORTLINK, ENTERPRISE, PERSONAL) send only `meeting_url` — no explicit `platform` or `native_meeting_id`. model_validator auto-parses. Live e2e confirmed with `meeting-tts-teams.sh` | 2026-04-08 | TEAMS_URL_SHORTLINK, meeting-tts-teams.sh |
-| 9 | Invalid URLs rejected with clear error | 10 | — | 0 | PASS | INVALID_URL_REJECTED contract check: POST /bots with `not-a-url` → 422 | 2026-04-08 | INVALID_URL_REJECTED |
 
-Confidence: 100 (all 9 checks PASS. Live Teams e2e validated with `meeting-tts-teams.sh`: URL parse → bot join → admission → TTS → transcription → scoring.)
+<!-- BEGIN AUTO-DOD -->
+<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260417-1454`. Do not edit by hand — edit the sidecar `dods.yaml` + re-run `make -C tests3 report --write-features`. -->
+
+**Confidence: 100%** (gate: 100%, status: ✅ pass)
+
+| # | Behavior | Weight | Status | Evidence (modes) |
+|---|----------|-------:|:------:|------------------|
+| url-parser-exists | meeting-api has a URL parser module (url_parser.py) that handles platform detection | 10 | ✅ pass | `lite`: smoke-static/URL_PARSER_EXISTS: MeetingCreate schema has parse_meeting_url — accepts meeting_url field directly; `compose`: smoke-static/URL_PARSER_EXISTS: MeetingCreate schema has parse_meeting_url — accepts meeting_url field directly; `helm`: smoke-static/URL_PARSER_EXISTS: MeetingCreat… |
+| gmeet-parsed | Google Meet URL (meet.google.com/xxx-xxxx-xxx) parses correctly | 15 | ✅ pass | `lite`: smoke-contract/GMEET_URL_PARSED: Google Meet URL accepted by POST /bots — parser handles GMeet format; `compose`: smoke-contract/GMEET_URL_PARSED: Google Meet URL accepted by POST /bots — parser handles GMeet format; `helm`: smoke-contract/GMEET_URL_PARSED: Google Meet URL accepted by POS… |
+| invalid-rejected | Invalid meeting URL returns 400 (not 500) | 10 | ✅ pass | `lite`: smoke-contract/INVALID_URL_REJECTED: garbage URLs rejected with 400/422 — input validation works; `compose`: smoke-contract/INVALID_URL_REJECTED: garbage URLs rejected with 400/422 — input validation works; `helm`: smoke-contract/INVALID_URL_REJECTED: garbage URLs rejected with 400/422 — … |
+| teams-standard | Teams standard link (teams.microsoft.com/l/meetup-join/...) parses | 15 | ✅ pass | `lite`: smoke-contract/TEAMS_URL_STANDARD: Teams standard join URL accepted by POST /bots; `compose`: smoke-contract/TEAMS_URL_STANDARD: Teams standard join URL accepted by POST /bots; `helm`: smoke-contract/TEAMS_URL_STANDARD: Teams standard join URL accepted by POST /bots |
+| teams-shortlink | Teams shortlink (teams.live.com, teams.microsoft.com/meet) parses | 10 | ✅ pass | `lite`: smoke-contract/TEAMS_URL_SHORTLINK: Teams /meet/ shortlink URL parsed and accepted by POST /bots (no explicit platform needed); `compose`: smoke-contract/TEAMS_URL_SHORTLINK: Teams /meet/ shortlink URL parsed and accepted by POST /bots (no explicit platform needed); `helm`: smoke-contract… |
+| teams-channel | Teams channel meeting URL parses | 10 | ✅ pass | `lite`: smoke-contract/TEAMS_URL_CHANNEL: Teams channel meeting URL accepted or known gap; `compose`: smoke-contract/TEAMS_URL_CHANNEL: Teams channel meeting URL accepted or known gap; `helm`: smoke-contract/TEAMS_URL_CHANNEL: Teams channel meeting URL accepted or known gap |
+| teams-enterprise | Teams enterprise-tenant URL parses (custom domain) | 15 | ✅ pass | `lite`: smoke-contract/TEAMS_URL_ENTERPRISE: Teams enterprise domain URL parsed and accepted by POST /bots (no explicit platform needed); `compose`: smoke-contract/TEAMS_URL_ENTERPRISE: Teams enterprise domain URL parsed and accepted by POST /bots (no explicit platform needed); `helm`: smoke-cont… |
+| teams-personal | Teams personal-account URL parses | 15 | ✅ pass | `lite`: smoke-contract/TEAMS_URL_PERSONAL: Teams personal (teams.live.com) URL parsed and accepted by POST /bots (no explicit platform needed); `compose`: smoke-contract/TEAMS_URL_PERSONAL: Teams personal (teams.live.com) URL parsed and accepted by POST /bots (no explicit platform needed); `helm`… |
+
+<!-- END AUTO-DOD -->
+

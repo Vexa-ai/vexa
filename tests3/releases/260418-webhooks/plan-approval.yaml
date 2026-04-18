@@ -1,0 +1,73 @@
+# Plan approval — 260418-webhooks
+#
+# Human reviews each item in this file line-by-line. AI may NOT set any
+# `approved:` to true. Flip `approved: false` → `true` once you agree
+# with the item. Send back for revision if not.
+#
+# Exit gate (mechanical, enforced by stage.enter(develop)):
+#   - scope.yaml parses; every issue has hypothesis + ≥1 proves[] binding.
+#   - Every {check: X} in proves[] either exists in registry.yaml OR
+#     appears below under registry_changes_approved.
+#   - Every item below has `approved: true`.
+
+release_id: 260418-webhooks
+approved_at: 2026-04-18T20:50:11Z
+approver: dmitry@vexa.ai
+
+# ── OBJECTIVES ────────────────────────────────────────────────────────
+# For each issue in scope.yaml: do you agree the hypothesis captures
+# the bug, and the proves[] bindings prove it's fixed?
+scope_approved:
+  - issue: webhooks-status-events-non-completed
+    hypothesis: true          # dual-cause framing — test gap + possible runtime dispatch/storage misbehavior
+    gap_analysis: true        # accurate description of why the 260417 matrix missed this
+    proves: true              # {test: webhooks, step: e2e_status_non_completed} + {test: webhooks, step: e2e_status}
+    new_checks: true          # [webhooks.e2e_status_non_completed] — the regression lock (dotted test.step form)
+    required_modes: true      # [compose] only (widen to helm/lite only if runtime regression proven)
+    human_verify: true        # PUT /user/webhook with all event types + observe non-completed deliveries
+
+# ── DoD CHANGES ───────────────────────────────────────────────────────
+# Do these DoD edits accurately describe what "done" means for webhooks?
+dod_changes_approved:
+  - feature: webhooks
+    change: modify-evidence-and-label
+    id: events-status-webhooks
+    from:
+      weight: 10
+      evidence: {test: webhooks, step: e2e_status, modes: [compose]}
+      label: >-
+        Status-change webhooks fire when enabled via webhook_events
+        (meeting.started / bot.failed / meeting.status_change)
+    to:
+      weight: 10
+      evidence: {test: webhooks, step: e2e_status_non_completed, modes: [compose]}
+      label: >-
+        Status-change webhooks for non-meeting.completed events
+        (meeting.started / meeting.status_change / bot.failed) fire
+        when opted-in via webhook_events — proven by a delivery with
+        event_type != meeting.completed, not by any entry in
+        webhook_deliveries[].
+    approved: true
+
+# ── REGISTRY CHANGES ──────────────────────────────────────────────────
+# New check IDs that scope.yaml references. Each must be approved here
+# AND created in tests3/registry.yaml during develop.
+registry_changes_approved:
+  # Implementation detail corrected in develop: aggregate.py resolves
+  # {check: X} bindings against smoke-* reports only; webhooks.sh
+  # emits webhooks.json, so a standalone named check can't resolve.
+  # Instead, we add a NEW STEP to the existing `webhooks:` script-type
+  # registry entry. Bindings use {test: webhooks, step: e2e_status_non_completed}.
+  - id: webhooks.e2e_status_non_completed
+    change: add-step-to-existing-script-entry
+    parent: webhooks          # the script-type registry entry in tests3/registry.yaml
+    step: e2e_status_non_completed
+    modes: [compose]
+    rationale: |
+      Tightens the status-webhook proof. Asserts that when
+      webhook_events enables non-completed event types AND a bot
+      lifecycle runs, meeting.data.webhook_deliveries[] contains
+      ≥1 entry with event_type != meeting.completed. Existing
+      e2e_status step (looser) stays as a sanity indicator; this
+      step is the actual DoD binding.
+    approved: true

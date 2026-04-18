@@ -4,11 +4,15 @@
        meeting-tts meeting bot admit transcribe finalize post-meeting meeting-chain \
        webhooks auth-meeting bot-stop-timing transcription-replay tts-reliability \
        collect score \
+       validate-lite validate-compose validate-helm validate-all \
+       report report-gate \
        e2e full \
        vm-compose vm-lite \
        vm-provision-compose vm-provision-lite vm-smoke-compose vm-smoke-lite \
+       vm-redeploy-compose vm-redeploy-lite vm-reset-compose vm-reset-lite \
+       vm-validate-scope-compose vm-validate-scope-lite \
        vm-destroy vm-ssh vm-status \
-       lke-helm lke-provision lke-setup lke-smoke lke-destroy lke-status \
+       lke-helm lke-provision lke-setup lke-upgrade lke-smoke lke-destroy lke-status \
        helm-check helm-smoke helm-dashboard helm-containers helm-full \
        what-changed \
        clean help
@@ -136,6 +140,36 @@ webhooks: $(SMOKE_STAMP)          ## envelope, HMAC, no secret leak (10s)
 auth-meeting: $(SMOKE_STAMP)      ## authenticated join: S3 config, cookies, join type (60s)
 	@$(T3)/tests/auth-meeting.sh
 
+# ═══ Matrix validation (reads test-registry.yaml) ══════════════
+# validate-<mode> runs every cheap-tier test registered for that mode,
+# writes .state/reports/<mode>/<test>.json, exits non-zero on any failure.
+# Reports drive the aggregator (Phase C+) and release-ship gate (Phase D).
+
+# validate-<mode>: run tests for that mode.
+# With no SCOPE: runs ALL cheap-tier tests registered for the mode (full matrix).
+# With SCOPE=<path>: runs only the tests scope.issues[].proves[] lists for this mode.
+validate-lite:                     ## run tests for lite mode + write JSON reports
+	@$(T3)/lib/run-matrix.sh lite $(if $(SCOPE),--scope $(SCOPE),)
+
+validate-compose:                  ## run tests for compose mode + write JSON reports
+	@$(T3)/lib/run-matrix.sh compose $(if $(SCOPE),--scope $(SCOPE),)
+
+validate-helm:                     ## run tests for helm mode + write JSON reports
+	@$(T3)/lib/run-matrix.sh helm $(if $(SCOPE),--scope $(SCOPE),)
+
+report:                            ## aggregate .state/reports/* → tests3/reports/release-<tag>.md + update feature READMEs
+	@mkdir -p $(ROOT)/tests3/reports
+	@TAG=$$(cat $(STATE)/image_tag 2>/dev/null || echo "unknown"); \
+	python3 $(T3)/lib/aggregate.py --write-features --out $(ROOT)/tests3/reports/release-$$TAG.md; \
+	echo "  report → tests3/reports/release-$$TAG.md"
+
+report-gate:                       ## like `report` but exits non-zero if any feature is below its confidence_min
+	@mkdir -p $(ROOT)/tests3/reports
+	@TAG=$$(cat $(STATE)/image_tag 2>/dev/null || echo "unknown"); \
+	python3 $(T3)/lib/aggregate.py --write-features --out $(ROOT)/tests3/reports/release-$$TAG.md --gate-check
+
+validate-all: validate-lite validate-compose validate-helm report  ## run all cheap tests on all modes + aggregate
+
 # ═══ Composites ═══════════════════════════════════════════════════
 
 e2e: meeting-tts                  ## smoke + full meeting (single script)
@@ -160,12 +194,18 @@ vm-provision-compose:              ## provision VM + deploy compose
 	@$(T3)/lib/vm.sh wait
 	@$(T3)/lib/vm-setup-compose.sh
 
-vm-smoke-compose:                  ## run smoke + dashboard + containers + webhooks on VM
-	@$(T3)/lib/vm-run.sh smoke
-	@$(T3)/lib/vm-run.sh dashboard-auth
-	@$(T3)/lib/vm-run.sh dashboard-proxy
-	@$(T3)/lib/vm-run.sh containers
-	@$(T3)/lib/vm-run.sh webhooks
+vm-smoke-compose:                  ## run the validate-compose matrix on VM (writes JSON reports)
+	@$(T3)/lib/vm-run.sh validate-compose
+
+vm-redeploy-compose:               ## pull latest :dev on compose VM and restart stack (keeps volumes)
+	@$(T3)/lib/vm-reset.sh $(T3)/lib/reset/redeploy-compose.sh
+
+vm-reset-compose:                  ## fresh reset on compose VM (stack+volumes, keeps VM)
+	@$(T3)/lib/vm-reset.sh $(T3)/lib/reset/reset-compose.sh
+
+vm-validate-scope-compose:         ## run scope-filtered tests on compose VM
+	@test -n "$(SCOPE)" || (echo "  ERROR: set SCOPE" && exit 2)
+	@$(T3)/lib/vm-run.sh "validate-compose SCOPE=$(SCOPE)"
 
 # ═══ VM — lite ════════════════════════════════════════════════════
 
@@ -183,10 +223,18 @@ vm-provision-lite:                 ## provision VM + deploy lite
 	@$(T3)/lib/vm.sh wait
 	@$(T3)/lib/vm-setup-lite.sh
 
-vm-smoke-lite:                     ## run smoke + dashboard + containers on VM
-	@$(T3)/lib/vm-run.sh smoke
-	@$(T3)/lib/vm-run.sh dashboard-auth
-	@$(T3)/lib/vm-run.sh containers
+vm-smoke-lite:                     ## run the validate-lite matrix on VM (writes JSON reports)
+	@$(T3)/lib/vm-run.sh validate-lite
+
+vm-redeploy-lite:                  ## pull latest :dev on lite VM and re-run make lite (keeps volumes)
+	@$(T3)/lib/vm-reset.sh $(T3)/lib/reset/redeploy-lite.sh
+
+vm-reset-lite:                     ## fresh reset on lite VM (stack+volumes, keeps VM)
+	@$(T3)/lib/vm-reset.sh $(T3)/lib/reset/reset-lite.sh
+
+vm-validate-scope-lite:            ## run scope-filtered tests on lite VM
+	@test -n "$(SCOPE)" || (echo "  ERROR: set SCOPE" && exit 2)
+	@$(T3)/lib/vm-run.sh "validate-lite SCOPE=$(SCOPE)"
 
 # ═══ VM — shared ══════════════════════════════════════════════════
 
@@ -239,10 +287,11 @@ lke-provision:                         ## provision LKE cluster + wait for nodes
 lke-setup:                             ## deploy helm chart to LKE cluster
 	@$(T3)/lib/lke-setup-helm.sh
 
-lke-smoke:                             ## run smoke + dashboard + containers on LKE
-	@$(MAKE) --no-print-directory smoke DEPLOY_MODE=helm
-	@$(MAKE) --no-print-directory dashboard-auth DEPLOY_MODE=helm || true
-	@$(MAKE) --no-print-directory containers DEPLOY_MODE=helm || true
+lke-upgrade:                           ## pull latest :dev + `helm upgrade` on LKE (keeps state)
+	@$(T3)/lib/lke-setup-helm.sh
+
+lke-smoke:                             ## run the validate-helm matrix + write JSON reports on LKE
+	@$(MAKE) --no-print-directory validate-helm DEPLOY_MODE=helm
 
 lke-load-db:                           ## load production DB dump into cluster Postgres
 	@$(T3)/lib/lke-load-db.sh $(DUMP_FILE)

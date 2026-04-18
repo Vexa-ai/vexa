@@ -142,7 +142,8 @@ up:
 			-e POSTGRES_DB=vexa \
 			-e POSTGRES_USER=postgres \
 			-e POSTGRES_PASSWORD=postgres \
-			postgres:17-alpine > /dev/null; \
+			postgres:17-alpine \
+			-c idle_in_transaction_session_timeout=60000 > /dev/null; \
 		echo "  Waiting for PostgreSQL..."; \
 		for i in $$(seq 1 12); do \
 			docker exec vexa-postgres pg_isready -U postgres -d vexa -q 2>/dev/null && break; \

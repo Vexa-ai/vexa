@@ -421,87 +421,104 @@ async def _get_running_bots_from_runtime(user_id: int) -> list:
         logger.error(f"Runtime API list failed for user {user_id}: {e}")
         return []
 
-    bots_status = []
-    async with async_session_local() as db:
-        for c in containers:
-            if c.get("status") != "running":
-                continue
+    # Parse container info and collect meeting IDs to fetch
+    parsed_containers = []
+    meeting_ids_to_fetch = set()
+    for c in containers:
+        if c.get("status") != "running":
+            continue
 
-            name = c.get("name", "")
-            meeting_id_from_name = "unknown"
-            meeting_id_int = None
+        name = c.get("name", "")
+        meeting_id_from_name = "unknown"
+        meeting_id_int = None
 
-            # Primary: metadata.meeting_id (set at spawn time)
-            meta = c.get("metadata", {})
-            if meta.get("meeting_id"):
+        # Primary: metadata.meeting_id (set at spawn time)
+        meta = c.get("metadata", {})
+        if meta.get("meeting_id"):
+            try:
+                meeting_id_int = int(meta["meeting_id"])
+                meeting_id_from_name = str(meeting_id_int)
+            except (ValueError, TypeError):
+                pass
+
+        # Fallback: parse container name (meeting-{user_id}-{hash} or vexa-bot-{id}-...)
+        if meeting_id_int is None:
+            try:
+                parts = name.split("-")
+                if len(parts) > 2 and parts[0] == "meeting":
+                    meeting_id_from_name = parts[2]
+                elif len(parts) > 2 and parts[0] == "vexa" and parts[1] == "bot":
+                    meeting_id_from_name = parts[2]
+                    meeting_id_int = int(meeting_id_from_name)
+            except (ValueError, IndexError):
+                pass
+
+        if meeting_id_int is not None:
+            meeting_ids_to_fetch.add(meeting_id_int)
+
+        parsed_containers.append((c, name, meeting_id_from_name, meeting_id_int))
+
+    # Batch-fetch all meetings in one short-lived DB session
+    meetings_map: Dict[int, Meeting] = {}
+    if meeting_ids_to_fetch:
+        async with async_session_local() as db:
+            for mid in meeting_ids_to_fetch:
                 try:
-                    meeting_id_int = int(meta["meeting_id"])
-                    meeting_id_from_name = str(meeting_id_int)
-                except (ValueError, TypeError):
-                    pass
-
-            # Fallback: parse container name (meeting-{user_id}-{hash} or vexa-bot-{id}-...)
-            if meeting_id_int is None:
-                try:
-                    parts = name.split("-")
-                    if len(parts) > 2 and parts[0] == "meeting":
-                        # Name format: meeting-{user_id}-{hash} — parts[1] is user_id, not meeting_id
-                        # Can't reliably extract meeting_id from name alone
-                        meeting_id_from_name = parts[2]
-                    elif len(parts) > 2 and parts[0] == "vexa" and parts[1] == "bot":
-                        meeting_id_from_name = parts[2]
-                        meeting_id_int = int(meeting_id_from_name)
-                except (ValueError, IndexError):
-                    pass
-
-            platform = None
-            native_meeting_id = None
-            meeting_data = {}
-            meeting_start_time = None
-            meeting_status = None
-
-            if meeting_id_int is not None:
-                try:
-                    meeting = await db.get(Meeting, meeting_id_int)
+                    meeting = await db.get(Meeting, mid)
                     if meeting:
-                        platform = meeting.platform
-                        native_meeting_id = meeting.platform_specific_id
-                        meeting_data = meeting.data or {}
-                        meeting_start_time = meeting.start_time.isoformat() if meeting.start_time else None
-                        meeting_status = meeting.status
-                        # Refresh browser_session Redis TTL for active bots
-                        if redis_client:
-                            await redis_client.expire(f"browser_session:{meeting.id}", 86400)
-                            session_token = meeting_data.get("session_token")
-                            if session_token:
-                                await redis_client.expire(f"browser_session:{session_token}", 86400)
+                        # Snapshot the fields we need so session can close
+                        meetings_map[mid] = {
+                            "platform": meeting.platform,
+                            "native_meeting_id": meeting.platform_specific_id,
+                            "data": dict(meeting.data) if meeting.data else {},
+                            "start_time": meeting.start_time.isoformat() if meeting.start_time else None,
+                            "status": meeting.status,
+                            "id": meeting.id,
+                        }
                 except Exception as e:
-                    logger.error(f"DB error fetching meeting {meeting_id_int}: {e}")
+                    logger.error(f"DB error fetching meeting {mid}: {e}")
+    # DB session closed here — no async I/O while holding connection
 
-            created_at = None
-            if c.get("created_at"):
-                try:
-                    created_at = datetime.fromtimestamp(c["created_at"], timezone.utc).isoformat()
-                except Exception:
-                    pass
+    # Redis TTL refreshes (outside DB session)
+    if redis_client:
+        for mid, mdata in meetings_map.items():
+            try:
+                await redis_client.expire(f"browser_session:{mdata['id']}", 86400)
+                session_token = mdata["data"].get("session_token")
+                if session_token:
+                    await redis_client.expire(f"browser_session:{session_token}", 86400)
+            except Exception:
+                pass
 
-            # Strip webhook_secret from response data for security
-            safe_data = {k: v for k, v in meeting_data.items() if k != "webhook_secret"} if meeting_data else {}
+    # Build response
+    bots_status = []
+    for c, name, meeting_id_from_name, meeting_id_int in parsed_containers:
+        mdata = meetings_map.get(meeting_id_int, {}) if meeting_id_int else {}
+        meeting_data = mdata.get("data", {})
 
-            bots_status.append({
-                "container_id": c.get("container_id"),
-                "container_name": name,
-                "platform": platform,
-                "native_meeting_id": native_meeting_id,
-                "status": "running",
-                "normalized_status": "Up",
-                "created_at": created_at,
-                "start_time": meeting_start_time,
-                "labels": {},
-                "meeting_id_from_name": meeting_id_from_name,
-                "meeting_status": meeting_status,
-                "data": safe_data,
-            })
+        created_at = None
+        if c.get("created_at"):
+            try:
+                created_at = datetime.fromtimestamp(c["created_at"], timezone.utc).isoformat()
+            except Exception:
+                pass
+
+        safe_data = {k: v for k, v in meeting_data.items() if k != "webhook_secret"} if meeting_data else {}
+
+        bots_status.append({
+            "container_id": c.get("container_id"),
+            "container_name": name,
+            "platform": mdata.get("platform"),
+            "native_meeting_id": mdata.get("native_meeting_id"),
+            "status": "running",
+            "normalized_status": "Up",
+            "created_at": created_at,
+            "start_time": mdata.get("start_time"),
+            "labels": {},
+            "meeting_id_from_name": meeting_id_from_name,
+            "meeting_status": mdata.get("status"),
+            "data": safe_data,
+        })
 
     return bots_status
 
@@ -516,16 +533,24 @@ async def _delayed_container_stop(container_name: str, meeting_id: int, delay_se
 
     # Safety finalizer
     await asyncio.sleep(1)
+    meeting_id_for_redis = None
+    session_token_for_redis = None
+    should_run_post_tasks = False
+    publish_info = None
+    status_transition_info = None
     try:
         async with async_session_local() as db:
             meeting = await db.get(Meeting, meeting_id)
             if not meeting:
                 return
 
+            # Snapshot data needed after session closes
+            meeting_id_for_redis = meeting.id
+            session_token_for_redis = (meeting.data or {}).get("session_token")
+
             terminal_states = [MeetingStatus.COMPLETED.value, MeetingStatus.FAILED.value]
             if meeting.status not in terminal_states:
                 logger.warning(f"[Delayed Stop] Meeting {meeting_id} still '{meeting.status}' after stop. Finalizing.")
-                # Use pending_completion_reason if set (e.g., scheduler timeout), otherwise default to STOPPED
                 reason = MeetingCompletionReason.STOPPED
                 if meeting.data and isinstance(meeting.data, dict):
                     pending = meeting.data.get("pending_completion_reason")
@@ -534,6 +559,7 @@ async def _delayed_container_stop(container_name: str, meeting_id: int, delay_se
                             reason = MeetingCompletionReason(pending)
                         except ValueError:
                             pass
+                old_status = meeting.status
                 success = await update_meeting_status(
                     meeting,
                     MeetingStatus.COMPLETED,
@@ -543,18 +569,34 @@ async def _delayed_container_stop(container_name: str, meeting_id: int, delay_se
                     transition_metadata={"container_name": container_name, "finalized_by": "delayed_stop"},
                 )
                 if success:
-                    await publish_meeting_status_change(
-                        meeting.id, MeetingStatus.COMPLETED.value, redis_client,
-                        meeting.platform, meeting.platform_specific_id, meeting.user_id,
-                    )
-                    asyncio.create_task(run_all_tasks(meeting.id))
+                    publish_info = (meeting.id, meeting.platform, meeting.platform_specific_id, meeting.user_id)
+                    should_run_post_tasks = True
+                    status_transition_info = {
+                        "old_status": old_status,
+                        "new_status": MeetingStatus.COMPLETED.value,
+                        "reason": "delayed_stop_finalizer",
+                        "transition_source": "delayed_stop",
+                    }
+        # DB session closed here — Redis/HTTP calls below are safe
 
-            # Clean up browser_session Redis keys
-            if redis_client:
-                session_token = (meeting.data or {}).get("session_token")
-                if session_token:
-                    await redis_client.delete(f"browser_session:{session_token}")
-                await redis_client.delete(f"browser_session:{meeting.id}")
+        if publish_info:
+            await publish_meeting_status_change(
+                publish_info[0], MeetingStatus.COMPLETED.value, redis_client,
+                publish_info[1], publish_info[2], publish_info[3],
+            )
+        if should_run_post_tasks:
+            asyncio.create_task(run_all_tasks(meeting_id))
+            # Fire status webhook for the COMPLETED transition (post-meeting fires completion webhook too,
+            # but status webhook is for users who enabled webhook_events=meeting.status_change etc.)
+            if status_transition_info:
+                from .post_meeting import run_status_webhook_task
+                asyncio.create_task(run_status_webhook_task(meeting_id, status_transition_info))
+
+        # Clean up browser_session Redis keys
+        if redis_client and meeting_id_for_redis is not None:
+            if session_token_for_redis:
+                await redis_client.delete(f"browser_session:{session_token_for_redis}")
+            await redis_client.delete(f"browser_session:{meeting_id_for_redis}")
     except Exception as e:
         logger.error(f"[Delayed Stop] Finalizer error for meeting {meeting_id}: {e}", exc_info=True)
 
@@ -823,7 +865,7 @@ async def request_bot(
     elif req.recording_enabled is not None:
         meeting_data["recording_enabled"] = bool(req.recording_enabled)
     else:
-        meeting_data["recording_enabled"] = os.getenv("RECORDING_ENABLED", "false").lower() == "true"
+        meeting_data["recording_enabled"] = os.getenv("RECORDING_ENABLED", "true").lower() == "true"
 
     # Store webhook config in meeting.data (from gateway headers or user config)
     webhook_url = request.headers.get("X-User-Webhook-URL", "")
@@ -939,7 +981,7 @@ async def request_bot(
             "everyoneLeftTimeout": resolved_max_time_left_alone,
         },
         "meetingApiCallbackUrl": f"{MEETING_API_URL}/bots/internal/callback/exited",
-        "recordingEnabled": user_recording_config.get("enabled", os.getenv("RECORDING_ENABLED", "false").lower() == "true"),
+        "recordingEnabled": user_recording_config.get("enabled", os.getenv("RECORDING_ENABLED", "true").lower() == "true"),
         "transcribeEnabled": transcribe,
         "captureModes": user_recording_config.get("capture_modes", os.getenv("CAPTURE_MODES", "audio").split(",")),
         "recordingUploadUrl": f"{MEETING_API_URL}/internal/recordings/upload",
@@ -1360,9 +1402,15 @@ async def stop_bot(
                 logger.warning(f"Runtime API lookup failed for meeting {meeting.id}: {e}")
 
         if not container_name:
+            old_status = meeting.status
             success = await update_meeting_status(meeting, MeetingStatus.COMPLETED, db, completion_reason=MeetingCompletionReason.STOPPED)
             if success:
                 await publish_meeting_status_change(meeting.id, MeetingStatus.COMPLETED.value, redis_client, platform_value, native_meeting_id, meeting.user_id)
+                await schedule_status_webhook_task(
+                    meeting=meeting, background_tasks=background_tasks,
+                    old_status=old_status, new_status=MeetingStatus.COMPLETED.value,
+                    reason="User requested stop (no container)", transition_source="user_stop",
+                )
             background_tasks.add_task(run_all_tasks, meeting.id)
             continue
 
@@ -1378,9 +1426,15 @@ async def stop_bot(
             meeting.data["stop_requested"] = True
             await db.commit()
             background_tasks.add_task(_delayed_container_stop, container_name, meeting.id, 0)
+            old_status = meeting.status
             success = await update_meeting_status(meeting, MeetingStatus.COMPLETED, db, completion_reason=MeetingCompletionReason.STOPPED)
             if success:
                 await publish_meeting_status_change(meeting.id, MeetingStatus.COMPLETED.value, redis_client, platform_value, native_meeting_id, meeting.user_id)
+                await schedule_status_webhook_task(
+                    meeting=meeting, background_tasks=background_tasks,
+                    old_status=old_status, new_status=MeetingStatus.COMPLETED.value,
+                    reason="User requested stop (fast-path)", transition_source="user_stop",
+                )
             background_tasks.add_task(run_all_tasks, meeting.id)
             continue
 
@@ -1400,6 +1454,11 @@ async def stop_bot(
         old_status = meeting.status
         await update_meeting_status(meeting, MeetingStatus.STOPPING, db, transition_reason="User requested stop")
         await publish_meeting_status_change(meeting.id, "stopping", redis_client, platform_value, native_meeting_id, meeting.user_id)
+        await schedule_status_webhook_task(
+            meeting=meeting, background_tasks=background_tasks,
+            old_status=old_status, new_status="stopping",
+            reason="User requested stop", transition_source="user_stop",
+        )
 
     return {"message": "Stop request accepted and is being processed."}
 
@@ -1439,6 +1498,7 @@ async def scheduler_timeout_stop(
     container_name = meeting.bot_container_id
     if not container_name:
         # No container — just complete the meeting
+        old_status = meeting.status
         success = await update_meeting_status(
             meeting, MeetingStatus.COMPLETED, db,
             completion_reason=MeetingCompletionReason.MAX_BOT_TIME_EXCEEDED,
@@ -1448,6 +1508,11 @@ async def scheduler_timeout_stop(
             await publish_meeting_status_change(
                 meeting.id, MeetingStatus.COMPLETED.value, redis_client,
                 platform_value, native_meeting_id, meeting.user_id,
+            )
+            await schedule_status_webhook_task(
+                meeting=meeting, background_tasks=background_tasks,
+                old_status=old_status, new_status=MeetingStatus.COMPLETED.value,
+                reason="max_bot_time_exceeded (no container)", transition_source="scheduler_timeout",
             )
             background_tasks.add_task(run_all_tasks, meeting.id)
         return {"message": "Bot timed out (no container)"}
@@ -1470,6 +1535,7 @@ async def scheduler_timeout_stop(
     background_tasks.add_task(_delayed_container_stop, container_name, meeting.id, BOT_STOP_DELAY_SECONDS)
 
     # Transition to STOPPING, then the delayed stop finalizer will complete it
+    old_status = meeting.status
     await update_meeting_status(
         meeting, MeetingStatus.STOPPING, db,
         transition_reason="scheduler_timeout_max_bot_time",
@@ -1478,6 +1544,11 @@ async def scheduler_timeout_stop(
     await publish_meeting_status_change(
         meeting.id, "stopping", redis_client,
         platform_value, native_meeting_id, meeting.user_id,
+    )
+    await schedule_status_webhook_task(
+        meeting=meeting, background_tasks=background_tasks,
+        old_status=old_status, new_status="stopping",
+        reason="max_bot_time_exceeded", transition_source="scheduler_timeout",
     )
 
     return {"message": "Bot timeout triggered, stopping."}
@@ -1504,13 +1575,13 @@ async def get_recording_config(
     user = (await db.execute(select(User).where(User.id == current_user.id))).scalars().first()
     if not user:
         return {
-            "enabled": os.getenv("RECORDING_ENABLED", "false").lower() == "true",
+            "enabled": os.getenv("RECORDING_ENABLED", "true").lower() == "true",
             "capture_modes": os.getenv("CAPTURE_MODES", "audio").split(","),
         }
     data = user.data or {}
     rc = data.get("recording_config", {})
     return {
-        "enabled": rc.get("enabled", os.getenv("RECORDING_ENABLED", "false").lower() == "true"),
+        "enabled": rc.get("enabled", os.getenv("RECORDING_ENABLED", "true").lower() == "true"),
         "capture_modes": rc.get("capture_modes", os.getenv("CAPTURE_MODES", "audio").split(",")),
     }
 

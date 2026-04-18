@@ -1,0 +1,87 @@
+gate:
+  confidence_min: 95
+dods:
+- id: events-meeting-completed
+  label: meeting.completed fires on every bot exit (default-enabled)
+  weight: 10
+  evidence:
+    test: webhooks
+    step: e2e_completion
+    modes:
+    - compose
+- id: events-status-webhooks
+  label: >-
+    Status-change webhooks for non-meeting.completed events
+    (meeting.started / meeting.status_change / bot.failed) fire when
+    opted-in via webhook_events — proven by a delivery with event_type
+    != meeting.completed, not by any entry in webhook_deliveries[].
+  weight: 10
+  evidence:
+    test: webhooks
+    step: e2e_status_non_completed
+    modes:
+    - compose
+- id: envelope-shape
+  label: 'Every webhook carries envelope: event_id, event_type, api_version, created_at, data'
+  weight: 10
+  evidence:
+    test: webhooks
+    step: envelope
+    modes:
+    - compose
+- id: headers-hmac
+  label: X-Webhook-Signature = HMAC-SHA256(timestamp + '.' + payload) when secret is set
+  weight: 10
+  evidence:
+    test: webhooks
+    step: hmac
+    modes:
+    - compose
+- id: security-spoof-protection
+  label: Client-supplied X-User-Webhook-* headers cannot override stored config
+  weight: 10
+  evidence:
+    test: webhooks
+    step: spoof
+    modes:
+    - compose
+- id: security-secret-not-exposed
+  label: webhook_secret never appears in any API response (POST /bots, GET /bots/status)
+  weight: 10
+  evidence:
+    test: webhooks
+    step: no_leak_response
+    modes:
+    - compose
+- id: security-payload-hygiene
+  label: Internal fields (secret, url, container ids, delivery state) stripped from webhook payloads
+  weight: 5
+  evidence:
+    test: webhooks
+    step: no_leak_payload
+    modes:
+    - compose
+- id: flow-user-config
+  label: PUT /user/webhook persists webhook_url + webhook_secret + webhook_events to User.data
+  weight: 10
+  evidence:
+    test: webhooks
+    step: config
+    modes:
+    - compose
+- id: flow-gateway-inject
+  label: Gateway injects validated webhook config into meeting.data on POST /bots
+  weight: 15
+  evidence:
+    test: webhooks
+    step: inject
+    modes:
+    - compose
+- id: reliability-db-pool
+  label: DB connection pool doesn't exhaust under repeated status requests
+  weight: 10
+  evidence:
+    check: DB_POOL_NO_EXHAUSTION
+    modes:
+    - lite
+    - compose

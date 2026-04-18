@@ -462,6 +462,22 @@
       "symptom": "Tokens have empty scopes — scope enforcement will reject all requests",
       "url": "DB_TOKEN_SCOPES_CHECK"
     },
+    {
+      "id": "ADMIN_API_DB_EXISTS",
+      "tier": "health",
+      "found": "2026-04-17",
+      "proves": "The `vexa` database exists and is reachable from admin-api — /login won't 500 on fresh boot",
+      "symptom": "/login returns 500 'Server Configuration Error'; admin-api crashes with asyncpg.InvalidCatalogNameError: database \\\"vexa\\\" does not exist (DB got dropped after initial bootstrap — e.g. Linode low-disk auto-recovery wiped it)",
+      "url": "ADMIN_API_DB_EXISTS_CHECK"
+    },
+    {
+      "id": "POSTGRES_NO_DISK_WARNING",
+      "tier": "health",
+      "found": "2026-04-17",
+      "proves": "Postgres has no Linode disk-pressure recovery marker (`readme_to_recover` database absent) — volume is healthy",
+      "symptom": "Linode detected low disk / volume corruption; replaced the data volume and left a `readme_to_recover` database behind. Application data is likely gone.",
+      "url": "POSTGRES_NO_DISK_WARNING_CHECK"
+    },
 
     {"_": "═══ CONTRACT — API behavior correct, 15s ═══"},
 
@@ -492,6 +508,13 @@
       "symptom": "No audio recording for meeting — RECORDING_ENABLED env var not set or recordingEnabled=false in BOT_CONFIG",
       "method": "BOT_RECORDING_CHECK",
       "skip_modes": ["lite"]
+    },
+    {
+      "id": "DB_POOL_NO_EXHAUSTION",
+      "tier": "contract",
+      "proves": "meeting-api DB connection pool does not exhaust under sequential requests",
+      "symptom": "meeting-api returns 504 after a few requests — DB connection pool exhausted (idle in transaction leak)",
+      "method": "DB_POOL_CHECK"
     },
     {
       "id": "MINIO_BUCKET_WRITABLE",
@@ -682,6 +705,23 @@
       "url": "$DASHBOARD_URL/",
       "method": "HEAD",
       "expect_code": 200
+    },
+    {
+      "id": "DASHBOARD_MEETINGS_NOT_ALL_FAILED",
+      "tier": "contract",
+      "found": "2026-04-17",
+      "proves": "Either /meetings is empty (clean reset) OR at least one non-failed meeting exists — the UI won't surface a 'everything broken' picture to a human validator",
+      "symptom": "/meetings page shows 20+ rows and every single one is status=failed (test-pollution from prior runs accumulating; or systemic failure). Either way, a human looking at the dashboard gets a misleading signal.",
+      "url": "DASHBOARD_MEETINGS_NOT_ALL_FAILED_CHECK"
+    },
+    {
+      "id": "DASHBOARD_WEBHOOKS_ALL_EVENT_TYPES",
+      "tier": "contract",
+      "found": "2026-04-17",
+      "proves": "The /webhooks dashboard page surfaces status-change/started/bot.failed deliveries, not just meeting.completed — UI reads meeting.data.webhook_deliveries[] (plural), not only webhook_delivery (singular)",
+      "symptom": "User sees only `meeting.completed` rows on /webhooks even when backend delivered other event types (regression of dashboard /api/webhooks/deliveries rollup)",
+      "url": "DASHBOARD_WEBHOOKS_ALL_EVENT_TYPES_CHECK",
+      "skip_modes": ["helm"]
     }
   ]
 }

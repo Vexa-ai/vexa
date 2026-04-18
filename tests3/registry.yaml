@@ -1,0 +1,1272 @@
+# tests3 Registry — consolidated.
+# Single source of truth for all automated evidence.
+# Schema: each entry has `type:` (grep | http | env | script).
+# Generated from tests3/checks/registry.json + tests3/test-registry.yaml
+# by tests3/lib/migrate-registry.py. See tests3/README.md §3.3.
+
+DASHBOARD_ADMIN_KEY_MATCHES:
+  proves: "dashboard VEXA_ADMIN_API_KEY equals admin-api ADMIN_API_TOKEN \u2014 login will work"
+  symptom: "Dashboard login fails silently \u2014 VEXA_ADMIN_API_KEY in dashboard differs from admin-api ADMIN_API_TOKEN"
+  found: '2026-04-07'
+  type: env
+  env_checks:
+  - service: dashboard
+    var: VEXA_ADMIN_API_KEY
+    not_empty: true
+    equals:
+      service: admin-api
+      var: ADMIN_API_TOKEN
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 10
+DASHBOARD_ADMIN_KEY_VALID:
+  proves: "dashboard can authenticate to admin-api \u2014 user lookup and login will work"
+  symptom: "Dashboard shows empty pages \u2014 VEXA_ADMIN_API_KEY rejected by admin-api"
+  found: '2026-04-07'
+  type: env
+  env_checks:
+  - service: dashboard
+    var: VEXA_ADMIN_API_KEY
+    valid_against:
+      url: $ADMIN_URL/admin/users?limit=1
+      header: 'X-Admin-API-Key: $VALUE'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 10
+DASHBOARD_API_KEY_VALID:
+  proves: "dashboard VEXA_API_KEY accepted by gateway \u2014 transcript and bot data will load"
+  symptom: "Dashboard transcript/status empty \u2014 VEXA_API_KEY in dashboard is stale (401 from gateway)"
+  found: '2026-04-07'
+  type: env
+  env_checks:
+  - service: dashboard
+    var: VEXA_API_KEY
+    valid_against:
+      url: $GATEWAY_URL/bots/status
+      header: 'X-API-Key: $VALUE'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 10
+DASHBOARD_API_URL_SET:
+  proves: "dashboard knows where the backend is \u2014 API calls will reach the gateway"
+  symptom: "Dashboard cannot reach backend \u2014 VEXA_API_URL not set or wrong"
+  found: '2026-04-07'
+  type: env
+  env_checks:
+  - service: dashboard
+    var: VEXA_API_URL
+    not_empty: true
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 10
+MINIO_BUCKET_SET:
+  proves: "MinIO bucket configured \u2014 file operations have a destination"
+  symptom: "Browser session save fails \u2014 MINIO_BUCKET not configured in meeting-api"
+  type: env
+  env_checks:
+  - service: meeting-api
+    var: MINIO_BUCKET
+    not_empty: true
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 10
+MINIO_ENDPOINT_SET:
+  proves: "meeting-api can reach MinIO \u2014 browser state save/restore and recordings will work"
+  symptom: "Authenticated bot join has no S3 config \u2014 MINIO_ENDPOINT not set in meeting-api"
+  found: '2026-04-07'
+  type: env
+  env_checks:
+  - service: meeting-api
+    var: MINIO_ENDPOINT
+    not_empty: true
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 10
+RUNTIME_API_URL_SET:
+  proves: "meeting-api can reach runtime-api \u2014 bot container creation will work"
+  symptom: "Bot creation fails \u2014 meeting-api cannot reach runtime-api"
+  type: env
+  env_checks:
+  - service: meeting-api
+    var: RUNTIME_API_URL
+    not_empty: true
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 10
+BROWSER_IMAGE_IN_ENV:
+  proves: "BROWSER_IMAGE is set explicitly in env-example \u2014 not derived from IMAGE_TAG substitution"
+  symptom: "BROWSER_IMAGE not in .env \u2014 docker-compose.yml variable substitution fails silently, bots get wrong image"
+  found: '2026-04-13'
+  type: grep
+  file: deploy/env-example
+  must_match: BROWSER_IMAGE=
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+COMPOSE_ADMIN_KEY_DEFAULT:
+  proves: dashboard and admin-api share same ADMIN_API_TOKEN default in compose
+  symptom: "Dashboard login 503 \u2014 VEXA_ADMIN_API_KEY had different default than admin-api"
+  found: '2026-04-07'
+  type: grep
+  file: deploy/compose/docker-compose.yml
+  must_match: VEXA_ADMIN_API_KEY=${ADMIN_API_TOKEN:-changeme}
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+ENV_EXAMPLE_LATEST_ON_MAIN:
+  proves: "env-example uses IMAGE_TAG=latest \u2014 main branch always deploys stable released images"
+  symptom: "Merging dev overwrites IMAGE_TAG to dev \u2014 new users pull untested dev images instead of latest"
+  found: '2026-04-13'
+  type: grep
+  file: deploy/env-example
+  must_match: IMAGE_TAG=latest
+  only_branches:
+  - main
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+GATEWAY_TIMEOUT_ADEQUATE:
+  proves: "API gateway HTTP client timeout >= 15s \u2014 browser session creation needs time"
+  symptom: "Gateway returns 503 on browser session creation \u2014 default 5s httpx timeout too short for process spawn"
+  found: '2026-04-13'
+  type: grep
+  file: services/api-gateway/main.py
+  must_match: AsyncClient(timeout=30
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+GRACEFUL_LEAVE:
+  proves: self_initiated_leave during stopping treated as completed, not failed
+  symptom: "Bot shows failed after successful meeting \u2014 exit during stopping treated as failure"
+  found: '2026-04-06'
+  type: grep
+  file: services/meeting-api/meeting_api/callbacks.py
+  must_match: self_initiated_leave
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+IDENTITY_NO_FALLBACK:
+  proves: /api/auth/me uses only cookie for identity, never falls back to env var
+  symptom: "/api/auth/me returns wrong user \u2014 fell back to VEXA_API_KEY env var instead of cookie"
+  found: '2026-04-07'
+  type: grep
+  file: services/dashboard/src/app/api/auth/me/route.ts
+  must_not_match: process\.env\.VEXA_API_KEY
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+LITE_PROCESS_BACKEND:
+  proves: "Dockerfile.lite uses process backend \u2014 lite is single-container, no Docker needed"
+  symptom: "Lite tries to spawn Docker containers for bots \u2014 fails without Docker socket, defeats single-container purpose"
+  found: '2026-04-13'
+  type: grep
+  file: deploy/lite/Dockerfile.lite
+  must_match: ORCHESTRATOR_BACKEND=process
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+LITE_RECORDING_ENABLED:
+  proves: "Dockerfile.lite has RECORDING_ENABLED=true \u2014 lite records audio by default"
+  symptom: "Recording disabled in lite \u2014 bots join meetings but produce no audio recordings"
+  found: '2026-04-13'
+  type: grep
+  file: deploy/lite/Dockerfile.lite
+  must_match: RECORDING_ENABLED=true
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+LOGIN_REDIRECT:
+  proves: login redirects to / (then /meetings), not to disabled /agent page
+  symptom: After login, user redirected to /agent (disabled feature) instead of /meetings
+  found: '2026-04-07'
+  type: grep
+  file: services/dashboard/src/app/login/page.tsx
+  must_match: push("/")
+  must_not_match: push\("/agent"\)
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+MAP_MEETING:
+  proves: dashboard API client maps native_meeting_id to platform_specific_id via mapMeeting
+  symptom: "Transcript page empty \u2014 getMeeting() skipped mapMeeting(), native_meeting_id not mapped"
+  found: '2026-04-07'
+  type: grep
+  file: services/dashboard/src/lib/api.ts
+  must_match: mapMeeting
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+NO_DEV_FALLBACK_COMPOSE:
+  proves: docker-compose.yml has no silent :-dev fallbacks on active (uncommented) lines
+  symptom: "IMAGE_TAG unset silently falls back to :dev \u2014 deploys untested dev images in production"
+  found: '2026-04-13'
+  type: grep
+  file: deploy/compose/docker-compose.yml
+  must_not_match: ^[^#]*:-dev\}
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+NO_EXPORT_IMAGE_TAG:
+  proves: "compose Makefile does not export IMAGE_TAG globally \u2014 prevents empty env var poisoning"
+  symptom: Make exports empty IMAGE_TAG before .env is read. Docker Compose inherits empty string which takes precedence over
+    --env-file, causing ${IMAGE_TAG:-dev} to resolve to dev
+  found: '2026-04-13'
+  type: grep
+  file: deploy/compose/Makefile
+  must_not_match: ^export IMAGE_TAG
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+NO_IMAGETOOLS_CREATE:
+  proves: publish/promote uses docker tag+push, not imagetools create (same SHA across tags)
+  symptom: "imagetools create wraps image in manifest list \u2014 latest/dev get different SHA than build tag, breaking traceability"
+  found: '2026-04-13'
+  type: grep
+  file: deploy/compose/Makefile
+  must_not_match: ^[^#]*imagetools create
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+NO_NESTED_COMPOSE_VARS:
+  proves: docker-compose.yml has no nested ${VAR:-${VAR}} on active (uncommented) lines
+  symptom: "BROWSER_IMAGE silently falls back to :dev \u2014 bots use wrong image, container creation 404/500"
+  found: '2026-04-13'
+  type: grep
+  file: deploy/compose/docker-compose.yml
+  must_not_match: ^[^#]*\$\{[^}]+:-[^}]*\$\{
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+PASSWORD_STORE_BASIC:
+  proves: "Chrome uses basic password store \u2014 cookies decryptable across sessions"
+  symptom: "Authenticated join fails \u2014 Chrome cookies encrypted, login not restored across sessions"
+  found: '2026-04-07'
+  type: grep
+  file: services/vexa-bot/core/src/constans.ts
+  must_match: password-store=basic
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+ROUTE_COLLISION:
+  proves: bot detail route is /bots/id/{id}, not /bots/{id} which collides with /bots/status
+  symptom: "GET /bots/status returns 422 \u2014 Starlette matches /bots/{meeting_id} before /bots/status"
+  found: '2026-04-06'
+  type: grep
+  file: services/meeting-api/meeting_api/meetings.py
+  must_match: /bots/id/{meeting_id}
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+SECURE_COOKIE_ADMIN_VERIFY:
+  proves: cookie Secure flag based on actual protocol, not NODE_ENV (admin-verify)
+  symptom: "Login loop on HTTP \u2014 Secure cookie flag set based on NODE_ENV instead of actual protocol"
+  found: '2026-04-07'
+  type: grep
+  file: services/dashboard/src/app/api/auth/admin-verify/route.ts
+  must_match: isSecureRequest()
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+SECURE_COOKIE_NEXTAUTH:
+  proves: cookie Secure flag based on actual protocol, not NODE_ENV (nextauth)
+  symptom: "Login loop on HTTP \u2014 Secure cookie flag set based on NODE_ENV instead of actual protocol"
+  found: '2026-04-07'
+  type: grep
+  file: services/dashboard/src/app/api/auth/[...nextauth]/route.ts
+  must_match: isSecureRequest()
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+SECURE_COOKIE_SEND_MAGIC_LINK:
+  proves: cookie Secure flag based on actual protocol, not NODE_ENV (send-magic-link)
+  symptom: "Login loop on HTTP \u2014 Secure cookie flag set based on NODE_ENV instead of actual protocol"
+  found: '2026-04-07'
+  type: grep
+  file: services/dashboard/src/app/api/auth/send-magic-link/route.ts
+  must_match: isSecureRequest()
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+SECURE_COOKIE_VERIFY:
+  proves: cookie Secure flag based on actual protocol, not NODE_ENV (verify)
+  symptom: "Login loop on HTTP \u2014 Secure cookie flag set based on NODE_ENV instead of actual protocol"
+  found: '2026-04-07'
+  type: grep
+  file: services/dashboard/src/app/api/auth/verify/route.ts
+  must_match: isSecureRequest()
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+URL_PARSER_EXISTS:
+  proves: "MeetingCreate schema has parse_meeting_url \u2014 accepts meeting_url field directly"
+  symptom: "All Teams URL formats return 422 \u2014 MeetingCreate schema had no URL parser"
+  found: '2026-04-06'
+  type: grep
+  file: services/meeting-api/meeting_api/schemas.py
+  must_match: parse_meeting_url
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+VM_LITE_USES_MAKE:
+  proves: "VM lite setup uses make lite \u2014 tests the same path as new users"
+  symptom: VM setup uses manual docker commands that diverge from user docs, hiding deployment bugs
+  found: '2026-04-13'
+  type: grep
+  file: tests3/lib/vm-setup-lite.sh
+  must_match: make lite
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+ADMIN_API_UP:
+  proves: "admin-api responds with valid token \u2014 user management and login work"
+  symptom: Admin API not responding
+  type: http
+  url: $ADMIN_URL/admin/users?limit=1
+  expect_code: 200
+  needs_admin_token: true
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 30
+AUTH_REJECTS_NO_TOKEN:
+  proves: "API rejects unauthenticated requests \u2014 auth middleware is active"
+  symptom: API accepts requests without auth token
+  type: http
+  url: $GATEWAY_URL/meetings
+  method: GET
+  expect_code:
+  - 401
+  - 403
+  - 422
+  auth: ''
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+BOTS_STATUS_NOT_422:
+  proves: "GET /bots/status returns 200 \u2014 no route collision with /bots/{meeting_id}"
+  symptom: GET /bots/status returns 422 due to route collision with /bots/{meeting_id}
+  found: '2026-04-06'
+  type: http
+  url: $GATEWAY_URL/bots/status
+  method: GET
+  expect_code: 200
+  auth: api_token
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+BOT_CREATE_OK:
+  proves: "POST /bots creates a bot without server error \u2014 runtime-api orchestrator is functional"
+  symptom: "Bot creation returns 500 \u2014 runtime-api cannot spawn bot containers (wrong orchestrator, missing image, or\
+    \ broken config)"
+  type: http
+  url: $GATEWAY_URL/bots
+  method: POST
+  expect_code:
+  - 200
+  - 201
+  - 202
+  - 403
+  - 409
+  auth: api_token
+  data: '{"platform":"google_meet","native_meeting_id":"healthcheck-bot","bot_name":"Health Check","automatic_leave":{"no_one_joined_timeout":30000}}'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+BROWSER_SESSION_OK:
+  proves: "POST /bots with mode=browser_session returns 201 \u2014 browser-session profile exists and works"
+  symptom: "Failed to start browser session container \u2014 browser-session profile missing from runtime-api"
+  type: http
+  url: $GATEWAY_URL/bots
+  method: POST
+  expect_code:
+  - 200
+  - 201
+  - 202
+  - 403
+  auth: api_token
+  data: '{"mode":"browser_session","bot_name":"Session Check"}'
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+CACHE_HEADERS:
+  proves: "dashboard HTML has cache control \u2014 deploy won't serve stale JS bundles"
+  symptom: "Old JS bundle served after deploy \u2014 HTML page cached by browser"
+  found: '2026-04-07'
+  type: http
+  url: $DASHBOARD_URL/
+  method: HEAD
+  expect_code: 200
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+DASHBOARD_LOGIN:
+  proves: "magic link login endpoint returns 200 \u2014 admin key is correctly configured"
+  symptom: "Dashboard magic link login returns 503 \u2014 admin key misconfigured"
+  found: '2026-04-07'
+  type: http
+  url: $DASHBOARD_URL/api/auth/send-magic-link
+  method: POST
+  expect_code: 200
+  data: '{"email":"test@vexa.ai"}'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+DASHBOARD_UP:
+  proves: "dashboard serves pages \u2014 user can access the UI"
+  symptom: Dashboard not responding
+  type: http
+  url: $DASHBOARD_URL/
+  expect_code: 200
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 30
+GATEWAY_UP:
+  proves: "API gateway accepts connections \u2014 all client requests can reach backend"
+  symptom: API gateway not responding
+  type: http
+  url: $GATEWAY_URL/
+  expect_code: 200
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 30
+GMEET_URL_PARSED:
+  proves: "Google Meet URL accepted by POST /bots \u2014 parser handles GMeet format"
+  symptom: Google Meet URL not accepted by POST /bots
+  type: http
+  url: $GATEWAY_URL/bots
+  method: POST
+  expect_code:
+  - 200
+  - 201
+  - 202
+  - 403
+  - 409
+  - 500
+  auth: api_token
+  data: '{"platform":"google_meet","meeting_url":"https://meet.google.com/abc-defg-hij","bot_name":"url-check-gm"}'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+INVALID_URL_REJECTED:
+  proves: "garbage URLs rejected with 400/422 \u2014 input validation works"
+  symptom: Invalid URL accepted instead of rejected
+  type: http
+  url: $GATEWAY_URL/bots
+  method: POST
+  expect_code:
+  - 400
+  - 422
+  auth: api_token
+  data: '{"platform":"teams","meeting_url":"not-a-url","bot_name":"url-check-bad"}'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+K8S_DEPLOYMENTS_READY:
+  proves: "all vexa deployments have ready replicas \u2014 K8s rollout succeeded"
+  symptom: One or more vexa deployments have 0 ready replicas
+  type: http
+  url: K8S_DEPLOYMENTS_READY
+  expect_code: 200
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 30
+K8S_NO_CRASHLOOP:
+  proves: "no pods in CrashLoopBackOff \u2014 all containers start cleanly"
+  symptom: "Pod stuck in CrashLoopBackOff \u2014 check image, env vars, resource limits"
+  type: http
+  url: K8S_NO_CRASHLOOP
+  expect_code: 200
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 30
+K8S_NO_RESTARTS:
+  proves: "pods are stable \u2014 restart count below threshold (5)"
+  symptom: "Pod restarting frequently \u2014 OOMKill, liveness probe failure, or crash"
+  type: http
+  url: K8S_NO_RESTARTS
+  expect_code: 200
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 30
+K8S_SECRETS_EXIST:
+  proves: "K8s secrets created \u2014 services can read credentials from secret mounts"
+  symptom: "No vexa secrets found \u2014 helm install may have skipped secret creation"
+  type: http
+  url: K8S_SECRETS_EXIST
+  expect_code: 200
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 30
+MEETINGS_LIST:
+  proves: "GET /meetings returns 200 \u2014 meeting list API works"
+  symptom: GET /meetings not returning 200
+  type: http
+  url: $GATEWAY_URL/meetings
+  method: GET
+  expect_code: 200
+  auth: api_token
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+MINIO_UP:
+  proves: "MinIO responds \u2014 recordings and browser state storage work"
+  symptom: "MinIO not responding \u2014 recordings and browser state will fail"
+  type: http
+  url: MINIO_HEALTH
+  expect_code: 200
+  modes:
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 30
+TEAMS_URL_CHANNEL:
+  proves: Teams channel meeting URL accepted or known gap
+  symptom: Teams channel meeting URL rejected
+  type: http
+  url: $GATEWAY_URL/bots
+  method: POST
+  expect_code:
+  - 200
+  - 201
+  - 202
+  - 403
+  - 409
+  - 422
+  - 500
+  auth: api_token
+  data: '{"platform":"teams","meeting_url":"https://teams.microsoft.com/l/meetup-join/19%3atestchannel%40thread.tacv2/1234567890","bot_name":"url-check-3"}'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+TEAMS_URL_ENTERPRISE:
+  proves: Teams enterprise domain URL parsed and accepted by POST /bots (no explicit platform needed)
+  symptom: Teams custom enterprise domain URL rejected
+  type: http
+  url: $GATEWAY_URL/bots
+  method: POST
+  expect_code:
+  - 200
+  - 201
+  - 202
+  - 403
+  - 409
+  - 500
+  auth: api_token
+  data: '{"meeting_url":"https://myorg.teams.microsoft.com/meet/33122884984323?p=J3o61K6vtz0f8RqKru","bot_name":"url-check-enterprise"}'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+TEAMS_URL_PERSONAL:
+  proves: Teams personal (teams.live.com) URL parsed and accepted by POST /bots (no explicit platform needed)
+  symptom: Teams personal (teams.live.com) URL rejected
+  type: http
+  url: $GATEWAY_URL/bots
+  method: POST
+  expect_code:
+  - 200
+  - 201
+  - 202
+  - 403
+  - 409
+  - 500
+  auth: api_token
+  data: '{"meeting_url":"https://teams.live.com/meet/9361792952021?p=abc12345","bot_name":"url-check-personal"}'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+TEAMS_URL_SHORTLINK:
+  proves: Teams /meet/ shortlink URL parsed and accepted by POST /bots (no explicit platform needed)
+  symptom: "Teams shortlink URL format rejected \u2014 parse_meeting_url does not handle /meet/ path"
+  found: '2026-04-06'
+  type: http
+  url: $GATEWAY_URL/bots
+  method: POST
+  expect_code:
+  - 200
+  - 201
+  - 202
+  - 403
+  - 409
+  - 500
+  auth: api_token
+  data: '{"meeting_url":"https://teams.microsoft.com/meet/365488377316481?p=ryf9yhbfrc7MpM7kNv","bot_name":"url-check-shortlink"}'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+TEAMS_URL_STANDARD:
+  proves: Teams standard join URL accepted by POST /bots
+  symptom: Teams standard URL format rejected
+  found: '2026-04-06'
+  type: http
+  url: $GATEWAY_URL/bots
+  method: POST
+  expect_code:
+  - 200
+  - 201
+  - 202
+  - 403
+  - 409
+  - 500
+  auth: api_token
+  data: '{"platform":"teams","meeting_url":"https://teams.microsoft.com/l/meetup-join/19%3ameeting_test123%40thread.v2/0?context=%7b%22Tid%22%3a%22test%22%7d","bot_name":"url-check"}'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+ADMIN_API_DB_EXISTS:
+  proves: "The `vexa` database exists and is reachable from admin-api \u2014 /login won't 500 on fresh boot"
+  symptom: "/login returns 500 'Server Configuration Error'; admin-api crashes with asyncpg.InvalidCatalogNameError: database\
+    \ \\\"vexa\\\" does not exist (DB got dropped after initial bootstrap \u2014 e.g. Linode low-disk auto-recovery wiped\
+    \ it)"
+  found: '2026-04-17'
+  type: script
+  dispatch: ADMIN_API_DB_EXISTS_CHECK
+  from_tier: health
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 30
+BOT_RECORDING_ENABLED:
+  proves: "bots are created with recordingEnabled=true \u2014 audio will be captured and uploaded"
+  symptom: "No audio recording for meeting \u2014 RECORDING_ENABLED env var not set or recordingEnabled=false in BOT_CONFIG"
+  type: script
+  dispatch: BOT_RECORDING_CHECK
+  from_tier: contract
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+BOT_STATUS_TRANSITIONS:
+  proves: "bot status transitions from requested within 30s \u2014 callbacks from bot\u2192meeting-api work"
+  symptom: "Bot stuck in 'requested' \u2014 status change callbacks not reaching meeting-api (wrong image, missing callback\
+    \ URL, network issue)"
+  type: script
+  dispatch: BOT_STATUS_CHECK
+  from_tier: contract
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+BROWSER_SESSION_CDP:
+  proves: "browser session CDP proxy is reachable \u2014 gateway can connect to browser container"
+  symptom: "Failed to reach browser container: Name or service not known \u2014 pod IP not resolved in K8s"
+  type: script
+  dispatch: BROWSER_SESSION_CDP_CHECK
+  from_tier: contract
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+CORS_PREFLIGHT:
+  proves: "OPTIONS preflight returns 200 for any origin \u2014 CORS_ORIGINS defaults to wildcard"
+  symptom: "OPTIONS /bots/status returns 400 for external origins \u2014 browser clients blocked by CORS"
+  found: '2026-04-13'
+  type: script
+  dispatch: CORS_PREFLIGHT
+  from_tier: contract
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+DASHBOARD_MEETINGS_NOT_ALL_FAILED:
+  proves: "Either /meetings is empty (clean reset) OR at least one non-failed meeting exists \u2014 the UI won't surface a\
+    \ 'everything broken' picture to a human validator"
+  symptom: /meetings page shows 20+ rows and every single one is status=failed (test-pollution from prior runs accumulating;
+    or systemic failure). Either way, a human looking at the dashboard gets a misleading signal.
+  found: '2026-04-17'
+  type: script
+  dispatch: DASHBOARD_MEETINGS_NOT_ALL_FAILED_CHECK
+  from_tier: contract
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+DASHBOARD_WEBHOOKS_ALL_EVENT_TYPES:
+  proves: "The /webhooks dashboard page surfaces status-change/started/bot.failed deliveries, not just meeting.completed \u2014\
+    \ UI reads meeting.data.webhook_deliveries[] (plural), not only webhook_delivery (singular)"
+  symptom: User sees only `meeting.completed` rows on /webhooks even when backend delivered other event types (regression
+    of dashboard /api/webhooks/deliveries rollup)
+  found: '2026-04-17'
+  type: script
+  dispatch: DASHBOARD_WEBHOOKS_ALL_EVENT_TYPES_CHECK
+  from_tier: contract
+  modes:
+  - lite
+  - compose
+  state: stateful
+  max_duration_sec: 30
+DASHBOARD_WS_URL:
+  proves: "dashboard /api/config returns a browser-resolvable wsUrl \u2014 WebSocket will connect"
+  symptom: "Dashboard WS broken \u2014 wsUrl contains internal Docker hostname (api-gateway, etc.) instead of localhost or\
+    \ public host"
+  found: '2026-04-08'
+  type: script
+  dispatch: DASHBOARD_WS_URL
+  from_tier: health
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 30
+DB_POOL_NO_EXHAUSTION:
+  proves: meeting-api DB connection pool does not exhaust under sequential requests
+  symptom: "meeting-api returns 504 after a few requests \u2014 DB connection pool exhausted (idle in transaction leak)"
+  type: script
+  dispatch: DB_POOL_CHECK
+  from_tier: contract
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+DB_SCHEMA_ALIGNED:
+  proves: "database schema has all required columns \u2014 schema sync ran successfully"
+  symptom: "Services crash or return 500 \u2014 missing columns, tables, or indexes after DB migration"
+  type: script
+  dispatch: DB_SCHEMA_CHECK
+  from_tier: health
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 30
+DB_TOKENS_HAVE_SCOPES:
+  proves: "API tokens have scopes assigned \u2014 backfill migration ran"
+  symptom: "Tokens have empty scopes \u2014 scope enforcement will reject all requests"
+  type: script
+  dispatch: DB_TOKEN_SCOPES_CHECK
+  from_tier: health
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 30
+DB_USERS_EXIST:
+  proves: "users table has data \u2014 not an empty database"
+  symptom: "No users in database \u2014 dump not loaded or load failed silently"
+  type: script
+  dispatch: DB_USERS_CHECK
+  from_tier: health
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 30
+HELM_CHART_VALID:
+  proves: "helm chart passes lint \u2014 templates are well-formed"
+  symptom: "helm lint fails \u2014 chart has structural errors"
+  type: script
+  dispatch: HELM_LINT
+  from_tier: static
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+HELM_TEMPLATE_RENDERS:
+  proves: "helm template renders without errors \u2014 values and templates are consistent"
+  symptom: "helm template fails \u2014 missing required values or template syntax error"
+  type: script
+  dispatch: HELM_TEMPLATE
+  from_tier: static
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+MINIO_BUCKET_WRITABLE:
+  proves: "MinIO bucket exists and is writable \u2014 recordings and browser state can be stored"
+  symptom: "No audio recording for meeting \u2014 MinIO bucket not created or not writable"
+  type: script
+  dispatch: MINIO_WRITABLE
+  from_tier: contract
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+POSTGRES_NO_DISK_WARNING:
+  proves: "Postgres has no Linode disk-pressure recovery marker (`readme_to_recover` database absent) \u2014 volume is healthy"
+  symptom: Linode detected low disk / volume corruption; replaced the data volume and left a `readme_to_recover` database
+    behind. Application data is likely gone.
+  found: '2026-04-17'
+  type: script
+  dispatch: POSTGRES_NO_DISK_WARNING_CHECK
+  from_tier: health
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 30
+REDIS_UP:
+  proves: "Redis responds to PING \u2014 WebSocket pub/sub, session state, and caching work"
+  symptom: "Redis not responding \u2014 WS, session state, and pub/sub will fail"
+  type: script
+  dispatch: REDIS_PING
+  from_tier: health
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 30
+RUNTIME_API_UP:
+  proves: "runtime-api responds \u2014 bot container lifecycle management works"
+  symptom: "Runtime API not responding \u2014 bot creation will fail"
+  type: script
+  dispatch: RUNTIME_API_HEALTH
+  from_tier: health
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 30
+SEGMENT_PIPELINE:
+  proves: "segments injected into Redis appear in the REST transcript \u2014 collector pipeline works end-to-end"
+  symptom: "Transcript empty despite audio being captured \u2014 collector not processing Redis stream, or segments not reaching\
+    \ Postgres"
+  type: script
+  dispatch: SEGMENT_PIPELINE
+  from_tier: contract
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+TRANSCRIPTION_TOKEN_VALID:
+  proves: "transcription API token accepted \u2014 bots can convert audio to text"
+  symptom: "Transcription returns 403 \u2014 TRANSCRIPTION_SERVICE_TOKEN expired or invalid. Bots capture audio but produce\
+    \ 0 segments."
+  found: '2026-04-07'
+  type: script
+  dispatch: TRANSCRIPTION_TEST
+  from_tier: contract
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+TRANSCRIPTION_UP:
+  proves: "transcription service responds \u2014 audio can be converted to text"
+  symptom: Transcription service not responding
+  type: script
+  dispatch: TRANSCRIPTION_HEALTH
+  from_tier: health
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 30
+WS_PING_PONG:
+  proves: "WebSocket connection works \u2014 dashboard live updates will function"
+  symptom: WebSocket not responding to ping
+  type: script
+  dispatch: $GATEWAY_URL/ws
+  from_tier: contract
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+auth-meeting:
+  type: script
+  script: tests/auth-meeting.sh
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 300
+  features:
+  - authenticated-meetings
+  tier: cheap
+bot-stop-timing:
+  type: script
+  script: tests/bot-stop-timing.sh
+  modes: []
+  state: stateful
+  max_duration_sec: 300
+  features:
+  - bot-lifecycle
+  tier: meeting
+browser-login:
+  type: script
+  script: tests/browser-login.sh
+  modes: []
+  state: stateful
+  max_duration_sec: 300
+  features:
+  - browser-session
+  tier: human
+browser-session:
+  type: script
+  script: tests/browser-session.sh
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 300
+  features:
+  - browser-session
+  - remote-browser
+  tier: cheap
+collect:
+  type: script
+  script: tests/collect.sh
+  modes: []
+  state: stateful
+  max_duration_sec: 300
+  features: []
+  tier: human
+containers:
+  type: script
+  script: tests/containers.sh
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 180
+  steps:
+  - create
+  - alive
+  - removal
+  - status_completed
+  - timeout_stop
+  - concurrency_slot
+  - no_orphans
+  features:
+  - bot-lifecycle
+  - container-lifecycle
+  tier: cheap
+dashboard-auth:
+  type: script
+  script: tests/dashboard-auth.sh
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+  steps:
+  - login
+  - cookie_flags
+  - identity
+  - proxy_reachable
+  features:
+  - dashboard
+  tier: cheap
+dashboard-proxy:
+  type: script
+  script: tests/dashboard-proxy.sh
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 60
+  steps:
+  - meetings_list
+  - pagination
+  - field_contract
+  - transcript_proxy
+  - bot_create_proxy
+  - no_false_failed
+  features:
+  - dashboard
+  tier: cheap
+meeting-tts:
+  type: script
+  script: tests/meeting-tts.sh
+  modes: []
+  state: stateful
+  max_duration_sec: 300
+  features:
+  - realtime-transcription
+  - realtime-transcription/gmeet
+  - meeting-chat
+  - speaking-bot
+  tier: meeting
+meeting-tts-teams:
+  type: script
+  script: tests/meeting-tts-teams.sh
+  modes: []
+  state: stateful
+  max_duration_sec: 300
+  features:
+  - realtime-transcription/msteams
+  tier: meeting
+post-meeting:
+  type: script
+  script: tests/post-meeting.sh
+  modes: []
+  state: stateful
+  max_duration_sec: 300
+  features:
+  - post-meeting-transcription
+  - webhooks
+  tier: meeting
+smoke-contract:
+  type: script
+  script: checks/run --tier contract --json-out $STATE/reports/$MODE/smoke-contract.json
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 120
+  features:
+  - auth-and-limits
+  - bot-lifecycle
+  - browser-session
+  - meeting-urls
+  - post-meeting-transcription
+  - realtime-transcription
+  - realtime-transcription/gmeet
+  - realtime-transcription/msteams
+  - webhooks
+  tier: cheap
+smoke-env:
+  type: script
+  script: checks/run --tier env --json-out $STATE/reports/$MODE/smoke-env.json
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+  features:
+  - authenticated-meetings
+  - browser-session
+  - infrastructure
+  tier: cheap
+smoke-health:
+  type: script
+  script: checks/run --tier health --json-out $STATE/reports/$MODE/smoke-health.json
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 60
+  features:
+  - infrastructure
+  - realtime-transcription
+  tier: cheap
+smoke-static:
+  type: script
+  script: checks/run --tier static --json-out $STATE/reports/$MODE/smoke-static.json
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+  features:
+  - infrastructure
+  - auth-and-limits
+  - dashboard
+  tier: cheap
+transcription-replay:
+  type: script
+  script: tests/transcription-replay.sh
+  modes: []
+  state: stateful
+  max_duration_sec: 300
+  features:
+  - realtime-transcription
+  tier: meeting
+tts-reliability:
+  type: script
+  script: tests/tts-reliability.sh
+  modes: []
+  state: stateful
+  max_duration_sec: 300
+  features:
+  - realtime-transcription
+  - speaking-bot
+  tier: meeting
+webhooks:
+  type: script
+  script: tests/webhooks.sh
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 180
+  steps:
+  - config
+  - inject
+  - spoof
+  - envelope
+  - no_leak_payload
+  - hmac
+  - no_leak_response
+  - e2e_completion
+  - e2e_status
+  - e2e_status_non_completed
+  features:
+  - webhooks
+  tier: cheap

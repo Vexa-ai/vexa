@@ -116,44 +116,56 @@ async def fire_post_meeting_hooks(meeting: Meeting, db: AsyncSession):
 async def run_all_tasks(meeting_id: int):
     """Run all post-meeting tasks for a given meeting_id.
 
-    Creates its own DB session.
+    Uses short-lived DB sessions to avoid holding connections during HTTP calls.
     """
     logger.info(f"Starting post-meeting tasks for meeting {meeting_id}")
 
-    async with async_session_local() as db:
-        try:
+    # Task 1: Aggregate transcription data (makes HTTP call to collector)
+    try:
+        async with async_session_local() as db:
             meeting = await db.get(Meeting, meeting_id)
             if not meeting:
                 logger.error(f"Meeting {meeting_id} not found for post-meeting tasks")
                 return
-
-            # Task 1: Aggregate transcription data
             await aggregate_transcription(meeting, db)
-
-            # Task 2: Send completion webhook to user
-            await send_completion_webhook(meeting, db)
-
-            # Task 3: Fire internal post-meeting hooks
-            await fire_post_meeting_hooks(meeting, db)
-
             await db.commit()
-            logger.info(f"Post-meeting tasks completed for meeting {meeting_id}")
+    except Exception as e:
+        logger.error(f"Transcription aggregation failed for meeting {meeting_id}: {e}", exc_info=True)
 
-        except Exception as e:
-            logger.error(f"Error in post-meeting tasks for meeting {meeting_id}: {e}", exc_info=True)
-            await db.rollback()
+    # Task 2: Send completion webhook to user (makes HTTP call to user's endpoint)
+    try:
+        async with async_session_local() as db:
+            meeting = await db.get(Meeting, meeting_id)
+            if meeting:
+                await send_completion_webhook(meeting, db)
+                await db.commit()
+    except Exception as e:
+        logger.error(f"Completion webhook failed for meeting {meeting_id}: {e}", exc_info=True)
+
+    # Task 3: Fire internal post-meeting hooks (makes HTTP calls to hook URLs)
+    try:
+        async with async_session_local() as db:
+            meeting = await db.get(Meeting, meeting_id)
+            if meeting:
+                await fire_post_meeting_hooks(meeting, db)
+                await db.commit()
+    except Exception as e:
+        logger.error(f"Post-meeting hooks failed for meeting {meeting_id}: {e}", exc_info=True)
+
+    logger.info(f"Post-meeting tasks completed for meeting {meeting_id}")
 
 
 async def run_status_webhook_task(meeting_id: int, status_change_info: dict = None):
-    """Run status webhook with proper DB session management."""
+    """Run status webhook — short-lived DB session, HTTP call outside session."""
     from .webhooks import send_status_webhook
 
-    async with async_session_local() as db:
-        try:
+    try:
+        async with async_session_local() as db:
             meeting = await db.get(Meeting, meeting_id)
             if not meeting:
                 logger.error(f"Meeting {meeting_id} not found for status webhook")
                 return
             await send_status_webhook(meeting, db, status_change_info)
-        except Exception as e:
-            logger.error(f"Error in status webhook for meeting {meeting_id}: {e}", exc_info=True)
+            await db.commit()
+    except Exception as e:
+        logger.error(f"Error in status webhook for meeting {meeting_id}: {e}", exc_info=True)

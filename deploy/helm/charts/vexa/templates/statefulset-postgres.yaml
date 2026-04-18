@@ -26,6 +26,11 @@ spec:
         - name: postgres
           image: "{{ .Values.postgres.image }}"
           imagePullPolicy: IfNotPresent
+          # idle_in_transaction_session_timeout=60s auto-kills orphaned
+          # transactions (defense-in-depth against DB session leaks in meeting-api).
+          args:
+            - "-c"
+            - "idle_in_transaction_session_timeout={{ .Values.postgres.idleInTransactionTimeoutMs | default 60000 }}"
           ports:
             - name: pg
               containerPort: 5432

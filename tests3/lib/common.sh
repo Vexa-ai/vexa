@@ -27,6 +27,140 @@ pass() { printf '  %s  %s\n' "$(green " ok ")" "$*"; _log "PASS" "$*"; }
 fail() { printf '  %s  %s\n' "$(red "FAIL")" "$*"; _log "FAIL" "$*"; }
 info() { printf '  %s  %s\n' "$(dim "    ")" "$*"; _log "INFO" "$*"; }
 
+# ─── Structured step reporting (JSON artifacts) ─────────────────
+# See /home/dima/.claude/plans/bubbly-foraging-wilkes.md for the design.
+#
+# Usage in a test script:
+#   test_begin my-test
+#   step_pass step-id "message"
+#   step_fail step-id "message"
+#   step_skip step-id "reason"
+#   test_end
+#
+# test_begin sets an EXIT trap, so test_end is optional (it just runs once if
+# explicitly called). On exit (clean or errored), a JSON report is flushed to:
+#   $STATE/reports/<mode>/<test_name>.json
+#
+# stdout output from pass/fail/info is UX only and is NOT parsed. JSON is the
+# only source of truth.
+
+_TEST_NAME=""
+_TEST_STARTED_AT=""
+_TEST_START_EPOCH_MS=""
+_TEST_STEPS_FILE=""
+_TEST_REPORT_PATH=""
+_TEST_IMAGE_TAG=""
+_TEST_ENDED=0
+
+# Escape a string for JSON (handles \, ", newlines, tabs, control chars).
+_json_escape() {
+    python3 -c 'import json,sys; sys.stdout.write(json.dumps(sys.argv[1]))' "$1" 2>/dev/null \
+        || printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' | tr '\n' ' ')"
+}
+
+_now_ms() {
+    # Millisecond epoch, portable (Python avoids bash-version drift).
+    python3 -c 'import time; print(int(time.time()*1000))' 2>/dev/null \
+        || echo $(($(date +%s)*1000))
+}
+
+_now_iso() {
+    date -u '+%Y-%m-%dT%H:%M:%SZ'
+}
+
+_detect_mode_cached() {
+    cat "$STATE/deploy_mode" 2>/dev/null || detect_mode
+}
+
+test_begin() {
+    _TEST_NAME="${1:?test_begin requires a name}"
+    _TEST_STARTED_AT="$(_now_iso)"
+    _TEST_START_EPOCH_MS="$(_now_ms)"
+    _TEST_IMAGE_TAG="$(cat "$STATE/image_tag" 2>/dev/null || echo '')"
+    _TEST_STEPS_FILE="$(mktemp -t "tests3-steps-${_TEST_NAME}.XXXXXX.jsonl")"
+    local mode
+    mode="$(_detect_mode_cached)"
+    mkdir -p "$STATE/reports/$mode"
+    _TEST_REPORT_PATH="$STATE/reports/$mode/${_TEST_NAME}.json"
+    _TEST_ENDED=0
+    # Flush on any exit path (normal, error, signal). set -e doesn't skip traps.
+    trap '_flush_test_report' EXIT INT TERM
+}
+
+_append_step() {
+    # _append_step <status> <id> <message>
+    local status="$1" id="$2" msg="$3"
+    [ -z "$_TEST_STEPS_FILE" ] && return 0  # test_begin not called — no-op
+    local esc_id esc_msg
+    esc_id="$(_json_escape "$id")"
+    esc_msg="$(_json_escape "$msg")"
+    printf '{"id":%s,"status":"%s","message":%s}\n' "$esc_id" "$status" "$esc_msg" >> "$_TEST_STEPS_FILE"
+}
+
+step_pass() { _append_step "pass" "$1" "${2:-}"; pass "$1${2:+: $2}"; }
+step_fail() { _append_step "fail" "$1" "${2:-}"; fail "$1${2:+: $2}"; }
+step_skip() { _append_step "skip" "$1" "${2:-}"; info "$1${2:+ (skipped: $2)}"; }
+
+# check <id> <condition-exit-code> <pass-msg> <fail-msg>
+# Convenience: one line for the common pattern "did X succeed? yes|no".
+# Usage: SOMETHING=$(...); check "step-id" $? "ok-msg" "failed: $SOMETHING"
+check() {
+    local id="$1" rc="$2" pass_msg="$3" fail_msg="$4"
+    if [ "$rc" = "0" ]; then
+        step_pass "$id" "$pass_msg"
+    else
+        step_fail "$id" "$fail_msg"
+    fi
+    return "$rc"
+}
+
+_flush_test_report() {
+    local rc=$?
+    # Idempotent: only flush once.
+    [ "$_TEST_ENDED" = "1" ] && return $rc
+    _TEST_ENDED=1
+    [ -z "$_TEST_NAME" ] && return $rc   # test_begin not called
+
+    local ended_at duration_ms status steps_json
+    ended_at="$(_now_iso)"
+    duration_ms=$(( $(_now_ms) - _TEST_START_EPOCH_MS ))
+
+    # Build steps JSON array
+    if [ -s "$_TEST_STEPS_FILE" ]; then
+        steps_json="[$(paste -sd, "$_TEST_STEPS_FILE")]"
+    else
+        steps_json="[]"
+    fi
+
+    # Overall test status: fail if any step failed OR the script exited non-zero
+    if grep -q '"status":"fail"' "$_TEST_STEPS_FILE" 2>/dev/null || [ "$rc" != "0" ]; then
+        status="fail"
+    else
+        status="pass"
+    fi
+
+    local mode
+    mode="$(_detect_mode_cached)"
+    local esc_name esc_mode esc_image esc_started esc_ended
+    esc_name="$(_json_escape "$_TEST_NAME")"
+    esc_mode="$(_json_escape "$mode")"
+    esc_image="$(_json_escape "$_TEST_IMAGE_TAG")"
+    esc_started="$(_json_escape "$_TEST_STARTED_AT")"
+    esc_ended="$(_json_escape "$ended_at")"
+
+    cat > "$_TEST_REPORT_PATH" <<EOF
+{"test":$esc_name,"mode":$esc_mode,"image_tag":$esc_image,"started_at":$esc_started,"ended_at":$esc_ended,"duration_ms":$duration_ms,"status":"$status","exit_code":$rc,"steps":$steps_json}
+EOF
+
+    rm -f "$_TEST_STEPS_FILE"
+    _log "REPORT" "$_TEST_NAME → $_TEST_REPORT_PATH ($status, ${duration_ms}ms)"
+    return $rc
+}
+
+test_end() {
+    _flush_test_report
+}
+
 # ─── Deploy mode detection ───────────────────────────────────────
 
 detect_mode() {

@@ -104,6 +104,7 @@ async def bot_exit_callback(
             return {"status": "error", "detail": "Meeting session not found"}
 
         meeting_id = meeting.id
+        old_status = meeting.status
 
         if exit_code == 0:
             # Check pending_completion_reason (set by scheduler timeout) — overrides bot-reported reason
@@ -223,6 +224,11 @@ async def bot_exit_callback(
 
         if new_status:
             await publish_meeting_status_change(meeting.id, new_status, redis_client, meeting.platform, meeting.platform_specific_id, meeting.user_id)
+            await schedule_status_webhook_task(
+                meeting=meeting, background_tasks=background_tasks,
+                old_status=old_status, new_status=new_status,
+                reason=payload.reason, transition_source="bot_callback",
+            )
 
         background_tasks.add_task(run_all_tasks, meeting.id)
 
@@ -237,6 +243,7 @@ async def bot_exit_callback(
 @router.post("/bots/internal/callback/started", status_code=200, include_in_schema=False)
 async def bot_startup_callback(
     payload: BotStartupCallbackPayload,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     redis_client = get_redis()
@@ -264,6 +271,11 @@ async def bot_startup_callback(
 
     if meeting.status == MeetingStatus.ACTIVE.value and old_status != MeetingStatus.ACTIVE.value:
         await publish_meeting_status_change(meeting.id, MeetingStatus.ACTIVE.value, redis_client, meeting.platform, meeting.platform_specific_id, meeting.user_id)
+        await schedule_status_webhook_task(
+            meeting=meeting, background_tasks=background_tasks,
+            old_status=old_status, new_status=MeetingStatus.ACTIVE.value,
+            transition_source="bot_callback",
+        )
 
     return {"status": "startup processed", "meeting_id": meeting.id, "meeting_status": meeting.status}
 
@@ -271,6 +283,7 @@ async def bot_startup_callback(
 @router.post("/bots/internal/callback/joining", status_code=200, include_in_schema=False)
 async def bot_joining_callback(
     payload: BotStartupCallbackPayload,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     redis_client = get_redis()
@@ -281,9 +294,15 @@ async def bot_joining_callback(
     if meeting.data and isinstance(meeting.data, dict) and meeting.data.get("stop_requested"):
         return {"status": "ignored", "detail": "stop requested"}
 
+    old_status = meeting.status
     success = await update_meeting_status(meeting, MeetingStatus.JOINING, db)
     if success:
         await publish_meeting_status_change(meeting.id, MeetingStatus.JOINING.value, redis_client, meeting.platform, meeting.platform_specific_id, meeting.user_id)
+        await schedule_status_webhook_task(
+            meeting=meeting, background_tasks=background_tasks,
+            old_status=old_status, new_status=MeetingStatus.JOINING.value,
+            transition_source="bot_callback",
+        )
 
     return {"status": "joining processed", "meeting_id": meeting.id, "meeting_status": meeting.status}
 
@@ -291,6 +310,7 @@ async def bot_joining_callback(
 @router.post("/bots/internal/callback/awaiting_admission", status_code=200, include_in_schema=False)
 async def bot_awaiting_admission_callback(
     payload: BotStartupCallbackPayload,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     redis_client = get_redis()
@@ -301,9 +321,15 @@ async def bot_awaiting_admission_callback(
     if meeting.data and isinstance(meeting.data, dict) and meeting.data.get("stop_requested"):
         return {"status": "ignored", "detail": "stop requested"}
 
+    old_status = meeting.status
     success = await update_meeting_status(meeting, MeetingStatus.AWAITING_ADMISSION, db)
     if success:
         await publish_meeting_status_change(meeting.id, MeetingStatus.AWAITING_ADMISSION.value, redis_client, meeting.platform, meeting.platform_specific_id, meeting.user_id)
+        await schedule_status_webhook_task(
+            meeting=meeting, background_tasks=background_tasks,
+            old_status=old_status, new_status=MeetingStatus.AWAITING_ADMISSION.value,
+            transition_source="bot_callback",
+        )
 
     return {"status": "awaiting_admission processed", "meeting_id": meeting.id, "meeting_status": meeting.status}
 
@@ -325,9 +351,20 @@ async def bot_status_change_callback(
 
     await db.refresh(meeting)
 
-    # Ignore non-terminal transitions if stop was requested
+    # Stop was requested: skip the actual status transition (we're winding down),
+    # but still fire the status webhook so users subscribed to meeting.status_change
+    # / meeting.started / bot.failed don't miss events that legitimately happened
+    # on the bot side (see releases/260418-webhooks/triage-log.md candidate b).
     if (meeting.data and isinstance(meeting.data, dict) and meeting.data.get("stop_requested")
             and new_status not in [MeetingStatus.COMPLETED, MeetingStatus.FAILED]):
+        await schedule_status_webhook_task(
+            meeting=meeting,
+            background_tasks=background_tasks,
+            old_status=meeting.status,
+            new_status=new_status.value,
+            reason=reason,
+            transition_source="bot_callback_post_stop",
+        )
         return {"status": "ignored", "detail": "stop requested"}
 
     old_status = meeting.status

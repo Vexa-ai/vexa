@@ -19,6 +19,9 @@ services:
 
   postgres:
     image: postgres:17-alpine
+    # idle_in_transaction_session_timeout=60s auto-kills orphaned transactions
+    # (defense-in-depth against future DB session leaks in meeting-api).
+    command: ["postgres", "-c", "idle_in_transaction_session_timeout=60000"]
     environment:
       - POSTGRES_DB=${DB_NAME:-vexa}
       - POSTGRES_USER=${DB_USER:-postgres}

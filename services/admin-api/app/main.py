@@ -8,7 +8,7 @@ from fastapi.security import APIKeyHeader
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload, attributes
-from typing import List, Optional  # Import List for response model
+from typing import Dict, List, Optional  # Import List for response model
 from datetime import datetime, timedelta
 from sqlalchemy import func, cast, literal
 from sqlalchemy.dialects.postgresql import ARRAY
@@ -44,6 +44,9 @@ app.add_middleware(SecurityHeadersMiddleware)
 class WebhookUpdate(BaseModel):
     webhook_url: HttpUrl
     webhook_secret: Optional[str] = Field(None, max_length=512)
+    # Map of event_type → enabled, e.g. {"meeting.completed": True, "meeting.started": True}
+    # When absent, only meeting.completed fires (backward-compatible default).
+    webhook_events: Optional[Dict[str, bool]] = None
 
 class MeetingUserStat(MeetingResponse): # Inherit from MeetingResponse to get meeting fields
     user: UserResponse # Embed UserResponse
@@ -177,11 +180,19 @@ async def set_user_webhook(
 
     # Only update webhook_secret when explicitly provided (backward compatible: clients
     # that only send webhook_url leave existing secret unchanged)
-    if 'webhook_secret' in webhook_update.model_dump(exclude_unset=True):
+    provided_fields = webhook_update.model_dump(exclude_unset=True)
+    if 'webhook_secret' in provided_fields:
         if webhook_update.webhook_secret is None or webhook_update.webhook_secret.strip() == '':
             user.data.pop('webhook_secret', None)
         else:
             user.data['webhook_secret'] = webhook_update.webhook_secret.strip()
+
+    # Only update webhook_events when explicitly provided
+    if 'webhook_events' in provided_fields:
+        if webhook_update.webhook_events is None:
+            user.data.pop('webhook_events', None)
+        else:
+            user.data['webhook_events'] = webhook_update.webhook_events
 
     # Flag the 'data' field as modified for SQLAlchemy to detect the change
     attributes.flag_modified(user, "data")
@@ -843,12 +854,26 @@ async def validate_token(request: Request, payload: dict, db: AsyncSession = Dep
     # Read scopes from DB column, not prefix
     scopes = list(api_token.scopes) if api_token.scopes else ["legacy"]
 
-    return {
+    response = {
         "user_id": user.id,
         "scopes": scopes,
         "max_concurrent": user.max_concurrent_bots,
         "email": user.email,
     }
+
+    # Include webhook config if present (gateway injects as X-User-Webhook-* headers)
+    user_data_blob = user.data if isinstance(user.data, dict) else {}
+    webhook_url = user_data_blob.get("webhook_url")
+    if webhook_url:
+        response["webhook_url"] = webhook_url
+        wh_secret = user_data_blob.get("webhook_secret")
+        if wh_secret:
+            response["webhook_secret"] = wh_secret
+        wh_events = user_data_blob.get("webhook_events")
+        if wh_events:
+            response["webhook_events"] = wh_events
+
+    return response
 
 
 async def backfill_token_scopes():

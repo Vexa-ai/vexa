@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
-# Container lifecycle: create, stop, verify removal, timeout, concurrency, transitions
-# Covers DoDs: container#1-#9, bot#5,#12,#13,#14
+# Container lifecycle: create, alive, stop, verify removal, timeout, concurrency, orphans
+#
+# Step IDs (stable — bound to features/container-lifecycle/README.md + features/bot-lifecycle/README.md DoDs):
+#   create            — POST /bots spawns a bot container successfully
+#   alive             — bot process is still running after 10s (not crash-looping)
+#   removal           — container removed after DELETE /bots/...
+#   status_completed  — meeting.status=completed after stop (not failed/stuck)
+#   timeout_stop      — bot auto-stops after automatic_leave timeout
+#   concurrency_slot  — slot released on stop, next create not rejected
+#   no_orphans        — no zombie/exited/stuck bot containers after test run
+#
 # Reads: .state/gateway_url, .state/api_token, .state/deploy_mode
+# Writes: .state/reports/<mode>/containers.json
 source "$(dirname "$0")/../lib/common.sh"
 
 GATEWAY_URL=$(state_read gateway_url)
@@ -12,7 +22,9 @@ echo ""
 echo "  containers"
 echo "  ──────────────────────────────────────────────"
 
-# ── 0. Clean up stale bots from previous runs ─────
+test_begin containers
+
+# ── Cleanup (setup hygiene, not a step) ───────────
 STALE_BOTS=$(curl -sf -H "X-API-Key: $API_TOKEN" "$GATEWAY_URL/bots/status" | python3 -c "
 import sys,json
 bots=json.load(sys.stdin).get('running_bots',[])
@@ -33,10 +45,9 @@ if [ -n "$STALE_BOTS" ]; then
             -H "X-API-Key: $API_TOKEN" > /dev/null 2>&1 || true
     done
     sleep 10
-    pass "stale bots cleaned"
 fi
 
-# ── 1. Create bot, verify container starts ────────
+# ── Step: create ─────────────────────────────────
 echo "  creating test bot..."
 RESP=$(http_post "$GATEWAY_URL/bots" \
     '{"platform":"google_meet","native_meeting_id":"lifecycle-test-1","bot_name":"LC Test","automatic_leave":{"no_one_joined_timeout":30000}}' \
@@ -44,21 +55,25 @@ RESP=$(http_post "$GATEWAY_URL/bots" \
 BOT_ID=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
 
 if [ -n "$BOT_ID" ]; then
-    pass "create: bot $BOT_ID"
+    step_pass create "bot $BOT_ID created"
 else
     if [ "$(http_code)" = "500" ] && [ "$MODE" = "helm" ]; then
-        info "create: HTTP 500 — bot runtime not configured in helm (expected)"
-        info "skipping container lifecycle tests"
+        step_skip create "bot runtime not configured in helm (HTTP 500)"
+        step_skip alive "create failed"
+        step_skip removal "create failed"
+        step_skip status_completed "create failed"
+        step_skip timeout_stop "create failed"
+        step_skip concurrency_slot "create failed"
+        step_skip no_orphans "create failed"
         echo "  ──────────────────────────────────────────────"
         echo ""
         exit 0
     fi
-    fail "create: POST /bots failed (HTTP $(http_code))"
-    info "$RESP"
+    step_fail create "POST /bots failed (HTTP $(http_code)): $RESP"
     exit 1
 fi
 
-# Verify bot is actually running (not crashed immediately)
+# ── Step: alive ──────────────────────────────────
 sleep 10
 BOT_ALIVE=$(curl -sf -H "X-API-Key: $API_TOKEN" "$GATEWAY_URL/bots/status" | python3 -c "
 import sys,json
@@ -71,10 +86,8 @@ else: print('gone')
 " 2>/dev/null)
 
 if [ "$BOT_ALIVE" = "running" ]; then
-    pass "alive: bot process running after 10s"
+    step_pass alive "bot process running after 10s"
 elif [ "$BOT_ALIVE" = "gone" ]; then
-    fail "alive: bot process died within 10s — check entrypoint/dependencies"
-    # Check meeting status for the reason
     MEETING_STATUS=$(curl -sf -H "X-API-Key: $API_TOKEN" "$GATEWAY_URL/meetings" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
@@ -84,13 +97,13 @@ for m in ms:
         print(f'status={m.get(\"status\",\"?\")} reason={m.get(\"completion_reason\",\"?\")}')
         break
 " 2>/dev/null)
-    info "meeting: $MEETING_STATUS"
+    step_fail alive "bot process died within 10s — $MEETING_STATUS"
     exit 1
 else
-    info "alive: bot status=$BOT_ALIVE"
+    step_skip alive "bot status=$BOT_ALIVE (not running, not gone)"
 fi
 
-# ── 2. Stop bot, verify container removed ─────────
+# ── Step: removal ────────────────────────────────
 echo "  stopping bot..."
 curl -sf -X DELETE "$GATEWAY_URL/bots/google_meet/lifecycle-test-1" \
     -H "X-API-Key: $API_TOKEN" > /dev/null 2>&1 || true
@@ -102,18 +115,24 @@ if [ "$MODE" = "compose" ]; then
 elif [ "$MODE" = "lite" ]; then
     REMAINING=$(docker exec vexa ps aux 2>/dev/null | { grep -c "lifecycle-test" || true; })
 elif [ "$MODE" = "helm" ]; then
-    REMAINING=$(kubectl get pods --no-headers 2>/dev/null | { grep -c "lifecycle-test" || true; }) || true
+    if command -v kubectl >/dev/null 2>&1 && kubectl cluster-info >/dev/null 2>&1; then
+        REMAINING=$(kubectl get pods --no-headers 2>/dev/null | { grep -c "lifecycle-test" || true; }) || true
+    else
+        REMAINING="unknown"
+    fi
 else
     REMAINING=0
 fi
 
-if [ "${REMAINING:-0}" -eq 0 ]; then
-    pass "removal: container fully removed after stop"
+if [ "$REMAINING" = "unknown" ]; then
+    step_skip removal "no kubectl access in helm mode"
+elif [ "${REMAINING:-0}" -eq 0 ]; then
+    step_pass removal "container fully removed after stop"
 else
-    fail "removal: $REMAINING container(s) still present after stop"
+    step_fail removal "$REMAINING container(s) still present after stop"
 fi
 
-# ── 3. Verify status = completed (not failed) ─────
+# ── Step: status_completed ───────────────────────
 STATUS=$(curl -sf -H "X-API-Key: $API_TOKEN" "$GATEWAY_URL/meetings" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
@@ -126,12 +145,12 @@ else: print('gone')
 " 2>/dev/null)
 
 if [ "$STATUS" = "completed" ] || [ "$STATUS" = "gone" ]; then
-    pass "status: $STATUS after stop"
+    step_pass status_completed "meeting.status=$STATUS after stop"
 else
-    fail "status: $STATUS (expected completed)"
+    step_fail status_completed "status=$STATUS (expected completed)"
 fi
 
-# ── 4. Timeout auto-stop ──────────────────────────
+# ── Step: timeout_stop ───────────────────────────
 echo "  testing timeout (30s no_one_joined)..."
 RESP2=$(http_post "$GATEWAY_URL/bots" \
     '{"platform":"google_meet","native_meeting_id":"timeout-test","bot_name":"Timeout Test","automatic_leave":{"no_one_joined_timeout":30000}}' \
@@ -151,19 +170,18 @@ else: print('gone')
 " 2>/dev/null)
 
     if [ "$TIMEOUT_STATUS" = "gone" ] || [ "$TIMEOUT_STATUS" = "completed" ] || [ "$TIMEOUT_STATUS" = "failed" ]; then
-        pass "timeout: bot stopped ($TIMEOUT_STATUS)"
+        step_pass timeout_stop "bot stopped ($TIMEOUT_STATUS)"
     else
-        info "timeout: bot still $TIMEOUT_STATUS after 60s (timeout may count from lobby, not creation)"
-        # Clean up
+        step_skip timeout_stop "bot still $TIMEOUT_STATUS after 60s (timeout may count from lobby)"
         curl -sf -X DELETE "$GATEWAY_URL/bots/google_meet/timeout-test" \
             -H "X-API-Key: $API_TOKEN" > /dev/null 2>&1
         sleep 10
     fi
 else
-    fail "timeout: could not create test bot"
+    step_fail timeout_stop "could not create timeout test bot"
 fi
 
-# ── 5. Concurrency release ────────────────────────
+# ── Step: concurrency_slot ───────────────────────
 echo "  testing concurrency release..."
 RESP_A=$(http_post "$GATEWAY_URL/bots" \
     '{"platform":"google_meet","native_meeting_id":"concurrency-a","bot_name":"CC-A","automatic_leave":{"no_one_joined_timeout":30000}}' \
@@ -171,47 +189,50 @@ RESP_A=$(http_post "$GATEWAY_URL/bots" \
 CC_A_OK=$(echo "$RESP_A" | python3 -c "import sys,json; print('ok' if json.load(sys.stdin).get('id') else 'fail')" 2>/dev/null)
 
 if [ "$CC_A_OK" = "ok" ]; then
-    # Stop A immediately
     curl -sf -X DELETE "$GATEWAY_URL/bots/google_meet/concurrency-a" \
         -H "X-API-Key: $API_TOKEN" > /dev/null 2>&1
     sleep 2
 
-    # Create B immediately — should succeed even if A's container still running
     CC_B_CODE=$(curl -sf -o /dev/null -w '%{http_code}' -X POST "$GATEWAY_URL/bots" \
         -H "X-API-Key: $API_TOKEN" -H "Content-Type: application/json" \
         -d '{"platform":"google_meet","native_meeting_id":"concurrency-b","bot_name":"CC-B","automatic_leave":{"no_one_joined_timeout":30000}}' 2>/dev/null || echo "000")
 
     if [ "$CC_B_CODE" = "403" ]; then
-        fail "concurrency: B got 403 — slot not released on stop"
+        step_fail concurrency_slot "B got 403 — slot not released on stop"
     else
-        pass "concurrency: slot released, B created"
+        step_pass concurrency_slot "slot released, B created (HTTP $CC_B_CODE)"
     fi
 
-    # Clean up
     curl -sf -X DELETE "$GATEWAY_URL/bots/google_meet/concurrency-b" \
         -H "X-API-Key: $API_TOKEN" > /dev/null 2>&1 || true
 else
-    fail "concurrency: could not create bot A"
+    step_fail concurrency_slot "could not create bot A"
 fi
 
 sleep 10
 
-# ── 6. Orphan check ───────────────────────────────
+# ── Step: no_orphans ─────────────────────────────
 if [ "$MODE" = "compose" ]; then
     ORPHANS=$(docker ps -a --filter "status=exited" --filter "name=meeting-" \
         --format '{{.Names}}' | { grep -vc meeting-api || true; })
 elif [ "$MODE" = "lite" ]; then
     ORPHANS=$(docker exec vexa ps aux 2>/dev/null | { grep -c '[Z]' || true; })
 elif [ "$MODE" = "helm" ]; then
-    ORPHANS=$(kubectl get pods --field-selector=status.phase!=Running --no-headers -l app.kubernetes.io/name=vexa 2>/dev/null | { grep -c "meeting-\|bot-" || true; }) || true
+    if command -v kubectl >/dev/null 2>&1 && kubectl cluster-info >/dev/null 2>&1; then
+        ORPHANS=$(kubectl get pods --field-selector=status.phase!=Running --no-headers -l app.kubernetes.io/name=vexa 2>/dev/null | { grep -c "meeting-\|bot-" || true; }) || true
+    else
+        ORPHANS="unknown"
+    fi
 else
     ORPHANS=0
 fi
 
-if [ "${ORPHANS:-0}" -eq 0 ]; then
-    pass "orphans: none"
+if [ "$ORPHANS" = "unknown" ]; then
+    step_skip no_orphans "no kubectl access in helm mode"
+elif [ "${ORPHANS:-0}" -eq 0 ]; then
+    step_pass no_orphans "no exited/zombie containers"
 else
-    fail "orphans: $ORPHANS exited container(s)"
+    step_fail no_orphans "$ORPHANS exited/zombie container(s)"
 fi
 
 echo "  ──────────────────────────────────────────────"

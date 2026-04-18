@@ -1,0 +1,11 @@
+{{- if .Values.runtimeApi.profilesConfigMap }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.runtimeApi.profilesConfigMap }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+data:
+  profiles.yaml: |
+    {{- .Values.runtimeProfiles | nindent 4 }}
+{{- end }}

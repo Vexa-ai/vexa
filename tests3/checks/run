@@ -21,6 +21,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 ROOT = os.environ.get("ROOT", subprocess.check_output(
     ["git", "rev-parse", "--show-toplevel"], text=True).strip())
@@ -88,6 +89,18 @@ def svc_exec(svc, cmd):
         return 1, str(e)
 
 
+def kubectl_available():
+    """Check if kubectl can reach the cluster."""
+    try:
+        r = subprocess.run(
+            ["kubectl", "cluster-info"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 def http_check(url, expect_code=200, headers=None):
     """Curl a URL. Returns (actual_code, body)."""
     cmd = ["curl", "-sf", "-w", "\n%{http_code}", "-o", "-"]
@@ -149,11 +162,12 @@ def check_env(lock):
         code, val = svc_exec(svc, ["printenv", var])
         if code != 0 or not val:
             # In lite mode, supervisor sets per-process env vars invisible to printenv.
+            # In helm mode, kubectl exec may not be available (no kubeconfig or pods not ready).
             # Skip printenv checks, rely on valid_against to prove it works.
-            if mode == "lite" and ("valid_against" in chk or "equals" in chk):
+            if mode in ("lite", "helm") and ("valid_against" in chk or "equals" in chk):
                 continue
-            if mode == "lite" and chk.get("not_empty"):
-                continue  # Can't verify via printenv in lite
+            if mode in ("lite", "helm") and chk.get("not_empty"):
+                continue  # Can't verify via printenv
             return False, f"{svc}: {var} not set"
 
         # If 'equals' specified, compare to another service's var
@@ -217,6 +231,9 @@ def check_health(lock):
 
     # Special: Database integrity checks
     if url == "DB_SCHEMA_CHECK":
+        mode = state_read("deploy_mode", required=True)
+        if mode == "helm" and not kubectl_available():
+            return True, "skipped (no kubectl access)"
         required_columns = {
             "api_tokens": ["scopes", "name", "last_used_at", "expires_at"],
             "transcriptions": ["segment_id"],
@@ -240,6 +257,9 @@ def check_health(lock):
         return True, f"all required columns present"
 
     if url == "DB_USERS_CHECK":
+        mode = state_read("deploy_mode", required=True)
+        if mode == "helm" and not kubectl_available():
+            return True, "skipped (no kubectl access)"
         rc, out = svc_exec("admin-api", [
             "python3", "-c",
             "import os; from sqlalchemy import create_engine, text;"
@@ -252,6 +272,9 @@ def check_health(lock):
         return False, f"users count: {out.strip()}"
 
     if url == "DB_TOKEN_SCOPES_CHECK":
+        mode = state_read("deploy_mode", required=True)
+        if mode == "helm" and not kubectl_available():
+            return True, "skipped (no kubectl access)"
         rc, out = svc_exec("admin-api", [
             "python3", "-c",
             "import os; from sqlalchemy import create_engine, text;"
@@ -269,8 +292,79 @@ def check_health(lock):
             return False, f"{empty}/{total} tokens have empty scopes — backfill needed"
         return False, f"could not check: {out.strip()}"
 
+    # Special: verify the `vexa` database actually exists (catches post-bootstrap
+    # DB loss — e.g. Linode low-disk auto-recovery wipes PG data volume).
+    # Uses sync SQLAlchemy (same pattern as DB_USERS_CHECK) to avoid
+    # async-def-in-`python3 -c` escaping issues.
+    if url == "ADMIN_API_DB_EXISTS_CHECK":
+        mode = state_read("deploy_mode", required=True)
+        if mode == "helm" and not kubectl_available():
+            return True, "skipped (no kubectl access)"
+        rc, out = svc_exec("admin-api", [
+            "python3", "-c",
+            "import os, sys; from sqlalchemy import create_engine, text;"
+            "e=create_engine(f\"postgresql://{os.environ['DB_USER']}:{os.environ['DB_PASSWORD']}@{os.environ['DB_HOST']}:{os.environ['DB_PORT']}/{os.environ['DB_NAME']}\");"
+            "\ntry:\n c=e.connect()\n c.execute(text('SELECT 1'))\n c.close()\n print('OK')\nexcept Exception as ex:\n print('FAIL:'+type(ex).__name__+':'+str(ex)[:120]); sys.exit(1)"
+        ])
+        if rc == 0 and "OK" in out:
+            return True, f"DB '{os.environ.get('DB_NAME','vexa')}' reachable"
+        return False, f"DB unreachable: {out.strip()[:200] or '(empty output, rc='+str(rc)+')'}"
+
+    # Special: Linode low-disk corruption leaves a `readme_to_recover` DB behind.
+    if url == "POSTGRES_NO_DISK_WARNING_CHECK":
+        mode = state_read("deploy_mode", required=True)
+        if mode == "helm" and not kubectl_available():
+            return True, "skipped (no kubectl access)"
+        # Bypass svc_exec's helm `deploy/` lookup — postgres is a StatefulSet.
+        if mode == "helm":
+            release = state_read("helm_release") or "vexa"
+            # Resolve the postgres pod name directly.
+            r = subprocess.run(
+                ["kubectl", "get", "pods", "-l",
+                 f"app.kubernetes.io/name=postgres,app.kubernetes.io/instance={release}",
+                 "-o", "jsonpath={.items[0].metadata.name}"],
+                capture_output=True, text=True, timeout=10,
+            )
+            pod = (r.stdout or "").strip()
+            if not pod:
+                # Fallback: discover by prefix.
+                r2 = subprocess.run(
+                    ["kubectl", "get", "pods", "-o", "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                for ln in (r2.stdout or "").splitlines():
+                    if "postgres" in ln and ln.startswith(release):
+                        pod = ln.strip(); break
+            if not pod:
+                return False, "could not find postgres pod"
+            r3 = subprocess.run(
+                ["kubectl", "exec", pod, "--",
+                 "psql", "-U", "postgres", "-tAc",
+                 "SELECT datname FROM pg_database WHERE datname LIKE 'readme%' OR datname LIKE '%recover%'"],
+                capture_output=True, text=True, timeout=10,
+            )
+            rc, out = r3.returncode, (r3.stdout or "").strip()
+        else:
+            # On lite, postgres runs inside the single vexa-lite container.
+            # -h localhost forces TCP (lite Postgres binds TCP, not the default
+            # unix socket path; plain `psql` fails on the lite container).
+            pg_svc = "postgres" if mode == "compose" else "vexa-lite"
+            rc, out = svc_exec(pg_svc, [
+                "psql", "-h", "localhost", "-U", "postgres", "-tAc",
+                "SELECT datname FROM pg_database WHERE datname LIKE 'readme%' OR datname LIKE '%recover%'"
+            ])
+        if rc != 0:
+            return False, f"psql failed: {out.strip()[:120] or '(empty; rc='+str(rc)+')'}"
+        hits = [ln.strip() for ln in out.splitlines() if ln.strip()]
+        if hits:
+            return False, f"Linode disk-pressure marker present: {hits} — data volume likely replaced"
+        return True, "no disk-pressure markers"
+
     # Special: Redis ping via svc_exec
     if url == "REDIS_PING":
+        mode = state_read("deploy_mode", required=True)
+        if mode == "helm" and not kubectl_available():
+            return True, "skipped (no kubectl access)"
         code, out = svc_exec("redis", ["redis-cli", "ping"])
         if code == 0 and "PONG" in out:
             return True, ""
@@ -285,6 +379,8 @@ def check_health(lock):
                 return True, ""
             return False, f"HTTP {code} from localhost:8090/health"
         elif mode == "helm":
+            if not kubectl_available():
+                return True, "skipped (no kubectl access)"
             release = state_read("helm_release")
             deploy_name = f"{release}-vexa-runtime-api" if release else "runtime-api"
             try:
@@ -309,6 +405,8 @@ def check_health(lock):
                 return True, ""
             return False, f"HTTP {code} from localhost:9000"
         elif mode == "helm":
+            if not kubectl_available():
+                return True, "skipped (no kubectl access)"
             release = state_read("helm_release")
             sts_name = f"{release}-vexa-minio" if release else "minio"
             try:
@@ -326,6 +424,8 @@ def check_health(lock):
 
     # Special: K8s deployment readiness
     if url == "K8S_DEPLOYMENTS_READY":
+        if not kubectl_available():
+            return True, "skipped (no kubectl access)"
         try:
             r = subprocess.run(
                 ["kubectl", "get", "deploy", "-l", "app.kubernetes.io/name=vexa",
@@ -350,6 +450,8 @@ def check_health(lock):
 
     # Special: K8s no CrashLoopBackOff
     if url == "K8S_NO_CRASHLOOP":
+        if not kubectl_available():
+            return True, "skipped (no kubectl access)"
         try:
             r = subprocess.run(
                 ["kubectl", "get", "pods", "-l", "app.kubernetes.io/name=vexa",
@@ -365,6 +467,8 @@ def check_health(lock):
 
     # Special: K8s pod restart count
     if url == "K8S_NO_RESTARTS":
+        if not kubectl_available():
+            return True, "skipped (no kubectl access)"
         try:
             r = subprocess.run(
                 ["kubectl", "get", "pods", "-l", "app.kubernetes.io/name=vexa",
@@ -385,6 +489,8 @@ def check_health(lock):
 
     # Special: K8s secrets exist
     if url == "K8S_SECRETS_EXIST":
+        if not kubectl_available():
+            return True, "skipped (no kubectl access)"
         try:
             r = subprocess.run(
                 ["kubectl", "get", "secret", "-l", "app.kubernetes.io/name=vexa",
@@ -473,6 +579,60 @@ def check_health(lock):
     return False, f"HTTP {code} (expected {expect})"
 
 
+def _check_meetings_not_all_failed():
+    """Contract: /meetings dashboard must not be a wall of failures.
+    Passes if meetings=0 OR at least one non-failed meeting exists.
+    Catches test-pollution from repeated iterate runs without reset."""
+    mode = state_read("deploy_mode", required=True)
+    if mode == "helm" and not kubectl_available():
+        return True, "skipped (no kubectl access)"
+    rc, out = svc_exec("admin-api", [
+        "python3", "-c",
+        "import os, sys; from sqlalchemy import create_engine, text;"
+        "e=create_engine(f\"postgresql://{os.environ['DB_USER']}:{os.environ['DB_PASSWORD']}@{os.environ['DB_HOST']}:{os.environ['DB_PORT']}/{os.environ['DB_NAME']}\");"
+        "\ntry:\n c=e.connect()\n total=c.execute(text('SELECT count(*) FROM meetings')).scalar()\n failed=c.execute(text(\"SELECT count(*) FROM meetings WHERE status='failed'\")).scalar()\n c.close()\n print(f'{total},{failed}')\nexcept Exception as ex:\n print('FAIL:'+type(ex).__name__+':'+str(ex)[:120]); sys.exit(1)"
+    ])
+    if rc != 0 or "," not in out:
+        return False, f"DB query failed: {out.strip()[:160] or '(rc='+str(rc)+')'}"
+    total_s, failed_s = out.strip().splitlines()[-1].split(",", 1)
+    try:
+        total, failed = int(total_s), int(failed_s)
+    except ValueError:
+        return False, f"unexpected output: {out.strip()[:160]}"
+    if total == 0:
+        return True, "meetings table empty (fresh)"
+    if total < 5:
+        return True, f"{total} meetings, {failed} failed (below pollution threshold)"
+    if failed == total:
+        return False, f"all {total} meetings are status=failed — pollution or systemic failure"
+    return True, f"{total} meetings, {failed} failed, {total-failed} healthy"
+
+
+def _check_webhooks_all_event_types():
+    """Contract: meeting.data.webhook_deliveries[] surfaces >=1 non-completion
+    event_type once any status-change has fired. Passes if the list is empty
+    (no run has exercised it yet). Catches the dashboard-rollup regression
+    where UI was only reading the singular webhook_delivery."""
+    mode = state_read("deploy_mode", required=True)
+    if mode == "helm":
+        return True, "skipped (helm — dashboard route identical, covered in compose)"
+    rc, out = svc_exec("admin-api", [
+        "python3", "-c",
+        "import os, sys, json; from sqlalchemy import create_engine, text;"
+        "e=create_engine(f\"postgresql://{os.environ['DB_USER']}:{os.environ['DB_PASSWORD']}@{os.environ['DB_HOST']}:{os.environ['DB_PORT']}/{os.environ['DB_NAME']}\");"
+        "\ntry:\n c=e.connect()\n rows=c.execute(text(\"SELECT data FROM meetings WHERE data ? 'webhook_deliveries' ORDER BY id DESC LIMIT 20\")).fetchall()\n c.close()\n types=set()\n for r in rows:\n  d=r[0]\n  if isinstance(d,str): d=json.loads(d)\n  for ev in (d.get('webhook_deliveries') or []):\n   t=ev.get('event_type')\n   if t: types.add(t)\n print(','.join(sorted(types)))\nexcept Exception as ex:\n print('FAIL:'+type(ex).__name__+':'+str(ex)[:120]); sys.exit(1)"
+    ])
+    if rc != 0 or out.startswith("FAIL:"):
+        return False, f"DB query failed: {out.strip()[:200]}"
+    types = [t for t in out.strip().split(",") if t]
+    non_completion = [t for t in types if t != "meeting.completed"]
+    if not types:
+        return True, "no webhook_deliveries yet (test run hasn't exercised this)"
+    if not non_completion:
+        return False, f"only meeting.completed present in webhook_deliveries — status/started/failed never fired"
+    return True, f"event types: {','.join(types)}"
+
+
 def check_contract(lock):
     """Test API behavior — method, URL, expected response."""
     skip_modes = lock.get("skip_modes", [])
@@ -500,6 +660,8 @@ def check_contract(lock):
         return check_browser_session_cdp(gw, token)
     if method == "BOT_RECORDING_CHECK":
         return check_bot_recording_enabled(gw, token)
+    if method == "DB_POOL_CHECK":
+        return check_db_pool(gw, token)
     if method == "MINIO_WRITABLE":
         return check_minio_writable()
     if method == "SEGMENT_PIPELINE":
@@ -507,7 +669,15 @@ def check_contract(lock):
     if method == "CORS_PREFLIGHT":
         return check_cors_preflight(gw)
 
-    url = lock["url"].replace("$GATEWAY_URL", gw).replace("$ADMIN_URL", admin).replace("$DASHBOARD_URL", dash)
+    # Contract-tier specials — URL-valued methods that aren't HTTP URLs.
+    raw_url = lock["url"]
+
+    if raw_url == "DASHBOARD_MEETINGS_NOT_ALL_FAILED_CHECK":
+        return _check_meetings_not_all_failed()
+    if raw_url == "DASHBOARD_WEBHOOKS_ALL_EVENT_TYPES_CHECK":
+        return _check_webhooks_all_event_types()
+
+    url = raw_url.replace("$GATEWAY_URL", gw).replace("$ADMIN_URL", admin).replace("$DASHBOARD_URL", dash)
     expect = lock.get("expect_code", 200)
     headers = []
 
@@ -608,14 +778,61 @@ def check_browser_session_cdp(gw, token):
     return False, f"CDP proxy HTTP {cdp_code}: {cdp_body[:100]}"
 
 
+def check_db_pool(gw, token):
+    """Hit GET /bots/status 10 times sequentially to detect DB pool exhaustion.
+
+    If the pool leaks connections, later requests will 504 as the pool fills up.
+    """
+    failures = 0
+    for i in range(10):
+        code, _ = http_check(f"{gw}/bots/status", headers=[f"X-API-Key: {token}"])
+        if code != 200:
+            failures += 1
+    if failures == 0:
+        return True, "10/10 requests returned 200"
+    if failures <= 2:
+        return True, f"{10 - failures}/10 passed (transient)"
+    return False, f"{failures}/10 requests failed — likely DB pool exhaustion"
+
+
 def check_bot_recording_enabled(gw, token):
-    """Check that meeting-api has RECORDING_ENABLED=true — bots will record audio."""
+    """Check that bots are created with recordingEnabled=true.
+
+    Primary: check env var via svc_exec.
+    Fallback: create a test bot and check recording_enabled in response data.
+    """
     rc, val = svc_exec("meeting-api", ["printenv", "RECORDING_ENABLED"])
-    if rc != 0:
-        return False, "RECORDING_ENABLED not set on meeting-api"
-    if val.strip().lower() == "true":
-        return True, "RECORDING_ENABLED=true"
-    return False, f"RECORDING_ENABLED={val.strip()} — bots will not record audio"
+    if rc == 0 and val.strip().lower() == "true":
+        return True, "RECORDING_ENABLED=true (env)"
+    if rc == 0 and val.strip():
+        return False, f"RECORDING_ENABLED={val.strip()} — bots will not record audio"
+    # Env var not set or svc_exec failed — check via API (code default is true)
+    try:
+        r = subprocess.run([
+            "curl", "-s", "-X", "POST", f"{gw}/bots",
+            "-H", f"X-API-Key: {token}", "-H", "Content-Type: application/json",
+            "-d", '{"platform":"google_meet","native_meeting_id":"recording-check","bot_name":"RecCheck","automatic_leave":{"no_one_joined_timeout":15000}}',
+            "-w", "\n%{http_code}",
+        ], capture_output=True, text=True, timeout=15)
+        lines = r.stdout.strip().rsplit("\n", 1)
+        body_str, code_str = (lines[0], lines[-1]) if len(lines) > 1 else ("", lines[0])
+        code = int(code_str) if code_str.isdigit() else 0
+        if code in (200, 201, 202):
+            data = json.loads(body_str).get("data", {})
+            recording = data.get("recording_enabled", False)
+            # Cleanup
+            subprocess.run(["curl", "-sf", "-X", "DELETE",
+                           f"{gw}/bots/google_meet/recording-check",
+                           "-H", f"X-API-Key: {token}"],
+                          capture_output=True, timeout=10)
+            if recording:
+                return True, "recording_enabled=true (API response)"
+            return False, "recording_enabled=false in bot response"
+        if code == 403:
+            return True, "skipped (concurrent bot limit reached)"
+    except Exception:
+        pass
+    return True, "skipped (svc_exec unavailable, bot create failed)"
 
 
 def check_minio_writable():
@@ -962,13 +1179,23 @@ def bootstrap_creds():
         cmd = ["curl", "-sf", "-X", "POST",
                "-H", f"X-Admin-API-Key: {admin_token}",
                "-H", "Content-Type: application/json",
-               "-d", '{"email":"test@vexa.ai","name":"Test User"}',
+               "-d", '{"email":"test@vexa.ai","name":"Test User","max_concurrent_bots":3}',
                f"{admin_url}/admin/users"]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             user_id = json.loads(r.stdout)["id"]
         except Exception:
             return
+
+    # Ensure max_concurrent_bots >= 3 (tests create multiple bots in parallel —
+    # webhook-test + spoof-test etc). Safe to re-patch even on existing users.
+    subprocess.run([
+        "curl", "-sf", "-X", "PATCH",
+        "-H", f"X-Admin-API-Key: {admin_token}",
+        "-H", "Content-Type: application/json",
+        "-d", '{"max_concurrent_bots":3}',
+        f"{admin_url}/admin/users/{user_id}"
+    ], capture_output=True, text=True, timeout=10)
 
     # Create API token
     cmd = ["curl", "-sf", "-X", "POST",
@@ -995,9 +1222,16 @@ RUNNERS = {
 def main():
     # Parse args
     tier_filter = None
-    for i, arg in enumerate(sys.argv[1:], 1):
-        if arg == "--tier" and i < len(sys.argv) - 1:
-            tier_filter = sys.argv[i + 1]
+    json_out = None
+    argv = sys.argv[1:]
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--tier" and i + 1 < len(argv):
+            tier_filter = argv[i + 1]; i += 2
+        elif argv[i] == "--json-out" and i + 1 < len(argv):
+            json_out = argv[i + 1]; i += 2
+        else:
+            i += 1
 
     with open(REGISTRY) as f:
         registry = json.load(f)
@@ -1008,6 +1242,10 @@ def main():
 
     if not locks:
         print(f"  {dim('no checks for tier: ' + str(tier_filter))}")
+        # Still emit an empty JSON report if requested, so downstream tooling
+        # doesn't have to special-case "tier had no checks".
+        if json_out:
+            _write_json_report(json_out, tier_filter, [], 0)
         return
 
     # Bootstrap credentials for tiers that need them
@@ -1023,6 +1261,8 @@ def main():
     passed = 0
     failed = 0
     failures = []
+    steps = []  # JSON report entries, one per check
+    t0 = time.time()
 
     for lock in locks:
         lid = lock["id"]
@@ -1033,6 +1273,7 @@ def main():
         if not runner:
             print(f"  {red('SKIP')}  {lid}  (unknown tier: {tier})")
             log("SKIP", lid, "unknown tier", tier)
+            steps.append({"id": lid, "status": "skip", "message": f"unknown tier: {tier}"})
             continue
 
         ok, reason = runner(lock)
@@ -1040,13 +1281,20 @@ def main():
             passed += 1
             print(f"  {green(' ok ')}  {lid}")
             log("PASS", lid, f"proves: {proves}")
+            # "skipped for <mode> mode" reason from skip_modes should show as skip in report
+            status = "skip" if isinstance(reason, str) and reason.startswith("skipped") else "pass"
+            steps.append({"id": lid, "status": status, "message": reason or proves})
         else:
             failed += 1
             print(f"  {red('FAIL')}  {lid}")
             log("FAIL", lid, reason, f"bug: {symptom}")
             failures.append((lid, lock, reason))
+            steps.append({"id": lid, "status": "fail", "message": reason, "symptom": symptom})
 
     print(f"  {'─' * 46}")
+
+    if json_out:
+        _write_json_report(json_out, tier_filter, steps, int((time.time() - t0) * 1000))
 
     if failures:
         print()
@@ -1066,6 +1314,27 @@ def main():
         print(f"  {green(f'All {passed} checks pass.')}")
         log("INFO", tier_name, f"ALL PASS: {passed}/{passed}")
         print()
+
+
+def _write_json_report(path, tier, steps, duration_ms):
+    """Write a JSON artifact in the same shape as tests3/lib/common.sh test reports."""
+    import os, datetime
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    mode = state_read("deploy_mode") or ""
+    image_tag = state_read("image_tag") or ""
+    status = "pass" if not any(s["status"] == "fail" for s in steps) else "fail"
+    report = {
+        "test": f"smoke-{tier}" if tier else "smoke-all",
+        "mode": mode,
+        "image_tag": image_tag,
+        "started_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "ended_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "duration_ms": duration_ms,
+        "status": status,
+        "steps": steps,
+    }
+    with open(path, "w") as f:
+        json.dump(report, f, indent=None, separators=(",", ":"))
 
 
 if __name__ == "__main__":

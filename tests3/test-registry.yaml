@@ -1,0 +1,177 @@
+# tests3 test registry — single source of truth for:
+#   1. Which tests run on which deployment mode (runs_in)
+#   2. Test tiers (cheap / meeting / human) — what the release gate requires
+#   3. Step IDs each test emits (bound to feature DoDs via evidence: {test, step})
+#
+# Used by tests3/lib/run-matrix.sh and tests3/lib/aggregate.py.
+# Every test listed here MUST emit a JSON report at .state/reports/<mode>/<name>.json
+# via test_begin/step_*/test_end (see tests3/lib/common.sh) — no stdout parsing.
+
+tests:
+  # ── Smoke tiers (from checks/run) ───────────────────────────────
+  # Each tier writes its own .state/reports/<mode>/smoke-<tier>.json artifact.
+  # Step IDs are the check IDs from checks/registry.json.
+  smoke-static:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: checks/run --tier static --json-out $STATE/reports/$MODE/smoke-static.json
+    features: [infrastructure, auth-and-limits, dashboard]
+    max_duration_sec: 30
+
+  smoke-env:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: checks/run --tier env --json-out $STATE/reports/$MODE/smoke-env.json
+    features: [authenticated-meetings, browser-session, infrastructure]
+    max_duration_sec: 30
+
+  smoke-health:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: checks/run --tier health --json-out $STATE/reports/$MODE/smoke-health.json
+    features: [infrastructure, realtime-transcription]
+    max_duration_sec: 60
+
+  smoke-contract:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: checks/run --tier contract --json-out $STATE/reports/$MODE/smoke-contract.json
+    features:
+      - auth-and-limits
+      - bot-lifecycle
+      - browser-session
+      - meeting-urls
+      - post-meeting-transcription
+      - realtime-transcription
+      - realtime-transcription/gmeet
+      - realtime-transcription/msteams
+      - webhooks
+    max_duration_sec: 120
+
+  # ── Test scripts — retrofitted with step_* in Phase A ───────────
+  webhooks:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: tests/webhooks.sh
+    features: [webhooks]
+    max_duration_sec: 180
+    steps:
+      - config             # PUT /user/webhook stores config in User.data
+      - inject             # gateway injects X-User-Webhook-* from validated token
+      - spoof              # client-supplied headers stripped (anti-spoof)
+      - envelope           # build_envelope emits frozen shape
+      - no_leak_payload    # clean_meeting_data strips internal fields
+      - hmac               # HMAC-SHA256 signing works
+      - no_leak_response   # webhook_secret not in /bots/status response
+      - e2e_completion     # meeting.completed delivered to user endpoint
+      - e2e_status         # status-change webhooks fire when enabled
+
+  containers:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: tests/containers.sh
+    features: [bot-lifecycle, container-lifecycle]
+    max_duration_sec: 180
+    steps:
+      - create
+      - alive
+      - removal
+      - status_completed
+      - timeout_stop
+      - concurrency_slot
+      - no_orphans
+
+  dashboard-auth:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: tests/dashboard-auth.sh
+    features: [dashboard]
+    max_duration_sec: 30
+    steps:
+      - login
+      - cookie_flags
+      - identity
+      - proxy_reachable
+
+  dashboard-proxy:
+    tier: cheap
+    runs_in: [compose, helm]   # lite doesn't serve the full dashboard proxy
+    script: tests/dashboard-proxy.sh
+    features: [dashboard]
+    max_duration_sec: 60
+    steps:
+      - meetings_list
+      - pagination
+      - field_contract
+      - transcript_proxy
+      - bot_create_proxy
+      - no_false_failed
+
+  # ── Test scripts still awaiting Phase D retrofit (listed so the runner
+  #    knows they exist, but skipped until step_* reporting is added).
+  #    Remove `awaiting_retrofit: true` once migrated.
+  auth-meeting:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/auth-meeting.sh
+    features: [authenticated-meetings]
+    awaiting_retrofit: true
+
+  browser-session:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/browser-session.sh
+    features: [browser-session, remote-browser]
+    awaiting_retrofit: true
+
+  browser-login:
+    tier: human   # Google login persistence — requires manual interaction
+    runs_in: []
+    script: tests/browser-login.sh
+    features: [browser-session]
+
+  bot-stop-timing:
+    tier: meeting
+    runs_in: []
+    script: tests/bot-stop-timing.sh
+    features: [bot-lifecycle]
+
+  transcription-replay:
+    tier: meeting
+    runs_in: []
+    script: tests/transcription-replay.sh
+    features: [realtime-transcription]
+
+  tts-reliability:
+    tier: meeting
+    runs_in: []
+    script: tests/tts-reliability.sh
+    features: [realtime-transcription, speaking-bot]
+
+  meeting-tts:
+    tier: meeting      # needs Google Meet + TTS + playwright on the runner
+    runs_in: []
+    script: tests/meeting-tts.sh
+    features:
+      - realtime-transcription
+      - realtime-transcription/gmeet
+      - meeting-chat
+      - speaking-bot
+
+  meeting-tts-teams:
+    tier: meeting
+    runs_in: []
+    script: tests/meeting-tts-teams.sh
+    features: [realtime-transcription/msteams]
+
+  post-meeting:
+    tier: meeting      # depends on meeting-tts having run first
+    runs_in: []
+    script: tests/post-meeting.sh
+    features: [post-meeting-transcription, webhooks]
+
+  collect:
+    tier: human        # data collection, not validation
+    runs_in: []
+    script: tests/collect.sh
+    features: []

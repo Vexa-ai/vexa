@@ -196,3 +196,74 @@ class TestWebhookSigning:
 
         call_kwargs = mock_deliver.call_args[1]
         assert call_kwargs["webhook_secret"] is None
+
+
+# ===================================================================
+# send_status_webhook
+# ===================================================================
+
+
+class TestSendStatusWebhook:
+
+    @pytest.mark.asyncio
+    async def test_status_webhook_calls_deliver_for_enabled_event(self):
+        """Status webhook with enabled event type → calls deliver()."""
+        from meeting_api.webhooks import send_status_webhook
+
+        now = datetime.utcnow()
+        meeting = make_meeting(
+            status="active",
+            start_time=now,
+            data={
+                "webhook_url": "https://example.com/webhook",
+                "webhook_secret": "my-secret",
+                "webhook_events": {"meeting.started": True},
+            },
+        )
+        object.__setattr__(meeting, "native_meeting_id", "abc-defg-hij")
+        object.__setattr__(meeting, "constructed_meeting_url", None)
+
+        db = AsyncMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+
+        with patch("meeting_api.webhooks.deliver", new_callable=AsyncMock, return_value=mock_resp) as mock_deliver:
+            with patch("meeting_api.webhooks.validate_webhook_url"):
+                with patch("meeting_api.webhooks.build_envelope", return_value={"event": "test"}):
+                    await send_status_webhook(meeting, db)
+
+        mock_deliver.assert_called_once()
+        call_kwargs = mock_deliver.call_args[1]
+        assert call_kwargs["webhook_secret"] == "my-secret"
+
+    @pytest.mark.asyncio
+    async def test_status_webhook_skips_disabled_event(self):
+        """Status webhook with disabled event type → does NOT call deliver()."""
+        from meeting_api.webhooks import send_status_webhook
+
+        meeting = make_meeting(
+            status="active",
+            data={
+                "webhook_url": "https://example.com/webhook",
+                # No webhook_events config → defaults to only meeting.completed
+            },
+        )
+        object.__setattr__(meeting, "native_meeting_id", "abc-defg-hij")
+        object.__setattr__(meeting, "constructed_meeting_url", None)
+
+        db = AsyncMock()
+
+        with patch("meeting_api.webhooks.deliver", new_callable=AsyncMock) as mock_deliver:
+            await send_status_webhook(meeting, db)
+
+        mock_deliver.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_status_webhook_no_url_skips(self):
+        """Status webhook with no webhook_url → skip."""
+        from meeting_api.webhooks import send_status_webhook
+
+        meeting = make_meeting(data={})
+        db = AsyncMock()
+        await send_status_webhook(meeting, db)
+        # Should not raise

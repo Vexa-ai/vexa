@@ -1,0 +1,115 @@
+# Release scope — 260418-webhooks
+# Authored in stage: plan. Awaiting human sign-off in plan-approval.yaml.
+# Drives every downstream stage (develop → deploy → validate).
+
+release_id: 260418-webhooks
+branch: dev
+summary: |
+  Webhook status-event coverage. Non-`meeting.completed` events
+  (meeting.started / meeting.status_change / bot.failed) are not being
+  delivered when opted-in via webhook_events. The 260417-webhooks-dbpool
+  release's `events-status-webhooks` DoD passed on a gate artifact that
+  recorded only `meeting.completed` — the proof was false-positive.
+  This release tightens the evidence and lands the fix.
+
+deployments:
+  modes: [compose, lite]
+  notes:
+    lite: "widened 2026-04-19 to satisfy reliability-db-pool DoD's mode coverage requirement (evidence.modes: [lite, compose, helm]). Compose alone left DoD as 'missing' → gate 90% < 95%."
+    helm: "not applicable this cycle — LKE provision cost outweighs coverage benefit for a webhooks-scoped release. reliability-db-pool DoD will remain partially-covered on helm until a release that independently exercises helm widens this."
+
+issues:
+  - id: webhooks-status-events-non-completed
+    source: human
+    ref: "user, 2026-04-18 (in-session)"
+    problem: |
+      User configures a webhook URL with webhook_events enabling
+      meeting.started / meeting.status_change / bot.failed (alongside the
+      default-enabled meeting.completed). After a full bot lifecycle, the
+      receiver sees meeting.completed deliveries only; no other event
+      types arrive.
+
+    hypothesis: |
+      Two candidate root causes, not yet disentangled — triage after
+      the new regression check exists will classify:
+
+      (1) Test-proof gap (high confidence). `tests3/tests/webhooks.sh`
+          step `e2e_status` (lines 219–265) asserts
+          `len(meeting.data.webhook_deliveries) > 0`. In the
+          260417-1454 green-gate evidence
+          (tests3/reports/release-0.10.0-260417-1454.md:180) that list
+          contained exactly one entry, event_type=meeting.completed.
+          The test was therefore satisfied by the completion event
+          alone — which is already proven separately by
+          `events-meeting-completed` (webhooks/e2e_completion). Non-
+          completed status events were never actually observed by the
+          matrix, so any runtime breakage on that path is invisible to
+          the gate.
+
+      (2) Runtime misbehavior (to be confirmed). That meeting.completed
+          shows up in `webhook_deliveries[]` at all suggests either:
+            - the status dispatcher in
+              services/meeting-api/meeting_api/webhooks.py
+              (send_status_webhook / schedule_status_webhook_task) is
+              firing meeting.completed itself, OR
+            - the storage model conflates completion into the
+              status-delivery list.
+          Either way, non-completed transitions (active / stopping /
+          bot.failed) never surface as separate deliveries in the list.
+          Develop will confirm against the user-reported receiver.
+
+    # REQUIRED when source: human — why did the automated matrix miss this?
+    gap_analysis: |
+      The `events-status-webhooks` DoD (weight 10, evidence
+      webhooks/e2e_status on compose) had a label promising coverage of
+      meeting.started / bot.failed / meeting.status_change, but its
+      evidence step passed if ANY entry existed in
+      webhook_deliveries[]. meeting.completed entering that list (for
+      whatever reason — see hypothesis #2) satisfied the step. Nothing
+      in the matrix required a non-completed event_type to appear.
+      Fix: introduce a new check that asserts a non-meeting.completed
+      event_type fires, and rebind the DoD evidence to it. The
+      existing `e2e_status` step remains as a looser regression
+      indicator but can no longer singly discharge the DoD.
+
+    # REQUIRED when source: human — IDs of checks that must EXIST AND
+    # PASS before the gate considers this issue closed. Enforced by the
+    # aggregator: every id here must appear in proves[] below.
+    # Binding form: aggregate.py (line 629) builds bound[] using
+    # f"{test}:{step}" (colon), so new_checks uses colon too.
+    new_checks: ["webhooks:e2e_status_non_completed"]
+
+    fix_commits: []   # to be populated in develop as commits land
+
+    proves:
+      - {test: webhooks, step: e2e_status_non_completed, modes: [compose]}
+      # Existing e2e_status step stays as a looser sanity binding.
+      - {test: webhooks, step: e2e_status, modes: [compose]}
+
+    required_modes: [compose]
+
+    # Human verification surfaced in per-release human-checklist.md.
+    human_verify:
+      - mode: compose
+        do: |
+          1. PUT /user/webhook with body:
+             {"webhook_url": "<receiver>",
+              "webhook_secret": "<any>",
+              "webhook_events": {
+                "meeting.completed": true,
+                "meeting.started": true,
+                "meeting.status_change": true,
+                "bot.failed": true}}
+          2. POST /bots (google_meet, any test URL).
+          3. Wait through a full lifecycle (~60s), then DELETE /bots/...
+          4. Inspect receiver payloads AND
+             svc_exec meeting-api -> select meeting.data.webhook_deliveries[]
+        expect: |
+          Receiver saw ≥1 delivery with event_type != meeting.completed
+          (e.g., meeting.started and/or meeting.status_change with
+          state in {active, stopping}). webhook_deliveries[] contains
+          matching entries. No double-delivery of meeting.completed.
+
+expensive_tests: []
+
+strict_features: []

@@ -1,0 +1,36 @@
+# Static human-validation checks — every release, every deployment.
+# One item = one action + one observable outcome. No prose.
+# Placeholders {vm_ip}, {node_ip}, {dashboard_url} resolved per mode at generate time.
+
+always:
+  - modes: [lite]
+    section: "Lite VM"
+    items:
+      - "Open http://{vm_ip}:3000 → magic-link login as test@vexa.ai → /meetings renders"
+      - "`docker logs vexa-lite 2>&1 | grep -i error | tail -5` → no new errors"
+      - "`docker stats --no-stream vexa-lite` → MEM < 2 GiB"
+
+  - modes: [compose]
+    section: "Compose VM"
+    items:
+      - "Open http://{vm_ip}:3001 → magic-link login → /meetings renders"
+      - "Open http://{vm_ip}:8056/docs → OpenAPI page renders"
+      - "POST /bots with a real Google Meet URL → 201 + container `meeting-*` appears in `docker ps`"
+      - "Within 60s bot.status → active; `/transcripts/<platform>/<native_id>` returns segments"
+      - "DELETE the bot → container gone, meeting.status=completed"
+      - "`docker compose -f deploy/compose/docker-compose.yml logs --tail=50 | grep -i error` → no new errors"
+      - "Re-GET `/transcripts/...` after stop → segments still returned (post-meeting persistence)"
+
+  - modes: [helm]
+    section: "Helm / LKE"
+    items:
+      - "`kubectl get pods` → all Running, 0 CrashLoopBackOff"
+      - "Open http://{node_ip}:30056/ → gateway root JSON"
+      - "Open http://{node_ip}:30001/ → dashboard renders"
+      - "`kubectl get events --field-selector type=Warning --sort-by=.lastTimestamp | tail` → no new warnings"
+
+  - modes: [lite, compose, helm]
+    section: "Release integrity"
+    items:
+      - "Every running image tag == `cat deploy/compose/.last-tag`"
+      - "`docker ps -a | grep -E 'lifecycle-|webhook-test|spoof-test'` → empty"

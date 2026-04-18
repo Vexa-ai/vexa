@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 # Dashboard proxy: meetings list, pagination, field contract, transcript, bot creation
-# Covers DoDs: dashboard#4,#5,#6,#8,#12,#15
+#
+# Step IDs (stable — bound to features/dashboard/README.md DoDs):
+#   meetings_list     — GET /api/vexa/meetings returns meetings
+#   pagination        — limit/offset works, no overlap between pages
+#   field_contract    — native_meeting_id present in meeting records
+#   transcript_proxy  — transcript reachable through dashboard proxy
+#   bot_create_proxy  — POST /api/vexa/bots reaches the gateway
+#   no_false_failed   — no meetings wrongly marked failed
+#
 # Reads: .state/dashboard_url, .state/dashboard_cookie, .state/api_token
+# Writes: .state/reports/<mode>/dashboard-proxy.json
 source "$(dirname "$0")/../lib/common.sh"
 
 DASHBOARD_URL=$(state_read dashboard_url)
@@ -11,9 +20,11 @@ echo ""
 echo "  dashboard-proxy"
 echo "  ──────────────────────────────────────────────"
 
+test_begin dashboard-proxy
+
 COOKIE_HEADER="Cookie: vexa-token=$COOKIE_TOKEN"
 
-# ── 1. Meetings list returns data ─────────────────
+# ── Step: meetings_list ──────────────────────────
 MEETINGS_RESP=$(curl -sf -H "$COOKIE_HEADER" "$DASHBOARD_URL/api/vexa/meetings")
 MEETING_COUNT=$(echo "$MEETINGS_RESP" | python3 -c "
 import sys,json
@@ -22,22 +33,23 @@ print(len(d.get('meetings',[])))
 " 2>/dev/null)
 
 if [ "${MEETING_COUNT:-0}" -gt 0 ]; then
-    pass "meetings list: $MEETING_COUNT meetings"
+    step_pass meetings_list "$MEETING_COUNT meetings"
 else
-    fail "meetings list: 0 meetings"
+    step_fail meetings_list "0 meetings returned"
 fi
 
-# ── 2. Pagination (limit/offset/has_more) ─────────
-PAGE_RESULT=$(python3 -c "
+# ── Step: pagination ─────────────────────────────
+# Requires >= 4 meetings in DB; skip if not enough data.
+if [ "${MEETING_COUNT:-0}" -lt 4 ]; then
+    step_skip pagination "need >=4 meetings in DB, have ${MEETING_COUNT:-0}"
+else
+    PAGE_RESULT=$(python3 -c "
 import json, urllib.request
-h={'Cookie':'vexa-token=$COOKIE_TOKEN'}
 req=urllib.request.Request('$DASHBOARD_URL/api/vexa/meetings?limit=2&offset=0')
 req.add_header('Cookie','vexa-token=$COOKIE_TOKEN')
 try:
     d=json.load(urllib.request.urlopen(req, timeout=10))
     p1=d.get('meetings',[])
-    hm=d.get('has_more',False)
-    # Second page
     req2=urllib.request.Request('$DASHBOARD_URL/api/vexa/meetings?limit=2&offset=2')
     req2.add_header('Cookie','vexa-token=$COOKIE_TOKEN')
     d2=json.load(urllib.request.urlopen(req2, timeout=10))
@@ -45,7 +57,7 @@ try:
     ids1=set(m.get('id','') for m in p1)
     ids2=set(m.get('id','') for m in p2)
     overlap=ids1 & ids2
-    if len(p1)==2 and len(overlap)==0:
+    if len(p1)==2 and len(p2)>=1 and len(overlap)==0:
         print('PASS')
     else:
         print(f'FAIL:p1={len(p1)},p2={len(p2)},overlap={len(overlap)}')
@@ -53,13 +65,14 @@ except Exception as e:
     print(f'FAIL:{e}')
 " 2>/dev/null)
 
-if [ "$PAGE_RESULT" = "PASS" ]; then
-    pass "pagination: limit/offset works, no overlap"
-else
-    fail "pagination: $PAGE_RESULT"
+    if [ "$PAGE_RESULT" = "PASS" ]; then
+        step_pass pagination "limit/offset works, no overlap"
+    else
+        step_fail pagination "$PAGE_RESULT"
+    fi
 fi
 
-# ── 3. Field contract: native_meeting_id present ──
+# ── Step: field_contract ─────────────────────────
 FIELD_RESULT=$(echo "$MEETINGS_RESP" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
@@ -73,12 +86,12 @@ else:
 " 2>/dev/null)
 
 if [ "$FIELD_RESULT" = "PASS" ]; then
-    pass "field contract: native_meeting_id present"
+    step_pass field_contract "native_meeting_id present"
 else
-    fail "field contract: $FIELD_RESULT"
+    step_fail field_contract "$FIELD_RESULT"
 fi
 
-# ── 4. Transcript via proxy ───────────────────────
+# ── Step: transcript_proxy ───────────────────────
 TX_RESULT=$(echo "$MEETINGS_RESP" | python3 -c "
 import sys,json,urllib.request
 d=json.load(sys.stdin)
@@ -100,14 +113,14 @@ else:
 " 2>/dev/null)
 
 if [[ "$TX_RESULT" == PASS:* ]]; then
-    pass "transcript proxy: ${TX_RESULT#PASS:} segments"
+    step_pass transcript_proxy "${TX_RESULT#PASS:} segments returned"
 elif [[ "$TX_RESULT" == SKIP:* ]]; then
-    pass "transcript proxy: skipped (no meetings with transcripts)"
+    step_skip transcript_proxy "no meetings with transcripts"
 else
-    fail "transcript proxy: $TX_RESULT"
+    step_fail transcript_proxy "$TX_RESULT"
 fi
 
-# ── 5. Bot creation through dashboard proxy ───────
+# ── Step: bot_create_proxy ───────────────────────
 BOT_RESP=$(curl -s -X POST "$DASHBOARD_URL/api/vexa/bots" \
     -H "Content-Type: application/json" \
     -H "$COOKIE_HEADER" \
@@ -116,14 +129,14 @@ BOT_RESP=$(curl -s -X POST "$DASHBOARD_URL/api/vexa/bots" \
 BOT_HTTP=$(echo "$BOT_RESP" | tail -1)
 
 case "$BOT_HTTP" in
-    200|201|202) pass "bot via proxy: $BOT_HTTP" ;;
-    403)         pass "bot via proxy: 403 (limit reached, proxy works)" ;;
-    409)         pass "bot via proxy: 409 (already exists, proxy works)" ;;
-    500)         fail "bot via proxy: 500 — check runtime-api + bot image" ;;
-    *)           fail "bot via proxy: $BOT_HTTP" ;;
+    200|201|202) step_pass bot_create_proxy "HTTP $BOT_HTTP" ;;
+    403)         step_pass bot_create_proxy "HTTP 403 (limit reached, proxy works)" ;;
+    409)         step_pass bot_create_proxy "HTTP 409 (already exists, proxy works)" ;;
+    500)         step_fail bot_create_proxy "HTTP 500 — runtime-api or bot image broken" ;;
+    *)           step_fail bot_create_proxy "HTTP $BOT_HTTP" ;;
 esac
 
-# ── 6. No false failed meetings ───────────────────
+# ── Step: no_false_failed ────────────────────────
 FALSE_FAILED=$(echo "$MEETINGS_RESP" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
@@ -135,9 +148,9 @@ print(count)
 " 2>/dev/null)
 
 if [ "${FALSE_FAILED:-0}" -eq 0 ]; then
-    pass "no failed meetings"
+    step_pass no_false_failed "no meetings with 'failed' status"
 else
-    info "$FALSE_FAILED meetings with 'failed' status (may need investigation)"
+    step_skip no_false_failed "$FALSE_FAILED meetings with 'failed' status (may be legitimate)"
 fi
 
 echo "  ──────────────────────────────────────────────"

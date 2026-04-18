@@ -25,9 +25,13 @@ from .webhook_delivery import (
 
 logger = logging.getLogger("meeting_api.webhooks")
 
-# Map meeting status to webhook event type
+# Map meeting status → status-webhook event type.
+# `completed` is intentionally NOT here: `send_completion_webhook` owns the
+# meeting.completed payload. Including "completed" caused the status path to
+# fire meeting.completed on the terminal transition too, which (1) double-
+# delivered and (2) masked the absence of genuine non-completed events in
+# webhook_deliveries[] (see releases/260418-webhooks/triage-log.md).
 STATUS_TO_EVENT: Dict[str, str] = {
-    "completed": "meeting.completed",
     "active": "meeting.started",
     "failed": "bot.failed",
 }
@@ -51,6 +55,18 @@ def _is_event_enabled(meeting_data: Optional[Dict], event_type: str) -> bool:
 def _write_delivery_status(meeting: Meeting, status: dict):
     data = dict(meeting.data) if meeting.data else {}
     data["webhook_delivery"] = status
+    meeting.data = data
+    flag_modified(meeting, "data")
+
+
+def _append_delivery_log(meeting: Meeting, entry: dict, max_entries: int = 20):
+    """Append a delivery record to meeting.data.webhook_deliveries (bounded list)."""
+    data = dict(meeting.data) if meeting.data else {}
+    log = list(data.get("webhook_deliveries") or [])
+    log.append(entry)
+    if len(log) > max_entries:
+        log = log[-max_entries:]
+    data["webhook_deliveries"] = log
     meeting.data = data
     flag_modified(meeting, "data")
 
@@ -144,7 +160,16 @@ async def send_status_webhook(
             return
 
         meeting_data = meeting.data if isinstance(meeting.data, dict) else {}
-        event_type = _resolve_event_type(meeting.status)
+        # Prefer new_status from status_change_info when the caller provides it —
+        # necessary for the stop_requested early-return path where meeting.status
+        # in the DB lags the actual bot-reported transition (callbacks.py gates
+        # the status update but still wants the webhook to fire for the real
+        # transition). Normal callers update status first, so either source agrees.
+        resolution_status = (
+            (status_change_info or {}).get("new_status")
+            or meeting.status
+        )
+        event_type = _resolve_event_type(resolution_status)
         if not _is_event_enabled(meeting_data, event_type):
             return
 
@@ -165,13 +190,28 @@ async def send_status_webhook(
             }
 
         payload = build_envelope(event_type, event_data)
-        await deliver(
+        now = datetime.now(timezone.utc).isoformat()
+        resp = await deliver(
             url=webhook_url,
             payload=payload,
             webhook_secret=webhook_secret,
             timeout=30.0,
             label=f"status-webhook meeting={meeting.id} status={meeting.status}",
+            metadata={"meeting_id": meeting.id},
         )
+
+        # Record this delivery attempt in meeting.data.webhook_deliveries (bounded log)
+        entry = {
+            "event_type": event_type,
+            "url": webhook_url,
+            "timestamp": now,
+        }
+        if resp is not None:
+            entry["status"] = "delivered"
+            entry["status_code"] = resp.status_code
+        else:
+            entry["status"] = "queued" if get_redis_client() is not None else "failed"
+        _append_delivery_log(meeting, entry)
     except Exception as e:
         logger.error(f"Unexpected error sending status webhook for meeting {meeting.id}: {e}", exc_info=True)
 
