@@ -17,11 +17,38 @@ from .conftest import (
 
 
 def _patch_find_active(meeting):
-    return patch(
-        "meeting_api.voice_agent._find_active_meeting",
-        new_callable=AsyncMock,
-        return_value=meeting,
-    )
+    """Patch both meeting-lookup helpers used by voice_agent routes.
+
+    Most routes (/speak, /screen, /avatar, /events) use `_find_active_meeting`,
+    but /chat (GET) uses `_find_meeting_any_status` (voice_agent.py:143).
+    Patching both keeps the test helper uniform across routes.
+    """
+    return _MultiPatch([
+        patch(
+            "meeting_api.voice_agent._find_active_meeting",
+            new_callable=AsyncMock,
+            return_value=meeting,
+        ),
+        patch(
+            "meeting_api.voice_agent._find_meeting_any_status",
+            new_callable=AsyncMock,
+            return_value=meeting,
+        ),
+    ])
+
+
+class _MultiPatch:
+    """Context manager that enters/exits a list of patch objects."""
+
+    def __init__(self, patches):
+        self._patches = patches
+
+    def __enter__(self):
+        return [p.__enter__() for p in self._patches]
+
+    def __exit__(self, exc_type, exc, tb):
+        for p in reversed(self._patches):
+            p.__exit__(exc_type, exc, tb)
 
 
 @pytest.fixture
