@@ -13,10 +13,10 @@ summary: |
   This release tightens the evidence and lands the fix.
 
 deployments:
-  modes: [compose]
+  modes: [compose, lite]
   notes:
-    helm: "not applicable — webhooks DoDs are compose-gated; if triage shows runtime regression beyond test gap, widen here."
-    lite: "not applicable — same reason."
+    lite: "widened 2026-04-19 to satisfy reliability-db-pool DoD's mode coverage requirement (evidence.modes: [lite, compose, helm]). Compose alone left DoD as 'missing' → gate 90% < 95%."
+    helm: "not applicable this cycle — LKE provision cost outweighs coverage benefit for a webhooks-scoped release. reliability-db-pool DoD will remain partially-covered on helm until a release that independently exercises helm widens this."
 
 issues:
   - id: webhooks-status-events-non-completed
@@ -75,10 +75,9 @@ issues:
     # REQUIRED when source: human — IDs of checks that must EXIST AND
     # PASS before the gate considers this issue closed. Enforced by the
     # aggregator: every id here must appear in proves[] below.
-    # Binding form: aggregate.py resolves {check: X} only against smoke-*
-    # reports; webhooks.sh emits webhooks.json, so we bind via {test,step}
-    # and use the dotted ID in new_checks.
-    new_checks: [webhooks.e2e_status_non_completed]
+    # Binding form: aggregate.py (line 629) builds bound[] using
+    # f"{test}:{step}" (colon), so new_checks uses colon too.
+    new_checks: ["webhooks:e2e_status_non_completed"]
 
     fix_commits: []   # to be populated in develop as commits land
 
