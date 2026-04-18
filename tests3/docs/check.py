@@ -2,7 +2,7 @@
 """Doc drift checks. Static — no infra needed, runs instantly.
 
 Checks:
-  PAGE_EXISTS          every page in registry.json has a .mdx file
+  PAGE_EXISTS          every page in manifest.json has a .mdx file
   NAV_COMPLETE         every .mdx in docs.json nav, every nav entry has a file
   LINKS_RESOLVE        internal markdown links point to real pages
   OWNERSHIP_COMPLETE   every nav page is owned or explicitly unowned
@@ -19,7 +19,7 @@ from pathlib import Path
 
 ROOT = Path(os.environ.get("ROOT", Path(__file__).resolve().parent.parent.parent))
 DOCS_DIR = ROOT / "docs"
-REGISTRY = Path(__file__).resolve().parent / "registry.json"
+REGISTRY = Path(__file__).resolve().parent / "manifest.json"
 DOCS_JSON = DOCS_DIR / "docs.json"
 
 
@@ -117,7 +117,7 @@ def _resolve_link(target, parent_dir):
 # ─── Checks ─────────────────────────────────────────────────────
 
 def check_page_exists(registry):
-    """Every page in registry.json has a .mdx file in docs/."""
+    """Every page in manifest.json has a .mdx file in docs/."""
     errors = []
     for owner in registry["owners"]:
         for page in owner["pages"]:
@@ -173,7 +173,7 @@ def check_ownership_complete(registry, docs_json):
     covered = owned_pages | unowned
 
     for slug in sorted(nav_slugs - covered):
-        errors.append(f"  \"{slug}\" is in docs.json but has no owner in registry.json")
+        errors.append(f"  \"{slug}\" is in docs.json but has no owner in manifest.json")
 
     return errors
 

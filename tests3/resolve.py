@@ -4,6 +4,15 @@
 Usage:
     git diff --name-only main | python3 tests3/resolve.py
     echo "services/meeting-api/foo.py" | python3 tests3/resolve.py
+
+DEPRECATED — reads legacy `tests3.targets` / `tests3.checks` frontmatter that
+was stripped from feature READMEs in refactor step 2 (§4.3). Not used by the
+release pipeline. Kept alive only for the top-level `make test` target
+(changed-files → targets); if that target gets retired, delete this file.
+
+Rewire plan (if kept): map changed file → owning feature → read the
+feature's `dods.yaml` sidecar → extract unique test IDs from
+`dods[].evidence.test|check` → emit those as Make targets.
 """
 
 import os
