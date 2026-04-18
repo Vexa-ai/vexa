@@ -5,7 +5,7 @@ tests3 report aggregator.
 Reads:
   - tests3/test-registry.yaml — which tests exist, their tier, modes, features
   - tests3/.state/reports/<mode>/<test>.json — evidence artifacts from validate-<mode>
-  - features/*/README.md frontmatter — DoD → evidence bindings + gate threshold
+  - features/*/dods.yaml sidecars — DoD → evidence bindings + gate threshold (§3.2)
 
 Outputs:
   - tests3/reports/release-<tag>.md — cross-deployment markdown report (committed)
@@ -162,30 +162,33 @@ FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
 
 def load_features() -> List[Feature]:
+    """Read per-feature DoD contracts from `features/<name>/dods.yaml` sidecars.
+
+    Per §3.2 / §3.5 of tests3/README.md:
+      - One sidecar file per feature, no frontmatter fallback.
+      - Missing dods.yaml is a HARD FAIL (no silent skip).
+      - The only opt-out is explicit `dods: []  # reason: …` in the sidecar.
+    """
     features: List[Feature] = []
+    hard_fails: List[str] = []
     for readme in sorted(glob.glob(FEATURES_GLOB) + glob.glob(NESTED_FEATURES_GLOB)):
         rel = os.path.relpath(readme, ROOT)
         # feature name = directory path under features/, e.g. "webhooks" or "realtime-transcription/gmeet"
         fname = rel.replace("features/", "", 1).rsplit("/README.md", 1)[0]
-        try:
-            with open(readme) as f:
-                text = f.read()
-        except Exception:
-            continue
-        m = FRONTMATTER_RE.match(text)
-        if not m:
+        sidecar_path = os.path.join(os.path.dirname(readme), "dods.yaml")
+        if not os.path.isfile(sidecar_path):
+            hard_fails.append(f"{fname}: missing {os.path.relpath(sidecar_path, ROOT)}")
             continue
         try:
-            fm = yaml.safe_load(m.group(1)) or {}
+            with open(sidecar_path) as f:
+                sc = yaml.safe_load(f) or {}
         except Exception as e:
-            print(f"WARN: could not parse frontmatter of {rel}: {e}", file=sys.stderr)
+            hard_fails.append(f"{fname}: sidecar parse error: {e}")
             continue
-        tests3 = fm.get("tests3") or {}
-        gate = (tests3.get("gate") or {}).get("confidence_min", 0)
-        dod_entries = tests3.get("dods") or []
-        if not dod_entries:
-            # Phase C: only features that have migrated get a DoD rollup. The
-            # rest are silently skipped (will be surfaced in Phase D migration).
+        gate = (sc.get("gate") or {}).get("confidence_min", 0)
+        dod_entries = sc.get("dods")
+        if dod_entries is None:
+            hard_fails.append(f"{fname}: sidecar must declare `dods:` (use `dods: []  # reason: …` to opt out)")
             continue
         dods: List[DoD] = []
         for entry in dod_entries:
@@ -202,6 +205,11 @@ def load_features() -> List[Feature]:
                 ),
             ))
         features.append(Feature(name=fname, path=readme, gate_confidence_min=int(gate), dods=dods))
+    if hard_fails:
+        print(f"ERROR: {len(hard_fails)} feature(s) missing / malformed dods.yaml:", file=sys.stderr)
+        for f in hard_fails:
+            print(f"  - {f}", file=sys.stderr)
+        sys.exit(2)
     return features
 
 
@@ -439,7 +447,7 @@ def render_dod_table(feature: Feature, tag: str) -> str:
     """
     lines: List[str] = []
     lines.append(AUTO_DOD_BEGIN)
-    lines.append(f"<!-- Auto-written by tests3/lib/aggregate.py from release tag `{tag}`. Do not edit by hand — edit the `tests3.dods:` frontmatter + re-run `make -C tests3 report --write-features`. -->")
+    lines.append(f"<!-- Auto-written by tests3/lib/aggregate.py from release tag `{tag}`. Do not edit by hand — edit the sidecar `dods.yaml` + re-run `make -C tests3 report --write-features`. -->")
     lines.append("")
     lines.append(f"**Confidence: {feature.confidence}%** "
                  f"(gate: {feature.gate_confidence_min}%, "
