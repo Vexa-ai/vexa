@@ -25,9 +25,13 @@ from .webhook_delivery import (
 
 logger = logging.getLogger("meeting_api.webhooks")
 
-# Map meeting status to webhook event type
+# Map meeting status → status-webhook event type.
+# `completed` is intentionally NOT here: `send_completion_webhook` owns the
+# meeting.completed payload. Including "completed" caused the status path to
+# fire meeting.completed on the terminal transition too, which (1) double-
+# delivered and (2) masked the absence of genuine non-completed events in
+# webhook_deliveries[] (see releases/260418-webhooks/triage-log.md).
 STATUS_TO_EVENT: Dict[str, str] = {
-    "completed": "meeting.completed",
     "active": "meeting.started",
     "failed": "bot.failed",
 }
@@ -156,7 +160,16 @@ async def send_status_webhook(
             return
 
         meeting_data = meeting.data if isinstance(meeting.data, dict) else {}
-        event_type = _resolve_event_type(meeting.status)
+        # Prefer new_status from status_change_info when the caller provides it —
+        # necessary for the stop_requested early-return path where meeting.status
+        # in the DB lags the actual bot-reported transition (callbacks.py gates
+        # the status update but still wants the webhook to fire for the real
+        # transition). Normal callers update status first, so either source agrees.
+        resolution_status = (
+            (status_change_info or {}).get("new_status")
+            or meeting.status
+        )
+        event_type = _resolve_event_type(resolution_status)
         if not _is_event_enabled(meeting_data, event_type):
             return
 

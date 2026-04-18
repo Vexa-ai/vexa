@@ -351,9 +351,20 @@ async def bot_status_change_callback(
 
     await db.refresh(meeting)
 
-    # Ignore non-terminal transitions if stop was requested
+    # Stop was requested: skip the actual status transition (we're winding down),
+    # but still fire the status webhook so users subscribed to meeting.status_change
+    # / meeting.started / bot.failed don't miss events that legitimately happened
+    # on the bot side (see releases/260418-webhooks/triage-log.md candidate b).
     if (meeting.data and isinstance(meeting.data, dict) and meeting.data.get("stop_requested")
             and new_status not in [MeetingStatus.COMPLETED, MeetingStatus.FAILED]):
+        await schedule_status_webhook_task(
+            meeting=meeting,
+            background_tasks=background_tasks,
+            old_status=meeting.status,
+            new_status=new_status.value,
+            reason=reason,
+            transition_source="bot_callback_post_stop",
+        )
         return {"status": "ignored", "detail": "stop requested"}
 
     old_status = meeting.status
