@@ -16,7 +16,10 @@ import os
 import time
 
 import pytest
-import requests
+
+# Live-stack integration test: skip entire module when `requests` isn't
+# installed (CI runs unit tests only; there's no live stack to hit).
+requests = pytest.importorskip("requests")
 
 GATEWAY = os.getenv("GATEWAY_URL", "http://localhost:8056")
 ADMIN_TOKEN = os.getenv("ADMIN_API_TOKEN", "changeme")
