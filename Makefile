@@ -90,18 +90,23 @@ release-build:                     ## build + publish :dev to DockerHub + record
 	fi
 
 ## ─────────────────────────────────────────────────────────────────────
-## Release cycle — scope-driven 7-stage process (see tests3/README.md)
+## Release cycle — stage state machine (see tests3/README.md §5.5)
 ##
-##   1. release-plan        — scaffold scope.yaml (one-off per release)
-##   2. release-provision   — parallel: provision VMs + LKE per scope.deployments.modes
-##   3. (develop code + tests locally, in parallel with #2)
-##   4. release-deploy      — build :dev + push + redeploy to each provisioned mode
-##   5. release-iterate     — targeted tests (scope-filtered); loop until green
-##   6. release-full        — fresh-reset all modes + run full matrix + gate
-##   7. release-ship        — push GitHub status + PR dev→main + promote :latest
-##   8. release-teardown    — destroy all provisioned infra
+##   0. idle                 — dormant; no active release
+##   1. release-groom        — cluster issues → groom.md (AI, stage 01)
+##   2. release-plan         — scaffold scope.yaml + plan-approval.yaml (stage 02)
+##   3. release-provision    — VMs + LKE (stage 04)
+##   4. release-deploy       — build :dev + push + redeploy (stage 05)
+##   5. release-validate     — three-phase validate → Gate verdict (stage 06)
+##        on red  → release-triage
+##        on green → release-human
+##   6. release-triage       — classify regression vs gap (stage 07)
+##   7. release-human        — code review + bounded eyeroll (stage 08)
+##   8. release-ship         — merge dev→main; promote :latest (stage 09)
+##   9. release-teardown     — destroy infra (stage 10)
 ##
-## Each stage is ONE command. Scope drives: SCOPE=tests3/releases/<id>/scope.yaml
+## Every target asserts stage before acting, transitions stage on success.
+## Scope drives: SCOPE=tests3/releases/<id>/scope.yaml
 ## ─────────────────────────────────────────────────────────────────────
 
 # Resolve which modes this scope touches (used by every stage below).
@@ -109,19 +114,42 @@ define _SCOPE_MODES
 $$(python3 -c "import yaml,sys; s=yaml.safe_load(open('$(SCOPE)')); print(' '.join(s['deployments']['modes']))")
 endef
 
-release-plan:                      ## stage 1: scaffold tests3/releases/<ID>/scope.yaml
-	@ID=$${ID:?set ID=<slug>, e.g. ID=260417-webhooks-dbpool}; \
+# Stage helper — every release-* target calls this before + after work.
+_STAGE = python3 $(CURDIR)/tests3/lib/stage.py
+
+stage:                             ## print current stage + next
+	@$(_STAGE) probe
+
+release-groom:                     ## stage 01: cluster issues → releases/<id>/groom.md
+	@$(_STAGE) assert-is idle
+	@ID=$${ID:?set ID=<YYMMDD-slug>, e.g. ID=260418-webhooks}; \
+	mkdir -p tests3/releases/$$ID; \
+	touch tests3/releases/$$ID/groom.md; \
+	echo "  created tests3/releases/$$ID/groom.md"; \
+	$(_STAGE) enter groom --release $$ID --actor make:release-groom; \
+	echo "  → next: fill groom.md with issue packs; human approves at least one pack; then \`make release-plan SCOPE=tests3/releases/$$ID/scope.yaml\`"
+
+release-plan:                      ## stage 02: scaffold scope.yaml + plan-approval.yaml
+	@$(_STAGE) assert-is groom
+	@ID=$${ID:?set ID=<YYMMDD-slug>}; \
 	mkdir -p tests3/releases/$$ID; \
 	if [ -f tests3/releases/$$ID/scope.yaml ]; then \
 		echo "  scope already exists: tests3/releases/$$ID/scope.yaml"; \
 	else \
 		cp tests3/releases/_template/scope.yaml tests3/releases/$$ID/scope.yaml; \
 		sed -i "s/REPLACE-WITH-YYMMDD-SLUG/$$ID/" tests3/releases/$$ID/scope.yaml; \
-		echo "  created tests3/releases/$$ID/scope.yaml — fill in issues + fix_commits"; \
+		echo "  created tests3/releases/$$ID/scope.yaml"; \
 	fi
-	@echo "  → next: export SCOPE=tests3/releases/$$ID/scope.yaml"
+	@ID=$${ID:?}; touch tests3/releases/$$ID/plan-approval.yaml
+	@ID=$${ID:?}; $(_STAGE) enter plan --release $$ID --actor make:release-plan
+	@echo "  → fill scope.yaml + plan-approval.yaml (approved: true on every item) then \`make release-provision SCOPE=tests3/releases/$$ID/scope.yaml\`"
 
-release-provision:                 ## stage 2: provision deployments in parallel per scope
+# Stage 03 `develop` has no Makefile target — it's "humans write code" with
+# AI assist. The stage is entered by release-plan (once plan-approval is
+# signed) via a helper; for now it's entered manually via stage.py enter develop.
+
+release-provision:                 ## stage 04: provision VMs + LKE in parallel
+	@$(_STAGE) assert-is develop
 	@test -n "$(SCOPE)" || (echo "  ERROR: set SCOPE=tests3/releases/<id>/scope.yaml" && exit 2)
 	@MODES="$(_SCOPE_MODES)"; echo "  provisioning modes: $$MODES"; \
 	mkdir -p tests3/.state-lite tests3/.state-compose tests3/.state-helm; \
@@ -132,8 +160,10 @@ release-provision:                 ## stage 2: provision deployments in parallel
 			helm)    $(MAKE) --no-print-directory -C tests3 lke-provision lke-setup STATE=$(CURDIR)/tests3/.state-helm & ;; \
 		esac; \
 	done; wait
+	@$(_STAGE) enter provision --actor make:release-provision
 
-release-deploy:                    ## stage 4: build + push :dev + redeploy to all provisioned modes
+release-deploy:                    ## stage 05: build + push :dev + redeploy to all provisioned modes
+	@python3 -c "import sys; from pathlib import Path; sys.path.insert(0,'tests3/lib'); import stage; s=stage.current(); sys.exit(0 if s.get('stage') in ('provision','develop') else (print(f\"stage must be provision or develop, got {s.get('stage')}\",file=sys.stderr) or 1))"
 	@test -n "$(SCOPE)" || (echo "  ERROR: set SCOPE" && exit 2)
 	@$(MAKE) --no-print-directory release-build
 	@MODES="$(_SCOPE_MODES)"; \
@@ -144,8 +174,21 @@ release-deploy:                    ## stage 4: build + push :dev + redeploy to a
 			helm)    $(MAKE) --no-print-directory -C tests3 lke-upgrade STATE=$(CURDIR)/tests3/.state-helm & ;; \
 		esac; \
 	done; wait
+	@$(_STAGE) enter deploy --actor make:release-deploy
 
-release-iterate:                   ## stage 5: run scope-filtered targeted tests on all modes + aggregate
+release-validate:                  ## stage 06: three-phase validate → Gate verdict (green→human / red→triage)
+	@$(_STAGE) assert-is deploy
+	@test -n "$(SCOPE)" || (echo "  ERROR: set SCOPE" && exit 2)
+	@$(MAKE) --no-print-directory release-full SCOPE=$(SCOPE) && \
+		($(_STAGE) enter human --actor make:release-validate --reason "gate green" && echo "  → stage: human") || \
+		($(_STAGE) enter triage --actor make:release-validate --reason "gate red" && echo "  → stage: triage" && exit 1)
+
+release-triage:                    ## stage 07: classify failures as regression vs gap
+	@$(_STAGE) assert-is triage
+	@echo "  invoke the triage skill (or do it by hand): write tests3/releases/<id>/triage-log.md"
+	@echo "  once human writes 'fix this first: <DoD-id>' run: python3 tests3/lib/stage.py enter develop --reason 'triage picked next fix'"
+
+release-iterate:                   ## stage 06 fast variant — scope-filtered tests (dev loop, not authoritative)
 	@test -n "$(SCOPE)" || (echo "  ERROR: set SCOPE" && exit 2)
 	@MODES="$(_SCOPE_MODES)"; \
 	mkdir -p tests3/.state; cp -f $(SCOPE) tests3/.state/scope.yaml; \
@@ -169,7 +212,7 @@ release-reset:                     ## stage 6a: wipe stack+volumes on all provis
 		esac; \
 	done; wait
 
-release-full:                      ## stage 6: fresh-reset + full cheap-tier matrix on all modes + aggregate + gate
+release-full:                      ## stage 06 authoritative variant — fresh-reset + full matrix + gate
 	@test -n "$(SCOPE)" || (echo "  ERROR: set SCOPE" && exit 2)
 	@$(MAKE) --no-print-directory release-reset SCOPE=$(SCOPE)
 	@MODES="$(_SCOPE_MODES)"; \
@@ -198,15 +241,23 @@ release-issue-add:                 ## add an issue to scope.yaml (enforces gap_a
 	  $(if $(HV_DO),--human-verify-do "$(HV_DO)") \
 	  $(if $(HV_EXPECT),--human-verify-expect "$(HV_EXPECT)")
 
-release-human-sheet:               ## stage 6b: generate tests3/releases/<id>/human-checklist.md (always + scope-specific)
+release-human-sheet:               ## stage 08 sub: generate tests3/releases/<id>/human-checklist.md
+	@$(_STAGE) assert-is human
 	@test -n "$(SCOPE)" || (echo "  ERROR: set SCOPE" && exit 2)
 	@python3 $(CURDIR)/tests3/lib/human-checklist.py generate --scope $(SCOPE)
 
-release-human-gate:                ## verify the human checklist — every `- [ ]` must be `- [x]`
+release-human-gate:                ## stage 08 sub: verify every `- [ ]` is `- [x]`
+	@$(_STAGE) assert-is human
 	@test -n "$(SCOPE)" || (echo "  ERROR: set SCOPE" && exit 2)
 	@python3 $(CURDIR)/tests3/lib/human-checklist.py gate --scope $(SCOPE)
 
-release-teardown:                  ## stage 8: destroy all provisioned infra (call AFTER release-ship)
+release-human:                     ## stage 08: generate sheet → human ticks → gate (convenience wrapper)
+	@$(MAKE) --no-print-directory release-human-sheet SCOPE=$(SCOPE)
+	@echo "  → human: edit tests3/releases/*/human-checklist.md, then re-invoke to gate"
+	@$(MAKE) --no-print-directory release-human-gate SCOPE=$(SCOPE)
+
+release-teardown:                  ## stage 10: destroy all provisioned infra (after release-ship)
+	@$(_STAGE) assert-is ship
 	@MODES="lite compose helm"; \
 	if [ -n "$(SCOPE)" ] && [ -f "$(SCOPE)" ]; then MODES="$(_SCOPE_MODES)"; fi; \
 	for mode in $$MODES; do \
@@ -216,6 +267,8 @@ release-teardown:                  ## stage 8: destroy all provisioned infra (ca
 			helm)    $(MAKE) --no-print-directory -C tests3 lke-destroy STATE=$(CURDIR)/tests3/.state-helm 2>/dev/null || true ;; \
 		esac; \
 	done
+	@$(_STAGE) enter teardown --actor make:release-teardown
+	@$(_STAGE) enter idle --actor make:release-teardown --reason "cycle closed"
 
 # ── Compatibility aliases (old names) ──
 release-test: release-provision release-deploy release-full  ## alias: full pipeline up through the gate (requires SCOPE)
@@ -248,26 +301,21 @@ release-report:                    ## aggregate .state-{lite,compose,helm}/repor
 		echo "" && echo "  Release gate PASSED. Report → tests3/reports/release-$$TAG.md" || \
 		(echo "" && echo "  Release gate FAILED — see tests3/reports/release-$$TAG.md" && exit 1)
 
-release-validate:                  ## push GitHub status + destroy VMs + destroy LKE cluster
+release-gh-status:                 ## internal: push `release/vm-validated` GitHub commit status
 	@SHA=$$(git rev-parse HEAD); \
 	gh api repos/Vexa-ai/vexa/statuses/$$SHA \
 		-f state=success \
 		-f context=release/vm-validated \
 		-f description="VM+helm tests passed + report gate on $$(date +%Y-%m-%d)" && \
 	echo "  ✓ Commit status pushed: release/vm-validated on $$SHA"
-	@$(MAKE) --no-print-directory -C tests3 vm-destroy STATE=$(CURDIR)/tests3/.state-lite 2>/dev/null || true
-	@$(MAKE) --no-print-directory -C tests3 vm-destroy STATE=$(CURDIR)/tests3/.state-compose 2>/dev/null || true
-	@$(MAKE) --no-print-directory -C tests3 lke-destroy STATE=$(CURDIR)/tests3/.state-helm 2>/dev/null || true
 
-release-ship:                      ## stage 7: verify both gates + PR dev→main + promote :latest
-	@echo "  ── Stage 7.1: Human checklist gate ──"
-	@if [ -n "$(SCOPE)" ]; then \
-		$(MAKE) --no-print-directory release-human-gate SCOPE=$(SCOPE); \
-	else \
-		echo "  SKIP: no SCOPE given (legacy flow — human gate not enforced)"; \
-	fi
-	@echo "  ── Stage 7.2: Push GitHub validation status ──"
-	@$(MAKE) --no-print-directory release-validate
+release-ship:                      ## stage 09: PR dev→main, promote :dev → :latest
+	@$(_STAGE) assert-is human
+	@test -n "$(SCOPE)" || (echo "  ERROR: set SCOPE" && exit 2)
+	@echo "  ── 1. human gate (re-verify) ──"
+	@$(MAKE) --no-print-directory release-human-gate SCOPE=$(SCOPE)
+	@echo "  ── 2. push GitHub validation status ──"
+	@$(MAKE) --no-print-directory release-gh-status
 	@echo ""
 	@echo "  ── Step 2: Create + merge PR ──"
 	@TAG=$$(cat deploy/compose/.last-tag); \
@@ -304,6 +352,7 @@ release-ship:                      ## stage 7: verify both gates + PR dev→main
 	echo "  :latest = :dev = $$TAG (same SHA)"; \
 	echo "  Now on dev branch. Ready for next cycle."; \
 	echo "  ══════════════════════════════════════════"
+	@$(_STAGE) enter ship --actor make:release-ship
 
 release-promote:                   ## promote :dev → :latest on DockerHub (standalone)
 	@$(MAKE) --no-print-directory -C deploy/compose promote-latest

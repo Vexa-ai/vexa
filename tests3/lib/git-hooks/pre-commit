@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Stage-aware pre-commit guard — surface #5 of §5.7 enforcement.
+#
+# Refuses commits made outside the `develop` stage unless:
+#   - the only changed file is CLAUDE.md / tests3/README.md / tests3/stages/*
+#   - VEXA_BYPASS_STAGE=1 is set (explicit, auditable)
+#
+# Install:
+#   git config core.hooksPath tests3/lib/git-hooks
+
+set -euo pipefail
+
+ROOT=$(git rev-parse --show-toplevel)
+STAGE_FILE="$ROOT/tests3/.current-stage"
+
+# No state file yet (fresh repo, first release hasn't started) → let it pass.
+[ -f "$STAGE_FILE" ] || exit 0
+
+# Explicit bypass (auditable: the env var shows up in shell history)
+if [ "${VEXA_BYPASS_STAGE:-0}" = "1" ]; then
+    echo "  stage-hook: VEXA_BYPASS_STAGE=1 — allowing commit outside develop" >&2
+    exit 0
+fi
+
+STAGE=$(awk '/^stage:/{print $2}' "$STAGE_FILE")
+
+# `develop` is the only stage where code commits are legal.
+if [ "$STAGE" = "develop" ]; then
+    exit 0
+fi
+
+# Permit commits that only touch protocol docs / stage files / skill files —
+# those are meta-edits that need to land even when no release is active.
+CHANGED=$(git diff --cached --name-only)
+META_ONLY=1
+for f in $CHANGED; do
+    case "$f" in
+        CLAUDE.md|tests3/README.md|tests3/stages/*|tests3/.claude/skills/*|tests3/lib/stage.py|tests3/lib/git-hooks/*|.gitignore|Makefile|tests3/Makefile)
+            ;;
+        *)
+            META_ONLY=0; break ;;
+    esac
+done
+
+if [ "$META_ONLY" = "1" ]; then
+    exit 0
+fi
+
+cat >&2 <<EOF
+
+  ✗ stage-hook: refusing commit — current stage is '$STAGE', code commits
+    are only legal in 'develop'.
+
+    To commit code:
+      1. Transition through the legal path:
+         idle → groom → plan → develop
+         or validate(red) → triage → develop
+      2. Once in develop: git commit again.
+
+    To commit anyway (auditable):
+      VEXA_BYPASS_STAGE=1 git commit ...
+
+    Full protocol: tests3/README.md §5.5 (state machine)
+
+EOF
+exit 1
