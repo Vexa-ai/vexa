@@ -1,7 +1,7 @@
 # Release scope — the contract between the dev work and the validation.
 #
 # Created by `make release-plan ID=<id>` (or copy from this template).
-# Drives every stage of the release cycle; see tests3/release-validation.md.
+# Drives every stage of the release cycle; see tests3/README.md.
 
 release_id: REPLACE-WITH-YYMMDD-SLUG     # e.g. 260417-webhooks-dbpool
 branch: dev                              # git branch the fixes live on

@@ -5,7 +5,7 @@ description: "Master orchestrator for the Vexa release cycle. Invoke this when t
 
 ## You are the orchestrator
 
-**The single source of truth for the protocol is `tests3/release-validation.md`.**
+**The single source of truth for the protocol is `tests3/README.md`.**
 Read it first when anything below seems ambiguous. This skill is the dispatch
 layer; the SoT is the definition.
 
@@ -46,7 +46,7 @@ fidelities of the **same** test stage — not two stages.
 > Historical note: the on-disk skill directories are numbered 0-9 because both
 > test fidelities (`5-iterate`, `6-full`) have their own skill files. The
 > protocol stages are 0-8. When the user names a numbered skill, use it;
-> when they ask about the "stage", point at `release-validation.md`.
+> when they ask about the "stage", point at `tests3/README.md` §5.5.
 
 Stages 2 and 3 run **in parallel**. Every other stage gates on the previous.
 
@@ -140,7 +140,7 @@ Tell the user **which stage is next**, **which command to run**, and **why that'
 
 ```
 tests3/
-├── release-validation.md            # authoritative doc
+├── README.md                   # authoritative protocol (this file after Part 1)
 ├── test-registry.yaml               # test catalog
 ├── human-always.yaml                # static human checks
 ├── checks/registry.json             # check catalog (static/env/health/contract)
@@ -158,4 +158,4 @@ tests3/
 
 ## When in doubt
 
-Re-read `tests3/release-validation.md`. That's the ground truth. This skill is its orchestration layer; the stage skills are its drill-downs.
+Re-read `tests3/README.md`. That's the ground truth. This skill is its orchestration layer; the stage skills are its drill-downs.

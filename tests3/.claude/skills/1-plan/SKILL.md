@@ -78,4 +78,4 @@ Once the scope is written:
 - `tests3/releases/_template/scope.yaml` — the schema (every field documented inline)
 - `tests3/test-registry.yaml` — catalog of tests you can reference in `proves:`
 - `tests3/checks/registry.json` — catalog of check IDs you can reference in `proves:`
-- `tests3/release-validation.md` — the full flow doc
+- `tests3/README.md` — the full flow doc

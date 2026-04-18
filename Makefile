@@ -90,7 +90,7 @@ release-build:                     ## build + publish :dev to DockerHub + record
 	fi
 
 ## ─────────────────────────────────────────────────────────────────────
-## Release cycle — scope-driven 7-stage process (see tests3/release-validation.md)
+## Release cycle — scope-driven 7-stage process (see tests3/README.md)
 ##
 ##   1. release-plan        — scaffold scope.yaml (one-off per release)
 ##   2. release-provision   — parallel: provision VMs + LKE per scope.deployments.modes
