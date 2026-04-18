@@ -10,7 +10,11 @@
 #   hmac              — HMAC-SHA256 signing over timestamp + payload
 #   no_leak_response  — webhook_secret not in GET /bots/status
 #   e2e_completion    — meeting.completed webhook delivered to user endpoint
-#   e2e_status        — status-change webhooks fire when enabled in webhook_events
+#   e2e_status        — status-change webhook list is populated (any entry, including meeting.completed)
+#   e2e_status_non_completed — at least one status-change webhook fires with event_type != meeting.completed
+#                              (meeting.started / meeting.status_change / bot.failed). Added 260418-webhooks
+#                              because e2e_status was satisfied by meeting.completed alone, hiding whether
+#                              non-completed events actually dispatch.
 #
 # Reads: .state/gateway_url, .state/api_token, .state/deploy_mode
 # Writes: .state/reports/<mode>/webhooks.json
@@ -83,6 +87,7 @@ elif [ "$HTTP_CODE" = "500" ] && [ "$MODE" = "helm" ]; then
     step_skip no_leak_response "bot create failed, no bots in status"
     step_skip e2e_completion "bot create failed"
     step_skip e2e_status "bot create failed"
+    step_skip e2e_status_non_completed "bot create failed"
     echo "  ──────────────────────────────────────────────"
     echo ""
     exit 0
@@ -240,16 +245,24 @@ asyncio.run(check())
     if [ -z "$DELIVERY_CHECK" ]; then
         step_skip e2e_completion "cannot exec into meeting-api"
         step_skip e2e_status "cannot exec into meeting-api"
+        step_skip e2e_status_non_completed "cannot exec into meeting-api"
     elif echo "$DELIVERY_CHECK" | grep -q "NO_WEBHOOK_URL"; then
         step_fail e2e_completion "meeting.data missing webhook_url — injection broken end-to-end"
         step_fail e2e_status "meeting.data missing webhook_url — injection broken end-to-end"
+        step_fail e2e_status_non_completed "meeting.data missing webhook_url — injection broken end-to-end"
     elif echo "$DELIVERY_CHECK" | grep -q "NOT_FOUND"; then
         step_fail e2e_completion "meeting $MEETING_ID not found"
         step_fail e2e_status "meeting $MEETING_ID not found"
+        step_fail e2e_status_non_completed "meeting $MEETING_ID not found"
     else
         COMP=$(echo "$DELIVERY_CHECK" | python3 -c "import sys,json; print(json.load(sys.stdin).get('completion_status',''))" 2>/dev/null)
         STATUS_CNT=$(echo "$DELIVERY_CHECK" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status_count',0))" 2>/dev/null)
         STATUS_EVENTS=$(echo "$DELIVERY_CHECK" | python3 -c "import sys,json; print(','.join(json.load(sys.stdin).get('status_events',[])))" 2>/dev/null)
+        NON_COMPLETED_EVENTS=$(echo "$DELIVERY_CHECK" | python3 -c "
+import sys, json
+evts = json.load(sys.stdin).get('status_events', [])
+print(','.join([e for e in evts if e != 'meeting.completed']))
+" 2>/dev/null)
 
         case "$COMP" in
             delivered) step_pass e2e_completion "webhook_delivery.status=delivered" ;;
@@ -263,10 +276,21 @@ asyncio.run(check())
         else
             step_fail e2e_status "no status-change webhooks fired — schedule_status_webhook_task wiring or _is_event_enabled broken"
         fi
+
+        # Tighter proof: at least one non-meeting.completed event must fire.
+        # The lifecycle from POST /bots through DELETE transits requested → (joining / awaiting_admission
+        # / active) → stopping → completed. Any of those intermediate transitions resolves to
+        # meeting.status_change / meeting.started / bot.failed — all enabled in webhook_events above.
+        if [ -n "$NON_COMPLETED_EVENTS" ]; then
+            step_pass e2e_status_non_completed "non-meeting.completed status event(s) fired: $NON_COMPLETED_EVENTS"
+        else
+            step_fail e2e_status_non_completed "only meeting.completed fired — no meeting.started / meeting.status_change / bot.failed observed; status dispatch or opt-in filter likely broken for non-completed events"
+        fi
     fi
 else
     step_skip e2e_completion "no meeting ID in POST /bots response"
     step_skip e2e_status "no meeting ID in POST /bots response"
+    step_skip e2e_status_non_completed "no meeting ID in POST /bots response"
 fi
 
 echo "  ──────────────────────────────────────────────"

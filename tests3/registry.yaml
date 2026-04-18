@@ -1266,6 +1266,7 @@ webhooks:
   - no_leak_response
   - e2e_completion
   - e2e_status
+  - e2e_status_non_completed
   features:
   - webhooks
   tier: cheap
