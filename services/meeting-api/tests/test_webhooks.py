@@ -16,13 +16,23 @@ from .conftest import make_meeting, TEST_MEETING_ID, TEST_USER_ID
 class TestWebhookHelpers:
 
     def test_resolve_event_type(self):
-        """Status → event type mapping."""
+        """Status → event type mapping.
+
+        Note: "completed" is intentionally NOT mapped to "meeting.completed".
+        send_completion_webhook owns the meeting.completed event end-to-end;
+        the status path would otherwise double-fire it on the terminal
+        transition (see release 260418-webhooks, commit 19cff9d).
+        """
         from meeting_api.webhooks import _resolve_event_type
 
-        assert _resolve_event_type("completed") == "meeting.completed"
         assert _resolve_event_type("active") == "meeting.started"
         assert _resolve_event_type("failed") == "bot.failed"
         assert _resolve_event_type("joining") == "meeting.status_change"
+        assert _resolve_event_type("awaiting_admission") == "meeting.status_change"
+        assert _resolve_event_type("stopping") == "meeting.status_change"
+        # "completed" falls through to the meeting.status_change fallback;
+        # the canonical meeting.completed comes via send_completion_webhook.
+        assert _resolve_event_type("completed") == "meeting.status_change"
 
     def test_is_event_enabled_defaults(self):
         """Default: only meeting.completed is enabled."""
