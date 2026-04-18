@@ -1,65 +1,69 @@
 ---
 name: 7-human
-description: "Invoke for the human-validation stage of a release. Two sub-modes: (a) generate/regenerate the checklist and gate on it; (b) translate human bug reports (plain English, screenshots, URLs) into a formal `release-issue-add` call. The human describes; the agent fills in GAP + NEW_CHECKS + modes + proves bindings and executes. Use when the user says 'human checklist', 'generate the sheet', 'sign off', 'gate', or reports any failure while stepping through the checklist — 'X is broken on compose', 'look at /webhooks', 'it shows wrong stuff'."
+description: "Stage 08 (human): (A) code review packet + (B) bounded manual eyeroll. TWO modes: generate/regenerate the checklist OR translate a human bug report (plain English, URL, screenshot) into a formal `release-issue-add` call. The human describes; the agent derives GAP + NEW_CHECKS and executes. Use when the user says 'human checklist', 'generate the sheet', 'sign off', 'gate', or reports any failure while stepping through the checklist."
 ---
 
-## Stage 6 — human validation
+## Stage 08 — human
 
-The human clicks through the checklist. The agent handles protocol mechanics.
+See `tests3/stages/08-human.md` for the full stage contract.
 
-## Commands the agent runs
+## First action — ALWAYS
 
 ```bash
-make release-human-sheet SCOPE=$SCOPE          # first generate
-make release-human-sheet SCOPE=$SCOPE --force  # regenerate (preserves ticks)
-make release-human-gate   SCOPE=$SCOPE         # gate — exits non-zero if any [ ] remains
+python3 tests3/lib/stage.py assert-is human
 ```
 
-## When the human reports a failure
+Legal predecessor: `validate` (green Gate).
 
-**The human's job is to describe what broke.** Examples:
+## Part A — Code review
 
-> "the /webhooks page on compose only shows meeting.completed"
-> "helm /meetings is all red"
-> "lite login gives 500 after an hour"
+Generate `releases/<id>/code-review.md` with:
+- **Per-commit summary**: what + why + risk + touched DoDs.
+- **Diffs grouped by concern**, not git order.
+- **Risk notes**: invariants, ordering deps, anything a fast reviewer might miss.
+- **Open questions** for the human.
 
-**The agent's job is to file the issue.** Do NOT ask the human for gap/checks/modes — derive them:
+Human reads, flips `code_review_approved: true` in `human-approval.yaml`. Part B unlocks.
 
-1. **Reproduce / confirm** by inspection (curl, `kubectl logs`, DB query) — one-shot verification that the observation is real.
-2. **Derive fields** yourself:
-   - `ID` — kebab-case slug from the symptom.
-   - `PROBLEM` — one sentence, what the human observed, including the specific URL/command.
-   - `HYPOTHESIS` — your best guess at root cause.
-   - `GAP` — "why didn't the automated matrix catch this?" Point at the missing test/step/check. If there is no gap (an existing check already fails), still record it: "check X is already failing but required_modes excluded this mode" or similar.
-   - `NEW_CHECKS` — ID(s) of the regression check(s) that will catch this next time. If a suitable check exists in the registry, use its ID. If not, invent a new ID (UPPER_SNAKE for registry check, `test:step` for a test step) — you will implement it in stage 3.
-   - `MODES` — the deployments this affects. If unsure, use scope.deployments.modes.
-   - `HV_MODE` + `HV_DO` + `HV_EXPECT` — the smallest repro a future human can run.
-3. **Show the call in one line** and execute it. Example:
+## Part B — Bounded eyeroll
+
+Generate `releases/<id>/human-checklist.md` — union of:
+- `tests3/human-always.yaml` accumulated items
+- scope's `human_verify[]`
+- URLs / env / assets pre-resolved
+
+Human ticks each `- [ ]` → `- [x]`.
+
+## If the human reports a failure
+
+**The human describes; the agent does the filing.** Derive every field yourself:
+
+1. Reproduce / confirm by inspection.
+2. Derive `ID` (kebab-case), `PROBLEM` (1-sentence), `HYPOTHESIS`, `GAP` (why automation missed it), `NEW_CHECKS` (registry IDs or `test:step`), `MODES`, `HV_*`.
+3. Execute:
 
 ```bash
 make release-issue-add \
-  SCOPE=$SCOPE ID=dashboard-webhooks-ui-rollup SOURCE=human \
-  PROBLEM="/webhooks on compose shows only meeting.completed rows" \
-  HYPOTHESIS="Dashboard route reads webhook_delivery (singular) not webhook_deliveries[]" \
-  GAP="webhooks.sh never hits the dashboard /api/webhooks/deliveries route" \
-  NEW_CHECKS="DASHBOARD_WEBHOOKS_ALL_EVENT_TYPES" \
-  MODES=compose \
-  HV_MODE=compose \
-  HV_DO="open http://{vm_ip}:3001/webhooks after a run with status events" \
-  HV_EXPECT="table rows include meeting.started / meeting.status_change not only meeting.completed"
+  SCOPE=releases/<id>/scope.yaml \
+  ID=<slug> SOURCE=human \
+  PROBLEM="…" HYPOTHESIS="…" \
+  GAP="…" NEW_CHECKS="…,…" \
+  MODES=compose HV_MODE=compose HV_DO="…" HV_EXPECT="…"
 ```
 
-The command refuses if GAP or NEW_CHECKS are empty — that's the protocol enforcement; the agent must fill them in, not ask the human to.
+The helper refuses if `GAP` or `NEW_CHECKS` is empty. NEVER ask the human to fill them in.
 
-4. **After filing**, move to stage 3 (develop) to implement the check + any code fix, stage 4 (deploy), stage 5 (test). Regenerate the checklist with `--force` (ticks auto-preserve). Hand back to the human only the new item to verify.
+4. Transition to `triage` — the fix needs to loop through develop → deploy → validate.
 
-## Loop cap
+## May NOT
 
-3 rounds of human-found bugs in one cycle → the scope is wrong. Go back to stage 1 and split.
+- Edit code.
+- Change infra.
+- Skip code review.
+- Auto-sign either part.
+- Ask the human to fill in `GAP` / `NEW_CHECKS` / structured fields.
 
-## What the agent never does
+## Next
 
-- Ask the human to fill in `GAP` / `NEW_CHECKS` / `MODES` / structured fields.
-- Edit `scope.yaml` by hand instead of calling `release-issue-add`.
-- Narrow `required_modes` to dodge a failing check.
-- Skip re-running stage 5 before resuming the checklist.
+`ship` — both parts signed, no unresolved findings.
+`triage` — human found a gap (either part).

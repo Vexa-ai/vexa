@@ -170,3 +170,4 @@ tests3/.state-lite
 tests3/.state-compose
 tests3/.state-helm
 
+tests3/.current-stage
