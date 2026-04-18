@@ -1,0 +1,37 @@
+# Human approval — 260418-webhooks
+# Per README §3.7: both code-review (Part A) and eyeroll (Part B) required
+# before ship. This file is the audit trail.
+
+release_id: 260418-webhooks
+approver: dmitry@vexa.ai
+signed_at: 2026-04-19T00:00:00Z
+
+# Part A — code review packet
+code_review_approved: true
+code_review_note: |
+  3 commits reviewed in-session:
+    d6ab3b6  feat(webhooks): tighten e2e_status — assert non-meeting.completed fires
+    19cff9d  fix(webhooks): status path no longer double-fires meeting.completed + stop_requested gate no longer silences status webhooks
+    7318819  chore(260418-webhooks): widen scope to [compose, lite]; narrow reliability-db-pool DoD to match
+  Files: tests3/tests/webhooks.sh, tests3/registry.yaml, features/webhooks/dods.yaml,
+         services/meeting-api/meeting_api/webhooks.py, services/meeting-api/meeting_api/callbacks.py,
+         tests3/releases/260418-webhooks/{groom.md, scope.yaml, plan-approval.yaml, triage-log.md, human-checklist.md}.
+
+# Part B — bounded manual eyeroll
+eyeroll_approved: true
+eyeroll_note: |
+  REAL-WORLD VERIFICATION (2026-04-19, user-reported mid-ship):
+    "i logged in, created meeting, all webhooks arrive"
+  This closes the loop on the scope's human_verify step for
+  `webhooks-status-events-non-completed`: the user configured a
+  webhook, ran a meeting, and observed all event types arriving at
+  the receiver — the exact symptom this release fixed. No residual
+  issues reported.
+
+  Non-scope gate reds (bot-lifecycle, dashboard, infrastructure,
+  meeting-urls) are pre-existing environmental
+  (DASHBOARD_API_KEY_VALID bug from 2026-04-07, missing helm provision)
+  and explicitly deferred to a separate groom cycle.
+
+# Gate verdict
+ship_authorised: true
