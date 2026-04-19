@@ -148,10 +148,15 @@ async def verify_api_token(
         detail="Invalid or missing API token"
     )
 
+_VEXA_ENV = os.getenv("VEXA_ENV", "development")
+_PUBLIC_DOCS = _VEXA_ENV != "production"
 app = FastAPI(
     title="Vexa Transcription Service",
     description="OpenAI Whisper API compatible transcription service",
-    version="1.0.0"
+    version="1.0.0",
+    docs_url="/docs" if _PUBLIC_DOCS else None,
+    redoc_url="/redoc" if _PUBLIC_DOCS else None,
+    openapi_url="/openapi.json" if _PUBLIC_DOCS else None,
 )
 
 # Global model instance

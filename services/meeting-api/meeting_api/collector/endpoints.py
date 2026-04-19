@@ -27,7 +27,7 @@ from ..auth import UserProxy
 
 from .config import IMMUTABILITY_THRESHOLD
 from .filters import TranscriptionFilter
-from .auth import get_current_user
+from .auth import get_current_user, require_internal_secret
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -406,7 +406,8 @@ async def ws_authorize_subscribe(
             response_model=List[TranscriptionSegment],
             response_model_exclude_none=False,
             summary="[Internal] Get all transcript segments for a meeting",
-            include_in_schema=False)
+            include_in_schema=False,
+            dependencies=[Depends(require_internal_secret)])
 async def get_transcript_internal(
     meeting_id: int,
     request: Request,

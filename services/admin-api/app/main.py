@@ -36,8 +36,15 @@ logger = logging.getLogger("admin_api")
 
 from admin_models.security_headers import SecurityHeadersMiddleware
 
-# App initialization
-app = FastAPI(title="Vexa Admin API")
+# App initialization — docs/redoc/openapi suppressed in production (see CVE-OSS-2).
+_VEXA_ENV = os.getenv("VEXA_ENV", "development")
+_PUBLIC_DOCS = _VEXA_ENV != "production"
+app = FastAPI(
+    title="Vexa Admin API",
+    docs_url="/docs" if _PUBLIC_DOCS else None,
+    redoc_url="/redoc" if _PUBLIC_DOCS else None,
+    openapi_url="/openapi.json" if _PUBLIC_DOCS else None,
+)
 app.add_middleware(SecurityHeadersMiddleware)
 
 # --- Pydantic Schemas for new endpoint ---

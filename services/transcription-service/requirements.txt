@@ -1,5 +1,6 @@
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
+h11>=0.16.0                       # CVE-2025-43859 (uvicorn transitive)
 python-multipart>=0.0.6
 faster-whisper>=1.0.0
 soundfile>=0.12.0

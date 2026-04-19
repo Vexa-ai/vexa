@@ -1,6 +1,20 @@
-# Intentionally un-gated: legacy feature carries no machine-readable
-# DoDs yet. Populate `dods:` before this feature's next release or
-# its expected behavior changes.
 gate:
-  confidence_min: 0    # not enforced until dods: is populated
-dods: []   # intentionally un-gated, reason: DoDs not yet authored
+  confidence_min: 95
+dods:
+- id: cdp-ws-scheme-preserved
+  label: "CDP proxy webSocketDebuggerUrl rewrite preserves the inbound scheme (wss:// on HTTPS gateways)"
+  weight: 10
+  evidence:
+    check: CDP_WS_SCHEME_PRESERVED
+    modes:
+    - lite
+    - compose
+
+- id: cdp-no-slash-redirect
+  label: "Bare /b/{token}/cdp (no trailing slash) is a first-class route — no 307 scheme downgrade"
+  weight: 10
+  evidence:
+    check: CDP_NO_SLASH_REDIRECT
+    modes:
+    - lite
+    - compose

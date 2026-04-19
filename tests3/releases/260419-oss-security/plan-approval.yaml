@@ -1,0 +1,255 @@
+# Plan approval — 260419-oss-security
+#
+# Human signal: user said "go implement all" in the 2026-04-19 turn →
+# interpreted as Shape 1 of groom.md (Packs A, B, C.1, C.2, D, E.1;
+# Pack F dropped). This file records that approval line-by-line per
+# the stage-03 gate machinery.
+#
+# Exit gate (mechanical, enforced by stage.enter(develop)):
+#   - scope.yaml parses; every issue has hypothesis + ≥1 proves[] binding.
+#   - Every {check: X} in proves[] either exists in registry.yaml OR
+#     appears below under registry_changes_approved.
+#   - Every item below has `approved: true`.
+
+release_id: 260419-oss-security
+approved_at: 2026-04-19T16:10:00Z
+approver: dmitry@vexa.ai
+approval_source: |
+  User turn 2026-04-19 ("go implement all") read as explicit approval
+  of Shape 1 of groom.md (Packs A, B, C.1, C.2, D, E.1; Pack F dropped).
+  ENV var naming default: VEXA_ENV (namespaced; project has no prior
+  ENV/VEXA_ENV convention — verified by grep). If the human wants
+  `ENV` instead, send back before develop.
+
+# ── OBJECTIVES ────────────────────────────────────────────────────────
+scope_approved:
+  - issue: sec-unauth-transcript-endpoint
+    hypothesis: true       # internal admin-token gate is the right shape; internal callers already hold the token
+    proves: true           # one http check is sufficient — 401 from a no-auth call on the meeting-api bind
+    required_modes: true   # [compose] — the internal bind only exists in the compose stack; lite uses a single-process harness
+    human_verify: true     # curl from api-gateway container into meeting-api /internal/transcripts/1
+
+  - issue: sec-webhook-ssrf-publish
+    hypothesis: true       # fix is already at delivery; closing the input gap + adding a regression check is the remaining work
+    proves: true           # one http check on PUT /user/webhook with an SSRF URL
+    required_modes: true   # [compose] — same reason as above
+    human_verify: true     # curl + gh security-advisories PATCH (manual step, tracked as ship task)
+
+  - issue: sec-h11-pin
+    hypothesis: true       # explicit pin is the minimal deterministic fix
+    proves: true           # one grep check across every requirements*.txt with httpx or uvicorn
+    required_modes: true   # [lite, compose] — the check is static; both modes rebuild the images and exercise pip install
+    human_verify: true     # `docker compose exec -T <svc> pip show h11` per service
+
+  - issue: sec-swagger-env-gate
+    hypothesis: true       # VEXA_ENV=production default-deny is the PRD's shape; chosen over `ENV` because the project has no existing convention and VEXA_ENV is namespaced
+    proves: true           # one cross-service grep that every FastAPI app passes docs_url/redoc_url/openapi_url computed from VEXA_ENV
+    required_modes: true   # [lite, compose]
+    human_verify: true     # 404 on VEXA_ENV=production; 200 otherwise
+
+  - issue: sec-cdp-scheme-preservation
+    hypothesis: true       # incoming scheme is the correct source of truth for the outgoing ws scheme
+    proves: true           # two static greps on gateway main.py — scheme derivation + no-slash route
+    required_modes: true   # [compose] (compose has the bot stack that produces the session token)
+    human_verify: true     # playwright connectOverCDP() against hosted https URL
+
+  - issue: sec-vexa-bot-npm-audit
+    hypothesis: true       # basic-ftp is transitive and unused at runtime; lockfile bump is safe
+    proves: true           # one script check parsing `npm audit --json` output
+    required_modes: true   # [lite, compose]
+    human_verify: true     # `npm audit --audit-level=high` shows 0 HIGH, 0 CRITICAL
+
+# ── DoD CHANGES ───────────────────────────────────────────────────────
+# Touched features: auth-and-limits (new DoD — first ever), webhooks
+# (add one SSRF DoD), remote-browser (new DoD — first ever), and a new
+# `security-hygiene` feature (h11 pin, docs gating, bot npm audit).
+#
+# Creating `features/security-hygiene/` cleanly separates the ops-level
+# hygiene concerns (pin CVE fixes, env-gate docs, npm audit) from
+# feature-level behavior. Alternative: squeeze into auth-and-limits.
+# If you'd rather not start a new feature folder, flip this file's
+# new-feature lines back to auth-and-limits before develop — the
+# registry_changes_approved section is unaffected.
+dod_changes_approved:
+  - feature: auth-and-limits
+    change: add
+    id: internal-transcripts-require-auth
+    label: "meeting-api /internal/transcripts/{id} rejects unauthenticated callers"
+    weight: 10
+    evidence: {check: INTERNAL_TRANSCRIPT_REQUIRES_AUTH, modes: [compose]}
+    approved: true
+
+  - feature: auth-and-limits
+    change: set-gate
+    from: 0
+    to: 95
+    note: "auth-and-limits was intentionally un-gated (dods: []); this release populates it with one DoD and raises the gate to match peer features."
+    approved: true
+
+  - feature: webhooks
+    change: add
+    id: security-ssrf-input-rejected
+    label: "PUT /user/webhook rejects SSRF URLs (private / link-local / metadata / internal hostnames)"
+    weight: 10
+    evidence: {check: WEBHOOK_SSRF_INPUT_REJECTED, modes: [compose]}
+    approved: true
+
+  - feature: remote-browser
+    change: add
+    id: cdp-ws-scheme-preserved
+    label: "CDP WebSocket proxy preserves the inbound scheme (wss:// on https gateways)"
+    weight: 10
+    evidence: {check: CDP_WS_SCHEME_PRESERVED, modes: [lite, compose]}
+    approved: true
+
+  - feature: remote-browser
+    change: add
+    id: cdp-no-slash-redirect
+    label: "Bare /b/{token}/cdp (no trailing slash) does not 307 — accepted as alias"
+    weight: 10
+    evidence: {check: CDP_NO_SLASH_REDIRECT, modes: [lite, compose]}
+    approved: true
+
+  - feature: remote-browser
+    change: set-gate
+    from: 0
+    to: 95
+    note: "remote-browser was intentionally un-gated; this release populates its first two DoDs and raises the gate to match peers."
+    approved: true
+
+  - feature: security-hygiene   # NEW feature folder
+    change: create
+    readme_line: "Ops-level security hygiene for the repo: CVE pins, env-gated docs, dependency hygiene."
+    approved: true
+
+  - feature: security-hygiene
+    change: add
+    id: h11-pinned-safe
+    label: "Every service requirements*.txt depending on httpx/uvicorn pins h11>=0.16.0 (CVE-2025-43859)"
+    weight: 10
+    evidence: {check: H11_PINNED_SAFE_EVERYWHERE, modes: [lite, compose]}
+    approved: true
+
+  - feature: security-hygiene
+    change: add
+    id: docs-env-gated-everywhere
+    label: "Every FastAPI app sets docs_url/redoc_url/openapi_url from VEXA_ENV; production default-deny"
+    weight: 10
+    evidence: {check: DOCS_ENV_GATED_EVERYWHERE, modes: [lite, compose]}
+    approved: true
+
+  - feature: security-hygiene
+    change: add
+    id: vexa-bot-no-high-npm-vulns
+    label: "services/vexa-bot npm audit reports 0 HIGH + 0 CRITICAL vulnerabilities"
+    weight: 5
+    evidence: {check: VEXA_BOT_NO_HIGH_NPM_VULNS, modes: [lite, compose]}
+    approved: true
+
+# ── REGISTRY CHANGES ──────────────────────────────────────────────────
+# Every scope `proves:` binding must either already exist in
+# tests3/registry.yaml OR appear here. Registry entries land in develop
+# after this approval.
+registry_changes_approved:
+  - id: INTERNAL_TRANSCRIPT_REQUIRES_AUTH
+    type: http
+    url: $COMPOSE_MEETING_API_URL/internal/transcripts/1
+    expect_code_any_of: [401, 403]
+    modes: [compose]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      Hits the meeting-api internal bind directly (not via api-gateway)
+      with no credentials. Expects auth refusal. If the endpoint is ever
+      re-opened without auth, this flips red immediately.
+    approved: true
+
+  - id: WEBHOOK_SSRF_INPUT_REJECTED
+    type: http
+    method: PUT
+    url: $GATEWAY_URL/user/webhook
+    headers:
+      X-API-Key: $VEXA_USER_TOKEN
+      Content-Type: application/json
+    body: '{"webhook_url":"http://redis:6379/"}'
+    expect_code_any_of: [400, 422]
+    modes: [compose]
+    state: stateless
+    max_duration_sec: 10
+    rationale: |
+      Attempts to set an SSRF URL via the user webhook config endpoint.
+      Current validate_webhook_url() should reject internal hostnames
+      (redis is in the blocked list). Ensures a future refactor can't
+      silently drop the validator.
+    approved: true
+
+  - id: H11_PINNED_SAFE_EVERYWHERE
+    type: script
+    script: tests3/tests/security-hygiene.sh
+    step: h11_pin
+    modes: [lite, compose]
+    state: stateless
+    mutates: []
+    max_duration_sec: 20
+    rationale: |
+      Enumerates every requirements*.txt that declares httpx or uvicorn.
+      For each, asserts an explicit h11 pin at >= 0.16.0. Static grep;
+      no container required.
+    approved: true
+
+  - id: DOCS_ENV_GATED_EVERYWHERE
+    type: script
+    script: tests3/tests/security-hygiene.sh
+    step: docs_gate
+    modes: [lite, compose]
+    state: stateless
+    mutates: []
+    max_duration_sec: 20
+    rationale: |
+      Enumerates every FastAPI app under services/**/main.py. For each,
+      asserts that the FastAPI(...) constructor passes docs_url,
+      redoc_url, and openapi_url expressions that reference an env var
+      (VEXA_ENV). Static grep.
+    approved: true
+
+  - id: CDP_WS_SCHEME_PRESERVED
+    type: grep
+    file: services/api-gateway/main.py
+    must_match: "request\\.url\\.scheme|X-Forwarded-Proto"
+    modes: [lite, compose]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      Static check: the CDP proxy rewrite path (~main.py:1824) must
+      derive the outgoing ws scheme from the request, not hard-code
+      ws://. Either `request.url.scheme` or `X-Forwarded-Proto`
+      substring presence in main.py is sufficient evidence.
+    approved: true
+
+  - id: CDP_NO_SLASH_REDIRECT
+    type: grep
+    file: services/api-gateway/main.py
+    must_match: "redirect_slashes\\s*=\\s*False|/b/\\{token\\}/cdp\\\"\\s*$|methods=\\[\"GET\"\\]\\s*\\).+/b/\\{token\\}/cdp\""
+    modes: [lite, compose]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      Static check: either FastAPI(redirect_slashes=False) is set OR
+      an explicit /b/{token}/cdp (no trailing slash) route exists.
+      Prevents the 307-http downgrade that blocks external CDP
+      clients behind TLS terminators.
+    approved: true
+
+  - id: VEXA_BOT_NO_HIGH_NPM_VULNS
+    type: script
+    script: tests3/tests/security-hygiene.sh
+    step: vexa_bot_npm_audit
+    modes: [lite, compose]
+    state: stateless
+    mutates: []
+    max_duration_sec: 60
+    rationale: |
+      Runs `npm audit --audit-level=high --json` in services/vexa-bot/
+      and services/vexa-bot/core/. Parses .metadata.vulnerabilities.high
+      and .critical. Asserts both are 0.
+    approved: true

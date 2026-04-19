@@ -1,6 +1,7 @@
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
-httpx==0.24.0
+httpx>=0.28.1
+h11>=0.16.0                       # CVE-2025-43859 fix; explicit pin survives transitive upgrades
 pydantic>=2.0.0
 python-dotenv==1.0.0
 # Documentation

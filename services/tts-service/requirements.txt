@@ -1,4 +1,5 @@
 fastapi>=0.104.0
 uvicorn>=0.24.0
+h11>=0.16.0                       # CVE-2025-43859 (uvicorn transitive)
 piper-tts>=1.4.0
 numpy>=1.21.0
