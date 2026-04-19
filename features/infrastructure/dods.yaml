@@ -81,3 +81,46 @@ dods:
     - lite
     - compose
     - helm
+# The five DoDs below are static chart-hygiene greps against files under
+# deploy/helm/charts/vexa/. The grepped files are mode-independent — the
+# check outcome is identical whether run from a lite VM or an LKE pod —
+# so one mode's evidence is canonical. `helm` is the chosen canonical
+# because these DoDs describe chart contracts, and helm is the mode the
+# chart is designed for. Widened in a future cycle only if we need
+# per-mode rollup for a specific regression.
+# (Narrowed from [lite, compose, helm] 2026-04-19 per 260419-helm triage.)
+- id: chart-resources-tuned
+  label: "every enabled service in values.yaml declares resources.requests + resources.limits for both cpu and memory"
+  weight: 10
+  evidence:
+    check: HELM_VALUES_RESOURCES_SET
+    modes:
+    - helm
+- id: chart-security-hardened
+  label: "global.securityContext sets allowPrivilegeEscalation: false and drops ALL capabilities"
+  weight: 10
+  evidence:
+    check: HELM_GLOBAL_SECURITY_HARDENED
+    modes:
+    - helm
+- id: chart-redis-tuned
+  label: "redis deployment args include --maxmemory and an eviction policy"
+  weight: 10
+  evidence:
+    check: HELM_REDIS_MAXMEMORY_SET
+    modes:
+    - helm
+- id: chart-db-pool-tuned
+  label: "meeting-api env sets DB_POOL_SIZE (pool sizing is an explicit, reviewed choice)"
+  weight: 10
+  evidence:
+    check: HELM_MEETING_API_DB_POOL_TUNED
+    modes:
+    - helm
+- id: chart-pdb-available
+  label: "PodDisruptionBudget template exists in chart (off by default via values toggle; on when podDisruptionBudgets.<svc>.enabled=true)"
+  weight: 10
+  evidence:
+    check: HELM_PDB_TEMPLATE_EXISTS
+    modes:
+    - helm

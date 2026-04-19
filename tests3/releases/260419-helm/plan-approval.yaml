@@ -1,0 +1,159 @@
+# Plan approval — 260419-helm
+#
+# Human reviews each item in this file line-by-line. AI may NOT set any
+# `approved:` to true. Flip `approved: false` → `true` once you agree
+# with the item; send back for revision if not.
+#
+# Exit gate (mechanical, enforced by stage.enter(develop)):
+#   - scope.yaml parses; every issue has hypothesis + ≥1 proves[] binding.
+#   - Every {check: X} in proves[] either exists in registry.yaml OR
+#     appears below under registry_changes_approved.
+#   - Every item below has `approved: true`.
+
+release_id: 260419-helm
+approved_at: 2026-04-19T07:55:00Z
+approver: dmitry@vexa.ai
+
+# ── OBJECTIVES ────────────────────────────────────────────────────────
+# For each issue in scope.yaml: do you agree the hypothesis captures
+# the problem, and the proves[] bindings prove it's addressed?
+scope_approved:
+  - issue: helm-chart-tuning
+    hypothesis: true           # subchart-level tuning is portable without leaking wrapper-level identifiers
+    proves: true               # 5 static chart-shape checks: resources, security, redis, db-pool, pdb
+    required_modes: true       # [helm]
+    human_verify: true         # kubectl-based visual check on resources + pdb presence
+
+  - issue: helm-fresh-evidence
+    hypothesis: true           # fresh LKE + tuned chart + full matrix → current evidence or triage input
+    proves: true               # 9 existing helm-mode checks rerun to refresh evidence
+    required_modes: true       # [helm]
+    human_verify: true         # kubectl get pods + kubectl get events
+
+# ── DoD CHANGES ───────────────────────────────────────────────────────
+# Do these DoD edits accurately describe what "done" means for the
+# touched features?
+#
+# The 5 new DoDs land in features/infrastructure/dods.yaml (not a new
+# folder — per user 2026-04-19 "we have deploy/heml readme for that").
+# features/infrastructure/ already owns "services are up"; adding
+# "services are correctly configured at the chart level" extends the
+# same concern without creating a parallel structure. Chart human docs
+# stay in deploy/helm/README.md.
+#
+# Gate math: features/infrastructure/ is gate=100 today. All new DoDs
+# must also pass (they're static — expected to pass deterministically
+# once the tuning lands). Weights below are relative; do not change
+# pass/fail behavior at gate=100.
+dod_changes_approved:
+  - feature: infrastructure
+    change: add
+    id: chart-resources-tuned
+    label: "every enabled service in values.yaml declares resources.requests + resources.limits for both cpu and memory"
+    weight: 10
+    evidence: {check: HELM_VALUES_RESOURCES_SET, modes: [lite, compose, helm]}
+    approved: true
+
+  - feature: infrastructure
+    change: add
+    id: chart-security-hardened
+    label: "global.securityContext sets allowPrivilegeEscalation: false and drops ALL capabilities"
+    weight: 10
+    evidence: {check: HELM_GLOBAL_SECURITY_HARDENED, modes: [lite, compose, helm]}
+    approved: true
+
+  - feature: infrastructure
+    change: add
+    id: chart-redis-tuned
+    label: "redis deployment args include --maxmemory and an eviction policy"
+    weight: 10
+    evidence: {check: HELM_REDIS_MAXMEMORY_SET, modes: [lite, compose, helm]}
+    approved: true
+
+  - feature: infrastructure
+    change: add
+    id: chart-db-pool-tuned
+    label: "meeting-api env sets DB_POOL_SIZE, DB_MAX_OVERFLOW, DB_POOL_TIMEOUT"
+    weight: 10
+    evidence: {check: HELM_MEETING_API_DB_POOL_TUNED, modes: [lite, compose, helm]}
+    approved: true
+
+  - feature: infrastructure
+    change: add
+    id: chart-pdb-available
+    label: "PodDisruptionBudget template exists in chart (off by default via values toggle; on when podDisruptionBudgets.*.enabled=true)"
+    weight: 10
+    evidence: {check: HELM_PDB_TEMPLATE_EXISTS, modes: [lite, compose, helm]}
+    approved: true
+
+# ── REGISTRY CHANGES ──────────────────────────────────────────────────
+# New check IDs that scope.yaml references. Each must be approved here
+# AND created in tests3/registry.yaml during develop.
+registry_changes_approved:
+  - id: HELM_VALUES_RESOURCES_SET
+    type: script
+    script: tests3/tests/helm-chart-hygiene.sh
+    step: resources_set
+    modes: [lite, compose, helm]
+    state: stateless
+    mutates: []
+    rationale: |
+      Iterates every top-level service block in
+      deploy/helm/charts/vexa/values.yaml with enabled=true (or default
+      on). For each, asserts resources.requests.{cpu,memory} and
+      resources.limits.{cpu,memory} are set. Static; runs without a
+      cluster.
+    approved: true
+
+  - id: HELM_GLOBAL_SECURITY_HARDENED
+    type: script
+    script: tests3/tests/helm-chart-hygiene.sh
+    step: security_hardened
+    modes: [lite, compose, helm]
+    state: stateless
+    mutates: []
+    rationale: |
+      Parses deploy/helm/charts/vexa/values.yaml global.securityContext
+      block. Asserts allowPrivilegeEscalation == false AND
+      capabilities.drop contains "ALL". Static.
+    approved: true
+
+  - id: HELM_REDIS_MAXMEMORY_SET
+    type: script
+    script: tests3/tests/helm-chart-hygiene.sh
+    step: redis_maxmemory
+    modes: [lite, compose, helm]
+    state: stateless
+    mutates: []
+    rationale: |
+      Parses deploy/helm/charts/vexa/values.yaml redis block. Asserts
+      redis.args contains --maxmemory AND --maxmemory-policy (or
+      equivalent eviction flag). Static.
+    approved: true
+
+  - id: HELM_MEETING_API_DB_POOL_TUNED
+    type: script
+    script: tests3/tests/helm-chart-hygiene.sh
+    step: db_pool_tuned
+    modes: [lite, compose, helm]
+    state: stateless
+    mutates: []
+    rationale: |
+      Parses deploy/helm/charts/vexa/values.yaml meetingApi block.
+      Asserts meetingApi.extraEnv (or similar envvar list) contains
+      DB_POOL_SIZE, DB_MAX_OVERFLOW, DB_POOL_TIMEOUT. Static.
+    approved: true
+
+  - id: HELM_PDB_TEMPLATE_EXISTS
+    type: grep
+    pattern: "kind:\\s*PodDisruptionBudget"
+    path: deploy/helm/charts/vexa/templates/
+    modes: [lite, compose, helm]
+    state: stateless
+    mutates: []
+    rationale: |
+      Greps the chart templates directory for a PodDisruptionBudget
+      resource. Template presence is the contract; enablement is a
+      values toggle.
+    approved: true
+

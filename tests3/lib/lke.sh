@@ -7,7 +7,14 @@ source "$(dirname "$0")/common.sh"
 LINODE_CLI="${LINODE_CLI:-/home/dima/anaconda3/bin/linode-cli}"
 LKE_VERSION="${LKE_VERSION:-1.34}"
 LKE_REGION="${LKE_REGION:-us-ord}"
-LKE_NODE_TYPE="${LKE_NODE_TYPE:-g6-standard-2}"
+# g6-standard-4 (4 cpu / 8 GiB) is the minimum that fits the bot profile
+# (runtimeProfiles.meeting: cpu_request 1000m, mem_request 1100Mi) alongside
+# the vexa service set (api-gateway, admin-api, meeting-api, runtime-api,
+# tts-service, mcp, dashboard, postgres, redis, minio ≈ 1.3–1.5 cpu
+# reserved per node). On g6-standard-2 (2 cpu), bots stayed in Pending
+# indefinitely with FailedScheduling — caught by human eyeroll in
+# 260419-helm, round-3 triage.
+LKE_NODE_TYPE="${LKE_NODE_TYPE:-g6-standard-4}"
 LKE_NODE_COUNT="${LKE_NODE_COUNT:-2}"
 
 lke_check_prereqs() {

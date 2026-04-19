@@ -1,0 +1,38 @@
+{{/*
+PodDisruptionBudget templates.
+
+Rendered once per service block under .Values.podDisruptionBudgets
+when that block has `enabled: true`. Disabled by default on all
+services so `helm install` on a single-replica / single-node cluster
+doesn't block `kubectl drain` during development.
+
+On multi-node production clusters, flip `enabled: true` per service
+and raise `replicaCount` + `minAvailable` together — a PDB with
+minAvailable: 1 on a replicaCount: 1 deployment WILL block node
+drains indefinitely, which is typically the opposite of what you
+want.
+*/}}
+{{- range $name, $cfg := .Values.podDisruptionBudgets }}
+{{- if $cfg.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "vexa.componentName" (list $ (printf "%s-pdb" $name | kebabcase)) }}
+  labels:
+    {{- include "vexa.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $name | kebabcase }}
+spec:
+  {{- if hasKey $cfg "minAvailable" }}
+  minAvailable: {{ $cfg.minAvailable }}
+  {{- else if hasKey $cfg "maxUnavailable" }}
+  maxUnavailable: {{ $cfg.maxUnavailable }}
+  {{- else }}
+  minAvailable: 1
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "vexa.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: {{ $name | kebabcase }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,147 @@
+# Release scope — 260419-helm
+# Authored in stage: plan. Awaiting human sign-off in plan-approval.yaml.
+# Drives every downstream stage (develop → provision → deploy → validate).
+
+release_id: 260419-helm
+branch: dev
+summary: |
+  Implement a working, scalable OSS helm deployment by porting generic,
+  load-tested tuning from a known-good proprietary wrapper chart into
+  this repo's subchart (resources, security-context hardening, Redis
+  tuning, meeting-api DB pool, structural templates for PDB /
+  NetworkPolicy). Then validate the resulting chart end-to-end on a
+  freshly provisioned LKE cluster.
+
+  Separation-of-concerns policy (per user 2026-04-19): ported values
+  must be *generic knobs only* — no production domain names, managed-DB
+  hostnames, hosted-mode flags, wrapper service references, billing
+  envvars, proprietary image repos, production-pinned tags, or hosted
+  CORS origins. Enforcement is manual discipline at plan/develop time;
+  no automated scan this cycle.
+
+deployments:
+  modes: [helm]
+  notes:
+    lite: "not applicable this cycle — helm-focused; static DoDs inherit prior mode-agnostic evidence."
+    compose: "same as lite."
+
+issues:
+  - id: helm-chart-tuning
+    source: internal
+    ref: "groom 2026-04-19 (user: 'working, scalable helm deployment')"
+    problem: |
+      OSS helm chart ships without explicit resource requests/limits on
+      service deployments, without a hardened global securityContext,
+      without Redis maxmemory / eviction-policy tuning, without tuned
+      DB-pool envvars on meeting-api, and without structural hardening
+      templates (PodDisruptionBudget, NetworkPolicy, PriorityClass).
+      A self-hoster installing the chart today gets "works on a single
+      node" quality; under any real load the deployment degrades
+      unpredictably.
+    hypothesis: |
+      Generic tuning knobs (numeric resources, security flags, Redis
+      args, DB-pool envvar names + values, structural template shapes)
+      proven under production load in a proprietary wrapper chart can
+      be landed directly in this subchart's values.yaml +
+      values-staging.yaml + templates/ without carrying any
+      Forbidden-category token. The wrapper-vs-subchart boundary
+      matches the proprietary-vs-generic boundary: all identifiers
+      (domains, hosted-mode flags, billing envvars, wrapper service
+      refs, production image tags) live one layer up in the wrapper;
+      the subchart sees only mechanism.
+    fix_commits: []
+    proves:
+      - {check: HELM_VALUES_RESOURCES_SET, modes: [helm]}
+      - {check: HELM_GLOBAL_SECURITY_HARDENED, modes: [helm]}
+      - {check: HELM_REDIS_MAXMEMORY_SET, modes: [helm]}
+      - {check: HELM_MEETING_API_DB_POOL_TUNED, modes: [helm]}
+      - {check: HELM_PDB_TEMPLATE_EXISTS, modes: [helm]}
+    required_modes: [helm]
+    human_verify:
+      - mode: helm
+        do: |
+          kubectl get pods -l app.kubernetes.io/name=vexa -o json \
+            | jq '[.items[].spec.containers[] | {name, resources}]'
+        expect: |
+          every container entry shows non-empty
+          resources.requests.{cpu,memory} AND resources.limits.{cpu,memory}.
+      - mode: helm
+        do: "kubectl get pdb -A"
+        expect: "PodDisruptionBudget objects are available (may be 0 if disabled by values; template presence is the DoD)."
+
+  - id: helm-e2e-bot-works
+    source: human
+    ref: "user eyeroll, 2026-04-19 — 'bot stuck in requested'"
+    problem: |
+      In the first validate pass, helm-fresh-evidence only proved that
+      control-plane services respond — the gate went green even though
+      POST /bots on helm produced pods that sat in Pending indefinitely
+      (test-cluster node size too small for the bot profile cpu_request).
+      Human eyeroll caught it; automation could not because no DoD
+      required end-to-end bot behavior on helm.
+    hypothesis: |
+      Widening bot-lifecycle DoDs to helm + upsizing the LKE test cluster
+      so the bot profile can actually schedule, forces the matrix to
+      exercise the bot flow on helm and fail on any future helm-bot
+      regression.
+    gap_analysis: |
+      No prior DoD required bots to actually run on helm. The containers
+      test step ran on helm during the first validate and DID fail
+      (status_completed: status=stopping) but the gate did not flip red
+      because no helm-mode DoD was bound to that step. Silent-pass path.
+    new_checks:
+      - "containers:create on helm (bot-lifecycle.create-ok)"
+      - "containers:alive on helm (bot-lifecycle.create-alive)"
+      - "containers:status_completed on helm (bot-lifecycle.status-completed)"
+      - "containers:no_orphans on helm (bot-lifecycle.no-orphans)"
+    fix_commits: []
+    proves:
+      - {test: containers, step: create,           modes: [helm]}
+      - {test: containers, step: alive,            modes: [helm]}
+      - {test: containers, step: status_completed, modes: [helm]}
+      - {test: containers, step: no_orphans,       modes: [helm]}
+    required_modes: [helm]
+    human_verify:
+      - mode: helm
+        do: "POST /bots with a real Google Meet URL via dashboard or gateway"
+        expect: "within 90s bot.status transitions from requested → joining → active; kubectl shows meeting-* pod Running (not Pending)"
+
+  - id: helm-fresh-evidence
+    source: internal
+    ref: "groom 2026-04-19 Pack A; last helm evidence is reports/release-0.10.0-260417-1454.md (2 cycles stale)"
+    problem: |
+      No helm-mode evidence has been generated since release
+      0.10.0-260417-1454. 82 registry checks declare mode=helm; four
+      features (infrastructure, dashboard, bot-lifecycle, meeting-urls)
+      have 35 DoDs bound to helm evidence that is silently stale. The
+      chart tuning landed by issue `helm-chart-tuning` must be proven
+      to deploy cleanly end-to-end, not just to pass static checks.
+    hypothesis: |
+      A fresh LKE provision + helm install using the tuned chart + a
+      full validate-helm matrix run will produce current evidence for
+      every helm-bound DoD. Green → the tuning works + no regression
+      since 260417-1454. Red → triage classifies each failing DoD as
+      regression-since-1454 or gap-in-new-tuning, scoping the next
+      cycle.
+    fix_commits: []
+    proves:
+      - {check: GATEWAY_UP, modes: [helm]}
+      - {check: ADMIN_API_UP, modes: [helm]}
+      - {check: DASHBOARD_UP, modes: [helm]}
+      - {check: RUNTIME_API_UP, modes: [helm]}
+      - {check: TRANSCRIPTION_UP, modes: [helm]}
+      - {check: REDIS_UP, modes: [helm]}
+      - {check: MINIO_UP, modes: [helm]}
+      - {check: DB_SCHEMA_ALIGNED, modes: [helm]}
+      - {check: DB_POOL_NO_EXHAUSTION, modes: [helm]}
+    required_modes: [helm]
+    human_verify:
+      - mode: helm
+        do: "kubectl get pods --all-namespaces"
+        expect: "every vexa-owned pod is Running; 0 CrashLoopBackOff; 0 Error."
+      - mode: helm
+        do: "kubectl get events --field-selector type=Warning --sort-by=.lastTimestamp | tail -20"
+        expect: "no new Warning events during install / first 5 min of steady state."
+
+expensive_tests: []
+strict_features: []

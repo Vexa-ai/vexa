@@ -27,7 +27,17 @@ spec:
         - name: redis
           image: "{{ .Values.redis.image }}"
           imagePullPolicy: IfNotPresent
-          args: ["--appendonly", "yes"]
+          args:
+            - "--appendonly"
+            - "yes"
+            {{- with .Values.redis.maxmemory }}
+            - "--maxmemory"
+            - {{ . | quote }}
+            {{- end }}
+            {{- with .Values.redis.maxmemoryPolicy }}
+            - "--maxmemory-policy"
+            - {{ . | quote }}
+            {{- end }}
           ports:
             - name: redis
               containerPort: 6379
