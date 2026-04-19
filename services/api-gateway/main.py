@@ -82,23 +82,25 @@ if not all([ADMIN_API_URL, MEETING_API_URL, TRANSCRIPTION_COLLECTOR_URL, MCP_URL
 api_key_scheme = APIKeyHeader(name="X-API-Key", description="API Key for client operations", auto_error=False)
 admin_api_key_scheme = APIKeyHeader(name="X-Admin-API-Key", description="API Key for admin operations", auto_error=False)
 
+_VEXA_ENV = os.getenv("VEXA_ENV", "development")
+_PUBLIC_DOCS = _VEXA_ENV != "production"
 app = FastAPI(
     title="Vexa API Gateway",
     description="""
     **Main entry point for the Vexa platform APIs.**
-    
+
     Provides access to:
     - Bot Management (Starting/Stopping transcription bots)
     - Transcription Retrieval
     - User & Token Administration (Admin only)
-    
+
     ## Authentication
-    
+
     Two types of API keys are used:
-    
+
     1.  **`X-API-Key`**: Required for all regular client operations (e.g., managing bots, getting transcripts). Obtain your key from an administrator.
     2.  **`X-Admin-API-Key`**: Required *only* for administrative endpoints (prefixed with `/admin`). This key is configured server-side.
-    
+
     Include the appropriate header in your requests.
     """,
     version="1.5.0", # Interactive bots, recordings, MCP, webhooks, transcript sharing, voice agent
@@ -110,8 +112,9 @@ app = FastAPI(
     license_info={
         "name": "Apache-2.0",
     },
-    # Include security schemes in OpenAPI spec
-    # Note: Applying them globally or per-route is done below
+    docs_url="/docs" if _PUBLIC_DOCS else None,
+    redoc_url="/redoc" if _PUBLIC_DOCS else None,
+    openapi_url="/openapi.json" if _PUBLIC_DOCS else None,
 )
 
 # Custom OpenAPI Schema
@@ -1804,24 +1807,36 @@ async def browser_vnc_ws(websocket: WebSocket, token: str):
             pass
 
 
-@app.api_route("/b/{token}/cdp/{path:path}", methods=["GET"],
-               include_in_schema=False)
-async def browser_cdp_http(token: str, path: str, request: Request):
-    """HTTP proxy for CDP endpoints (e.g. /json/version) needed by Playwright connectOverCDP."""
+async def _proxy_cdp_http(token: str, path: str, request: Request) -> Response:
+    """Shared CDP HTTP proxy body used by both /cdp and /cdp/{path} routes."""
     session = await resolve_browser_session(token)
     if not session:
         raise HTTPException(status_code=404, detail="Browser session not found")
-    container = session.get("container_ip") or session.get("container_ip") or session["container_name"]
+    container = session.get("container_ip") or session["container_name"]
     try:
         qs = f"?{request.url.query}" if request.url.query else ""
+        # Default to the /json/version handshake endpoint so that a bare
+        # /b/{token}/cdp call works — Playwright's chromium.connectOverCDP
+        # hits the base URL without a path, expects the CDP version JSON,
+        # and reads webSocketDebuggerUrl from it.
+        upstream_path = path or "json/version"
         resp = await app.state.http_client.get(
-            f"http://{container}:9223/{path}{qs}", timeout=10.0,
+            f"http://{container}:9223/{upstream_path}{qs}", timeout=10.0,
             headers={"Host": "localhost"}  # CDP rejects non-localhost Host headers
         )
-        # Rewrite webSocketDebuggerUrl to point through our CDP WebSocket proxy
+        # Rewrite webSocketDebuggerUrl to point through our CDP WebSocket
+        # proxy. Preserve the inbound scheme — behind a TLS terminator the
+        # gateway sees X-Forwarded-Proto=https and must emit wss://, not
+        # ws://; downgrading breaks Playwright's connectOverCDP from any
+        # secure origin.
         import re
-        host = request.headers.get('host', 'localhost:8056')
-        proxy_ws_url = f"ws://{host}/b/{token}/cdp"
+        host = request.headers.get("host", "localhost:8056")
+        forwarded_proto = request.headers.get("x-forwarded-proto", "")
+        incoming_scheme = (forwarded_proto.split(",")[0].strip().lower()
+                           or request.url.scheme
+                           or "http")
+        ws_scheme = "wss" if incoming_scheme == "https" else "ws"
+        proxy_ws_url = f"{ws_scheme}://{host}/b/{token}/cdp"
         content = re.sub(r'"webSocketDebuggerUrl":\s*"[^"]*"',
                         f'"webSocketDebuggerUrl": "{proxy_ws_url}"',
                         resp.text)
@@ -1829,6 +1844,26 @@ async def browser_cdp_http(token: str, path: str, request: Request):
                        headers={"content-type": resp.headers.get("content-type", "application/json")})
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"CDP HTTP proxy error: {exc}")
+
+
+@app.api_route("/b/{token}/cdp/{path:path}", methods=["GET"],
+               include_in_schema=False)
+async def browser_cdp_http(token: str, path: str, request: Request):
+    """HTTP proxy for CDP endpoints (e.g. /json/version) needed by Playwright connectOverCDP."""
+    return await _proxy_cdp_http(token, path, request)
+
+
+@app.api_route("/b/{token}/cdp", methods=["GET"], include_in_schema=False)
+async def browser_cdp_http_bare(token: str, request: Request):
+    """Bare /b/{token}/cdp alias — no trailing slash, no path.
+
+    Without this, FastAPI's default redirect_slashes behavior 307-redirects
+    GET /cdp → GET /cdp/ and strips the https scheme when the gateway sits
+    behind a TLS terminator. Playwright's chromium.connectOverCDP(url)
+    follows the redirect into plain http and then refuses the downgrade.
+    Accepting the bare path as a first-class route removes the redirect.
+    """
+    return await _proxy_cdp_http(token, "json/version", request)
 
 
 @app.websocket("/b/{token}/cdp-ws")

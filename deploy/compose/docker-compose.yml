@@ -246,6 +246,7 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - ADMIN_TOKEN=${ADMIN_API_TOKEN:-changeme}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
       - RUNTIME_API_URL=http://runtime-api:8090
       - RUNTIME_API_TOKEN=${BOT_API_TOKEN:-}
       - MEETING_API_URL=http://meeting-api:8080

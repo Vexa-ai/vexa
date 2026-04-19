@@ -91,3 +91,10 @@ dods:
     modes:
     - lite
     - compose
+- id: security-ssrf-input-rejected
+  label: "PUT /user/webhook rejects SSRF URLs (CVE-2026-25883 / GHSA-fhr6-8hff-cvg4)"
+  weight: 10
+  evidence:
+    check: WEBHOOK_SSRF_INPUT_REJECTED
+    modes:
+    - compose

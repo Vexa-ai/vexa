@@ -34,10 +34,15 @@ logger = logging.getLogger("runtime_api")
 
 
 def create_app() -> FastAPI:
+    vexa_env = os.getenv("VEXA_ENV", "development")
+    public_docs = vexa_env != "production"
     app = FastAPI(
         title="Container Lifecycle API",
         description="Generic container orchestration with pluggable backends",
         version="0.1.0",
+        docs_url="/docs" if public_docs else None,
+        redoc_url="/redoc" if public_docs else None,
+        openapi_url="/openapi.json" if public_docs else None,
     )
 
     # CORS

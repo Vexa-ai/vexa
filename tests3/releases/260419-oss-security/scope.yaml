@@ -1,0 +1,302 @@
+# Release scope — 260419-oss-security
+# Authored in stage: plan. Human sign-off captured in plan-approval.yaml
+# (approver note: user said "go implement all" in the 2026-04-19 turn →
+# Shape 1 from groom.md = Packs A, B, C, D, E.1; Pack F dropped).
+
+release_id: 260419-oss-security
+branch: dev
+summary: |
+  OSS security hardening — pre-cutover to Stripe live mode.
+
+  Ships upstream against Vexa-ai/vexa:dev:
+  - Pack A: fix HIGH-severity unauthenticated /internal/transcripts
+    endpoint (CVE-2026-25058 / GHSA-w73r-2449-qwgh, draft since
+    2026-01-28, disclosure deadline expired).
+  - Pack B: publish MEDIUM-severity webhook SSRF advisory
+    (CVE-2026-25883 / GHSA-fhr6-8hff-cvg4, fix already present in
+    webhook_url.validate_webhook_url; add defence-in-depth on the user
+    input path + regression check).
+  - Pack C.1: pin h11>=0.16.0 explicitly in every service requirements
+    (CVE-2025-43859, transitive via httpx/uvicorn).
+  - Pack C.2: env-gate /docs /redoc /openapi.json in every FastAPI
+    service; default-deny when VEXA_ENV=production.
+  - Pack D: preserve wss:// scheme in the CDP proxy webSocketDebuggerUrl
+    rewrite; accept /cdp (no trailing slash) without 307-downgrade.
+  - Pack E.1: bump transitive basic-ftp in services/vexa-bot to close 3
+    open dependabot HIGH alerts.
+
+  OSS-4 (slowapi) and OSS-5 (CORS) from the original PRD are
+  intentionally out of scope — see groom.md Pack F.
+
+deployments:
+  modes: [lite, compose]
+  notes:
+    lite: |
+      kept for image-build validation (per user, 2026-04-19: "we still
+      need to rebuild so that we need to test on lite as well to make
+      sure the image actually deploys"). Lite's supervisord bundles
+      every service into one container; that degenerates the
+      INTERNAL_API_SECRET cross-service semantics but still validates
+      that the rebuilt image starts + serves. Required_modes below
+      reflect which checks get signal from lite vs compose.
+    helm: |
+      dropped this cycle — code changes are mode-agnostic; the helm
+      chart inherits via submodule bump. 260419-helm validated helm
+      one cycle ago; it's current.
+
+# Policy note for PR shape (not machine-enforced; advisory to develop + ship):
+# Three PRs against Vexa-ai/vexa:dev, independently reviewable:
+#   PR-1 = Pack A + Pack B (both touch meeting-api; both are CVE work)
+#   PR-2 = Pack C (h11 + Swagger gating — tiny, cross-cutting)
+#   PR-3 = Pack D + Pack E.1 (gateway + bot runtime)
+# This is a ship-stage decision; develop can land on dev in any order.
+
+issues:
+  # ─────────────────────────────────────────────────────────────────
+  - id: sec-unauth-transcript-endpoint
+    source: gh-issue
+    ref: "Vexa-ai/vexa security advisory GHSA-w73r-2449-qwgh (CVE-2026-25058)"
+    problem: |
+      GET /internal/transcripts/{meeting_id} on meeting-api returns
+      every transcript segment for the given meeting with no
+      authentication and no ownership check. `include_in_schema=False`
+      hides the route from OpenAPI but not from the network; any
+      attacker who reaches the meeting-api bind enumerates integer
+      meeting_ids and exfiltrates transcripts cross-tenant.
+      Advisory submitted 2026-01-28, draft, disclosure deadline expired
+      ~2026-03-29.
+    hypothesis: |
+      The endpoint is consumed by internal services (transcription
+      pipeline, post-meeting hooks) that already hold either the admin
+      API token or a signed internal token. Requiring an admin-token
+      header on the route (and rejecting unauthenticated callers with
+      401) closes the IDOR without breaking internal consumers; we
+      patch every internal caller to send the token.
+    gap_analysis: |
+      Registry had no check enumerating internal meeting-api endpoints
+      and their auth requirements. `auth-and-limits` feature is
+      currently intentionally un-gated (dods: []), so the absence of an
+      auth DoD here was invisible to aggregate.py — silent skip path.
+    new_checks:
+      - INTERNAL_TRANSCRIPT_REQUIRES_AUTH
+    fix_commits: []
+    proves:
+      - {check: INTERNAL_TRANSCRIPT_REQUIRES_AUTH, modes: [compose]}
+    required_modes: [compose]
+    human_verify:
+      - mode: compose
+        do: |
+          # Call the internal endpoint directly on the meeting-api bind
+          # from a container that is NOT admin-api:
+          docker compose exec -T api-gateway sh -c \
+            "curl -s -o /dev/null -w '%{http_code}\n' \
+             http://meeting-api:8000/internal/transcripts/1"
+        expect: "401 (or 403). Never 200. Never 404 with a transcript body."
+
+  # ─────────────────────────────────────────────────────────────────
+  - id: sec-webhook-ssrf-publish
+    source: gh-issue
+    ref: "Vexa-ai/vexa security advisory GHSA-fhr6-8hff-cvg4 (CVE-2026-25883)"
+    problem: |
+      Authenticated user sets webhook_url = http://redis:6379/ (or
+      cloud metadata, or any internal service) → on meeting completion
+      the server posts to that URL, turning itself into an SSRF
+      primitive against its own network. Advisory draft since
+      2026-01-29, disclosure deadline expired ~2026-03-30.
+    hypothesis: |
+      Fix landed earlier via services/meeting-api/meeting_api/webhook_url.py
+      (validate_webhook_url blocks localhost, private/link-local/
+      multicast, cloud-metadata, and Vexa Docker service hostnames;
+      DNS-resolves with rebind protection; called at delivery time
+      from webhooks.py:107/177/232). Remaining work: (a) verify the
+      same validation runs on the user-input path (PUT /user/webhook)
+      so invalid URLs are rejected at configuration time too, not
+      only at delivery; (b) add a regression check so a future change
+      can't silently bypass the validator.
+    gap_analysis: |
+      Prior webhook DoDs (webhooks/dods.yaml) cover HMAC, envelope
+      shape, spoof protection, payload hygiene — but none enforces
+      that SSRF URLs are rejected. Without a DoD bound to that
+      claim, the validator could be silently disabled by a future
+      refactor.
+    new_checks:
+      - WEBHOOK_SSRF_INPUT_REJECTED
+    fix_commits: []
+    proves:
+      - {check: WEBHOOK_SSRF_INPUT_REJECTED, modes: [compose]}
+    required_modes: [compose]
+    human_verify:
+      - mode: compose
+        do: |
+          curl -s -o /dev/null -w '%{http_code}\n' \
+            -X PUT http://$HOST:8056/user/webhook \
+            -H "X-API-Key: $USER_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"webhook_url":"http://redis:6379/"}'
+        expect: "400 or 422 — SSRF URL rejected at config time"
+      - mode: any
+        do: |
+          # Publish the advisory in the GitHub UI after PR-1 merges.
+          # (Not part of the automated gate; tracked as ship-stage task.)
+          # gh api -X PATCH repos/Vexa-ai/vexa/security-advisories/GHSA-fhr6-8hff-cvg4 \
+          #   -f state=published -f patched_versions=<released tag>
+        expect: "Advisory state → published, CVE listed, Ariel Silver credited."
+
+  # ─────────────────────────────────────────────────────────────────
+  - id: sec-h11-pin
+    source: human
+    ref: "vexa-platform pre-cutover PRD — OSS-1 (CVE-2025-43859)"
+    problem: |
+      No service's requirements*.txt pins h11 explicitly. h11 is a
+      transitive dep of httpx + uvicorn; versions below 0.16.0 leak
+      response headers across HTTP/1.1 pipelined connections under
+      specific timing edge cases. api-gateway pins httpx==0.24.0 (old),
+      which resolves to a pre-0.16.0 h11 range.
+    hypothesis: |
+      Adding h11>=0.16.0 as an explicit pin in every service
+      requirements file that already depends on httpx or uvicorn
+      makes `pip install` resolve deterministically to a safe version
+      and survives future transitive bumps.
+    gap_analysis: |
+      No registry check enumerates transitive CVE pins. Services
+      individually upgrade dependencies without a cross-service
+      hygiene DoD.
+    new_checks:
+      - H11_PINNED_SAFE_EVERYWHERE
+    fix_commits: []
+    proves:
+      - {check: H11_PINNED_SAFE_EVERYWHERE, modes: [lite, compose]}
+    required_modes: [lite, compose]
+    human_verify:
+      - mode: compose
+        do: |
+          for svc in api-gateway meeting-api admin-api mcp runtime-api \
+                     agent-api tts-service calendar-service \
+                     telegram-bot transcription-service; do
+            docker compose exec -T $svc pip show h11 2>/dev/null \
+              | awk -v s=$svc '/^Version:/ {print s, $2}'
+          done
+        expect: "every line shows a Version >= 0.16.0"
+
+  # ─────────────────────────────────────────────────────────────────
+  - id: sec-swagger-env-gate
+    source: human
+    ref: "vexa-platform pre-cutover PRD — OSS-2"
+    problem: |
+      Every FastAPI app in the repo exposes /docs, /redoc, and
+      /openapi.json unconditionally. That publishes internal admin
+      endpoints (admin-api /admin/users, gateway /bots, …) to anyone
+      who hits the gateway. Hosted api.staging.vexa.ai/docs
+      demonstrates the exposure today.
+    hypothesis: |
+      Gating `docs_url` / `redoc_url` / `openapi_url` on an env var
+      (`VEXA_ENV`) at FastAPI construction, with default-deny when
+      `VEXA_ENV=production`, removes the info disclosure while leaving
+      developer ergonomics untouched in staging / dev. Operators
+      opt-in by setting VEXA_ENV=staging or unsetting.
+    gap_analysis: |
+      Registry has no DoD binding docs exposure to deployment env.
+      The 9 FastAPI services each independently construct their app
+      without consulting a shared policy.
+    new_checks:
+      - DOCS_ENV_GATED_EVERYWHERE
+    fix_commits: []
+    proves:
+      - {check: DOCS_ENV_GATED_EVERYWHERE, modes: [lite, compose]}
+    required_modes: [lite, compose]
+    human_verify:
+      - mode: compose
+        do: |
+          # Point compose at VEXA_ENV=production, redeploy api-gateway:
+          VEXA_ENV=production docker compose up -d api-gateway
+          curl -s -o /dev/null -w '%{http_code}\n' http://$HOST:8056/docs
+        expect: "404 — docs disabled in production"
+      - mode: compose
+        do: |
+          unset VEXA_ENV && docker compose up -d api-gateway
+          curl -s -o /dev/null -w '%{http_code}\n' http://$HOST:8056/docs
+        expect: "200 — docs back on in dev / staging default"
+
+  # ─────────────────────────────────────────────────────────────────
+  - id: sec-cdp-scheme-preservation
+    source: human
+    ref: "vexa-platform pre-cutover PRD — OSS-3 + Vexa-ai/vexa#122"
+    problem: |
+      Playwright's `chromium.connectOverCDP()` against hosted Vexa
+      fails because (a) api-gateway/main.py:1824 hard-codes
+      `proxy_ws_url = f"ws://{host}/..."` in the CDP
+      webSocketDebuggerUrl rewrite — the scheme is never `wss://`
+      even on an HTTPS gateway; (b) the route
+      `/b/{token}/cdp/{path:path}` matches `/cdp/json/version` but
+      not bare `/cdp`, causing a 307 redirect chain that downgrades
+      https→http behind TLS-terminating proxies. Host-header
+      rewriting is ALREADY correct (lines 1819, 1854, 1879) — the
+      PRD's framing was partially stale.
+    hypothesis: |
+      Deriving the outgoing scheme from the incoming request (via
+      `request.url.scheme` or X-Forwarded-Proto) produces a correct
+      `wss://` on TLS gateways and `ws://` on local dev. Adding an
+      explicit no-trailing-slash route (or disabling FastAPI's 307
+      for this path) removes the scheme-downgrade redirect.
+    gap_analysis: |
+      remote-browser dods.yaml is currently un-gated (dods: []).
+      No prior check exercised a CDP connection through the public
+      gateway hostname; internal tests went directly to the bot pod.
+    new_checks:
+      - CDP_WS_SCHEME_PRESERVED
+      - CDP_NO_SLASH_REDIRECT
+    fix_commits: []
+    proves:
+      - {check: CDP_WS_SCHEME_PRESERVED, modes: [lite, compose]}
+      - {check: CDP_NO_SLASH_REDIRECT,    modes: [lite, compose]}
+    required_modes: [compose]
+    human_verify:
+      - mode: compose
+        do: |
+          # Acquire a real browser_session token via POST /browser-sessions,
+          # then:
+          CDP_URL=https://<gateway-host>/b/<token>/cdp \
+            node -e 'import("playwright").then(async p => {
+              const b = await p.chromium.connectOverCDP(process.env.CDP_URL);
+              console.log("ok", b.contexts()[0].pages().length);
+              await b.close();
+            })'
+        expect: "prints 'ok N' without any 307/403/ws-handshake errors"
+
+  # ─────────────────────────────────────────────────────────────────
+  - id: sec-vexa-bot-npm-audit
+    source: gh-issue
+    ref: "Vexa-ai/vexa dependabot alerts #93, #94, #89 (basic-ftp)"
+    problem: |
+      services/vexa-bot/package-lock.json and
+      services/vexa-bot/core/package-lock.json ship transitive
+      basic-ftp versions with 3 open HIGH dependabot alerts: CRLF
+      injection via credentials + MKD, incomplete CRLF protection
+      against arbitrary FTP commands, and unbounded memory DoS via
+      Client.list(). basic-ftp is unused at runtime (transitive via
+      Playwright tooling) but sits in the lockfile.
+    hypothesis: |
+      Running `npm audit fix` (optionally --force) on both vexa-bot
+      package-lock.json files bumps basic-ftp past the vulnerable
+      range without any runtime behavior change. If the transitive
+      resolution can't be auto-fixed, add an `overrides` entry
+      pinning basic-ftp to the safe version.
+    gap_analysis: |
+      No DoD enumerates node dependency hygiene. This cycle adds one
+      scoped to vexa-bot; dashboard is deferred to a follow-up
+      (groom Pack E.2).
+    new_checks:
+      - VEXA_BOT_NO_HIGH_NPM_VULNS
+    fix_commits: []
+    proves:
+      - {check: VEXA_BOT_NO_HIGH_NPM_VULNS, modes: [lite, compose]}
+    required_modes: [lite, compose]
+    human_verify:
+      - mode: compose
+        do: |
+          cd services/vexa-bot && npm audit --audit-level=high --json \
+            | jq '.metadata.vulnerabilities.high,.metadata.vulnerabilities.critical'
+        expect: "both values are 0"
+
+expensive_tests: []
+strict_features: []

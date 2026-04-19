@@ -1338,3 +1338,118 @@ webhooks:
   features:
   - webhooks
   tier: cheap
+
+# ────────────────────────────────────────────────────────────────
+# 260419-oss-security — security hygiene checks
+# ────────────────────────────────────────────────────────────────
+
+INTERNAL_TRANSCRIPT_REQUIRES_AUTH:
+  proves: "meeting-api /internal/transcripts/{id} rejects unauthenticated callers — CVE-2026-25058 / GHSA-w73r-2449-qwgh closed"
+  symptom: "Internal transcript endpoint returns 200 with transcripts to any unauthenticated caller — cross-tenant IDOR"
+  found: '2026-04-19'
+  type: http
+  url: http://meeting-api:8080/internal/transcripts/1
+  from_container: api-gateway
+  expect_code_any_of: [401, 403, 503]
+  modes:
+  - compose
+  state: stateless
+  max_duration_sec: 5
+
+WEBHOOK_SSRF_INPUT_REJECTED:
+  proves: "PUT /user/webhook rejects SSRF URLs (private/link-local/metadata/internal hostnames) — CVE-2026-25883 / GHSA-fhr6-8hff-cvg4 regression guard"
+  symptom: "A valid API key can store a webhook_url pointing at internal services (redis, postgres, 169.254.169.254) without rejection"
+  found: '2026-04-19'
+  type: http
+  method: PUT
+  url: $GATEWAY_URL/user/webhook
+  headers:
+    X-API-Key: $API_TOKEN
+    Content-Type: application/json
+  body: '{"webhook_url":"http://redis:6379/"}'
+  expect_code_any_of: [400, 422]
+  modes:
+  - compose
+  state: stateless
+  max_duration_sec: 10
+
+H11_PINNED_SAFE_EVERYWHERE:
+  proves: "every httpx/uvicorn requirements*.txt pins h11>=0.16.0 — CVE-2025-43859 closed transitively"
+  symptom: "pip install resolves h11<0.16.0 on any service; HTTP/1.1 pipelining header leak reintroduced"
+  found: '2026-04-19'
+  type: script
+  script: tests/security-hygiene.sh
+  step: h11_pin
+  modes:
+  - lite
+  - compose
+  state: stateless
+  max_duration_sec: 20
+
+DOCS_ENV_GATED_EVERYWHERE:
+  proves: "every FastAPI app reads VEXA_ENV and passes docs_url/redoc_url/openapi_url derived from it — /docs default-deny in production"
+  symptom: "/docs exposed on a production deployment; internal admin endpoints listed to any client"
+  found: '2026-04-19'
+  type: script
+  script: tests/security-hygiene.sh
+  step: docs_gate
+  modes:
+  - lite
+  - compose
+  state: stateless
+  max_duration_sec: 20
+
+CDP_WS_SCHEME_PRESERVED:
+  proves: "CDP proxy webSocketDebuggerUrl rewrite preserves inbound scheme (wss:// on HTTPS gateways) — Playwright connectOverCDP works through TLS"
+  symptom: "Hard-coded ws:// in proxy URL breaks every external CDP client on HTTPS deployments"
+  found: '2026-04-19'
+  type: grep
+  file: services/api-gateway/main.py
+  must_match: "x-forwarded-proto|request\\.url\\.scheme"
+  modes:
+  - lite
+  - compose
+  state: stateless
+  max_duration_sec: 5
+
+CDP_NO_SLASH_REDIRECT:
+  proves: "Bare /b/{token}/cdp (no trailing slash) is a first-class route — no 307 downgrade"
+  symptom: "GET /b/<tok>/cdp 307-redirects to /b/<tok>/cdp/ and downgrades https→http behind TLS terminators"
+  found: '2026-04-19'
+  type: grep
+  file: services/api-gateway/main.py
+  must_match: "browser_cdp_http_bare"
+  modes:
+  - lite
+  - compose
+  state: stateless
+  max_duration_sec: 5
+
+VEXA_BOT_NO_HIGH_NPM_VULNS:
+  proves: "services/vexa-bot + services/vexa-bot/core npm audit report 0 HIGH and 0 CRITICAL vulnerabilities"
+  symptom: "vexa-bot ships transitive basic-ftp with CRLF injection / DoS (GHSA-6v7q-wjvx-w8wg, GHSA-chqc-8p9q-pq6q, GHSA-rp42-5vxx-qpwr)"
+  found: '2026-04-19'
+  type: script
+  script: tests/security-hygiene.sh
+  step: vexa_bot_npm_audit
+  modes:
+  - lite
+  - compose
+  state: stateless
+  max_duration_sec: 60
+
+security-hygiene:
+  type: script
+  script: tests/security-hygiene.sh
+  modes:
+  - lite
+  - compose
+  state: stateless
+  max_duration_sec: 90
+  steps:
+  - h11_pin
+  - docs_gate
+  - vexa_bot_npm_audit
+  features:
+  - security-hygiene
+  tier: cheap

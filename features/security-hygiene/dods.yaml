@@ -1,0 +1,29 @@
+gate:
+  confidence_min: 95
+dods:
+- id: h11-pinned-safe
+  label: "Every service requirements*.txt with httpx/uvicorn pins h11>=0.16.0 (CVE-2025-43859)"
+  weight: 10
+  evidence:
+    check: H11_PINNED_SAFE_EVERYWHERE
+    modes:
+    - lite
+    - compose
+
+- id: docs-env-gated-everywhere
+  label: "Every FastAPI app sets docs_url/redoc_url/openapi_url from VEXA_ENV — /docs default-deny on VEXA_ENV=production"
+  weight: 10
+  evidence:
+    check: DOCS_ENV_GATED_EVERYWHERE
+    modes:
+    - lite
+    - compose
+
+- id: vexa-bot-no-high-npm-vulns
+  label: "services/vexa-bot + services/vexa-bot/core npm audit reports 0 HIGH + 0 CRITICAL"
+  weight: 5
+  evidence:
+    check: VEXA_BOT_NO_HIGH_NPM_VULNS
+    modes:
+    - lite
+    - compose

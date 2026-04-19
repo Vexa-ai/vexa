@@ -26,8 +26,10 @@ async def aggregate_transcription(meeting: Meeting, db: AsyncSession):
     meeting_id = meeting.id
     try:
         collector_url = f"{TRANSCRIPTION_COLLECTOR_URL}/internal/transcripts/{meeting_id}"
+        internal_secret = os.getenv("INTERNAL_API_SECRET", "")
+        headers = {"X-Internal-Secret": internal_secret} if internal_secret else {}
         async with httpx.AsyncClient() as client:
-            response = await client.get(collector_url, timeout=30.0)
+            response = await client.get(collector_url, timeout=30.0, headers=headers)
 
         if response.status_code != 200:
             logger.error(f"Collector returned {response.status_code} for meeting {meeting_id}")
