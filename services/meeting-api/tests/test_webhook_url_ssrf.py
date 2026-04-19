@@ -51,9 +51,12 @@ SSRF_SAMPLES = [
 
 
 PERMITTED_SAMPLES = [
+    # All three IANA-reserved example.* base domains resolve; specific
+    # subdomains like `hooks.example.org` intentionally don't, so stick to
+    # the bases (or a path under them) for these positive-case tests.
     "https://example.com/webhook",
-    "https://hooks.example.org/vexa",
-    "http://public.example.net/endpoint",
+    "https://example.org/vexa",
+    "http://example.net/endpoint",
 ]
 
 
