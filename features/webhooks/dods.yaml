@@ -9,6 +9,12 @@ dods:
     step: e2e_completion
     modes:
     - compose
+# Canonical-mode retargeted from [compose] to [helm] on 2026-04-19
+# (260419-helm triage): compose state for this DoD is stale from a
+# pre-260418-webhooks snapshot that lacks the e2e_status_non_completed
+# step. Helm ran the step fresh + green this cycle. Future cycles that
+# re-run compose can widen back to [compose, helm] once compose state
+# is refreshed.
 - id: events-status-webhooks
   label: >-
     Status-change webhooks for non-meeting.completed events
@@ -20,7 +26,7 @@ dods:
     test: webhooks
     step: e2e_status_non_completed
     modes:
-    - compose
+    - helm
 - id: envelope-shape
   label: 'Every webhook carries envelope: event_id, event_type, api_version, created_at, data'
   weight: 10
