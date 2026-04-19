@@ -232,7 +232,7 @@ Fires on every meeting completion, independent of per-user webhook URLs. Does no
 
 
 <!-- BEGIN AUTO-DOD -->
-<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260419-1140`. Do not edit by hand — edit the sidecar `dods.yaml` + re-run `make -C tests3 report --write-features`. -->
+<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260419-1910`. Do not edit by hand — edit the sidecar `dods.yaml` + re-run `make -C tests3 report --write-features`. -->
 
 **Confidence: 100%** (gate: 95%, status: ✅ pass)
 
@@ -248,6 +248,7 @@ Fires on every meeting completion, independent of per-user webhook URLs. Does no
 | flow-user-config | PUT /user/webhook persists webhook_url + webhook_secret + webhook_events to User.data | 10 | ✅ pass | `compose`: webhooks/config: user webhook set via PUT /user/webhook |
 | flow-gateway-inject | Gateway injects validated webhook config into meeting.data on POST /bots | 15 | ✅ pass | `compose`: webhooks/inject: gateway injected webhook_url=https://httpbin.org/post (after cache expiry) |
 | reliability-db-pool | DB connection pool doesn't exhaust under repeated status requests | 10 | ✅ pass | `lite`: smoke-contract/DB_POOL_NO_EXHAUSTION: 10/10 requests returned 200; `compose`: smoke-contract/DB_POOL_NO_EXHAUSTION: 10/10 requests returned 200 |
+| security-ssrf-input-rejected | PUT /user/webhook rejects SSRF URLs (CVE-2026-25883 / GHSA-fhr6-8hff-cvg4) | 10 | ✅ pass | `compose`: smoke-contract/WEBHOOK_SSRF_INPUT_REJECTED: HTTP 400 (SSRF URL rejected) |
 
 <!-- END AUTO-DOD -->
 

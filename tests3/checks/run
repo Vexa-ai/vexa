@@ -117,6 +117,114 @@ def http_check(url, expect_code=200, headers=None):
         return 0, str(e)
 
 
+# ─── Static method helpers (260419-oss-security) ─────────────────
+
+def _check_h11_pinned_everywhere():
+    """Every requirements*.txt with httpx or uvicorn must also pin h11>=0.16.0."""
+    import glob
+    missing = []
+    for req in glob.glob(os.path.join(ROOT, "**/requirements*.txt"), recursive=True):
+        if "/node_modules/" in req or "/.venv/" in req or "/.git/" in req:
+            continue
+        txt = open(req).read()
+        if not re.search(r"^(httpx|uvicorn)\b", txt, re.M):
+            continue
+        # Accept any explicit pin of h11 at 0.16.0 or above (e.g. h11>=0.16.0).
+        if not re.search(r"^h11[><=!]+\s*0\.(1[6-9]|[2-9]\d)", txt, re.M):
+            missing.append(os.path.relpath(req, ROOT))
+    if missing:
+        return False, f"missing h11>=0.16.0 pin in: {', '.join(missing)}"
+    return True, ""
+
+
+def _check_docs_gate_everywhere():
+    """Every services/**/main.py FastAPI app must env-gate docs_url/redoc_url/openapi_url on VEXA_ENV."""
+    import glob
+    missing = []
+    for main_py in glob.glob(os.path.join(ROOT, "services", "**", "main.py"), recursive=True):
+        if "__pycache__" in main_py:
+            continue
+        txt = open(main_py).read()
+        if "FastAPI(" not in txt:
+            continue
+        if "VEXA_ENV" not in txt:
+            missing.append(os.path.relpath(main_py, ROOT))
+            continue
+        for field in ("docs_url", "redoc_url", "openapi_url"):
+            if not re.search(rf"{field}\s*=.*(_PUBLIC_DOCS|public_docs|VEXA_ENV)", txt):
+                missing.append(f"{os.path.relpath(main_py, ROOT)}:{field}")
+    if missing:
+        return False, f"missing VEXA_ENV-gated docs in: {', '.join(missing)}"
+    return True, ""
+
+
+def _check_vexa_bot_npm_audit():
+    """services/vexa-bot + services/vexa-bot/core — assert known-vulnerable transitive
+    deps (currently: basic-ftp < 5.2.3, the three CRLF/DoS HIGHs from dependabot)
+    are patched by parsing package-lock.json directly.
+
+    Parsing the lockfile (instead of shelling out to `npm audit`) is intentional:
+    the validate VMs don't have npm installed. A lockfile-level check gives us
+    deterministic evidence with the one dependency the tests3 VMs always have
+    — Python. Adding a new advisory here is a single-line addition below.
+    """
+    # CVE minimum-safe-version table. Add entries as new HIGH / CRITICAL
+    # advisories surface for transitive deps shipped in these workspaces.
+    #
+    #   pkg_name          : (min_safe_version, gh_advisory_ids)
+    REQUIRED = {
+        "basic-ftp": ("5.2.3", [
+            "GHSA-rp42-5vxx-qpwr",
+            "GHSA-6v7q-wjvx-w8wg",
+            "GHSA-chqc-8p9q-pq6q",
+        ]),
+    }
+
+    def _ver_tuple(v: str):
+        out = []
+        for part in re.split(r"[^\d]+", v or ""):
+            if part.isdigit():
+                out.append(int(part))
+        return tuple(out) or (0,)
+
+    summary = []
+    bad = False
+    for pkg_dir in ("services/vexa-bot", "services/vexa-bot/core"):
+        lock_path = os.path.join(ROOT, pkg_dir, "package-lock.json")
+        if not os.path.isfile(lock_path):
+            summary.append(f"{pkg_dir}[no-lockfile]")
+            continue
+        try:
+            with open(lock_path) as f:
+                lock = json.load(f)
+        except Exception as e:
+            bad = True
+            summary.append(f"{pkg_dir}[parse-error: {e}]")
+            continue
+
+        packages = lock.get("packages") or {}
+        for req_name, (min_ver, _) in REQUIRED.items():
+            installed = None
+            for key, entry in packages.items():
+                # npm v7+ lockfile: packages keys look like "node_modules/basic-ftp"
+                if key.endswith(f"/{req_name}") or key == f"node_modules/{req_name}":
+                    installed = entry.get("version")
+                    break
+            if installed is None:
+                # Package not in tree — nothing to check (no exposure).
+                summary.append(f"{pkg_dir}[{req_name}:absent]")
+                continue
+            if _ver_tuple(installed) < _ver_tuple(min_ver):
+                bad = True
+                summary.append(f"{pkg_dir}[{req_name}={installed} < {min_ver}]")
+            else:
+                summary.append(f"{pkg_dir}[{req_name}={installed}]")
+
+    if bad:
+        return False, "vulnerable version(s): " + " ".join(summary)
+    return True, " ".join(summary)
+
+
 # ─── Tier runners ────────────────────────────────────────────────
 
 def check_static(lock):
@@ -131,6 +239,15 @@ def check_static(lock):
                 return True, f"skipped on {branch}"
         except Exception:
             pass
+
+    # Special: method-driven static checks that don't have a single file to grep.
+    method = lock.get("method", "")
+    if method == "H11_PIN_CHECK":
+        return _check_h11_pinned_everywhere()
+    if method == "DOCS_GATE_CHECK":
+        return _check_docs_gate_everywhere()
+    if method == "VEXA_BOT_NPM_AUDIT":
+        return _check_vexa_bot_npm_audit()
 
     # Special: helm chart validation (no file to grep, runs CLI commands)
     url = lock.get("url", "")
@@ -668,6 +785,10 @@ def check_contract(lock):
         return check_segment_pipeline(gw, token, admin_token)
     if method == "CORS_PREFLIGHT":
         return check_cors_preflight(gw)
+    if method == "INTERNAL_TRANSCRIPT_AUTH_CHECK":
+        return _check_internal_transcript_auth()
+    if method == "WEBHOOK_SSRF_CHECK":
+        return _check_webhook_ssrf_rejection(gw, token)
 
     # Contract-tier specials — URL-valued methods that aren't HTTP URLs.
     raw_url = lock["url"]
@@ -1061,6 +1182,60 @@ def check_transcription_token():
         return False, f"HTTP {code}"
     except Exception as e:
         return False, str(e)
+
+
+def _check_internal_transcript_auth():
+    """meeting-api /internal/transcripts/{id} must reject unauthenticated callers.
+    CVE-2026-25058 / GHSA-w73r-2449-qwgh regression guard.
+
+    Calls the endpoint from INSIDE the api-gateway container so we hit the
+    internal meeting-api bind directly (not via the public gateway proxy).
+    Uses python3 (available in every Vexa Python image) rather than curl
+    (not installed in api-gateway).
+    """
+    url = "http://meeting-api:8080/internal/transcripts/1"
+    probe = (
+        "import urllib.request, urllib.error, sys\n"
+        f"req = urllib.request.Request({url!r})\n"
+        "try:\n"
+        "    urllib.request.urlopen(req, timeout=5)\n"
+        "    print('200')\n"
+        "except urllib.error.HTTPError as e:\n"
+        "    print(e.code)\n"
+        "except Exception as e:\n"
+        "    print(f'err:{e}')\n"
+    )
+    code, out = svc_exec("api-gateway", ["python3", "-c", probe])
+    if code != 0:
+        return False, f"svc_exec api-gateway failed: {out}"
+    status = (out or "").strip().splitlines()[-1] if out else ""
+    if status in ("401", "403", "503"):
+        return True, f"HTTP {status} (auth required)"
+    return False, f"HTTP {status} — unauthenticated access not blocked"
+
+
+def _check_webhook_ssrf_rejection(gw, token):
+    """PUT /user/webhook must reject SSRF URLs.
+    CVE-2026-25883 / GHSA-fhr6-8hff-cvg4 regression guard.
+    """
+    if not token:
+        return False, "no api_token"
+    ssrf_url = "http://redis:6379/"
+    cmd = [
+        "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+        "-X", "PUT", f"{gw}/user/webhook",
+        "-H", f"X-API-Key: {token}",
+        "-H", "Content-Type: application/json",
+        "-d", json.dumps({"webhook_url": ssrf_url}),
+    ]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    except Exception as e:
+        return False, str(e)
+    status = (r.stdout or "").strip()
+    if status in ("400", "422"):
+        return True, f"HTTP {status} (SSRF URL rejected)"
+    return False, f"HTTP {status} — SSRF URL was accepted"
 
 
 def check_cors_preflight(gw):
