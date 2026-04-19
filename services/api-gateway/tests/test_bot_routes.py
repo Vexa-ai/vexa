@@ -10,6 +10,21 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from main import app, forward_request
 
 
+@pytest.fixture(autouse=True)
+def _patch_resolve_token():
+    """Auto-patch _resolve_token so proxy tests don't 401.
+
+    forward_request calls _resolve_token → admin-api's /internal/validate
+    to inject x-user-* headers. With no admin-api reachable in unit tests
+    and no explicit mock, the fallback returns None and forward_request
+    rejects the request 401. These tests only exercise proxy/header
+    behavior, so stub _resolve_token to return a generic valid user.
+    """
+    user = {"user_id": 1, "scopes": ["bot", "tx", "browser"], "max_concurrent": 1}
+    with patch("main._resolve_token", AsyncMock(return_value=user)):
+        yield
+
+
 @pytest.fixture
 def mock_response():
     """Create a mock httpx.Response."""

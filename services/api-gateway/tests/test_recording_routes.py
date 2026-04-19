@@ -5,8 +5,18 @@ Verifies that /recordings/* routes correctly proxy to MEETING_API_URL.
 import pytest
 import httpx
 from httpx import ASGITransport
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from main import app
+
+
+@pytest.fixture(autouse=True)
+def _patch_resolve_token():
+    """Auto-patch _resolve_token so proxy tests don't 401.
+    See test_bot_routes.py::_patch_resolve_token for rationale.
+    """
+    user = {"user_id": 1, "scopes": ["bot", "tx", "browser"], "max_concurrent": 1}
+    with patch("main._resolve_token", AsyncMock(return_value=user)):
+        yield
 
 
 @pytest.fixture
