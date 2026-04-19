@@ -1,0 +1,18 @@
+# Human approval — 260419-helm
+#
+# Part A — code review: read releases/260419-helm/code-review.md. Approved
+#   by user after reviewing the 5 commits (14fab9d, 5747173, 46fa31d,
+#   3a39218, f00b0b8) and their per-round risk notes.
+#
+# Part B — bounded eyeroll: user validated end-to-end against the running
+#   LKE cluster (172.238.170.161) 2026-04-19:
+#   (1) bot joins real Google Meet ✓
+#   (2) transcript arrives ✓
+#   (3) webhook deliveries arrive at webhook.site ✓
+#   (4) browser session renders ✓
+
+release_id: 260419-helm
+approved_at: 2026-04-19T11:45:00Z
+approver: dmitry@vexa.ai
+code_review_approved: true   # Part A
+eyeroll_approved: true       # Part B

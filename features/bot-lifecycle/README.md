@@ -243,23 +243,23 @@ Status transitions are protected by `SELECT FOR UPDATE` (row-level lock) to prev
 
 
 <!-- BEGIN AUTO-DOD -->
-<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260419-0052`. Do not edit by hand — edit the sidecar `dods.yaml` + re-run `make -C tests3 report --write-features`. -->
+<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260419-1140`. Do not edit by hand — edit the sidecar `dods.yaml` + re-run `make -C tests3 report --write-features`. -->
 
-**Confidence: 75%** (gate: 90%, status: ❌ below gate)
+**Confidence: 90%** (gate: 90%, status: ✅ pass)
 
 | # | Behavior | Weight | Status | Evidence (modes) |
 |---|----------|-------:|:------:|------------------|
-| create-ok | POST /bots spawns a bot container and returns a bot id | 15 | ✅ pass | `compose`: containers/create: bot 1 created |
-| create-alive | Bot process is running 10s after creation (not crash-looping) | 15 | ✅ pass | `compose`: containers/alive: bot process running after 10s |
-| bots-status-not-422 | GET /bots/status never returns 422 (schema stable under concurrent writes) | 5 | ⬜ missing | `lite`: smoke-contract/BOTS_STATUS_NOT_422: GET /bots/status returns 200 — no route collision with /bots/{meeting_id}; `compose`: smoke-contract/BOTS_STATUS_NOT_422: GET /bots/status returns 200 — no route collision with /bots/{meeting_id}; `helm`: check BOTS_STATUS_NOT_422 not found in any smoke… |
-| removal | Container fully removed after DELETE /bots/... | 10 | ✅ pass | `compose`: containers/removal: container fully removed after stop |
-| status-completed | Meeting.status=completed after stop (not failed/stuck) | 10 | ✅ pass | `compose`: containers/status_completed: meeting.status=completed after stop |
-| graceful-leave | Bot leaves the meeting gracefully on stop (no force-kill by default) | 5 | ⬜ missing | `lite`: smoke-static/GRACEFUL_LEAVE: self_initiated_leave during stopping treated as completed, not failed; `compose`: smoke-static/GRACEFUL_LEAVE: self_initiated_leave during stopping treated as completed, not failed; `helm`: check GRACEFUL_LEAVE not found in any smoke-* report |
-| route-collision | No Starlette route collisions — /bots/{id} and /bots/{platform}/{native_id} do not clash | 5 | ⬜ missing | `lite`: smoke-static/ROUTE_COLLISION: bot detail route is /bots/id/{id}, not /bots/{id} which collides with /bots/status; `compose`: smoke-static/ROUTE_COLLISION: bot detail route is /bots/id/{id}, not /bots/{id} which collides with /bots/status; `helm`: check ROUTE_COLLISION not found in any smo… |
-| timeout-stop | Bot auto-stops after automatic_leave timeout (no_one_joined_timeout) | 10 | ⚠️ skip | `compose`: containers/timeout_stop: bot still running after 60s (timeout may count from lobby) |
-| concurrency-slot | Concurrent-bot slot released immediately on stop — next create succeeds | 10 | ✅ pass | `compose`: containers/concurrency_slot: slot released, B created (HTTP 201) |
-| no-orphans | No zombie/exited bot containers left after a lifecycle run | 10 | ✅ pass | `compose`: containers/no_orphans: no exited/zombie containers |
-| status-webhooks-fire | Status-change webhooks fire for every transition when enabled in webhook_events | 5 | ✅ pass | `compose`: webhooks/e2e_status: 4 status-change webhook(s) fired: meeting.status_change |
+| create-ok | POST /bots spawns a bot container and returns a bot id | 15 | ✅ pass | `helm`: containers/create: bot 8 created |
+| create-alive | Bot process is running 10s after creation (not crash-looping) | 15 | ✅ pass | `helm`: containers/alive: bot process running after 10s |
+| bots-status-not-422 | GET /bots/status never returns 422 (schema stable under concurrent writes) | 5 | ✅ pass | `lite`: smoke-contract/BOTS_STATUS_NOT_422: GET /bots/status returns 200 — no route collision with /bots/{meeting_id}; `compose`: smoke-contract/BOTS_STATUS_NOT_422: GET /bots/status returns 200 — no route collision with /bots/{meeting_id}; `helm`: smoke-contract/BOTS_STATUS_NOT_422: GET /bots/st… |
+| removal | Container fully removed after DELETE /bots/... | 10 | ✅ pass | `helm`: containers/removal: container fully removed after stop |
+| status-completed | Meeting.status=completed after stop (not failed/stuck) | 10 | ✅ pass | `helm`: containers/status_completed: meeting.status=completed after stop (waited 1x5s) |
+| graceful-leave | Bot leaves the meeting gracefully on stop (no force-kill by default) | 5 | ✅ pass | `lite`: smoke-static/GRACEFUL_LEAVE: self_initiated_leave during stopping treated as completed, not failed; `compose`: smoke-static/GRACEFUL_LEAVE: self_initiated_leave during stopping treated as completed, not failed; `helm`: smoke-static/GRACEFUL_LEAVE: self_initiated_leave during stopping trea… |
+| route-collision | No Starlette route collisions — /bots/{id} and /bots/{platform}/{native_id} do not clash | 5 | ✅ pass | `lite`: smoke-static/ROUTE_COLLISION: bot detail route is /bots/id/{id}, not /bots/{id} which collides with /bots/status; `compose`: smoke-static/ROUTE_COLLISION: bot detail route is /bots/id/{id}, not /bots/{id} which collides with /bots/status; `helm`: smoke-static/ROUTE_COLLISION: bot detail r… |
+| timeout-stop | Bot auto-stops after automatic_leave timeout (no_one_joined_timeout) | 10 | ⚠️ skip | `helm`: containers/timeout_stop: bot still running after 60s (timeout may count from lobby) |
+| concurrency-slot | Concurrent-bot slot released immediately on stop — next create succeeds | 10 | ✅ pass | `helm`: containers/concurrency_slot: slot released, B created (HTTP 201) |
+| no-orphans | No zombie/exited bot containers left after a lifecycle run | 10 | ✅ pass | `helm`: containers/no_orphans: no exited/zombie containers |
+| status-webhooks-fire | Status-change webhooks fire for every transition when enabled in webhook_events | 5 | ✅ pass | `helm`: webhooks/e2e_status: 1 status-change webhook(s) fired: meeting.status_change |
 
 <!-- END AUTO-DOD -->
 
