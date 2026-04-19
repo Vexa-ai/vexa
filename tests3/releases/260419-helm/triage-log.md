@@ -125,3 +125,39 @@ After fixes: re-run `release-validate` **against the already-provisioned cluster
 ## Designate next-fix target
 fix this first: both
 approver: dmitry@vexa.ai (user said "go. DO not stop, you should continue untill ready for human validation" 2026-04-19)
+
+---
+
+## Round 2 — human-found gap during eyeroll (2026-04-19T09:30Z)
+
+### `infrastructure.chart-resources-tuned` — **GAP (under-tightened check)** — weight 10
+
+- **Finding** (human via `kubectl get pods -o json | jq`):
+  3 of 11 running containers lack `resources.limits.cpu`:
+  - `vexa-vexa-minio-0`           — limits has memory only
+  - `vexa-vexa-runtime-api-*`     — limits has memory only
+  - `vexa-vexa-tts-service-*`     — limits has memory only
+- **Why the automated gate missed it:**
+  The registered `HELM_VALUES_RESOURCES_SET` check is a `type: grep`
+  that looks for a single occurrence of the pattern `resources:\n    requests:\n      cpu:`
+  in `values.yaml`. That pattern appears for `apiGateway` (the first
+  service block) and satisfies the lock — but the check never iterates
+  across every service block. The DoD label *"every enabled service
+  declares resources.requests + resources.limits for both cpu and memory"*
+  is stricter than the underlying grep.
+- **Classification: GAP — check weaker than DoD label.**
+  - Not a regression: all 3 services pre-existed in OSS `values.yaml`
+    without `limits.cpu` before this cycle (i.e., commit `14fab9d`
+    didn't remove cpu limits, it just didn't add them).
+  - Proprietary wrapper (`/home/dima/dev/vexa-platform/deploy/helm/charts/vexa-platform/values-{staging,production}.yaml`) supplies cpu limits for `runtimeApi` + `ttsService` but leaves `minio` at OSS default, implying the OSS default itself should be cpu-limit-complete.
+- **Proposed fix (stage `develop`):**
+  1. **values.yaml** — add `limits.cpu` on the 3 services:
+     - `runtimeApi.resources.limits.cpu: 200m`  (from platform staging)
+     - `ttsService.resources.limits.cpu: 100m`  (from platform staging)
+     - `minio.resources.limits.cpu: 500m`       (generic storage-service shape; platform didn't override)
+  2. Also raise the matching `requests.cpu` on runtimeApi (100m→20m) and ttsService (100m→10m) to match platform's load-tested shape — keeps requests lean, lets limits absorb spikes.
+  3. **Deferred, not in this fix:** tighten `HELM_VALUES_RESOURCES_SET` from grep-with-single-pattern to a script that parses values.yaml and verifies every enabled service block has all 4 keys. That's a new scope-issue for the next cycle — noted in groom queue.
+
+### Designate next-fix target (round 2)
+fix this first: values-only (no check-tightening this cycle)
+approver: dmitry@vexa.ai (user: "Fix now in this cycle" + "use values from the platform", 2026-04-19)

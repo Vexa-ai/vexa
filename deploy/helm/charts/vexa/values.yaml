@@ -139,12 +139,15 @@ runtimeApi:
   # profile: meeting". Keep this set for any real deployment.
   profilesConfigMap: "vexa-runtime-profiles"
   logLevel: "INFO"
+  # Load-tested shape (from proprietary wrapper staging values): runtime-api
+  # is a thin dispatcher — lean requests, modest cpu limit for spikes.
   resources:
-    limits:
-      memory: 512Mi
     requests:
-      cpu: 100m
+      cpu: 20m
       memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 512Mi
   extraEnv: []
 
 ttsService:
@@ -161,12 +164,15 @@ ttsService:
   persistence:
     size: 5Gi
     storageClassName: ""
+  # Load-tested shape (from proprietary wrapper staging values): TTS is
+  # bursty — lean cpu request, bigger memory for voice cache.
   resources:
-    limits:
-      memory: 1Gi
     requests:
-      cpu: 100m
+      cpu: 10m
       memory: 256Mi
+    limits:
+      cpu: 100m
+      memory: 512Mi
   extraEnv: []
 
 mcp:
@@ -292,12 +298,17 @@ minio:
   service:
     type: ClusterIP
     port: 9000
+  # Proprietary wrapper values leave minio at the OSS default (no override),
+  # so the OSS default itself must be cpu-limit-complete. 500m matches the
+  # api-gateway / admin-api shape — storage services are typically IO-bound,
+  # cpu is a burst-absorb knob, not a sustained workload.
   resources:
-    limits:
-      memory: 1Gi
     requests:
       cpu: 100m
       memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
 
 # ---------- Ingress (optional; exposes api-gateway by default) ----------
 ingress:
