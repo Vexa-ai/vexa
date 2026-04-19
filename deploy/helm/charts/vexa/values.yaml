@@ -16,7 +16,14 @@ global:
   tolerations: []
   affinity: {}
   podSecurityContext: {}
-  securityContext: {}
+  # Hardened defaults (load-tested): block privilege escalation and drop
+  # all Linux capabilities. Images run as non-root via their Dockerfile
+  # USER directives. Override per-component if a specific workload needs
+  # a capability back (unusual — flag in review).
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
 
 # Shared secrets (recommended: override via --set-file or external secret tooling)
 secrets:
@@ -103,7 +110,16 @@ meetingApi:
     limits:
       cpu: 1000m
       memory: 1Gi
-  extraEnv: []
+  # Connection-pool sizing for the meeting-api → Postgres path. Defaults
+  # tuned against a single-node LKE smoke run; raise for heavier traffic.
+  # Names match the asyncpg pool knobs read by meeting_api/database.py.
+  extraEnv:
+    - name: DB_POOL_SIZE
+      value: "20"
+    - name: DB_MAX_OVERFLOW
+      value: "20"
+    - name: DB_POOL_TIMEOUT
+      value: "10"
 
 runtimeApi:
   enabled: true
@@ -248,6 +264,12 @@ redis:
     enabled: true
     size: 2Gi
     storageClassName: ""
+  # Memory cap + eviction policy. Without these, Redis grows unbounded
+  # until the pod OOMs — which kills WebSocket pub/sub, transcription
+  # segments, and session state simultaneously. Default policy drops
+  # the least-recently-used keys (safe for all Vexa-side usages).
+  maxmemory: "1gb"
+  maxmemoryPolicy: "allkeys-lru"
   resources:
     requests:
       cpu: 100m
@@ -339,3 +361,31 @@ runtimeProfiles: |
         "6080/tcp": {}
         "9222/tcp": {}
         "9223/tcp": {}
+
+# ──────────────────────────────────────────────────────────────────────
+# PodDisruptionBudgets (optional, off by default)
+#
+# Enables minAvailable guarantees on services that matter for availability
+# during node drain (LKE maintenance, auto-upgrade, manual `kubectl drain`).
+# Off by default so `helm install` on a single-node dev cluster doesn't
+# block drains. Flip to `enabled: true` per-service on multi-node clusters.
+# ──────────────────────────────────────────────────────────────────────
+podDisruptionBudgets:
+  apiGateway:
+    enabled: false
+    minAvailable: 1
+  adminApi:
+    enabled: false
+    minAvailable: 1
+  meetingApi:
+    enabled: false
+    minAvailable: 1
+  runtimeApi:
+    enabled: false
+    minAvailable: 1
+  dashboard:
+    enabled: false
+    minAvailable: 1
+  redis:
+    enabled: false
+    minAvailable: 1

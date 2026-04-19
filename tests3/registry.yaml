@@ -404,6 +404,74 @@ VM_LITE_USES_MAKE:
   - helm
   state: stateless
   max_duration_sec: 5
+HELM_VALUES_RESOURCES_SET:
+  proves: "values.yaml declares explicit resources.requests.cpu on service blocks \u2014 no service ships without a CPU request"
+  symptom: "services deploy without resource requests \u2014 the scheduler over-packs the node, pods get OOMKilled, throughput degrades unpredictably under load"
+  found: '2026-04-19'
+  type: grep
+  file: deploy/helm/charts/vexa/values.yaml
+  must_match: |-
+    resources:
+        requests:
+          cpu:
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+HELM_GLOBAL_SECURITY_HARDENED:
+  proves: "global.securityContext blocks privilege escalation and drops all Linux capabilities \u2014 pods run with minimum required privileges"
+  symptom: "containers start with default Linux capabilities (NET_RAW, SETUID, etc.) \u2014 unnecessary attack surface; a compromised pod can do more than it needs to"
+  found: '2026-04-19'
+  type: grep
+  file: deploy/helm/charts/vexa/values.yaml
+  must_match: 'allowPrivilegeEscalation: false'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+HELM_REDIS_MAXMEMORY_SET:
+  proves: "redis deployment is capped at a specific maxmemory with an eviction policy \u2014 no unbounded growth"
+  symptom: "redis grows unbounded until its pod OOMs \u2014 which kills WebSocket pub/sub, transcription segments, and session state simultaneously; whole bot fleet loses live transcripts"
+  found: '2026-04-19'
+  type: grep
+  file: deploy/helm/charts/vexa/values.yaml
+  must_match: 'maxmemory: "1gb"'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+HELM_MEETING_API_DB_POOL_TUNED:
+  proves: "meeting-api values set an explicit DB_POOL_SIZE \u2014 pool sizing is a conscious choice, not an asyncpg default"
+  symptom: "default asyncpg pool (5 connections) exhausts under status-request bursts \u2014 pool_timeout, 500s, meeting.status requests start failing"
+  found: '2026-04-19'
+  type: grep
+  file: deploy/helm/charts/vexa/values.yaml
+  must_match: DB_POOL_SIZE
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+HELM_PDB_TEMPLATE_EXISTS:
+  proves: "the chart carries a PodDisruptionBudget template (enablement is a values toggle) \u2014 availability contracts are first-class"
+  symptom: "node drain during LKE maintenance evicts every replica of a service simultaneously \u2192 brief full outage; no operator-visible way to signal 'keep at least N running'"
+  found: '2026-04-19'
+  type: grep
+  file: deploy/helm/charts/vexa/templates/pdb.yaml
+  must_match: 'kind: PodDisruptionBudget'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
 ADMIN_API_UP:
   proves: "admin-api responds with valid token \u2014 user management and login work"
   symptom: Admin API not responding
