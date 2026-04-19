@@ -28,6 +28,7 @@ services:
       - MODEL_SIZE=${MODEL_SIZE:-large-v3-turbo}
       - DEVICE=cuda
       - COMPUTE_TYPE=${COMPUTE_TYPE:-int8}
+      - VAD_MIN_SILENCE_DURATION_MS=80
     volumes:
       - ./models:/app/models
     deploy:
@@ -52,6 +53,7 @@ services:
       - MODEL_SIZE=${MODEL_SIZE:-large-v3-turbo}
       - DEVICE=cuda
       - COMPUTE_TYPE=${COMPUTE_TYPE:-int8}
+      - VAD_MIN_SILENCE_DURATION_MS=80
     volumes:
       - ./models:/app/models
     deploy:
