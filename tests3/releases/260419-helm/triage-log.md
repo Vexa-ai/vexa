@@ -161,3 +161,39 @@ approver: dmitry@vexa.ai (user said "go. DO not stop, you should continue untill
 ### Designate next-fix target (round 2)
 fix this first: values-only (no check-tightening this cycle)
 approver: dmitry@vexa.ai (user: "Fix now in this cycle" + "use values from the platform", 2026-04-19)
+
+---
+
+## Round 3 — human-found gap: bots stuck in `requested` on helm (2026-04-19T10:51Z)
+
+### `bot-lifecycle.create-ok` / `create-alive` / `status-completed` (etc.) — **GAP (no helm coverage)** + infra sizing
+
+- **Human finding** (eyeroll): POST /bots on helm dashboard → meeting.status stays at `requested`, never progresses.
+- **Cluster state** (`kubectl get pods`):
+  - 3 × `meeting-2-*` bot pods in `Pending` — FailedScheduling.
+  - Event: *"0/2 nodes are available: 1 Insufficient memory, 2 Insufficient cpu."*
+- **Root cause — infra sizing:**
+  - LKE test cluster: 2 × `g6-standard-2` = 2 cpu / ~4 GiB per node (`tests3/lib/lke.sh:10` defaults).
+  - Bot profile (`runtimeProfiles.meeting` in `values.yaml`): `cpu_request: 1000m`, `memory_request: 1100Mi`.
+  - Vexa services reserve 1.37 cpu / 1.25 cpu on the two nodes, leaving 630m / 750m free. Neither node can satisfy a 1-core reservation → indefinite `Pending`.
+- **Root cause — matrix-design gap:**
+  - Every DoD in `features/bot-lifecycle/dods.yaml` that proves a bot actually runs (`create-ok`, `create-alive`, `status-completed`, `removal`, `concurrency-slot`, `no-orphans`) binds `evidence.modes: [compose]`. **No DoD asserts bots run on helm.**
+  - `scope.yaml` `helm-fresh-evidence` proves[] bound to 9 service-health `smoke-*` checks only. No end-to-end bot step was included.
+  - The `containers` test DID fail on helm during validate (`FAIL status_completed: status=stopping` surfaced in the monitor) but the gate couldn't fail on it — no helm-mode DoD binds to that step. Silent ignore.
+- **So validate was structurally incapable of catching "bots don't run on helm."** This is on the plan stage — `helm-fresh-evidence` should have included at least one end-to-end bot binding. It didn't.
+
+**Classification: GAP (two-part):**
+1. Matrix-design gap: helm has no bot-lifecycle DoD coverage.
+2. Infra gap: the test-cluster node size is smaller than the workload's resource requests.
+
+**Proposed fix (stage `develop`, both parts together):**
+
+- **A. Upsize LKE test cluster** — `tests3/lib/lke.sh` `LKE_NODE_TYPE`: `g6-standard-2` → `g6-standard-4` (4 cpu / 8 GiB per node). Gives ~3 free cores per node after services — accommodates at least 2 concurrent bots per node (= 4 cluster-wide on 2 nodes), matching the `create-ok` / `concurrency-slot` coverage needs.
+- **B. Widen bot-lifecycle DoDs to include `helm`** — the 7 DoDs that currently bind `[compose]` for bot-runtime behavior gain helm coverage: `create-ok`, `create-alive`, `removal`, `status-completed`, `timeout-stop`, `concurrency-slot`, `no-orphans`. Status-webhooks DoD already runs on helm via webhooks.sh binding.
+- **Also:** add `{test: containers, step: create_ok, modes: [helm]}` or similar to scope.yaml `helm-fresh-evidence` so this cycle's scope explicitly requires bot-run proof on helm going forward.
+
+After A+B: re-provision (bigger nodes), re-install helm, re-run validate. Gate can now go red on this class of regression; with bigger nodes it should actually go green.
+
+### Designate next-fix target (round 3)
+fix this first: A + B + scope widen
+approver: dmitry@vexa.ai (user: "yes. We need tests to actually test bots", 2026-04-19)

@@ -69,6 +69,43 @@ issues:
         do: "kubectl get pdb -A"
         expect: "PodDisruptionBudget objects are available (may be 0 if disabled by values; template presence is the DoD)."
 
+  - id: helm-e2e-bot-works
+    source: human
+    ref: "user eyeroll, 2026-04-19 — 'bot stuck in requested'"
+    problem: |
+      In the first validate pass, helm-fresh-evidence only proved that
+      control-plane services respond — the gate went green even though
+      POST /bots on helm produced pods that sat in Pending indefinitely
+      (test-cluster node size too small for the bot profile cpu_request).
+      Human eyeroll caught it; automation could not because no DoD
+      required end-to-end bot behavior on helm.
+    hypothesis: |
+      Widening bot-lifecycle DoDs to helm + upsizing the LKE test cluster
+      so the bot profile can actually schedule, forces the matrix to
+      exercise the bot flow on helm and fail on any future helm-bot
+      regression.
+    gap_analysis: |
+      No prior DoD required bots to actually run on helm. The containers
+      test step ran on helm during the first validate and DID fail
+      (status_completed: status=stopping) but the gate did not flip red
+      because no helm-mode DoD was bound to that step. Silent-pass path.
+    new_checks:
+      - "containers:create on helm (bot-lifecycle.create-ok)"
+      - "containers:alive on helm (bot-lifecycle.create-alive)"
+      - "containers:status_completed on helm (bot-lifecycle.status-completed)"
+      - "containers:no_orphans on helm (bot-lifecycle.no-orphans)"
+    fix_commits: []
+    proves:
+      - {test: containers, step: create,           modes: [helm]}
+      - {test: containers, step: alive,            modes: [helm]}
+      - {test: containers, step: status_completed, modes: [helm]}
+      - {test: containers, step: no_orphans,       modes: [helm]}
+    required_modes: [helm]
+    human_verify:
+      - mode: helm
+        do: "POST /bots with a real Google Meet URL via dashboard or gateway"
+        expect: "within 90s bot.status transitions from requested → joining → active; kubectl shows meeting-* pod Running (not Pending)"
+
   - id: helm-fresh-evidence
     source: internal
     ref: "groom 2026-04-19 Pack A; last helm evidence is reports/release-0.10.0-260417-1454.md (2 cycles stale)"
