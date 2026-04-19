@@ -24,7 +24,8 @@ alembic>=1.13
 redis[hiredis]>=5.0
 
 # HTTP Clients
-httpx>=0.27
+httpx>=0.28.1
+h11>=0.16.0                       # CVE-2025-43859 (httpx/uvicorn transitive)
 requests>=2.31
 requests-unixsocket>=0.3
 

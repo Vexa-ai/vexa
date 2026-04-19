@@ -415,7 +415,8 @@ if data:
           exit 1
         fi
         _curl "$TC/internal/transcripts/$MEETING_ID" \
-          -H "X-API-Key: $BOT_TOKEN" | python3 -c "
+          -H "X-API-Key: $BOT_TOKEN" \
+          -H "X-Internal-Secret: ${INTERNAL_API_SECRET:-}" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 segments = data if isinstance(data, list) else data.get('segments', data.get('transcriptions', []))
@@ -460,7 +461,8 @@ if bot:
           exit 1
         fi
         _curl "$TC/internal/transcripts/$MEETING_ID" \
-          -H "X-API-Key: $BOT_TOKEN" | python3 -c "
+          -H "X-API-Key: $BOT_TOKEN" \
+          -H "X-Internal-Secret: ${INTERNAL_API_SECRET:-}" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 segments = data if isinstance(data, list) else data.get('segments', data.get('transcriptions', []))

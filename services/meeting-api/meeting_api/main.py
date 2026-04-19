@@ -55,10 +55,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger("meeting_api")
 
+_VEXA_ENV = os.getenv("VEXA_ENV", "development")
+_PUBLIC_DOCS = _VEXA_ENV != "production"
 app = FastAPI(
     title="Meeting API",
     description="Meeting bot management — join/stop bots, voice agent, recordings, webhooks, transcription collection",
     version="0.1.0",
+    docs_url="/docs" if _PUBLIC_DOCS else None,
+    redoc_url="/redoc" if _PUBLIC_DOCS else None,
+    openapi_url="/openapi.json" if _PUBLIC_DOCS else None,
 )
 
 # CORS

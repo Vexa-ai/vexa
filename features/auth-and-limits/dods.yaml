@@ -1,6 +1,10 @@
-# Intentionally un-gated: legacy feature carries no machine-readable
-# DoDs yet. Populate `dods:` before this feature's next release or
-# its expected behavior changes.
 gate:
-  confidence_min: 0    # not enforced until dods: is populated
-dods: []   # intentionally un-gated, reason: DoDs not yet authored
+  confidence_min: 95
+dods:
+- id: internal-transcripts-require-auth
+  label: "meeting-api /internal/transcripts/{id} rejects unauthenticated callers (CVE-2026-25058 / GHSA-w73r-2449-qwgh)"
+  weight: 10
+  evidence:
+    check: INTERNAL_TRANSCRIPT_REQUIRES_AUTH
+    modes:
+    - compose

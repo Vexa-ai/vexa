@@ -43,7 +43,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger("agent_api")
 
-app = FastAPI(title="Agent Runtime", version="0.1.0")
+_VEXA_ENV = os.getenv("VEXA_ENV", "development")
+_PUBLIC_DOCS = _VEXA_ENV != "production"
+app = FastAPI(
+    title="Agent Runtime",
+    version="0.1.0",
+    docs_url="/docs" if _PUBLIC_DOCS else None,
+    redoc_url="/redoc" if _PUBLIC_DOCS else None,
+    openapi_url="/openapi.json" if _PUBLIC_DOCS else None,
+)
 
 app.add_middleware(
     CORSMiddleware,
