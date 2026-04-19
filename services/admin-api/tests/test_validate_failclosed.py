@@ -27,6 +27,12 @@ def _make_api_token(token_value, user_id=5):
     api_token = MagicMock()
     api_token.token = token_value
     api_token.user_id = user_id
+    # /internal/validate does `if api_token.expires_at is not None and
+    # api_token.expires_at < datetime.utcnow()`. A default MagicMock is not
+    # None and triggers TypeError on the comparison. Also sets scopes to
+    # the legacy-fallback-friendly empty list.
+    api_token.expires_at = None
+    api_token.scopes = []
     return api_token
 
 

@@ -29,11 +29,15 @@ def _make_user(user_id=5, email="test@example.com", max_concurrent_bots=3, data=
     return user
 
 
-def _make_api_token(token_value, user_id=5):
+def _make_api_token(token_value, user_id=5, scopes=None):
     api_token = MagicMock()
     api_token.token = token_value
     api_token.user_id = user_id
     api_token.expires_at = None
+    # /internal/validate reads scopes from the DB column (not token prefix).
+    # Default to []: legacy tokens hit the ["legacy"] fallback in main.py.
+    # Scoped tokens override explicitly per test.
+    api_token.scopes = [] if scopes is None else list(scopes)
     return api_token
 
 
@@ -54,7 +58,7 @@ async def test_validate_valid_scoped_token(mock_db):
     """Valid vxa_ prefixed token returns 200 with user_id and scopes."""
     token = "vxa_bot_abc123def456"
     user = _make_user()
-    api_token = _make_api_token(token)
+    api_token = _make_api_token(token, scopes=["bot"])
     mock_db.execute.return_value = _mock_db_result((api_token, user))
 
     async def override_get_db():

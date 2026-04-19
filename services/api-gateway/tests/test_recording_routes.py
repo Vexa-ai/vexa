@@ -4,6 +4,7 @@ Verifies that /recordings/* routes correctly proxy to MEETING_API_URL.
 """
 import pytest
 import httpx
+from httpx import ASGITransport
 from unittest.mock import AsyncMock, MagicMock
 from main import app
 
@@ -33,7 +34,7 @@ class TestListRecordings:
         mock_http_client.request = AsyncMock(return_value=mock_response(200, {"recordings": []}))
         app.state.http_client = mock_http_client
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as ac:
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/recordings", headers={"x-api-key": "k"})
 
         assert resp.status_code == 200
@@ -45,7 +46,7 @@ class TestListRecordings:
         mock_http_client.request = AsyncMock(return_value=mock_response(200, {"recordings": []}))
         app.state.http_client = mock_http_client
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as ac:
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/recordings?meeting_id=42&limit=10", headers={"x-api-key": "k"})
 
         assert resp.status_code == 200
@@ -61,7 +62,7 @@ class TestGetRecording:
         mock_http_client.request = AsyncMock(return_value=mock_response(200, {"id": 5}))
         app.state.http_client = mock_http_client
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as ac:
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/recordings/5", headers={"x-api-key": "k"})
 
         assert resp.status_code == 200
@@ -71,7 +72,7 @@ class TestGetRecording:
         mock_http_client.request = AsyncMock(return_value=mock_response(404, {"detail": "not found"}))
         app.state.http_client = mock_http_client
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as ac:
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/recordings/999", headers={"x-api-key": "k"})
 
         assert resp.status_code == 404
@@ -83,7 +84,7 @@ class TestDownloadMedia:
         mock_http_client.request = AsyncMock(return_value=mock_response(200, {"url": "https://s3/file"}))
         app.state.http_client = mock_http_client
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as ac:
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/recordings/5/media/3/download", headers={"x-api-key": "k"})
 
         assert resp.status_code == 200
@@ -94,7 +95,7 @@ class TestDownloadMedia:
         mock_http_client.request = AsyncMock(return_value=mock_response(200))
         app.state.http_client = mock_http_client
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as ac:
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/recordings/5/media/3/raw", headers={"x-api-key": "k"})
 
         assert resp.status_code == 200
@@ -108,7 +109,7 @@ class TestDeleteRecording:
         mock_http_client.request = AsyncMock(return_value=mock_response(200, {"deleted": True}))
         app.state.http_client = mock_http_client
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as ac:
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.delete("/recordings/5", headers={"x-api-key": "k"})
 
         assert resp.status_code == 200
@@ -123,7 +124,7 @@ class TestRecordingConfig:
         mock_http_client.request = AsyncMock(return_value=mock_response(200, {"enabled": True}))
         app.state.http_client = mock_http_client
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as ac:
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/recording-config", headers={"x-api-key": "k"})
 
         assert resp.status_code == 200
@@ -133,7 +134,7 @@ class TestRecordingConfig:
         mock_http_client.request = AsyncMock(return_value=mock_response(200, {}))
         app.state.http_client = mock_http_client
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as ac:
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.put("/recording-config",
                                 json={"enabled": False},
                                 headers={"x-api-key": "k"})
@@ -149,7 +150,7 @@ class TestRecordingBackendErrors:
         mock_http_client.request = AsyncMock(side_effect=httpx.ConnectError("down"))
         app.state.http_client = mock_http_client
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as ac:
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/recordings", headers={"x-api-key": "k"})
 
         assert resp.status_code == 503

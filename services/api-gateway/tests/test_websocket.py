@@ -150,8 +150,12 @@ class TestWSSubscribe:
             assert msg["type"] == "error"
             assert "no valid meeting objects" in msg.get("details", "")
 
+    @patch("main._resolve_token", AsyncMock(return_value=None))
     def test_subscribe_success(self):
         """Valid subscribe with mocked authorization → subscribed response."""
+        # _resolve_token patched to None so the WS handler skips user-header
+        # injection — the single auth_response mock below is not a valid
+        # /internal/validate payload and would KeyError if consumed there.
         auth_response = MagicMock()
         auth_response.status_code = 200
         auth_response.json.return_value = {
@@ -230,6 +234,7 @@ class TestWSUnsubscribe:
             assert msg["type"] == "error"
             assert msg["error"] == "invalid_unsubscribe_payload"
 
+    @patch("main._resolve_token", AsyncMock(return_value=None))
     def test_subscribe_then_unsubscribe(self):
         """Subscribe then unsubscribe → both succeed."""
         auth_response = MagicMock()
@@ -267,6 +272,7 @@ class TestWSUnsubscribe:
 # ---------------------------------------------------------------------------
 
 class TestWSMultipleSubscriptions:
+    @patch("main._resolve_token", AsyncMock(return_value=None))
     def test_subscribe_multiple_meetings(self):
         """Subscribe to two meetings at once → both confirmed."""
         auth_response = MagicMock()
@@ -295,6 +301,7 @@ class TestWSMultipleSubscriptions:
             platforms = {m["platform"] for m in msg["meetings"]}
             assert platforms == {"google_meet", "teams"}
 
+    @patch("main._resolve_token", AsyncMock(return_value=None))
     def test_duplicate_subscribe_is_idempotent(self):
         """Subscribing to the same meeting twice doesn't break anything."""
         auth_response = MagicMock()
