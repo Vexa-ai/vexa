@@ -172,14 +172,23 @@ jq '.packages["node_modules/basic-ftp"].version' services/vexa-bot/core/package-
 
 Before handing off to `ship`, human must confirm:
 
-- [ ] Dashboard loads on compose + lite — no visible regressions
-- [ ] Pack A curl from api-gateway container returns 401/403/503 (never 200)
-- [ ] Pack B curl with SSRF URL returns 400 (rejected)
-- [ ] Pack B curl with public URL returns 200 (not overblocking)
-- [ ] Pack C.1 `pip show h11` is ≥ 0.16.0 in all three containers
-- [ ] Pack C.2 `/docs` returns 200 currently (unset VEXA_ENV); optional: verify 404 when `VEXA_ENV=production`
-- [ ] Pack D bare `/b/{token}/cdp` returns 200 (no 307)
-- [ ] Pack E.1 basic-ftp version ≥ 5.3.0 in both lockfiles
+- [x] Dashboard loads on compose + lite — no visible regressions
+      (user 2026-04-19: "created gmeet and mstemas meetgs, transcription works,
+      webhooks arrive, recording available")
+- [x] Pack A curl from api-gateway container returns 401/403/503 (never 200)
+      (automated: INTERNAL_TRANSCRIPT_REQUIRES_AUTH green on compose)
+- [x] Pack B curl with SSRF URL returns 400 (rejected)
+      (automated: WEBHOOK_SSRF_INPUT_REJECTED green on compose)
+- [x] Pack B curl with public URL returns 200 (not overblocking)
+      (automated: webhooks e2e fired successfully with httpbin.org/post delivery)
+- [x] Pack C.1 `pip show h11` is ≥ 0.16.0 in all three containers
+      (automated: H11_PINNED_SAFE_EVERYWHERE green, both modes)
+- [x] Pack C.2 `/docs` returns 200 currently (unset VEXA_ENV); optional: verify 404 when `VEXA_ENV=production`
+      (automated: DOCS_ENV_GATED_EVERYWHERE green, both modes)
+- [x] Pack D bare `/b/{token}/cdp` returns 200 (no 307)
+      (automated: CDP_WS_SCHEME_PRESERVED + CDP_NO_SLASH_REDIRECT green)
+- [x] Pack E.1 basic-ftp version ≥ 5.3.0 in both lockfiles
+      (automated: VEXA_BOT_NO_HIGH_NPM_VULNS green; lockfile parse confirms 5.3.0)
 
 Once the boxes are checked, say the word and I'll:
 

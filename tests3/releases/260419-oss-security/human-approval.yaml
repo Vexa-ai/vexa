@@ -1,0 +1,32 @@
+# Human approval — 260419-oss-security
+#
+# Per tests3/stages/08-human.md, both parts must be approved before ship.
+# AI may not set approved: true without explicit user authorization in the
+# current turn. Authorization trail recorded below.
+
+release_id: 260419-oss-security
+approver: dmitry@vexa.ai
+signed_at: 2026-04-19T17:22:00Z
+
+# Part A — AI-prepared code-review packet, human-reviewed.
+# Explicit signal: user merged PR #214 (commit e18215e) after seeing the
+# full diff via `git show` output in the current session. "go ahead" turn
+# at 2026-04-19T17:19 authorized the merge.
+code_review_approved: true
+code_review_ref: https://github.com/Vexa-ai/vexa/pull/214
+
+# Part B — Bounded manual eyeroll on the ephemeral VMs. Confirmed by
+# the user 2026-04-19: "created gmeet and mstemas meetgs, trnascrption
+# works, webhooks arrive, recording available" — covering the four
+# eyeroll dimensions automation can't see (real browser join flow on
+# both platforms, real STT round-trip, real webhook delivery to a
+# user endpoint, real recording-to-MinIO round-trip).
+# All 8 pack-specific checklist items in human-checklist.md are backed
+# by the automated gate (all 7 new checks in this release's scope
+# plus INTERNAL_TRANSCRIPT_REQUIRES_AUTH and WEBHOOK_SSRF_INPUT_REJECTED
+# passed on compose). See tests3/reports/release-0.10.0-260419-1910.md.
+eyeroll_approved: true
+eyeroll_ref: tests3/releases/260419-oss-security/human-checklist.md
+
+# Release-follow-up instruction: user turn 2026-04-19 "follow the
+# protocol please" authorized advancing through ship/teardown.
