@@ -107,7 +107,7 @@ preflight:
 		printf "  Press Enter to continue: "; \
 		read -r CONFIRM < /dev/tty; \
 		echo ""; \
-		echo "  Get your token at: https://staging.vexa.ai/dashboard/transcription"; \
+		echo "  Get your token at: https://vexa.ai/account"; \
 		echo ""; \
 		printf "  Paste your transcription token: "; \
 		read -r TX_TOKEN < /dev/tty; \

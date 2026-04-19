@@ -154,13 +154,13 @@ Then choose:
 | `make all`   | Full stack, each service separate | Development, production     |
 
 
-Both prompt for a transcription token on first run. Get one at [staging.vexa.ai/dashboard/transcription](https://staging.vexa.ai/dashboard/transcription), or [self-host transcription](./services/transcription-service/README.md) with a GPU.
+Both prompt for a transcription token on first run. Get one at [vexa.ai/account](https://vexa.ai/account), or [self-host transcription](./services/transcription-service/README.md) with a GPU.
 
 Guides: [Vexa Lite](deploy/lite/README.md) | [Docker Compose](deploy/compose/README.md) | [Helm (K8s)](deploy/helm/README.md)
 
 ### Hosted (no deployment needed)
 
-Get your API key at [vexa.ai/dashboard/api-keys](https://vexa.ai/dashboard/api-keys) and start sending bots immediately.
+Get your API key at [vexa.ai/account](https://vexa.ai/account) and start sending bots immediately.
 
 ## Meeting API — Send Bots, Get Transcripts
 

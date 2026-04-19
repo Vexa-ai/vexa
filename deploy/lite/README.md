@@ -19,7 +19,7 @@ From repo root:
 make lite
 ```
 
-That's it. Provisions PostgreSQL, pulls the Vexa Lite image, starts everything, and verifies connectivity. Prompts for a transcription token on first run (get one at [staging.vexa.ai/dashboard/transcription](https://staging.vexa.ai/dashboard/transcription)).
+That's it. Provisions PostgreSQL, pulls the Vexa Lite image, starts everything, and verifies connectivity. Prompts for a transcription token on first run (get one at [vexa.ai/account](https://vexa.ai/account)).
 
 After it finishes:
 

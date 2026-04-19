@@ -11,7 +11,7 @@ Self-hosting gives you control over your data and infrastructure. Three options,
 
 ### Option 0: Hosted (no deployment)
 
-Get an API key at [vexa.ai/dashboard/api-keys](https://vexa.ai/dashboard/api-keys). Start sending bots. No infrastructure needed.
+Get an API key at [vexa.ai/account](https://vexa.ai/account). Start sending bots. No infrastructure needed.
 
 ### Option 1: Lite (easiest self-host)
 
