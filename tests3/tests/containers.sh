@@ -133,7 +133,14 @@ else
 fi
 
 # ── Step: status_completed ───────────────────────
-STATUS=$(curl -sf -H "X-API-Key: $API_TOKEN" "$GATEWAY_URL/meetings" | python3 -c "
+# Poll for up to 120s — on K8s the BOT_STOP_DELAY_SECONDS=90 path holds
+# meeting.status in `stopping` for ~90s before transitioning to `completed`
+# (see features/bot-lifecycle/README.md:273 "Bot stuck in stopping —
+# Delayed Stop 90s wait"). Immediate query returns `stopping` on helm,
+# which is expected intermediate state — not a failure.
+STATUS="unknown"
+for i in $(seq 1 24); do
+    STATUS=$(curl -sf -H "X-API-Key: $API_TOKEN" "$GATEWAY_URL/meetings" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
 meetings=d.get('meetings',[]) if isinstance(d,dict) else d
@@ -143,11 +150,16 @@ for m in meetings:
         break
 else: print('gone')
 " 2>/dev/null)
+    case "$STATUS" in
+        completed|gone|failed) break ;;
+    esac
+    sleep 5
+done
 
 if [ "$STATUS" = "completed" ] || [ "$STATUS" = "gone" ]; then
-    step_pass status_completed "meeting.status=$STATUS after stop"
+    step_pass status_completed "meeting.status=$STATUS after stop (waited ${i}x5s)"
 else
-    step_fail status_completed "status=$STATUS (expected completed)"
+    step_fail status_completed "status=$STATUS (expected completed) after ~${i}x5s poll"
 fi
 
 # ── Step: timeout_stop ───────────────────────────
