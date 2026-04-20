@@ -1,6 +1,19 @@
+# Full stack for local dev and for building images to push (Docker Hub / GHCR / DOCR).
+#
+# Build & run locally:
+#   docker compose build && docker compose up -d
+#
+# Push to a registry (set your namespace, then login: docker login / doctl registry login):
+#   export DOCKER_IMAGE_PREFIX=docker.io/YOURUSER/vexa-
+#   export DOCKER_IMAGE_TAG=dev
+#   docker compose build && docker compose push
+#
+# On DigitalOcean: create a registry, set DOCKER_IMAGE_PREFIX=registry.digitalocean.com/YOUR_REGISTRY/vexa-
+# pull on the Droplet: docker compose pull && docker compose up -d
 name: vexa_dev
 services:
   api-gateway:
+    image: ${DOCKER_IMAGE_PREFIX:-}vexa-api-gateway:${DOCKER_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: services/api-gateway/Dockerfile
@@ -28,6 +41,7 @@ services:
     restart: unless-stopped
 
   admin-api:
+    image: ${DOCKER_IMAGE_PREFIX:-}vexa-admin-api:${DOCKER_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: services/admin-api/Dockerfile
@@ -43,19 +57,26 @@ services:
       - ADMIN_API_TOKEN=${ADMIN_API_TOKEN}
       - LOG_LEVEL=DEBUG
     init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
     networks:
       - vexa_default
     restart: unless-stopped
 
   bot-manager:
+    image: ${DOCKER_IMAGE_PREFIX:-}vexa-bot-manager:${DOCKER_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: services/bot-manager/Dockerfile
     environment:
       - REDIS_URL=redis://redis:6379/0
       - BOT_IMAGE_NAME=${BOT_IMAGE_NAME:-vexa-bot:dev}
-      - TTS_SERVICE_URL=http://tts-service:8002
-      - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa_default
+      - TTS_SERVICE_URL=${TTS_SERVICE_URL:-http://tts-service:8002}
+      # Must match this file's top-level `name` + network `vexa_default` → vexa_dev_vexa_default
+      - DOCKER_NETWORK=${DOCKER_NETWORK:-vexa_dev_vexa_default}
       - LOG_LEVEL=DEBUG
       - DB_HOST=${DB_HOST:-postgres}
       - DB_PORT=${DB_PORT:-5432}
@@ -97,13 +118,18 @@ services:
     depends_on:
       redis:
         condition: service_started
-      tts-service:
-        condition: service_started
+      postgres:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+      bot-image-prepull:
+        condition: service_completed_successfully
     networks:
       - vexa_default
     restart: unless-stopped
 
   whisperlive:
+    image: ${DOCKER_IMAGE_PREFIX:-}vexa-whisperlive:${DOCKER_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: services/WhisperLive/Dockerfile.cpu
@@ -134,6 +160,7 @@ services:
       - DEVICE_TYPE=remote
       - REMOTE_TRANSCRIBER_URL=${REMOTE_TRANSCRIBER_URL}
       - REMOTE_TRANSCRIBER_API_KEY=${REMOTE_TRANSCRIBER_API_KEY}
+      - REMOTE_TRANSCRIBER_MODEL=${REMOTE_TRANSCRIBER_MODEL:-whisper-1}
       - CONSUL_ENABLE=false
       - WL_REDIS_DISCOVERY_ENABLED=false
     command: >-
@@ -165,6 +192,7 @@ services:
     restart: unless-stopped
 
   transcription-collector:
+    image: ${DOCKER_IMAGE_PREFIX:-}vexa-transcription-collector:${DOCKER_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: services/transcription-collector/Dockerfile
@@ -208,61 +236,61 @@ services:
     depends_on:
       redis:
         condition: service_started
+      postgres:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
     networks:
       - vexa_default
     restart: unless-stopped
 
-  mcp:
-    build:
-      context: .
-      dockerfile: services/mcp/Dockerfile
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_DB=${DB_NAME:-vexa}
+      - POSTGRES_USER=${DB_USER:-postgres}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-vexa}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     ports:
-      - "${MCP_HOST_PORT:-18888}:18888"
-    environment:
-      - API_GATEWAY_URL=http://api-gateway:8000
-      - LOG_LEVEL=DEBUG
-    init: true
-    depends_on:
-      api-gateway:
-        condition: service_started
+      - "${POSTGRES_HOST_PORT:-5438}:5432"
     networks:
       - vexa_default
     restart: unless-stopped
 
-  dashboard:
-    build:
-      context: ${DASHBOARD_PATH:-../Vexa-Dashboard}
-    ports:
-      - "${DASHBOARD_HOST_PORT:-3001}:3000"
+  db-init:
+    image: ${DOCKER_IMAGE_PREFIX:-}vexa-admin-api:${DOCKER_IMAGE_TAG:-latest}
     environment:
-      - VEXA_API_URL=http://api-gateway:8000
-      - VEXA_ADMIN_API_KEY=${ADMIN_API_TOKEN}
-      - VEXA_ADMIN_API_URL=http://admin-api:8001
-      - JWT_SECRET=${JWT_SECRET:-vexa-dev-jwt-secret}
-      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3001}
-    init: true
-    depends_on:
-      api-gateway:
-        condition: service_started
-    networks:
-      - vexa_default
-    restart: unless-stopped
-
-  tts-service:
-    build:
-      context: .
-      dockerfile: services/tts-service/Dockerfile
-    expose:
-      - "8002"
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com}
-      - TTS_API_TOKEN=${TTS_API_TOKEN:-}
+      - DB_HOST=${DB_HOST:-postgres}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_NAME=${DB_NAME:-vexa}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-postgres}
+      - DB_SSL_MODE=${DB_SSL_MODE:-disable}
       - LOG_LEVEL=DEBUG
-    init: true
+    command: >
+      python -c "import asyncio; from shared_models.database import init_db; asyncio.run(init_db())"
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - vexa_default
-    restart: unless-stopped
+    restart: "no"
+
+  # Ensures BOT_IMAGE_NAME is available in the same daemon/context that
+  # bot-manager uses to create meeting bot containers.
+  bot-image-prepull:
+    image: ${BOT_IMAGE_NAME:-faisalshehzad8/vexa-bot:dev}
+    command: >
+      sh -c "echo 'bot image pre-pull ok'"
+    networks:
+      - vexa_default
+    restart: "no"
 
   redis:
     image: redis:7.0-alpine
@@ -274,55 +302,9 @@ services:
       - vexa_default
     restart: unless-stopped
 
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    environment:
-      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-vexa-access-key}
-      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-vexa-secret-key}
-    volumes:
-      - minio-data:/data
-    ports:
-      - "${MINIO_HOST_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
-    networks:
-      - vexa_default
-    restart: unless-stopped
-
-  minio-init:
-    image: minio/mc:latest
-    depends_on:
-      - minio
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        sleep 5
-        mc alias set vexa http://minio:9000 $${MINIO_ROOT_USER:-vexa-access-key} $${MINIO_ROOT_PASSWORD:-vexa-secret-key}
-        mc mb --ignore-existing vexa/${MINIO_BUCKET:-vexa-recordings}
-        cat > /tmp/cors.xml <<'XML'
-        <CORSConfiguration>
-          <CORSRule>
-            <AllowedOrigin>*</AllowedOrigin>
-            <AllowedMethod>GET</AllowedMethod>
-            <AllowedMethod>HEAD</AllowedMethod>
-            <AllowedHeader>*</AllowedHeader>
-          </CORSRule>
-        </CORSConfiguration>
-        XML
-        mc cors set vexa/${MINIO_BUCKET:-vexa-recordings} /tmp/cors.xml || echo "minio cors set unsupported in this environment; continuing"
-        mc anonymous set download vexa/${MINIO_BUCKET:-vexa-recordings} || true
-        exit 0
-    environment:
-      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-vexa-access-key}
-      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-vexa-secret-key}
-    networks:
-      - vexa_default
-
 volumes:
   redis-data:
   postgres-data:
-  minio-data:
   recordings-data:
   wl-recordings:
 
