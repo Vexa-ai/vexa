@@ -342,13 +342,16 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                 // the shutdown-flush path — the server-side `chunk_seq`
                 // contract is idempotent across duplicate arrivals.
                 recorder.ondataavailable = async (event: BlobEvent) => {
-                  if (!(event.data && event.data.size > 0)) return;
+                  if (!(event.data && event.data.size > 0)) {
+                    (window as any).logBot?.("[Google Recording] dataavailable fired with empty data (skipping)");
+                    return;
+                  }
                   (window as any).__vexaRecordedChunks.push(event.data);
 
                   // Best-effort immediate upload; do NOT block the recorder.
+                  const chunkSeq = (window as any).__vexaChunkSeq as number;
+                  (window as any).__vexaChunkSeq = chunkSeq + 1;
                   try {
-                    const chunkSeq = (window as any).__vexaChunkSeq as number;
-                    (window as any).__vexaChunkSeq = chunkSeq + 1;
                     const mimeType = recorder.mimeType || "audio/webm";
                     const buffer = await event.data.arrayBuffer();
                     const bytes = new Uint8Array(buffer);
@@ -359,18 +362,31 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                     }
                     const base64 = btoa(binary);
                     if (typeof (window as any).__vexaSaveRecordingChunk === "function") {
-                      // isFinal=false always for MediaRecorder.start timeslice events;
-                      // the shutdown path sends the final chunk with isFinal=true.
-                      void (window as any).__vexaSaveRecordingChunk({
+                      (window as any).logBot?.(
+                        `[Google Recording] Uploading chunk ${chunkSeq} (${bytes.length} bytes)`
+                      );
+                      // Await so a thrown error surfaces. Failures here
+                      // previously went silent (fire-and-forget), which
+                      // masked compose recording regression in Bug A 2026-04-21.
+                      const ok = await (window as any).__vexaSaveRecordingChunk({
                         base64,
                         chunkSeq,
                         isFinal: false,
                         mimeType,
                       });
+                      if (!ok) {
+                        (window as any).logBot?.(
+                          `[Google Recording] Chunk ${chunkSeq} upload returned false — bot-side sink rejected (see bot-container logs)`
+                        );
+                      }
+                    } else {
+                      (window as any).logBot?.(
+                        `[Google Recording] __vexaSaveRecordingChunk not exposed — chunk ${chunkSeq} will rely on the legacy full-blob shutdown path`
+                      );
                     }
                   } catch (err: any) {
                     (window as any).logBot?.(
-                      `[Google Recording] Incremental chunk upload prep failed: ${err?.message || err}`
+                      `[Google Recording] Chunk ${chunkSeq} upload prep/send FAILED: ${err?.message || err}`
                     );
                   }
                 };

@@ -329,12 +329,15 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
 
                 // Pack B (issue #218): incremental chunk upload, matches googlemeet.
                 recorder.ondataavailable = async (event: BlobEvent) => {
-                  if (!(event.data && event.data.size > 0)) return;
+                  if (!(event.data && event.data.size > 0)) {
+                    (window as any).logBot?.("[Teams Recording] dataavailable fired with empty data (skipping)");
+                    return;
+                  }
                   (window as any).__vexaRecordedChunks.push(event.data);
 
+                  const chunkSeq = (window as any).__vexaChunkSeq as number;
+                  (window as any).__vexaChunkSeq = chunkSeq + 1;
                   try {
-                    const chunkSeq = (window as any).__vexaChunkSeq as number;
-                    (window as any).__vexaChunkSeq = chunkSeq + 1;
                     const mime = recorder.mimeType || "audio/webm";
                     const buffer = await event.data.arrayBuffer();
                     const bytes = new Uint8Array(buffer);
@@ -345,16 +348,28 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
                     }
                     const base64 = btoa(binary);
                     if (typeof (window as any).__vexaSaveRecordingChunk === "function") {
-                      void (window as any).__vexaSaveRecordingChunk({
+                      (window as any).logBot?.(
+                        `[Teams Recording] Uploading chunk ${chunkSeq} (${bytes.length} bytes)`
+                      );
+                      const ok = await (window as any).__vexaSaveRecordingChunk({
                         base64,
                         chunkSeq,
                         isFinal: false,
                         mimeType: mime,
                       });
+                      if (!ok) {
+                        (window as any).logBot?.(
+                          `[Teams Recording] Chunk ${chunkSeq} upload returned false — bot-side sink rejected`
+                        );
+                      }
+                    } else {
+                      (window as any).logBot?.(
+                        `[Teams Recording] __vexaSaveRecordingChunk not exposed — chunk ${chunkSeq} will rely on shutdown fallback`
+                      );
                     }
                   } catch (err: any) {
                     (window as any).logBot?.(
-                      `[Teams Recording] Incremental chunk upload prep failed: ${err?.message || err}`
+                      `[Teams Recording] Chunk ${chunkSeq} upload prep/send FAILED: ${err?.message || err}`
                     );
                   }
                 };

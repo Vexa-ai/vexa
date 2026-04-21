@@ -76,5 +76,10 @@ Tick boxes. `release-ship` blocks until all are `[x]`. Bugs → `make release-is
 **runtime-api-exit-callback-delivery-is-durable** _(compose)_
 - [ ] [compose] Create a bot; SIGSTOP meeting-api (or blackhole its URL); stop the bot; wait 2× IDLE_CHECK_INTERVAL; SIGCONT meeting-api → Within another IDLE_CHECK_INTERVAL, the meeting row transitions out of `active` to `completed` (or `failed` with exit_code if the bot was SIGKILLed). No manual intervention needed. <!-- h:8e0b90d0 -->
 
+**lite-postgres-publicly-exposed** _(compose,lite)_
+- [ ] [lite] From a host outside the VM run `nc -zv 172.232.0.163 5432` (external scan) → Connection is refused or filtered (NOT 'Connection succeeded'). <!-- h:d86caa6f -->
+- [ ] [lite] `docker exec vexa-postgres psql -U postgres -l` — from inside the VM → database 'vexa' is present; 'readme_to_recover' is absent. <!-- h:6d4d89e2 -->
+- [ ] [compose] From a host outside the compose VM run `nc -zv 172.239.57.155 5458` → Connection is refused or filtered. <!-- h:123fe2d1 -->
+
 ## Issues found
 _List anything that failed. Each entry → `release-issue-add SOURCE=human` before ship._

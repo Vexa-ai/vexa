@@ -210,13 +210,14 @@ async def internal_upload_recording(
             await db.flush()
     storage_id = legacy_id if use_meeting_data else recording.id
 
-    # Incremental-upload storage path: per-session directory + zero-padded
-    # chunk index. A legacy one-shot upload (chunk_seq=0, is_final=true)
-    # renders as `.../000000.webm` — still a valid single object, just at a
-    # predictable prefix. Chunk-based uploads accumulate under the same
-    # prefix so a retrieval-time stitcher (or orphan reconciler) can
-    # enumerate them by MinIO listing.
-    storage_path = f"recordings/{user_id}/{storage_id}/{session_uid}/{chunk_seq:06d}.{media_format}"
+    # Incremental-upload storage path: per-session + per-media-type directory
+    # + zero-padded chunk index. media_type is part of the path because audio
+    # chunks and a video blob often share the same format (webm) — without
+    # the type prefix they'd collide on chunk_seq=0, and the second upload
+    # would silently overwrite the first (Bug C 2026-04-21: dashboard
+    # showed video-player UI but the MinIO object was an audio-only blob
+    # because audio overwrote video at .../000000.webm).
+    storage_path = f"recordings/{user_id}/{storage_id}/{session_uid}/{media_type}/{chunk_seq:06d}.{media_format}"
     content_types = {"wav": "audio/wav", "webm": "video/webm", "opus": "audio/opus", "mp3": "audio/mpeg", "jpg": "image/jpeg", "png": "image/png"}
     content_type = content_types.get(media_format, "application/octet-stream")
 
@@ -232,23 +233,17 @@ async def internal_upload_recording(
         raise HTTPException(status_code=500, detail="Failed to upload recording to storage")
 
     if use_meeting_data:
-        # Per-chunk media_file entry — APPEND (not upsert). One object per chunk in MinIO;
-        # one entry per chunk in media_files[]. On is_final=true, promote the Recording's
-        # status to COMPLETED and fire the webhook exactly once (the moment of transition
-        # from IN_PROGRESS → COMPLETED).
-        media_file_id = _new_recording_numeric_id()
-        new_media_file = {
-            "id": media_file_id,
-            "type": media_type,
-            "format": media_format,
-            "storage_path": storage_path,
-            "storage_backend": os.environ.get("STORAGE_BACKEND", "minio"),
-            "file_size_bytes": file_size,
-            "duration_seconds": duration_seconds,
-            "chunk_seq": chunk_seq,
-            "metadata": {"sample_rate": sample_rate} if sample_rate else {},
-            "created_at": datetime.utcnow().isoformat(),
-        }
+        # Media-file materialization policy (Bug C+D fix, 2026-04-21):
+        #   - Intermediate chunks (is_final=false) upload to MinIO for
+        #     SIGKILL safety but do NOT append media_files entries.
+        #   - The final chunk (is_final=true) + every distinct media_type
+        #     (audio, video) yields ONE media_files entry per type pointing
+        #     at the final-chunk storage_path.
+        #   - This gives the dashboard ONE audio entry + (optionally) ONE
+        #     video entry per recording, instead of N per-chunk entries
+        #     that confused the fragment player and the seek-to-segment
+        #     math. Per-chunk history is still reconstructable from the
+        #     MinIO listing under the session/type prefix.
         if existing_rec is None:
             rec_payload = {
                 "id": legacy_id,
@@ -259,48 +254,80 @@ async def internal_upload_recording(
                 "status": RecordingStatus.COMPLETED.value if is_final else RecordingStatus.IN_PROGRESS.value,
                 "created_at": datetime.utcnow().isoformat(),
                 "completed_at": datetime.utcnow().isoformat() if is_final else None,
-                "media_files": [new_media_file],
+                "media_files": [],
             }
+            existing_idx = len(recordings_list)
             recordings_list.append(rec_payload)
-            status_transitioned_to_completed = bool(is_final)
+            was_completed = False
         else:
             rec_payload = dict(existing_rec)
-            existing_media_files = list(rec_payload.get("media_files") or [])
-            existing_media_files.append(new_media_file)
-            rec_payload["media_files"] = existing_media_files
             was_completed = rec_payload.get("status") == RecordingStatus.COMPLETED.value
-            if is_final:
-                rec_payload["status"] = RecordingStatus.COMPLETED.value
-                rec_payload["completed_at"] = datetime.utcnow().isoformat()
-            status_transitioned_to_completed = is_final and not was_completed
-            recordings_list[existing_idx] = rec_payload
+
+        status_transitioned_to_completed = False
+        if is_final:
+            # Replace any existing entry for this media_type with the final one.
+            existing_media_files = [
+                mf for mf in (rec_payload.get("media_files") or [])
+                if mf.get("type") != media_type
+            ]
+            existing_media_files.append({
+                "id": _new_recording_numeric_id(),
+                "type": media_type,
+                "format": media_format,
+                "storage_path": storage_path,
+                "storage_backend": os.environ.get("STORAGE_BACKEND", "minio"),
+                "file_size_bytes": file_size,
+                "duration_seconds": duration_seconds,
+                "chunk_seq": chunk_seq,
+                "metadata": {"sample_rate": sample_rate} if sample_rate else {},
+                "created_at": datetime.utcnow().isoformat(),
+            })
+            rec_payload["media_files"] = existing_media_files
+            rec_payload["status"] = RecordingStatus.COMPLETED.value
+            rec_payload["completed_at"] = datetime.utcnow().isoformat()
+            status_transitioned_to_completed = not was_completed
+        # Intermediate chunk (is_final=false): chunk is in MinIO; no
+        # media_files row yet. Recording stays IN_PROGRESS.
+        recordings_list[existing_idx] = rec_payload
         meeting_data_dict["recordings"] = recordings_list
         meeting.data = meeting_data_dict
         attributes.flag_modified(meeting, "data")
         await db.commit()
         if status_transitioned_to_completed:
             asyncio.create_task(send_event_webhook(meeting.id, "recording.completed", {"recording": rec_payload}))
-        return {"recording_id": rec_payload["id"], "media_file_id": media_file_id, "storage_path": storage_path, "status": rec_payload["status"], "chunk_seq": chunk_seq}
+        final_media = rec_payload.get("media_files") or []
+        mf_id = final_media[-1]["id"] if (is_final and final_media) else None
+        return {"recording_id": rec_payload["id"], "media_file_id": mf_id, "storage_path": storage_path, "status": rec_payload["status"], "chunk_seq": chunk_seq}
 
-    # DB mode — per-chunk MediaFile append; Recording.status flips to COMPLETED
-    # only on is_final=true. Legacy one-shot callers (chunk_seq=0,is_final=true)
-    # still write exactly one MediaFile + COMPLETED Recording as before.
-    file_metadata = {"chunk_seq": chunk_seq}
-    if sample_rate:
-        file_metadata["sample_rate"] = sample_rate
-    media_file = MediaFile(
-        recording_id=recording.id,
-        type=media_type,
-        format=media_format,
-        storage_path=storage_path,
-        storage_backend=os.environ.get("STORAGE_BACKEND", "minio"),
-        file_size_bytes=file_size,
-        duration_seconds=duration_seconds,
-        extra_metadata=file_metadata,
-    )
-    db.add(media_file)
+    # DB mode — same materialization policy as meeting_data mode (Bug C+D fix):
+    # intermediate chunks upload to MinIO for SIGKILL safety but do NOT create
+    # a MediaFile row. On is_final=true, one MediaFile row per media_type is
+    # created (replacing any earlier same-type row for this Recording).
     was_completed = recording.status == "completed"
+    media_file = None
     if is_final:
+        # Retire any existing MediaFile for this recording + media_type.
+        from sqlalchemy import delete
+        await db.execute(
+            delete(MediaFile).where(
+                MediaFile.recording_id == recording.id,
+                MediaFile.type == media_type,
+            )
+        )
+        file_metadata = {"chunk_seq": chunk_seq}
+        if sample_rate:
+            file_metadata["sample_rate"] = sample_rate
+        media_file = MediaFile(
+            recording_id=recording.id,
+            type=media_type,
+            format=media_format,
+            storage_path=storage_path,
+            storage_backend=os.environ.get("STORAGE_BACKEND", "minio"),
+            file_size_bytes=file_size,
+            duration_seconds=duration_seconds,
+            extra_metadata=file_metadata,
+        )
+        db.add(media_file)
         recording.status = "completed"
         recording.completed_at = datetime.utcnow()
     else:
@@ -310,13 +337,14 @@ async def internal_upload_recording(
             recording.status = "uploading"
     await db.commit()
     await db.refresh(recording)
-    await db.refresh(media_file)
+    if media_file:
+        await db.refresh(media_file)
 
     if is_final and not was_completed:
         asyncio.create_task(send_event_webhook(meeting.id, "recording.completed", {
-            "recording": {"id": recording.id, "meeting_id": recording.meeting_id, "session_uid": session_uid, "status": recording.status, "media_file_id": media_file.id, "file_size_bytes": file_size, "media_type": media_type, "media_format": media_format}
+            "recording": {"id": recording.id, "meeting_id": recording.meeting_id, "session_uid": session_uid, "status": recording.status, "media_file_id": (media_file.id if media_file else None), "file_size_bytes": file_size, "media_type": media_type, "media_format": media_format}
         }))
-    return {"recording_id": recording.id, "media_file_id": media_file.id, "storage_path": storage_path, "status": recording.status, "chunk_seq": chunk_seq}
+    return {"recording_id": recording.id, "media_file_id": (media_file.id if media_file else None), "storage_path": storage_path, "status": recording.status, "chunk_seq": chunk_seq}
 
 
 @router.get("/recordings", response_model=RecordingListResponse, summary="List recordings for the authenticated user")

@@ -243,7 +243,7 @@ Status transitions are protected by `SELECT FOR UPDATE` (row-level lock) to prev
 
 
 <!-- BEGIN AUTO-DOD -->
-<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260421-1827`. Do not edit by hand — edit the sidecar `dods.yaml` + re-run `make -C tests3 report --write-features`. -->
+<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260421-1922`. Do not edit by hand — edit the sidecar `dods.yaml` + re-run `make -C tests3 report --write-features`. -->
 
 **Confidence: 94%** (gate: 90%, status: ✅ pass)
 
@@ -259,7 +259,7 @@ Status transitions are protected by `SELECT FOR UPDATE` (row-level lock) to prev
 | timeout-stop | Bot auto-stops after automatic_leave timeout (no_one_joined_timeout) | 10 | ⚠️ skip | `helm`: containers/timeout_stop: bot still running after 60s (timeout may count from lobby) |
 | concurrency-slot | Concurrent-bot slot released immediately on stop — next create succeeds | 10 | ✅ pass | `helm`: containers/concurrency_slot: slot released, B created (HTTP 201) |
 | no-orphans | No zombie/exited bot containers left after a lifecycle run | 10 | ✅ pass | `helm`: containers/no_orphans: no exited/zombie containers |
-| status-webhooks-fire | Status-change webhooks fire for every transition when enabled in webhook_events | 5 | ✅ pass | `helm`: webhooks/e2e_status: 2 status-change webhook(s) fired: meeting.status_change |
+| status-webhooks-fire | Status-change webhooks fire for every transition when enabled in webhook_events | 5 | ✅ pass | `helm`: webhooks/e2e_status: 1 status-change webhook(s) fired: meeting.status_change |
 | recording-incremental-chunk-upload | bot uploads each MediaRecorder chunk as it arrives; meeting-api accepts chunk_seq on /internal/recordings/upload | 15 | ✅ pass | `lite`: smoke-static/RECORDING_UPLOAD_SUPPORTS_CHUNK_SEQ: /internal/recordings/upload accepts chunk_seq: int form parameter; `compose`: smoke-static/RECORDING_UPLOAD_SUPPORTS_CHUNK_SEQ: /internal/recordings/upload accepts chunk_seq: int form parameter |
 | bot-records-incrementally | bot recording.ts calls MediaRecorder.start with ≥15s timeslice AND uploads each chunk via __vexaSaveRecordingChunk | 10 | ✅ pass | `lite`: bot-records-incrementally/BOT_RECORDS_INCREMENTALLY: bot recording.ts wires ≥15s MediaRecorder timeslice + __vexaSaveRecordingChunk; `compose`: bot-records-incrementally/BOT_RECORDS_INCREMENTALLY: bot recording.ts wires ≥15s MediaRecorder timeslice + __vexaSaveRecordingChunk |
 | recording-survives-mid-meeting-kill | SIGKILL mid-recording leaves already-uploaded chunks durable in MinIO; Recording.status stays IN_PROGRESS until is_final=true | 10 | ✅ pass | `compose`: recording-survives-sigkill/RECORDING_SURVIVES_MID_MEETING_KILL: chunk_seq contract verified statically (see RECORDING_UPLOAD_SUPPORTS_CHUNK_SEQ) |
