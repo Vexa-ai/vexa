@@ -88,7 +88,17 @@ adminApi:
     limits:
       cpu: 500m
       memory: 512Mi
-  extraEnv: []
+  # Connection-pool sizing — explicit so the sum of configured ceilings
+  # across services stays well under the managed-DB slot cap (incident-doc
+  # §4 + N-8). Matches the asyncpg / SQLAlchemy pool knobs each service
+  # reads from its database.py.
+  extraEnv:
+    - name: DB_POOL_SIZE
+      value: "10"
+    - name: DB_MAX_OVERFLOW
+      value: "5"
+    - name: DB_POOL_TIMEOUT
+      value: "10" 
 
 meetingApi:
   enabled: true
@@ -151,7 +161,17 @@ runtimeApi:
     limits:
       cpu: 200m
       memory: 512Mi
-  extraEnv: []
+  # Connection-pool sizing — explicit so the sum of configured ceilings
+  # across services stays well under the managed-DB slot cap (incident-doc
+  # §4 + N-8). Matches the asyncpg / SQLAlchemy pool knobs each service
+  # reads from its database.py.
+  extraEnv:
+    - name: DB_POOL_SIZE
+      value: "10"
+    - name: DB_MAX_OVERFLOW
+      value: "5"
+    - name: DB_POOL_TIMEOUT
+      value: "10" 
 
 ttsService:
   enabled: true

@@ -232,14 +232,14 @@ Fires on every meeting completion, independent of per-user webhook URLs. Does no
 
 
 <!-- BEGIN AUTO-DOD -->
-<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260419-1910`. Do not edit by hand — edit the sidecar `dods.yaml` + re-run `make -C tests3 report --write-features`. -->
+<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260421-1502`. Do not edit by hand — edit the sidecar `dods.yaml` + re-run `make -C tests3 report --write-features`. -->
 
-**Confidence: 100%** (gate: 95%, status: ✅ pass)
+**Confidence: 91%** (gate: 95%, status: ❌ below gate)
 
 | # | Behavior | Weight | Status | Evidence (modes) |
 |---|----------|-------:|:------:|------------------|
 | events-meeting-completed | meeting.completed fires on every bot exit (default-enabled) | 10 | ✅ pass | `compose`: webhooks/e2e_completion: webhook_delivery.status=delivered |
-| events-status-webhooks | Status-change webhooks for non-meeting.completed events (meeting.started / meeting.status_change / bot.failed) fire when opted-in via webhook_events — proven by a delivery with event_type != meeting.completed, not by any entry in webhook_deliveries[]. | 10 | ✅ pass | `helm`: webhooks/e2e_status_non_completed: non-meeting.completed status event(s) fired: meeting.status_change |
+| events-status-webhooks | Status-change webhooks for non-meeting.completed events (meeting.started / meeting.status_change / bot.failed) fire when opted-in via webhook_events — proven by a delivery with event_type != meeting.completed, not by any entry in webhook_deliveries[]. | 10 | ✅ pass | `helm`: webhooks/e2e_status_non_completed: non-meeting.completed status event(s) fired: bot.failed |
 | envelope-shape | Every webhook carries envelope: event_id, event_type, api_version, created_at, data | 10 | ✅ pass | `compose`: webhooks/envelope: event_id, event_type, api_version, created_at, data present |
 | headers-hmac | X-Webhook-Signature = HMAC-SHA256(timestamp + '.' + payload) when secret is set | 10 | ✅ pass | `compose`: webhooks/hmac: HMAC-SHA256 64-char digest |
 | security-spoof-protection | Client-supplied X-User-Webhook-* headers cannot override stored config | 10 | ✅ pass | `compose`: webhooks/spoof: client header stripped (stored webhook_url=https://httpbin.org/post) |
@@ -247,7 +247,7 @@ Fires on every meeting completion, independent of per-user webhook URLs. Does no
 | security-payload-hygiene | Internal fields (secret, url, container ids, delivery state) stripped from webhook payloads | 5 | ✅ pass | `compose`: webhooks/no_leak_payload: internal fields stripped; user fields preserved |
 | flow-user-config | PUT /user/webhook persists webhook_url + webhook_secret + webhook_events to User.data | 10 | ✅ pass | `compose`: webhooks/config: user webhook set via PUT /user/webhook |
 | flow-gateway-inject | Gateway injects validated webhook config into meeting.data on POST /bots | 15 | ✅ pass | `compose`: webhooks/inject: gateway injected webhook_url=https://httpbin.org/post (after cache expiry) |
-| reliability-db-pool | DB connection pool doesn't exhaust under repeated status requests | 10 | ✅ pass | `lite`: smoke-contract/DB_POOL_NO_EXHAUSTION: 10/10 requests returned 200; `compose`: smoke-contract/DB_POOL_NO_EXHAUSTION: 10/10 requests returned 200 |
+| reliability-db-pool | DB connection pool doesn't exhaust under repeated status requests | 10 | ❌ fail | `lite`: smoke-contract/DB_POOL_NO_EXHAUSTION: 10/10 requests failed — likely DB pool exhaustion; `compose`: smoke-contract/DB_POOL_NO_EXHAUSTION: 10/10 requests returned 200 |
 | security-ssrf-input-rejected | PUT /user/webhook rejects SSRF URLs (CVE-2026-25883 / GHSA-fhr6-8hff-cvg4) | 10 | ✅ pass | `compose`: smoke-contract/WEBHOOK_SSRF_INPUT_REJECTED: HTTP 400 (SSRF URL rejected) |
 
 <!-- END AUTO-DOD -->

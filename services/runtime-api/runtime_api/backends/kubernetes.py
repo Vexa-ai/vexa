@@ -166,7 +166,13 @@ class KubernetesBackend(Backend):
             logger.error(f"K8s API error creating pod: {e.status} {e.reason}")
             raise
 
-    async def stop(self, name: str, timeout: int = 10) -> bool:
+    async def stop(self, name: str, timeout: int = 30) -> bool:
+        # Pack B.4 (issue #218 defense-in-depth): grace_period_seconds must
+        # match the pod spec's terminationGracePeriodSeconds so bots have
+        # enough time to flush the last recording chunk before SIGKILL. The
+        # old 10s default cut MinIO uploads short (recording loss). Pair with
+        # the incremental-upload model in Pack B.1 — with chunks already
+        # uploaded, 30s is comfortable for the last chunk + webhook delivery.
         from kubernetes.client.rest import ApiException
 
         api = self._get_api()

@@ -27,59 +27,52 @@ test_begin chart-prod-secrets-secretref
 
 # ── Step: secretref_only ───────────────────────────────────────
 if [ -z "$STEP_REQUESTED" ] || [ "$STEP_REQUESTED" = "secretref_only" ]; then
-    # Render chart with default values (postgres.enabled=true) and scan
-    # every Deployment env entry for the secret names. Each must appear as
-    # `valueFrom: secretKeyRef:` — NOT as plain `value:`.
     rendered=$(helm template vexa "$CHART_DIR" 2>&1) || {
         step_fail secretref_only "helm template failed: ${rendered:0:200}"
         [ "$STEP_REQUESTED" = "secretref_only" ] && exit 1
     }
 
-    bad=""
-    for secret in DB_PASSWORD TRANSCRIPTION_SERVICE_TOKEN; do
-        # Match lines: "- name: DB_PASSWORD" followed within ~4 lines by
-        # either `value:` (BAD) or `valueFrom:` (GOOD). Use Python for reliable multiline parsing.
-        if echo "$rendered" | python3 -c "
+    set +e
+    bad=$(echo "$rendered" | python3 - <<'PY'
 import sys, re
 txt = sys.stdin.read()
-secret = '$secret'
-# Find every occurrence of '- name: <SECRET>' and look ahead 4 lines.
-for m in re.finditer(r'- name: ' + re.escape(secret) + r'\s*\n((?:\s{12,}.+\n){1,4})', txt):
-    block = m.group(1)
-    # Plain value branch: matches `              value:` with something after
-    if re.search(r'^\s{14,}value:\s*\S', block, re.MULTILINE):
-        print('plain value seen')
-        sys.exit(1)
-    if 'valueFrom' not in block and 'secretKeyRef' not in block:
-        print('no secretKeyRef')
-        sys.exit(2)
-sys.exit(0)
-" 2>/dev/null; then
-            :
-        else
-            bad+=" $secret"
-        fi
-    done
+bad = []
+for secret in ("DB_PASSWORD", "TRANSCRIPTION_SERVICE_TOKEN"):
+    for m in re.finditer(r'- name: ' + re.escape(secret) + r'\s*\n((?:\s{12,}.+\n){1,4})', txt):
+        block = m.group(1)
+        if re.search(r'^\s{14,}value:\s*\S', block, re.MULTILINE):
+            bad.append(secret + ':plain-value')
+            break
+        if 'valueFrom' not in block and 'secretKeyRef' not in block:
+            bad.append(secret + ':no-secretKeyRef')
+            break
+print(' '.join(bad))
+PY
+)
+    set -e
 
     if [ -z "$bad" ]; then
         step_pass secretref_only "DB_PASSWORD + TRANSCRIPTION_SERVICE_TOKEN rendered via secretKeyRef in every Deployment"
     else
-        step_fail secretref_only "plain value: detected for:$bad"
+        step_fail secretref_only "plain value: detected for: $bad"
     fi
 fi
 
 # ── Step: required_at_render ──────────────────────────────────
 if [ -z "$STEP_REQUESTED" ] || [ "$STEP_REQUESTED" = "required_at_render" ]; then
     # External-DB mode with empty credentialsSecretName — chart MUST fail
-    # with a `required` error, not silently render.
-    if helm template vexa "$CHART_DIR" \
+    # with the `required` directive's error message, not silently render.
+    # `|| true` because helm template is expected to exit non-zero here; we
+    # grade on the message content, not the exit code.
+    out=$(helm template vexa "$CHART_DIR" \
         --set postgres.enabled=false \
         --set database.host=ext.example.com \
         --set postgres.credentialsSecretName= \
-        2>&1 | grep -qi "required"; then
-        step_pass required_at_render "helm template fails with 'required' on missing credentialsSecretName"
+        2>&1 || true)
+    if echo "$out" | grep -qE "execution error.*credentialsSecretName|must name a pre-existing Secret"; then
+        step_pass required_at_render "helm template fails with the required-directive error on missing credentialsSecretName"
     else
-        step_fail required_at_render "helm template did not surface a 'required' error for missing credentialsSecretName"
+        step_fail required_at_render "helm template did not fail as expected (out tail: ${out: -200})"
     fi
 fi
 

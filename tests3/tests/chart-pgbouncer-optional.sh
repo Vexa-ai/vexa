@@ -16,9 +16,11 @@ echo "  ────────────────────────
 
 test_begin chart-pgbouncer-optional
 
-# Default render — pgbouncer disabled
+# Default render — pgbouncer disabled. grep -c may exit 1 when zero matches,
+# and `set -e` from common.sh would kill us; || echo 0 is the guard.
 default_rendered=$(helm template vexa "$CHART_DIR" 2>&1)
-default_has_pgbouncer=$(echo "$default_rendered" | grep -c 'component: pgbouncer')
+default_has_pgbouncer=$({ echo "$default_rendered" | grep -c 'component: pgbouncer'; } || true)
+[ -z "$default_has_pgbouncer" ] && default_has_pgbouncer=0
 
 if [ "$default_has_pgbouncer" -eq 0 ]; then
     step_pass default_off "default render has no pgbouncer Deployment/Service"
@@ -28,7 +30,8 @@ fi
 
 # Enabled render — verify Deployment + Service + DB_HOST rewire
 enabled_rendered=$(helm template vexa "$CHART_DIR" --set pgbouncer.enabled=true 2>&1)
-enabled_has_pgbouncer=$(echo "$enabled_rendered" | grep -c 'component: pgbouncer')
+enabled_has_pgbouncer=$({ echo "$enabled_rendered" | grep -c 'component: pgbouncer'; } || true)
+[ -z "$enabled_has_pgbouncer" ] && enabled_has_pgbouncer=0
 
 if [ "$enabled_has_pgbouncer" -lt 2 ]; then
     step_fail enabled_renders "pgbouncer.enabled=true render missing Deployment+Service (count=$enabled_has_pgbouncer)"
@@ -51,8 +54,9 @@ for b in blocks:
     cm = re.search(r'component:\s*(\S+)', b)
     if not cm: continue
     comp = cm.group(1)
-    # DB_HOST value lines
-    m = re.search(r'name: DB_HOST\s*\n\s*value:\s*\"([^\"]+)\"', b)
+    # DB_HOST value lines — allow comment lines between name: and value:
+    # (the pgbouncer template has explanatory comments there).
+    m = re.search(r'name: DB_HOST\s*\n(?:\s*#[^\n]*\n)*\s*value:\s*\"([^\"]+)\"', b)
     if not m:
         continue
     db_host = m.group(1)

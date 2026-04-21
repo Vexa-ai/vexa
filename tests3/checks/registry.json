@@ -551,6 +551,69 @@
       "method": "VEXA_BOT_NPM_AUDIT"
     },
     {
+      "id": "RECORDING_UPLOAD_SUPPORTS_CHUNK_SEQ",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": "/internal/recordings/upload accepts chunk_seq: int form parameter",
+      "symptom": "bot incremental chunk uploads rejected because endpoint drops chunk_seq",
+      "file": "services/meeting-api/meeting_api/recordings.py",
+      "must_match": "chunk_seq: int"
+    },
+    {
+      "id": "ENGINE_POOL_RESET_ON_RETURN_ROLLBACK",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": "meeting-api SQLAlchemy engine keeps pool_reset_on_return=\"rollback\" \u2014 guards idle-in-transaction leak defense",
+      "symptom": "engine config refactored without pool_reset_on_return; AsyncSession leaks re-emerge silently",
+      "file": "services/meeting-api/meeting_api/database.py",
+      "must_match": "pool_reset_on_return=\"rollback\""
+    },
+    {
+      "id": "HELM_DEPLOYMENT_STRATEGY_HELPER_DEFINED",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": "_helpers.tpl defines vexa.deploymentStrategy \u2014 centralized rolling-update contract",
+      "symptom": "helper deleted; every Deployment reverts to K8s default maxSurge=25%",
+      "file": "deploy/helm/charts/vexa/templates/_helpers.tpl",
+      "must_match": "vexa.deploymentStrategy"
+    },
+    {
+      "id": "PACKAGES_CI_WORKFLOW_EXISTS",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": ".github/workflows/test-packages.yml exists and runs npm test on packages/*",
+      "symptom": "packages/ has no PR-time CI; regressions slip in",
+      "file": ".github/workflows/test-packages.yml",
+      "must_match": "packages/"
+    },
+    {
+      "id": "RUNTIME_API_IDLE_LOOP_SWEEPS_PENDING_CALLBACKS",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": "runtime-api idle_loop references list_pending_callbacks \u2014 the durable-delivery sweep is wired",
+      "symptom": "meeting stuck status='active' forever after callback delivery gives up",
+      "file": "services/runtime-api/runtime_api/lifecycle.py",
+      "must_match": "list_pending_callbacks"
+    },
+    {
+      "id": "RUNTIME_API_STOP_GRACE_MATCHES_POD_SPEC",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": "runtime-api kubernetes.py stop() grace_period_seconds default is 30s \u2014 matches the pod spec terminationGracePeriodSeconds so final recording chunk + webhook flush in time",
+      "symptom": "grace period cut back to 10s; final chunk upload aborted on pod deletion",
+      "file": "services/runtime-api/runtime_api/backends/kubernetes.py",
+      "must_match": "timeout: int = 30"
+    },
+    {
+      "id": "HELM_API_GATEWAY_REPLICA_COUNT_HA",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": "apiGateway.replicaCount default is 2 \u2014 maxSurge: 0 rollouts stay zero-downtime for the front door",
+      "symptom": "apiGateway rolled with replicaCount=1 + maxSurge=0 = 5-15s platform-wide outage during upgrade",
+      "file": "deploy/helm/charts/vexa/values.yaml",
+      "must_match": "replicaCount: 2"
+    },
+    {
       "_": "\u2550\u2550\u2550 HEALTH/DATA \u2014 database integrity \u2550\u2550\u2550"
     },
     {
