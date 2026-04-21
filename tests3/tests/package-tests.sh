@@ -54,7 +54,7 @@ run_pkg_step() {
     fi
 }
 
-run_pkg_step transcript_rendering packages/transcript-rendering
+run_pkg_step TRANSCRIPT_RENDERING_DEDUP_TESTS_PASS packages/transcript-rendering
 
 echo "  ──────────────────────────────────────────────"
 echo ""
