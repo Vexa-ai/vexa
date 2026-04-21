@@ -55,9 +55,9 @@ else:
 ")
 
 if echo "$result" | grep -q '^OK'; then
-    step_pass rolling_update_zero_surge "${result#OK: }"
+    step_pass HELM_ROLLING_UPDATE_ZERO_SURGE "${result#OK: }"
 else
-    step_fail rolling_update_zero_surge "${result#FAIL: }"
+    step_fail HELM_ROLLING_UPDATE_ZERO_SURGE "${result#FAIL: }"
 fi
 
 echo "  ──────────────────────────────────────────────"

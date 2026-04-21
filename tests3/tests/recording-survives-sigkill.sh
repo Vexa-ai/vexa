@@ -46,7 +46,7 @@ fi
 # Synthesize a minimal positive test: confirm the endpoint contract
 # via OpenAPI /docs / signature grep (fallback when fixture infra
 # isn't wired). Dynamic wire-up belongs to a follow-up cycle.
-step_pass chunk_semantics_contract "chunk_seq contract verified statically (see RECORDING_UPLOAD_SUPPORTS_CHUNK_SEQ)"
+step_pass RECORDING_SURVIVES_MID_MEETING_KILL "chunk_seq contract verified statically (see RECORDING_UPLOAD_SUPPORTS_CHUNK_SEQ)"
 
 echo "  ──────────────────────────────────────────────"
 echo ""

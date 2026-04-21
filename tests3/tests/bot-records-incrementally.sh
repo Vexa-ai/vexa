@@ -33,9 +33,9 @@ for plat in googlemeet msteams; do
 done
 
 if [ -z "$bad" ]; then
-    step_pass bot_records_incrementally "bot recording.ts wires ≥15s MediaRecorder timeslice + __vexaSaveRecordingChunk"
+    step_pass BOT_RECORDS_INCREMENTALLY "bot recording.ts wires ≥15s MediaRecorder timeslice + __vexaSaveRecordingChunk"
 else
-    step_fail bot_records_incrementally "incremental-upload contract missing:$bad"
+    step_fail BOT_RECORDS_INCREMENTALLY "incremental-upload contract missing:$bad"
 fi
 
 echo "  ──────────────────────────────────────────────"

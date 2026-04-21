@@ -101,14 +101,14 @@ make down
 
 
 <!-- BEGIN AUTO-DOD -->
-<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260421-1502`. Do not edit by hand — edit the sidecar `dods.yaml` + re-run `make -C tests3 report --write-features`. -->
+<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260421-1544`. Do not edit by hand — edit the sidecar `dods.yaml` + re-run `make -C tests3 report --write-features`. -->
 
-**Confidence: 72%** (gate: 100%, status: ❌ below gate)
+**Confidence: 83%** (gate: 100%, status: ❌ below gate)
 
 | # | Behavior | Weight | Status | Evidence (modes) |
 |---|----------|-------:|:------:|------------------|
 | gateway-up | API gateway responds to /admin/users via valid admin token | 10 | ✅ pass | `lite`: smoke-health/GATEWAY_UP: API gateway accepts connections — all client requests can reach backend; `compose`: smoke-health/GATEWAY_UP: API gateway accepts connections — all client requests can reach backend; `helm`: smoke-health/GATEWAY_UP: API gateway accepts connections — all client requ… |
-| admin-api-up | admin-api responds with a valid list | 10 | ❌ fail | `lite`: smoke-health/ADMIN_API_UP: HTTP 500 (expected 200); `compose`: smoke-health/ADMIN_API_UP: admin-api responds with valid token — user management and login work; `helm`: smoke-health/ADMIN_API_UP: admin-api responds with valid token — user management and login work |
+| admin-api-up | admin-api responds with a valid list | 10 | ✅ pass | `lite`: smoke-health/ADMIN_API_UP: admin-api responds with valid token — user management and login work; `compose`: smoke-health/ADMIN_API_UP: admin-api responds with valid token — user management and login work; `helm`: smoke-health/ADMIN_API_UP: admin-api responds with valid token — user manage… |
 | dashboard-up | dashboard root page responds | 10 | ✅ pass | `lite`: smoke-health/DASHBOARD_UP: dashboard serves pages — user can access the UI; `compose`: smoke-health/DASHBOARD_UP: dashboard serves pages — user can access the UI; `helm`: smoke-health/DASHBOARD_UP: dashboard serves pages — user can access the UI |
 | runtime-api-up | runtime-api (bot orchestrator) is reachable / has ready replicas | 15 | ✅ pass | `lite`: smoke-health/RUNTIME_API_UP: runtime-api responds — bot container lifecycle management works; `compose`: smoke-health/RUNTIME_API_UP: runtime-api responds — bot container lifecycle management works; `helm`: smoke-health/RUNTIME_API_UP: 1 ready replicas |
 | transcription-up | transcription service /health returns ok + gpu_available | 15 | ✅ pass | `lite`: smoke-health/TRANSCRIPTION_UP: transcription service responds — audio can be converted to text; `compose`: smoke-health/TRANSCRIPTION_UP: transcription service responds — audio can be converted to text; `helm`: smoke-health/TRANSCRIPTION_UP: transcription service responds — audio can be c… |
@@ -121,9 +121,9 @@ make down
 | chart-redis-tuned | redis deployment args include --maxmemory and an eviction policy | 10 | ✅ pass | `helm`: smoke-static/HELM_REDIS_MAXMEMORY_SET: redis deployment is capped at a specific maxmemory with an eviction policy — no unbounded growth |
 | chart-db-pool-tuned | every pool-holder service (admin-api, meeting-api, runtime-api) sets DB_POOL_SIZE — no silent framework defaults | 10 | ⬜ missing | `helm`: check HELM_ALL_SERVICES_DB_POOL_TUNED not found in any smoke-* report |
 | chart-pdb-available | PodDisruptionBudget template exists in chart (off by default via values toggle; on when podDisruptionBudgets.<svc>.enabled=true) | 10 | ✅ pass | `helm`: smoke-static/HELM_PDB_TEMPLATE_EXISTS: the chart carries a PodDisruptionBudget template (enablement is a values toggle) — availability contracts are first-class |
-| chart-deployment-strategy-helper | _helpers.tpl defines vexa.deploymentStrategy — centralized rolling-update contract | 5 | ⬜ missing | `helm`: check HELM_DEPLOYMENT_STRATEGY_HELPER_DEFINED not found in any smoke-* report |
+| chart-deployment-strategy-helper | _helpers.tpl defines vexa.deploymentStrategy — centralized rolling-update contract | 5 | ✅ pass | `helm`: smoke-static/HELM_DEPLOYMENT_STRATEGY_HELPER_DEFINED: _helpers.tpl defines vexa.deploymentStrategy — centralized rolling-update contract |
 | chart-rolling-update-zero-surge | every app-facing Deployment in rendered chart has strategy.rollingUpdate.maxSurge: 0 — rolling updates never double DB-pool footprint | 10 | ⬜ missing | `helm`: check HELM_ROLLING_UPDATE_ZERO_SURGE not found in any smoke-* report |
-| chart-api-gateway-ha-replica-count | apiGateway.replicaCount default ≥ 2 — so maxSurge: 0 rollouts remain zero-downtime for the front door | 5 | ⬜ missing | `helm`: check HELM_API_GATEWAY_REPLICA_COUNT_HA not found in any smoke-* report |
+| chart-api-gateway-ha-replica-count | apiGateway.replicaCount default ≥ 2 — so maxSurge: 0 rollouts remain zero-downtime for the front door | 5 | ✅ pass | `helm`: smoke-static/HELM_API_GATEWAY_REPLICA_COUNT_HA: apiGateway.replicaCount default is 2 — maxSurge: 0 rollouts stay zero-downtime for the front door |
 | chart-pgbouncer-optional-and-wired | chart supports optional PgBouncer (pgbouncer.enabled: false default); enabled=true rewires every service's DB_HOST to pgbouncer via vexa.dbHostEffective | 10 | ⬜ missing | `helm`: check HELM_PGBOUNCER_OPTIONAL_AND_WIRED not found in any smoke-* report |
 
 <!-- END AUTO-DOD -->

@@ -232,9 +232,9 @@ Fires on every meeting completion, independent of per-user webhook URLs. Does no
 
 
 <!-- BEGIN AUTO-DOD -->
-<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260421-1502`. Do not edit by hand — edit the sidecar `dods.yaml` + re-run `make -C tests3 report --write-features`. -->
+<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260421-1544`. Do not edit by hand — edit the sidecar `dods.yaml` + re-run `make -C tests3 report --write-features`. -->
 
-**Confidence: 91%** (gate: 95%, status: ❌ below gate)
+**Confidence: 100%** (gate: 95%, status: ✅ pass)
 
 | # | Behavior | Weight | Status | Evidence (modes) |
 |---|----------|-------:|:------:|------------------|
@@ -247,7 +247,7 @@ Fires on every meeting completion, independent of per-user webhook URLs. Does no
 | security-payload-hygiene | Internal fields (secret, url, container ids, delivery state) stripped from webhook payloads | 5 | ✅ pass | `compose`: webhooks/no_leak_payload: internal fields stripped; user fields preserved |
 | flow-user-config | PUT /user/webhook persists webhook_url + webhook_secret + webhook_events to User.data | 10 | ✅ pass | `compose`: webhooks/config: user webhook set via PUT /user/webhook |
 | flow-gateway-inject | Gateway injects validated webhook config into meeting.data on POST /bots | 15 | ✅ pass | `compose`: webhooks/inject: gateway injected webhook_url=https://httpbin.org/post (after cache expiry) |
-| reliability-db-pool | DB connection pool doesn't exhaust under repeated status requests | 10 | ❌ fail | `lite`: smoke-contract/DB_POOL_NO_EXHAUSTION: 10/10 requests failed — likely DB pool exhaustion; `compose`: smoke-contract/DB_POOL_NO_EXHAUSTION: 10/10 requests returned 200 |
+| reliability-db-pool | DB connection pool doesn't exhaust under repeated status requests | 10 | ✅ pass | `lite`: smoke-contract/DB_POOL_NO_EXHAUSTION: 10/10 requests returned 200; `compose`: smoke-contract/DB_POOL_NO_EXHAUSTION: 10/10 requests returned 200 |
 | security-ssrf-input-rejected | PUT /user/webhook rejects SSRF URLs (CVE-2026-25883 / GHSA-fhr6-8hff-cvg4) | 10 | ✅ pass | `compose`: smoke-contract/WEBHOOK_SSRF_INPUT_REJECTED: HTTP 400 (SSRF URL rejected) |
 
 <!-- END AUTO-DOD -->

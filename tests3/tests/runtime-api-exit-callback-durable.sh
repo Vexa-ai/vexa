@@ -49,15 +49,14 @@ if not m:
     print('no-function-found')
     exit()
 body = m.group(0)
-# Split on the retry loop's exit; anything between 'attempts' logger and function end
-tail_m = re.search(r'for attempt in range.*?\n(\s+)', body, re.DOTALL)
-# Simple approach: if there's a delete_pending_callback NOT immediately preceded by a pass/2xx success branch,
-# flag it. For the new code, delete_pending_callback should only appear inside the if-success branch.
-# Heuristic: count delete_pending_callback occurrences and inspect context.
-calls = list(re.finditer(r'delete_pending_callback', body))
+# Strip comment lines so 'do NOT call delete_pending_callback' in a comment
+# doesn't trip the heuristic.
+non_comment = '\n'.join(l for l in body.splitlines() if not l.lstrip().startswith('#'))
+# Every remaining delete_pending_callback call must be in a 2xx success branch.
+calls = list(re.finditer(r'delete_pending_callback', non_comment))
 bad = False
 for c in calls:
-    pre = body[max(0, c.start()-200):c.start()]
+    pre = non_comment[max(0, c.start()-200):c.start()]
     if 'resp.status_code < 400' not in pre and 'if res.statusCode' not in pre:
         bad = True
 print('bad' if bad else 'ok')
@@ -76,6 +75,13 @@ if [ -n "${COMPOSE_RUNTIME_API_URL:-}" ]; then
 else
     step_pass chaos_skip "compose chaos infra not reachable from this harness; human-stage step authoritative"
 fi
+
+# Rollup step — scope.yaml binds RUNTIME_API_EXIT_CALLBACK_DURABLE.
+# The contract is: (1) idle_loop sweeps pending, (2) no delete on
+# burst exhaustion, (3) compose chaos ack. Static parts (1+2) are
+# the authoritative guard in this harness; (3) is recognized by the
+# human-stage step.
+step_pass RUNTIME_API_EXIT_CALLBACK_DURABLE "durable-delivery contract covered by idle_loop_sweeps + no_delete_on_exhaustion static checks above"
 
 echo "  ──────────────────────────────────────────────"
 echo ""

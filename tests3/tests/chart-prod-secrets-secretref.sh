@@ -52,9 +52,9 @@ PY
     set -e
 
     if [ -z "$bad" ]; then
-        step_pass secretref_only "DB_PASSWORD + TRANSCRIPTION_SERVICE_TOKEN rendered via secretKeyRef in every Deployment"
+        step_pass HELM_PROD_SECRETS_SECRETREF_ONLY "DB_PASSWORD + TRANSCRIPTION_SERVICE_TOKEN rendered via secretKeyRef in every Deployment"
     else
-        step_fail secretref_only "plain value: detected for: $bad"
+        step_fail HELM_PROD_SECRETS_SECRETREF_ONLY "plain value: detected for: $bad"
     fi
 fi
 
@@ -70,9 +70,9 @@ if [ -z "$STEP_REQUESTED" ] || [ "$STEP_REQUESTED" = "required_at_render" ]; the
         --set postgres.credentialsSecretName= \
         2>&1 || true)
     if echo "$out" | grep -qE "execution error.*credentialsSecretName|must name a pre-existing Secret"; then
-        step_pass required_at_render "helm template fails with the required-directive error on missing credentialsSecretName"
+        step_pass HELM_PROD_SECRETS_REQUIRED_AT_RENDER "helm template fails with the required-directive error on missing credentialsSecretName"
     else
-        step_fail required_at_render "helm template did not fail as expected (out tail: ${out: -200})"
+        step_fail HELM_PROD_SECRETS_REQUIRED_AT_RENDER "helm template did not fail as expected (out tail: ${out: -200})"
     fi
 fi
 

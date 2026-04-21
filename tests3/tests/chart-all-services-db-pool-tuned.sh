@@ -51,9 +51,9 @@ print('no')
 done
 
 if [ -z "$missing" ]; then
-    step_pass all_services_db_pool_tuned "every pool-holder service declares DB_POOL_SIZE env (admin-api, meeting-api, runtime-api)"
+    step_pass HELM_ALL_SERVICES_DB_POOL_TUNED "every pool-holder service declares DB_POOL_SIZE env (admin-api, meeting-api, runtime-api)"
 else
-    step_fail all_services_db_pool_tuned "services without explicit DB_POOL_SIZE env:$missing"
+    step_fail HELM_ALL_SERVICES_DB_POOL_TUNED "services without explicit DB_POOL_SIZE env:$missing"
 fi
 
 echo "  ──────────────────────────────────────────────"

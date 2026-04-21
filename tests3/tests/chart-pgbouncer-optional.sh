@@ -83,5 +83,13 @@ else
     step_fail db_host_rewired "${rewired_check#FAIL: }"
 fi
 
+# Rollup step — scope.yaml binds the check ID HELM_PGBOUNCER_OPTIONAL_AND_WIRED
+# which covers all three sub-conditions. Pass only if every sub-step passed.
+if [ "$default_has_pgbouncer" -eq 0 ] && [ "$enabled_has_pgbouncer" -ge 2 ] && echo "$rewired_check" | grep -q '^OK'; then
+    step_pass HELM_PGBOUNCER_OPTIONAL_AND_WIRED "pgbouncer optional subchart + DB_HOST rewire contract holds"
+else
+    step_fail HELM_PGBOUNCER_OPTIONAL_AND_WIRED "pgbouncer subchart contract not fully satisfied (see sub-steps above)"
+fi
+
 echo "  ──────────────────────────────────────────────"
 echo ""
