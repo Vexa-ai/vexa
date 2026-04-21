@@ -65,11 +65,50 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
+{{- /*
+  vexa.dbHostEffective — the host every service SHOULD point at for DB.
+  When pgbouncer.enabled=true, routes through the pgbouncer Service.
+  Otherwise falls through to vexa.dbHost (direct Postgres). PgBouncer's
+  own Deployment bypasses this helper and uses vexa.dbHost directly to
+  avoid pointing at itself.
+*/ -}}
+{{- define "vexa.dbHostEffective" -}}
+{{- if .Values.pgbouncer.enabled -}}
+{{- include "vexa.componentName" (list . "pgbouncer") -}}
+{{- else -}}
+{{- include "vexa.dbHost" . -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "vexa.dbPortEffective" -}}
+{{- if .Values.pgbouncer.enabled -}}
+{{- .Values.pgbouncer.service.port | default 5432 -}}
+{{- else -}}
+{{- .Values.database.port -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "vexa.adminTokenSecretName" -}}
 {{- if .Values.secrets.existingSecretName -}}
 {{- .Values.secrets.existingSecretName -}}
 {{- else -}}
 {{- include "vexa.componentName" (list . "secrets") -}}
 {{- end -}}
+{{- end -}}
+
+{{- define "vexa.postgresCredentialsSecretName" -}}
+{{- if .Values.postgres.enabled -}}
+{{- .Values.postgres.credentialsSecretName | default "postgres-credentials" -}}
+{{- else -}}
+{{- required "postgres.credentialsSecretName must name a pre-existing Secret when postgres.enabled=false (keys: POSTGRES_PASSWORD, POSTGRES_USER, POSTGRES_DB)" .Values.postgres.credentialsSecretName -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "vexa.deploymentStrategy" -}}
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 0
+    maxUnavailable: 1
 {{- end -}}
 

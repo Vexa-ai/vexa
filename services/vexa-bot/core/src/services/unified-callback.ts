@@ -103,7 +103,20 @@ export async function callStatusChangeCallback(
       if (response.ok) {
         // Read and validate response body
         const responseBody = await response.json();
-        if (responseBody.status === 'processed' || responseBody.status === 'ok' || responseBody.status === 'container_updated') {log(`${status} status change callback sent and processed successfully`);
+        // `ignored` is returned when the meeting is already in stopping state
+        // (stop_requested=true) and the bot's in-flight status-change is
+        // superseded. This is a terminal success for the bot's perspective —
+        // the server acknowledged the call and deliberately declined to
+        // transition because the user already requested stop. Without this,
+        // a user-requested DELETE while the bot's joining callback is
+        // in-flight triggers 3 retries + a 'server rejected' exception, and
+        // the meeting ends up in `failed` instead of `completed`.
+        if (
+          responseBody.status === 'processed' ||
+          responseBody.status === 'ok' ||
+          responseBody.status === 'container_updated' ||
+          responseBody.status === 'ignored'
+        ) {log(`${status} status change callback sent and processed successfully (status=${responseBody.status})`);
           return; // Success, exit retry loop
         } else {log(`Callback returned unexpected status: ${responseBody.status}, detail: ${responseBody.detail || 'none'}`);
           // If not last attempt, retry

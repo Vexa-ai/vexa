@@ -246,11 +246,17 @@ def evaluate_dod(dod: DoD, reports: Dict[str, Dict[str, TestReport]]) -> None:
             dod.evidence_msgs.append((mode, f"{ev.test}/{ev.step}: {step.message}"))
 
         elif ev.check:
-            # Scan all smoke-* reports in this mode for a step with id == ev.check.
+            # Scan smoke-* reports first (canonical location for check IDs from
+            # checks/registry.json); then fall through to any other report in
+            # this mode — a script-driven test that emits the check ID as one
+            # of its step.id values also satisfies the binding (e.g. the
+            # 260421 chart-hygiene bundles written via tests3/tests/*.sh).
             found = False
-            for rname, report in mode_reports.items():
-                if not rname.startswith("smoke-"):
-                    continue
+            scan_order = sorted(
+                mode_reports.items(),
+                key=lambda kv: (0 if kv[0].startswith("smoke-") else 1, kv[0]),
+            )
+            for rname, report in scan_order:
                 step = report.steps.get(ev.check)
                 if step:
                     statuses.append(step.status)
@@ -259,7 +265,7 @@ def evaluate_dod(dod: DoD, reports: Dict[str, Dict[str, TestReport]]) -> None:
                     break
             if not found:
                 statuses.append("missing")
-                dod.evidence_msgs.append((mode, f"check {ev.check} not found in any smoke-* report"))
+                dod.evidence_msgs.append((mode, f"check {ev.check} not found in any report"))
         else:
             statuses.append("missing")
             dod.evidence_msgs.append((mode, "evidence binding invalid (needs test+step or check)"))
@@ -316,10 +322,14 @@ def _eval_proof(proof: Dict[str, Any], reports: Dict[str, Dict[str, TestReport]]
             step = report.steps.get(proof["step"])
             out[mode] = step.status if step else "missing"
         elif "check" in proof:
+            # Smoke-* first, then script-driven reports — same fall-through
+            # as the DoD resolver above.
             found = False
-            for rname, rep in mode_reports.items():
-                if not rname.startswith("smoke-"):
-                    continue
+            scan_order = sorted(
+                mode_reports.items(),
+                key=lambda kv: (0 if kv[0].startswith("smoke-") else 1, kv[0]),
+            )
+            for rname, rep in scan_order:
                 step = rep.steps.get(proof["check"])
                 if step:
                     out[mode] = step.status

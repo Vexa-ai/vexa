@@ -1450,6 +1450,18 @@ async def stop_bot(
         stop_delay = 0 if platform_value == "browser_session" else BOT_STOP_DELAY_SECONDS
         background_tasks.add_task(_delayed_container_stop, container_name, meeting.id, stop_delay)
 
+        # Set stop_requested flag so late bot status_change callbacks (e.g.
+        # `joining` arriving after user DELETE) are returned as "ignored"
+        # instead of failing the bot with "Invalid status transition
+        # 'stopping' -> 'joining'". Without this flag, the bot retries 3×
+        # and ends up writing the meeting status as FAILED from its own
+        # error callback, even though the user-requested stop was clean.
+        # Mirrors the fast-path at line ~1426.
+        if meeting.data is None:
+            meeting.data = {}
+        meeting.data["stop_requested"] = True
+        attributes.flag_modified(meeting, "data")
+
         # Update to STOPPING
         old_status = meeting.status
         await update_meeting_status(meeting, MeetingStatus.STOPPING, db, transition_reason="User requested stop")

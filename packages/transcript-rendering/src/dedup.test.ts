@@ -63,6 +63,27 @@ describe('deduplicateSegments', () => {
     expect(result[0].text).toContain('long segment');
   });
 
+  it('containment: confirmed wins over draft regardless of which side is wider', () => {
+    // Case A: draft is wider (pending window [0, 6]), confirmed tighter ([1, 5])
+    const caseA = sortSegments([
+      seg('Alice', 0, 6, 'all right, we are on the call, so this means updates.', { completed: false }),
+      seg('Alice', 1, 5, 'All right, we are on the call. So this means updates',   { completed: true  }),
+    ]);
+    const resultA = deduplicateSegments(caseA);
+    expect(resultA).toHaveLength(1);
+    expect(resultA[0].completed).toBe(true);
+
+    // Case B: confirmed is wider ([0, 60]), draft tighter ([0, 3]) — the
+    // common Vexa shape. Must also pick the confirmed.
+    const caseB = sortSegments([
+      seg('Alice', 0,  3, 'It is all the same thing.',              { completed: false }),
+      seg('Alice', 0, 60, 'It is all the same thing, but about it', { completed: true  }),
+    ]);
+    const resultB = deduplicateSegments(caseB);
+    expect(resultB).toHaveLength(1);
+    expect(resultB[0].completed).toBe(true);
+  });
+
   it('expansion: replaces partial with full text', () => {
     const input = sortSegments([
       seg('Alice', 0, 5, 'It was a milestone.', { completed: false }),

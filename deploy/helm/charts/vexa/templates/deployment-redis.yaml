@@ -7,6 +7,8 @@ metadata:
     {{- include "vexa.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  # Redis uses Recreate (not the default RollingUpdate) because a single PVC
+  # cannot be mounted by two pods; a maxSurge > 0 rollout would stall.
   strategy:
     type: Recreate
   selector:

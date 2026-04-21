@@ -8,6 +8,7 @@ metadata:
 spec:
   serviceName: {{ include "vexa.componentName" (list . "minio") }}
   replicas: 1
+  {{- include "vexa.deploymentStrategy" . | nindent 2 }}
   selector:
     matchLabels:
       {{- include "vexa.selectorLabels" . | nindent 6 }}

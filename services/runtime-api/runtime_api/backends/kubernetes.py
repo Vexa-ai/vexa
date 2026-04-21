@@ -131,6 +131,12 @@ class KubernetesBackend(Backend):
             "node_selector": spec.node_selector or None,
             "containers": [container],
             "volumes": volumes or None,
+            # Bot shutdown path needs time: MediaRecorder stop + final chunk
+            # upload + ffmpeg mux + MinIO upload + callbacks. 60s covers the
+            # observed Teams bot shutdown time (Bug B 2026-04-21 — exit 137
+            # after 12s active was grace-period-expiry during the graceful
+            # leave sequence, not bot-runtime failure). Matches stop() timeout.
+            "termination_grace_period_seconds": 60,
         }
         if k8s.get("tolerations"):
             pod_spec_kwargs["tolerations"] = [
@@ -166,7 +172,12 @@ class KubernetesBackend(Backend):
             logger.error(f"K8s API error creating pod: {e.status} {e.reason}")
             raise
 
-    async def stop(self, name: str, timeout: int = 10) -> bool:
+    async def stop(self, name: str, timeout: int = 60) -> bool:
+        # Bug B fix (2026-04-21): grace bumped 30→60s. Teams bot exhibited
+        # exit 137 during graceful leave sequence (Teams + ffmpeg mux +
+        # final-chunk upload exceeded 30s). Matches pod spec's
+        # terminationGracePeriodSeconds=60. Pack B incremental upload gives
+        # most data durability; 60s handles the slower platforms reliably.
         from kubernetes.client.rest import ApiException
 
         api = self._get_api()

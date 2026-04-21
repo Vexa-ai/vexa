@@ -140,3 +140,20 @@ dods:
     - lite
     - compose
     - helm
+
+# ── 260421-prod-stabilize additions ─────────────────────────────────
+- id: packages-transcript-rendering-tests-pass
+  label: "packages/transcript-rendering npm test passes — guards the dedup-prefers-confirmed fix + existing 76 tests"
+  weight: 5
+  evidence:
+    check: TRANSCRIPT_RENDERING_DEDUP_TESTS_PASS
+    modes:
+    - lite
+
+- id: packages-ci-workflow-exists
+  label: ".github/workflows/test-packages.yml exists and runs npm test per package in matrix"
+  weight: 5
+  evidence:
+    check: PACKAGES_CI_WORKFLOW_EXISTS
+    modes:
+    - lite

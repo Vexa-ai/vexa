@@ -7,6 +7,7 @@ metadata:
     {{- include "vexa.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.apiGateway.replicaCount }}
+  {{- include "vexa.deploymentStrategy" . | nindent 2 }}
   selector:
     matchLabels:
       {{- include "vexa.selectorLabels" . | nindent 6 }}

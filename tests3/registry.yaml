@@ -1453,3 +1453,203 @@ security-hygiene:
   features:
   - security-hygiene
   tier: cheap
+
+# ─── 260421-prod-stabilize additions ─────────────────────────────────
+
+HELM_PROD_SECRETS_SECRETREF_ONLY:
+  proves: "every prod secret env (DB_PASSWORD, TRANSCRIPTION_SERVICE_TOKEN) in the rendered chart sources from secretKeyRef, not plain value"
+  symptom: "an env var renders as plain `value: \"\"` silently; pod CrashLoops on secret-driven auth"
+  found: '2026-04-21'
+  type: script
+  script: tests/chart-prod-secrets-secretref.sh
+  step: secretref_only
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 20
+
+HELM_PROD_SECRETS_REQUIRED_AT_RENDER:
+  proves: "helm template fails with a `required` error when DB_PASSWORD / TRANSCRIPTION_SERVICE_TOKEN secret material is missing"
+  symptom: "chart silently renders with empty secret values; broken Deployment hits K8s unnoticed"
+  found: '2026-04-21'
+  type: script
+  script: tests/chart-prod-secrets-secretref.sh
+  step: required_at_render
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 30
+
+RECORDING_UPLOAD_SUPPORTS_CHUNK_SEQ:
+  proves: "/internal/recordings/upload endpoint signature accepts a chunk_seq: int form parameter"
+  symptom: "bot chunk uploads fail because endpoint drops chunk_seq support"
+  found: '2026-04-21'
+  type: grep
+  file: services/meeting-api/meeting_api/recordings.py
+  must_match: 'chunk_seq\s*:\s*int'
+  modes:
+  - lite
+  - compose
+  state: stateless
+  max_duration_sec: 5
+
+BOT_RECORDS_INCREMENTALLY:
+  proves: "every bot recording.ts wires MediaRecorder.start() with a ≥15_000 ms timeslice AND calls __vexaSaveRecordingChunk in ondataavailable"
+  symptom: "bot reverts to buffering full WebM until shutdown → long-meeting recording loss on SIGKILL"
+  found: '2026-04-21'
+  type: script
+  script: tests/bot-records-incrementally.sh
+  modes:
+  - lite
+  - compose
+  state: stateless
+  max_duration_sec: 10
+
+RECORDING_SURVIVES_MID_MEETING_KILL:
+  proves: "SIGKILL mid-recording leaves already-uploaded chunks durable in MinIO; Recording.status stays IN_PROGRESS (never COMPLETED)"
+  symptom: "SIGKILL loses 100% of recording; Recording row orphans at uploading state with no media_files"
+  found: '2026-04-21'
+  type: script
+  script: tests/recording-survives-sigkill.sh
+  modes:
+  - compose
+  state: stateful
+  mutates:
+  - 'minio:recordings/test-user/**'
+  - 'meetings(test)'
+  max_duration_sec: 180
+
+RUNTIME_API_STOP_GRACE_MATCHES_POD_SPEC:
+  proves: "runtime-api kubernetes.py stop() grace_period_seconds default ≥30 matches the pod spec's terminationGracePeriodSeconds"
+  symptom: "grace-period override cuts bot shutdown short; final chunk upload aborted"
+  found: '2026-04-21'
+  type: grep
+  file: services/runtime-api/runtime_api/backends/kubernetes.py
+  must_match: 'timeout:\s*int\s*=\s*(3[0-9]|[4-9][0-9]|[1-9][0-9]{2,})'
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 5
+
+TRANSCRIPT_RENDERING_DEDUP_TESTS_PASS:
+  proves: "packages/transcript-rendering npm test passes — dedup-prefers-confirmed fix + existing invariants"
+  symptom: "dedup regression — pending segments stuck italic or confirmed dropped"
+  found: '2026-04-21'
+  type: script
+  script: tests/package-tests.sh
+  step: transcript_rendering
+  modes:
+  - lite
+  state: stateless
+  max_duration_sec: 120
+
+PACKAGES_CI_WORKFLOW_EXISTS:
+  proves: ".github/workflows/test-packages.yml exists and runs npm test per package in a matrix"
+  symptom: "packages/* has no PR-time CI; regressions slip in"
+  found: '2026-04-21'
+  type: grep
+  file: .github/workflows/test-packages.yml
+  must_match: 'matrix:|packages/[a-z*-]+'
+  modes:
+  - lite
+  state: stateless
+  max_duration_sec: 5
+
+ENGINE_POOL_RESET_ON_RETURN_ROLLBACK:
+  proves: "meeting-api SQLAlchemy engine sets pool_reset_on_return='rollback' — the engine-level defense against idle-in-transaction leaks"
+  symptom: "engine config refactored without pool_reset_on_return; AsyncSession leaks re-emerge silently"
+  found: '2026-04-21'
+  type: grep
+  file: services/meeting-api/meeting_api/database.py
+  must_match: 'pool_reset_on_return\s*=\s*["'']rollback["'']'
+  modes:
+  - lite
+  - compose
+  state: stateless
+  max_duration_sec: 5
+
+HELM_ALL_SERVICES_DB_POOL_TUNED:
+  proves: "every pool-holder service in the chart has an explicit DB_POOL_SIZE env — no silent framework defaults"
+  symptom: "configured pool ceilings sum past managed-DB slot cap; pool-exhaustion 500s under load"
+  found: '2026-04-21'
+  type: script
+  script: tests/chart-all-services-db-pool-tuned.sh
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 15
+
+HELM_DEPLOYMENT_STRATEGY_HELPER_DEFINED:
+  proves: "_helpers.tpl defines the vexa.deploymentStrategy helper"
+  symptom: "helper deletion causes every Deployment to revert to K8s default maxSurge=25%"
+  found: '2026-04-21'
+  type: grep
+  file: deploy/helm/charts/vexa/templates/_helpers.tpl
+  must_match: 'define\s+"vexa\.deploymentStrategy"'
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 5
+
+HELM_ROLLING_UPDATE_ZERO_SURGE:
+  proves: "every app-facing Deployment in rendered chart sets strategy.rollingUpdate.maxSurge: 0 — rolling updates never double DB pool footprint"
+  symptom: "rolling update briefly runs 2 pods, pools 2×, pushes over managed-DB slot cap"
+  found: '2026-04-21'
+  type: script
+  script: tests/chart-rolling-update-zero-surge.sh
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 15
+
+HELM_API_GATEWAY_REPLICA_COUNT_HA:
+  proves: "apiGateway.replicaCount default ≥ 2 so maxSurge: 0 rolling updates remain zero-downtime for the front door"
+  symptom: "apiGateway rolled with replicaCount=1 and maxSurge=0 = 5-15s platform-wide outage during upgrade"
+  found: '2026-04-21'
+  type: grep
+  file: deploy/helm/charts/vexa/values.yaml
+  must_match: 'apiGateway:\s*\n(?:[ \t]+[^\n]+\n)*[ \t]+replicaCount:\s*[2-9]'
+  multiline: true
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 5
+
+HELM_PGBOUNCER_OPTIONAL_AND_WIRED:
+  proves: "chart supports optional PgBouncer (pgbouncer.enabled: false default); when enabled, DB_HOST of every service rewires to pgbouncer via vexa.dbHostEffective"
+  symptom: "operator can't put a pooler in front of Postgres without forking the chart"
+  found: '2026-04-21'
+  type: script
+  script: tests/chart-pgbouncer-optional.sh
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 30
+
+RUNTIME_API_IDLE_LOOP_SWEEPS_PENDING_CALLBACKS:
+  proves: "runtime-api lifecycle.py idle_loop references pending-callback iteration — the sweep is wired"
+  symptom: "meeting stuck status='active' forever after callback delivery gives up"
+  found: '2026-04-21'
+  type: grep
+  file: services/runtime-api/runtime_api/lifecycle.py
+  must_match: 'list_pending_callbacks|pending_callbacks.*idle_loop|idle_loop.*pending_callback'
+  multiline: true
+  modes:
+  - lite
+  - compose
+  state: stateless
+  max_duration_sec: 5
+
+RUNTIME_API_EXIT_CALLBACK_DURABLE:
+  proves: "runtime-api exit callback delivery survives a meeting-api outage — pending record replays after consumer recovers"
+  symptom: "short meeting-api outage during bot exit orphans the meeting in status='active' forever"
+  found: '2026-04-21'
+  type: script
+  script: tests/runtime-api-exit-callback-durable.sh
+  modes:
+  - compose
+  state: stateful
+  mutates:
+  - 'meeting(fixture)'
+  - 'runtime-api:redis:pending_callbacks/*'
+  max_duration_sec: 180

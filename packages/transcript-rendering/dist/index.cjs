@@ -86,8 +86,16 @@ function deduplicateSegments(segments) {
         }
         continue;
       }
-      if (segFullyInsideLast) continue;
+      if (segFullyInsideLast) {
+        if (seg.completed && !last.completed) {
+          deduped[deduped.length - 1] = seg;
+        }
+        continue;
+      }
       if (lastFullyInsideSeg) {
+        if (last.completed && !seg.completed) {
+          continue;
+        }
         deduped[deduped.length - 1] = seg;
         continue;
       }

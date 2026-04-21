@@ -551,6 +551,132 @@
       "method": "VEXA_BOT_NPM_AUDIT"
     },
     {
+      "id": "RECORDING_UPLOAD_SUPPORTS_CHUNK_SEQ",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": "/internal/recordings/upload accepts chunk_seq: int form parameter",
+      "symptom": "bot incremental chunk uploads rejected because endpoint drops chunk_seq",
+      "file": "services/meeting-api/meeting_api/recordings.py",
+      "must_match": "chunk_seq: int"
+    },
+    {
+      "id": "ENGINE_POOL_RESET_ON_RETURN_ROLLBACK",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": "meeting-api SQLAlchemy engine keeps pool_reset_on_return=\"rollback\" \u2014 guards idle-in-transaction leak defense",
+      "symptom": "engine config refactored without pool_reset_on_return; AsyncSession leaks re-emerge silently",
+      "file": "services/meeting-api/meeting_api/database.py",
+      "must_match": "pool_reset_on_return=\"rollback\""
+    },
+    {
+      "id": "HELM_DEPLOYMENT_STRATEGY_HELPER_DEFINED",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": "_helpers.tpl defines vexa.deploymentStrategy \u2014 centralized rolling-update contract",
+      "symptom": "helper deleted; every Deployment reverts to K8s default maxSurge=25%",
+      "file": "deploy/helm/charts/vexa/templates/_helpers.tpl",
+      "must_match": "vexa.deploymentStrategy"
+    },
+    {
+      "id": "PACKAGES_CI_WORKFLOW_EXISTS",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": ".github/workflows/test-packages.yml exists and runs npm test on packages/*",
+      "symptom": "packages/ has no PR-time CI; regressions slip in",
+      "file": ".github/workflows/test-packages.yml",
+      "must_match": "packages/"
+    },
+    {
+      "id": "RUNTIME_API_IDLE_LOOP_SWEEPS_PENDING_CALLBACKS",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": "runtime-api idle_loop references list_pending_callbacks \u2014 the durable-delivery sweep is wired",
+      "symptom": "meeting stuck status='active' forever after callback delivery gives up",
+      "file": "services/runtime-api/runtime_api/lifecycle.py",
+      "must_match": "list_pending_callbacks"
+    },
+    {
+      "id": "RUNTIME_API_STOP_GRACE_MATCHES_POD_SPEC",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": "runtime-api kubernetes.py stop() passes its `timeout` parameter through as grace_period_seconds on pod deletion \u2014 bot graceful-leave has the full grace window. Current default: 60s (matches pod spec's terminationGracePeriodSeconds=60).",
+      "symptom": "grace period cut back to 10s; final chunk upload aborted on pod deletion",
+      "file": "services/runtime-api/runtime_api/backends/kubernetes.py",
+      "must_match": "grace_period_seconds=timeout"
+    },
+    {
+      "id": "HELM_API_GATEWAY_REPLICA_COUNT_HA",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": "apiGateway.replicaCount default is 2 \u2014 maxSurge: 0 rollouts stay zero-downtime for the front door",
+      "symptom": "apiGateway rolled with replicaCount=1 + maxSurge=0 = 5-15s platform-wide outage during upgrade",
+      "file": "deploy/helm/charts/vexa/values.yaml",
+      "must_match": "replicaCount: 2"
+    },
+    {
+      "id": "LITE_POSTGRES_NOT_PUBLIC",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": "deploy/lite/Makefile launches Postgres with listen_addresses=127.0.0.1 \u2014 not reachable from the public internet on the host interface",
+      "symptom": "lite's Postgres on 0.0.0.0:5432 was scanned + ransomware-wiped (172.232.0.163 on 2026-04-21; database 'vexa' dropped; 'readme_to_recover' left with BTC demand)",
+      "file": "deploy/lite/Makefile",
+      "must_match": "listen_addresses=127.0.0.1"
+    },
+    {
+      "id": "LITE_INTERNAL_SERVICES_LOOPBACK_ONLY",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": "lite supervisord binds every internal service (admin-api, runtime-api, meeting-api, agent-api, tts-service, mcp) to 127.0.0.1 \u2014 only api-gateway + dashboard listen on 0.0.0.0",
+      "symptom": "internal services expose authenticated endpoints on 0.0.0.0 on a public-IP VM; enlarges attack surface even though auth protects against ransomware-class data loss",
+      "file": "deploy/lite/supervisord.conf",
+      "must_not_match": "host 0\\.0\\.0\\.0 --port (8057|8090|8080|8100|8059|18888)"
+    },
+    {
+      "id": "LITE_REDIS_NOT_PUBLIC",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": "lite's Redis binds to 127.0.0.1 with protected-mode \u2014 not reachable from the public internet; same ransomware class as Postgres if left on 0.0.0.0 without AUTH",
+      "symptom": "--bind 0.0.0.0 Redis with no AUTH gets FLUSHALL-ed by scanner + ransom key written",
+      "file": "deploy/lite/supervisord.conf",
+      "must_match": "redis-server --bind 127.0.0.1"
+    },
+    {
+      "id": "COMPOSE_PORTS_LOOPBACK_ONLY",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": "compose dev-mode ports (Postgres 5458, MinIO 9000/9001, admin-api 8057, runtime-api 8090, MCP 18888) publish to 127.0.0.1 only \u2014 only api-gateway + dashboard reach the public interface",
+      "symptom": "same exposure class as lite \u2014 dev-mode ports on a public-IP VM get scanned + attacked",
+      "file": "deploy/compose/docker-compose.yml",
+      "must_not_match": "- \"\\$\\{(POSTGRES_HOST_PORT|MINIO_HOST_PORT|MINIO_CONSOLE_HOST_PORT|ADMIN_API_PORT|RUNTIME_API_PORT|MCP_HOST_PORT)"
+    },
+    {
+      "id": "BOT_VIDEO_DEFAULT_OFF",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": "POST /bots `video` field defaults to False \u2014 video recording is opt-in; audio-only is the default for transcription-focused deployments",
+      "symptom": "Every default-posted bot gets video capture via Xvfb screen-grab, creating unwanted recordings of the bot's browser view + inflated storage + confused dashboards showing video UI for unwanted recordings",
+      "file": "services/meeting-api/meeting_api/schemas.py",
+      "must_not_match": "video: Optional\\[bool\\] = Field\\(\\s*True"
+    },
+    {
+      "id": "RUNTIME_API_MEETING_PROFILE_MEMORY_2560MI",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "runtime-api meeting profile memory_limit is at least 2560Mi \u2014 prevents Teams bot SIGKILL exit 137 during graceful leave sequence (admission + ffmpeg mux + final-chunk upload spike above 1.5Gi)",
+      "symptom": "Teams bot exits 137 (OOM) 10-13s after admission; observed meeting-11 baseline died at 11s post-active; no audio captured, no transcript, recording loss",
+      "file": "services/runtime-api/profiles.yaml",
+      "must_match": "memory_limit: \"2560Mi\""
+    },
+    {
+      "id": "HELM_CHART_RUNTIME_API_MEMORY_2560MI",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "helm chart values.yaml sets runtime-api meeting profile memory_limit to 2560Mi, matching services/runtime-api/profiles.yaml \u2014 source-of-truth drift guard (edit one, forget the other = bug B recurrence)",
+      "symptom": "Chart deployed with 1536Mi memory even though profiles.yaml bumped to 2560Mi; helm runtime-api OOMs Teams bot while compose/lite work fine",
+      "file": "deploy/helm/charts/vexa/values.yaml",
+      "must_match": "memory_limit: \"2560Mi\""
+    },
+    {
       "_": "\u2550\u2550\u2550 HEALTH/DATA \u2014 database integrity \u2550\u2550\u2550"
     },
     {

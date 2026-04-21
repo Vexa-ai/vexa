@@ -104,3 +104,12 @@ async def get_pending_callback(redis, name: str) -> Optional[dict]:
 async def delete_pending_callback(redis, name: str):
     """Remove a pending callback after successful delivery."""
     await redis.delete(f"{CALLBACK_PREFIX}{name}")
+
+
+async def list_pending_callbacks(redis) -> list[str]:
+    """Return the list of container names with a pending callback in Redis."""
+    names: list[str] = []
+    async for key in redis.scan_iter(match=f"{CALLBACK_PREFIX}*"):
+        name = key.decode() if isinstance(key, (bytes, bytearray)) else key
+        names.append(name[len(CALLBACK_PREFIX):])
+    return names

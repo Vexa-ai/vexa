@@ -16,7 +16,11 @@ profiles:
       cpu_request: "1000m"     # measured p95: 780m (load test 2026-04-15, 19 bots)
       cpu_limit: "1500m"       # 1.5x headroom for browser spikes
       memory_request: "1100Mi" # measured p95: 977Mi (load test 2026-04-15, 19 bots)
-      memory_limit: "1536Mi"   # 1.5x headroom for Chrome memory spikes
+      # Bumped 1536Mi → 2560Mi (Bug B 2026-04-21): Teams bot bursts memory
+      # during admission-verification + graceful leave. Exit 137 observed
+      # on helm meetings 9+10 + compose 18 after 10-20s active. 2.5× headroom
+      # absorbs Teams-side memory spikes without affecting bot scheduling.
+      memory_limit: "2560Mi"
       shm_size: 2147483648     # 2GB shared memory for browser
     idle_timeout: 0          # managed by meeting-api (scheduler + bot-side timers)
     auto_remove: false

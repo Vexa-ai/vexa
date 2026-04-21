@@ -175,3 +175,60 @@ tests:
     runs_in: []
     script: tests/collect.sh
     features: []
+
+  # ── 260421-prod-stabilize additions ────────────────────────────
+  chart-prod-secrets-secretref:
+    tier: cheap
+    runs_in: [helm]
+    script: tests/chart-prod-secrets-secretref.sh
+    features: [security-hygiene]
+    max_duration_sec: 60
+
+  bot-records-incrementally:
+    tier: cheap
+    runs_in: [lite, compose]
+    script: tests/bot-records-incrementally.sh
+    features: [bot-lifecycle]
+    max_duration_sec: 15
+
+  recording-survives-sigkill:
+    tier: cheap
+    runs_in: [compose]
+    script: tests/recording-survives-sigkill.sh
+    features: [bot-lifecycle]
+    max_duration_sec: 180
+
+  package-tests:
+    tier: cheap
+    runs_in: [lite]
+    script: tests/package-tests.sh
+    features: [dashboard]
+    max_duration_sec: 150
+
+  chart-all-services-db-pool-tuned:
+    tier: cheap
+    runs_in: [helm]
+    script: tests/chart-all-services-db-pool-tuned.sh
+    features: [infrastructure]
+    max_duration_sec: 20
+
+  chart-rolling-update-zero-surge:
+    tier: cheap
+    runs_in: [helm]
+    script: tests/chart-rolling-update-zero-surge.sh
+    features: [infrastructure]
+    max_duration_sec: 20
+
+  chart-pgbouncer-optional:
+    tier: cheap
+    runs_in: [helm]
+    script: tests/chart-pgbouncer-optional.sh
+    features: [infrastructure]
+    max_duration_sec: 30
+
+  runtime-api-exit-callback-durable:
+    tier: cheap
+    runs_in: [lite, compose]
+    script: tests/runtime-api-exit-callback-durable.sh
+    features: [bot-lifecycle]
+    max_duration_sec: 60

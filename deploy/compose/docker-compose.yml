@@ -27,7 +27,7 @@ services:
       - POSTGRES_USER=${DB_USER:-postgres}
       - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres}
     ports:
-      - "${POSTGRES_HOST_PORT:-5458}:5432"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5458}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-vexa}"]
       interval: 5s
@@ -47,8 +47,8 @@ services:
       - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-vexa-access-key}
       - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-vexa-secret-key}
     ports:
-      - "${MINIO_HOST_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
+      - "127.0.0.1:${MINIO_HOST_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
     volumes:
       - minio-data:/data
     networks:
@@ -81,7 +81,7 @@ services:
       dockerfile: services/admin-api/Dockerfile
     image: vexaai/admin-api:${IMAGE_TAG}
     ports:
-      - "${ADMIN_API_PORT:-8057}:8001"
+      - "127.0.0.1:${ADMIN_API_PORT:-8057}:8001"
     environment:
       - DB_HOST=postgres
       - DB_PORT=5432
@@ -114,7 +114,7 @@ services:
     group_add:
       - "${DOCKER_GID:-998}"
     ports:
-      - "${RUNTIME_API_PORT:-8090}:8090"
+      - "127.0.0.1:${RUNTIME_API_PORT:-8090}:8090"
     environment:
       - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa
       - AGENT_IMAGE=${AGENT_IMAGE}
@@ -309,7 +309,7 @@ services:
     image: vexaai/mcp:${IMAGE_TAG}
     mem_limit: 512m
     ports:
-      - "${MCP_HOST_PORT:-18888}:18888"
+      - "127.0.0.1:${MCP_HOST_PORT:-18888}:18888"
     environment:
       - API_GATEWAY_URL=http://api-gateway:8000
       - LOG_LEVEL=${LOG_LEVEL:-INFO}

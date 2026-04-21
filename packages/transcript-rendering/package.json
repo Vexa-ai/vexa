@@ -1,6 +1,6 @@
 {
   "name": "@vexaai/transcript-rendering",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Real-time transcript state management: confirmed/pending two-map model, deduplication, speaker grouping",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -21,12 +21,22 @@
     "type": "git",
     "url": "https://github.com/Vexa-ai/vexa"
   },
-  "keywords": ["transcript", "deduplication", "websocket", "speech-to-text", "vexa"],
+  "keywords": [
+    "transcript",
+    "deduplication",
+    "websocket",
+    "speech-to-text",
+    "vexa"
+  ],
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "devDependencies": {
     "tsup": "^8.0.0",

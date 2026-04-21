@@ -27,3 +27,61 @@ dods:
     modes:
     - lite
     - compose
+
+# ── 260421-prod-stabilize additions ─────────────────────────────────
+- id: chart-prod-secrets-via-secretkeyref
+  label: "every prod secret (DB_PASSWORD, TRANSCRIPTION_SERVICE_TOKEN) sourced via secretKeyRef in rendered chart"
+  weight: 15
+  evidence:
+    check: HELM_PROD_SECRETS_SECRETREF_ONLY
+    modes:
+    - helm
+
+- id: chart-prod-secrets-required-at-render
+  label: "helm template exits non-zero when prod secrets are absent — fail loud at render, not silently at pod boot"
+  weight: 10
+  evidence:
+    check: HELM_PROD_SECRETS_REQUIRED_AT_RENDER
+    modes:
+    - helm
+
+- id: engine-pool-reset-on-return-rollback-explicit
+  label: "meeting-api database.py engine sets pool_reset_on_return='rollback' — regression guard for idle-in-transaction leak defense"
+  weight: 10
+  evidence:
+    check: ENGINE_POOL_RESET_ON_RETURN_ROLLBACK
+    modes:
+    - lite
+    - compose
+
+- id: lite-postgres-not-public
+  label: "deploy/lite/Makefile launches Postgres with listen_addresses=127.0.0.1 — not reachable from public internet"
+  weight: 15
+  evidence:
+    check: LITE_POSTGRES_NOT_PUBLIC
+    modes:
+    - lite
+
+- id: lite-internal-services-loopback-only
+  label: "deploy/lite/supervisord.conf binds every internal service (admin-api, runtime-api, meeting-api, agent-api, tts-service, mcp) to 127.0.0.1"
+  weight: 10
+  evidence:
+    check: LITE_INTERNAL_SERVICES_LOOPBACK_ONLY
+    modes:
+    - lite
+
+- id: lite-redis-not-public
+  label: "deploy/lite/supervisord.conf Redis binds to 127.0.0.1 with protected-mode"
+  weight: 10
+  evidence:
+    check: LITE_REDIS_NOT_PUBLIC
+    modes:
+    - lite
+
+- id: compose-ports-loopback-only
+  label: "deploy/compose/docker-compose.yml dev-mode ports publish to 127.0.0.1 only (postgres, minio, admin-api, runtime-api, mcp)"
+  weight: 10
+  evidence:
+    check: COMPOSE_PORTS_LOOPBACK_ONLY
+    modes:
+    - compose

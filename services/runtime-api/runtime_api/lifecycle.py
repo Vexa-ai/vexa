@@ -25,7 +25,15 @@ logger = logging.getLogger("runtime_api.lifecycle")
 
 
 async def idle_loop(redis, backend: Backend) -> None:
-    """Background task: stop containers that have been idle too long."""
+    """Background task: stop idle containers + sweep pending exit callbacks.
+
+    Two responsibilities, one loop tick:
+      (1) Stop containers that have been idle past their profile's timeout.
+      (2) Re-try any exit callback that has not yet been acknowledged by the
+          consumer. This makes exit-callback delivery durable across consumer
+          outages — without it, runtime-api gives up after CALLBACK_RETRIES
+          and the downstream meeting row is stuck 'active' forever.
+    """
     while True:
         await asyncio.sleep(config.IDLE_CHECK_INTERVAL)
         try:
@@ -56,6 +64,21 @@ async def idle_loop(redis, backend: Backend) -> None:
                         await _fire_exit_callback(redis, name, exit_code=0)
                     except Exception:
                         logger.warning(f"Failed to stop idle container {name}", exc_info=True)
+
+            # Durable exit-callback sweep — re-deliver anything still pending.
+            # This is the single mechanism that makes callback delivery
+            # eventually-complete; _deliver_callback no longer deletes the
+            # record on burst-exhaustion, so we retry here every tick.
+            try:
+                pending_names = await state.list_pending_callbacks(redis)
+            except Exception:
+                pending_names = []
+                logger.debug("pending-callback scan failed", exc_info=True)
+            for name in pending_names:
+                try:
+                    await _deliver_callback(redis, name)
+                except Exception:
+                    logger.debug(f"pending-callback sweep delivery failed for {name}", exc_info=True)
         except asyncio.CancelledError:
             return
         except Exception:
@@ -111,7 +134,14 @@ async def _fire_exit_callback(redis, name: str, exit_code: int = 0) -> None:
 
 
 async def _deliver_callback(redis, name: str) -> None:
-    """Attempt to deliver a callback with exponential backoff."""
+    """Attempt to deliver a callback with exponential backoff.
+
+    One burst = CALLBACK_RETRIES attempts. If the burst exhausts without a
+    2xx/3xx, the pending-callback record is LEFT in Redis so the idle_loop
+    sweeper can retry on its next tick. This makes exit-callback delivery
+    durable across consumer outages: the only way a pending callback stops
+    retrying is by succeeding (or TTL expiry, which is the outer bound).
+    """
     cb = await state.get_pending_callback(redis, name)
     if not cb:
         return
@@ -139,7 +169,13 @@ async def _deliver_callback(redis, name: str) -> None:
             logger.info(f"Retrying callback for {name} in {delay}s")
             await asyncio.sleep(delay)
 
-    logger.error(f"Callback delivery exhausted for {name} after {config.CALLBACK_RETRIES} attempts")
+    # Burst exhausted. Leave the pending-callback record in Redis so idle_loop
+    # will re-invoke this function on its next tick; do NOT call
+    # delete_pending_callback here.
+    logger.warning(
+        f"Callback burst exhausted for {name} after {config.CALLBACK_RETRIES} attempts; "
+        f"idle_loop will retry on next tick (IDLE_CHECK_INTERVAL)"
+    )
 
 
 async def reconcile_state(redis, backend: Backend) -> None:
