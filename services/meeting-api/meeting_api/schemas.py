@@ -565,8 +565,8 @@ class MeetingCreate(BaseModel):
         description="Bot mode: 'browser_session' for remote browser access, or None for default meeting mode."
     )
     video: Optional[bool] = Field(
-        True,
-        description="Enable video recording. When true, automatically sets recording_enabled=true and capture_modes=['audio', 'video']. Default: on."
+        False,
+        description="Enable video recording (Xvfb screen capture of the bot's browser view). Default: off. When true, sets recording_enabled=true and capture_modes=['audio', 'video']. Opt-in — leaving this false (or unset) gives audio-only recording, which is the expected default for transcription-focused deployments."
     )
     authenticated: Optional[bool] = Field(
         False,

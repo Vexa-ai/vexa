@@ -650,6 +650,15 @@
       "must_not_match": "- \"\\$\\{(POSTGRES_HOST_PORT|MINIO_HOST_PORT|MINIO_CONSOLE_HOST_PORT|ADMIN_API_PORT|RUNTIME_API_PORT|MCP_HOST_PORT)"
     },
     {
+      "id": "BOT_VIDEO_DEFAULT_OFF",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": "POST /bots `video` field defaults to False \u2014 video recording is opt-in; audio-only is the default for transcription-focused deployments",
+      "symptom": "Every default-posted bot gets video capture via Xvfb screen-grab, creating unwanted recordings of the bot's browser view + inflated storage + confused dashboards showing video UI for unwanted recordings",
+      "file": "services/meeting-api/meeting_api/schemas.py",
+      "must_not_match": "video: Optional\\[bool\\] = Field\\(\\s*True"
+    },
+    {
       "_": "\u2550\u2550\u2550 HEALTH/DATA \u2014 database integrity \u2550\u2550\u2550"
     },
     {

@@ -151,3 +151,12 @@ dods:
     modes:
     - lite
     - compose
+
+- id: bot-video-default-off
+  label: "POST /bots `video` field defaults to False — video recording is opt-in, not opt-out"
+  weight: 5
+  evidence:
+    check: BOT_VIDEO_DEFAULT_OFF
+    modes:
+    - lite
+    - compose
