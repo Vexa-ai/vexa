@@ -1,14 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import { deduplicateSegments, upsertSegments, sortSegments } from './dedup';
 import type { TranscriptSegment } from './types';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
-// Load actual core output from the delivery module
+// Load actual core output from the delivery module.
+// Fixture lives under features/realtime-transcription/data/ which is
+// .gitignore'd (dev-only replay data); test skips when absent so CI +
+// prepublishOnly don't fail in clean checkouts.
 const CORE_OUTPUT_PATH = join(
   __dirname,
   '../../../features/realtime-transcription/data/core/teams-7sp-panel/segments.json',
 );
+const FIXTURE_PRESENT = existsSync(CORE_OUTPUT_PATH);
 
 interface CoreSegment {
   speaker: string;
@@ -32,8 +36,10 @@ function coreToTranscript(seg: CoreSegment, i: number): TranscriptSegment {
   };
 }
 
-describe('panel-20 core output (43 segments, 7 speakers)', () => {
-  const raw: CoreSegment[] = JSON.parse(readFileSync(CORE_OUTPUT_PATH, 'utf8'));
+describe.skipIf(!FIXTURE_PRESENT)('panel-20 core output (43 segments, 7 speakers)', () => {
+  const raw: CoreSegment[] = FIXTURE_PRESENT
+    ? JSON.parse(readFileSync(CORE_OUTPUT_PATH, 'utf8'))
+    : [];
   const segments = raw.map(coreToTranscript);
 
   it('deduplicateSegments preserves all 43 segments', () => {
