@@ -599,10 +599,10 @@
       "id": "RUNTIME_API_STOP_GRACE_MATCHES_POD_SPEC",
       "tier": "static",
       "found": "2026-04-21",
-      "proves": "runtime-api kubernetes.py stop() grace_period_seconds default is 30s \u2014 matches the pod spec terminationGracePeriodSeconds so final recording chunk + webhook flush in time",
+      "proves": "runtime-api kubernetes.py stop() passes its `timeout` parameter through as grace_period_seconds on pod deletion \u2014 bot graceful-leave has the full grace window. Current default: 60s (matches pod spec's terminationGracePeriodSeconds=60).",
       "symptom": "grace period cut back to 10s; final chunk upload aborted on pod deletion",
       "file": "services/runtime-api/runtime_api/backends/kubernetes.py",
-      "must_match": "timeout: int = 30"
+      "must_match": "grace_period_seconds=timeout"
     },
     {
       "id": "HELM_API_GATEWAY_REPLICA_COUNT_HA",
