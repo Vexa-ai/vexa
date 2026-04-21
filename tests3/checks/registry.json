@@ -659,6 +659,24 @@
       "must_not_match": "video: Optional\\[bool\\] = Field\\(\\s*True"
     },
     {
+      "id": "RUNTIME_API_MEETING_PROFILE_MEMORY_2560MI",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "runtime-api meeting profile memory_limit is at least 2560Mi \u2014 prevents Teams bot SIGKILL exit 137 during graceful leave sequence (admission + ffmpeg mux + final-chunk upload spike above 1.5Gi)",
+      "symptom": "Teams bot exits 137 (OOM) 10-13s after admission; observed meeting-11 baseline died at 11s post-active; no audio captured, no transcript, recording loss",
+      "file": "services/runtime-api/profiles.yaml",
+      "must_match": "memory_limit: \"2560Mi\""
+    },
+    {
+      "id": "HELM_CHART_RUNTIME_API_MEMORY_2560MI",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "helm chart values.yaml sets runtime-api meeting profile memory_limit to 2560Mi, matching services/runtime-api/profiles.yaml \u2014 source-of-truth drift guard (edit one, forget the other = bug B recurrence)",
+      "symptom": "Chart deployed with 1536Mi memory even though profiles.yaml bumped to 2560Mi; helm runtime-api OOMs Teams bot while compose/lite work fine",
+      "file": "deploy/helm/charts/vexa/values.yaml",
+      "must_match": "memory_limit: \"2560Mi\""
+    },
+    {
       "_": "\u2550\u2550\u2550 HEALTH/DATA \u2014 database integrity \u2550\u2550\u2550"
     },
     {

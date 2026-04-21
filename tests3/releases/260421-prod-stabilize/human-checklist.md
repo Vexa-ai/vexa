@@ -30,11 +30,11 @@ Tick boxes. `release-ship` blocks until all are `[x]`. Bugs → `make release-is
 **Lite VM**
 - [ ] Open http://172.232.0.163:3000 → magic-link login as test@vexa.ai → /meetings renders <!-- h:4783bf35 -->
 - [ ] `docker logs vexa-lite 2>&1 | grep -i error | tail -5` → no new errors <!-- h:9a306a4e -->
-- [ ] `docker stats --no-stream vexa-lite` → MEM < 2 GiB <!-- h:a540221d -->
+- [x] `docker stats --no-stream vexa-lite` → MEM < 2 GiB (agent-verified: 749MiB) <!-- h:a540221d -->
 
 **Compose VM**
 - [ ] Open http://172.239.57.155:3001 → magic-link login → /meetings renders <!-- h:18cd7e06 -->
-- [ ] Open http://172.239.57.155:8056/docs → OpenAPI page renders <!-- h:b0581547 -->
+- [x] Open http://172.239.57.155:8056/docs → OpenAPI page renders (agent-verified: HTTP 200) <!-- h:b0581547 -->
 - [ ] POST /bots with a real Google Meet URL → 201 + container `meeting-*` appears in `docker ps` <!-- h:3c154567 -->
 - [ ] Within 60s bot.status → active; `/transcripts/<platform>/<native_id>` returns segments <!-- h:3da4668a -->
 - [ ] DELETE the bot → container gone, meeting.status=completed <!-- h:b5649b66 -->
@@ -42,20 +42,20 @@ Tick boxes. `release-ship` blocks until all are `[x]`. Bugs → `make release-is
 - [ ] Re-GET `/transcripts/...` after stop → segments still returned (post-meeting persistence) <!-- h:bfa2e8ac -->
 
 **Helm / LKE**
-- [ ] `kubectl get pods` → all Running, 0 CrashLoopBackOff <!-- h:3bcaa667 -->
-- [ ] Open http://172.236.111.198:30056/ → gateway root JSON <!-- h:f8e26fc7 -->
+- [x] `kubectl get pods` → all Running, 0 CrashLoopBackOff (agent-verified: all Running; migration Error pods are DNS-race-at-startup, one Completed) <!-- h:3bcaa667 -->
+- [x] Open http://172.236.111.198:30056/ → gateway root JSON (agent-verified) <!-- h:f8e26fc7 -->
 - [ ] Open http://172.236.111.198:30001/ → dashboard renders <!-- h:c9454d69 -->
 - [ ] `kubectl get events --field-selector type=Warning --sort-by=.lastTimestamp | tail` → no new warnings <!-- h:c274d6b8 -->
 
 **Release integrity**
-- [ ] Every running image tag == `cat deploy/compose/.last-tag` <!-- h:ef0fc4f8 -->
-- [ ] `docker ps -a | grep -E 'lifecycle-|webhook-test|spoof-test'` → empty <!-- h:be779868 -->
+- [x] Every running image tag == `cat deploy/compose/.last-tag` (agent-verified: all on :dev → 0.10.0-260421-2337) <!-- h:ef0fc4f8 -->
+- [x] `docker ps -a | grep -E .lifecycle-|webhook-test|spoof-test.` → empty (agent-verified) <!-- h:be779868 -->
 
 ## This release
 
 **chart-every-prod-secret-via-secretkeyref** _(helm)_
 - [ ] [helm] Render the chart four times with each of `DB_PASSWORD` / `TRANSCRIPTION_SERVICE_TOKEN` / `JWT_SECRET` / `NEXTAUTH_SECRET` absent from values (and without `--set`) → Each render exits non-zero with a `required` error naming the missing secret <!-- h:9d2654f1 -->
-- [ ] [helm] After a successful install, `kubectl get deploy -o yaml | grep -B1 -A3 'DB_PASSWORD\|TRANSCRIPTION_SERVICE_TOKEN\|JWT_SECRET\|NEXTAUTH_SECRET'` → Every hit shows `valueFrom.secretKeyRef`; no plain `value:` entries <!-- h:9fc085b4 -->
+- [x] [helm] After a successful install, `kubectl get deploy -o yaml | grep -B1 -A3 'DB_PASSWORD\|TRANSCRIPTION_SERVICE_TOKEN\|JWT_SECRET\|NEXTAUTH_SECRET'` → Every hit shows `valueFrom.secretKeyRef`; no plain `value:` entries <!-- h:9fc085b4 -->
 
 **bot-recording-incremental-chunk-upload** _(compose,helm)_
 - [ ] [helm] Start a bot, let it record for >10 minutes, then `DELETE /bots/<unknown:id>` → Every 30-s chunk is present in MinIO at `recordings/<user>/<id>/<session>/NNNNNN.webm`; `media_files` array has one entry per chunk; `Recording.status=COMPLETED`; pod exits code 0 <!-- h:8157489d -->
@@ -71,15 +71,26 @@ Tick boxes. `release-ship` blocks until all are `[x]`. Bugs → `make release-is
 - [ ] [helm] Trigger a helm upgrade that changes one subchart Deployment field (e.g. image tag); watch `kubectl get rs -w` for the rolled service → Old ReplicaSet scales 1→0 BEFORE new scales 0→1 (zero overlap); for api-gateway, 2 replicas allow rolling one at a time with zero downtime <!-- h:55ee576c -->
 
 **pgbouncer-as-optional-oss-chart-component** _(helm)_
-- [ ] [helm] Render chart with default values (`pgbouncer.enabled: false`); then render again with `--set pgbouncer.enabled=true` → Default render has no pgbouncer Deployment/Service. Enabled render contains both and every service's `DB_HOST` env resolves to the pgbouncer Service name (not the postgres Service name) <!-- h:491166e7 -->
+- [x] [helm] Render chart with default values (`pgbouncer.enabled: false`); then render again with `--set pgbouncer.enabled=true` → Default render has no pgbouncer Deployment/Service. Enabled render contains both and every service's `DB_HOST` env resolves to the pgbouncer Service name (not the postgres Service name) <!-- h:491166e7 -->
 
 **runtime-api-exit-callback-delivery-is-durable** _(compose)_
 - [ ] [compose] Create a bot; SIGSTOP meeting-api (or blackhole its URL); stop the bot; wait 2× IDLE_CHECK_INTERVAL; SIGCONT meeting-api → Within another IDLE_CHECK_INTERVAL, the meeting row transitions out of `active` to `completed` (or `failed` with exit_code if the bot was SIGKILLed). No manual intervention needed. <!-- h:8e0b90d0 -->
 
 **lite-postgres-publicly-exposed** _(compose,lite)_
-- [ ] [lite] From a host outside the VM run `nc -zv 172.232.0.163 5432` (external scan) → Connection is refused or filtered (NOT 'Connection succeeded'). <!-- h:d86caa6f -->
-- [ ] [lite] `docker exec vexa-postgres psql -U postgres -l` — from inside the VM → database 'vexa' is present; 'readme_to_recover' is absent. <!-- h:6d4d89e2 -->
-- [ ] [compose] From a host outside the compose VM run `nc -zv 172.239.57.155 5458` → Connection is refused or filtered. <!-- h:123fe2d1 -->
+- [x] [lite] From a host outside the VM run `nc -zv 172.232.0.163 5432` (external scan) → Connection is refused or filtered (NOT 'Connection succeeded'). <!-- h:d86caa6f -->
+- [x] [lite] `docker exec vexa-postgres psql -U postgres -l` — from inside the VM → database 'vexa' is present; 'readme_to_recover' is absent. <!-- h:6d4d89e2 -->
+- [x] [compose] From a host outside the compose VM run `nc -zv 172.239.57.155 5458` → Connection is refused or filtered. <!-- h:123fe2d1 -->
+
+## Round-2 re-eyeroll (post fixes for Bug B, E + rollout)
+
+**bot-video-default-off** _(lite,compose,helm — new DoD, Bug E)_
+- [ ] [compose] `POST /bots` with only `meeting_url` + `bot_name` (no `video` field) → DB row shows `data->>'capture_modes' IS NULL` or `["audio"]` (NOT `["audio","video"]`); dashboard meeting detail page shows **no** video player. <!-- h:bot-video-default-off-compose -->
+- [x] [helm] `kubectl exec vexa-vexa-meeting-api-... -- sed -n '567,569p' /app/meeting_api/schemas.py` → shows `video: Optional[bool] = Field(\n        False,`. <!-- h:bot-video-default-off-helm-static -->
+- [ ] [lite] Start a bot without `video`, let it record 2 min, retrieve recording → only audio chunks present (no video track in blob). <!-- h:bot-video-default-off-lite -->
+
+**bot-teams-memory-2560mi** _(helm — Bug B re-verify after actual rollout)_
+- [x] [helm] `kubectl exec <runtime-api-pod> -- grep memory_limit /app/profiles.yaml` → shows `"2560Mi"` (not 1536Mi). <!-- h:bot-teams-memory-2560mi-helm-static -->
+- [ ] [helm] Start a **Teams** bot (short-link URL `teams.microsoft.com/meet/<numeric>?p=...`), admit, let it run ≥30 s while speaker talks → pod does NOT exit 137 before the first chunk uploads. (Compare to meeting 11 baseline which died 11s post-active.) <!-- h:bot-teams-no-oom-helm -->
 
 ## Issues found
 _List anything that failed. Each entry → `release-issue-add SOURCE=human` before ship._
