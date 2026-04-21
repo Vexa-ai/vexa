@@ -232,14 +232,14 @@ Fires on every meeting completion, independent of per-user webhook URLs. Does no
 
 
 <!-- BEGIN AUTO-DOD -->
-<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260421-1632`. Do not edit by hand — edit the sidecar `dods.yaml` + re-run `make -C tests3 report --write-features`. -->
+<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260421-1703`. Do not edit by hand — edit the sidecar `dods.yaml` + re-run `make -C tests3 report --write-features`. -->
 
 **Confidence: 100%** (gate: 95%, status: ✅ pass)
 
 | # | Behavior | Weight | Status | Evidence (modes) |
 |---|----------|-------:|:------:|------------------|
 | events-meeting-completed | meeting.completed fires on every bot exit (default-enabled) | 10 | ✅ pass | `compose`: webhooks/e2e_completion: webhook_delivery.status=delivered |
-| events-status-webhooks | Status-change webhooks for non-meeting.completed events (meeting.started / meeting.status_change / bot.failed) fire when opted-in via webhook_events — proven by a delivery with event_type != meeting.completed, not by any entry in webhook_deliveries[]. | 10 | ✅ pass | `helm`: webhooks/e2e_status_non_completed: non-meeting.completed status event(s) fired: bot.failed |
+| events-status-webhooks | Status-change webhooks for non-meeting.completed events (meeting.started / meeting.status_change / bot.failed) fire when opted-in via webhook_events — proven by a delivery with event_type != meeting.completed, not by any entry in webhook_deliveries[]. | 10 | ✅ pass | `helm`: webhooks/e2e_status_non_completed: non-meeting.completed status event(s) fired: meeting.status_change |
 | envelope-shape | Every webhook carries envelope: event_id, event_type, api_version, created_at, data | 10 | ✅ pass | `compose`: webhooks/envelope: event_id, event_type, api_version, created_at, data present |
 | headers-hmac | X-Webhook-Signature = HMAC-SHA256(timestamp + '.' + payload) when secret is set | 10 | ✅ pass | `compose`: webhooks/hmac: HMAC-SHA256 64-char digest |
 | security-spoof-protection | Client-supplied X-User-Webhook-* headers cannot override stored config | 10 | ✅ pass | `compose`: webhooks/spoof: client header stripped (stored webhook_url=https://httpbin.org/post) |
