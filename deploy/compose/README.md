@@ -18,7 +18,7 @@ Runs all Vexa services via Docker Compose:
 - Bots spawn as Docker containers (needs Docker socket)
 - **Experimental (commented out):** Agent API, Calendar Service — uncomment in `docker-compose.yml` to enable
 
-**You provide:** A transcription service — get your API key at [staging.vexa.ai/dashboard/transcription](https://staging.vexa.ai/dashboard/transcription), endpoint is `https://transcription.vexa.ai`. Or [self-host](../../services/transcription-service/README.md) with GPU.
+**You provide:** A transcription service — get your API key at [vexa.ai/account](https://vexa.ai/account), endpoint is `https://transcription.vexa.ai`. Or [self-host](../../services/transcription-service/README.md) with GPU.
 
 ## Prerequisites
 
@@ -39,7 +39,7 @@ cd vexa/deploy/compose
 make all
 ```
 
-`make all` will prompt you for a transcription token (get one at [staging.vexa.ai/dashboard/transcription](https://staging.vexa.ai/dashboard/transcription)), then pull pre-built images from DockerHub, start all services, sync the DB schema, create an API key, and verify connectivity. To build from source instead: `make all-build`.
+`make all` will prompt you for a transcription token (get one at [vexa.ai/account](https://vexa.ai/account)), then pull pre-built images from DockerHub, start all services, sync the DB schema, create an API key, and verify connectivity. To build from source instead: `make all-build`.
 
 You can also [self-host transcription](../../services/transcription-service/README.md) with a GPU.
 

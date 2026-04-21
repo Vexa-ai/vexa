@@ -73,7 +73,7 @@ TOKEN="${TRANSCRIPTION_TOKEN:-}"
 if [ -z "$TOKEN" ]; then
   echo ""
   echo "A transcription token is required to run Vexa."
-  echo "Get one at: https://staging.vexa.ai/dashboard/transcription"
+  echo "Get one at: https://vexa.ai/account"
   echo ""
   if [ -t 0 ] || [ -e /dev/tty ]; then
     read -rp "Paste your transcription token (or press Enter to skip): " TOKEN < /dev/tty

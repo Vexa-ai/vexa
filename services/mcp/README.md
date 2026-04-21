@@ -91,7 +91,7 @@ You should see version numbers for both. If you do, you are ready to proceed.
 
 ## 2. Prepare Your API Key
 
-You will need your Vexa API key to connect to the MCP. If you do not have one, please generate it or view existing ones from https://vexa.ai/dashboard/api-keys
+You will need your Vexa API key to connect to the MCP. If you do not have one, please generate it or view existing ones from https://vexa.ai/account
 
 ## 3. Configure Claude to Connect to Vexa MCP
 (Same steps can be followed to connect to any other MCP Client (Cursor etc..) make sure you use the same config)
