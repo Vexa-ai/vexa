@@ -234,7 +234,8 @@ class TestStopBot:
 
         with patch("meeting_api.meetings.update_meeting_status", new_callable=AsyncMock, return_value=True):
             with patch("meeting_api.meetings._delayed_container_stop", new_callable=AsyncMock):
-                resp = await client.delete(f"/bots/{TEST_PLATFORM}/{TEST_NATIVE_MEETING_ID}")
+                with patch("meeting_api.meetings.attributes.flag_modified", MagicMock()):
+                    resp = await client.delete(f"/bots/{TEST_PLATFORM}/{TEST_NATIVE_MEETING_ID}")
 
         assert resp.status_code == 202
 
@@ -267,7 +268,8 @@ class TestStopBot:
 
         with patch("meeting_api.meetings.update_meeting_status", new_callable=AsyncMock, return_value=True):
             with patch("meeting_api.meetings._delayed_container_stop", new_callable=AsyncMock):
-                resp = await client.delete(f"/bots/{TEST_PLATFORM}/{TEST_NATIVE_MEETING_ID}")
+                with patch("meeting_api.meetings.attributes.flag_modified", MagicMock()):
+                    resp = await client.delete(f"/bots/{TEST_PLATFORM}/{TEST_NATIVE_MEETING_ID}")
 
         # Verify Redis publish with leave action
         publish_calls = mock_redis.publish.call_args_list
