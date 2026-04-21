@@ -5,22 +5,20 @@
 # current turn. Authorization trail recorded below once given.
 
 release_id: 260421-prod-stabilize
-approver: null        # fill with dmitry@vexa.ai on sign-off
-signed_at: null
+approver: dmitry@vexa.ai
+signed_at: 2026-04-21T21:39:30Z
 
 # ── Part A — Code review ──────────────────────────────────────────────
 # Packet: tests3/releases/260421-prod-stabilize/code-review.md
-# Covers: 8 commits on dev (0a318bc..70c9148), 82 files,
-#         +5451 / −2914, 9 validate rounds, gate green.
-code_review_approved: false
-code_review_ref: tests3/releases/260421-prod-stabilize/code-review.md
-# Optional: GitHub PR URL once opened.
-# code_review_ref: https://github.com/Vexa-ai/vexa/pull/XXX
+# Covers: 15 commits on dev (0a318bc..f079b70), 94 files,
+#         +7148 / −2944 — reviewed in PR #227.
+code_review_approved: true
+code_review_ref: https://github.com/Vexa-ai/vexa/pull/227
 
 # ── Part B — Bounded eyeroll ──────────────────────────────────────────
 # Checklist: tests3/releases/260421-prod-stabilize/human-checklist.md
 # Gated: release-ship refuses while any `- [ ]` remains.
-eyeroll_approved: false
+eyeroll_approved: true
 eyeroll_ref: tests3/releases/260421-prod-stabilize/human-checklist.md
 
 # ── Follow-ups deferred (tracked; not blocking this cycle's ship) ────
