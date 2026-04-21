@@ -614,6 +614,42 @@
       "must_match": "replicaCount: 2"
     },
     {
+      "id": "LITE_POSTGRES_NOT_PUBLIC",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": "deploy/lite/Makefile launches Postgres with listen_addresses=127.0.0.1 \u2014 not reachable from the public internet on the host interface",
+      "symptom": "lite's Postgres on 0.0.0.0:5432 was scanned + ransomware-wiped (172.232.0.163 on 2026-04-21; database 'vexa' dropped; 'readme_to_recover' left with BTC demand)",
+      "file": "deploy/lite/Makefile",
+      "must_match": "listen_addresses=127.0.0.1"
+    },
+    {
+      "id": "LITE_INTERNAL_SERVICES_LOOPBACK_ONLY",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": "lite supervisord binds every internal service (admin-api, runtime-api, meeting-api, agent-api, tts-service, mcp) to 127.0.0.1 \u2014 only api-gateway + dashboard listen on 0.0.0.0",
+      "symptom": "internal services expose authenticated endpoints on 0.0.0.0 on a public-IP VM; enlarges attack surface even though auth protects against ransomware-class data loss",
+      "file": "deploy/lite/supervisord.conf",
+      "must_not_match": "host 0\\.0\\.0\\.0 --port (8057|8090|8080|8100|8059|18888)"
+    },
+    {
+      "id": "LITE_REDIS_NOT_PUBLIC",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": "lite's Redis binds to 127.0.0.1 with protected-mode \u2014 not reachable from the public internet; same ransomware class as Postgres if left on 0.0.0.0 without AUTH",
+      "symptom": "--bind 0.0.0.0 Redis with no AUTH gets FLUSHALL-ed by scanner + ransom key written",
+      "file": "deploy/lite/supervisord.conf",
+      "must_match": "redis-server --bind 127.0.0.1"
+    },
+    {
+      "id": "COMPOSE_PORTS_LOOPBACK_ONLY",
+      "tier": "static",
+      "found": "2026-04-21",
+      "proves": "compose dev-mode ports (Postgres 5458, MinIO 9000/9001, admin-api 8057, runtime-api 8090, MCP 18888) publish to 127.0.0.1 only \u2014 only api-gateway + dashboard reach the public interface",
+      "symptom": "same exposure class as lite \u2014 dev-mode ports on a public-IP VM get scanned + attacked",
+      "file": "deploy/compose/docker-compose.yml",
+      "must_not_match": "- \"\\$\\{(POSTGRES_HOST_PORT|MINIO_HOST_PORT|MINIO_CONSOLE_HOST_PORT|ADMIN_API_PORT|RUNTIME_API_PORT|MCP_HOST_PORT)"
+    },
+    {
       "_": "\u2550\u2550\u2550 HEALTH/DATA \u2014 database integrity \u2550\u2550\u2550"
     },
     {

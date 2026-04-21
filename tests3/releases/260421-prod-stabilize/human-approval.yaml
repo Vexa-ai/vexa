@@ -1,0 +1,32 @@
+# Human approval — 260421-prod-stabilize
+#
+# Per tests3/stages/08-human.md, BOTH parts must be signed before ship.
+# AI may not set approved: true without explicit user authorization in the
+# current turn. Authorization trail recorded below once given.
+
+release_id: 260421-prod-stabilize
+approver: null        # fill with dmitry@vexa.ai on sign-off
+signed_at: null
+
+# ── Part A — Code review ──────────────────────────────────────────────
+# Packet: tests3/releases/260421-prod-stabilize/code-review.md
+# Covers: 8 commits on dev (0a318bc..70c9148), 82 files,
+#         +5451 / −2914, 9 validate rounds, gate green.
+code_review_approved: false
+code_review_ref: tests3/releases/260421-prod-stabilize/code-review.md
+# Optional: GitHub PR URL once opened.
+# code_review_ref: https://github.com/Vexa-ai/vexa/pull/XXX
+
+# ── Part B — Bounded eyeroll ──────────────────────────────────────────
+# Checklist: tests3/releases/260421-prod-stabilize/human-checklist.md
+# Gated: release-ship refuses while any `- [ ]` remains.
+eyeroll_approved: false
+eyeroll_ref: tests3/releases/260421-prod-stabilize/human-checklist.md
+
+# ── Follow-ups deferred (tracked; not blocking this cycle's ship) ────
+deferred_follow_ups:
+  - Server-side recording stitcher for multi-chunk retrieval (Pack B read-side)
+  - Cross-repo N-2 (Grafana + postgres-exporter) → vexa-platform
+  - Cross-repo N-3 (ValidatingAdmissionPolicy for empty secret envs) → vexa-platform
+  - Cross-repo N-5 activation (pgbouncer.enabled=true in platform values overlay)
+  - #171 Teams consumer-URL admission — next groom cycle

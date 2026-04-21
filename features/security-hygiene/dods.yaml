@@ -53,3 +53,35 @@ dods:
     modes:
     - lite
     - compose
+
+- id: lite-postgres-not-public
+  label: "deploy/lite/Makefile launches Postgres with listen_addresses=127.0.0.1 — not reachable from public internet"
+  weight: 15
+  evidence:
+    check: LITE_POSTGRES_NOT_PUBLIC
+    modes:
+    - lite
+
+- id: lite-internal-services-loopback-only
+  label: "deploy/lite/supervisord.conf binds every internal service (admin-api, runtime-api, meeting-api, agent-api, tts-service, mcp) to 127.0.0.1"
+  weight: 10
+  evidence:
+    check: LITE_INTERNAL_SERVICES_LOOPBACK_ONLY
+    modes:
+    - lite
+
+- id: lite-redis-not-public
+  label: "deploy/lite/supervisord.conf Redis binds to 127.0.0.1 with protected-mode"
+  weight: 10
+  evidence:
+    check: LITE_REDIS_NOT_PUBLIC
+    modes:
+    - lite
+
+- id: compose-ports-loopback-only
+  label: "deploy/compose/docker-compose.yml dev-mode ports publish to 127.0.0.1 only (postgres, minio, admin-api, runtime-api, mcp)"
+  weight: 10
+  evidence:
+    check: COMPOSE_PORTS_LOOPBACK_ONLY
+    modes:
+    - compose

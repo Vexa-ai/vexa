@@ -143,6 +143,7 @@ up:
 			-e POSTGRES_USER=postgres \
 			-e POSTGRES_PASSWORD=postgres \
 			postgres:17-alpine \
+			-c listen_addresses=127.0.0.1 \
 			-c idle_in_transaction_session_timeout=60000 > /dev/null; \
 		echo "  Waiting for PostgreSQL..."; \
 		for i in $$(seq 1 12); do \

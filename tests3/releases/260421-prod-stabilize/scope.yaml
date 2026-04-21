@@ -1,362 +1,375 @@
-# Release scope — 260421-prod-stabilize
-# Iteration 3 (architecture-conformance audited). Human approved 2026-04-21.
-# Reflects groom.md Iteration 3 packs A, B, C, D, G, H, J.
-
 release_id: 260421-prod-stabilize
 branch: dev
-summary: |
-  Post-incident 0.10.x stabilization, audit-reduced scope. Seven issues,
-  each extending an existing codebase pattern rather than introducing a
-  new one (see groom.md Iteration 3 drift report).
-
-  - A: every prod secret (DB_PASSWORD, TRANSCRIPTION_SERVICE_TOKEN,
-    JWT_SECRET, NEXTAUTH_SECRET) sourced via secretKeyRef unconditionally,
-    with `required` fail-loud at helm-template time. Extends the existing
-    admin-token Secret pattern in `templates/secret.yaml` + the `required`
-    idiom in `_helpers.tpl`. (#221 + incident-doc §13)
-  - B: incremental chunk upload from the bot via the EXISTING
-    `/internal/recordings/upload` endpoint + a new `chunk_seq` parameter.
-    `Recording.status=IN_PROGRESS` already signals partial, so no
-    reconciler needed. (#218)
-  - C: transcript-rendering `deduplicateSegments` fix + first
-    `.github/workflows/test-packages.yml` so package tests run in CI, not
-    only in tests3 gate. Package tests already exist via vitest. (#220)
-  - D: lock in the engine's existing `pool_reset_on_return="rollback"`
-    defense with a regression guard (previous Pack D proposal to add
-    `await db.rollback()` at 8 call sites was redundant with the engine
-    config — audit findings in groom.md Iteration 3). Broaden the
-    existing `HELM_MEETING_API_DB_POOL_TUNED` check to cover every
-    pool-holder service. (#208 + incident-doc §4)
-  - G: chart-hygiene addition — `vexa.deploymentStrategy` helper in
-    `_helpers.tpl` returning `maxSurge: 0`, applied to every subchart
-    Deployment; `apiGateway.replicaCount` default bumped 1→2 for
-    zero-downtime rolling updates. (incident-doc §10 + N-4)
-  - H: PgBouncer as optional OSS chart component, monolithic-chart
-    pattern mirroring `postgres:` / `redis:` / `minio:`
-    (`pgbouncer.enabled: false` default). Every self-hoster gets the
-    same structural defense against app-to-DB slot oversubscription that
-    the hosted platform gets. (incident-doc §4-A + user-challenged
-    OSS/platform split)
-  - J: durable exit-callback delivery via runtime-api's EXISTING
-    `idle_loop` scheduler (reuse, not add) so pod-exit → meeting-status
-    transitions always eventually complete. (incident-doc §7 +
-    `services/runtime-api/runtime_api/lifecycle.py:113-142` audit)
-
+summary: "Post-incident 0.10.x stabilization, audit-reduced scope. Seven issues,\neach extending an existing\
+  \ codebase pattern rather than introducing a\nnew one (see groom.md Iteration 3 drift report).\n\n-\
+  \ A: every prod secret (DB_PASSWORD, TRANSCRIPTION_SERVICE_TOKEN,\n  JWT_SECRET, NEXTAUTH_SECRET) sourced\
+  \ via secretKeyRef unconditionally,\n  with `required` fail-loud at helm-template time. Extends the\
+  \ existing\n  admin-token Secret pattern in `templates/secret.yaml` + the `required`\n  idiom in `_helpers.tpl`.\
+  \ (#221 + incident-doc \xA713)\n- B: incremental chunk upload from the bot via the EXISTING\n  `/internal/recordings/upload`\
+  \ endpoint + a new `chunk_seq` parameter.\n  `Recording.status=IN_PROGRESS` already signals partial,\
+  \ so no\n  reconciler needed. (#218)\n- C: transcript-rendering `deduplicateSegments` fix + first\n\
+  \  `.github/workflows/test-packages.yml` so package tests run in CI, not\n  only in tests3 gate. Package\
+  \ tests already exist via vitest. (#220)\n- D: lock in the engine's existing `pool_reset_on_return=\"\
+  rollback\"`\n  defense with a regression guard (previous Pack D proposal to add\n  `await db.rollback()`\
+  \ at 8 call sites was redundant with the engine\n  config \u2014 audit findings in groom.md Iteration\
+  \ 3). Broaden the\n  existing `HELM_MEETING_API_DB_POOL_TUNED` check to cover every\n  pool-holder service.\
+  \ (#208 + incident-doc \xA74)\n- G: chart-hygiene addition \u2014 `vexa.deploymentStrategy` helper in\n\
+  \  `_helpers.tpl` returning `maxSurge: 0`, applied to every subchart\n  Deployment; `apiGateway.replicaCount`\
+  \ default bumped 1\u21922 for\n  zero-downtime rolling updates. (incident-doc \xA710 + N-4)\n- H: PgBouncer\
+  \ as optional OSS chart component, monolithic-chart\n  pattern mirroring `postgres:` / `redis:` / `minio:`\n\
+  \  (`pgbouncer.enabled: false` default). Every self-hoster gets the\n  same structural defense against\
+  \ app-to-DB slot oversubscription that\n  the hosted platform gets. (incident-doc \xA74-A + user-challenged\n\
+  \  OSS/platform split)\n- J: durable exit-callback delivery via runtime-api's EXISTING\n  `idle_loop`\
+  \ scheduler (reuse, not add) so pod-exit \u2192 meeting-status\n  transitions always eventually complete.\
+  \ (incident-doc \xA77 +\n  `services/runtime-api/runtime_api/lifecycle.py:113-142` audit)\n"
 deployments:
-  modes: [lite, compose, helm]
+  modes:
+  - lite
+  - compose
+  - helm
   notes:
-    lite:    "Pack C npm test is mode-independent; lite is the cheapest canonical mode for package-level checks."
-    compose: "Pack B dynamic chaos test (kill-bot-mid-record), Pack D dynamic pool check, Pack J dynamic exit-callback chaos test — all need meeting-api + Postgres + runtime-api co-located."
-    helm:    "Packs A, G, H canonical (chart contracts). Pack B client-side K8s grace-period adjunct."
-
+    lite: Pack C npm test is mode-independent; lite is the cheapest canonical mode for package-level checks.
+    compose: "Pack B dynamic chaos test (kill-bot-mid-record), Pack D dynamic pool check, Pack J dynamic\
+      \ exit-callback chaos test \u2014 all need meeting-api + Postgres + runtime-api co-located."
+    helm: Packs A, G, H canonical (chart contracts). Pack B client-side K8s grace-period adjunct.
 issues:
+- id: chart-every-prod-secret-via-secretkeyref
+  source: gh-issue
+  ref: Vexa-ai/vexa#221
+  problem: "Four chart templates render prod-critical env vars as plain\n`value: {{ .Values.xxx | quote\
+    \ }}` (meeting-api, admin-api,\napi-gateway, runtime-api on the `postgres.enabled=false` branch\n\
+    for `DB_PASSWORD`; meeting-api directly for\n`TRANSCRIPTION_SERVICE_TOKEN`; dashboard for `JWT_SECRET`\
+    \ and\n`NEXTAUTH_SECRET`). Any `helm upgrade` that doesn't `--set` the\ncorresponding value silently\
+    \ renders `\"\"`. New pods CrashLoop\ninvisibly; old pods keep serving. Exactly what caused the\n\
+    2026-04-20 \u2192 21 production outage (dashboard + sign-in 500s)\nand the recovery-path 15-minute\
+    \ meeting-10522 transcription\noutage when the same pattern fired on a second secret.\n"
+  hypothesis: "Extend the existing admin-token Secret pattern in\n`templates/secret.yaml` (which already\
+    \ emits `ADMIN_API_TOKEN`,\n`TRANSCRIPTION_SERVICE_TOKEN`, `INTERNAL_API_SECRET` from\n`.Values.secrets.*`\
+    \ and is read via `vexa.adminTokenSecretName`\nhelper) to cover every prod-critical secret. Wire each\
+    \ of the\nfour env vars via `secretKeyRef` unconditionally \u2014 including on\n`.Values.postgres.enabled=false`\
+    \ external-DB branches, where the\noperator must pre-populate the `postgres-credentials` Secret\n\
+    (same BYO-Secret pattern `secrets.existingSecretName` already\nsupports). Guard with `{{ required\
+    \ \"<secret> must be populated\" }}`\n\u2014 the same idiom `_helpers.tpl` already uses for\n`vexa.redisHost`,\
+    \ `vexa.dbHost`, etc. Zero new patterns.\n"
+  fix_commits: []
+  proves:
+  - check: HELM_PROD_SECRETS_SECRETREF_ONLY
+    modes:
+    - helm
+  - check: HELM_PROD_SECRETS_REQUIRED_AT_RENDER
+    modes:
+    - helm
+  required_modes:
+  - helm
+  human_verify:
+  - mode: helm
+    do: Render the chart four times with each of `DB_PASSWORD` / `TRANSCRIPTION_SERVICE_TOKEN` / `JWT_SECRET`
+      / `NEXTAUTH_SECRET` absent from values (and without `--set`)
+    expect: Each render exits non-zero with a `required` error naming the missing secret
+  - mode: helm
+    do: After a successful install, `kubectl get deploy -o yaml | grep -B1 -A3 'DB_PASSWORD\|TRANSCRIPTION_SERVICE_TOKEN\|JWT_SECRET\|NEXTAUTH_SECRET'`
+    expect: Every hit shows `valueFrom.secretKeyRef`; no plain `value:` entries
+- id: bot-recording-incremental-chunk-upload
+  source: gh-issue
+  ref: Vexa-ai/vexa#218
+  problem: '77% of recording-enabled completed meetings over 7 days in
 
-  # ─── Pack A ────────────────────────────────────────────────────────
-  - id: chart-every-prod-secret-via-secretkeyref
-    source: gh-issue
-    ref: "Vexa-ai/vexa#221"
-    problem: |
-      Four chart templates render prod-critical env vars as plain
-      `value: {{ .Values.xxx | quote }}` (meeting-api, admin-api,
-      api-gateway, runtime-api on the `postgres.enabled=false` branch
-      for `DB_PASSWORD`; meeting-api directly for
-      `TRANSCRIPTION_SERVICE_TOKEN`; dashboard for `JWT_SECRET` and
-      `NEXTAUTH_SECRET`). Any `helm upgrade` that doesn't `--set` the
-      corresponding value silently renders `""`. New pods CrashLoop
-      invisibly; old pods keep serving. Exactly what caused the
-      2026-04-20 → 21 production outage (dashboard + sign-in 500s)
-      and the recovery-path 15-minute meeting-10522 transcription
-      outage when the same pattern fired on a second secret.
-    hypothesis: |
-      Extend the existing admin-token Secret pattern in
-      `templates/secret.yaml` (which already emits `ADMIN_API_TOKEN`,
-      `TRANSCRIPTION_SERVICE_TOKEN`, `INTERNAL_API_SECRET` from
-      `.Values.secrets.*` and is read via `vexa.adminTokenSecretName`
-      helper) to cover every prod-critical secret. Wire each of the
-      four env vars via `secretKeyRef` unconditionally — including on
-      `.Values.postgres.enabled=false` external-DB branches, where the
-      operator must pre-populate the `postgres-credentials` Secret
-      (same BYO-Secret pattern `secrets.existingSecretName` already
-      supports). Guard with `{{ required "<secret> must be populated" }}`
-      — the same idiom `_helpers.tpl` already uses for
-      `vexa.redisHost`, `vexa.dbHost`, etc. Zero new patterns.
-    fix_commits: []
-    proves:
-      - {check: HELM_PROD_SECRETS_SECRETREF_ONLY, modes: [helm]}
-      - {check: HELM_PROD_SECRETS_REQUIRED_AT_RENDER, modes: [helm]}
-    required_modes: [helm]
-    human_verify:
-      - mode: helm
-        do: "Render the chart four times with each of `DB_PASSWORD` / `TRANSCRIPTION_SERVICE_TOKEN` / `JWT_SECRET` / `NEXTAUTH_SECRET` absent from values (and without `--set`)"
-        expect: "Each render exits non-zero with a `required` error naming the missing secret"
-      - mode: helm
-        do: "After a successful install, `kubectl get deploy -o yaml | grep -B1 -A3 'DB_PASSWORD\\|TRANSCRIPTION_SERVICE_TOKEN\\|JWT_SECRET\\|NEXTAUTH_SECRET'`"
-        expect: "Every hit shows `valueFrom.secretKeyRef`; no plain `value:` entries"
+    production have no recording saved (0% for >30 min). The bot
 
-  # ─── Pack B ────────────────────────────────────────────────────────
-  - id: bot-recording-incremental-chunk-upload
-    source: gh-issue
-    ref: "Vexa-ai/vexa#218"
-    problem: |
-      77% of recording-enabled completed meetings over 7 days in
-      production have no recording saved (0% for >30 min). The bot
-      buffers the entire WebM in `window.__vexaRecordedChunks` and
-      only uploads at graceful shutdown (`services/vexa-bot/core/src/
-      platforms/{googlemeet,msteams}/recording.ts:264-270`). SIGKILL
-      / grace-period race cuts the upload off. Reporter's suggested
-      fix is the 0.7-0.9 incremental-upload model.
-    hypothesis: |
-      On the bot side: `MediaRecorder.start(1000)` → `.start(30_000)`;
-      `ondataavailable` handler uploads each chunk directly instead of
-      pushing to a buffer. Server side: extend the EXISTING
-      `/internal/recordings/upload` endpoint
-      (`services/meeting-api/meeting_api/recordings.py:122`, which
-      already has `is_final: bool` + a `media_files: []` array +
-      `Recording.status IN_PROGRESS/COMPLETED`) with one new
-      parameter `chunk_seq: int`. Each chunk writes a new entry in
-      `media_files: []` (meeting_data mode) or a new `MediaFile` row
-      (DB mode); storage path becomes
-      `recordings/{user_id}/{storage_id}/{session_uid}/{chunk_seq:06d}.{format}`.
-      `is_final=false` keeps `Recording.status=IN_PROGRESS`;
-      `is_final=true` flips to `COMPLETED` and fires the existing
-      `recording.completed` webhook. An `IN_PROGRESS` recording with
-      no terminal transition IS the "partial" marker — no reconciler
-      needed. Defense-in-depth: bump runtime-api's
-      `delete_namespaced_pod(grace_period_seconds=10)` to 30 to match
-      the pod spec's `terminationGracePeriodSeconds` (not to 90 —
-      no single operation needs that much now).
-    fix_commits: []
-    proves:
-      - {check: RECORDING_UPLOAD_SUPPORTS_CHUNK_SEQ, modes: [compose]}
-      - {check: BOT_RECORDS_INCREMENTALLY, modes: [lite, compose]}
-      - {check: RECORDING_SURVIVES_MID_MEETING_KILL, modes: [compose]}
-      - {check: RUNTIME_API_STOP_GRACE_MATCHES_POD_SPEC, modes: [helm]}
-    required_modes: [compose, helm]
-    human_verify:
-      - mode: helm
-        do: "Start a bot, let it record for >10 minutes, then `DELETE /bots/{id}`"
-        expect: "Every 30-s chunk is present in MinIO at `recordings/<user>/<id>/<session>/NNNNNN.webm`; `media_files` array has one entry per chunk; `Recording.status=COMPLETED`; pod exits code 0"
-      - mode: compose
-        do: "Start a bot, record for ~90 s (expect 3 chunks), SIGKILL the pod"
-        expect: "First 2-3 chunks survive in MinIO; `Recording.status=IN_PROGRESS` stays (never COMPLETED); retrieving the recording returns the partial data (or a 'partial' marker)"
+    buffers the entire WebM in `window.__vexaRecordedChunks` and
 
-  # ─── Pack C ────────────────────────────────────────────────────────
-  - id: transcript-rendering-dedup-prefers-confirmed-on-containment
-    source: gh-issue
-    ref: "Vexa-ai/vexa#220"
-    problem: |
-      `@vexaai/transcript-rendering@0.4.0`'s `deduplicateSegments`
-      containment branch (`src/dedup.ts:81-85`) picks by time-range
-      width and ignores `completed`. When Vexa's ASR trims the
-      utterance tighter on confirmation, the draft ends up wider and
-      the confirmed is dropped — pending segments stay italic
-      forever. User-visible on `dashboard.vexa.ai` and any downstream
-      consumer of the live stream.
-    hypothesis: |
-      Ship the in-tree 7-line fix (working tree at
-      `packages/transcript-rendering/src/dedup.ts`) that consults
-      `completed` in both containment branches. Ship the 2 new test
-      cases already in `dedup.test.ts`. `npm version patch` → 0.4.1.
-      Sync `services/dashboard/package-lock.json`. Add the first
-      `.github/workflows/test-packages.yml` (matrix workflow covering
-      every `packages/*` that has a `scripts.test`) so regressions
-      are caught at PR-time, not only in the tests3 release gate.
-    fix_commits: []
-    proves:
-      - {check: TRANSCRIPT_RENDERING_DEDUP_TESTS_PASS, modes: [lite]}
-      - {check: PACKAGES_CI_WORKFLOW_EXISTS, modes: [lite]}
-    required_modes: [lite]
-    human_verify:
-      - mode: lite
-        do: "Open a live meeting on the dashboard, speak a phrase, then watch the segment for ~30 s"
-        expect: "Italic draft is replaced by confirmed on the first confirmation tick; no italic remnants remain after speech stops"
+    only uploads at graceful shutdown (`services/vexa-bot/core/src/
 
-  # ─── Pack D ────────────────────────────────────────────────────────
-  - id: engine-pool-reset-on-return-guarded
-    source: gh-issue
-    ref: "Vexa-ai/vexa#208"
-    problem: |
-      (As re-diagnosed during iteration-3 audit.)
-      Reporter of #208 proposed adding `await db.rollback()` to
-      `finally:` blocks at 8 direct `async_session_local()` call
-      sites. Audit finding: `services/meeting-api/meeting_api/
-      database.py:67` already sets `pool_reset_on_return="rollback"`
-      on the engine; every one of the 8 sites uses `async with` so
-      the engine-level rollback fires automatically on session close.
-      Postgres-side `idle_in_transaction_session_timeout=60000ms` is
-      the belt-and-braces (`deploy/helm/charts/vexa/values.yaml:251`).
-      The reported 504s were likely from the pool-ceiling-sum
-      (~120 > Aiven cap 100) identified in the 2026-04-21 incident
-      post-mortem, not from per-session leaks. #208's code-level fix
-      is redundant; the engine config already handles it. BUT — the
-      defense is invisible to anyone reading request handler code.
-      A future refactor that rewrites `database.py` without the
-      `pool_reset_on_return` argument would silently re-introduce
-      the leak class.
-    hypothesis: |
-      D.1: Add a regression guard `ENGINE_POOL_RESET_ON_RETURN_ROLLBACK`
-      — a grep on `services/meeting-api/meeting_api/database.py` for
-      the literal `pool_reset_on_return="rollback"`. Cheap; makes the
-      defense explicit-in-check even though it stays implicit-in-code.
-      D.2: The EXISTING `HELM_MEETING_API_DB_POOL_TUNED` check greps
-      for `DB_POOL_SIZE` in `values.yaml`. Broaden it to assert the
-      same env is set on admin-api, api-gateway, runtime-api — every
-      pool-holder service (retire the single-service name in favor
-      of `HELM_ALL_SERVICES_DB_POOL_TUNED`). If Pack H (PgBouncer)
-      ships in this cycle, the sum-over-cap risk is structurally
-      removed; D.2 remains good hygiene regardless.
-      D.3: Reuse the existing `DB_POOL_NO_EXHAUSTION` dynamic check
-      as the compose-mode regression.
-    fix_commits: []
-    proves:
-      - {check: ENGINE_POOL_RESET_ON_RETURN_ROLLBACK, modes: [lite, compose]}
-      - {check: HELM_ALL_SERVICES_DB_POOL_TUNED, modes: [helm]}
-      - {check: DB_POOL_NO_EXHAUSTION, modes: [compose]}
-    required_modes: [lite, compose, helm]
-    human_verify:
-      - mode: compose
-        do: "From api-gateway container, `for i in {1..200}; do curl -s -H \"X-API-Key: $TOKEN\" $GATEWAY/bots/status; done` while watching `SELECT count(*) FROM pg_stat_activity WHERE application_name LIKE '%meeting-api%'`"
-        expect: "Active connection count stays ≤ `DB_POOL_SIZE + DB_MAX_OVERFLOW`; no growth into 'idle in transaction'"
+    platforms/{googlemeet,msteams}/recording.ts:264-270`). SIGKILL
 
-  # ─── Pack G ────────────────────────────────────────────────────────
-  - id: chart-rolling-update-zero-pool-overlap
-    source: human
-    ref: "vexa-platform/docs/incidents/2026-04-21-db-pool-exhaustion.md §10 + N-4"
-    problem: |
-      K8s default `RollingUpdate` on a 1-replica Deployment does
-      `maxSurge=25%` → 1 pod, so rollouts briefly run two pods of the
-      rolled service in parallel. Each pod holds its own DB pool;
-      transient slot footprint is 2× the configured ceiling. Under
-      current defaults (meeting-api ceiling 12 per pod post-incident)
-      plus other services' defaults, a peak-traffic rollout can push
-      configured usage close to the Aiven 100-slot cap.
-    hypothesis: |
-      Add `vexa.deploymentStrategy` helper to `_helpers.tpl` returning
-      `type: RollingUpdate` + `rollingUpdate.maxSurge: 0` +
-      `rollingUpdate.maxUnavailable: 1`. Inject it into every
-      subchart Deployment template (same pattern as `vexa.labels`,
-      `vexa.selectorLabels`). Old pod terminates BEFORE new schedules
-      → zero pool overlap. Brief 5-15 s service gap per rollout. For
-      api-gateway (front door) mitigate by bumping
-      `apiGateway.replicaCount` default 1→2 so `maxSurge: 0` rolls
-      1-of-2 = zero-downtime for that service.
-    gap_analysis: |
-      No existing DoD or check inspects K8s rolling-update strategy.
-      `HELM_VALUES_RESOURCES_SET`, `HELM_GLOBAL_SECURITY_HARDENED`,
-      `HELM_PDB_TEMPLATE_EXISTS` cover adjacent chart-hygiene axes
-      (resources, security, pdb) — rollout-strategy is the missing
-      sibling. Gap filled by the three new checks below.
-    new_checks:
-      - HELM_DEPLOYMENT_STRATEGY_HELPER_DEFINED
-      - HELM_ROLLING_UPDATE_ZERO_SURGE
-      - HELM_API_GATEWAY_REPLICA_COUNT_HA
-    fix_commits: []
-    proves:
-      - {check: HELM_DEPLOYMENT_STRATEGY_HELPER_DEFINED, modes: [helm]}
-      - {check: HELM_ROLLING_UPDATE_ZERO_SURGE, modes: [helm]}
-      - {check: HELM_API_GATEWAY_REPLICA_COUNT_HA, modes: [helm]}
-    required_modes: [helm]
-    human_verify:
-      - mode: helm
-        do: "Trigger a helm upgrade that changes one subchart Deployment field (e.g. image tag); watch `kubectl get rs -w` for the rolled service"
-        expect: "Old ReplicaSet scales 1→0 BEFORE new scales 0→1 (zero overlap); for api-gateway, 2 replicas allow rolling one at a time with zero downtime"
+    / grace-period race cuts the upload off. Reporter''s suggested
 
-  # ─── Pack H ────────────────────────────────────────────────────────
-  - id: pgbouncer-as-optional-oss-chart-component
-    source: human
-    ref: "vexa-platform/docs/incidents/2026-04-21-db-pool-exhaustion.md §4-A + N-5 (re-routed OSS-side)"
-    problem: |
-      The incident doc originally routed PgBouncer to the platform
-      repo. Re-assessed during iteration-2: any self-hoster running
-      Vexa against any managed Postgres (RDS, Cloud SQL, Aiven,
-      Supabase) hits the same oversubscription class once they scale
-      past 1-replica-each. Platform-only PgBouncer forces every
-      adopter to reinvent the same subchart locally.
-    hypothesis: |
-      Add PgBouncer as an optional OSS chart component following the
-      existing monolithic-chart pattern (the chart has no
-      `Chart.yaml` dependencies; all optional services — postgres,
-      redis, minio — are top-level templates gated by
-      `.Values.<name>.enabled`). New files:
-        - `templates/deployment-pgbouncer.yaml` (guarded by
-          `{{- if .Values.pgbouncer.enabled }}`)
-        - `templates/service-pgbouncer.yaml` (same guard)
-      New values block `pgbouncer:` with `enabled: false` default,
-      `default_pool_size: 20`, `max_client_conn: 1000`, transaction
-      mode, resources block mirroring `redis:` / `postgres:` shape.
-      New helper `vexa.dbHostEffective` in `_helpers.tpl` — returns
-      the pgbouncer service when enabled, falls through to existing
-      `vexa.dbHost` otherwise. Every service's `DB_HOST` env in its
-      Deployment template switches from `vexa.dbHost` to
-      `vexa.dbHostEffective`. Platform repo's helm values file flips
-      `pgbouncer.enabled: true` in its overlay; every self-hoster
-      inherits the safe option.
-    gap_analysis: |
-      No existing DoD inspects chart topology for optional connection
-      poolers. This is a new chart-shape concern. One DoD covers
-      both static (template exists) and behavioural (enabling it
-      rewires `DB_HOST`) aspects.
-    new_checks:
-      - HELM_PGBOUNCER_OPTIONAL_AND_WIRED
-    fix_commits: []
-    proves:
-      - {check: HELM_PGBOUNCER_OPTIONAL_AND_WIRED, modes: [helm]}
-    required_modes: [helm]
-    human_verify:
-      - mode: helm
-        do: "Render chart with default values (`pgbouncer.enabled: false`); then render again with `--set pgbouncer.enabled=true`"
-        expect: "Default render has no pgbouncer Deployment/Service. Enabled render contains both and every service's `DB_HOST` env resolves to the pgbouncer Service name (not the postgres Service name)"
+    fix is the 0.7-0.9 incremental-upload model.
 
-  # ─── Pack J ────────────────────────────────────────────────────────
-  - id: runtime-api-exit-callback-delivery-is-durable
-    source: human
-    ref: "vexa-platform/docs/incidents/2026-04-21-db-pool-exhaustion.md §7 + N-7b; root cause at services/runtime-api/runtime_api/lifecycle.py:113-142"
-    problem: |
-      Runtime-api's `_deliver_callback` (lifecycle.py:113-142) gives
-      up after `CALLBACK_RETRIES` (default 3) attempts and logs
-      "exhausted". The pending-callback record sits in Redis with
-      no retriggering mechanism. If meeting-api is unhealthy for
-      longer than `sum(CALLBACK_BACKOFF)` (typically 1+5+30 s = 36 s
-      — exactly what happened 2026-04-21 when meeting-api was
-      CrashLooping due to Pack A's issue), the exit callback is
-      lost. The bot pod is gone but the meeting row is stuck
-      `status='active'` forever. Incident doc §7 lists 7+ orphaned
-      meetings (10522, 10479, 10313, 10311, 10137, 9147, others)
-      from exactly this class.
-    hypothesis: |
-      Use the scheduler runtime-api ALREADY HAS (`idle_loop` at
-      `services/runtime-api/runtime_api/lifecycle.py:27`, which
-      already runs as a background task on `IDLE_CHECK_INTERVAL`).
-      J.1: Remove the retry cap in `_deliver_callback`. Keep
-      exponential backoff within one attempt-burst (cap at a few
-      minutes). Do NOT `delete_pending_callback` on failure; leave
-      the record.
-      J.2: Extend `idle_loop` to also iterate
-      `state.list_pending_callbacks()` each tick and re-invoke
-      `_deliver_callback(name)` on any that remain. Idempotent,
-      no new background task, no CronJob.
-      J.3: Audit meeting-api's callback endpoint
-      (`services/meeting-api/meeting_api/callbacks.py`) is
-      idempotent — already-transitioned meetings must respond 200,
-      not 4xx, so retries are safe.
-    gap_analysis: |
-      No existing DoD inspects exit-callback delivery durability.
-      The dual failure mode (issue #173, reconcile_state on VM
-      redeploy) is a separate runtime-api state-durability bug —
-      explicitly deferred.
-    new_checks:
-      - RUNTIME_API_EXIT_CALLBACK_DURABLE
-      - RUNTIME_API_IDLE_LOOP_SWEEPS_PENDING_CALLBACKS
-    fix_commits: []
-    proves:
-      - {check: RUNTIME_API_IDLE_LOOP_SWEEPS_PENDING_CALLBACKS, modes: [lite, compose]}
-      - {check: RUNTIME_API_EXIT_CALLBACK_DURABLE, modes: [compose]}
-    required_modes: [compose]
-    human_verify:
-      - mode: compose
-        do: "Create a bot; SIGSTOP meeting-api (or blackhole its URL); stop the bot; wait 2× IDLE_CHECK_INTERVAL; SIGCONT meeting-api"
-        expect: "Within another IDLE_CHECK_INTERVAL, the meeting row transitions out of `active` to `completed` (or `failed` with exit_code if the bot was SIGKILLed). No manual intervention needed."
+    '
+  hypothesis: "On the bot side: `MediaRecorder.start(1000)` \u2192 `.start(30_000)`;\n`ondataavailable`\
+    \ handler uploads each chunk directly instead of\npushing to a buffer. Server side: extend the EXISTING\n\
+    `/internal/recordings/upload` endpoint\n(`services/meeting-api/meeting_api/recordings.py:122`, which\n\
+    already has `is_final: bool` + a `media_files: []` array +\n`Recording.status IN_PROGRESS/COMPLETED`)\
+    \ with one new\nparameter `chunk_seq: int`. Each chunk writes a new entry in\n`media_files: []` (meeting_data\
+    \ mode) or a new `MediaFile` row\n(DB mode); storage path becomes\n`recordings/{user_id}/{storage_id}/{session_uid}/{chunk_seq:06d}.{format}`.\n\
+    `is_final=false` keeps `Recording.status=IN_PROGRESS`;\n`is_final=true` flips to `COMPLETED` and fires\
+    \ the existing\n`recording.completed` webhook. An `IN_PROGRESS` recording with\nno terminal transition\
+    \ IS the \"partial\" marker \u2014 no reconciler\nneeded. Defense-in-depth: bump runtime-api's\n`delete_namespaced_pod(grace_period_seconds=10)`\
+    \ to 30 to match\nthe pod spec's `terminationGracePeriodSeconds` (not to 90 \u2014\nno single operation\
+    \ needs that much now).\n"
+  fix_commits: []
+  proves:
+  - check: RECORDING_UPLOAD_SUPPORTS_CHUNK_SEQ
+    modes:
+    - compose
+  - check: BOT_RECORDS_INCREMENTALLY
+    modes:
+    - lite
+    - compose
+  - check: RECORDING_SURVIVES_MID_MEETING_KILL
+    modes:
+    - compose
+  - check: RUNTIME_API_STOP_GRACE_MATCHES_POD_SPEC
+    modes:
+    - helm
+  required_modes:
+  - compose
+  - helm
+  human_verify:
+  - mode: helm
+    do: Start a bot, let it record for >10 minutes, then `DELETE /bots/{id}`
+    expect: Every 30-s chunk is present in MinIO at `recordings/<user>/<id>/<session>/NNNNNN.webm`; `media_files`
+      array has one entry per chunk; `Recording.status=COMPLETED`; pod exits code 0
+  - mode: compose
+    do: Start a bot, record for ~90 s (expect 3 chunks), SIGKILL the pod
+    expect: First 2-3 chunks survive in MinIO; `Recording.status=IN_PROGRESS` stays (never COMPLETED);
+      retrieving the recording returns the partial data (or a 'partial' marker)
+- id: transcript-rendering-dedup-prefers-confirmed-on-containment
+  source: gh-issue
+  ref: Vexa-ai/vexa#220
+  problem: "`@vexaai/transcript-rendering@0.4.0`'s `deduplicateSegments`\ncontainment branch (`src/dedup.ts:81-85`)\
+    \ picks by time-range\nwidth and ignores `completed`. When Vexa's ASR trims the\nutterance tighter\
+    \ on confirmation, the draft ends up wider and\nthe confirmed is dropped \u2014 pending segments stay\
+    \ italic\nforever. User-visible on `dashboard.vexa.ai` and any downstream\nconsumer of the live stream.\n"
+  hypothesis: "Ship the in-tree 7-line fix (working tree at\n`packages/transcript-rendering/src/dedup.ts`)\
+    \ that consults\n`completed` in both containment branches. Ship the 2 new test\ncases already in `dedup.test.ts`.\
+    \ `npm version patch` \u2192 0.4.1.\nSync `services/dashboard/package-lock.json`. Add the first\n\
+    `.github/workflows/test-packages.yml` (matrix workflow covering\nevery `packages/*` that has a `scripts.test`)\
+    \ so regressions\nare caught at PR-time, not only in the tests3 release gate.\n"
+  fix_commits: []
+  proves:
+  - check: TRANSCRIPT_RENDERING_DEDUP_TESTS_PASS
+    modes:
+    - lite
+  - check: PACKAGES_CI_WORKFLOW_EXISTS
+    modes:
+    - lite
+  required_modes:
+  - lite
+  human_verify:
+  - mode: lite
+    do: Open a live meeting on the dashboard, speak a phrase, then watch the segment for ~30 s
+    expect: Italic draft is replaced by confirmed on the first confirmation tick; no italic remnants remain
+      after speech stops
+- id: engine-pool-reset-on-return-guarded
+  source: gh-issue
+  ref: Vexa-ai/vexa#208
+  problem: "(As re-diagnosed during iteration-3 audit.)\nReporter of #208 proposed adding `await db.rollback()`\
+    \ to\n`finally:` blocks at 8 direct `async_session_local()` call\nsites. Audit finding: `services/meeting-api/meeting_api/\n\
+    database.py:67` already sets `pool_reset_on_return=\"rollback\"`\non the engine; every one of the\
+    \ 8 sites uses `async with` so\nthe engine-level rollback fires automatically on session close.\n\
+    Postgres-side `idle_in_transaction_session_timeout=60000ms` is\nthe belt-and-braces (`deploy/helm/charts/vexa/values.yaml:251`).\n\
+    The reported 504s were likely from the pool-ceiling-sum\n(~120 > Aiven cap 100) identified in the\
+    \ 2026-04-21 incident\npost-mortem, not from per-session leaks. #208's code-level fix\nis redundant;\
+    \ the engine config already handles it. BUT \u2014 the\ndefense is invisible to anyone reading request\
+    \ handler code.\nA future refactor that rewrites `database.py` without the\n`pool_reset_on_return`\
+    \ argument would silently re-introduce\nthe leak class.\n"
+  hypothesis: "D.1: Add a regression guard `ENGINE_POOL_RESET_ON_RETURN_ROLLBACK`\n\u2014 a grep on `services/meeting-api/meeting_api/database.py`\
+    \ for\nthe literal `pool_reset_on_return=\"rollback\"`. Cheap; makes the\ndefense explicit-in-check\
+    \ even though it stays implicit-in-code.\nD.2: The EXISTING `HELM_MEETING_API_DB_POOL_TUNED` check\
+    \ greps\nfor `DB_POOL_SIZE` in `values.yaml`. Broaden it to assert the\nsame env is set on admin-api,\
+    \ api-gateway, runtime-api \u2014 every\npool-holder service (retire the single-service name in favor\n\
+    of `HELM_ALL_SERVICES_DB_POOL_TUNED`). If Pack H (PgBouncer)\nships in this cycle, the sum-over-cap\
+    \ risk is structurally\nremoved; D.2 remains good hygiene regardless.\nD.3: Reuse the existing `DB_POOL_NO_EXHAUSTION`\
+    \ dynamic check\nas the compose-mode regression.\n"
+  fix_commits: []
+  proves:
+  - check: ENGINE_POOL_RESET_ON_RETURN_ROLLBACK
+    modes:
+    - lite
+    - compose
+  - check: HELM_ALL_SERVICES_DB_POOL_TUNED
+    modes:
+    - helm
+  - check: DB_POOL_NO_EXHAUSTION
+    modes:
+    - compose
+  required_modes:
+  - lite
+  - compose
+  - helm
+  human_verify:
+  - mode: compose
+    do: 'From api-gateway container, `for i in {1..200}; do curl -s -H "X-API-Key: $TOKEN" $GATEWAY/bots/status;
+      done` while watching `SELECT count(*) FROM pg_stat_activity WHERE application_name LIKE ''%meeting-api%''`'
+    expect: "Active connection count stays \u2264 `DB_POOL_SIZE + DB_MAX_OVERFLOW`; no growth into 'idle\
+      \ in transaction'"
+- id: chart-rolling-update-zero-pool-overlap
+  source: human
+  ref: "vexa-platform/docs/incidents/2026-04-21-db-pool-exhaustion.md \xA710 + N-4"
+  problem: "K8s default `RollingUpdate` on a 1-replica Deployment does\n`maxSurge=25%` \u2192 1 pod, so\
+    \ rollouts briefly run two pods of the\nrolled service in parallel. Each pod holds its own DB pool;\n\
+    transient slot footprint is 2\xD7 the configured ceiling. Under\ncurrent defaults (meeting-api ceiling\
+    \ 12 per pod post-incident)\nplus other services' defaults, a peak-traffic rollout can push\nconfigured\
+    \ usage close to the Aiven 100-slot cap.\n"
+  hypothesis: "Add `vexa.deploymentStrategy` helper to `_helpers.tpl` returning\n`type: RollingUpdate`\
+    \ + `rollingUpdate.maxSurge: 0` +\n`rollingUpdate.maxUnavailable: 1`. Inject it into every\nsubchart\
+    \ Deployment template (same pattern as `vexa.labels`,\n`vexa.selectorLabels`). Old pod terminates\
+    \ BEFORE new schedules\n\u2192 zero pool overlap. Brief 5-15 s service gap per rollout. For\napi-gateway\
+    \ (front door) mitigate by bumping\n`apiGateway.replicaCount` default 1\u21922 so `maxSurge: 0` rolls\n\
+    1-of-2 = zero-downtime for that service.\n"
+  gap_analysis: "No existing DoD or check inspects K8s rolling-update strategy.\n`HELM_VALUES_RESOURCES_SET`,\
+    \ `HELM_GLOBAL_SECURITY_HARDENED`,\n`HELM_PDB_TEMPLATE_EXISTS` cover adjacent chart-hygiene axes\n\
+    (resources, security, pdb) \u2014 rollout-strategy is the missing\nsibling. Gap filled by the three\
+    \ new checks below.\n"
+  new_checks:
+  - HELM_DEPLOYMENT_STRATEGY_HELPER_DEFINED
+  - HELM_ROLLING_UPDATE_ZERO_SURGE
+  - HELM_API_GATEWAY_REPLICA_COUNT_HA
+  fix_commits: []
+  proves:
+  - check: HELM_DEPLOYMENT_STRATEGY_HELPER_DEFINED
+    modes:
+    - helm
+  - check: HELM_ROLLING_UPDATE_ZERO_SURGE
+    modes:
+    - helm
+  - check: HELM_API_GATEWAY_REPLICA_COUNT_HA
+    modes:
+    - helm
+  required_modes:
+  - helm
+  human_verify:
+  - mode: helm
+    do: Trigger a helm upgrade that changes one subchart Deployment field (e.g. image tag); watch `kubectl
+      get rs -w` for the rolled service
+    expect: "Old ReplicaSet scales 1\u21920 BEFORE new scales 0\u21921 (zero overlap); for api-gateway,\
+      \ 2 replicas allow rolling one at a time with zero downtime"
+- id: pgbouncer-as-optional-oss-chart-component
+  source: human
+  ref: "vexa-platform/docs/incidents/2026-04-21-db-pool-exhaustion.md \xA74-A + N-5 (re-routed OSS-side)"
+  problem: 'The incident doc originally routed PgBouncer to the platform
 
+    repo. Re-assessed during iteration-2: any self-hoster running
+
+    Vexa against any managed Postgres (RDS, Cloud SQL, Aiven,
+
+    Supabase) hits the same oversubscription class once they scale
+
+    past 1-replica-each. Platform-only PgBouncer forces every
+
+    adopter to reinvent the same subchart locally.
+
+    '
+  hypothesis: "Add PgBouncer as an optional OSS chart component following the\nexisting monolithic-chart\
+    \ pattern (the chart has no\n`Chart.yaml` dependencies; all optional services \u2014 postgres,\nredis,\
+    \ minio \u2014 are top-level templates gated by\n`.Values.<name>.enabled`). New files:\n  - `templates/deployment-pgbouncer.yaml`\
+    \ (guarded by\n    `{{- if .Values.pgbouncer.enabled }}`)\n  - `templates/service-pgbouncer.yaml`\
+    \ (same guard)\nNew values block `pgbouncer:` with `enabled: false` default,\n`default_pool_size:\
+    \ 20`, `max_client_conn: 1000`, transaction\nmode, resources block mirroring `redis:` / `postgres:`\
+    \ shape.\nNew helper `vexa.dbHostEffective` in `_helpers.tpl` \u2014 returns\nthe pgbouncer service\
+    \ when enabled, falls through to existing\n`vexa.dbHost` otherwise. Every service's `DB_HOST` env\
+    \ in its\nDeployment template switches from `vexa.dbHost` to\n`vexa.dbHostEffective`. Platform repo's\
+    \ helm values file flips\n`pgbouncer.enabled: true` in its overlay; every self-hoster\ninherits the\
+    \ safe option.\n"
+  gap_analysis: 'No existing DoD inspects chart topology for optional connection
+
+    poolers. This is a new chart-shape concern. One DoD covers
+
+    both static (template exists) and behavioural (enabling it
+
+    rewires `DB_HOST`) aspects.
+
+    '
+  new_checks:
+  - HELM_PGBOUNCER_OPTIONAL_AND_WIRED
+  fix_commits: []
+  proves:
+  - check: HELM_PGBOUNCER_OPTIONAL_AND_WIRED
+    modes:
+    - helm
+  required_modes:
+  - helm
+  human_verify:
+  - mode: helm
+    do: 'Render chart with default values (`pgbouncer.enabled: false`); then render again with `--set
+      pgbouncer.enabled=true`'
+    expect: Default render has no pgbouncer Deployment/Service. Enabled render contains both and every
+      service's `DB_HOST` env resolves to the pgbouncer Service name (not the postgres Service name)
+- id: runtime-api-exit-callback-delivery-is-durable
+  source: human
+  ref: "vexa-platform/docs/incidents/2026-04-21-db-pool-exhaustion.md \xA77 + N-7b; root cause at services/runtime-api/runtime_api/lifecycle.py:113-142"
+  problem: "Runtime-api's `_deliver_callback` (lifecycle.py:113-142) gives\nup after `CALLBACK_RETRIES`\
+    \ (default 3) attempts and logs\n\"exhausted\". The pending-callback record sits in Redis with\nno\
+    \ retriggering mechanism. If meeting-api is unhealthy for\nlonger than `sum(CALLBACK_BACKOFF)` (typically\
+    \ 1+5+30 s = 36 s\n\u2014 exactly what happened 2026-04-21 when meeting-api was\nCrashLooping due\
+    \ to Pack A's issue), the exit callback is\nlost. The bot pod is gone but the meeting row is stuck\n\
+    `status='active'` forever. Incident doc \xA77 lists 7+ orphaned\nmeetings (10522, 10479, 10313, 10311,\
+    \ 10137, 9147, others)\nfrom exactly this class.\n"
+  hypothesis: "Use the scheduler runtime-api ALREADY HAS (`idle_loop` at\n`services/runtime-api/runtime_api/lifecycle.py:27`,\
+    \ which\nalready runs as a background task on `IDLE_CHECK_INTERVAL`).\nJ.1: Remove the retry cap in\
+    \ `_deliver_callback`. Keep\nexponential backoff within one attempt-burst (cap at a few\nminutes).\
+    \ Do NOT `delete_pending_callback` on failure; leave\nthe record.\nJ.2: Extend `idle_loop` to also\
+    \ iterate\n`state.list_pending_callbacks()` each tick and re-invoke\n`_deliver_callback(name)` on\
+    \ any that remain. Idempotent,\nno new background task, no CronJob.\nJ.3: Audit meeting-api's callback\
+    \ endpoint\n(`services/meeting-api/meeting_api/callbacks.py`) is\nidempotent \u2014 already-transitioned\
+    \ meetings must respond 200,\nnot 4xx, so retries are safe.\n"
+  gap_analysis: "No existing DoD inspects exit-callback delivery durability.\nThe dual failure mode (issue\
+    \ #173, reconcile_state on VM\nredeploy) is a separate runtime-api state-durability bug \u2014\nexplicitly\
+    \ deferred.\n"
+  new_checks:
+  - RUNTIME_API_EXIT_CALLBACK_DURABLE
+  - RUNTIME_API_IDLE_LOOP_SWEEPS_PENDING_CALLBACKS
+  fix_commits: []
+  proves:
+  - check: RUNTIME_API_IDLE_LOOP_SWEEPS_PENDING_CALLBACKS
+    modes:
+    - lite
+    - compose
+  - check: RUNTIME_API_EXIT_CALLBACK_DURABLE
+    modes:
+    - compose
+  required_modes:
+  - compose
+  human_verify:
+  - mode: compose
+    do: "Create a bot; SIGSTOP meeting-api (or blackhole its URL); stop the bot; wait 2\xD7 IDLE_CHECK_INTERVAL;\
+      \ SIGCONT meeting-api"
+    expect: Within another IDLE_CHECK_INTERVAL, the meeting row transitions out of `active` to `completed`
+      (or `failed` with exit_code if the bot was SIGKILLed). No manual intervention needed.
+- id: lite-postgres-publicly-exposed
+  source: human
+  problem: 'Lite-mode Postgres listens on 0.0.0.0:5432 and is reachable from the public internet; an attacker
+    already dropped the ''vexa'' database and left a ransom note in ''readme_to_recover'' on the running
+    172.232.0.163 instance, surfaced as HTTP 500 ''Server Configuration Error'' on /login
+
+    '
+  hypothesis: 'The lite Docker image publishes 5432 to all interfaces (either via -p 5432:5432 on the
+    container OR postgresql.conf listens on 0.0.0.0 with default pg_hba.conf). Fix: bind Postgres to 127.0.0.1
+    only, OR don''t expose 5432 in deploy/lite/Dockerfile / supervisord conf / compose-like port map.
+    Combined with pg_hba.conf requiring password for external connections as defense-in-depth.
+
+    '
+  gap_analysis: 'No automated check verifies Postgres is NOT reachable from the public internet. ADMIN_API_DB_EXISTS
+    and POSTGRES_NO_DISK_WARNING only verify the internal app-path to Postgres works; neither checks the
+    network attack surface. Similarly no firewall / iptables / port-binding inspection. The login-flow
+    dashboard-auth test logs in as test@vexa.ai which succeeded before the attacker wiped the DB, so even
+    repeated test runs did not catch the compromise once it happened.
+
+    '
+  new_checks:
+  - LITE_POSTGRES_NOT_PUBLIC
+  - LITE_INTERNAL_SERVICES_LOOPBACK_ONLY
+  - LITE_REDIS_NOT_PUBLIC
+  - COMPOSE_PORTS_LOOPBACK_ONLY
+  fix_commits: []
+  proves:
+  - {check: LITE_POSTGRES_NOT_PUBLIC, modes: [lite]}
+  - {check: LITE_INTERNAL_SERVICES_LOOPBACK_ONLY, modes: [lite]}
+  - {check: LITE_REDIS_NOT_PUBLIC, modes: [lite]}
+  - {check: COMPOSE_PORTS_LOOPBACK_ONLY, modes: [compose]}
+  required_modes: [lite, compose]
+  human_verify:
+  - mode: lite
+    do: "From a host outside the VM run `nc -zv 172.232.0.163 5432` (external scan)"
+    expect: "Connection is refused or filtered (NOT 'Connection succeeded')."
+  - mode: lite
+    do: "`docker exec vexa-postgres psql -U postgres -l` — from inside the VM"
+    expect: "database 'vexa' is present; 'readme_to_recover' is absent."
+  - mode: compose
+    do: "From a host outside the compose VM run `nc -zv 172.239.57.155 5458`"
+    expect: "Connection is refused or filtered."
+  added: '2026-04-21'
 expensive_tests: []
-
 strict_features: []
