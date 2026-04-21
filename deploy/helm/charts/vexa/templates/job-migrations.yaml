@@ -35,38 +35,26 @@ spec:
               python -c "import asyncio; from meeting_api.database import init_db; asyncio.run(init_db()); print('Schema sync complete.')"
           env:
             - name: DB_HOST
-              value: {{ include "vexa.dbHost" . | quote }}
+              value: {{ include "vexa.dbHostEffective" . | quote }}
             - name: DB_PORT
-              value: {{ .Values.database.port | quote }}
+              value: {{ include "vexa.dbPortEffective" . | quote }}
             - name: DB_NAME
-              {{- if .Values.postgres.enabled }}
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.postgres.credentialsSecretName | quote }}
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
                   key: POSTGRES_DB
-              {{- else }}
-              value: {{ .Values.database.name | quote }}
-              {{- end }}
             - name: DB_USER
-              {{- if .Values.postgres.enabled }}
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.postgres.credentialsSecretName | quote }}
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
                   key: POSTGRES_USER
-              {{- else }}
-              value: {{ .Values.database.user | quote }}
-              {{- end }}
             - name: DB_SSL_MODE
               value: {{ .Values.database.sslMode | quote }}
             - name: DB_PASSWORD
-              {{- if .Values.postgres.enabled }}
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.postgres.credentialsSecretName | quote }}
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
                   key: POSTGRES_PASSWORD
-              {{- else }}
-              value: {{ .Values.database.password | quote }}
-              {{- end }}
           resources:
             {{- toYaml .Values.migrations.resources | nindent 12 }}
 {{- end }}

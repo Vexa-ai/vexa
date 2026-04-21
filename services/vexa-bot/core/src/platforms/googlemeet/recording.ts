@@ -64,6 +64,47 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
         return false;
       }
     });
+
+    // Pack B (issue #218): incremental chunk upload — each MediaRecorder
+    // chunk uploads immediately, so ungraceful exits leave already-uploaded
+    // chunks durable in MinIO. `is_final=false` on intermediate chunks;
+    // shutdown-path flush sends the last chunk with `is_final=true`.
+    await page.exposeFunction(
+      "__vexaSaveRecordingChunk",
+      async (payload: { base64: string; chunkSeq: number; isFinal: boolean; mimeType?: string }) => {
+        try {
+          if (!recordingService) {
+            log("[Google Recording] Recording service not initialized; dropping chunk.");
+            return false;
+          }
+          if (!botConfig.recordingUploadUrl || !botConfig.token) {
+            // No upload URL configured — fall back to the buffered path.
+            return false;
+          }
+          const mimeType = (payload?.mimeType || "").toLowerCase();
+          let format = "webm";
+          if (mimeType.includes("wav")) format = "wav";
+          else if (mimeType.includes("ogg")) format = "ogg";
+          else if (mimeType.includes("mp4") || mimeType.includes("m4a")) format = "m4a";
+
+          const buf = Buffer.from(payload.base64 || "", "base64");
+          if (!buf.length) return false;
+
+          await recordingService.uploadChunk(
+            botConfig.recordingUploadUrl,
+            botConfig.token,
+            buf,
+            payload.chunkSeq,
+            !!payload.isFinal,
+            format,
+          );
+          return true;
+        } catch (error: any) {
+          log(`[Google Recording] uploadChunk failed (seq=${payload?.chunkSeq}): ${error?.message || String(error)}`);
+          return false;
+        }
+      },
+    );
   } else {
     log("[Google Recording] Audio capture disabled by config.");
   }
@@ -147,34 +188,66 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
             (window as any).__vexaRecordingFlushed = true;
 
             try {
-              const recorded = (window as any).__vexaRecordedChunks || [];
-              if (!recorded.length) {
-                (window as any).logBot?.(`[Google Recording] No media chunks to flush (${reason}).`);
-                return;
-              }
-
+              // Pack B (issue #218): with incremental chunk upload in the
+              // ondataavailable handler, the preferred shutdown path is a
+              // single final-chunk POST with is_final=true. The `recorder.stop()`
+              // call just before this flush triggers one last dataavailable
+              // event that already uploaded as is_final=false; now we send
+              // an empty-body "finalizer" with the next chunk_seq so
+              // meeting-api flips the Recording to COMPLETED and fires the
+              // webhook. If that fails (or chunk sink absent), fall back to
+              // the legacy full-blob save for durable local copy.
               const mimeType =
                 (window as any).__vexaMediaRecorder?.mimeType || "audio/webm";
-              const blob = new Blob(recorded, { type: mimeType });
-              const buffer = await blob.arrayBuffer();
-              const bytes = new Uint8Array(buffer);
-              let binary = "";
-              const chunkSize = 0x8000;
-              for (let i = 0; i < bytes.length; i += chunkSize) {
-                binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-              }
-              const base64 = btoa(binary);
+              const chunkSeq = ((window as any).__vexaChunkSeq as number) ?? 0;
 
-              if (typeof (window as any).__vexaSaveRecordingBlob === "function") {
-                await (window as any).__vexaSaveRecordingBlob({
-                  base64,
-                  mimeType: blob.type || mimeType,
-                });
-                (window as any).logBot?.(
-                  `[Google Recording] Flushed ${bytes.length} bytes (${blob.type || mimeType}) on ${reason}.`
-                );
-              } else {
-                (window as any).logBot?.("[Google Recording] Node blob sink is not available.");
+              let chunkFinalized = false;
+              if (typeof (window as any).__vexaSaveRecordingChunk === "function") {
+                try {
+                  await (window as any).__vexaSaveRecordingChunk({
+                    base64: "",
+                    chunkSeq,
+                    isFinal: true,
+                    mimeType,
+                  });
+                  (window as any).logBot?.(
+                    `[Google Recording] Finalized recording (chunk_seq=${chunkSeq}, ${reason}).`
+                  );
+                  chunkFinalized = true;
+                } catch (err: any) {
+                  (window as any).logBot?.(
+                    `[Google Recording] Chunk finalizer failed: ${err?.message || err}`
+                  );
+                }
+              }
+
+              // Legacy full-blob path (kept as defense-in-depth for local
+              // disk copy + for cases where chunk upload is unreachable).
+              const recorded = (window as any).__vexaRecordedChunks || [];
+              if (recorded.length) {
+                const blob = new Blob(recorded, { type: mimeType });
+                const buffer = await blob.arrayBuffer();
+                const bytes = new Uint8Array(buffer);
+                let binary = "";
+                const chunkSize = 0x8000;
+                for (let i = 0; i < bytes.length; i += chunkSize) {
+                  binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+                }
+                const base64 = btoa(binary);
+
+                if (typeof (window as any).__vexaSaveRecordingBlob === "function") {
+                  await (window as any).__vexaSaveRecordingBlob({
+                    base64,
+                    mimeType: blob.type || mimeType,
+                  });
+                  (window as any).logBot?.(
+                    `[Google Recording] Flushed ${bytes.length} bytes (${blob.type || mimeType}) on ${reason}${chunkFinalized ? " (chunk upload already final)" : ""}.`
+                  );
+                } else if (!chunkFinalized) {
+                  (window as any).logBot?.("[Google Recording] Node blob sink is not available.");
+                }
+              } else if (!chunkFinalized) {
+                (window as any).logBot?.(`[Google Recording] No media chunks to flush (${reason}).`);
               }
             } catch (err: any) {
               (window as any).logBot?.(
@@ -260,14 +333,52 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                 (window as any).__vexaMediaRecorder = recorder;
                 (window as any).__vexaRecordedChunks = [];
                 (window as any).__vexaRecordingFlushed = false;
+                (window as any).__vexaChunkSeq = 0;
 
-                recorder.ondataavailable = (event: BlobEvent) => {
-                  if (event.data && event.data.size > 0) {
-                    (window as any).__vexaRecordedChunks.push(event.data);
+                // Pack B (issue #218): upload each chunk immediately to MinIO
+                // via meeting-api, rather than buffering the whole WebM until
+                // shutdown. On ungraceful exit, already-uploaded chunks are
+                // durable. The buffer is still populated as a fallback for
+                // the shutdown-flush path — the server-side `chunk_seq`
+                // contract is idempotent across duplicate arrivals.
+                recorder.ondataavailable = async (event: BlobEvent) => {
+                  if (!(event.data && event.data.size > 0)) return;
+                  (window as any).__vexaRecordedChunks.push(event.data);
+
+                  // Best-effort immediate upload; do NOT block the recorder.
+                  try {
+                    const chunkSeq = (window as any).__vexaChunkSeq as number;
+                    (window as any).__vexaChunkSeq = chunkSeq + 1;
+                    const mimeType = recorder.mimeType || "audio/webm";
+                    const buffer = await event.data.arrayBuffer();
+                    const bytes = new Uint8Array(buffer);
+                    let binary = "";
+                    const encodeChunkSize = 0x8000;
+                    for (let i = 0; i < bytes.length; i += encodeChunkSize) {
+                      binary += String.fromCharCode(...bytes.subarray(i, i + encodeChunkSize));
+                    }
+                    const base64 = btoa(binary);
+                    if (typeof (window as any).__vexaSaveRecordingChunk === "function") {
+                      // isFinal=false always for MediaRecorder.start timeslice events;
+                      // the shutdown path sends the final chunk with isFinal=true.
+                      void (window as any).__vexaSaveRecordingChunk({
+                        base64,
+                        chunkSeq,
+                        isFinal: false,
+                        mimeType,
+                      });
+                    }
+                  } catch (err: any) {
+                    (window as any).logBot?.(
+                      `[Google Recording] Incremental chunk upload prep failed: ${err?.message || err}`
+                    );
                   }
                 };
 
-                recorder.start(1000);
+                // 30-second chunks: balances upload overhead with data-loss
+                // granularity on SIGKILL. Rarely shorter chunks are also fine
+                // — the server-side endpoint appends by chunk_seq.
+                recorder.start(30000);
                 // Signal Node.js that recording started — re-aligns segment timestamps
                 (window as any).__vexaRecordingStarted?.();
                 (window as any).logBot?.(

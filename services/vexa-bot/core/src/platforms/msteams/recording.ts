@@ -69,6 +69,43 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
         return false;
       }
     });
+
+    // Pack B (issue #218): incremental chunk upload — mirrors googlemeet/recording.ts.
+    await page.exposeFunction(
+      "__vexaSaveRecordingChunk",
+      async (payload: { base64: string; chunkSeq: number; isFinal: boolean; mimeType?: string }) => {
+        try {
+          if (!recordingService) {
+            log("[Teams Recording] Recording service not initialized; dropping chunk.");
+            return false;
+          }
+          if (!botConfig.recordingUploadUrl || !botConfig.token) {
+            return false;
+          }
+          const mimeType = (payload?.mimeType || "").toLowerCase();
+          let format = "webm";
+          if (mimeType.includes("wav")) format = "wav";
+          else if (mimeType.includes("ogg")) format = "ogg";
+          else if (mimeType.includes("mp4") || mimeType.includes("m4a")) format = "m4a";
+
+          const buf = Buffer.from(payload.base64 || "", "base64");
+          if (!buf.length) return false;
+
+          await recordingService.uploadChunk(
+            botConfig.recordingUploadUrl,
+            botConfig.token,
+            buf,
+            payload.chunkSeq,
+            !!payload.isFinal,
+            format,
+          );
+          return true;
+        } catch (error: any) {
+          log(`[Teams Recording] uploadChunk failed (seq=${payload?.chunkSeq}): ${error?.message || String(error)}`);
+          return false;
+        }
+      },
+    );
   } else {
     log("[Teams Recording] Audio capture disabled by config.");
   }
@@ -164,34 +201,57 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
             (window as any).__vexaRecordingFlushed = true;
 
             try {
-              const recorded = (window as any).__vexaRecordedChunks || [];
-              if (!recorded.length) {
-                (window as any).logBot?.(`[Teams Recording] No media chunks to flush (${reason}).`);
-                return;
-              }
-
+              // Pack B (issue #218): prefer sending a final-chunk finalizer;
+              // fall back to the legacy full-blob save for local disk copy.
               const mimeType =
                 (window as any).__vexaMediaRecorder?.mimeType || "audio/webm";
-              const blob = new Blob(recorded, { type: mimeType });
-              const buffer = await blob.arrayBuffer();
-              const bytes = new Uint8Array(buffer);
-              let binary = "";
-              const chunkSize = 0x8000;
-              for (let i = 0; i < bytes.length; i += chunkSize) {
-                binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-              }
-              const base64 = btoa(binary);
+              const chunkSeq = ((window as any).__vexaChunkSeq as number) ?? 0;
 
-              if (typeof (window as any).__vexaSaveRecordingBlob === "function") {
-                await (window as any).__vexaSaveRecordingBlob({
-                  base64,
-                  mimeType: blob.type || mimeType,
-                });
-                (window as any).logBot?.(
-                  `[Teams Recording] Flushed ${bytes.length} bytes (${blob.type || mimeType}) on ${reason}.`
-                );
-              } else {
-                (window as any).logBot?.("[Teams Recording] Node blob sink is not available.");
+              let chunkFinalized = false;
+              if (typeof (window as any).__vexaSaveRecordingChunk === "function") {
+                try {
+                  await (window as any).__vexaSaveRecordingChunk({
+                    base64: "",
+                    chunkSeq,
+                    isFinal: true,
+                    mimeType,
+                  });
+                  (window as any).logBot?.(
+                    `[Teams Recording] Finalized recording (chunk_seq=${chunkSeq}, ${reason}).`
+                  );
+                  chunkFinalized = true;
+                } catch (err: any) {
+                  (window as any).logBot?.(
+                    `[Teams Recording] Chunk finalizer failed: ${err?.message || err}`
+                  );
+                }
+              }
+
+              const recorded = (window as any).__vexaRecordedChunks || [];
+              if (recorded.length) {
+                const blob = new Blob(recorded, { type: mimeType });
+                const buffer = await blob.arrayBuffer();
+                const bytes = new Uint8Array(buffer);
+                let binary = "";
+                const chunkSize = 0x8000;
+                for (let i = 0; i < bytes.length; i += chunkSize) {
+                  binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+                }
+                const base64 = btoa(binary);
+
+                if (typeof (window as any).__vexaSaveRecordingBlob === "function") {
+                  await (window as any).__vexaSaveRecordingBlob({
+                    base64,
+                    mimeType: blob.type || mimeType,
+                  });
+                  (window as any).logBot?.(
+                    `[Teams Recording] Flushed ${bytes.length} bytes (${blob.type || mimeType}) on ${reason}${chunkFinalized ? " (chunk upload already final)" : ""}.`
+                  );
+                } else if (!chunkFinalized) {
+                  (window as any).logBot?.("[Teams Recording] Node blob sink is not available.");
+                }
+              } else if (!chunkFinalized) {
+                (window as any).logBot?.(`[Teams Recording] No media chunks to flush (${reason}).`);
               }
             } catch (err: any) {
               (window as any).logBot?.(
@@ -265,14 +325,41 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
                 (window as any).__vexaMediaRecorder = recorder;
                 (window as any).__vexaRecordedChunks = [];
                 (window as any).__vexaRecordingFlushed = false;
+                (window as any).__vexaChunkSeq = 0;
 
-                recorder.ondataavailable = (event: BlobEvent) => {
-                  if (event.data && event.data.size > 0) {
-                    (window as any).__vexaRecordedChunks.push(event.data);
+                // Pack B (issue #218): incremental chunk upload, matches googlemeet.
+                recorder.ondataavailable = async (event: BlobEvent) => {
+                  if (!(event.data && event.data.size > 0)) return;
+                  (window as any).__vexaRecordedChunks.push(event.data);
+
+                  try {
+                    const chunkSeq = (window as any).__vexaChunkSeq as number;
+                    (window as any).__vexaChunkSeq = chunkSeq + 1;
+                    const mime = recorder.mimeType || "audio/webm";
+                    const buffer = await event.data.arrayBuffer();
+                    const bytes = new Uint8Array(buffer);
+                    let binary = "";
+                    const encodeChunkSize = 0x8000;
+                    for (let i = 0; i < bytes.length; i += encodeChunkSize) {
+                      binary += String.fromCharCode(...bytes.subarray(i, i + encodeChunkSize));
+                    }
+                    const base64 = btoa(binary);
+                    if (typeof (window as any).__vexaSaveRecordingChunk === "function") {
+                      void (window as any).__vexaSaveRecordingChunk({
+                        base64,
+                        chunkSeq,
+                        isFinal: false,
+                        mimeType: mime,
+                      });
+                    }
+                  } catch (err: any) {
+                    (window as any).logBot?.(
+                      `[Teams Recording] Incremental chunk upload prep failed: ${err?.message || err}`
+                    );
                   }
                 };
 
-                recorder.start(1000);
+                recorder.start(30000);
                 // Signal Node.js that recording started — re-aligns segment timestamps
                 (window as any).__vexaRecordingStarted?.();
                 (window as any).logBot?.(

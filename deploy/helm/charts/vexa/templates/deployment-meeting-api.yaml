@@ -7,6 +7,7 @@ metadata:
     {{- include "vexa.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.meetingApi.replicaCount }}
+  {{- include "vexa.deploymentStrategy" . | nindent 2 }}
   selector:
     matchLabels:
       {{- include "vexa.selectorLabels" . | nindent 6 }}
@@ -36,38 +37,26 @@ spec:
               containerPort: 8080
           env:
             - name: DB_HOST
-              value: {{ include "vexa.dbHost" . | quote }}
+              value: {{ include "vexa.dbHostEffective" . | quote }}
             - name: DB_PORT
-              value: {{ .Values.database.port | quote }}
+              value: {{ include "vexa.dbPortEffective" . | quote }}
             - name: DB_NAME
-              {{- if .Values.postgres.enabled }}
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.postgres.credentialsSecretName | quote }}
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
                   key: POSTGRES_DB
-              {{- else }}
-              value: {{ .Values.database.name | quote }}
-              {{- end }}
             - name: DB_USER
-              {{- if .Values.postgres.enabled }}
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.postgres.credentialsSecretName | quote }}
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
                   key: POSTGRES_USER
-              {{- else }}
-              value: {{ .Values.database.user | quote }}
-              {{- end }}
             - name: DB_SSL_MODE
               value: {{ .Values.database.sslMode | quote }}
             - name: DB_PASSWORD
-              {{- if .Values.postgres.enabled }}
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.postgres.credentialsSecretName | quote }}
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
                   key: POSTGRES_PASSWORD
-              {{- else }}
-              value: {{ .Values.database.password | quote }}
-              {{- end }}
             - name: REDIS_URL
               value: {{ include "vexa.redisUrl" . | quote }}
             - name: REDIS_HOST
@@ -97,7 +86,10 @@ spec:
             - name: TRANSCRIPTION_SERVICE_URL
               value: {{ .Values.meetingApi.transcriptionServiceUrl | default "" | quote }}
             - name: TRANSCRIPTION_SERVICE_TOKEN
-              value: {{ .Values.meetingApi.transcriptionServiceToken | default "" | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: TRANSCRIPTION_SERVICE_TOKEN
             - name: RECORDING_ENABLED
               value: {{ required "meetingApi.recordingEnabled must be set" .Values.meetingApi.recordingEnabled | quote }}
             - name: STORAGE_BACKEND

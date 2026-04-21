@@ -170,6 +170,77 @@ export class RecordingService {
     }
   }
 
+  /**
+   * Upload a single recording chunk to the meeting-api internal endpoint.
+   *
+   * Pack B (issue #218): the bot's MediaRecorder emits a chunk every N ms;
+   * each chunk lands in MinIO immediately so an ungraceful exit (SIGKILL)
+   * leaves the already-uploaded chunks durable. Set `isFinal=true` on the
+   * last chunk (the one sent from the graceful-shutdown path) so meeting-api
+   * flips Recording.status from IN_PROGRESS to COMPLETED and fires the
+   * recording.completed webhook.
+   *
+   * chunk_seq is monotonically increasing from 0. Storage path ends up at
+   * `recordings/<user>/<storage_id>/<session>/<chunk_seq:06d>.<format>`.
+   *
+   * Uses the same multipart body shape as upload() — meeting-api receives
+   * identical field names, just with chunk_seq + is_final=false for
+   * intermediate chunks.
+   */
+  async uploadChunk(
+    callbackUrl: string,
+    token: string,
+    chunkData: Buffer,
+    chunkSeq: number,
+    isFinal: boolean,
+    format: string = 'webm',
+  ): Promise<void> {
+    const uploadTimeoutMs = 30_000;
+    const durationSeconds = this.startTime > 0 ? (Date.now() - this.startTime) / 1000 : undefined;
+
+    const boundary = `----VexaRecordingChunk${Date.now()}${chunkSeq}`;
+    const metadata = JSON.stringify({
+      meeting_id: this.meetingId,
+      session_uid: this.sessionUid,
+      format: format,
+      sample_rate: this.sampleRate,
+      channels: this.channels,
+      duration_seconds: durationSeconds,
+      file_size_bytes: chunkData.length,
+      chunk_seq: chunkSeq,
+      is_final: isFinal,
+    });
+
+    const parts: Buffer[] = [];
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="metadata"\r\nContent-Type: application/json\r\n\r\n`));
+    parts.push(Buffer.from(metadata));
+    parts.push(Buffer.from('\r\n'));
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="chunk_seq"\r\n\r\n${chunkSeq}\r\n`));
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="is_final"\r\n\r\n${isFinal ? 'true' : 'false'}\r\n`));
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="recording.${chunkSeq}.${format}"\r\nContent-Type: audio/${format}\r\n\r\n`));
+    parts.push(chunkData);
+    parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+
+    const body = Buffer.concat(parts);
+
+    const maxRetries = 2;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        await this._sendUpload(callbackUrl, token, boundary, body, uploadTimeoutMs);
+        log(`[Recording] Chunk ${chunkSeq}${isFinal ? ' (final)' : ''} uploaded (${chunkData.length} bytes)`);
+        return;
+      } catch (err: any) {
+        if (attempt === maxRetries) {
+          log(`[Recording] Chunk ${chunkSeq} upload failed after ${maxRetries + 1} attempts: ${err.message}`);
+          throw err;
+        }
+        const delay = 500 * Math.pow(2, attempt);
+        log(`[Recording] Chunk ${chunkSeq} upload attempt ${attempt + 1} failed: ${err.message}. Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+
   private _sendUpload(callbackUrl: string, token: string, boundary: string, body: Buffer, timeoutMs: number): Promise<void> {
     return new Promise((resolve, reject) => {
       const url = new URL(callbackUrl);

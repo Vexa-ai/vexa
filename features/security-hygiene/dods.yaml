@@ -27,3 +27,29 @@ dods:
     modes:
     - lite
     - compose
+
+# ── 260421-prod-stabilize additions ─────────────────────────────────
+- id: chart-prod-secrets-via-secretkeyref
+  label: "every prod secret (DB_PASSWORD, TRANSCRIPTION_SERVICE_TOKEN) sourced via secretKeyRef in rendered chart"
+  weight: 15
+  evidence:
+    check: HELM_PROD_SECRETS_SECRETREF_ONLY
+    modes:
+    - helm
+
+- id: chart-prod-secrets-required-at-render
+  label: "helm template exits non-zero when prod secrets are absent — fail loud at render, not silently at pod boot"
+  weight: 10
+  evidence:
+    check: HELM_PROD_SECRETS_REQUIRED_AT_RENDER
+    modes:
+    - helm
+
+- id: engine-pool-reset-on-return-rollback-explicit
+  label: "meeting-api database.py engine sets pool_reset_on_return='rollback' — regression guard for idle-in-transaction leak defense"
+  weight: 10
+  evidence:
+    check: ENGINE_POOL_RESET_ON_RETURN_ROLLBACK
+    modes:
+    - lite
+    - compose

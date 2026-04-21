@@ -52,7 +52,10 @@ redisConfig:
 
 apiGateway:
   enabled: true
-  replicaCount: 1
+  # Default 2 so `maxSurge: 0` rolling updates remain zero-downtime for the
+  # front door. See _helpers.tpl vexa.deploymentStrategy and DoD
+  # chart-api-gateway-ha-replica-count.
+  replicaCount: 2
   image:
     repository: vexaai/api-gateway
     tag: dev
@@ -238,6 +241,36 @@ migrations:
       memory: 256Mi
 
 # ---------- Optional bundled dependencies (for dev) ----------
+
+pgbouncer:
+  # Optional transaction-mode connection pooler in front of Postgres.
+  # Default off. Flip to `enabled: true` when:
+  #   - running against managed external Postgres (postgres.enabled=false)
+  #     with a fixed slot budget (Aiven, RDS, Cloud SQL, …);
+  #   - scaling any service beyond replicaCount=1;
+  #   - operating a production deployment where configured pool ceilings
+  #     might sum past the server's max_connections under load.
+  # When enabled, the chart rewires every service's DB_HOST to point at
+  # pgbouncer via the `vexa.dbHostEffective` helper. See incident post-mortem
+  # 2026-04-21-db-pool-exhaustion.md §4-A + N-5.
+  enabled: false
+  image: edoburu/pgbouncer:latest
+  replicaCount: 1
+  poolMode: transaction
+  defaultPoolSize: 20
+  maxClientConn: 1000
+  serverResetQuery: "DISCARD ALL"
+  authType: scram-sha-256
+  adminUsers: postgres
+  service:
+    port: 5432
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
 
 postgres:
   enabled: true

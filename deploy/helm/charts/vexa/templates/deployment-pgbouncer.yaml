@@ -1,0 +1,87 @@
+{{- if .Values.pgbouncer.enabled }}
+# PgBouncer — optional connection pooler in front of Postgres.
+#
+# Why: when multiple app pods + replicas each hold their own SQLAlchemy pool,
+# the sum of configured pool ceilings can exceed the server's max_connections
+# (especially against managed Postgres with fixed slot counts — Aiven, RDS,
+# Cloud SQL). PgBouncer in transaction mode decouples per-pod pool size from
+# the server-side slot count: each pod can keep its local pool,
+# pgbouncer multiplexes onto a small fixed number of upstream connections.
+#
+# Default: disabled. Operators running against managed external Postgres
+# (postgres.enabled=false) or any non-trivial multi-replica deployment
+# should flip `pgbouncer.enabled=true`. The chart then rewires every
+# service's DB_HOST env via `vexa.dbHostEffective` to point at this Service.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vexa.componentName" (list . "pgbouncer") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.pgbouncer.replicaCount | default 1 }}
+  {{- include "vexa.deploymentStrategy" . | nindent 2 }}
+  selector:
+    matchLabels:
+      {{- include "vexa.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: pgbouncer
+  template:
+    metadata:
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: pgbouncer
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: pgbouncer
+          image: "{{ .Values.pgbouncer.image }}"
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: DB_HOST
+              # Upstream — always the "real" Postgres (bundled or external),
+              # bypassing the helper that would otherwise short-circuit to
+              # pgbouncer itself.
+              value: {{ include "vexa.dbHost" . | quote }}
+            - name: DB_PORT
+              value: {{ .Values.database.port | quote }}
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_PASSWORD
+            - name: POOL_MODE
+              value: {{ .Values.pgbouncer.poolMode | default "transaction" | quote }}
+            - name: DEFAULT_POOL_SIZE
+              value: {{ .Values.pgbouncer.defaultPoolSize | default 20 | quote }}
+            - name: MAX_CLIENT_CONN
+              value: {{ .Values.pgbouncer.maxClientConn | default 1000 | quote }}
+            - name: SERVER_RESET_QUERY
+              value: {{ .Values.pgbouncer.serverResetQuery | default "DISCARD ALL" | quote }}
+            - name: AUTH_TYPE
+              value: {{ .Values.pgbouncer.authType | default "scram-sha-256" | quote }}
+            - name: ADMIN_USERS
+              value: {{ .Values.pgbouncer.adminUsers | default "postgres" | quote }}
+          ports:
+            - name: pgbouncer
+              containerPort: 5432
+          readinessProbe:
+            tcpSocket:
+              port: pgbouncer
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: pgbouncer
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.pgbouncer.resources | nindent 12 }}
+{{- end }}

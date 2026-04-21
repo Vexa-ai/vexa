@@ -129,6 +129,15 @@ async def internal_upload_recording(
     duration_seconds: Optional[float] = Form(default=None),
     sample_rate: Optional[int] = Form(default=None),
     is_final: bool = Form(default=True),
+    # Incremental-upload support (Pack B / issue #218). When the bot uploads
+    # per-chunk, `chunk_seq` is incremented per chunk and `is_final` stays
+    # False until the last one. Each chunk gets its own object in MinIO under
+    # a per-session prefix; each creates a distinct `media_files[]` entry
+    # (meeting_data mode) or MediaFile row (DB mode). Recording.status stays
+    # IN_PROGRESS until is_final=True — that's the "partial recording" marker.
+    # Legacy one-shot callers that don't pass chunk_seq default to 0 with
+    # is_final=True; behavior is byte-identical to today for that path.
+    chunk_seq: int = Form(default=0),
     db: AsyncSession = Depends(get_db),
 ):
     if metadata:
@@ -143,6 +152,11 @@ async def internal_upload_recording(
         sample_rate = meta.get("sample_rate", sample_rate)
         if "is_final" in meta:
             is_final = _to_bool(meta.get("is_final"), default=True)
+        if "chunk_seq" in meta:
+            try:
+                chunk_seq = int(meta.get("chunk_seq"))
+            except (TypeError, ValueError):
+                pass
 
     if not session_uid:
         raise HTTPException(status_code=422, detail="session_uid is required")
@@ -180,12 +194,29 @@ async def internal_upload_recording(
 
     recording = None
     if not use_meeting_data:
-        recording = Recording(meeting_id=meeting.id, user_id=user_id, session_uid=session_uid, source="bot", status="uploading")
-        db.add(recording)
-        await db.flush()
+        # Incremental-upload aware: look up an existing Recording for this
+        # session_uid first. Chunks 1..N reuse it; chunk 0 creates it. The
+        # one-shot legacy path lands here with chunk_seq=0 and no prior
+        # row — same as before.
+        existing_stmt = select(Recording).where(
+            Recording.meeting_id == meeting.id,
+            Recording.session_uid == session_uid,
+            Recording.source == "bot",
+        )
+        recording = (await db.execute(existing_stmt)).scalars().first()
+        if recording is None:
+            recording = Recording(meeting_id=meeting.id, user_id=user_id, session_uid=session_uid, source="bot", status="uploading")
+            db.add(recording)
+            await db.flush()
     storage_id = legacy_id if use_meeting_data else recording.id
 
-    storage_path = f"recordings/{user_id}/{storage_id}/{session_uid}.{media_format}"
+    # Incremental-upload storage path: per-session directory + zero-padded
+    # chunk index. A legacy one-shot upload (chunk_seq=0, is_final=true)
+    # renders as `.../000000.webm` — still a valid single object, just at a
+    # predictable prefix. Chunk-based uploads accumulate under the same
+    # prefix so a retrieval-time stitcher (or orphan reconciler) can
+    # enumerate them by MinIO listing.
+    storage_path = f"recordings/{user_id}/{storage_id}/{session_uid}/{chunk_seq:06d}.{media_format}"
     content_types = {"wav": "audio/wav", "webm": "video/webm", "opus": "audio/opus", "mp3": "audio/mpeg", "jpg": "image/jpeg", "png": "image/png"}
     content_type = content_types.get(media_format, "application/octet-stream")
 
@@ -201,44 +232,60 @@ async def internal_upload_recording(
         raise HTTPException(status_code=500, detail="Failed to upload recording to storage")
 
     if use_meeting_data:
-        existing_media = (existing_rec.get("media_files", [{}])[0] if existing_rec else {})
-        media_file_id = existing_media.get("id") or _new_recording_numeric_id()
-        created_at = existing_rec.get("created_at") if existing_rec else datetime.utcnow().isoformat()
-        rec_payload = {
-            "id": legacy_id,
-            "meeting_id": meeting.id,
-            "user_id": user_id,
-            "session_uid": session_uid,
-            "source": RecordingSource.BOT.value,
-            "status": RecordingStatus.COMPLETED.value if is_final else RecordingStatus.IN_PROGRESS.value,
-            "created_at": created_at,
-            "completed_at": datetime.utcnow().isoformat() if is_final else None,
-            "media_files": [{
-                "id": media_file_id,
-                "type": media_type,
-                "format": media_format,
-                "storage_path": storage_path,
-                "storage_backend": os.environ.get("STORAGE_BACKEND", "minio"),
-                "file_size_bytes": file_size,
-                "duration_seconds": duration_seconds,
-                "metadata": {"sample_rate": sample_rate} if sample_rate else {},
-                "created_at": datetime.utcnow().isoformat(),
-            }],
+        # Per-chunk media_file entry — APPEND (not upsert). One object per chunk in MinIO;
+        # one entry per chunk in media_files[]. On is_final=true, promote the Recording's
+        # status to COMPLETED and fire the webhook exactly once (the moment of transition
+        # from IN_PROGRESS → COMPLETED).
+        media_file_id = _new_recording_numeric_id()
+        new_media_file = {
+            "id": media_file_id,
+            "type": media_type,
+            "format": media_format,
+            "storage_path": storage_path,
+            "storage_backend": os.environ.get("STORAGE_BACKEND", "minio"),
+            "file_size_bytes": file_size,
+            "duration_seconds": duration_seconds,
+            "chunk_seq": chunk_seq,
+            "metadata": {"sample_rate": sample_rate} if sample_rate else {},
+            "created_at": datetime.utcnow().isoformat(),
         }
-        if existing_idx is None:
+        if existing_rec is None:
+            rec_payload = {
+                "id": legacy_id,
+                "meeting_id": meeting.id,
+                "user_id": user_id,
+                "session_uid": session_uid,
+                "source": RecordingSource.BOT.value,
+                "status": RecordingStatus.COMPLETED.value if is_final else RecordingStatus.IN_PROGRESS.value,
+                "created_at": datetime.utcnow().isoformat(),
+                "completed_at": datetime.utcnow().isoformat() if is_final else None,
+                "media_files": [new_media_file],
+            }
             recordings_list.append(rec_payload)
+            status_transitioned_to_completed = bool(is_final)
         else:
+            rec_payload = dict(existing_rec)
+            existing_media_files = list(rec_payload.get("media_files") or [])
+            existing_media_files.append(new_media_file)
+            rec_payload["media_files"] = existing_media_files
+            was_completed = rec_payload.get("status") == RecordingStatus.COMPLETED.value
+            if is_final:
+                rec_payload["status"] = RecordingStatus.COMPLETED.value
+                rec_payload["completed_at"] = datetime.utcnow().isoformat()
+            status_transitioned_to_completed = is_final and not was_completed
             recordings_list[existing_idx] = rec_payload
         meeting_data_dict["recordings"] = recordings_list
         meeting.data = meeting_data_dict
         attributes.flag_modified(meeting, "data")
         await db.commit()
-        if is_final:
+        if status_transitioned_to_completed:
             asyncio.create_task(send_event_webhook(meeting.id, "recording.completed", {"recording": rec_payload}))
-        return {"recording_id": rec_payload["id"], "media_file_id": media_file_id, "storage_path": storage_path, "status": rec_payload["status"]}
+        return {"recording_id": rec_payload["id"], "media_file_id": media_file_id, "storage_path": storage_path, "status": rec_payload["status"], "chunk_seq": chunk_seq}
 
-    # DB mode
-    file_metadata = {}
+    # DB mode — per-chunk MediaFile append; Recording.status flips to COMPLETED
+    # only on is_final=true. Legacy one-shot callers (chunk_seq=0,is_final=true)
+    # still write exactly one MediaFile + COMPLETED Recording as before.
+    file_metadata = {"chunk_seq": chunk_seq}
     if sample_rate:
         file_metadata["sample_rate"] = sample_rate
     media_file = MediaFile(
@@ -249,19 +296,27 @@ async def internal_upload_recording(
         storage_backend=os.environ.get("STORAGE_BACKEND", "minio"),
         file_size_bytes=file_size,
         duration_seconds=duration_seconds,
-        extra_metadata=file_metadata if file_metadata else {},
+        extra_metadata=file_metadata,
     )
     db.add(media_file)
-    recording.status = "completed"
-    recording.completed_at = datetime.utcnow()
+    was_completed = recording.status == "completed"
+    if is_final:
+        recording.status = "completed"
+        recording.completed_at = datetime.utcnow()
+    else:
+        # Keep in-progress; never downgrade from completed → uploading if a
+        # late chunk arrives after a final.
+        if not was_completed:
+            recording.status = "uploading"
     await db.commit()
     await db.refresh(recording)
     await db.refresh(media_file)
 
-    asyncio.create_task(send_event_webhook(meeting.id, "recording.completed", {
-        "recording": {"id": recording.id, "meeting_id": recording.meeting_id, "session_uid": session_uid, "status": recording.status, "media_file_id": media_file.id, "file_size_bytes": file_size, "media_type": media_type, "media_format": media_format}
-    }))
-    return {"recording_id": recording.id, "media_file_id": media_file.id, "storage_path": storage_path, "status": recording.status}
+    if is_final and not was_completed:
+        asyncio.create_task(send_event_webhook(meeting.id, "recording.completed", {
+            "recording": {"id": recording.id, "meeting_id": recording.meeting_id, "session_uid": session_uid, "status": recording.status, "media_file_id": media_file.id, "file_size_bytes": file_size, "media_type": media_type, "media_format": media_format}
+        }))
+    return {"recording_id": recording.id, "media_file_id": media_file.id, "storage_path": storage_path, "status": recording.status, "chunk_seq": chunk_seq}
 
 
 @router.get("/recordings", response_model=RecordingListResponse, summary="List recordings for the authenticated user")

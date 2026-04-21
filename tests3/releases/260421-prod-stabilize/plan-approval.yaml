@@ -1,0 +1,488 @@
+# Plan approval — 260421-prod-stabilize
+#
+# Human signed off 2026-04-21. All items flipped to `approved: true`
+# per explicit user turn: "approved" following the Iteration-3
+# architecture-conformance audit presentation.
+
+release_id: 260421-prod-stabilize
+approved_at: 2026-04-21T10:55:00Z
+approver: dmitry@vexa.ai
+approval_source: |
+  User turn "approved" 2026-04-21 after three groom iterations:
+    Iter-1: initial pack shape (A, B-grace, C, D-rollback, G).
+    Iter-2: Pack B re-scoped to incremental upload per user
+            "grace-period is not a solution"; Pack H added after
+            user "PgBouncer — isn't this an OSS side of separation
+            of concerns?"; Pack J redesigned (no CronJob — reuse
+            existing idle_loop).
+    Iter-3: architecture-conformance audit reshaped Packs A / B / D,
+            fixed Pack G regex drift, confirmed Pack H monolithic-
+            chart pattern. Pack D scope reduced after finding
+            engine-level `pool_reset_on_return="rollback"` already
+            in place (#208's proposed fix is redundant). Pack B.3
+            reconciler dropped (existing `Recording.status=IN_PROGRESS`
+            already signals partial).
+  Final shape presented and approved: Packs A, B, C, D, G, H, J
+  (seven issues). Net cycle ~5 days develop.
+
+# ── OBJECTIVES ────────────────────────────────────────────────────────
+
+scope_approved:
+  - issue: chart-every-prod-secret-via-secretkeyref
+    hypothesis: true          # Extend existing admin-token Secret pattern; `required` fail-loud idiom from _helpers.tpl; no new Secret
+    proves: true              # Two script checks: one asserts every prod-secret env in rendered chart uses secretKeyRef; one asserts `helm template` fails on missing secret
+    required_modes: true      # [helm] — chart contract, helm is the canonical mode for chart-hygiene DoDs
+    human_verify: true        # Both render-fail tests + grep of rendered Deployment YAML
+
+  - issue: bot-recording-incremental-chunk-upload
+    hypothesis: true          # Extend existing /internal/recordings/upload endpoint with chunk_seq; bot-side MediaRecorder timeslice change; defense-in-depth grace-period bump (30 s, not 90)
+    proves: true              # Static greps (bot code emits chunks; endpoint accepts chunk_seq) + dynamic chaos test (SIGKILL mid-record; early chunks survive) + grace-period static check
+    required_modes: true      # [compose] for chaos test, [helm] for grace-period inspection, [lite, compose] for bot-code static grep
+    human_verify: true        # Long-meeting graceful test + compose-mode SIGKILL test
+
+  - issue: transcript-rendering-dedup-prefers-confirmed-on-containment
+    hypothesis: true          # In-tree 7-line fix + 2 test cases already drafted; npm version 0.4.1; sync dashboard lock; first packages/* CI workflow
+    proves: true              # Two script checks: package tests pass + CI workflow file exists
+    required_modes: true      # [lite] — mode-independent npm test; cheapest canonical mode
+    human_verify: true        # Live-dashboard eyeroll on next live meeting
+
+  - issue: engine-pool-reset-on-return-guarded
+    hypothesis: true          # Lock in existing engine config via regression grep; broaden existing HELM_MEETING_API_DB_POOL_TUNED to all services; reuse existing DB_POOL_NO_EXHAUSTION dynamic check
+    proves: true              # Three bindings: static grep of database.py engine config + static grep of chart values across services + existing dynamic check
+    required_modes: true      # [lite, compose, helm] — engine grep everywhere; chart grep helm; dynamic compose
+    human_verify: true        # Curl-burst + pg_stat_activity observation
+
+  - issue: chart-rolling-update-zero-pool-overlap
+    hypothesis: true          # Add vexa.deploymentStrategy helper; inject into every subchart Deployment; bump apiGateway.replicaCount default 1→2
+    proves: true              # Three static checks: helper defined + strategy present on rendered Deployments + apiGateway.replicaCount ≥ 2
+    required_modes: true      # [helm]
+    human_verify: true        # kubectl get rs -w during an upgrade
+    gap_analysis: true        # "No existing DoD inspects rollout strategy" — accurate
+    new_checks: true          # Three new checks listed: helper/surge/replicas
+
+  - issue: pgbouncer-as-optional-oss-chart-component
+    hypothesis: true          # Monolithic-chart pattern mirroring postgres/redis/minio; new vexa.dbHostEffective helper; enabled: false default; every service's DB_HOST uses the helper
+    proves: true              # Combined script check: chart renders without pgbouncer by default; renders with pgbouncer + wires DB_HOST when enabled
+    required_modes: true      # [helm]
+    human_verify: true        # Render-both-ways + grep DB_HOST in rendered Deployments
+    gap_analysis: true        # "No existing DoD inspects chart topology for optional poolers" — accurate
+    new_checks: true          # One new combined check
+
+  - issue: runtime-api-exit-callback-delivery-is-durable
+    hypothesis: true          # Remove retry cap in _deliver_callback; extend existing idle_loop to sweep pending callbacks; audit meeting-api callback-endpoint idempotency
+    proves: true              # Static grep (idle_loop sweeps pending_callbacks) + dynamic chaos test (blackhole meeting-api; bot stops; restore; assert meeting transitions)
+    required_modes: true      # [compose] for chaos test; [lite, compose] for static grep
+    human_verify: true        # SIGSTOP + stop-bot + SIGCONT sequence
+    gap_analysis: true        # "No existing DoD inspects exit-callback delivery durability" — accurate; #173's dual failure mode explicitly deferred
+    new_checks: true          # Two new checks: durability + idle_loop sweep
+
+# ── DoD CHANGES ───────────────────────────────────────────────────────
+# Features touched:
+#   security-hygiene  (Pack A: chart secrets; Pack D: engine pool config)
+#   bot-lifecycle     (Pack B: incremental recording; Pack J: exit callbacks)
+#   dashboard         (Pack C: package CI + test regression)
+#   infrastructure    (Pack D chart-side; Pack G rollout strategy; Pack H pgbouncer)
+
+dod_changes_approved:
+
+  # Pack A
+  - feature: security-hygiene
+    change: add
+    id: chart-prod-secrets-via-secretkeyref
+    label: "every prod secret (DB_PASSWORD, TRANSCRIPTION_SERVICE_TOKEN, JWT_SECRET, NEXTAUTH_SECRET) sourced via secretKeyRef in rendered chart; helm template fails with `required` error when any is missing"
+    weight: 15
+    evidence: {check: HELM_PROD_SECRETS_SECRETREF_ONLY, modes: [helm]}
+    approved: true
+
+  - feature: security-hygiene
+    change: add
+    id: chart-prod-secrets-required-at-render
+    label: "helm template exits non-zero when any of the four prod secrets is absent from values — fail loud at render, not silently at pod boot"
+    weight: 10
+    evidence: {check: HELM_PROD_SECRETS_REQUIRED_AT_RENDER, modes: [helm]}
+    approved: true
+
+  # Pack B
+  - feature: bot-lifecycle
+    change: add
+    id: recording-incremental-chunk-upload
+    label: "bot uploads each MediaRecorder chunk as it arrives; meeting-api accepts `chunk_seq` parameter on /internal/recordings/upload and appends to media_files[]"
+    weight: 15
+    evidence: {check: RECORDING_UPLOAD_SUPPORTS_CHUNK_SEQ, modes: [compose]}
+    approved: true
+
+  - feature: bot-lifecycle
+    change: add
+    id: recording-survives-mid-meeting-kill
+    label: "SIGKILL mid-recording leaves already-uploaded chunks durable in MinIO; Recording.status stays IN_PROGRESS (never COMPLETED) so retrieval can detect partial"
+    weight: 10
+    evidence: {check: RECORDING_SURVIVES_MID_MEETING_KILL, modes: [compose]}
+    approved: true
+
+  - feature: bot-lifecycle
+    change: add
+    id: runtime-api-stop-grace-matches-pod-spec
+    label: "runtime-api delete_namespaced_pod(grace_period_seconds) matches the pod spec's terminationGracePeriodSeconds — no override-shorter-than-spec foot-gun"
+    weight: 5
+    evidence: {check: RUNTIME_API_STOP_GRACE_MATCHES_POD_SPEC, modes: [helm]}
+    approved: true
+
+  # Pack C
+  - feature: dashboard
+    change: add
+    id: packages-transcript-rendering-tests-pass
+    label: "packages/transcript-rendering `npm test` passes (guards the dedup-prefers-confirmed fix + the existing 76 tests)"
+    weight: 5
+    evidence: {check: TRANSCRIPT_RENDERING_DEDUP_TESTS_PASS, modes: [lite]}
+    approved: true
+
+  - feature: dashboard
+    change: add
+    id: packages-ci-workflow-exists
+    label: ".github/workflows/test-packages.yml exists and runs `npm test` per package in matrix (first packages/* CI; scales to vexa-cli / vexa-client)"
+    weight: 5
+    evidence: {check: PACKAGES_CI_WORKFLOW_EXISTS, modes: [lite]}
+    approved: true
+
+  # Pack D
+  - feature: security-hygiene
+    change: add
+    id: engine-pool-reset-on-return-rollback-explicit
+    label: "meeting-api database.py engine sets `pool_reset_on_return='rollback'` — regression guard so a future refactor can't silently remove the defense against idle-in-transaction leaks"
+    weight: 10
+    evidence: {check: ENGINE_POOL_RESET_ON_RETURN_ROLLBACK, modes: [lite, compose]}
+    approved: true
+
+  - feature: infrastructure
+    change: replace-evidence
+    id: chart-db-pool-tuned
+    from_check: HELM_MEETING_API_DB_POOL_TUNED
+    to_check: HELM_ALL_SERVICES_DB_POOL_TUNED
+    note: "broaden from meeting-api only to every pool-holder service; retires the single-service name. Drops silent framework defaults on admin-api / api-gateway / runtime-api that contributed to the 2026-04-21 sum-over-cap"
+    approved: true
+
+  # Pack G
+  - feature: infrastructure
+    change: add
+    id: chart-deployment-strategy-helper
+    label: "`vexa.deploymentStrategy` helper defined in _helpers.tpl and used by every subchart Deployment template — centralized rollout-strategy contract (same pattern as vexa.labels, vexa.selectorLabels)"
+    weight: 10
+    evidence: {check: HELM_DEPLOYMENT_STRATEGY_HELPER_DEFINED, modes: [helm]}
+    approved: true
+
+  - feature: infrastructure
+    change: add
+    id: chart-rolling-update-zero-surge
+    label: "every subchart Deployment renders with `strategy.rollingUpdate.maxSurge: 0` — rolling updates never double a service's DB-pool footprint"
+    weight: 10
+    evidence: {check: HELM_ROLLING_UPDATE_ZERO_SURGE, modes: [helm]}
+    approved: true
+
+  - feature: infrastructure
+    change: add
+    id: chart-api-gateway-ha-replica-count
+    label: "apiGateway.replicaCount default ≥ 2 — so maxSurge: 0 rollouts remain zero-downtime for the front door"
+    weight: 5
+    evidence: {check: HELM_API_GATEWAY_REPLICA_COUNT_HA, modes: [helm]}
+    approved: true
+
+  # Pack H
+  - feature: infrastructure
+    change: add
+    id: chart-pgbouncer-optional-and-wired
+    label: "chart supports optional PgBouncer Deployment/Service (pgbouncer.enabled: false default); when enabled, every service's DB_HOST is rewired to the PgBouncer service via vexa.dbHostEffective helper"
+    weight: 10
+    evidence: {check: HELM_PGBOUNCER_OPTIONAL_AND_WIRED, modes: [helm]}
+    approved: true
+
+  # Pack J
+  - feature: bot-lifecycle
+    change: add
+    id: runtime-api-exit-callback-durable
+    label: "runtime-api exit callback delivery is durable across meeting-api outages — idle_loop re-sweeps pending callbacks until delivered; pending-callback record is not deleted on single-burst exhaustion"
+    weight: 10
+    evidence: {check: RUNTIME_API_EXIT_CALLBACK_DURABLE, modes: [compose]}
+    approved: true
+
+  - feature: bot-lifecycle
+    change: add
+    id: runtime-api-idle-loop-sweeps-pending-callbacks
+    label: "services/runtime-api/runtime_api/lifecycle.py `idle_loop` iterates pending callbacks each tick and retries delivery"
+    weight: 5
+    evidence: {check: RUNTIME_API_IDLE_LOOP_SWEEPS_PENDING_CALLBACKS, modes: [lite, compose]}
+    approved: true
+
+# ── REGISTRY CHANGES ──────────────────────────────────────────────────
+# Every scope proves[] binding must exist in registry.yaml OR below.
+# Existing registry dependencies (no new entry needed):
+#   DB_POOL_NO_EXHAUSTION — reused by Pack D.3 dynamic regression
+
+registry_changes_approved:
+
+  # Pack A
+  - id: HELM_PROD_SECRETS_SECRETREF_ONLY
+    type: script
+    script: tests/chart-prod-secrets-secretref.sh
+    step: secretref_only
+    modes: [helm]
+    state: stateless
+    mutates: []
+    max_duration_sec: 20
+    rationale: |
+      Runs `helm template` on the chart with default values and greps
+      every rendered Deployment for the four prod-critical env names
+      (DB_PASSWORD, TRANSCRIPTION_SERVICE_TOKEN, JWT_SECRET,
+      NEXTAUTH_SECRET). Each must appear ONLY as `valueFrom.secretKeyRef`
+      — never as plain `value:`. Fail if any appears as plain value.
+    approved: true
+
+  - id: HELM_PROD_SECRETS_REQUIRED_AT_RENDER
+    type: script
+    script: tests/chart-prod-secrets-secretref.sh
+    step: required_at_render
+    modes: [helm]
+    state: stateless
+    mutates: []
+    max_duration_sec: 30
+    rationale: |
+      Renders the chart four times, each with one of the four prod
+      secrets absent from values. Every render must exit non-zero with
+      an error matching `required`. Regression guard for the
+      2026-04-21 outage class (incident-doc §13). Bundled with the
+      sister check into one shell script with `step:` sub-invocations,
+      matching the existing `tests/security-hygiene.sh` pattern.
+    approved: true
+
+  # Pack B
+  - id: RECORDING_UPLOAD_SUPPORTS_CHUNK_SEQ
+    type: grep
+    file: services/meeting-api/meeting_api/recordings.py
+    must_match: 'chunk_seq\s*:\s*int'
+    modes: [lite, compose]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      Static grep: the /internal/recordings/upload endpoint signature
+      declares a `chunk_seq: int` form parameter. Catches a refactor
+      that silently drops chunk support.
+    approved: true
+
+  - id: BOT_RECORDS_INCREMENTALLY
+    type: script
+    script: tests/bot-records-incrementally.sh
+    modes: [lite, compose]
+    state: stateless
+    mutates: []
+    max_duration_sec: 10
+    rationale: |
+      Greps services/vexa-bot/core/src/platforms/{googlemeet,msteams}/
+      recording.ts for two conditions: (1) `MediaRecorder.start(` with
+      a timeslice argument ≥ 5000 (not 1000, not undefined); (2) the
+      `ondataavailable` handler contains a direct POST / fetch /
+      upload call (not just `.push(` into a window-global buffer).
+      Script so the logic is readable and future platforms (Zoom) can
+      be enumerated without editing registry.yaml.
+    approved: true
+
+  - id: RECORDING_SURVIVES_MID_MEETING_KILL
+    type: script
+    script: tests/recording-survives-sigkill.sh
+    modes: [compose]
+    state: stateful
+    mutates: ["minio:recordings/test-user/**", "meetings(test)"]
+    max_duration_sec: 120
+    rationale: |
+      Compose-mode chaos test: start a test bot against a fixture
+      meeting URL, record for ~90 s (expect 3 chunks), SIGKILL the
+      bot container mid-third-chunk, wait 10 s, query MinIO under
+      `recordings/<test-user>/<id>/<session>/` — assert at least
+      2 chunks present (the first two complete 30-s chunks). Also
+      query DB for the Recording row — assert status=IN_PROGRESS
+      (never COMPLETED; no final chunk arrived). Dynamic proof that
+      the incremental-upload model survives ungraceful shutdown.
+    approved: true
+
+  - id: RUNTIME_API_STOP_GRACE_MATCHES_POD_SPEC
+    type: grep
+    file: services/runtime-api/runtime_api/backends/kubernetes.py
+    must_match: 'timeout:\s*int\s*=\s*3[0-9]|timeout:\s*int\s*=\s*[4-9][0-9]|timeout:\s*int\s*=\s*[1-9][0-9]{2,}'
+    modes: [helm]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      Grace-period default in kubernetes.py `stop()` must be ≥ 30
+      (matching the pod spec's terminationGracePeriodSeconds).
+      Regex permits 30-99 or any 3+ digit number. Defense-in-depth
+      alongside incremental upload — the final chunk still needs time
+      to flush on graceful shutdown.
+    approved: true
+
+  # Pack C
+  - id: TRANSCRIPT_RENDERING_DEDUP_TESTS_PASS
+    type: script
+    script: tests/package-tests.sh
+    step: transcript_rendering
+    modes: [lite]
+    state: stateless
+    mutates: []
+    max_duration_sec: 120
+    rationale: |
+      Runs `npm ci && npm test` in packages/transcript-rendering.
+      Covers the new dedup-prefers-confirmed regression + existing
+      76 tests. Script uses node_modules cache so subsequent runs are
+      fast. Mode-independent; lite is cheapest canonical mode.
+    approved: true
+
+  - id: PACKAGES_CI_WORKFLOW_EXISTS
+    type: grep
+    file: .github/workflows/test-packages.yml
+    must_match: 'packages/[a-z*-]+|matrix:'
+    modes: [lite]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      Static existence-and-shape check: the packages CI workflow file
+      exists and either names a specific package path or uses a matrix
+      strategy covering packages/*. Cheap way to prevent the workflow
+      from being accidentally deleted.
+    approved: true
+
+  # Pack D
+  - id: ENGINE_POOL_RESET_ON_RETURN_ROLLBACK
+    type: grep
+    file: services/meeting-api/meeting_api/database.py
+    must_match: 'pool_reset_on_return\s*=\s*["'']rollback["'']'
+    modes: [lite, compose]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      The defense against per-session transaction leaks is an engine
+      configuration flag that's easy to lose in a refactor. This grep
+      makes the defense explicit in the check surface even though it
+      stays implicit in request-handler code. Flips red immediately
+      if anyone rewrites database.py without preserving the flag.
+    approved: true
+
+  - id: HELM_ALL_SERVICES_DB_POOL_TUNED
+    type: script
+    script: tests/chart-all-services-db-pool-tuned.sh
+    modes: [helm]
+    state: stateless
+    mutates: []
+    max_duration_sec: 15
+    rationale: |
+      Enumerates every service Deployment template in
+      deploy/helm/charts/vexa/templates/ that declares SQLAlchemy /
+      asyncpg / Prisma DB usage (admin-api, api-gateway, meeting-api,
+      runtime-api, plus any siblings the chart grows). For each,
+      asserts an explicit DB_POOL_SIZE env (and DB_MAX_OVERFLOW where
+      applicable). Retires HELM_MEETING_API_DB_POOL_TUNED (which
+      remains in registry.yaml unbound — no DoD points at it anymore).
+    approved: true
+
+  # Pack G
+  - id: HELM_DEPLOYMENT_STRATEGY_HELPER_DEFINED
+    type: grep
+    file: deploy/helm/charts/vexa/templates/_helpers.tpl
+    must_match: 'define\s+"vexa\.deploymentStrategy"'
+    modes: [helm]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      Asserts the `vexa.deploymentStrategy` helper is defined.
+      Pairs with HELM_ROLLING_UPDATE_ZERO_SURGE (behavioural) —
+      both together prove the helper exists AND is applied.
+    approved: true
+
+  - id: HELM_ROLLING_UPDATE_ZERO_SURGE
+    type: script
+    script: tests/chart-rolling-update-zero-surge.sh
+    modes: [helm]
+    state: stateless
+    mutates: []
+    max_duration_sec: 15
+    rationale: |
+      Runs `helm template` on the chart with default values and parses
+      every rendered `kind: Deployment`. Each must have
+      `.spec.strategy.rollingUpdate.maxSurge` set to 0 or "0%".
+      Fails on any Deployment missing the setting or with a non-zero
+      maxSurge. Regression guard for the rolling-update pool-doubling
+      risk (incident-doc §10).
+    approved: true
+
+  - id: HELM_API_GATEWAY_REPLICA_COUNT_HA
+    type: grep
+    file: deploy/helm/charts/vexa/values.yaml
+    must_match: 'apiGateway:\s*\n(?:[ \t]+[^\n]+\n)*[ \t]+replicaCount:\s*[2-9]'
+    modes: [helm]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      apiGateway.replicaCount default must be ≥ 2 so `maxSurge: 0`
+      rolling updates remain zero-downtime. Regex uses `replicaCount`
+      (camelCase — the real chart key, not `replicas`) and allows
+      2-9 or larger.
+    approved: true
+
+  # Pack H
+  - id: HELM_PGBOUNCER_OPTIONAL_AND_WIRED
+    type: script
+    script: tests/chart-pgbouncer-optional.sh
+    modes: [helm]
+    state: stateless
+    mutates: []
+    max_duration_sec: 30
+    rationale: |
+      Two sub-renders:
+      (a) Default render (`pgbouncer.enabled: false` inherited):
+          no `kind: Deployment` named `pgbouncer`; every service's
+          DB_HOST env value routes to the postgres service (when
+          postgres.enabled=true) or to `.Values.database.host` (when
+          postgres.enabled=false). Unchanged from today.
+      (b) `--set pgbouncer.enabled=true`: Deployment + Service for
+          pgbouncer exist; every service's DB_HOST env renders to the
+          pgbouncer Service name (via `vexa.dbHostEffective` helper).
+      Asserts both renders. Regression guard for the toggle + wiring
+      contract.
+    approved: true
+
+  # Pack J
+  - id: RUNTIME_API_IDLE_LOOP_SWEEPS_PENDING_CALLBACKS
+    type: grep
+    file: services/runtime-api/runtime_api/lifecycle.py
+    must_match: 'idle_loop.*pending_callback|list_pending_callbacks|pending_callback.*idle_loop'
+    multiline: true
+    modes: [lite, compose]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      Static grep verifying the idle_loop in lifecycle.py references
+      pending-callback iteration (i.e. the sweep is wired). Multiline
+      regex accommodates either ordering (sweep-code inside idle_loop
+      body OR idle_loop calling a named helper that handles it).
+    approved: true
+
+  - id: RUNTIME_API_EXIT_CALLBACK_DURABLE
+    type: script
+    script: tests/runtime-api-exit-callback-durable.sh
+    modes: [compose]
+    state: stateful
+    mutates: ["meeting(fixture)", "runtime-api:redis:pending_callbacks/*"]
+    max_duration_sec: 180
+    rationale: |
+      Compose-mode chaos test:
+      1. Create a test bot against a fixture meeting URL.
+      2. Wait until bot is `active`.
+      3. SIGSTOP meeting-api container (or network-blackhole it).
+      4. `DELETE /bots/<id>` — runtime-api's exit callback will fail
+         delivery N times.
+      5. Wait 2× IDLE_CHECK_INTERVAL.
+      6. SIGCONT meeting-api.
+      7. Poll meeting status for up to another IDLE_CHECK_INTERVAL +
+         CALLBACK_BACKOFF window.
+      8. Assert meeting.status has transitioned out of `active` to
+         `completed` or `failed` WITHOUT any manual intervention.
+      Dynamic proof that the exit-callback delivery path is durable
+      across meeting-api outages — the root-cause class for the
+      7+ orphaned `active` meetings in incident-doc §7.
+    approved: true

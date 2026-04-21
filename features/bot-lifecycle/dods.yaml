@@ -99,3 +99,55 @@ dods:
     step: e2e_status
     modes:
     - helm
+
+# ── 260421-prod-stabilize additions ─────────────────────────────────
+- id: recording-incremental-chunk-upload
+  label: "bot uploads each MediaRecorder chunk as it arrives; meeting-api accepts chunk_seq on /internal/recordings/upload"
+  weight: 15
+  evidence:
+    check: RECORDING_UPLOAD_SUPPORTS_CHUNK_SEQ
+    modes:
+    - lite
+    - compose
+
+- id: bot-records-incrementally
+  label: "bot recording.ts calls MediaRecorder.start with ≥15s timeslice AND uploads each chunk via __vexaSaveRecordingChunk"
+  weight: 10
+  evidence:
+    check: BOT_RECORDS_INCREMENTALLY
+    modes:
+    - lite
+    - compose
+
+- id: recording-survives-mid-meeting-kill
+  label: "SIGKILL mid-recording leaves already-uploaded chunks durable in MinIO; Recording.status stays IN_PROGRESS until is_final=true"
+  weight: 10
+  evidence:
+    check: RECORDING_SURVIVES_MID_MEETING_KILL
+    modes:
+    - compose
+
+- id: runtime-api-stop-grace-matches-pod-spec
+  label: "runtime-api delete_namespaced_pod grace_period_seconds matches the pod spec terminationGracePeriodSeconds"
+  weight: 5
+  evidence:
+    check: RUNTIME_API_STOP_GRACE_MATCHES_POD_SPEC
+    modes:
+    - helm
+
+- id: runtime-api-exit-callback-durable
+  label: "runtime-api exit callback delivery is durable across consumer outages (idle_loop re-sweeps pending records)"
+  weight: 10
+  evidence:
+    check: RUNTIME_API_EXIT_CALLBACK_DURABLE
+    modes:
+    - compose
+
+- id: runtime-api-idle-loop-sweeps-pending-callbacks
+  label: "services/runtime-api lifecycle.py idle_loop iterates pending callbacks each tick and retries delivery"
+  weight: 5
+  evidence:
+    check: RUNTIME_API_IDLE_LOOP_SWEEPS_PENDING_CALLBACKS
+    modes:
+    - lite
+    - compose

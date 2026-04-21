@@ -111,10 +111,10 @@ dods:
     modes:
     - helm
 - id: chart-db-pool-tuned
-  label: "meeting-api env sets DB_POOL_SIZE (pool sizing is an explicit, reviewed choice)"
+  label: "every pool-holder service (admin-api, meeting-api, runtime-api) sets DB_POOL_SIZE — no silent framework defaults"
   weight: 10
   evidence:
-    check: HELM_MEETING_API_DB_POOL_TUNED
+    check: HELM_ALL_SERVICES_DB_POOL_TUNED
     modes:
     - helm
 - id: chart-pdb-available
@@ -122,5 +122,38 @@ dods:
   weight: 10
   evidence:
     check: HELM_PDB_TEMPLATE_EXISTS
+    modes:
+    - helm
+
+# ── 260421-prod-stabilize additions ─────────────────────────────────
+- id: chart-deployment-strategy-helper
+  label: "_helpers.tpl defines vexa.deploymentStrategy — centralized rolling-update contract"
+  weight: 5
+  evidence:
+    check: HELM_DEPLOYMENT_STRATEGY_HELPER_DEFINED
+    modes:
+    - helm
+
+- id: chart-rolling-update-zero-surge
+  label: "every app-facing Deployment in rendered chart has strategy.rollingUpdate.maxSurge: 0 — rolling updates never double DB-pool footprint"
+  weight: 10
+  evidence:
+    check: HELM_ROLLING_UPDATE_ZERO_SURGE
+    modes:
+    - helm
+
+- id: chart-api-gateway-ha-replica-count
+  label: "apiGateway.replicaCount default ≥ 2 — so maxSurge: 0 rollouts remain zero-downtime for the front door"
+  weight: 5
+  evidence:
+    check: HELM_API_GATEWAY_REPLICA_COUNT_HA
+    modes:
+    - helm
+
+- id: chart-pgbouncer-optional-and-wired
+  label: "chart supports optional PgBouncer (pgbouncer.enabled: false default); enabled=true rewires every service's DB_HOST to pgbouncer via vexa.dbHostEffective"
+  weight: 10
+  evidence:
+    check: HELM_PGBOUNCER_OPTIONAL_AND_WIRED
     modes:
     - helm

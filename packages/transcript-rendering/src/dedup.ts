@@ -77,9 +77,22 @@ export function deduplicateSegments<T extends TranscriptSegment>(segments: T[]):
         continue;
       }
 
-      // Different text: containment
-      if (segFullyInsideLast) continue;
+      // Different text: containment.
+      // Prefer the confirmed segment over a same-speaker draft regardless of
+      // which one has the wider time range — Vexa routinely trims the
+      // boundary tighter when confirming, which left the draft wider than
+      // its own confirmed version and caused the pending-stuck bug.
+      if (segFullyInsideLast) {
+        if (seg.completed && !last.completed) {
+          deduped[deduped.length - 1] = seg;
+        }
+        continue;
+      }
       if (lastFullyInsideSeg) {
+        // seg is wider. Keep it unless it's a draft while last is confirmed.
+        if (last.completed && !seg.completed) {
+          continue;
+        }
         deduped[deduped.length - 1] = seg;
         continue;
       }

@@ -7,6 +7,9 @@ metadata:
     {{- include "vexa.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.ttsService.replicaCount }}
+  # TTS uses Recreate (not the default RollingUpdate) because its PVC for
+  # voice models cannot be mounted by two pods; a maxSurge > 0 rollout
+  # would stall.
   strategy:
     type: Recreate
   selector:
