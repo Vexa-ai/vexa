@@ -342,8 +342,10 @@ release-ship:                      ## stage 09: PR dev→main, promote :dev → 
 	@echo "  ── Step 4: Promote :latest ──"
 	@$(MAKE) --no-print-directory -C deploy/compose promote-latest
 	@echo ""
+	@echo "  ── Step 5: Publish packages to npm ──"
+	@$(MAKE) --no-print-directory release-publish-packages
 	@echo ""
-	@echo "  ── Step 5: Switch back to dev ──"
+	@echo "  ── Step 6: Switch back to dev ──"
 	@git checkout dev && git merge main --no-edit
 	@TAG=$$(cat deploy/compose/.last-tag); \
 	echo ""; \
@@ -356,6 +358,23 @@ release-ship:                      ## stage 09: PR dev→main, promote :dev → 
 
 release-promote:                   ## promote :dev → :latest on DockerHub (standalone)
 	@$(MAKE) --no-print-directory -C deploy/compose promote-latest
+
+release-publish-packages:          ## build + publish every packages/* to npm (idempotent)
+	@for dir in packages/*/; do \
+		[ -f "$$dir/package.json" ] || continue; \
+		NAME=$$(python3 -c "import json; print(json.load(open('$$dir/package.json'))['name'])"); \
+		VERSION=$$(python3 -c "import json; print(json.load(open('$$dir/package.json'))['version'])"); \
+		echo ""; \
+		echo "  ── publishing $$NAME@$$VERSION ──"; \
+		LIVE=$$(npm view "$$NAME@$$VERSION" version 2>/dev/null || echo ""); \
+		if [ "$$LIVE" = "$$VERSION" ]; then \
+			echo "  ✓ $$NAME@$$VERSION already on npm, skipping"; \
+		else \
+			(cd "$$dir" && npm install --no-audit --no-fund && npm publish) || \
+				{ echo "  ✗ publish failed for $$NAME@$$VERSION"; exit 1; }; \
+			echo "  ✓ $$NAME@$$VERSION published"; \
+		fi; \
+	done
 
 # ═══ Util ════════════════════════════════════════════════════════
 
