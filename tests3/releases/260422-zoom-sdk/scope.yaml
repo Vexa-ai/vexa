@@ -3,7 +3,7 @@
 # Every issue here traces back to a groom pack with `approved: true`.
 
 release_id: 260422-zoom-sdk
-branch: dev
+branch: release/260422-zoom-sdk
 summary: |
   # ───────────────────────────────────────────────────────────────────
   # What we deliver (PM framing — use verbatim in PR description,
