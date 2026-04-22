@@ -1051,6 +1051,54 @@
       "proves": "PUT /user/webhook rejects SSRF URLs (private/link-local/metadata/internal hostnames) \u2014 CVE-2026-25883 / GHSA-fhr6-8hff-cvg4 regression guard",
       "symptom": "A valid API key can store a webhook_url pointing at internal services (redis, postgres, 169.254.169.254) without rejection",
       "method": "WEBHOOK_SSRF_CHECK"
+    },
+    {
+      "_": "\u2550\u2550\u2550 Release 260422-zoom-sdk \u2014 Pack F (platform split) \u2550\u2550\u2550"
+    },
+    {
+      "id": "ZOOM_SDK_PLATFORM_ENUM_EXISTS",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "Platform enum declares ZOOM_SDK = \"zoom_sdk\" \u2014 external API accepts the explicit native-SDK platform value",
+      "symptom": "API rejects platform=zoom_sdk as unknown enum value; Pack F split rolled back",
+      "file": "services/meeting-api/meeting_api/schemas.py",
+      "must_match": "ZOOM_SDK = \"zoom_sdk\""
+    },
+    {
+      "id": "ZOOM_WEB_PLATFORM_ENUM_EXISTS",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "Platform enum declares ZOOM_WEB = \"zoom_web\" \u2014 external API accepts the explicit web-client platform value",
+      "symptom": "API rejects platform=zoom_web as unknown enum value; Pack F split rolled back",
+      "file": "services/meeting-api/meeting_api/schemas.py",
+      "must_match": "ZOOM_WEB = \"zoom_web\""
+    },
+    {
+      "id": "ZOOM_PLATFORM_DIR_SPLIT",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "zoom-sdk/index.ts exists and exports handleZoomSdk \u2014 native-SDK platform dir is live. Pair with ZOOM_SOFT_ENV_SWITCH_RETIRED and the tsc build which needs zoom-web/ to resolve handleZoomWeb.",
+      "symptom": "zoom-sdk/index.ts missing or handleZoomSdk renamed/removed \u2014 platform split regressed",
+      "file": "services/vexa-bot/core/src/platforms/zoom-sdk/index.ts",
+      "must_match": "handleZoomSdk"
+    },
+    {
+      "id": "ZOOM_LEGACY_ALIAS_MAPS_TO_SDK",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "Platform.resolve_legacy_zoom helper exists \u2014 deprecated platform=zoom is rewritten at the API boundary with X-Vexa-Deprecated-Platform header",
+      "symptom": "legacy platform=zoom accepted but never rewritten to zoom_sdk / zoom_web; bot sees legacy value and has to fall back",
+      "file": "services/meeting-api/meeting_api/schemas.py",
+      "must_match": "def resolve_legacy_zoom"
+    },
+    {
+      "id": "ZOOM_SOFT_ENV_SWITCH_RETIRED",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "platforms/zoom-sdk/index.ts no longer reads process.env.ZOOM_WEB \u2014 dispatch is platform-value-driven, not env-var-driven",
+      "symptom": "ZOOM_WEB env switch resurrected in the SDK track, hiding which Zoom variant is actually running",
+      "file": "services/vexa-bot/core/src/platforms/zoom-sdk/index.ts",
+      "must_not_match": "process\\.env\\.ZOOM_WEB"
     }
   ]
 }

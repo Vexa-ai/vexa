@@ -1653,3 +1653,77 @@ RUNTIME_API_EXIT_CALLBACK_DURABLE:
   - 'meeting(fixture)'
   - 'runtime-api:redis:pending_callbacks/*'
   max_duration_sec: 180
+
+# ──────────────────────────────────────────────────────────────────────
+# Release 260422-zoom-sdk — Pack F (platform split: zoom → zoom_sdk + zoom_web)
+# ──────────────────────────────────────────────────────────────────────
+
+ZOOM_SDK_PLATFORM_ENUM_EXISTS:
+  proves: "Platform enum declares ZOOM_SDK = \"zoom_sdk\" — external API accepts the explicit native-SDK platform value"
+  symptom: "API rejects platform=zoom_sdk as unknown enum value; Pack F split rolled back"
+  found: '2026-04-22'
+  type: grep
+  file: services/meeting-api/meeting_api/schemas.py
+  must_match: 'ZOOM_SDK = "zoom_sdk"'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+
+ZOOM_WEB_PLATFORM_ENUM_EXISTS:
+  proves: "Platform enum declares ZOOM_WEB = \"zoom_web\" — external API accepts the explicit web-client platform value"
+  symptom: "API rejects platform=zoom_web as unknown enum value; Pack F split rolled back"
+  found: '2026-04-22'
+  type: grep
+  file: services/meeting-api/meeting_api/schemas.py
+  must_match: 'ZOOM_WEB = "zoom_web"'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+
+ZOOM_PLATFORM_DIR_SPLIT:
+  proves: "zoom-sdk/index.ts exists and exports handleZoomSdk — native-SDK platform dir is live. Pairs with ZOOM_SOFT_ENV_SWITCH_RETIRED which proves zoom-sdk code is env-switch-free; pairs with tsc build which requires zoom-web/ dir to resolve the handleZoomWeb import."
+  symptom: "zoom-sdk/index.ts missing or handleZoomSdk renamed/removed — platform split regressed"
+  found: '2026-04-22'
+  type: grep
+  file: services/vexa-bot/core/src/platforms/zoom-sdk/index.ts
+  must_match: 'handleZoomSdk'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+
+ZOOM_LEGACY_ALIAS_MAPS_TO_SDK:
+  proves: "Platform.resolve_legacy_zoom helper exists — deprecated platform=zoom is rewritten at the API boundary with X-Vexa-Deprecated-Platform header"
+  symptom: "legacy platform=zoom accepted but never rewritten to zoom_sdk / zoom_web; bot sees legacy value and has to fall back"
+  found: '2026-04-22'
+  type: grep
+  file: services/meeting-api/meeting_api/schemas.py
+  must_match: 'def resolve_legacy_zoom'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+
+ZOOM_SOFT_ENV_SWITCH_RETIRED:
+  proves: "platforms/zoom-sdk/index.ts no longer reads process.env.ZOOM_WEB — dispatch is platform-value-driven, not env-var-driven"
+  symptom: "ZOOM_WEB env switch resurrected in the SDK track, hiding which Zoom variant is actually running"
+  found: '2026-04-22'
+  type: grep
+  file: services/vexa-bot/core/src/platforms/zoom-sdk/index.ts
+  must_not_match: 'process\.env\.ZOOM_WEB'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
