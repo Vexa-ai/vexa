@@ -180,12 +180,15 @@ issues:
       stage state — error-prone and undocumented.
     hypothesis: |
       `tests3/lib/worktree.sh create <release_id>` does
-      `git worktree add -b release/<id> ../vexa-<id> dev` +
+      `git worktree add -b release/<id> ../vexa-<id> main` +
       `stage.py enter idle --release <id>` so the new worktree is
       ready for `make release-groom ID=<id>`. `make release-worktree
-      ID=<id>` wraps it. `stages/00-idle.md` Next + `stages/01-groom.md`
-      Step 0 document the flow. This release is itself the first
-      dogfood of the pattern.
+      ID=<id>` wraps it. Base defaults to `main` (last-shipped state),
+      so release branches are isolated from other in-flight releases
+      — explicitly decoupling N-parallel releases from one clone
+      (triage r2 fix, 2026-04-22). `stages/00-idle.md` Next +
+      `stages/01-groom.md` Step 0 document the flow. This release is
+      itself the first dogfood of the pattern.
     fix_commits: [c1eeb5b]
     proves:
       - {check: TESTS3_WORKTREE_BOOTSTRAP, modes: [lite]}

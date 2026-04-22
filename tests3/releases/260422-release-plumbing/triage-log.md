@@ -74,3 +74,59 @@ Inheritance property restored.
 
 Transition `triage → develop`, land the fix, redeploy, revalidate,
 return to `human` with updated `code-review.md`.
+
+---
+
+## Round 2 — worktree.sh base-branch default
+
+### Signal
+
+During PR preparation, `gh pr create --base dev` failed with "No
+commits between dev and release/260422-release-plumbing" — because the
+remote no longer has a `dev` branch (repo has standardized on `main`
+as the only long-lived integration branch + per-release feature
+branches). Checking `git log origin/main..HEAD` revealed the PR would
+include **16 commits**, of which 9 belong to the in-flight
+`260422-zoom-sdk` release (not shipped; on its own
+`origin/release/260422-zoom-sdk` branch).
+
+User: *"stop, zoom should not be there - zoom is unfinished"*
+
+### Classification
+
+**Gap, not regression.** Similar in shape to round 1: a policy default
+in our new tooling that looks right locally but is wrong under the
+"releases run in parallel from one clone" invariant. The worktree was
+bootstrapped with `base=dev` (local dev still had unshipped zoom-sdk
+commits), so all of zoom-sdk rides along.
+
+### Fix target
+
+1. `tests3/lib/worktree.sh`: `local base="${2:-dev}"` → `"${2:-main}"`.
+   Release worktrees branch off last-shipped state by default. Other
+   in-flight releases are isolated on their own worktrees, each
+   branched off `main`, with zero coupling between them. Matches
+   Pack A.2's design intent ("N-parallel releases from one clone")
+   literally.
+2. `tests3/releases/260422-release-plumbing/scope.yaml`:
+   `tests3-worktree-bootstrap` hypothesis text: `../vexa-<id>` on
+   branch `release/<id>` from `dev` → from `main`.
+3. Rebase `release/260422-release-plumbing` onto `origin/main` to
+   drop the 9 zoom-sdk commits from this release's base. All 7
+   release-plumbing commits get new SHAs; `scope.yaml.fix_commits`
+   must be updated post-rebase.
+4. `git push --force-with-lease origin release/260422-release-plumbing`
+   — safe (feature branch; no one else on it; lease prevents
+   overwriting any concurrent push).
+
+### Consequence for the release-plumbing invariant story
+
+This triage round is a meta-success: the release that SHIPS the
+worktree convention had its OWN worktree built with the wrong default,
+and we found it exactly when the invariant demanded ("isolated
+releases"). The fix is the lowest-possible blast-radius one-word
+change (`dev` → `main`) + the rebase. If this class of gap stays
+latent, every future release using `release-worktree ID=<id>` would
+silently inherit in-flight other-release commits — exactly the
+class-of-bug #229 exists to prevent.
+

@@ -14,7 +14,11 @@ source "$ROOT/tests3/lib/common.sh"
 
 worktree_create() {
     local rel="${1:?usage: worktree.sh create <release_id> [base_branch]}"
-    local base="${2:-dev}"
+    # Default base is `main` (last-shipped state), NOT `dev`. Release
+    # branches must not inherit other in-flight releases' commits, else
+    # "parallel releases from one clone" collapses into "N coupled
+    # releases that must ship in order" (#229 triage r2).
+    local base="${2:-main}"
     local parent="${ROOT%/*}"
     local target="${parent}/vexa-${rel}"
     local branch="release/${rel}"
