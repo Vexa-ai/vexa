@@ -19,7 +19,7 @@ COPY package*.json ./
 COPY binding.gyp ./
 
 # Copy Zoom SDK (if present) and native source
-COPY core/src/platforms/zoom/native/ ./core/src/platforms/zoom/native/
+COPY core/src/platforms/zoom-sdk/native/ ./core/src/platforms/zoom-sdk/native/
 
 # Install dependencies without triggering native postinstall hooks.
 # Native addon build is handled explicitly below on best-effort basis.
@@ -108,7 +108,7 @@ COPY --from=native-builder /app/vexa-bot/node_modules ./node_modules
 COPY --from=native-builder /app/vexa-bot/build ./build
 
 # Copy Zoom SDK libraries (if present)
-COPY --from=native-builder /app/vexa-bot/core/src/platforms/zoom/native/zoom_meeting_sdk ./core/src/platforms/zoom/native/zoom_meeting_sdk
+COPY --from=native-builder /app/vexa-bot/core/src/platforms/zoom-sdk/native/zoom_meeting_sdk ./core/src/platforms/zoom-sdk/native/zoom_meeting_sdk
 
 # Copy TypeScript build artifacts and assets (default avatar logo)
 COPY --from=ts-builder /app/vexa-bot/core/package*.json ./core/

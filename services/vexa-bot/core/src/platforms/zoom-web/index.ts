@@ -1,6 +1,6 @@
 import { Page } from 'playwright';
-import { BotConfig } from '../../../types';
-import { runMeetingFlow, PlatformStrategies } from '../../shared/meetingFlow';
+import { BotConfig } from '../../types';
+import { runMeetingFlow, PlatformStrategies } from '../shared/meetingFlow';
 import { joinZoomWebMeeting } from './join';
 import { waitForZoomWebAdmission, checkZoomWebAdmissionSilent } from './admission';
 import { prepareZoomWebMeeting } from './prepare';

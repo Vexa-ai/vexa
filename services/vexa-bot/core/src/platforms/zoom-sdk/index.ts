@@ -7,7 +7,7 @@ import { prepareZoomRecording } from './strategies/prepare';
 import { startZoomRecording } from './strategies/recording';
 import { startZoomRemovalMonitor } from './strategies/removal';
 import { leaveZoomMeeting } from './strategies/leave';
-import { handleZoomWeb, leaveZoomWeb } from './web/index';
+import { handleZoomWeb, leaveZoomWeb } from '../zoom-web/index';
 
 export async function handleZoom(
   botConfig: BotConfig,

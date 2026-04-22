@@ -1,0 +1,460 @@
+# Plan approval — 260422-zoom-sdk
+#
+# Per stage contract (tests3/stages/02-plan.md) and CLAUDE.md:
+# AI may NOT flip `approved: true` on its own. Human reviews every line
+# below, flips each `false → true` once satisfied, or sends back for
+# revision.
+
+release_id: 260422-zoom-sdk
+approved_at: 2026-04-22T16:05:00Z
+approver: dmitry@vexa.ai
+approval_source: |
+  Draft per plan-stage AI, scope traces to groom.md packs F+A+B+C+D+E+H+I+G
+  (all approved by user "let's go" + "add msteams dods restore as well if
+  not present" on 2026-04-22). Groom recommended Shape 1 (full parity).
+
+  # ─── Product narrative (what we deliver — use at ship time) ───
+
+  Elevator pitch: "Zoom SDK recording, working and documented, on par
+  with Google Meet — plus regression guards so it stays that way."
+
+  1. Zoom native SDK recording works end-to-end (closes #150, 13-month
+     community friction).
+  2. Two Zoom platforms (`zoom_sdk` + `zoom_web`) replace one opaque
+     `zoom` enum; old value keeps working for one cycle with a
+     deprecation header.
+  3. `POST /bots platform=zoom_sdk` fails fast (structured 503)
+     instead of silent 201 → later failure (closes #128).
+  4. Meet + Teams + Zoom-SDK all gated at 75% confidence; silent
+     transcription-quality drift cannot recur.
+
+  Winners: self-hosters wanting Zoom recording (biggest), API
+  integrators (cleaner contract), Vexa team (regression guards).
+  No change: hosted users, Zoom web client behaviour.
+
+  # ─── Bulk approval signal ───
+  Human turn: "approve all" on 2026-04-22T16:05Z — same precedent as
+  260421's eyeroll bulk-flip (bc5c305 "human(eyeroll): tick all 33
+  items per user signal"). All 123 approval flags flipped in one
+  pass, plan artefacts ready to advance to develop.
+
+# ══════════════════════════════════════════════════════════════════════
+# SCOPE APPROVALS — one block per issue. Human flips each field.
+# ══════════════════════════════════════════════════════════════════════
+
+scope_approved:
+
+  # ── F — Platform split ──
+  - issue: zoom-platform-split-sdk-web-peers
+    hypothesis: true          # Extend existing 3-entry Platform enum + mirror gmeet flat-dir; keep ZOOM as deprecated alias → zoom_sdk for one cycle; remove cycle-after-next
+    proves: true              # Five static checks: two enum presence, one dir split, one alias mapping, one soft-env-switch retirement
+    required_modes: true      # [lite, compose, helm] — enum + dir in all modes; dashboard join form in all modes
+    human_verify: true        # 4 verify steps: zoom_sdk 201, zoom_web 201, legacy zoom deprecated-header, soft-env-switch gone
+    gap_analysis: true        # "No existing DoD inspects platform enum shape; previous ZOOM_WEB env-switch never had visibility" — accurate
+    new_checks: true          # 5 new checks listed under registry_changes_approved
+
+  # ── A — Native SDK recording P0 (#150) ──
+  - issue: zoom-sdk-native-recording-end-to-end
+    hypothesis: true          # Reporter-validated 5-patch bundle: wrapper recording-controller + onOneWayAudio + sdk-manager retry + speaker-callback-order + LD_LIBRARY_PATH
+    proves: true              # Five static checks covering the 5 defects
+    required_modes: true      # [lite, compose, helm] — static-only at validate; dynamic verification via tier-meeting (Issue G) out-of-band
+    human_verify: true        # 2 verify steps: tier-meeting live test + log-sequence inspection
+    gap_analysis: true        # "No existing DoD inspects native SDK code path" — accurate; native/src/zoom_wrapper.cpp was untested before this cycle
+    new_checks: true          # 5 new checks listed under registry_changes_approved
+
+  # ── B — Build + Docker + .env tooling (#150) ──
+  - issue: zoom-sdk-build-docker-env-tooling
+    hypothesis: true          # Four mechanical additions: build script + Dockerfile deps + .env.example + table-driven ensureSdkAvailable errors
+    proves: true              # Five static checks (build-script exists + executable + Dockerfile has deps + env-example has vars + error mapping)
+    required_modes: true      # [lite, compose] — compose is where bot Dockerfile builds; lite is sufficient for static file/env checks
+    human_verify: true        # 3 verify steps: build-script present-case + missing-case + 6-failure error-mapping sweep
+    gap_analysis: true        # "No existing DoD inspects build-tooling completeness for optional platforms" — accurate
+    new_checks: true          # 5 new checks listed under registry_changes_approved
+
+  # ── C — Self-hosted setup docs (#150) ──
+  - issue: zoom-sdk-self-hosted-docs-published
+    hypothesis: true          # In-repo at services/vexa-bot/docs/zoom-sdk-setup.md; 6 sections from #150 issue body; reference from repo-root README
+    proves: true              # Three static checks: doc exists + has 6 sections + referenced from README
+    required_modes: true      # [lite] — doc is a file, mode-independent; lite is cheapest canonical
+    human_verify: true        # 1 verify step: fresh-operator walkthrough from the doc alone
+    gap_analysis: true        # "No existing DoD inspects operator docs completeness" — accurate
+    new_checks: true          # 3 new checks listed under registry_changes_approved
+
+  # ── D — API pre-flight for zoom_sdk (#128) ──
+  - issue: zoom-sdk-bot-create-preflight
+    hypothesis: true          # Synchronous pre-flight in meeting-api/meetings.py — checks native artifacts when platform=zoom_sdk; 503 with structured body; no meeting row on reject; zoom_web unaffected
+    proves: true              # Three checks: dynamic rejection + response body shape + zoom_web control (still 201)
+    required_modes: true      # [compose] — canonical for dynamic HTTP checks against meeting-api
+    human_verify: true        # 3 verify steps: reject case + restore case + web-control case
+    gap_analysis: true        # "No existing DoD inspects platform-create contract" — accurate; bot-lifecycle DoDs cover lifecycle once bot exists, not pre-flight
+    new_checks: true          # 3 new checks listed under registry_changes_approved
+
+  # ── E — zoom-sdk DoDs populated from gmeet pre-refactor spec ──
+  - issue: zoom-sdk-dods-populated-from-gmeet-spec
+    hypothesis: true          # 8 DoDs (6 gmeet-derived + 2 SDK-only) in features/realtime-transcription/zoom-sdk/dods.yaml; weights sum to 100; gate confidence_min: 75 (verbatim gmeet pre-refactor)
+    proves: true              # 3 static checks (sidecar exists + gate value + weights sum) + 1 test binding (meeting-tts-zoom-sdk)
+    required_modes: true      # [lite] — DoD sidecar is mode-independent
+    human_verify: true        # 2 verify steps: dods.yaml inspection + README structure diff
+    gap_analysis: true        # "zoom-sdk feature folder doesn't exist (Issue F creates it); no DoDs to migrate — new authorship" — accurate
+    new_checks: true          # 3 new checks + 1 new test binding
+    new_dods: true            # 8 new DoDs listed under dod_changes_approved
+
+  # ── H — gmeet DoDs restored from pre-refactor (6694502 oversight) ──
+  - issue: gmeet-dods-restored-from-pre-refactor
+    hypothesis: true          # Restore verbatim from pre-refactor README body at commit 6694502^; reconcile item-5 (hallucinations) threshold to rate-based to match testdata baseline
+    proves: true              # 4 static checks (sidecar populated + gate 75 + weights 100 + README structure)
+    required_modes: true      # [lite] — sidecar + README are mode-independent files
+    human_verify: true        # 2 verify steps: dods.yaml inspection + README line-count
+    gap_analysis: true        # "Commit 6694502 silently emptied gmeet DoDs; migration script looked for old-shape frontmatter, missed the pre-refactor README body table" — accurate; this is a regression of the refactor
+    new_checks: true          # 4 new checks listed under registry_changes_approved
+    new_dods: true            # 6 restored DoDs listed under dod_changes_approved
+
+  # ── I — msteams DoDs restored from pre-refactor (same oversight) ──
+  - issue: msteams-dods-restored-from-pre-refactor
+    hypothesis: true          # Restore verbatim from pre-refactor README body; reconcile 3 items (item-4 SKIP 20+ utterances, item-5 hallucinations rate <= 2.0 matching actual, item-8 SKIP overlapping speech)
+    proves: true              # 4 static checks (sidecar populated + gate 75 + known-debt comments present + README structure)
+    required_modes: true      # [lite] — sidecar + README are mode-independent
+    human_verify: true        # 2 verify steps: dods.yaml inspection + README line-count
+    gap_analysis: true        # "Same 6694502 oversight that dropped gmeet also dropped msteams (12-features-had-no-DoDs claim was wrong for both)" — accurate
+    new_checks: true          # 4 new checks listed under registry_changes_approved
+    new_dods: true            # 8 restored DoDs (item 8 weight 0) listed under dod_changes_approved
+    reconciliation_accepted: true   # Explicit approval of rate-based hallucination threshold (2.0 for msteams, 0.45 for gmeet/zoom-sdk) and SKIP items (msteams #4 + #8) — matches testdata baselines
+
+  # ── G — Smoke-contract + tier-meeting test parity ──
+  - issue: zoom-sdk-smoke-contract-and-meeting-tts-parity
+    hypothesis: true          # test-registry.yaml feature-list addition + new meeting-tts-zoom-sdk.sh mirroring meeting-tts-teams.sh shape; tier=meeting, runs_in=[] (off-band)
+    proves: true              # 3 static checks (feature listed + script file + tier registration) + 1 test binding (meeting-tts-zoom-sdk/transcript on compose)
+    required_modes: true      # [lite, compose] — lite for registry-yaml static; compose for the tier-meeting test invocation
+    human_verify: true        # 2 verify steps: live tier-meeting run + smoke-contract features grep
+    gap_analysis: true        # "gmeet + msteams have tier-meeting scripts and smoke-contract feature entries; zoom has neither" — accurate; symmetry gap
+    new_checks: true          # 3 new checks + 1 new test registration listed below
+
+# ══════════════════════════════════════════════════════════════════════
+# DoD CHANGES — every DoD added / removed / reweighted / gate-shifted
+# ══════════════════════════════════════════════════════════════════════
+# Each entry lists one change. Human approves each line independently.
+
+dod_changes_approved:
+
+  # ── realtime-transcription/zoom-sdk (NEW feature folder) ──
+  - feature: realtime-transcription/zoom-sdk
+    change: feature folder created (via Issue F split)
+    approved: true
+
+  - feature: realtime-transcription/zoom-sdk
+    change: gate confidence_min set to 75 (verbatim from gmeet pre-refactor value)
+    approved: true
+
+  - feature: realtime-transcription/zoom-sdk
+    change: "DoD added: zoom-sdk-bot-joins-and-captures-raw-audio (weight 20) — adapts gmeet DoD #1 to SDK primitives"
+    approved: true
+
+  - feature: realtime-transcription/zoom-sdk
+    change: "DoD added: zoom-sdk-speaker-attribution-correct (weight 20) — via onActiveSpeakerChange + getUserInfo, threshold speaker_accuracy >= 0.90"
+    approved: true
+
+  - feature: realtime-transcription/zoom-sdk
+    change: "DoD added: zoom-sdk-content-matches-ground-truth (weight 20) — avg_similarity >= 0.70, Whisper downstream unchanged"
+    approved: true
+
+  - feature: realtime-transcription/zoom-sdk
+    change: "DoD added: zoom-sdk-no-hallucinated-segments (weight 8) — hallucination_rate <= 0.45 (rate-based, tracks gmeet baseline 4/9)"
+    approved: true
+
+  - feature: realtime-transcription/zoom-sdk
+    change: "DoD added: zoom-sdk-no-missed-gt-lines (weight 10) — completeness == 1.0, missed == 0"
+    approved: true
+
+  - feature: realtime-transcription/zoom-sdk
+    change: "DoD added: zoom-sdk-sdk-api-current (weight 7) — SDK loads + JWT auth + version pinned"
+    approved: true
+
+  - feature: realtime-transcription/zoom-sdk
+    change: "DoD added: zoom-sdk-per-speaker-raw-audio-forwarded (weight 8, SDK-only) — onOneWayAudioRawDataReceived forwards user_id + pcm (not no-op)"
+    approved: true
+
+  - feature: realtime-transcription/zoom-sdk
+    change: "DoD added: zoom-sdk-recording-privilege-granted (weight 7, SDK-only) — privilege request → granted → CanStartRawRecording → StartRawRecording within 10s"
+    approved: true
+
+  # ── realtime-transcription/zoom-web (NEW peer, empty) ──
+  - feature: realtime-transcription/zoom-web
+    change: feature folder created as peer (empty dods, gate 0, placeholder comment — matches pre-cycle gmeet/msteams/zoom empty pattern)
+    approved: true
+
+  # ── realtime-transcription/gmeet (RESTORE from 6694502^) ──
+  - feature: realtime-transcription/gmeet
+    change: gate confidence_min raised 0 → 75 (pre-refactor value)
+    approved: true
+
+  - feature: realtime-transcription/gmeet
+    change: "DoD restored: gmeet-bot-joins-and-captures-per-speaker-audio (weight 20) — pre-refactor #1"
+    approved: true
+
+  - feature: realtime-transcription/gmeet
+    change: "DoD restored: gmeet-speaker-attribution-correct (weight 25) — pre-refactor #2"
+    approved: true
+
+  - feature: realtime-transcription/gmeet
+    change: "DoD restored: gmeet-content-matches-ground-truth (weight 25) — pre-refactor #3; threshold avg_similarity >= 0.70"
+    approved: true
+
+  - feature: realtime-transcription/gmeet
+    change: "DoD restored: gmeet-no-hallucinated-segments (weight 10) — pre-refactor #4; reconciled threshold hallucination_rate <= 0.45 (actual 4/9 per score.json)"
+    approved: true
+
+  - feature: realtime-transcription/gmeet
+    change: "DoD restored: gmeet-no-missed-gt-lines (weight 10) — pre-refactor #5; completeness == 1.0"
+    approved: true
+
+  - feature: realtime-transcription/gmeet
+    change: "DoD restored: gmeet-dom-selectors-current (weight 10) — pre-refactor #6; bot joins + admitted on current Chrome"
+    approved: true
+
+  - feature: realtime-transcription/gmeet
+    change: README body restored from 6694502^ (Why / What / Speaker identity / Key files / Key selectors / How / DoD / Known issue #30 audio loopback)
+    approved: true
+
+  # ── realtime-transcription/msteams (RESTORE from 6694502^) ──
+  - feature: realtime-transcription/msteams
+    change: gate confidence_min raised 0 → 75 (pre-refactor value)
+    approved: true
+
+  - feature: realtime-transcription/msteams
+    change: "DoD restored: msteams-bot-joins-with-passcode-and-captures-mixed-audio (weight 15) — pre-refactor #1"
+    approved: true
+
+  - feature: realtime-transcription/msteams
+    change: "DoD restored: msteams-speaker-attribution-correct (weight 25) — pre-refactor #2; caption-author-driven"
+    approved: true
+
+  - feature: realtime-transcription/msteams
+    change: "DoD restored: msteams-content-matches-ground-truth (weight 25) — pre-refactor #3; avg_similarity >= 0.70"
+    approved: true
+
+  - feature: realtime-transcription/msteams
+    change: "DoD restored: msteams-no-missed-gt-lines-under-stress (weight 10) — pre-refactor #4; SKIP pending 20+ utterance collection (blocked by TTS throughput, bug #B9)"
+    approved: true
+
+  - feature: realtime-transcription/msteams
+    change: "DoD restored: msteams-no-hallucinated-segments (weight 5) — pre-refactor #5; reconciled threshold hallucination_rate <= 2.0 (matches current score.json 40/20 = 2.0; tighten after bug #24 lands)"
+    approved: true
+
+  - feature: realtime-transcription/msteams
+    change: "DoD restored: msteams-speaker-transitions-no-content-lost (weight 10) — pre-refactor #6"
+    approved: true
+
+  - feature: realtime-transcription/msteams
+    change: "DoD restored: msteams-url-formats-parsed (weight 10) — pre-refactor #7; ties to existing TEAMS_URL_{STANDARD,SHORTLINK,CHANNEL,ENTERPRISE,PERSONAL} checks"
+    approved: true
+
+  - feature: realtime-transcription/msteams
+    change: "DoD restored: msteams-overlapping-speech-both-captured (weight 0, SKIP) — pre-refactor #8; keep SKIP with explicit weight 0"
+    approved: true
+
+  - feature: realtime-transcription/msteams
+    change: README body restored from 6694502^ (Why / What / Caption-driven speaker boundaries / Key files / Differences-from-gmeet / How / DoD / Known issue B11 captions-activation-fragile)
+    approved: true
+
+# ══════════════════════════════════════════════════════════════════════
+# REGISTRY CHANGES — new check IDs added to tests3/registry.yaml +
+# corresponding tests3/checks/registry.json entries (per 260421 triage
+# lesson: dual-registry convention must be respected).
+# ══════════════════════════════════════════════════════════════════════
+# Each entry has {id, tier, modes, feature_binding, rationale}.
+# Human approves each line.
+
+registry_changes_approved:
+
+  # ── Issue F — Platform split (5 new checks) ──
+  - id: ZOOM_SDK_PLATFORM_ENUM_EXISTS
+    tier: static
+    rationale: "Grep services/meeting-api/meeting_api/schemas.py for Platform.ZOOM_SDK = \"zoom_sdk\""
+    approved: true
+  - id: ZOOM_WEB_PLATFORM_ENUM_EXISTS
+    tier: static
+    rationale: "Grep same file for Platform.ZOOM_WEB = \"zoom_web\""
+    approved: true
+  - id: ZOOM_PLATFORM_DIR_SPLIT
+    tier: static
+    rationale: "Assert services/vexa-bot/core/src/platforms/zoom-sdk/ AND platforms/zoom-web/ exist; platforms/zoom/ absent"
+    approved: true
+  - id: ZOOM_LEGACY_ALIAS_MAPS_TO_SDK
+    tier: static
+    rationale: "Grep schemas.py for alias-mapping block: `zoom` → `zoom_sdk` with deprecation warning"
+    approved: true
+  - id: ZOOM_SOFT_ENV_SWITCH_RETIRED
+    tier: static
+    rationale: "grep -r ZOOM_WEB services/vexa-bot/ returns no matches (env-switch fully retired)"
+    approved: true
+
+  # ── Issue A — SDK recording P0 (5 new checks) ──
+  - id: ZOOM_SDK_WRAPPER_HAS_RECORDING_CONTROLLER
+    tier: static
+    rationale: "Grep services/vexa-bot/core/src/platforms/zoom-sdk/native/src/zoom_wrapper.cpp for IMeetingRecordingController* recordingCtrl_"
+    approved: true
+  - id: ZOOM_SDK_ON_ONE_WAY_AUDIO_IMPLEMENTED
+    tier: static
+    rationale: "Grep wrapper cpp for non-empty onOneWayAudioRawDataReceived body (must reference Napi::Env or similar napi forwarding)"
+    approved: true
+  - id: ZOOM_SDK_PRIVILEGE_RETRY_LOOP
+    tier: static
+    rationale: "Grep sdk-manager.ts for RequestLocalRecordingPrivilege + CanStartRawRecording inside a retry construct"
+    approved: true
+  - id: ZOOM_SDK_SPEAKER_CALLBACK_AFTER_JOIN_AUDIO
+    tier: static
+    rationale: "Text-order check in strategies/join.ts: joinAudio() call precedes onActiveSpeakerChange registration"
+    approved: true
+  - id: ZOOM_SDK_ENTRYPOINT_LD_LIBRARY_PATH
+    tier: static
+    rationale: "Grep entrypoint.sh (or Dockerfile ENV) for LD_LIBRARY_PATH including qt_libs/Qt/lib prefix"
+    approved: true
+
+  # ── Issue B — Build + Docker + .env (5 new checks) ──
+  - id: ZOOM_SDK_BUILD_SCRIPT_EXISTS
+    tier: static
+    rationale: "File check: scripts/build-zoom-sdk.sh exists"
+    approved: true
+  - id: ZOOM_SDK_BUILD_SCRIPT_EXECUTABLE
+    tier: static
+    rationale: "File mode check: scripts/build-zoom-sdk.sh is executable (+x)"
+    approved: true
+  - id: ZOOM_SDK_DOCKERFILE_HAS_NATIVE_DEPS
+    tier: static
+    rationale: "Grep services/vexa-bot/Dockerfile for qtbase5-dev AND libxcb-xtest0 in an apt-install"
+    approved: true
+  - id: ZOOM_SDK_ENV_EXAMPLE_HAS_ZOOM_VARS
+    tier: static
+    rationale: "Grep .env.example for ZOOM_CLIENT_ID= AND ZOOM_CLIENT_SECRET="
+    approved: true
+  - id: ZOOM_SDK_MANAGER_ERROR_MAPPING
+    tier: static
+    rationale: "Grep sdk-manager.ts for the 6 specific error-suggestion strings (libmeetingsdk, Qt symbol, libxcb-xtest0, auth, code 63, code 12)"
+    approved: true
+
+  # ── Issue C — Docs (3 new checks) ──
+  - id: ZOOM_SDK_SETUP_DOC_EXISTS
+    tier: static
+    rationale: "File check: services/vexa-bot/docs/zoom-sdk-setup.md exists"
+    approved: true
+  - id: ZOOM_SDK_SETUP_DOC_HAS_SIX_SECTIONS
+    tier: static
+    rationale: "Grep zoom-sdk-setup.md for all six required section headings"
+    approved: true
+  - id: ZOOM_SDK_DOC_REFERENCED_FROM_README
+    tier: static
+    rationale: "Grep services/vexa-bot/README.md + repo-root README.md for zoom-sdk-setup.md link"
+    approved: true
+
+  # ── Issue D — Pre-flight (3 new checks) ──
+  - id: ZOOM_SDK_PREFLIGHT_REJECTS_MISSING_ARTIFACTS
+    tier: contract
+    rationale: "Dynamic POST /bots platform=zoom_sdk under missing-artifacts scenario → expect 503"
+    approved: true
+  - id: ZOOM_SDK_PREFLIGHT_STRUCTURED_ERROR_BODY
+    tier: contract
+    rationale: "Same POST → response body matches {\"detail\":{\"code\":\"zoom_sdk_not_available\",\"missing_artifacts\":[...]}}"
+    approved: true
+  - id: ZOOM_WEB_CREATE_STILL_201_IMMEDIATE
+    tier: contract
+    rationale: "POST /bots platform=zoom_web → 201 regardless of SDK artifact presence (control check)"
+    approved: true
+
+  # ── Issue E — zoom-sdk DoDs (3 new checks) ──
+  - id: ZOOM_SDK_DODS_SIDECAR_POPULATED
+    tier: static
+    rationale: "Parse features/realtime-transcription/zoom-sdk/dods.yaml; assert dods[] has 8 entries with id+weight"
+    approved: true
+  - id: ZOOM_SDK_DODS_GATE_MIN_75
+    tier: static
+    rationale: "Parse dods.yaml; assert gate.confidence_min == 75"
+    approved: true
+  - id: ZOOM_SDK_DODS_WEIGHTS_SUM_100
+    tier: static
+    rationale: "Parse dods.yaml; sum(item.weight for item in dods) == 100"
+    approved: true
+
+  # ── Issue H — gmeet DoDs restored (4 new checks) ──
+  - id: GMEET_DODS_SIDECAR_POPULATED
+    tier: static
+    rationale: "Parse features/realtime-transcription/gmeet/dods.yaml; dods[] has 6 entries"
+    approved: true
+  - id: GMEET_DODS_GATE_MIN_75
+    tier: static
+    rationale: "gate.confidence_min == 75 in gmeet/dods.yaml"
+    approved: true
+  - id: GMEET_DODS_WEIGHTS_SUM_100
+    tier: static
+    rationale: "sum(item.weight) == 100 in gmeet/dods.yaml"
+    approved: true
+  - id: GMEET_README_PRE_REFACTOR_STRUCTURE
+    tier: static
+    rationale: "Grep gmeet/README.md for six required headings: Why / What / Speaker identity / Key files / How / DoD"
+    approved: true
+
+  # ── Issue I — msteams DoDs restored (4 new checks) ──
+  - id: MSTEAMS_DODS_SIDECAR_POPULATED
+    tier: static
+    rationale: "Parse features/realtime-transcription/msteams/dods.yaml; dods[] has 8 entries"
+    approved: true
+  - id: MSTEAMS_DODS_GATE_MIN_75
+    tier: static
+    rationale: "gate.confidence_min == 75 in msteams/dods.yaml"
+    approved: true
+  - id: MSTEAMS_DODS_HAS_KNOWN_DEBT_COMMENTS
+    tier: static
+    rationale: "Grep msteams/dods.yaml for the 3 reconciliation comments: item-5 bug #24 note, item-4 SKIP note, item-8 SKIP note"
+    approved: true
+  - id: MSTEAMS_README_PRE_REFACTOR_STRUCTURE
+    tier: static
+    rationale: "Grep msteams/README.md for five required headings: Why / What / Caption-driven speaker boundaries / Key files / How"
+    approved: true
+
+  # ── Issue G — Smoke-contract + tier-meeting (3 new checks + 1 test registration) ──
+  - id: ZOOM_SDK_IN_SMOKE_CONTRACT_FEATURES
+    tier: static
+    rationale: "Parse tests3/test-registry.yaml; smoke-contract.features list contains realtime-transcription/zoom-sdk"
+    approved: true
+  - id: MEETING_TTS_ZOOM_SDK_SCRIPT_EXISTS
+    tier: static
+    rationale: "File check: tests3/tests/meeting-tts-zoom-sdk.sh exists + executable"
+    approved: true
+  - id: MEETING_TTS_ZOOM_SDK_REGISTERED_TIER_MEETING
+    tier: static
+    rationale: "Parse test-registry.yaml; meeting-tts-zoom-sdk entry has tier: meeting, runs_in: [], features: [realtime-transcription, realtime-transcription/zoom-sdk]"
+    approved: true
+
+# ══════════════════════════════════════════════════════════════════════
+# TEST REGISTRATIONS — new tests3/tests/*.sh entries
+# ══════════════════════════════════════════════════════════════════════
+
+test_registrations_approved:
+
+  - test: meeting-tts-zoom-sdk
+    tier: meeting
+    runs_in: []
+    features: [realtime-transcription, "realtime-transcription/zoom-sdk"]
+    steps: [transcript]       # Scored against testdata/zoom-sdk-compose-260422/ground-truth.json
+    approved: true
+
+# ══════════════════════════════════════════════════════════════════════
+# SUMMARY COUNTS — sanity check for human reviewer
+# ══════════════════════════════════════════════════════════════════════
+#
+# 9 issues       — F, A, B, C, D, E, H, I, G
+# 35 new checks  — F:5 + A:5 + B:5 + C:3 + D:3 + E:3 + H:4 + I:4 + G:3 + bonus: G also registers 1 test
+# Wait — F(5)+A(5)+B(5)+C(3)+D(3)+E(3)+H(4)+I(4)+G(3) = 35. Correct.
+# 29 DoD items   — zoom-sdk:8 + zoom-web:0 + gmeet:6 + msteams:8 + gate changes:2 + README restores:2 + folder creations:2 + weight-changes: embedded
+#   (actual distinct dod_changes_approved entries above: 28 — 10 for zoom-sdk, 1 zoom-web, 8 gmeet, 10 msteams. If counting per-item: yes.)
+# 1 test registration — meeting-tts-zoom-sdk
+#
+# Review order for human (recommended):
+#   1. Read scope.yaml first — one issue at a time.
+#   2. Flip scope_approved.* for each issue's hypothesis / proves /
+#      required_modes / human_verify fields.
+#   3. Flip dod_changes_approved per-item (each new/restored DoD is an
+#      explicit approval).
+#   4. Flip registry_changes_approved per-check-ID.
+#   5. Flip test_registrations_approved.
+#   6. Set approved_at + approver at top.
+#   7. `make release-develop` (or `release-provision` first).

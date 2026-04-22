@@ -9,7 +9,7 @@
 | Base image (`mcr.microsoft.com/playwright:v1.56.0-jammy`) | 2.1GB | X11/xvfb for headless Chromium |
 | Playwright browsers | 1.5GB | Chromium 597M, headless shell 323M, WebKit 274M, Firefox 267M, FFmpeg 5M |
 | onnxruntime-node (Silero VAD) | 513MB | Runtime dependency for voice activity detection |
-| Zoom SDK (`src/platforms/zoom/native/`) | 312MB | libmeetingsdk.so 194M, qt_libs 101M, libcml.so 16M |
+| Zoom SDK (`src/platforms/zoom-sdk/native/`) | 312MB | libmeetingsdk.so 194M, qt_libs 101M, libcml.so 16M |
 | node_modules (other) | 108MB | Includes devDeps that shouldn't ship |
 
 ## Optimization opportunities

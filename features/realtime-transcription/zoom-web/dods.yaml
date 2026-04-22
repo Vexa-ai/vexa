@@ -1,0 +1,9 @@
+# Intentionally un-gated: zoom-web peer was split from zoom in
+# release 260422-zoom-sdk (Pack F). This cycle's scope explicitly
+# defers zoom-web DoD population; its story is the web-track
+# Playwright path (similar shape to gmeet + msteams DoDs). Populate
+# `dods:` before this feature's next release or its expected
+# behavior changes.
+gate:
+  confidence_min: 0    # not enforced until dods: is populated
+dods: []   # intentionally un-gated, reason: zoom-web body deferred to a future cycle

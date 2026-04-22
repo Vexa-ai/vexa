@@ -1,8 +1,8 @@
 import { Page } from 'playwright';
-import { BotConfig } from '../../../types';
-import { RecordingService } from '../../../services/recording';
-import { setActiveRecordingService, getRawCaptureService } from '../../../index';
-import { log } from '../../../utils';
+import { BotConfig } from '../../types';
+import { RecordingService } from '../../services/recording';
+import { setActiveRecordingService, getRawCaptureService } from '../../index';
+import { log } from '../../utils';
 import { spawn, ChildProcess } from 'child_process';
 import { zoomParticipantNameSelector } from './selectors';
 import { dismissZoomPopups } from './prepare';

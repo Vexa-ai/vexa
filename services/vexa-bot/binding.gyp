@@ -2,11 +2,11 @@
   "targets": [{
     "target_name": "zoom_sdk_wrapper",
     "sources": [
-      "core/src/platforms/zoom/native/src/zoom_wrapper.cpp"
+      "core/src/platforms/zoom-sdk/native/src/zoom_wrapper.cpp"
     ],
     "include_dirs": [
       "<!@(node -p \"require('node-addon-api').include\")",
-      "core/src/platforms/zoom/native/zoom_meeting_sdk/h",
+      "core/src/platforms/zoom-sdk/native/zoom_meeting_sdk/h",
       "<!@(pkg-config --cflags-only-I Qt5Core 2>/dev/null | tr ' ' '\\n' | sed 's/^-I//')"
     ],
     "libraries": [
@@ -24,12 +24,12 @@
     "conditions": [
       ["OS=='linux'", {
         "libraries": [
-          "-L<(module_root_dir)/core/src/platforms/zoom/native/zoom_meeting_sdk",
+          "-L<(module_root_dir)/core/src/platforms/zoom-sdk/native/zoom_meeting_sdk",
           "-lmeetingsdk",
           "-lpthread",
           "<!@(pkg-config --libs Qt5Core 2>/dev/null)",
-          "-Wl,-rpath,$$ORIGIN/../../core/src/platforms/zoom/native/zoom_meeting_sdk",
-          "-Wl,-rpath,$$ORIGIN/../../core/src/platforms/zoom/native/zoom_meeting_sdk/qt_libs"
+          "-Wl,-rpath,$$ORIGIN/../../core/src/platforms/zoom-sdk/native/zoom_meeting_sdk",
+          "-Wl,-rpath,$$ORIGIN/../../core/src/platforms/zoom-sdk/native/zoom_meeting_sdk/qt_libs"
         ]
       }]
     ]

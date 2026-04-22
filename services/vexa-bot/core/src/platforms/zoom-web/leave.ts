@@ -1,6 +1,6 @@
 import { Page } from 'playwright';
-import { log } from '../../../utils';
-import { LeaveReason } from '../../shared/meetingFlow';
+import { log } from '../../utils';
+import { LeaveReason } from '../shared/meetingFlow';
 import { zoomLeaveConfirmSelector } from './selectors';
 import { stopZoomWebRecording } from './recording';
 import { dismissZoomPopups } from './prepare';

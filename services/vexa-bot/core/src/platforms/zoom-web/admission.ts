@@ -1,8 +1,8 @@
 import { Page } from 'playwright';
-import { BotConfig } from '../../../types';
-import { AdmissionDecision } from '../../shared/meetingFlow';
-import { log, callAwaitingAdmissionCallback } from '../../../utils';
-import { checkEscalation, triggerEscalation, getEscalationExtensionMs } from '../../shared/escalation';
+import { BotConfig } from '../../types';
+import { AdmissionDecision } from '../shared/meetingFlow';
+import { log, callAwaitingAdmissionCallback } from '../../utils';
+import { checkEscalation, triggerEscalation, getEscalationExtensionMs } from '../shared/escalation';
 import {
   zoomLeaveButtonSelector,
   zoomMeetingAppSelector,

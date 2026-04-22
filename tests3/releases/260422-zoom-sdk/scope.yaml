@@ -1,0 +1,610 @@
+# Release scope — 260422-zoom-sdk
+# Drafted by plan-stage AI from groom.md approved packs (F+A+B+C+D+E+H+I+G).
+# Every issue here traces back to a groom pack with `approved: true`.
+
+release_id: 260422-zoom-sdk
+branch: dev
+summary: |
+  # ───────────────────────────────────────────────────────────────────
+  # What we deliver (PM framing — use verbatim in PR description,
+  # CHANGELOG, release notes at ship time)
+  # ───────────────────────────────────────────────────────────────────
+
+  Elevator pitch: *"Zoom SDK recording, working and documented, on
+  par with Google Meet — plus regression guards so it stays that way."*
+
+  1. **Zoom (native SDK) becomes a first-class platform.** Currently
+     ships but recording is broken end-to-end (#150). After this
+     release, a self-hoster can record Zoom meetings with per-speaker
+     audio + speaker attribution, following a documented setup path:
+     Marketplace app → `scripts/build-zoom-sdk.sh` → run.
+
+  2. **Two Zoom platforms, not one.** API clients specify
+     `platform=zoom_sdk` (native SDK, external meetings capable) or
+     `platform=zoom_web` (Playwright-based, like Meet/Teams). The
+     old `platform=zoom` keeps working for one cycle with a
+     deprecation header; removed in the cycle after this one.
+
+  3. **"Feature broken" fails fast.** `POST /bots platform=zoom_sdk`
+     now returns a structured `503` when SDK artifacts are missing
+     (was silent `201` → meeting fails seconds later, #128). Clients
+     learn the real error at request time.
+
+  4. **Regression guards for Google Meet + Teams + Zoom.** All three
+     realtime-transcription features now have populated DoDs gated
+     at 75% confidence (restored from pre-refactor evidence for
+     Meet/Teams via commit `6694502^`; authored fresh for Zoom from
+     the same spec). Silent transcription-quality drift — the class
+     of bug that crept in between 0.9 and 0.10 — can't recur.
+
+  ## Who wins
+
+  - **Self-hosters wanting Zoom recording** — biggest delta; unblocked
+    after 13 months of community friction (#150 filed 2026-03-05).
+  - **API integrators** — clean error surface + explicit platform
+    semantics for Zoom.
+  - **Vexa team** — future Meet/Teams regressions caught by the
+    restored DoD gates, not by customers.
+
+  ## Who sees no change
+
+  - Hosted (app.vexa.ai) users. No Meet/Teams behaviour changes.
+  - Zoom web client (`platform=zoom_web`) — behaviour unchanged; it
+    just gets its own explicit enum value.
+
+  # ───────────────────────────────────────────────────────────────────
+  # Technical scope (feeds develop + validate)
+  # ───────────────────────────────────────────────────────────────────
+
+  Split `platform=zoom` into `zoom-sdk` + `zoom-web` peer platforms.
+  Populate zoom-sdk DoDs from the pre-refactor gmeet spec, restore
+  gmeet + msteams DoDs that commit 6694502 silently dropped, close
+  #150 (native-SDK recording broken P0) + #128 (bot-create
+  201-before-failure), ship in-repo setup docs + build tooling, and
+  wire a tier-meeting test script mirroring meeting-tts.sh.
+
+  Nine issues, one coherent story:
+
+  - F: structural split — zoom_sdk + zoom_web as first-class
+    platform enum values; code dir + feature folder + dispatcher
+    fall out. Soft env-switch ZOOM_WEB=true retires.
+  - A: native-SDK recording P0 — reporter-validated patches
+    (#150 P0): zoom_wrapper.cpp StartRawRecording flow +
+    per-user audio forwarding + privilege retry + callback
+    registration order + LD_LIBRARY_PATH.
+  - B: build + Docker + .env tooling — scripts/build-zoom-sdk.sh;
+    native-deps in Dockerfile; ZOOM_{CLIENT_ID,CLIENT_SECRET} in
+    .env.example; table-driven error mapping in ensureSdkAvailable.
+  - C: self-hosted setup docs — in-repo at
+    services/vexa-bot/docs/zoom-sdk-setup.md covering six sections
+    from #150 (Marketplace app, SDK download, build, runtime,
+    account settings, limitations).
+  - D: #128 pre-flight on zoom_sdk only — synchronous artifact
+    check → 503 when missing, meeting row not created. zoom_web
+    path unchanged.
+  - E: zoom-sdk DoDs populated from gmeet pre-refactor spec — 8
+    items (6 gmeet-derived + 2 SDK-only: per-speaker raw + recording
+    privilege); gate confidence_min=75.
+  - H: gmeet DoDs restored — refactor commit 6694502 silently
+    emptied them; pre-refactor README had 6 items + confidence 75;
+    testdata baseline at testdata/gmeet-compose-260405.
+  - I: msteams DoDs restored — same refactor oversight; pre-refactor
+    README had 8 items + confidence 75; testdata baseline at
+    testdata/teams-compose-260405. Plan reconciles item-5
+    (no-halluc) threshold — actual rate 2.0 vs target 0.
+  - G: smoke-contract + tier-meeting parity — add
+    realtime-transcription/zoom-sdk to smoke-contract.features;
+    new tests3/tests/meeting-tts-zoom-sdk.sh mirroring
+    meeting-tts-teams.sh shape.
+
+deployments:
+  modes: [lite, compose, helm]
+  notes:
+    lite: "Cheapest canonical mode for static checks (Packs A, B, C, F, E, H, I). No native SDK builds on lite."
+    compose: "Canonical mode for dynamic checks (Pack D pre-flight, Pack G tier-meeting test). Native SDK builds here."
+    helm: "Chart-level contracts only (Pack B Dockerfile verification, Pack F dispatch coverage in K8s-deployed services)."
+
+issues:
+
+  # ═══════════════════════════════════════════════════════════════════
+  # F — Platform split (structural precondition)
+  # ═══════════════════════════════════════════════════════════════════
+  - id: zoom-platform-split-sdk-web-peers
+    source: internal
+    ref: "groom.md Pack F"
+    problem: |
+      `platform=zoom` conflates two architecturally different integrations
+      behind a single API value + one dispatcher dir. Native SDK (C++
+      addon, external meetings, Marketplace-app auth) and web (Playwright
+      on zoom.us, similar to Meet/Teams) share `services/vexa-bot/core/
+      src/platforms/zoom/index.ts:20` where `ZOOM_WEB=true` is the only
+      differentiator — invisible to API callers. Failures under one
+      platform value hide very different failure modes.
+    hypothesis: |
+      Promote the env-switch into first-class platform enum values.
+      Extend the existing 3-entry enum pattern in
+      `services/meeting-api/meeting_api/schemas.py:194-211`:
+      add `ZOOM_SDK = "zoom_sdk"` + `ZOOM_WEB = "zoom_web"`. For
+      migration: keep `ZOOM = "zoom"` as a deprecated alias that maps
+      to `zoom_sdk` (preserves existing clients), log a deprecation
+      warning on hit, remove in the cycle after next. Split the code
+      dir: `services/vexa-bot/core/src/platforms/zoom/native/` →
+      `platforms/zoom-sdk/`; `platforms/zoom/web/` →
+      `platforms/zoom-web/`. Retire `zoom/index.ts` dispatcher;
+      each platform value hooks straight into its handler
+      (`handleZoomSdk`, `handleZoomWeb`). Split the feature folder
+      `features/realtime-transcription/zoom/` → `zoom-sdk/` +
+      `zoom-web/`. Mirror gmeet's flat platform-dir layout. Update
+      all dispatch sites cataloged by grep in groom.md: meeting-api,
+      mcp, dashboard (join form + zoom auth paths), vexa-agent,
+      runtime-api, `services/vexa-bot/run-zoom-bot.sh`,
+      `services/vexa-bot/core/src/types.ts`.
+    fix_commits: []
+    proves:
+      - {check: ZOOM_SDK_PLATFORM_ENUM_EXISTS, modes: [lite, compose, helm]}
+      - {check: ZOOM_WEB_PLATFORM_ENUM_EXISTS, modes: [lite, compose, helm]}
+      - {check: ZOOM_PLATFORM_DIR_SPLIT, modes: [lite, compose, helm]}
+      - {check: ZOOM_LEGACY_ALIAS_MAPS_TO_SDK, modes: [lite, compose, helm]}
+      - {check: ZOOM_SOFT_ENV_SWITCH_RETIRED, modes: [lite, compose, helm]}
+    required_modes: [lite, compose, helm]
+    human_verify:
+      - mode: compose
+        do: "POST /bots with `platform=zoom_sdk` (valid native_meeting_id)"
+        expect: "201 Created (or 503 zoom_sdk_not_available per Issue D if SDK artifacts absent)"
+      - mode: compose
+        do: "POST /bots with `platform=zoom_web` (valid native_meeting_id)"
+        expect: "201 Created"
+      - mode: lite
+        do: "POST /bots with legacy `platform=zoom`"
+        expect: "201 with deprecation warning header (X-Vexa-Deprecated-Platform); meeting created via zoom_sdk path"
+      - mode: compose
+        do: "grep -r 'ZOOM_WEB' services/vexa-bot/core/src/platforms/"
+        expect: "no matches (soft env-switch fully retired)"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # A — Native SDK recording P0 (#150)
+  # ═══════════════════════════════════════════════════════════════════
+  - id: zoom-sdk-native-recording-end-to-end
+    source: gh-issue
+    ref: "Vexa-ai/vexa#150"
+    problem: |
+      Native-SDK recording is broken end-to-end. Five defects in the
+      native code path cause `SDKERR_NO_PERMISSION` (code 12) and
+      silent runtime failures:
+      1. `services/vexa-bot/core/src/platforms/zoom/native/src/zoom_wrapper.cpp`
+         `StartRecording` calls `audioHelper_->subscribe()` directly
+         without first going through `RequestLocalRecordingPrivilege →
+         CanStartRawRecording → StartRawRecording`.
+      2. `onOneWayAudioRawDataReceived(AudioRawData*, uint32_t)` is a
+         no-op — per-user audio never reaches JS.
+      3. `services/vexa-bot/core/src/platforms/zoom/sdk-manager.ts`
+         has no retry loop for the async permission-grant.
+      4. `strategies/join.ts` registers `onActiveSpeakerChange` BEFORE
+         `joinAudio()` — `audioController_` is only set inside
+         joinAudio, so the callback attaches to nothing.
+      5. `entrypoint.sh` does not prepend `qt_libs/Qt/lib/` (nested, not
+         top-level) to `LD_LIBRARY_PATH`, causing Qt symbol undefined
+         errors on every SDK load.
+      Reporter (bockage → Vexa team) built SDK 6.7.2.7020 on Ubuntu 22.04,
+      Node v22.14.0 and validated all five fixes end-to-end: 57.7s raw
+      audio captured, speakers detected by name, active-speaker events
+      firing, per-participant mapping correct.
+    hypothesis: |
+      Apply reporter-validated patches verbatim. Files land under the
+      new `platforms/zoom-sdk/` path (post-Issue-F split):
+      - `native/src/zoom_wrapper.cpp` — add include
+        `<meeting_service_components/meeting_recording_interface.h>`,
+        add member `IMeetingRecordingController* recordingCtrl_`. In
+        `StartRecording`: get recording controller →
+        `RequestLocalRecordingPrivilege()` → poll
+        `CanStartRawRecording()` → `StartRawRecording()` → then
+        `audioHelper_->subscribe(&delegate)`. Implement
+        `onOneWayAudioRawDataReceived` to forward buffers + user_id to
+        JS using the existing `onMixedAudioRawDataReceived` napi shape.
+      - `sdk-manager.ts::startRecording` — wrap calls in a retry loop:
+        privilege request → poll `CanStartRawRecording()` every 2s →
+        once granted, invoke `StartRawRecording()` + `subscribe()`. Log
+        "Waiting for recording permission from host…".
+      - `strategies/join.ts` — move the `onActiveSpeakerChange`
+        registration to AFTER `await joinAudio()`.
+      - `entrypoint.sh` (or Docker CMD, per Issue-B Dockerfile update):
+        export `LD_LIBRARY_PATH="$SDK_DIR/qt_libs/Qt/lib:$SDK_DIR:$LD_LIBRARY_PATH"`
+        before any SDK load.
+      Mechanical recording verification happens in tier-meeting (Issue G).
+    fix_commits: []
+    proves:
+      - {check: ZOOM_SDK_WRAPPER_HAS_RECORDING_CONTROLLER, modes: [lite, compose, helm]}
+      - {check: ZOOM_SDK_ON_ONE_WAY_AUDIO_IMPLEMENTED, modes: [lite, compose, helm]}
+      - {check: ZOOM_SDK_PRIVILEGE_RETRY_LOOP, modes: [lite, compose, helm]}
+      - {check: ZOOM_SDK_SPEAKER_CALLBACK_AFTER_JOIN_AUDIO, modes: [lite, compose, helm]}
+      - {check: ZOOM_SDK_ENTRYPOINT_LD_LIBRARY_PATH, modes: [lite, compose, helm]}
+    required_modes: [lite, compose, helm]
+    human_verify:
+      - mode: compose
+        do: "Build bot image with native SDK; start bot against same-account Zoom meeting via `platform=zoom_sdk`; speak for 30s"
+        expect: "Bot logs `onOneWayAudioRawDataReceived` firing with distinct user_ids; `tests3/testdata/zoom-sdk-compose-260422/` collection successful"
+      - mode: compose
+        do: "Inspect bot logs during a fresh join"
+        expect: "Sequence: `RequestLocalRecordingPrivilege` → `Waiting for recording permission…` → `Recording permission granted` → `StartRawRecording OK` (all within 10s for an auto-approved account)"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # B — SDK build + Docker + .env parity (#150 P1/P2)
+  # ═══════════════════════════════════════════════════════════════════
+  - id: zoom-sdk-build-docker-env-tooling
+    source: gh-issue
+    ref: "Vexa-ai/vexa#150"
+    problem: |
+      Self-hosters cannot ship the native SDK track. Four gaps make
+      onboarding infeasible:
+      - No build script for the native addon; users recreate the
+        toolchain by reading #150.
+      - `services/vexa-bot/Dockerfile` doesn't apt-install
+        `qtbase5-dev` + `libxcb-xtest0`; doesn't set
+        `LD_LIBRARY_PATH` in ENTRYPOINT.
+      - Repo-root `.env.example` lacks `ZOOM_CLIENT_ID=` +
+        `ZOOM_CLIENT_SECRET=` hints.
+      - `sdk-manager.ts::ensureSdkAvailable()` emits a generic
+        error for all six common failure modes (libmeetingsdk.so
+        missing, Qt symbol undef, libxcb-xtest0 missing, auth
+        failure, SDK code 63 external-meeting-without-Marketplace,
+        SDK code 12 local-recording-disabled).
+    hypothesis: |
+      Four mechanical additions:
+      - New file `scripts/build-zoom-sdk.sh`:
+        * check SDK files (`libmeetingsdk.so`, `qt_libs/`) — fail
+          with download-instruction message if absent;
+        * `apt-get install -y qtbase5-dev libxcb-xtest0`;
+        * `cd services/vexa-bot && npm install node-addon-api && npx node-gyp rebuild`;
+        * validate: `node -e "require('./build/Release/zoom_sdk_wrapper')"`;
+        * print success + next-steps.
+      - `services/vexa-bot/Dockerfile`: add the two apt packages;
+        set `ENV LD_LIBRARY_PATH=...` pointing into the nested
+        qt_libs/Qt/lib path (proprietary SDK files stay a volume
+        mount / build-time copy, documented in Issue-C docs).
+      - `.env.example`: add `ZOOM_CLIENT_ID=` + `ZOOM_CLIENT_SECRET=`
+        with `# optional — required only for platform=zoom_sdk` comment.
+      - `sdk-manager.ts`: table-driven error-to-suggestion mapping in
+        `ensureSdkAvailable()` (~30-40 LOC). Each failure mode gets a
+        specific remediation string (`Run scripts/build-zoom-sdk.sh`,
+        `Set LD_LIBRARY_PATH…`, `Publish SDK app on Marketplace`, etc.).
+    fix_commits: []
+    proves:
+      - {check: ZOOM_SDK_BUILD_SCRIPT_EXISTS, modes: [lite, compose, helm]}
+      - {check: ZOOM_SDK_BUILD_SCRIPT_EXECUTABLE, modes: [lite, compose, helm]}
+      - {check: ZOOM_SDK_DOCKERFILE_HAS_NATIVE_DEPS, modes: [lite, compose, helm]}
+      - {check: ZOOM_SDK_ENV_EXAMPLE_HAS_ZOOM_VARS, modes: [lite, compose, helm]}
+      - {check: ZOOM_SDK_MANAGER_ERROR_MAPPING, modes: [lite, compose, helm]}
+    required_modes: [lite, compose]
+    human_verify:
+      - mode: compose
+        do: "With SDK binaries present, run `./scripts/build-zoom-sdk.sh`"
+        expect: "exits 0; prints `require('./build/Release/zoom_sdk_wrapper')` success; prints next-step hint"
+      - mode: compose
+        do: "With libmeetingsdk.so renamed, run `./scripts/build-zoom-sdk.sh`"
+        expect: "exits non-zero; error includes `Download SDK from marketplace.zoom.us` + expected path"
+      - mode: compose
+        do: "Trigger each of the 6 failure modes in `sdk-manager.ts::ensureSdkAvailable()` by removing/corrupting the relevant input"
+        expect: "Each failure produces a specific remediation line naming the fix (not a generic error)"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # C — Self-hosted setup docs (#150 docs section)
+  # ═══════════════════════════════════════════════════════════════════
+  - id: zoom-sdk-self-hosted-docs-published
+    source: gh-issue
+    ref: "Vexa-ai/vexa#150"
+    problem: |
+      No in-repo or docs.vexa.ai coverage of Zoom-SDK self-hosted
+      setup. Community discovery is "read issue #150 body." Without
+      this doc, Issue-B build tooling is discoverable only by accident.
+    hypothesis: |
+      Create `services/vexa-bot/docs/zoom-sdk-setup.md` with six
+      sections lifted from #150:
+      1. Create Meeting SDK app on marketplace.zoom.us (Meeting-SDK
+         app type; `ZOOM_CLIENT_ID` + `ZOOM_CLIENT_SECRET`).
+      2. Download SDK (proprietary, not redistributable). Target path:
+         `services/vexa-bot/core/src/platforms/zoom-sdk/native/zoom_meeting_sdk/`
+         with `libmeetingsdk.so` (+ `.so.1` symlink), `libcml.so`,
+         `libmpg123.so`, `qt_libs/Qt/lib/`.
+      3. Build native addon: `scripts/build-zoom-sdk.sh` (from Issue B).
+      4. Runtime config: env vars, `LD_LIBRARY_PATH` preserve-order,
+         `~/.zoomsdk/logs/` mkdir.
+      5. Zoom-account settings: Recording → "Record to computer files"
+         ON; "Auto approve permission requests" for both internal +
+         external participants ON.
+      6. Limitations: unpublished SDK apps = same-account only
+         (Code 63); Marketplace publishing required for external
+         meetings; SDK binaries are proprietary.
+      Reference from `services/vexa-bot/README.md` + repo-root README.
+      docs.vexa.ai cross-publication is a follow-on ticket, not this
+      cycle.
+    fix_commits: []
+    proves:
+      - {check: ZOOM_SDK_SETUP_DOC_EXISTS, modes: [lite, compose, helm]}
+      - {check: ZOOM_SDK_SETUP_DOC_HAS_SIX_SECTIONS, modes: [lite, compose, helm]}
+      - {check: ZOOM_SDK_DOC_REFERENCED_FROM_README, modes: [lite, compose, helm]}
+    required_modes: [lite]
+    human_verify:
+      - mode: lite
+        do: "Fresh operator (someone unfamiliar with Zoom SDK) follows the doc only"
+        expect: "Within ~30 min, native addon builds + bot successfully joins a same-account Zoom meeting; no external help needed"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # D — API pre-flight for zoom_sdk (#128)
+  # ═══════════════════════════════════════════════════════════════════
+  - id: zoom-sdk-bot-create-preflight
+    source: gh-issue
+    ref: "Vexa-ai/vexa#128"
+    problem: |
+      `POST /bots` with `platform=zoom` returns `201 Created` even
+      when `services/vexa-bot/build/Release/zoom_sdk_wrapper.node`
+      or `…/libmeetingsdk.so` are absent. Meeting transitions
+      `requested → joining → failed` within seconds; failure only
+      surfaces later via `GET /meetings.data.error_details`. API
+      contract bug: known prerequisites at request time should gate
+      the 201.
+    hypothesis: |
+      Synchronous pre-flight on the `zoom_sdk` path (new enum value
+      from Issue F). Add a helper in `services/meeting-api/meeting_api/
+      meetings.py` that checks — ideally via a lightweight bot-runner
+      capability probe (or, acceptably, by presence checks against
+      the bot-runner image/container manifest) — whether both
+      artifacts are available. If missing: respond `503 Service
+      Unavailable` with body `{"detail": {"code":
+      "zoom_sdk_not_available", "missing_artifacts": [...]}}`.
+      Meeting row NOT created. If present: existing code path unchanged.
+      `zoom_web` path stays 201-immediate (no native deps). `zoom`
+      legacy alias (per Issue-F migration) hits the same pre-flight
+      as `zoom_sdk`.
+    fix_commits: []
+    proves:
+      - {check: ZOOM_SDK_PREFLIGHT_REJECTS_MISSING_ARTIFACTS, modes: [compose]}
+      - {check: ZOOM_SDK_PREFLIGHT_STRUCTURED_ERROR_BODY, modes: [compose]}
+      - {check: ZOOM_WEB_CREATE_STILL_201_IMMEDIATE, modes: [compose]}
+    required_modes: [compose]
+    human_verify:
+      - mode: compose
+        do: "Rename `libmeetingsdk.so` temporarily; `curl -X POST /bots -d '{\"platform\":\"zoom_sdk\",...}'`"
+        expect: "503 with body `{\"detail\": {\"code\": \"zoom_sdk_not_available\", \"missing_artifacts\": [...]}}`; `GET /meetings` shows NO new row for this request"
+      - mode: compose
+        do: "Restore libmeetingsdk.so; same curl"
+        expect: "201 Created as before"
+      - mode: compose
+        do: "Same rename; POST with `platform=zoom_web`"
+        expect: "201 Created (pre-flight doesn't gate web path)"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # E — zoom-sdk DoDs populated from gmeet pre-refactor spec
+  # ═══════════════════════════════════════════════════════════════════
+  - id: zoom-sdk-dods-populated-from-gmeet-spec
+    source: internal
+    ref: "groom.md Pack E; gmeet README@6694502^; testdata/gmeet-compose-260405/pipeline/score.json"
+    problem: |
+      `features/realtime-transcription/zoom-sdk/` doesn't exist yet
+      (Issue F creates the folder). Without populated DoDs, zoom-sdk
+      ships ungated — regressions would pass silently and the word
+      "parity with gmeet" has no operational meaning.
+    hypothesis: |
+      Derive 8 DoD items from the pre-refactor gmeet spec, adapted
+      for SDK-level primitives (native `StartRawRecording` +
+      `onOneWayAudioRawDataReceived` + SDK-API speaker attribution
+      via `onActiveSpeakerChange` + `getUserInfo` instead of DOM
+      ScriptProcessor + CSS-class voting). Write into
+      `features/realtime-transcription/zoom-sdk/dods.yaml`. Weights
+      sum to 100; gate `confidence_min: 75` (verbatim from pre-refactor
+      gmeet confidence). README mirrors the pre-refactor gmeet body,
+      adapted.
+      DoDs:
+      1. zoom-sdk-bot-joins-and-captures-raw-audio (weight 20) —
+         bot joins via SDK, admitted, mixed-raw-audio buffer fires ≥1
+         within 30s of active.
+      2. zoom-sdk-speaker-attribution-correct (weight 20) — speaker
+         attribution via `onActiveSpeakerChange + getUserInfo`;
+         threshold `score.json:speaker_accuracy >= 0.90`.
+      3. zoom-sdk-content-matches-ground-truth (weight 20) — Whisper
+         pipeline unchanged downstream; threshold `avg_similarity >= 0.70`.
+      4. zoom-sdk-no-hallucinated-segments (weight 8) —
+         `hallucination_rate <= 0.45` (tracks gmeet actual: 4/9 GT
+         lines; rate not absolute, so scales with GT length).
+      5. zoom-sdk-no-missed-gt-lines (weight 10) —
+         `completeness == 1.0; missed == 0`.
+      6. zoom-sdk-sdk-api-current (weight 7) — `node -e "require('./
+         build/Release/zoom_sdk_wrapper')"` exits 0; JWT auth valid;
+         SDK version pinned in meta.
+      7. zoom-sdk-per-speaker-raw-audio-forwarded (weight 8) — SDK-only.
+         `native/src/zoom_wrapper.cpp::onOneWayAudioRawDataReceived`
+         body forwards user_id + pcm to JS; segments attributed by
+         SDK user_id not timing correlation.
+      8. zoom-sdk-recording-privilege-granted (weight 7) — SDK-only.
+         `RequestLocalRecordingPrivilege → granted within 10s →
+         CanStartRawRecording=true → StartRawRecording succeeds`.
+    fix_commits: []
+    proves:
+      - {check: ZOOM_SDK_DODS_SIDECAR_POPULATED, modes: [lite, compose, helm]}
+      - {check: ZOOM_SDK_DODS_GATE_MIN_75, modes: [lite, compose, helm]}
+      - {check: ZOOM_SDK_DODS_WEIGHTS_SUM_100, modes: [lite, compose, helm]}
+      - {test: meeting-tts-zoom-sdk, step: transcript, modes: [compose]}
+    required_modes: [lite]
+    human_verify:
+      - mode: lite
+        do: "cat features/realtime-transcription/zoom-sdk/dods.yaml"
+        expect: "8 items with ids + weights summing to 100; gate confidence_min: 75"
+      - mode: lite
+        do: "Diff README against pre-refactor gmeet README (commit 6694502^)"
+        expect: "Structure mirrors gmeet's Why / What / Speaker identity / Key files / How / DoD / Known Issues; prose adapted for SDK-level primitives"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # H — gmeet DoDs restored from pre-refactor (6694502 oversight)
+  # ═══════════════════════════════════════════════════════════════════
+  - id: gmeet-dods-restored-from-pre-refactor
+    source: regression
+    ref: "commit 6694502 refactor step 2; features/realtime-transcription/gmeet/README.md@6694502^; testdata/gmeet-compose-260405/pipeline/score.json"
+    problem: |
+      `features/realtime-transcription/gmeet/dods.yaml` is
+      intentionally un-gated (`dods: []`, `confidence_min: 0`)
+      despite the pre-refactor README carrying a 6-row DoD table
+      with real evidence (Bot 135 in `rxf-gxis-ozd`, 9 segments,
+      0% WER, Chrome 141, Confidence 75). Commit 6694502 (2026-04-18
+      "refactor step 2: DoDs → features/<name>/dods.yaml sidecars")
+      claimed "12 features had no machine-readable DoDs" but gmeet's
+      were present in README body (not the old frontmatter shape the
+      migration script looked for) and silently dropped. This blocks
+      "parity with gmeet" — empty DoDs means parity-with-nothing.
+    hypothesis: |
+      Restore the content verbatim from git history:
+      - `features/realtime-transcription/gmeet/dods.yaml` — populate
+        with the 6 items from pre-refactor README, converted to
+        current sidecar schema. Weights: 20/25/25/10/10/10 = 100.
+        Gate `confidence_min: 75`.
+      - `features/realtime-transcription/gmeet/README.md` — restore
+        the ~90-line pre-refactor body (Why / What / Speaker identity /
+        Key files / Key selectors / How / DoD / Known Issues #30 audio
+        loopback). Frontmatter adjusted to current sidecar schema
+        (strip `tests3.targets/checks`; keep `services:`).
+      - Empirical baseline at `tests3/testdata/gmeet-compose-260405/
+        pipeline/score.json` stays as-is (speaker_accuracy=1.0,
+        avg_similarity=0.932, completeness=1.0, hallucinations=4,
+        pass=9/9) — DoD-5 "no hallucinated segments" threshold must
+        be realistic: tighten to `hallucination_rate <= 0.45` (tracks
+        current 4/9) or accept the pre-refactor claim "9 segments
+        all match GT" at face value. Plan picks: rate-based.
+    fix_commits: []
+    proves:
+      - {check: GMEET_DODS_SIDECAR_POPULATED, modes: [lite, compose, helm]}
+      - {check: GMEET_DODS_GATE_MIN_75, modes: [lite, compose, helm]}
+      - {check: GMEET_DODS_WEIGHTS_SUM_100, modes: [lite, compose, helm]}
+      - {check: GMEET_README_PRE_REFACTOR_STRUCTURE, modes: [lite, compose, helm]}
+    required_modes: [lite]
+    human_verify:
+      - mode: lite
+        do: "cat features/realtime-transcription/gmeet/dods.yaml"
+        expect: "6 items matching pre-refactor README table; weights 20/25/25/10/10/10; gate 75"
+      - mode: lite
+        do: "cat features/realtime-transcription/gmeet/README.md | wc -l"
+        expect: ">= 80 lines (pre-refactor body restored)"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # I — msteams DoDs restored from pre-refactor (same oversight)
+  # ═══════════════════════════════════════════════════════════════════
+  - id: msteams-dods-restored-from-pre-refactor
+    source: regression
+    ref: "commit 6694502 refactor step 2; features/realtime-transcription/msteams/README.md@6694502^; testdata/teams-compose-260405/pipeline/score.json"
+    problem: |
+      Same as Issue H: `features/realtime-transcription/msteams/
+      dods.yaml` empty despite pre-refactor README carrying an 8-row
+      DoD table (Compose + Helm + Lite evidence across 2026-04-09).
+      Empirical baseline at `testdata/teams-compose-260405/pipeline/
+      score.json`: speaker_accuracy=0.8, avg_similarity=0.932,
+      completeness=0.8, hallucinations=40 in 20 GT lines (rate 2.0),
+      pass=16/20. Restoring symmetry with gmeet + zoom-sdk means
+      msteams gets DoDs too — leaving it empty while the other two
+      are gated is the same drift-to-empty the refactor caused.
+    hypothesis: |
+      Restore the content from git history:
+      - `features/realtime-transcription/msteams/dods.yaml` —
+        populate with 8 items from pre-refactor README. Weights:
+        15/25/25/10/5/10/10/0 = 100 (item 8 weight 0, SKIP — see
+        reconciliation below). Gate `confidence_min: 75`.
+      - `features/realtime-transcription/msteams/README.md` — restore
+        the ~120-line pre-refactor body.
+      - Plan reconciliation on three items (documented in dods.yaml
+        comments + README):
+        * Item 4 (no-missed, 20+ utterances) was SKIP pre-refactor
+          (transcription-replay blocked by TTS throughput). Keep
+          SKIP — weight 10 contributes only if a later meeting-tts
+          run collects ≥20 utterances; until then it doesn't pull
+          down the gate because SKIP items are excluded from the
+          denominator (plan to verify aggregator behavior against
+          `tests3/lib/aggregate.py`).
+        * Item 5 (no-halluc) PARTIAL pre-refactor (bug #24 whisper
+          hallucination on silence). Actual current rate 2.0;
+          threshold `hallucination_rate <= 2.0` — matches actual as
+          floor and freezes drift, rather than tightening to 0 and
+          going RED. Documented in dods.yaml comment as a known
+          debt.
+        * Item 8 (overlapping speech) SKIP pre-refactor (not tested).
+          Keep SKIP, weight 0 explicitly.
+    fix_commits: []
+    proves:
+      - {check: MSTEAMS_DODS_SIDECAR_POPULATED, modes: [lite, compose, helm]}
+      - {check: MSTEAMS_DODS_GATE_MIN_75, modes: [lite, compose, helm]}
+      - {check: MSTEAMS_DODS_HAS_KNOWN_DEBT_COMMENTS, modes: [lite, compose, helm]}
+      - {check: MSTEAMS_README_PRE_REFACTOR_STRUCTURE, modes: [lite, compose, helm]}
+    required_modes: [lite]
+    human_verify:
+      - mode: lite
+        do: "cat features/realtime-transcription/msteams/dods.yaml"
+        expect: "8 items; gate 75; item-5 comment names bug #24; item-4/item-8 explicit SKIP"
+      - mode: lite
+        do: "cat features/realtime-transcription/msteams/README.md | wc -l"
+        expect: ">= 110 lines (pre-refactor body restored)"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # G — Smoke-contract + tier-meeting test parity
+  # ═══════════════════════════════════════════════════════════════════
+  - id: zoom-sdk-smoke-contract-and-meeting-tts-parity
+    source: internal
+    ref: "groom.md Pack G; tests3/tests/meeting-tts-teams.sh; tests3/test-registry.yaml:35-49,161-165"
+    problem: |
+      Two gaps prevent zoom-sdk from being visible to the tests3
+      machinery the way gmeet + msteams are:
+      1. `tests3/test-registry.yaml` `smoke-contract.features` lists
+         `realtime-transcription/gmeet` + `realtime-transcription/
+         msteams` but no zoom variant. Static contract checks never
+         bind against zoom-sdk → its DoDs (from Issue E) can't be
+         graded.
+      2. No tier-meeting test for zoom-sdk. gmeet has `meeting-tts.sh`
+         (tier=meeting, features includes `realtime-transcription/
+         gmeet`); teams has `meeting-tts-teams.sh` (tier=meeting,
+         features=`realtime-transcription/msteams`). Without a
+         `meeting-tts-zoom-sdk.sh` equivalent, no empirical score.json
+         can be collected → Issue-E DoDs 1-5 have no evidence binding.
+    hypothesis: |
+      Two mechanical additions:
+      - `tests3/test-registry.yaml`: add
+        `realtime-transcription/zoom-sdk` to `smoke-contract.features`
+        list (line ~49 in current file). `zoom-web` stays absent this
+        cycle (deferred).
+      - `tests3/tests/meeting-tts-zoom-sdk.sh` (new): mirror
+        `meeting-tts-teams.sh` structure. Phases: cleanup stale bots →
+        create browser-session host + same-account Zoom meeting →
+        launch recorder + N speaker bots with `platform=zoom_sdk` →
+        admit all (manual step; Zoom SDK same-account join is
+        auto-admit once host is in) → send TTS utterances → fetch
+        transcript → score against ground truth → cleanup. Register
+        in test-registry: `tier: meeting`, `runs_in: []` (tier-meeting
+        runs off-band), `features: [realtime-transcription,
+        realtime-transcription/zoom-sdk]`. Produce
+        `testdata/zoom-sdk-compose-260422/` on first clean run.
+    fix_commits: []
+    proves:
+      - {check: ZOOM_SDK_IN_SMOKE_CONTRACT_FEATURES, modes: [lite, compose, helm]}
+      - {check: MEETING_TTS_ZOOM_SDK_SCRIPT_EXISTS, modes: [lite, compose, helm]}
+      - {check: MEETING_TTS_ZOOM_SDK_REGISTERED_TIER_MEETING, modes: [lite, compose, helm]}
+      - {test: meeting-tts-zoom-sdk, step: transcript, modes: [compose]}
+    required_modes: [lite, compose]
+    human_verify:
+      - mode: compose
+        do: "Configure Zoom SDK same-account credentials on the runner; run `bash tests3/tests/meeting-tts-zoom-sdk.sh`"
+        expect: "Script creates meeting, launches recorder + speakers, TTS sent, transcript fetched with ≥1 segment; `testdata/zoom-sdk-compose-260422/pipeline/score.json` written with speaker_accuracy + avg_similarity + completeness metrics"
+      - mode: lite
+        do: "grep 'realtime-transcription/zoom-sdk' tests3/test-registry.yaml"
+        expect: "Match in smoke-contract.features"
+
+# ═══════════════════════════════════════════════════════════════════
+# Expensive tests — tier-meeting, run during release-full (not release-iterate)
+# ═══════════════════════════════════════════════════════════════════
+expensive_tests:
+  - {test: meeting-tts-zoom-sdk, modes: [compose]}
+  # Note: meeting-tts (gmeet) and meeting-tts-teams (msteams) are NOT
+  # listed because this cycle does not change their code paths.
+  # However, if plan approves re-running them to re-baseline against
+  # the restored DoD gates from Issues H and I, add them here.
+
+# ═══════════════════════════════════════════════════════════════════
+# Strict features — force 100% gate for this release
+# ═══════════════════════════════════════════════════════════════════
+strict_features: []
+  # None. The three realtime-transcription features gate at 75 as
+  # restored from pre-refactor evidence. If the cycle exposes that
+  # actual behavior can't hit 75, that's a triage decision (regression
+  # vs gap) — NOT a gate-lowering question.

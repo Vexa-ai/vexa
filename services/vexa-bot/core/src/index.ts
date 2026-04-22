@@ -4,9 +4,9 @@ import { callStatusChangeCallback, mapExitReasonToStatus } from "./services/unif
 import { chromium } from "playwright-extra";
 import { handleGoogleMeet, leaveGoogleMeet } from "./platforms/googlemeet";
 import { handleMicrosoftTeams, leaveMicrosoftTeams } from "./platforms/msteams";
-import { handleZoom, leaveZoom, leaveZoomWeb } from "./platforms/zoom";
-import { reconfigureZoomWebRecording, getLastActiveSpeaker } from "./platforms/zoom/web/recording";
-import { getZoomSpeakerEvents } from "./platforms/zoom/strategies/recording";
+import { handleZoom, leaveZoom, leaveZoomWeb } from "./platforms/zoom-sdk";
+import { reconfigureZoomWebRecording, getLastActiveSpeaker } from "./platforms/zoom-web/recording";
+import { getZoomSpeakerEvents } from "./platforms/zoom-sdk/strategies/recording";
 import { browserArgs, getBrowserArgs, getAuthenticatedBrowserArgs, userAgent } from "./constans";
 import { BotConfig } from "./types";
 import { RecordingService } from "./services/recording";

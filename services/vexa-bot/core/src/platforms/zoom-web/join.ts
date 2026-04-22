@@ -1,6 +1,6 @@
 import { Page } from 'playwright';
-import { BotConfig } from '../../../types';
-import { log, callJoiningCallback } from '../../../utils';
+import { BotConfig } from '../../types';
+import { log, callJoiningCallback } from '../../utils';
 import {
   zoomNameInputSelector,
   zoomJoinButtonSelector,

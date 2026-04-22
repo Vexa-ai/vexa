@@ -1,5 +1,5 @@
 import { Page } from 'playwright';
-import { log } from '../../../utils';
+import { log } from '../../utils';
 import { zoomLeaveButtonSelector, zoomMeetingEndedModalSelector, zoomRemovalTexts } from './selectors';
 
 /**

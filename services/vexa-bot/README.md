@@ -299,10 +299,10 @@ Entry point: `core/src/browser-session.ts` (imported dynamically from `docker.ts
 ## Zoom SDK
 
 Zoom Meeting SDK binaries are proprietary and not included. Download from Zoom
-and place under `core/src/platforms/zoom/native/zoom_meeting_sdk/`.
+and place under `core/src/platforms/zoom-sdk/native/zoom_meeting_sdk/`.
 
 ```bash
-ls core/src/platforms/zoom/native/zoom_meeting_sdk/libmeetingsdk.so
+ls core/src/platforms/zoom-sdk/native/zoom_meeting_sdk/libmeetingsdk.so
 ```
 
 ## Public Docs
