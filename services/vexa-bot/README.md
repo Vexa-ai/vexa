@@ -305,6 +305,10 @@ and place under `core/src/platforms/zoom-sdk/native/zoom_meeting_sdk/`.
 ls core/src/platforms/zoom-sdk/native/zoom_meeting_sdk/libmeetingsdk.so
 ```
 
+**Full setup guide:** [`services/vexa-bot/docs/zoom-sdk-setup.md`](docs/zoom-sdk-setup.md) —
+Marketplace app, SDK download layout, `scripts/build-zoom-sdk.sh`, runtime
+config, Zoom account settings (auto-approve local recording), and limitations.
+
 ## Public Docs
 
 - [Google Meet](https://docs.vexa.ai/platforms/google-meet)

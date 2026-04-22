@@ -1195,6 +1195,36 @@
       "symptom": "ensureSdkAvailable emits a generic error for every failure; operators can't tell if it's missing binaries, wrong env, or no permission",
       "file": "services/vexa-bot/core/src/platforms/zoom-sdk/sdk-manager.ts",
       "must_match": "diagnoseLoadFailure"
+    },
+    {
+      "_": "\u2550\u2550\u2550 Pack C \u2014 SDK self-hosted docs (#150 docs section) \u2550\u2550\u2550"
+    },
+    {
+      "id": "ZOOM_SDK_SETUP_DOC_EXISTS",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "services/vexa-bot/docs/zoom-sdk-setup.md exists with the canonical Zoom SDK self-hosted guide",
+      "symptom": "Setup knowledge lives only in issue #150; contributors can't discover the build + account-settings flow",
+      "file": "services/vexa-bot/docs/zoom-sdk-setup.md",
+      "must_match": "Zoom SDK (Native) \u2014 Self-Hosted Platform Setup"
+    },
+    {
+      "id": "ZOOM_SDK_SETUP_DOC_HAS_SIX_SECTIONS",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "zoom-sdk-setup.md contains all six required sections (Marketplace app, SDK download, build, runtime config, account settings, limitations)",
+      "symptom": "Doc gutted; self-hosters miss a required step (most commonly: auto-approve account setting)",
+      "file": "services/vexa-bot/docs/zoom-sdk-setup.md",
+      "must_match": "## 6. Limitations"
+    },
+    {
+      "id": "ZOOM_SDK_DOC_REFERENCED_FROM_README",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "services/vexa-bot/README.md links to the zoom-sdk-setup.md guide \u2014 discovery from the module-level README",
+      "symptom": "Doc exists but no one finds it because the README does not link to it",
+      "file": "services/vexa-bot/README.md",
+      "must_match": "docs/zoom-sdk-setup.md"
     }
   ]
 }

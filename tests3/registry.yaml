@@ -1875,3 +1875,49 @@ ZOOM_SDK_MANAGER_ERROR_MAPPING:
   - helm
   state: stateless
   max_duration_sec: 5
+
+# ──────────────────────────────────────────────────────────────────────
+# Pack C — SDK self-hosted docs (#150 docs section)
+# ──────────────────────────────────────────────────────────────────────
+
+ZOOM_SDK_SETUP_DOC_EXISTS:
+  proves: "services/vexa-bot/docs/zoom-sdk-setup.md exists with the canonical Zoom SDK self-hosted guide"
+  symptom: "Setup knowledge lives only in issue #150; contributors can't discover the build + account-settings flow"
+  found: '2026-04-22'
+  type: grep
+  file: services/vexa-bot/docs/zoom-sdk-setup.md
+  must_match: 'Zoom SDK (Native) — Self-Hosted Platform Setup'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+
+ZOOM_SDK_SETUP_DOC_HAS_SIX_SECTIONS:
+  proves: "zoom-sdk-setup.md contains all six required sections (Marketplace app, SDK download, build, runtime config, account settings, limitations)"
+  symptom: "Doc gutted; self-hosters miss a required step (most commonly: auto-approve account setting)"
+  found: '2026-04-22'
+  type: grep
+  file: services/vexa-bot/docs/zoom-sdk-setup.md
+  must_match: '## 6. Limitations'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+
+ZOOM_SDK_DOC_REFERENCED_FROM_README:
+  proves: "services/vexa-bot/README.md links to the zoom-sdk-setup.md guide — discovery from the module-level README"
+  symptom: "Doc exists but no one finds it because the README does not link to it"
+  found: '2026-04-22'
+  type: grep
+  file: services/vexa-bot/README.md
+  must_match: 'docs/zoom-sdk-setup.md'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
