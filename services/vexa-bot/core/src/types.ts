@@ -1,5 +1,8 @@
 export type BotConfig = {
-  platform: "google_meet" | "zoom" | "teams",
+  platform: "google_meet" | "zoom" | "zoom_sdk" | "zoom_web" | "teams",
+  // NB: "zoom" is a deprecated alias for "zoom_sdk" retained for one cycle
+  // (release 260422-zoom-sdk). Emits X-Vexa-Deprecated-Platform header
+  // server-side + log warning bot-side. Remove in the cycle after 260422.
   meetingUrl: string | null,
   botName: string,
   token: string,  // MeetingToken (HS256 JWT)

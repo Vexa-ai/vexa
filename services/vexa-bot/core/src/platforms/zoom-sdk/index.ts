@@ -7,22 +7,16 @@ import { prepareZoomRecording } from './strategies/prepare';
 import { startZoomRecording } from './strategies/recording';
 import { startZoomRemovalMonitor } from './strategies/removal';
 import { leaveZoomMeeting } from './strategies/leave';
-import { handleZoomWeb, leaveZoomWeb } from '../zoom-web/index';
 
-export async function handleZoom(
+// zoom-sdk is the native-SDK path. Pack F of release 260422-zoom-sdk split
+// the former zoom/{native,web} tree into zoom-sdk/ + zoom-web/ peer
+// platforms; the previous env-var-based dispatch switch is retired. Callers
+// now select the path by sending `platform=zoom_sdk` or `platform=zoom_web`.
+export async function handleZoomSdk(
   botConfig: BotConfig,
   page: Page | null,
   gracefulLeaveFunction: (page: Page | null, exitCode: number, reason: string) => Promise<void>
 ): Promise<void> {
-
-  // Route to web-based Playwright implementation when ZOOM_WEB=true
-  // or when the native SDK addon is not available
-  const useWebClient = process.env.ZOOM_WEB === 'true';
-  if (useWebClient) {
-    return handleZoomWeb(botConfig, page, gracefulLeaveFunction);
-  }
-
-  // Native SDK path (requires proprietary Zoom Meeting SDK binaries)
   const strategies: PlatformStrategies = {
     join: joinZoomMeeting,
     waitForAdmission: waitForZoomAdmission,
@@ -33,9 +27,13 @@ export async function handleZoom(
     leave: leaveZoomMeeting
   };
 
-  await runMeetingFlow("zoom", botConfig, page, gracefulLeaveFunction, strategies);
+  await runMeetingFlow("zoom_sdk", botConfig, page, gracefulLeaveFunction, strategies);
 }
+
+// Back-compat alias — kept for one cycle while legacy `platform: "zoom"` is
+// supported at the dispatcher. Remove alongside the legacy alias in cycle
+// after 260422-zoom-sdk.
+export const handleZoom = handleZoomSdk;
 
 // Export for graceful leave in index.ts
 export { leaveZoomMeeting as leaveZoom };
-export { leaveZoomWeb };

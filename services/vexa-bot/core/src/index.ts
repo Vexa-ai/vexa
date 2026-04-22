@@ -4,7 +4,8 @@ import { callStatusChangeCallback, mapExitReasonToStatus } from "./services/unif
 import { chromium } from "playwright-extra";
 import { handleGoogleMeet, leaveGoogleMeet } from "./platforms/googlemeet";
 import { handleMicrosoftTeams, leaveMicrosoftTeams } from "./platforms/msteams";
-import { handleZoom, leaveZoom, leaveZoomWeb } from "./platforms/zoom-sdk";
+import { handleZoomSdk, leaveZoom } from "./platforms/zoom-sdk";
+import { handleZoomWeb, leaveZoomWeb } from "./platforms/zoom-web/index";
 import { reconfigureZoomWebRecording, getLastActiveSpeaker } from "./platforms/zoom-web/recording";
 import { getZoomSpeakerEvents } from "./platforms/zoom-sdk/strategies/recording";
 import { browserArgs, getBrowserArgs, getAuthenticatedBrowserArgs, userAgent } from "./constans";
@@ -38,7 +39,7 @@ let currentTask: string | null | undefined = 'transcribe'; // Default task
 let currentRedisUrl: string | null = null;
 let currentConnectionId: string | null = null;
 let meetingApiCallbackUrl: string | null = null; // ADDED: To store callback URL
-let currentPlatform: "google_meet" | "zoom" | "teams" | undefined;
+let currentPlatform: "google_meet" | "zoom" | "zoom_sdk" | "zoom_web" | "teams" | undefined;
 let page: Page | null = null; // Initialize page, will be set in runBot
 
 // --- ADDED: Flag to prevent multiple shutdowns ---
@@ -93,7 +94,7 @@ export function startVideoRecordingIfNeeded(): void {
   if (!currentBotConfig) return;
   const wantsVideoCapture = !!currentBotConfig.recordingEnabled &&
     Array.isArray(currentBotConfig.captureModes) && currentBotConfig.captureModes.includes('video');
-  const isZoomNative = currentBotConfig.platform === 'zoom' && process.env.ZOOM_WEB !== 'true';
+  const isZoomNative = currentBotConfig.platform === 'zoom_sdk' || currentBotConfig.platform === 'zoom';
 
   if (wantsVideoCapture && !isZoomNative) {
     try {
@@ -106,7 +107,7 @@ export function startVideoRecordingIfNeeded(): void {
       activeVideoRecordingService = null;
     }
   } else if (wantsVideoCapture && isZoomNative) {
-    log('[VideoRecording] Video recording not supported for Zoom Native SDK — use ZOOM_WEB=true for screen capture');
+    log('[VideoRecording] Video recording not supported for Zoom Native SDK — use platform="zoom_web" for screen capture');
   }
 }
 
@@ -488,7 +489,7 @@ const handleRedisMessage = async (message: string, channel: string, page: Page |
           currentTask = command.task;
 
           // Zoom Web uses a Node.js-side WhisperLive (not browser-based) — reconfigure directly
-          const isZoomWeb = process.env.ZOOM_WEB === 'true' && (globalThis as any).botConfig?.platform === 'zoom';
+          const isZoomWeb = (globalThis as any).botConfig?.platform === 'zoom_web';
           if (isZoomWeb) {
             await reconfigureZoomWebRecording(currentLanguage ?? null, currentTask ?? null);
             log('[Zoom Web] Reconfigure handled via Node.js WhisperLive reconnect');
@@ -638,10 +639,9 @@ async function performGracefulLeave(
   let platformLeaveSuccess = false;
 
   // Handle Zoom separately — SDK mode uses null page, web mode uses browser page
-  if (currentPlatform === "zoom") {
+  if (currentPlatform === "zoom_sdk" || currentPlatform === "zoom" || currentPlatform === "zoom_web") {
     try {
-      const zoomWebMode = process.env.ZOOM_WEB === 'true';
-      if (zoomWebMode) {
+      if (currentPlatform === "zoom_web") {
         log("[Graceful Leave] Attempting Zoom Web cleanup...");
         platformLeaveSuccess = await leaveZoomWeb(page);
       } else {
@@ -777,9 +777,12 @@ async function performGracefulLeave(
   // Read accumulated speaker events from browser context (or Zoom module)
   let speakerEvents: any[] = [];
   try {
-    if (currentPlatform === "zoom") {
+    if (currentPlatform === "zoom_sdk" || currentPlatform === "zoom") {
+      // Native SDK path: speaker events are accumulated in the zoom-sdk
+      // strategies/recording module by the C++ wrapper callbacks. zoom_web
+      // falls through to page.evaluate below (browser-side events).
       speakerEvents = getZoomSpeakerEvents();
-      log(`[Speaker Events] Read ${speakerEvents.length} speaker events from Zoom module`);
+      log(`[Speaker Events] Read ${speakerEvents.length} speaker events from Zoom SDK module`);
     } else if (page && !page.isClosed()) {
       speakerEvents = await page.evaluate(() => (window as any).__vexaSpeakerEvents || []);
       log(`[Speaker Events] Read ${speakerEvents.length} speaker events from browser context`);
@@ -1450,14 +1453,18 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
 
   const platformKey = currentPlatform === 'google_meet' ? 'googlemeet'
     : currentPlatform === 'teams' ? 'msteams'
+    : currentPlatform === 'zoom_web' ? 'zoom_web'
+    : (currentPlatform === 'zoom_sdk' || currentPlatform === 'zoom') ? 'zoom_sdk'
     : currentPlatform || 'unknown';
 
-  // ─── Zoom: DOM active speaker is the source of truth ───────────────────────
+  // ─── Zoom (web): DOM active speaker is the source of truth ─────────────────
   // Zoom SFU reuses ~3 audio tracks. Track ownership does NOT map to speakers —
   // when Alice speaks, her audio may arrive on a track previously used by Bob.
   // The DOM polling (getLastActiveSpeaker) correctly identifies who is speaking.
   // We skip voting/locking entirely and always use the DOM-polled name.
-  if (platformKey === 'zoom') {
+  // (SDK path does not reach here — this handler is per-speaker-audio from
+  // browser ScriptProcessor, not SDK C++ callback.)
+  if (platformKey === 'zoom_web') {
     const domSpeaker = getLastActiveSpeaker() || '';
 
     if (!speakerManager.hasSpeaker(speakerId)) {
@@ -2037,7 +2044,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
 
   // For Zoom Web: create a per-bot PulseAudio null sink so concurrent bots don't
   // cross-contaminate each other's audio via the shared zoom_sink.monitor.
-  if (botConfig.platform === 'zoom' && process.env.ZOOM_WEB === 'true') {
+  if (botConfig.platform === 'zoom_web') {
     const sinkName = `bot_sink_${botConfig.meeting_id}`;
     try {
       const moduleId = execSync(
@@ -2322,8 +2329,23 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
   try {
     if (botConfig.platform === "google_meet") {
       await handleGoogleMeet(botConfig, page, performGracefulLeave);
+    } else if (botConfig.platform === "zoom_sdk") {
+      await handleZoomSdk(botConfig, page, performGracefulLeave);
+    } else if (botConfig.platform === "zoom_web") {
+      await handleZoomWeb(botConfig, page, performGracefulLeave);
     } else if (botConfig.platform === "zoom") {
-      await handleZoom(botConfig, page, performGracefulLeave);
+      // Legacy alias — retained for one cycle (release 260422-zoom-sdk).
+      // Dispatcher-level last-resort ZOOM_WEB env read, to preserve any
+      // deployment that still has ZOOM_WEB=true set alongside the legacy
+      // platform value. platforms/** no longer reads this env — scope check
+      // ZOOM_SOFT_ENV_SWITCH_RETIRED greps under platforms/.
+      if (process.env.ZOOM_WEB === 'true') {
+        log('[DEPRECATION] platform="zoom" with ZOOM_WEB=true env — migrate callers to platform="zoom_web". This fallback is removed next cycle.');
+        await handleZoomWeb(botConfig, page, performGracefulLeave);
+      } else {
+        log('[DEPRECATION] platform="zoom" — migrate callers to platform="zoom_sdk". This alias is removed next cycle.');
+        await handleZoomSdk(botConfig, page, performGracefulLeave);
+      }
     } else if (botConfig.platform === "teams") {
       await handleMicrosoftTeams(botConfig, page, performGracefulLeave);
     } else {
