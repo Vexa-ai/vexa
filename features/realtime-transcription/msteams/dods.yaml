@@ -1,6 +1,126 @@
-# Intentionally un-gated: legacy feature carries no machine-readable
-# DoDs yet. Populate `dods:` before this feature's next release or
-# its expected behavior changes.
+# MS Teams real-time transcription DoDs.
+#
+# Pack I of release 260422-zoom-sdk: restored from pre-refactor README body
+# at commit 6694502^. Same migration oversight as gmeet (Pack H).
+#
+# Empirical baseline: tests3/testdata/teams-compose-260405/pipeline/score.json
+#   gt_count=20, seg_count=56, pass=16/20, missed=4
+#   speaker_accuracy=0.8, avg_similarity=0.932, completeness=0.8, hallucinations=40
+#
+# Plan reconciliation (planner approved 2026-04-22, see plan-approval.yaml):
+#   - Item 4 (no-missed-under-stress, 20+ utterances) was SKIP pre-refactor
+#     (transcription-replay blocked by TTS throughput, bug #B9). Kept SKIP.
+#   - Item 5 (no-hallucinations) PARTIAL pre-refactor (bug #24 Whisper-on-
+#     silence). Threshold set to hallucination_rate <= 2.0 (matches current
+#     baseline 40/20 = 2.0 as a floor that freezes drift). Tighten after #24.
+#   - Item 8 (overlapping-speech) SKIP pre-refactor. Weight dropped 5 -> 0 to
+#     make the total sum to exactly 100 without the SKIP items counting.
+# Gate 75 = pre-refactor value verbatim.
+
 gate:
-  confidence_min: 0    # not enforced until dods: is populated
-dods: []   # intentionally un-gated, reason: DoDs not yet authored
+  confidence_min: 75
+
+dods:
+  - id: msteams-bot-joins-with-passcode-and-captures-mixed-audio
+    weight: 15
+    check: |
+      Bot joins Teams with passcode, admitted via waiting-room flow, captures
+      the mixed audio stream, and feeds it to the Whisper pipeline.
+    evidence_shape: |
+      tier=meeting; script=tests3/tests/meeting-tts-teams.sh; assert bot
+      reaches meeting_status=active and >=1 audio frame arrives within 30s.
+    status_baseline: PASS       # pre-refactor: compose 3 segments, K8s 22 segments, lite 8 segments
+
+  - id: msteams-speaker-attribution-correct
+    weight: 25
+    check: |
+      Each ground-truth utterance is attributed to the correct speaker via
+      caption-author boundaries (captions.ts). Teams provides ONE mixed
+      audio stream; attribution is caption-driven, not audio-driven.
+    evidence_shape: |
+      score.json:speaker_accuracy >= 0.70 (lower than gmeet target because
+      caption-driven attribution has an ~1-2s latency gap bridged by the
+      ring buffer; mis-attributions around transitions are common).
+      Pre-refactor: 2 speakers correctly attributed (Alice, Bob).
+    status_baseline: PASS       # baseline 0.8
+
+  - id: msteams-content-matches-ground-truth
+    weight: 25
+    check: |
+      Whisper output of each GT line matches the spoken text with
+      similarity >= 0.70 (punctuation-insensitive).
+    evidence_shape: |
+      score.json:avg_similarity >= 0.70.
+      Pre-refactor: 3/4 phrases matched on compose; baseline 0.93.
+    status_baseline: PASS
+
+  - id: msteams-no-missed-gt-lines-under-stress
+    weight: 10
+    check: |
+      On a 20+ utterance stress test, every GT line appears in the transcript.
+      Distinct from gmeet's "completeness" DoD because the Teams caption path
+      has known drops under rapid speaker changes.
+    evidence_shape: |
+      SKIP (pre-refactor). Requires transcription-replay fixture that
+      doesn't exist yet — blocked by bug #B9 (TTS throughput).
+      When #B9 lands: score.json:completeness == 1.0 against 20+ GT lines.
+    status_baseline: SKIP
+
+  - id: msteams-no-hallucinated-segments
+    weight: 5
+    check: |
+      No transcription output without a ground-truth match, per time window.
+      Rate-based with a higher ceiling than gmeet because Teams captures ALL
+      platform audio (including own-bot playback echoes Zoom doesn't) and the
+      Whisper-on-silence bug #24 fires more often on this platform.
+    evidence_shape: |
+      score.json:hallucinations / gt_count <= 2.0
+      Pre-refactor PARTIAL: "Whisper hallucination on silence (bug #24) still present."
+      Current baseline: 40/20 = 2.0. Matches as floor; tighten after #24 lands.
+    status_baseline: PARTIAL    # known debt on #24
+
+  - id: msteams-speaker-transitions-no-content-lost
+    weight: 10
+    check: |
+      When the caption-author switches from speaker A to speaker B, the ring
+      buffer flushes A's outstanding audio to A's stream; no content
+      re-attributed to B mid-sentence.
+    evidence_shape: |
+      Inspect score.json:seg_count distribution by speaker; no GT utterance
+      straddles two speaker rows in the transcript.
+      Pre-refactor: "Content preserved across speaker switches in all tests."
+    status_baseline: PASS
+
+  - id: msteams-url-formats-parsed
+    weight: 10
+    check: |
+      All six documented Teams URL formats (T1-T6) parse into a valid
+      meeting_url payload via POST /bots. Existing checks TEAMS_URL_STANDARD,
+      TEAMS_URL_SHORTLINK, TEAMS_URL_CHANNEL, TEAMS_URL_ENTERPRISE,
+      TEAMS_URL_PERSONAL cover these.
+    evidence_shape: |
+      tier=contract: the five TEAMS_URL_* checks in the runtime registry
+      all pass on the deployment.
+    status_baseline: PASS       # tier=contract smoke green pre-refactor
+
+  - id: msteams-overlapping-speech-both-captured
+    weight: 0                    # SKIP — see reconciliation
+    check: |
+      When speakers A and B talk simultaneously, both GT lines appear in the
+      transcript with correct attribution. The caption-driven architecture
+      struggles here because captions serialize speakers — this DoD is a
+      known parking-lot item.
+    evidence_shape: |
+      SKIP (pre-refactor). No test fixture available; would require
+      synthesizing overlapping TTS streams in the meeting-tts-teams.sh test.
+    status_baseline: SKIP
+
+# Known debt (for humans):
+# - Bug #24 — Whisper hallucination on silence. Accepted via DoD 5 threshold.
+# - Bug #B9 — transcription-replay blocked by TTS throughput. Blocks DoD 4.
+# - Item 8 SKIP — overlapping speech architecture-bound on caption-driven
+#   attribution. Would need a fundamentally different attribution approach
+#   (e.g. audio-only VAD) to lift.
+# - Live fires carried into future cycles: #171 (Teams consumer-URL exit
+#   137), #226 (light-meetings/launch modal). These may affect DoD 1 on
+#   certain URL shapes — flagged for next msteams-focused cycle.

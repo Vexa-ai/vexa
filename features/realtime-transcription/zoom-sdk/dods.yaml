@@ -1,6 +1,128 @@
-# Intentionally un-gated: legacy feature carries no machine-readable
-# DoDs yet. Populate `dods:` before this feature's next release or
-# its expected behavior changes.
+# Zoom SDK (native) real-time transcription DoDs.
+#
+# Pack E of release 260422-zoom-sdk: authored from scratch, derived from
+# gmeet's pre-refactor DoD table (Pack H) adapted for the native-SDK
+# primitives. Items 1-6 mirror gmeet #1-#6 with SDK-level instead of
+# DOM-level attribution. Items 7-8 are SDK-only (no gmeet analogue) and
+# close the #150 P0 gaps: per-user audio forwarding + raw-recording
+# privilege flow.
+#
+# No empirical score.json baseline yet — the meeting-tts-zoom-sdk.sh tier-
+# meeting test (Pack G) produces the first testdata/zoom-sdk-compose-260422/
+# artifacts on its first clean run against a real same-account Zoom meeting.
+#
+# Weights: 20 + 20 + 20 + 8 + 10 + 7 + 8 + 7 = 100
+# Gate: confidence_min 75 (verbatim from gmeet pre-refactor; parity target).
+
 gate:
-  confidence_min: 0    # not enforced until dods: is populated
-dods: []   # intentionally un-gated, reason: DoDs not yet authored
+  confidence_min: 75
+
+dods:
+  - id: zoom-sdk-bot-joins-and-captures-raw-audio
+    weight: 20
+    check: |
+      Bot joins a same-account Zoom meeting via the native SDK, is admitted,
+      starts raw-audio capture via StartRawRecording, and onMixedAudioData
+      fires at least once within 30s of active state.
+    evidence_shape: |
+      tier=meeting; script=tests3/tests/meeting-tts-zoom-sdk.sh; assert bot
+      reaches meeting_status=active and >=1 mixed-audio buffer arrives
+      within 30s.
+    status_baseline: TODO       # first validated run populates testdata/zoom-sdk-compose-260422/
+
+  - id: zoom-sdk-speaker-attribution-correct
+    weight: 20
+    check: |
+      Each ground-truth utterance is attributed to the correct speaker via
+      onActiveSpeakerChange + getUserInfo. SDK provides user_id per audio
+      frame in onOneWayAudioRawDataReceived — cleaner than gmeet's
+      DOM-voting because Zoom SDK exposes the attribution directly.
+    evidence_shape: |
+      score.json:speaker_accuracy >= 0.90.
+      Expected higher than gmeet baseline (1.0) because SDK attribution is
+      direct-API, not DOM-inferred.
+    status_baseline: TODO
+
+  - id: zoom-sdk-content-matches-ground-truth
+    weight: 20
+    check: |
+      Whisper output matches each spoken GT line with similarity >= 0.70.
+      Pipeline downstream of raw audio is identical to gmeet/msteams, so
+      baseline should match their ~0.93.
+    evidence_shape: |
+      score.json:avg_similarity >= 0.70.
+    status_baseline: TODO
+
+  - id: zoom-sdk-no-hallucinated-segments
+    weight: 8
+    check: |
+      No transcription output without a ground-truth match. Rate-based
+      threshold (same as gmeet) because the Whisper-on-silence class (bug
+      #24) affects all platforms equally.
+    evidence_shape: |
+      score.json:hallucinations / gt_count <= 0.45.
+    status_baseline: TODO
+
+  - id: zoom-sdk-no-missed-gt-lines
+    weight: 10
+    check: |
+      Every ground-truth line appears at least once in the transcript
+      (completeness 100%).
+    evidence_shape: |
+      score.json:completeness == 1.0 and missed == 0.
+    status_baseline: TODO
+
+  - id: zoom-sdk-sdk-api-current
+    weight: 7
+    check: |
+      Native addon loads; JWT auth against sample credentials returns
+      success; SDK version pinned in binary metadata matches the version
+      the wrapper was compiled against. Analogous to gmeet's
+      "DOM selectors current" — catches Zoom-SDK version bumps that break
+      the C++ wrapper.
+    evidence_shape: |
+      - tier=static: ZOOM_SDK_WRAPPER_HAS_RECORDING_CONTROLLER +
+        ZOOM_SDK_ON_ONE_WAY_AUDIO_IMPLEMENTED pass (Pack A checks).
+      - scripts/build-zoom-sdk.sh step 5 smoke: node require of addon
+        exits 0 without "undefined symbol" or "Cannot find module".
+    status_baseline: PASS       # Pack A checks green against current code
+
+  - id: zoom-sdk-per-speaker-raw-audio-forwarded
+    weight: 8
+    check: |
+      SDK-only DoD (no gmeet analogue). zoom_wrapper.cpp's
+      onOneWayAudioRawDataReceived forwards per-user audio buffers to JS
+      with user_id — not the no-op that shipped before Pack A. Unblocks
+      speaker attribution beyond timing correlation.
+    evidence_shape: |
+      - tier=static: registry check ZOOM_SDK_ON_ONE_WAY_AUDIO_IMPLEMENTED
+        passes (grep "tsfOneWay_.NonBlockingCall" in zoom_wrapper.cpp).
+      - tier=meeting: meeting-tts-zoom-sdk.sh logs
+        "[Zoom SDK per-user] frame ... from user_id=..." for each distinct
+        speaker in the GT set.
+    status_baseline: PASS       # Pack A check green; meeting-tier pending Pack G run
+
+  - id: zoom-sdk-recording-privilege-granted
+    weight: 7
+    check: |
+      SDK-only DoD (Zoom permission model has no gmeet analogue).
+      RequestLocalRecordingPrivilege fires -> host auto-approves within 10s
+      -> CanStartRawRecording returns SDKERR_SUCCESS -> StartRawRecording
+      returns SDKERR_SUCCESS -> audioHelper_->subscribe returns SDKERR_SUCCESS.
+    evidence_shape: |
+      - tier=static: ZOOM_SDK_PRIVILEGE_RETRY_LOOP passes (Pack A check on
+        sdk-manager.ts retry loop).
+      - tier=meeting: bot log sequence in meeting-tts-zoom-sdk.sh shows
+        "RequestLocalRecordingPrivilege" -> "Waiting for recording
+        permission from host..." -> "Recording permission granted on attempt N"
+        (or first-try success) within 10s of startRecording call.
+    status_baseline: PASS       # Pack A check green; meeting-tier pending Pack G run
+
+# Known constraints (for humans):
+# - Same-account-only today (unpublished Marketplace SDK app = code 63
+#   on external meetings). Publishing is a business action, not a code
+#   action — tracked as deferred.
+# - Whisper-on-silence (bug #24) class will dip DoD 4 rate occasionally;
+#   accepted via rate-based threshold matching gmeet.
+# - Baseline metrics (TODO above) populate after the first clean run of
+#   tests3/tests/meeting-tts-zoom-sdk.sh against a configured Zoom account.

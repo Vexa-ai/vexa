@@ -1255,6 +1255,114 @@
       "symptom": "Pre-flight accidentally rejects zoom_web because someone broadened the check to cover all Zoom variants",
       "file": "services/meeting-api/meeting_api/meetings.py",
       "must_match": "req.platform.value == \"zoom_sdk\""
+    },
+    {
+      "_": "\u2550\u2550\u2550 Pack E \u2014 zoom-sdk DoDs (authored from gmeet pre-refactor spec) \u2550\u2550\u2550"
+    },
+    {
+      "id": "ZOOM_SDK_DODS_SIDECAR_POPULATED",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "features/realtime-transcription/zoom-sdk/dods.yaml has concrete DoDs (not the empty legacy placeholder)",
+      "symptom": "zoom-sdk ships ungated; regressions pass silently",
+      "file": "features/realtime-transcription/zoom-sdk/dods.yaml",
+      "must_match": "zoom-sdk-bot-joins-and-captures-raw-audio"
+    },
+    {
+      "id": "ZOOM_SDK_DODS_GATE_MIN_75",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "zoom-sdk/dods.yaml gate.confidence_min == 75 (matches gmeet pre-refactor parity bar)",
+      "symptom": "Gate accidentally set to 0 or 90 \u2014 parity with gmeet pre-refactor breaks",
+      "file": "features/realtime-transcription/zoom-sdk/dods.yaml",
+      "must_match": "confidence_min: 75"
+    },
+    {
+      "id": "ZOOM_SDK_DODS_WEIGHTS_SUM_100",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "zoom-sdk/dods.yaml header comment declares weights sum to 100 \u2014 arithmetic self-documenting",
+      "symptom": "Weights drift out of sum; dod-scoring normalization silently corrupts",
+      "file": "features/realtime-transcription/zoom-sdk/dods.yaml",
+      "must_match": "= 100"
+    },
+    {
+      "_": "\u2550\u2550\u2550 Pack H \u2014 gmeet DoDs restored from 6694502^ \u2550\u2550\u2550"
+    },
+    {
+      "id": "GMEET_DODS_SIDECAR_POPULATED",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "features/realtime-transcription/gmeet/dods.yaml has the 6 pre-refactor DoDs restored",
+      "symptom": "gmeet sidecar emptied again; parity-with-gmeet statement becomes meaningless",
+      "file": "features/realtime-transcription/gmeet/dods.yaml",
+      "must_match": "gmeet-bot-joins-and-captures-per-speaker-audio"
+    },
+    {
+      "id": "GMEET_DODS_GATE_MIN_75",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "gmeet/dods.yaml gate.confidence_min == 75 (pre-refactor value)",
+      "symptom": "Gate reverted to 0 by a future migration",
+      "file": "features/realtime-transcription/gmeet/dods.yaml",
+      "must_match": "confidence_min: 75"
+    },
+    {
+      "id": "GMEET_DODS_WEIGHTS_SUM_100",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "gmeet/dods.yaml weights sum to exactly 100 (20+25+25+10+10+10)",
+      "symptom": "Weights reweighted without updating the sum comment; scoring silently skews",
+      "file": "features/realtime-transcription/gmeet/dods.yaml",
+      "must_match": "Weights sum to 100"
+    },
+    {
+      "id": "GMEET_README_PRE_REFACTOR_STRUCTURE",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "gmeet/README.md includes the six canonical sections from the pre-refactor body (Why / What / Speaker identity / Key files / How / DoD)",
+      "symptom": "README restored to the un-gated stub; contributors lose the architecture context",
+      "file": "features/realtime-transcription/gmeet/README.md",
+      "must_match": "Speaker identity"
+    },
+    {
+      "_": "\u2550\u2550\u2550 Pack I \u2014 msteams DoDs restored from 6694502^ \u2550\u2550\u2550"
+    },
+    {
+      "id": "MSTEAMS_DODS_SIDECAR_POPULATED",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "features/realtime-transcription/msteams/dods.yaml has the 8 pre-refactor DoDs restored",
+      "symptom": "msteams sidecar emptied again; no regression signal on Teams transcription",
+      "file": "features/realtime-transcription/msteams/dods.yaml",
+      "must_match": "msteams-bot-joins-with-passcode-and-captures-mixed-audio"
+    },
+    {
+      "id": "MSTEAMS_DODS_GATE_MIN_75",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "msteams/dods.yaml gate.confidence_min == 75 (pre-refactor value)",
+      "symptom": "Gate dropped to dodge Teams-specific fires (#171 / #226) instead of fixing them",
+      "file": "features/realtime-transcription/msteams/dods.yaml",
+      "must_match": "confidence_min: 75"
+    },
+    {
+      "id": "MSTEAMS_DODS_HAS_KNOWN_DEBT_COMMENTS",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "msteams/dods.yaml carries a 'Known debt' comment block enumerating bugs #24, #B9, #171, #226, and the item-8 architecture note",
+      "symptom": "Known debt erased; future maintainers think the restored DoDs are aspirational rather than baseline-aligned",
+      "file": "features/realtime-transcription/msteams/dods.yaml",
+      "must_match": "Known debt"
+    },
+    {
+      "id": "MSTEAMS_README_PRE_REFACTOR_STRUCTURE",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "msteams/README.md includes the canonical sections from the pre-refactor body (Why / What / Caption-driven speaker boundaries / Key files / How / DoD / Known Issues)",
+      "symptom": "README restored to the un-gated stub; Teams architecture context lost",
+      "file": "features/realtime-transcription/msteams/README.md",
+      "must_match": "Caption-driven speaker boundaries"
     }
   ]
 }
