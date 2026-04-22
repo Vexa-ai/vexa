@@ -207,6 +207,11 @@ issues:
   - id: chart-version-current-per-commit
     source: gh-issue
     ref: "Vexa-ai/vexa#228"
+    policy: |
+      Chart version INHERITS from the most recent repo release tag.
+      Never ahead (pre-claims future tags), never behind (reproduces
+      #228 drift). New v* tag → same commit bumps Chart.yaml to
+      match. Equality is the invariant (triage round 1, 2026-04-22).
     problem: |
       `deploy/helm/charts/vexa/Chart.yaml` has been pinned at
       `version: 0.1.0` since commit `bf3dd83` across four repo
@@ -221,7 +226,7 @@ issues:
       version advances in the same commit that changes chart files.
       Evidence: a script check that reads `Chart.yaml.version` and
       compares against `git tag -l 'v*' | sort -V | tail -1`.
-    fix_commits: [5c5bff6]
+    fix_commits: [5c5bff6, 5698e81]    # 5c5bff6 initial bump; 5698e81 switched to inherit policy (triage r1)
     proves:
       - {check: CHART_VERSION_CURRENT, modes: [lite]}
     required_modes: [lite]
