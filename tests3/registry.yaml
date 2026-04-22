@@ -1801,3 +1801,77 @@ ZOOM_SDK_ENTRYPOINT_LD_LIBRARY_PATH:
   - helm
   state: stateless
   max_duration_sec: 5
+
+# ──────────────────────────────────────────────────────────────────────
+# Pack B — SDK build + Docker + .env tooling (#150 P1/P2)
+# ──────────────────────────────────────────────────────────────────────
+
+ZOOM_SDK_BUILD_SCRIPT_EXISTS:
+  proves: "scripts/build-zoom-sdk.sh exists with the build-zoom-sdk header comment — single-command build path for self-hosters (#150 P1 §3)"
+  symptom: "Build script lost; contributors reconstruct the node-gyp toolchain by reading issue #150"
+  found: '2026-04-22'
+  type: grep
+  file: scripts/build-zoom-sdk.sh
+  must_match: 'build-zoom-sdk'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+
+ZOOM_SDK_BUILD_SCRIPT_EXECUTABLE:
+  proves: "scripts/build-zoom-sdk.sh has a bash shebang — intended for direct `./scripts/build-zoom-sdk.sh` invocation (proxy for +x bit; file-mode check not supported by the current dispatcher)"
+  symptom: "Script lacks shebang and won't run directly; users end up `bash` prefixing every call"
+  found: '2026-04-22'
+  type: grep
+  file: scripts/build-zoom-sdk.sh
+  must_match: '#!/usr/bin/env bash'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+
+ZOOM_SDK_DOCKERFILE_HAS_NATIVE_DEPS:
+  proves: "services/vexa-bot/Dockerfile installs libxcb-xtest0 — Zoom SDK runtime dependency (#150 P1 §2, documented in ensureSdkAvailable remediation table)"
+  symptom: "SDK loads but crashes with 'libxcb-xtest.so.0: cannot open shared object file' on first meeting join"
+  found: '2026-04-22'
+  type: grep
+  file: services/vexa-bot/Dockerfile
+  must_match: 'libxcb-xtest0'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+
+ZOOM_SDK_ENV_EXAMPLE_HAS_ZOOM_VARS:
+  proves: "deploy/env-example documents ZOOM_CLIENT_ID + ZOOM_CLIENT_SECRET — operators see the SDK credentials are needed without reading source code"
+  symptom: "Self-hosters enable Zoom path but never set the credentials; bot fails at auth with a cryptic SDK error"
+  found: '2026-04-22'
+  type: grep
+  file: deploy/env-example
+  must_match: 'ZOOM_CLIENT_ID='
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+
+ZOOM_SDK_MANAGER_ERROR_MAPPING:
+  proves: "sdk-manager.ts has the diagnoseLoadFailure table — 6 specific remediation strings for the known Zoom-SDK failure modes (#150 P2 §7)"
+  symptom: "ensureSdkAvailable emits a generic error for every failure; operators can't tell if it's missing binaries, wrong env, or no permission"
+  found: '2026-04-22'
+  type: grep
+  file: services/vexa-bot/core/src/platforms/zoom-sdk/sdk-manager.ts
+  must_match: 'diagnoseLoadFailure'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5

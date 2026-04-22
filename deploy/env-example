@@ -67,3 +67,15 @@ CLAUDE_JSON_PATH=
 
 # Billing hooks (optional — for hosted service)
 # POST_MEETING_HOOKS=https://your-billing-webhook
+
+# ============================================================================
+# Zoom SDK — optional, required only for platform=zoom_sdk
+# ============================================================================
+# The native-SDK track needs proprietary Zoom Meeting SDK binaries + a
+# Meeting-SDK app on marketplace.zoom.us. Setup guide:
+#   services/vexa-bot/docs/zoom-sdk-setup.md
+# Without these credentials, platform=zoom_sdk requests return 503
+# `zoom_sdk_not_available`. platform=zoom_web works without them
+# (Playwright-based; shares the google_meet / teams deploy path).
+ZOOM_CLIENT_ID=
+ZOOM_CLIENT_SECRET=

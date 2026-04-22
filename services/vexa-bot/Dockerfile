@@ -3,13 +3,19 @@
 # ==============================================================================
 FROM --platform=linux/amd64 node:20-bullseye AS native-builder
 
-# Install build dependencies
+# Install build dependencies.
+# Pack B (release 260422-zoom-sdk) — #150 P1/P2: libxcb-xtest0 is a runtime
+# dependency of libmeetingsdk.so. Including it in native-builder lets the
+# build-smoke step (`node -e "require('./build/Release/zoom_sdk_wrapper')"`)
+# actually load the addon, catching symbol-resolution failures at image
+# build time instead of at container startup.
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
     python3 \
     libssl-dev \
     qtbase5-dev \
+    libxcb-xtest0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app/vexa-bot
@@ -136,6 +142,14 @@ RUN chmod +x /app/vexa-bot/entrypoint.sh
 
 # Set environment
 ENV DISPLAY=:99
+
+# Pack B (release 260422-zoom-sdk) — #150 P0 §2: bundled Qt libraries from the
+# Zoom SDK must load BEFORE system Qt, otherwise symbol-resolution produces
+# "undefined symbol: _ZNSt28__atomic_futex_unsigned_base..., version Qt_5".
+# entrypoint.sh also sets this; declaring here makes it visible in
+# `docker inspect` and covers the case where someone runs the image without
+# the entrypoint (e.g. `docker run --entrypoint /bin/bash`).
+ENV LD_LIBRARY_PATH=/app/vexa-bot/core/src/platforms/zoom-sdk/native/zoom_meeting_sdk/qt_libs/Qt/lib:/app/vexa-bot/core/src/platforms/zoom-sdk/native/zoom_meeting_sdk
 
 # Expose noVNC web interface and SSH for browser session mode
 EXPOSE 6080 22

@@ -50,15 +50,72 @@ export class ZoomSDKManager {
     const addonError =
       addonLoadError instanceof Error ? addonLoadError.message : String(addonLoadError || 'unknown error');
 
+    // Pack B (release 260422-zoom-sdk, #150 P2 §7): table-driven error
+    // remediation. Map the six observed failure modes to specific hints so
+    // operators don't have to read issue #150 to decode a generic error.
+    const remediation = ZoomSDKManager.diagnoseLoadFailure(addonError);
+
     throw new Error(
       [
         '[Zoom] Zoom SDK native addon is not available.',
         'Expected native addon: services/vexa-bot/build/Release/zoom_sdk_wrapper.node',
-        'Expected SDK library: services/vexa-bot/core/src/platforms/zoom/native/zoom_meeting_sdk/libmeetingsdk.so',
-        'Zoom Meeting SDK binaries are proprietary and must be downloaded separately from Zoom.',
-        `Addon load error: ${addonError}`
-      ].join(' ')
+        'Expected SDK library:  services/vexa-bot/core/src/platforms/zoom-sdk/native/zoom_meeting_sdk/libmeetingsdk.so',
+        `Fix: ${remediation}`,
+        `Raw load error: ${addonError}`,
+      ].join('\n  ')
     );
+  }
+
+  // Map a load-time or runtime failure message to a short actionable fix.
+  // Returning a remediation string instead of a boolean keeps the surface
+  // easy to extend as new SDK error modes come in from users.
+  static diagnoseLoadFailure(msg: string): string {
+    const diagnostics: Array<{ match: RegExp; fix: string }> = [
+      {
+        match: /libmeetingsdk\.so|Cannot find module.*zoom_sdk_wrapper/,
+        fix: 'Download Zoom Meeting SDK (Linux x86_64) from marketplace.zoom.us '
+          + '-> your Meeting-SDK app -> Download. Place libmeetingsdk.so + qt_libs/ '
+          + 'under services/vexa-bot/core/src/platforms/zoom-sdk/native/zoom_meeting_sdk/, '
+          + 'then run scripts/build-zoom-sdk.sh.',
+      },
+      {
+        match: /undefined symbol.*Qt_5|_ZNSt28__atomic_futex_unsigned_base/,
+        fix: 'Bundled Qt not loaded before system Qt. Prepend '
+          + '$SDK_DIR/qt_libs/Qt/lib to LD_LIBRARY_PATH (see entrypoint.sh). '
+          + 'Check ENV LD_LIBRARY_PATH in Dockerfile.',
+      },
+      {
+        match: /libxcb-xtest\.so|libxcb-xtest0/,
+        fix: 'Runtime dependency missing: apt-get install -y libxcb-xtest0.',
+      },
+      {
+        match: /Auth(entication)? failed|code 1001|code 1002|AUTHRET|jwt/i,
+        fix: 'Check ZOOM_CLIENT_ID and ZOOM_CLIENT_SECRET in .env. '
+          + 'Verify the Marketplace app is type "Meeting SDK" (not "General App") '
+          + 'and the credentials match.',
+      },
+      {
+        match: /code 63|external meeting|marketplace publish/i,
+        fix: 'The Zoom Marketplace SDK app is unpublished. Unpublished apps '
+          + 'can only join same-account meetings. Publish on Marketplace to '
+          + 'join external meetings, or test with a meeting hosted by the '
+          + 'same Zoom account as the SDK credentials.',
+      },
+      {
+        match: /code 12|NO_PERMISSION/,
+        fix: 'Local-recording permission denied. On the host Zoom account: '
+          + 'Settings -> Recording -> "Record to computer files" ON; '
+          + '"Auto approve permission requests" for internal AND external '
+          + 'participants ON. If the settings are correct, the 10s retry '
+          + 'loop in sdk-manager::startRecording should pick up the grant.',
+      },
+    ];
+
+    for (const { match, fix } of diagnostics) {
+      if (match.test(msg)) return fix;
+    }
+
+    return 'Check services/vexa-bot/docs/zoom-sdk-setup.md for the full setup guide.';
   }
 
   async authenticate(clientId: string, clientSecret: string): Promise<void> {
