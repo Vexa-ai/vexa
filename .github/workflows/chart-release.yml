@@ -1,0 +1,48 @@
+name: Release Helm chart
+
+# Publishes deploy/helm/charts/vexa to gh-pages as a Helm repo whenever
+# Chart.yaml.version changes on main. Consumers: `helm repo add vexa
+# https://vexa-ai.github.io/vexa && helm repo update`. Closes #228.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'deploy/helm/charts/**'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+
+      # chart-releaser-action inspects Chart.yaml in every charts_dir
+      # subdir; if the version is new (not yet tagged chart-<name>-<version>),
+      # it packages the chart, pushes the .tgz to `gh-pages`, refreshes
+      # `index.yaml`, and drafts a matching GitHub Release. Same commit
+      # with no version bump is a no-op.
+      - name: Release chart
+        uses: helm/chart-releaser-action@v1.6.0
+        with:
+          charts_dir: deploy/helm/charts
+        env:
+          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"

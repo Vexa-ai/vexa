@@ -196,6 +196,30 @@ CDP_WS_SCHEME_PRESERVED:
   - compose
   state: stateless
   max_duration_sec: 5
+CHART_PUBLISH_WORKFLOW_EXISTS:
+  proves: .github/workflows/chart-release.yml exists, references helm/chart-releaser-action, parses as valid YAML
+  symptom: No gh-pages Helm repo; consumers must clone + helm package locally (#228)
+  found: '2026-04-22'
+  type: script
+  dispatch: SHELL_CHECK
+  script: tests3/checks/scripts/chart-publish-workflow-exists.sh
+  from_tier: static
+  modes:
+  - lite
+  state: stateless
+  max_duration_sec: 5
+CHART_VERSION_CURRENT:
+  proves: deploy/helm/charts/vexa/Chart.yaml version is SemVer >= latest v* git tag
+  symptom: Chart.yaml pinned at 0.1.0 for ~100 commits; consumers cannot detect drift (#228)
+  found: '2026-04-22'
+  type: script
+  dispatch: SHELL_CHECK
+  script: tests3/checks/scripts/chart-version-current.sh
+  from_tier: static
+  modes:
+  - lite
+  state: stateless
+  max_duration_sec: 5
 COMPOSE_ADMIN_KEY_DEFAULT:
   proves: dashboard and admin-api share same ADMIN_API_TOKEN default in compose
   symptom: "Dashboard login 503 \u2014 VEXA_ADMIN_API_KEY had different default than admin-api"
