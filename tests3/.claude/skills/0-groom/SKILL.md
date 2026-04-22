@@ -20,7 +20,14 @@ If wrong stage, halt. Legal predecessor of `groom` is `idle`.
 1. Fetch open GitHub issues + recent Discord reports + internal notes.
 2. Cluster by theme (bot lifecycle, webhooks, DB, transcription, …).
 3. Draft one issue pack per cluster: symptom, owner feature(s), estimated scope, repro confidence.
-4. Write `releases/<id>/groom.md` — one section per pack.
+4. Write `releases/<id>/groom.md` with **two layers, product first**:
+   - **(A) Product framing at the top** — elevator pitch, "What we
+     deliver" (3-5 user-visible changes + WHY), "Who wins" (personas
+     × deltas), "Who sees no change". This narrative is the canonical
+     source for scope.yaml summary, PR descriptions, CHANGELOG, and
+     release notes. Never skip it.
+   - **(B) Technical pack detail beneath** — signal sources, per-pack
+     sections, suggested cycle shapes, approvals block.
 5. HALT. Human picks which packs advance to `plan`.
 
 ## May NOT
