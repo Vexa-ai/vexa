@@ -283,6 +283,24 @@ pod_logs() {
     esac
 }
 
+# ─── Release-aware labels ─────────────────────────────────────────
+# Throwaway infra (VMs, LKE clusters) must be uniquely labelled per dev
+# AND traceable to a release. A timestamp-only label collides between
+# parallel clones/worktrees that provision within the same HHMM window
+# (#229). `release_label PREFIX` → "PREFIX-<release_id|adhoc>-<hex6>".
+
+release_label() {
+    local prefix="${1:?release_label requires prefix}"
+    local rel sfx stage_file="$ROOT/tests3/.current-stage"
+    if [ -f "$stage_file" ]; then
+        rel=$(awk '/^release_id:/ {gsub(/["'\'' ]/, "", $2); print $2; exit}' \
+            "$stage_file" 2>/dev/null || true)
+    fi
+    rel="${rel:-adhoc}"
+    sfx=$(openssl rand -hex 3)
+    echo "${prefix}-${rel}-${sfx}"
+}
+
 # ─── State helpers ────────────────────────────────────────────────
 
 state_write() {

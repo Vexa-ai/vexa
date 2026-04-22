@@ -39,7 +39,8 @@ vm_provision() {
 
     vm_check_prereqs
 
-    local label="vexa-t3-${mode}-$(date +%H%M)"
+    local label
+    label=$(release_label "vexa-t3-${mode}")
 
     echo ""
     echo "  vm-provision"

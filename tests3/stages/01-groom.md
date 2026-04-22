@@ -8,6 +8,11 @@
 | Outputs      | `tests3/releases/<id>/groom.md` — candidate issue packs   |
 
 ## Steps
+0. Run from the release's own worktree at `../vexa-<id>` (created in the
+   idle→groom transition via `make release-worktree ID=<id>`). Each release
+   gets its own working dir so `.current-stage`, `.state/`, and throwaway
+   infra labels never collide across parallel releases (#229). If PWD is the
+   main checkout, stop and bootstrap the worktree first.
 1. `lib/stage.py assert-is groom` — halt if wrong stage.
 2. Fetch open GitHub issues (`gh issue list --state open --json number,title,labels,body`).
 3. Fetch recent Discord reports (via the in-repo fetcher — §4.2 moves it into repo).

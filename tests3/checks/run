@@ -248,6 +248,30 @@ def check_static(lock):
         return _check_docs_gate_everywhere()
     if method == "VEXA_BOT_NPM_AUDIT":
         return _check_vexa_bot_npm_audit()
+    if method == "SHELL_CHECK":
+        # Generic shell-script dispatch — registry entry carries
+        # `script: checks/scripts/<name>.sh` relative to ROOT. Exit 0 = pass.
+        # Last stdout line is the "reason"; stderr surfaces on failure.
+        script_rel = lock.get("script", "")
+        if not script_rel:
+            return False, "SHELL_CHECK missing 'script' field"
+        script_path = os.path.join(ROOT, script_rel)
+        if not os.path.isfile(script_path):
+            return False, f"script missing: {script_rel}"
+        timeout = int(lock.get("max_duration_sec", 30))
+        try:
+            r = subprocess.run(["bash", script_path],
+                               capture_output=True, text=True, timeout=timeout)
+            out_lines = [l for l in (r.stdout or "").strip().splitlines() if l.strip()]
+            err_lines = [l for l in (r.stderr or "").strip().splitlines() if l.strip()]
+            if r.returncode == 0:
+                return True, out_lines[-1] if out_lines else ""
+            reason = (err_lines[-1] if err_lines else
+                      out_lines[-1] if out_lines else
+                      f"exit {r.returncode}")
+            return False, reason
+        except subprocess.TimeoutExpired:
+            return False, f"script timed out after {timeout}s"
 
     # Special: helm chart validation (no file to grep, runs CLI commands)
     url = lock.get("url", "")

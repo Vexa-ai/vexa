@@ -1051,6 +1051,56 @@
       "proves": "PUT /user/webhook rejects SSRF URLs (private/link-local/metadata/internal hostnames) \u2014 CVE-2026-25883 / GHSA-fhr6-8hff-cvg4 regression guard",
       "symptom": "A valid API key can store a webhook_url pointing at internal services (redis, postgres, 169.254.169.254) without rejection",
       "method": "WEBHOOK_SSRF_CHECK"
+    },
+    {
+      "id": "TESTS3_LABEL_RELEASE_TRACEABLE",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "release_label helper emits labels of shape PREFIX-<release_id|adhoc>-<6-hex-char-suffix>; two calls produce distinct suffixes",
+      "symptom": "tests3/lib/vm.sh and lib/lke.sh use date +%H%M \u2014 collides between parallel devs (#229)",
+      "method": "SHELL_CHECK",
+      "script": "tests3/checks/scripts/tests3-label-release-traceable.sh",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "TESTS3_RELEASE_KEY_CONSISTENT",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "four-way single-key invariant: basename(worktree)=vexa-<id>, branch=release/<id>, tests3/releases/<id>/ exists, all match .current-stage.release_id",
+      "symptom": "release_id drifts across branch / worktree / .current-stage without any check catching it",
+      "method": "SHELL_CHECK",
+      "script": "tests3/checks/scripts/tests3-release-key-consistent.sh",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "TESTS3_WORKTREE_BOOTSTRAP",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "make release-worktree ID=<id> creates ../vexa-<id>, seeds stage=idle, branch release/<id>, and stage.py next reports groom",
+      "symptom": "No standard way to bootstrap a per-release worktree; manual git worktree add + hand-seeded stage state is undocumented and error-prone",
+      "method": "SHELL_CHECK",
+      "script": "tests3/checks/scripts/tests3-worktree-bootstrap.sh",
+      "max_duration_sec": 30
+    },
+    {
+      "id": "CHART_VERSION_CURRENT",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "deploy/helm/charts/vexa/Chart.yaml version is SemVer >= latest v* git tag",
+      "symptom": "Chart.yaml pinned at 0.1.0 for ~100 commits; consumers cannot detect drift (#228)",
+      "method": "SHELL_CHECK",
+      "script": "tests3/checks/scripts/chart-version-current.sh",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "CHART_PUBLISH_WORKFLOW_EXISTS",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": ".github/workflows/chart-release.yml exists, references helm/chart-releaser-action, parses as valid YAML",
+      "symptom": "No gh-pages Helm repo; consumers must clone + helm package locally (#228)",
+      "method": "SHELL_CHECK",
+      "script": "tests3/checks/scripts/chart-publish-workflow-exists.sh",
+      "max_duration_sec": 5
     }
   ]
 }

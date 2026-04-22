@@ -1,0 +1,278 @@
+# Release scope — 260422-release-plumbing
+# Drafted by plan-stage AI from groom.md approved packs (A+B).
+# Both packs trace back to GitHub issues with `approved: true` in groom.md.
+
+release_id: 260422-release-plumbing
+branch: release/260422-release-plumbing
+summary: |
+  Release plumbing: two boundary fixes, one design theme.
+
+  "Fresh charts for consumers. Parallel releases for devs. One tight
+  cycle that fixes both drift problems."
+
+  # ───────────────────────────────────────────────────────────────────
+  # What we deliver (product framing — flows to PR, CHANGELOG, notes)
+  # ───────────────────────────────────────────────────────────────────
+
+  1. **Per-release git worktrees** (#229). `make release-worktree
+     ID=<id>` creates `../vexa-<id>` on branch `release/<id>`, seeded at
+     `stage: idle`. Each release has its own working dir, `.current-stage`,
+     `.state/`, and release-traceable throwaway-infra labels
+     (`vexa-t3-<mode>-<release_id>-<hex6>`). N releases run in parallel
+     from one clone without collision. This very release dogfoods the
+     pattern.
+
+  2. **Chart version bumps + published Helm repo** (#228). `Chart.yaml`
+     moves off the pinned `0.1.0` (stuck ~100 commits). New
+     `.github/workflows/chart-release.yml` uses
+     `helm/chart-releaser-action` on every chart-version bump to
+     package `vexa-<version>.tgz`, push to `gh-pages`, and draft a
+     matching GitHub Release. Consumers gain `helm repo add vexa
+     https://vexa-ai.github.io/vexa`.
+
+  # ───────────────────────────────────────────────────────────────────
+  # Who wins / who sees no change
+  # ───────────────────────────────────────────────────────────────────
+
+  **Wins**: self-hosters (chart drift detection); Vexa devs running
+  parallel releases; future groom cycles (cold-start ready-to-go).
+
+  **No change**: app.vexa.ai runtime; consumers pinning 0.1.0 today;
+  in-flight `260422-zoom-sdk` cycle (runs to completion in main
+  checkout beside this worktree).
+
+  # ───────────────────────────────────────────────────────────────────
+  # Release shape (feeds develop + validate)
+  # ───────────────────────────────────────────────────────────────────
+
+  **No-code release**. Neither pack touches service code, runtime
+  config, schema, or deployment manifests (Pack B edits chart
+  *metadata* + adds a CI workflow; both are file-level). All evidence
+  is static-check class. No Linode, no LKE, no image build.
+  `deployments.modes: [lite]` is a bookkeeping tag per 260421
+  precedent — checks are mode-independent and don't touch a
+  deployed stack. A follow-on cycle should formalize a `static`
+  mode or make `modes: []` first-class.
+
+  # ───────────────────────────────────────────────────────────────────
+  # Single-key invariant — `release_id` is the one identifier
+  # ───────────────────────────────────────────────────────────────────
+
+  Every cross-cutting surface derives from one `release_id`
+  (e.g. `260422-release-plumbing`). No other slug, no parallel slug,
+  no human-picked alias per surface:
+
+      context              shape                       example
+      ──────────────────────────────────────────────────────────────────
+      stage state          .current-stage:             release_id: <id>
+                             release_id                (YAML key)
+      git branch           release/<id>                release/260422-release-plumbing
+      git worktree path    ../vexa-<id>                /home/dima/dev/vexa-260422-release-plumbing
+      Linode labels        vexa-t3-<mode>-<id>-<hex6>  vexa-t3-compose-260422-release-plumbing-a3f9c2
+      release artifacts    tests3/releases/<id>/       tests3/releases/260422-release-plumbing/
+
+  Flow: human invents `<id>` → `make release-worktree ID=<id>`
+  writes the branch, the worktree path, AND
+  `.current-stage.release_id` atomically. `release_label` reads
+  `.current-stage.release_id` for all infra labels. `make
+  release-groom ID=<id>` creates the artifacts folder. Every
+  downstream surface derives from the same seed.
+
+  **Enforcement**: a new static check `TESTS3_RELEASE_KEY_CONSISTENT`
+  asserts the four-way invariant (branch, worktree basename,
+  `.current-stage.release_id`, current release folder) match, so
+  drift is caught at validate.
+
+# Which deployments the release must prove out.
+# Static-only release: lite is the cheapest canonical mode; no check
+# here actually talks to the lite container. See summary above.
+deployments:
+  modes: [lite]
+  notes:
+    static: |
+      This is a no-code release — only tooling, chart metadata, and
+      CI workflow files change. `[lite]` is chosen as the cheapest
+      canonical mode for script-class check bookkeeping; no check
+      requires the lite container to be running. Triage if validate
+      infra insists on deploy prerequisites we don't need.
+    compose: "not applicable — no service code changes"
+    helm: "not applicable — chart metadata only; runtime unchanged"
+
+issues:
+  # ──────────────────────────────────────────────────────────────────
+  # Pack A — #229: tests3 label collision + per-release worktrees
+  # ──────────────────────────────────────────────────────────────────
+  - id: tests3-labels-traceable-per-release
+    source: gh-issue
+    ref: "Vexa-ai/vexa#229"
+    problem: |
+      `tests3/lib/vm.sh` and `lib/lke.sh` label throwaway Linode infra
+      with `vexa-t3-<mode>-$(date +%H%M)` / `vexa-t3-$(date +%H%M)`.
+      Two devs provisioning inside the same HHMM window produce
+      identical labels, breaking Linode console readability and
+      blocking "just clone and go" multi-dev work. The underlying
+      gap: the tests3 protocol's release identity (`release_id` in
+      `.current-stage`) never reached the infra-labelling layer.
+    hypothesis: |
+      Compose labels from `release_id` (read from `.current-stage`)
+      plus a 6-hex random suffix: `vexa-t3-<mode>-<release_id>-<hex6>`.
+      Fall back to `adhoc` when no stage file present (uninitialised
+      worktree). `vm_destroy` + `lke_destroy` already delete by id
+      (not by label), so the label becomes purely human-facing.
+    fix_commits: [0deee2f]
+    proves:
+      - {check: TESTS3_LABEL_RELEASE_TRACEABLE, modes: [lite]}
+    required_modes: [lite]
+    human_verify:
+      - mode: lite
+        do: |
+          cd /tmp && mkdir label-demo && cd label-demo &&
+          bash -c 'source /path/to/tests3/lib/common.sh; release_label vexa-t3-compose' (twice)
+        expect: |
+          Both outputs have shape `vexa-t3-compose-<release_id>-<hex6>`
+          with different hex suffixes; release_id segment matches
+          `.current-stage` (or `adhoc` if no file).
+
+  - id: tests3-release-key-invariant
+    source: internal
+    ref: "Single-key invariant request, user turn 2026-04-22T17:55Z"
+    problem: |
+      The single-key convention (`release_id` maps 1:1 to branch,
+      worktree path, `.current-stage`, infra labels, release folder)
+      is a design invariant but has no runtime enforcement. A manual
+      `git branch -m` or edit of `.current-stage` can silently
+      desync surfaces without any check catching it. Drift here
+      would reproduce the same class of failure the release itself
+      exists to prevent (#229).
+    hypothesis: |
+      A static check `TESTS3_RELEASE_KEY_CONSISTENT` runs from the
+      current worktree and asserts:
+        (a) basename(worktree_root) == `vexa-<release_id>`
+        (b) current branch == `release/<release_id>`
+        (c) `tests3/releases/<release_id>/` directory exists
+      where `<release_id>` is read from `.current-stage`. Fails
+      loud on any mismatch. Exempted at `stage: idle` / main
+      checkout (where no release is active).
+    fix_commits: [0deee2f]
+    proves:
+      - {check: TESTS3_RELEASE_KEY_CONSISTENT, modes: [lite]}
+    required_modes: [lite]
+    human_verify:
+      - mode: lite
+        do: |
+          cd /home/dima/dev/vexa-260422-release-plumbing &&
+          bash tests3/checks/tests3-release-key-consistent.sh
+        expect: |
+          Exit 0 with "ok" lines for all three invariants. Temporarily
+          `git -C ../vexa-260422-release-plumbing branch -m wrong-name`
+          and re-run → exits non-zero with a clear diagnostic naming
+          the mismatched surface. Restore the correct branch name.
+
+  - id: tests3-worktree-bootstrap
+    source: gh-issue
+    ref: "Vexa-ai/vexa#229"  # A.2 corollary from the same pack
+    problem: |
+      The tests3 protocol is a state machine per checkout:
+      `.current-stage`, `.state/`, and the release's scope folder all
+      assume one active release per clone. Devs can't run two
+      releases in parallel without state contention. Today this is
+      worked around by manual `git worktree add` + hand-seeding
+      stage state — error-prone and undocumented.
+    hypothesis: |
+      `tests3/lib/worktree.sh create <release_id>` does
+      `git worktree add -b release/<id> ../vexa-<id> main` +
+      `stage.py enter idle --release <id>` so the new worktree is
+      ready for `make release-groom ID=<id>`. `make release-worktree
+      ID=<id>` wraps it. Base defaults to `main` (last-shipped state),
+      so release branches are isolated from other in-flight releases
+      — explicitly decoupling N-parallel releases from one clone
+      (triage r2 fix, 2026-04-22). `stages/00-idle.md` Next +
+      `stages/01-groom.md` Step 0 document the flow. This release is
+      itself the first dogfood of the pattern.
+    fix_commits: [0deee2f, d37a678]  # 0deee2f initial worktree + stage-doc; d37a678 default base dev→main (triage r2)
+    proves:
+      - {check: TESTS3_WORKTREE_BOOTSTRAP, modes: [lite]}
+    required_modes: [lite]
+    human_verify:
+      - mode: lite
+        do: |
+          cd /home/dima/dev/vexa && make release-worktree ID=demo-XXXX
+        expect: |
+          `../vexa-demo-XXXX` exists on branch `release/demo-XXXX`;
+          its `tests3/.current-stage` reads `stage: idle, release_id:
+          demo-XXXX`; `python3 tests3/lib/stage.py next` prints `groom`.
+          Clean up: `git worktree remove ../vexa-demo-XXXX && git
+          branch -D release/demo-XXXX`.
+
+  # ──────────────────────────────────────────────────────────────────
+  # Pack B — #228: Helm chart versioning + gh-pages publishing
+  # ──────────────────────────────────────────────────────────────────
+  - id: chart-version-current-per-commit
+    source: gh-issue
+    ref: "Vexa-ai/vexa#228"
+    policy: |
+      Chart version INHERITS from the most recent repo release tag.
+      Never ahead (pre-claims future tags), never behind (reproduces
+      #228 drift). New v* tag → same commit bumps Chart.yaml to
+      match. Equality is the invariant (triage round 1, 2026-04-22).
+    problem: |
+      `deploy/helm/charts/vexa/Chart.yaml` has been pinned at
+      `version: 0.1.0` since commit `bf3dd83` across four repo
+      release tags (`v0.10`–`v0.10.3`). Consumers who vendor the
+      chart can't detect drift — `helm dependency update` compares
+      version strings. A 9-day-stale tgz contributed to the
+      2026-04-21 DB-pool incident recovery hazard.
+    hypothesis: |
+      Retroactively bump `Chart.yaml.version` to match the most
+      recent repo `v*` tag (or one SemVer bump ahead if the
+      accumulated chart diff warrants). Going forward, the chart
+      version advances in the same commit that changes chart files.
+      Evidence: a script check that reads `Chart.yaml.version` and
+      compares against `git tag -l 'v*' | sort -V | tail -1`.
+    fix_commits: [ea59875, cb41728]  # ea59875 initial bump; cb41728 switched to inherit policy (triage r1)
+    proves:
+      - {check: CHART_VERSION_CURRENT, modes: [lite]}
+    required_modes: [lite]
+    human_verify:
+      - mode: lite
+        do: |
+          cat deploy/helm/charts/vexa/Chart.yaml | grep version
+        expect: |
+          `version:` line shows a real version ≥ latest `v*` git tag
+          (e.g. `0.10.3` or `0.11.0`). Plan picks the exact number.
+
+  - id: chart-publish-workflow-ghpages
+    source: gh-issue
+    ref: "Vexa-ai/vexa#228"  # B.2 of the same pack
+    problem: |
+      No published Helm repo or packaged `.tgz` artifact. Consumers
+      must `git clone` and `helm package` locally. There's no
+      `helm repo add` path, no index.yaml, no signed releases.
+    hypothesis: |
+      `.github/workflows/chart-release.yml` using
+      `helm/chart-releaser-action@v1` on push to `main` with a
+      `Chart.yaml.version` change: packages `vexa-<version>.tgz`,
+      pushes to `gh-pages` branch with `index.yaml`, drafts a
+      matching GitHub Release. This is the canonical OSS Helm
+      pattern (~25 YAML lines). Evidence: static existence check
+      for the workflow file + grep for `chart-releaser-action`.
+    fix_commits: [ea59875]
+    proves:
+      - {check: CHART_PUBLISH_WORKFLOW_EXISTS, modes: [lite]}
+    required_modes: [lite]
+    human_verify:
+      - mode: lite
+        do: |
+          (post-ship, once PR merges to main and workflow runs)
+          curl -sf https://vexa-ai.github.io/vexa/index.yaml | grep version:
+        expect: |
+          index.yaml lists the current chart version; `helm repo
+          add vexa https://vexa-ai.github.io/vexa && helm search
+          repo vexa` shows the chart. Gate this in validate only as
+          "workflow file exists"; actual publish succeeds on ship.
+
+# No expensive tests — static-only cycle.
+expensive_tests: []
+
+# No strict-feature overrides; no existing feature folders touched.
+strict_features: []

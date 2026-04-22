@@ -1,0 +1,170 @@
+# Plan approval — 260422-release-plumbing
+#
+# Human signed off 2026-04-22 via user turn "go" (approved Shape 1 in
+# groom) + "go" (approved plan). Both turns were in the current session
+# in direct response to AI HALTs at the respective stage exit conditions.
+
+release_id: 260422-release-plumbing
+approved_at: 2026-04-22T17:52:00Z
+approver: dmitry@vexa.ai
+approval_source: |
+  Three explicit user turns in the current session:
+    1. "go, do we need provisioning validations for this one?"
+       → Shape 1 (both packs) + question about validate scope
+       (answered: static-only, no provision).
+    2. "go" → approval of all initial plan items.
+    3. "make sure we have a single key for releases, branches,
+       worktrees and stacks provisioning and where we need this key"
+       → added issue `tests3-release-key-invariant` + registry
+       entry TESTS3_RELEASE_KEY_CONSISTENT to enforce the single-key
+       invariant at runtime; documented the full key-flow table in
+       scope.yaml summary ("Single-key invariant" section).
+
+  Context: fresh worktree bootstrap; no prior iterations on these
+  packs. Signal is pair of clean, reporter-validated issues (#228,
+  #229) filed 2026-04-22; both reporters offered to PR after
+  direction confirmed. This release provides that direction and
+  ships reporter-validated shape.
+
+# ── OBJECTIVES ────────────────────────────────────────────────────────
+
+scope_approved:
+  - issue: tests3-labels-traceable-per-release
+    hypothesis: true          # release_label helper in common.sh reads .current-stage; fallback "adhoc" when no file
+    proves: true              # TESTS3_LABEL_RELEASE_TRACEABLE — shape match + uniqueness across calls
+    required_modes: true      # [lite] — mode-independent; cheapest canonical per 260421 precedent
+    human_verify: true        # source common.sh in /tmp; call release_label twice; compare outputs
+
+  - issue: tests3-release-key-invariant
+    hypothesis: true          # static check asserts branch + worktree + .current-stage + release folder all agree on release_id
+    proves: true              # TESTS3_RELEASE_KEY_CONSISTENT — four-way consistency
+    required_modes: true      # [lite]
+    human_verify: true        # run the check; temporarily rename branch → check fails loud; restore
+
+  - issue: tests3-worktree-bootstrap
+    hypothesis: true          # worktree.sh create + release-worktree Makefile target + stage-doc updates (00-idle, 01-groom)
+    proves: true              # TESTS3_WORKTREE_BOOTSTRAP — creates ../vexa-<id> + seeds idle stage
+    required_modes: true      # [lite]
+    human_verify: true        # make release-worktree ID=demo-XXXX in sandbox; inspect .current-stage; clean up
+
+  - issue: chart-version-current-per-commit
+    hypothesis: true          # retroactively bump Chart.yaml.version to match latest v* tag; policy going forward
+    proves: true              # CHART_VERSION_CURRENT — reads Chart.yaml; compares vs latest v* tag
+    required_modes: true      # [lite]
+    human_verify: true        # grep Chart.yaml for version: line
+
+  - issue: chart-publish-workflow-ghpages
+    hypothesis: true          # .github/workflows/chart-release.yml via helm/chart-releaser-action@v1
+    proves: true              # CHART_PUBLISH_WORKFLOW_EXISTS — file present + references action
+    required_modes: true      # [lite]
+    human_verify: true        # curl gh-pages index.yaml post-ship (not gated in validate)
+
+# ── REGISTRY CHANGES ──────────────────────────────────────────────────
+
+registry_changes_approved:
+  - check_id: TESTS3_LABEL_RELEASE_TRACEABLE
+    approved: true
+    type: script
+    proves: |
+      tests3/lib/common.sh release_label helper emits labels of shape
+      PREFIX-<release_id|adhoc>-<6-hex-char-suffix>. Two calls produce
+      distinct suffixes. Value carries the release_id from
+      .current-stage (or adhoc fallback).
+    shape: |
+      Script sources tests3/lib/common.sh, calls release_label twice
+      with a test prefix, asserts (a) both match the regex
+      ^PREFIX-[a-z0-9-]+-[0-9a-f]{6}$, (b) suffixes differ,
+      (c) release_id segment matches .current-stage content.
+    modes: [lite]
+    max_duration_sec: 5
+
+  - check_id: TESTS3_RELEASE_KEY_CONSISTENT
+    approved: true
+    type: script
+    proves: |
+      From a release worktree, asserts the four-way single-key
+      invariant: basename(worktree_root) == `vexa-<release_id>`,
+      current branch == `release/<release_id>`, and
+      `tests3/releases/<release_id>/` directory exists — where
+      `release_id` is read from `.current-stage`. Exempted at stage:
+      idle or in the main checkout (where no release is active).
+    shape: |
+      Script reads .current-stage.release_id (via awk or yaml parse),
+      reads current branch (git rev-parse --abbrev-ref HEAD), reads
+      basename of worktree root (basename `git rev-parse
+      --show-toplevel`), and checks for tests3/releases/$REL/. Each
+      of the four gets a pass/fail line; overall exit 0 iff all four
+      match. Skip-and-pass when stage == idle or no .current-stage.
+    modes: [lite]
+    max_duration_sec: 5
+
+  - check_id: TESTS3_WORKTREE_BOOTSTRAP
+    approved: true
+    type: script
+    proves: |
+      make release-worktree ID=<id> creates ../vexa-<id> on branch
+      release/<id> with tests3/.current-stage pre-seeded at
+      stage: idle, release_id: <id>. `stage.py next` reports groom.
+    shape: |
+      Script creates a unique test ID, runs `make release-worktree
+      ID=$TEST_ID` from the main worktree, asserts (a) the target
+      dir exists, (b) contains tests3/.current-stage with stage=idle
+      and release_id=$TEST_ID, (c) branch release/$TEST_ID exists,
+      (d) stage.py next from the new dir prints `groom`. Cleans up
+      via git worktree remove + git branch -D.
+    modes: [lite]
+    max_duration_sec: 15
+
+  - check_id: CHART_VERSION_CURRENT
+    approved: true
+    type: script
+    proves: |
+      deploy/helm/charts/vexa/Chart.yaml version is a real SemVer
+      matching or ahead of the most recent v* git tag. Detects the
+      stale-version pattern that caused #228.
+    shape: |
+      Script reads `Chart.yaml.version`, reads `git tag -l 'v*' |
+      sort -V | tail -1`, strips any `v` prefix on the tag, asserts
+      SemVer(chart_version) >= SemVer(latest_tag_version).
+    modes: [lite]
+    max_duration_sec: 5
+
+  - check_id: CHART_PUBLISH_WORKFLOW_EXISTS
+    approved: true
+    type: script
+    proves: |
+      .github/workflows/chart-release.yml exists and references
+      helm/chart-releaser-action — asserts the publish path is wired
+      up. Does NOT assert that a publish ran (that's post-ship).
+    shape: |
+      Script asserts (a) file exists, (b) grep for
+      "helm/chart-releaser-action" returns ≥ 1 hit, (c) yaml parses
+      cleanly (so the workflow is at least syntactically valid).
+    modes: [lite]
+    max_duration_sec: 5
+
+# ── DOD CHANGES ───────────────────────────────────────────────────────
+#
+# No existing feature folder DoDs are reweighted or removed. No new
+# feature folder is created (release plumbing is not a product
+# feature). The four new checks above ride as registry-only entries,
+# discoverable by validate via issue `proves:` bindings in scope.yaml.
+
+dod_changes_approved: []
+
+# ── NOTES ─────────────────────────────────────────────────────────────
+#
+# 1. deployments.modes: [lite] is bookkeeping. Every new check is
+#    mode-independent (file-level static / git-state). A follow-on
+#    cycle should formalize a `static` mode or make modes: [] first-
+#    class. Flagging here so the gap is visible in triage if needed.
+#
+# 2. Develop-stage work is partially pre-done. The #229 code + the
+#    worktree tooling + stage-doc edits exist as uncommitted working-
+#    tree modifications (speculative pre-approval draft, disclosed in
+#    turn). They will be formalized into commits after plan-approval.
+#    Pack B (chart-version bump + publish workflow) is not yet
+#    written — will be authored in develop per approval.
+#
+# 3. No chart runtime changes. Chart.yaml version bump is metadata; it
+#    does not alter any rendered Kubernetes resource.
