@@ -1921,3 +1921,49 @@ ZOOM_SDK_DOC_REFERENCED_FROM_README:
   - helm
   state: stateless
   max_duration_sec: 5
+
+# ──────────────────────────────────────────────────────────────────────
+# Pack D — API pre-flight for zoom_sdk (#128)
+# ──────────────────────────────────────────────────────────────────────
+
+ZOOM_SDK_PREFLIGHT_REJECTS_MISSING_ARTIFACTS:
+  proves: "meetings.py::request_bot pre-flight rejects platform=zoom_sdk with HTTPException 503 when ZOOM_CLIENT_ID / ZOOM_CLIENT_SECRET are missing — contract from #128"
+  symptom: "POST /bots platform=zoom_sdk returns 201 with missing SDK credentials; meeting transitions to failed seconds later with generic error"
+  found: '2026-04-22'
+  type: grep
+  file: services/meeting-api/meeting_api/meetings.py
+  must_match: 'zoom_sdk_not_available'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+
+ZOOM_SDK_PREFLIGHT_STRUCTURED_ERROR_BODY:
+  proves: "pre-flight 503 response body carries code + missing_artifacts + remediation fields — machine-parseable contract for clients"
+  symptom: "Pre-flight fires but returns an opaque error string; dashboard / CLI clients can't surface the specific missing credential"
+  found: '2026-04-22'
+  type: grep
+  file: services/meeting-api/meeting_api/meetings.py
+  must_match: 'missing_artifacts'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+
+ZOOM_WEB_CREATE_STILL_201_IMMEDIATE:
+  proves: "pre-flight is scoped to platform=zoom_sdk only — zoom_web path remains unchanged (no-native-deps check)"
+  symptom: "Pre-flight accidentally rejects zoom_web because someone broadened the check to cover all Zoom variants"
+  found: '2026-04-22'
+  type: grep
+  file: services/meeting-api/meeting_api/meetings.py
+  must_match: 'req.platform.value == "zoom_sdk"'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5

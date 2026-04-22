@@ -695,6 +695,40 @@ async def request_bot(
         # sees an explicit zoom_sdk / zoom_web.
         req.platform = Platform(resolved_zoom)
 
+    # ── Pack D (#128): synchronous pre-flight for zoom_sdk. ───────────────
+    # If the operator set ZOOM_CLIENT_ID / ZOOM_CLIENT_SECRET, trust that the
+    # bot image was built with matching SDK binaries — the remaining failure
+    # modes surface via sdk-manager.ts::diagnoseLoadFailure inside the bot
+    # with a specific remediation string. If the credentials are missing,
+    # we can KNOW the SDK path will fail (no Marketplace auth possible), so
+    # refuse the request with a structured 503 instead of returning 201 and
+    # letting the meeting transition requested → joining → failed.
+    # zoom_web: no native deps, passes through untouched.
+    if req.platform is not None and req.platform.value == "zoom_sdk":
+        zoom_cid = (os.getenv("ZOOM_CLIENT_ID") or "").strip()
+        zoom_csec = (os.getenv("ZOOM_CLIENT_SECRET") or "").strip()
+        missing = []
+        if not zoom_cid:
+            missing.append("ZOOM_CLIENT_ID")
+        if not zoom_csec:
+            missing.append("ZOOM_CLIENT_SECRET")
+        if missing:
+            logger.warning(
+                f"Pre-flight rejected platform=zoom_sdk request from user {current_user.id}: "
+                f"missing env {missing}"
+            )
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "zoom_sdk_not_available",
+                    "missing_artifacts": missing,
+                    "remediation": (
+                        "Set ZOOM_CLIENT_ID and ZOOM_CLIENT_SECRET on meeting-api. "
+                        "See services/vexa-bot/docs/zoom-sdk-setup.md § 1 + § 4."
+                    ),
+                },
+            )
+
     # --- Agent-only mode ---
     if req.agent_enabled and req.platform is None:
         new_meeting = Meeting(

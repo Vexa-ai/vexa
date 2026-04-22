@@ -1225,6 +1225,36 @@
       "symptom": "Doc exists but no one finds it because the README does not link to it",
       "file": "services/vexa-bot/README.md",
       "must_match": "docs/zoom-sdk-setup.md"
+    },
+    {
+      "_": "\u2550\u2550\u2550 Pack D \u2014 API pre-flight for zoom_sdk (#128) \u2550\u2550\u2550"
+    },
+    {
+      "id": "ZOOM_SDK_PREFLIGHT_REJECTS_MISSING_ARTIFACTS",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "meetings.py::request_bot pre-flight rejects platform=zoom_sdk with HTTPException 503 when ZOOM_CLIENT_ID / ZOOM_CLIENT_SECRET are missing \u2014 contract from #128",
+      "symptom": "POST /bots platform=zoom_sdk returns 201 with missing SDK credentials; meeting transitions to failed seconds later with generic error",
+      "file": "services/meeting-api/meeting_api/meetings.py",
+      "must_match": "zoom_sdk_not_available"
+    },
+    {
+      "id": "ZOOM_SDK_PREFLIGHT_STRUCTURED_ERROR_BODY",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "pre-flight 503 response body carries code + missing_artifacts + remediation fields \u2014 machine-parseable contract for clients",
+      "symptom": "Pre-flight fires but returns an opaque error string; dashboard / CLI clients can't surface the specific missing credential",
+      "file": "services/meeting-api/meeting_api/meetings.py",
+      "must_match": "missing_artifacts"
+    },
+    {
+      "id": "ZOOM_WEB_CREATE_STILL_201_IMMEDIATE",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "pre-flight is scoped to platform=zoom_sdk only \u2014 zoom_web path remains unchanged (no-native-deps check)",
+      "symptom": "Pre-flight accidentally rejects zoom_web because someone broadened the check to cover all Zoom variants",
+      "file": "services/meeting-api/meeting_api/meetings.py",
+      "must_match": "req.platform.value == \"zoom_sdk\""
     }
   ]
 }
