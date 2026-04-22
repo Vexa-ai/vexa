@@ -193,12 +193,26 @@ class Platform(str, Enum):
     """
     Platform identifiers for meeting platforms.
     The value is the external API name, while the bot_name is what's used internally by the bot.
+
+    Zoom migration note (release 260422-zoom-sdk, Pack F):
+    - ZOOM_SDK ("zoom_sdk") = native Meeting-SDK track (C++ addon, external-
+      meeting capable with Marketplace publishing). Recording path is the
+      reporter-validated #150 flow.
+    - ZOOM_WEB ("zoom_web") = Playwright-on-zoom.us web-client track.
+      Shape parallels google_meet + teams.
+    - ZOOM ("zoom") = DEPRECATED alias. Retained for one cycle so existing
+      callers keep working. Maps to ZOOM_SDK by default at the meeting-api
+      boundary (see `meetings.py::create_bot`); if the legacy `ZOOM_WEB=true`
+      env is set on meeting-api, the alias rewrites to ZOOM_WEB instead.
+      Remove in the cycle after 260422-zoom-sdk.
     """
     GOOGLE_MEET = "google_meet"
-    ZOOM = "zoom"
+    ZOOM = "zoom"              # deprecated alias, remove next cycle
+    ZOOM_SDK = "zoom_sdk"      # native Meeting SDK
+    ZOOM_WEB = "zoom_web"      # Playwright web-client
     TEAMS = "teams"
     BROWSER_SESSION = "browser_session"
-    
+
     @property
     def bot_name(self) -> str:
         """
@@ -207,20 +221,22 @@ class Platform(str, Enum):
         """
         mapping = {
             Platform.GOOGLE_MEET: "google_meet",
-            Platform.ZOOM: "zoom",
+            Platform.ZOOM: "zoom",                # legacy passthrough (bot resolves)
+            Platform.ZOOM_SDK: "zoom_sdk",
+            Platform.ZOOM_WEB: "zoom_web",
             Platform.TEAMS: "teams"
         }
         return mapping[self]
-    
+
     @classmethod
     def get_bot_name(cls, platform_str: str) -> str:
         """
         Static method to get the bot platform name from a string.
         This is useful when you have a platform string but not a Platform instance.
-        
+
         Args:
             platform_str: The platform identifier string (e.g., 'google_meet')
-            
+
         Returns:
             The platform name used by the bot (e.g., 'google')
         """
@@ -240,9 +256,34 @@ class Platform(str, Enum):
         reverse_mapping = {
             "google_meet": Platform.GOOGLE_MEET.value,
             "zoom": Platform.ZOOM.value,
+            "zoom_sdk": Platform.ZOOM_SDK.value,
+            "zoom_web": Platform.ZOOM_WEB.value,
             "teams": Platform.TEAMS.value
         }
         return reverse_mapping.get(bot_platform_name)
+
+    @classmethod
+    def is_zoom(cls, platform_str: str) -> bool:
+        """True iff platform is any Zoom variant (sdk/web/legacy alias)."""
+        return platform_str in ("zoom", "zoom_sdk", "zoom_web")
+
+    @classmethod
+    def resolve_legacy_zoom(cls, platform_str: str, zoom_web_env: bool = False) -> str:
+        """
+        Normalize the deprecated `zoom` alias at the API boundary.
+
+        - `zoom_sdk` / `zoom_web` pass through unchanged (caller is explicit).
+        - `zoom` maps to `zoom_web` if `zoom_web_env` is true (honors the
+          legacy meeting-api ZOOM_WEB env for one-cycle backcompat), otherwise
+          `zoom_sdk` (the new default).
+        - Other values pass through unchanged.
+
+        Call site is expected to log deprecation + set the
+        X-Vexa-Deprecated-Platform response header when a rewrite happens.
+        """
+        if platform_str == "zoom":
+            return "zoom_web" if zoom_web_env else "zoom_sdk"
+        return platform_str
 
     @classmethod
     def construct_meeting_url(
@@ -281,8 +322,10 @@ class Platform(str, Enum):
                         url += f"?p={passcode}"
                     return url
                 return None
-            elif platform == Platform.ZOOM:
-                # Zoom meeting ID (numeric, 9-11 digits) and optional passcode
+            elif platform in (Platform.ZOOM, Platform.ZOOM_SDK, Platform.ZOOM_WEB):
+                # Zoom meeting ID (numeric, 9-11 digits) and optional passcode.
+                # All three variants share the same URL shape; only the
+                # meeting-flow implementation differs (SDK vs web-client).
                 if re.fullmatch(r"^\d{9,11}$", native_id):
                     base_url = f"https://zoom.us/j/{native_id}"
                     if passcode:

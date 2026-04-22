@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 import redis.asyncio as aioredis
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, desc, func, text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -663,11 +663,37 @@ async def _find_meeting_any_status(
 async def request_bot(
     req: MeetingCreate,
     request: Request,
+    response: Response,
     background_tasks: BackgroundTasks,
     auth_data: tuple = Depends(get_user_and_token),
     db: AsyncSession = Depends(get_db),
 ):
     user_token, current_user = auth_data
+
+    # ── Resolve deprecated `platform=zoom` alias at the API boundary. ─────
+    # Release 260422-zoom-sdk (Pack F) split Zoom into zoom_sdk + zoom_web
+    # peer platforms. "zoom" stays accepted for one cycle for backcompat;
+    # honor the legacy meeting-api-side ZOOM_WEB env so operators who still
+    # set it keep getting the web path.
+    legacy_zoom = (
+        req.platform is not None
+        and getattr(req.platform, "value", None) == "zoom"
+    )
+    if legacy_zoom:
+        zoom_web_env_set = os.getenv("ZOOM_WEB", "").strip() == "true"
+        resolved_zoom = Platform.resolve_legacy_zoom("zoom", zoom_web_env_set)
+        response.headers["X-Vexa-Deprecated-Platform"] = (
+            f"zoom -> {resolved_zoom} (migrate callers to explicit value; "
+            f"alias removed next cycle)"
+        )
+        logger.warning(
+            f"Deprecated platform=zoom accepted from user {current_user.id}; "
+            f"resolved to {resolved_zoom} "
+            f"(ZOOM_WEB env {'set' if zoom_web_env_set else 'unset'})."
+        )
+        # Replace req.platform with the resolved enum value so downstream code
+        # sees an explicit zoom_sdk / zoom_web.
+        req.platform = Platform(resolved_zoom)
 
     # --- Agent-only mode ---
     if req.agent_enabled and req.platform is None:
@@ -1025,16 +1051,17 @@ async def request_bot(
     if raw_capture:
         env_vars["RAW_CAPTURE"] = raw_capture
 
-    # Zoom credentials
-    if req.platform.value == "zoom":
-        if os.getenv("ZOOM_WEB", "").strip() == "true":
-            env_vars["ZOOM_WEB"] = "true"
-        else:
-            zoom_cid = os.getenv("ZOOM_CLIENT_ID")
-            zoom_csec = os.getenv("ZOOM_CLIENT_SECRET")
-            if zoom_cid and zoom_csec:
-                env_vars["ZOOM_CLIENT_ID"] = zoom_cid
-                env_vars["ZOOM_CLIENT_SECRET"] = zoom_csec
+    # Zoom credentials (SDK path only). ZOOM_WEB env propagation retired in
+    # release 260422-zoom-sdk (Pack F slice 3) — bot dispatches on the explicit
+    # platform value. Legacy `platform=zoom` requests are resolved up-top in
+    # request_bot() via Platform.resolve_legacy_zoom; by the time we land
+    # here, req.platform is always the explicit zoom_sdk / zoom_web / etc.
+    if req.platform.value == "zoom_sdk":
+        zoom_cid = os.getenv("ZOOM_CLIENT_ID")
+        zoom_csec = os.getenv("ZOOM_CLIENT_SECRET")
+        if zoom_cid and zoom_csec:
+            env_vars["ZOOM_CLIENT_ID"] = zoom_cid
+            env_vars["ZOOM_CLIENT_SECRET"] = zoom_csec
 
     # Spawn via Runtime API
     result = await _spawn_via_runtime_api(
