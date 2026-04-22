@@ -119,7 +119,7 @@ issues:
       Fall back to `adhoc` when no stage file present (uninitialised
       worktree). `vm_destroy` + `lke_destroy` already delete by id
       (not by label), so the label becomes purely human-facing.
-    fix_commits: []
+    fix_commits: [c1eeb5b]
     proves:
       - {check: TESTS3_LABEL_RELEASE_TRACEABLE, modes: [lite]}
     required_modes: [lite]
@@ -153,7 +153,7 @@ issues:
       where `<release_id>` is read from `.current-stage`. Fails
       loud on any mismatch. Exempted at `stage: idle` / main
       checkout (where no release is active).
-    fix_commits: []
+    fix_commits: [c1eeb5b]
     proves:
       - {check: TESTS3_RELEASE_KEY_CONSISTENT, modes: [lite]}
     required_modes: [lite]
@@ -186,7 +186,7 @@ issues:
       ID=<id>` wraps it. `stages/00-idle.md` Next + `stages/01-groom.md`
       Step 0 document the flow. This release is itself the first
       dogfood of the pattern.
-    fix_commits: []
+    fix_commits: [c1eeb5b]
     proves:
       - {check: TESTS3_WORKTREE_BOOTSTRAP, modes: [lite]}
     required_modes: [lite]
@@ -221,7 +221,7 @@ issues:
       version advances in the same commit that changes chart files.
       Evidence: a script check that reads `Chart.yaml.version` and
       compares against `git tag -l 'v*' | sort -V | tail -1`.
-    fix_commits: []
+    fix_commits: [5c5bff6]
     proves:
       - {check: CHART_VERSION_CURRENT, modes: [lite]}
     required_modes: [lite]
@@ -248,7 +248,7 @@ issues:
       matching GitHub Release. This is the canonical OSS Helm
       pattern (~25 YAML lines). Evidence: static existence check
       for the workflow file + grep for `chart-releaser-action`.
-    fix_commits: []
+    fix_commits: [5c5bff6]
     proves:
       - {check: CHART_PUBLISH_WORKFLOW_EXISTS, modes: [lite]}
     required_modes: [lite]
