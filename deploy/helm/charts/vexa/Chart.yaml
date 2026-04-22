@@ -2,7 +2,7 @@ apiVersion: v2
 name: vexa
 description: Vexa - self-hosted real-time meeting transcription platform
 type: application
-version: 0.10.4
+version: 0.10.3
 appVersion: "0.10.3"
 home: https://github.com/Vexa-ai/vexa
 sources:
