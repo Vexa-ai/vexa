@@ -144,14 +144,54 @@ export class ZoomSDKManager {
     }
   }
 
-  async startRecording(onAudioData: (buffer: Buffer, sampleRate: number) => void): Promise<void> {
+  async startRecording(
+    onAudioData: (buffer: Buffer, sampleRate: number) => void,
+    onOneWayAudioData?: (buffer: Buffer, sampleRate: number, userId: number) => void,
+  ): Promise<void> {
     if (this.isStubMode) {
       console.log('[Zoom SDK Stub] Start recording called');
       return;
     }
 
+    // Pack A (release 260422-zoom-sdk): register both mixed + per-user
+    // callbacks before kicking the native start. Per-user forwarding is the
+    // input to speaker attribution (DoD zoom-sdk-per-speaker-raw-audio-forwarded).
     this.sdk.onAudioData(onAudioData);
-    this.sdk.startRecording({ audioChannel: 'mixed', sampleRate: 16000 });
+    if (onOneWayAudioData) {
+      this.sdk.onOneWayAudioData(onOneWayAudioData);
+    }
+
+    // Privilege-retry loop. Native StartRecording throws "NO_PERMISSION" the
+    // first time when the host hasn't yet auto-approved Local Recording. Poll
+    // every 2s up to 10s — matches the scope shape in #150 P0 §4.
+    // Under an auto-approve-enabled Zoom account this loop completes on the
+    // first retry (≤2s). If permission never arrives, raise an explicit error
+    // naming the account setting.
+    const maxAttempts = 5;
+    const intervalMs = 2000;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        this.sdk.startRecording({ audioChannel: 'mixed', sampleRate: 16000 });
+        if (attempt > 1) {
+          console.log(`[Zoom SDK] Recording permission granted on attempt ${attempt}`);
+        }
+        return;
+      } catch (err: any) {
+        const msg = err?.message ?? String(err);
+        if (msg.includes('NO_PERMISSION') || msg.includes('privilege request sent')) {
+          console.log(`[Zoom SDK] Waiting for recording permission from host (attempt ${attempt}/${maxAttempts})...`);
+          await new Promise(res => setTimeout(res, intervalMs));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error(
+      '[Zoom SDK] Recording permission not granted after 10s. Check the Zoom account: '
+      + 'Settings → Recording → "Record to computer files" ON; '
+      + '"Auto approve permission requests" for internal AND external participants ON. '
+      + 'Reference: services/vexa-bot/docs/zoom-sdk-setup.md §5.'
+    );
   }
 
   async stopRecording(): Promise<void> {

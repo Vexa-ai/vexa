@@ -1,8 +1,13 @@
 #!/bin/bash
-# Set up Zoom SDK library paths
+# Set up Zoom SDK library paths.
+# Pack A (release 260422-zoom-sdk) — #150 P0 §2: bundled Qt must load BEFORE
+# system Qt; the nested path qt_libs/Qt/lib is the actual library dir (parent
+# qt_libs/ holds plugins + resources, not libs). Previous order put SDK_LIB_DIR
+# before Qt/lib which let system Qt resolve first and produce:
+#   undefined symbol: _ZNSt28__atomic_futex_unsigned_base..., version Qt_5
 SDK_LIB_DIR="/app/vexa-bot/core/src/platforms/zoom-sdk/native/zoom_meeting_sdk"
 if [ -f "${SDK_LIB_DIR}/libmeetingsdk.so" ]; then
-  export LD_LIBRARY_PATH="${SDK_LIB_DIR}:${SDK_LIB_DIR}/qt_libs:${SDK_LIB_DIR}/qt_libs/Qt/lib:${LD_LIBRARY_PATH}"
+  export LD_LIBRARY_PATH="${SDK_LIB_DIR}/qt_libs/Qt/lib:${SDK_LIB_DIR}:${LD_LIBRARY_PATH}"
 fi
 
 # Start a virtual framebuffer in the background

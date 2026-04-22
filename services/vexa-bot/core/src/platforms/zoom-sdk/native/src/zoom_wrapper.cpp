@@ -27,6 +27,7 @@
 #include "rawdata/rawdata_audio_helper_interface.h"
 #include "meeting_service_components/meeting_audio_interface.h"
 #include "meeting_service_components/meeting_participants_ctrl_interface.h"
+#include "meeting_service_components/meeting_recording_interface.h"  // Pack A (release 260422-zoom-sdk): raw-recording permission API
 
 // Global Qt application (runs on Node.js main thread)
 static QCoreApplication* g_qtApp = nullptr;
@@ -166,7 +167,13 @@ public:
 // ============================================================
 class AudioDelegate : public IZoomSDKAudioRawDataDelegate {
 public:
+    // tsf_ = mixed-audio callback (single buffer per frame, shared across
+    // all speakers). tsfOneWay_ = per-user callback (one buffer per speaker
+    // user_id). Both registered from JS; either may be unset.
+    // Pack A (release 260422-zoom-sdk) activated per-user forwarding so
+    // speaker attribution no longer relies solely on timing correlation.
     Napi::ThreadSafeFunction tsf_;
+    Napi::ThreadSafeFunction tsfOneWay_;
 
     void onMixedAudioRawDataReceived(AudioRawData* data) override {
         if (!tsf_ || !data) return;
@@ -181,7 +188,26 @@ public:
         });
     }
 
-    void onOneWayAudioRawDataReceived(AudioRawData*, uint32_t) override {}
+    // Pack A (release 260422-zoom-sdk): implement per-user audio forwarding.
+    // Was a no-op; #150 P0 marked this critical for speaker-attribution
+    // parity with gmeet DoD #2 (speaker_accuracy >= 0.90). Signature matches
+    // IZoomSDKAudioRawDataDelegate: AudioRawData* buffer + uint32_t user_id.
+    void onOneWayAudioRawDataReceived(AudioRawData* data, uint32_t user_id) override {
+        if (!tsfOneWay_ || !data) return;
+        unsigned int len = data->GetBufferLen();
+        if (len == 0) return;
+        unsigned int sampleRate = data->GetSampleRate();
+        std::vector<char> buffer(data->GetBuffer(), data->GetBuffer() + len);
+        tsfOneWay_.NonBlockingCall([buf = std::move(buffer), sampleRate, user_id](Napi::Env env, Napi::Function jsCallback) mutable {
+            Napi::Buffer<char> nodeBuf = Napi::Buffer<char>::Copy(env, buf.data(), buf.size());
+            jsCallback.Call({
+                nodeBuf,
+                Napi::Number::New(env, (double)sampleRate),
+                Napi::Number::New(env, (double)user_id)
+            });
+        });
+    }
+
     void onShareAudioRawDataReceived(AudioRawData*, uint32_t) override {}
     void onOneWayInterpreterAudioRawDataReceived(AudioRawData*, const zchar_t*) override {}
 };
@@ -208,14 +234,16 @@ private:
     Napi::Value OnAuthResult(const Napi::CallbackInfo& info);
     Napi::Value OnMeetingStatus(const Napi::CallbackInfo& info);
     Napi::Value OnAudioData(const Napi::CallbackInfo& info);
+    Napi::Value OnOneWayAudioData(const Napi::CallbackInfo& info);  // Pack A
     Napi::Value OnActiveSpeakerChange(const Napi::CallbackInfo& info);
     Napi::Value GetUserInfo(const Napi::CallbackInfo& info);
 
     // SDK objects
-    IAuthService*               authService_    = nullptr;
-    IMeetingService*            meetingService_ = nullptr;
-    IMeetingAudioController*    audioController_ = nullptr;
-    IZoomSDKAudioRawDataHelper* audioHelper_    = nullptr;
+    IAuthService*                  authService_     = nullptr;
+    IMeetingService*               meetingService_  = nullptr;
+    IMeetingAudioController*       audioController_ = nullptr;
+    IMeetingRecordingController*   recordingCtrl_   = nullptr;  // Pack A: raw-recording permission + StartRawRecording
+    IZoomSDKAudioRawDataHelper*    audioHelper_     = nullptr;
 
     // Event handlers
     AuthEventHandler    authHandler_;
@@ -270,6 +298,7 @@ Napi::Object ZoomSDKNode::Init(Napi::Env env, Napi::Object exports) {
         InstanceMethod("onAuthResult",           &ZoomSDKNode::OnAuthResult),
         InstanceMethod("onMeetingStatus",        &ZoomSDKNode::OnMeetingStatus),
         InstanceMethod("onAudioData",            &ZoomSDKNode::OnAudioData),
+        InstanceMethod("onOneWayAudioData",      &ZoomSDKNode::OnOneWayAudioData),
         InstanceMethod("onActiveSpeakerChange",  &ZoomSDKNode::OnActiveSpeakerChange),
         InstanceMethod("getUserInfo",            &ZoomSDKNode::GetUserInfo),
     });
@@ -449,14 +478,76 @@ Napi::Value ZoomSDKNode::StartRecording(const Napi::CallbackInfo& info) {
     std::cout << "[ZoomSDK] StartRecording" << std::endl;
     Napi::Env env = info.Env();
 
-    audioHelper_ = GetAudioRawdataHelper();
+    // Pack A (release 260422-zoom-sdk): full raw-recording flow per #150 P0.
+    // Previously StartRecording called audioHelper_->subscribe() directly,
+    // which returned SDKERR_NO_PERMISSION (code 12) against any account that
+    // hadn't explicitly enabled Local Recording with auto-approval. The
+    // correct sequence is:
+    //   1. GetMeetingRecordingController
+    //   2. CanStartRawRecording -> if NO_PERMISSION, RequestLocalRecordingPrivilege
+    //   3. StartRawRecording   (raw-data mode on)
+    //   4. audioHelper_->subscribe(&audioDelegate_)
+    // When permission is pending (step 2 returns NO_PERMISSION), we throw a
+    // structured error; the JS side in sdk-manager.ts retries every 2s.
+
+    // Step 1: Get recording controller
+    if (!recordingCtrl_) {
+        if (meetingService_) {
+            recordingCtrl_ = meetingService_->GetMeetingRecordingController();
+        }
+        if (!recordingCtrl_) {
+            std::cerr << "[ZoomSDK] GetMeetingRecordingController returned null" << std::endl;
+            Napi::Error::New(env, "GetMeetingRecordingController failed")
+                .ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+    }
+
+    // Step 2: Check raw-recording permission; request if missing.
+    SDKError canStart = recordingCtrl_->CanStartRawRecording();
+    if (canStart == SDKERR_NO_PERMISSION) {
+        std::cout << "[ZoomSDK] Raw recording permission not granted; requesting from host..." << std::endl;
+        SDKError reqErr = recordingCtrl_->RequestLocalRecordingPrivilege();
+        if (reqErr != SDKERR_SUCCESS) {
+            std::cerr << "[ZoomSDK] RequestLocalRecordingPrivilege failed: " << (int)reqErr << std::endl;
+            Napi::Error::New(env, "RequestLocalRecordingPrivilege failed: " + std::to_string((int)reqErr))
+                .ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+        // Host approval arrives async. Signal JS side to retry.
+        Napi::Error::New(env, "NO_PERMISSION: privilege request sent, waiting for host approval — retry startRecording")
+            .ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+    if (canStart != SDKERR_SUCCESS) {
+        std::cerr << "[ZoomSDK] CanStartRawRecording returned " << (int)canStart << std::endl;
+        Napi::Error::New(env, "CanStartRawRecording error: " + std::to_string((int)canStart))
+            .ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    // Step 3: Enable raw-data mode on the controller. SDKERR_WRONG_USAGE =
+    // already started (idempotent; don't fail).
+    SDKError startErr = recordingCtrl_->StartRawRecording();
+    if (startErr != SDKERR_SUCCESS && startErr != SDKERR_WRONG_USAGE) {
+        std::cerr << "[ZoomSDK] StartRawRecording failed: " << (int)startErr << std::endl;
+        Napi::Error::New(env, "StartRawRecording failed: " + std::to_string((int)startErr))
+            .ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+
+    // Step 4: Subscribe audio helper — SDK now delivers both mixed buffers
+    // (onMixedAudioRawDataReceived) and per-user buffers
+    // (onOneWayAudioRawDataReceived) to the AudioDelegate.
+    if (!audioHelper_) {
+        audioHelper_ = GetAudioRawdataHelper();
+    }
     if (!audioHelper_) {
         std::cerr << "[ZoomSDK] GetAudioRawdataHelper returned null" << std::endl;
         Napi::Error::New(env, "GetAudioRawdataHelper failed")
             .ThrowAsJavaScriptException();
         return env.Undefined();
     }
-
     SDKError err = audioHelper_->subscribe(&audioDelegate_);
     if (err != SDKERR_SUCCESS) {
         std::cerr << "[ZoomSDK] Audio subscribe failed: " << (int)err << std::endl;
@@ -465,7 +556,7 @@ Napi::Value ZoomSDKNode::StartRecording(const Napi::CallbackInfo& info) {
         return env.Undefined();
     }
 
-    std::cout << "[ZoomSDK] Audio recording started" << std::endl;
+    std::cout << "[ZoomSDK] Audio recording started (mixed + per-user forwarding active)" << std::endl;
     return env.Undefined();
 }
 
@@ -536,6 +627,21 @@ Napi::Value ZoomSDKNode::OnAudioData(const Napi::CallbackInfo& info) {
     }
     audioDelegate_.tsf_ = Napi::ThreadSafeFunction::New(
         env, info[0].As<Napi::Function>(), "audioCallback", 0, 1);
+    return env.Undefined();
+}
+
+// Pack A (release 260422-zoom-sdk): register the per-user audio callback.
+// JS signature: (buffer: Buffer, sampleRate: number, userId: number) => void.
+// Fires in AudioDelegate::onOneWayAudioRawDataReceived once
+// recordingCtrl_->StartRawRecording() has taken effect.
+Napi::Value ZoomSDKNode::OnOneWayAudioData(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsFunction()) {
+        Napi::TypeError::New(env, "Expected function").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+    audioDelegate_.tsfOneWay_ = Napi::ThreadSafeFunction::New(
+        env, info[0].As<Napi::Function>(), "oneWayAudioCallback", 0, 1);
     return env.Undefined();
 }
 

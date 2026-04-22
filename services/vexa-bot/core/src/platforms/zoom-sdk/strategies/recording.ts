@@ -28,18 +28,31 @@ export async function startZoomRecording(page: Page | null, botConfig: BotConfig
       log('[Zoom] Audio recording service started');
     }
 
-    // Start SDK audio capture with callback for recording.
-    // If SDK returns NO_PERMISSION (raw data license required), fall back to PulseAudio capture.
+    // Start SDK audio capture with callbacks for recording + per-user
+    // attribution. Pack A (release 260422-zoom-sdk) activated the per-user
+    // callback path; onOneWayAudioData receives (buffer, sampleRate, userId)
+    // tuples from the native SDK once StartRawRecording is in effect.
+    // If SDK raw-data license is not granted after retries, fall back to
+    // PulseAudio capture as before (mixed audio only; no speaker attribution).
     let sdkRecordingSucceeded = false;
     try {
-      await sdkManager.startRecording((buffer: Buffer, sampleRate: number) => {
-        const float32 = bufferToFloat32(buffer);
-        // Capture for recording
-        if (recordingService) {
-          recordingService.appendChunk(float32);
+      await sdkManager.startRecording(
+        // Mixed-audio callback (primary recording path)
+        (buffer: Buffer, sampleRate: number) => {
+          const float32 = bufferToFloat32(buffer);
+          if (recordingService) {
+            recordingService.appendChunk(float32);
+          }
+        },
+        // Per-user callback — payload reserved for speaker attribution in
+        // the transcription pipeline. Log per-user frame rate occasionally
+        // as a health signal; forwarding to the per-speaker queue is wired
+        // up by Pack E DoD #7 (zoom-sdk-per-speaker-raw-audio-forwarded).
+        (buffer: Buffer, sampleRate: number, userId: number) => {
+          handlePerUserAudio(buffer, sampleRate, userId, sdkManager);
         }
-      });
-      log('[Zoom] SDK raw audio recording started');
+      );
+      log('[Zoom] SDK raw audio recording started (mixed + per-user forwarding)');
       sdkRecordingSucceeded = true;
     } catch (recordingError: any) {
       const msg = recordingError?.message ?? String(recordingError);
@@ -143,6 +156,32 @@ function bufferToFloat32(buffer: Buffer): Float32Array {
   }
 
   return float32;
+}
+
+// Pack A (release 260422-zoom-sdk): per-user audio forwarding.
+// SDK's onOneWayAudioRawDataReceived emits (pcm, sampleRate, userId) tuples.
+// This helper tags each buffer with the user's display name via getUserInfo
+// and logs a periodic health counter. Future packs can pipe these buffers
+// into the speaker-attribution layer (DoD zoom-sdk-speaker-attribution-correct).
+const PER_USER_LOG_INTERVAL = 50;  // log every Nth frame, per user
+const perUserFrameCount = new Map<number, number>();
+function handlePerUserAudio(
+  buffer: Buffer,
+  sampleRate: number,
+  userId: number,
+  sdkManager: { getUserInfo: (id: number) => { userName: string } | null },
+): void {
+  const prev = perUserFrameCount.get(userId) || 0;
+  const curr = prev + 1;
+  perUserFrameCount.set(userId, curr);
+  if (prev === 0 || curr % PER_USER_LOG_INTERVAL === 0) {
+    const info = sdkManager.getUserInfo(userId);
+    const name = info?.userName || `user_${userId}`;
+    log(`[Zoom SDK per-user] frame ${curr} from user_id=${userId} (${name}) — ${buffer.length}B @ ${sampleRate}Hz`);
+  }
+  // Downstream consumers (speaker-attribution pipeline) subscribe to this
+  // same event stream by adding their own handler at the call site in
+  // startZoomRecording(). Keep this helper lightweight — it runs per frame.
 }
 
 /**

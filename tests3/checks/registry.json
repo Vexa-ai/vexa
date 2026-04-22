@@ -1099,6 +1099,54 @@
       "symptom": "ZOOM_WEB env switch resurrected in the SDK track, hiding which Zoom variant is actually running",
       "file": "services/vexa-bot/core/src/platforms/zoom-sdk/index.ts",
       "must_not_match": "process\\.env\\.ZOOM_WEB"
+    },
+    {
+      "_": "\u2550\u2550\u2550 Pack A \u2014 Native SDK recording P0 (#150) \u2550\u2550\u2550"
+    },
+    {
+      "id": "ZOOM_SDK_WRAPPER_HAS_RECORDING_CONTROLLER",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "zoom_wrapper.cpp declares IMeetingRecordingController* recordingCtrl_ \u2014 raw-recording permission flow is wired in (#150 P0 \u00a71)",
+      "symptom": "StartRecording path regressed to audioHelper_->subscribe() direct call; SDKERR_NO_PERMISSION (code 12) on any account without explicit raw-recording grant",
+      "file": "services/vexa-bot/core/src/platforms/zoom-sdk/native/src/zoom_wrapper.cpp",
+      "must_match": "IMeetingRecordingController*"
+    },
+    {
+      "id": "ZOOM_SDK_ON_ONE_WAY_AUDIO_IMPLEMENTED",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "AudioDelegate::onOneWayAudioRawDataReceived forwards per-user audio to JS via tsfOneWay_ \u2014 not a no-op (#150 P0 \u00a75)",
+      "symptom": "Per-user audio never reaches Node.js; speaker attribution falls back to timing correlation only; DoD zoom-sdk-per-speaker-raw-audio-forwarded fails",
+      "file": "services/vexa-bot/core/src/platforms/zoom-sdk/native/src/zoom_wrapper.cpp",
+      "must_match": "tsfOneWay_.NonBlockingCall"
+    },
+    {
+      "id": "ZOOM_SDK_PRIVILEGE_RETRY_LOOP",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "sdk-manager.ts::startRecording retries on NO_PERMISSION with host-approval wait \u2014 matches #150 P0 \u00a74 retry loop",
+      "symptom": "First call fails with NO_PERMISSION; no retry; bot ends up without recording despite host auto-approval being valid",
+      "file": "services/vexa-bot/core/src/platforms/zoom-sdk/sdk-manager.ts",
+      "must_match": "Waiting for recording permission from host"
+    },
+    {
+      "id": "ZOOM_SDK_SPEAKER_CALLBACK_AFTER_JOIN_AUDIO",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "strategies/join.ts does not register onActiveSpeakerChange \u2014 registration happens in strategies/recording.ts which runs strictly after joinAudio() (#150 P0 \u00a76)",
+      "symptom": "Speaker callback registered before audioController_ is set; logs 'Audio controller not available for speaker events'; no speaker events flow to JS",
+      "file": "services/vexa-bot/core/src/platforms/zoom-sdk/strategies/join.ts",
+      "must_not_match": "onActiveSpeakerChange"
+    },
+    {
+      "id": "ZOOM_SDK_ENTRYPOINT_LD_LIBRARY_PATH",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "bot entrypoint.sh prepends qt_libs/Qt/lib to LD_LIBRARY_PATH \u2014 bundled Qt loads before system Qt (#150 P0 \u00a72)",
+      "symptom": "System Qt resolves first; SDK fails with 'undefined symbol: _ZNSt28__atomic_futex_unsigned_base..., version Qt_5'",
+      "file": "services/vexa-bot/core/entrypoint.sh",
+      "must_match": "qt_libs/Qt/lib:${SDK_LIB_DIR}"
     }
   ]
 }
