@@ -93,6 +93,10 @@ release-build:                     ## build + publish :dev to DockerHub + record
 ## Release cycle — stage state machine (see tests3/README.md §5.5)
 ##
 ##   0. idle                 — dormant; no active release
+##   0a. release-worktree    — create ../vexa-<id> git worktree so N
+##                             releases run in parallel from one clone
+##                             (#229). Run from the main checkout; then
+##                             cd into the worktree for every step below.
 ##   1. release-groom        — cluster issues → groom.md (AI, stage 01)
 ##   2. release-plan         — scaffold scope.yaml + plan-approval.yaml (stage 02)
 ##   3. release-provision    — VMs + LKE (stage 04)
@@ -119,6 +123,10 @@ _STAGE = python3 $(CURDIR)/tests3/lib/stage.py
 
 stage:                             ## print current stage + next
 	@$(_STAGE) probe
+
+release-worktree:                  ## stage 00→ bootstrap: create ../vexa-<id> worktree + seed idle
+	@ID=$${ID:?set ID=<YYMMDD-slug>, e.g. ID=260418-webhooks}; \
+	bash $(CURDIR)/tests3/lib/worktree.sh create $$ID
 
 release-groom:                     ## stage 01: cluster issues → releases/<id>/groom.md
 	@$(_STAGE) assert-is idle

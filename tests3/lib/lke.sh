@@ -43,7 +43,8 @@ lke_provision() {
 
     lke_check_prereqs
 
-    local label="vexa-t3-$(date +%H%M)"
+    local label
+    label=$(release_label "vexa-t3-lke")
 
     echo ""
     echo "  lke-provision"
