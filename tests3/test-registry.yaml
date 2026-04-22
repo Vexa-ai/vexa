@@ -45,6 +45,7 @@ tests:
       - realtime-transcription
       - realtime-transcription/gmeet
       - realtime-transcription/msteams
+      - realtime-transcription/zoom-sdk
       - webhooks
     max_duration_sec: 120
 
@@ -163,6 +164,12 @@ tests:
     runs_in: []
     script: tests/meeting-tts-teams.sh
     features: [realtime-transcription/msteams]
+
+  meeting-tts-zoom-sdk:
+    tier: meeting      # needs Zoom SDK Marketplace app + host account with auto-approve recording
+    runs_in: []
+    script: tests/meeting-tts-zoom-sdk.sh
+    features: [realtime-transcription, realtime-transcription/zoom-sdk]
 
   post-meeting:
     tier: meeting      # depends on meeting-tts having run first

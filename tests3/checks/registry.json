@@ -1363,6 +1363,36 @@
       "symptom": "README restored to the un-gated stub; Teams architecture context lost",
       "file": "features/realtime-transcription/msteams/README.md",
       "must_match": "Caption-driven speaker boundaries"
+    },
+    {
+      "_": "\u2550\u2550\u2550 Pack G \u2014 smoke-contract + tier-meeting test parity \u2550\u2550\u2550"
+    },
+    {
+      "id": "ZOOM_SDK_IN_SMOKE_CONTRACT_FEATURES",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "tests3/test-registry.yaml smoke-contract.features includes realtime-transcription/zoom-sdk \u2014 the feature is bound to static contract checks",
+      "symptom": "zoom-sdk feature folder exists but smoke-contract doesn't run its bound checks",
+      "file": "tests3/test-registry.yaml",
+      "must_match": "realtime-transcription/zoom-sdk"
+    },
+    {
+      "id": "MEETING_TTS_ZOOM_SDK_SCRIPT_EXISTS",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "tests3/tests/meeting-tts-zoom-sdk.sh exists with the meeting-tts-zoom-sdk header \u2014 tier-meeting fixture is in place",
+      "symptom": "No way to populate testdata/zoom-sdk-compose-260422/ baseline; DoDs 1-5 stay TODO forever",
+      "file": "tests3/tests/meeting-tts-zoom-sdk.sh",
+      "must_match": "meeting-tts-zoom-sdk"
+    },
+    {
+      "id": "MEETING_TTS_ZOOM_SDK_REGISTERED_TIER_MEETING",
+      "tier": "static",
+      "found": "2026-04-22",
+      "proves": "tests3/test-registry.yaml has meeting-tts-zoom-sdk entry with tier: meeting + features binding zoom-sdk",
+      "symptom": "Script file exists but not registered; tier-meeting runner skips it",
+      "file": "tests3/test-registry.yaml",
+      "must_match": "meeting-tts-zoom-sdk"
     }
   ]
 }
