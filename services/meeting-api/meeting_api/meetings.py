@@ -992,6 +992,7 @@ async def request_bot(
         bot_config["recordingEnabled"] = bool(req.recording_enabled)
     if req.voice_agent_enabled is not None:
         bot_config["voiceAgentEnabled"] = bool(req.voice_agent_enabled)
+        bot_config["cameraEnabled"] = bool(req.voice_agent_enabled)
     if req.default_avatar_url:
         bot_config["defaultAvatarUrl"] = req.default_avatar_url
     if os.getenv("SHOW_AVATAR", "true").lower() == "false":
