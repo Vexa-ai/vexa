@@ -1383,6 +1383,15 @@ export function getVideoBlockInitScript(): string {
           try { window.RTCPeerConnection[key] = OrigRTC[key]; } catch {}
         });
 
+        // Note (cycle 260426 Zoom Web): tried prototype-level
+        // setRemoteDescription patch + SDP-munge to set m=video sections
+        // to a=inactive — fires for one PC but Zoom retries / ignores
+        // the inactive direction and CPU usage actually spikes (~440%
+        // vs ~270% baseline). Approach reverted; carrying as Wave-2
+        // research item. Real fix likely requires intercepting Zoom's
+        // custom video-rendering layer or running Zoom Web behind a
+        // network-level video filter.
+
         console.log('[Vexa] RTCPeerConnection patched for video blocking (transcription-only)');
       } catch (e) {
         console.error('[Vexa] Video block init script FAILED:', e);
