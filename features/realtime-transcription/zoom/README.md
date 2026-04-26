@@ -12,11 +12,25 @@ separate subfeature scoped under #253 and out of this subfeature's scope.
 
 ## TL;DR
 
-Zoom Web borrows gmeet's audio plumbing but invents its own (more
-fragile) speaker-binding layer because Zoom's SFU breaks gmeet's track-
-stability assumption. The result is gmeet-grade transcription quality
-with a Zoom-specific misattribution race that does not exist on either
-gmeet or msteams.
+**Zoom Web is gmeet-family** (final classification after live
+rich-observation harness + Wave-2 prototype testing 2026-04-26).
+Each Zoom MediaStream is overwhelmingly tied to ONE specific speaker
+(88%/81%/62% per-stream concentration measured live). Simultaneous
+speakers go to different streams (overlap isolation works). Stream
+pool is small (~6 unique IDs observed) and bounded by the
+loudest-N display grid; gmeet's pool is unbounded by participant
+count. Stream IDs are stable per speaker; what's volatile is the
+DOM positions the streams get rendered through (8 migrations
+observed in 17 min).
+
+**The misattribution race users observed wasn't an architecture
+problem** — the audio handling has been correct all along. The bug
+was that PR #181 bypassed the existing `resolveZoomSpeakerName`
+voting/locking pipeline in `speaker-identity.ts` and substituted
+per-chunk DOM polling, which propagates DOM-badge flicker. Fix:
+re-route Zoom audio through the same `resolveSpeakerName()` pipeline
+gmeet/teams use. Live-tested in Wave 1 against multi-speaker
+meetings; user-confirmed "looks pretty good".
 
 See parent [`../README.md`](../README.md) for the cross-platform
 comparison table and shared pipeline.
@@ -34,64 +48,106 @@ comparison table and shared pipeline.
 | `services/vexa-bot/core/src/platforms/zoom/web/removal.ts`          | end-of-meeting / removed-by-host detection |
 | `services/vexa-bot/core/src/platforms/zoom/web/leave.ts`            | graceful leave |
 
-## Audio acquisition (gmeet-style, two paths in parallel)
+## Audio acquisition (current — to be redesigned in Wave 2)
 
-The bot opens **two** audio capture paths simultaneously:
+The bot currently opens **two** audio capture paths simultaneously:
 
-1. **Browser per-stream** — exactly the gmeet shape:
+1. **Browser per-element** (PR #181's design — to be retired in Wave 2):
    `services/audio.ts:60-100` finds DOM `<audio>` elements with
    `srcObject instanceof MediaStream`. Each is subscribed via
    `ctx.createMediaStreamSource(stream)` → `ScriptProcessor` →
    per-stream PCM at 16 kHz mono. Lands at
    `__vexaPerSpeakerAudioData(speakerIndex, audioArray)` →
-   `SpeakerStreamManager`.
-2. **PulseAudio mix** — `recording.ts:121-127` spawns
+   `SpeakerStreamManager`. **The fundamental flaw**: these elements
+   are **display slots**, not per-speaker channels. Zoom routes the
+   active speaker's audio to multiple slots simultaneously; the bot
+   processes duplicate audio (cascade ratio 2.14 observed in live
+   meeting 18) and uses DOM polling to bind a name to each chunk.
+   The DOM-poll lookup races with Zoom's mixer state, producing
+   misattribution. Wave 2 retires this path in favor of caption-
+   driven labeling on top of the PulseAudio mix.
+2. **PulseAudio mix** (becomes the sole audio source in Wave 2):
+   `recording.ts:121-127` spawns
    `parecord --device=zoom_sink.monitor --rate=16000 --channels=1
-   --format=s16le`. The captured mixed stream feeds the durable
-   `RecordingService` (MinIO upload) but **NOT** the transcription
-   pipeline.
+   --format=s16le`. The captured mixed stream is the canonical
+   single-channel conference audio. Wave 2 will:
+   (a) drop the per-element pipeline,
+   (b) feed the PulseAudio mix into Whisper directly (msteams-style),
+   (c) wire a Zoom captions observer (DOM event listener on Zoom's CC
+   stream) for speaker labels.
 
-The two paths are independent: per-stream feeds Whisper; PulseAudio
-feeds the recording. They observe the same audio but at different
-granularities.
+### What we observed in real multi-speaker meetings
 
-### What we observed in a real multi-speaker meeting (10 speakers)
-
+Meeting 15 (10 speakers, 32 min):
 ```
-[Zoom Web] Audio verification: 3 elements with audio streams (5 total media elements)
-  Element 0 <audio>: paused=false, tracks=1, states=[{"enabled":true,"muted":false,"readyState":"live"}]
-  Element 1 <audio>: paused=false, tracks=1, states=[{"enabled":true,"muted":false,"readyState":"live"}]
-  Element 2 <audio>: paused=false, tracks=1, states=[{"enabled":true,"muted":false,"readyState":"live"}]
+[Zoom Web] Audio verification: 3 elements with audio streams
 [PerSpeaker] Browser-side audio capture started with 3 streams
 ```
 
-Three audio elements stayed open the entire meeting — the count did
-**not** grow with participant count. Zoom's SFU recycles ~3 track slots
-across all active speakers; track identity is opaque and volatile.
+Meeting 18 (5 speakers, 12+ min ongoing):
+```
+[Zoom Web] Audio verification: 4 elements with audio streams
+[PerSpeaker] Browser-side audio capture started with 4 streams
+```
 
-## Speaker-name binding (the departure)
+The element count varies by meeting but **does not scale with
+participant count** — it tracks Zoom's UI loudest-N slot affordance.
+The audio routed to each slot is whichever speaker's audio Zoom
+multiplexes into that visual position; the same audio replicates
+across multiple slots (cascade ratio 2.14 measured on meeting 18 —
+see Live observation evidence below).
 
-gmeet's deal with track identity: **track 0 is Alice forever**. After
-voting, `track-0 → Alice` is locked in `speaker-identity.ts` and trusted
-for the rest of the meeting.
+## Speaker-name binding — current implementation (PR #181)
 
-Zoom's SFU does not honor that contract. Track 0 might be Alice this
-second, Bob next, Carol after that. PR #181's response:
+PR #181 attempts to demux Zoom's display layer back into per-speaker
+streams via DOM polling:
 
 - **Bypass `speaker-identity.ts` entirely** for Zoom
   (`services/vexa-bot/core/src/index.ts:1460` — `if (platformKey ===
   'zoom')` skips the voting/locking layer).
 - **Poll Zoom's active-speaker DOM badge every 250 ms**
   (`platforms/zoom/web/recording.ts:175-218`).
-- On every audio chunk arriving from any of the 3 streams, call
+- On every audio chunk arriving from any of the N streams, call
   `speakerManager.updateSpeakerName(speakerId, domSpeaker)` to remap
   (`index.ts:1478`).
 
-This is a **third pattern**, neither gmeet nor msteams:
+This approach is **structurally fragile** because the slots are not
+per-speaker channels — they're display affordances over a single
+multiplexed audio stream. Live evidence:
 
-- gmeet: stable track → name (vote-and-lock).
-- msteams: no track at all → caption events drive everything.
-- **Zoom Web: volatile tracks + DOM-polled active-speaker overlay.**
+| Test                              | Expected (true multi-channel) | Observed (Zoom Web) |
+|-----------------------------------|-------------------------------|---------------------|
+| Cascade ratio (tracks updated per speaker change) | 1.0   | **2.14**            |
+| Tracks active at any moment       | 1 per speaker                 | 2-3 simultaneously  |
+| Per-track audio identity          | Stable (Alice = track 0)      | None — slot is whichever speaker is loudest |
+
+The 2.14 cascade ratio is **proof** that Zoom replicates the active
+speaker's audio across multiple slots. In a true multi-channel
+architecture, only ONE track would update on a speaker change.
+
+## Wave 2 — switch to msteams-pattern
+
+Zoom Web is fundamentally an **msteams-family platform**: single-channel
+mixed audio + caption-driven speaker labels. Wave 2 will:
+
+1. **Drop the per-element subscription** — retire the
+   `__vexaPerSpeakerAudioData` path for Zoom.
+2. **Feed PulseAudio mix to Whisper** — single audio stream input,
+   matching msteams.
+3. **Wire a captions observer** — Zoom Web supports closed captions;
+   add a DOM event listener that captures `(speaker_name, utterance,
+   timestamp)` tuples (analog of msteams's `__vexaTeamsCaptionData`
+   callback).
+4. **Reuse the msteams reconciler** — Whisper segments + caption-derived
+   speaker labels merge identically to msteams.
+
+This eliminates the cascade-update misattribution race entirely
+because there's no per-track binding to race against — labels arrive
+pre-attached to the caption events, decoupled from audio routing.
+
+Trade-off: depends on host enabling closed captions. When CC is off,
+the bot has only the active-speaker DOM badge as a fallback (the
+current method's accuracy ceiling).
 
 ## Production observations (2026-04-26 smoke)
 
@@ -145,7 +201,27 @@ t=1247  Marion  : "he told my he ain't making no money there you are you get pai
 
 Ranked by user-visible impact.
 
-1. **Speaker misattribution race** — the DOM-polling overlay is reactive
+1. **Audio recording total-loss on Zoom Web** — `platforms/zoom/web/
+   recording.ts` writes the durable WAV via PulseAudio (`parecord` →
+   `/tmp/recording_<id>_<session>.wav`) and **does not call
+   `uploadChunk()` anywhere**. Upload only fires from the shared
+   post-leave block in `index.ts:746-757`. gmeet and msteams don't
+   depend on that block — they upload incrementally via
+   `recordingService.uploadChunk(...)` from MediaRecorder
+   `ondataavailable` every 10 s (Pack B from #218 / commit `58ba53e`),
+   so their durable recording survives SIGKILL.
+   Production observation 2026-04-26: meeting 15 (32-min real
+   multi-speaker call) produced ZERO uploads despite `recording_enabled=true`;
+   only meeting 3 (the very first smoke on the original pre-rebuild
+   bot image) has anything in MinIO.
+   **Fix (chosen 2026-04-26): mirror gmeet/teams's incremental pattern
+   for Zoom Web**: call `recordingService.uploadChunk(callbackUrl,
+   token, chunkData, seq, isFinal)` from `appendPCMBuffer()` (or a
+   timer over the parecord stream) every ~10 s. Removes the dependency
+   on graceful-leave entirely; survives SIGKILL like the post-#218
+   gmeet/teams pattern. **Estimate: half a day.**
+
+2. **Speaker misattribution race** — the DOM-polling overlay is reactive
    only; no state lock. When speaker A addresses speaker B mid-utterance,
    Zoom briefly flips the active-speaker badge to B (B's tile lights up
    as they prepare to respond), the 250 ms poll catches B's name, the
@@ -166,10 +242,22 @@ Ranked by user-visible impact.
    (`join_meeting_error.reason = auth_required`) instead of timeout.
    **Estimate: half a day.**
 
-3. **Audio-join button selector stale** — `button.join-audio-container__btn`
-   click times out 8 times in a loop (5 s each = 40 s wasted) before the
-   bot proceeds. Audio capture works anyway because Zoom Web auto-joins
-   audio without the button. Either update the selector or drop the loop.
+3. **Audio-join button selector stale → 40 s ACTIVE-callback delay**
+   (UPGRADED P3 → P1 after meeting 18 production observation):
+   `button.join-audio-container__btn` click times out 8 times in a
+   loop (5 s each = ~40 s wasted). The retry loop runs **before** the
+   bot fires the ACTIVE callback, so meeting-api / dashboard show
+   "joining" for ~40 s while the bot is already in the meeting.
+   Audio capture works anyway because Zoom Web auto-joins audio on
+   the current UI version. Either update the selector or drop the
+   loop entirely. Concrete trace from meeting 18:
+   ```
+   10:34:52 JOINING callback fired
+   10:34:52 [Zoom Web] Bot immediately admitted — Leave button visible
+   10:34:52 [Zoom Web] Audio join attempt 3 failed: Timeout 5000ms
+            (attempts 4, 5, 6, 7, 8 — 30s burned)
+   10:35:33 🔥 UNIFIED CALLBACK: ACTIVE                ← +41s wasted
+   ```
    **Estimate: 1-2 hours.**
 
 4. **`mic muted` modal not auto-dismissed** — Zoom shows a
@@ -193,9 +281,10 @@ Ranked by user-visible impact.
    meeting (verified). No action needed; monitor in case behavior
    regresses.
 
-**Total Wave 2 estimate: ~2 days** (was 1.5-2 d in the original groom
+**Total Wave 2 estimate: ~2.5 days** (was 1.5-2 d in the original groom
 estimate; bumped after the misattribution race surfaced as a real
-production issue, not a theoretical one).
+production issue, plus the Zoom-side recording-total-loss bug surfaced
+during the live multi-speaker smoke).
 
 ## Known unknown — auth wall workarounds
 
@@ -215,11 +304,39 @@ value; `Platform.ZOOM_SDK` opts into Native; operator-side `ZOOM_WEB=true`
 env-var dispatch is retired end-to-end. Detailed in
 `tests3/releases/260426-zoom/plan-approval.yaml` `future_waves_documented.wave_3`.
 
-# Intentionally un-gated: legacy feature carries no machine-readable
+# DoDs
 
-**DoDs:** see [`./dods.yaml`](./dods.yaml) · Gate: **confidence ≥ 90%**
-# DoDs yet. Populate `dods:` before this feature's next release or
-# its expected behavior changes.
+Authored 2026-04-26 (Wave 1 — release 260426-zoom). Each DoD anchors
+to evidence from the live multi-speaker production smoke
+(meeting_id=15) documented in
+`tests3/releases/260426-zoom/audio-research.md` and the cross-platform
+table in `../README.md`. Wave 3 will replace the research-note grep
+checks with tier-meeting-test bindings (automated Zoom + TTS
+ground-truth scoring, mirroring `meeting-tts-teams`).
+
+**Verified (Wave 1 evidence-passing):**
+
+| id                                          | weight | evidence                                              |
+|---------------------------------------------|-------:|-------------------------------------------------------|
+| bot-joins-zoom-web-on-real-meeting          |   10   | `ZOOM_WEB_LIVE_SMOKE_RECORDED` (compose)              |
+| transcribes-zoom-web-end-to-end             |   15   | `ZOOM_WEB_LIVE_SMOKE_RECORDED` (compose)              |
+| multi-speaker-scales-via-track-recycle      |   15   | `ZOOM_WEB_MULTI_SPEAKER_VERIFIED` (compose)           |
+| audio-architecture-comparison-documented    |    5   | `ZOOM_WEB_AUDIO_ARCHITECTURE_DOCUMENTED` (compose)    |
+
+**Known-gap (red until Wave 2 ships fixes):**
+
+| id                                          | weight | evidence                                              |
+|---------------------------------------------|-------:|-------------------------------------------------------|
+| durable-recording-uploaded-to-minio         |   10   | `ZOOM_WEB_RECORDING_UPLOAD_FOLLOWUP_DOCUMENTED` (red) |
+| speaker-attribution-no-polling-lag-race     |    5   | `ZOOM_WEB_RECORDING_UPLOAD_FOLLOWUP_DOCUMENTED` (red) |
+
+Total weight verified: **45**. Total weight known-gap: **15**.
+Confidence at Wave 1 close: **75%** (45 / 60). Wave 2 closes the
+known-gap DoDs to bring confidence to 100%.
+
+**DoDs:** evidence checks live in
+`tests3/releases/260426-zoom/plan-approval.yaml`
+`registry_changes_approved` · Gate: **confidence ≥ 75%**
+
 gate:
-  confidence_min: 0    # not enforced until dods: is populated
-dods: []   # intentionally un-gated, reason: DoDs not yet authored
+  confidence_min: 75   # raised from 0 in Wave 1 — feature now gated

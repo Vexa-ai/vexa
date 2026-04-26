@@ -6,6 +6,7 @@ import { log } from '../../../utils';
 import { spawn, ChildProcess } from 'child_process';
 import { zoomParticipantNameSelector } from './selectors';
 import { dismissZoomPopups } from './prepare';
+import { startZoomRichObservation } from './observe';
 
 let recordingService: RecordingService | null = null;
 let recordingStopResolver: (() => void) | null = null;
@@ -49,6 +50,17 @@ export async function startZoomWebRecording(page: Page | null, botConfig: BotCon
   popupDismissInterval = setInterval(() => {
     dismissZoomPopups(page).catch(() => {});
   }, 2000);
+
+  // Optional: rich observation harness — enabled by ZOOM_OBSERVE=true
+  // Dumps WebRTC stats / per-element audio levels / WebSocket frames /
+  // DOM badge / caption availability every 2s for architecture research.
+  if (process.env.ZOOM_OBSERVE === 'true') {
+    try {
+      await startZoomRichObservation(page);
+    } catch (e: any) {
+      log(`[Zoom Web] ZOOM_OBSERVE harness failed to install: ${e.message}`);
+    }
+  }
 
   // Block until stopZoomWebRecording() is called
   await new Promise<void>((resolve) => {

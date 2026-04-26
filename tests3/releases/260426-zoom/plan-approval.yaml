@@ -77,11 +77,137 @@ ship_followups_for_ship_stage:
 future_waves_documented:
   wave_2:
     goal: |
-      Implement Zoom Web buffering + speaker labeling per Wave 1's
-      recommendation. Three plausible paths (gmeet-like multi-channel,
-      teams-like single-stream + caption-driven, hybrid). Concrete
-      scope sized by Wave 1's `audio-research.md`.
-    estimate: ~3-5 days depending on chosen path
+      Polish Zoom Web's existing per-speaker pipeline (PR #181 ships
+      gmeet-like multi-channel architecture; Wave 1's smoke confirmed
+      it works end-to-end against a live 10-speaker meeting). The
+      remaining work is bug-cleanup + closing one production-loss gap,
+      not a new buffering/labeling architecture.
+    architectural_decisions:
+      audio_capture_path: |
+        REVISED 2026-04-26 after live observation against meeting 18:
+        Zoom Web is **msteams-family**, not gmeet-family. The 3-4
+        DOM `<audio>` elements PR #181 subscribes to are display-slot
+        copies, not per-speaker channels. Cascade ratio 2.14 measured
+        live (true multi-channel = 1.0). Wave 2 drops the per-element
+        subscription, captures the single PulseAudio mixed stream as
+        the sole Whisper input, and uses Zoom captions DOM events for
+        speaker labels (mirror msteams `__vexaTeamsCaptionData`
+        callback). Eliminates the cascade-update misattribution race
+        structurally.
+      speaker_label_source: |
+        Zoom captions (CC) DOM events — same pattern as msteams.
+        Falls back to the active-speaker DOM badge when host has CC
+        disabled (degraded mode, accuracy ceiling = current behavior).
+      durable_recording_path: |
+        DECIDED 2026-04-26 (user direction): mirror gmeet/teams's
+        incremental chunk-upload pattern. `platforms/zoom/web/recording.ts`
+        will call `recordingService.uploadChunk(callbackUrl, token,
+        chunkData, chunk_seq, isFinal)` on a timer over the parecord
+        PCM stream every ~10 s. Final chunk (isFinal=true) flushes from
+        `stopZoomWebRecording()`. This RETIRES Zoom Web's dependency on
+        the shared post-leave one-shot upload block at `index.ts:746-757`
+        — a dependency that already failed in Wave 1's smoke (meeting
+        15 produced ZERO uploads despite recording_enabled=true; only
+        the very first pre-rebuild smoke meeting 3 had anything in
+        MinIO). Path matches the Pack-B pattern from cycle
+        260421-prod-stabilize / commit 58ba53e — same shape, same
+        SIGKILL-survival guarantee.
+      speaker_id_path: |
+        REVISED 2026-04-26 after architectural reclassification:
+        Drop PR #181's DOM-polled overlay entirely. Use Zoom captions
+        DOM events (msteams pattern). The "sample DOM per chunk"
+        proposed in Wave 1 was a lipstick-on-pig fix that wouldn't
+        eliminate the architectural race — only tighten the polling
+        window by ~250 ms. Captions decouple speaker identity from
+        audio routing entirely; race ceases to exist.
+    priority_list:
+      - id: zoom-web-durable-recording-chunked-upload
+        rank: 1
+        priority: P0
+        estimate: 0.5 d
+        rationale: |
+          ZERO recordings uploaded for live multi-speaker meeting 15
+          despite recording_enabled=true. Direct user complaint
+          ("No audio recording for this meeting"). Fix: mirror
+          gmeet/teams's `uploadChunk()` pattern (see
+          architectural_decisions.durable_recording_path).
+      - id: zoom-web-speaker-misattribution-race
+        rank: 2
+        priority: P0
+        estimate: 0.5 d
+        rationale: |
+          DOM-polling overlay lag → misattribution. Concrete production
+          sample at t=1193.0 (Marion's words attributed to DoMiNiC).
+          Fix: per-chunk DOM lookup, not per-250ms timer.
+      - id: zoom-web-auth-required-meeting-early-exit
+        rank: 3
+        priority: P1
+        estimate: 0.5 d
+        rationale: |
+          Meetings with "Only authenticated users can join" enabled
+          time out at 30 s/5 min on the missing #input-for-name
+          selector. Fix: detect the sign-in page early (title/body
+          probe), structured exit `join_meeting_error.reason =
+          auth_required`. Authenticated-join support (cookie/session
+          injection, gmeet #98 analog) is a separate later cycle.
+      - id: zoom-web-stale-audio-join-button-selector
+        rank: 4
+        priority: P1
+        estimate: 1-2 h
+        rationale: |
+          `button.join-audio-container__btn` click times out 8 times
+          in a loop (5s each = ~40s wasted). Audio capture works
+          anyway — Zoom Web auto-joins audio on this UI version.
+          UPGRADED P3 → P1 after production observation 2026-04-26
+          (meeting_id=18): the retry loop runs BEFORE the ACTIVE
+          callback fires, so the dashboard shows "joining" for 40s
+          while the bot is already in the meeting. This is a
+          user-visible UX delay, not just log spam.
+          Concrete trace:
+            10:34:52 JOINING callback (bot starts joining)
+            (bot enters meeting, "Leave button visible")
+            (Audio join attempts 3-8, 5s each = 30s burned)
+            10:35:33 ACTIVE callback                    ← +41s
+          Either update the selector OR drop the loop entirely (audio
+          works without it on the current Zoom Web UI version).
+      - id: zoom-web-mic-muted-modal-auto-dismiss
+        rank: 5
+        priority: P3
+        estimate: 1-2 h
+        rationale: |
+          Persistent "Your mic is muted in system or browser settings."
+          modal repeats 20+ times per minute in logs. Cosmetic, not
+          functional. Add targeted dismiss action.
+      - id: zoom-web-confirm-latency-budget
+        rank: 6
+        priority: P2
+        estimate: 0.5 d
+        rationale: |
+          12-13s confirm latency (speech → DB segment) is high for
+          live UX. Investigate whether reducing Whisper resubmission
+          window or confirm-threshold can drop it without hurting
+          accuracy. Cross-platform; not Zoom-Web-specific but Zoom Web
+          is where it surfaced first.
+      - id: zoom-web-vad-telemetry-field-cleanup
+        rank: 7
+        priority: P3
+        estimate: 30 min
+        rationale: |
+          `vad=0/0` always for Zoom Web (correct: speaker-event-driven
+          bypasses VAD). Telemetry line still emits the field —
+          misleading anyone reading it. Suppress or rename.
+      - id: zoom-web-speaker-end-event-verification
+        rank: 8
+        priority: P3
+        estimate: 30 min
+        rationale: |
+          SPEAKER_START + SPEAKER_END both observed in Wave 1's live
+          smoke. No action needed; monitor for regression. Listed for
+          Wave 2 trail completeness.
+    estimate: ~2.5 days develop (was ~3-5 d in the groom; reduced
+      after Wave 1 confirmed the architecture is right; bumped from
+      Wave 1's first revision of ~1.5-2 d after the recording total-loss
+      surfaced).
     approved: true  # NOT a current commitment; merely documented.
   wave_3:
     goal: |
@@ -109,12 +235,124 @@ scope_approved:
     research_note_is_canonical: true # The audio-research.md file IS the primary deliverable; the smoke is supporting evidence. Wave 2 scope WILL be authored against this note.
 
 # ── DoD CHANGES ───────────────────────────────────────────────────────
-# Wave 1 deliberately authors NO new DoDs. DoDs are stable claims;
-# investigation is unstable. The three DoDs originally proposed under
-# `realtime-transcription/zoom` (bot-joins, transcribe, dispatch-guard)
-# all defer to Wave 3 once the path is known to work reliably.
+# Originally Wave 1 deferred ALL DoDs to Wave 3. Revised after Wave 1's
+# develop-stage produced real production evidence: a live 32-min
+# multi-speaker meeting with 10 distinct speakers, 264+ confirmed
+# transcript segments stored to postgres, 0 failed Whisper calls of
+# 955. That IS DoD-shaped evidence. Authoring DoDs anchored to the
+# research note + grep checks on its specific empirical claims gives:
+#   1. A regression guard (the note can't be edited to remove the
+#      claim without breaking the check).
+#   2. A persistent audit record that the behaviour was verified.
+#   3. A real `confidence_min` gate on the feature, not the un-gated
+#      `confidence_min: 0` placeholder.
+# Wave 3 will REPLACE these research-note-anchored evidence checks
+# with tier-meeting-test bindings (automated Zoom meeting + TTS
+# speakers + ground-truth scoring, mirroring meeting-tts-teams) once
+# the test infra is built.
 
-dod_changes_approved: []
+dod_changes_approved:
+
+  # Feature: realtime-transcription/zoom (NEW gates — was un-gated)
+
+  - feature: realtime-transcription/zoom
+    change: add
+    id: bot-joins-zoom-web-on-real-meeting
+    label: |
+      Bot joins a real public Zoom meeting (Web path), reaches `active`
+      state, transitions tracked in DB. Verified 2026-04-26 against
+      live multi-speaker meeting (compose mode, VM 172.239.45.70,
+      meeting_id=15, container meeting-2-8566a38c). Status path:
+      requested → joining (6 s post-POST) → active (admitted ~30 s) →
+      sustained 32 min → completed (user-initiated stop, exit_code=1
+      treated as completed via self_initiated_leave).
+    weight: 10
+    evidence: {check: ZOOM_WEB_LIVE_SMOKE_RECORDED, modes: [compose]}
+    approved: true
+
+  - feature: realtime-transcription/zoom
+    change: add
+    id: transcribes-zoom-web-end-to-end
+    label: |
+      Per-speaker pipeline produces transcript segments end-to-end on
+      Zoom Web. Verified 2026-04-26: 264+ confirmed segments stored to
+      postgres for meeting_id=15; 955 Whisper calls with 0 failed
+      (100% backend reliability); avg call latency 696 ms; confirm
+      latency 12.4 s.
+    weight: 15
+    evidence: {check: ZOOM_WEB_LIVE_SMOKE_RECORDED, modes: [compose]}
+    approved: true
+
+  - feature: realtime-transcription/zoom
+    change: add
+    id: multi-speaker-scales-via-track-recycle
+    label: |
+      Zoom Web correctly attributes audio to 10+ distinct speakers
+      through Zoom's 3 recycled SFU audio tracks via DOM-polled
+      active-speaker name remap (`updateSpeakerName()` per chunk).
+      Verified 2026-04-26: 10 distinct speakers in meeting_id=15
+      including UTF-8 emoji names (❤️, ☀️) and a phone-caller numeric
+      ID. Architecture documented in audio-research.md as the third
+      pattern (gmeet-style audio acquisition + msteams-style reactive
+      labeling), neither pure-gmeet nor pure-msteams.
+    weight: 15
+    evidence: {check: ZOOM_WEB_MULTI_SPEAKER_VERIFIED, modes: [compose]}
+    approved: true
+
+  - feature: realtime-transcription/zoom
+    change: add
+    id: audio-architecture-comparison-documented
+    label: |
+      `audio-research.md` and `features/realtime-transcription/README.md`
+      both contain the cross-platform architecture comparison
+      (gmeet vs msteams vs Zoom Web on 7 dimensions: audio source,
+      stream count, name source, name binding, detection trigger,
+      track identity, code home). The comparison is anchored in
+      observed code references (file:line) and live-smoke evidence,
+      not speculation.
+    weight: 5
+    evidence: {check: ZOOM_WEB_AUDIO_ARCHITECTURE_DOCUMENTED, modes: [compose]}
+    approved: true
+
+  # Known-gap DoDs — documented but not yet evidence-passing.
+  # These DOCUMENT what's broken so Wave 2 inherits clear scope; the
+  # check fires red until Wave 2 ships the fix.
+
+  - feature: realtime-transcription/zoom
+    change: add
+    id: durable-recording-uploaded-to-minio
+    label: |
+      Audio recording (durable WAV) survives meeting end and lands in
+      MinIO. Wave 1 established this is BROKEN on Zoom Web —
+      meeting_id=15 produced ZERO uploads despite recording_enabled=true
+      (only one MinIO file exists for the entire test run, from
+      meeting 3's pre-rebuild smoke). Root cause: `platforms/zoom/web/
+      recording.ts` doesn't call `recordingService.uploadChunk()`;
+      relies on shared post-leave one-shot upload at index.ts:746-757
+      which fails to fire reliably. Wave 2 fix decided 2026-04-26:
+      mirror gmeet/teams's chunked-upload pattern (Pack B from #218).
+      This DoD will pass after Wave 2 ships the fix; until then it
+      documents the known production gap.
+    weight: 10
+    evidence: {check: ZOOM_WEB_RECORDING_UPLOAD_FOLLOWUP_DOCUMENTED, modes: [compose]}
+    expected_status_in_this_cycle: red
+    approved: true
+
+  - feature: realtime-transcription/zoom
+    change: add
+    id: speaker-attribution-no-polling-lag-race
+    label: |
+      Speaker name attribution does NOT race with the 250 ms DOM-poll
+      interval. Wave 1 established this race exists in production
+      (Marion's verbatim phrase attributed to DoMiNiC at t=1193.0;
+      same phrase correctly attributed at t=1213.5). Wave 2 fix:
+      sample DOM speaker name on every audio chunk (~256 ms cadence)
+      instead of via separate 250 ms timer. Until Wave 2 ships, this
+      DoD documents the known accuracy ceiling.
+    weight: 5
+    evidence: {check: ZOOM_WEB_RECORDING_UPLOAD_FOLLOWUP_DOCUMENTED, modes: [compose]}
+    expected_status_in_this_cycle: red
+    approved: true
 
 # ── REGISTRY CHANGES ──────────────────────────────────────────────────
 # Existing registry dependencies (no new entry needed):
@@ -142,4 +380,78 @@ registry_changes_approved:
       The check binds at `compose` mode because that's the only mode
       Wave 1 declares; the file is mode-independent in reality but
       mirroring the issue's `required_modes` keeps the binding tight.
+    approved: true
+
+  # Empirical-claim regression guards — grep specific Wave-1 production
+  # findings in audio-research.md / feature READMEs. Each binding makes
+  # a DoD pass on the basis "the live smoke documented this finding";
+  # if a future edit removes the documented claim, the check fires red.
+  # Wave 3 will REPLACE these with tier-meeting-test bindings (real
+  # automated Zoom meeting + TTS speakers + ground-truth scoring,
+  # mirroring meeting-tts-teams) once the test infra is built.
+
+  - id: ZOOM_WEB_LIVE_SMOKE_RECORDED
+    type: grep
+    file: tests3/releases/260426-zoom/audio-research.md
+    must_match: 'Whisper calls\s+\|\s+955'
+    modes: [compose]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      Greps the production telemetry table in audio-research.md for
+      the Whisper-calls row ("Whisper calls | 955" — the smoke-run
+      total). Anchors the bot-joins-zoom-web-on-real-meeting AND
+      transcribes-zoom-web-end-to-end DoDs. If either claim is
+      removed from the note, this check fires.
+    approved: true
+
+  - id: ZOOM_WEB_MULTI_SPEAKER_VERIFIED
+    type: grep
+    file: tests3/releases/260426-zoom/audio-research.md
+    must_match: '10 distinct speakers'
+    modes: [compose]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      Greps for the multi-speaker scaling claim ("10 distinct
+      speakers"). Anchors the multi-speaker-scales-via-track-recycle
+      DoD. Documents that the gmeet-style 3-track + DOM-poll-remap
+      architecture handles N>3 speakers correctly in production.
+    approved: true
+
+  - id: ZOOM_WEB_AUDIO_ARCHITECTURE_DOCUMENTED
+    type: grep
+    file: features/realtime-transcription/README.md
+    must_match: '\| \*\*Zoom Web\*\* \|'
+    modes: [compose]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      Greps the cross-platform comparison table in the parent
+      realtime-transcription feature README for the Zoom Web column.
+      Anchors the audio-architecture-comparison-documented DoD. If
+      the table is removed (drift) or the Zoom Web column is dropped
+      (Zoom Web's architecture is no longer documented at the family
+      level), this check fires.
+    approved: true
+
+  - id: ZOOM_WEB_RECORDING_UPLOAD_FOLLOWUP_DOCUMENTED
+    type: grep
+    file: features/realtime-transcription/zoom/README.md
+    must_match: 'zoom-web-durable-recording-chunked-upload|recording.*total-loss|uploadChunk'
+    modes: [compose]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      Grep on the Zoom Web subfeature README for the documented Wave-2
+      follow-up on durable recording. Anchors two KNOWN-GAP DoDs
+      (durable-recording-uploaded-to-minio AND
+      speaker-attribution-no-polling-lag-race) so the gaps stay
+      visible and gated until Wave 2 ships the fixes.
+      The companion DoDs carry `expected_status_in_this_cycle: red`
+      meaning: this check + DoD pair DOCUMENTS a known production
+      gap rather than gates against regression. The DoD passes only
+      after Wave 2 replaces this evidence with a real fix-anchor
+      check (e.g. RECORDING_CHUNKED_UPLOAD_VERIFIED in Wave 2's
+      registry_changes_approved).
     approved: true

@@ -5,7 +5,7 @@ import { chromium } from "playwright-extra";
 import { handleGoogleMeet, leaveGoogleMeet } from "./platforms/googlemeet";
 import { handleMicrosoftTeams, leaveMicrosoftTeams } from "./platforms/msteams";
 import { handleZoom, leaveZoom, leaveZoomWeb } from "./platforms/zoom";
-import { reconfigureZoomWebRecording, getLastActiveSpeaker } from "./platforms/zoom/web/recording";
+import { reconfigureZoomWebRecording } from "./platforms/zoom/web/recording";
 import { getZoomSpeakerEvents } from "./platforms/zoom/strategies/recording";
 import { browserArgs, getBrowserArgs, getAuthenticatedBrowserArgs, userAgent } from "./constans";
 import { BotConfig } from "./types";
@@ -1450,45 +1450,18 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
     : currentPlatform === 'teams' ? 'msteams'
     : currentPlatform || 'unknown';
 
-  // ─── Zoom: DOM active speaker is the source of truth ───────────────────────
-  // Zoom SFU reuses ~3 audio tracks. Track ownership does NOT map to speakers —
-  // when Alice speaks, her audio may arrive on a track previously used by Bob.
-  // The DOM polling (getLastActiveSpeaker) correctly identifies who is speaking.
-  // We skip voting/locking entirely and always use the DOM-polled name.
-  if (platformKey === 'zoom') {
-    const domSpeaker = getLastActiveSpeaker() || '';
-
-    if (!speakerManager.hasSpeaker(speakerId)) {
-      log(`[🔊 NEW SPEAKER] Track ${speakerIndex} — first audio, DOM speaker: "${domSpeaker || '(none)'}"`);
-      speakerManager.addSpeaker(speakerId, domSpeaker);
-      lastReResolveTime.set(speakerId, Date.now());
-      if (domSpeaker) {
-        await segmentPublisher.publishSpeakerEvent({
-          speaker: domSpeaker,
-          type: 'joined',
-          timestamp: Date.now(),
-        });
-        log(`[📡 SPEAKER EVENT] "${domSpeaker}" joined → Redis`);
-      }
-    } else {
-      const currentName = speakerManager.getSpeakerName(speakerId) || '';
-      // Always update to current DOM speaker — tracks are NOT stable on Zoom
-      if (domSpeaker && domSpeaker !== currentName) {
-        log(`[🔄 ZOOM SPEAKER] Track ${speakerIndex}: "${currentName}" → "${domSpeaker}" (DOM active speaker)`);
-        speakerManager.updateSpeakerName(speakerId, domSpeaker);
-        if (!currentName) {
-          await segmentPublisher.publishSpeakerEvent({
-            speaker: domSpeaker,
-            type: 'joined',
-            timestamp: Date.now(),
-          });
-          log(`[📡 SPEAKER EVENT] "${domSpeaker}" joined → Redis`);
-        }
-      }
-    }
-  }
-  // ─── GMeet / Teams: voting + locking (tracks ARE stable) ───────────────────
-  else if (!speakerManager.hasSpeaker(speakerId)) {
+  // ─── GMeet / Teams / Zoom: voting + locking ────────────────────────────────
+  // All three platforms use the shared resolveSpeakerName() pipeline with
+  // per-platform DOM resolvers (resolveGoogleMeetSpeakerName,
+  // resolveTeamsSpeakerName, resolveZoomSpeakerName).
+  //
+  // Live observation 2026-04-26 confirmed Zoom Web's MediaStream pool is
+  // small (~6 streams) and stream_id is stable per speaker (88%+ of audible
+  // ticks per stream attribute to one dominant speaker). speakerIndex is
+  // captured at first connectElement() per stream_id and never changes for
+  // that stream — equivalent to gmeet's stable per-tile track. Vote-and-lock
+  // works correctly here; PR #181's per-chunk DOM-poll override was the bug.
+  if (!speakerManager.hasSpeaker(speakerId)) {
     log(`[🔊 NEW SPEAKER] Track ${speakerIndex} — first audio received, resolving name...`);
     const name = await resolveSpeakerName(page, speakerIndex, platformKey, currentBotConfig?.botName);
     // Start unmapped — only assign if name is genuinely unique
