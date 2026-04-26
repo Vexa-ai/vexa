@@ -1,7 +1,7 @@
 import { Page } from 'playwright';
 import { BotConfig } from '../../../types';
 import { log } from '../../../utils';
-import { zoomAudioButtonSelector, zoomChatButtonSelector } from './selectors';
+import { zoomAudioButtonSelector, zoomChatButtonSelector, zoomVideoButtonSelector } from './selectors';
 
 /**
  * Post-admission setup: join computer audio, dismiss any popups, verify audio.
@@ -141,6 +141,35 @@ export async function prepareZoomWebMeeting(page: Page | null, botConfig: BotCon
       await closeNotif.click();
     }
   } catch { /* no banner */ }
+
+  // Belt-and-braces video-off after admission. join.ts already toggles the
+  // pre-join preview button when it says "Stop Video", but Zoom's meeting-side
+  // video state can re-enable independently of preview (observed on some
+  // accounts where the preview toggle didn't carry over). Match gmeet/teams
+  // behaviour: bot defaults to camera off — only opt back in when an
+  // operator explicitly asks for video capture downstream.
+  // Only act when aria-label === "Stop Video" (= currently broadcasting);
+  // "Start Video" is already-off and would be a no-op.
+  try {
+    const inMeetingVideoBtn = page.locator(zoomVideoButtonSelector).first();
+    if (await inMeetingVideoBtn.isVisible({ timeout: 2000 })) {
+      const label = await inMeetingVideoBtn.getAttribute('aria-label');
+      if (label === 'Stop Video') {
+        await inMeetingVideoBtn.click();
+        log('[Zoom Web] Video disabled post-admission (was on, toggled off)');
+      } else {
+        log(`[Zoom Web] Video already off post-admission (aria-label="${label}")`);
+      }
+    }
+  } catch (e: any) {
+    log(`[Zoom Web] Could not verify video-off post-admission: ${e.message}`);
+  }
+
+  // Incoming-video block runs at the RTCPeerConnection layer (shared
+  // services/screen-content.ts → getVideoBlockInitScript). That script
+  // also sets transceiver.direction so the decoder actually stops —
+  // not just `track.enabled=false` which only blackens <video> output
+  // while the decoder keeps pumping frames into Zoom's canvas paint.
 
   // Verify audio elements exist after joining (delayed check — elements may take time to appear)
   await verifyAudioElements(page);

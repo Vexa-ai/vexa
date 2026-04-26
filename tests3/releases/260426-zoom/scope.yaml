@@ -63,8 +63,14 @@ summary: |
   process action and doesn't depend on which wave is in flight.
 
 # Which deployments the release must prove out.
+# 2026-04-26 widening: the user invoked the cross-feature gate which
+# strictly evaluates ALL features; narrow `[compose]` left helm/lite
+# DoDs without evidence and the gate red-flagged 8 unrelated features.
+# Widened to all three modes so the gate evaluates against full
+# evidence rather than blocking on coverage gaps that aren't this
+# cycle's regression scope.
 deployments:
-  modes: [compose]
+  modes: [compose, lite, helm]
   notes:
     compose: |
       Smoke run + audio-architecture inspection happens against a

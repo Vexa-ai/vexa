@@ -93,7 +93,11 @@ export function startVideoRecordingIfNeeded(): void {
   if (!currentBotConfig) return;
   const wantsVideoCapture = !!currentBotConfig.recordingEnabled &&
     Array.isArray(currentBotConfig.captureModes) && currentBotConfig.captureModes.includes('video');
-  const isZoomNative = currentBotConfig.platform === 'zoom' && process.env.ZOOM_WEB !== 'true';
+  // Zoom Web is the default; opt into Native SDK with ZOOM_SDK=true (and
+  // valid ZOOM_CLIENT_ID/SECRET). Legacy ZOOM_WEB=true still forces Web.
+  const isZoomNative = currentBotConfig.platform === 'zoom'
+    && process.env.ZOOM_SDK === 'true'
+    && process.env.ZOOM_WEB !== 'true';
 
   if (wantsVideoCapture && !isZoomNative) {
     try {
@@ -106,7 +110,7 @@ export function startVideoRecordingIfNeeded(): void {
       activeVideoRecordingService = null;
     }
   } else if (wantsVideoCapture && isZoomNative) {
-    log('[VideoRecording] Video recording not supported for Zoom Native SDK — use ZOOM_WEB=true for screen capture');
+    log('[VideoRecording] Video recording not supported for Zoom Native SDK — unset ZOOM_SDK to use the default Web client (screen capture works there)');
   }
 }
 
@@ -487,7 +491,10 @@ const handleRedisMessage = async (message: string, channel: string, page: Page |
           allowedLanguages = command.allowed_languages?.length ? command.allowed_languages : null;
           currentTask = command.task;
 
-          const isZoomWeb = process.env.ZOOM_WEB === 'true' && (globalThis as any).botConfig?.platform === 'zoom';
+          // Zoom Web is the default; isZoomWeb is true unless ZOOM_SDK=true
+          // explicitly opts into the native SDK path.
+          const isZoomWeb = (globalThis as any).botConfig?.platform === 'zoom'
+            && (process.env.ZOOM_WEB === 'true' || process.env.ZOOM_SDK !== 'true');
           if (isZoomWeb) {
             await reconfigureZoomWebRecording(currentLanguage ?? null, currentTask ?? null);
           }
@@ -638,7 +645,8 @@ async function performGracefulLeave(
   // Handle Zoom separately — SDK mode uses null page, web mode uses browser page
   if (currentPlatform === "zoom") {
     try {
-      const zoomWebMode = process.env.ZOOM_WEB === 'true';
+      // Zoom Web is the default; SDK is opt-in via ZOOM_SDK=true.
+      const zoomWebMode = process.env.ZOOM_WEB === 'true' || process.env.ZOOM_SDK !== 'true';
       if (zoomWebMode) {
         log("[Graceful Leave] Attempting Zoom Web cleanup...");
         platformLeaveSuccess = await leaveZoomWeb(page);
@@ -2006,9 +2014,11 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
   }
   // -------------------------------------------------
 
-  // For Zoom Web: create a per-bot PulseAudio null sink so concurrent bots don't
-  // cross-contaminate each other's audio via the shared zoom_sink.monitor.
-  if (botConfig.platform === 'zoom' && process.env.ZOOM_WEB === 'true') {
+  // For Zoom Web (default): create a per-bot PulseAudio null sink so
+  // concurrent bots don't cross-contaminate each other's audio via the
+  // shared zoom_sink.monitor. Skip for the native-SDK path.
+  if (botConfig.platform === 'zoom'
+      && (process.env.ZOOM_WEB === 'true' || process.env.ZOOM_SDK !== 'true')) {
     const sinkName = `bot_sink_${botConfig.meeting_id}`;
     try {
       const moduleId = execSync(
