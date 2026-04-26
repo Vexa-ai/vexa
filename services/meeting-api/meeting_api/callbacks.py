@@ -211,10 +211,18 @@ async def bot_exit_callback(
                 }
                 meeting.data = updated_data
 
-        if not success:
-            return {"status": "error", "detail": "Failed to update meeting status"}
-
-        # Persist chat messages from Redis
+        # Persist chat messages from Redis list → meeting.data.chat_messages JSONB.
+        #
+        # Runs unconditionally — independent of `success`. Race we're guarding
+        # against: when the user sends DELETE, meetings.py's [Delayed Stop]
+        # timer can mark the meeting `completed` BEFORE the bot's exit
+        # callback fires. The exit callback's status update then tries
+        # `completed → completed` and returns False ("Invalid status
+        # transition"). If we returned early on `not success`, chat messages
+        # would be stuck in Redis forever — which was happening: every
+        # DELETE-terminated meeting had zero persisted chat (observed
+        # 2026-04-26 across all meetings). The chat-persistence block
+        # doesn't depend on status state, so it's safe to run regardless.
         if redis_client:
             try:
                 chat_raw = await redis_client.lrange(f"meeting:{meeting_id}:chat_messages", 0, -1)
