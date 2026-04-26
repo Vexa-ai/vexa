@@ -1,0 +1,145 @@
+# Plan approval — 260426-zoom (Wave 1: investigation + smoke)
+#
+# Human signed off 2026-04-26. All items flipped to `approved: true`
+# per explicit user turn: "go" following Iter-4 (wave-shaped plan).
+
+release_id: 260426-zoom
+approved_at: 2026-04-26T08:30:00Z
+approver: dmitry@vexa.ai
+approval_source: |
+  User turn "go" 2026-04-26 after the plan went through four
+  substantial reshapes during this turn:
+    Iter-1: groom Shape 1 → 5 packs (A enum, B tier-meeting,
+            C DoD authorship, D pre-flight, E PR close-out).
+    Iter-2 (audit + user pushback "looks bloated, why not directly
+            route"): merged the `process.env.ZOOM_WEB` indirection
+            deletion into Pack A — direct platform-value dispatch on
+            both meeting-api AND bot. Bot-image rebuild added.
+    Iter-3 (user "we don't have separate image for meet and teams,
+            why we need separate for zoom web"): Pack D dropped
+            entirely — Playwright presence is bot-image-wide, not
+            Zoom-specific; gmeet+teams tests already implicitly
+            verify it.
+    Iter-4 (user "let's organize the work in waves; first transcription
+            flowing + research on audio architecture"): wholesale
+            re-shape into wave-based delivery. THIS CYCLE = Wave 1
+            ONLY. Pack A (enum upgrade), Pack B (tier-meeting test),
+            Pack C (DoDs) all defer to Wave 3 (subsequent cycle).
+            Wave 2 (speaker labeling implementation) sized by Wave 1
+            findings; not committed in this scope.
+  Final shape: ONE issue, ONE new registry check (research-note
+  existence guard), ZERO new DoDs, ZERO public-API change, ZERO
+  bot-image change. Develop time: ~1-1.5 d (mostly running real
+  meetings + DOM inspection + writing research note).
+
+  Audit findings retained from prior iterations:
+    1. **Bot image is shared across all browser platforms** (gmeet,
+       teams, zoom-web) — confirmed at `deploy/helm/charts/vexa/values.yaml:386-410`
+       (single `${BROWSER_IMAGE}` ref) and `services/vexa-bot/core/src/index.ts:5-9`
+       (single index.ts handles all platforms). Implication: Zoom
+       Web's prereqs are bot-lifecycle prereqs; no Zoom-specific
+       image guard buys anything.
+    2. **`runtimeProfiles.yaml` has no per-platform `capabilities`
+       flag** — confirmed by inspecting values.yaml profiles block.
+       Implication: any pre-flight design that wants to gate
+       `(platform, profile)` capability requires a new abstraction
+       this cycle is too small to justify. Defer to whatever cycle
+       actually needs it (likely #253 SDK-side).
+    3. **The features taxonomy in registry.yaml is feature-tags on
+       test/check entries**, not a `tests3/features/<name>/dods.yaml`
+       directory tree. The groom's reference to that path was
+       aspirational. Wave 3 will add `realtime-transcription/zoom`
+       as a feature tag value when it authors DoDs.
+    4. **Zoom audio architecture is unknown** (the new finding that
+       drove Iter-4). PR #181's source files exist but no documentation
+       explains whether Zoom Web emits per-participant tracks (gmeet
+       shape) or a mixed stream (teams shape) or something else.
+       Wave 1 IS the work to find out.
+
+# Ship-stage follow-ups (NOT scope items; recorded for ship's
+# `deferred_follow_ups` section in human-approval.yaml).
+ship_followups_for_ship_stage:
+  - id: pr-179-close-out
+    description: |
+      Close PR #179 (jbschooley, 2026-03-11, currently CONFLICTING)
+      with thanks, citing PR #181 as the merged solution that
+      shipped the in-tree Zoom Web client. Even though THIS cycle is
+      research-only, the close-out is still appropriate now —
+      the PR is stale regardless of which wave we're in. Process
+      action; no code change. If the contributor wants to follow up
+      on Wave 2/3 work (audio path, anti-automation), file fresh
+      issues rather than reopen #179.
+    routed_to: ship
+    approved: true
+
+# Future waves — documented for trail; NOT committed in this scope.
+# These will become their own cycle's groom + plan when this cycle ships.
+future_waves_documented:
+  wave_2:
+    goal: |
+      Implement Zoom Web buffering + speaker labeling per Wave 1's
+      recommendation. Three plausible paths (gmeet-like multi-channel,
+      teams-like single-stream + caption-driven, hybrid). Concrete
+      scope sized by Wave 1's `audio-research.md`.
+    estimate: ~3-5 days depending on chosen path
+    approved: true  # NOT a current commitment; merely documented.
+  wave_3:
+    goal: |
+      Public-API uplift + gating contract. Land the platform-enum
+      split (`Platform.ZOOM_SDK = "zoom_sdk"`; `ZOOM = "zoom"` is
+      Web; direct routing on both meeting-api and bot; delete
+      `process.env.ZOOM_WEB` end-to-end). Add `meeting-tts-zoom`
+      tier-meeting test mirroring `meeting-tts-teams`. Author three
+      DoDs under `realtime-transcription/zoom` (bot-joins, transcribe,
+      breaking-change-dispatch-guard). **Ships the breaking change**
+      in release notes (operators relying on `platform=zoom` routing
+      SDK pre-cycle must send `zoom_sdk` explicitly).
+    estimate: ~2.5 days
+    approved: true  # NOT a current commitment; merely documented.
+
+# ── OBJECTIVES ────────────────────────────────────────────────────────
+
+scope_approved:
+  - issue: zoom-web-audio-path-research-and-smoke
+    hypothesis: true        # Operate the existing PR #181 code on a real Zoom meeting via compose; inspect audio architecture (per-participant tracks vs mixed stream; active-speaker DOM hook; captions; name resolution); produce audio-research.md comparing to gmeet/teams + recommending Wave 2 path with concrete file touchpoints.
+    proves: true            # Four bindings: 3 reused checks (BOT_CREATE_OK, BOT_STATUS_TRANSITIONS, SEGMENT_PIPELINE) on compose for the smoke half + 1 new check (ZOOM_WEB_AUDIO_RESEARCH_NOTE_EXISTS) for the research-note half.
+    required_modes: true    # [compose] only. Smoke needs running services (compose); research is mode-independent but compose is where the smoke runs anyway.
+    human_verify: true      # Three steps: smoke run on real meeting; CDP-attached audio architecture inspection while bot is connected; eyeroll of audio-research.md recommendation against existing gmeet/teams paths.
+    no_public_api_change: true       # Confirmed: no Platform enum changes this cycle; no breaking changes; no bot-image rebuild.
+    research_note_is_canonical: true # The audio-research.md file IS the primary deliverable; the smoke is supporting evidence. Wave 2 scope WILL be authored against this note.
+
+# ── DoD CHANGES ───────────────────────────────────────────────────────
+# Wave 1 deliberately authors NO new DoDs. DoDs are stable claims;
+# investigation is unstable. The three DoDs originally proposed under
+# `realtime-transcription/zoom` (bot-joins, transcribe, dispatch-guard)
+# all defer to Wave 3 once the path is known to work reliably.
+
+dod_changes_approved: []
+
+# ── REGISTRY CHANGES ──────────────────────────────────────────────────
+# Existing registry dependencies (no new entry needed):
+#   BOT_CREATE_OK, BOT_STATUS_TRANSITIONS, SEGMENT_PIPELINE — all
+#   reused for the smoke half of the issue.
+
+registry_changes_approved:
+
+  - id: ZOOM_WEB_AUDIO_RESEARCH_NOTE_EXISTS
+    type: grep
+    file: tests3/releases/260426-zoom/audio-research.md
+    must_match: '##\s+(Recommendation|Wave 2)'
+    modes: [compose]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      Asserts the research-note file exists AND has at least one
+      section header matching `## Recommendation` or `## Wave 2`
+      (the structural marker that the note arrived at a recommendation,
+      not just an inventory of findings). Cheap regression guard
+      that prevents merging Wave 1 with an empty / TODO note. The
+      note's content is human-eyerolled (per scope.yaml's
+      `human_verify` step 3); this check guards the file's structural
+      shape.
+      The check binds at `compose` mode because that's the only mode
+      Wave 1 declares; the file is mode-independent in reality but
+      mirroring the issue's `required_modes` keeps the binding tight.
+    approved: true
