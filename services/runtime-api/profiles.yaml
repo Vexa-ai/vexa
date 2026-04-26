@@ -13,6 +13,15 @@ profiles:
     command: ["/app/vexa-bot/entrypoint.sh"]
     working_dir: "/app/vexa-bot"
     resources:
+      # 2026-04-26: Zoom Web bot was demanding ~3.2 cores due to a
+      # software gpu-process (357% of one bot's 440% total CPU) running
+      # SwiftShader + canvas compositing. 2026-04-27: adding the Chromium
+      # flag --in-process-gpu (services/vexa-bot/core/src/constans.ts)
+      # collapsed that work into the renderer and per-bot demand dropped
+      # to ~115% — back inside the original 1500m budget that matches
+      # the prior gmeet/teams p95 (780m). Restoring those original
+      # numbers; the brief 4000m / 2500m bump was an emergency
+      # compensation while the gpu-process bug was unidentified.
       cpu_request: "1000m"     # measured p95: 780m (load test 2026-04-15, 19 bots)
       cpu_limit: "1500m"       # 1.5x headroom for browser spikes
       memory_request: "1100Mi" # measured p95: 977Mi (load test 2026-04-15, 19 bots)

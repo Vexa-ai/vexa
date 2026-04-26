@@ -6,6 +6,7 @@ import { log } from '../../../utils';
 import { spawn, ChildProcess } from 'child_process';
 import { zoomParticipantNameSelector } from './selectors';
 import { dismissZoomPopups } from './prepare';
+import { startZoomRichObservation } from './observe';
 
 let recordingService: RecordingService | null = null;
 let recordingStopResolver: (() => void) | null = null;
@@ -24,12 +25,6 @@ export async function startZoomWebRecording(page: Page | null, botConfig: BotCon
   if (!page) throw new Error('[Zoom Web] Page required for recording');
 
   activeBotConfig = botConfig;
-
-  // WhisperLive transcription is disabled for Zoom Web.
-  // The per-speaker pipeline in index.ts handles transcription via
-  // startPerSpeakerAudioCapture() + SpeakerStreamManager + TranscriptionClient.
-  // WhisperLive was a duplicate path that produced ~2x segments in Redis.
-  log('[Zoom Web] Transcription handled by per-speaker pipeline (WhisperLive disabled)');
 
   // Recording service
   const wantsAudioCapture =
@@ -55,6 +50,17 @@ export async function startZoomWebRecording(page: Page | null, botConfig: BotCon
   popupDismissInterval = setInterval(() => {
     dismissZoomPopups(page).catch(() => {});
   }, 2000);
+
+  // Optional: rich observation harness — enabled by ZOOM_OBSERVE=true
+  // Dumps WebRTC stats / per-element audio levels / WebSocket frames /
+  // DOM badge / caption availability every 2s for architecture research.
+  if (process.env.ZOOM_OBSERVE === 'true') {
+    try {
+      await startZoomRichObservation(page);
+    } catch (e: any) {
+      log(`[Zoom Web] ZOOM_OBSERVE harness failed to install: ${e.message}`);
+    }
+  }
 
   // Block until stopZoomWebRecording() is called
   await new Promise<void>((resolve) => {
@@ -105,9 +111,8 @@ export async function stopZoomWebRecording(): Promise<void> {
 }
 
 export async function reconfigureZoomWebRecording(language: string | null, task: string | null): Promise<void> {
-  // WhisperLive is disabled for Zoom Web — per-speaker pipeline handles transcription.
-  // Reconfigure is a no-op; language/task changes are handled at the per-speaker pipeline level.
-  log(`[Zoom Web] reconfigure: WhisperLive not active — ignoring (lang=${language}, task=${task})`);
+  // Language/task changes are handled at the per-speaker pipeline level.
+  log(`[Zoom Web] reconfigure: ignoring (lang=${language}, task=${task})`);
 }
 
 export function getZoomWebRecordingService(): RecordingService | null {

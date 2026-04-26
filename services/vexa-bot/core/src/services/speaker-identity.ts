@@ -341,9 +341,13 @@ async function resolveTeamsSpeakerName(
  * Zoom web client wraps each participant's media in a video-avatar container
  * with a .video-avatar__avatar-footer label containing the name.
  */
-async function traverseZoomDOM(page: Page, elementIndex: number): Promise<string | null> {
+async function traverseZoomDOM(
+  page: Page,
+  elementIndex: number,
+  botName?: string,
+): Promise<string | null> {
   return await page.evaluate(
-    ({ idx }) => {
+    ({ idx, selfName }) => {
       const mediaElements = Array.from(
         document.querySelectorAll('audio, video')
       ).filter((el: any) =>
@@ -355,6 +359,32 @@ async function traverseZoomDOM(page: Page, elementIndex: number): Promise<string
       const targetElement = mediaElements[idx] as HTMLElement | undefined;
       if (!targetElement) return null;
 
+      const selfLower = (selfName || '').toLowerCase();
+      const isBotName = (text: string) => {
+        if (!selfLower) return false;
+        const t = text.toLowerCase();
+        return t.includes(selfLower) || selfLower.includes(t);
+      };
+      // Reject obvious non-name strings (chat snippets, system messages).
+      // Display names: typically <60 chars, start with a capital letter, digit,
+      // or non-Latin char (emoji, ideogram). Chat sentences typically start
+      // lowercase ("it's a we thing"). Names like "Mr. Mason 2/5/02" must be
+      // accepted — so we DO NOT use a period-followed-by-space rule.
+      const looksLikeName = (text: string) => {
+        if (text.length > 60) return false;
+        const first = text[0];
+        // Reject leading lowercase Latin letter (chat sentences start that way)
+        if (first >= 'a' && first <= 'z') return false;
+        return true;
+      };
+      const accept = (text: string | null | undefined): string | null => {
+        if (!text) return null;
+        if (text.length === 0) return null;
+        if (isBotName(text)) return null;
+        if (!looksLikeName(text)) return null;
+        return text;
+      };
+
       // Walk up the DOM tree looking for Zoom participant containers
       let current: HTMLElement | null = targetElement;
       while (current && current !== document.body) {
@@ -365,7 +395,8 @@ async function traverseZoomDOM(page: Page, elementIndex: number): Promise<string
           if (footer) {
             const span = footer.querySelector('span');
             const text = (span?.textContent?.trim() || (footer as HTMLElement).innerText?.trim()) || null;
-            if (text && text.length > 0) return text;
+            const ok = accept(text);
+            if (ok) return ok;
           }
         }
         // Check for speaker-active-container (main speaker view)
@@ -374,7 +405,8 @@ async function traverseZoomDOM(page: Page, elementIndex: number): Promise<string
           if (footer) {
             const span = footer.querySelector('span');
             const text = (span?.textContent?.trim() || (footer as HTMLElement).innerText?.trim()) || null;
-            if (text && text.length > 0) return text;
+            const ok = accept(text);
+            if (ok) return ok;
           }
         }
         current = current.parentElement;
@@ -382,7 +414,7 @@ async function traverseZoomDOM(page: Page, elementIndex: number): Promise<string
 
       return null;
     },
-    { idx: elementIndex }
+    { idx: elementIndex, selfName: botName || '' }
   );
 }
 
@@ -444,8 +476,8 @@ async function resolveZoomSpeakerName(
   const locked = getLockedMapping(elementIndex);
   if (locked) return locked;
 
-  // Path 1: DOM traversal from the audio element
-  const domName = await traverseZoomDOM(page, elementIndex);
+  // Path 1: DOM traversal from the audio element (excludes bot's own tile)
+  const domName = await traverseZoomDOM(page, elementIndex, botName);
   if (domName) {
     if (!isNameTaken(domName, elementIndex)) {
       recordTrackVote(elementIndex, domName);

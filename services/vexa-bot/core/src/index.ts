@@ -5,7 +5,7 @@ import { chromium } from "playwright-extra";
 import { handleGoogleMeet, leaveGoogleMeet } from "./platforms/googlemeet";
 import { handleMicrosoftTeams, leaveMicrosoftTeams } from "./platforms/msteams";
 import { handleZoom, leaveZoom, leaveZoomWeb } from "./platforms/zoom";
-import { reconfigureZoomWebRecording, getLastActiveSpeaker } from "./platforms/zoom/web/recording";
+import { reconfigureZoomWebRecording } from "./platforms/zoom/web/recording";
 import { getZoomSpeakerEvents } from "./platforms/zoom/strategies/recording";
 import { browserArgs, getBrowserArgs, getAuthenticatedBrowserArgs, userAgent } from "./constans";
 import { BotConfig } from "./types";
@@ -93,7 +93,11 @@ export function startVideoRecordingIfNeeded(): void {
   if (!currentBotConfig) return;
   const wantsVideoCapture = !!currentBotConfig.recordingEnabled &&
     Array.isArray(currentBotConfig.captureModes) && currentBotConfig.captureModes.includes('video');
-  const isZoomNative = currentBotConfig.platform === 'zoom' && process.env.ZOOM_WEB !== 'true';
+  // Zoom Web is the default; opt into Native SDK with ZOOM_SDK=true (and
+  // valid ZOOM_CLIENT_ID/SECRET). Legacy ZOOM_WEB=true still forces Web.
+  const isZoomNative = currentBotConfig.platform === 'zoom'
+    && process.env.ZOOM_SDK === 'true'
+    && process.env.ZOOM_WEB !== 'true';
 
   if (wantsVideoCapture && !isZoomNative) {
     try {
@@ -106,7 +110,7 @@ export function startVideoRecordingIfNeeded(): void {
       activeVideoRecordingService = null;
     }
   } else if (wantsVideoCapture && isZoomNative) {
-    log('[VideoRecording] Video recording not supported for Zoom Native SDK — use ZOOM_WEB=true for screen capture');
+    log('[VideoRecording] Video recording not supported for Zoom Native SDK — unset ZOOM_SDK to use the default Web client (screen capture works there)');
   }
 }
 
@@ -487,11 +491,12 @@ const handleRedisMessage = async (message: string, channel: string, page: Page |
           allowedLanguages = command.allowed_languages?.length ? command.allowed_languages : null;
           currentTask = command.task;
 
-          // Zoom Web uses a Node.js-side WhisperLive (not browser-based) — reconfigure directly
-          const isZoomWeb = process.env.ZOOM_WEB === 'true' && (globalThis as any).botConfig?.platform === 'zoom';
+          // Zoom Web is the default; isZoomWeb is true unless ZOOM_SDK=true
+          // explicitly opts into the native SDK path.
+          const isZoomWeb = (globalThis as any).botConfig?.platform === 'zoom'
+            && (process.env.ZOOM_WEB === 'true' || process.env.ZOOM_SDK !== 'true');
           if (isZoomWeb) {
             await reconfigureZoomWebRecording(currentLanguage ?? null, currentTask ?? null);
-            log('[Zoom Web] Reconfigure handled via Node.js WhisperLive reconnect');
           }
 
           // Trigger browser-side reconfiguration via the exposed function (for Google Meet / Teams)
@@ -640,7 +645,8 @@ async function performGracefulLeave(
   // Handle Zoom separately — SDK mode uses null page, web mode uses browser page
   if (currentPlatform === "zoom") {
     try {
-      const zoomWebMode = process.env.ZOOM_WEB === 'true';
+      // Zoom Web is the default; SDK is opt-in via ZOOM_SDK=true.
+      const zoomWebMode = process.env.ZOOM_WEB === 'true' || process.env.ZOOM_SDK !== 'true';
       if (zoomWebMode) {
         log("[Graceful Leave] Attempting Zoom Web cleanup...");
         platformLeaveSuccess = await leaveZoomWeb(page);
@@ -1452,45 +1458,18 @@ async function handlePerSpeakerAudioData(speakerIndex: number, audioDataArray: n
     : currentPlatform === 'teams' ? 'msteams'
     : currentPlatform || 'unknown';
 
-  // ─── Zoom: DOM active speaker is the source of truth ───────────────────────
-  // Zoom SFU reuses ~3 audio tracks. Track ownership does NOT map to speakers —
-  // when Alice speaks, her audio may arrive on a track previously used by Bob.
-  // The DOM polling (getLastActiveSpeaker) correctly identifies who is speaking.
-  // We skip voting/locking entirely and always use the DOM-polled name.
-  if (platformKey === 'zoom') {
-    const domSpeaker = getLastActiveSpeaker() || '';
-
-    if (!speakerManager.hasSpeaker(speakerId)) {
-      log(`[🔊 NEW SPEAKER] Track ${speakerIndex} — first audio, DOM speaker: "${domSpeaker || '(none)'}"`);
-      speakerManager.addSpeaker(speakerId, domSpeaker);
-      lastReResolveTime.set(speakerId, Date.now());
-      if (domSpeaker) {
-        await segmentPublisher.publishSpeakerEvent({
-          speaker: domSpeaker,
-          type: 'joined',
-          timestamp: Date.now(),
-        });
-        log(`[📡 SPEAKER EVENT] "${domSpeaker}" joined → Redis`);
-      }
-    } else {
-      const currentName = speakerManager.getSpeakerName(speakerId) || '';
-      // Always update to current DOM speaker — tracks are NOT stable on Zoom
-      if (domSpeaker && domSpeaker !== currentName) {
-        log(`[🔄 ZOOM SPEAKER] Track ${speakerIndex}: "${currentName}" → "${domSpeaker}" (DOM active speaker)`);
-        speakerManager.updateSpeakerName(speakerId, domSpeaker);
-        if (!currentName) {
-          await segmentPublisher.publishSpeakerEvent({
-            speaker: domSpeaker,
-            type: 'joined',
-            timestamp: Date.now(),
-          });
-          log(`[📡 SPEAKER EVENT] "${domSpeaker}" joined → Redis`);
-        }
-      }
-    }
-  }
-  // ─── GMeet / Teams: voting + locking (tracks ARE stable) ───────────────────
-  else if (!speakerManager.hasSpeaker(speakerId)) {
+  // ─── GMeet / Teams / Zoom: voting + locking ────────────────────────────────
+  // All three platforms use the shared resolveSpeakerName() pipeline with
+  // per-platform DOM resolvers (resolveGoogleMeetSpeakerName,
+  // resolveTeamsSpeakerName, resolveZoomSpeakerName).
+  //
+  // Live observation 2026-04-26 confirmed Zoom Web's MediaStream pool is
+  // small (~6 streams) and stream_id is stable per speaker (88%+ of audible
+  // ticks per stream attribute to one dominant speaker). speakerIndex is
+  // captured at first connectElement() per stream_id and never changes for
+  // that stream — equivalent to gmeet's stable per-tile track. Vote-and-lock
+  // works correctly here; PR #181's per-chunk DOM-poll override was the bug.
+  if (!speakerManager.hasSpeaker(speakerId)) {
     log(`[🔊 NEW SPEAKER] Track ${speakerIndex} — first audio received, resolving name...`);
     const name = await resolveSpeakerName(page, speakerIndex, platformKey, currentBotConfig?.botName);
     // Start unmapped — only assign if name is genuinely unique
@@ -2035,9 +2014,11 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
   }
   // -------------------------------------------------
 
-  // For Zoom Web: create a per-bot PulseAudio null sink so concurrent bots don't
-  // cross-contaminate each other's audio via the shared zoom_sink.monitor.
-  if (botConfig.platform === 'zoom' && process.env.ZOOM_WEB === 'true') {
+  // For Zoom Web (default): create a per-bot PulseAudio null sink so
+  // concurrent bots don't cross-contaminate each other's audio via the
+  // shared zoom_sink.monitor. Skip for the native-SDK path.
+  if (botConfig.platform === 'zoom'
+      && (process.env.ZOOM_WEB === 'true' || process.env.ZOOM_SDK !== 'true')) {
     const sinkName = `bot_sink_${botConfig.meeting_id}`;
     try {
       const moduleId = execSync(

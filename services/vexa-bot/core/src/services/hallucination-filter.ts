@@ -2,8 +2,7 @@
  * Hallucination filter for post-transcription filtering.
  *
  * Catches known hallucination phrases, repetition loops, and junk output
- * before publishing to Redis. Phrase files loaded from hallucinations/*.txt
- * (same lists shared with WhisperLive's filter.py).
+ * before publishing to Redis. Phrase files loaded from hallucinations/*.txt.
  */
 
 import * as fs from 'fs';

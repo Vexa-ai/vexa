@@ -4,8 +4,6 @@ import { isHallucination } from './hallucination-filter';
 /**
  * Per-speaker audio buffer with offset-based sliding window.
  *
- * Ported from WhisperLive server algorithm (services/WhisperLive/whisper_live/server.py).
- *
  * Two pointers track progress through a continuous audio stream:
  *   - confirmedSamples: audio before this has been confirmed and emitted
  *   - totalSamples: end of audio buffer
@@ -261,9 +259,8 @@ export class SpeakerStreamManager {
       // No prefix confirmed yet — fall through to full-text check
     }
 
-    // Full string match — same as WhisperLive's same_output_threshold.
-    // Text must be identical across consecutive submissions. This ensures
-    // Whisper has fully stabilized before we confirm and advance the offset.
+    // Full string match — text must be identical across consecutive submissions.
+    // Ensures Whisper has fully stabilized before we confirm and advance the offset.
     if (trimmed === buffer.lastTranscript) {
       buffer.confirmCount++;
     } else {

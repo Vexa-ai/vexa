@@ -1,0 +1,264 @@
+release_id: 260426-zoom
+branch: release/260426-zoom
+summary: |
+  Zoom delivery — **Wave 1 of 3**: audio-architecture research + smoke
+  that the existing PR #181 code actually joins a real Zoom meeting
+  and emits transcripts on current `main`. Public-API and gating work
+  deferred to Waves 2 and 3.
+
+  The user direction (2026-04-26) reframed the cycle: Zoom's concerns
+  are the same as every other web bot — bot lifecycle, transcription,
+  speaker identification — but the *implementation choices* depend on
+  facts we don't have yet. Specifically: is Zoom Web's audio
+  multi-channel like Google Meet (per-participant WebRTC tracks
+  exposed in the DOM, bot subscribes per-track and speaker-labels by
+  track identity — see `services/vexa-bot/core/src/services/audio.ts`
+  and per-track flow in `index.ts`), or single-channel like Microsoft
+  Teams (one mixed audio stream, speaker detection driven by caption
+  events / DOM inspection), or some hybrid? Buffering strategy,
+  speaker-labeling pipeline, and the entire shape of subsequent waves
+  depend on that answer.
+
+  This wave answers the question. It does NOT:
+    - change the public API (`Platform` enum unchanged this cycle).
+    - introduce a tier-meeting test (premature without speaker
+      labeling working).
+    - author DoDs under `realtime-transcription/zoom` (DoDs are
+      stable claims; investigation is unstable).
+    - retire `process.env.ZOOM_WEB` env-var dispatch (architectural
+      cleanup, defer to Wave 3 along with the enum split).
+    - touch the bot image (no code change required for Wave 1; we run
+      what's already in `main` from PR #181).
+
+  Future waves (NOT committed in this cycle's scope; documented for
+  trail and to keep the plan-stage architecture audit intact):
+
+  - **Wave 2** — implement the speaker-labeling and buffering path
+    Wave 1 recommended. Three plausible shapes:
+      (a) Inherit gmeet's per-track WebRTC subscription if Zoom
+          exposes per-participant streams (likely SpeakerStreamManager
+          + per-track transcription + name-resolver as today).
+      (b) Inherit teams' single-stream + caption-driven labels if
+          Zoom mixes audio and the DOM exposes captions or speaker
+          chips. Likely reuse the existing caption-event listener
+          path teams uses.
+      (c) Hybrid — multi-channel audio (like gmeet) with caption-
+          driven speaker labels (because Zoom's name attribution
+          works differently from gmeet's). Touchpoints: `audio.ts`,
+          `speaker-streams.ts`, `speaker-identity.ts`,
+          `platforms/zoom/web/recording.ts`, `platforms/zoom/web/
+          selectors.ts`. Estimate: ~3-5 days depending on path.
+
+  - **Wave 3** — platform-enum upgrade (`zoom`→Web, `zoom_sdk`→SDK
+    direct routing both sides; delete `process.env.ZOOM_WEB`),
+    `meeting-tts-zoom` tier-meeting test, three DoDs under
+    `realtime-transcription/zoom`. Public-API + gating contract.
+    Estimate: ~2.5 days. Ships the **breaking change** in release
+    notes (operators relying on `platform=zoom` routing SDK pre-cycle
+    must send `zoom_sdk` explicitly).
+
+  Pack E from the groom (close PR #179, superseded by #181) — still a
+  ship-stage follow-up for THIS cycle. Even though we're shipping less
+  this cycle, PR #179 should still be closed-with-thanks; it's a
+  process action and doesn't depend on which wave is in flight.
+
+# Which deployments the release must prove out.
+# 2026-04-26 widening: the user invoked the cross-feature gate which
+# strictly evaluates ALL features; narrow `[compose]` left helm/lite
+# DoDs without evidence and the gate red-flagged 8 unrelated features.
+# Widened to all three modes so the gate evaluates against full
+# evidence rather than blocking on coverage gaps that aren't this
+# cycle's regression scope.
+deployments:
+  modes: [compose, lite, helm]
+  notes:
+    compose: |
+      Smoke run + audio-architecture inspection happens against a
+      compose-mode bot in a real Zoom meeting (you in the meeting as
+      host admitting the bot from the waiting room). DevTools attached
+      to the bot's headed Chromium (`9222/tcp` exposed by the
+      `meeting` runtime profile) for live DOM/WebRTC inspection while
+      the bot is connected.
+    lite: |
+      Not in modes — Wave 1 is exploratory; lite-mode static checks
+      (none new this cycle) would gate ahead of evidence we don't yet
+      have. Add lite back in Wave 3 alongside the platform-enum guards.
+    helm: |
+      Not in modes — no chart change in Wave 1.
+
+# Issues the release addresses. Each is a problem → hypothesis → fix → proof.
+issues:
+  - id: zoom-web-audio-path-research-and-smoke
+    source: gh-issue
+    ref: "Vexa-ai/vexa#254"
+    problem: |
+      PR #181 landed ~1,133 LOC of Zoom Web client code in `main`
+      (`services/vexa-bot/core/src/platforms/zoom/web/*`). The
+      existing repo has zero evidence that:
+        (a) the code actually joins a real Zoom meeting end-to-end on
+            current `main` (no DoD exercises it; no triage log notes
+            a successful run);
+        (b) the audio capture pipeline produces transcript segments;
+        (c) the audio architecture is multi-channel (per-participant
+            tracks like gmeet) or single-channel (mixed like teams)
+            — which determines the entire speaker-labeling and
+            buffering strategy for Wave 2.
+      Without (c), any committed Wave-2 design would be a guess.
+      Without (a)+(b), the public-API uplift (Wave 3) would be
+      pointing at code we don't know works. The conservative move is
+      to investigate first, commit later.
+
+      The architecture question is concrete:
+        - **Google Meet** path (`audio.ts`, `speaker-streams.ts`):
+          DOM exposes per-participant `<video>` elements with
+          attached MediaStream tracks; the bot subscribes per-track
+          via `MediaStreamAudioSourceNode`, runs Silero VAD per
+          stream, transcribes per stream, attributes the speaker by
+          DOM text adjacent to the element. Per-track speaker
+          labeling is essentially free — track identity = speaker
+          identity.
+        - **Microsoft Teams** path
+          (`platforms/msteams/recording.ts`, caption-event listener):
+          one mixed audio stream, captions arrive via a DOM event
+          listener with `(speaker_name, utterance, timestamp)`
+          tuples; Whisper transcribes the mixed stream and a
+          reconciler aligns Whisper segments with caption-derived
+          speaker labels.
+        - **Zoom Web** path (PR #181 landed code): unknown. The
+          source files exist (`platforms/zoom/web/recording.ts`,
+          `selectors.ts`) but no documentation explains which
+          architecture shape was chosen.
+
+      This issue establishes the answer empirically and writes it
+      down so Wave 2 can scope from facts.
+
+    hypothesis: |
+      Operate the existing bot against a real Zoom meeting on
+      compose, with DevTools attached to the headed bot Chromium.
+      Capture:
+        1. **Smoke** — `POST /bots {platform: "zoom", ...}` on the
+           current API, watch for `bot.status → active`, watch
+           transcripts on `/transcripts/zoom/<native_id>`. Capture
+           timing (join → admit → first segment), error/warn logs
+           from the bot pod, any failure modes. Acceptance: bot
+           joins; segments emit (quality + speaker labels can be
+           wrong; this wave is binary "did anything come out").
+        2. **Audio architecture inspection** — while the bot is
+           connected (or via a separately-attached recorder using the
+           same selectors PR #181 wired up), inspect:
+             (a) `document.querySelectorAll('video')` — does Zoom
+                 expose per-participant `<video>` elements with
+                 audio tracks?
+             (b) `navigator.mediaDevices.getDisplayMedia()` /
+                 `getUserMedia()` track structure — does the bot's
+                 captured stream contain N audio tracks (one per
+                 participant) or 1 mixed track?
+             (c) Active-speaker DOM hooks — Zoom's UI shows which
+                 participant is speaking via a coloured border /
+                 speaker indicator. Find the selector. Determine
+                 whether it's polled or event-driven (MutationObserver
+                 candidates, custom events).
+             (d) Captions — Zoom Web supports closed captions; check
+                 if PR #181's selectors cover them and whether they
+                 arrive as DOM events (teams shape) or rendered text
+                 only.
+             (e) Participant list / name resolution — how does the
+                 bot map an audio source (track or active-speaker
+                 indicator) to a name? DOM attributes? Track metadata?
+        3. **Comparison + recommendation** — write
+           `tests3/releases/260426-zoom/audio-research.md` with:
+             - findings table for each of (a)-(e) above;
+             - architectural mapping: Zoom resembles {gmeet, teams,
+               hybrid};
+             - recommended Wave 2 path with concrete file
+               touchpoints (e.g. "extend SpeakerStreamManager to
+               accept Zoom track shape" if multi-channel, or "wire
+               a caption-event listener mirroring msteams' shape"
+               if single-channel + captions);
+             - timing estimate for Wave 2;
+             - any blocker findings (e.g. "Zoom's anti-automation
+               actively blocks the smoke; need separate hardening
+               cycle first").
+
+      No code change required this wave. The deliverable is the
+      research note + smoke confirmation. If Step 1 fails (bot
+      doesn't even join), the failure mode goes into the research
+      note as the first finding and the Wave 2 scope opens with
+      "fix the join path" — no patch required to be in this wave's
+      ship.
+
+    gap_analysis: |
+      Source `gh-issue` (#254 Phase 2 + Phase 3); no `human` source,
+      so a strict gap analysis isn't required by the scope schema.
+      But for the trail: the gap that allowed PR #181 to merge
+      without exercise is the absence of any tier-meeting test
+      tagged with a Zoom feature in registry.yaml. Wave 3 will fill
+      that gap. Wave 1 establishes the empirical floor that makes
+      Wave 3's test design defensible.
+
+    new_checks:
+      - ZOOM_WEB_AUDIO_RESEARCH_NOTE_EXISTS
+
+    fix_commits: []
+
+    proves:
+      - {check: BOT_CREATE_OK, modes: [compose]}
+      - {check: BOT_STATUS_TRANSITIONS, modes: [compose]}
+      - {check: SEGMENT_PIPELINE, modes: [compose]}
+      - {check: ZOOM_WEB_AUDIO_RESEARCH_NOTE_EXISTS, modes: [compose]}
+
+    required_modes: [compose]
+
+    human_verify:
+      - mode: compose
+        do: |
+          With a real Zoom meeting URL (you in the meeting as host):
+          `curl -X POST $GATEWAY/bots -H 'X-API-Key: $TOKEN'
+            -H 'Content-Type: application/json'
+            -d '{"platform":"zoom","native_meeting_id":"<id>",
+                 "passcode":"<pwd>","bot_name":"wave1-zoom-smoke"}'`
+          Watch the waiting-room admit. Wait up to 90 s for
+          `GET /bots/{id}/status` → `active`. Then
+          `GET /transcripts/zoom/<native_id>` for ~60 s after speech.
+        expect: |
+          Bot enters meeting (you admit it). Status reaches `active`.
+          At least ONE segment is returned for the `zoom` platform —
+          quality, language, and speaker label correctness are NOT
+          gates this wave. Capture the run output (timings, log
+          tails, segment shape) and reference in audio-research.md.
+      - mode: compose
+        do: |
+          Attach to the bot's headed Chromium via the exposed
+          `9222/tcp` (CDP) — `chromium-devtools` or
+          `chrome://inspect`. While the bot is in the live Zoom
+          meeting, inspect the audio pipeline as documented in the
+          hypothesis (Step 2 a-e). Note findings inline in
+          `audio-research.md`.
+        expect: |
+          `audio-research.md` exists at
+          `tests3/releases/260426-zoom/audio-research.md` and
+          covers all five inspection points (per-participant tracks,
+          stream structure, active-speaker DOM hook, captions,
+          name-resolution). Concludes with one of three
+          architectural recommendations (gmeet-like, teams-like,
+          hybrid) + concrete file touchpoints for Wave 2.
+      - mode: compose
+        do: |
+          Eyeroll the recommendation in `audio-research.md` against
+          the existing gmeet+teams code paths
+          (`services/vexa-bot/core/src/services/audio.ts`,
+          `services/vexa-bot/core/src/services/speaker-streams.ts`,
+          `services/vexa-bot/core/src/platforms/msteams/recording.ts`).
+        expect: |
+          Recommendation cites specific lines / functions in the
+          referenced files; the named touchpoints actually exist;
+          the timing estimate is sized appropriately for the chosen
+          path (~2-3 d gmeet-like, ~3-4 d teams-like, ~4-5 d hybrid).
+
+# Wave 2 + Wave 3 are out of scope for this cycle's `expensive_tests`
+# (no tier-meeting test until Wave 3 — premature without speaker
+# labeling working).
+expensive_tests: []
+
+# No strict_features override.
+strict_features: []

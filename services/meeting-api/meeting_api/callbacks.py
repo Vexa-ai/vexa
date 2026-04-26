@@ -143,17 +143,40 @@ async def bot_exit_callback(
                 transition_metadata=meta,
             )
             new_status = MeetingStatus.COMPLETED.value if success else None
-        elif meeting.status == MeetingStatus.ACTIVE.value and payload.completion_reason:
+        elif meeting.status == MeetingStatus.ACTIVE.value and (
+            payload.completion_reason
+            or payload.reason in (
+                "self_initiated_leave",
+                "evicted",
+                "left_alone",
+                "removed_by_host",
+                "meeting_ended_by_host",
+            )
+        ):
             # Bot was active and self-exited with a known completion reason
-            # (e.g., evicted, left_alone, self_initiated_leave).
+            # (e.g., evicted, left_alone, self_initiated_leave) OR with a
+            # reason string that maps to one of those completion classes.
             # These exit with code != 0 but are normal completions, not failures.
-            logger.info(f"Exit callback: session {session_uid} exit_code={exit_code} from active with completion_reason={payload.completion_reason} — treating as completed")
+            #
+            # The reason-only branch handles the case where the bot fires its
+            # exit callback without setting completion_reason (observed
+            # 2026-04-26 in meeting_id=26: bot self-initiated leave from active
+            # with reason="self_initiated_leave" but completion_reason empty,
+            # which previously fell through to the failed branch).
+            derived_completion_reason = payload.completion_reason or {
+                "self_initiated_leave": MeetingCompletionReason.STOPPED,
+                "evicted": MeetingCompletionReason.EVICTED,
+                "removed_by_host": MeetingCompletionReason.EVICTED,
+                "left_alone": MeetingCompletionReason.LEFT_ALONE,
+                "meeting_ended_by_host": MeetingCompletionReason.STOPPED,
+            }.get(payload.reason or "", MeetingCompletionReason.STOPPED)
+            logger.info(f"Exit callback: session {session_uid} exit_code={exit_code} from active with reason={payload.reason} completion_reason={payload.completion_reason or '(derived: ' + str(derived_completion_reason) + ')'} — treating as completed")
             meta = {"exit_code": exit_code, "original_reason": payload.reason}
             if payload.platform_specific_error:
                 meta["platform_specific_error"] = payload.platform_specific_error
             success = await update_meeting_status(
                 meeting, MeetingStatus.COMPLETED, db,
-                completion_reason=payload.completion_reason,
+                completion_reason=derived_completion_reason,
                 transition_reason=payload.reason,
                 transition_metadata=meta,
             )
@@ -188,10 +211,18 @@ async def bot_exit_callback(
                 }
                 meeting.data = updated_data
 
-        if not success:
-            return {"status": "error", "detail": "Failed to update meeting status"}
-
-        # Persist chat messages from Redis
+        # Persist chat messages from Redis list → meeting.data.chat_messages JSONB.
+        #
+        # Runs unconditionally — independent of `success`. Race we're guarding
+        # against: when the user sends DELETE, meetings.py's [Delayed Stop]
+        # timer can mark the meeting `completed` BEFORE the bot's exit
+        # callback fires. The exit callback's status update then tries
+        # `completed → completed` and returns False ("Invalid status
+        # transition"). If we returned early on `not success`, chat messages
+        # would be stuck in Redis forever — which was happening: every
+        # DELETE-terminated meeting had zero persisted chat (observed
+        # 2026-04-26 across all meetings). The chat-persistence block
+        # doesn't depend on status state, so it's safe to run regardless.
         if redis_client:
             try:
                 chat_raw = await redis_client.lrange(f"meeting:{meeting_id}:chat_messages", 0, -1)

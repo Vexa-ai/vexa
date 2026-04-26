@@ -1025,11 +1025,18 @@ async def request_bot(
     if raw_capture:
         env_vars["RAW_CAPTURE"] = raw_capture
 
-    # Zoom credentials
+    # Zoom credentials.
+    # Zoom Web is the bot's default — no env propagation needed for the
+    # web path. The native SDK path is opt-in via operator-set
+    # ZOOM_SDK=true plus ZOOM_CLIENT_ID/ZOOM_CLIENT_SECRET. We forward
+    # the legacy ZOOM_WEB=true too so operators with explicit overrides
+    # keep working until Wave 3 retires both env vars in favour of
+    # `platform: zoom_sdk`.
     if req.platform.value == "zoom":
         if os.getenv("ZOOM_WEB", "").strip() == "true":
             env_vars["ZOOM_WEB"] = "true"
-        else:
+        if os.getenv("ZOOM_SDK", "").strip() == "true":
+            env_vars["ZOOM_SDK"] = "true"
             zoom_cid = os.getenv("ZOOM_CLIENT_ID")
             zoom_csec = os.getenv("ZOOM_CLIENT_SECRET")
             if zoom_cid and zoom_csec:

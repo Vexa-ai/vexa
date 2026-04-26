@@ -7,10 +7,16 @@ set -euo pipefail
 
 cd /root/vexa
 
-# Pull latest dev branch first so the reset uses current test + deploy scripts.
-echo "  [reset-compose] git fetch + reset to origin/dev"
-git fetch origin dev 2>&1 | tail -3
-git reset --hard origin/dev 2>&1 | tail -2
+# Reset to the branch we provisioned this VM with — the orchestrator passes
+# this in via VM_BRANCH (sourced from tests3/.state-<mode>/vm_branch). Each
+# release cycle runs against its own branch, so hardcoding `dev` is wrong:
+# `dev` may not exist on the remote at all, and even when it does, validation
+# should test the release branch under review (release/<id>), not whatever
+# integration branch happens to be in flight.
+: "${VM_BRANCH:?VM_BRANCH must be set (sourced from tests3/.state-<mode>/vm_branch by vm-reset.sh)}"
+echo "  [reset-compose] git fetch + reset to origin/${VM_BRANCH}"
+git fetch origin "${VM_BRANCH}" 2>&1 | tail -3
+git reset --hard "origin/${VM_BRANCH}" 2>&1 | tail -2
 
 cd /root/vexa/deploy/compose
 

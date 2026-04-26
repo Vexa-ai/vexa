@@ -4,8 +4,14 @@
 set -euo pipefail
 
 cd /root/vexa
-git fetch origin dev
-git reset --hard origin/dev
+
+# Pull the branch this VM was provisioned with (passed via VM_BRANCH from
+# vm-reset.sh, sourced from tests3/.state-<mode>/vm_branch). Hardcoding
+# `dev` is wrong — the remote may not have a `dev` branch at all (many
+# release flows run release/<id> branches that merge directly to main).
+: "${VM_BRANCH:?VM_BRANCH must be set (sourced from tests3/.state-<mode>/vm_branch by vm-reset.sh)}"
+git fetch origin "${VM_BRANCH}"
+git reset --hard "origin/${VM_BRANCH}"
 cd deploy/compose
 
 # Some deployments store IMAGE_TAG in /root/.env, others in /root/vexa/.env

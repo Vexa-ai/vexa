@@ -1300,24 +1300,77 @@ export function getVideoBlockInitScript(): string {
         window.RTCPeerConnection = function(...args) {
           const pc = new OrigRTC(...args);
 
-          // Block incoming video: disable track rendering only.
-          // IMPORTANT: Do NOT call track.stop() or set transceiver to inactive —
-          // that breaks WebRTC renegotiation and causes Google Meet to kick the bot
-          // when new video tracks arrive (e.g. screen share/presentation).
+          // Block incoming video. Two layers, deferred via setTimeout so the
+          // platform's own ontrack runs first and creates the DOM <audio>/
+          // <video> elements (audio capture relies on finding those elements
+          // via querySelectorAll('audio, video') + srcObject.getAudioTracks()).
           //
-          // The disabling is deferred (setTimeout 0) so Google Meet's own ontrack
-          // handlers execute first and create the DOM <video> elements with the
-          // MediaStream attached. The audio capture pipeline relies on finding
-          // these elements via querySelectorAll('audio, video') and reading
-          // srcObject.getAudioTracks(). If we disable the video track synchronously
-          // before Meet processes the event, Meet may skip DOM element creation
-          // entirely, leaving zero media elements for audio capture.
+          //   1. track.enabled=false — makes <video> tags emit black frames.
+          //      Sufficient for gmeet/teams which render video via standard
+          //      <video> elements. INSUFFICIENT for Zoom Web which renders
+          //      via canvas decoded in Worker contexts: the decoder keeps
+          //      pumping frames even when the <video> output is disabled,
+          //      so the canvas paint is unaffected.
+          //
+          //   2. transceiver.direction → 'sendonly' (was sendrecv) or
+          //      'inactive' (was recvonly). This actually stops WebRTC from
+          //      pulling decoded frames for the disabled track — which is
+          //      what stops Zoom's canvas paint, and what frees the heavy
+          //      decoder Worker on all platforms. 'sendonly' (not 'inactive')
+          //      keeps the connection symmetric so Zoom doesn't kick the
+          //      bot on renegotiation; 'inactive' is only used when the
+          //      connection was already recv-only.
+          //
+          // Same pattern getVirtualCameraInitScript uses when virtual camera
+          // is on — it just wasn't being applied in the simpler block-only
+          // path until 2026-04-26 (Zoom Web cycle 260426: user observed
+          // participant video still rendering in bot's VNC view despite
+          // track.enabled=false succeeding).
           pc.addEventListener('track', (event) => {
             if (event.track && event.track.kind === 'video') {
               const trackId = event.track.id;
               const trackRef = event.track;
+              // RTCTrackEvent.transceiver is a direct reference — no need
+              // to scan pc.getTransceivers() and compare track refs (which
+              // can fail when Zoom's WebRTC wraps tracks). Captured here in
+              // the synchronous handler in case the transceiver list mutates
+              // by the time setTimeout fires. Note: this string template is
+              // injected into the browser as JS, so it MUST be plain JS — no
+              // TypeScript type annotations (those would survive tsc's pass
+              // through the template literal and cause a SyntaxError in the
+              // browser, killing the whole IIFE silently).
+              const transceiverRef = event.transceiver;
               setTimeout(() => {
-                trackRef.enabled = false;
+                try {
+                  trackRef.enabled = false;
+                } catch (e) { /* ignore */ }
+                if (transceiverRef) {
+                  try {
+                    const before = transceiverRef.direction;
+                    transceiverRef.direction = before === 'sendrecv' ? 'sendonly' : 'inactive';
+                    console.log('[Vexa] Video transceiver direction ' + before + ' → ' + transceiverRef.direction + ' (id=' + trackId + ')');
+                  } catch (e) {
+                    console.warn('[Vexa] Transceiver direction set failed (id=' + trackId + '):', e);
+                  }
+                } else {
+                  // Fallback: scan pc.getTransceivers() for the matching one.
+                  try {
+                    const transceivers = pc.getTransceivers();
+                    let matched = false;
+                    for (const t of transceivers) {
+                      if (t.receiver && t.receiver.track && t.receiver.track.id === trackId) {
+                        const before = t.direction;
+                        t.direction = before === 'sendrecv' ? 'sendonly' : 'inactive';
+                        console.log('[Vexa] Video transceiver direction ' + before + ' → ' + t.direction + ' (scan-matched id=' + trackId + ')');
+                        matched = true;
+                        break;
+                      }
+                    }
+                    if (!matched) {
+                      console.log('[Vexa] Could not match transceiver for video track id=' + trackId + ' (scanned ' + transceivers.length + ' transceivers); track.enabled=false only');
+                    }
+                  } catch (e) { /* transceiver API unavailable */ }
+                }
                 console.log('[Vexa] Incoming video track disabled (deferred, id=' + trackId + ')');
               }, 0);
             }
@@ -1329,6 +1382,15 @@ export function getVideoBlockInitScript(): string {
         Object.keys(OrigRTC).forEach(key => {
           try { window.RTCPeerConnection[key] = OrigRTC[key]; } catch {}
         });
+
+        // Note (cycle 260426 Zoom Web): tried prototype-level
+        // setRemoteDescription patch + SDP-munge to set m=video sections
+        // to a=inactive — fires for one PC but Zoom retries / ignores
+        // the inactive direction and CPU usage actually spikes (~440%
+        // vs ~270% baseline). Approach reverted; carrying as Wave-2
+        // research item. Real fix likely requires intercepting Zoom's
+        // custom video-rendering layer or running Zoom Web behind a
+        // network-level video filter.
 
         console.log('[Vexa] RTCPeerConnection patched for video blocking (transcription-only)');
       } catch (e) {

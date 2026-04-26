@@ -15,10 +15,16 @@ export async function handleZoom(
   gracefulLeaveFunction: (page: Page | null, exitCode: number, reason: string) => Promise<void>
 ): Promise<void> {
 
-  // Route to web-based Playwright implementation when ZOOM_WEB=true
-  // or when the native SDK addon is not available
-  const useWebClient = process.env.ZOOM_WEB === 'true';
-  if (useWebClient) {
+  // Default: web-based Playwright implementation (no proprietary SDK creds needed,
+  // works on every deployment mode out-of-the-box).
+  // Opt into the native Zoom Meeting SDK path by setting ZOOM_SDK=true
+  // (requires ZOOM_CLIENT_ID + ZOOM_CLIENT_SECRET). The legacy
+  // `ZOOM_WEB=true` env-var is still honoured for backward-compat —
+  // both `ZOOM_WEB=true` and the new default route to handleZoomWeb.
+  // (Wave 3 will retire both env vars in favour of an explicit
+  // `platform: zoom_sdk` enum value.)
+  const useNativeSdk = process.env.ZOOM_SDK === 'true' && process.env.ZOOM_WEB !== 'true';
+  if (!useNativeSdk) {
     return handleZoomWeb(botConfig, page, gracefulLeaveFunction);
   }
 

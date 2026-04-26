@@ -1,7 +1,7 @@
 // User Agent for consistency - Updated to modern Chrome version for Google Meet compatibility
 export const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36";
 
-// Base browser launch arguments (shared across all modes)
+// Base browser launch arguments (shared across all modes).
 const baseBrowserArgs = [
   "--incognito",
   "--no-sandbox",
@@ -9,6 +9,24 @@ const baseBrowserArgs = [
   "--disable-features=IsolateOrigins,site-per-process",
   "--disable-infobars",
   "--disable-gpu",
+  // Collapse Chromium's gpu-process work into the renderer — no separate
+  // gpu-process at all.
+  //
+  // 2026-04-27 measurement (cycle 260426 Zoom Web): a Zoom Web bot
+  // demanded 4.4 cores; 3.6 of those (= 357% CPU) lived in
+  // --type=gpu-process running SwiftShader software-WebGL + canvas
+  // compositing for Zoom's UI. Software-decoded video frames also flow
+  // through that process. With --in-process-gpu, the work collapses
+  // into the renderer (which already runs the page's JS) and per-bot
+  // demand drops to ~115% — back inside the 1500m budget that matches
+  // the gmeet/teams p95 (780m).
+  //
+  // Earlier iterations on this cycle tried --disable-webgl /
+  // --disable-3d-apis / --disable-accelerated-2d-canvas etc.; all
+  // confirmed inert (gpu-process kept running because it hosts the
+  // software video decoder, not just the compositor).
+  // --in-process-gpu is the only flag that actually killed it.
+  "--in-process-gpu",
   "--use-fake-ui-for-media-stream",
   "--use-file-for-fake-video-capture=/dev/null",
   "--allow-running-insecure-content",
