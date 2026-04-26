@@ -1,12 +1,14 @@
 ---
-title: "Zoom Integration Setup Guide"
+title: "Zoom SDK Integration Setup (optional)"
 ---
 
-<Warning>
-**Zoom SDK integration is for self-hosted (open source) deployments only.** The hosted service at vexa.ai does not yet support Zoom. A browser-based approach (no SDK needed) is in development.
-</Warning>
+<Note>
+**As of v0.10.4, Vexa joins Zoom via the Web Client by default — no SDK setup required.** Send the same `POST /bots` payload as Google Meet / Teams and you're done. See the [Zoom platform page](./platforms/zoom) for the default path.
 
-Use this guide to configure Zoom for the Vexa meeting bot in self-hosted deployments.
+This guide is only needed if you want the **Native SDK** path (e.g., you already have Marketplace credentials, or you need SDK-only features). Opt in by setting `ZOOM_SDK=true` on meeting-api after completing this setup.
+</Note>
+
+Use this guide to configure the Native Zoom Meeting SDK path for self-hosted deployments.
 
 ## Overview
 

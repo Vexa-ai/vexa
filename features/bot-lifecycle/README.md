@@ -11,7 +11,10 @@ services:
 
 ## What
 
-Meeting bots join Google Meet / Teams, transcribe audio, and leave. Each bot is a Docker container running Playwright that navigates to a meeting URL, joins, captures audio, and reports state changes back to meeting-api via HTTP callbacks.
+Meeting bots join Google Meet, Microsoft Teams, and Zoom (via Web Client),
+transcribe audio, and leave. Each bot is a Docker container running
+Playwright that navigates to a meeting URL, joins, captures audio, and
+reports state changes back to meeting-api via HTTP callbacks.
 
 ## State machine
 

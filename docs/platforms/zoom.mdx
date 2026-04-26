@@ -1,9 +1,12 @@
 ---
 title: "Zoom"
 ---
-> Important: Zoom Marketplace approval can take weeks to months. Before approval, you should assume you can reliably join only meetings created/hosted by the authorizing account. The hosted Vexa Zoom app is not approved at the time of writing.
 
-Zoom bots require additional configuration (Zoom OAuth + Meeting SDK + OBF token flow).
+As of v0.10.4, Vexa joins Zoom meetings via the **Zoom Web Client** by default — no Zoom Marketplace listing, no OAuth setup, no SDK credentials required. The bot opens `app.zoom.us/wc/...` in a Playwright-driven browser, fills the bot name, joins audio, and starts transcribing. Same API call as Google Meet and Microsoft Teams.
+
+The legacy Native SDK path is still available for operators who already have it configured: opt in by setting `ZOOM_SDK=true` plus `ZOOM_CLIENT_ID` and `ZOOM_CLIENT_SECRET` on meeting-api / runtime-api. See [Zoom Integration Setup Guide](../zoom-app-setup) for the SDK setup. Most users won't need it.
+
+> **Marketplace note (SDK path only):** Zoom Marketplace approval can take weeks to months. Before approval, you should assume you can reliably join only meetings created/hosted by the authorizing account. The hosted Vexa Zoom app is not approved at the time of writing. **The Web Client default path has no Marketplace dependency.**
 
 ## Native meeting ID and passcode
 
@@ -28,11 +31,22 @@ ZoomGov URLs (`zoomgov.com`) are also supported with the same format.
 **Zoom Events** links (`events.zoom.us`) are not supported. Zoom Events uses unique per-registrant join links that cannot be shared with a bot.
 </Note>
 
-## Setup guide
+## Setup
 
-Use this guide for the exact OAuth + OBF flow and environment variables:
+### Default (Web Client)
 
-- [Zoom Integration Setup Guide](../zoom-app-setup)
+No setup. Send the same `POST /bots` payload you'd send for `google_meet` or `teams`. The bot opens Zoom's browser client, joins, and transcribes.
+
+### Native SDK path (opt-in)
+
+If you've already obtained Zoom Marketplace credentials and prefer the Native SDK route:
+
+1. Follow the [Zoom Integration Setup Guide](../zoom-app-setup) for the OAuth + OBF flow.
+2. Set on meeting-api / runtime-api:
+   - `ZOOM_SDK=true`
+   - `ZOOM_CLIENT_ID=...`
+   - `ZOOM_CLIENT_SECRET=...`
+3. Bots created with `platform=zoom` will dispatch to the SDK path instead of the Web Client.
 
 ## API example
 

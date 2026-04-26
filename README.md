@@ -83,11 +83,9 @@ Every feature is a separate service. Pick what you need, skip what you don't. Se
 
 Build meeting assistants like Otter.ai, Fireflies.ai, or Fathom — or build a meeting bot API like [Recall.ai](https://recall.ai) — self-hosted on your infrastructure.
 
-- **Vexa (self-host)** — your infra cost. Data never leaves your infrastructure. Meeting bot API, real-time transcription, interactive bots, MCP server. Open source, Apache 2.0. Google Meet, Teams, Zoom*.
+- **Vexa (self-host)** — your infra cost. Data never leaves your infrastructure. Meeting bot API, real-time transcription, interactive bots, MCP server. Open source, Apache 2.0. Google Meet, Teams, Zoom.
 - **Recall.ai** — $0.50/hr. No self-hosting. Meeting bot API, real-time transcription. No MCP, limited interactive bots. Closed source. Meet, Teams, Zoom, Webex.
 - **Otter.ai** — $17-20/seat/mo. No self-hosting. No API. Limited real-time transcription. Closed source. Meet, Teams, Zoom.
-
-\* Zoom support is experimental
 
 Or use [vexa.ai](https://vexa.ai) hosted — get an API key and start sending bots immediately, no infrastructure needed.
 
@@ -112,6 +110,13 @@ Run everything including your own GPU transcription service.
 *Meeting data never leaves your infrastructure* — see [deploy/](./deploy/) for setup guides.
 
 ## What's new
+
+**v0.10.4 — Zoom Web bot + 4× CPU reduction**
+
+- **Zoom (Web Client) is the default join path** — `platform=zoom` now routes to Zoom's official browser client (`app.zoom.us/wc/`). No proprietary SDK credentials needed. Same API call as Google Meet / Teams. The legacy SDK path is still available, opt-in via `ZOOM_SDK=true` (requires `ZOOM_CLIENT_ID` + `ZOOM_CLIENT_SECRET`).
+- **`--in-process-gpu` Chromium flag** — collapses the gpu-process work into the renderer. Per-Zoom-bot CPU dropped from ~440% to ~115% (4× reduction). Original 1500m k8s budget restored.
+- **Chat persistence race fixed** — DELETE-vs-exit-callback race that was leaving chat messages stranded in Redis. Platform-agnostic; benefits Google Meet + Teams chat too.
+- **Awaiting-admission false positive on Zoom waiting room** — bots no longer report `active` while still in a Zoom waiting room.
 
 **v0.10 — full architecture refactor**
 

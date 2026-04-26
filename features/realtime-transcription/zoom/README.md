@@ -10,6 +10,46 @@ Browser-automated Zoom path via Playwright (PR #181), running in the same
 unified bot image as Google Meet and Teams. Native SDK track is a
 separate subfeature scoped under #253 and out of this subfeature's scope.
 
+## Status — shipped in v0.10.4 (cycle 260426-zoom, 2026-04-27)
+
+Zoom Web is now production-ready in Vexa. Headline outcomes:
+
+- **Default join path for `platform=zoom`** — no `ZOOM_WEB=true` env var
+  needed, no SDK credentials. The bot dispatches to the Web Client
+  unconditionally; the legacy SDK path is opt-in via `ZOOM_SDK=true`.
+- **4× CPU reduction** — `--in-process-gpu` Chromium flag in
+  `services/vexa-bot/core/src/constans.ts` collapses Chromium's
+  gpu-process work into the renderer. Per-Zoom-bot demand dropped from
+  ~440% to ~115%, fitting the original 1500m k8s budget. Audio capture
+  no longer drops samples under throttle; "dashed audio" symptom gone.
+- **Chat persistence race fixed** — `meeting-api/callbacks.py` no
+  longer drops chat messages on DELETE-vs-exit-callback race. Applies
+  to all platforms (gmeet/teams chat persisted the same way and had
+  the same race silently).
+- **Awaiting-admission false positive fixed** — `isAdmitted()` now
+  rules out the Zoom waiting room before its weaker fallbacks
+  (`.meeting-app` container present, live audio + no pre-join
+  indicators). Bots in the waiting room correctly report
+  `awaiting_admission` instead of jumping straight to `active`.
+- **Pre-join hardening** (committed 8b4cd34) — passcode-entry
+  detection, DOM-direct Join click that bypasses
+  `preview-meeting-info` overlay, auth-required gate that fails fast
+  with structured `auth_required` reason, host-not-started polling.
+- **40s ACTIVE-callback delay fixed** — audio-join retry loop reduced
+  from 8 attempts to 3 with early-exit on live-audio detection.
+- **`mic-muted` modal auto-dismissed** — added to popup dismiss
+  targets in prepare.ts.
+
+**Known incoming-video CPU sink (Wave 2)**: Zoom's software video
+decoder still runs in the renderer process; total per-bot CPU is
+dominated by the renderer (~80%) instead of an isolated gpu-process.
+Five JS-level intercept attempts in this cycle didn't fully stop the
+decoder (Zoom Web's pipeline is decoupled from page DOM and standard
+WebRTC track-receiver controls). Documented in
+`tests3/releases/260426-zoom/audio-research.md` for Wave 2 follow-up;
+the `--in-process-gpu` fix was sufficient to make the cycle's CPU
+budget viable.
+
 ## TL;DR
 
 **Zoom Web is gmeet-family** (final classification after live
