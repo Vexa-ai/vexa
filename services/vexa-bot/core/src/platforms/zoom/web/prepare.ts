@@ -14,12 +14,33 @@ export async function prepareZoomWebMeeting(page: Page | null, botConfig: BotCon
   // Dismiss popups that overlay the meeting content
   await dismissZoomPopups(page);
 
-  // Join computer audio — retry up to 8 times with escalating strategies.
-  // This is CRITICAL: without joining audio, no <audio> elements are created
-  // and the per-speaker capture pipeline gets zero audio data.
+  // Join computer audio — retry up to 3 times with escalating strategies.
+  // (Was 8 attempts, but on current Zoom Web UI versions audio auto-joins
+  // after admission so the loop most often runs through with no button to
+  // click and burns ~40s before continuing — visible to the user as
+  // "joining" status while the bot is actually already in the meeting.)
+  // CRITICAL invariant: without joining audio, no <audio> elements are
+  // created and the per-speaker capture pipeline gets zero audio data.
   let audioJoined = false;
-  for (let attempt = 0; attempt < 8; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
+      // Early-exit: if Zoom auto-joined audio, <audio> elements with live
+      // MediaStreams already exist. Skip the click loop entirely in that case.
+      const liveAudioCount = await page.evaluate(() => {
+        return Array.from(document.querySelectorAll('audio'))
+          .filter((el: any) =>
+            !el.paused &&
+            el.srcObject instanceof MediaStream &&
+            el.srcObject.getAudioTracks().length > 0 &&
+            el.srcObject.getAudioTracks()[0].readyState === 'live')
+          .length;
+      }).catch(() => 0);
+      if (liveAudioCount > 0) {
+        log(`[Zoom Web] Audio already flowing (${liveAudioCount} live <audio> elements); skipping join-button retry`);
+        audioJoined = true;
+        break;
+      }
+
       // First: check if a "Join with Computer Audio" dialog is already open (ReactModal).
       // This MUST come before clicking the footer button, because the modal blocks footer clicks.
       const computerAudioBtn = page.locator([
@@ -185,6 +206,10 @@ export async function dismissZoomPopups(page: Page): Promise<void> {
     { selector: '.ReactModal__Content button:has-text("OK")', label: 'modal OK' },
     { selector: '.ReactModal__Content button:has-text("Got it")', label: 'modal Got it' },
     { selector: '[role="presentation"] button:has-text("OK")', label: 'presentation OK' },
+    // Zoom advisory modal: "Your mic is muted in system or browser settings."
+    // Doesn't block joining/capture but spams logs and remains on screen
+    // until manually dismissed. Click any of OK / Dismiss / Got it / Continue.
+    { selector: '.zm-modal:has-text("mic is muted") button:has-text("OK"), .zm-modal:has-text("mic is muted") button:has-text("Got it"), .zm-modal:has-text("mic is muted") button:has-text("Dismiss"), .zm-modal:has-text("mic is muted") button:has-text("Continue")', label: 'mic-muted advisory' },
   ];
 
   for (const { selector, label } of dismissTargets) {

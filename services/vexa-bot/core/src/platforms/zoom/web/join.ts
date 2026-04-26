@@ -68,6 +68,29 @@ export async function joinZoomWebMeeting(page: Page | null, botConfig: BotConfig
 
     const title = await page.title();
     const isError = title === 'Error - Zoom' || title === 'error - Zoom';
+
+    // Auth-required gate: meetings with "Only authenticated users can join"
+    // enabled show a sign-in page where #input-for-name never renders, and
+    // the bot would otherwise wait the full name-input timeout (5 min) for
+    // a field that never appears. Detect early and fail fast with a
+    // structured reason so the meeting-api receives auth_required, not a
+    // generic timeout.
+    const authRequired = await page.evaluate(() => {
+      const body = (document.body?.innerText || '').toLowerCase();
+      const signInIndicators = [
+        'sign in to join this meeting',
+        'sign in to join',
+        'authentication is required',
+        'only authenticated users can join',
+        'this meeting requires authentication',
+      ];
+      return signInIndicators.some(s => body.includes(s));
+    }).catch(() => false);
+    if (authRequired) {
+      log('[Zoom Web] Sign-in page detected — meeting requires authenticated users');
+      throw new Error('[Zoom Web] auth_required: meeting host has restricted entry to authenticated Zoom users; bot cannot join without a Zoom account session');
+    }
+
     if (!isError) break; // Pre-join page loaded
 
     const elapsed = Date.now() - startTime;
