@@ -25,12 +25,6 @@ export async function startZoomWebRecording(page: Page | null, botConfig: BotCon
 
   activeBotConfig = botConfig;
 
-  // WhisperLive transcription is disabled for Zoom Web.
-  // The per-speaker pipeline in index.ts handles transcription via
-  // startPerSpeakerAudioCapture() + SpeakerStreamManager + TranscriptionClient.
-  // WhisperLive was a duplicate path that produced ~2x segments in Redis.
-  log('[Zoom Web] Transcription handled by per-speaker pipeline (WhisperLive disabled)');
-
   // Recording service
   const wantsAudioCapture =
     !!botConfig.recordingEnabled &&
@@ -105,9 +99,8 @@ export async function stopZoomWebRecording(): Promise<void> {
 }
 
 export async function reconfigureZoomWebRecording(language: string | null, task: string | null): Promise<void> {
-  // WhisperLive is disabled for Zoom Web — per-speaker pipeline handles transcription.
-  // Reconfigure is a no-op; language/task changes are handled at the per-speaker pipeline level.
-  log(`[Zoom Web] reconfigure: WhisperLive not active — ignoring (lang=${language}, task=${task})`);
+  // Language/task changes are handled at the per-speaker pipeline level.
+  log(`[Zoom Web] reconfigure: ignoring (lang=${language}, task=${task})`);
 }
 
 export function getZoomWebRecordingService(): RecordingService | null {

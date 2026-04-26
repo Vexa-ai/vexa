@@ -487,11 +487,9 @@ const handleRedisMessage = async (message: string, channel: string, page: Page |
           allowedLanguages = command.allowed_languages?.length ? command.allowed_languages : null;
           currentTask = command.task;
 
-          // Zoom Web uses a Node.js-side WhisperLive (not browser-based) — reconfigure directly
           const isZoomWeb = process.env.ZOOM_WEB === 'true' && (globalThis as any).botConfig?.platform === 'zoom';
           if (isZoomWeb) {
             await reconfigureZoomWebRecording(currentLanguage ?? null, currentTask ?? null);
-            log('[Zoom Web] Reconfigure handled via Node.js WhisperLive reconnect');
           }
 
           // Trigger browser-side reconfiguration via the exposed function (for Google Meet / Teams)
