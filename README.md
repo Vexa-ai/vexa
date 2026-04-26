@@ -111,12 +111,9 @@ Run everything including your own GPU transcription service.
 
 ## What's new
 
-**v0.10.4 — Zoom Web bot + 4× CPU reduction**
+**v0.10.4**
 
-- **Zoom (Web Client) is the default join path** — `platform=zoom` now routes to Zoom's official browser client (`app.zoom.us/wc/`). No proprietary SDK credentials needed. Same API call as Google Meet / Teams. The legacy SDK path is still available, opt-in via `ZOOM_SDK=true` (requires `ZOOM_CLIENT_ID` + `ZOOM_CLIENT_SECRET`).
-- **`--in-process-gpu` Chromium flag** — collapses the gpu-process work into the renderer. Per-Zoom-bot CPU dropped from ~440% to ~115% (4× reduction). Original 1500m k8s budget restored.
-- **Chat persistence race fixed** — DELETE-vs-exit-callback race that was leaving chat messages stranded in Redis. Platform-agnostic; benefits Google Meet + Teams chat too.
-- **Awaiting-admission false positive on Zoom waiting room** — bots no longer report `active` while still in a Zoom waiting room.
+- **Zoom (via web)** — `platform=zoom` works out of the box, no SDK setup.
 
 **v0.10 — full architecture refactor**
 
