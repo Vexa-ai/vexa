@@ -13,18 +13,18 @@ profiles:
     command: ["/app/vexa-bot/entrypoint.sh"]
     working_dir: "/app/vexa-bot"
     resources:
-      # Zoom Web's video decoder dominates CPU (Chrome decoder + renderer
-      # ~130% one core; transcription pipeline ~10%). 2026-04-26 helm
-      # measurement: a Zoom Web bot used 4244s CPU + was throttled 4844s
-      # over 2820s wall = ~3.2 cores demanded; throttled 96% of periods
-      # at the prior 1500m cap. Bumping to 4000m limit / 2500m request so
-      # the bot stops throttling. Once the incoming-video block fully
-      # lands (transceiver.direction trick — see Wave 2 follow-up in
-      # services/screen-content.ts) these can drop back toward the
-      # 1500m range that matched the prior gmeet/teams p95 (780m).
-      cpu_request: "2500m"
-      cpu_limit: "4000m"
-      memory_request: "1500Mi" # matches steady-state ~1.5 GB observed under load
+      # 2026-04-26: Zoom Web bot was demanding ~3.2 cores due to a
+      # software gpu-process (357% of one bot's 440% total CPU) running
+      # SwiftShader + canvas compositing. 2026-04-27: adding the Chromium
+      # flag --in-process-gpu (services/vexa-bot/core/src/constans.ts)
+      # collapsed that work into the renderer and per-bot demand dropped
+      # to ~115% — back inside the original 1500m budget that matches
+      # the prior gmeet/teams p95 (780m). Restoring those original
+      # numbers; the brief 4000m / 2500m bump was an emergency
+      # compensation while the gpu-process bug was unidentified.
+      cpu_request: "1000m"     # measured p95: 780m (load test 2026-04-15, 19 bots)
+      cpu_limit: "1500m"       # 1.5x headroom for browser spikes
+      memory_request: "1100Mi" # measured p95: 977Mi (load test 2026-04-15, 19 bots)
       # Bumped 1536Mi → 2560Mi (Bug B 2026-04-21): Teams bot bursts memory
       # during admission-verification + graceful leave. Exit 137 observed
       # on helm meetings 9+10 + compose 18 after 10-20s active. 2.5× headroom

@@ -390,22 +390,19 @@ runtimeProfiles: |
       command: ["/app/vexa-bot/entrypoint.sh"]
       working_dir: "/app/vexa-bot"
       resources:
-        # 2026-04-26 (Zoom Web cycle 260426): measured a Zoom Web bot
-        # under throttle on helm — used 4244s CPU + throttled 4844s
-        # over 2820s wall = ~3.2 cores demanded. Prior `cpu_limit: 1500m`
-        # throttled 96% of periods. Zoom Web's WebAssembly video decoder
-        # workers are the dominant cost (~130% of one core just for
-        # Chrome decoder + renderer); transcription pipeline is ~10%.
-        # Bumping to 4000m limit + 2500m request keeps two bots per
-        # g6-standard-4 (4-core) node and gives headroom for the
-        # decoder. Once the incoming-video block fully lands (Wave 2
-        # follow-up — transceiver.direction step needs to actually take
-        # effect in the build), these can drop back toward the 1500m
-        # range. Also bumped memory_request 1100→1500Mi to match the
-        # observed steady state (~1.5 GB).
-        cpu_request: "2500m"
-        cpu_limit: "4000m"
-        memory_request: "1500Mi"
+        # 2026-04-27 (Zoom Web cycle 260426): the prior 4000m/2500m bump
+        # was emergency compensation while the dominant cost was the
+        # Chromium gpu-process (357% of 440% per bot = SwiftShader
+        # software-WebGL + canvas compositing for Zoom Web's UI).
+        # Adding the --in-process-gpu Chromium flag (see
+        # services/vexa-bot/core/src/constans.ts baseBrowserArgs)
+        # collapsed that work into the renderer and per-bot demand
+        # dropped to ~115% — back inside the original 1500m budget
+        # that matches the prior gmeet/teams p95 (780m). Reverted to
+        # the original numbers.
+        cpu_request: "1000m"     # measured p95: 780m
+        cpu_limit: "1500m"       # 1.5x headroom for browser spikes
+        memory_request: "1100Mi"
         memory_limit: "2560Mi"  # bumped 2026-04-21 (Bug B Teams OOM)
         shm_size: 2147483648
       idle_timeout: 0
@@ -416,10 +413,6 @@ runtimeProfiles: |
         REDIS_URL: "${REDIS_URL}"
         TRANSCRIPTION_SERVICE_URL: "${TRANSCRIPTION_SERVICE_URL}"
         TRANSCRIPTION_SERVICE_TOKEN: "${TRANSCRIPTION_SERVICE_TOKEN}"
-        # Route Zoom to the Web client (no SDK creds required). Same dispatch
-        # as the compose-mode override; retired in Wave 3 once the platform
-        # enum splits into `zoom` (Web) / `zoom_sdk` (SDK).
-        ZOOM_WEB: "true"
       ports:
         "9222/tcp": {}
     browser-session:
