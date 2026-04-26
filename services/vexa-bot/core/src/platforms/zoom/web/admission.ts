@@ -12,8 +12,17 @@ import {
 
 /**
  * Check if the bot is confirmed inside the meeting.
- * Primary: Leave button visible (footer is showing).
- * Fallback: .meeting-app container present (footer may be auto-hidden).
+ * Primary:   Leave button visible (footer is showing).
+ * Fallback1: .meeting-app container present (footer may be auto-hidden).
+ * Fallback2: live <audio> elements AND no pre-join-page indicators —
+ *            Zoom Web preloads audio streams on the pre-join page itself
+ *            (local mic preview), so audio presence alone is NOT enough.
+ *            Require the pre-join name input AND join button to be absent.
+ *            (Observed 2026-04-26 meeting_id=31: bot was at
+ *            "Enter Meeting Info"/passcode-entry screen with 3 live audio
+ *            elements; an earlier audio-only fallback falsely reported
+ *            admitted, status=active appeared on the dashboard while the
+ *            bot was actually still pre-join.)
  */
 async function isAdmitted(page: Page): Promise<boolean> {
   try {
@@ -22,7 +31,30 @@ async function isAdmitted(page: Page): Promise<boolean> {
 
     // Footer may be auto-hidden — check for the meeting app container
     const meetingApp = page.locator(zoomMeetingAppSelector).first();
-    return await meetingApp.isVisible({ timeout: 500 });
+    if (await meetingApp.isVisible({ timeout: 500 })) return true;
+
+    // Audio-routing fallback: live <audio> elements AND no pre-join
+    // indicators (name input gone, join-button gone). The combined check
+    // distinguishes "in meeting, audio routing" from "pre-join page with
+    // mic preview audio".
+    const state = await page.evaluate(() => {
+      const liveAudioCount = Array.from(document.querySelectorAll('audio'))
+        .filter((el: any) =>
+          !el.paused &&
+          el.srcObject instanceof MediaStream &&
+          el.srcObject.getAudioTracks().length > 0 &&
+          el.srcObject.getAudioTracks()[0].readyState === 'live')
+        .length;
+      const preJoinPresent = !!(
+        document.querySelector('#input-for-name') ||
+        document.querySelector('button.preview-join-button') ||
+        document.querySelector('input[placeholder*="passcode" i], input[placeholder*="password" i]')
+      );
+      const bodyText = (document.body?.innerText || '').toLowerCase();
+      const preJoinTextHints = ['enter meeting info', 'meeting passcode'].some(t => bodyText.includes(t));
+      return { liveAudioCount, preJoinPresent, preJoinTextHints };
+    }).catch(() => ({ liveAudioCount: 0, preJoinPresent: true, preJoinTextHints: true }));
+    return state.liveAudioCount > 0 && !state.preJoinPresent && !state.preJoinTextHints;
   } catch {
     return false;
   }
