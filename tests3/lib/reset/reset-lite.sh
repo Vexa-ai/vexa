@@ -7,10 +7,13 @@ set -euo pipefail
 
 cd /root/vexa
 
-# Pull latest dev branch first so the reset uses current test + deploy scripts.
-echo "  [reset-lite] git fetch + reset to origin/dev"
-git fetch origin dev 2>&1 | tail -3
-git reset --hard origin/dev 2>&1 | tail -2
+# Reset to the branch this VM was provisioned with (VM_BRANCH from vm-reset.sh,
+# sourced from tests3/.state-<mode>/vm_branch). Cycles run on release/<id>;
+# hardcoding `dev` doesn't generalise — `dev` may not exist on the remote.
+: "${VM_BRANCH:?VM_BRANCH must be set (sourced from tests3/.state-<mode>/vm_branch by vm-reset.sh)}"
+echo "  [reset-lite] git fetch + reset to origin/${VM_BRANCH}"
+git fetch origin "${VM_BRANCH}" 2>&1 | tail -3
+git reset --hard "origin/${VM_BRANCH}" 2>&1 | tail -2
 
 # Wipe tests3/.state on the VM — otherwise stale api_token etc. from pre-reset
 # survive and point at DB rows that no longer exist.

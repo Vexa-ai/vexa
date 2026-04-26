@@ -1101,6 +1101,16 @@
       "method": "SHELL_CHECK",
       "script": "tests3/checks/scripts/chart-publish-workflow-exists.sh",
       "max_duration_sec": 5
+    },
+    {
+      "id": "ZOOM_WEB_AUDIO_RESEARCH_NOTE_EXISTS",
+      "tier": "static",
+      "found": "2026-04-26",
+      "proves": "Wave 1 (release/260426-zoom) audio-research.md exists and contains a `## Recommendation` section — the structural marker that the note arrived at a recommendation, not just an inventory of findings.",
+      "symptom": "Wave 1 closes without a research conclusion: audio-research.md is missing, empty, or contains scattered findings with no recommendation section; Wave 2 has no documented direction.",
+      "file": "tests3/releases/260426-zoom/audio-research.md",
+      "must_match": "## Recommendation",
+      "max_duration_sec": 5
     }
   ]
 }
