@@ -1,10 +1,11 @@
 import type { Platform } from "@/types/vexa";
 
 export interface ParsedMeetingInput {
-  platform: Platform;
-  meetingId: string;
+  platform: Platform | null;       // null when URL looks like a meeting but vendor isn't recognized
+  meetingId: string;                // best-effort ID extraction; may be empty when platformNeeded=true
   passcode?: string;
   originalUrl?: string;
+  platformNeeded?: boolean;         // v0.10.5: white-label / enterprise URLs need user-supplied platform
 }
 
 // Parse Google Meet, Zoom, or Teams URL/meeting ID
@@ -80,6 +81,34 @@ export function parseMeetingInput(input: string): ParsedMeetingInput | null {
       const originalUrl = trimmed.startsWith('http') ? trimmed : `https://${trimmed}`;
       return { platform: "teams", meetingId: genericId, passcode, originalUrl };
     }
+  }
+
+  // v0.10.5 — URL looks like a meeting link but vendor isn't recognized
+  // (white-label Zoom like Linux Foundation, enterprise SSO portals, etc.).
+  // Don't reject. Signal "platformNeeded" so the UI can ask the user
+  // which platform this is. Backend's Path 3 (URL + platform) trust
+  // model handles it without per-vendor parsers.
+  //
+  // Heuristic for "looks like a meeting URL":
+  //   - starts with http(s):// (clear URL)
+  //   - has a path beyond the bare domain
+  //   - contains "meeting" / "join" / "zoom" / "meet" / "teams" / digits
+  //     in the URL (any one of these is a good signal)
+  const urlLikely = /^https?:\/\/[^/]+\/[^/]+/i.test(trimmed) || trimmed.startsWith('http');
+  const meetingIshKeywords = /(meeting|join|conference|zoom|meet|teams|webex|google)/i.test(trimmed);
+  const hasNumericRun = /\d{9,}/.test(trimmed);
+  if (urlLikely && (meetingIshKeywords || hasNumericRun)) {
+    // Best-effort extraction (server will redo this; we just hint).
+    const numericMatch = trimmed.match(/\b(\d{9,11})\b/);
+    const passcodeMatch = trimmed.match(/[?&](?:password|pwd|passcode)=([^&\s]+)/i);
+    const originalUrl = trimmed.startsWith('http') ? trimmed : `https://${trimmed}`;
+    return {
+      platform: null,
+      meetingId: numericMatch ? numericMatch[1] : '',
+      passcode: passcodeMatch ? decodeURIComponent(passcodeMatch[1]) : undefined,
+      originalUrl,
+      platformNeeded: true,
+    };
   }
 
   return null;
