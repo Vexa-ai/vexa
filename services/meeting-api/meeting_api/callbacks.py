@@ -16,8 +16,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import attributes
 
+from sqlalchemy import func
+
 from .database import get_db
-from .models import Meeting, MeetingSession
+from .models import Meeting, MeetingSession, Transcription
 from .schemas import (
     MeetingStatus,
     MeetingCompletionReason,
@@ -33,6 +35,110 @@ from .meetings import (
 from .post_meeting import run_all_tasks
 
 logger = logging.getLogger("meeting_api.callbacks")
+
+
+# v0.10.5 Pack J — exit classification routing rule (#255 silent class).
+#
+# [PLATFORM] data on #255 showed 557 of 1183 (47%) `completed` meetings
+# in 30d are actually misclassified — 432 pre-admission + 125 substantive
+# (transcribe-enabled, ≥30s, 0 segments). The classifier already produces
+# the correct completion_reason; the meeting-api callback handler ignored
+# the signal and wrote status='completed' regardless. This helper closes
+# the silent class by inspecting the same fields the data showed:
+#   - reached_active (from status_transition[]) → distinguishes 432 class
+#   - duration_seconds (from start_time/end_time) → 30s threshold
+#   - transcribe_enabled (from data) → opt-out for recording-only mode
+#   - transcription_count (count(*) from transcriptions table)
+async def _classify_stopped_exit(
+    meeting: Meeting,
+    db: AsyncSession,
+    requested_reason: MeetingCompletionReason,
+) -> tuple[MeetingStatus, MeetingCompletionReason]:
+    """Classify a stopped exit per Pack J's data-driven rules.
+
+    Returns (target_status, completion_reason). When the meeting passes
+    positive-proof-of-success, returns (COMPLETED, requested_reason).
+    Otherwise routes to FAILED with the closest-fit prod-derived reason.
+    """
+    # Pack J.4 — every non-success completion_reason routes to FAILED.
+    # [PLATFORM] data showed these were ALL being silently routed to
+    # COMPLETED despite having explicit failure semantics:
+    #   awaiting_admission_timeout (72), awaiting_admission_rejected (9),
+    #   evicted (6), max_bot_time_exceeded (10), validation_error.
+    # left_alone is debatable (bot legitimately left when alone); routes
+    # to COMPLETED unless the data shows otherwise.
+    _explicit_failure_reasons = {
+        MeetingCompletionReason.AWAITING_ADMISSION_TIMEOUT,
+        MeetingCompletionReason.AWAITING_ADMISSION_REJECTED,
+        MeetingCompletionReason.EVICTED,
+        MeetingCompletionReason.MAX_BOT_TIME_EXCEEDED,
+        MeetingCompletionReason.VALIDATION_ERROR,
+        MeetingCompletionReason.STOPPED_BEFORE_ADMISSION,
+        MeetingCompletionReason.STOPPED_WITH_NO_AUDIO,
+    }
+    if requested_reason in _explicit_failure_reasons:
+        return (MeetingStatus.FAILED, requested_reason)
+    # LEFT_ALONE — bot left because everyone else left. Legitimate end of
+    # meeting; user got their transcript. Stay COMPLETED.
+    if requested_reason == MeetingCompletionReason.LEFT_ALONE:
+        return (MeetingStatus.COMPLETED, requested_reason)
+    # Only STOPPED reaches the deeper success-proof checks below.
+    if requested_reason != MeetingCompletionReason.STOPPED:
+        # Defensive: unknown reason. Mark FAILED rather than silent-completed.
+        logger.warning(f"Pack J: unknown completion_reason {requested_reason!r} — defaulting to FAILED")
+        return (MeetingStatus.FAILED, requested_reason)
+
+    data = meeting.data or {}
+
+    # Did the meeting ever reach active? Walk status_transition[] for it.
+    transitions = data.get("status_transition") or []
+    reached_active = any(
+        isinstance(t, dict) and t.get("to") == MeetingStatus.ACTIVE.value
+        for t in transitions
+    )
+    if not reached_active:
+        # 432-case: bot was created + stopped before reaching admission.
+        return (
+            MeetingStatus.FAILED,
+            MeetingCompletionReason.STOPPED_BEFORE_ADMISSION,
+        )
+
+    # Compute duration. start_time is set when the meeting reaches active;
+    # end_time may not be set yet at exit-callback time, so fall back to now.
+    duration_s = 0.0
+    if meeting.start_time:
+        end_t = meeting.end_time or datetime.utcnow()
+        duration_s = (end_t - meeting.start_time).total_seconds()
+
+    # Was transcription requested? Default True (legacy meetings without
+    # the explicit flag predate the field; treat them as transcribe-enabled).
+    transcribe_enabled = bool(data.get("transcribe_enabled", True))
+
+    # Short meeting OR transcribe disabled — legitimate, route as completed.
+    if duration_s < 30 or not transcribe_enabled:
+        return (MeetingStatus.COMPLETED, requested_reason)
+
+    # Long meeting + transcribe enabled — check actual transcription rows.
+    try:
+        count_stmt = select(func.count()).select_from(Transcription).where(
+            Transcription.meeting_id == meeting.id
+        )
+        segment_count = (await db.execute(count_stmt)).scalar() or 0
+    except Exception as e:
+        # Don't block exit-callback on a transient DB error; log + treat as
+        # legitimate completed (conservative — better to under-route to
+        # FAILED than to spuriously fail genuinely-successful meetings).
+        logger.warning(f"Pack J: segment count query failed for meeting {meeting.id}: {e}")
+        return (MeetingStatus.COMPLETED, requested_reason)
+
+    if segment_count == 0:
+        # 125-case: bot was active for 30s+ with transcribe enabled but
+        # produced no segments. This is the silent class — was being marked
+        # `completed` despite producing nothing. Route to FAILED with
+        # specific reason so the dashboard can render distinctly.
+        return (MeetingStatus.FAILED, MeetingCompletionReason.STOPPED_WITH_NO_AUDIO)
+
+    return (MeetingStatus.COMPLETED, requested_reason)
 
 router = APIRouter()
 
@@ -129,20 +235,30 @@ async def bot_exit_callback(
             new_status = MeetingStatus.COMPLETED.value if success else None
         elif meeting.status == MeetingStatus.STOPPING.value:
             # Meeting was in stopping state — user requested stop.
-            # Any exit during stopping is a completed meeting, not a failure:
-            #   exit 1:   self_initiated_leave (bot left the meeting)
-            #   exit 137: SIGKILL from docker stop (container killed after timeout)
-            #   exit 143: SIGTERM caught (graceful container shutdown)
-            logger.info(f"Exit callback: session {session_uid} exit_code={exit_code} during stopping — treating as completed (reason={payload.reason})")
+            # v0.10.5 Pack J — apply data-driven classification rule (#255).
+            # OLD shape: any stopped exit → COMPLETED unconditionally. Result:
+            # 47% misclassification rate (557/1183 in 30d production data).
+            # NEW shape: classify via _classify_stopped_exit() which inspects
+            # reached-active + duration + transcribe-enabled + segment count
+            # to distinguish legitimate stops from STOPPED_BEFORE_ADMISSION
+            # and STOPPED_WITH_NO_AUDIO.
             provided_reason = payload.completion_reason or MeetingCompletionReason.STOPPED
-            meta = {"exit_code": exit_code, "original_reason": payload.reason}
+            target_status, classified_reason = await _classify_stopped_exit(
+                meeting, db, provided_reason
+            )
+            logger.info(
+                f"Exit callback: session {session_uid} exit_code={exit_code} during stopping "
+                f"— Pack J classified as {target_status.value} reason={classified_reason.value} "
+                f"(was: completed reason={provided_reason.value})"
+            )
+            meta = {"exit_code": exit_code, "original_reason": payload.reason, "pack_j_classification": classified_reason.value}
             success = await update_meeting_status(
-                meeting, MeetingStatus.COMPLETED, db,
-                completion_reason=provided_reason,
+                meeting, target_status, db,
+                completion_reason=classified_reason,
                 transition_reason=payload.reason,
                 transition_metadata=meta,
             )
-            new_status = MeetingStatus.COMPLETED.value if success else None
+            new_status = target_status.value if success else None
         elif meeting.status == MeetingStatus.ACTIVE.value and (
             payload.completion_reason
             or payload.reason in (
@@ -170,17 +286,28 @@ async def bot_exit_callback(
                 "left_alone": MeetingCompletionReason.LEFT_ALONE,
                 "meeting_ended_by_host": MeetingCompletionReason.STOPPED,
             }.get(payload.reason or "", MeetingCompletionReason.STOPPED)
-            logger.info(f"Exit callback: session {session_uid} exit_code={exit_code} from active with reason={payload.reason} completion_reason={payload.completion_reason or '(derived: ' + str(derived_completion_reason) + ')'} — treating as completed")
-            meta = {"exit_code": exit_code, "original_reason": payload.reason}
+            # v0.10.5 Pack J — apply J.4 routing rule. evicted / removed_by_host
+            # were previously routing to COMPLETED despite being explicit failure
+            # signals (#255 data: 6 evicted cases / 30d misclassified). The
+            # classifier now routes them to FAILED.
+            target_status, classified_reason = await _classify_stopped_exit(
+                meeting, db, derived_completion_reason
+            )
+            logger.info(
+                f"Exit callback: session {session_uid} exit_code={exit_code} from active "
+                f"reason={payload.reason} completion_reason={derived_completion_reason.value} "
+                f"— Pack J classified as {target_status.value}"
+            )
+            meta = {"exit_code": exit_code, "original_reason": payload.reason, "pack_j_classification": classified_reason.value}
             if payload.platform_specific_error:
                 meta["platform_specific_error"] = payload.platform_specific_error
             success = await update_meeting_status(
-                meeting, MeetingStatus.COMPLETED, db,
-                completion_reason=derived_completion_reason,
+                meeting, target_status, db,
+                completion_reason=classified_reason,
                 transition_reason=payload.reason,
                 transition_metadata=meta,
             )
-            new_status = MeetingStatus.COMPLETED.value if success else None
+            new_status = target_status.value if success else None
         else:
             provided_stage = payload.failure_stage or MeetingFailureStage.ACTIVE
             error_msg = f"Bot exited with code {exit_code}"

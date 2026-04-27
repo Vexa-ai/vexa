@@ -62,6 +62,13 @@ class MeetingStatus(str, Enum):
 class MeetingCompletionReason(str, Enum):
     """
     Reasons for meeting completion.
+
+    v0.10.5 Pack J — taxonomy expanded with two prod-derived values from
+    [PLATFORM] data on #255 (47% of `completed` meetings in 30d are actually
+    misclassified). The classifier already produces the correct reason; the
+    bug is downstream — meeting-api's exit-callback handler routed every
+    completion_reason to status='completed' regardless. Pack J's J.4 routing
+    rule (in callbacks.py) closes the silent-class.
     """
     STOPPED = "stopped"  # User stopped by API
     VALIDATION_ERROR = "validation_error"  # Post bot validation failed
@@ -70,6 +77,9 @@ class MeetingCompletionReason(str, Enum):
     LEFT_ALONE = "left_alone"  # Timeout for being alone
     EVICTED = "evicted"  # Kicked out from meeting using meeting UI
     MAX_BOT_TIME_EXCEEDED = "max_bot_time_exceeded"  # Scheduler killed bot after max lifetime
+    # v0.10.5 Pack J — prod-derived (data on #255):
+    STOPPED_BEFORE_ADMISSION = "stopped_before_admission"  # User stopped bot before it reached active (432 cases / 30d)
+    STOPPED_WITH_NO_AUDIO = "stopped_with_no_audio"  # Bot ran ≥30s with transcribe enabled but produced 0 segments (125 cases / 30d)
 
 class MeetingFailureStage(str, Enum):
     """
