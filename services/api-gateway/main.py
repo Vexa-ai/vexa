@@ -2044,14 +2044,14 @@ _PACK_X_TEST_ROUTES_ENABLED = os.environ.get("VEXA_ENV", "development") != "prod
 async def synthetic_test_proxy(path: str, request: Request):
     """Forward Pack X synthetic-rig calls to meeting-api.
 
-    Returns 404 when VEXA_ENV=production — synthetic-test traffic must
-    never reach prod. meeting-api endpoint enforces the same gate as a
-    second line of defense.
+    require_auth=False because synthetic-rig callers don't carry user
+    tokens. meeting-api endpoint enforces VEXA_ENV != production gate
+    as the security boundary; gateway just passes through.
     """
     if not _PACK_X_TEST_ROUTES_ENABLED:
         raise HTTPException(status_code=404, detail="Not Found")
     url = f"{MEETING_API_URL}/bots/internal/test/{path}"
-    return await forward_request(app.state.http_client, request.method, url, request)
+    return await forward_request(app.state.http_client, request.method, url, request, require_auth=False)
 
 
 @app.api_route(
@@ -2062,13 +2062,13 @@ async def synthetic_test_proxy(path: str, request: Request):
 async def synthetic_callback_proxy(path: str, request: Request):
     """Forward bot lifecycle callbacks to meeting-api.
 
-    Lets the synthetic test rig drive callback orderings via the same
-    endpoints the real bot uses — necessary for Pack X to deterministically
-    reproduce the Pack J coverage gap class (status_change-vs-exit
-    ordering bugs).
+    require_auth=False because bot callbacks don't carry user tokens
+    (matches the in-cluster behavior where runtime-api delivers
+    callbacks without auth). Lets the synthetic test rig drive
+    callback orderings via the same endpoints the real bot uses.
     """
     url = f"{MEETING_API_URL}/bots/internal/callback/{path}"
-    return await forward_request(app.state.http_client, request.method, url, request)
+    return await forward_request(app.state.http_client, request.method, url, request, require_auth=False)
 
 
 # --- End Pack X synthetic-rig proxy routes ---
