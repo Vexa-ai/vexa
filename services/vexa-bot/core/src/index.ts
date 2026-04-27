@@ -1,5 +1,6 @@
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import { log } from "./utils";
+import { logJSON, setLogContext } from "./utils/log";
 import { callStatusChangeCallback, mapExitReasonToStatus } from "./services/unified-callback";
 import { chromium } from "playwright-extra";
 import { handleGoogleMeet, leaveGoogleMeet } from "./platforms/googlemeet";
@@ -634,11 +635,27 @@ async function performGracefulLeave(
   errorDetails?: any // Optional detailed error information
 ): Promise<void> {
   if (isShuttingDown) {
-    log("[Graceful Leave] Already in progress, ignoring duplicate call.");
+    logJSON({
+      level: "warn",
+      msg: "[Graceful Leave] Already in progress, ignoring duplicate call",
+      reason,
+      exit_code: exitCode,
+    });
     return;
   }
   isShuttingDown = true;
-  log(`[Graceful Leave] Initiating graceful shutdown sequence... Reason: ${reason}, Exit Code: ${exitCode}`);
+  // v0.10.5 Pack G.1 (#272 issue 6) — emit the graceful-leave start
+  // event with structured fields. This is the diagnostic-critical
+  // window: Pack G.2's kubectl-logs capture reads stdout right up to
+  // pod termination, so every record in this function MUST be
+  // parseable by the operator's grep+jq tooling.
+  logJSON({
+    level: "info",
+    msg: "[Graceful Leave] Initiating graceful shutdown sequence",
+    reason,
+    exit_code: exitCode,
+    error_details: errorDetails ?? null,
+  });
 
   let platformLeaveSuccess = false;
 
@@ -723,7 +740,7 @@ async function performGracefulLeave(
   // Stop video recording, mux audio in, and upload the combined file
   if (activeVideoRecordingService && currentBotConfig?.recordingUploadUrl && currentBotConfig?.token) {
     try {
-      log("[Graceful Leave] Stopping video recording...");
+      logJSON({ level: "info", msg: "[Graceful Leave] Stopping video recording" });
       await activeVideoRecordingService.stop();
 
       // Finalize audio and mux into the video so the upload is a single self-contained file
@@ -732,18 +749,33 @@ async function performGracefulLeave(
           const audioPath = await activeRecordingService.finalize();
           // Compute how much later audio started compared to video
           const audioDelayMs = activeRecordingService.getStartTime() - activeVideoRecordingService.getStartTime();
-          log(`[Graceful Leave] Muxing audio into video (audio delay: ${audioDelayMs}ms)...`);
+          logJSON({
+            level: "info",
+            msg: "[Graceful Leave] Muxing audio into video",
+            audio_delay_ms: audioDelayMs,
+          });
           await activeVideoRecordingService.muxAudio(audioPath, audioDelayMs);
         } catch (muxErr: any) {
-          log(`[Graceful Leave] Audio mux failed (will upload video-only): ${muxErr.message}`);
+          logJSON({
+            level: "warn",
+            msg: "[Graceful Leave] Audio mux failed (will upload video-only)",
+            error_message: muxErr?.message,
+            error_name: muxErr?.name,
+          });
         }
       }
 
-      log("[Graceful Leave] Uploading video to meeting-api...");
+      logJSON({ level: "info", msg: "[Graceful Leave] Uploading video to meeting-api" });
       await activeVideoRecordingService.upload(currentBotConfig.recordingUploadUrl, currentBotConfig.token);
-      log("[Graceful Leave] Video uploaded successfully.");
+      logJSON({ level: "info", msg: "[Graceful Leave] Video uploaded successfully" });
     } catch (uploadError: any) {
-      log(`[Graceful Leave] Video upload failed: ${uploadError.message}`);
+      logJSON({
+        level: "error",
+        msg: "[Graceful Leave] Video upload failed",
+        error_message: uploadError?.message,
+        error_name: uploadError?.name,
+        error_stack: uploadError?.stack,
+      });
     } finally {
       await activeVideoRecordingService.cleanup();
       activeVideoRecordingService = null;
@@ -753,11 +785,20 @@ async function performGracefulLeave(
   // Upload audio recording separately (used for audio-only playback / transcription alignment)
   if (activeRecordingService && currentBotConfig?.recordingUploadUrl && currentBotConfig?.token) {
     try {
-      log("[Graceful Leave] Uploading audio recording to meeting-api...");
+      logJSON({ level: "info", msg: "[Graceful Leave] Uploading audio recording to meeting-api" });
       await activeRecordingService.upload(currentBotConfig.recordingUploadUrl, currentBotConfig.token);
-      log("[Graceful Leave] Audio recording uploaded successfully.");
+      logJSON({ level: "info", msg: "[Graceful Leave] Audio recording uploaded successfully" });
     } catch (uploadError: any) {
-      log(`[Graceful Leave] Audio recording upload failed: ${uploadError.message}`);
+      // Recording-loss diagnostic: this is the line operators grep for in
+      // post-mortems. Emit every field that lets them recover from S3 +
+      // determine whether to retry (4xx) or escalate to platform (5xx).
+      logJSON({
+        level: "error",
+        msg: "[Graceful Leave] Audio recording upload failed",
+        error_message: uploadError?.message,
+        error_name: uploadError?.name,
+        error_stack: uploadError?.stack,
+      });
     } finally {
       await activeRecordingService.cleanup();
       activeRecordingService = null;
@@ -815,12 +856,33 @@ async function performGracefulLeave(
         statusMapping.failureStage,
         speakerEvents.length > 0 ? speakerEvents : undefined
       );
-      log(`[Graceful Leave] Unified exit callback sent successfully`);
+      logJSON({
+        level: "info",
+        msg: "[Graceful Leave] Unified exit callback sent successfully",
+        status: statusMapping.status,
+        completion_reason: statusMapping.completionReason,
+        failure_stage: statusMapping.failureStage,
+        final_callback_reason: finalCallbackReason,
+        final_callback_exit_code: finalCallbackExitCode,
+        speaker_event_count: speakerEvents.length,
+      });
     } catch (callbackError: any) {
-      log(`[Graceful Leave] Error sending unified exit callback: ${callbackError.message}`);
+      logJSON({
+        level: "error",
+        msg: "[Graceful Leave] Error sending unified exit callback",
+        error_message: callbackError?.message,
+        error_name: callbackError?.name,
+        final_callback_reason: finalCallbackReason,
+        final_callback_exit_code: finalCallbackExitCode,
+      });
     }
   } else {
-    log("[Graceful Leave] Bot manager callback URL or Connection ID not configured. Cannot send exit status.");
+    logJSON({
+      level: "error",
+      msg: "[Graceful Leave] Bot manager callback URL or Connection ID not configured — cannot send exit status",
+      has_callback_url: Boolean(meetingApiCallbackUrl),
+      has_connection_id: Boolean(currentConnectionId),
+    });
   }
 
   if (redisSubscriber && redisSubscriber.isOpen) {
@@ -861,7 +923,15 @@ async function performGracefulLeave(
   // Exit the process
   // The process exit code should reflect the overall success/failure.
   // If callback used finalCallbackExitCode, process.exit could use the same.
-  log(`[Graceful Leave] Exiting process with code ${finalCallbackExitCode} (Reason: ${finalCallbackReason}).`);
+  // v0.10.5 Pack G.1: emit the final exit record as structured JSON —
+  // this is the LAST line in the kubectl-logs capture for a clean pod
+  // exit, so it carries the diagnostic burden of "what happened?"
+  logJSON({
+    level: "info",
+    msg: "[Graceful Leave] Exiting process",
+    exit_code: finalCallbackExitCode,
+    reason: finalCallbackReason,
+  });
   process.exit(finalCallbackExitCode);
 }
 // --- ----------------------------- ---
@@ -1948,7 +2018,7 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
 
 export async function runBot(botConfig: BotConfig): Promise<void> {// Store botConfig globally for command validation
   (globalThis as any).botConfig = botConfig;
-  
+
   // --- UPDATED: Parse and store config values ---
   currentLanguage = botConfig.language;
   allowedLanguages = botConfig.allowedLanguages?.length ? botConfig.allowedLanguages : null;
@@ -1959,14 +2029,39 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
   currentPlatform = botConfig.platform; // Set currentPlatform here
   currentBotConfig = botConfig; // Store full config for recording upload
 
+  // v0.10.5 Pack G.1 (#272 issue 6) — populate the structured-logger
+  // context once per-bot from BotConfig. Every subsequent log line
+  // (whether emitted via the legacy `log(message)` shim or directly
+  // via `logJSON({...})`) automatically carries meeting_id, session_uid,
+  // platform, container_name, connection_id. K8s `kubectl logs` capture
+  // (Pack G.2) becomes deterministically grep+jq-able from this point.
+  setLogContext({
+    meeting_id: botConfig.meeting_id,
+    session_uid: botConfig.connectionId,
+    platform: botConfig.platform,
+    container_name: process.env.HOSTNAME || undefined,
+    connection_id: botConfig.connectionId,
+    bot_name: botConfig.botName,
+  });
+
   // Destructure other needed config values
   const { meetingUrl, platform, botName } = botConfig;
 
-  log(
-    `Starting bot for ${platform} with URL: ${meetingUrl}, name: ${botName}, language: ${currentLanguage}, ` +
-    `allowedLanguages: ${allowedLanguages ? JSON.stringify(allowedLanguages) : 'none'}, ` +
-    `task: ${currentTask}, transcribeEnabled: ${botConfig.transcribeEnabled !== false}, connectionId: ${currentConnectionId}`
-  );
+  // Initial bot-startup record uses logJSON directly so the operator
+  // sees the structured fields (rather than the prefix-parser making
+  // its best guess on an unprefixed message).
+  logJSON({
+    level: "info",
+    msg: "Bot startup",
+    meeting_url: meetingUrl,
+    platform,
+    bot_name: botName,
+    language: currentLanguage,
+    allowed_languages: allowedLanguages ?? null,
+    task: currentTask,
+    transcribe_enabled: botConfig.transcribeEnabled !== false,
+    connection_id: currentConnectionId,
+  });
 
   // Fail fast: meeting_id must be present for control-plane commands
   const meetingId = botConfig.meeting_id;

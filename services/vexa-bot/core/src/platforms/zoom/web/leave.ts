@@ -1,5 +1,6 @@
 import { Page } from 'playwright';
 import { log } from '../../../utils';
+import { logJSON } from '../../../utils/log';
 import { LeaveReason } from '../../shared/meetingFlow';
 import { zoomLeaveConfirmSelector } from './selectors';
 import { stopZoomWebRecording } from './recording';
@@ -60,14 +61,29 @@ export async function leaveZoomWebMeeting(
       await page.waitForTimeout(1000);
     }
   } catch (e: any) {
-    log(`[Zoom Web] Error during leave: ${e.message}`);
+    logJSON({
+      level: "error",
+      msg: "[Zoom Web] Error during leave",
+      error_message: e?.message,
+      error_name: e?.name,
+      leave_reason: reason,
+      confirmed,
+    });
   }
 
   // Stop recording after the UI leave so popupDismissInterval stays active until we're done
   try {
     await stopZoomWebRecording();
   } catch (e: any) {
-    log(`[Zoom Web] Error stopping recording during leave: ${e.message}`);
+    // v0.10.5 Pack G.1 — recording-stop failure is diagnostic-critical
+    // for Zoom Web (#272 issue 1 audio-loss class).
+    logJSON({
+      level: "error",
+      msg: "[Zoom Web] Error stopping recording during leave",
+      error_message: e?.message,
+      error_name: e?.name,
+      leave_reason: reason,
+    });
   }
 
   return true;

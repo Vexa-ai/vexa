@@ -1,5 +1,6 @@
 import { Page } from "playwright";
 import { log, callLeaveCallback } from "../../utils";
+import { logJSON } from "../../utils/log";
 import { BotConfig } from "../../types";
 import { teamsLeaveSelectors, teamsPrimaryHangupButtonSelector } from "./selectors";
 
@@ -112,20 +113,38 @@ export async function leaveMicrosoftTeams(page: Page | null, botConfig?: BotConf
       }
     });
   } catch (flushError: any) {
-    log(`[leaveMicrosoftTeams] Recording flush failed: ${flushError.message}`);
+    // v0.10.5 Pack G.1 — recording-flush failure is diagnostic-critical
+    // (audio upload runs against an unflushed blob → silent loss).
+    logJSON({
+      level: "error",
+      msg: "[leaveMicrosoftTeams] Recording flush failed",
+      error_message: flushError?.message,
+      error_name: flushError?.name,
+      error_stack: flushError?.stack,
+      leave_reason: reason,
+    });
   }
 
   // Call leave callback first to notify meeting-api
   if (botConfig) {
     try {
-      log("🔥 Calling leave callback before attempting to leave...");
+      log("[leaveMicrosoftTeams] Calling leave callback before attempting to leave");
       await callLeaveCallback(botConfig, reason);
-      log("✅ Leave callback sent successfully");
+      log("[leaveMicrosoftTeams] Leave callback sent successfully");
     } catch (callbackError: any) {
-      log(`⚠️ Warning: Failed to send leave callback: ${callbackError.message}. Continuing with leave attempt...`);
+      logJSON({
+        level: "warn",
+        msg: "[leaveMicrosoftTeams] Leave callback failed; continuing with leave attempt",
+        error_message: callbackError?.message,
+        error_name: callbackError?.name,
+        leave_reason: reason,
+      });
     }
   } else {
-    log("⚠️ Warning: No bot config provided, cannot send leave callback");
+    logJSON({
+      level: "warn",
+      msg: "[leaveMicrosoftTeams] No bot config provided; cannot send leave callback",
+    });
   }
 
   try {

@@ -96,6 +96,20 @@ BOT_DELETE_DURABLE_RETRY:
   - meeting-api:redis:meeting-api:container-stops/*
   - meeting-api:redis:meeting-api:container-stop-dlq
   max_duration_sec: 300
+BOT_LOGS_STRUCTURED_JSON:
+  proves: "vexa-bot core ships a structured-JSON logger module at services/vexa-bot/core/src/utils/log.ts AND the legacy\
+    \ log() shim in utils.ts routes through it \u2014 every bot stdout line is a single-line JSON object so K8s `kubectl logs`\
+    \ capture (Pack G.2) is parseable without ad-hoc text munging (Pack G.1 / #272 issue 6)"
+  symptom: "Bot pod dies with [Graceful Leave] free-text logs that no operator tool can parse \u2014 every recording-loss bug\
+    \ becomes a 'we don't know why' post-mortem because the captured stdout is unstructured prefix-tagged text"
+  found: '2026-04-27'
+  type: grep
+  file: services/vexa-bot/core/src/utils.ts
+  must_match: from\s+["']\./utils/log["']
+  modes:
+  - lite
+  state: stateless
+  max_duration_sec: 5
 BOT_RECORDING_ENABLED:
   proves: "bots are created with recordingEnabled=true \u2014 audio will be captured and uploaded"
   symptom: "No audio recording for meeting \u2014 RECORDING_ENABLED env var not set or recordingEnabled=false in BOT_CONFIG"

@@ -1,5 +1,6 @@
 import { Page } from "playwright";
 import { log, callLeaveCallback } from "../../utils";
+import { logJSON } from "../../utils/log";
 import { BotConfig } from "../../types";
 import { googleLeaveSelectors } from "./selectors";
 
@@ -111,20 +112,39 @@ export async function leaveGoogleMeet(page: Page | null, botConfig?: BotConfig, 
       }
     });
   } catch (flushError: any) {
-    log(`[leaveGoogleMeet] Recording flush failed: ${flushError.message}`);
+    // v0.10.5 Pack G.1 — recording-flush failure means the final blob
+    // never made it from the browser context to disk; the audio upload
+    // path will have nothing to send. Diagnostic-critical.
+    logJSON({
+      level: "error",
+      msg: "[leaveGoogleMeet] Recording flush failed",
+      error_message: flushError?.message,
+      error_name: flushError?.name,
+      error_stack: flushError?.stack,
+      leave_reason: reason,
+    });
   }
 
   // Call leave callback first to notify meeting-api
   if (botConfig) {
     try {
-      log("🔥 Calling leave callback before attempting to leave...");
+      log("[leaveGoogleMeet] Calling leave callback before attempting to leave");
       await callLeaveCallback(botConfig, reason);
-      log("✅ Leave callback sent successfully");
+      log("[leaveGoogleMeet] Leave callback sent successfully");
     } catch (callbackError: any) {
-      log(`⚠️ Warning: Failed to send leave callback: ${callbackError.message}. Continuing with leave attempt...`);
+      logJSON({
+        level: "warn",
+        msg: "[leaveGoogleMeet] Leave callback failed; continuing with leave attempt",
+        error_message: callbackError?.message,
+        error_name: callbackError?.name,
+        leave_reason: reason,
+      });
     }
   } else {
-    log("⚠️ Warning: No bot config provided, cannot send leave callback");
+    logJSON({
+      level: "warn",
+      msg: "[leaveGoogleMeet] No bot config provided; cannot send leave callback",
+    });
   }
 
   try {
@@ -137,10 +157,21 @@ export async function leaveGoogleMeet(page: Page | null, botConfig?: BotConfig, 
         return false;
       }
     });
-    log(`[leaveGoogleMeet] Browser leave action result: ${result}`);
+    logJSON({
+      level: "info",
+      msg: "[leaveGoogleMeet] Browser leave action complete",
+      leave_result: Boolean(result),
+      leave_reason: reason,
+    });
     return result;
   } catch (error: any) {
-    log(`[leaveGoogleMeet] Error calling performLeaveAction in browser: ${error.message}`);
+    logJSON({
+      level: "error",
+      msg: "[leaveGoogleMeet] Error calling performLeaveAction in browser",
+      error_message: error?.message,
+      error_name: error?.name,
+      leave_reason: reason,
+    });
     return false;
   }
 }
