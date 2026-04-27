@@ -1720,7 +1720,12 @@ export default function MeetingDetailPage() {
                   || currentMeeting.data?.failure_reason
                   || currentMeeting.data?.status_message;
               })()}
-              errorCode={currentMeeting.data?.error_code || currentMeeting.data?.failure_stage}
+              errorCode={
+                currentMeeting.data?.error_code
+                || (typeof currentMeeting.data?.failure_stage === "string"
+                  ? currentMeeting.data.failure_stage
+                  : undefined)
+              }
             />
           )}
 
