@@ -524,75 +524,48 @@ async def _get_running_bots_from_runtime(user_id: int) -> list:
 
 
 async def _delayed_container_stop(container_name: str, meeting_id: int, delay_seconds: int = BOT_STOP_DELAY_SECONDS):
-    """Wait, then stop container via Runtime API. Finalize meeting if still non-terminal."""
+    """Wait, then stop container via Runtime API. Clean up browser_session Redis keys.
+
+    v0.10.5 Pack E.3.1 — REMOVED the redundant `_delayed_stop_finalizer`
+    safety block (lines 534-579 pre-Pack-E). 260421 Pack J shipped durable
+    exit-callback delivery in runtime-api's idle_loop; that path is now
+    canonical for `stopping → completed`. Pack J's classifier in
+    callbacks.py (this cycle) routes correctly per data-driven rules.
+    Pack E.3.2 sweep (sweeps.py) catches stale 'stopping' rows that
+    genuinely escape both — operator-actionable signal, not silent recovery.
+
+    Removed code was the third claim on the same transition: in-process
+    coroutine continuation that fires after sleep+stop and force-completes
+    if the runtime-api callback path hasn't already. Redundant defense per
+    principle filter (no fallbacks for internal subsystems with their own
+    canonical durable mechanism).
+
+    What this function still does (NOT removed):
+      1. Wait `delay_seconds` for graceful bot shutdown.
+      2. Call runtime-api stop (idempotent — second call is a 200 no-op).
+      3. Clean up browser_session:* secondary Redis keys.
+
+    Status finalization is handled by:
+      - Pack J's classifier (canonical, runtime-api callback fires)
+      - Pack E.3.2 sweep (escape hatch — runs every 60s, threshold 5 min)
+    """
     logger.info(f"[Delayed Stop] Waiting {delay_seconds}s for container {container_name} (meeting {meeting_id})")
     await asyncio.sleep(delay_seconds)
 
     await _stop_via_runtime_api(container_name)
     logger.info(f"[Delayed Stop] Stopped container {container_name}")
 
-    # Safety finalizer
-    await asyncio.sleep(1)
-    meeting_id_for_redis = None
-    session_token_for_redis = None
-    should_run_post_tasks = False
-    publish_info = None
-    status_transition_info = None
+    # v0.10.5 Pack E.3.1 — only Redis-side cleanup remains here.
+    # Status finalization is the runtime-api exit callback's job (Pack J).
     try:
+        meeting_id_for_redis = None
+        session_token_for_redis = None
         async with async_session_local() as db:
             meeting = await db.get(Meeting, meeting_id)
-            if not meeting:
-                return
+            if meeting:
+                meeting_id_for_redis = meeting.id
+                session_token_for_redis = (meeting.data or {}).get("session_token")
 
-            # Snapshot data needed after session closes
-            meeting_id_for_redis = meeting.id
-            session_token_for_redis = (meeting.data or {}).get("session_token")
-
-            terminal_states = [MeetingStatus.COMPLETED.value, MeetingStatus.FAILED.value]
-            if meeting.status not in terminal_states:
-                logger.warning(f"[Delayed Stop] Meeting {meeting_id} still '{meeting.status}' after stop. Finalizing.")
-                reason = MeetingCompletionReason.STOPPED
-                if meeting.data and isinstance(meeting.data, dict):
-                    pending = meeting.data.get("pending_completion_reason")
-                    if pending:
-                        try:
-                            reason = MeetingCompletionReason(pending)
-                        except ValueError:
-                            pass
-                old_status = meeting.status
-                success = await update_meeting_status(
-                    meeting,
-                    MeetingStatus.COMPLETED,
-                    db,
-                    completion_reason=reason,
-                    transition_reason="delayed_stop_finalizer",
-                    transition_metadata={"container_name": container_name, "finalized_by": "delayed_stop"},
-                )
-                if success:
-                    publish_info = (meeting.id, meeting.platform, meeting.platform_specific_id, meeting.user_id)
-                    should_run_post_tasks = True
-                    status_transition_info = {
-                        "old_status": old_status,
-                        "new_status": MeetingStatus.COMPLETED.value,
-                        "reason": "delayed_stop_finalizer",
-                        "transition_source": "delayed_stop",
-                    }
-        # DB session closed here — Redis/HTTP calls below are safe
-
-        if publish_info:
-            await publish_meeting_status_change(
-                publish_info[0], MeetingStatus.COMPLETED.value, redis_client,
-                publish_info[1], publish_info[2], publish_info[3],
-            )
-        if should_run_post_tasks:
-            asyncio.create_task(run_all_tasks(meeting_id))
-            # Fire status webhook for the COMPLETED transition (post-meeting fires completion webhook too,
-            # but status webhook is for users who enabled webhook_events=meeting.status_change etc.)
-            if status_transition_info:
-                from .post_meeting import run_status_webhook_task
-                asyncio.create_task(run_status_webhook_task(meeting_id, status_transition_info))
-
-        # Clean up browser_session Redis keys
         if redis_client and meeting_id_for_redis is not None:
             if session_token_for_redis:
                 await redis_client.delete(f"browser_session:{session_token_for_redis}")

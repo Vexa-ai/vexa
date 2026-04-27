@@ -322,6 +322,13 @@ async def startup():
     asyncio.create_task(start_retry_worker(redis_client))
     logger.info("Webhook retry worker started")
 
+    # v0.10.5 Pack E.3.2 — stale-stopping sweep + future H.4 + E.1-sibling.
+    # Idle-loop equivalent for meeting-api: periodic scans that catch
+    # state-machine rows that escape the canonical durable mechanisms.
+    from .sweeps import start_sweeps
+    asyncio.create_task(start_sweeps(async_session_local))
+    logger.info("Meeting-api sweeps loop started (Pack E.3.2 stale-stopping)")
+
     # --- Collector startup ---
     if True:  # redis_client is guaranteed non-None per Pack C.4
         # Ensure consumer groups exist for transcription stream
