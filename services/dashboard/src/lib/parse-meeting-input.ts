@@ -1,11 +1,11 @@
 import type { Platform } from "@/types/vexa";
 
 export interface ParsedMeetingInput {
-  platform: Platform | null;       // null when URL looks like a meeting but vendor isn't recognized
+  platform: Platform;               // best guess; with platformNeeded=true, caller must override with user pick
   meetingId: string;                // best-effort ID extraction; may be empty when platformNeeded=true
   passcode?: string;
   originalUrl?: string;
-  platformNeeded?: boolean;         // v0.10.5: white-label / enterprise URLs need user-supplied platform
+  platformNeeded?: boolean;         // v0.10.5: white-label / enterprise URLs — UI must ask user; default platform here is just a placeholder
 }
 
 // Parse Google Meet, Zoom, or Teams URL/meeting ID
@@ -102,8 +102,12 @@ export function parseMeetingInput(input: string): ParsedMeetingInput | null {
     const numericMatch = trimmed.match(/\b(\d{9,11})\b/);
     const passcodeMatch = trimmed.match(/[?&](?:password|pwd|passcode)=([^&\s]+)/i);
     const originalUrl = trimmed.startsWith('http') ? trimmed : `https://${trimmed}`;
+    // Heuristic guess for default platform; UI MUST ask user (platformNeeded=true).
+    // If the URL contains "zoom" anywhere, default to zoom; otherwise google_meet.
+    // The user's actual pick overrides this.
+    const guessPlatform: Platform = trimmed.toLowerCase().includes('zoom') ? 'zoom' : 'google_meet';
     return {
-      platform: null,
+      platform: guessPlatform,
       meetingId: numericMatch ? numericMatch[1] : '',
       passcode: passcodeMatch ? decodeURIComponent(passcodeMatch[1]) : undefined,
       originalUrl,

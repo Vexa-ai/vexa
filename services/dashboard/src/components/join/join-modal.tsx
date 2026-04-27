@@ -85,26 +85,20 @@ export function JoinModal() {
   }, [meetingInput]);
 
   // Update platform and passcode when detected from URL.
-  // platformNeeded URLs (white-label / enterprise) leave platform at
-  // its current value; user must pick.
+  // platformNeeded URLs (white-label / enterprise) seed the picker with
+  // a heuristic default; the user CAN re-pick to override.
   useEffect(() => {
-    if (parsedInput && parsedInput.platform) {
+    if (parsedInput) {
       setPlatform(parsedInput.platform);
       if (parsedInput.passcode) {
         setPasscode(parsedInput.passcode);
       }
-    } else if (parsedInput && parsedInput.passcode) {
-      // platformNeeded but passcode extractable
-      setPasscode(parsedInput.passcode);
     }
   }, [parsedInput]);
 
-  // Valid request shapes:
-  //   (a) parsed canonical (platform detected from URL/code)
-  //   (b) parsed platformNeeded + user picked a platform
-  const isValid = parsedInput !== null && (
-    !parsedInput.platformNeeded || (parsedInput.platformNeeded && platform !== null)
-  );
+  // Valid: parsed input present. platformNeeded shows extra UI; submit
+  // uses whatever platform is currently selected (state), regardless.
+  const isValid = parsedInput !== null;
 
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
