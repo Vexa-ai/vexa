@@ -781,12 +781,31 @@ class MeetingResponse(BaseModel): # Not inheriting from MeetingBase anymore to a
             if reason and reason not in [r.value for r in MeetingCompletionReason]:
                 raise ValueError(f"Invalid completion_reason '{reason}'. Must be one of: {[r.value for r in MeetingCompletionReason]}")
         
-        # Validate failure stage
+        # Validate failure stage (READ-tolerant since v0.10.5 iter-6).
+        #
+        # Pre-iter-6 this raised ValueError on any unrecognized value,
+        # which 500'd /meetings list whenever the DB held a record with
+        # `failure_stage='stopping'` (Pack R bug pre-iter-6 wrote
+        # current_status.value, which can be 'stopping' for quick-stop
+        # transitions). Forward-fix in meetings.py::set_meeting_status
+        # gates writes correctly; here we make reads tolerant so old/
+        # external/manually-poked records don't take the entire list
+        # endpoint down. Strip the invalid value, log a warning, return.
+        # The data is still in the DB — operators can audit + fix at
+        # leisure rather than fight a hard validation error.
         elif status == MeetingStatus.FAILED:
             stage = v.get('failure_stage')
             if stage and stage not in [s.value for s in MeetingFailureStage]:
-                raise ValueError(f"Invalid failure_stage '{stage}'. Must be one of: {[s.value for s in MeetingFailureStage]}")
-        
+                import logging
+                logging.getLogger(__name__).warning(
+                    "MeetingResponse: stripping invalid failure_stage=%r "
+                    "(must be one of %s); see meetings.py Pack R write-path "
+                    "gate. Data remains in DB; update or null at leisure.",
+                    stage, [s.value for s in MeetingFailureStage],
+                )
+                v = dict(v)
+                v['failure_stage'] = None
+
         return v
 
     @field_serializer('data')
