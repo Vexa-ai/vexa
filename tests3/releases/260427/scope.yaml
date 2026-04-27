@@ -1260,6 +1260,49 @@ issues:
       do: "Verify endpoint gating: with VEXA_ENV=production, `curl -X POST http://localhost:8056/bots/internal/test/session-bootstrap -d '{}'` returns 404"
       expect: "404 Not Found"
 
+# ── v0.10.6 GROOM SEED — Pack Y: invariant-based entropy expansion ──
+# (Documented here so it carries forward; not in v0.10.5 ship scope.)
+#
+# Pack X v1 (this release) shipped 9 hand-crafted scenarios. Live
+# testing 2026-04-27 surfaced 3 bug classes Pack X v1 didn't cover
+# (DELETE no-container path, status_change=failed reason persistence,
+# stale-stopping recovery threshold UX). Project-owner pushback:
+# "instead of enumerations think on how you can expand entropy in
+# that dimensions" — correct call. Path enumeration is assertion-
+# mindset; invariant-based fuzz is the discovery shape.
+#
+# Pack Y design (v0.10.6 priority):
+#
+# Universal meeting-lifecycle invariants — hold for ANY input sequence:
+#   I1: Status monotonic in legal-transition graph
+#       (catches: started-callback REQUESTED→ACTIVE class)
+#   I2: Terminal status → completion_reason OR failure_stage non-null
+#       (catches: m8 + m28 silent-class today)
+#   I3: Terminal status → end_time non-null
+#       (catches: lifecycle-shutdown bugs)
+#   I4: status_transition[] count == observed transitions
+#       (catches: hidden state changes)
+#   I5: completion_reason ∈ enum when non-null
+#       (catches: Pack R failure_stage='stopping' class)
+#   I6: Sweep eventually recovers stopping > THRESHOLD to terminal
+#       (catches: m27 stale class)
+#   I7: No callback sequence yields 5xx
+#       (catches: service-availability under fuzz; DB connection leaks)
+#
+# Implementation:
+#   - tests3/synthetic/property/test_lifecycle_invariants.py
+#   - hypothesis-based: random callback sequence + payload + timing
+#   - 7 invariants asserted post-condition
+#   - 100s of cases per CI run finds bugs hand-crafted scenarios miss
+#
+# Plus tier-3 time-injection (POST /bots/internal/test/trigger-sweep)
+# unblocks I6 — sweep behavior testable in seconds, not 5+min.
+# Plus tier-5 chaos primitives (rig_chaos docker_stop / network_blackhole)
+# extend invariants to chaos conditions.
+#
+# Estimated: ~3 days dev + [PLATFORM] invariant input.
+# Open during v0.10.6 groom with this entry as the seed.
+
 expensive_tests: []
 
 strict_features: []
