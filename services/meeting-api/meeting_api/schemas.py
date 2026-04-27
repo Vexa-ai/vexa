@@ -502,7 +502,7 @@ def parse_meeting_url(url: str) -> dict:
             }
         raise ValueError("Unsupported Teams URL format. Expected /meet/<id>?p=<passcode> or /l/meetup-join/...")
 
-    # Zoom
+    # Zoom — canonical zoom.us / zoomgov.com hosts
     if "zoom.us" in host or "zoomgov.com" in host:
         parts = [p for p in path.split("/") if p]
         native_id = ""
@@ -713,7 +713,24 @@ class MeetingCreate(BaseModel):
     @model_validator(mode='before')
     @classmethod
     def parse_meeting_url_if_provided(cls, data: Any) -> Any:
-        """When meeting_url is provided but native_meeting_id is missing, parse the URL."""
+        """When meeting_url is provided, try to extract platform + native_meeting_id.
+
+        v0.10.5 (2026-04-27) — parsing is BEST-EFFORT, not a gate. If the
+        parser fails to recognize a URL shape (e.g., a white-label Zoom
+        like https://zoom-lfx.platform.linuxfoundation.org/meeting/<id>
+        ?password=<uuid>), we DO NOT raise — instead, we leave the URL
+        as-is and rely on the user-supplied `platform` field. The bot
+        navigates to the URL directly; HTTPS resolves vendor redirects
+        to the canonical join page.
+
+        Principle (per project-owner 2026-04-27): "we will have endless
+        like this; we cannot create a parser for every white-label.
+        Instead, allow users to supply (URL + platform) and trust them."
+
+        The caller decides what they're sending us. We try to be helpful
+        (extract the meeting ID for analytics + canonical URL
+        construction) but don't gatekeep.
+        """
         if not isinstance(data, dict):
             return data
         url = data.get("meeting_url")
@@ -732,17 +749,40 @@ class MeetingCreate(BaseModel):
             if parsed.get("teams_base_host") and not data.get("teams_base_host"):
                 data["teams_base_host"] = parsed["teams_base_host"]
         except ValueError:
-            pass  # let the downstream validators produce the error
+            # Parser doesn't recognize this URL shape (white-label /
+            # enterprise / brand-new vendor). That's fine — if the user
+            # also supplied `platform`, the validate_meeting_or_agent
+            # check below accepts (meeting_url + platform) directly.
+            # If they supplied only `meeting_url` with no platform, the
+            # validator raises a clear actionable error (path 1 ask).
+            pass
         return data
 
     @model_validator(mode='after')
     def validate_meeting_or_agent(self):
-        """Ensure at least one of meeting info, agent_enabled, or browser_session mode is provided."""
-        has_meeting = self.platform is not None and self.native_meeting_id is not None
+        """Ensure the request gives us enough to spawn a bot.
+
+        v0.10.5 (2026-04-27) — three valid shapes:
+          (A) platform + native_meeting_id  — explicit, server constructs join URL
+          (B) platform + meeting_url        — user-supplied URL, bot navigates as-is
+          (C) agent_enabled OR mode='browser_session' — non-meeting modes
+
+        Shape (B) is the white-label / enterprise / never-seen-before
+        URL escape hatch. The user knows their meeting is Zoom (or
+        Meet, or Teams) — they tell us. We don't need to recognize the
+        URL shape; the bot's browser handles redirects. No proliferating
+        per-vendor URL parsers.
+        """
+        has_meeting_explicit = self.platform is not None and self.native_meeting_id is not None
+        has_meeting_via_url = self.platform is not None and self.meeting_url is not None
+        has_meeting = has_meeting_explicit or has_meeting_via_url
         has_agent = bool(self.agent_enabled)
         has_browser_session = self.mode == "browser_session"
         if not has_meeting and not has_agent and not has_browser_session:
-            raise ValueError("Either provide platform + native_meeting_id for a meeting, set agent_enabled=true, or set mode='browser_session'")
+            raise ValueError(
+                "Either provide platform + native_meeting_id, OR platform + meeting_url, "
+                "OR set agent_enabled=true, OR set mode='browser_session'"
+            )
         # Teams requires passcode — without it bots can't pass the lobby
         if has_meeting and self.platform == Platform.TEAMS and not self.meeting_url and not self.passcode:
             raise ValueError("Teams meetings require a passcode. Without it, bots cannot join (lobby rejects anonymous guests). Provide the 'passcode' field.")

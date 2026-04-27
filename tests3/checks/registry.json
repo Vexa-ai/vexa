@@ -1235,6 +1235,46 @@
       "file": "services/meeting-api/meeting_api/recordings.py",
       "must_match": "[E1A] chunk_write",
       "max_duration_sec": 5
+    },
+    {
+      "id": "PACK_X_DRY_RUN_FLAG_GATED",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "MeetingCreate schema accepts `dry_run` field; request_bot handler enforces `VEXA_ENV != 'production'` gate (HTTP 422 in production). Synthetic-rig safety net — even if a test-shape leaks past route gating, the value is rejected at the application layer.",
+      "symptom": "Test-mode flag accepted in production: synthetic test traffic could create meetings without launching real bots, hiding production usage anomalies. Bypasses the no-platform-bot test boundary.",
+      "file": "services/meeting-api/meeting_api/meetings.py",
+      "must_match": "dry_run=true is a test-mode flag; not allowed in production",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "PACK_X_DRY_RUN_SCHEMA_FIELD",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "MeetingCreate Pydantic schema declares `dry_run: Optional[bool] = Field(False, ...)` so callers can opt in deterministically. The synthetic-rig depends on this field being a first-class schema element (not a magic header).",
+      "symptom": "If someone removes the field, all 7 Pack X scenarios fail with HTTP 422; rig becomes unrunnable; entropy testing offline.",
+      "file": "services/meeting-api/meeting_api/schemas.py",
+      "must_match": "dry_run: Optional[bool] = Field(",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "URL_PLUS_PLATFORM_TRUST_MODEL",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "MeetingCreate accepts (platform + meeting_url) as a valid request shape — schema validator does NOT require parser-extracted native_meeting_id. White-label / enterprise / never-seen-before Zoom URLs (LFX, AWS, Bloomberg, etc.) work via this path. Bot navigates the user-supplied URL directly; vendor backend resolves to canonical join. Avoids per-vendor URL-parser proliferation.",
+      "symptom": "Each new white-label Zoom domain (zoom-lfx.platform.linuxfoundation.org today, AWS Chime tomorrow, etc.) requires a per-vendor parser entry. Schema rejection forces users to translate URLs to canonical zoom.us shape they may not know. Anti-architecture per project-owner principle 2026-04-27.",
+      "file": "services/meeting-api/meeting_api/schemas.py",
+      "must_match": "platform + meeting_url",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "URL_PARSER_BEST_EFFORT_NOT_GATE",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "parse_meeting_url is best-effort metadata extraction, not a validation gate. When the parser raises ValueError (URL shape unrecognized), the model_validator catches it silently — downstream validation accepts (URL + platform) without parser output. Pure URL-only requests still work via the parser; the parser failing doesn't block (URL + platform) requests.",
+      "symptom": "Parser failure rejects valid (URL + platform) requests; user sees 422 even though they supplied enough info. Defeats the white-label escape hatch.",
+      "file": "services/meeting-api/meeting_api/schemas.py",
+      "must_match": "Parser doesn't recognize this URL shape",
+      "max_duration_sec": 5
     }
   ]
 }

@@ -860,6 +860,28 @@ async def request_bot(
     # --- Standard meeting bot ---
     native_meeting_id = req.native_meeting_id
 
+    # v0.10.5 (2026-04-27) — Path 3: (platform + meeting_url) without
+    # parser-extractable native_meeting_id is valid. Synthesize a
+    # placeholder native_meeting_id from the URL hash so internal
+    # tracking, dedupe, and cancel flows still work. The bot uses
+    # `meeting_url` directly (browser navigates; Zoom/Meet/Teams
+    # backends resolve white-label/enterprise URLs server-side).
+    #
+    # This is the "no proliferating per-vendor URL parsers" boundary
+    # (per project-owner 2026-04-27 — "we will have endless [LFX-style
+    # white-label URLs]; cannot create a parser for every one. Allow
+    # users to supply (URL + platform) and trust them.").
+    if not native_meeting_id and req.meeting_url:
+        # Synthesize stable id from URL: short hash prefix + suffix
+        # of URL for human-readability when ops spot-check the row.
+        import hashlib
+        h = hashlib.sha256(req.meeting_url.encode()).hexdigest()[:10]
+        native_meeting_id = f"url-{h}"
+        logger.info(
+            f"Path 3 (URL+platform): meeting_url='{req.meeting_url[:60]}...' "
+            f"→ synthesized native_meeting_id='{native_meeting_id}' for platform={req.platform.value}"
+        )
+
     # Construct meeting URL
     if req.meeting_url:
         constructed_url = req.meeting_url
