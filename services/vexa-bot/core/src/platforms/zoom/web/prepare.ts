@@ -1,6 +1,6 @@
 import { Page } from 'playwright';
 import { BotConfig } from '../../../types';
-import { log } from '../../../utils';
+import { log, callNeedsHumanHelpCallback } from '../../../utils';
 import { zoomAudioButtonSelector, zoomChatButtonSelector, zoomVideoButtonSelector } from './selectors';
 
 /**
@@ -131,7 +131,36 @@ export async function prepareZoomWebMeeting(page: Page | null, botConfig: BotCon
   }
 
   if (!audioJoined) {
-    log('[Zoom Web] WARNING: Could not confirm audio join after all attempts — per-speaker capture may fail');
+    // v0.10.5 — Silent failure detected on lite meeting 30 (LFX URL test):
+    // bot reached `active` (joined the meeting), prepareZoomWebMeeting's
+    // 3-attempt audio-join loop fell through, but the bot kept running.
+    // The per-speaker capture pipeline then found 0 <audio> elements
+    // (because computer audio was never joined → no audio elements created)
+    // and silently bailed. Result: status=active in DB, 0 transcripts ever
+    // produced, no diagnostic surface.
+    //
+    // CRITICAL invariant restated from comment above (line 22-23):
+    // "without joining audio, no <audio> elements are created and the
+    //  per-speaker capture pipeline gets zero audio data."
+    //
+    // Convert this silent failure into an explicit escalation. The
+    // dashboard's "Bot needs help" panel will surface a VNC link so a
+    // human can click "Join with Computer Audio" themselves; meanwhile
+    // status flips from active → needs_human_help, making the failure
+    // observable on /meetings/<id> instead of looking like a working bot
+    // that just happens to never produce transcripts.
+    log('[Zoom Web] FAIL: audio_join_failed — could not confirm audio join after 3 attempts. Escalating to needs_human_help so dashboard surfaces VNC link.');
+    try {
+      await callNeedsHumanHelpCallback(
+        botConfig,
+        'audio_join_failed: bot is in the meeting but could not click "Join with Computer Audio". ' +
+        'Without computer audio, no <audio> elements are created and zero transcripts are produced. ' +
+        'VNC into the bot\'s browser via /b/<meeting_id>/vnc and click the "Join with Computer Audio" ' +
+        'dialog or the audio toolbar button manually.'
+      );
+    } catch (e: any) {
+      log(`[Zoom Web] needs_human_help callback failed: ${e.message}`);
+    }
   }
 
   // Dismiss the "Please enable microphone/camera" notification banner if present
