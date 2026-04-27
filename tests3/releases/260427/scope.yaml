@@ -1206,11 +1206,14 @@ issues:
     - PACK_X_PACK_T_TERMINAL_IDEMPOTENCY
   hypothesis: |
     (X.1) Add an internal-only endpoint
-          `POST /internal/test/session-bootstrap` (gated by
+          `POST /bots/internal/test/session-bootstrap` (gated by
           `VEXA_ENV != "production"`) that creates a MeetingSession
-          row directly. Lets a synthetic test driver bypass the
-          bot-side WebSocket session-start path and drive callbacks
-          via pure HTTP. Returns 404 in production.
+          row directly. Path is under `/bots/internal/*` (not
+          top-level `/internal/*`) because that's the namespace
+          api-gateway proxies to meeting-api. Mirrors existing
+          `/bots/internal/callback/*` shape. Lets a synthetic test
+          driver bypass the bot-side WebSocket session-start path
+          and drive callbacks via pure HTTP. Returns 404 in production.
     (X.2) `tests3/synthetic/rig.sh` — bash+curl primitives:
           rig_get_user_token, rig_spawn_dryrun, rig_session_bootstrap,
           rig_callback (POST any callback endpoint with hand-rolled
@@ -1254,7 +1257,7 @@ issues:
       do: "On a running compose stack: `BASE=http://localhost:8056 bash tests3/synthetic/run-all.sh`"
       expect: "All 4 scenarios pass; report at .state-compose/reports/compose/synthetic.json shows status=pass"
     - mode: compose
-      do: "Verify endpoint gating: with VEXA_ENV=production, `curl -X POST http://localhost:8056/internal/test/session-bootstrap -d '{}'` returns 404"
+      do: "Verify endpoint gating: with VEXA_ENV=production, `curl -X POST http://localhost:8056/bots/internal/test/session-bootstrap -d '{}'` returns 404"
       expect: "404 Not Found"
 
 expensive_tests: []

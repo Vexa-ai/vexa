@@ -693,13 +693,19 @@ async def bot_status_change_callback(
 # v0.10.5 Pack X — Synthetic test harness endpoint
 # ---------------------------------------------------------------------------
 #
-# `POST /internal/test/session-bootstrap` — creates a MeetingSession row
-# for an existing meeting WITHOUT requiring the bot to spawn. Lets the
-# synthetic test rig (`tests3/synthetic/`) drive the full lifecycle via
-# pure HTTP callbacks without external platform dependencies (Zoom DOM,
-# Meet WebRTC, Teams). Catches OSS-side regressions that only surface
-# in callback orderings (e.g. Pack J coverage gap caught 2026-04-27 by
-# real Zoom test — would have caught deterministically with this rig).
+# `POST /bots/internal/test/session-bootstrap` — creates a MeetingSession
+# row for an existing meeting WITHOUT requiring the bot to spawn. Lets
+# the synthetic test rig (`tests3/synthetic/`) drive the full lifecycle
+# via pure HTTP callbacks without external platform dependencies (Zoom
+# DOM, Meet WebRTC, Teams). Catches OSS-side regressions that only
+# surface in callback orderings (e.g. Pack J coverage gap caught
+# 2026-04-27 by real Zoom test — would have caught deterministically
+# with this rig).
+#
+# Path is `/bots/internal/test/...` (not `/internal/test/...`) because
+# the api-gateway proxies the `/bots/internal/*` namespace to
+# meeting-api but does NOT proxy a top-level `/internal/*` path.
+# Mirrors the existing `/bots/internal/callback/*` pattern.
 #
 # Gated by VEXA_ENV != "production" — endpoint returns 404 in production.
 # Synthetic-test traffic must never reach prod meeting-api instances.
@@ -709,7 +715,7 @@ class SyntheticSessionBootstrap(BaseModel):
     session_uid: Optional[str] = None  # auto-generated if not provided
 
 
-@router.post("/internal/test/session-bootstrap", status_code=201, include_in_schema=False)
+@router.post("/bots/internal/test/session-bootstrap", status_code=201, include_in_schema=False)
 async def synthetic_session_bootstrap(
     payload: SyntheticSessionBootstrap,
     db: AsyncSession = Depends(get_db),

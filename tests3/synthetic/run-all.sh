@@ -28,9 +28,14 @@ overall_status=pass
 ts_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 total_ms=0
 
-# Verify endpoint is reachable + Pack X bootstrap is enabled (gated by env).
-if ! curl -sf -o /dev/null -w '%{http_code}' "$BASE/health" 2>/dev/null | grep -qE '^(200|201)$'; then
-    echo "[run-all] meeting-api not reachable at $BASE — aborting"
+# Verify endpoint is reachable. Use /admin/users probe (a real endpoint
+# served by admin-api through the gateway) — the gateway has no generic
+# /health route, only per-service ones.
+: "${ADMIN_TOKEN:=changeme}"
+if ! curl -s -o /dev/null -w '%{http_code}' \
+       -H "X-Admin-API-Key: $ADMIN_TOKEN" \
+       "$BASE/admin/users?limit=1" 2>/dev/null | grep -qE '^(200|201|204)$'; then
+    echo "[run-all] meeting-api stack not reachable at $BASE (admin probe failed) — aborting"
     cat > "$REPORT_FILE" <<EOF
 {
   "test": "synthetic",

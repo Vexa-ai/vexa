@@ -74,7 +74,7 @@ rig_session_bootstrap() {
     else
         body=$(printf '{"meeting_id": %s}' "$meeting_id")
     fi
-    curl -sf -X POST "$BASE/internal/test/session-bootstrap" \
+    curl -sf -X POST "$BASE/bots/internal/test/session-bootstrap" \
         -H "Content-Type: application/json" \
         -d "$body" | _rig_jq 'd["session_uid"]'
 }
