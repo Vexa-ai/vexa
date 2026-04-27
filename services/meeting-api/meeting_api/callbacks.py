@@ -537,7 +537,40 @@ async def bot_status_change_callback(
                 effective_reason = MeetingCompletionReason(pending)
             except ValueError:
                 pass
-        success = await update_meeting_status(meeting, MeetingStatus.COMPLETED, db, completion_reason=effective_reason)
+
+        # v0.10.5 Pack J — apply data-driven classification rule (#255 silent class).
+        #
+        # 2026-04-27 live-validation finding (meeting 26): when the bot self-
+        # reports new_status=COMPLETED via status_change while in STOPPING
+        # state, this handler previously set status='completed' directly with
+        # the bot-reported reason — bypassing Pack J's classifier entirely.
+        # Result: a meeting that was active 6+ min with transcribe_enabled
+        # and 0 transcription segments was marked `completed` instead of
+        # `failed/stopped_with_no_audio`. Same silent class as the
+        # exit_callback STOPPING branch (callbacks.py:236).
+        #
+        # Fix: when transitioning STOPPING → COMPLETED (or active → COMPLETED
+        # with a stoppable bot-reported reason), apply Pack J's classifier so
+        # the same data-driven rules govern both callback paths. The
+        # exit_callback STOPPING branch and the status_change STOPPING→
+        # COMPLETED branch now produce identical classifications for
+        # identical inputs.
+        target_status = MeetingStatus.COMPLETED
+        classified_reason = effective_reason
+        if (
+            meeting.status == MeetingStatus.STOPPING.value
+            and effective_reason is not None
+        ):
+            target_status, classified_reason = await _classify_stopped_exit(
+                meeting, db, effective_reason
+            )
+            logger.info(
+                f"Pack J (status_change path): meeting {meeting.id} "
+                f"STOPPING→{target_status.value} reason={classified_reason.value} "
+                f"(bot-reported: {effective_reason.value})"
+            )
+
+        success = await update_meeting_status(meeting, target_status, db, completion_reason=classified_reason)
         if success:
             meeting.end_time = datetime.utcnow()
             if payload.speaker_events:
