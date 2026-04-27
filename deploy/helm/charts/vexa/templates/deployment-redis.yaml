@@ -72,4 +72,17 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+      {{- /* v0.10.5 Pack A.1 — restore tolerations/nodeSelector/affinity dropped in 0.10.4 (#272 issue 2). On any cluster with NoSchedule taints, redis pod stays Pending forever without these. */}}
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
 {{- end }}

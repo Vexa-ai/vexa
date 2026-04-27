@@ -5,6 +5,16 @@ metadata:
   name: {{ include "vexa.componentName" (list . "migrations") }}
   labels:
     {{- include "vexa.labels" . | nindent 4 }}
+  # v0.10.5 Pack A.2 — Helm hook annotations (#272 issue 3 / #247).
+  # Without these, every `helm upgrade` that bumps any image tag fails with
+  # `Job.batch is invalid: spec.template: field is immutable` because Helm
+  # tries to patch the existing Job. Hook annotations tell Helm to delete-
+  # and-recreate at the right point in the lifecycle. Standard Helm idiom
+  # for migration Jobs; should have been here from day one.
+  annotations:
+    "helm.sh/hook": pre-upgrade,pre-install
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   backoffLimit: {{ .Values.migrations.backoffLimit }}
   template:
@@ -57,4 +67,17 @@ spec:
                   key: POSTGRES_PASSWORD
           resources:
             {{- toYaml .Values.migrations.resources | nindent 12 }}
+      {{- /* v0.10.5 Pack A.1 — restore tolerations/nodeSelector/affinity (#272 issue 2; was never on Job spec). */}}
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
 {{- end }}
