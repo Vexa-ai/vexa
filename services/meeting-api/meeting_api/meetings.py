@@ -553,39 +553,65 @@ async def _get_running_bots_from_runtime(user_id: int) -> list:
 
 
 async def _delayed_container_stop(container_name: str, meeting_id: int, delay_seconds: int = BOT_STOP_DELAY_SECONDS):
-    """Wait, then stop container via Runtime API. Clean up browser_session Redis keys.
+    """Enqueue a delayed container-stop intent onto the durable outbox.
+
+    v0.10.5 Pack D.2 (#266) — REPLACED the in-process `asyncio.sleep + stop`
+    body with a single XADD onto `meeting-api:container-stops`. The actual
+    runtime-api DELETE is now driven by sweeps.consume_pending_stops on
+    every sweep iteration. Pre-D.2, this function was a fire-and-forget
+    BackgroundTask: meeting-api restart in the 90 s window dropped the
+    pending stop on the floor, leaving bot pods Running indefinitely.
+    Production scale test (release-006, 20-bot Google Meet): 3-of-20
+    DELETEs returned 500 with the meeting marked COMPLETED while pods
+    kept recording for 12+ minutes. Outbox shape mirrors 260421 Pack J's
+    durable exit-callback (same problem class, same fix).
+
+    Principle filter: ONE durable mechanism for delayed stop (the outbox).
+    No in-process timer competing. Idempotent — runtime-api DELETE is
+    already 200-no-op for already-stopped containers.
 
     v0.10.5 Pack E.3.1 — REMOVED the redundant `_delayed_stop_finalizer`
-    safety block (lines 534-579 pre-Pack-E). 260421 Pack J shipped durable
-    exit-callback delivery in runtime-api's idle_loop; that path is now
-    canonical for `stopping → completed`. Pack J's classifier in
-    callbacks.py (this cycle) routes correctly per data-driven rules.
-    Pack E.3.2 sweep (sweeps.py) catches stale 'stopping' rows that
-    genuinely escape both — operator-actionable signal, not silent recovery.
+    safety block. 260421 Pack J shipped durable exit-callback delivery
+    in runtime-api's idle_loop; that path is now canonical for
+    `stopping → completed`. Pack J's classifier in callbacks.py routes
+    correctly per data-driven rules. Pack E.3.2 sweep (sweeps.py) catches
+    stale 'stopping' rows that genuinely escape both — operator-actionable
+    signal, not silent recovery.
 
-    Removed code was the third claim on the same transition: in-process
-    coroutine continuation that fires after sleep+stop and force-completes
-    if the runtime-api callback path hasn't already. Redundant defense per
-    principle filter (no fallbacks for internal subsystems with their own
-    canonical durable mechanism).
-
-    What this function still does (NOT removed):
-      1. Wait `delay_seconds` for graceful bot shutdown.
-      2. Call runtime-api stop (idempotent — second call is a 200 no-op).
-      3. Clean up browser_session:* secondary Redis keys.
+    What this function still does:
+      1. XADD the delayed-stop intent to the outbox (durable, retried by
+         sweep consumer with exponential backoff and DLQ).
+      2. Eagerly clean up the browser_session:* secondary Redis keys —
+         these are owned by meeting-api and unrelated to runtime-api stop.
 
     Status finalization is handled by:
       - Pack J's classifier (canonical, runtime-api callback fires)
       - Pack E.3.2 sweep (escape hatch — runs every 60s, threshold 5 min)
     """
-    logger.info(f"[Delayed Stop] Waiting {delay_seconds}s for container {container_name} (meeting {meeting_id})")
-    await asyncio.sleep(delay_seconds)
+    from .container_stop_outbox import enqueue_stop
 
-    await _stop_via_runtime_api(container_name)
-    logger.info(f"[Delayed Stop] Stopped container {container_name}")
+    if redis_client is None:
+        # If Redis is unreachable at the moment we try to enqueue, fall
+        # through to a direct stop attempt — the sweep consumer can't pick
+        # up something that wasn't enqueued. /readyz (Pack C.4) gates traffic
+        # on Redis being up, so this branch should be rare; logging it loud
+        # so operator sees the deviation from the canonical path.
+        logger.error(
+            f"[Delayed Stop] Redis unavailable — cannot enqueue stop for "
+            f"{container_name} (meeting {meeting_id}); attempting direct stop."
+        )
+        await asyncio.sleep(delay_seconds)
+        await _stop_via_runtime_api(container_name)
+    else:
+        await enqueue_stop(redis_client, container_name, meeting_id, delay_seconds)
+        logger.info(
+            f"[Delayed Stop] Enqueued stop for {container_name} "
+            f"(meeting {meeting_id}) delay={delay_seconds}s — sweep consumer will fire"
+        )
 
-    # v0.10.5 Pack E.3.1 — only Redis-side cleanup remains here.
-    # Status finalization is the runtime-api exit callback's job (Pack J).
+    # browser_session:* secondary-key cleanup is local to meeting-api and
+    # safe to do immediately (those keys are short-lookup helpers, not
+    # tied to the runtime-api stop ack). Mirrors pre-D.2 behaviour.
     try:
         meeting_id_for_redis = None
         session_token_for_redis = None

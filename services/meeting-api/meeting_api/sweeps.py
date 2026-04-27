@@ -1,9 +1,17 @@
-"""v0.10.5 Pack E.3.2 + future H.4 + E.1-sibling sweeps.
+"""v0.10.5 Pack E.3.2 + Pack D.2 + future H.4 + E.1-sibling sweeps.
 
 Long-running idle-loop equivalent for meeting-api. Each sweep is a
 periodic scan that catches state-machine rows that genuinely got
 stuck — escapes from the canonical durable mechanisms (Pack J's
 exit-callback in callbacks.py, Pack E.1's chunk-finalize outbox, etc).
+
+Active responsibilities:
+  - Pack E.3.2: stale-stopping sweep (postgres scan + force-finalize).
+  - Pack D.2 (#266): durable container-stop outbox consumer
+    (Redis Stream `meeting-api:container-stops` → runtime-api DELETE
+    with retry + DLQ). The producer side is `_delayed_container_stop`
+    in meetings.py, which now XADDs onto the stream instead of running
+    an in-process timer.
 
 Principle filter: every sweep is OBSERVABLE. Rows found = the canonical
 mechanism failed somewhere; operators must see it. Loud warning logs
@@ -234,6 +242,35 @@ async def _sweep_aggregation_retry(
     return swept
 
 
+async def _sweep_container_stops() -> dict:
+    """v0.10.5 Pack D.2 (#266) — durable container-stop outbox consumer.
+
+    One iteration of the consumer for the
+    `meeting-api:container-stops` Redis Stream. Producer side is
+    `_delayed_container_stop` in meetings.py. The consumer reads all
+    entries due-now (fire_at <= now), invokes `_stop_via_runtime_api`
+    (idempotent — runtime-api 200 no-op for already-stopped), and
+    handles retry / DLQ on failure.
+
+    Returns the consumer's per-iteration summary dict (succeeded /
+    retried / dlq / deferred), or {} on Redis unavailability.
+
+    Why here, not in a dedicated worker: the per-iteration sweep cadence
+    (60 s) is sufficient for the BOT_STOP_DELAY_SECONDS=90 window, and
+    co-locating with the other sweeps keeps the operational surface
+    small (one supervisor, one task). Same shape as Pack H.4's
+    aggregation-retry sweep above.
+    """
+    from .meetings import get_redis, _stop_via_runtime_api
+    from .container_stop_outbox import consume_pending_stops
+
+    redis_client = get_redis()
+    if redis_client is None:
+        return {}
+
+    return await consume_pending_stops(redis_client, _stop_via_runtime_api)
+
+
 async def start_sweeps(
     db_session_factory: Callable[[], AsyncSession],
 ) -> None:
@@ -242,6 +279,7 @@ async def start_sweeps(
     Currently runs:
       - Pack E.3.2: stale-stopping sweep
       - Pack H.4: aggregation_failure_class='transient_infra' retry
+      - Pack D.2: container-stop outbox consumer (durable retry + DLQ)
 
     Future Pack E.1-sibling (sweep_unfinalized_recordings) wires in here.
 
@@ -251,7 +289,7 @@ async def start_sweeps(
     global _stop_event, sweep_iterations, sweep_last_iteration_at
     _stop_event = asyncio.Event()
 
-    logger.info("[sweeps] Starting meeting-api idle sweeps loop (Pack E.3.2 + H.4)")
+    logger.info("[sweeps] Starting meeting-api idle sweeps loop (Pack E.3.2 + H.4 + D.2)")
 
     while not _stop_event.is_set():
         sweep_iterations += 1
@@ -277,6 +315,27 @@ async def start_sweeps(
                 )
         except Exception as e:
             logger.error(f"[sweeps] iteration {sweep_iterations} aggregation-retry error: {e}", exc_info=True)
+
+        try:
+            stop_summary = await _sweep_container_stops()
+            if stop_summary and (
+                stop_summary.get("processed") or stop_summary.get("dlq")
+            ):
+                logger.info(
+                    f"[sweeps] iteration {sweep_iterations} container-stops (Pack D.2): {stop_summary}"
+                )
+                if stop_summary.get("dlq", 0) > 0:
+                    logger.warning(
+                        f"[sweeps] iteration {sweep_iterations}: "
+                        f"{stop_summary['dlq']} container-stop entries moved to DLQ "
+                        f"(meeting-api:container-stop-dlq) — operator must investigate "
+                        f"persistent runtime-api communication failures"
+                    )
+        except Exception as e:
+            logger.error(
+                f"[sweeps] iteration {sweep_iterations} container-stops error: {e}",
+                exc_info=True,
+            )
 
         # Wait for POLL_INTERVAL or until stopped.
         try:

@@ -79,6 +79,23 @@ BOT_CREATE_OK:
   - helm
   state: stateful
   max_duration_sec: 30
+BOT_DELETE_DURABLE_RETRY:
+  proves: "meeting-api DELETE container-stop survives meeting-api restart and runtime-api transient 5xx \u2014 stop intent\
+    \ persists in Redis Stream, sweep consumer retries with exponential backoff, DLQ surfaces persistent failures (Pack D.2 / #266)"
+  symptom: "Bot pod runs forever after meeting marked COMPLETED \u2014 production scale test caught 3-of-20 DELETEs returning\
+    \ 500 with pods recording for 12+ minutes; meeting-api restart in BOT_STOP_DELAY_SECONDS window dropped pending stops on\
+    \ the floor"
+  found: '2026-04-27'
+  type: script
+  script: tests/bot-delete-durable-retry.sh
+  modes:
+  - compose
+  state: stateful
+  mutates:
+  - meeting(fixture)
+  - meeting-api:redis:meeting-api:container-stops/*
+  - meeting-api:redis:meeting-api:container-stop-dlq
+  max_duration_sec: 300
 BOT_RECORDING_ENABLED:
   proves: "bots are created with recordingEnabled=true \u2014 audio will be captured and uploaded"
   symptom: "No audio recording for meeting \u2014 RECORDING_ENABLED env var not set or recordingEnabled=false in BOT_CONFIG"
