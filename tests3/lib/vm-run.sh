@@ -24,6 +24,19 @@ if [ -f "$STATE/image_tag" ]; then
         "$STATE/image_tag" "root@$VM_IP:/root/vexa/tests3/.state/image_tag" 2>/dev/null || true
 fi
 
+# v0.10.5 R5 fix (2026-04-27 iter-3): push host `.current-stage` to VM.
+# `.current-stage` is git-ignored, so `git reset --hard` during redeploy
+# leaves the VM with whatever was seeded at initial provision. After a
+# release_id rename (e.g. R2 fix this release), the VM's release_id
+# becomes stale and static checks that key off it (label-traceable,
+# release-key-consistent) fail with confusing "expected old, got new"
+# messages even though the underlying code/config is correct. Sync
+# host → VM so VM matches authoritative host release-state.
+if [ -f "$ROOT/tests3/.current-stage" ]; then
+    scp -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        "$ROOT/tests3/.current-stage" "root@$VM_IP:/root/vexa/tests3/.current-stage" 2>/dev/null || true
+fi
+
 # Translate host-absolute paths inside $TARGET to VM-absolute paths. The host repo
 # lives at "$ROOT" (e.g. /home/dima/dev/vexa); on the VM it lives at /root/vexa.
 # Every VAR=<path-under-root> in $TARGET gets rewritten. Example:

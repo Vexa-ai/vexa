@@ -24,10 +24,22 @@ if [ "$STAGE" = "idle" ] || [ -z "$REL" ]; then
     echo "ok: skipped (stage=$STAGE, release=${REL:-none})"; exit 0
 fi
 
+# v0.10.5 R5 fix (2026-04-27 iter-3): when this check runs on a test VM
+# (compose/lite/helm matrix), the working directory is a flat clone at
+# /root/vexa — not a per-release worktree like vexa-<id>. The basename
+# +branch invariant is a HOST-side release-process contract; on the VM
+# it can never hold (basename is always literally `vexa`, branch may be
+# whatever the VM was provisioned on). Skip here so the matrix doesn't
+# fail-blame VMs for a property they categorically cannot satisfy. The
+# host run still enforces the four-way invariant via this same script.
+BASENAME=$(basename "$ROOT")
+if [ "$BASENAME" = "vexa" ]; then
+    echo "ok: skipped (flat clone — host-only contract not applicable on test VMs)"; exit 0
+fi
+
 fail=0
 
 # (a) worktree basename
-BASENAME=$(basename "$ROOT")
 EXPECTED_BASENAME="vexa-${REL}"
 if [ "$BASENAME" = "$EXPECTED_BASENAME" ]; then
     echo "ok: worktree basename = $BASENAME"
