@@ -9,10 +9,18 @@ metadata:
   # Without these, every `helm upgrade` that bumps any image tag fails with
   # `Job.batch is invalid: spec.template: field is immutable` because Helm
   # tries to patch the existing Job. Hook annotations tell Helm to delete-
-  # and-recreate at the right point in the lifecycle. Standard Helm idiom
-  # for migration Jobs; should have been here from day one.
+  # and-recreate at the right point in the lifecycle.
+  #
+  # NOTE: pre-upgrade ONLY, NOT pre-install. On first install, secrets
+  # (including postgres-credentials) are not yet created when pre-install
+  # hooks run — migrations would crash with "secret postgres-credentials
+  # not found." Discovered during v0.10.5 helm-mode validate (this cycle).
+  # On first install, the Job runs as a regular managed resource AFTER
+  # secrets are deployed; on upgrade, the hook prevents the immutable-
+  # patch error. This is the standard Helm idiom for migration Jobs that
+  # depend on chart-managed secrets.
   annotations:
-    "helm.sh/hook": pre-upgrade,pre-install
+    "helm.sh/hook": pre-upgrade
     "helm.sh/hook-weight": "0"
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
