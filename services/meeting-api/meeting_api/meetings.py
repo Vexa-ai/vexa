@@ -1547,13 +1547,24 @@ async def stop_bot(
                 logger.warning(f"Runtime API lookup failed for meeting {meeting.id}: {e}")
 
         if not container_name:
+            # v0.10.5 Pack X finding (helm meeting 8, 2026-04-27): when
+            # runtime-api lookup fails, the previous code went directly
+            # COMPLETED + STOPPED — bypassing Pack J classifier. A bot
+            # active 60s+ with transcribe_enabled and 0 transcripts gets
+            # silently classified as completed/stopped, exactly the
+            # #255 silent class. Fix: route through _classify_stopped_exit
+            # so every DELETE path produces the same data-driven verdict.
+            from .callbacks import _classify_stopped_exit
+            target_status, classified_reason = await _classify_stopped_exit(
+                meeting, db, MeetingCompletionReason.STOPPED
+            )
             old_status = meeting.status
-            success = await update_meeting_status(meeting, MeetingStatus.COMPLETED, db, completion_reason=MeetingCompletionReason.STOPPED)
+            success = await update_meeting_status(meeting, target_status, db, completion_reason=classified_reason)
             if success:
-                await publish_meeting_status_change(meeting.id, MeetingStatus.COMPLETED.value, redis_client, platform_value, native_meeting_id, meeting.user_id)
+                await publish_meeting_status_change(meeting.id, target_status.value, redis_client, platform_value, native_meeting_id, meeting.user_id)
                 await schedule_status_webhook_task(
                     meeting=meeting, background_tasks=background_tasks,
-                    old_status=old_status, new_status=MeetingStatus.COMPLETED.value,
+                    old_status=old_status, new_status=target_status.value,
                     reason="User requested stop (no container)", transition_source="user_stop",
                 )
             background_tasks.add_task(run_all_tasks, meeting.id)
@@ -1571,13 +1582,21 @@ async def stop_bot(
             meeting.data["stop_requested"] = True
             await db.commit()
             background_tasks.add_task(_delayed_container_stop, container_name, meeting.id, 0)
+            # v0.10.5 Pack X — same Pack J routing as the no-container
+            # branch above. Fast-path (pre-active, <5s old) will
+            # naturally classify as STOPPED_BEFORE_ADMISSION via Pack J
+            # because reached_active is False — semantically correct.
+            from .callbacks import _classify_stopped_exit
+            target_status, classified_reason = await _classify_stopped_exit(
+                meeting, db, MeetingCompletionReason.STOPPED
+            )
             old_status = meeting.status
-            success = await update_meeting_status(meeting, MeetingStatus.COMPLETED, db, completion_reason=MeetingCompletionReason.STOPPED)
+            success = await update_meeting_status(meeting, target_status, db, completion_reason=classified_reason)
             if success:
-                await publish_meeting_status_change(meeting.id, MeetingStatus.COMPLETED.value, redis_client, platform_value, native_meeting_id, meeting.user_id)
+                await publish_meeting_status_change(meeting.id, target_status.value, redis_client, platform_value, native_meeting_id, meeting.user_id)
                 await schedule_status_webhook_task(
                     meeting=meeting, background_tasks=background_tasks,
-                    old_status=old_status, new_status=MeetingStatus.COMPLETED.value,
+                    old_status=old_status, new_status=target_status.value,
                     reason="User requested stop (fast-path)", transition_source="user_stop",
                 )
             background_tasks.add_task(run_all_tasks, meeting.id)

@@ -601,8 +601,16 @@ async def bot_status_change_callback(
             background_tasks.add_task(run_all_tasks, meeting.id)
 
     elif new_status == MeetingStatus.FAILED:
+        # v0.10.5 Pack X finding (lite m28, 2026-04-27): bot's
+        # status_change new_status=failed didn't pass completion_reason
+        # through to update_meeting_status — `data.completion_reason`
+        # stayed empty even when the bot supplied one. Now it
+        # propagates: dashboards/observers grouping by completion_reason
+        # see the bot-reported value (or null when bot didn't supply
+        # one — caller responsibility to provide a meaningful reason).
         success = await update_meeting_status(
             meeting, MeetingStatus.FAILED, db,
+            completion_reason=payload.completion_reason,
             failure_stage=payload.failure_stage,
             error_details=str(payload.error_details) if payload.error_details else None,
         )
