@@ -1212,6 +1212,7 @@ async def list_user_bots(
     offset: int = 0,
     search: Optional[str] = None,
     status: Optional[str] = None,
+    include: Optional[str] = None,  # v0.10.5 Pack L — opt-in full-data backward-compat (?include=data)
     platform: Optional[str] = None,
 ):
     """Returns recent meetings (all statuses) from the database."""
@@ -1232,6 +1233,39 @@ async def list_user_bots(
     meetings = (await db.execute(stmt)).scalars().all()
     has_more = len(meetings) > limit
     meetings = meetings[:limit]
+    # v0.10.5 Pack L — slim list endpoint (#263 + #264).
+    #
+    # OLD shape returned `m.data or {}` — full JSONB blob with
+    # status_transition[], recordings[], webhook_deliveries[], etc.
+    # ~35 KB per meeting; default limit=50 → ~1.7 MB per /meetings page
+    # load. Beyond perf, this is a DoS vector at scale and bad REST hygiene
+    # (list view should be summary; detail endpoint returns full data).
+    #
+    # Audited dashboard usage in services/dashboard/src/components/meetings/
+    # meeting-card.tsx + ai-chat-panel.tsx + export.ts. The list view actually
+    # consumes: name/title, completion_reason, participants[:3], notes (preview),
+    # languages, last status_transition entry, has_recording.
+    #
+    # Backward-compat: ?include=data restores the old behavior (full blob);
+    # opt-in for callers that genuinely need it. Default off.
+    include_full_data = include == "data"
+
+    def _data_summary(d: dict) -> dict:
+        d = d or {}
+        participants = d.get("participants") or []
+        notes = d.get("notes")
+        transitions = d.get("status_transition") or []
+        return {
+            "name": d.get("name") or d.get("title"),
+            "completion_reason": d.get("completion_reason"),
+            "participants": participants[:3],
+            "participants_count": len(participants),
+            "notes_preview": (notes[:120] if isinstance(notes, str) else None),
+            "languages": d.get("languages"),
+            "last_transition": transitions[-1] if transitions else None,
+            "has_recording": bool(d.get("recordings")),
+        }
+
     return {
         "meetings": [
             {
@@ -1242,7 +1276,7 @@ async def list_user_bots(
                 "bot_container_id": m.bot_container_id,
                 "start_time": m.start_time.isoformat() if m.start_time else None,
                 "end_time": m.end_time.isoformat() if m.end_time else None,
-                "data": m.data or {},
+                "data": (m.data or {}) if include_full_data else _data_summary(m.data),
                 "created_at": m.created_at.isoformat() if m.created_at else None,
                 "updated_at": m.updated_at.isoformat() if m.updated_at else None,
             }
