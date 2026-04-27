@@ -21,6 +21,19 @@ spec:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: redis
     spec:
+      # v0.10.5 Pack I.s — stateful-pod anti-affinity (#272 iter-5).
+      # See deployment-minio.yaml header for the full rationale.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/component
+                      operator: In
+                      values: [postgres, minio, tts-service]
+                topologyKey: kubernetes.io/hostname
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

@@ -1215,6 +1215,26 @@
       "file": "services/vexa-bot/core/src/utils/log.ts",
       "must_match": "export function logJSON",
       "max_duration_sec": 5
+    },
+    {
+      "id": "PACK_E1A_CONCURRENT_CHUNKS_REPRODUCER_PASSES",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "services/meeting-api/tests/test_recordings_concurrent_chunks.py — 3 pytest cases (AST static check + sequential sanity + concurrent asyncio.gather race) — all pass against current HEAD. Wires the [PLATFORM]-approved Pack E.1.a v2 lock-before-snapshot reproducer test as a required-by-mode gate.",
+      "symptom": "Pack E.1.a regression: SELECT FOR UPDATE moved back to AFTER snapshot, OR the lock-acquisition / re-snapshot pattern broken in some other refactor. Concurrent audio+video chunks lose one media_files entry. (#272 issuecomment-4327366063)",
+      "method": "SHELL_CHECK",
+      "script": "tests3/checks/scripts/pack-e1a-concurrent-chunks-reproducer.sh",
+      "max_duration_sec": 60
+    },
+    {
+      "id": "PACK_E1A_CHUNK_WRITE_LOG_LINE",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "recordings.py emits a structured single-line log per chunk write (`[E1A] chunk_write meeting_id=... recording_id=... media_type=... chunk_seq=... prior_count=... action=...`). [PLATFORM] ASK 2 (#272 issuecomment-4327839749 reply 14:32Z) — greppable signal for ad-hoc validation + post-deploy production observer.",
+      "symptom": "Production observer cannot detect race recurrence without scanning DB+S3 on every meeting end; structured log line eliminates that scan path. Missing line means observability regression for the v0.10.5 hardening.",
+      "file": "services/meeting-api/meeting_api/recordings.py",
+      "must_match": "[E1A] chunk_write",
+      "max_duration_sec": 5
     }
   ]
 }

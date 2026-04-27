@@ -337,8 +337,13 @@ async def internal_upload_recording(
             was_completed = rec_payload.get("status") == RecordingStatus.COMPLETED.value
 
         status_transitioned_to_completed = False
+        prior_media_files = list(rec_payload.get("media_files") or [])
+        prior_count = len(prior_media_files)
+        prior_types = {mf.get("type") for mf in prior_media_files}
+        # Determine action: appended (new media_type) vs in_place (same type, latest-metadata refresh)
+        chunk_action = "appended" if media_type not in prior_types else "in_place"
         existing_media_files = [
-            mf for mf in (rec_payload.get("media_files") or [])
+            mf for mf in prior_media_files
             if mf.get("type") != media_type
         ]
         existing_media_files.append({
@@ -355,6 +360,20 @@ async def internal_upload_recording(
             "is_final": is_final,
         })
         rec_payload["media_files"] = existing_media_files
+        # v0.10.5 Pack E.1.a observability — [PLATFORM] ASK 2 (#272
+        # issuecomment-4327839749 → 14:32Z reply). Structured single-line
+        # log per chunk write, greppable for ad-hoc validation under
+        # `kubectl logs`. action=`appended` (new media_type entry) or
+        # `in_place` (same type, latest-metadata refresh). The third
+        # value `raced_lost` from [PLATFORM]'s spec wouldn't appear
+        # post-fix; expecting 0 occurrences over 7d post-deploy is the
+        # smoke-signal the production observer keys off.
+        logger.info(
+            "[E1A] chunk_write meeting_id=%s recording_id=%s media_type=%s "
+            "chunk_seq=%s prior_count=%s action=%s is_final=%s",
+            meeting.id, rec_payload.get("id"), media_type,
+            chunk_seq, prior_count, chunk_action, is_final,
+        )
         if is_final:
             rec_payload["status"] = RecordingStatus.COMPLETED.value
             rec_payload["completed_at"] = datetime.utcnow().isoformat()

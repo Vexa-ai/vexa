@@ -64,10 +64,15 @@ summary: |
     runtimeApi, adminApi, dashboard, transcriptionGateway). State-
     bearing services (Postgres/Redis/MinIO) explicitly NOT touched —
     replication shape is a separate cycle.
-  - Cross-cutting: templates/prometheusrule.yaml with 7 alerts (every
-    sweep, every retry-budget-exhausted, every "canonical mechanism
-    failed" path) + idle_loop heartbeat watcher-of-the-watcher.
-    Auto-recover acceptable IFF accompanied by guaranteed observability.
+  - Cross-cutting: idle_loop heartbeat watcher-of-the-watcher pattern
+    inside meeting-api / runtime-api processes. Auto-recover acceptable
+    IFF accompanied by guaranteed observability.
+    Prometheus alert manifests / scrape pipeline / observability
+    infrastructure are [PLATFORM]'s territory (per 2026-04-27 ~15:13Z
+    project-owner clarification) — OSS does NOT ship PrometheusRule
+    YAML, /metrics endpoints, or prometheus_client deps. OSS provides
+    structured log signals where useful (e.g. Pack E.1.a `[E1A]
+    chunk_write` line) for [PLATFORM]'s observers to consume.
 
 deployments:
   modes: [lite, compose, helm]
@@ -122,6 +127,55 @@ constraints:
     single-entry-per-type shape. Sweep ports of platform-team
     algorithms (which used per-chunk arrays in their environment)
     must be shape-aligned before landing.
+
+# ── Cross-repo cycle dependencies (converged with [PLATFORM] on #272)
+cycle_dependencies:
+  platform_retirement_gate:
+    description: |
+      Platform-side `cronjob-recording-reconciler.yaml` retires after a
+      24-hour soak of Pack E.1.a v2 in production AND the platform
+      production observer (`len(media_files) < distinct_media_types_in_s3`
+      audit, see #272 issuecomment-4327676126 + 14:32Z heuristic
+      correction) returns 0 orphans across the soak window.
+    purpose: |
+      Removes the K8s-CronJob-based recovery path in favor of the
+      app-layer `_idle_loop_task` sweep (lifecycle_ownership constraint
+      above). Once retired, [PLATFORM] absorbs the existing transient
+      `asyncpg.TimeoutError` failures that recur on freshly-autoscaled
+      nodes (cf. #272 issuecomment-4327983847 root cause analysis); the
+      sweep-as-loop architecture eliminates the failure mode entirely
+      because the in-process loop inherits the meeting-api pod's
+      already-warm asyncpg connection pool.
+    retirement_PR_target: vexa-platform/<TBD>  # opened post-soak by [PLATFORM]
+    shape_alignment_required: |
+      Platform sweep currently writes per-chunk media_files entries.
+      MUST be aligned to OSS Option α (one entry per media_type, latest-
+      chunk metadata) BEFORE retirement OR run no-op during the overlap
+      window to prevent fighting the Pack E.1.a v2 live path. See
+      `media_files_canonical_shape` constraint above.
+    blocking_for_v0_10_5_ship: false  # [PLATFORM] tracks; not OSS-side gate
+    blocking_for_v0_10_6_groom: true  # surface during next groom
+
+  platform_observer_arrival:
+    description: |
+      Platform-side production observer instrumentation arrives when
+      `release/260427`'s meeting-api image reaches production. The
+      observer (Prometheus counters + OTel trace spans + their scrape
+      pipeline) is owned by [PLATFORM] — NOT in OSS scope at any
+      release level. OSS contributes the structured signal that the
+      observer consumes (ASK 2: `[E1A] chunk_write` log line) so
+      [PLATFORM]'s observer can detect race recurrence via a single
+      grep+rate signal rather than an O(N) S3+DB scan per meeting end.
+    oss_contributes:
+      - "ASK 2 ([E1A] chunk_write structured log line) — recordings.py — landed in this release"
+      - "Pack E.1.a v2 lock-before-snapshot fix (Issue 1 critical) — recordings.py — landed in this release"
+      - "Reproducer test wired as required-by-mode in matrix — landed in this release"
+    platform_owns:
+      - "ASK 1 — Prometheus counters / scrape pipeline (their infrastructure tier)"
+      - "ASK 3 — OTel trace spans (optional, their infrastructure tier)"
+      - "Production-traffic regression observer (heuristic + log-line consumption)"
+      - "24h post-deploy soak window classification (any orphans surfaced → reverts retirement)"
+    blocking_for_v0_10_5_ship: false
 
 issues:
 
@@ -415,6 +469,15 @@ issues:
     - {check: BOT_GRACEFUL_LEAVE_UPLOADS_FIRST, modes: [lite, compose]}
     - {check: DELAYED_STOP_FINALIZER_REMOVED, modes: [lite, compose]}
     - {check: STALE_STOPPING_SWEEP_RECOVERS_MEETING, modes: [compose]}
+    # v0.10.5 Pack E.1.a v2 reproducer test (Issue 1 critical race —
+    # see #272 issuecomment-4327366063 + 14:39Z [PLATFORM] approval).
+    # Three pytest cases in services/meeting-api/tests/test_recordings_concurrent_chunks.py:
+    #  1. test_lock_acquired_before_snapshot_in_source — AST static check
+    #  2. test_sequential_audio_then_video_both_persist — sanity baseline
+    #  3. test_concurrent_audio_video_no_lost_entry — asyncio.gather race
+    # Required-by-mode: lite + compose (the meeting-api unit-test surface
+    # is the same in both; helm matrix doesn't run python unit tests).
+    - {check: PACK_E1A_CONCURRENT_CHUNKS_REPRODUCER_PASSES, modes: [lite, compose]}
   required_modes: [compose]
   human_verify:
     - mode: compose
@@ -888,12 +951,13 @@ issues:
     Sweep iterates ALL `browser_session:*` entries by structure; doesn't
     require platform's specific cluster shape.
 
-    (K.3 — KEPT, steady-state observability ~¼ d) Prometheus metric
-    `runtime_api_browser_session_pods_orphaned_total` (counter) + alert
-    `BrowserSessionPodsOrphaned`. Rate > 0 over 5 min = the reconcile
-    sweep is finding orphans = either (a) the K8s reaper IS firing
-    (acceptable as the reconcile path) OR (b) it's firing too
-    aggressively. Either way, observable.
+    (K.3 — REFRAMED to log-line; observability infra is [PLATFORM]'s)
+    Per project-owner clarification 2026-04-27 ~15:13Z, OSS does not
+    ship Prometheus metrics/alerts. The reconcile sweep emits a
+    structured log line on each orphan-find:
+        logger.warning(f"[K2] reconcile_orphan browser_session={key} container={name} k8s_pod_missing=True")
+    [PLATFORM]'s log-pipeline / observer consumes the rate signal.
+    Same observability outcome, OSS stays out of the metrics tier.
 
     (K.4 — REFINED to test the actual prod failure mode, ~¼ d)
     Compose-mode integration test:
@@ -903,14 +967,20 @@ issues:
       4. Assert subsequent client query for that browser_session
          returns 404 NOT stale-entry
 
-    (K.5 — NEW from data Finding 3) `RuntimeApiIdleLoopStalled` alert
-    (analog to meeting-api's `MeetingApiIdleLoopStalled` from Pack C
-    cross-cutting). [PLATFORM] data showed zero `idle_loop` log lines
-    in last 1h with no way to disambiguate "running silently" vs "not
-    running at all." Counter `runtime_api_idle_loop_iterations_total`
-    + gauge `runtime_api_idle_loop_last_iteration_timestamp` at start
-    of each iteration. Same shape, same rationale. Closes the
-    observability gap; defense-in-depth on top of K.2's reconcile.
+    (K.5 — REFRAMED as in-process counter + log line; observability
+    infra is [PLATFORM]'s) Per project-owner clarification 2026-04-27
+    ~15:13Z, OSS doesn't ship Prometheus deps. Implementation:
+    module-level globals `idle_loop_iterations` (int) +
+    `idle_loop_last_iteration_at` (ISO timestamp) updated at start of
+    each iteration in `runtime_api/lifecycle.py`, plus a structured
+    log line every iteration:
+        logger.info(f"[K5] idle_loop iteration={iteration} ts={now}")
+    [PLATFORM]'s observer consumes the log-line cadence + can scrape
+    the in-memory globals via /healthz endpoint if/when their tier
+    needs structured numbers. Closes the observability gap from
+    [PLATFORM] data Finding 3 (no way to disambiguate "running
+    silently" vs "not running at all"); defense-in-depth on top of
+    K.2's reconcile.
 
     Re-prioritized total: ~1 d (unchanged in effort; reshaped in
     sequence). Plan-stage should also confirm rendered chart values
@@ -1000,52 +1070,25 @@ issues:
       do: "GET /bots/id/<id> for one meeting"
       expect: "Detail endpoint returns full `m.data` JSONB unchanged"
 
-# ── Pack M — meetings.data row-size monitoring (NEW; pure observability) ──
-- id: meetings-data-row-size-monitoring
-  source: human
-  ref: "260427-k8s-stabilize groom JSONB-as-NoSQL audit"
-  problem: |
-    `meetings.data` JSONB has accumulated 16 distinct field families
-    (status_transition[], recordings[], webhook_deliveries[],
-    completion_reason, scheduler_job_id, participants, languages,
-    notes, name, session_token, mode, agent_enabled,
-    voice_agent_enabled, cameraEnabled, webhook_secret,
-    resolved_timeouts, plus Pack G bot_logs[] + Pack H
-    aggregation_failure_class). Some belong as columns / separate
-    tables (queryable scalars + audit-log arrays). Pack M doesn't
-    pay down the structural debt; it surfaces magnitude so the
-    next architectural-cleanup cycle has data to work from.
-  gap_analysis: |
-    No existing telemetry monitors row size growth. Operators
-    discover bloated rows only via slow queries / TOAST-overflow
-    incidents. Pack M adds the metric + alert so the structural
-    debt becomes visible.
-  new_checks:
-    - MEETINGS_DATA_ROW_SIZE_METRIC_EXPORTED
-  hypothesis: |
-    (M.1) Add Prometheus metric `meetings_data_row_size_bytes`
-          (histogram), sampled via meeting-api periodic task running
-          `pg_column_size(data)` aggregations every IDLE_CHECK_INTERVAL.
-    (M.2) Alert `MeetingsDataRowSizeP99High` — fires when p99
-          exceeds 200 KB (best-guess threshold; develop-stage
-          measurement adjusts). Surfaces the structural debt without
-          committing to a fix in this cycle.
-    (M.3) Document the structural-cleanup follow-on in 260427
-          ship-stage follow-ups (separate cycle, requires forward-
-          only migrations to promote queried JSONB keys to columns +
-          split audit-log arrays into tables).
-    Pure observability. No DB migration. No application logic change.
-  fix_commits: []
-  proves:
-    - {check: MEETINGS_DATA_ROW_SIZE_METRIC_EXPORTED, modes: [compose, helm]}
-  required_modes: [helm]
-  human_verify:
-    - mode: helm
-      do: "Render chart with `monitoring.prometheusRule.enabled=true`; verify `MeetingsDataRowSizeP99High` alert is present"
-      expect: "Alert rendered in PrometheusRule manifest with the documented expression and threshold"
-    - mode: compose
-      do: "Run a meeting; query `curl http://meeting-api/metrics | grep meetings_data_row_size_bytes`"
-      expect: "Histogram metric exposed with bucket counts; visible in any Prometheus scraper"
+# Pack M — meetings.data row-size monitoring — REMOVED FROM OSS SCOPE
+#
+# Originally scoped as "pure observability" adding Prometheus metric
+# `meetings_data_row_size_bytes` (histogram) + `MeetingsDataRowSizeP99High`
+# alert. Per project-owner clarification 2026-04-27 ~15:13Z: Prometheus +
+# observability infrastructure is [PLATFORM]'s territory, not OSS. OSS
+# does not ship `/metrics` endpoints, prometheus_client deps, or
+# PrometheusRule alert manifests.
+#
+# Where the JSONB structural-debt visibility lives instead:
+#  - [PLATFORM] queries `pg_column_size(meetings.data)` directly via
+#    their existing operational tooling
+#  - The structural-cleanup follow-on (split JSONB into columns + audit
+#    tables) remains an OSS concern — opens during a future groom
+#    cycle when [PLATFORM] surfaces row-size data warranting action
+#
+# This entry is preserved as a comment-only stub so the scope-shrink
+# is visible in the audit trail (rather than silently disappearing
+# from a previously-approved plan-approval.yaml).
 
 # ── Pack N — Bot/Server contract parity checks (NEW; #255 epic structural follow-on) ──
 - id: bot-server-contract-parity-checks
