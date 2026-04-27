@@ -871,16 +871,43 @@ async def request_bot(
     # (per project-owner 2026-04-27 — "we will have endless [LFX-style
     # white-label URLs]; cannot create a parser for every one. Allow
     # users to supply (URL + platform) and trust them.").
+    # Best-effort passcode extraction from `?password=...` or `?pwd=...`
+    # query params (white-label URLs use either). Only extracts if
+    # caller didn't supply passcode explicitly. Zoom's join URL accepts
+    # the embedded passcode either way; this just makes the field
+    # available for dashboards/analytics.
+    if req.meeting_url and not req.passcode:
+        import re as _re
+        pw_match = _re.search(r"[?&](?:password|pwd)=([^&\s]+)", req.meeting_url)
+        if pw_match:
+            req.passcode = pw_match.group(1)
+            logger.info(f"Path 3: extracted passcode from meeting_url query")
+
     if not native_meeting_id and req.meeting_url:
-        # Synthesize stable id from URL: short hash prefix + suffix
-        # of URL for human-readability when ops spot-check the row.
-        import hashlib
-        h = hashlib.sha256(req.meeting_url.encode()).hexdigest()[:10]
-        native_meeting_id = f"url-{h}"
-        logger.info(
-            f"Path 3 (URL+platform): meeting_url='{req.meeting_url[:60]}...' "
-            f"→ synthesized native_meeting_id='{native_meeting_id}' for platform={req.platform.value}"
-        )
+        # Best-effort numeric-ID extraction (Path 3 enhancement).
+        # Bot adapters validate native_meeting_id format per platform
+        # (Zoom expects 9-11 digits). White-label URLs typically embed
+        # the canonical ID in the path: LFX has /meeting/<numeric>,
+        # AWS has /j/<numeric>, etc. We grep for the first 9-11 digit
+        # run in the URL and use it if found. Falls back to URL hash
+        # only when no numeric ID is present (e.g., truly opaque URLs).
+        import re, hashlib
+        if req.platform.value == "zoom":
+            zoom_id_match = re.search(r"\b(\d{9,11})\b", req.meeting_url)
+            if zoom_id_match:
+                native_meeting_id = zoom_id_match.group(1)
+                logger.info(
+                    f"Path 3 (URL+zoom): extracted native_meeting_id='{native_meeting_id}' "
+                    f"from meeting_url='{req.meeting_url[:60]}...'"
+                )
+        if not native_meeting_id:
+            # Fallback for opaque URLs (no extractable ID).
+            h = hashlib.sha256(req.meeting_url.encode()).hexdigest()[:10]
+            native_meeting_id = f"url-{h}"
+            logger.info(
+                f"Path 3 (URL+{req.platform.value}): meeting_url='{req.meeting_url[:60]}...' "
+                f"→ synthesized native_meeting_id='{native_meeting_id}' (no numeric ID found)"
+            )
 
     # Construct meeting URL
     if req.meeting_url:
