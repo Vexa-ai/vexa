@@ -280,6 +280,20 @@ async def internal_upload_recording(
         # recording row with `status=IN_PROGRESS` + the latest chunk's
         # metadata, so the dashboard can show "Recording in progress (X
         # chunks captured)" rather than "no recording."
+        #
+        # Concurrency: per-chunk JSONB update on the same `meetings.data`
+        # row from concurrent chunk uploads would race (jsonb_set is
+        # last-write-wins). Per [PLATFORM]'s convergence on #272 13:13Z
+        # (Option A vs B), Option A picked: serialize per-meeting via
+        # `SELECT … FOR UPDATE` inside the same transaction. Latency cost
+        # is acceptable (one chunk per ~10s; serializing across 1-2
+        # concurrent in-flight chunks is sub-millisecond contention).
+        # Option B (separate recording_chunks table) is the cleaner
+        # long-term shape but requires migration → deferred to next cycle.
+        from sqlalchemy import select as _sql_select
+        # Refresh meeting row with SELECT … FOR UPDATE to serialize
+        # concurrent per-chunk JSONB updates from the same recording.
+        await db.execute(_sql_select(Meeting).where(Meeting.id == meeting.id).with_for_update())
         existing_media_files = [
             mf for mf in (rec_payload.get("media_files") or [])
             if mf.get("type") != media_type

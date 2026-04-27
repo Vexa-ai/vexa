@@ -181,18 +181,29 @@ async def create_container(req: CreateContainerRequest, request: Request):
     else:
         suffix = uuid.uuid4().hex[:8]
         # v0.10.5 Pack Q (#275) — pod name uses meeting_id when present
-        # in metadata, NOT user_id. Pre-Pack-Q: `meeting-{user_id}-{uuid}`
+        # in config (BOT_CONFIG), NOT user_id. Pre-Pack-Q: `meeting-{user_id}-{uuid}`
         # produced names like `meeting-2087-ee434b6d` for actual meeting_id
         # 11058 — operator-confusing + audit-tooling-broken-by-design (the
         # natural inference "pod name's integer = meeting_id" was wrong).
         # Now: pod is `meeting-{meeting_id}-{uuid}` so kubectl logs +
         # browse-by-name + Redis state-index reconciliation are aligned
-        # with the canonical meeting identifier. user_id is preserved in
-        # the runtime.user_id label for filtering. Falls back to user_id
-        # for profiles without an associated meeting (e.g. agent).
-        identifier = req.metadata.get("meeting_id") if isinstance(req.metadata, dict) else None
-        if identifier is None:
-            identifier = req.user_id
+        # with the canonical meeting identifier.
+        #
+        # Field path: `req.config.meeting_id` (verified by [PLATFORM]
+        # cross-reference 2026-04-27 13:13:51Z on #272 — BOT_CONFIG carries
+        # meeting_id at the top level). Initial Pack Q implementation used
+        # `req.metadata` which is operator-supplied + may not have it;
+        # `req.config` is the bot's launch config which always has it for
+        # meeting + browser-session profiles.
+        meeting_id = None
+        if isinstance(req.config, dict):
+            meeting_id = req.config.get("meeting_id")
+        # Defensive secondary: meeting-api callers also pass meeting_id
+        # via metadata (we set this in meeting-api/meetings.py:_create_container).
+        if meeting_id is None and isinstance(req.metadata, dict):
+            meeting_id = req.metadata.get("meeting_id")
+        # Fallback for profiles without an associated meeting (e.g. agent).
+        identifier = meeting_id if meeting_id else req.user_id
         name = _sanitize_name(f"{req.profile}-{identifier}-{suffix}")
 
     # Build env from profile defaults + user config
