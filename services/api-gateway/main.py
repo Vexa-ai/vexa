@@ -2017,6 +2017,63 @@ async def browser_delete_storage(token: str):
 
 # --- End Remote Browser Session Routes ---
 
+
+# --- v0.10.5 Pack X — synthetic-rig proxy routes ---
+#
+# Forward `/bots/internal/test/*` and `/bots/internal/callback/*` to
+# meeting-api so the synthetic test rig (`tests3/synthetic/`) can drive
+# OSS-side meeting lifecycle from the host without depending on the
+# docker network for service-to-service hostnames. meeting-api itself
+# enforces VEXA_ENV != production for the test endpoints — gateway
+# just passes them through.
+#
+# /bots/internal/callback/* was already reachable because runtime-api
+# delivers callbacks via the docker network (`http://localhost:8080`
+# from runtime-api's POV — meeting-api hostname). The synthetic rig
+# runs from the HOST, which has no docker-DNS access; the gateway
+# proxy is the only way to reach meeting-api externally.
+import os
+_PACK_X_TEST_ROUTES_ENABLED = os.environ.get("VEXA_ENV", "development") != "production"
+
+
+@app.api_route(
+    "/bots/internal/test/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE"],
+    include_in_schema=False,
+)
+async def synthetic_test_proxy(path: str, request: Request):
+    """Forward Pack X synthetic-rig calls to meeting-api.
+
+    Returns 404 when VEXA_ENV=production — synthetic-test traffic must
+    never reach prod. meeting-api endpoint enforces the same gate as a
+    second line of defense.
+    """
+    if not _PACK_X_TEST_ROUTES_ENABLED:
+        raise HTTPException(status_code=404, detail="Not Found")
+    url = f"{MEETING_API_URL}/bots/internal/test/{path}"
+    return await forward_request(app.state.http_client, request.method, url, request)
+
+
+@app.api_route(
+    "/bots/internal/callback/{path:path}",
+    methods=["POST"],
+    include_in_schema=False,
+)
+async def synthetic_callback_proxy(path: str, request: Request):
+    """Forward bot lifecycle callbacks to meeting-api.
+
+    Lets the synthetic test rig drive callback orderings via the same
+    endpoints the real bot uses — necessary for Pack X to deterministically
+    reproduce the Pack J coverage gap class (status_change-vs-exit
+    ordering bugs).
+    """
+    url = f"{MEETING_API_URL}/bots/internal/callback/{path}"
+    return await forward_request(app.state.http_client, request.method, url, request)
+
+
+# --- End Pack X synthetic-rig proxy routes ---
+
+
 # --- WebSocket Multiplex Endpoint ---
 @app.websocket("/ws")
 async def websocket_multiplex(ws: WebSocket):
