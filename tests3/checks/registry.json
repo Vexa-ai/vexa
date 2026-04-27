@@ -1111,6 +1111,110 @@
       "file": "tests3/releases/260426-zoom/audio-research.md",
       "must_match": "## Recommendation",
       "max_duration_sec": 5
+    },
+    {
+      "_": "═════ v0.10.5 G3 — grepable claims from scope.yaml (Pack C/D/E/G/H/L) ═════"
+    },
+    {
+      "id": "REDIS_CLIENT_HARDENED_TIMEOUTS",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "meeting-api aioredis.from_url() carries socket_timeout, socket_connect_timeout, socket_keepalive, health_check_interval, retry_on_timeout — Redis client cannot hang indefinitely on a partitioned/slow Redis (Pack C.1).",
+      "symptom": "Bare aioredis.from_url(url) with no timeouts; one Redis socket stall blocks the meeting-api event loop until OS-level TCP keepalive (~hours) eventually closes the socket — no consumer, no /readyz signal, no recovery without pod restart (#267).",
+      "file": "services/meeting-api/meeting_api/main.py",
+      "must_match": "socket_timeout=\\s*\\d+[\\s\\S]{1,400}socket_connect_timeout=\\s*\\d+[\\s\\S]{1,400}health_check_interval=\\s*\\d+",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "MEETING_API_READYZ_GATES_CONSUMER",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "meeting-api exposes `/readyz` distinct from `/health`; `_startup_complete` flag flips True only after Redis ping + consumer-task spawn; readinessProbe targets /readyz (Pack C.4).",
+      "symptom": "Service marks Ready before Redis consumer is up; K8s routes traffic to a pod that can't process callbacks; outbox reads silently fail (#248).",
+      "file": "services/meeting-api/meeting_api/main.py",
+      "must_match": "@app\\.get\\(\"/readyz\"\\)[\\s\\S]{1,1500}_startup_complete",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "MEETING_API_COLLECTOR_LIVENESS",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "meeting-api `/health/collector` returns 503 when Redis stream lag>100 AND idle>60s — liveness signal models the consumer's actual ability to drain the queue (Pack C.3).",
+      "symptom": "Liveness probe is bare process-up; consumer hangs on a Redis blocking read but probe stays green; pod silently stops processing while K8s reports Ready (#269).",
+      "file": "services/meeting-api/meeting_api/main.py",
+      "must_match": "/health/collector[\\s\\S]{1,1500}(503|HTTPException)",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "K8S_BACKEND_CONTAINER_ID_IS_NAME",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "runtime-api kubernetes backend `create()` returns `pod.metadata.name` as container_id — meeting-api stores a kubectl-resolvable identifier for later DELETE (Pack D.1).",
+      "symptom": "container_id is `pod.metadata.uid` (a UUID); subsequent stop+delete fails because k8s API only accepts pod-name identifiers; orphan bot pods accumulate (#261).",
+      "file": "services/runtime-api/runtime_api/backends/kubernetes.py",
+      "must_match": "return\\s+created\\.metadata\\.name",
+      "must_not_match": "return\\s+created\\.metadata\\.uid",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "BOT_DELETE_DURABLE_RETRY",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "meeting-api carries a Redis Stream outbox for container-stop intents (`container_stop_outbox.py` with `enqueue_stop` producer + `consume_pending_stops` consumer); DELETE is durable across runtime-api outages (Pack D.2 — mirrors 260421 Pack J shape).",
+      "symptom": "DELETE container is fire-and-forget HTTP to runtime-api; if runtime-api is unreachable the stop is silently dropped; bot pod runs forever (#266).",
+      "file": "services/meeting-api/meeting_api/container_stop_outbox.py",
+      "must_match": "async\\s+def\\s+enqueue_stop[\\s\\S]{1,8000}async\\s+def\\s+consume_pending_stops",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "RECORDING_FINALIZE_OUTBOX_CONSUMER_IDEMPOTENT",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "container-stop outbox consumer in `sweeps.py` imports `consume_pending_stops` from `container_stop_outbox` and is wired into the idle_loop pattern (Pack D.2 wiring).",
+      "symptom": "Outbox stream entries pile up unconsumed because no idle_loop sweep reads them; Redis memory grows; stops never reach runtime-api (#266 follow-on).",
+      "file": "services/meeting-api/meeting_api/sweeps.py",
+      "must_match": "from\\s+\\.container_stop_outbox\\s+import\\s+consume_pending_stops",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "AGGREGATION_FAILURE_CLASS_VIA_TYPED_HELPER",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "post_meeting.py exports `set_aggregation_failure_class(meeting, cls)` — single-write-path discipline for `data['aggregation_failure_class']`; class taxonomy is `AggregationFailureClass` enum/constants (Pack H).",
+      "symptom": "Multiple call sites poke `data['aggregation_failure_class']` directly with magic strings; classifier drift; sweeps query a key that doesn't always exist (#H1).",
+      "file": "services/meeting-api/meeting_api/post_meeting.py",
+      "must_match": "def\\s+set_aggregation_failure_class\\s*\\(\\s*meeting[^)]*,\\s*cls",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "DELAYED_STOP_FINALIZER_REMOVED",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "meetings.py contains documentation marker explaining the removal of `_delayed_stop_finalizer` (redundant after 260421 Pack J durable exit-callback) — replaced by idle_loop sweep (Pack E.3.1).",
+      "symptom": "Both _delayed_stop_finalizer AND the new sweep run; double-finalize race; meeting flips status twice in <1s; webhooks fire duplicate events (#268 [PLATFORM] comment).",
+      "file": "services/meeting-api/meeting_api/meetings.py",
+      "must_match": "Pack E\\.3\\.1[\\s\\S]{0,200}REMOVED[\\s\\S]{0,200}_delayed_stop_finalizer",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "BOTS_LIST_ENDPOINT_SLIM",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "meetings.py list endpoint projects `data` through `_data_summary(d)` by default; full data only on explicit `include == \"data\"` (include_full_data branch) — payload size bounded for bulk listings (Pack L).",
+      "symptom": "Every /meetings list response carries full meetings.data JSONB blob (potentially MB per row × N rows); dashboard list page payloads grow unbounded; gateway timeouts at scale (#272#... user concern).",
+      "file": "services/meeting-api/meeting_api/meetings.py",
+      "must_match": "include_full_data\\s*=\\s*include\\s*==\\s*\"data\"[\\s\\S]{1,1000}def\\s+_data_summary[\\s\\S]{1,3000}include_full_data\\s+else\\s+_data_summary",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "BOT_LOGS_STRUCTURED_JSON",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "vexa-bot core exposes `setLogContext({...})` + `logJSON({...})` — every bot log line is structured JSON with auto-injected meeting_id/session_uid/platform/container_name (Pack G.1).",
+      "symptom": "Bot logs are free-form strings; runtime-api log capture cannot index by meeting_id; debugging a single bot in a busy cluster requires grepping unstructured stdout (#272#6).",
+      "file": "services/vexa-bot/core/src/utils/log.ts",
+      "must_match": "export\\s+function\\s+setLogContext[\\s\\S]{1,5000}export\\s+function\\s+logJSON",
+      "max_duration_sec": 5
     }
   ]
 }

@@ -1,4 +1,4 @@
-# Plan approval — 260427-k8s-stabilize
+# Plan approval — 260427 (codename k8s-stabilize)
 # Public release: v0.10.5 — Production hardening
 # Milestone: https://github.com/Vexa-ai/vexa/milestone/14
 #
@@ -6,8 +6,15 @@
 # explicitly flip it. Per the stage contract, AI does not flip these.
 # Review each line; flip to `true` for approve, send back for revision
 # otherwise.
+#
+# v0.10.5 R2 fix (2026-04-27): release_id consolidated from
+# `260427-k8s-stabilize` to `260427` to align with worktree+branch
+# (the four-way invariant per TESTS3_RELEASE_KEY_CONSISTENT). The
+# descriptive handle is preserved as `codename` field in scope.yaml
+# and as the (k8s-stabilize) parenthetical in this comment header.
 
-release_id: 260427-k8s-stabilize
+release_id: '260427'
+codename: k8s-stabilize
 public_version: v0.10.5
 approved_at: 2026-04-27T11:50:57Z
 approver: dmitry@vexa.ai
@@ -28,7 +35,7 @@ approval_source: |
 #      change). None proposed this cycle.
 #   4. When every line is `approved: true`, write `approved_at` (UTC ISO 8601)
 #      + `approver` + `approval_source` at the top.
-#   5. `make release-provision SCOPE=tests3/releases/260427-k8s-stabilize/scope.yaml`
+#   5. `make release-provision SCOPE=tests3/releases/260427/scope.yaml`
 #      transitions plan → develop.
 
 # ── OBJECTIVES ────────────────────────────────────────────────────────

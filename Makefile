@@ -187,6 +187,12 @@ release-deploy:                    ## stage 05: build + push :dev + redeploy to 
 release-validate:                  ## stage 06: three-phase validate → Gate verdict (green→human / red→triage)
 	@$(_STAGE) assert-is deploy
 	@test -n "$(SCOPE)" || (echo "  ERROR: set SCOPE" && exit 2)
+	# Enter `validate` BEFORE running the matrix. Without this, the
+	# transition deploy→triage on red is illegal (triage's legal
+	# predecessors are {validate, human} per stage.py:55) — the recipe
+	# would fail with "illegal transition 'deploy' → 'triage'" even
+	# though the matrix produced a clean red verdict. v0.10.5 R4 fix.
+	@$(_STAGE) enter validate --actor make:release-validate --reason "begin gate matrix"
 	@$(MAKE) --no-print-directory release-full SCOPE=$(SCOPE) && \
 		($(_STAGE) enter human --actor make:release-validate --reason "gate green" && echo "  → stage: human") || \
 		($(_STAGE) enter triage --actor make:release-validate --reason "gate red" && echo "  → stage: triage" && exit 1)

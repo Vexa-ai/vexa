@@ -1,6 +1,7 @@
-release_id: 260427-k8s-stabilize
+release_id: '260427'  # canonical id matches worktree (vexa-260427) + branch (release/260427)
+codename: k8s-stabilize  # human-readable handle, surfaces in release notes / report headers
 public_version: v0.10.5
-public_name: "v0.10.5 — Production hardening"
+public_name: "v0.10.5 — Production hardening (k8s-stabilize)"
 milestone: https://github.com/Vexa-ai/vexa/milestone/14
 branch: dev
 summary: |
@@ -74,6 +75,53 @@ deployments:
     lite: Bot-side stdout-JSON discipline (Pack G.1) is mode-independent; lite is the cheapest canonical mode for static-grep checks against bot source.
     compose: Pack C.4 startup-gate chaos test, Pack D.2 durable-DELETE chaos, Pack E.1 chunk-finalize chaos, Pack E.3 stale-stopping sweep chaos, Pack H aggregation_failed sweep chaos — all need meeting-api + Redis + runtime-api co-located with kill-restore primitives.
     helm: Packs A, B, C.5, F, I are canonical chart contracts; helm is the only mode that exercises chart rendering + actual scheduling/PDB/probe behaviour.
+
+# ── Documented invariants (cross-cutting; converged with [PLATFORM] on #272)
+constraints:
+  lifecycle_ownership: |
+    Meeting + bot lifecycle is owned by the application layer
+    (meeting-api + runtime-api + scheduler service). K8s features
+    (autoscaling, eviction, restartPolicy, livenessProbe) are
+    OBSERVABILITY/SAFETY NETS only — never primary lifecycle
+    mechanisms. We want our bugs visible, not hidden behind a K8s
+    auto-recover that masks the underlying state-machine defect.
+
+    Audit of v0.10.5 packs against this principle (validated by
+    [PLATFORM] code review 2026-04-27 13:42:17Z, #272
+    issuecomment-4327366063): every pack respects the constraint.
+    K8s probes (Pack C.4 /readyz, Pack I liveness) are app-layer
+    SIGNALS observed by K8s — not raw process-up checks. K8s cron
+    is the scheduler-as-infrastructure for app-layer sweep LOGIC,
+    not a lifecycle trigger.
+
+    Adding K8s-level lifecycle (e.g. `activeDeadlineSeconds` on a
+    pod, autoscaling-based eviction, podDisruptionBudget as
+    primary completion mechanism) requires explicit groom-stage
+    decision + documented bug-visibility tradeoff. Catch-up rule
+    for v0.10.6 and beyond.
+
+  media_files_canonical_shape: |
+    `meetings.data.recordings[].media_files` is a flat list of
+    entries with the invariant: ONE entry per (recording,
+    media_type) pair. The entry's metadata reflects the latest
+    chunk uploaded for that type (chunk_seq, storage_path,
+    file_size_bytes, duration_seconds, is_final).
+
+    Rationale (decision converged with [PLATFORM] on #272
+    issuecomment-4327366063, 2026-04-27): per-chunk arrays would
+    explode payload size for long recordings + force dashboard UI
+    changes to handle N entries per type. Single-entry-per-type is
+    Pack E.1.a's existing intent and matches the dashboard's
+    fragment-player + seek-to-segment math. Per-chunk history
+    remains reconstructable from the MinIO listing under the
+    session/type prefix.
+
+    The Pack E.1-sibling reconcile sweep (deferred to v0.11.x) MUST
+    maintain this shape: skip if `len(per_type) == 1 AND
+    latest_seq == max(S3 seq for that type)`; otherwise rebuild to
+    single-entry-per-type shape. Sweep ports of platform-team
+    algorithms (which used per-chunk arrays in their environment)
+    must be shape-aligned before landing.
 
 issues:
 

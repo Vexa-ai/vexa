@@ -244,6 +244,79 @@ async def internal_upload_recording(
         #     that confused the fragment player and the seek-to-segment
         #     math. Per-chunk history is still reconstructable from the
         #     MinIO listing under the session/type prefix.
+        #
+        # v0.10.5 Pack E.1.a — per-chunk durable media_files write (#268
+        # reproduction 2026-04-27).
+        #
+        # Pre-Pack-E.1.a: intermediate chunks went to MinIO/S3 but media_files
+        # was only updated on is_final=true. When the bot died mid-active
+        # (e.g. Playwright Execution context destroyed in production today),
+        # 31 chunks landed in S3 with media_files=[] in DB — orphaned.
+        #
+        # Now: every successful chunk upload UPDATES the per-type media_files
+        # entry with the latest chunk's metadata. Dashboard still sees ONE
+        # entry per type (audio, video) — UX unchanged from prior shape;
+        # what changes is the entry exists from chunk_seq=0 onward instead
+        # of waiting for is_final. Even mid-stream death leaves a partial
+        # recording row with `status=IN_PROGRESS` + the latest chunk's
+        # metadata, so the dashboard can show "Recording in progress (X
+        # chunks captured)" rather than "no recording."
+        #
+        # Concurrency: [PLATFORM] code review (#272 issuecomment-4327366063,
+        # 2026-04-27 13:42:17Z) flagged a stale-read race in the v1 shape:
+        # SELECT … FOR UPDATE was acquired AFTER snapshotting meeting.data,
+        # so two concurrent uploads for the same recording (e.g. audio +
+        # video chunk N) both saw media_files=[] pre-lock; one wrote
+        # [audio], the other (using its stale snapshot) wrote [video] —
+        # losing the audio entry despite both S3 uploads succeeding.
+        #
+        # v2 shape (this commit): hold the row lock from BEFORE the
+        # snapshot until after the commit. The S3 upload above stays
+        # OUTSIDE the lock — it's idempotent on the storage_path key, so
+        # no need to serialize S3 round-trips. Only the JSONB read+derive
+        # +write is inside the critical section. Latency cost: one chunk
+        # per ~10s per recording; sub-millisecond lock contention even
+        # under heavy parallel chunk arrival.
+        #
+        # Pre-lock find at line ~187 derives `legacy_id` so the S3
+        # storage_path can be built BEFORE we hold the lock. In the rare
+        # double-create race (two requests both first-chunk-of-session,
+        # neither sees existing_rec pre-lock), each generates a different
+        # random legacy_id and uploads to a different S3 directory; the
+        # post-lock re-find resolves which rec wins, and the loser's
+        # upload is referenced by its OWN storage_path entry under the
+        # winning rec's media_files (paths are self-describing — no data
+        # loss; mild S3 directory fragmentation only).
+        #
+        # Option B (separate recording_chunks table) remains the cleaner
+        # long-term shape but requires migration → deferred to v0.11.x.
+        from sqlalchemy import select as _sql_select
+        # Lock FIRST, then re-snapshot under the lock. This is the
+        # critical-section entry — every JSONB read below must see a
+        # linearizable view, not the pre-lock snapshot at line ~181.
+        locked_meeting = (await db.execute(
+            _sql_select(Meeting)
+            .where(Meeting.id == meeting_session.meeting_id)
+            .with_for_update()
+        )).scalar_one()
+        meeting = locked_meeting
+        meeting_data_dict = dict(meeting.data or {})
+        recordings_list = list(meeting_data_dict.get("recordings") or [])
+        # Re-find existing_rec under the FRESH snapshot. This may differ
+        # from the pre-lock find at line ~187 if a concurrent request
+        # created the rec while we were in S3 upload. Adopt the canonical
+        # legacy_id from the existing rec so subsequent media_files
+        # entries reference the right rec, even if our S3 upload used a
+        # different legacy_id (see above on the rare double-create race).
+        existing_rec = None
+        existing_idx = None
+        for idx, rec in enumerate(recordings_list):
+            if isinstance(rec, dict) and rec.get("session_uid") == session_uid and rec.get("source") == RecordingSource.BOT.value:
+                existing_rec = rec
+                existing_idx = idx
+                legacy_id = rec.get("id") or legacy_id
+                break
+
         if existing_rec is None:
             rec_payload = {
                 "id": legacy_id,
@@ -264,36 +337,6 @@ async def internal_upload_recording(
             was_completed = rec_payload.get("status") == RecordingStatus.COMPLETED.value
 
         status_transitioned_to_completed = False
-        # v0.10.5 Pack E.1.a — per-chunk durable media_files write (#268
-        # reproduction 2026-04-27).
-        #
-        # Pre-Pack-E.1.a: intermediate chunks went to MinIO/S3 but media_files
-        # was only updated on is_final=true. When the bot died mid-active
-        # (e.g. Playwright Execution context destroyed in production today),
-        # 31 chunks landed in S3 with media_files=[] in DB — orphaned.
-        #
-        # Now: every successful chunk upload UPDATES the per-type media_files
-        # entry with the latest chunk's metadata. Dashboard still sees ONE
-        # entry per type (audio, video) — UX unchanged from prior shape;
-        # what changes is the entry exists from chunk_seq=0 onward instead
-        # of waiting for is_final. Even mid-stream death leaves a partial
-        # recording row with `status=IN_PROGRESS` + the latest chunk's
-        # metadata, so the dashboard can show "Recording in progress (X
-        # chunks captured)" rather than "no recording."
-        #
-        # Concurrency: per-chunk JSONB update on the same `meetings.data`
-        # row from concurrent chunk uploads would race (jsonb_set is
-        # last-write-wins). Per [PLATFORM]'s convergence on #272 13:13Z
-        # (Option A vs B), Option A picked: serialize per-meeting via
-        # `SELECT … FOR UPDATE` inside the same transaction. Latency cost
-        # is acceptable (one chunk per ~10s; serializing across 1-2
-        # concurrent in-flight chunks is sub-millisecond contention).
-        # Option B (separate recording_chunks table) is the cleaner
-        # long-term shape but requires migration → deferred to next cycle.
-        from sqlalchemy import select as _sql_select
-        # Refresh meeting row with SELECT … FOR UPDATE to serialize
-        # concurrent per-chunk JSONB updates from the same recording.
-        await db.execute(_sql_select(Meeting).where(Meeting.id == meeting.id).with_for_update())
         existing_media_files = [
             mf for mf in (rec_payload.get("media_files") or [])
             if mf.get("type") != media_type
