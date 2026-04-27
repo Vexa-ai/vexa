@@ -1700,8 +1700,27 @@ export default function MeetingDetailPage() {
           {currentMeeting.status === "failed" && transcripts.length === 0 && (
             <BotFailedIndicator
               status={currentMeeting.status}
-              errorMessage={currentMeeting.data?.error || currentMeeting.data?.failure_reason || currentMeeting.data?.status_message}
-              errorCode={currentMeeting.data?.error_code}
+              errorMessage={(() => {
+                // v0.10.5: bots emit a structured `error_details` payload
+                // (stringified Python repr, single-quoted) on join failures.
+                // Surface the human-readable error_message field so a user
+                // staring at /meetings/<id> can see WHAT failed without
+                // having to curl the API. Falls through to the legacy fields
+                // for older bots / non-Node code paths.
+                const ed = currentMeeting.data?.error_details;
+                if (typeof ed === "string" && ed.length > 0) {
+                  // Tolerate both JSON and Python repr (single-quoted) shapes.
+                  const m = ed.match(/['"]error_message['"]\s*:\s*['"]([^'"]+)['"]/);
+                  if (m) return m[1];
+                  // Fall back to the raw string if pattern didn't match —
+                  // ugly is better than silent.
+                  return ed.length > 240 ? ed.slice(0, 240) + "…" : ed;
+                }
+                return currentMeeting.data?.error
+                  || currentMeeting.data?.failure_reason
+                  || currentMeeting.data?.status_message;
+              })()}
+              errorCode={currentMeeting.data?.error_code || currentMeeting.data?.failure_stage}
             />
           )}
 

@@ -21,14 +21,27 @@ import {
  * v0.10.5 — White-label / enterprise URL support. Some organizations
  * front Zoom behind their own portal:
  *   https://zoom-lfx.platform.linuxfoundation.org/meeting/96088138284?password=...
- *   https://amazon.zoom.us/j/...   (still canonical /j/ path)
- *   https://bloomberg-corp.zoom.us/m/<id>?password=...
- * For these we can't rely on the canonical "/j/<id>" path, but Zoom IDs
- * are 9–11 digits and unique enough to extract from anywhere in the URL.
- * Likewise, white-label portals use ?password=...; canonical Zoom uses
- * ?pwd=... — accept both. This mirrors the meeting-api Path 3 extraction
- * (services/meeting-api/meeting_api/meetings.py) so the trust model is
- * symmetric: server extracts ID, bot does too, both agree.
+ *   https://corp.example.com/m/96088138284?password=...
+ * Two questions arise:
+ *   (a) Can we navigate the canonical Zoom web client directly,
+ *       skipping the portal? Sometimes — if the portal is just a
+ *       branded landing page that proxies to the same /wc/ flow.
+ *   (b) Should we? NO. Many portals (LFX, AWS Chime, Bloomberg) embed
+ *       extra steps the user must complete in-page (T&C consent,
+ *       guest-name pre-fill, captcha, magic-link auth). Bypassing
+ *       them means the bot sometimes joins, but the user can never
+ *       VNC in and assist when it doesn't.
+ *
+ * Strategy: ONLY rewrite when the host is canonical zoom.us / *.zoom.us
+ * AND the path matches /j/<digits>. Anything else returns as-is and the
+ * bot navigates the original URL — letting a human VNC in via the
+ * /b/<meeting_id>/vnc route to click through whatever extra page the
+ * portal renders. Once past the portal, the bot's selector waits pick
+ * up from the standard Zoom pre-join page (name input, etc.).
+ *
+ * This is symmetric with the meeting-api Path 3 trust model: server
+ * accepts the URL + platform pair without strict per-vendor parsing,
+ * and bot does the same — relying on the human as the fallback parser.
  */
 export function buildZoomWebClientUrl(meetingUrl: string): string {
   try {
@@ -42,34 +55,31 @@ export function buildZoomWebClientUrl(meetingUrl: string): string {
     // Already a web client URL — return as-is
     if (meetingUrl.includes('/wc/')) return meetingUrl;
 
-    // Extract meeting ID. Try the canonical /j/<digits> path first; fall back
-    // to scanning the entire URL for a 9–11 digit run (white-label portals).
-    let meetingId: string | undefined;
-    const canonicalMatch = url.pathname.match(/\/j\/(\d+)/);
-    if (canonicalMatch) {
-      meetingId = canonicalMatch[1];
-    } else {
-      // White-label fallback. Anchored to word boundaries so it doesn't
-      // match parts of UUIDs or longer numeric tokens by accident.
-      const fallbackMatch = meetingUrl.match(/\b(\d{9,11})\b/);
-      if (fallbackMatch) meetingId = fallbackMatch[1];
-    }
-    if (!meetingId) {
-      throw new Error(`Cannot extract meeting ID from Zoom URL: ${meetingUrl}`);
+    // Detect canonical Zoom: hostname is zoom.us or *.zoom.us
+    // (NOT zoom-lfx.platform.linuxfoundation.org, which would slip past
+    // a substring check).
+    const isCanonicalZoomHost =
+      url.hostname === 'zoom.us' || url.hostname.endsWith('.zoom.us');
+
+    // For canonical zoom.us URLs we rewrite to the web-client URL — gives
+    // a faster, more reliable join (no portal, no redirects).
+    if (isCanonicalZoomHost) {
+      const pathMatch = url.pathname.match(/\/j\/(\d+)/);
+      const meetingId = pathMatch?.[1];
+      if (!meetingId) {
+        throw new Error(`Cannot extract meeting ID from Zoom URL: ${meetingUrl}`);
+      }
+      const pwd = url.searchParams.get('pwd') || '';
+      const wcUrl = new URL(`https://app.zoom.us/wc/${meetingId}/join`);
+      if (pwd) wcUrl.searchParams.set('pwd', pwd);
+      return wcUrl.toString();
     }
 
-    // Passcode — canonical Zoom uses `pwd`, white-label/LFX often uses `password`.
-    // Accept both. This must NOT be a UUID (which would reject the LFX
-    // 8-4-4-4-12 hex format we actually want to pass through), so don't
-    // validate format here; just forward whatever the portal provided.
-    const pwd =
-      url.searchParams.get('pwd') ||
-      url.searchParams.get('password') ||
-      '';
-    const wcUrl = new URL(`https://app.zoom.us/wc/${meetingId}/join`);
-    if (pwd) wcUrl.searchParams.set('pwd', pwd);
-
-    return wcUrl.toString();
+    // White-label / enterprise portal — return as-is so the bot navigates
+    // the portal page. The user can VNC in and assist with any
+    // extra-step UI (T&C, guest-name confirm, etc.). Bot picks back up
+    // once Zoom's pre-join name input renders.
+    return meetingUrl;
   } catch (err: any) {
     // If already a web client URL or unrecognised format, return as-is
     if (meetingUrl.includes('/wc/')) return meetingUrl;
@@ -166,9 +176,26 @@ export async function joinZoomWebMeeting(page: Page | null, botConfig: BotConfig
     }
   }
 
-  // Wait for the pre-join name input to appear
-  log('[Zoom Web] Waiting for pre-join name input...');
-  await page.waitForSelector(zoomNameInputSelector, { timeout: 30000 });
+  // Wait for the pre-join name input to appear.
+  //
+  // v0.10.5 — White-label / enterprise URLs (LFX, AWS Chime, Bloomberg-style
+  // portals) often render an extra page in front of Zoom's pre-join: T&C
+  // consent, guest-name confirm, captcha, magic-link auth. The bot can't
+  // automate those reliably, but a human can VNC in via /b/<meeting_id>/vnc
+  // and click through. We extend the wait when the URL is non-canonical
+  // (rawUrl !== webClientUrl means buildZoomWebClientUrl returned the URL
+  // as-is, which our refactor only does for white-label hosts) so the user
+  // has time to assist. Canonical zoom.us URLs keep the tight 30s timeout —
+  // there's no portal layer to navigate.
+  const isWhiteLabel = rawUrl === webClientUrl && !rawUrl.includes('/wc/');
+  const nameInputTimeoutMs = isWhiteLabel ? 5 * 60 * 1000 : 30_000;
+  if (isWhiteLabel) {
+    log(`[Zoom Web] White-label URL — waiting up to 5 min for pre-join name input ` +
+        `(human can VNC in to click through any portal page).`);
+  } else {
+    log('[Zoom Web] Waiting for pre-join name input...');
+  }
+  await page.waitForSelector(zoomNameInputSelector, { timeout: nameInputTimeoutMs });
 
   // Some meetings show a passcode-entry pre-join page that includes a
   // passcode input ABOVE the name input. If a passcode field is visible

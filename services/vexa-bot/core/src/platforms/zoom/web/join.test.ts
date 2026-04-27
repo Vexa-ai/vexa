@@ -71,16 +71,20 @@ expect(
   'https://events.zoom.us/ejl/AbCdEf123',
 );
 
-console.log('\n=== buildZoomWebClientUrl — v0.10.5 white-label fallback ===');
+console.log('\n=== buildZoomWebClientUrl — v0.10.5 white-label passthrough ===');
 
-// The exact URL the user reported.
+// The exact URL the user reported. We deliberately do NOT rewrite it —
+// the LFX portal often shows an extra page (T&C / guest-name confirm /
+// captcha) before redirecting to Zoom, and a human VNC'd into the bot's
+// browser needs to be able to click through it. Canonical zoom.us paths
+// stay rewritten because they have no portal layer.
 const LFX_URL =
   'https://zoom-lfx.platform.linuxfoundation.org/meeting/96088138284?password=c9e528a8-3852-4b82-89c2-96d6f22526ad';
 
 expect(
-  'LFX zoom-portal — extracts numeric ID + accepts ?password',
+  'LFX zoom-portal — passthrough so user can VNC into portal page',
   buildZoomWebClientUrl(LFX_URL),
-  'https://app.zoom.us/wc/96088138284/join?pwd=c9e528a8-3852-4b82-89c2-96d6f22526ad',
+  LFX_URL,
 );
 
 expect(
@@ -90,39 +94,38 @@ expect(
 );
 
 expect(
-  'white-label /m/ path with ?password',
+  'white-label /m/ path — passthrough',
   buildZoomWebClientUrl('https://corp.example.com/m/85173157171?password=xyz'),
-  'https://app.zoom.us/wc/85173157171/join?pwd=xyz',
+  'https://corp.example.com/m/85173157171?password=xyz',
 );
 
 expect(
-  'white-label without passcode — forwarded as no-pwd',
+  'white-label without passcode — passthrough',
   buildZoomWebClientUrl('https://portal.example.org/meeting/96088138284'),
-  'https://app.zoom.us/wc/96088138284/join',
+  'https://portal.example.org/meeting/96088138284',
 );
 
-console.log('\n=== buildZoomWebClientUrl — negative cases ===');
-
-expectThrows(
-  'no numeric ID anywhere',
-  () => buildZoomWebClientUrl('https://example.com/just-a-bare-page'),
-  'Cannot extract meeting ID',
+expect(
+  'tricky: zoom-lfx.platform.linuxfoundation.org is NOT *.zoom.us',
+  // Substring "zoom" in hostname — must NOT count as canonical
+  buildZoomWebClientUrl('https://zoom-something.example.com/meeting/96088138284'),
+  'https://zoom-something.example.com/meeting/96088138284',
 );
 
+console.log('\n=== buildZoomWebClientUrl — negative cases (canonical-only) ===');
+
+// White-label URLs are no longer parsed — they pass through. Only canonical
+// zoom.us / *.zoom.us URLs that we attempted to rewrite can throw.
 expectThrows(
-  'too few digits (8 < 9)',
-  () => buildZoomWebClientUrl('https://example.com/meeting/12345678'),
+  'canonical zoom.us without /j/ — throws',
+  () => buildZoomWebClientUrl('https://zoom.us/some-other-path'),
   'Cannot extract meeting ID',
 );
 
 expect(
-  'too many digits (12) — boundary, not a Zoom ID',
-  // 12 digits doesn't match \b(\d{9,11})\b — must throw
-  (() => {
-    try { buildZoomWebClientUrl('https://example.com/meeting/123456789012'); return 'NO_THROW'; }
-    catch { return 'THREW'; }
-  })(),
-  'THREW',
+  'unknown host without numeric — passthrough (not our concern)',
+  buildZoomWebClientUrl('https://example.com/just-a-bare-page'),
+  'https://example.com/just-a-bare-page',
 );
 
 console.log(`\n=== summary: ${passed} passed, ${failed} failed ===`);
