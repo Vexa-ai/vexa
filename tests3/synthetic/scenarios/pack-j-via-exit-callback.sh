@@ -19,7 +19,10 @@ meeting_id=$(rig_spawn_dryrun "$token" "$native_id" google_meet)
 session_uid=$(rig_session_bootstrap "$meeting_id")
 echo "    meeting_id=$meeting_id session=${session_uid:0:8}..."
 
-rig_callback "$session_uid" started >/dev/null
+# Drive through legal transitions: requested → joining → active.
+rig_callback "$session_uid" status_change status=joining container_id="$native_id" >/dev/null
+sleep 1
+rig_callback "$session_uid" status_change status=active container_id="$native_id" >/dev/null
 sleep 1
 
 # Cross duration threshold

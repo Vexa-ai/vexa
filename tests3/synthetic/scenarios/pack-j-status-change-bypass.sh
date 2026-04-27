@@ -35,16 +35,20 @@ session_uid=$(rig_session_bootstrap "$meeting_id")
 echo "    session_uid=${session_uid:0:8}..."
 
 # Drive lifecycle: requested → joining → active
-rig_callback "$session_uid" started >/dev/null
-echo "    [callback] started — meeting reaches active"
-
-# Verify we hit active
+# Drive through legal transitions: requested → joining → active.
+# (The `started` callback alone attempts requested→active which the
+# state machine rejects — Pack X finding 2026-04-27.)
+rig_callback "$session_uid" status_change status=joining container_id="$native_id" >/dev/null
 sleep 1
+rig_callback "$session_uid" status_change status=active container_id="$native_id" >/dev/null
+sleep 1
+
 status=$(rig_get_state "$token" "$meeting_id" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
 if [ "$status" != "active" ]; then
-    echo "FAIL: expected active after started, got $status" >&2
+    echo "FAIL: expected active after joining→active, got $status" >&2
     exit 1
 fi
+echo "    drove requested → joining → active via status_change"
 
 # Sleep across Pack J's 30-second duration threshold.
 echo "    sleep 35s (cross Pack J duration threshold)..."
@@ -58,7 +62,7 @@ sleep 1
 # Pre-734d248: this path bypassed _classify_stopped_exit → meeting marked
 # completed/stopped. Post-fix: same classifier fires → failed/stopped_with_no_audio.
 rig_callback "$session_uid" status_change \
-    new_status=completed \
+    status=completed \
     reason=self_initiated_leave \
     completion_reason=stopped >/dev/null
 echo "    [callback] status_change=completed (the gap-triggering call)"

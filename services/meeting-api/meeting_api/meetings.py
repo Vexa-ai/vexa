@@ -207,6 +207,19 @@ async def update_meeting_status(
             current_data["completion_reason"] = completion_reason.value
         meeting.end_time = datetime.utcnow()
     elif new_status == MeetingStatus.FAILED:
+        # v0.10.5 Pack X finding (2026-04-27): persist completion_reason
+        # on FAILED transitions too. Pack J's classifier routes to
+        # FAILED + STOPPED_WITH_NO_AUDIO (or other terminal failure
+        # reasons), but the previous code only wrote completion_reason
+        # to data on COMPLETED. Result: Pack J classification was
+        # CORRECT in the transition_entry log but invisible at top-
+        # level data.completion_reason — dashboards grouping by
+        # data.completion_reason saw empty for the entire #255 silent
+        # class. Surfaced by tests3/synthetic/scenarios/pack-j-via-
+        # exit-callback.sh which asserts completion_reason on the
+        # FAILED meeting and caught it.
+        if completion_reason:
+            current_data["completion_reason"] = completion_reason.value
         if failure_stage:
             current_data["failure_stage"] = failure_stage.value
         if error_details:

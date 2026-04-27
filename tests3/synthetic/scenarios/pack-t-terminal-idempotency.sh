@@ -20,7 +20,9 @@ session_uid=$(rig_session_bootstrap "$meeting_id")
 echo "    meeting_id=$meeting_id"
 
 # Drive to terminal: requested → joining → active → completed
-rig_callback "$session_uid" started >/dev/null
+rig_callback "$session_uid" status_change status=joining container_id="$native_id" >/dev/null
+sleep 1
+rig_callback "$session_uid" status_change status=active container_id="$native_id" >/dev/null
 sleep 1
 rig_callback "$session_uid" exited \
     exit_code=0 \
