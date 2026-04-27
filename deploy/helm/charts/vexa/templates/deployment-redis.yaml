@@ -29,9 +29,15 @@ spec:
         - name: redis
           image: "{{ .Values.redis.image }}"
           imagePullPolicy: IfNotPresent
+          {{- /* v0.10.5 Pack C.5 — paired-durability invariant guard */}}
+          {{- include "vexa.validateRedisDurability" . }}
           args:
             - "--appendonly"
-            - "yes"
+            - {{ .Values.redis.durability.appendonly | default "yes" | quote }}
+            - "--appendfsync"
+            - {{ .Values.redis.durability.appendfsync | default "everysec" | quote }}
+            - "--stop-writes-on-bgsave-error"
+            - {{ .Values.redis.durability.stopWritesOnBgsaveError | default "no" | quote }}
             {{- with .Values.redis.maxmemory }}
             - "--maxmemory"
             - {{ . | quote }}

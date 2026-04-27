@@ -329,6 +329,17 @@ redis:
   # the least-recently-used keys (safe for all Vexa-side usages).
   maxmemory: "1gb"
   maxmemoryPolicy: "allkeys-lru"
+  # v0.10.5 Pack C.5 — Durability paired invariant (#267 + 2026-04-21
+  # redis-storage-cascade incident). AOF is per-write durability; BGSAVE
+  # is the snapshot. With AOF on, BGSAVE failures don't risk write-loss
+  # so we let them be non-blocking (`stopWritesOnBgsaveError: no`). The
+  # _helpers.tpl `vexa.validateRedisDurability` enforces the invariant:
+  # if you set stopWritesOnBgsaveError=yes WITHOUT appendonly=yes, render
+  # fails with `required` — refuses to ship the unsafe combination.
+  durability:
+    appendonly: "yes"               # per-write append-only file
+    appendfsync: "everysec"         # fsync once per second (balanced durability/perf)
+    stopWritesOnBgsaveError: "no"   # don't block writes on snapshot failure
   resources:
     requests:
       cpu: 100m
