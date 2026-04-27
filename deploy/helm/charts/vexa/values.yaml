@@ -405,6 +405,16 @@ ingress:
 # Mirrors the vexa-platform production profiles; override in your own
 # values file if you need different resource envelopes.
 # ──────────────────────────────────────────────────────────────────────
+# v0.10.5 Pack B.3 — recording / storage configuration block.
+# Centralizes recording + storage knobs that runtime-api propagates
+# to bot pods via runtimeProfiles env substitution. Pre-Pack-B these
+# were scattered (RECORDING_ENABLED on meetingApi only; bots silently
+# unconfigured per #235).
+recording:
+  enabled: true
+  storageBackend: "minio"   # "minio" | "s3"
+  minioSecure: false
+
 runtimeProfiles: |
   profiles:
     meeting:
@@ -412,16 +422,6 @@ runtimeProfiles: |
       command: ["/app/vexa-bot/entrypoint.sh"]
       working_dir: "/app/vexa-bot"
       resources:
-        # 2026-04-27 (Zoom Web cycle 260426): the prior 4000m/2500m bump
-        # was emergency compensation while the dominant cost was the
-        # Chromium gpu-process (357% of 440% per bot = SwiftShader
-        # software-WebGL + canvas compositing for Zoom Web's UI).
-        # Adding the --in-process-gpu Chromium flag (see
-        # services/vexa-bot/core/src/constans.ts baseBrowserArgs)
-        # collapsed that work into the renderer and per-bot demand
-        # dropped to ~115% — back inside the original 1500m budget
-        # that matches the prior gmeet/teams p95 (780m). Reverted to
-        # the original numbers.
         cpu_request: "1000m"     # measured p95: 780m
         cpu_limit: "1500m"       # 1.5x headroom for browser spikes
         memory_request: "1100Mi"
@@ -429,12 +429,34 @@ runtimeProfiles: |
         shm_size: 2147483648
       idle_timeout: 0
       auto_remove: false
+      # v0.10.5 Pack B.2 — bot pod scheduling per #240. Empty defaults
+      # ship without operator config; operators with dedicated bot
+      # pools override `runtimeProfiles` in their values overlay to
+      # populate `node_selector` and `k8s_overrides.tolerations`.
+      # Schema (services/runtime-api/runtime_api/profiles.py:65,67)
+      # accepts both fields; backend (kubernetes.py:131,141) applies them.
+      node_selector: {}
+      k8s_overrides:
+        tolerations: []
       env:
         DISPLAY: "${DISPLAY:-:99}"
         NODE_ENV: "production"
         REDIS_URL: "${REDIS_URL}"
         TRANSCRIPTION_SERVICE_URL: "${TRANSCRIPTION_SERVICE_URL}"
         TRANSCRIPTION_SERVICE_TOKEN: "${TRANSCRIPTION_SERVICE_TOKEN}"
+        # v0.10.5 Pack B.3 — propagate recording/storage env to bot pods (#235).
+        # Without these, bot transcribes (has TRANSCRIPTION_SERVICE_*) and
+        # silently skips recording upload (no MEETING_API_URL → no endpoint
+        # for /internal/recordings/upload). Prod evidence on #235: prod
+        # MinIO 0 objects despite real-time transcripts flowing normally.
+        MEETING_API_URL: "${MEETING_API_URL}"
+        RECORDING_ENABLED: "${RECORDING_ENABLED:-true}"
+        STORAGE_BACKEND: "${STORAGE_BACKEND:-minio}"
+        MINIO_ENDPOINT: "${MINIO_ENDPOINT}"
+        MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY}"
+        MINIO_SECRET_KEY: "${MINIO_SECRET_KEY}"
+        MINIO_BUCKET: "${MINIO_BUCKET:-vexa}"
+        MINIO_SECURE: "${MINIO_SECURE:-false}"
       ports:
         "9222/tcp": {}
     browser-session:
@@ -445,14 +467,27 @@ runtimeProfiles: |
         cpu_request: "1000m"
         cpu_limit: "1500m"
         memory_request: "1100Mi"
-        memory_limit: "2560Mi"  # bumped 2026-04-21 (Bug B Teams OOM)
+        memory_limit: "2560Mi"
         shm_size: 2147483648
       idle_timeout: 0
       auto_remove: false
+      # v0.10.5 Pack B.2 — same scheduling extension point.
+      node_selector: {}
+      k8s_overrides:
+        tolerations: []
       env:
         DISPLAY: "${DISPLAY:-:99}"
         NODE_ENV: "production"
         REDIS_URL: "${REDIS_URL}"
+        # v0.10.5 Pack B.3 — recording/storage env propagation.
+        MEETING_API_URL: "${MEETING_API_URL}"
+        RECORDING_ENABLED: "${RECORDING_ENABLED:-true}"
+        STORAGE_BACKEND: "${STORAGE_BACKEND:-minio}"
+        MINIO_ENDPOINT: "${MINIO_ENDPOINT}"
+        MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY}"
+        MINIO_SECRET_KEY: "${MINIO_SECRET_KEY}"
+        MINIO_BUCKET: "${MINIO_BUCKET:-vexa}"
+        MINIO_SECURE: "${MINIO_SECURE:-false}"
       ports:
         "6080/tcp": {}
         "9222/tcp": {}
