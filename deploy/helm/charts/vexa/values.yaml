@@ -74,7 +74,10 @@ apiGateway:
 
 adminApi:
   enabled: true
-  replicaCount: 1
+  # v0.10.5 Pack I — stateless services default to replicaCount: 2 + PDB
+  # for production-shape availability. Pairs with `vexa.deploymentStrategy`
+  # helper (maxSurge: 0) so rollouts stay zero-downtime.
+  replicaCount: 2
   image:
     repository: vexaai/admin-api
     tag: dev
@@ -102,7 +105,8 @@ adminApi:
 
 meetingApi:
   enabled: true
-  replicaCount: 1
+  # v0.10.5 Pack I — stateless service default replicaCount: 2 + PDB.
+  replicaCount: 2
   image:
     repository: vexaai/meeting-api
     tag: dev
@@ -136,7 +140,12 @@ meetingApi:
 
 runtimeApi:
   enabled: true
-  replicaCount: 1
+  # v0.10.5 Pack I — runtime-api can run replicaCount: 2 in `kubernetes`
+  # orchestrator mode (the K8s backend is stateless beyond Redis, which IS
+  # the source of truth for container state). For `process`/`docker` modes
+  # (bots run on the same node as runtime-api), keep at 1 — operator sets
+  # replicaCount: 1 in their values overlay if needed.
+  replicaCount: 2
   orchestrator: "process"       # "process" (default), "kubernetes" (K8s pods), or "docker"
   browserImage: ""              # Bot container image (defaults to meetingApi image if empty)
   image:
@@ -218,7 +227,9 @@ mcp:
 
 dashboard:
   enabled: false
-  replicaCount: 1
+  # v0.10.5 Pack I — stateless service default replicaCount: 2 + PDB
+  # (when dashboard is enabled in operator values).
+  replicaCount: 2
   image:
     repository: vexaai/dashboard
     tag: dev
@@ -455,22 +466,27 @@ runtimeProfiles: |
 # Off by default so `helm install` on a single-node dev cluster doesn't
 # block drains. Flip to `enabled: true` per-service on multi-node clusters.
 # ──────────────────────────────────────────────────────────────────────
+# v0.10.5 Pack I — stateless services default to PDB enabled (paired
+# with replicaCount: 2 above). State-bearing services (redis, postgres,
+# minio, pgbouncer) stay disabled — they have replicaCount: 1 by design;
+# a PDB minAvailable: 1 with replicaCount: 1 blocks `kubectl drain`
+# indefinitely.
 podDisruptionBudgets:
   apiGateway:
-    enabled: false
+    enabled: true
     minAvailable: 1
   adminApi:
-    enabled: false
+    enabled: true
     minAvailable: 1
   meetingApi:
-    enabled: false
+    enabled: true
     minAvailable: 1
   runtimeApi:
-    enabled: false
+    enabled: true
     minAvailable: 1
   dashboard:
-    enabled: false
+    enabled: true
     minAvailable: 1
   redis:
-    enabled: false
+    enabled: false        # state-bearing single-replica; don't block drains
     minAvailable: 1
