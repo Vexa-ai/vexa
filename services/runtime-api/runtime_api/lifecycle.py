@@ -11,6 +11,7 @@ Retries with exponential backoff (default: 1s, 5s, 30s).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from typing import Optional
@@ -25,17 +26,47 @@ logger = logging.getLogger("runtime_api.lifecycle")
 
 
 async def idle_loop(redis, backend: Backend) -> None:
-    """Background task: stop idle containers + sweep pending exit callbacks.
+    """Background task: stop idle containers + sweep pending exit callbacks
+    + reconcile browser-session secondary index against primary container state.
 
-    Two responsibilities, one loop tick:
+    Three responsibilities, one loop tick:
       (1) Stop containers that have been idle past their profile's timeout.
       (2) Re-try any exit callback that has not yet been acknowledged by the
           consumer. This makes exit-callback delivery durable across consumer
           outages — without it, runtime-api gives up after CALLBACK_RETRIES
           and the downstream meeting row is stuck 'active' forever.
+      (3) v0.10.5 Pack K.2 — sweep browser_session:* secondary index for
+          orphans whose container_name is missing from the primary
+          `runtime:container:*` index. [PLATFORM] data on #273 showed 14
+          stale browser_session entries vs 0 actual K8s pods — pods were
+          reaped but the secondary index never reconciled, leading to the
+          "Browser session not found or expired" UX symptom.
+
+    v0.10.5 Pack K.5 — heartbeat instrumentation logs the loop's tick
+    rate. Without an external observable, can't tell whether the loop is
+    "running silently" vs "not running at all" (closes #273 Finding 3).
     """
+    iteration = 0
     while True:
         await asyncio.sleep(config.IDLE_CHECK_INTERVAL)
+        # v0.10.5 Pack K.5 — heartbeat at start of iteration (not end), so
+        # a hung sweep still advances the counter on the iteration that
+        # started. External observers can detect "loop not running" via a
+        # stale `last_iteration_at`. Metrics infrastructure (Pack M) wires
+        # this into Prometheus; until then, the structured log + the
+        # in-memory counter on `lifecycle.idle_loop_last_iteration_at`
+        # gives operators something to grep / log-aggregate against.
+        iteration += 1
+        global idle_loop_iterations, idle_loop_last_iteration_at
+        idle_loop_iterations = iteration
+        idle_loop_last_iteration_at = time.time()
+        if iteration % 60 == 1:
+            # Log heartbeat every ~60 iterations (1× / IDLE_CHECK_INTERVAL × 60)
+            # so logs aren't spammed but external grep can confirm liveness.
+            logger.info(
+                f"idle_loop heartbeat: iteration={iteration} "
+                f"last_iteration_at={idle_loop_last_iteration_at:.0f}"
+            )
         try:
             containers = await state.list_containers(redis)
             now = time.time()
@@ -79,10 +110,70 @@ async def idle_loop(redis, backend: Backend) -> None:
                     await _deliver_callback(redis, name)
                 except Exception:
                     logger.debug(f"pending-callback sweep delivery failed for {name}", exc_info=True)
+
+            # v0.10.5 Pack K.2 — reconcile browser_session:* secondary index.
+            #
+            # The browser_session:<meeting_id> Redis key (set by meeting-api
+            # at dispatch time, TTL ~24h) is a secondary lookup from
+            # meeting_id to container_name. When the primary container is
+            # reaped (natural exit, K8s eviction, manual delete), the
+            # primary `runtime:container:*` entry clears but this secondary
+            # index doesn't — leaving stale entries that downstream services
+            # serve as if live. [PLATFORM] data 2026-04-27: 14 stale entries
+            # vs 0 K8s pods.
+            #
+            # Sweep: iterate browser_session:*, for each entry check whether
+            # its container_name still exists in the primary index. If not,
+            # the entry is orphan — delete it.
+            try:
+                orphan_count = 0
+                async for key in redis.scan_iter("browser_session:*"):
+                    try:
+                        raw = await redis.get(key)
+                        if not raw:
+                            continue
+                        # Entries can be either a JSON object {container_name, ...}
+                        # or a bare container_name string (legacy shape).
+                        try:
+                            entry = json.loads(raw)
+                            container_name = (
+                                entry.get("container_name") if isinstance(entry, dict)
+                                else None
+                            )
+                        except (json.JSONDecodeError, TypeError):
+                            container_name = raw  # legacy bare-string shape
+                        if not container_name:
+                            continue
+                        primary = await state.get_container(redis, container_name)
+                        # Orphan if primary index doesn't have it OR primary
+                        # has it as stopped/failed (pod reaped).
+                        if primary is None or primary.get("status") in ("stopped", "failed"):
+                            await redis.delete(key)
+                            orphan_count += 1
+                            logger.warning(
+                                f"Pack K.2 reconcile: deleted orphan {key} -> {container_name} "
+                                f"(primary={'missing' if primary is None else primary.get('status')})"
+                            )
+                    except Exception:
+                        logger.debug(f"Pack K.2 reconcile error on {key}", exc_info=True)
+                if orphan_count > 0:
+                    logger.warning(
+                        f"Pack K.2 reconcile: swept {orphan_count} orphan browser_session entries"
+                    )
+            except Exception:
+                logger.debug("Pack K.2 reconcile scan failed", exc_info=True)
         except asyncio.CancelledError:
             return
         except Exception:
             logger.debug("Idle check error", exc_info=True)
+
+
+# v0.10.5 Pack K.5 — module-level heartbeat state.
+# External observable: read these from a /metrics or /health endpoint
+# elsewhere in runtime-api. Set at the START of each idle_loop iteration
+# (not the end) so a hung sweep handler still updates the counter.
+idle_loop_iterations: int = 0
+idle_loop_last_iteration_at: float = 0.0
 
 
 async def handle_container_exit(redis, name: str, exit_code: int) -> None:
