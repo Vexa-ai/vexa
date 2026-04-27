@@ -128,6 +128,112 @@ async def _sweep_stale_stopping(
     return swept
 
 
+async def _sweep_aggregation_retry(
+    db_session_factory: Callable[[], AsyncSession],
+) -> int:
+    """v0.10.5 Pack H.4 — retry meetings stuck on transient-infra aggregation failure.
+
+    Scans `data->>'aggregation_failure_class' = 'transient_infra'` AND
+    `data->>'aggregation_last_retry_at'` older than the next-attempt
+    backoff window. For each, re-attempts aggregate_transcription. On
+    success: clears failure_class. On 24-attempt budget exhaustion
+    (~7 days at exponential backoff): flips to 'permanent_infra' +
+    fires critical alert (Pack M wires the actual Prometheus counter
+    when metrics infra ships).
+
+    Returns count of rows successfully retried this iteration.
+    """
+    from datetime import datetime, timedelta
+    from .models import Meeting
+
+    BUDGET_ATTEMPTS = 24  # 7 days at exponential backoff
+    swept = 0
+
+    # Backoff schedule: 1m, 5m, 15m, 30m, 1h, 2h, 4h, 8h, 16h, 24h × N
+    # Keep simple — use retry_count to determine next-eligible time.
+    def _eligible_for_retry(retry_count: int, last_retry_at_str: str) -> bool:
+        try:
+            last_retry = datetime.fromisoformat(last_retry_at_str)
+        except (ValueError, TypeError):
+            return True
+        # Backoff: 60s base, 2× per attempt, capped at 24h
+        backoff_s = min(60 * (2 ** min(retry_count, 10)), 86400)
+        return datetime.utcnow() - last_retry > timedelta(seconds=backoff_s)
+
+    async with db_session_factory() as db:
+        from sqlalchemy import text
+        # Use JSONB query — meetings.data->>'aggregation_failure_class' = 'transient_infra'
+        stmt = text("""
+            SELECT id FROM meetings
+            WHERE data->>'aggregation_failure_class' = :cls
+            ORDER BY (data->>'aggregation_last_retry_at')::timestamp NULLS FIRST
+            LIMIT 50
+        """)
+        rows = (await db.execute(stmt, {"cls": "transient_infra"})).fetchall()
+
+        if not rows:
+            return 0
+
+        from .post_meeting import (
+            aggregate_transcription,
+            set_aggregation_failure_class,
+            AggregationFailureClass,
+        )
+
+        for row in rows:
+            meeting_id = row[0]
+            meeting = await db.get(Meeting, meeting_id)
+            if not meeting:
+                continue
+            data = meeting.data or {}
+            retry_count = data.get("aggregation_retry_count") or 0
+            last_retry = data.get("aggregation_last_retry_at") or ""
+
+            # Budget exhausted — flip to permanent + emit critical event
+            if retry_count >= BUDGET_ATTEMPTS:
+                logger.error(
+                    f"[sweep] Pack H.4: meeting {meeting_id} exhausted aggregation "
+                    f"retry budget after {retry_count} attempts — flipping to "
+                    f"'permanent_infra' + critical alert"
+                )
+                set_aggregation_failure_class(
+                    meeting, AggregationFailureClass.PERMANENT_INFRA
+                )
+                await db.commit()
+                # TODO: emit meeting.aggregation_failed_permanent webhook event
+                # (Pack H.3 wire-up — webhook_delivery infrastructure exists;
+                # event dispatch lands in next commit)
+                continue
+
+            # Within budget — check eligibility
+            if not _eligible_for_retry(retry_count, last_retry):
+                continue
+
+            try:
+                ok = await aggregate_transcription(meeting, db)
+                if ok:
+                    logger.info(
+                        f"[sweep] Pack H.4: meeting {meeting_id} aggregation "
+                        f"retry {retry_count + 1} succeeded"
+                    )
+                    swept += 1
+                else:
+                    # Still transient — set_aggregation_failure_class inside
+                    # aggregate_transcription already incremented retry_count.
+                    logger.debug(
+                        f"[sweep] Pack H.4: meeting {meeting_id} aggregation "
+                        f"retry {retry_count + 1} still transient"
+                    )
+            except Exception as e:
+                logger.error(
+                    f"[sweep] Pack H.4 aggregation retry failed for {meeting_id}: "
+                    f"{type(e).__name__}: {e!r}",
+                    exc_info=True,
+                )
+
+    return swept
+
+
 async def start_sweeps(
     db_session_factory: Callable[[], AsyncSession],
 ) -> None:
@@ -135,9 +241,9 @@ async def start_sweeps(
 
     Currently runs:
       - Pack E.3.2: stale-stopping sweep
+      - Pack H.4: aggregation_failure_class='transient_infra' retry
 
-    Future Packs E.1-sibling (sweep_unfinalized_recordings) and H.4
-    (sweep aggregation_failed for retry) wire in here.
+    Future Pack E.1-sibling (sweep_unfinalized_recordings) wires in here.
 
     Pattern mirrors webhook_retry_worker.start_retry_worker — same
     shape, different responsibility.
@@ -145,7 +251,7 @@ async def start_sweeps(
     global _stop_event, sweep_iterations, sweep_last_iteration_at
     _stop_event = asyncio.Event()
 
-    logger.info("[sweeps] Starting meeting-api idle sweeps loop (Pack E.3.2 + future)")
+    logger.info("[sweeps] Starting meeting-api idle sweeps loop (Pack E.3.2 + H.4)")
 
     while not _stop_event.is_set():
         sweep_iterations += 1
@@ -160,7 +266,17 @@ async def start_sweeps(
                     f"(operators should investigate why exit-callback path failed)"
                 )
         except Exception as e:
-            logger.error(f"[sweeps] iteration {sweep_iterations} error: {e}", exc_info=True)
+            logger.error(f"[sweeps] iteration {sweep_iterations} stale-stopping error: {e}", exc_info=True)
+
+        try:
+            retried = await _sweep_aggregation_retry(db_session_factory)
+            if retried > 0:
+                logger.info(
+                    f"[sweeps] iteration {sweep_iterations}: "
+                    f"successfully retried {retried} aggregation_failed rows (Pack H.4)"
+                )
+        except Exception as e:
+            logger.error(f"[sweeps] iteration {sweep_iterations} aggregation-retry error: {e}", exc_info=True)
 
         # Wait for POLL_INTERVAL or until stopped.
         try:
