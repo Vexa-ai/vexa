@@ -17,6 +17,18 @@ import {
  *
  * For Zoom Events URLs (events.zoom.us/ejl/...) the URL is returned as-is
  * because the events page handles its own redirect to the web client.
+ *
+ * v0.10.5 — White-label / enterprise URL support. Some organizations
+ * front Zoom behind their own portal:
+ *   https://zoom-lfx.platform.linuxfoundation.org/meeting/96088138284?password=...
+ *   https://amazon.zoom.us/j/...   (still canonical /j/ path)
+ *   https://bloomberg-corp.zoom.us/m/<id>?password=...
+ * For these we can't rely on the canonical "/j/<id>" path, but Zoom IDs
+ * are 9–11 digits and unique enough to extract from anywhere in the URL.
+ * Likewise, white-label portals use ?password=...; canonical Zoom uses
+ * ?pwd=... — accept both. This mirrors the meeting-api Path 3 extraction
+ * (services/meeting-api/meeting_api/meetings.py) so the trust model is
+ * symmetric: server extracts ID, bot does too, both agree.
  */
 export function buildZoomWebClientUrl(meetingUrl: string): string {
   try {
@@ -30,14 +42,30 @@ export function buildZoomWebClientUrl(meetingUrl: string): string {
     // Already a web client URL — return as-is
     if (meetingUrl.includes('/wc/')) return meetingUrl;
 
-    // Extract meeting ID from path: /j/84335626851
-    const pathMatch = url.pathname.match(/\/j\/(\d+)/);
-    const meetingId = pathMatch?.[1];
+    // Extract meeting ID. Try the canonical /j/<digits> path first; fall back
+    // to scanning the entire URL for a 9–11 digit run (white-label portals).
+    let meetingId: string | undefined;
+    const canonicalMatch = url.pathname.match(/\/j\/(\d+)/);
+    if (canonicalMatch) {
+      meetingId = canonicalMatch[1];
+    } else {
+      // White-label fallback. Anchored to word boundaries so it doesn't
+      // match parts of UUIDs or longer numeric tokens by accident.
+      const fallbackMatch = meetingUrl.match(/\b(\d{9,11})\b/);
+      if (fallbackMatch) meetingId = fallbackMatch[1];
+    }
     if (!meetingId) {
       throw new Error(`Cannot extract meeting ID from Zoom URL: ${meetingUrl}`);
     }
 
-    const pwd = url.searchParams.get('pwd') || '';
+    // Passcode — canonical Zoom uses `pwd`, white-label/LFX often uses `password`.
+    // Accept both. This must NOT be a UUID (which would reject the LFX
+    // 8-4-4-4-12 hex format we actually want to pass through), so don't
+    // validate format here; just forward whatever the portal provided.
+    const pwd =
+      url.searchParams.get('pwd') ||
+      url.searchParams.get('password') ||
+      '';
     const wcUrl = new URL(`https://app.zoom.us/wc/${meetingId}/join`);
     if (pwd) wcUrl.searchParams.set('pwd', pwd);
 
