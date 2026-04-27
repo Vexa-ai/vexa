@@ -1175,6 +1175,88 @@ issues:
       do: "From a fresh clone in a non-interactive shell: `make env TRANSCRIPTION=cpu && make all < /dev/null > make.log 2>&1 &`; wait 15 minutes"
       expect: "Process exits cleanly within 10 minutes; `make.log` does not grow unbounded; no `Invalid Google Meet ID format` spam"
 
+# ── Pack X — Synthetic-bot test rig (NEW; entropy testing without external deps) ──
+- id: synthetic-bot-test-rig
+  source: human
+  ref: 260427-k8s-stabilize live-validation finding 2026-04-27
+  problem: |
+    The Pack J coverage gap (status_change path bypassed _classify_
+    stopped_exit) shipped through the entire validate matrix because
+    the matrix doesn't drive a real meeting end-to-end. Static checks,
+    smoke matrix, unit tests, and reproducer tests all reported green.
+    The bug surfaced only when a human ran a real Zoom bot and noticed
+    a meeting marked `completed/stopped` despite 0 transcripts.
+
+    Industry parlance: we have ASSERTION-based testing (we know what
+    to assert). We need DISCOVERY-based testing (entropy that surfaces
+    behavior we didn't think to assert). The matrix locks known
+    invariants. Real-meeting validation surfaces external-integration
+    bugs. Neither catches OSS-side regressions in callback orderings,
+    classifier branching, JSONB invariants under adversarial inputs.
+  gap_analysis: |
+    No deterministic, fast, no-external-dependency way to drive the
+    OSS-side meeting lifecycle through arbitrary orderings. Real
+    meetings exercise the full stack but are slow, non-deterministic,
+    and require external platforms. Mock-based unit tests don't
+    exercise the actual HTTP handlers + DB + Redis path.
+  new_checks:
+    - PACK_X_PACK_J_STATUS_CHANGE_BYPASS
+    - PACK_X_PACK_J_VIA_EXIT_CALLBACK
+    - PACK_X_PACK_R_STALE_FAILURE_STAGE_TOLERANCE
+    - PACK_X_PACK_T_TERMINAL_IDEMPOTENCY
+  hypothesis: |
+    (X.1) Add an internal-only endpoint
+          `POST /internal/test/session-bootstrap` (gated by
+          `VEXA_ENV != "production"`) that creates a MeetingSession
+          row directly. Lets a synthetic test driver bypass the
+          bot-side WebSocket session-start path and drive callbacks
+          via pure HTTP. Returns 404 in production.
+    (X.2) `tests3/synthetic/rig.sh` — bash+curl primitives:
+          rig_get_user_token, rig_spawn_dryrun, rig_session_bootstrap,
+          rig_callback (POST any callback endpoint with hand-rolled
+          payload), rig_delete_bot, rig_get_state, rig_assert_state.
+          ~120 LoC, no external deps beyond bash+curl+python3.
+    (X.3) `tests3/synthetic/scenarios/<name>.sh` — each scenario is
+          a self-contained reproducer for a specific failure mode.
+          v0.10.5 ships 4 scenarios:
+          - pack-j-status-change-bypass — the bug discovered today
+          - pack-j-via-exit-callback — companion (other path; same
+            classification invariant)
+          - pack-r-stale-failure-stage-tolerance — read-side defense
+          - pack-t-terminal-idempotency — re-fire safety
+    (X.4) `tests3/synthetic/run-all.sh` — runner that emits a
+          matrix-shaped JSON report. Wired into `test-registry.yaml`
+          as a cheap-tier `synthetic` test running on lite + compose.
+          Helm doesn't run it (no compose-style direct DB access).
+    (X.5) [PLATFORM] contributes additional scenarios over time as
+          their incident catalog grows. Each new OSS bug from now on
+          ships paired with a synthetic scenario reproducing it.
+          Cross-repo entropy curation.
+
+    The Pack J discovery proves the value: the same scenario that
+    reproduces the bug is now the deterministic regression test
+    that would have caught it pre-ship. Future bugs of this class
+    fail the matrix before reaching live-validation.
+
+    Industry best practice: defense-in-depth across testing tiers.
+    Synthetic rig is the OSS-tier counterpart to [PLATFORM]'s
+    production-traffic-mirror observer (which they own per the
+    OSS↔PLATFORM SoC).
+  fix_commits: []
+  proves:
+    - {check: PACK_X_PACK_J_STATUS_CHANGE_BYPASS, modes: [lite, compose]}
+    - {check: PACK_X_PACK_J_VIA_EXIT_CALLBACK, modes: [lite, compose]}
+    - {check: PACK_X_PACK_R_STALE_FAILURE_STAGE_TOLERANCE, modes: [lite, compose]}
+    - {check: PACK_X_PACK_T_TERMINAL_IDEMPOTENCY, modes: [lite, compose]}
+  required_modes: [lite, compose]
+  human_verify:
+    - mode: compose
+      do: "On a running compose stack: `BASE=http://localhost:8056 bash tests3/synthetic/run-all.sh`"
+      expect: "All 4 scenarios pass; report at .state-compose/reports/compose/synthetic.json shows status=pass"
+    - mode: compose
+      do: "Verify endpoint gating: with VEXA_ENV=production, `curl -X POST http://localhost:8056/internal/test/session-bootstrap -d '{}'` returns 404"
+      expect: "404 Not Found"
+
 expensive_tests: []
 
 strict_features: []

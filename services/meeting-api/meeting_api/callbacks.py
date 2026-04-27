@@ -687,3 +687,69 @@ async def bot_status_change_callback(
         )
 
     return {"status": "processed", "meeting_id": meeting.id, "meeting_status": meeting.status}
+
+
+# ---------------------------------------------------------------------------
+# v0.10.5 Pack X — Synthetic test harness endpoint
+# ---------------------------------------------------------------------------
+#
+# `POST /internal/test/session-bootstrap` — creates a MeetingSession row
+# for an existing meeting WITHOUT requiring the bot to spawn. Lets the
+# synthetic test rig (`tests3/synthetic/`) drive the full lifecycle via
+# pure HTTP callbacks without external platform dependencies (Zoom DOM,
+# Meet WebRTC, Teams). Catches OSS-side regressions that only surface
+# in callback orderings (e.g. Pack J coverage gap caught 2026-04-27 by
+# real Zoom test — would have caught deterministically with this rig).
+#
+# Gated by VEXA_ENV != "production" — endpoint returns 404 in production.
+# Synthetic-test traffic must never reach prod meeting-api instances.
+
+class SyntheticSessionBootstrap(BaseModel):
+    meeting_id: int
+    session_uid: Optional[str] = None  # auto-generated if not provided
+
+
+@router.post("/internal/test/session-bootstrap", status_code=201, include_in_schema=False)
+async def synthetic_session_bootstrap(
+    payload: SyntheticSessionBootstrap,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a MeetingSession row directly — synthetic test harness only.
+
+    Allows the synthetic test rig to drive callback paths without spawning
+    a real bot. The bot's natural session-creation path (collector
+    process_session_start_event) is bypassed.
+
+    Returns the session_uid so the test driver can pass it as
+    connection_id in subsequent callback POSTs.
+    """
+    import os
+    if os.getenv("VEXA_ENV") == "production":
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    meeting = await db.get(Meeting, payload.meeting_id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail=f"Meeting {payload.meeting_id} not found")
+
+    import uuid
+    session_uid = payload.session_uid or str(uuid.uuid4())
+
+    # Idempotent — if session_uid already exists, return it as-is.
+    existing_stmt = select(MeetingSession).where(MeetingSession.session_uid == session_uid)
+    existing = (await db.execute(existing_stmt)).scalars().first()
+    if existing:
+        return {"session_uid": session_uid, "meeting_id": payload.meeting_id, "created": False}
+
+    new_session = MeetingSession(
+        meeting_id=payload.meeting_id,
+        session_uid=session_uid,
+        session_start_time=datetime.utcnow(),
+    )
+    db.add(new_session)
+    await db.commit()
+
+    logger.info(
+        f"[Pack X synthetic] Bootstrapped MeetingSession session_uid={session_uid} "
+        f"meeting_id={payload.meeting_id}"
+    )
+    return {"session_uid": session_uid, "meeting_id": payload.meeting_id, "created": True}
