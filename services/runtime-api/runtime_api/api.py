@@ -180,7 +180,20 @@ async def create_container(req: CreateContainerRequest, request: Request):
             raise HTTPException(400, "Container name is invalid after sanitization")
     else:
         suffix = uuid.uuid4().hex[:8]
-        name = _sanitize_name(f"{req.profile}-{req.user_id}-{suffix}")
+        # v0.10.5 Pack Q (#275) — pod name uses meeting_id when present
+        # in metadata, NOT user_id. Pre-Pack-Q: `meeting-{user_id}-{uuid}`
+        # produced names like `meeting-2087-ee434b6d` for actual meeting_id
+        # 11058 — operator-confusing + audit-tooling-broken-by-design (the
+        # natural inference "pod name's integer = meeting_id" was wrong).
+        # Now: pod is `meeting-{meeting_id}-{uuid}` so kubectl logs +
+        # browse-by-name + Redis state-index reconciliation are aligned
+        # with the canonical meeting identifier. user_id is preserved in
+        # the runtime.user_id label for filtering. Falls back to user_id
+        # for profiles without an associated meeting (e.g. agent).
+        identifier = req.metadata.get("meeting_id") if isinstance(req.metadata, dict) else None
+        if identifier is None:
+            identifier = req.user_id
+        name = _sanitize_name(f"{req.profile}-{identifier}-{suffix}")
 
     # Build env from profile defaults + user config
     env = {**profile_def.get("env", {})}

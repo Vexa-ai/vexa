@@ -147,6 +147,21 @@ async def update_meeting_status(
         await db.commit()
 
     if not is_valid_status_transition(current_status, new_status):
+        # v0.10.5 Pack T (#278) — Already-terminal idempotent re-fire is benign,
+        # not noise-worthy. Three independent code paths (chat persistence,
+        # status update, post-meeting tasks) racing the documented
+        # _delayed_stop_finalizer / runtime-api callback completion can each
+        # try `completed → completed`. Pre-Pack-T this fired WARNING ×3 per
+        # completed meeting (~30 in 90 min in prod logs). Now: log at DEBUG +
+        # return True so callers' `if not success` short-circuit doesn't break
+        # post-meeting tasks (per the documented race comment in callbacks.py).
+        terminal = {MeetingStatus.COMPLETED, MeetingStatus.FAILED}
+        if current_status == new_status and current_status in terminal:
+            logger.debug(
+                f"Idempotent re-fire of '{current_status.value}' for meeting {meeting.id} "
+                f"(documented race; benign no-op; see callbacks.py:217)"
+            )
+            return True
         logger.warning(f"Invalid status transition '{current_status.value}' -> '{new_status.value}' for meeting {meeting.id}")
         return False
 
@@ -159,6 +174,20 @@ async def update_meeting_status(
             current_data = dict(meeting.data)
         except Exception:
             current_data = {}
+
+    # v0.10.5 Pack R (#276) — failure_stage tracks the stage the meeting
+    # WAS IN when failure happened, not the first ever-stuck value. Pre-
+    # Pack-R, a meeting that failed in 'active' showed failure_stage='joining'
+    # if some early-signal capture had set it; never updated. Result:
+    # dashboards grouping by failure_stage misattributed in-meeting failures
+    # to admission/join issues. Now: every transition to FAILED overwrites.
+    if new_status == MeetingStatus.FAILED:
+        # current_status here is what we WERE in (pre-transition); that's
+        # the stage that failed. Coerce to FailureStage if possible.
+        try:
+            current_data["failure_stage"] = current_status.value
+        except Exception:
+            pass
 
     if new_status == MeetingStatus.COMPLETED:
         if completion_reason:

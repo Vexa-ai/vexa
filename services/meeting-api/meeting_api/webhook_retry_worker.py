@@ -121,10 +121,25 @@ async def _deliver_one(entry: dict) -> bool:
             logger.warning(f"[retry-worker] Permanent failure for {url} [{label}]: {resp.status_code}. Dropping.")
             return True  # return True so it's not re-enqueued
     except (httpx.TimeoutException, httpx.ConnectError) as e:
-        logger.warning(f"[retry-worker] Transient error for {url} [{label}]: {e}")
+        # v0.10.5 Pack S (#277) — log type + repr; bare `{e}` was empty
+        # string for httpx exceptions with empty args, leaving operators
+        # with "Transient error: " (no diagnostic info) before 4 retries
+        # burned. Include request method + URL when available for at-a-glance
+        # triage (DNS NXDOMAIN vs TLS handshake vs timeout).
+        req_info = ""
+        if hasattr(e, "request") and e.request is not None:
+            req_info = f" [request={e.request.method} {e.request.url}]"
+        logger.warning(
+            f"[retry-worker] Transient error for {url} [{label}]: "
+            f"{type(e).__name__}: {e!r}{req_info}"
+        )
         return False
     except Exception as e:
-        logger.error(f"[retry-worker] Unexpected error delivering to {url} [{label}]: {e}")
+        # Same fix shape — never log bare {e}.
+        logger.error(
+            f"[retry-worker] Unexpected error delivering to {url} [{label}]: "
+            f"{type(e).__name__}: {e!r}"
+        )
         return False
 
 
