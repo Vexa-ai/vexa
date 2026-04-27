@@ -1039,6 +1039,22 @@ RECORDING_UPLOAD_SUPPORTS_CHUNK_SEQ:
   - compose
   state: stateless
   max_duration_sec: 5
+REDIS_CLIENT_HARDENED_TIMEOUTS:
+  proves: "Every aioredis.from_url() call site across services configures bounded socket_timeout + health_check_interval; no production client can sit forever inside `await` on a dead TCP connection (#267 silent-hang root cause class)"
+  symptom: "Without bounded socket config, redis-py awaits the socket forever; OS TCP keepalive default is 7200s. Any Redis pod kill, kube-proxy conntrack flip, NAT timeout silently hangs the consumer for hours. Reproduced 2026-04-26: 10.5h silent data loss, 20 lost transcripts."
+  found: '2026-04-26'
+  fix_release: v0.10.5
+  type: grep
+  file: services
+  must_match: 'aioredis\.from_url\([^)]*socket_timeout[^)]*health_check_interval'
+  multiline: true
+  recursive: true
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 10
 REDIS_UP:
   proves: "Redis responds to PING \u2014 WebSocket pub/sub, session state, and caching work"
   symptom: "Redis not responding \u2014 WS, session state, and pub/sub will fail"

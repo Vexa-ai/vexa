@@ -60,7 +60,16 @@ _redis: aioredis.Redis | None = None
 async def get_redis() -> aioredis.Redis:
     global _redis
     if _redis is None:
-        _redis = aioredis.from_url(REDIS_URL, decode_responses=True)
+        # v0.10.5 Pack C.1 hardened client config (#267).
+        _redis = aioredis.from_url(
+            REDIS_URL,
+            decode_responses=True,
+            socket_timeout=10,
+            socket_connect_timeout=5,
+            socket_keepalive=True,
+            health_check_interval=30,
+            retry_on_timeout=True,
+        )
     return _redis
 
 

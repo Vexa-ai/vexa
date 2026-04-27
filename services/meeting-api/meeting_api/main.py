@@ -105,7 +105,23 @@ async def startup():
     # Redis
     redis_client = None
     try:
-        redis_client = aioredis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
+        # v0.10.5 Pack C.1 — bounded socket config closes the silent-hang class
+        # (#267). Without these, redis-py awaits the socket forever and a dead
+        # TCP connection (Redis pod kill, kube-proxy conntrack flip, NAT timeout)
+        # never surfaces — the caller sits inside `await` until OS TCP keepalive
+        # fires (Linux default: 7200s). Hardened timeouts force the client to
+        # raise within 10s of a silent socket; the existing exception handlers
+        # then sleep + retry. Closes 2026-04-26 silent-hang incident root cause.
+        redis_client = aioredis.from_url(
+            REDIS_URL,
+            encoding="utf-8",
+            decode_responses=True,
+            socket_timeout=10,
+            socket_connect_timeout=5,
+            socket_keepalive=True,
+            health_check_interval=30,
+            retry_on_timeout=True,
+        )
         await redis_client.ping()
         logger.info("Redis connected")
     except Exception as e:

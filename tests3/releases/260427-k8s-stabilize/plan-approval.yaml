@@ -1,0 +1,992 @@
+# Plan approval — 260427-k8s-stabilize
+# Public release: v0.10.5 — Production hardening
+# Milestone: https://github.com/Vexa-ai/vexa/milestone/14
+#
+# Awaiting human signoff. Every `approved` field is `false` until you
+# explicitly flip it. Per the stage contract, AI does not flip these.
+# Review each line; flip to `true` for approve, send back for revision
+# otherwise.
+
+release_id: 260427-k8s-stabilize
+public_version: v0.10.5
+approved_at: 2026-04-27T11:50:57Z
+approver: dmitry@vexa.ai
+approval_source: |
+  Project-owner explicit current-turn signal 2026-04-27:
+  "is no more requests to platform, go ahead, confirmed signed by human"
+  Following 95%-convergence audit; principle filter applied across 15 packs;
+  data-driven refinements on Packs J + K from [PLATFORM] production data
+  on #255 + #273; SoC table aligned; cross-repo retirements scheduled;
+  v0.10.5 milestone created (#14) with 26 in-scope issues + 1 PR.
+
+# Approval flow:
+#   1. Review each issue's hypothesis / proves / required_modes / human_verify
+#      lines; flip `approved: true` per item or annotate revision request.
+#   2. Review each `registry_changes_approved` new check definition; flip
+#      `approved: true` per check.
+#   3. Review each `dod_changes_approved` entry (features whose DoD weights
+#      change). None proposed this cycle.
+#   4. When every line is `approved: true`, write `approved_at` (UTC ISO 8601)
+#      + `approver` + `approval_source` at the top.
+#   5. `make release-provision SCOPE=tests3/releases/260427-k8s-stabilize/scope.yaml`
+#      transitions plan → develop.
+
+# ── OBJECTIVES ────────────────────────────────────────────────────────
+
+scope_approved:
+
+  - issue: chart-deploy-shape-restored
+    hypothesis: true       # 6 chart-template restorations + values cleanup. Each fix extends an existing chart pattern (tolerations blocks, helm.sh/hook annotations, mc ready, hasKey guard, vexa.fullname helper). No new idioms. Restoration + extension, not invention.
+    proves: true           # Six grep + script checks: tolerations propagated, upgrade-twice-no-immutable, fresh-install-buckets-present, capacityReserve-zero-honoured, NetworkPolicy-tx-gateway-present, no-hardcoded-release-name.
+    required_modes: true   # [helm] — chart contracts are helm-canonical.
+    human_verify: true     # 6 manual checklist items: tainted-cluster install, double-upgrade, fresh-install bucket check, replicas-zero render, tx-gateway egress, non-default release name.
+
+  - issue: bot-pod-scheduling-and-storage-env
+    hypothesis: true       # B.1 runtime-api schema accepts native K8s pod-spec keys; B.2 chart values default from new global.botNodeSelector / global.botTolerations; B.3 vexa.botStorageEnv helper mirrors meeting-api secretKeyRef pattern. Both halves must land together (schema fix + chart values fix).
+    proves: true           # Three checks: schema-accepts-K8s-keys (lite/compose/helm static grep on runtime-api), bot-pod-scheduling-from-profile (helm render-time grep), bot-pod-recording-env-propagated (helm render-time grep).
+    required_modes: true   # [helm, compose] — helm for chart contract, compose for end-to-end recording upload validation.
+    human_verify: true     # 3 manual items: tainted-bot-pool dispatch, env exec, end-to-end recording.
+
+  - issue: redis-client-robustness-layered
+    hypothesis: true       # L1 bounded socket config × ~5 services + L2 task-restart supervisor + L3 lag-aware liveness + L4 /readyz startup gate (no silent-degraded mode) + L5 AOF + bgsave-error PAIRED via template-time required guard. Closes #267 + #248 + #269.
+    proves: true           # Six checks: hardened-timeouts (lite/compose/helm grep), collector-liveness (compose), readyz-gates-consumer (compose), runtime-api-startup-retry (compose), recovers-after-redis-kill (compose), AOF-and-bgsave-paired (helm render-time required guard).
+    required_modes: true   # [compose, helm] — compose for chaos chains, helm for chart-render config pairing.
+    human_verify: true     # 3 manual items: redis-pod-kill recovery, delayed-redis startup readiness, force-unsafe-config render.
+
+  - issue: bot-lifecycle-orphan-pod-prevention
+    hypothesis: true       # D.1 runtime-api returns pod NAME (not UID) for container_id; D.2 BackgroundTask → outbox via Redis Stream (260421 Pack J pattern reuse); D.3 entrypoint `wait $NODE_PID` (PR #260 already implements; needs review + merge).
+    proves: true           # Three checks: container-id-is-name (static grep), durable-DELETE-retry (compose chaos), browser-session-terminates-on-node-exit (compose integration).
+    required_modes: true   # [compose] for chaos + integration tests.
+    human_verify: true     # 2 manual items: 20-bot scale + brief runtime-api blip; SIGKILL node from inside browser-session pod.
+
+  - issue: recording-durability-across-restart
+    hypothesis: true       # E.1 chunk-finalize outbox via Redis Stream + idempotent consumer; E.1-sibling sweep_unfinalized_recordings retires platform cronjob-recording-reconciler; E.2 Zoom incremental upload re-applied + performGracefulLeave reorder; E.3.1 REMOVE _delayed_stop_finalizer (redundant after 260421 Pack J); E.3.2 sweep_stale_stopping retires platform stuck-stopping cronjob.
+    proves: true           # Six checks: finalize-survives-restart (compose chaos), outbox-consumer-idempotent (lite/compose), zoom-incremental-upload-present (lite/compose grep), graceful-leave-uploads-first (lite/compose grep), delayed_stop_finalizer-removed (lite/compose grep), stale-stopping-sweep-recovers (compose chaos).
+    required_modes: true   # [compose] for chaos chains.
+    human_verify: true     # 3 manual items: meeting-api restart mid-record, Zoom 30s-abort, runtime-api blackhole + meeting-api restart sequence.
+
+  - issue: helm-prod-shape-smoke-matrix
+    hypothesis: true       # F.1 ephemeral cluster (LKE or kind) with bot-pool taints + helm install + image bump + 30s-abort meeting + assertion harness; F.2 static-render variant for per-PR CI; F.3 once green, smoke matrix gains `helm-prod-shape` row alongside compose/lite/helm. Platform contributes the scaffold during develop stage.
+    proves: true           # One check: HELM_PROD_SHAPE_VALIDATES (rolls up the others through scenario-based assertion harness).
+    required_modes: true   # [helm] — only mode that exercises chart-shape end-to-end.
+    human_verify: true     # 1 manual item: review assertion harness output against an ephemeral cluster.
+    gap_analysis: true     # "helm mode renders + DoDs but doesn't exercise deployment-lifecycle shape (multiple upgrades, image bumps forcing Job recreation, tainted nodes, abrupt-stop meetings)." Accurate.
+    new_checks: true       # HELM_PROD_SHAPE_VALIDATES — rolls up Pack A+B+D+E+I assertions in one matrix entry.
+
+  - issue: bot-pod-log-capture-compliance-coupled
+    hypothesis: true       # G.1 stdout structured-JSON discipline; G.2 runtime-api kubectl-logs capture into meetings.data.bot_logs JSONB (default ON, 50KB cap, retention-coupled to data_retention_days); G.3 --previous for crashes; G.4 opt-in long-lived aggregator with documented retention trade-off; G.5 docs.
+    proves: true           # Four checks: structured-JSON (lite static grep), captures-logs-pre-reap (compose integration), purged-with-meeting (compose retention test), bounded-size (compose).
+    required_modes: true   # [compose] for the runtime-api capture + retention-purge test paths; [lite] for static-grep.
+    human_verify: true     # 3 manual items: SIGKILL bot + verify JSONB, verbose bot + 50KB cap check, retention-purge run + verify cleanup.
+
+  - issue: post-meeting-aggregation-state-machine
+    hypothesis: true       # **MIGRATION-FREE.** H.1 retry-on-5xx in meeting-api HTTP-client wrapper (one place, one policy). H.2 NO PG enum migration — discrimination via `data.aggregation_failure_class` (new key in existing JSONB column) + Python `AggregationFailureClass` enum class + single typed-helper write path enforced by static-grep check (H.6). H.3 separate `meeting.aggregation_failed` + `meeting.aggregation_failed_permanent` webhook events (app-level). H.4 idle_loop sweep query uses existing columns + JSONB key. Industry-best-practice fault isolation through application-layer typed discriminator; same robustness as PG enum without the schema cost.
+    proves: true           # Four checks: transient-5xx-retried-at-transport-layer (lite/compose grep), aggregation-failure-class-via-typed-helper (lite/compose static grep), aggregation-failed-vs-user-failed-distinct (compose integration on JSONB + webhook events), 5xx-retries-not-fails (compose chaos).
+    required_modes: true   # [compose] for state-machine integration + chaos.
+    human_verify: true     # 2 manual items: tx-gateway restart mid-aggregation (assert no PG migration runs); 8-day stress for terminal transition (JSONB-discriminator flip).
+    gap_analysis: true     # "No automated check exercises post_meeting + tx-gateway-restart concurrently. Compose smoke matrix tests aggregate_transcription happy-path only; no chaos-tier test kills tx-gateway during a post_meeting flow." Accurate.
+    new_checks: true       # TRANSIENT_5XX_RETRIED_AT_TRANSPORT_LAYER, AGGREGATION_FAILURE_CLASS_VIA_TYPED_HELPER, AGGREGATION_FAILED_VS_USER_FAILED_DISTINCT, POST_MEETING_5XX_RETRIES_NOT_FAILS.
+
+  - issue: chart-availability-defaults-stateless
+    hypothesis: true       # Extend 260421 Pack G apiGateway pattern to meetingApi, runtimeApi, adminApi, dashboard, transcriptionGateway. I.1 replicaCount: 2; I.2 PDB minAvailable: 1; I.3 readinessProbe + livenessProbe; I.4 terminationGracePeriodSeconds: 30. State-bearing services (PG/Redis/MinIO) explicitly NOT touched.
+    proves: true           # Four checks: replicaCount-≥-2 (helm grep), have-PDB (helm grep), have-probes (helm grep), grace-period (helm grep).
+    required_modes: true   # [helm] — chart contract.
+    human_verify: true     # 2 manual items: render-default + grep, node-drain availability test.
+    gap_analysis: true     # "OSS validate matrix renders chart but doesn't enforce industry-best-practice availability defaults across stateless service set; no existing check requires replicaCount ≥ 2 / PDB presence / probe presence." Accurate.
+    new_checks: true       # CHART_STATELESS_SERVICES_REPLICACOUNT_AT_LEAST_2, CHART_STATELESS_SERVICES_HAVE_PDB, CHART_STATELESS_SERVICES_HAVE_PROBES, CHART_STATELESS_SERVICES_GRACE_PERIOD.
+
+  # ── Project-owner expansion 2026-04-27 (Packs J/K/L/M/N/O) ─────────
+  # Reframes cycle from "k8s/Helm/platform robustness" to "production
+  # robustness across chart + platform + bot lifecycle." Six packs added
+  # after [PLATFORM] 11:13Z lock. Migration-free across all six.
+
+  - issue: bot-exit-classification-refinement
+    hypothesis: true       # **MIGRATION-FREE.** Extend `MeetingCompletionReason` Python enum with 7 abnormal-exit values (BOT_CRASHED, OOM_KILLED, ZERO_SEGMENTS, NETWORK_LOST, ADMISSION_BUTTON_NOT_FOUND, AUDIO_PIPELINE_FAILED, KICKED_FROM_MEETING). J.4 replaces "default to completed if nothing says failed" with "completed REQUIRES positive proof of success." J.6 covers symmetric #233 dual (clean exits → completed, NOT silently failed). Pending [PLATFORM] data on #255 (volume + sample IDs + pod-event correlation) before final catalog locks. Bot-side defensive selectors for Zoom/Meet/Teams DOM stay allowed (legitimate non-deterministic-external case); upstream classifier must be deterministic.
+    proves: true           # Three checks: BOT_ABNORMAL_EXIT_CATALOG_COMPLETE (lite/compose static grep), BOT_EXIT_CLASSIFICATION_REQUIRES_POSITIVE_SUCCESS (compose chaos), BOT_CLEAN_EXIT_NOT_MISCLASSIFIED_FAILED (compose).
+    required_modes: true   # [compose] for chaos chains across all abnormal-exit modes.
+    human_verify: true     # 3 manual items: SIGKILL bot mid-active, admission-flow failure fixture, clean meeting end-to-end.
+    gap_analysis: true     # "Today's classification taxonomy has only 7 MeetingCompletionReason values; runtime-api defaults to 'completed' on any clean exit without checking transcripts. Matrix has zero chaos tests asserting bot-crashed → failed or zero-segments → failed." Accurate.
+    new_checks: true       # BOT_ABNORMAL_EXIT_CATALOG_COMPLETE, BOT_EXIT_CLASSIFICATION_REQUIRES_POSITIVE_SUCCESS, BOT_CLEAN_EXIT_NOT_MISCLASSIFIED_FAILED.
+
+  - issue: browser-session-idle-eviction
+    hypothesis: true       # Investigation-first. K.1 audit gateway /touch semantics; K.2 reconcile_browser_sessions sweep (K8s pod list vs Redis state index); K.3 Prometheus metric + alert; K.4 compose-mode integration test. Pending [PLATFORM] data on #273 (pod count vs state count + longest-lived pod ages + idle_loop log lines) before scope finalizes — investigation may surface different root cause.
+    proves: true           # Two checks: BROWSER_SESSION_IDLE_EVICTION_FIRES (compose), BROWSER_SESSION_K8S_VS_REDIS_RECONCILED (compose).
+    required_modes: true   # [compose] for integration + chaos.
+    human_verify: true     # 2 manual items: dispatch-and-leave-alone idle test, manually-deleted-state-entry orphan reconciliation test.
+    gap_analysis: true     # "No automated check exercises browser-session idle-eviction path end-to-end. Compose smoke matrix tests dispatch + transcribe but doesn't test 'create then leave alone'." Accurate.
+    new_checks: true       # BROWSER_SESSION_IDLE_EVICTION_FIRES, BROWSER_SESSION_K8S_VS_REDIS_RECONCILED.
+
+  - issue: slim-meeting-list-endpoint
+    hypothesis: true       # L.1 explicit projection of dashboard-consumed fields (audited from meeting-card.tsx + ai-chat-panel.tsx + export.ts) — name/title, completion_reason, participants[:3], notes_preview[:120], languages, last_transition (single, not array), duration_seconds, has_recording. ~1KB per meeting (vs 35KB today). L.2 detail endpoint unchanged. L.3 ?include=data backward-compat opt-in. L.4 paired with #264 dashboard limit:50→10 + infinite-scroll. L.5 static + dynamic checks. No infrastructure change; no DB migration; pure REST projection.
+    proves: true           # Two checks: BOTS_LIST_ENDPOINT_SLIM (lite/compose static grep), BOTS_LIST_PAYLOAD_SIZE_BOUNDED (compose dynamic).
+    required_modes: true   # [compose] for fixture + payload-size assertion.
+    human_verify: true     # 3 manual items: 50-meeting fixture + payload size, ?include=data backward-compat, detail endpoint unchanged.
+
+  - issue: meetings-data-row-size-monitoring
+    hypothesis: true       # Pure observability. M.1 Prometheus histogram `meetings_data_row_size_bytes` sampled via meeting-api periodic task running pg_column_size(data); M.2 alert MeetingsDataRowSizeP99High at 200KB threshold (best-guess, develop-stage adjusts); M.3 ship-stage follow-up document for the structural cleanup cycle (promote queried JSONB keys to columns, split audit-log arrays). Pure observability addition; no DB migration; no application logic change.
+    proves: true           # One check: MEETINGS_DATA_ROW_SIZE_METRIC_EXPORTED (compose+helm).
+    required_modes: true   # [helm] for chart-rendered alert + [compose] for metric exposure.
+    human_verify: true     # 2 manual items: chart render with monitoring enabled + verify alert present, metric scrape from meeting-api.
+    gap_analysis: true     # "No existing telemetry monitors row size growth; operators discover bloated rows only via slow queries / TOAST-overflow incidents." Accurate.
+    new_checks: true       # MEETINGS_DATA_ROW_SIZE_METRIC_EXPORTED.
+
+  - issue: bot-server-contract-parity-checks
+    hypothesis: true       # N.1 static contract test between bot-side BotConfig (TS types) and meeting-api MeetingCreate Pydantic schema — snapshot test that fails on rename / type-shape drift at PR time. N.2 same shape for MeetingStatus enum mirror across meeting-api ↔ runtime-api ↔ bot. N.3 close #168 + #169 GH issues post-merge ('surgical fix shipped earlier; structural follow-on landed in 260427 Pack N'). Pure prevention; consumer-driven contract tests; ~½ d. Closes #169-class regression family at PR time.
+    proves: true           # Two checks: BOT_SERVER_CONFIG_CONTRACT_PARITY (all modes static), MEETING_STATUS_ENUM_CROSS_SERVICE_PARITY (all modes static).
+    required_modes: true   # [lite, compose, helm] — contract tests are mode-independent static checks.
+    human_verify: true     # 1 manual item: rename a Pydantic field, run check, verify it fails with diff.
+    gap_analysis: true     # "Today's CI matrix has zero contract tests between bot ↔ meeting-api. The #169 surgical fix was a one-instance fix; the next field rename has nothing stopping it from regressing." Accurate.
+    new_checks: true       # BOT_SERVER_CONFIG_CONTRACT_PARITY, MEETING_STATUS_ENUM_CROSS_SERVICE_PARITY.
+
+  - issue: make-all-non-interactive-shell
+    hypothesis: true       # O.1 testing/run_vexa_interaction.sh:222-231 adds `[ -t 0 ]` guard; if stdin is not TTY, skip interactive prompt loop and exit cleanly. ~5-line shell diff. O.2 registry check: `make all < /dev/null` exits cleanly within bounded wall-clock window (10 min) without unbounded log growth. Pure CI/dev-workflow hygiene; documented commands must work in non-interactive shells.
+    proves: true           # One check: MAKE_ALL_NON_INTERACTIVE_SHELL_EXITS_CLEAN (compose).
+    required_modes: true   # [compose] for end-to-end `make all` invocation.
+    human_verify: true     # 1 manual item: fresh-clone-+-redirected-stdin run, expect clean exit within 10 min.
+    gap_analysis: true     # "No CI test exercises `make all` with redirected stdin today; contributors discover the hang only when running in CI or nohup." Accurate.
+    new_checks: true       # MAKE_ALL_NON_INTERACTIVE_SHELL_EXITS_CLEAN.
+
+# ── DoD CHANGES ───────────────────────────────────────────────────────
+# No existing feature DoDs are reweighted, removed, or split this cycle.
+# All scope changes are NEW DoDs landing as new checks under
+# registry_changes_approved below. If develop-stage discovers an existing
+# DoD that conflicts with the new shape, plan must be revisited.
+
+dod_changes_approved: []
+
+# ── REGISTRY CHANGES ──────────────────────────────────────────────────
+# 28 new checks across the cycle. Type-mix: ~14 grep (chart render-time
+# + static source), ~10 script (compose chaos + dynamic integration),
+# ~4 multi-mode (the "PRESENT in lite, INTEGRATED in compose" pattern).
+# Modes follow each check's natural canonical mode per the deployments
+# block in scope.yaml.
+
+registry_changes_approved:
+
+  # ── Pack A: Helm chart shape ──
+  - id: HELM_TOLERATIONS_PROPAGATED
+    type: script
+    script: tests/chart-tolerations-propagated.sh
+    modes: [helm]
+    state: stateless
+    max_duration_sec: 30
+    rationale: |
+      Render the chart with `--set global.tolerations='[{key: workload, operator: Equal, value: bot, effect: NoSchedule}]'`;
+      assert every `kind: Deployment | StatefulSet | Job` template
+      includes a matching tolerations block. Specifically catches
+      the 0.10.4 regression where deployment-redis.yaml,
+      deployment-pgbouncer.yaml, job-migrations.yaml dropped the
+      `{{- with .Values.global.tolerations }}` blocks.
+    approved: true
+
+  - id: HELM_UPGRADE_TWICE_NO_JOB_IMMUTABLE
+    type: script
+    script: tests/chart-upgrade-twice-no-immutable.sh
+    modes: [helm]
+    state: stateful
+    mutates: [release, jobs]
+    max_duration_sec: 180
+    rationale: |
+      `helm install` then `helm upgrade --set meetingApi.image.tag=<bumped>`;
+      assert the upgrade succeeds; zero `Job spec immutable` errors.
+      Validates A.2 (migrations Job becomes Helm hook) regression.
+    approved: true
+
+  - id: HELM_FRESH_INSTALL_BUCKETS_PRESENT
+    type: script
+    script: tests/chart-minio-init-buckets-present.sh
+    modes: [helm]
+    state: stateful
+    mutates: [minio-pvc]
+    max_duration_sec: 180
+    rationale: |
+      Fresh `helm install` on a cluster with intentionally-delayed
+      MinIO PVC provisioning; wait for Job completion; assert
+      `mc ls vexa/` shows expected buckets. Closes A.3 minio-init
+      Job racing MinIO startup.
+    approved: true
+
+  - id: HELM_CAPACITY_RESERVE_ZERO
+    type: grep
+    file: deploy/helm/charts/vexa/templates/deployment-capacity-reserve.yaml
+    must_match: 'hasKey \.Values\.capacityReserve "replicas"'
+    modes: [helm]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      Static grep asserting the capacityReserve template uses an
+      explicit `hasKey` check rather than the falsy-zero `default 3`
+      pattern. Closes A.4.
+    approved: true
+
+  - id: HELM_NETWORK_POLICY_TX_GATEWAY
+    type: grep
+    file: deploy/helm/charts/vexa/templates/networkpolicy.yaml
+    must_match: 'allow-meeting-api[\s\S]*transcription-gateway'
+    multiline: true
+    modes: [helm]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      Static grep asserting allow-meeting-api NetworkPolicy includes
+      a transcription-gateway egress target. Closes A.5.
+    approved: true
+
+  - id: HELM_NO_HARDCODED_RELEASE_NAME
+    type: script
+    script: tests/chart-no-hardcoded-release-name.sh
+    modes: [helm]
+    state: stateless
+    max_duration_sec: 30
+    rationale: |
+      Render chart with non-default release name (`helm template vexa-prod ...`);
+      grep rendered output for `vexa-platform-vexa-` strings outside
+      `_helpers.tpl`. Should be zero hits. Closes A.6.
+    approved: true
+
+  # ── Pack B: Bot pod scheduling + storage env ──
+  - id: RUNTIME_PROFILE_SCHEMA_ACCEPTS_K8S_KEYS
+    type: script
+    script: tests/runtime-api-profile-schema-accepts-k8s-keys.sh
+    modes: [lite, compose, helm]
+    state: stateless
+    max_duration_sec: 15
+    rationale: |
+      Load a runtime-api profile YAML containing top-level
+      `nodeSelector`, `tolerations`, `affinity` keys; assert profile
+      validation accepts them without error. Closes B.1.
+    approved: true
+
+  - id: BOT_POD_SCHEDULING_FROM_PROFILE
+    type: script
+    script: tests/chart-bot-pod-scheduling.sh
+    modes: [helm]
+    state: stateless
+    max_duration_sec: 15
+    rationale: |
+      Render chart with `--set global.botNodeSelector='{workload: bot}' --set global.botTolerations='[{key: workload, value: bot}]'`;
+      assert rendered `vexa-runtime-profiles` ConfigMap profiles.yaml
+      contains the populated nodeSelector + tolerations under
+      `meeting:` and `browser-session:`. Closes B.2.
+    approved: true
+
+  - id: BOT_POD_RECORDING_ENV_PROPAGATED
+    type: script
+    script: tests/chart-bot-pod-recording-env.sh
+    modes: [helm]
+    state: stateless
+    max_duration_sec: 15
+    rationale: |
+      Render chart with default storage config; assert rendered
+      `vexa-runtime-profiles` ConfigMap profiles.yaml contains
+      RECORDING_ENABLED, STORAGE_BACKEND, MEETING_API_URL,
+      MINIO_BUCKET (or S3_*) in the meeting + browser-session env.
+      Closes B.3.
+    approved: true
+
+  # ── Pack C: Redis client robustness ──
+  - id: REDIS_CLIENT_HARDENED_TIMEOUTS
+    type: grep
+    file: services
+    must_match: 'aioredis\.from_url\([^)]*socket_timeout[^)]*health_check_interval'
+    multiline: true
+    recursive: true
+    modes: [lite, compose, helm]
+    state: stateless
+    max_duration_sec: 10
+    rationale: |
+      Recursive grep across services/* for `aioredis.from_url(...)`
+      constructors; require socket_timeout AND health_check_interval
+      keywords present. Closes C.1.
+    approved: true
+
+  - id: MEETING_API_COLLECTOR_LIVENESS
+    type: script
+    script: tests/meeting-api-collector-liveness.sh
+    modes: [compose]
+    state: stateful
+    mutates: [redis_streams, meeting-api-pod]
+    max_duration_sec: 90
+    rationale: |
+      Push 200 entries to `transcription_segments` stream; do not
+      consume; `GET /health/collector` should return 503 within 60 s
+      (lag > 100 + max_consumer_idle > 60s threshold). Closes C.2.
+    approved: true
+
+  - id: MEETING_API_READYZ_GATES_CONSUMER
+    type: script
+    script: tests/meeting-api-readyz-gates-consumer.sh
+    modes: [compose]
+    state: stateful
+    mutates: [redis-pod, meeting-api-pod]
+    max_duration_sec: 120
+    rationale: |
+      Start meeting-api with Redis NOT yet reachable (delay Redis
+      startup); poll `/readyz`; expect 503 until consumer task is
+      alive; expect 200 within 5 s of consumer starting. Closes C.4.
+    approved: true
+
+  - id: RUNTIME_API_REDIS_STARTUP_RETRY
+    type: script
+    script: tests/runtime-api-redis-startup-retry.sh
+    modes: [compose]
+    state: stateful
+    mutates: [redis-pod, runtime-api-pod]
+    max_duration_sec: 90
+    rationale: |
+      Start runtime-api with Redis not yet ready; expect zero
+      CrashLoop in the first 60 s; bring Redis up; expect Ready
+      within 30 s. Closes #248.
+    approved: true
+
+  - id: MEETING_API_COLLECTOR_RECOVERS_AFTER_REDIS_KILL
+    type: script
+    script: tests/meeting-api-collector-recovers-after-redis-kill.sh
+    modes: [compose]
+    state: stateful
+    mutates: [redis-pod, transcriptions-table]
+    max_duration_sec: 180
+    rationale: |
+      Start meeting + bot streaming; kill Redis pod; wait for Redis
+      Ready; assert `transcriptions` table writes resume within 10 s
+      of recovery. Today this would silently fail (consumer hung).
+      Extends platform's existing `r1-redis-pod-kill-recovery.sh`
+      from "no 5xx during outage" to "post-recovery PG-write resumes."
+    approved: true
+
+  - id: REDIS_AOF_AND_BGSAVE_PAIRED
+    type: script
+    script: tests/chart-redis-aof-bgsave-paired.sh
+    modes: [helm]
+    state: stateless
+    max_duration_sec: 15
+    rationale: |
+      Render chart three times: (a) defaults — assert AOF + bgsave
+      flags both present; (b) `--set redis.config.bgsaveErrorBlocksWrites=true`
+      WITHOUT disabling AOF — assert helm template exits non-zero
+      with `required` error; (c) explicit AOF=off + bgsave=no — same
+      `required` error. Closes C.5b paired-config principle.
+    approved: true
+
+  # ── Pack D: Bot lifecycle ──
+  - id: K8S_BACKEND_CONTAINER_ID_IS_NAME
+    type: script
+    script: tests/runtime-api-container-id-is-name.sh
+    modes: [lite, compose, helm]
+    state: stateless
+    max_duration_sec: 15
+    rationale: |
+      Unit test against runtime-api Kubernetes backend: dispatch a
+      pod (mocked or real); assert the response's `container_id`
+      equals `pod.metadata.name`, NOT `pod.metadata.uid`. Closes
+      D.1 / #261.
+    approved: true
+
+  - id: BOT_DELETE_DURABLE_RETRY
+    type: script
+    script: tests/bot-delete-durable-retry.sh
+    modes: [compose]
+    state: stateful
+    mutates: [bot-pod, redis_streams, runtime-api-pod]
+    max_duration_sec: 240
+    rationale: |
+      Dispatch bot, blackhole runtime-api (`docker pause`), DELETE
+      bot via meeting-api, wait IDLE_CHECK_INTERVAL, restore runtime-api,
+      assert pod is reaped within IDLE_CHECK_INTERVAL + delivery_window.
+      Mirrors 260421 Pack J chaos shape on a different surface.
+      Closes D.2 / #266.
+    approved: true
+
+  - id: BROWSER_SESSION_POD_TERMINATES_ON_NODE_EXIT
+    type: script
+    script: tests/browser-session-terminates-on-node-exit.sh
+    modes: [compose]
+    state: stateful
+    mutates: [browser-session-pod]
+    max_duration_sec: 90
+    rationale: |
+      Dispatch browser-session bot; `docker exec <pod> kill -9 <node-pid>`;
+      assert pod transitions to `Succeeded` (or `Completed`) within
+      60 s. Closes D.3 / #258 (covered by PR #260).
+    approved: true
+
+  # ── Pack E: Recording durability ──
+  - id: RECORDING_FINALIZE_SURVIVES_POD_RESTART
+    type: script
+    script: tests/recording-finalize-survives-pod-restart.sh
+    modes: [compose]
+    state: stateful
+    mutates: [bot-pod, meeting-api-pod, meetings-table, redis_streams]
+    max_duration_sec: 240
+    rationale: |
+      Dispatch bot mid-recording; `docker restart meeting-api`
+      during chunk uploads; restore; bot continues uploading
+      `is_final=true` chunk; assert `meetings.data.recordings[].media_files`
+      populates within 30 s of meeting-api Ready. Closes E.1 / #268.
+    approved: true
+
+  - id: RECORDING_FINALIZE_OUTBOX_CONSUMER_IDEMPOTENT
+    type: grep
+    file: services/meeting-api/meeting_api/recordings.py
+    must_match: 'idempotency_key|chunk_seq.*media_type.*session_uid|XADD.*recording_finalizations'
+    multiline: true
+    modes: [lite, compose]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      Static grep asserting the chunk-finalize entry path uses the
+      Redis Stream outbox primitive (XADD recording_finalizations)
+      and the consumer keys idempotency by chunk_seq + media_type +
+      session_uid. Closes E.1 architecture.
+    approved: true
+
+  - id: ZOOM_INCREMENTAL_UPLOAD_PRESENT
+    type: grep
+    file: services/vexa-bot/core/src/platforms/zoom
+    must_match: 'recorder\.start\(10\d{3}\)|recorder\.start\(\s*30\d{3}\s*\)'
+    recursive: true
+    modes: [lite, compose]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      Static grep across services/vexa-bot/core/src/platforms/zoom/
+      asserting `recorder.start(<10s-30s timeslice>)` is present
+      (incremental upload re-applied). Matches 10000-10999 ms or
+      30000-30999 ms range. Closes E.2 / #272#1.
+    approved: true
+
+  - id: BOT_GRACEFUL_LEAVE_UPLOADS_FIRST
+    type: script
+    script: tests/bot-graceful-leave-uploads-first.sh
+    modes: [lite, compose]
+    state: stateless
+    max_duration_sec: 10
+    rationale: |
+      AST-walk over services/vexa-bot/core/src/platforms/zoom/leave.ts
+      (and gmeet/teams equivalents); assert audio-upload call comes
+      before UI-leave / voice-agent-cleanup / mux. Order matters
+      under SHUTDOWN_TIMEOUT_MS pressure. Closes E.2 reordering.
+    approved: true
+
+  - id: DELAYED_STOP_FINALIZER_REMOVED
+    type: grep
+    file: services/meeting-api/meeting_api/meetings.py
+    must_not_match: '_delayed_stop_finalizer|delayed_stop_finalizer'
+    modes: [lite, compose]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      Static grep asserting `_delayed_stop_finalizer` is fully
+      removed (not just unused). Negative-grep: zero hits in
+      meetings.py. Closes E.3.1.
+    approved: true
+
+  - id: STALE_STOPPING_SWEEP_RECOVERS_MEETING
+    type: script
+    script: tests/stale-stopping-sweep-recovers-meeting.sh
+    modes: [compose]
+    state: stateful
+    mutates: [bot-pod, meeting-api-pod, runtime-api-pod, meetings-table]
+    max_duration_sec: 240
+    rationale: |
+      Dispatch bot; DELETE (status → stopping); `docker pause runtime-api`
+      (block exit-callback); restart meeting-api during would-be 90s
+      window; restore runtime-api; assert meeting transitions to
+      `completed` within IDLE_CHECK_INTERVAL via stale_stopping
+      sweep with `completion_source: stale_stopping_sweep`. Closes E.3.2.
+    approved: true
+
+  # ── Pack F: helm-prod-shape smoke matrix ──
+  - id: HELM_PROD_SHAPE_VALIDATES
+    type: script
+    script: tests3/release/checks/helm-prod-shape/run.sh
+    modes: [helm]
+    state: stateful
+    mutates: [ephemeral-cluster, helm-release, bot-pods]
+    max_duration_sec: 1800
+    rationale: |
+      Ephemeral cluster (LKE or kind+simulated taints) with
+      `workload=bot:NoSchedule` + untainted base pool. Sequence:
+      helm install → helm upgrade with bumped image tag (forces
+      Job recreate) → dispatch bot → abort within 30 s → assertion
+      harness: zero `Pending` pods, zero `Job spec immutable`,
+      recording chunk(s) in MinIO, JSONB populated, no orphan pods.
+      Platform contributes scaffold during develop stage.
+    approved: true
+
+  # ── Pack G: Bot pod log capture ──
+  - id: BOT_LOGS_STRUCTURED_JSON
+    type: script
+    script: tests/bot-logs-structured-json.sh
+    modes: [lite]
+    state: stateless
+    max_duration_sec: 10
+    rationale: |
+      AST-walk over services/vexa-bot/core/src/; for each call to
+      `console.log` / `process.stdout.write`, assert the argument
+      is a structured object literal serialized as JSON, NOT an
+      embedded-prefix string like `"[Graceful Leave] ..."`. Closes G.1.
+    approved: true
+
+  - id: RUNTIME_API_CAPTURES_LOGS_PRE_REAP
+    type: script
+    script: tests/runtime-api-captures-logs-pre-reap.sh
+    modes: [compose]
+    state: stateful
+    mutates: [bot-pod, meetings-table]
+    max_duration_sec: 120
+    rationale: |
+      Dispatch bot; SIGKILL it; assert
+      `meetings.data.bot_logs` JSONB populates within 30 s of pod
+      death; assert `--previous` content present (pre-restart
+      container logs captured). Closes G.2 + G.3.
+    approved: true
+
+  - id: BOT_LOGS_PURGED_WITH_MEETING
+    type: script
+    script: tests/bot-logs-purged-with-meeting.sh
+    modes: [compose]
+    state: stateful
+    mutates: [meetings-table]
+    max_duration_sec: 60
+    rationale: |
+      Mark a meeting for retention purge; run purger; assert
+      `bot_logs` JSONB is purged together with the row. Compliance
+      gate. Closes G.2 retention coupling.
+    approved: true
+
+  - id: BOT_LOGS_BOUNDED_SIZE
+    type: script
+    script: tests/bot-logs-bounded-size.sh
+    modes: [compose]
+    state: stateful
+    mutates: [meetings-table]
+    max_duration_sec: 90
+    rationale: |
+      Dispatch a verbose bot (induce log-volume bursts); assert
+      `bot_logs` JSONB stays under 50 KB; on overflow, assert
+      truncation marker present + head-N + tail-N preserved.
+      Closes G.2 size cap.
+    approved: true
+
+  # ── Pack H: post_meeting state-machine ──
+  - id: TRANSIENT_5XX_RETRIED_AT_TRANSPORT_LAYER
+    type: grep
+    file: services/meeting-api/meeting_api/http_client.py
+    must_match: 'retry_on_5xx|status_code.*500.*retry|exponential_backoff'
+    multiline: true
+    modes: [lite, compose]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      Static grep asserting retry-on-5xx policy lives in the
+      meeting-api HTTP-client wrapper, not special-cased per call
+      site. One place, one policy. Closes H.1.
+    approved: true
+
+  - id: AGGREGATION_FAILURE_CLASS_VIA_TYPED_HELPER
+    type: grep
+    file: services/meeting-api/meeting_api
+    must_match: "data\\['aggregation_failure_class'\\]|data\\.get\\('aggregation_failure_class'\\)|data\\[\"aggregation_failure_class\"\\]"
+    multiline: true
+    recursive: true
+    modes: [lite, compose]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      Static grep enforcing single-write-path discipline: every read or
+      write of `data['aggregation_failure_class']` must occur in the
+      canonical helper module (post_meeting.py:set_aggregation_failure_class
+      and the matching getter). Files outside that module that touch the
+      key fail the check. Replaces what a PG enum constraint would have
+      enforced at the schema layer; instead enforced at the application
+      layer + grep gate. Closes H.2 typed-helper invariant.
+    approved: true
+
+  - id: AGGREGATION_FAILED_VS_USER_FAILED_DISTINCT
+    type: script
+    script: tests/aggregation-failed-vs-user-failed-distinct.sh
+    modes: [compose]
+    state: stateful
+    mutates: [meetings-table, transcription-gateway-pod]
+    max_duration_sec: 240
+    rationale: |
+      Two sub-tests, both end-to-end on the meetings table:
+      (a) User-meaningful failure (e.g. bot can't admit): assert
+          status='failed', `data.aggregation_failure_class` UNSET,
+          `meeting.failed` event fires.
+      (b) Transient-infra failure (tx-gateway restart past retry
+          budget): assert status='failed',
+          `data.aggregation_failure_class='transient_infra'`,
+          `meeting.aggregation_failed` event fires (NOT
+          `meeting.failed`).
+      Closes H.2 + H.3 distinction without any schema migration.
+    approved: true
+
+  - id: POST_MEETING_5XX_RETRIES_NOT_FAILS
+    type: script
+    script: tests/post-meeting-5xx-retries-not-fails.sh
+    modes: [compose]
+    state: stateful
+    mutates: [meetings-table, transcription-gateway-pod]
+    max_duration_sec: 240
+    rationale: |
+      Run meeting; brief tx-gateway restart during aggregate_transcription;
+      assert call retries (H.1) AND meeting transitions to
+      `completed` once tx-gateway returns. No silent skip, no
+      premature `failed`. Closes the 2026-04-23 incident class.
+    approved: true
+
+  # ── Pack I: Chart availability defaults ──
+  - id: CHART_STATELESS_SERVICES_REPLICACOUNT_AT_LEAST_2
+    type: script
+    script: tests/chart-stateless-replicacount-at-least-2.sh
+    modes: [helm]
+    state: stateless
+    max_duration_sec: 15
+    rationale: |
+      Render chart with default values; for each stateless service
+      (meetingApi, runtimeApi, adminApi, dashboard,
+      transcriptionGateway), assert rendered Deployment has
+      `replicas: ≥ 2`. apiGateway already covered by 260421.
+      Closes I.1.
+    approved: true
+
+  - id: CHART_STATELESS_SERVICES_HAVE_PDB
+    type: script
+    script: tests/chart-stateless-have-pdb.sh
+    modes: [helm]
+    state: stateless
+    max_duration_sec: 15
+    rationale: |
+      Render chart with default values; for each stateless service,
+      assert a sibling `kind: PodDisruptionBudget` resource exists
+      with `minAvailable: 1`. Closes I.2.
+    approved: true
+
+  - id: CHART_STATELESS_SERVICES_HAVE_PROBES
+    type: script
+    script: tests/chart-stateless-have-probes.sh
+    modes: [helm]
+    state: stateless
+    max_duration_sec: 15
+    rationale: |
+      Render chart; for each stateless Deployment, assert both
+      `readinessProbe` and `livenessProbe` blocks present with
+      non-empty config. Closes I.3.
+    approved: true
+
+  - id: CHART_STATELESS_SERVICES_GRACE_PERIOD
+    type: grep
+    file: deploy/helm/charts/vexa/templates
+    must_match: 'terminationGracePeriodSeconds:\s*([3-9][0-9]|[1-9][0-9]{2,})'
+    recursive: true
+    modes: [helm]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      Static grep across stateless service templates asserting
+      `terminationGracePeriodSeconds: ≥ 30`. Closes I.4.
+    approved: true
+
+  # ── Pack J: Bot exit classification refinement ──
+  - id: BOT_ABNORMAL_EXIT_CATALOG_COMPLETE
+    type: grep
+    file: services/meeting-api/meeting_api/schemas.py
+    must_match: 'BOT_CRASHED|OOM_KILLED|ZERO_SEGMENTS|NETWORK_LOST|ADMISSION_BUTTON_NOT_FOUND|AUDIO_PIPELINE_FAILED|KICKED_FROM_MEETING'
+    multiline: true
+    modes: [lite, compose]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      Static grep asserting MeetingCompletionReason enum has been
+      extended with the abnormal-exit catalog. Closes J.1.
+    approved: true
+
+  - id: BOT_EXIT_CLASSIFICATION_REQUIRES_POSITIVE_SUCCESS
+    type: script
+    script: tests/bot-exit-classification-positive-success.sh
+    modes: [compose]
+    state: stateful
+    mutates: [bot-pod, meetings-table]
+    max_duration_sec: 240
+    rationale: |
+      Three sub-tests on the abnormal-exit catalog:
+      (a) SIGKILL bot mid-active → assert status='failed',
+          completion_reason='BOT_CRASHED' or 'OOM_KILLED'.
+      (b) Admission-fail fixture (no admit button) → assert status='failed',
+          completion_reason='ADMISSION_BUTTON_NOT_FOUND'.
+      (c) Bot runs but produces zero segments → assert status='failed',
+          completion_reason='ZERO_SEGMENTS'.
+      Closes J.4 — the "completed requires positive proof" invariant.
+    approved: true
+
+  - id: BOT_CLEAN_EXIT_NOT_MISCLASSIFIED_FAILED
+    type: script
+    script: tests/bot-clean-exit-completed.sh
+    modes: [compose]
+    state: stateful
+    mutates: [bot-pod, meetings-table]
+    max_duration_sec: 180
+    rationale: |
+      Run a clean meeting end-to-end (segments produced, admission
+      confirmed, clean exit code). Assert status='completed',
+      completion_reason='STOPPED' or unset, NOT 'failed'.
+      Closes J.6 — the dual #233 direction.
+    approved: true
+
+  # ── Pack K: Browser-session idle eviction ──
+  - id: BROWSER_SESSION_IDLE_EVICTION_FIRES
+    type: script
+    script: tests/browser-session-idle-eviction.sh
+    modes: [compose]
+    state: stateful
+    mutates: [browser-session-pod, redis-state]
+    max_duration_sec: 240
+    rationale: |
+      Dispatch a browser-session with idle_timeout overridden to 60s
+      via test profile; do NOT touch it; assert pod transitions to
+      Succeeded/Completed within (idle_timeout + 5×IDLE_CHECK_INTERVAL).
+      Closes K.4.
+    approved: true
+
+  - id: BROWSER_SESSION_K8S_VS_REDIS_RECONCILED
+    type: script
+    script: tests/browser-session-reconcile-k8s-vs-redis.sh
+    modes: [compose]
+    state: stateful
+    mutates: [browser-session-pod, redis-state]
+    max_duration_sec: 180
+    rationale: |
+      Dispatch browser-session; manually delete its Redis state-index
+      entry while leaving K8s pod running; wait IDLE_CHECK_INTERVAL;
+      assert reconcile_browser_sessions sweep reaps the orphan pod;
+      assert runtime_api_browser_session_pods_orphaned_total counter
+      increments. Closes K.2 + K.3.
+    approved: true
+
+  # ── Pack L: Slim meeting list endpoint ──
+  - id: BOTS_LIST_ENDPOINT_SLIM
+    type: grep
+    file: services/meeting-api/meeting_api/meetings.py
+    must_match: 'data_summary\s*=\s*\{|"data":\s*data_summary'
+    multiline: true
+    modes: [lite, compose]
+    state: stateless
+    max_duration_sec: 5
+    rationale: |
+      Static grep asserting list_user_bots returns explicit
+      data_summary projection, NOT raw m.data. Closes L.1.
+    approved: true
+
+  - id: BOTS_LIST_PAYLOAD_SIZE_BOUNDED
+    type: script
+    script: tests/bots-list-payload-size-bounded.sh
+    modes: [compose]
+    state: stateful
+    mutates: [meetings-table]
+    max_duration_sec: 60
+    rationale: |
+      Populate test fixture with 50 meetings (varied data shapes);
+      curl GET /bots?limit=50; assert response < 100KB total
+      (~2KB per meeting average); assert response does NOT contain
+      keys "status_transition", "recordings", "webhook_deliveries".
+      Closes L.5 + the slim-projection contract.
+    approved: true
+
+  # ── Pack M: meetings.data row-size monitoring ──
+  - id: MEETINGS_DATA_ROW_SIZE_METRIC_EXPORTED
+    type: script
+    script: tests/meetings-data-row-size-metric.sh
+    modes: [compose, helm]
+    state: stateful
+    mutates: [meetings-table]
+    max_duration_sec: 30
+    rationale: |
+      Compose: scrape /metrics on meeting-api; assert
+      meetings_data_row_size_bytes histogram is exposed with non-empty
+      buckets. Helm: render chart with monitoring.prometheusRule.enabled=true;
+      assert MeetingsDataRowSizeP99High alert is present in PrometheusRule
+      manifest. Closes M.1 + M.2.
+    approved: true
+
+  # ── Pack N: Bot/Server contract parity checks ──
+  - id: BOT_SERVER_CONFIG_CONTRACT_PARITY
+    type: script
+    script: tests/bot-server-config-contract-parity.sh
+    modes: [lite, compose, helm]
+    state: stateless
+    max_duration_sec: 30
+    rationale: |
+      Extracts JSON Schema from meeting-api Pydantic MeetingCreate;
+      extracts equivalent shape from services/vexa-bot/core/src/types.ts
+      BotConfig (via tsc + json-schema-to-typescript or equivalent);
+      diffs the two; fails if any field name, type, or required-ness
+      differs. Catches the next #169-class regression at PR time.
+      Closes N.1.
+    approved: true
+
+  - id: MEETING_STATUS_ENUM_CROSS_SERVICE_PARITY
+    type: script
+    script: tests/meeting-status-enum-parity.sh
+    modes: [lite, compose, helm]
+    state: stateless
+    max_duration_sec: 15
+    rationale: |
+      Extracts MeetingStatus enum values from
+      services/meeting-api/meeting_api/schemas.py; asserts the same
+      set is mirrored in services/runtime-api/runtime_api/state.py
+      (or equivalent) and services/vexa-bot/core/src/types.ts; fails
+      on any divergence. Closes N.2.
+    approved: true
+
+  # ── Pack O: `make all` non-interactive shell ──
+  - id: MAKE_ALL_NON_INTERACTIVE_SHELL_EXITS_CLEAN
+    type: script
+    script: tests/make-all-non-interactive.sh
+    modes: [compose]
+    state: stateful
+    mutates: [docker-compose, vexa-cli-state]
+    max_duration_sec: 600
+    rationale: |
+      Fresh-clone-equivalent setup; run `make env TRANSCRIPTION=cpu &&
+      make all < /dev/null > make.log 2>&1` with a 10-minute wall-clock
+      cap. Assert process exits cleanly within the cap; assert
+      make.log does NOT contain >100 occurrences of
+      "Invalid Google Meet ID format" (i.e. no infinite loop).
+      Closes O.2 / #198.
+    approved: true
+
+# ── PROMETHEUS ALERT RULES ────────────────────────────────────────────
+# Cross-cutting principle: alerting is robustness, not optional.
+# Every sweep + retry-budget-exhausted path + canonical-mechanism-failed
+# recovery in this cycle ships with a Prometheus alert in
+# `templates/prometheusrule.yaml`, gated by
+# `monitoring.prometheusRule.enabled: true`. Auto-recover is acceptable
+# IFF accompanied by guaranteed observability that surfaces the
+# canonical-path failure.
+
+prometheus_rules_approved:
+
+  - alert: MeetingApiSweepUnfinalizedRecordingsFiring
+    expr: 'rate(meeting_api_sweep_unfinalized_recordings_total[5m]) > 0'
+    for: 5m
+    severity: warning
+    rationale: "Sweep finding rows means E.1 outbox didn't deliver — investigate; not silent recovery."
+    approved: true
+
+  - alert: MeetingApiSweepStaleStoppingFiring
+    expr: 'rate(meeting_api_sweep_stale_stopping_total[5m]) > 0'
+    for: 5m
+    severity: warning
+    rationale: "Sweep finding rows means runtime-api exit callback didn't deliver — investigate; not silent recovery."
+    approved: true
+
+  - alert: MeetingApiAggregationFailedAccumulating
+    expr: 'rate(meetings_aggregation_failed_total[15m]) > 0.1'
+    for: 15m
+    severity: warning
+    rationale: "Pack H aggregation_failed transitions accumulating — tx-gateway likely degraded; H.4 sweep retries are firing."
+    approved: true
+
+  - alert: MeetingApiAggregationGivenUp
+    expr: 'rate(meetings_aggregation_failed_permanent_total[1h]) > 0'
+    for: 0m
+    severity: critical
+    rationale: "7-day retry budget exhausted on at least one meeting — operator action required."
+    approved: true
+
+  - alert: MeetingApiContainerStopDLQ
+    expr: 'meeting_api_container_stop_dlq_total > 0'
+    for: 5m
+    severity: warning
+    rationale: "Pack D.2 outbox DLQ entry — runtime-api stop call has failed beyond exponential-backoff budget; investigate."
+    approved: true
+
+  - alert: RedisMaxmemoryNear
+    expr: 'redis_memory_used_bytes / redis_memory_max_bytes > 0.85'
+    for: 5m
+    severity: warning
+    rationale: "Pack C.5 — eviction imminent; matches platform-side alert proposed in #267 layered fix."
+    approved: true
+
+  - alert: MeetingApiIdleLoopStalled
+    expr: 'time() - meeting_api_idle_loop_last_iteration_timestamp > 300'
+    for: 1m
+    severity: critical
+    rationale: "Watcher-of-the-watcher per [PLATFORM] refinement on #272. idle_loop being alive is the precondition for every sweep + retry in this cycle. Counter increments at the START of each iteration (not end) so a hung sweep handler shows up as 'iterations stop' instead of 'iterations slow.'"
+    approved: true
+
+  - alert: MeetingApiIdleLoopSweepTimeout
+    expr: 'rate(meeting_api_idle_loop_sweep_timeout_total[5m]) > 0'
+    for: 5m
+    severity: warning
+    rationale: "Per-sweep timeout via asyncio.wait_for(sweep_handler, timeout=4×IDLE_CHECK_INTERVAL). One hung sweep doesn't block the next iteration. Triage signal narrows from 'the loop hung' to 'WHICH sweep hung' via {sweep_name=...} label. Defense-in-depth on top of MeetingApiIdleLoopStalled."
+    approved: true
+
+  - alert: BrowserSessionPodsOrphaned
+    expr: 'runtime_api_browser_session_pods_orphaned_total > 0'
+    for: 5m
+    severity: warning
+    rationale: "Pack K.3 — `reconcile_browser_sessions` sweep found pods present in K8s but missing from Redis state index. Each occurrence is a sign that pod-creation flow bypassed the state index OR an external operator deleted the index entry. Investigate; not silent recovery."
+    approved: true
+
+  - alert: MeetingsDataRowSizeP99High
+    expr: 'histogram_quantile(0.99, rate(meetings_data_row_size_bytes_bucket[1h])) > 200000'
+    for: 30m
+    severity: warning
+    rationale: "Pack M.2 — surfaces meetings.data JSONB structural debt without committing to a fix in this cycle. Threshold 200KB p99 is best-guess at plan-stage; develop-stage measurement adjusts. Hitting this fires the next architectural-cleanup cycle (promote queried JSONB keys to columns + split audit-log arrays into tables)."
+    approved: true
+
+  - alert: RuntimeApiIdleLoopStalled
+    expr: 'time() - runtime_api_idle_loop_last_iteration_timestamp > 300'
+    for: 1m
+    severity: critical
+    rationale: "Pack K.5 — analog of MeetingApiIdleLoopStalled for runtime-api side. [PLATFORM] data on #273 showed zero idle_loop log lines in last 1h with no way to disambiguate 'running silently' vs 'not running at all.' Counter increments at the START of each iteration; alert fires if loop hasn't ticked in 5×IDLE_CHECK_INTERVAL. Closes the observability gap and is defense-in-depth for K.2 reconcile sweep — sweep can only fire if the loop is alive."
+    approved: true
+
+# ── DEPLOYMENT-MODE COVERAGE ──────────────────────────────────────────
+# Sanity check: every mode listed in scope.yaml `deployments.modes` is
+# covered by at least one binding above. Verify mechanically before
+# transitioning to develop.
+
+deployment_modes_covered:
+  lite: true        # Static grep checks for Pack B/C/D/E/G + bot-side AST validation
+  compose: true     # All chaos + integration tests for Pack C/D/E/G/H + B end-to-end
+  helm: true        # Chart-render checks for Pack A/B/C.5/F/I
+
+# ── CYCLE-SHAPE COMMITMENTS (informational, not blocking) ─────────────
+
+cycle_shape: shape-1-expanded
+estimated_dev_days: ~15   # 9 packs (~10d) + Packs J/K/L/M/N/O (~5d) — most packs parallelize
+target_cut: T+13          # T+10 + 3 wall-clock days for the 6 added packs
+no_later_than: T+17
+release_theme: robustness-not-features
+
+# Scope expansion 2026-04-27 (post-[PLATFORM] 11:13Z lock):
+# Project-owner authorized 6 additional packs to make the cycle truly
+# robustness-themed across chart + platform + bot lifecycle.
+# All migration-free; all principle-aligned (no workarounds, no
+# fallbacks except external non-deterministic systems).
+expanded_packs:
+  - J  # Bot exit classification refinement (un-deferred from #255 epic; pending [PLATFORM] data on #255)
+  - K  # Browser-session idle eviction (filed at #273; pending [PLATFORM] data)
+  - L  # Slim meeting list endpoint (#263 + #264)
+  - M  # meetings.data row-size monitoring (pure observability)
+  - N  # Bot/Server contract parity checks (#169 structural follow-on per #255 epic)
+  - O  # `make all` non-interactive shell (#198)
+
+# Total scope: 15 packs · 39 checks · 11 alerts.
+# Approval flow unchanged: every line approved: true until human flips.
+
+cross_repo_followups:
+  # Tracked by ship-stage; mechanical retirement when OSS lands.
+  - vexa-platform retires `cronjob-collector-watchdog` after Pack C.1 lands
+  - vexa-platform retires `cronjob-recording-reconciler` after Pack E.1 lands
+  - vexa-platform retires `kubectl delete job` Makefile preflight after Pack A.2 lands
+  - vexa-platform's planned-then-withdrawn 5-min stuck-stopping cronjob never ships (E.3.2 sweep is canonical)
+  - File new GH issue: `post_meeting` 5xx/4xx classification — Pack H IS the fix; issue is the GH-side tracker
+  - File new GH issue: dashboard auto-DELETE bot (meeting 11054) — out-of-scope this cycle but tracked
+  - Consolidate #272 against #247 + #267 — platform-side housekeeping; reframe #272 to its unique content
+  - Close #168 + #169 GH issues post-merge (Pack N.3) — surgical fixes shipped via feature/disable-incoming-video; structural follow-on landed in 260427 Pack N
+  - Architectural-cleanup follow-on cycle (~5 dev-days, separate cycle): promote queried `meetings.data` JSONB keys to columns + split audit-log arrays into separate tables. Triggered by Pack M's MeetingsDataRowSizeP99High alert firing in production.

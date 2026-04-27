@@ -260,7 +260,17 @@ async def startup_event():
     app.state.http_client = httpx.AsyncClient(timeout=30.0)
     # Initialize Redis for Pub/Sub used by WS
     redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
-    app.state.redis = await aioredis.from_url(redis_url, encoding="utf-8", decode_responses=True)
+    # v0.10.5 Pack C.1 — bounded socket config closes the silent-hang class (#267).
+    app.state.redis = await aioredis.from_url(
+        redis_url,
+        encoding="utf-8",
+        decode_responses=True,
+        socket_timeout=10,
+        socket_connect_timeout=5,
+        socket_keepalive=True,
+        health_check_interval=30,
+        retry_on_timeout=True,
+    )
 
 @app.on_event("shutdown")
 async def shutdown_event():

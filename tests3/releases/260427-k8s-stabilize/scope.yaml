@@ -1,0 +1,1089 @@
+release_id: 260427-k8s-stabilize
+public_version: v0.10.5
+public_name: "v0.10.5 — Production hardening"
+milestone: https://github.com/Vexa-ai/vexa/milestone/14
+branch: dev
+summary: |
+  **v0.10.5 — Production hardening release. ROBUSTNESS, not features.**
+
+  Closes the next layer of "in-process / silent-skip / single-mechanism"
+  anti-patterns surfaced after v0.10.4 (Zoom Web bot + 4× CPU reduction)
+  went into platform staging. Fifteen packs across six domains: chart
+  deployability, bot lifecycle correctness, recording durability, Redis
+  client robustness, browser-session reliability, operational
+  observability. Migration-free; principle-filtered; SoC clean.
+  every one principle-driven (no workarounds, no fallbacks except for
+  bot-side code interfacing with non-deterministic external systems
+  Zoom/Meet/Teams DOM).
+
+  - A: Helm chart shape — restore tolerations dropped in 0.10.4
+    (#272#2), migrations Job becomes a Helm hook (#272#3 / #247),
+    minio-init waits for ready (#249), capacityReserve falsy-zero
+    fixed (#272#4), NetworkPolicy egress to tx-gateway (#244),
+    release-name de-hardcoding (#234), stale values files removed
+    (#231).
+  - B: Bot pod scheduling + storage env propagation — runtime-api
+    profile schema accepts nodeSelector/tolerations/affinity (#250),
+    chart values populate them by default (#240), runtimeProfiles
+    ConfigMap propagates RECORDING_*/STORAGE_*/MINIO_*/MEETING_API_URL
+    to bot pods (#235).
+  - C: Redis client robustness — bounded socket timeouts, supervised
+    consumer tasks, /readyz startup gate (no Ready pod ever has no
+    working consumer), AOF + stop-writes-on-bgsave-error: no shipped
+    as a paired durable config. (#267 + #248 + #269)
+  - D: Bot lifecycle on K8s — runtime-api returns pod NAME as
+    container_id (#261), DELETE container-stop becomes durable via
+    Redis Stream outbox mirroring 260421 Pack J (#266), browser-session
+    entrypoint exits when node exits (#258, PR #260 already open).
+  - E: Recording durability — chunk-finalize moves to outbox pattern
+    (#268), Zoom incremental upload re-applied for short-meeting
+    audio loss (#272#1), `_delayed_stop_finalizer` REMOVED (redundant
+    after 260421 Pack J's durable exit-callback) + replaced with
+    idle_loop sweep (#268 [PLATFORM] comment + [OSS] reply).
+  - F: helm-prod-shape smoke matrix — CI scaffold exercising tainted
+    multi-pool cluster + image bumps + Zoom 30 s-abort. Platform
+    contributes the scaffold during develop stage. Closes the
+    structural gap that lets the next layer of these same bugs reach
+    production. (#272 cross-cutting ask)
+  - G: Bot pod log capture — stdout structured JSON discipline +
+    JSONB capture compliance-coupled to meeting retention (default
+    ON, 50 KB cap, purges with the meeting row) + opt-in long-lived
+    aggregator path with explicit data-retention trade-off
+    documentation. (#272#6)
+  - H: post_meeting transient/permanent classification — dedicated
+    `aggregation_failed` terminal state distinct from `failed`,
+    transient 5xx retries at the HTTP-client wrapper layer (one
+    place, one policy), idle_loop sweep retries for 7 days, terminal
+    `aggregation_failed_permanent` after exhaustion. Closes incident
+    `2026-04-23-post-meeting-collector-503`.
+  - I: Chart availability defaults — replicaCount: 2 + PDB
+    minAvailable: 1 + readiness/liveness probes +
+    terminationGracePeriodSeconds: 30 for every stateless OSS service
+    (apiGateway already done in 260421 Pack G; extends to meetingApi,
+    runtimeApi, adminApi, dashboard, transcriptionGateway). State-
+    bearing services (Postgres/Redis/MinIO) explicitly NOT touched —
+    replication shape is a separate cycle.
+  - Cross-cutting: templates/prometheusrule.yaml with 7 alerts (every
+    sweep, every retry-budget-exhausted, every "canonical mechanism
+    failed" path) + idle_loop heartbeat watcher-of-the-watcher.
+    Auto-recover acceptable IFF accompanied by guaranteed observability.
+
+deployments:
+  modes: [lite, compose, helm]
+  notes:
+    lite: Bot-side stdout-JSON discipline (Pack G.1) is mode-independent; lite is the cheapest canonical mode for static-grep checks against bot source.
+    compose: Pack C.4 startup-gate chaos test, Pack D.2 durable-DELETE chaos, Pack E.1 chunk-finalize chaos, Pack E.3 stale-stopping sweep chaos, Pack H aggregation_failed sweep chaos — all need meeting-api + Redis + runtime-api co-located with kill-restore primitives.
+    helm: Packs A, B, C.5, F, I are canonical chart contracts; helm is the only mode that exercises chart rendering + actual scheduling/PDB/probe behaviour.
+
+issues:
+
+# ── Pack A — Helm chart shape ────────────────────────────────────────
+- id: chart-deploy-shape-restored
+  source: gh-issue
+  ref: Vexa-ai/vexa#272
+  problem: |
+    A fresh helm-on-tainted-multi-pool cluster cannot complete a clean
+    `helm upgrade` cycle. Six independent template-shape regressions surface
+    on first or second upgrade:
+    1. Redis / pgbouncer / migrations dropped tolerations blocks in 0.10.4
+       — pods Pending forever on any cluster with `:NoSchedule` taints.
+    2. migrations Job not a Helm hook → `Job spec immutable` error on
+       every image-tag bump → atomic rollback.
+    3. minio-init `sleep 5` races MinIO PVC mount → bucket never created
+       → recordings 500 with `NoSuchBucket`.
+    4. `capacityReserve.replicas: 0` silently renders as `replicas: 3`
+       (Go template falsy-zero anti-pattern).
+    5. allow-meeting-api NetworkPolicy missing tx-gateway egress → batch
+       transcribe HTTP 500 with empty error after 120 s on default-deny
+       clusters.
+    6. service references hardcode `vexa-platform-vexa-redis` → any
+       non-default release name (`helm install vexa-prod`) breaks DNS
+       resolution.
+    Plus: stale `values-staging.yaml` + `values-test.yaml` should be deleted.
+  hypothesis: |
+    Pure chart edits, no application-code change. Each fix extends an
+    existing chart pattern (the chart already supports `global.tolerations`
+    via `{{- with }}` blocks that 0.10.4 dropped from three templates;
+    `helm.sh/hook` annotations are idiomatic for migration Jobs;
+    `mc ready` is the official MinIO readiness primitive; `hasKey` is
+    the standard Go-template guard against falsy-zero; the chart already
+    has a `vexa.fullname` helper for `{{ include "vexa.fullname" . }}-foo`
+    patterns elsewhere). Restoration + extension, not invention.
+  fix_commits: []
+  proves:
+    - {check: HELM_TOLERATIONS_PROPAGATED, modes: [helm]}
+    - {check: HELM_UPGRADE_TWICE_NO_JOB_IMMUTABLE, modes: [helm]}
+    - {check: HELM_FRESH_INSTALL_BUCKETS_PRESENT, modes: [helm]}
+    - {check: HELM_CAPACITY_RESERVE_ZERO, modes: [helm]}
+    - {check: HELM_NETWORK_POLICY_TX_GATEWAY, modes: [helm]}
+    - {check: HELM_NO_HARDCODED_RELEASE_NAME, modes: [helm]}
+  required_modes: [helm]
+  human_verify:
+    - mode: helm
+      do: "Apply `--set global.tolerations='[{key: workload, operator: Equal, value: bot, effect: NoSchedule}]'` to a tainted-cluster install"
+      expect: "Every Deployment + StatefulSet + Job pod schedules; zero `Pending` pods after 60 s"
+    - mode: helm
+      do: "Run `helm upgrade <release> <chart> --set meetingApi.image.tag=<new>` twice in sequence"
+      expect: "Both upgrades succeed; zero `Job spec immutable` errors; migrations Job recreated as a hook"
+    - mode: helm
+      do: "Fresh `helm install` on a cluster with provisioning-delayed PVC backend"
+      expect: "After install completes, `mc ls vexa/` shows expected buckets; minio-init Job exited 0"
+    - mode: helm
+      do: "Render with `--set capacityReserve.replicas=0`"
+      expect: "Rendered output contains `replicas: 0` (zero is honoured, not silently bumped to 3)"
+    - mode: helm
+      do: "From inside meeting-api: `nc -vz <release>-vexa-transcription-gateway 8084`"
+      expect: "Connection succeeds; default-deny does not block the path"
+    - mode: helm
+      do: "`helm install vexa-prod ...` (non-default release name)"
+      expect: "All services come up Ready; zero `getaddrinfo ENOTFOUND` log entries; `redisConfig.url` resolves to `vexa-prod-vexa-redis`"
+
+# ── Pack B — Bot pod scheduling + storage env ────────────────────────
+- id: bot-pod-scheduling-and-storage-env
+  source: gh-issue
+  ref: Vexa-ai/vexa#240
+  problem: |
+    Bot pods (created at runtime by runtime-api from the
+    `vexa-runtime-profiles` ConfigMap) suffer two silent failures on
+    any production-shape cluster:
+    (a) The runtime-api profile schema does NOT accept `nodeSelector` /
+        `tolerations` / `affinity` (#250) — even though kubernetes.py
+        backend already reads them. Schema rejects unknown keys.
+    (b) Chart values' `runtimeProfiles.{meeting,browser-session}.env`
+        does NOT propagate `RECORDING_ENABLED` / `STORAGE_BACKEND` /
+        `MINIO_*` / `MEETING_API_URL` to bot pods (#235). Result: bot
+        transcribes (has TRANSCRIPTION_SERVICE_*) and silently skips
+        recording upload (no endpoint to POST to).
+    Production evidence (#235): prod MinIO 0 objects despite real-time
+    transcripts flowing normally. User receives "transcribed meeting"
+    promise; the recording behind post-meeting batch transcription is
+    silently dropped.
+  hypothesis: |
+    Two paired fixes:
+    (B.1) runtime-api profile schema accepts native K8s pod-spec keys
+          (`nodeSelector`, `tolerations`, `affinity`); the kubernetes
+          backend already maps them at L131/L141-144.
+    (B.2) Chart values default `runtimeProfiles.{...}.nodeSelector` +
+          `tolerations` from new top-level `global.botNodeSelector` +
+          `global.botTolerations` (mirroring existing
+          `global.nodeSelector` / `global.tolerations` for chart-managed
+          Deployments).
+    (B.3) Define `vexa.botStorageEnv` helper in `_helpers.tpl` mirroring
+          meeting-api's secretKeyRef pattern; runtimeProfiles' env block
+          consumes the helper.
+    Both halves must land together — fixing chart values without the
+    schema half is silently ignored by runtime-api. Same drift-prevention
+    shape as 260421 Pack A.
+  fix_commits: []
+  proves:
+    - {check: RUNTIME_PROFILE_SCHEMA_ACCEPTS_K8S_KEYS, modes: [lite, compose, helm]}
+    - {check: BOT_POD_SCHEDULING_FROM_PROFILE, modes: [helm]}
+    - {check: BOT_POD_RECORDING_ENV_PROPAGATED, modes: [helm]}
+  required_modes: [helm, compose]
+  human_verify:
+    - mode: helm
+      do: "On a cluster with a dedicated bot pool tainted `workload=bot:NoSchedule`, install with `--set global.botTolerations='[{key: workload, value: bot}]' --set global.botNodeSelector='{workload: bot}'`; dispatch a bot via meeting-api"
+      expect: "Bot pod schedules on the bot-pool node; zero pods landing on non-bot nodes"
+    - mode: helm
+      do: "Dispatch a bot, observe `kubectl exec` env on the bot pod"
+      expect: "Bot env contains `RECORDING_ENABLED`, `STORAGE_BACKEND`, `MEETING_API_URL`, `MINIO_BUCKET` (or `S3_*` if S3 backend); bot's `/internal/recordings/upload` calls succeed"
+    - mode: compose
+      do: "Run a Zoom/Meet/Teams meeting end-to-end"
+      expect: "After meeting completes, `mc ls vexa-recordings/...` shows ≥1 chunk for the session; `meetings.data.recordings[].media_files` populated"
+
+# ── Pack C — Redis client robustness ─────────────────────────────────
+- id: redis-client-robustness-layered
+  source: gh-issue
+  ref: Vexa-ai/vexa#267
+  problem: |
+    Two reproduced production incidents (2026-04-21 cascade, 2026-04-26
+    silent hang with 10.5 h data loss + 20 lost transcripts) share the
+    root cause: every `aioredis.from_url(...)` call across vexa services
+    lacks `socket_timeout`, `socket_connect_timeout`, `socket_keepalive`,
+    `health_check_interval`. redis-py defaults to "wait forever for the
+    socket"; OS TCP keepalive default is 7200 s. Failure modes:
+    - Silent hang: `xreadgroup(... block=2000)` sits inside a single
+      `await` for hours after a Redis pod kill; consumer alive in K8s's
+      view, dead in reality; no exception, no log line.
+    - Visible cascade: Redis hits MISCONF (BGSAVE failure), refuses
+      writes for 46 min; client TCP connections stay open but every
+      write rejected; client pools never reconnect after Redis recovers.
+    - Startup variant (#267 [PLATFORM] comment): try/except catches
+      Redis-not-yet-ready, leaves `redis_client = None`, silently skips
+      `xgroup_create + consume_redis_stream`. Pod stays Ready; serves
+      HTTP; consumer dead for the lifetime of the pod.
+    - Runtime-api startup (#248): no exponential-backoff on Redis init;
+      CrashLoopBackOff if Redis not ready at deploy time.
+  hypothesis: |
+    Layered fix — every layer closes a distinct failure class:
+    (C.1) L1 — bounded socket config across every aioredis.from_url
+          call site (~5 services): socket_timeout=10,
+          socket_connect_timeout=5, socket_keepalive=True,
+          health_check_interval=30, retry_on_timeout=True. Closes
+          unbounded await on dead socket.
+    (C.2) L2 — task-restart `_restart_on_crash` done-callback on
+          consume_redis_stream / consume_speaker_events_stream /
+          process_redis_to_postgres. Closes "consumer task crashes
+          silently."
+    (C.3) L3 — meeting-api `/health/collector` lag-aware livenessProbe
+          (lag>100 + max_consumer_idle>60s = 503). Worst-case data
+          loss bounded at ~90 s for any future failure mode.
+    (C.4) /readyz startup gate driven by `startup_complete: bool`
+          flag; flips True only after Redis ping succeeds AND consumer
+          tasks alive. Bounded retry inside the ping helper, then
+          RAISE on exhaustion (let K8s `restartPolicy: Always` handle
+          ordering). No silent-degraded mode anywhere.
+    (C.5) Redis durability: `appendonly yes` + `appendfsync everysec`
+          + `stop-writes-on-bgsave-error: no` shipped as a PAIRED
+          config (template-time `required` guard refuses one without
+          the other). AOF is per-write durability; BGSAVE failures
+          become non-blocking. Industry-standard Redis-as-stream-buffer
+          shape.
+    Closes #267 + #248 + #269 (dashboard WS lost updates is a downstream
+    symptom of #267 silent hang; closes when L1 lands).
+  fix_commits: []
+  proves:
+    - {check: REDIS_CLIENT_HARDENED_TIMEOUTS, modes: [lite, compose, helm]}
+    - {check: MEETING_API_COLLECTOR_LIVENESS, modes: [compose]}
+    - {check: MEETING_API_READYZ_GATES_CONSUMER, modes: [compose]}
+    - {check: RUNTIME_API_REDIS_STARTUP_RETRY, modes: [compose]}
+    - {check: MEETING_API_COLLECTOR_RECOVERS_AFTER_REDIS_KILL, modes: [compose]}
+    - {check: REDIS_AOF_AND_BGSAVE_PAIRED, modes: [helm]}
+  required_modes: [compose, helm]
+  human_verify:
+    - mode: compose
+      do: "Start meeting + bot streaming transcripts; `kubectl delete pod redis` (or `docker kill` in compose); wait for Redis to come back Ready"
+      expect: "After Redis recovers, transcripts table writes resume within 10 s; consumer idle metric resets; no manual restart of meeting-api needed"
+    - mode: compose
+      do: "Start meeting-api with Redis NOT YET reachable (delay Redis startup by 30 s)"
+      expect: "Meeting-api remains NotReady (`/readyz` returns 503) for 30 s; Service does not route traffic; flips to Ready within 5 s of Redis becoming reachable"
+    - mode: helm
+      do: "Render chart with `--set redis.config.bgsaveErrorBlocksWrites=true` (attempt to force the unsafe combination)"
+      expect: "`helm template` exits non-zero with `required` error: AOF must be enabled together with stop-writes-on-bgsave-error: no"
+
+# ── Pack D — Bot lifecycle on K8s ────────────────────────────────────
+- id: bot-lifecycle-orphan-pod-prevention
+  source: gh-issue
+  ref: Vexa-ai/vexa#266
+  problem: |
+    Three independent bugs each leave bot pods consuming K8s slots
+    indefinitely, compounding into capacity exhaustion under load:
+    (a) #261: runtime-api K8s backend returns `container_id =
+        pod.metadata.uid` (UUID), but meeting-api's later DELETE looks
+        the pod up by NAME via `delete_namespaced_pod(name=name)` →
+        404 → silent no-op → bot pod runs forever.
+    (b) #266: meeting-api's DELETE container-stop runs as a FastAPI
+        BackgroundTask (`_delayed_container_stop`) with no retry, no
+        DLQ, no reconciliation. Production scale test (release-006,
+        20-bot Google Meet): 3-of-20 DELETEs returned HTTP 500 with
+        meeting marked `COMPLETED` while the pod kept running
+        (recording, uploading) for 12+ minutes.
+    (c) #258: browser-session entrypoint `wait` (no args) keeps the
+        container alive forever after `node dist/docker.js` exits;
+        x11vnc + websockify never return; pod stays Running for VNC
+        access but K8s never sees termination. Already addressed by
+        OPEN PR #260 — needs review + merge in this cycle.
+  hypothesis: |
+    (D.1) runtime-api K8s backend returns pod NAME as `container_id`,
+          not UID. Same field, different value. ~5-line fix.
+    (D.2) Replace BackgroundTask with the Redis-Stream outbox pattern
+          from 260421 Pack J: push stop-intent to a stream, idle_loop
+          consumer pops + retries with exponential backoff + DLQ.
+          Idempotent stop on runtime-api side (already 200 no-op for
+          stopping-already-stopped). Same pattern, new entry surface.
+    (D.3) browser-session entrypoint: change `wait` (no args) to
+          `wait $NODE_PID` so the entrypoint exits when node exits.
+          VNC services become opt-in via `KEEP_ALIVE_AFTER_NODE_EXIT=true`
+          env. Pair with `terminationGracePeriodSeconds: 30` in the
+          browser-session profile. PR #260 already implements this.
+  fix_commits: []
+  proves:
+    - {check: K8S_BACKEND_CONTAINER_ID_IS_NAME, modes: [lite, compose, helm]}
+    - {check: BOT_DELETE_DURABLE_RETRY, modes: [compose]}
+    - {check: BROWSER_SESSION_POD_TERMINATES_ON_NODE_EXIT, modes: [compose]}
+  required_modes: [compose]
+  human_verify:
+    - mode: compose
+      do: "Dispatch 20 bots into one meeting in quick succession; sequentially DELETE each with 3 s spacing while runtime-api experiences brief connectivity blips (`docker pause runtime-api` for 5 s every 4th delete)"
+      expect: "All 20 bot pods terminated within (last_delete + IDLE_CHECK_INTERVAL); zero pods in `Running` state with `runtime.managed=true` afterwards"
+    - mode: compose
+      do: "Dispatch a browser-session bot, then `docker exec <pod> kill -9 <node-pid>`"
+      expect: "Pod transitions to `Succeeded` (or `Completed`) within 60 s; without the entrypoint fix it would stay `Running` forever"
+
+# ── Pack E — Recording durability ────────────────────────────────────
+- id: recording-durability-across-restart
+  source: gh-issue
+  ref: Vexa-ai/vexa#268
+  problem: |
+    Three distinct recording-durability bugs with shared root pattern
+    "in-process / in-request transient state where it must be durable":
+    (a) #268: meeting-api pod restart drops `is_final=true` JSONB
+        finalization. S3 has chunks; `meetings.data.recordings[].media_files`
+        is `[]`. Reproduced today on prod meeting 11010 (53 chunks in S3,
+        manual recovery required to populate JSONB).
+    (b) #272#1: Zoom Web meetings stopped within 30 s lose all audio.
+        `RecordingService` only uploads on `performGracefulLeave()`;
+        SHUTDOWN_TIMEOUT_MS racing earlier cleanup steps.
+        Commit 58ba53e (incremental upload every 10 s) was reverted in
+        24e0641 with reason "never tested in a live meeting." Never
+        re-applied for Zoom paths (Google Meet + Teams already have
+        equivalent).
+    (c) #268 [PLATFORM] comment: meeting-api's `_delayed_container_stop`
+        90 s timer (`asyncio.sleep` inside FastAPI BackgroundTask) +
+        the inline `_delayed_stop_finalizer` block — coroutine dies on
+        meeting-api restart, meeting stuck in `stopping` forever.
+        Production evidence: rows with `status='stopping'` for >24 h.
+        After 260421 Pack J shipped durable exit-callback in runtime-api,
+        the in-process timer is REDUNDANT defense, not load-bearing.
+  hypothesis: |
+    (E.1) Chunk-finalize moves to outbox: `POST /internal/recordings/upload`
+          uploads to S3 then `XADD recording_finalizations` with chunk
+          metadata; idle_loop consumer ACID-writes
+          `meetings.data.recordings[].media_files`. Idempotent (keyed
+          off `chunk_seq + media_type + session_uid`).
+    (E.1-sibling) `sweep_unfinalized_recordings` in idle_loop catches
+          recording rows with chunks-in-S3-but-empty-media_files. Pairs
+          with Prometheus alert (cross-cutting). Retires
+          `cronjob-recording-reconciler` on platform side.
+    (E.2) Zoom incremental upload: re-implement 58ba53e as
+          `recorder.start(10000)` with `ondataavailable` POST-ing to
+          /internal/recordings/upload (matching gmeet/teams pattern).
+          PLUS reorder Zoom's `performGracefulLeave()` so audio upload
+          runs FIRST, before UI-leave / voice-agent / pipeline /
+          PulseAudio / mux cleanup.
+    (E.3.1) REMOVE `_delayed_stop_finalizer` — redundant defense.
+    (E.3.2) Add `sweep_stale_stopping` to meeting-api idle_loop: scan
+          `status='stopping' AND updated_at < now() - 5*IDLE_CHECK_INTERVAL`,
+          force-complete with `completion_source='stale_stopping_sweep'`.
+          Loud warning log + Prometheus counter + alert (cross-cutting).
+          Retires the planned-then-withdrawn 5-min cronjob backstop.
+    Single-mechanism-per-transition (one durable mechanism, not two
+    competing ones).
+  fix_commits: []
+  proves:
+    - {check: RECORDING_FINALIZE_SURVIVES_POD_RESTART, modes: [compose]}
+    - {check: RECORDING_FINALIZE_OUTBOX_CONSUMER_IDEMPOTENT, modes: [lite, compose]}
+    - {check: ZOOM_INCREMENTAL_UPLOAD_PRESENT, modes: [lite, compose]}
+    - {check: BOT_GRACEFUL_LEAVE_UPLOADS_FIRST, modes: [lite, compose]}
+    - {check: DELAYED_STOP_FINALIZER_REMOVED, modes: [lite, compose]}
+    - {check: STALE_STOPPING_SWEEP_RECOVERS_MEETING, modes: [compose]}
+  required_modes: [compose]
+  human_verify:
+    - mode: compose
+      do: "Start a meeting; mid-recording, `docker restart meeting-api`; wait for restart; bot continues uploading; after meeting ends, query `meetings.data.recordings[]`"
+      expect: "All chunks present in MinIO; `media_files: [...]` populated with all chunks; zero meetings stuck with empty `media_files` in `select * from meetings where data->>'status'='completed' and data->'recordings'->0->>'media_files'='[]';`"
+    - mode: compose
+      do: "Start a Zoom Web meeting (or fixture'd equivalent); click Stop within 30 s"
+      expect: "At least one chunk reaches MinIO under `recordings/.../<session_uid>/`; meeting transitions cleanly to `completed`"
+    - mode: compose
+      do: "Dispatch bot, DELETE it (status → stopping), `docker kill runtime-api` to prevent the exit-callback delivery, restart meeting-api during the would-be 90 s window, restore runtime-api"
+      expect: "Meeting transitions to `completed` within IDLE_CHECK_INTERVAL via stale_stopping sweep (`completion_source: stale_stopping_sweep` in transition record); Prometheus alert `MeetingApiSweepStaleStoppingFiring` fires"
+
+# ── Pack F — helm-prod-shape smoke matrix ────────────────────────────
+- id: helm-prod-shape-smoke-matrix
+  source: human
+  ref: "Vexa-ai/vexa#272 (cross-cutting ask)"
+  problem: |
+    Every blocker in Pack A (and most of Pack B) was caught by the
+    reporter on their staging cluster, NOT by the OSS release smoke
+    matrix. The matrix exercises `compose / lite / helm-on-fresh-
+    untainted-cluster` — fine for unit-equivalent tests, blind to the
+    production deployment shape (tainted multi-pool clusters with
+    image bumps + restart pressure). The same gap will produce the
+    next layer of similar bugs three weeks from now if not closed
+    structurally.
+  gap_analysis: |
+    The `helm` mode in tests3 today renders the chart and verifies
+    individual DoDs but doesn't exercise the deployment-lifecycle
+    shape — multiple `helm upgrade` cycles, image-tag bumps that
+    force Job recreation, tainted nodes that surface scheduling bugs,
+    abrupt-stop meetings that surface recording-loss bugs. Pack F
+    closes that structural gap so future regressions of the same
+    family are CI catches not incident reports.
+  new_checks: [HELM_PROD_SHAPE_VALIDATES]
+  hypothesis: |
+    Add a new `helm-prod-shape` validate mode to tests3:
+    (F.1) Ephemeral cluster (LKE or kind+simulated taints) with
+          dedicated bot pool tainted `workload=bot:NoSchedule` + an
+          untainted base pool. Run helm install → helm upgrade with
+          bumped image tag (forces Job recreation) → dispatch a bot
+          → abort within 30 s → assert recording recoverable + zero
+          orphan pods + zero `Pending` pods + zero `Job spec immutable`
+          errors.
+    (F.2) Static-render variant for per-PR CI: `helm template` against
+          a "production-shape" values file, asserted for absence of
+          hardcoded release names + non-empty NetworkPolicy targets +
+          rendered tolerations on every Deployment.
+    (F.3) Once F.1 + F.2 are green, the per-release smoke matrix gains
+          a `helm-prod-shape` row alongside `compose / lite / helm`.
+          Red row halts merge to main.
+    Platform-side `chaos-tier1` continues to live downstream against
+    operator-specific cluster shapes; Pack F.1 lives upstream and
+    asserts "OSS chart deploys correctly on a generic production-shape
+    cluster." Two layers, complementary, no double-coverage.
+    Platform-team contributes the scaffold during develop stage.
+  fix_commits: []
+  proves:
+    - {check: HELM_PROD_SHAPE_VALIDATES, modes: [helm]}
+  required_modes: [helm]
+  human_verify:
+    - mode: helm
+      do: "Run `make validate-helm-prod-shape` against an ephemeral cluster; review the assertion harness output"
+      expect: "All assertions pass: 0 Pending pods, 0 immutable-Job errors, recording chunk(s) present, JSONB populated, 0 orphan pods after 30 s-abort meeting"
+
+# ── Pack G — Bot pod log capture ─────────────────────────────────────
+- id: bot-pod-log-capture-compliance-coupled
+  source: gh-issue
+  ref: "Vexa-ai/vexa#272 issue 6"
+  problem: |
+    When a bot pod dies, its `[Graceful Leave]` shutdown logs vanish
+    with the pod. The `meeting-api` `[Delayed Stop]` (90 s) has time
+    to capture them but doesn't. Every recording-loss bug becomes a
+    "we don't know why" post-mortem unless someone happened to be
+    tailing logs during the failure. Multiplies the diagnostic cost
+    of every other pack.
+  hypothesis: |
+    (G.1) Bot pods log structured JSON to stdout (basic logging
+          discipline; required for everything else to parse). Audit
+          `services/vexa-bot/core/src/`; every log line is a single-
+          line JSON object with `{ts, level, msg, meeting_id,
+          session_uid, platform, ...fields}`. Existing prefix-tagged
+          logs (`[Graceful Leave]`, `[Recording]`) become structured
+          fields, not embedded prefixes.
+    (G.2) runtime-api lifecycle captures `kubectl logs <bot-pod>
+          --tail=10000 --previous=false` on bot exit, persists into
+          `meetings.data.bot_logs` (JSONB array). Bounded 50 KB per
+          meeting (head-N + tail-N + truncation marker on overflow).
+          Lifetime-coupled to the meeting: purged with the row per
+          operator's `data_retention_days`. Default ON.
+    (G.3) `kubectl logs --previous` for crashes; same destination.
+    (G.4) Opt-in long-lived aggregator via `runtimeProfiles.{...}.sidecars: []`
+          chart values extension point + documented `values-loki-example.yaml`.
+          Default OFF. Operators turning ON explicitly opt OUT of
+          `data_retention_days` contract — documented trade-off.
+    (G.5) Docs: `docs/operations/bot-log-aggregation.md` covers the
+          three paths + their data-protection implications.
+    Compliance-coupled by construction: JSONB lifecycle = meeting
+    lifecycle, by structural placement not policy. Two paths, both
+    principled, operator picks consciously.
+  fix_commits: []
+  proves:
+    - {check: BOT_LOGS_STRUCTURED_JSON, modes: [lite]}
+    - {check: RUNTIME_API_CAPTURES_LOGS_PRE_REAP, modes: [compose]}
+    - {check: BOT_LOGS_PURGED_WITH_MEETING, modes: [compose]}
+    - {check: BOT_LOGS_BOUNDED_SIZE, modes: [compose]}
+  required_modes: [compose]
+  human_verify:
+    - mode: compose
+      do: "Dispatch a bot, kill it with SIGKILL, query `meetings.data.bot_logs` after 30 s"
+      expect: "JSONB array populated with structured records; final entries include the SIGKILL signal capture from `--previous`"
+    - mode: compose
+      do: "Run a meeting with verbose bot logging; verify `meetings.data.bot_logs` JSONB stays under 50 KB"
+      expect: "Truncation marker present; head-N + tail-N preserved; total under 50 KB"
+    - mode: compose
+      do: "Trigger data-retention purge against an aged meeting"
+      expect: "`bot_logs` JSONB purged with the meetings row; no orphan log artifacts"
+
+# ── Pack H — post_meeting transient/permanent classification ─────────
+- id: post-meeting-aggregation-state-machine
+  source: human
+  ref: "vexa-platform/docs/incidents/2026-04-23-post-meeting-collector-503"
+  problem: |
+    `services/meeting-api/meeting_api/post_meeting.py` `aggregate_transcription`
+    treats any non-200 from tx-gateway identically (`return` →
+    meeting marked `failed`). A 503 from a tx-gateway pod restart is
+    treated identically to "transcripts not ready" — the meeting
+    transitions to `failed` with empty transcript. Real-world
+    trigger 2026-04-23: tx-gateway pod restart during a post_meeting
+    request → 23 consecutive meetings marked `failed` despite the
+    transcripts being recoverable. `meeting.failed` webhook fires
+    incorrectly, signalling "transcription broken" to downstream
+    consumers when the real state is "transient gateway flap."
+  gap_analysis: |
+    No automated check exercises the path "post_meeting + tx-gateway
+    restart concurrently." The compose smoke matrix tests
+    aggregate_transcription happy path only; the OSS-side validate
+    matrix has no chaos-tier test that kills tx-gateway during a
+    post_meeting flow. Pack H's regression check
+    `POST_MEETING_5XX_RETRIES_NOT_FAILS` closes the gap.
+  new_checks:
+    - TRANSIENT_5XX_RETRIED_AT_TRANSPORT_LAYER
+    - AGGREGATION_FAILURE_CLASS_VIA_TYPED_HELPER
+    - AGGREGATION_FAILED_VS_USER_FAILED_DISTINCT
+    - POST_MEETING_5XX_RETRIES_NOT_FAILS
+  hypothesis: |
+    (H.1) Retry-on-5xx lives in meeting-api's internal HTTP client
+          wrapper, NOT special-cased per call site. One place, one
+          policy, applies to every internal-RPC site by construction.
+          5 attempts, exponential backoff 2-30 s. 4xx returns
+          immediately; the caller distinguishes 5xx (transient) from
+          4xx (permanent).
+    (H.2) **MIGRATION-FREE shape (revised per principle audit):**
+          Keep existing `meetings.status` enum as-is — NO PG migration.
+          Discrimination lives in `meetings.data` (existing JSONB
+          column; new keys, NOT new columns):
+            data.aggregation_failure_class: str   # "transient_infra" | "permanent_infra" | "user_meaningful"
+            data.aggregation_retry_count:   int
+            data.aggregation_last_retry_at: ISO8601 str
+          Type-safety: Python `AggregationFailureClass` enum class in
+          `meeting_api/post_meeting.py`; ALL writes go through a single
+          `set_aggregation_failure_class(meeting, cls)` helper.
+          Static-grep registry check (H.6 below) refuses any code
+          path that writes `data['aggregation_failure_class']` outside
+          the helper. Same enforcement guarantee a PG enum gives —
+          via app-layer + tests + grep — without the migration cost.
+    (H.3) Separate webhook events `meeting.aggregation_failed`
+          (transient-infra retry-budget exhausted, retry-eligible) +
+          `meeting.aggregation_failed_permanent` (after 7-day budget
+          exhaustion, terminal). Distinct from `meeting.failed`
+          (user-meaningful). Webhook events are app-level — no schema
+          change anyway. Branch on `data.aggregation_failure_class`,
+          not on a status enum value.
+    (H.4) idle_loop sweep query (uses existing columns, NO migration):
+            SELECT id FROM meetings
+             WHERE status = 'failed'
+               AND data->>'aggregation_failure_class' = 'transient_infra'
+               AND (data->>'aggregation_last_retry_at')::timestamp
+                   < now() - <exponential-backoff window>
+          Retries up to 24 attempts × exponential backoff up to 1 day,
+          total ~7 days. On success → status='completed' + clear
+          aggregation_failure_class. On exhaustion → keep status='failed',
+          flip aggregation_failure_class='permanent_infra', emit
+          `meeting.aggregation_failed_permanent`, alert critical.
+          Same idle_loop pattern as Pack E.3; zero new infrastructure;
+          zero schema change.
+    (H.5 OPTIONAL — performance optimization, defer to develop stage)
+          If the sweep query performance is a concern at scale (it
+          isn't expected to be — sweep runs every IDLE_CHECK_INTERVAL
+          on a small population of `failed` rows), add a partial index:
+            CREATE INDEX CONCURRENTLY meetings_aggregation_retry_idx
+              ON meetings ((data->>'aggregation_failure_class'))
+              WHERE status = 'failed'
+                AND data->>'aggregation_failure_class' = 'transient_infra';
+          This IS a schema-side change but: (a) it's a partial index,
+          not a column or enum migration; (b) `CREATE INDEX CONCURRENTLY`
+          is non-blocking; (c) only added if observed performance
+          warrants it. Develop-stage measurement, not plan-stage commit.
+    Industry best practice: fault-isolation through application-layer
+    typed discriminator; retry policy at the transport layer (single
+    source of truth); bounded escalation timeline. No silent skip, no
+    "leave in processing forever" workaround. **Zero schema migrations.**
+  fix_commits: []
+  proves:
+    - {check: TRANSIENT_5XX_RETRIED_AT_TRANSPORT_LAYER, modes: [lite, compose]}
+    - {check: AGGREGATION_FAILURE_CLASS_VIA_TYPED_HELPER, modes: [lite, compose]}
+    - {check: AGGREGATION_FAILED_VS_USER_FAILED_DISTINCT, modes: [compose]}
+    - {check: POST_MEETING_5XX_RETRIES_NOT_FAILS, modes: [compose]}
+  required_modes: [compose]
+  human_verify:
+    - mode: compose
+      do: "Run a meeting end-to-end; mid-aggregation, `docker restart transcription-gateway`; observe meeting status + JSONB"
+      expect: "Either retries succeed (status `completed`, no aggregation_failure_class set) OR meeting goes to status=`failed` WITH `data.aggregation_failure_class='transient_infra'` AND `meeting.aggregation_failed` event fires (NOT `meeting.failed`). No PG schema migration ran during the test."
+    - mode: compose
+      do: "Stress: hold tx-gateway down for 8 days, observe idle_loop sweep behavior"
+      expect: "Meeting initially has `data.aggregation_failure_class='transient_infra'`; after 7-day retry budget, flips to `data.aggregation_failure_class='permanent_infra'`; status remains `failed` throughout; `MeetingApiAggregationGivenUp` critical alert fires"
+
+# ── Pack I — Chart availability defaults ─────────────────────────────
+- id: chart-availability-defaults-stateless
+  source: human
+  ref: "vexa-platform/docs/gaps.md (All services replicaCount=1 + Missing health probes)"
+  problem: |
+    OSS chart ships every stateless service with `replicaCount: 1`
+    and no PodDisruptionBudget by default. Several services
+    (admin-api, api-gateway, tts-service, mcp, transcription-collector
+    per gaps.md) lack readiness/liveness probes entirely. Every
+    operator inheriting OSS-chart defaults gets a degraded-availability
+    deploy: single-pod services = brief outage on every node drain,
+    every pod crash, every helm upgrade; missing probes = K8s can't
+    detect unhealthy pods, dead pods keep receiving traffic.
+    260421 Pack G fixed this for `apiGateway` only; the rest of the
+    stateless service set inherits the gap.
+  gap_analysis: |
+    The OSS validate matrix renders the chart and asserts presence of
+    individual templates but doesn't enforce industry-best-practice
+    availability defaults across the stateless service set. No
+    existing check requires `replicaCount: ≥ 2`, no check requires
+    PDB presence, no check requires both readiness + liveness probes
+    on every Deployment. Pack I introduces the four
+    `CHART_STATELESS_*` checks to formalize the contract.
+  new_checks:
+    - CHART_STATELESS_SERVICES_REPLICACOUNT_AT_LEAST_2
+    - CHART_STATELESS_SERVICES_HAVE_PDB
+    - CHART_STATELESS_SERVICES_HAVE_PROBES
+    - CHART_STATELESS_SERVICES_GRACE_PERIOD
+  hypothesis: |
+    Extend 260421 Pack G's apiGateway pattern to the rest of the
+    stateless OSS service set: meetingApi, runtimeApi, adminApi,
+    dashboard, transcriptionGateway. Specifically:
+    (I.1) Default `replicaCount: 2` for each stateless service in
+          chart values.
+    (I.2) PDB templates gated by `<service>.podDisruptionBudget.enabled: true`
+          (default ON). `minAvailable: 1`.
+    (I.3) `readinessProbe` + `livenessProbe` (HTTP `/healthz`) on
+          every stateless Deployment template; sane defaults for
+          `initialDelaySeconds`, `periodSeconds`, `timeoutSeconds`,
+          `failureThreshold`.
+    (I.4) `terminationGracePeriodSeconds: 30` explicit on every
+          stateless Deployment.
+    State-bearing services (Postgres, Redis, MinIO) NOT touched —
+    their replication shape is a separate (bigger) architectural
+    cycle; not in 260427 scope.
+    Pack C's meeting-api `/readyz` (Pack C.4.2) is the specialized
+    case of I.3's baseline `/healthz`; the two compose cleanly.
+  fix_commits: []
+  proves:
+    - {check: CHART_STATELESS_SERVICES_REPLICACOUNT_AT_LEAST_2, modes: [helm]}
+    - {check: CHART_STATELESS_SERVICES_HAVE_PDB, modes: [helm]}
+    - {check: CHART_STATELESS_SERVICES_HAVE_PROBES, modes: [helm]}
+    - {check: CHART_STATELESS_SERVICES_GRACE_PERIOD, modes: [helm]}
+  required_modes: [helm]
+  human_verify:
+    - mode: helm
+      do: "Render with default values; `helm template ... | grep -c 'replicas: [1-9]'` per stateless Deployment"
+      expect: "Every stateless Deployment renders with `replicas: ≥ 2`; every one has a sibling PDB with `minAvailable: 1`; every one has `readinessProbe` + `livenessProbe` blocks"
+    - mode: helm
+      do: "Drain the node hosting a stateless service (e.g. meeting-api)"
+      expect: "Service stays available throughout drain; one pod always Ready; zero 5xx during the drain window"
+
+# ── Pack J — Bot exit classification refinement (NEW; un-deferred from #255 epic) ──
+- id: bot-exit-classification-refinement
+  source: gh-issue
+  ref: Vexa-ai/vexa#255
+  problem: |
+    Two complementary misclassification gaps in `MeetingCompletionReason`
+    taxonomy:
+    (a) **Silent class** — bots that exit abnormally (admission DOM
+        button not found, audio pipeline failed to start, OOM-killed,
+        kicked from meeting, network lost mid-meeting, zero segments
+        produced) silently land in `status='completed'`. Project-owner
+        observation: dashboard shows "completed" for meetings that
+        didn't actually transcribe anything.
+    (b) **Dual class (#233)** — bots that exit cleanly after a
+        successful meeting (segments produced, admission confirmed)
+        sometimes get marked `status='failed'` because runtime-api's
+        callback path classifies any bot exit as failed by default.
+        Production evidence in #233 body (meeting 10743).
+    Both are state-machine correctness gaps; both share the same code
+    surface (runtime-api `handle_container_exit`, meeting-api callback
+    handler, bot exit emission); both close together.
+  hypothesis: |
+    **DATA-DRIVEN REFINEMENT (post #255 [PLATFORM] data 2026-04-27 11:31Z).**
+    Production query confirmed 557 / 1183 (47%) of `completed` meetings
+    in last 30 days are misclassified — 125 substantive (transcribe
+    enabled, ≥30s, 0 segs) + 432 pre-admission. **The classification
+    signals already exist** (`completion_reason` enumerates
+    awaiting_admission_timeout, awaiting_admission_rejected, evicted,
+    max_bot_time_exceeded, etc.) but **the meeting-api callback
+    handler ignores them and writes `status='completed'` regardless**.
+    Pack J therefore refocuses from taxonomy expansion to routing-rule
+    fix + 2 prod-derived enum additions.
+
+    Migration-free (`meetings.status` is `String(50)`, not PG ENUM;
+    `completion_reason` is JSONB string in `meetings.data`):
+
+    (J.1 — slimmed to 2 prod-derived values) Extend
+    `MeetingCompletionReason` Python enum with:
+      - `STOPPED_BEFORE_ADMISSION` — for `reason=stopped AND duration=0`
+        (the 432 pre-admission misclassification class)
+      - `STOPPED_WITH_NO_AUDIO`    — for `reason=stopped AND duration>=30s
+        AND transcribe_enabled AND transcription_count=0` (the 125
+        substantive class)
+    Speculative catalog from original proposal (BOT_CRASHED, OOM_KILLED,
+    NETWORK_LOST, ADMISSION_BUTTON_NOT_FOUND, AUDIO_PIPELINE_FAILED,
+    KICKED_FROM_MEETING) **moves to J.5b future-catalog** — added when
+    actual prod cases surface, not preemptively. Pack J ships only
+    what data justifies.
+
+    (J.2 — DEFERRED) Bot-side `meeting_aborted` callback for new
+    failure detection (admission DOM not found, audio capture failed).
+    Data shows this is NOT blocking — current `completion_reason`
+    signals are sufficient for J.4. Files as a Pack J.2 follow-on
+    issue tracked at ship-stage; revisit when speculative catalog
+    values actually appear in prod.
+
+    (J.3 — KEPT) `services/runtime-api/runtime_api/lifecycle.py:handle_container_exit`
+    captures K8s pod events (OOMKill / Evicted / Error markers via
+    `kubectl get events --field-selector involvedObject.name=<pod>`)
+    BEFORE the pod is reaped. The `evicted × completed` (n=6 in prod
+    data) case is the proof — runtime-api's callback already detected
+    the eviction; meeting-api ignored the signal. J.3 makes the signal
+    capture robust against the cluster's 1-hour event-retention limit.
+
+    (J.4 — PRIMARY FIX, clarified) Routing rule in meeting-api callback
+    handler. Replaces today's "any non-explicit-failure → completed"
+    default with explicit mapping:
+        if completion_reason in {
+            AWAITING_ADMISSION_TIMEOUT,    # was: completed × 72
+            AWAITING_ADMISSION_REJECTED,   # was: completed × 9
+            EVICTED,                        # was: completed × 6
+            MAX_BOT_TIME_EXCEEDED,          # was: completed × 10
+            VALIDATION_ERROR,
+            STOPPED_BEFORE_ADMISSION,       # NEW
+            STOPPED_WITH_NO_AUDIO,          # NEW
+        }: status = FAILED
+        elif completion_reason == STOPPED:
+            if duration_seconds == 0:
+                status, reason = FAILED, STOPPED_BEFORE_ADMISSION
+            elif duration_seconds >= 30 and transcribe_enabled \
+                 and transcription_count == 0:
+                status, reason = FAILED, STOPPED_WITH_NO_AUDIO
+            else:
+                status = COMPLETED   # legitimate user quick-stop OR success
+        else:
+            # Defensive: unknown reason → failed (no silent completion)
+            status = FAILED
+    Same DB column, same enum values (mostly), different status setter
+    logic. ~30 lines of code change. No data migration; reclassifies
+    47% of historical completion records on read (operators see
+    accurate state going forward).
+
+    (J.5 — refined regression checks, anchored to prod patterns) Six
+    compose-mode integration tests, each fixture-driven against an
+    actual prod misclassification pattern:
+      - awaiting_admission_timeout fixture → assert FAILED
+      - awaiting_admission_rejected fixture → assert FAILED
+      - evicted (K8s killed pod) fixture → assert FAILED
+      - max_bot_time_exceeded fixture → assert FAILED
+      - stopped + duration=0 fixture → assert FAILED + STOPPED_BEFORE_ADMISSION
+      - stopped + duration=60s + 0 segs fixture → assert FAILED + STOPPED_WITH_NO_AUDIO
+
+    (J.5b — DEFERRED future catalog) Speculative reasons (BOT_CRASHED
+    etc) added when prod evidence surfaces. Not in 260427.
+
+    (J.6 — KEPT) Symmetric dual-direction guard for #233: clean exits
+    with positive proof of success → `completed` (NOT silently `failed`).
+    Same code surface as J.4. Closes #233's structural taxonomy gap.
+
+    **Refined estimate ~1 d** (was ~1.5 d): J.1 enum extension ~10
+    lines; J.4 routing rule ~30 lines; J.5 6 fixtures ~½ d; J.3 K8s
+    event capture ~½ d; J.2 deferred; J.6 covered by J.4.
+
+    Sample meeting IDs from #255 [PLATFORM] data drop (10 most recent)
+    will become Pack J.5 fixture seeds: 11000-11003 google_meet group
+    (4-10 min duration, STOPPED_WITH_NO_AUDIO pattern), 11033 teams
+    (66s, cross-platform check).
+  gap_analysis: |
+    Today's classification taxonomy has only 7 `MeetingCompletionReason`
+    values; runtime-api's exit path defaults to "completed" on any
+    clean exit without checking whether the meeting actually produced
+    transcripts. The matrix doesn't have a chaos test that asserts
+    "bot crashed → meeting marked failed" or "bot ran but zero segments
+    → meeting marked failed." Pack J's catalog + J.5 integration tests
+    close the gap.
+  new_checks:
+    - BOT_ABNORMAL_EXIT_CATALOG_COMPLETE
+    - BOT_EXIT_CLASSIFICATION_REQUIRES_POSITIVE_SUCCESS
+    - BOT_CLEAN_EXIT_NOT_MISCLASSIFIED_FAILED
+  fix_commits: []
+  proves:
+    - {check: BOT_ABNORMAL_EXIT_CATALOG_COMPLETE, modes: [lite, compose]}
+    - {check: BOT_EXIT_CLASSIFICATION_REQUIRES_POSITIVE_SUCCESS, modes: [compose]}
+    - {check: BOT_CLEAN_EXIT_NOT_MISCLASSIFIED_FAILED, modes: [compose]}
+  required_modes: [compose]
+  human_verify:
+    - mode: compose
+      do: "Dispatch a bot, kill it mid-active with SIGKILL (simulate OOM); wait for meeting to terminalize; query DB"
+      expect: "Meeting status='failed', `data.completion_reason`='OOM_KILLED' or 'BOT_CRASHED'; NOT 'completed'"
+    - mode: compose
+      do: "Dispatch a bot to a meeting where bot's admission flow fails (test fixture: admit button not present); wait for terminal state"
+      expect: "Meeting status='failed', `data.completion_reason`='ADMISSION_BUTTON_NOT_FOUND'; NOT 'completed'"
+    - mode: compose
+      do: "Run a clean meeting end-to-end (segments produced, clean exit); query DB"
+      expect: "Meeting status='completed' (NOT 'failed' per #233); `data.completion_reason`='STOPPED' or unset"
+
+# ── Pack K — Browser-session idle eviction (NEW; filed at #273) ──
+- id: browser-session-idle-eviction
+  source: gh-issue
+  ref: Vexa-ai/vexa#273
+  problem: |
+    Browser-session pods are not garbage-collected when idle, despite
+    the mechanism being in place: `runtime-api/profiles.yaml` declares
+    `browser-session: idle_timeout: 3600` (1 h) and
+    `runtime-api/lifecycle.py:idle_loop` iterates
+    `state.list_containers(redis)` every IDLE_CHECK_INTERVAL, stopping
+    containers idle past their timeout. Project-owner reports browser-
+    session pods linger in K8s far past their idle window.
+    Distinct from #258 (entrypoint `wait` keeps container alive after
+    node exits — Pack D.3 / PR #260). #258 is the "node-exited but
+    pod-still-Running" half; #273 is the "pod-genuinely-idle but
+    never-reaped" half.
+  hypothesis: |
+    **DATA-DRIVEN REFINEMENT (post #273 [PLATFORM] data 2026-04-27 11:32Z).**
+    Production audit found 14 stale `browser_session:*` Redis keys
+    pointing at container_names that are gone from K8s; ZERO actual
+    K8s browser-session pods alive. The hypothesized failure mode
+    (pods living too long when idle) is INVERSE of reality —
+    K8s reaps the pod faster than the Redis state index reconciles,
+    leaving stale entries that the API serves as if live. User-visible
+    symptom: "Browser session not found or expired" on dashboard.
+
+    Pack K refocuses on reconcile-sweep-as-primary; investigation of
+    `/touch` semantics is deprioritized as data shows pods aren't
+    over-running.
+
+    (K.1 — DEFERRED, possibly unnecessary) Gateway `/touch` semantics
+    audit. Data shows pods are being reaped on time; `/touch` audit
+    was hedging against the inverse failure mode that doesn't exist.
+    Re-evaluate at ship-stage triage; if K.2 closes the user-visible
+    symptom, K.1 is moot.
+
+    (K.2 — PROMOTED to PRIMARY, ~½ d) `reconcile_browser_sessions`
+    sweep in runtime-api `idle_loop`:
+        for key in redis.scan(match="browser_session:*"):
+            entry = redis.get(key)
+            container_name = entry["container_name"]
+            if not k8s.pod_exists(container_name):
+                redis.delete(key)
+                metrics.runtime_api_browser_session_pods_orphaned_total.inc()
+                logger.warning(f"Reconciled orphan browser_session: {key} -> {container_name} (K8s pod missing)")
+    Architecturally correct regardless of what's reaping the K8s side.
+    Sweep iterates ALL `browser_session:*` entries by structure; doesn't
+    require platform's specific cluster shape.
+
+    (K.3 — KEPT, steady-state observability ~¼ d) Prometheus metric
+    `runtime_api_browser_session_pods_orphaned_total` (counter) + alert
+    `BrowserSessionPodsOrphaned`. Rate > 0 over 5 min = the reconcile
+    sweep is finding orphans = either (a) the K8s reaper IS firing
+    (acceptable as the reconcile path) OR (b) it's firing too
+    aggressively. Either way, observable.
+
+    (K.4 — REFINED to test the actual prod failure mode, ~¼ d)
+    Compose-mode integration test:
+      1. Dispatch browser-session pod
+      2. Externally kill the K8s pod (mimic K8s eviction / natural exit)
+      3. Assert Redis state is reconciled within IDLE_CHECK_INTERVAL × 1.5
+      4. Assert subsequent client query for that browser_session
+         returns 404 NOT stale-entry
+
+    (K.5 — NEW from data Finding 3) `RuntimeApiIdleLoopStalled` alert
+    (analog to meeting-api's `MeetingApiIdleLoopStalled` from Pack C
+    cross-cutting). [PLATFORM] data showed zero `idle_loop` log lines
+    in last 1h with no way to disambiguate "running silently" vs "not
+    running at all." Counter `runtime_api_idle_loop_iterations_total`
+    + gauge `runtime_api_idle_loop_last_iteration_timestamp` at start
+    of each iteration. Same shape, same rationale. Closes the
+    observability gap; defense-in-depth on top of K.2's reconcile.
+
+    Re-prioritized total: ~1 d (unchanged in effort; reshaped in
+    sequence). Plan-stage should also confirm rendered chart values
+    match `runtime-api/profiles.yaml`'s `auto_remove: false` (a
+    chart-override discrepancy could explain why the K8s reaper
+    fires faster than expected).
+  gap_analysis: |
+    No automated check today exercises the browser-session idle-
+    eviction path end-to-end. Compose smoke matrix tests dispatch +
+    transcribe but doesn't test the "create then leave alone" path.
+    Pack K's K.4 integration test closes the gap.
+  new_checks:
+    - BROWSER_SESSION_IDLE_EVICTION_FIRES
+    - BROWSER_SESSION_K8S_VS_REDIS_RECONCILED
+  fix_commits: []
+  proves:
+    - {check: BROWSER_SESSION_IDLE_EVICTION_FIRES, modes: [compose]}
+    - {check: BROWSER_SESSION_K8S_VS_REDIS_RECONCILED, modes: [compose]}
+  required_modes: [compose]
+  human_verify:
+    - mode: compose
+      do: "Dispatch a browser-session bot, do NOT `/touch` it for 70 min (test override of idle_timeout to 60s + buffer)"
+      expect: "Pod transitions to Succeeded/Completed within idle_timeout + 5×IDLE_CHECK_INTERVAL; no manual cleanup needed"
+    - mode: compose
+      do: "Manually delete a browser-session entry from Redis state index while leaving the K8s pod running"
+      expect: "Within IDLE_CHECK_INTERVAL, reconcile_browser_sessions sweep reaps the orphan pod; `runtime_api_browser_session_pods_orphaned_total` metric increments; alert fires"
+
+# ── Pack L — Slim meeting list endpoint (NEW; #263 + #264) ──
+- id: slim-meeting-list-endpoint
+  source: gh-issue
+  ref: Vexa-ai/vexa#263
+  problem: |
+    `GET /bots` (the user-facing meeting list endpoint, served via
+    api-gateway as `/meetings`) returns the entire `m.data` JSONB
+    column for every row. At production scale, a single response with
+    `?limit=10` is **354 KB** (~35 KB per meeting). Default dashboard
+    `/meetings` page loads with `limit=50` → ~1.7 MB per page load.
+    Beyond perf, this is a robustness concern at scale: 100 meetings
+    × 35 KB × N polling clients = meeting-api egress saturation + a
+    DoS vector. Industry-best-practice REST distinguishes list view
+    (summary) from detail view (full).
+  hypothesis: |
+    (L.1) Replace `"data": m.data or {}` in `list_user_bots`
+          (services/meeting-api/meeting_api/meetings.py:1238) with
+          explicit projection of fields the dashboard list view
+          actually consumes (audited from
+          services/dashboard/src/components/meetings/meeting-card.tsx
+          + ai-chat-panel.tsx + export.ts):
+              data_summary = {
+                "name":            data.get("name") or data.get("title"),
+                "completion_reason": data.get("completion_reason"),
+                "participants":    (data.get("participants") or [])[:3],
+                "participants_count": len(data.get("participants") or []),
+                "notes_preview":   (data.get("notes") or "")[:120],
+                "languages":       data.get("languages"),
+                "last_transition": (data.get("status_transition") or [{}])[-1],
+                "duration_seconds": derived from start_time/end_time,
+                "has_recording":   bool(data.get("recordings")),
+              }
+          Per-meeting payload: ~1 KB (vs ~35 KB today). 35× reduction.
+    (L.2) Detail endpoint `GET /bots/id/{meeting_id}` keeps full
+          `m.data`. Standard REST list-vs-detail split.
+    (L.3) Backward-compat: `?include=data` query parameter restores
+          old behavior, default off. Closes the migration concern
+          for any caller that depends on full blob today.
+    (L.4) Pair with #264: dashboard `meetings-store.ts:103` lowers
+          `limit: 50 → 10` AND switches to infinite-scroll. Combined
+          with L.1, initial /meetings page load: 1.7 MB → ~10 KB.
+    (L.5) Static grep + dynamic check: `list_user_bots` returns
+          `data_summary`, NOT raw `m.data`; per-meeting payload <
+          2 KB on a populated test fixture.
+    No new infrastructure. No DB migration. Industry-standard REST
+    projection.
+  fix_commits: []
+  proves:
+    - {check: BOTS_LIST_ENDPOINT_SLIM, modes: [lite, compose]}
+    - {check: BOTS_LIST_PAYLOAD_SIZE_BOUNDED, modes: [compose]}
+  required_modes: [compose]
+  human_verify:
+    - mode: compose
+      do: "Populate test fixture with 50 meetings; `curl -H 'X-API-Key: $TOKEN' http://meeting-api/bots?limit=50 | wc -c`"
+      expect: "Response < 100 KB total (~2 KB per meeting); zero `status_transition[]`/`recordings[]`/`webhook_deliveries[]` arrays in response"
+    - mode: compose
+      do: "Same request with `?include=data`"
+      expect: "Full blob backward-compat path returns ~35 KB per meeting"
+    - mode: compose
+      do: "GET /bots/id/<id> for one meeting"
+      expect: "Detail endpoint returns full `m.data` JSONB unchanged"
+
+# ── Pack M — meetings.data row-size monitoring (NEW; pure observability) ──
+- id: meetings-data-row-size-monitoring
+  source: human
+  ref: "260427-k8s-stabilize groom JSONB-as-NoSQL audit"
+  problem: |
+    `meetings.data` JSONB has accumulated 16 distinct field families
+    (status_transition[], recordings[], webhook_deliveries[],
+    completion_reason, scheduler_job_id, participants, languages,
+    notes, name, session_token, mode, agent_enabled,
+    voice_agent_enabled, cameraEnabled, webhook_secret,
+    resolved_timeouts, plus Pack G bot_logs[] + Pack H
+    aggregation_failure_class). Some belong as columns / separate
+    tables (queryable scalars + audit-log arrays). Pack M doesn't
+    pay down the structural debt; it surfaces magnitude so the
+    next architectural-cleanup cycle has data to work from.
+  gap_analysis: |
+    No existing telemetry monitors row size growth. Operators
+    discover bloated rows only via slow queries / TOAST-overflow
+    incidents. Pack M adds the metric + alert so the structural
+    debt becomes visible.
+  new_checks:
+    - MEETINGS_DATA_ROW_SIZE_METRIC_EXPORTED
+  hypothesis: |
+    (M.1) Add Prometheus metric `meetings_data_row_size_bytes`
+          (histogram), sampled via meeting-api periodic task running
+          `pg_column_size(data)` aggregations every IDLE_CHECK_INTERVAL.
+    (M.2) Alert `MeetingsDataRowSizeP99High` — fires when p99
+          exceeds 200 KB (best-guess threshold; develop-stage
+          measurement adjusts). Surfaces the structural debt without
+          committing to a fix in this cycle.
+    (M.3) Document the structural-cleanup follow-on in 260427
+          ship-stage follow-ups (separate cycle, requires forward-
+          only migrations to promote queried JSONB keys to columns +
+          split audit-log arrays into tables).
+    Pure observability. No DB migration. No application logic change.
+  fix_commits: []
+  proves:
+    - {check: MEETINGS_DATA_ROW_SIZE_METRIC_EXPORTED, modes: [compose, helm]}
+  required_modes: [helm]
+  human_verify:
+    - mode: helm
+      do: "Render chart with `monitoring.prometheusRule.enabled=true`; verify `MeetingsDataRowSizeP99High` alert is present"
+      expect: "Alert rendered in PrometheusRule manifest with the documented expression and threshold"
+    - mode: compose
+      do: "Run a meeting; query `curl http://meeting-api/metrics | grep meetings_data_row_size_bytes`"
+      expect: "Histogram metric exposed with bucket counts; visible in any Prometheus scraper"
+
+# ── Pack N — Bot/Server contract parity checks (NEW; #255 epic structural follow-on) ──
+- id: bot-server-contract-parity-checks
+  source: gh-issue
+  ref: Vexa-ai/vexa#169
+  problem: |
+    The `feature/disable-incoming-video` branch shipped surgical fixes
+    for #168 (`voice_agent_enabled` default True → False) and #169
+    (bot reading `everyoneLeftTimeoutSeconds` instead of the actual
+    field name `everyoneLeftTimeout` from the BOT_CONFIG message).
+    Both are merged. Both issues stay OPEN because the structural
+    prevention #255 epic explicitly says "lands here" — a contract-
+    parity check between bot-side TypeScript types and meeting-api
+    Pydantic schemas — never landed. The next field-rename drift
+    will reproduce #169-class regressions at PR time and land in
+    production as "bots exit at 10 s." Pure prevention; pure
+    industry best practice (consumer-driven contract tests).
+  hypothesis: |
+    (N.1) Static contract test between bot-side `BotConfig` shape
+          (`services/vexa-bot/core/src/types.ts`) and meeting-api
+          `MeetingCreate` Pydantic schema. Snapshot test: regenerates
+          the bot-side TS type from the Pydantic schema (or the
+          inverse — extracts both into a JSON Schema and diffs). Fails
+          on rename / type-shape drift at PR time.
+    (N.2) Same shape for `MeetingStatus` enum mirror between
+          meeting-api ↔ runtime-api ↔ bot. Status enum values must
+          stay in sync across services.
+    (N.3) Close #168 + #169 GH issues post-merge: "surgical fix
+          shipped earlier; structural follow-on landed in 260427
+          Pack N." Mechanical issue hygiene.
+    Pure prevention. Catches the next regression at PR time, not
+    at production-bot-exits-at-10s time. ~½ d.
+  gap_analysis: |
+    Today's CI matrix has zero contract tests between bot ↔
+    meeting-api. The #169 surgical fix was a one-instance fix; the
+    next field rename has nothing stopping it from regressing. Pack
+    N closes the gap.
+  new_checks:
+    - BOT_SERVER_CONFIG_CONTRACT_PARITY
+    - MEETING_STATUS_ENUM_CROSS_SERVICE_PARITY
+  fix_commits: []
+  proves:
+    - {check: BOT_SERVER_CONFIG_CONTRACT_PARITY, modes: [lite, compose, helm]}
+    - {check: MEETING_STATUS_ENUM_CROSS_SERVICE_PARITY, modes: [lite, compose, helm]}
+  required_modes: [lite, compose, helm]
+  human_verify:
+    - mode: lite
+      do: "Rename a field in `MeetingCreate` Pydantic schema (e.g. `voice_agent_enabled` → `tts_enabled`); run the contract-parity check"
+      expect: "Check fails with diff showing bot-side `BotConfig` is now out of sync; PR cannot merge"
+
+# ── Pack O — `make all` non-interactive shell hygiene (NEW; #198) ──
+- id: make-all-non-interactive-shell
+  source: gh-issue
+  ref: Vexa-ai/vexa#198
+  problem: |
+    `make all` (the documented one-command setup) hangs in an
+    infinite loop printing `Invalid Google Meet ID format` warnings
+    when invoked from any non-interactive shell (CI, background
+    process, `nohup`, redirected stdin). Build/up/migrate succeed;
+    only the final `test` step is broken. Result: documented setup
+    flow is broken in CI; contributors hit it on every clone.
+  hypothesis: |
+    (O.1) `testing/run_vexa_interaction.sh:222-231` adds a `[ -t 0 ]`
+          guard: if stdin is not a TTY, skip the interactive meeting-
+          ID prompt loop and exit cleanly with a documented status.
+          Trivial guard; ~5-line shell diff.
+    (O.2) Registry check: `make all < /dev/null` exits cleanly within
+          a bounded wall-clock window (say 10 minutes) without
+          unbounded log growth.
+    Pure CI / dev-workflow hygiene. Industry best practice:
+    documented commands work in non-interactive shells.
+  gap_analysis: |
+    No CI test exercises `make all` with redirected stdin today;
+    contributors discover the hang only when running in CI or
+    `nohup`. Pack O.2 closes the gap.
+  new_checks:
+    - MAKE_ALL_NON_INTERACTIVE_SHELL_EXITS_CLEAN
+  fix_commits: []
+  proves:
+    - {check: MAKE_ALL_NON_INTERACTIVE_SHELL_EXITS_CLEAN, modes: [compose]}
+  required_modes: [compose]
+  human_verify:
+    - mode: compose
+      do: "From a fresh clone in a non-interactive shell: `make env TRANSCRIPTION=cpu && make all < /dev/null > make.log 2>&1 &`; wait 15 minutes"
+      expect: "Process exits cleanly within 10 minutes; `make.log` does not grow unbounded; no `Invalid Google Meet ID format` spam"
+
+expensive_tests: []
+
+strict_features: []

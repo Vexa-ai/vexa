@@ -63,8 +63,16 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def startup():
-        # Redis
-        app.state.redis = aioredis.from_url(config.REDIS_URL, decode_responses=True)
+        # Redis — v0.10.5 Pack C.1 hardened client config (#267).
+        app.state.redis = aioredis.from_url(
+            config.REDIS_URL,
+            decode_responses=True,
+            socket_timeout=10,
+            socket_connect_timeout=5,
+            socket_keepalive=True,
+            health_check_interval=30,
+            retry_on_timeout=True,
+        )
         await app.state.redis.ping()
         logger.info("Redis connected")
 
