@@ -42,8 +42,11 @@ rig_get_user_token() {
 }
 
 rig_spawn_dryrun() {
-    # Spawn a meeting record. The bot will fail to launch (we don't care);
-    # we hand-roll the lifecycle via callbacks. Returns meeting_id.
+    # Spawn a meeting record with dry_run=true. NO real bot is launched
+    # (Pack X v0.10.5 — meeting-api skips runtime-api spawn when
+    # dry_run=true). Test driver controls full lifecycle via callbacks
+    # without contamination from real bot subprocess.
+    # Returns meeting_id.
     local token=$1
     local native_id=$2
     local platform=${3:-google_meet}
@@ -53,7 +56,8 @@ rig_spawn_dryrun() {
   "native_meeting_id": "$native_id",
   "platform": "$platform",
   "transcribe_enabled": true,
-  "recording_enabled": false
+  "recording_enabled": false,
+  "dry_run": true
 }
 EOF
 )
@@ -158,6 +162,121 @@ rig_assert_state() {
         fi
     done
     return $fail
+}
+
+# ─── High-level meeting-setup helper (reused by all scenarios) ──────
+
+rig_setup_meeting() {
+    # Spawn a meeting + bootstrap session in one call. Reduces every
+    # scenario's boilerplate from ~10 lines to one. Returns "tab-
+    # separated" tuple: token<TAB>meeting_id<TAB>session_uid<TAB>native_id
+    # — split via `read -r token meeting_id session_uid native_id <<<"$(rig_setup_meeting ...)"`
+    #
+    # Usage:
+    #   read -r token meeting_id session_uid native_id <<<"$(rig_setup_meeting pack-foo)"
+    #
+    # Args:
+    #   $1 = scenario name prefix (used in native_meeting_id for traceability)
+    #   $2 = platform (default: google_meet)
+    local prefix=${1:-synth}
+    local platform=${2:-google_meet}
+    local native_id="${prefix}-$(date +%s)-$$"
+    local token meeting_id session_uid
+
+    token=$(rig_get_user_token)
+    [ -n "$token" ] || { echo "FAIL: no token" >&2; return 1; }
+
+    meeting_id=$(rig_spawn_dryrun "$token" "$native_id" "$platform")
+    [ -n "$meeting_id" ] || { echo "FAIL: spawn returned empty meeting_id" >&2; return 1; }
+
+    session_uid=$(rig_session_bootstrap "$meeting_id")
+    [ -n "$session_uid" ] || { echo "FAIL: session bootstrap failed for meeting_id=$meeting_id" >&2; return 1; }
+
+    printf '%s\t%s\t%s\t%s\n' "$token" "$meeting_id" "$session_uid" "$native_id"
+}
+
+rig_drive_to_active() {
+    # Drive a meeting from REQUESTED → JOINING → ACTIVE via legal
+    # state-machine transitions. Most scenarios need this to set up
+    # a "bot is live, transcribing" state before triggering the
+    # behavior under test.
+    #
+    # Usage: rig_drive_to_active <session_uid> <native_id>
+    local session_uid=$1
+    local native_id=$2
+    rig_callback "$session_uid" status_change status=joining container_id="$native_id" >/dev/null
+    sleep 1
+    rig_callback "$session_uid" status_change status=active container_id="$native_id" >/dev/null
+    sleep 1
+}
+
+# ─── Race / parallel primitives (v0.10.6 tier-1 entropy) ──────────
+
+rig_parallel() {
+    # Fire 2+ commands concurrently via background `&` + `wait`. Each arg
+    # is a single shell command (with quoting). Returns the exit-code of
+    # the worst-failing child. Use to test ordering-sensitive bugs:
+    #
+    #   rig_parallel \
+    #     "rig_callback $sess status_change status=completed" \
+    #     "rig_callback $sess exited exit_code=0"
+    #   # final state must be deterministic regardless of arrival order
+    local pids=() max_rc=0
+    for cmd in "$@"; do
+        bash -c "$cmd" &
+        pids+=($!)
+    done
+    for pid in "${pids[@]}"; do
+        wait "$pid" || max_rc=$?
+    done
+    return $max_rc
+}
+
+# ─── Log-line assertion primitives ────────────────────────────────
+
+rig_assert_log() {
+    # Greps a docker container's logs for an expected pattern.
+    # Usage: rig_assert_log <container> <pattern> [--count N | --any | --none]
+    local container=$1
+    local pattern=$2
+    local mode=${3:---any}
+    local expected_count=${4:-1}
+
+    local hits
+    hits=$(docker logs "$container" 2>&1 | grep -cE "$pattern" || echo 0)
+
+    case "$mode" in
+        --count) [ "$hits" -eq "$expected_count" ] && return 0 || { echo "FAIL: pattern '$pattern' hits=$hits expected=$expected_count" >&2; return 1; } ;;
+        --any)   [ "$hits" -gt 0 ] && return 0 || { echo "FAIL: pattern '$pattern' not found in $container" >&2; return 1; } ;;
+        --none)  [ "$hits" -eq 0 ] && return 0 || { echo "FAIL: pattern '$pattern' SHOULD NOT appear; hits=$hits" >&2; return 1; } ;;
+        *) echo "FAIL: unknown mode '$mode'" >&2; return 1 ;;
+    esac
+}
+
+# ─── Resource-leak detection ──────────────────────────────────────
+
+rig_baseline_redis_keys() {
+    # Capture the baseline count of Redis keys (or only matching pattern).
+    # Use rig_assert_no_redis_leak <baseline> [pattern] after scenario.
+    local pattern=${1:-*}
+    docker exec vexa-redis-1 redis-cli --scan --pattern "$pattern" 2>/dev/null | wc -l
+}
+
+rig_assert_no_redis_leak() {
+    # After a scenario, assert Redis key delta is within tolerance.
+    # Usage: rig_assert_no_redis_leak <baseline> <max_delta> [pattern]
+    local baseline=$1
+    local max_delta=${2:-0}
+    local pattern=${3:-*}
+    local current
+    current=$(rig_baseline_redis_keys "$pattern")
+    local delta=$((current - baseline))
+    if [ "$delta" -gt "$max_delta" ]; then
+        echo "FAIL: Redis leak — pattern='$pattern' baseline=$baseline current=$current delta=$delta max=$max_delta" >&2
+        return 1
+    fi
+    echo "  ✓ no Redis leak (pattern=$pattern baseline=$baseline current=$current delta=$delta)"
+    return 0
 }
 
 # Echo a banner so sourcing this script provides visible feedback.

@@ -1097,6 +1097,34 @@ async def request_bot(
                 env_vars["ZOOM_CLIENT_ID"] = zoom_cid
                 env_vars["ZOOM_CLIENT_SECRET"] = zoom_csec
 
+    # v0.10.5 Pack X — synthetic dry-run mode.
+    # When req.dry_run=True, skip the runtime-api bot launch + scheduler
+    # + Redis registration. Test driver drives the meeting lifecycle via
+    # /bots/internal/test/* + /bots/internal/callback/* endpoints. The
+    # meeting record + MeetingSession get bootstrapped by the test
+    # surface; the rig owns end-to-end. Catches OSS-side regressions
+    # without contamination from real bot subprocess firing its own
+    # callbacks (which races synthetic callbacks under the previous
+    # "real bot launches and exits in 5s" path).
+    #
+    # Production gate: VEXA_ENV != "production". 422 in prod.
+    if req.dry_run:
+        if os.getenv("VEXA_ENV", "development") == "production":
+            raise HTTPException(
+                status_code=422,
+                detail="dry_run=true is a test-mode flag; not allowed in production",
+            )
+        # Persist meeting record without launching bot. bot_container_id
+        # stays None; test driver bootstraps session via
+        # /bots/internal/test/session-bootstrap.
+        await db.commit()
+        await db.refresh(new_meeting)
+        logger.info(
+            f"[Pack X dry_run] Meeting {meeting_id} created without bot launch; "
+            f"test driver controls lifecycle via callback endpoints."
+        )
+        return MeetingResponse.model_validate(new_meeting)
+
     # Spawn via Runtime API
     result = await _spawn_via_runtime_api(
         profile="meeting",

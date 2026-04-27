@@ -587,6 +587,19 @@ class MeetingCreate(BaseModel):
     workspaceGitToken: Optional[str] = Field(None, description="Git token for workspace repo access")
     workspaceGitBranch: Optional[str] = Field(None, description="Git branch for workspace (default: main)")
 
+    # v0.10.5 Pack X — synthetic-test dry-run flag.
+    # When dry_run=True, meeting record is created but NO bot is launched
+    # via runtime-api. Test driver controls full lifecycle via
+    # /bots/internal/test/* + /bots/internal/callback/* endpoints.
+    # Requires VEXA_ENV != "production" (handler enforces); 422 in prod.
+    # This is the "no platform bot for tests" surface — synthetic
+    # scenarios run without contamination from real bot subprocess
+    # firing its own callbacks.
+    dry_run: Optional[bool] = Field(
+        False,
+        description="Synthetic-test mode: create meeting without launching a real bot. Test driver drives lifecycle via internal callback endpoints. Gated by VEXA_ENV != 'production'.",
+    )
+
     @field_validator('platform')
     @classmethod
     def platform_must_be_valid(cls, v):

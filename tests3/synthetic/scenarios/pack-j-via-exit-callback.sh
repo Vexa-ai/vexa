@@ -1,29 +1,23 @@
 #!/usr/bin/env bash
 # v0.10.5 Pack X scenario — Pack J classification via exit_callback path.
 #
-# Companion to pack-j-status-change-bypass.sh: same input shape (meeting
-# was active 30+s with transcribe_enabled and 0 transcripts, then
-# stopped) but the bot fires `/bots/internal/callback/exited` instead of
-# status_change. Both paths must produce IDENTICAL classification —
-# this scenario locks the invariant.
+# Companion to pack-j-status-change-bypass.sh. Same input shape but
+# the bot fires exit_callback instead of status_change. Both paths
+# must produce IDENTICAL classification — locks the invariant.
+#
+# Caught REAL BUG (2026-04-27): completion_reason was NOT persisted
+# to data on FAILED transitions. Fix shipped in update_meeting_status.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../rig.sh"
 
-native_id="pack-j-exit-$(date +%s)-$$"
 echo
 echo "=== Scenario: pack-j-via-exit-callback ==="
 
-token=$(rig_get_user_token)
-meeting_id=$(rig_spawn_dryrun "$token" "$native_id" google_meet)
-session_uid=$(rig_session_bootstrap "$meeting_id")
-echo "    meeting_id=$meeting_id session=${session_uid:0:8}..."
+read -r token meeting_id session_uid native_id <<<"$(rig_setup_meeting pack-j-exit)"
+echo "    meeting_id=$meeting_id"
 
-# Drive through legal transitions: requested → joining → active.
-rig_callback "$session_uid" status_change status=joining container_id="$native_id" >/dev/null
-sleep 1
-rig_callback "$session_uid" status_change status=active container_id="$native_id" >/dev/null
-sleep 1
+rig_drive_to_active "$session_uid" "$native_id"
 
 # Cross duration threshold
 sleep 35
@@ -31,7 +25,7 @@ sleep 35
 rig_delete_bot "$token" google_meet "$native_id" >/dev/null
 sleep 1
 
-# Bot exits with completion_reason=stopped (the prior canonical path).
+# Bot exits with completion_reason=stopped (the canonical exit-callback path).
 rig_callback "$session_uid" exited \
     exit_code=0 \
     reason=self_initiated_leave \
@@ -45,6 +39,6 @@ if rig_assert_state "$token" "$meeting_id" \
     echo "    ✅ exit_callback path produces same classification as status_change path"
     exit 0
 else
-    echo "    ❌ exit_callback path classification regressed"
+    echo "    ❌ exit_callback classification regressed" >&2
     exit 1
 fi
