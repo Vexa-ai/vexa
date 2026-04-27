@@ -181,11 +181,24 @@ async def update_meeting_status(
     # if some early-signal capture had set it; never updated. Result:
     # dashboards grouping by failure_stage misattributed in-meeting failures
     # to admission/join issues. Now: every transition to FAILED overwrites.
+    #
+    # v0.10.5 iter-6 fix (caught by compose smoke MEETINGS_LIST 500): only
+    # overwrite when current_status maps to a valid MeetingFailureStage
+    # value. MeetingStatus has more values than MeetingFailureStage —
+    # `stopping`, `completed`, `left_alone` etc. are statuses but not
+    # lifecycle stages. Writing `failure_stage='stopping'` produces a
+    # JSONB record that the Pydantic response-validator rejects (HTTP
+    # 500 on /meetings list). When current_status is transitional/
+    # terminal (not a lifecycle stage), keep whatever was set during the
+    # prior progression; that's the most recent ACTUAL stage reached.
     if new_status == MeetingStatus.FAILED:
-        # current_status here is what we WERE in (pre-transition); that's
-        # the stage that failed. Coerce to FailureStage if possible.
         try:
-            current_data["failure_stage"] = current_status.value
+            valid_failure_stages = {s.value for s in MeetingFailureStage}
+            if current_status.value in valid_failure_stages:
+                current_data["failure_stage"] = current_status.value
+            # Else: current_status is transitional (e.g. 'stopping') or
+            # terminal-equivalent. Don't overwrite — last lifecycle stage
+            # set by the natural progression is the right value.
         except Exception:
             pass
 
