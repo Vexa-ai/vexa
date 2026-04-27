@@ -264,30 +264,48 @@ async def internal_upload_recording(
             was_completed = rec_payload.get("status") == RecordingStatus.COMPLETED.value
 
         status_transitioned_to_completed = False
+        # v0.10.5 Pack E.1.a — per-chunk durable media_files write (#268
+        # reproduction 2026-04-27).
+        #
+        # Pre-Pack-E.1.a: intermediate chunks went to MinIO/S3 but media_files
+        # was only updated on is_final=true. When the bot died mid-active
+        # (e.g. Playwright Execution context destroyed in production today),
+        # 31 chunks landed in S3 with media_files=[] in DB — orphaned.
+        #
+        # Now: every successful chunk upload UPDATES the per-type media_files
+        # entry with the latest chunk's metadata. Dashboard still sees ONE
+        # entry per type (audio, video) — UX unchanged from prior shape;
+        # what changes is the entry exists from chunk_seq=0 onward instead
+        # of waiting for is_final. Even mid-stream death leaves a partial
+        # recording row with `status=IN_PROGRESS` + the latest chunk's
+        # metadata, so the dashboard can show "Recording in progress (X
+        # chunks captured)" rather than "no recording."
+        existing_media_files = [
+            mf for mf in (rec_payload.get("media_files") or [])
+            if mf.get("type") != media_type
+        ]
+        existing_media_files.append({
+            "id": _new_recording_numeric_id(),
+            "type": media_type,
+            "format": media_format,
+            "storage_path": storage_path,
+            "storage_backend": os.environ.get("STORAGE_BACKEND", "minio"),
+            "file_size_bytes": file_size,
+            "duration_seconds": duration_seconds,
+            "chunk_seq": chunk_seq,
+            "metadata": {"sample_rate": sample_rate} if sample_rate else {},
+            "created_at": datetime.utcnow().isoformat(),
+            "is_final": is_final,
+        })
+        rec_payload["media_files"] = existing_media_files
         if is_final:
-            # Replace any existing entry for this media_type with the final one.
-            existing_media_files = [
-                mf for mf in (rec_payload.get("media_files") or [])
-                if mf.get("type") != media_type
-            ]
-            existing_media_files.append({
-                "id": _new_recording_numeric_id(),
-                "type": media_type,
-                "format": media_format,
-                "storage_path": storage_path,
-                "storage_backend": os.environ.get("STORAGE_BACKEND", "minio"),
-                "file_size_bytes": file_size,
-                "duration_seconds": duration_seconds,
-                "chunk_seq": chunk_seq,
-                "metadata": {"sample_rate": sample_rate} if sample_rate else {},
-                "created_at": datetime.utcnow().isoformat(),
-            })
-            rec_payload["media_files"] = existing_media_files
             rec_payload["status"] = RecordingStatus.COMPLETED.value
             rec_payload["completed_at"] = datetime.utcnow().isoformat()
             status_transitioned_to_completed = not was_completed
-        # Intermediate chunk (is_final=false): chunk is in MinIO; no
-        # media_files row yet. Recording stays IN_PROGRESS.
+        else:
+            # Intermediate chunk: keep IN_PROGRESS but durably-write the
+            # latest media_files entry so dashboard shows partial recording.
+            rec_payload["status"] = RecordingStatus.IN_PROGRESS.value
         recordings_list[existing_idx] = rec_payload
         meeting_data_dict["recordings"] = recordings_list
         meeting.data = meeting_data_dict
