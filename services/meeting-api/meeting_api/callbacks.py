@@ -414,6 +414,22 @@ async def bot_startup_callback(
 
     old_status = meeting.status
     if meeting.status in [MeetingStatus.REQUESTED.value, MeetingStatus.JOINING.value, MeetingStatus.AWAITING_ADMISSION.value, MeetingStatus.FAILED.value]:
+        # v0.10.5 Pack X finding (2026-04-27): the state machine
+        # (schemas.get_valid_status_transitions) FORBIDS direct
+        # REQUESTED→ACTIVE — only REQUESTED→JOINING and JOINING→ACTIVE
+        # are legal. Pre-fix, this branch silently failed when status
+        # was REQUESTED: update_meeting_status returned False, the
+        # callback returned 200 with `meeting_status: "requested"` —
+        # misleading API. Real bots happen to fire `joining` first so
+        # production didn't trip it; synthetic scenarios driving
+        # `started` directly did.
+        #
+        # Fix: drive through legal intermediate transitions. If
+        # currently REQUESTED, transition to JOINING first, then to
+        # ACTIVE. Each step uses the same legal-transition validator.
+        if meeting.status == MeetingStatus.REQUESTED.value:
+            await update_meeting_status(meeting, MeetingStatus.JOINING, db)
+            await db.refresh(meeting)
         success = await update_meeting_status(meeting, MeetingStatus.ACTIVE, db)
         if success:
             if payload.container_id:
