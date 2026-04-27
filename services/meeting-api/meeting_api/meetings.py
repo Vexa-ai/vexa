@@ -1573,6 +1573,44 @@ async def stop_bot(
             except Exception as e:
                 logger.warning(f"Runtime API lookup failed for meeting {meeting.id}: {e}")
 
+        # v0.10.5 — Validate the resolved container_name actually exists at
+        # runtime-api before treating it as live. Symptom (lite meeting 30,
+        # 2026-04-27): meeting.bot_container_id pointed at "519" but the
+        # bot container had been wiped by a stack redeploy. Without this
+        # check, code assumed bot was alive, sent leave-via-Redis (no bot
+        # listening), enqueued a Pack D.2 outbox stop (succeeded — runtime-
+        # api logged "Process 519 not in registry"), and left the meeting
+        # in `stopping` indefinitely. Pack E.3.2 stale-stopping sweep would
+        # eventually reap it after 5 min, but the user-visible UX is "stuck
+        # in stopping". Same Pack J classifier branch as the truly
+        # no-container case — a stale bot_container_id has identical
+        # semantics: there's no live process to ask, so we apply the
+        # data-driven classifier to the meeting state we already have.
+        if container_name:
+            try:
+                client = _get_httpx_client()
+                cresp = await client.get(
+                    f"{RUNTIME_API_URL}/containers/{container_name}",
+                    timeout=5.0,
+                )
+                if cresp.status_code == 404 or (
+                    cresp.status_code == 200 and (cresp.json() or {}).get("status") != "running"
+                ):
+                    logger.info(
+                        f"DELETE meeting {meeting.id}: bot_container_id={container_name!r} "
+                        f"is stale (runtime-api reports gone/not-running) — routing through "
+                        f"no-container Pack J branch"
+                    )
+                    container_name = None
+            except Exception as e:
+                # Runtime API unreachable — DON'T null out the container_name
+                # (could be a transient network blip). Fall through to the
+                # leave-via-Redis path; Pack E.3.2 sweep is the safety net.
+                logger.warning(
+                    f"DELETE meeting {meeting.id}: runtime-api inspect failed for "
+                    f"{container_name!r} ({e!r}) — keeping live-container assumption"
+                )
+
         if not container_name:
             # v0.10.5 Pack X finding (helm meeting 8, 2026-04-27): when
             # runtime-api lookup fails, the previous code went directly
