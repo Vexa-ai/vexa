@@ -81,4 +81,54 @@ describe("parseMeetingInput", () => {
       expect(r?.platform).toBe("teams");
     });
   });
+
+  // v0.10.5 — white-label / enterprise URLs we don't recognize per-vendor
+  // (Linux Foundation Zoom, AWS Chime portals, Bloomberg, etc.). Parser must
+  // signal platformNeeded=true so the modal asks the user to pick. Backend's
+  // Path 3 (URL + platform) trust model handles the rest.
+  describe("platformNeeded — white-label / enterprise URLs", () => {
+    const LFX_URL =
+      "https://zoom-lfx.platform.linuxfoundation.org/meeting/96088138284?password=c9e528a8-3852-4b82-89c2-96d6f22526ad";
+
+    it("flags LFX zoom-portal URL as platformNeeded with zoom heuristic", () => {
+      const r = parseMeetingInput(LFX_URL);
+      expect(r).not.toBeNull();
+      expect(r?.platformNeeded).toBe(true);
+      // Heuristic: URL contains "zoom" → default platform=zoom (user can override)
+      expect(r?.platform).toBe("zoom");
+      // Best-effort numeric ID extraction
+      expect(r?.meetingId).toBe("96088138284");
+      // Passcode under password= query param
+      expect(r?.passcode).toBe("c9e528a8-3852-4b82-89c2-96d6f22526ad");
+      expect(r?.originalUrl).toBe(LFX_URL);
+    });
+
+    it("defaults to google_meet when URL doesn't hint at zoom", () => {
+      const r = parseMeetingInput(
+        "https://conference.example.com/join/123456789?meeting=foo"
+      );
+      expect(r?.platformNeeded).toBe(true);
+      expect(r?.platform).toBe("google_meet");
+    });
+
+    it("returns null for non-meeting-looking URLs", () => {
+      // Bare domain with nothing meeting-ish — don't false-positive
+      expect(parseMeetingInput("https://example.com/")).toBeNull();
+    });
+
+    it("preserves originalUrl so backend can navigate verbatim", () => {
+      const r = parseMeetingInput(LFX_URL);
+      expect(r?.originalUrl).toBe(LFX_URL);
+    });
+
+    it("never flags canonical Zoom URL as platformNeeded", () => {
+      const r = parseMeetingInput("https://zoom.us/j/85173157171?pwd=secret");
+      expect(r?.platformNeeded).toBeUndefined();
+    });
+
+    it("never flags canonical Google Meet URL as platformNeeded", () => {
+      const r = parseMeetingInput("https://meet.google.com/abc-defg-hij");
+      expect(r?.platformNeeded).toBeUndefined();
+    });
+  });
 });
