@@ -49,6 +49,23 @@ logger = logging.getLogger("meeting_api.callbacks")
 #   - duration_seconds (from start_time/end_time) → 30s threshold
 #   - transcribe_enabled (from data) → opt-out for recording-only mode
 #   - transcription_count (count(*) from transcriptions table)
+def _failure_stage_from_status(status: str) -> MeetingFailureStage:
+    """Derive failure_stage from current meeting.status at write time.
+
+    v0.10.5 FM-003: payload.failure_stage from the bot's gracefulLeave
+    path can be stale (it reflects the bot's internal stage tracker, not
+    the meeting's actual state). Server-side derivation removes the
+    parallel-surface drift — the failure_stage value matches what
+    status_transition[] would tell you anyway.
+    """
+    return {
+        MeetingStatus.REQUESTED.value: MeetingFailureStage.REQUESTED,
+        MeetingStatus.JOINING.value: MeetingFailureStage.JOINING,
+        MeetingStatus.AWAITING_ADMISSION.value: MeetingFailureStage.AWAITING_ADMISSION,
+        MeetingStatus.ACTIVE.value: MeetingFailureStage.ACTIVE,
+    }.get(status, MeetingFailureStage.ACTIVE)
+
+
 async def _classify_stopped_exit(
     meeting: Meeting,
     db: AsyncSession,
@@ -259,73 +276,104 @@ async def bot_exit_callback(
                 transition_metadata=meta,
             )
             new_status = target_status.value if success else None
-        elif meeting.status == MeetingStatus.ACTIVE.value and (
-            payload.completion_reason
-            or payload.reason in (
-                "self_initiated_leave",
-                "evicted",
-                "left_alone",
-                "removed_by_host",
-                "meeting_ended_by_host",
-            )
-        ):
-            # Bot was active and self-exited with a known completion reason
-            # (e.g., evicted, left_alone, self_initiated_leave) OR with a
-            # reason string that maps to one of those completion classes.
-            # These exit with code != 0 but are normal completions, not failures.
+        else:
+            # v0.10.5 FM-001/FM-002/FM-003 (registered 2026-04-28): every
+            # bot exit from a non-stopping state routes through the central
+            # classifier. Pre-fix shape had a narrow allowlist gate
+            # (`payload.completion_reason or payload.reason in {5 strings}`)
+            # for ACTIVE exits, with a `failed + completion_reason=NULL`
+            # else-branch for everything else. PLATFORM 7d aggregate showed
+            # 182 NULL-bucket rows (FM-002) plus 127 mislabeled failure_stage
+            # rows (FM-003) — and meeting 11161 in particular: a 30-min
+            # gmeet meeting with 197 segments delivered, painted FAILED
+            # because `payload.reason="post_join_setup_error"` (gmeet
+            # end-of-meeting page navigation crashing the bot's page.evaluate)
+            # was not in the allowlist (FM-001).
             #
-            # The reason-only branch handles the case where the bot fires its
-            # exit callback without setting completion_reason (observed
-            # 2026-04-26 in meeting_id=26: bot self-initiated leave from active
-            # with reason="self_initiated_leave" but completion_reason empty,
-            # which previously fell through to the failed branch).
-            derived_completion_reason = payload.completion_reason or {
+            # Two structural changes (per ARCH review 2026-04-28):
+            #   (1) Drop the allowlist gate; route ALL non-stopping exits
+            #       through _classify_stopped_exit. The classifier already
+            #       distinguishes reached_active+segments→COMPLETED from
+            #       not-reached-active→STOPPED_BEFORE_ADMISSION. The else
+            #       branch's silent NULL bucket becomes structurally
+            #       impossible.
+            #   (2) failure_stage derives from meeting.status at write time,
+            #       not from the bot's payload. The bot reports its own
+            #       internal stage tracker which is stale on the catch path
+            #       (FM-003).
+            #
+            # Plus: unknown payload.reason values are logged WARN + stuffed
+            # into transition_metadata.unknown_bot_reason so DATA can grep
+            # for new vocabulary before it becomes the next FM-002.
+            _BOT_REASON_TO_COMPLETION = {
                 "self_initiated_leave": MeetingCompletionReason.STOPPED,
                 "evicted": MeetingCompletionReason.EVICTED,
                 "removed_by_host": MeetingCompletionReason.EVICTED,
+                "removed_by_admin": MeetingCompletionReason.EVICTED,
                 "left_alone": MeetingCompletionReason.LEFT_ALONE,
+                "left_alone_timeout": MeetingCompletionReason.LEFT_ALONE,
+                "startup_alone_timeout": MeetingCompletionReason.LEFT_ALONE,
                 "meeting_ended_by_host": MeetingCompletionReason.STOPPED,
-            }.get(payload.reason or "", MeetingCompletionReason.STOPPED)
-            # v0.10.5 Pack J — apply J.4 routing rule. evicted / removed_by_host
-            # were previously routing to COMPLETED despite being explicit failure
-            # signals (#255 data: 6 evicted cases / 30d misclassified). The
-            # classifier now routes them to FAILED.
+                "normal_completion": MeetingCompletionReason.STOPPED,
+                "post_join_setup_error": MeetingCompletionReason.STOPPED,  # FM-001 — gmeet end-of-meeting nav
+                "admission_timeout": MeetingCompletionReason.AWAITING_ADMISSION_TIMEOUT,
+                "admission_rejected_by_admin": MeetingCompletionReason.AWAITING_ADMISSION_REJECTED,
+                "admission_false_positive": MeetingCompletionReason.STOPPED,
+                "stop_requested_pre_admission": MeetingCompletionReason.STOPPED_BEFORE_ADMISSION,
+                "missing_meeting_url": MeetingCompletionReason.VALIDATION_ERROR,
+                "join_meeting_error": MeetingCompletionReason.STOPPED_BEFORE_ADMISSION,
+            }
+            unknown_reason = bool(
+                payload.reason and payload.reason not in _BOT_REASON_TO_COMPLETION
+            )
+            if unknown_reason:
+                logger.warning(
+                    "Unknown bot exit reason %r — defaulting to STOPPED. "
+                    "Catalog this in _BOT_REASON_TO_COMPLETION.",
+                    payload.reason,
+                )
+            derived_completion_reason = payload.completion_reason or _BOT_REASON_TO_COMPLETION.get(
+                payload.reason or "", MeetingCompletionReason.STOPPED
+            )
             target_status, classified_reason = await _classify_stopped_exit(
                 meeting, db, derived_completion_reason
             )
             logger.info(
-                f"Exit callback: session {session_uid} exit_code={exit_code} from active "
-                f"reason={payload.reason} completion_reason={derived_completion_reason.value} "
+                f"Exit callback: session {session_uid} exit_code={exit_code} "
+                f"from {meeting.status} reason={payload.reason} "
+                f"completion_reason={derived_completion_reason.value} "
                 f"— Pack J classified as {target_status.value}"
             )
-            meta = {"exit_code": exit_code, "original_reason": payload.reason, "pack_j_classification": classified_reason.value}
+            meta = {
+                "exit_code": exit_code,
+                "original_reason": payload.reason,
+                "pack_j_classification": classified_reason.value,
+            }
             if payload.platform_specific_error:
                 meta["platform_specific_error"] = payload.platform_specific_error
-            success = await update_meeting_status(
-                meeting, target_status, db,
+            if unknown_reason:
+                meta["unknown_bot_reason"] = payload.reason
+            # FM-003: derive failure_stage from current meeting.status, not
+            # from the bot's payload. Only used if target_status == FAILED.
+            update_kwargs = dict(
                 completion_reason=classified_reason,
                 transition_reason=payload.reason,
                 transition_metadata=meta,
             )
-            new_status = target_status.value if success else None
-        else:
-            provided_stage = payload.failure_stage or MeetingFailureStage.ACTIVE
-            error_msg = f"Bot exited with code {exit_code}"
-            if payload.reason:
-                error_msg += f"; reason: {payload.reason}"
-            meta = {"exit_code": exit_code}
-            if payload.platform_specific_error:
-                meta["platform_specific_error"] = payload.platform_specific_error
+            if target_status == MeetingStatus.FAILED:
+                update_kwargs["failure_stage"] = _failure_stage_from_status(meeting.status)
+                error_msg = f"Bot exited with code {exit_code}"
+                if payload.reason:
+                    error_msg += f"; reason: {payload.reason}"
+                update_kwargs["error_details"] = error_msg
             success = await update_meeting_status(
-                meeting, MeetingStatus.FAILED, db,
-                failure_stage=provided_stage,
-                error_details=error_msg,
-                transition_reason=payload.reason,
-                transition_metadata=meta,
+                meeting, target_status, db, **update_kwargs
             )
-            new_status = MeetingStatus.FAILED.value if success else None
+            new_status = target_status.value if success else None
 
-            if success and (payload.error_details or payload.platform_specific_error):
+            if success and target_status == MeetingStatus.FAILED and (
+                payload.error_details or payload.platform_specific_error
+            ):
                 if not meeting.data:
                     meeting.data = {}
                 updated_data = dict(meeting.data)

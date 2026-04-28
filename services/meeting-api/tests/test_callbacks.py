@@ -488,3 +488,131 @@ class TestStatusChangeCallback:
                 "status": "active",
             })
         assert resp.status_code == 404
+
+
+# ===================================================================
+# v0.10.5 FM-001/FM-002/FM-003 — central classifier coverage
+# ===================================================================
+#
+# Pre-fix: bot exits with reason="post_join_setup_error" (gmeet
+# end-of-meeting page navigation crash) hit the else branch at
+# callbacks.py:311 → status=failed, completion_reason=NULL,
+# failure_stage=ACTIVE. Prod 7d aggregate had 182 NULL-bucket rows
+# (FM-002), 127 mislabeled failure_stage (FM-003), and meeting 11161
+# (FM-001) — a 30-min gmeet meeting with 197 segments delivered painted
+# as FAILED.
+#
+# Post-fix: the else branch routes through _classify_stopped_exit. ALL
+# non-stopping exits go through the central classifier. Unknown bot
+# reasons get logged WARN + stuffed into transition_metadata.unknown_bot_reason.
+# failure_stage derives from meeting.status at write time.
+
+
+class TestFM001ClassifierCoverage:
+    """v0.10.5 FM-001/FM-002/FM-003 — every non-stopping exit routes through the classifier."""
+
+    @pytest.mark.asyncio
+    async def test_post_join_setup_error_with_segments_classified_completed(
+        self, client, mock_db, mock_redis,
+    ):
+        """FM-001: gmeet end-of-meeting nav crash on a meeting that reached active and produced segments → COMPLETED.
+
+        This is the meeting-11161 shape: bot exited code 1 with
+        reason="post_join_setup_error", meeting reached active, transcripts
+        persisted. Pre-fix → FAILED + NULL. Post-fix → COMPLETED + STOPPED.
+        """
+        meeting = make_meeting(
+            status=MeetingStatus.ACTIVE.value,
+            start_time=datetime.utcnow(),
+            data={
+                "status_transition": [
+                    {"from": "joining", "to": "awaiting_admission"},
+                    {"from": "awaiting_admission", "to": "active"},
+                ],
+                "transcribe_enabled": True,
+            },
+        )
+        # Simulate >30s active + segments > 0
+        from datetime import timedelta
+        meeting.start_time = datetime.utcnow() - timedelta(minutes=30)
+
+        with _patch_find_meeting(meeting):
+            with patch("meeting_api.callbacks.update_meeting_status", new_callable=AsyncMock, return_value=True) as mock_update:
+                with patch("meeting_api.callbacks.publish_meeting_status_change", new_callable=AsyncMock):
+                    with patch("meeting_api.callbacks.run_all_tasks", new_callable=AsyncMock):
+                        # Mock the segment-count query in _classify_stopped_exit
+                        with patch("meeting_api.callbacks.select") as mock_select:
+                            mock_db.execute = AsyncMock(return_value=MockResult(scalar_value=197))
+                            resp = await client.post("/bots/internal/callback/exited", json={
+                                "connection_id": TEST_SESSION_UID,
+                                "exit_code": 1,
+                                "reason": "post_join_setup_error",
+                            })
+
+        assert resp.status_code == 200
+        mock_update.assert_called_once()
+        call_args = mock_update.call_args
+        # Reached active + duration ≥ 30s + segments > 0 → COMPLETED
+        assert call_args[0][1] == MeetingStatus.COMPLETED, (
+            f"FM-001 regression: gmeet end-of-meeting nav exit not classified as COMPLETED, got {call_args[0][1]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_unknown_bot_reason_logged_and_stashed(
+        self, client, mock_db, mock_redis,
+    ):
+        """FM-002 canary: unknown payload.reason value gets WARN-logged + stashed in transition_metadata."""
+        meeting = make_meeting(status=MeetingStatus.ACTIVE.value)
+
+        with _patch_find_meeting(meeting):
+            with patch("meeting_api.callbacks.update_meeting_status", new_callable=AsyncMock, return_value=True) as mock_update:
+                with patch("meeting_api.callbacks.publish_meeting_status_change", new_callable=AsyncMock):
+                    with patch("meeting_api.callbacks.run_all_tasks", new_callable=AsyncMock):
+                        mock_db.execute = AsyncMock(return_value=MockResult(scalar_value=0))
+                        resp = await client.post("/bots/internal/callback/exited", json={
+                            "connection_id": TEST_SESSION_UID,
+                            "exit_code": 1,
+                            "reason": "some_future_uncatalogued_reason",
+                        })
+
+        assert resp.status_code == 200
+        mock_update.assert_called_once()
+        # transition_metadata should carry unknown_bot_reason
+        meta = mock_update.call_args[1].get("transition_metadata", {})
+        assert meta.get("unknown_bot_reason") == "some_future_uncatalogued_reason", (
+            f"FM-002 canary failed: unknown_bot_reason not in transition_metadata: {meta}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_failure_stage_derived_from_meeting_status_not_payload(
+        self, client, mock_db, mock_redis,
+    ):
+        """FM-003: failure_stage on a FAILED route derives from meeting.status, not payload.failure_stage.
+
+        Bot reports failure_stage='joining' (stale from its internal tracker),
+        but meeting.status='active'. Server-side derivation should write 'active'.
+        """
+        meeting = make_meeting(status=MeetingStatus.ACTIVE.value)
+        # No status_transition[] → not reached_active → classifier returns FAILED + STOPPED_BEFORE_ADMISSION
+
+        with _patch_find_meeting(meeting):
+            with patch("meeting_api.callbacks.update_meeting_status", new_callable=AsyncMock, return_value=True) as mock_update:
+                with patch("meeting_api.callbacks.publish_meeting_status_change", new_callable=AsyncMock):
+                    with patch("meeting_api.callbacks.run_all_tasks", new_callable=AsyncMock):
+                        mock_db.execute = AsyncMock(return_value=MockResult(scalar_value=0))
+                        resp = await client.post("/bots/internal/callback/exited", json={
+                            "connection_id": TEST_SESSION_UID,
+                            "exit_code": 1,
+                            "reason": "post_join_setup_error",
+                            "failure_stage": "joining",   # bot reports stale stage
+                        })
+
+        assert resp.status_code == 200
+        mock_update.assert_called_once()
+        # target_status should be FAILED (no segments, didn't reach active)
+        assert mock_update.call_args[0][1] == MeetingStatus.FAILED
+        # failure_stage should be ACTIVE (derived from meeting.status), NOT 'joining' (from payload)
+        kwargs = mock_update.call_args[1]
+        assert kwargs.get("failure_stage") == MeetingFailureStage.ACTIVE, (
+            f"FM-003 regression: failure_stage not derived from meeting.status, got {kwargs.get('failure_stage')}"
+        )
