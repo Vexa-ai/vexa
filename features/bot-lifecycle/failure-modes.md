@@ -18,6 +18,7 @@ stay here.
 | `FM-002` | 2026-04-28 (via 11161) | * | Bot exits with non-allowlisted `payload.reason` bypass Pack J classifier — `status=failed, completion_reason=NULL` | open |
 | `FM-003` | 2026-04-28 (via 11161) | * | `failure_stage` from bot payload doesn't reflect actual `meeting.status` — read-side allowlist tolerates, write-side never corrects | open |
 | `FM-004` | 2026-04-19 (onset; observed via FM-001) | google_meet | gmeet end-of-meeting page navigation — same trigger as FM-001; tracks the bot-side crash signature catalog | open (merged into FM-001 scope) |
+| `FM-005` | 2026-04-28 (ARCH-2 review of Option C) | n/a | Option C cosmetic carry-forward: inline-rebuilt classifier dict + silent-default failure_stage helper | open (v0.10.6) |
 
 Status vocabulary: `open` · `pending-data` · `fix-in-flight` · `fixed-in-X.Y.Z` · `partial-fix-in-X.Y.Z` · `wontfix` · `pending-decision`.
 
@@ -696,6 +697,82 @@ captured URL. From there, the fix path becomes clear:
 - Cross-origin nav → CDP-driven external capture is the long-term fix.
 
 Not committing to a fix path until we have the diagnostic evidence.
+
+---
+
+## FM-005 — Option C cosmetic carry-forward (v0.10.6)
+
+```yaml
+id: FM-005
+first_observed: 2026-04-28               # ARCH-2 code review of commit 0243737
+platform: n/a                            # internal code-quality only
+status: open
+target: v0.10.6
+parent: FM-001 / FM-002 / FM-003 (Option C cosmetic carry-forward)
+class: cosmetic / hardening
+severity: cosmetic                        # not a bug, no user impact, no validate impact
+linked_fixes: []
+prod_observations: 0
+filed_by: ARCH-2 (2026-04-28 review of Option C ship)
+linked_callbacks_path: services/meeting-api/meeting_api/callbacks.py
+deferred_fixes:
+  - target: v0.10.6
+    pack: Σ
+    summary: bundle into Pack Σ where the classifier dict + failure-stage taxonomy are already being restructured
+```
+
+Two cosmetic items raised by ARCH-2 during the Option C ship review.
+Neither blocks deploy. Both right-sized to land inside Pack Σ where the
+shape is changing anyway.
+
+### Item 1 — `_BOT_REASON_TO_COMPLETION` defined inline
+
+`services/meeting-api/meeting_api/callbacks.py` ~lines 308-325 inside
+the else-branch of `bot_exit_callback`. The 14-entry dict gets rebuilt
+on every callback. Cosmetic / minor perf — not measurable in practice.
+
+**Fix shape:** lift to module-level constant near
+`_failure_stage_from_status` (~line 52):
+
+```python
+from types import MappingProxyType
+
+_BOT_REASON_TO_COMPLETION: Mapping[str, MeetingCompletionReason] = MappingProxyType({
+    "self_initiated_leave": MeetingCompletionReason.STOPPED,
+    # ...etc
+})
+```
+
+Two lines moved. No behavioural delta.
+
+**Why not now:** pure refactor; doesn't earn re-validate. Pack Σ
+restructures the classifier anyway — the dict either becomes a method on
+the new outcome resolver or moves into a per-platform translator table.
+Land alongside that.
+
+### Item 2 — `_failure_stage_from_status` silent default
+
+`services/meeting-api/meeting_api/callbacks.py:52-66`. The helper ends
+in `.get(status, MeetingFailureStage.ACTIVE)` — silently swallows any
+`MeetingStatus` value not in the dict. Same shape as the FM-002 problem
+the `unknown_bot_reason` canary is meant to prevent: a future enum
+addition (e.g. a new transitional state in v0.10.6) routes to ACTIVE
+without observability.
+
+**Fix shape:** mirror the FM-002 canary pattern. WARN log on the default
+branch + stash `transition_metadata['unknown_failure_status'] = status`
+at the call site. DATA gets a second canary watch.
+
+**Why not now:** needs the canary plumbing (caller passes back the
+unknown-status flag), not a one-liner. Pack Σ rebuilds the failure-stage
+taxonomy regardless — fits there.
+
+### Why this is filed at all
+
+ARCH-2's principle: every cosmetic deferral is a tracked entry, not a
+mental note. Two cosmetic smells that ship as-is in v0.10.5 → file FM-005,
+target v0.10.6, link the parent fix. If they slip past Pack Σ they
+become observable as their own entry rather than rotting silently.
 
 ---
 
