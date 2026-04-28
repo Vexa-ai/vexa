@@ -17,6 +17,7 @@ export class RecordingService {
   private channels: number;
   private isFinalized: boolean = false;
   private startTime: number = 0;
+  private chunkUploadUsed: boolean = false;  // Track if chunk upload was used for this session
 
   constructor(
     private meetingId: number,
@@ -27,6 +28,13 @@ export class RecordingService {
     this.sampleRate = sampleRate;
     this.channels = channels;
     this.filePath = path.join('/tmp', `recording_${meetingId}_${sessionUid}.wav`);
+  }
+
+  /**
+   * Returns whether chunk upload has been used for this session.
+   */
+  hasChunkUploadBeenUsed(): boolean {
+    return this.chunkUploadUsed;
   }
 
   /**
@@ -227,6 +235,7 @@ export class RecordingService {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         await this._sendUpload(callbackUrl, token, boundary, body, uploadTimeoutMs);
+        this.chunkUploadUsed = true;
         log(`[Recording] Chunk ${chunkSeq}${isFinal ? ' (final)' : ''} uploaded (${chunkData.length} bytes)`);
         return;
       } catch (err: any) {

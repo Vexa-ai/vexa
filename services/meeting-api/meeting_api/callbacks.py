@@ -230,7 +230,23 @@ async def bot_exit_callback(
                 reason=payload.reason, transition_source="bot_callback",
             )
 
-        background_tasks.add_task(run_all_tasks, meeting.id)
+        # Idempotency: skip post-meeting tasks if already terminal or already scheduled
+        terminal_states = [MeetingStatus.COMPLETED.value, MeetingStatus.FAILED.value]
+        if meeting.status in terminal_states:
+            logger.info(f"Exit callback: meeting {meeting_id} already in terminal state {meeting.status}, skipping post-meeting tasks")
+        else:
+            # Check Redis-based idempotency marker
+            post_meeting_lock_key = f"meeting:{meeting_id}:post_meeting:scheduled"
+            if redis_client:
+                # Try to set the lock with NX (only if not exists) and expiry
+                acquired = await redis_client.set(post_meeting_lock_key, "1", nx=True, ex=3600)
+                if not acquired:
+                    logger.info(f"Exit callback: post-meeting tasks already scheduled for meeting {meeting_id}, skipping")
+                else:
+                    background_tasks.add_task(run_all_tasks, meeting.id)
+            else:
+                # Fallback: no Redis, just schedule (legacy behavior)
+                background_tasks.add_task(run_all_tasks, meeting.id)
 
         return {"status": "callback processed", "meeting_id": meeting.id, "final_status": meeting.status}
 
@@ -391,7 +407,16 @@ async def bot_status_change_callback(
                 attributes.flag_modified(meeting, "data")
             await db.commit()
             await db.refresh(meeting)
-            background_tasks.add_task(run_all_tasks, meeting.id)
+            # Idempotency: check if already scheduled
+            post_meeting_lock_key = f"meeting:{meeting.id}:post_meeting:scheduled"
+            if redis_client:
+                acquired = await redis_client.set(post_meeting_lock_key, "1", nx=True, ex=3600)
+                if not acquired:
+                    logger.info(f"Status change callback: post-meeting already scheduled for meeting {meeting.id}, skipping")
+                else:
+                    background_tasks.add_task(run_all_tasks, meeting.id)
+            else:
+                background_tasks.add_task(run_all_tasks, meeting.id)
 
     elif new_status == MeetingStatus.FAILED:
         success = await update_meeting_status(
@@ -413,7 +438,16 @@ async def bot_status_change_callback(
                 }
             await db.commit()
             await db.refresh(meeting)
-            background_tasks.add_task(run_all_tasks, meeting.id)
+            # Idempotency: check if already scheduled
+            post_meeting_lock_key = f"meeting:{meeting.id}:post_meeting:scheduled"
+            if redis_client:
+                acquired = await redis_client.set(post_meeting_lock_key, "1", nx=True, ex=3600)
+                if not acquired:
+                    logger.info(f"Status change callback: post-meeting already scheduled for meeting {meeting.id}, skipping")
+                else:
+                    background_tasks.add_task(run_all_tasks, meeting.id)
+            else:
+                background_tasks.add_task(run_all_tasks, meeting.id)
 
     elif new_status == MeetingStatus.ACTIVE:
         if meeting.status in [MeetingStatus.REQUESTED.value, MeetingStatus.JOINING.value,

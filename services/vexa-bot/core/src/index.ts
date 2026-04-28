@@ -745,11 +745,16 @@ async function performGracefulLeave(
   }
 
   // Upload audio recording separately (used for audio-only playback / transcription alignment)
+  // Skip if chunk upload was already used - prevents collision with chunk 0
   if (activeRecordingService && currentBotConfig?.recordingUploadUrl && currentBotConfig?.token) {
     try {
-      log("[Graceful Leave] Uploading audio recording to meeting-api...");
-      await activeRecordingService.upload(currentBotConfig.recordingUploadUrl, currentBotConfig.token);
-      log("[Graceful Leave] Audio recording uploaded successfully.");
+      if (activeRecordingService.hasChunkUploadBeenUsed()) {
+        log("[Graceful Leave] Chunk upload was used; skipping legacy full-blob audio upload");
+      } else {
+        log("[Graceful Leave] Uploading audio recording to meeting-api...");
+        await activeRecordingService.upload(currentBotConfig.recordingUploadUrl, currentBotConfig.token);
+        log("[Graceful Leave] Audio recording uploaded successfully.");
+      }
     } catch (uploadError: any) {
       log(`[Graceful Leave] Audio recording upload failed: ${uploadError.message}`);
     } finally {
@@ -1262,7 +1267,8 @@ async function initPerSpeakerPipeline(botConfig: BotConfig): Promise<boolean> {
           // Check multiple signals from Whisper before accepting.
 
           // 1. Language confidence (auto-detect only)
-          if (!lang && prob > 0 && prob < 0.3) {
+          // Treat prob <= 0.3 as low confidence, including prob=0.0 which previously bypassed the filter
+          if (!lang && prob <= 0.3) {
             telemetry.segmentsDiscarded++;
             log(`[🚫 LOW CONFIDENCE] ${speakerName} | lang_prob=${prob.toFixed(2)} | "${result.text}" — discarded`);
             speakerManager!.handleTranscriptionResult(speakerId, '');
