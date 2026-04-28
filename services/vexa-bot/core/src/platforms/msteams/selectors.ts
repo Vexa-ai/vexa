@@ -2,16 +2,28 @@
 // Keep this file free of runtime logic; export constants only.
 
 export const teamsInitialAdmissionIndicators: string[] = [
-  // Most reliable indicators: Leave buttons that actually exist in Teams meetings
+  // Most reliable indicators: Leave buttons that actually exist in Teams meetings.
+  // English variants — classic Teams + Teams 2.
   'button[id="hangup-button"]',
-  'button[data-tid="hangup-main-btn"]', 
+  'button[data-tid="hangup-main-btn"]',
+  'button[data-tid="call-end"]',
+  'button[data-tid*="hangup"]',
   'button[aria-label="Leave"]',
   '[role="toolbar"] button[aria-label*="Leave"]',
-  'button[aria-label*="Leave"]'
+  'button[aria-label*="Leave"]',
+  // German variants — light-meetings UI is localized to the browser locale,
+  // and Edge in our container reports de-DE, so Leave reads as "Verlassen"
+  // / "Auflegen" with no English aria-label fallback.
+  'button[aria-label*="Verlassen"]',
+  'button[aria-label*="verlassen"]',
+  'button[aria-label*="Auflegen"]',
+  '[role="toolbar"] button[aria-label*="Verlassen"]'
 ];
 
 export const teamsWaitingRoomIndicators: string[] = [
-  // Pre-join screen specific text (generic patterns)
+  // Pre-join / lobby screen text. admission.ts now scans this entire array
+  // (any-of), so order doesn't matter for correctness, but keep the most
+  // common English variant first for log readability.
   'text="Someone will let you in shortly"',
   'text*="Someone will let you in shortly"', // Generic pattern for any bot name
   'text="You\'re in the lobby"',
@@ -20,23 +32,26 @@ export const teamsWaitingRoomIndicators: string[] = [
   'text="Wait for someone to admit you"',
   'text="Waiting to be admitted"',
   'text="Your request to join has been sent"',
-  
-  // Pre-join screen specific elements
-  'button:has-text("Join now")',
-  'button:has-text("Cancel")',
-  'text="Microsoft Teams meeting"',
-  
-  // Pre-join screen specific aria labels
+  'text*="When the meeting starts"', // Teams 2 / light-meetings phrasing
+  // German lobby strings (light-meetings UI follows the Edge locale,
+  // which is de-DE in the lite container).
+  'text*="Du wirst gleich hereingebeten"',
+  'text*="Du befindest dich im Wartebereich"',
+  'text*="Du befindest dich in der Lobby"',
+  'text*="Bitte warten"',
+  'text*="Sobald die Besprechung beginnt"',
+  'text*="hereingelassen"',
+
+  // Pre-join screen specific aria labels (lobby/waiting only — NOT Join/Cancel,
+  // those are pre-join controls, not lobby indicators, and caused false positives
+  // on the new light-meetings page where Step 6 silently fails to click Join.)
   '[aria-label*="waiting"]',
   '[aria-label*="lobby"]',
-  '[aria-label*="Join now"]',
-  '[aria-label*="Cancel"]',
-  
-  // Pre-join screen specific classes/attributes
-  '[data-tid*="pre-join"]',
+
+  // Pre-join screen specific classes/attributes (lobby/waiting only)
   '[data-tid*="lobby"]',
   '[data-tid*="waiting"]',
-  
+
   // Error states
   'text="Meeting not found"',
   'text="Unable to join"'
@@ -247,8 +262,20 @@ export const teamsContinueButtonSelectors: string[] = [
 ];
 
 export const teamsJoinButtonSelectors: string[] = [
-  'button:has-text("Join")',
-  'button:has-text("Join now")'
+  // Order matters: most specific first.
+  // Stable, locale-independent Teams data-tid (verified on light-meetings/launch
+  // pre-join page, German UI, April 2026).
+  'button[data-tid="prejoin-join-button"]',
+  'button[data-tid*="prejoin-join"]',
+  'button[data-tid*="join-button"]',
+  // English-locale fallbacks (will not match localized UIs).
+  'button[aria-label="Join now" i]',
+  'button[aria-label="Join meeting" i]',
+  'button[aria-label*="Join now" i]',
+  'button[aria-label*="Join meeting" i]',
+  'button:has-text("Join now")',
+  'button:has-text("Join meeting")',
+  'button:has-text("Join")'
 ];
 
 export const teamsCameraButtonSelectors: string[] = [

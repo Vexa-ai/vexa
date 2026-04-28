@@ -5,9 +5,27 @@ import { checkEscalation, triggerEscalation, getEscalationExtensionMs } from "..
 import {
   teamsInitialAdmissionIndicators,
   teamsWaitingRoomIndicators,
-  teamsRejectionIndicators,
-  teamsJoinButtonSelectors
+  teamsRejectionIndicators
 } from "./selectors";
+
+// Returns true if any known waiting-room/lobby indicator is currently visible.
+// Used to be a single-selector check on teamsWaitingRoomIndicators[0]
+// (English-only), which silently failed on the Teams 2 light-meetings page
+// in German locales and caused the bot to never enter the proper 5 min
+// waiting-room loop.
+async function isLobbyVisible(page: Page): Promise<boolean> {
+  for (const selector of teamsWaitingRoomIndicators) {
+    try {
+      const visible = await page.locator(selector).first().isVisible();
+      if (visible) {
+        return true;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
 
 // Function to check if bot has been rejected from the meeting
 export async function checkForTeamsRejection(page: Page): Promise<boolean> {
@@ -73,23 +91,13 @@ export async function waitForTeamsMeetingAdmission(
     // Check for any visible Leave button (multiple selectors for robustness)
     const initialLeaveButtonFound = await checkForAdmissionIndicators(page);
     
-    // Negative check: ensure we're not still in lobby/pre-join
-    const initialLobbyTextVisible = await page.locator(teamsWaitingRoomIndicators[0]).isVisible();
-    
-    // Use selector-based approach instead of getByRole for consistency
-    const joinNowButtons = teamsJoinButtonSelectors.filter(sel => sel.includes('Join now'));
-    let initialJoinNowButtonVisible = false;
-    for (const selector of joinNowButtons) {
-      try {
-        const isVisible = await page.locator(selector).isVisible();
-        if (isVisible) {
-          initialJoinNowButtonVisible = true;
-          break;
-        }
-      } catch {}
-    }
-    
-    if (initialLeaveButtonFound && !initialLobbyTextVisible && !initialJoinNowButtonVisible) {
+    // Negative check: ensure we're not still in lobby/pre-join.
+    // We rely ONLY on lobby text — the visible "Join now" button is a pre-join
+    // control, not a lobby indicator, and treating it as such caused
+    // false-positive awaiting_admission loops when Step 6 silently failed.
+    const initialLobbyTextVisible = await isLobbyVisible(page);
+
+    if (initialLeaveButtonFound && !initialLobbyTextVisible) {
       log(`Found Teams admission indicator: visible Leave button - Bot is already admitted to the meeting!`);
       
       // CRITICAL FIX: When bot is immediately admitted, skip awaiting_admission callback
@@ -106,24 +114,12 @@ export async function waitForTeamsMeetingAdmission(
     
     // Check for waiting room indicators using visibility checks
     let stillInWaitingRoom = false;
-    
-    // Check for lobby text visibility
-    const waitingLobbyTextVisible = await page.locator(teamsWaitingRoomIndicators[0]).isVisible();
-    
-    // Use selector-based approach for join now button check
-    let waitingJoinNowButtonVisible = false;
-    for (const selector of joinNowButtons) {
-      try {
-        const isVisible = await page.locator(selector).isVisible();
-        if (isVisible) {
-          waitingJoinNowButtonVisible = true;
-          break;
-        }
-      } catch {}
-    }
-    
-    if (waitingLobbyTextVisible || waitingJoinNowButtonVisible) {
-      log(`Found Teams waiting room indicator: lobby text or Join now button visible - Bot is still in waiting room`);
+
+    // Lobby-text only — see note above on Join button false positives.
+    const waitingLobbyTextVisible = await isLobbyVisible(page);
+
+    if (waitingLobbyTextVisible) {
+      log(`Found Teams waiting room indicator: lobby text visible - Bot is still in waiting room`);
       
       // CRITICAL: Wait a moment to ensure "joining" callback is processed before sending "awaiting_admission"
       // This prevents race condition where awaiting_admission arrives before joining is processed
@@ -151,21 +147,11 @@ export async function waitForTeamsMeetingAdmission(
       const effectiveTimeout = () => timeout + getEscalationExtensionMs();
 
       while (Date.now() - startTime < effectiveTimeout()) {
-        // Check if we're still in waiting room using visibility
-        const lobbyTextStillVisible = await page.locator(teamsWaitingRoomIndicators[0]).isVisible();
+        // Lobby-text only — a visible "Join now" button means we never left
+        // the pre-join screen, NOT that we're in the lobby.
+        const lobbyTextStillVisible = await isLobbyVisible(page);
 
-        let joinNowButtonStillVisible = false;
-        for (const selector of joinNowButtons) {
-          try {
-            const isVisible = await page.locator(selector).isVisible();
-            if (isVisible) {
-              joinNowButtonStillVisible = true;
-              break;
-            }
-          } catch {}
-        }
-
-        const stillWaiting = lobbyTextStillVisible || joinNowButtonStillVisible;
+        const stillWaiting = lobbyTextStillVisible;
 
         if (!stillWaiting) {
           log("Teams waiting room indicator disappeared - checking if bot was admitted or rejected...");
@@ -205,21 +191,10 @@ export async function waitForTeamsMeetingAdmission(
       }
       
       // After waiting, check if we're still in waiting room using visibility
-      const finalLobbyTextVisible = await page.locator(teamsWaitingRoomIndicators[0]).isVisible();
-      
-      let finalJoinNowButtonVisible = false;
-      for (const selector of joinNowButtons) {
-        try {
-          const isVisible = await page.locator(selector).isVisible();
-          if (isVisible) {
-            finalJoinNowButtonVisible = true;
-            break;
-          }
-        } catch {}
-      }
-      
-      const finalWaitingCheck = finalLobbyTextVisible || finalJoinNowButtonVisible;
-      
+      const finalLobbyTextVisible = await isLobbyVisible(page);
+
+      const finalWaitingCheck = finalLobbyTextVisible;
+
       if (finalWaitingCheck) {
         throw new Error("Bot is still in the Teams waiting room after timeout - not admitted to the meeting");
       }
@@ -233,32 +208,24 @@ export async function waitForTeamsMeetingAdmission(
     
     const finalLeaveButtonFound = await checkForAdmissionIndicators(page);
     
-    // Negative check: ensure we're not still in lobby/pre-join
-    const finalLobbyTextVisible = await page.locator(teamsWaitingRoomIndicators[0]).isVisible();
-    
-    let finalJoinNowButtonVisible = false;
-    for (const selector of joinNowButtons) {
-      try {
-        const isVisible = await page.locator(selector).isVisible();
-        if (isVisible) {
-          finalJoinNowButtonVisible = true;
-          break;
-        }
-      } catch {}
-    }
-    
-    const admitted = finalLeaveButtonFound && !finalLobbyTextVisible && !finalJoinNowButtonVisible;
+    // Negative check: ensure we're not still in lobby/pre-join (lobby text only).
+    const postLobbyTextVisible = await isLobbyVisible(page);
+
+    const admitted = finalLeaveButtonFound && !postLobbyTextVisible;
     
     if (admitted) {
       log(`Found Teams admission indicator: visible Leave button - Bot is admitted to the meeting`);
     }
     
     if (!admitted) {
-      // The bot may still be transitioning. Poll for admission indicators
-      // for up to 30 seconds before concluding failure.
-      log("No Teams meeting indicators found yet — polling for up to 30s...");
+      // The bot may still be transitioning OR sitting in a lobby that we
+      // don't yet have selectors for. Poll for the full waitingRoomTimeout
+      // (default 5 min) before giving up — a hardcoded 30s here was much
+      // shorter than the time hosts typically take to admit a bot, and
+      // produced spurious admission_timeout exits.
+      log(`No Teams meeting indicators found yet — polling for up to ${Math.round(timeout / 1000)}s...`);
       const pollStart = Date.now();
-      const pollTimeout = 30000;
+      const pollTimeout = timeout;
       const pollInterval = 2000;
 
       while (Date.now() - pollStart < pollTimeout) {
@@ -279,7 +246,7 @@ export async function waitForTeamsMeetingAdmission(
         }
 
         // Check for waiting room (enter the waiting loop)
-        const lobbyText = await page.locator(teamsWaitingRoomIndicators[0]).isVisible().catch(() => false);
+        const lobbyText = await isLobbyVisible(page).catch(() => false);
         if (lobbyText) {
           log("Found Teams lobby text — entering waiting room loop...");
           // Re-enter the waiting room logic from here
@@ -293,7 +260,7 @@ export async function waitForTeamsMeetingAdmission(
           // Wait for admission in the lobby
           const lobbyStart = Date.now();
           while (Date.now() - lobbyStart < timeout) {
-            const stillInLobby = await page.locator(teamsWaitingRoomIndicators[0]).isVisible().catch(() => false);
+            const stillInLobby = await isLobbyVisible(page).catch(() => false);
             if (!stillInLobby) {
               const admittedNow = await checkForAdmissionIndicators(page);
               if (admittedNow) {

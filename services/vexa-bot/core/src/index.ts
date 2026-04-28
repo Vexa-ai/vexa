@@ -2124,6 +2124,10 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
         args: teamsLaunchArgs
       });
     }
+
+    if (!browserInstance) {
+      throw new Error("Failed to launch browser for Teams platform");
+    }
     
     // Create context with CSP bypass to allow script injection (like Google Meet)
     const context = await browserInstance.newContext({
@@ -2189,6 +2193,10 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
       headless: false,
       args: getBrowserArgs(!!botConfig.voiceAgentEnabled),
     });
+
+    if (!browserInstance) {
+      throw new Error("Failed to launch browser");
+    }
 
     // Create a new page with permissions and viewport for non-Teams
     const context = await browserInstance.newContext({
