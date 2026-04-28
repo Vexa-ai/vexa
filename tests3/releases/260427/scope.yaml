@@ -1303,6 +1303,174 @@ issues:
 # Estimated: ~3 days dev + [PLATFORM] invariant input.
 # Open during v0.10.6 groom with this entry as the seed.
 
+# ── v0.10.6 GROOM SEED — Pack Σ: meeting lifecycle taxonomy redesign ──
+# (Documented here so it carries forward; not in v0.10.5 ship scope.)
+#
+# Triggered by: v0.10.5 retrospective 2026-04-28 + recall.ai documentation
+# study (https://docs.recall.ai/docs/bot-status-change-events,
+# https://docs.recall.ai/docs/sub-codes). Three concerns conflate in our
+# current binary `completed | failed`:
+#   - Users don't see plain-language explanations of what happened
+#     (no action affordance — "failed" with no specific cause)
+#   - Engineering can't isolate bug rate from user/host/environment-
+#     driven failures (every silent-classification fix in v0.10.5 was a
+#     symptom of this)
+#   - Product can't read funnel cause attribution from the data
+#
+# Pack J's "default to failed when uncertain" is engineering-defensive
+# but user-hostile and product-hostile. v0.10.5 closed the silent-success
+# class; v0.10.6 closes the silent-classification class entirely.
+#
+# === DESIGN ===
+#
+# Two layers, recall.ai-aligned for future API translator compatibility:
+#
+# Layer 1: 9 LIFECYCLE STATES (renamed for recall-compat)
+#   - requested                 (vexa-specific; pre-spawn)
+#   - joining                ↔  bot.joining_call
+#   - in_waiting_room        ↔  bot.in_waiting_room
+#                               (renamed from awaiting_admission)
+#   - in_call_not_recording  ↔  bot.in_call_not_recording
+#                               (NEW; split from active)
+#   - in_call_recording      ↔  bot.in_call_recording
+#                               (NEW; split from active — closes
+#                                bot.active ≠ actually_capturing_audio)
+#   - needs_human_help          (vexa-specific; VNC affordance)
+#   - call_ended             ↔  bot.call_ended (transient)
+#                               (renamed from stopping)
+#   - done                   ↔  bot.done (terminal)
+#                               (renamed from completed)
+#   - fatal                  ↔  bot.fatal (terminal)
+#                               (renamed from failed)
+#
+#   The done/fatal cut rule is mechanical:
+#     done   if meeting reached in_call_recording at any point
+#     fatal  otherwise
+#
+#   This matches recall.ai's billing semantic — they don't bill for
+#   bot.fatal. Useful internal "engineering owns this rate" bucket
+#   even without billing.
+#
+# Layer 2: meeting.data.cause FIELD — agency-prefixed, ~70 named values
+#   user_*           → API caller's action  (user_cancelled,
+#                                            user_stopped, ...)
+#   host_*           → meeting host's action (host_did_not_admit,
+#                                             host_removed_bot_*, ...)
+#   platform_*       → platform's hard rule (platform_meeting_not_started,
+#                                            platform_requires_signin, ...)
+#   zoom_* /         → platform-specific failures
+#   google_meet_* /
+#   teams_* /
+#   webex_*
+#   bot_self_*       → bot's own configured leave (bot_self_left_alone,
+#                                                  bot_self_max_time, ...)
+#   bot_*            → OUR SOFTWARE FAULT (bot_crashed_pre_join,
+#                                          bot_audio_pipeline_failed,
+#                                          bot_internal_error, ...)
+#                      ←── ENGINEERING'S BUCKET. Bug rate query filters
+#                          to bot_* prefix. Clean signal, no pollution.
+#   ux_gap_*         → automation incomplete, escalation unresolved
+#                      (ux_gap_portal_navigation_unresolved, ...)
+#   unknown          → classifier rule didn't fire (engineering must
+#                      add a rule). NEVER user-facing directly; user
+#                      view layer maps to apologetic generic message.
+#
+# === THE THREE-AUDIENCE PAYOFF ===
+#
+# User-facing meeting page: cause → 5-class plain-English status with
+#   action affordance (✅ success / ⚪ aborted / ⚠ blocked-with-action /
+#   🔵 needs-help / 🔴 our-fault)
+#
+# Engineering bug rate (clean signal):
+#   SELECT count(*) FROM meetings
+#   WHERE data->>'cause' LIKE 'bot\_%' ESCAPE '\'
+#     AND end_time > NOW() - INTERVAL '7 days';
+#
+# Product funnel attribution:
+#   GROUP BY agency-prefix → user_decided / host_action /
+#                            platform_blocked / meeting_ended_naturally /
+#                            our_bug / automation_gap
+#
+# === RECALL.AI API TRANSLATOR (forward-compat motivation) ===
+#
+# Future requirement (project-owner direction 2026-04-28):
+#   "we want to create an API translator [for] AI Recall to Vexa"
+#
+# 7 of 9 vexa states map directly to recall events. Translator becomes
+# pure data — static lookup tables, no business logic:
+#
+#   recall_to_vexa: dict mapping recall events → vexa states
+#                   plus recall sub_codes → vexa causes (~80 entries)
+#   vexa_to_recall: inverse, with vexa-specific states (needs_human_help,
+#                   ux_gap_*, unknown) folded into closest recall analog
+#
+# Lands at services/meeting-api/meeting_api/translators/recall.py
+#
+# Recall-specific events we DON'T model (would translate to no-op or
+# closest analog):
+#   bot.recording_permission_allowed/denied  — Zoom Meeting SDK only;
+#                                              we use browser bots
+#   bot.breakout_room_*                       — out of scope until demand
+#
+# === IMPLEMENTATION (Pack Σ scope, target v0.10.6) ===
+#
+# Phase 1 (one cycle):
+#   - schemas.py: rename status enum values
+#   - meeting.data.cause field populated by ONE central classifier
+#     (replaces scattered _classify_stopped_exit calls — every miss
+#      in v0.10.5 was a parallel-write-site bug)
+#   - Audio-confirmation gate: meeting cannot enter in_call_recording
+#     until first segment POSTed successfully (closes bot.active ≠
+#     actually_capturing_audio at the schema level)
+#   - Backfill script populates data.cause for historical rows
+#     (data is JSONB — no schema migration)
+#   - Webhook v2 ships behind opt-in feature flag
+#   - Translator skeleton at translators/recall.py
+#
+# Phase 2 (next cycle):
+#   - Webhook v2 default; v1 deprecated with timeline
+#   - Old status values removed from new code paths
+#
+# Phase 3 (third cycle):
+#   - Old status values removed entirely; v1 webhook retired
+#
+# === PARALLEL-SURFACE-DRIFT PATTERNS PACK Σ ALSO CLOSES ===
+# (Documented in v0.10.5 architectural-debt audit posted to PLATFORM
+#  2026-04-27; symptoms recurred during develop iterations as bugs.)
+#
+#   1. bot.active ≠ bot.actually_capturing_audio
+#      → fixed by in_call_not_recording / in_call_recording split +
+#        audio-confirmation gate
+#   2. failure_stage defaults to ACTIVE when payload omits it
+#      (callbacks.py:312) — paints over real bot crashes (gerry's
+#      symptom 2026-04-27)
+#      → fixed by `unknown` cause as explicit class instead of
+#        default-painting-over
+#   3. self_initiated_leave defaults in bot.ts:634 mask distinct
+#      root causes
+#      → fixed by central classifier producing specific cause from
+#        observed signals, not from bot's reason string
+#   4. status='completed' survived Pack J.4 in DELETE-no-container,
+#      DELETE-fast-path, FAILED-branch
+#      → fixed by single canonical write path (one classifier call,
+#        every site)
+#   5. Stuck-in-stopping (lite m30 2026-04-27) — sweep is the safety
+#      net but synchronous detection at DELETE time is the proper fix
+#      → already partially fixed in v0.10.5 commit e16fa7e; full
+#        consolidation in Pack Σ
+#
+# === ESTIMATED EFFORT ===
+#
+# ~5 days dev across meeting-api / dashboard / docs:
+#   - 1d: schemas.py + central classifier function + audio gate
+#   - 1d: meeting.data.cause field plumbing + backfill script
+#   - 1d: dashboard cause → user-message lookup + meeting page UX
+#   - 1d: webhook v2 + back-compat layer + recall translator skeleton
+#   - 1d: regression matrix updates + Pack Y invariant tests for new
+#         taxonomy
+#
+# Open during v0.10.6 groom with this entry as the seed.
+
 expensive_tests: []
 
 strict_features: []
