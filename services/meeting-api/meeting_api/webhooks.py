@@ -80,7 +80,13 @@ def _get_webhook_config(meeting: Meeting) -> tuple[Optional[str], Optional[str]]
 
 
 def _build_meeting_event_data(meeting: Meeting) -> Dict[str, Any]:
-    """Build the meeting data dict used in webhook payloads."""
+    """Build the meeting data dict used in webhook payloads.
+
+    v0.10.5 additive: hoist completion_reason + failure_stage from JSONB data
+    to top-level keys so SDK consumers and Recall-displaced customers see
+    typed fields, not a JSONB dig. data still ships intact for back-compat.
+    """
+    data = meeting.data if isinstance(meeting.data, dict) else {}
     return {
         "id": meeting.id,
         "user_id": meeting.user_id,
@@ -88,6 +94,8 @@ def _build_meeting_event_data(meeting: Meeting) -> Dict[str, Any]:
         "native_meeting_id": meeting.native_meeting_id,
         "constructed_meeting_url": meeting.constructed_meeting_url,
         "status": meeting.status,
+        "completion_reason": data.get("completion_reason"),
+        "failure_stage": data.get("failure_stage"),
         "start_time": meeting.start_time.isoformat() if meeting.start_time else None,
         "end_time": meeting.end_time.isoformat() if meeting.end_time else None,
         "data": clean_meeting_data(meeting.data),

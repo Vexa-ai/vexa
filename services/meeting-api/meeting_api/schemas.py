@@ -798,9 +798,77 @@ class MeetingResponse(BaseModel): # Not inheriting from MeetingBase anymore to a
     bot_container_id: Optional[str]
     start_time: Optional[datetime]
     end_time: Optional[datetime]
+    completion_reason: Optional[MeetingCompletionReason] = Field(
+        None,
+        description="Reason the meeting concluded. Hoisted from data.completion_reason for typed-field access. None during in-flight states.",
+    )
+    failure_stage: Optional[MeetingFailureStage] = Field(
+        None,
+        description="Lifecycle stage at which the meeting failed. Hoisted from data.failure_stage for typed-field access. None when status != failed.",
+    )
     data: Optional[Dict] = Field(default_factory=dict, description="JSON data containing meeting metadata like name, participants, languages, notes, and status reasons")
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="before")
+    @classmethod
+    def _hoist_typed_fields_from_data(cls, values):
+        """Hoist completion_reason + failure_stage from JSONB data → top-level typed fields.
+
+        v0.10.5 mid-flight additive (FM-006 prefix): SDK consumers and Recall-displaced
+        customers expect typed fields, not a JSONB dig. The full `bot_lifecycle` envelope
+        is FM-006 / Pack Σ; this is the 80%-value half-step. Strictly additive: data
+        still ships intact.
+        """
+        # Dict path (e.g. .model_validate({...}) or kwargs construction)
+        if isinstance(values, dict):
+            data = values.get("data")
+            if isinstance(data, dict):
+                values.setdefault("completion_reason", data.get("completion_reason"))
+                values.setdefault("failure_stage", data.get("failure_stage"))
+            return values
+
+        # ORM-attribute path (.model_validate(orm_obj) with from_attributes=True).
+        # Build a dict so the hoisted values aren't shadowed by ORM attribute access.
+        data = getattr(values, "data", None)
+        if not isinstance(data, dict):
+            return values
+
+        out = {}
+        for fname in cls.model_fields:
+            if hasattr(values, fname):
+                out[fname] = getattr(values, fname)
+        out["completion_reason"] = data.get("completion_reason")
+        out["failure_stage"] = data.get("failure_stage")
+        return out
+
+    @field_validator('completion_reason', mode='before')
+    @classmethod
+    def _tolerate_unknown_completion_reason(cls, v):
+        """Read-tolerance: unknown values → None + WARN (mirrors data validator at L849-860)."""
+        if v is None or v == "":
+            return None
+        if isinstance(v, MeetingCompletionReason):
+            return v
+        try:
+            return MeetingCompletionReason(v)
+        except ValueError:
+            logger.warning("MeetingResponse: unknown completion_reason=%r → None (read-tolerant)", v)
+            return None
+
+    @field_validator('failure_stage', mode='before')
+    @classmethod
+    def _tolerate_unknown_failure_stage(cls, v):
+        """Read-tolerance: unknown values → None + WARN (mirrors data validator at L849-860)."""
+        if v is None or v == "":
+            return None
+        if isinstance(v, MeetingFailureStage):
+            return v
+        try:
+            return MeetingFailureStage(v)
+        except ValueError:
+            logger.warning("MeetingResponse: unknown failure_stage=%r → None (read-tolerant)", v)
+            return None
 
     @field_validator('status', mode='before')
     @classmethod
