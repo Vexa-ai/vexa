@@ -128,5 +128,103 @@ expect(
   'https://example.com/just-a-bare-page',
 );
 
+// ============================================================================
+// v0.10.5 audio_join_failed escalation — structural regression check
+// ============================================================================
+//
+// prepare.ts wraps a 3-attempt audio-join loop in zoom-web. When all 3
+// attempts fail, the bot was silently flipping to "active in DB, 0
+// transcripts ever produced" because the per-speaker capture pipeline
+// found 0 <audio> elements (computer audio was never joined). v0.10.5
+// commit 37316d6 introduced an explicit escalation: instead of silent
+// failure, the bot calls callNeedsHumanHelpCallback() with a structured
+// "audio_join_failed:" prefix so the dashboard surfaces a VNC link.
+//
+// The full-flow test would require playwright Page mocks for selectors
+// + waitForTimeout + locator, plus mocking the `callNeedsHumanHelpCallback`
+// network call — high friction for a regression-coverage gate. A
+// source-shape check is the right tier: it pins the escalation to its
+// source location + critical message-shape strings, catches deletion or
+// downgrade in code review, and runs in milliseconds.
+
+import * as fs from 'fs';
+import * as path from 'path';
+
+console.log('\n=== audio_join_failed escalation — structural regression check ===');
+
+function expectFileContains(
+  name: string,
+  filePath: string,
+  needle: string | RegExp,
+) {
+  let body: string;
+  try {
+    body = fs.readFileSync(filePath, 'utf-8');
+  } catch (e: any) {
+    console.log(`  \x1b[31mFAIL\x1b[0m  ${name} (cannot read ${filePath}: ${e.message})`);
+    failed++;
+    return;
+  }
+  const ok = typeof needle === 'string' ? body.includes(needle) : needle.test(body);
+  if (ok) {
+    console.log(`  \x1b[32mPASS\x1b[0m  ${name}`);
+    passed++;
+  } else {
+    console.log(`  \x1b[31mFAIL\x1b[0m  ${name}`);
+    console.log(`        needle: ${needle}`);
+    console.log(`        in:     ${filePath}`);
+    failed++;
+  }
+}
+
+const PREPARE_TS = path.join(__dirname, 'prepare.ts');
+
+// Escalation entrypoint must exist + import must be present.
+expectFileContains(
+  'prepare.ts imports callNeedsHumanHelpCallback',
+  PREPARE_TS,
+  /callNeedsHumanHelpCallback/,
+);
+
+// The audio-join loop must escalate on failure.
+expectFileContains(
+  'prepare.ts contains audio_join_failed escalation log',
+  PREPARE_TS,
+  'audio_join_failed',
+);
+
+// The escalation message must explain the consequence (no audio elements
+// → zero transcripts) so the dashboard's needs_human_help panel has
+// actionable context.
+expectFileContains(
+  'prepare.ts escalation message references missing-audio consequence',
+  PREPARE_TS,
+  /no\s*<audio>\s*elements|zero\s+transcripts|Without computer audio/i,
+);
+
+// The escalation must be wrapped in try/catch so a callback failure does
+// not crash the bot mid-meeting.
+expectFileContains(
+  'prepare.ts wraps callNeedsHumanHelpCallback in try/catch',
+  PREPARE_TS,
+  /try\s*\{[^}]*callNeedsHumanHelpCallback[\s\S]*?\}\s*catch/,
+);
+
+// The escalation must surface VNC instructions so the human knows what
+// action to take.
+expectFileContains(
+  'prepare.ts escalation message references VNC link surface',
+  PREPARE_TS,
+  /VNC/,
+);
+
+// The escalation block must follow the 3-attempt audio-join loop —
+// reverting to "fall through silently" is the regression we care about.
+expectFileContains(
+  'prepare.ts escalation gates on audioJoined === false',
+  PREPARE_TS,
+  /if\s*\(\s*!\s*audioJoined\s*\)/,
+);
+
 console.log(`\n=== summary: ${passed} passed, ${failed} failed ===`);
 process.exit(failed > 0 ? 1 : 0);

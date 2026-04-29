@@ -19,6 +19,9 @@ stay here.
 | `FM-003` | 2026-04-28 (via 11161) | * | `failure_stage` from bot payload doesn't reflect actual `meeting.status` — read-side allowlist tolerates, write-side never corrects | open |
 | `FM-004` | 2026-04-19 (onset; observed via FM-001) | google_meet | gmeet end-of-meeting page navigation — same trigger as FM-001; tracks the bot-side crash signature catalog | open (merged into FM-001 scope) |
 | `FM-005` | 2026-04-28 (ARCH-2 review of Option C) | n/a | Option C cosmetic carry-forward: inline-rebuilt classifier dict + silent-default failure_stage helper | open (v0.10.6) |
+| `FM-006` | 2026-04-28 (ARCH-2 spec, north-star check) | n/a | Full Recall-parity envelope — `bot_lifecycle: { joined_at, left_at, recorded_seconds, segment_count, exit_reason, failed_at_stage, status_path }` typed object on `MeetingResponse` + webhook payload | open (v0.10.6 / Pack Σ, blocks on FM-007) |
+| `FM-007` | 2026-04-28 (team-lead approved, Pack Σ keystone) | n/a | Shared `bot-lifecycle-vocab` package — single source of exit-reason strings + completion-reason mapping + human-readable descriptions; consumed by bot + meeting-api + SDK type-gen + dashboard. Kills "two enums secretly meant to match" antipattern at source. | open (v0.10.6 / Pack Σ keystone — starts post-0.10.5-ship; blocks FM-006/008/005-items) |
+| `FM-008` | 2026-04-29 (OSS-2 + team-lead redesign session) | n/a | Bot-lifecycle outcome-taxonomy redesign — 4-bucket model (success/user_aborted/environment_blocked/software_fault) + ~30 sub-causes + `audio_confirmed_at` flag + `needs_help` rename + 6-surface delivery framing | open (v0.10.6, blocks on FM-007) |
 
 Status vocabulary: `open` · `pending-data` · `fix-in-flight` · `fixed-in-X.Y.Z` · `partial-fix-in-X.Y.Z` · `wontfix` · `pending-decision`.
 
@@ -773,6 +776,257 @@ ARCH-2's principle: every cosmetic deferral is a tracked entry, not a
 mental note. Two cosmetic smells that ship as-is in v0.10.5 → file FM-005,
 target v0.10.6, link the parent fix. If they slip past Pack Σ they
 become observable as their own entry rather than rotting silently.
+
+---
+
+## FM-006 — full Recall-parity `bot_lifecycle` envelope
+
+```yaml
+id: FM-006
+slug: bot-lifecycle-envelope
+first_observed: 2026-04-28        # internal — ARCH-2 north-star check
+platform: n/a                     # internal API surface / contract shape
+status: open
+target: v0.10.6
+parent: Pack Σ
+class: design / deferred
+severity: design                   # not a bug; v0.10.5 ships 80% via additive promote
+linked_fixes: []
+prod_observations: 0
+filed_by: ARCH-2 (2026-04-28 north-star check, 13:30); routed to OSS-2 post-restart
+linked_callbacks_path: services/meeting-api/meeting_api/callbacks.py
+linked_schemas_path:   services/meeting-api/meeting_api/schemas.py
+linked_webhook_path:   services/meeting-api/meeting_api/webhooks.py
+sequencing:
+  blocks_on: FM-007                # vocab package is the single source of exit-reason strings
+  blocks: FM-008                  # 4-bucket outcome taxonomy reads from the envelope
+deferred_fixes:
+  - target: v0.10.6
+    pack: Σ
+    summary: implement the typed envelope after FM-007 keystone lands
+```
+
+### What this entry captures
+
+The full Recall-parity envelope on `MeetingResponse` and webhook payload. Shape:
+
+```python
+bot_lifecycle: {
+  joined_at: datetime | None,
+  left_at: datetime | None,
+  recorded_seconds: int | None,
+  segment_count: int | None,
+  exit_reason: str,             # from FM-007 vocab
+  failed_at_stage: str | None,  # from MeetingFailureStage
+  status_path: list[str],       # ordered status_transition slugs
+}
+```
+
+### Why deferred (v0.10.5 ships 80%)
+
+Mid-flight v0.10.5 additive promote (`daa5cc5`) ships typed `completion_reason` + `failure_stage` to the top level — closes ~80% of Recall-parity (the two fields most-frequently consumed by displaced customers). The full envelope adds joined/left timestamps, transcript stats, and the ordered status path — useful for richer integrations but not on the v0.10.5 critical path.
+
+Implementation blocks on FM-007: `exit_reason` and `failed_at_stage` should consume the vocab package's typed enums, not strings. Building the envelope before vocab lands re-creates the parallel-enum drift FM-007 keystone is approved to kill.
+
+### Cross-references
+
+- Architecture room: `/home/dima/dev/human/architecture.md` (Pack Σ priority stack item 2)
+- v0.10.5 partial closure: commit `daa5cc5` (additive promote of `completion_reason` + `failure_stage`)
+- Release room: `/home/dima/dev/human/release-0.10.5.md` (NORTH STAR §1, Recall-parity row marked ✅ for additive-promote scope)
+
+---
+
+## FM-007 — shared `bot-lifecycle-vocab` package (Pack Σ keystone)
+
+```yaml
+id: FM-007
+slug: bot-lifecycle-vocab-package
+first_observed: 2026-04-28        # team-lead approval
+platform: n/a                     # internal package / contract shape
+status: open
+target: v0.10.6
+parent: Pack Σ                    # keystone — head of the priority stack
+class: design / keystone
+severity: design                   # not a bug; structurally kills FM-002 family
+linked_fixes: []
+prod_observations: 0
+filed_by: team-lead approved 2026-04-28 ~17:50; routed to OSS-2 post-restart
+linked_consumer_paths:
+  - services/vexa-bot/core/src/platforms/shared/meetingFlow.ts:55-254  # bot exit-reason emission
+  - services/meeting-api/meeting_api/callbacks.py:52                   # _classify_stopped_exit
+  - services/meeting-api/meeting_api/schemas.py                        # MeetingCompletionReason / MeetingFailureStage
+  - dashboard composite view (TBD)                                     # SDK type-gen target
+sequencing:
+  blocks: [FM-006, FM-008, "FM-005 items 1+2", cross-repo JSONB audit]  # entire Pack Σ stack waits on this
+estimated_effort: ~1 week (per architecture room)
+implementation_questions:
+  - location: where does the package live? (shared monorepo path vs published artifact)
+  - language: Python source-of-truth + TS code-gen, or vice versa?
+  - sdk_codegen_path: which generator(s) consume it?
+deferred_fixes:
+  - target: v0.10.6
+    pack: Σ keystone
+    summary: stand up the package post-0.10.5-ship; OSS-2 owner per 2026-04-28 ~18:30 routing
+```
+
+### What this entry captures
+
+Single source of truth for:
+
+1. **Bot exit-reason strings** — the catalog currently scattered across `vexa-bot/core/src/platforms/shared/meetingFlow.ts:55-254` (~14 strings) and aliased into the meeting-api `_classify_stopped_exit` allowlist (`callbacks.py:262-271`).
+2. **Completion-reason mapping** — bot reason → `MeetingCompletionReason` enum value, consumed by classifier.
+3. **Human-readable descriptions** — what each reason means, surfaced to dashboard / SDK consumers.
+
+Imported by: bot (emits), meeting-api (classifies), SDK type-gen (consumes for typed customer integrations), dashboard (renders).
+
+### Why this is the keystone
+
+Kills the **two-enums-secretly-meant-to-match** antipattern at its source. FM-002 (allowlist bypass) was the most-recent prod symptom — bot emitted `post_join_setup_error` and the meeting-api classifier didn't recognize it, dropping `completion_reason` to NULL on 182 rows / 7d. The v0.10.5 fix (Option C central classifier) papers over by allowlisting; the structural fix is one shared vocabulary that compile-fails when out-of-sync.
+
+The unknown_bot_reason canary (decided 2026-04-28) is the bridge: until vocab lands, unknown reasons stash to `transition_metadata.unknown_bot_reason` and DATA mints catalog updates. Post-vocab, the catalog IS the contract; canary becomes a regression detector.
+
+### Why this blocks the entire Pack Σ stack
+
+- **FM-006** (envelope) consumes `exit_reason` typed from vocab — pre-vocab build = strings = drift.
+- **FM-008** (4-bucket outcome) reads cause from vocab — pre-vocab build = parallel enum at outcome layer (the exact pattern FM-007 kills).
+- **FM-005 item 1** (inline-dict refactor) — the dict IS the vocab; refactor lands as a vocab consumer.
+- **FM-005 item 2** (MeetingFailureStage canary) — same canary primitive as bot-reason; second instance of the pattern, lands together.
+- **Cross-repo JSONB audit** — uses vocab as a precedent for "shared contract via shared package, not shared JSONB shape".
+
+### Implementation questions (for OSS-2 post-ship scope)
+
+- **Location.** `packages/vexa-lifecycle-vocab/` in the OSS monorepo? Or a published artifact (`@vexa/lifecycle-vocab` on npm + PyPI)?
+- **Language.** Python source-of-truth (closest to the classifier) with TS code-gen for bot + dashboard? Or YAML/JSON source-of-truth with both Python + TS code-gen?
+- **SDK type-gen path.** Currently the SDK is hand-written; vocab as code-gen input is the right shape but needs the SDK type-gen pipeline to exist.
+
+These are scoping decisions, not implementation blockers. OSS-2 picks the answer post-0.10.5-ship as part of FM-007 implementation kickoff.
+
+### Cross-references
+
+- Architecture room: `/home/dima/dev/human/architecture.md` — Pack Σ priority stack item 1 (keystone), Decisions log 2026-04-28 entry 3
+- Recurring patterns observed: "two enums secretly meant to match" — first named instance
+- v0.10.5 patch that papers over: commit `0243737` (Option C central classifier with allowlist)
+- Canary primitive: decision 2026-04-28 in architecture room
+- Downstream blocked: FM-005 (items 1+2), FM-006, FM-008
+
+---
+
+## FM-008 — bot-lifecycle outcome-taxonomy redesign
+
+```yaml
+id: FM-008
+slug: bot-lifecycle-outcome-taxonomy-redesign
+first_observed: 2026-04-29   # internal redesign session, not a prod symptom
+platform: n/a                # internal taxonomy / data shape
+status: open
+target: v0.10.6
+parent: FM-006 (bot_lifecycle envelope) / FM-007 (bot-lifecycle-vocab keystone)
+class: design / deferred
+severity: design              # not a bug; v0.10.5 ships without it
+linked_fixes: []
+prod_observations: 0
+filed_by: ARCH-2 directive (2026-04-29 ~13:00) after OSS-2 + team-lead redesign session
+linked_callbacks_path: services/meeting-api/meeting_api/callbacks.py
+linked_readme: features/bot-lifecycle/README.md   # rewritten ~463 lines, uncommitted on release/260427
+linked_groom_seed: tests3/releases/260427/scope.yaml (Pack Σ entry, commit 8154359)
+sequencing:
+  blocks_on: FM-007            # vocab IS the substrate; without it FM-008 re-creates parallel-enum drift at outcome layer
+  blocks: FM-006              # full envelope depends on outcome shape
+deferred_fixes:
+  - target: v0.10.6
+    pack: Σ
+    summary: implement after FM-007 (bot-lifecycle-vocab) keystone lands
+```
+
+### What this entry captures
+
+The 4 design decisions that emerged from the 2026-04-29 09:00-09:45 MSK redesign session (OSS-2 + team-lead). Each is a v0.10.5-out-of-scope decision parked for post-FM-007 implementation in v0.10.6 / Pack Σ.
+
+#### 1. Four-bucket outcome model
+
+`success` / `user_aborted` / `environment_blocked` / `software_fault`, organized into normal vs abnormal:
+
+- **NORMAL** (no attention required): `success` ∪ `user_aborted` — maps to `v1.status=completed`
+- **ABNORMAL** (something needs attention): `environment_blocked` ∪ `software_fault` — maps to `v1.status=failed`
+
+~30 sub-causes, agency-prefixed: `user_*`, `host_*`, `requires_*`, `navigation_*`, `bot_self_*`, `bot_*`, `ux_gap_*`. Engineering's bug-rate query filters to `outcome=software_fault`; product funnel groups by `outcome=user_aborted` cause distribution; sales/docs reads `outcome=environment_blocked` patterns.
+
+#### 2. `data.audio_confirmed_at` flag
+
+Encodes the "bot reached the meeting DOM ≠ bot is actually capturing audio" invariant without splitting `active` into two lifecycle states. Set by bot (or collector on first segment landing). Classifier reads this to distinguish `success.recorded_*` from `software_fault.audio_pipeline_failed`.
+
+**Zero contract break for existing webhook consumers** — `meeting.status` semantics unchanged; new field is additive. This is the architectural alternative to renaming `active` → `in_call_not_recording`/`in_call_recording`, which was rejected in the same session as not paying back the migration cost.
+
+#### 3. `needs_human_help` → `needs_help` rename
+
+Clean rename, no alias bridge. State is ~3wk old (introduced 2026-04-05 in commit `9b8ba83`); no external webhook consumers depend on the string in production. Semantic is broader than human-only — the AI assist-agent path planned for v0.10.7+ uses the same lifecycle state with same VNC affordance.
+
+Code change ~5 LOC: enum value, callback function name (`callNeedsHumanHelpCallback` → `callNeedsHelpCallback`), DB string. Doc note in v0.10.6 release notes.
+
+#### 4. `environment_blocked` sub-classification policy
+
+Spans host-action / platform-requirement / navigation-blocked / infra spectrum:
+
+- **host actions** (clearly host's choice): `host_did_not_admit`, `host_rejected_admission`, `host_kicked_pre_recording`, `host_locked_meeting`, `meeting_full`, `meeting_not_started_yet`, `meeting_already_ended`
+- **platform-side prerequisites** (meeting requires X): `requires_authentication` (collapses signin/SSO/2FA in practice — indistinguishable to bot), `requires_registration`, `requires_captcha`, `org_restricted`
+- **navigation gap** (bot reached UI but couldn't pass it): `navigation_blocked_unfamiliar_ui` (catches LFX/AWS portal stuck without resolution), `navigation_blocked_button_not_found`
+- **infrastructure**: `network_dropped_connection`, `platform_server_error`, `platform_idle_kick`, `platform_max_duration_kick`
+
+Some causes are technically indistinguishable in practice (`requires_authentication` vs `navigation_blocked_unfamiliar_ui` both look like "we hit a sign-in dialog and didn't proceed"). Classifier policy: pick most-specific detectable cause (literal text indicators, known SSO redirect patterns), fall back to generic when ambiguous. Either way the user sees the same actionable message and retry/contact-host affordance.
+
+#### 5. Six-surface delivery framing
+
+Audience × outcome matrix mapped:
+
+| audience | reads | how |
+|---|---|---|
+| user (dashboard) | `data.outcome` + `data.cause` | 5-class visual treatment (✅⚪⚠🔵🔴), plain-English message, action button |
+| product (analytics) | JSONB indices on `outcome` + `cause` | funnel queries; cohort by user/platform |
+| engineering (observability) | structured log lines + audit trail | per-meeting debug + cluster queries |
+| devops (monitoring) | OSS-emitted log shape, PLATFORM-owned scrape pipeline | rate-of-`software_fault` page alerts; rate-of-`automation_gap_unresolved` slack |
+| API (integrators) | webhook v1 (additive only — narrowed status semantic) + webhook v2 (opt-in, ships outcome+cause+audio_confirmed_at) | `X-Vexa-Webhook-Version` header; `user.data.webhook_version` opt-in |
+| docs (release-notes) | migration guide for v1→v2 | one-page diff; recall translator availability for migrations |
+
+OSS does NOT ship `prometheus_client` or `/metrics` endpoint. Structured log lines are the contract; PLATFORM owns the scrape pipeline.
+
+### Why deferred (not extending v0.10.5 scope)
+
+ARCH-2 verdict 2026-04-29 ~10:30 — **SHIP ADDITIVE-ONLY** in v0.10.5. Reasons:
+
+1. **Sequencing.** Outcome-taxonomy without `bot-lifecycle-vocab` (FM-007 keystone) re-creates "two enums secretly meant to match" at the outcome-bucket layer; vocab IS the substrate; build substrate first. Today's 4-bucket model + ~30 sub-causes is exactly the new-enum-aligned-by-mapping shape FM-007 was approved to kill.
+2. **North-star fit.** Additive-promote already closes 80% of Recall-parity (approved 2026-04-28 scope); full envelope was already deferred to FM-006. FM-008 adds *more* shape on top of the same data-still-lies-in-JSONB gap, not closing it.
+3. **Stage hygiene.** Stage is `deploy`; extending = re-enter develop = stack a second stage-machine override on yesterday's audit trail. Each override is debt; pay it down by shipping.
+4. **"Ship today" violation.** North star said "today"; +3-4d compounds delay without changing user-visible value (FM-001/002/003 closed + 80% surface honesty IS the value).
+
+### Open decisions parked under this entry
+
+- **v1 webhook semantic narrowing.** Three options surfaced during the redesign session:
+  - **A** (outcome-derived): `v1.status=completed` if `outcome ∈ {success, user_aborted}` else `failed`. Behavioral change vs v0.10.4 — failed-bucket narrows; existing alerts see fewer fires (improvement, not regression).
+  - **B** (Pack-J-only): keep current behavior; ship outcome/cause as additive fields only.
+  - **C** (configurable): per-user `legacy_failed_semantic: true` flag → v1 emits Pack-J semantic; default false → outcome-derived.
+  - OSS-2 recommendation: **A** with release-note callout. Revert to **C** if specific customers push back. Decision parks under SHIP-ADDITIVE-ONLY verdict; revisits when the redesign actually lands.
+
+- **`outcome_class` as a field.** Resolved during session: **DROP** (redundant with v1.status binary under option A). Ship 3 new fields (`outcome` / `cause` / `audio_confirmed_at`), not 4.
+
+- **Bulk lifecycle state renames** (`awaiting_admission` → `in_waiting_room`, `active` → split, `stopping` → `call_ended`, `completed` → `done`, `failed` → `fatal`). Resolved during session: **DROP**. Migration cost for us + every webhook consumer doesn't pay back; recall translator handles name mapping at the boundary either way.
+
+### How this entry will close
+
+Three-phase implementation in v0.10.6:
+
+1. **Phase 1** (one cycle): schema + central classifier + audio-confirmation gate + backfill script + webhook v2 (opt-in feature flag) + recall translator skeleton.
+2. **Phase 2** (next cycle): webhook v2 default; v1 deprecated with timeline.
+3. **Phase 3** (third cycle): old taxonomy retired.
+
+Pre-condition: FM-007 (`bot-lifecycle-vocab`) keystone lands first. Without it, the outcome enum gets pinned in two places (meeting-api + bot) and drifts. With it, both consume the shared package; drift is a build error.
+
+### Cross-references
+
+- README rewrite: `features/bot-lifecycle/README.md` (~463 lines, uncommitted on `release/260427`, captures WHY/WHAT/HOW framing for the redesign).
+- Parent groom seed: `tests3/releases/260427/scope.yaml` Pack Σ entry (commit `8154359`).
+- Architecture room: `/home/dima/dev/human/architecture.md` (Pack Σ sequencing — `bot-lifecycle-vocab` keystone → envelope → MeetingFailureStage canary → inline-dict refactor → cross-repo JSONB audit).
+- Release room: `/home/dima/dev/human/release-0.10.5.md` (Decisions log entries dated 2026-04-29; LOG entries 09:00-09:45).
+- Recall.ai mapping: future translator at `services/meeting-api/meeting_api/translators/recall.py` — static lookup table; agency lift from sub_code names → vexa outcome.
 
 ---
 

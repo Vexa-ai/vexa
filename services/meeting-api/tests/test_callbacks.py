@@ -616,3 +616,249 @@ class TestFM001ClassifierCoverage:
         assert kwargs.get("failure_stage") == MeetingFailureStage.ACTIVE, (
             f"FM-003 regression: failure_stage not derived from meeting.status, got {kwargs.get('failure_stage')}"
         )
+
+
+# ===================================================================
+# v0.10.5 α-EXPANDED — FM-002 + FM-003 exhaustive parametrization
+# ===================================================================
+#
+# Audit 1 (ARCH-2 2026-04-29 ~13:15 UTC) flagged HIGH risk: FM-001's happy-
+# path test above does not exhaustively cover the classifier surface.
+# Future callbacks.py refactor that drops a branch (or adds a new reason
+# without routing) could revert FM-002/003 silently and validate would
+# pass. The two parametrized classes below pin every enum value at the
+# unit-test layer.
+#
+# - TestFM002ClassifierExhaustive: every MeetingCompletionReason × every
+#   meeting state (reached-active vs not) → asserts the returned tuple
+#   is (terminal_status, non_null_reason). NULL completion_reason or
+#   non-terminal status is the regression we care about.
+# - TestFM003FailureStageExhaustive: every MeetingStatus → asserts
+#   _failure_stage_from_status returns a valid MeetingFailureStage. The
+#   FM-003 regression shape was the function returning ACTIVE for
+#   pre-active statuses (server didn't actually derive; just defaulted).
+
+
+from datetime import timedelta
+from meeting_api.callbacks import (
+    _classify_stopped_exit,
+    _failure_stage_from_status,
+)
+
+
+class TestFM002ClassifierExhaustive:
+    """v0.10.5 FM-002 — every MeetingCompletionReason routes through the classifier with a non-NULL outcome.
+
+    Pinned at the unit-test layer rather than the HTTP-callback layer so
+    the regression is caught even if the callback wiring changes shape.
+    Closes audit-1's HIGH gap (ARCH-2 2026-04-29 ~13:15 UTC): "any future
+    callbacks.py change could revert this silently and validate would pass."
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("reason", list(MeetingCompletionReason))
+    async def test_every_reason_yields_terminal_status_and_non_null_reason_when_active(
+        self, mock_db, reason: MeetingCompletionReason,
+    ):
+        """For meetings that reached ACTIVE: every input reason yields (COMPLETED|FAILED, non-NULL reason)."""
+        meeting = make_meeting(
+            status=MeetingStatus.ACTIVE.value,
+            start_time=datetime.utcnow() - timedelta(minutes=30),
+            data={
+                "status_transition": [
+                    {"from": "joining", "to": "awaiting_admission"},
+                    {"from": "awaiting_admission", "to": "active"},
+                ],
+                "transcribe_enabled": True,
+            },
+        )
+        # Provide a non-zero segment count so the classifier's deeper
+        # success-proof path doesn't false-route to FAILED for STOPPED.
+        mock_db.execute = AsyncMock(return_value=MockResult(scalar_value=10))
+
+        target_status, returned_reason = await _classify_stopped_exit(
+            meeting, mock_db, reason,
+        )
+
+        # Every classification must terminal-route.
+        assert target_status in (MeetingStatus.COMPLETED, MeetingStatus.FAILED), (
+            f"FM-002 regression: reason={reason!r} did not route to a terminal status, got {target_status}"
+        )
+        # completion_reason must never be NULL after routing.
+        assert returned_reason is not None, (
+            f"FM-002 regression: reason={reason!r} produced NULL completion_reason"
+        )
+        # Returned reason must be a member of the enum (not a raw string).
+        assert isinstance(returned_reason, MeetingCompletionReason), (
+            f"FM-002 regression: reason={reason!r} produced non-enum value {returned_reason!r}"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("reason", list(MeetingCompletionReason))
+    async def test_every_reason_yields_terminal_status_and_non_null_reason_pre_active(
+        self, mock_db, reason: MeetingCompletionReason,
+    ):
+        """For meetings that did NOT reach ACTIVE: every input reason still yields (terminal, non-NULL)."""
+        meeting = make_meeting(
+            status=MeetingStatus.JOINING.value,
+            start_time=None,
+            data={"status_transition": [{"from": "requested", "to": "joining"}]},
+        )
+        mock_db.execute = AsyncMock(return_value=MockResult(scalar_value=0))
+
+        target_status, returned_reason = await _classify_stopped_exit(
+            meeting, mock_db, reason,
+        )
+
+        assert target_status in (MeetingStatus.COMPLETED, MeetingStatus.FAILED), (
+            f"FM-002 regression (pre-active): reason={reason!r} did not route to terminal, got {target_status}"
+        )
+        assert returned_reason is not None, (
+            f"FM-002 regression (pre-active): reason={reason!r} produced NULL completion_reason"
+        )
+
+    @pytest.mark.asyncio
+    async def test_explicit_failure_reasons_route_to_failed(self, mock_db):
+        """Explicit failure reasons (not LEFT_ALONE / STOPPED) route to FAILED regardless of meeting state."""
+        explicit_failures = [
+            MeetingCompletionReason.AWAITING_ADMISSION_TIMEOUT,
+            MeetingCompletionReason.AWAITING_ADMISSION_REJECTED,
+            MeetingCompletionReason.EVICTED,
+            MeetingCompletionReason.MAX_BOT_TIME_EXCEEDED,
+            MeetingCompletionReason.VALIDATION_ERROR,
+            MeetingCompletionReason.STOPPED_BEFORE_ADMISSION,
+            MeetingCompletionReason.STOPPED_WITH_NO_AUDIO,
+        ]
+        # Even with reached-active + segments, explicit failure reasons
+        # must still route to FAILED — the bot stated the failure
+        # explicitly, the classifier respects that.
+        meeting = make_meeting(
+            status=MeetingStatus.ACTIVE.value,
+            start_time=datetime.utcnow() - timedelta(minutes=30),
+            data={
+                "status_transition": [
+                    {"from": "joining", "to": "active"},
+                ],
+                "transcribe_enabled": True,
+            },
+        )
+        mock_db.execute = AsyncMock(return_value=MockResult(scalar_value=10))
+
+        for reason in explicit_failures:
+            target_status, returned_reason = await _classify_stopped_exit(
+                meeting, mock_db, reason,
+            )
+            assert target_status == MeetingStatus.FAILED, (
+                f"FM-002 regression: explicit failure {reason!r} did not route to FAILED, got {target_status}"
+            )
+            assert returned_reason == reason, (
+                f"FM-002 regression: explicit failure {reason!r} mutated to {returned_reason!r}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_left_alone_routes_completed(self, mock_db):
+        """LEFT_ALONE is a legitimate end-of-meeting; routes to COMPLETED."""
+        meeting = make_meeting(status=MeetingStatus.ACTIVE.value)
+        target_status, returned_reason = await _classify_stopped_exit(
+            meeting, mock_db, MeetingCompletionReason.LEFT_ALONE,
+        )
+        assert target_status == MeetingStatus.COMPLETED
+        assert returned_reason == MeetingCompletionReason.LEFT_ALONE
+
+    @pytest.mark.asyncio
+    async def test_stopped_pre_active_routes_to_stopped_before_admission(self, mock_db):
+        """STOPPED reason + meeting never reached active → FAILED + STOPPED_BEFORE_ADMISSION (432-class)."""
+        meeting = make_meeting(
+            status=MeetingStatus.JOINING.value,
+            data={"status_transition": [{"from": "requested", "to": "joining"}]},
+        )
+        target_status, returned_reason = await _classify_stopped_exit(
+            meeting, mock_db, MeetingCompletionReason.STOPPED,
+        )
+        assert target_status == MeetingStatus.FAILED, (
+            f"FM-002 regression: STOPPED + pre-active should route FAILED, got {target_status}"
+        )
+        assert returned_reason == MeetingCompletionReason.STOPPED_BEFORE_ADMISSION, (
+            f"FM-002 regression: STOPPED + pre-active should narrow to STOPPED_BEFORE_ADMISSION, got {returned_reason}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_stopped_long_meeting_zero_segments_routes_to_no_audio(self, mock_db):
+        """STOPPED reason + ≥30s active + transcribe enabled + 0 segments → FAILED + STOPPED_WITH_NO_AUDIO (125-class)."""
+        meeting = make_meeting(
+            status=MeetingStatus.ACTIVE.value,
+            start_time=datetime.utcnow() - timedelta(minutes=30),
+            data={
+                "status_transition": [{"from": "joining", "to": "active"}],
+                "transcribe_enabled": True,
+            },
+        )
+        mock_db.execute = AsyncMock(return_value=MockResult(scalar_value=0))
+
+        target_status, returned_reason = await _classify_stopped_exit(
+            meeting, mock_db, MeetingCompletionReason.STOPPED,
+        )
+        assert target_status == MeetingStatus.FAILED, (
+            f"FM-002 regression: long-meeting + 0 segments should route FAILED, got {target_status}"
+        )
+        assert returned_reason == MeetingCompletionReason.STOPPED_WITH_NO_AUDIO, (
+            f"FM-002 regression: long-meeting + 0 segments should narrow to STOPPED_WITH_NO_AUDIO, got {returned_reason}"
+        )
+
+
+class TestFM003FailureStageExhaustive:
+    """v0.10.5 FM-003 — _failure_stage_from_status returns the right stage for every MeetingStatus value.
+
+    Audit-1 flagged that the read-side tolerances (introduced in 3b54143,
+    f0e618a, c6937db) protect dashboard rendering, but no write-side test
+    pins the function's behaviour. A regression where _failure_stage_from_status
+    silently returns ACTIVE for every status would pass validate.
+    """
+
+    # Mapping the function is contractually expected to honor.
+    EXPECTED_STAGES = {
+        MeetingStatus.REQUESTED: MeetingFailureStage.REQUESTED,
+        MeetingStatus.JOINING: MeetingFailureStage.JOINING,
+        MeetingStatus.AWAITING_ADMISSION: MeetingFailureStage.AWAITING_ADMISSION,
+        MeetingStatus.ACTIVE: MeetingFailureStage.ACTIVE,
+    }
+
+    @pytest.mark.parametrize("status", list(MeetingStatus))
+    def test_every_status_yields_valid_stage(self, status: MeetingStatus):
+        """Every MeetingStatus → returned MeetingFailureStage is a member of the enum (never NULL, never raw string)."""
+        result = _failure_stage_from_status(status.value)
+        assert isinstance(result, MeetingFailureStage), (
+            f"FM-003 regression: status={status.value!r} produced non-enum value {result!r}"
+        )
+
+    @pytest.mark.parametrize("status,expected", list(EXPECTED_STAGES.items()))
+    def test_known_status_yields_expected_stage(
+        self, status: MeetingStatus, expected: MeetingFailureStage,
+    ):
+        """For known statuses, the returned stage matches the contract."""
+        result = _failure_stage_from_status(status.value)
+        assert result == expected, (
+            f"FM-003 regression: status={status.value!r} expected {expected!r}, got {result!r}"
+        )
+
+    def test_terminal_statuses_default_to_active(self):
+        """Terminal statuses (COMPLETED/FAILED/STOPPING/NEEDS_HUMAN_HELP) default to ACTIVE.
+
+        Pinned because the function uses dict.get(status, ACTIVE) — a
+        regression that flips the default would silently mislabel
+        post-active failures.
+        """
+        for status in (
+            MeetingStatus.COMPLETED,
+            MeetingStatus.FAILED,
+            MeetingStatus.STOPPING,
+            MeetingStatus.NEEDS_HUMAN_HELP,
+        ):
+            assert _failure_stage_from_status(status.value) == MeetingFailureStage.ACTIVE, (
+                f"FM-003 regression: terminal status {status.value!r} did not default to ACTIVE"
+            )
+
+    def test_unknown_status_defaults_to_active(self):
+        """Unknown / future / corrupt status string falls back to ACTIVE (defensive write-side default)."""
+        assert _failure_stage_from_status("future_status_unknown") == MeetingFailureStage.ACTIVE
+        assert _failure_stage_from_status("") == MeetingFailureStage.ACTIVE

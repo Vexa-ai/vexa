@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "tsx src/platforms/zoom/web/join.test.ts",
     "build": "tsc && cp -r src/services/hallucinations dist/services/hallucinations 2>/dev/null; node build-browser-utils.js",
     "build-browser": "node build-browser-utils.js",
     "dev": "tsx src/index.ts"

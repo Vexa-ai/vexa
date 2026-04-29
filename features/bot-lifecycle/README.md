@@ -9,328 +9,378 @@ services:
 
 **DoDs:** see [`./dods.yaml`](./dods.yaml) · Gate: **confidence ≥ 90%**
 
-## What
+**Current state.** v0.10.5 is **not shipped**. The release branch (`release/260427`) is in `develop` stage, debugging real bugs hit in live testing. The lifecycle work documented here is **the debugging** — we surfaced enough silent-classification failures ("default to failed" is dishonest, `active` is overloaded, multiple write paths drift apart) that the right fix isn't another patch; it's stepping back to decide what the lifecycle should actually MEAN before continuing. The shipped release in production is the previous one (`:latest`).
 
-Meeting bots join Google Meet, Microsoft Teams, and Zoom (via Web Client),
-transcribe audio, and leave. Each bot is a Docker container running
-Playwright that navigates to a meeting URL, joins, captures audio, and
-reports state changes back to meeting-api via HTTP callbacks.
+Status legend used throughout:
 
-**v0.10.5 Path 3 trust model.** Meeting URL inputs are accepted in three shapes:
+| marker | meaning |
+|---|---|
+| 🟢 | code on `release/260427`, in flight, NOT yet shipped to users |
+| 🟡 | design only — being decided NOW; goes into v0.10.6 (or v0.10.5 itself if we extend scope) |
+| 🔵 | direction noted; later release |
 
+---
+
+## WHY
+
+A meeting bot has to deliver transcripts under conditions we don't fully control: third-party meeting platforms whose UIs change, hosts who admit/reject/kick, networks that flap, and our own automation that doesn't yet handle every variation. The lifecycle has to model that reality without lying to anyone reading it.
+
+Three audiences read the lifecycle, asking different questions:
+
+| audience | their question |
+|---|---|
+| **user** | what happened to my meeting? what should I do next? |
+| **engineering** | is something broken in my code? |
+| **product** | where do users drop off and why? |
+
+Today's binary `completed | failed` conflates them — every bug we hit during v0.10.5 develop was a variant of "the data is lying to one of these audiences". The patches we shipped on the release branch (a routing-rule classifier, `audio_join_failed` escalation, stale-bot-container detection) close specific symptoms but inherit the same broken framing. **Live debugging is what surfaced this — and it's why we're redesigning the lifecycle before shipping v0.10.5, not after.**
+
+Two non-obvious framings drive the redesign:
+
+- **Default to specificity, never to a generic bucket.** When the classifier doesn't have a rule, that's its own named class (`classifier_gap`) — engineering's call to action, never user-facing. The "default to failed" rule was the wrong defensive move; the right one is "every meeting has a specific cause".
+- **`needs_help` is part of the success path.** When automation hits an unfamiliar UI (LFX portal, captcha, magic-link auth), the bot pauses, exposes the browser, and lets a human (or 🔵 LLM-driven assist-agent later) push it through. The bot's selector wait keeps polling — whoever clicks the right button, the lifecycle resumes. Meetings that pass through this state and produce transcripts land in `success`, not `software_fault`.
+
+A future `recall_to_vexa` API translator falls out of this design as a static lookup table.
+
+---
+
+## WHAT — the model
+
+### Outcomes (4 buckets × 2 classes) 🟡
+
+```
+┌─────────────────────────────────┬──────────────────────────────────┐
+│        NORMAL outcomes          │         ABNORMAL outcomes         │
+│   (no attention required)       │   (something needs attention)     │
+├─────────────────────────────────┼──────────────────────────────────┤
+│  success                        │  environment_blocked              │
+│    user got value               │    bot reached the platform but   │
+│                                 │    couldn't pass through its UI   │
+│  user_aborted                   │    (host action, platform req.,   │
+│    user's deliberate action     │    navigation gap, network)       │
+│    (cancel, stop, bad input)    │                                   │
+│                                 │  software_fault                   │
+│                                 │    our code or infra broke        │
+└─────────────────────────────────┴──────────────────────────────────┘
+```
+
+| outcome | remediation owner | example |
+|---|---|---|
+| `success` | nobody | recorded; user stopped happy; everyone left |
+| `user_aborted` | **product/UX** (funnel signal) | wrong password; user changed mind |
+| `environment_blocked` | **docs/sales + engineering** (per sub-cause) | host didn't admit; meeting requires SSO; bot couldn't navigate portal page |
+| `software_fault` | **ENGINEERING** (clean bug rate) | our code crashed; audio pipeline broke |
+
+Each terminal meeting also gets a specific `cause` (~30 named values).
+
+`environment_blocked` covers a spectrum that's worth sub-classifying because the remediation differs — and because **some of these are technically indistinguishable in practice**: when the bot reaches a sign-in page, we usually can't tell whether the meeting truly *requires* SSO for everyone or whether our automation just doesn't know how to bypass it. We pick the most-specific cause we can detect; fall back to a generic when the signal is ambiguous.
+
+```
+environment_blocked
+  ─── host action (clearly the host's choice) ───
+  ├─ host_did_not_admit              waiting room timeout, no explicit Decline
+  ├─ host_rejected_admission         host clicked Decline (explicit signal)
+  ├─ host_kicked_pre_recording       eviction event before recording started
+  ├─ host_locked_meeting             meeting was locked when bot tried to join
+  ├─ meeting_full                    at capacity
+  ├─ meeting_not_started_yet         bot joined too early
+  ├─ meeting_already_ended           bot joined after end
+
+  ─── platform-side prerequisite (the meeting requires X) ───
+  ├─ requires_authentication         signin / SSO / 2FA — usually the same to us
+  ├─ requires_registration
+  ├─ requires_captcha                detected captcha widget
+  ├─ org_restricted                  GMeet org-only, Zoom auth-only-participants
+
+  ─── navigation gap (bot reached UI but couldn't pass it) ───
+  ├─ navigation_blocked_unfamiliar_ui  LFX/AWS portal, magic-link, etc.
+  │                                    (catches the case where the bot
+  │                                     escalated to needs_help and
+  │                                     timed out without resolution)
+  ├─ navigation_blocked_button_not_found  selector miss on a known platform
+
+  ─── infrastructure ───
+  ├─ network_dropped_connection
+  ├─ platform_server_error              platform-side 5xx
+  ├─ platform_idle_kick                 platform's own idle detection
+  └─ platform_max_duration_kick         Zoom 40min free tier
+```
+
+The line between `requires_authentication` and `navigation_blocked_unfamiliar_ui` is fuzzy — both look like "we hit a sign-in dialog and didn't proceed". The bot tries to detect explicit indicators (literal text "you must sign in to join", known SSO redirect patterns) before falling back to the generic navigation-gap class. Either way, the user sees the same actionable message ("this meeting requires sign-in we can't bypass") with a retry/contact-host affordance.
+
+For `success`, `user_aborted`, and `software_fault` the sub-causes are simpler:
+
+```
+success
+  └─ recorded_fully | recorded_then_user_stopped | recorded_then_left_alone
+     | recorded_then_max_time | recorded_then_host_ended | recorded_then_host_kicked
+
+user_aborted
+  └─ cancelled_before_join | cancelled_quickly | wrong_password_provided
+     | wrong_url_provided | invalid_request
+
+software_fault
+  └─ bot_crashed_pre_join | bot_crashed_in_call | audio_pipeline_failed
+     | audio_join_dialog_failed | runtime_failed_to_launch | classifier_gap
+     | unknown_error
+```
+
+(Catalog grows per data — start with ~30 covering observed prod, not the full recall.ai 80+. Catalog only what data justifies.)
+
+Filtering examples:
+
+```sql
+-- Engineering bug rate (the only signal that pages someone)
+WHERE outcome = 'software_fault'
+
+-- Product funnel — where do users drop?
+WHERE outcome = 'user_aborted' GROUP BY cause
+
+-- Environment patterns — actionable for docs/sales
+WHERE outcome = 'environment_blocked' GROUP BY cause
+
+-- Headline KPI
+SELECT count(*) FILTER (WHERE outcome='success')::float / count(*)
+```
+
+User-facing dashboard maps each outcome to a visual class: ✅ success, ⚪ user_aborted, ⚠ environment_blocked, 🔴 software_fault. Most meetings are NOT red — only true software faults get the angry treatment.
+
+**Webhook v1 contract** (back-compat preserved): `v1.completed = success ∪ user_aborted` (NORMAL); `v1.failed = environment_blocked ∪ software_fault` (ABNORMAL). Existing consumers see fewer "failed" than today — because today over-reports failure.
+
+### Lifecycle states (8, no rename)
+
+```
+                              ┌─→ needs_help ←─┐
+                              │  (transient pause —   │
+                              │   bot's selector wait │
+                              │   keeps polling)      │
+                              ↓                       │
+requested → joining → awaiting_admission → active → stopping → completed
+   │           │            │                  │         │
+   └──────── failed ←──── failed ←──────── failed ←──── failed
+```
+
+| state | meaning |
+|---|---|
+| `requested` | DB row created, bot not yet spawned |
+| `joining` | Bot process alive, navigating to meeting URL |
+| `awaiting_admission` | In platform's waiting room |
+| `active` | In the meeting (DOM reached); audio capture running |
+| `needs_help` | Transient pause — VNC exposed for human/AI assist |
+| `stopping` | Leaving the meeting; cleanup in progress (transient) |
+| `completed` | Terminal — controlled exit (configured/expected path) |
+| `failed` | Terminal — error condition prevented normal lifecycle |
+
+**We are NOT renaming our states for recall.ai compatibility.** A `recall_to_vexa` translator is a static lookup table either way (`bot.joining_call → "joining"`); rename gains no translator simplicity but costs migration for every existing webhook consumer with integrations on the current names. Keep what works; map at the translation boundary.
+
+The substantive change is **encoding the audio-confirmation gate without breaking the contract**:
+
+- `meeting.data.audio_confirmed_at` 🟡 — timestamp when first transcript segment lands. Set by the bot (or collector, on receiving the first segment). The classifier reads this to distinguish `active` meetings that produced audio from `active` meetings that didn't.
+- `meeting.status` semantics unchanged: `active` still means "bot is in the meeting DOM". Existing consumers don't observe a contract break.
+- Outcome classifier uses `audio_confirmed_at` to decide between `success.recorded_*` and `software_fault.audio_pipeline_failed` — the data encodes the truth without renaming the state.
+
+Today's `bot.active ≠ bot.actually_capturing_audio` parallel-surface drift is closed by this flag, with zero migration cost.
+
+For recall.ai mapping, the translator synthesizes the recall name from `(status, audio_confirmed_at)`:
+
+```
+recall direction (incoming):
+  bot.in_call_not_recording → vexa: status='active', audio_confirmed_at=null
+  bot.in_call_recording     → vexa: status='active', audio_confirmed_at=<ts>
+
+vexa direction (outgoing — for users wanting recall-compat webhooks):
+  vexa active + null audio_confirmed_at  → emit bot.in_call_not_recording
+  vexa active + non-null audio_confirmed_at → emit bot.in_call_recording
+```
+
+Other recall name differences (`in_waiting_room` ↔ `awaiting_admission`, `done` ↔ `completed`, `fatal` ↔ `failed`, `call_ended` ↔ `stopping`) are pure renames at the translator layer — no internal change.
+
+### Transition rules
+
+Each row is one specific cause within a transition. Where today's table has multi-class rows, splits the row.
+
+| From | To | Trigger sub-cause | Outcome | Class |
+|---|---|---|---|---|
+| requested | failed | Schema validation (bad URL/payload) | `user_aborted.invalid_request` | normal |
+| requested | failed | Wrong password rejected pre-spawn | `user_aborted.wrong_password_provided` | normal |
+| requested | failed | Spawn infrastructure failure | `software_fault.runtime_failed_to_launch` | abnormal |
+| requested | done | User DELETE before bot joined | `user_aborted.cancelled_before_join` | normal |
+| joining | failed | Wrong password / wrong URL | `user_aborted.wrong_*` | normal |
+| joining | failed | Meeting requires signin / 2FA / captcha / org-restricted | `environment_blocked.requires_*` | abnormal |
+| joining | failed | Meeting locked / full / not-started / ended | `environment_blocked.*` | abnormal |
+| joining | failed | Network drop during navigation | `environment_blocked.network_dropped_connection` | abnormal |
+| joining | failed | Selector timeout — UI variant we don't handle (LFX portal) | `software_fault.automation_gap_unresolved` | abnormal |
+| joining | failed | Bot JS exception in our code | `software_fault.bot_crashed_pre_join` | abnormal |
+| joining | needs_help | Auth wall / portal page detected | (transient — recoverable) | — |
+| in_waiting_room | failed | Host rejected / admission timeout | `environment_blocked.host_*` | abnormal |
+| needs_help | (resume) | Human/AI clicked, selector wait fired | (back to lifecycle) | — |
+| needs_help | failed | User clicked Stop | `user_aborted.cancelled_quickly` | normal |
+| needs_help | failed | Escalation timeout (no help came) | `software_fault.automation_gap_unresolved` | abnormal |
+| in_call_not_recording | needs_help | `audio_join_failed` (Zoom Web consent) | (transient — recoverable) | — |
+| in_call_recording | done | `LEFT_ALONE` / user stopped after segments / max-time | `success.recorded_then_*` | normal |
+| in_call_recording | done | `EVICTED` after recording (today: failed — wrong) | `success.recorded_then_host_kicked` | normal |
+| in_call_not_recording | fatal | `STOPPED_WITH_NO_AUDIO` (30s+, transcribe-on, 0 segments) | `software_fault.audio_pipeline_failed` | abnormal |
+| in_call_not_recording | fatal | `EVICTED` before recording | `environment_blocked.host_kicked_pre_recording` | abnormal |
+| in_call_recording | fatal | Bot JS crash mid-meeting | `software_fault.bot_crashed_in_call` | abnormal |
+| stopping | (classifier output) | various | resolves to one of the rows above | — |
+| call_ended | fatal (sweep) | Stale > 5min, force-finalize | `software_fault.classifier_gap` + classified-by-data | abnormal |
+
+#### Today's mis-routings (the redesign closes)
+
+The transition shape is right; the routing is wrong:
+
+| today's classifier | reality |
+|---|---|
+| `EVICTED` post-recording → failed | should be `success.recorded_then_host_kicked` (bot delivered value) |
+| `MAX_BOT_TIME_EXCEEDED` post-recording → failed | should be `success.recorded_then_max_time` (bot ran the full asked time) |
+| schema validation → failed (alarming red) | should be `user_aborted.invalid_request` (normal — user typo) |
+| wrong password → failed (alarming red) | should be `user_aborted.wrong_password_provided` (normal) |
+
+### `needs_help` — hybrid automation
+
+🟡 Renamed from `needs_human_help` — the state is broader than human-only assist (an LLM-driven `assist-agent` is the planned 🔵 phase 2 operator using the same Playwright/CDP surface).
+
+The state has three properties that make it part of the success path, not failure:
+
+1. **Browser stays alive.** No `page.close()`, no idle-timeout reaping. VNC server, runtime-api `/touch`, dashboard WS all stay live for the whole pause window.
+2. **Resolution is automatic detection of progress.** The bot's existing `page.waitForSelector()` is the resolution mechanism — whoever clicks the right button (human via VNC, or 🔵 AI via Playwright later), the bot sees the next-stage element appear and continues its joining flow. No "I'm done" signal needed.
+3. **Resolved meetings end in `success`, not `software_fault`.** The escalation is part of the lifecycle, not the outcome. `software_fault.automation_gap_unresolved` is reserved for the case where help didn't come in time.
+
+#### Canonical example: LFX zoom-portal URL
+
+`https://zoom-lfx.platform.linuxfoundation.org/meeting/<id>?password=<uuid>` renders an extra "Continue" / consent page before redirecting to the actual Zoom Web Client. Bot doesn't know that DOM.
+
+```
+T+0    POST /bots; Path 3 schema accepts; bot spawns
+T+3s   bot navigates to LFX URL verbatim (white-label passthrough)
+T+10s  Pre-emptive escalation — no Zoom name input visible, no waiting-room banner.
+       status: joining → needs_help; dashboard shows 🔵 panel with VNC link
+T+30s  user opens VNC, clicks "Continue" on portal page
+T+37s  LFX redirects to Zoom Web Client; Zoom name input renders
+T+39s  bot's selector wait fires (still polling — never paused)
+       bot resumes: typeName + clickJoin → in_waiting_room → in_call_recording
+T+30m  user ends meeting → call_ended → done
+       outcome: success.recorded_then_user_stopped (NORMAL ✅)
+```
+
+The user-assist becomes part of the success path. Honest.
+
+#### 🔵 AI as operator (later, same code surface)
+
+The escalation event is the integration point. Replace human VNC viewer with `assist-agent` service that fetches a screenshot, prompts an LLM, executes the action via the same `/b/{meeting_id}/cdp` endpoint. Bot doesn't change; selector wait is the same resolution mechanism.
+
+### Path 3 — meeting URL inputs (white-label support 🟢)
+
+POST /bots accepts URLs in three shapes:
 1. `(platform + native_meeting_id)` — canonical
-2. URL alone — server parses, extracts native_meeting_id from canonical Zoom/Meet/Teams URLs
-3. `(meeting_url + platform)` — **white-label / enterprise URLs** (LFX, AWS Chime, Bloomberg-style portals). Server best-effort extracts a numeric ID where possible (regex `\b(\d{9,11})\b`), falls back to a hash sentinel for opaque URLs. Bot navigates the URL **verbatim** — does NOT rewrite to canonical Zoom Web Client. A human can VNC in to click through any portal-side T&C / consent / captcha page.
+2. URL alone — server parses, extracts `native_meeting_id` for known platforms
+3. **`(meeting_url + platform)`** — white-label/enterprise portals
 
-This means the schema accepts URLs we've never seen before. The cost: when the bot can't auto-navigate the portal, it escalates to `needs_human_help` and waits up to 5 min for human VNC assistance (vs the 30s wait for canonical URLs).
+For path 3, the bot navigates the URL **verbatim**. Hostname-anchored detection: only `zoom.us` / `*.zoom.us` URLs with `/j/<digits>` get rewritten to canonical web client; everything else passes through with a 5min selector wait so a human can VNC in. The hostname check is `hostname === 'zoom.us' || hostname.endsWith('.zoom.us')` — substring would false-positive on `zoom-lfx.platform.linuxfoundation.org`.
 
-## State machine (v0.10.5)
+---
 
+## HOW — implementation
+
+### Lifetime management (4 mechanisms)
+
+Meeting bots use **model 1** (consumer-managed) from runtime-api. `idle_timeout: 0` — runtime-api never auto-stops them. Meeting-api owns the full lifecycle:
+
+| # | mechanism | how |
+|---|---|---|
+| 1 | **Server-side hard limit** | scheduler job in runtime-api: `execute_at = now + max_bot_time` (default 2h) → `DELETE /bots/internal/timeout/{id}` |
+| 2 | **Bot-side timers** | bot self-exits when `no_one_joined_timeout` (2min default) / `max_wait_for_admission` (15min) / `max_time_left_alone` (15min) fires |
+| 3 | **User DELETE** | `DELETE /bots/{platform}/{native_id}` → Redis `{action: leave}` → bot exits |
+| 4 | **Platform events** | bot detects evicted/ended/disconnected → self-exit |
+
+All 4 paths converge on the classifier (`callbacks.py:_classify_stopped_exit`). The redesign extends to a single central outcome classifier called from every terminal write site.
+
+Resolution order for timeout config: per-request `automatic_leave` → `user.data.bot_config` → system defaults.
+
+### Delayed stop + sweep safety nets 🟢
+
+DELETE flow:
+1. Send Redis `{action: leave}`
+2. Status → stopping/`call_ended`; **enqueue stop in Redis Stream outbox** (`container_stop_outbox.py`, `fire_at = now + 90s`)
+3. If bot exits naturally within 90s → exit callback fires → classifier → terminal
+4. Else outbox consumer (in `sweeps.py`) calls `DELETE /containers/{name}` on runtime-api with retries 5x → DLQ
+
+**Why durable outbox** (vs v0.10.4 in-memory `asyncio.create_task`): the in-memory task was lost on meeting-api restart; bot stayed running, meeting stuck in stopping. Outbox is durable across restarts.
+
+**Stale `bot_container_id` detection** 🟢: at DELETE time, validates `container_name` via `GET /containers/{name}`. If 404 or `status != running`, routes through the no-container classifier branch synchronously instead of waiting for the 5-min sweep.
+
+**Stale-stopping sweep** 🟢 (`sweeps.py:_sweep_stale_stopping`): every 60s, scans rows in `stopping` for >5min, force-finalizes via the classifier. Safety net for bots whose exit callback never landed.
+
+### Concurrency
+
+`max_concurrent_bots` counts meetings in non-terminal states (`requested`, `joining`, `in_waiting_room`, `in_call_*`, `needs_help`). `call_ended` is NOT counted — slot released immediately on DELETE so user doesn't wait 90s for the next bot. Two containers may run briefly; only one "active" meeting counts.
+
+### Callbacks (bot → meeting-api)
+
+| Endpoint | Called when |
+|---|---|
+| `/bots/internal/callback/status_change` | Any state transition (unified) |
+| `/bots/internal/callback/exited` | Bot process exits |
+| `/bots/internal/callback/joining` / `awaiting_admission` / `started` | Stage-specific transitions |
+| 🟢 `/bots/internal/test/session-bootstrap` | Synthetic test rig — gated by `VEXA_ENV != production` |
+
+All callbacks: 3 retries, exponential backoff (1s/2s/4s), 5s timeout each. Status transitions protected by `SELECT FOR UPDATE`.
+
+🟢 **`dry_run: true`** flag (gated by non-prod): creates meeting row + bot_config, skips `_spawn_via_runtime_api`. Used by the synthetic test rig under `tests3/synthetic/` to drive the lifecycle without external dependencies.
+
+### Components
+
+| Component | File | Role |
+|---|---|---|
+| Bot creation | `services/meeting-api/meeting_api/meetings.py:870-1130` | POST /bots, Path 3 extraction, spawn, dry_run gate |
+| Outcome classifier | `services/meeting-api/meeting_api/callbacks.py:52` | `_classify_stopped_exit` — single source of truth for terminal-state routing |
+| Stop/timeout | `services/meeting-api/meeting_api/meetings.py:1530-1650` | DELETE, stale-container detection, no-container classifier branch |
+| Container-stop outbox | `services/meeting-api/meeting_api/container_stop_outbox.py` | Durable Redis Stream outbox for DELETE container-stop |
+| Sweeps | `services/meeting-api/meeting_api/sweeps.py` | Stale-stopping + outbox consumer + aggregation-failure retry |
+| Bot core | `services/vexa-bot/core/src/platforms/shared/meetingFlow.ts` | Join, admit, capture flow |
+| Zoom Web join | `services/vexa-bot/core/src/platforms/zoom/web/join.ts` | URL parser (canonical rewrite vs white-label passthrough); 5min wait for portals |
+| Zoom Web prepare | `services/vexa-bot/core/src/platforms/zoom/web/prepare.ts` | Audio-join 3-attempt loop + `needs_help` escalation |
+| Bot exit-reason callbacks | `services/vexa-bot/core/src/utils.ts` | `callJoiningCallback`, `callStartupCallback`, `callNeedsHumanHelpCallback` (🟡 rename to `callNeedsHelpCallback` as part of state rename) |
+| Scheduler | `services/runtime-api/runtime_api/scheduler.py` | `max_bot_time` enforcement |
+| Runtime exit callback | `services/runtime-api/runtime_api/lifecycle.py` | Pod-event capture (OOMKill, Evicted) + durable callback delivery |
+| 🟡 Recall translator | `services/meeting-api/meeting_api/translators/recall.py` (planned) | Static lookup table — recall webhook → vexa state-change |
+
+### Recall.ai mapping summary
+
+7 of 9 vexa states map directly to recall events. Translator is a static lookup table:
+
+```python
+RECALL_TO_VEXA_STATE = {
+    "bot.joining_call":             "joining",
+    "bot.in_waiting_room":          "in_waiting_room",
+    "bot.in_call_not_recording":    "in_call_not_recording",
+    "bot.in_call_recording":        "in_call_recording",
+    "bot.recording_permission_denied": "needs_help",  # special — vexa exposes VNC
+    "bot.recording_permission_allowed": None,               # drop — Meeting SDK only
+    "bot.call_ended":               "call_ended",
+    "bot.done":                     "done",
+    "bot.fatal":                    "fatal",
+    "bot.breakout_room_*":          None,                   # drop
+}
+
+# (state, sub_code) → (outcome, cause): translator does the agency lift
+# Recall's done/fatal cut is "controlled exit vs error" — coarser than our
+# 4-bucket. Their sub_code names already encode agency; translator extracts.
+RECALL_TO_VEXA_OUTCOME = {
+    ("bot.fatal", "meeting_password_incorrect"):   ("user_aborted", "wrong_password_provided"),
+    ("bot.fatal", "meeting_locked"):               ("environment_blocked", "host_locked_meeting"),
+    ("bot.fatal", "bot_errored"):                  ("software_fault", "unknown_error"),
+    ("bot.done",  "timeout_exceeded_everyone_left"):("success", "recorded_then_left_alone"),
+    ("bot.done",  "bot_kicked_from_call"):         # split on reached_recording:
+                                                    # success.recorded_then_host_kicked or
+                                                    # environment_blocked.host_kicked_pre_recording
+    # ... ~80 entries
+}
 ```
-    POST /bots
-        │
-        ▼
-  ┌───────────┐
-  │ requested  │  meeting record created, container spawning
-  └─────┬─────┘
-        │ bot callback: joining
-        ▼
-  ┌───────────┐
-  │  joining   │  container running, navigating to meeting URL
-  └──┬──┬─────┘     (5min selector wait for white-label URLs;
-     │  │           30s wait for canonical platform URLs)
-     │  │
-     │  └── bot callback: needs_human_help ──► ┌──────────────────┐
-     │                                         │ needs_human_help  │ ◄─── audio_join_failed
-     │  bot callback: awaiting_admission       └────┬─────────────┘      escalates here too
-     │                                              │ user resolves via VNC
-     ▼                                              ▼
-  ┌────────────────────┐                     back to active
-  │ awaiting_admission  │  in lobby, waiting for host to admit
-  └──────┬─────────────┘
-         │ bot callback: active (host admitted)
-         ▼
-  ┌───────────┐
-  │  active    │  in meeting; audio capture pipeline running
-  └──┬──┬─────┘   (NB: `active` ≠ "actually capturing audio" — see Pack Σ
-     │  │             section below; v0.10.6 splits this into
-     │  │             in_call_not_recording / in_call_recording)
-     │  │
-     │  └── DELETE /bots (user) ─────────────┐
-     │  └── scheduler timeout (max_bot_time) ─┤
-     │  └── bot self-exit (any reason)        │
-     │                                        ▼
-     │                                  ┌───────────┐
-     │                                  │ stopping   │  leave cmd sent, finalizing
-     │                                  └─────┬─────┘
-     │                                        │ bot exit callback OR
-     │                                        │ stale-stopping sweep (5min)
-     │                                        ▼
-     │                       ┌─────── Pack J classifier ─────────┐
-     │                       │ (services/meeting-api/             │
-     │                       │  meeting_api/callbacks.py:52)      │
-     │                       │                                    │
-     │                       │ • LEFT_ALONE → completed          │
-     │                       │ • STOPPED + reached_active +       │
-     │                       │   has_segments → completed         │
-     │                       │ • STOPPED + transcribe_disabled    │
-     │                       │   OR <30s → completed              │
-     │                       │ • STOPPED + reached_active + 0    │
-     │                       │   segments → FAILED (no_audio)    │
-     │                       │ • STOPPED + !reached_active →     │
-     │                       │   FAILED (before_admission)       │
-     │                       │ • EVICTED / TIMEOUT / etc → FAILED │
-     │                       └────┬─────────────────────┬────────┘
-     │                            ▼                     ▼
-     │                       ┌──────────┐         ┌──────────┐
-     │                       │ completed │         │  failed   │  terminal: failure_stage
-     │                       └──────────┘         └──────────┘  + completion_reason
-     │                                                  ▲
-     └── error at any point ──────────────────────────┘
-```
 
-## Transition rules (v0.10.5)
+**Key insight on the cuts:** recall's `bot.fatal` is NOT vexa's `abnormal`. Recall puts user input errors (`meeting_password_incorrect`) in fatal because their billing model says "don't charge for those" — customer-friendly but it makes their fatal rate useless as an engineering signal. Our 4-bucket fixes this — `software_fault` is engineering's bucket alone.
 
-
-| From               | To                 | Trigger                                              |
-| ------------------ | ------------------ | ---------------------------------------------------- |
-| requested          | joining            | Bot callback                                         |
-| requested          | failed             | Validation error, spawn failure                      |
-| requested          | stopping           | User DELETE                                          |
-| joining            | awaiting_admission | Bot callback                                         |
-| joining            | active             | Bot callback (no waiting room)                       |
-| joining            | needs_human_help   | Bot escalation (auth_required, portal page stuck)    |
-| joining            | failed             | Platform error                                       |
-| awaiting_admission | active             | Bot callback (admitted)                              |
-| awaiting_admission | needs_human_help   | Bot escalation                                       |
-| awaiting_admission | failed             | Rejected, timeout                                    |
-| needs_human_help   | active             | User resolved via VNC                                |
-| needs_human_help   | failed             | User gave up OR escalation timeout                   |
-| active             | needs_human_help   | audio_join_failed (Zoom Web 3-attempt loop fell through; v0.10.5 commit 37316d6) |
-| active             | stopping           | User DELETE, scheduler timeout                       |
-| active             | completed          | Bot self-exit, classifier verifies positive proof    |
-| active             | failed             | Bot self-exit, classifier finds no_audio / no proof  |
-| stopping           | completed          | Pack J classifier rules (see below)                  |
-| stopping           | failed             | Pack J classifier rules (see below)                  |
-| stopping           | failed (sweep)     | Stale > 5min, force-finalize via Pack E.3.2 sweep    |
-
-
-## Pack J classifier (v0.10.5 — the routing principle)
-
-**Status used to default to `completed` on any clean exit.** [PLATFORM] data on issue #255 showed 47% (557/1183) of `completed` meetings in 30 days had zero transcripts. The bot was reporting eviction / admission_timeout / max_bot_time correctly via `completion_reason`, but the meeting-api callback handler ignored those signals.
-
-`_classify_stopped_exit` (services/meeting-api/meeting_api/callbacks.py:52) is the canonical routing function. **Every code path that transitions to a terminal state goes through it.** If you find a write site that doesn't, that's a bug — every silent-classification fix in v0.10.5 was the same pattern (Pack X session caught 4 bypass sites: status_change, exit_callback, DELETE no-container, DELETE fast-path).
-
-The principle:
-
-> `completed` = **positive proof of success**. `failed` = absence of that proof OR explicit failure signal.
-
-Concretely, in priority order:
-
-1. `completion_reason ∈ {AWAITING_ADMISSION_TIMEOUT, AWAITING_ADMISSION_REJECTED, EVICTED, MAX_BOT_TIME_EXCEEDED, VALIDATION_ERROR, STOPPED_BEFORE_ADMISSION, STOPPED_WITH_NO_AUDIO}` → **failed** with that reason
-2. `LEFT_ALONE` → **completed** (everyone else left, bot did its job)
-3. `STOPPED` with `not reached_active` → **failed (STOPPED_BEFORE_ADMISSION)**
-4. `STOPPED` with `reached_active AND (duration < 30s OR transcribe_disabled)` → **completed** (user-initiated quick stop)
-5. `STOPPED` with `reached_active AND duration ≥ 30s AND transcribe_enabled AND segment_count == 0` → **failed (STOPPED_WITH_NO_AUDIO)**
-6. `STOPPED` with `reached_active AND segment_count > 0` → **completed**
-7. unknown reason → **failed** (defensive — don't silently green-light)
-
-## Escalation (needs_human_help)
-
-When a bot is stuck in an unknown state, it triggers escalation:
-
-1. Bot-side: `callNeedsHumanHelpCallback(botConfig, reason)` → status change to `needs_human_help`
-2. Meeting-api: stores `meeting.data.escalation = {reason, escalated_at, session_token, vnc_url}`
-3. Meeting-api: registers container in Redis for gateway VNC proxy (`browser_session:{meeting_id}`)
-4. Dashboard: receives status change via WS, shows "Bot needs help" panel with VNC link + Stop button
-5. User: connects via VNC at `/b/{meeting_id}/vnc/`, manually resolves the issue
-6. Resolution: bot detects admission → status changes to `active`. Or user gives up → `failed`.
-
-Triggers (v0.10.5):
-
-- **Admission flow stuck** — bot can't determine if it's in lobby, admitted, or rejected (Google Meet, Teams, Zoom)
-- **`audio_join_failed`** (v0.10.5 commit 37316d6) — Zoom Web 3-attempt audio-join loop falls through. Without computer audio, no `<audio>` elements are created and per-speaker capture gets zero data. Previously this was a silent failure ("active" status, 0 transcripts forever). Now escalates so VNC link surfaces.
-- **Portal page stuck** (Path 3) — bot navigates a white-label URL (LFX, AWS Chime, Bloomberg) and can't find Zoom's pre-join name input within 5 min. User VNCs in to click through portal page.
-
-Implemented for: Google Meet, Teams, Zoom admission flows; Zoom Web audio-join.
-
-## Completion reasons (v0.10.5 enum)
-
-
-| Reason                        | Routes to | Trigger                               |
-| ----------------------------- | --------- | ------------------------------------- |
-| `stopped`                     | classifier | User called DELETE /bots             |
-| `awaiting_admission_timeout`  | failed    | Waited > max_wait_for_admission       |
-| `awaiting_admission_rejected` | failed    | Host rejected bot from lobby          |
-| `left_alone`                  | completed | No participants > max_time_left_alone |
-| `evicted`                     | failed    | Host removed bot from meeting         |
-| `max_bot_time_exceeded`       | failed    | Scheduler timeout fired               |
-| `validation_error`            | failed    | Request validation failed             |
-| `stopped_before_admission`    | failed    | **v0.10.5 Pack J** — DELETE before reaching active (~432 cases / 30d in prod data) |
-| `stopped_with_no_audio`       | failed    | **v0.10.5 Pack J** — bot ran ≥30s with transcribe enabled, produced 0 segments (~125 cases / 30d) |
-
-
-## Failure stages
-
-
-| Stage                | When                                           |
-| -------------------- | ---------------------------------------------- |
-| `requested`          | Pre-spawn validation fails                     |
-| `joining`            | Platform join error (wrong URL, auth, network) |
-| `awaiting_admission` | Waiting room error                             |
-| `active`             | Runtime crash after admission                  |
-
-> **v0.10.5 caveat:** when the bot's exit callback omits `failure_stage`, meeting-api defaults it to `ACTIVE` (`callbacks.py:312`). This means a bot that crashed in `joining` looks like it failed in `active` if its exit callback was thin. Pack Σ (v0.10.6) replaces the default with `unknown` so the field always reflects observed truth.
-
-
-## Lifetime management
-
-Meeting bots use **model 1** (consumer-managed) from runtime-api. `idle_timeout: 0` — runtime-api never auto-stops them. Meeting-api owns the full lifecycle through four mechanisms:
-
-### 1. Server-side kill switch: scheduler job (max_bot_time)
-
-When a bot is created, meeting-api schedules a deferred HTTP job in runtime-api's scheduler:
-
-- `execute_at = now + max_bot_time` (default 2h)
-- Job: `DELETE /bots/internal/timeout/{meeting_id}`
-- When fired: sets `pending_completion_reason=MAX_BOT_TIME_EXCEEDED`, transitions to stopping
-- Job cancelled when meeting reaches terminal state (completed/failed)
-
-This is the **hard limit**. No meeting bot can run longer than `max_bot_time`.
-
-### 2. Bot-side timers (client-enforced)
-
-The bot process runs timers internally. When triggered, bot self-exits with a specific reason:
-
-
-| Timer                    | Default      | What happens                                   |
-| ------------------------ | ------------ | ---------------------------------------------- |
-| `no_one_joined_timeout`  | 120s (2min)  | Nobody joined after bot entered meeting → exit |
-| `max_wait_for_admission` | 900s (15min) | Stuck in lobby → exit                          |
-| `max_time_left_alone`    | 900s (15min) | All participants left → exit                   |
-
-
-Bot exit → Docker "die" event → runtime-api `on_exit` → meeting-api exit callback → status updated.
-
-### 3. User DELETE
-
-`DELETE /bots/{platform}/{native_id}` → Redis `{"action": "leave"}` → bot exits → completed.
-
-### 4. Platform events
-
-Bot detects: evicted by host, meeting ended, connection lost → self-exit with appropriate reason.
-
-### Timeout configuration
-
-Resolution order: per-request `automatic_leave` → `user.data.bot_config` → system defaults.
-
-
-| Timeout                  | Default           | Enforced by            | Configurable          |
-| ------------------------ | ----------------- | ---------------------- | --------------------- |
-| `max_bot_time`           | 7,200,000ms (2h)  | Scheduler job (server) | per-request, per-user |
-| `max_wait_for_admission` | 900,000ms (15min) | Bot timer (client)     | per-request, per-user |
-| `max_time_left_alone`    | 900,000ms (15min) | Bot timer (client)     | per-request, per-user |
-| `no_one_joined_timeout`  | 120,000ms (2min)  | Bot timer (client)     | per-request, per-user |
-
-
-### Contrast with other container types
-
-
-|                          | Meeting bot                               | Browser session                          | Agent               |
-| ------------------------ | ----------------------------------------- | ---------------------------------------- | ------------------- |
-| Who manages lifetime     | meeting-api                               | gateway (planned)                        | agent-api           |
-| Server-side kill         | scheduler job (max_bot_time)              | idle_timeout (planned)                   | idle_timeout (300s) |
-| Client-side kill         | bot timers (alone, admission, join)       | none                                     | none                |
-| Heartbeat                | none needed (scheduler is the safety net) | gateway /touch on /b/* traffic (planned) | agent-api /touch    |
-| runtime-api idle_timeout | 0 (disabled)                              | >0 (planned)                             | 300s                |
-
-
-## Delayed stop mechanism (v0.10.5: Pack D.2 durable outbox)
-
-When user calls DELETE /bots or scheduler fires:
-
-1. Send Redis command `{"action": "leave"}` to bot
-2. Transition to `stopping`
-3. **Enqueue stop in Redis Stream outbox** (`container_stop_outbox.py`) — `fire_at = now + 90s`
-4. Pack D.2 outbox consumer (in `sweeps.py`) fires the stop call to runtime-api at `fire_at`
-5. If bot exits naturally within 90s → exit callback fires → Pack J classifier → terminal state
-6. If 90s expires → outbox consumer calls `DELETE /containers/{name}` on runtime-api
-7. If outbox call fails → retries with backoff up to 5x → DLQ on exhaustion
-
-**Why Pack D.2 outbox** (vs the v0.10.4 in-memory `asyncio.create_task`): the in-memory task was lost on meeting-api restart. Bot would stay running, meeting stuck in `stopping`. Outbox is durable across restarts and retries deterministically.
-
-**Stale `bot_container_id` detection** (v0.10.5 commit e16fa7e): at DELETE time, before scheduling the outbox stop, meeting-api validates the resolved `container_name` against runtime-api's `GET /containers/{name}`. If 404 or `status != running`, the container is already gone — code routes through the **no-container Pack J branch** for synchronous finalization instead of waiting for the 5-min stale-stopping sweep. Closes the "stuck in stopping after stack restart" UX gap.
-
-**Stale-stopping sweep** (v0.10.5 Pack E.3.2, `sweeps.py:_sweep_stale_stopping`): every 60s, scans for rows in `stopping` for >5min, force-finalizes via Pack J classifier. Safety net for any bot whose exit callback never landed (e.g. container OOM-killed without graceful exit).
-
-Browser sessions: delay = 0s (no meeting to leave).
-
-## Concurrency
-
-Users have a `max_concurrent_bots` limit. The concurrency check counts meetings in non-terminal states: `requested`, `joining`, `awaiting_admission`, `active`.
-
-`stopping` is NOT counted. When user calls DELETE:
-
-1. Status → stopping → concurrency slot released immediately
-2. Container still running (up to 90s delayed stop)
-3. User can create a new bot right away
-
-This is by design — user shouldn't wait 90s for the slot. Two containers may run simultaneously briefly, but only one "active" meeting counts against the limit.
-
-Browser sessions are included in the concurrency count (same query). They release the slot on stop (delay=0, immediate).
-
-## Callbacks (bot → meeting-api)
-
-
-| Endpoint                                     | Called when                    |
-| -------------------------------------------- | ------------------------------ |
-| `/bots/internal/callback/status_change`      | Any state transition (unified) |
-| `/bots/internal/callback/exited`             | Bot process exits              |
-| `/bots/internal/callback/joining`            | Bot navigating to meeting      |
-| `/bots/internal/callback/awaiting_admission` | Bot in lobby                   |
-| `/bots/internal/callback/started`            | Bot admitted, active           |
-| `/bots/internal/test/session-bootstrap`      | **Pack X** synthetic test rig — creates a MeetingSession row directly. Gated by `VEXA_ENV != "production"`; returns 404 in production. |
-
-
-All callbacks: 3 retries, exponential backoff (1s, 2s, 4s), 5s timeout per attempt.
-
-Status transitions are protected by `SELECT FOR UPDATE` (row-level lock) to prevent TOCTOU races.
-
-**v0.10.5 — `dry_run` flag.** POST /bots accepts `dry_run: true` (gated by `VEXA_ENV != "production"`). When set, meeting-api creates the meeting row + bot_config but skips `_spawn_via_runtime_api`. Used by Pack X tests to exercise the schema/validation/Path-3-extraction layers without spending compute on a real bot.
-
-## Pack X synthetic test rig (v0.10.5)
-
-Pack J's `status_change` coverage gap shipped through the entire pre-existing validate matrix because the matrix didn't drive a real meeting end-to-end — static checks, smoke matrix, unit tests, reproducer tests all reported green. The bug surfaced only when a human ran a real Zoom bot.
-
-Pack X (`tests3/synthetic/`) closes this with a deterministic, no-external-dependency way to drive the OSS-side meeting lifecycle:
-
-- `tests3/synthetic/rig.sh` — bash+curl primitives: `rig_get_user_token`, `rig_spawn_dryrun`, `rig_session_bootstrap`, `rig_callback`, `rig_delete_bot`, `rig_get_state`, `rig_assert_state`, `rig_setup_meeting`, `rig_drive_to_active`, `rig_parallel`, `rig_assert_log`, `rig_baseline_redis_keys`, `rig_assert_no_redis_leak`
-- 9 scenarios covering Pack J status_change bypass, exit-callback path, callback ordering races, DELETE no-container, FAILED-branch completion_reason persistence, terminal idempotency, redis-key leakage, fuzz callback payloads, stale failure_stage tolerance.
-
-This is the leverage tool that caught **5 additional bugs** during v0.10.5 develop iterations that the pre-existing matrix had silently passed.
-
-**Pack Y groom seed (v0.10.6)** extends Pack X from path-enumeration to invariant-based property fuzz — see scope.yaml tail.
-
-## Components
-
-
-| Component                   | File                                                            | Role                                                              |
-| --------------------------- | --------------------------------------------------------------- | ----------------------------------------------------------------- |
-| Bot creation                | `services/meeting-api/meeting_api/meetings.py:870-1130`         | POST /bots, Path 3 extraction, spawn container, dry_run gate      |
-| Status callbacks            | `services/meeting-api/meeting_api/callbacks.py`                 | Bot → meeting-api state updates; Pack J classifier                |
-| Pack J classifier           | `services/meeting-api/meeting_api/callbacks.py:52`              | `_classify_stopped_exit` — single source of truth for completed/failed routing |
-| Stop/timeout                | `services/meeting-api/meeting_api/meetings.py:1530-1650`        | DELETE /bots, stale-container detection, fast-path, no-container Pack J branch |
-| Container-stop outbox       | `services/meeting-api/meeting_api/container_stop_outbox.py`     | Pack D.2 — durable Redis Stream outbox for DELETE container-stop  |
-| Sweeps                      | `services/meeting-api/meeting_api/sweeps.py`                    | Pack E.3.2 stale-stopping + Pack D.2 outbox consumer + Pack H aggregation-failure retry |
-| Bot core                    | `services/vexa-bot/core/src/platforms/shared/meetingFlow.ts`    | Join, admit, capture flow                                         |
-| Zoom Web join               | `services/vexa-bot/core/src/platforms/zoom/web/join.ts`         | URL parser (canonical rewrite vs white-label passthrough); 5min wait for portals |
-| Zoom Web prepare            | `services/vexa-bot/core/src/platforms/zoom/web/prepare.ts`      | Audio-join 3-attempt loop + needs_human_help escalation on failure |
-| Unified callback            | `services/vexa-bot/core/src/services/unified-callback.ts`       | Bot → API state reporting                                         |
-| Bot exit-reason callbacks   | `services/vexa-bot/core/src/utils.ts`                           | `callJoiningCallback`, `callStartupCallback`, `callNeedsHumanHelpCallback` |
-| Scheduler                   | `services/runtime-api/runtime_api/scheduler.py`                 | max_bot_time enforcement                                          |
-| Runtime exit callback       | `services/runtime-api/runtime_api/lifecycle.py`                 | Pod-event capture (OOMKill, Evicted) + durable callback delivery  |
-| Pack X synthetic rig        | `tests3/synthetic/rig.sh` + `tests3/synthetic/scenarios/*.sh`   | Entropy testing — drives the lifecycle without external deps      |
-
+---
 
 ## DoD
 
@@ -363,89 +413,53 @@ This is the leverage tool that caught **5 additional bugs** during v0.10.5 devel
 
 <!-- END AUTO-DOD -->
 
+
 ## Failure modes
 
+**Tracked registry:** [`./failure-modes.md`](./failure-modes.md) — every prod failure observed by PLATFORM (or anyone) lands here as a tracked `FM-NNN` entry with status, linked fixes, repro, and pre-classification against the v0.10.6 outcome taxonomy. Standing rule from team-lead 2026-04-28.
 
-| Symptom                                         | Cause                                                  | Fix                                                              | Learned                                         |
-| ----------------------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------- | ----------------------------------------------- |
-| Bot shows "failed" after successful meeting     | exit_code=1 on self_initiated_leave treated as failure | callbacks.py: exit during stopping → completed                   | Graceful leave ≠ crash                          |
-| **47% of completed meetings had 0 transcripts** (#255 prod data) | callback handler defaulted any clean exit to status=completed regardless of `completion_reason` signal | **v0.10.5 Pack J classifier** — `_classify_stopped_exit` routes by completion_reason + reached_active + segment_count. Two new reasons: `STOPPED_WITH_NO_AUDIO` (125 cases / 30d) + `STOPPED_BEFORE_ADMISSION` (432 cases / 30d) | `failed` is the safe default — silent success kills observability |
-| Bot at status=active forever, 0 transcripts (Zoom Web) | Zoom Web `prepareZoomWebMeeting` 3-attempt audio-join loop fell through silently. Without computer audio, no `<audio>` elements created, per-speaker capture bails after 10×2s retry. Bot reports `active` but produces nothing. | **v0.10.5 commit 37316d6** — escalate `audio_join_failed` to `needs_human_help`. Dashboard shows VNC link; user clicks "Join with Computer Audio" manually; bot picks up. | `bot.active` ≠ `bot.actually_capturing_audio` — closed by Pack Σ in/recording state split |
-| LFX/AWS/enterprise Zoom URL rejected by parser | Bot `buildZoomWebClientUrl` only matched canonical `/j/<id>` path; LFX URLs (`/meeting/<id>`) crashed with "Cannot extract meeting ID". | **v0.10.5 commit da97506** — canonical `*.zoom.us` URLs rewrite to web client; white-label URLs pass through verbatim with 5min selector wait so human can VNC in to navigate portal page. | Per-vendor parsers are an arms race we lose; trust the user-supplied platform pick (Path 3) |
-| Meeting stuck in `stopping` after stack restart | DELETE flow read `meeting.bot_container_id` (truthy) and skipped no-container Pack J branch, even though the container had been wiped by a redeploy. Pack D.2 outbox stop succeeded (`Process not in registry`) but no terminal transition fired. Pack E.3.2 sweep finally reaped at 5min. | **v0.10.5 commit e16fa7e** — DELETE flow validates `bot_container_id` via `GET /containers/{name}`. If 404 or status≠running, null out container_name → no-container Pack J branch fires → synchronous Pack J finalize. | Sweep is the safety net, not the first line of defense |
-| `failure_stage: active` paints over reality    | When bot exit callback omits `failure_stage`, meeting-api defaults to `MeetingFailureStage.ACTIVE` (`callbacks.py:312`). A bot that crashed in `joining` (selector timeout pre-`callJoiningCallback`) looks like it failed in `active`. | **Pack Σ (v0.10.6)** — replace default with explicit `unknown`. Field always reflects observed truth, never default-painting. | Stacked defaults compound (bot's `self_initiated_leave` default + server's `ACTIVE` default = misleading user-facing message) |
-| Bot stuck on name input (unauthenticated GMeet) | No saved cookies, Google shows "Your name" prompt      | Bot should fill name or fail fast                                | Open bug                                        |
-| Recording upload fails on lite (host network)   | MinIO endpoint `http://minio:9000` — DNS unresolvable in host-network mode. Bot uploads to `/internal/recordings/upload`, meeting-api then uploads to MinIO. meeting-api can't resolve `minio`. | Set `MINIO_ENDPOINT=http://localhost:9000` for lite. | `recordings.py:194`, `storage.py:90`. |
-| MinIO retry blocks bot completion (lite)         | **Lite**: No MinIO running. `recording_enabled` defaults to `True` (`meetings.py:796`). Every bot stop: graceful leave → upload to `minio:9000` → DNS fail → botocore retries 4x (~30s) → 500 → then bot callback fires → completed. Total stop time ~32s instead of ~6s. | Set `RECORDING_ENABLED=false` in lite .env when no MinIO, or run MinIO alongside lite. | `meetings.py:796`, `recordings.py:194`, `storage.py:90`. |
-| K8s exit callback not fired from DELETE endpoint | `DELETE /containers/{name}` (`runtime-api/api.py:308-318`) calls `state.set_stopped()` but NOT `_fire_exit_callback()`. Exit callback only fires from the pod watcher. If watcher misses event (reconnect gap, double-delete), callback never fires. | Fix: fire exit callback from DELETE endpoint. | `api.py:308-318`, `lifecycle.py:65-110`. |
-| Redis client stays None after startup failure   | `meeting-api/main.py:101-108`: if Redis down at startup, `redis_client=None` forever. No reconnect. All Redis ops silently skipped — no PubSub, no segment reads from Redis, no stream consumption. | Restart meeting-api after Redis recovers. Fix: add reconnect logic. | `main.py:101-113`. |
-| Auto-admit clicks text node instead of button   | `text=/Admit/i` matched non-clickable element          | Multi-phase CDP: panel → expand → `button[aria-label^="Admit "]` | Always use element-type + aria-label for clicks |
-| "Waiting to join" section collapsed             | Google Meet collapses lobby list after ~10s            | Expand before looking for admit button                           | Check visibility before assuming DOM state      |
+The table below is the historical lessons catalog — kept for the "Learned" column. New entries go in the registry.
 
+| Symptom | Cause | Fix | Learned |
+|---|---|---|---|
+| **47% of completed meetings had 0 transcripts** (#255 prod data) | callback handler defaulted any clean exit to `status=completed` regardless of `completion_reason` | 🟢 routing-rule classifier — routes by `completion_reason` + `reached_active` + `segment_count` | Silent success kills observability — but defaulting-to-failed is wrong too; outcome taxonomy is the principled fix |
+| Bot at status=active forever, 0 transcripts (Zoom Web) | Audio-join 3-attempt loop fell through silently. No `<audio>` elements created → per-speaker capture bails | 🟢 commit `37316d6` — escalate `audio_join_failed` to `needs_help` | `bot.active` ≠ `bot.actually_capturing_audio` — closed by `in_call_not_recording` / `in_call_recording` split |
+| LFX/AWS/enterprise Zoom URL rejected by parser | Bot only matched canonical `/j/<id>` path | 🟢 commit `da97506` — canonical `*.zoom.us` rewrites; white-label passthrough + 5min wait | Per-vendor parsers are an arms race we lose; trust user-supplied platform pick (Path 3) |
+| Meeting stuck in `stopping` after stack restart | DELETE read truthy `bot_container_id` and skipped no-container branch even though container was wiped | 🟢 commit `e16fa7e` — validate `bot_container_id` via runtime-api inspect | Sweep is the safety net, not the first line of defense |
+| `failure_stage: active` paints over reality | `failure_stage` defaults to `ACTIVE` when callback omits it (`callbacks.py:312`) | 🟡 redesign — replace default with `unknown` | Stacked defaults compound (bot's `self_initiated_leave` default + server's `ACTIVE` default = lying user message) |
+| Bot shows "failed" after successful meeting | `exit_code=1` on `self_initiated_leave` treated as failure | callbacks.py: exit during stopping → completed | Graceful leave ≠ crash |
+| Bot stuck on name input (unauthenticated GMeet) | No saved cookies, Google shows "Your name" prompt | Bot should fill name or fail fast | Open bug |
+| Recording upload fails on lite (host network) | MinIO endpoint `http://minio:9000` unresolvable | Set `MINIO_ENDPOINT=http://localhost:9000` for lite | `recordings.py:194`, `storage.py:90` |
+| MinIO retry blocks bot completion (lite) | Lite has no MinIO; `recording_enabled` defaults true; every stop hits 30s DNS-fail retry | Set `RECORDING_ENABLED=false` in lite .env when no MinIO | `meetings.py:796`, `storage.py:90` |
+| K8s exit callback not fired from DELETE | `DELETE /containers/{name}` calls `state.set_stopped()` but NOT `_fire_exit_callback()`; only fires from pod watcher | Fix: fire exit callback from DELETE endpoint | `runtime-api/api.py:308-318` |
+| Redis client stays None after startup failure | Meeting-api never reconnects if Redis was down at boot | Restart meeting-api after Redis recovers | `main.py:101-113` |
+| Auto-admit clicks text node | `text=/Admit/i` matched non-clickable element | Multi-phase CDP: panel → expand → `button[aria-label^="Admit "]` | Always use element-type + aria-label |
+| "Waiting to join" section collapsed | Google Meet collapses lobby list after ~10s | Expand before looking for admit button | Check visibility before assuming DOM state |
 
-## Future direction (v0.10.6 Pack Σ — meeting lifecycle taxonomy redesign)
+---
 
-Documented as a groom seed in `tests3/releases/260427/scope.yaml`. Carries forward as the headline pack for v0.10.6.
+## Roadmap
 
-**Trigger:** v0.10.5 retrospective + recall.ai documentation study (2026-04-28). Three concerns conflate in the current binary `completed | failed`:
+🟢 **v0.10.5 — IN FLIGHT on `release/260427`, NOT YET SHIPPED.**
+Patches landed on the release branch during develop iterations: routing-rule classifier (replaces "default to completed" with completion_reason-driven routing), Path 3 trust model for white-label URLs, durable container-stop outbox, stale-stopping sweep, stale `bot_container_id` detection, `audio_join_failed` escalation, white-label URL passthrough + 5min wait, synthetic test rig, `dry_run` flag. **All shipped to the dev image, none promoted to `:latest`.** `:latest` still points to the previous release. Symptom-level fixes; inherits binary `completed | failed` framing.
 
-- Users see binary status with no plain-language cause and no action affordance
-- Engineering can't isolate bug rate from user/host/environment-driven failures
-- Product can't read funnel cause attribution
+🟡 **Lifecycle redesign — being decided now.**
+Decision in progress: does v0.10.5 ship with the symptomatic patches as-is, OR do we extend v0.10.5 scope to include the outcome-taxonomy redesign before shipping? The redesign content:
 
-Pack J's "default to failed when uncertain" is engineering-defensive but user-hostile and product-hostile. v0.10.5 closed the silent-success class; Pack Σ closes the silent-classification class entirely.
+- 4-bucket × 2-class outcome taxonomy (`success` / `user_aborted` / `environment_blocked` / `software_fault` × normal/abnormal) — new fields `data.outcome` / `data.outcome_class` / `data.cause`
+- One central outcome classifier called from every terminal write site (replaces today's scattered classifier calls — every miss in v0.10.5 was a parallel-write-site bug)
+- `meeting.data.audio_confirmed_at` flag — encodes the audio-confirmation gate without renaming `active` (closes `bot.active ≠ bot.actually_capturing_audio` parallel-surface drift; zero contract break for existing webhook consumers)
+- Rename `needs_human_help` → `needs_help` (state is broader than human-only — AI assist-agent later)
+- Reframe `needs_help` as first-class hybrid-automation pause (not failure path)
+- Proactive escalation on unknown UI; configurable `needs_help_timeout`
+- Dashboard 5-class visual treatment (✅⚪⚠🔵🔴) reading from `data.outcome`
+- Webhook v2 with new fields; v1 keeps `completed | failed` derived via outcome → status mapping
+- `recall_to_vexa` translator (static lookup table — no internal renames; mapping at translation boundary)
 
-### Layer 1: 9 lifecycle states (recall.ai-aligned)
+**Explicitly NOT in scope** (despite earlier draft): bulk lifecycle state renames for recall.ai-alignment (`awaiting_admission` → `in_waiting_room`, `active` → split, `stopping` → `call_ended`, `completed` → `done`, `failed` → `fatal`). Migration cost for us + every webhook consumer doesn't pay back; the translator handles name mapping either way.
 
-| Pack Σ state            | Maps to recall.ai event       | Notes                                                        |
-| ----------------------- | ----------------------------- | ------------------------------------------------------------ |
-| `requested`             | (no equivalent)               | vexa-specific pre-spawn state                                |
-| `joining`               | `bot.joining_call`            | direct                                                       |
-| `in_waiting_room`       | `bot.in_waiting_room`         | renamed from `awaiting_admission`                            |
-| `in_call_not_recording` | `bot.in_call_not_recording`   | **NEW** — split from `active`; bot in meeting DOM, audio NOT yet confirmed |
-| `in_call_recording`     | `bot.in_call_recording`       | **NEW** — split from `active`; audio confirmed, segments flowing |
-| `needs_human_help`      | (no equivalent)               | vexa-specific VNC affordance                                 |
-| `call_ended`            | `bot.call_ended`              | renamed from `stopping`                                      |
-| `done`                  | `bot.done`                    | renamed from `completed`                                     |
-| `fatal`                 | `bot.fatal`                   | renamed from `failed`                                        |
+Estimated ~3-4 days dev across meeting-api / dashboard / docs.
 
-The done/fatal cut becomes one mechanical bit: **`done` if the meeting reached `in_call_recording` at any point, `fatal` otherwise.** This matches recall.ai's billing semantic (they don't bill for `bot.fatal`).
+The current auto-DoD confidence (91%) measures behavioral checks against today's lifecycle. The redesign brings **design-confidence** up but won't move the auto-DoD number until new behavioral checks for outcome classification + audio-confirmation gate land in `dods.yaml`.
 
-7-of-9 states map directly to recall events → a future `recall_to_vexa` API translator becomes a static lookup table, not business logic.
-
-### Layer 2: `meeting.data.cause` field (~70 named values, agency-prefixed)
-
-Single source of truth for terminal-state diagnosis. Computed by **one classifier function** called from every write site (replacing today's scattered Pack J calls). Agency prefixes:
-
-| prefix         | meaning                                | engineering query                                     |
-| -------------- | -------------------------------------- | ----------------------------------------------------- |
-| `user_*`       | API caller's action                    | product funnel analysis                               |
-| `host_*`       | meeting host's action                  | environment / sales-side education                    |
-| `platform_*`   | platform's hard rule                   | environment / docs                                    |
-| `zoom_*` / `google_meet_*` / `teams_*` / `webex_*` | platform-specific failures | environment, per-platform |
-| `bot_self_*`   | bot's own configured leave             | normal end-of-meeting                                 |
-| `bot_*`        | **OUR SOFTWARE FAULT**                 | **engineering bug rate** (filter by this prefix)      |
-| `ux_gap_*`     | automation incomplete, escalation unresolved | product + engineering (new automation surface)  |
-| `unknown`      | classifier rule didn't fire (bug)      | engineering must close coverage gap                   |
-
-The principle: **every terminal meeting gets a specific cause, including the "we don't know" case as `unknown`** — never user-facing directly, but visible to engineering as a coverage gap.
-
-### What this closes
-
-5 parallel-surface-drift patterns documented in the v0.10.5 architectural-debt audit, each of which recurred as a bug during develop iterations:
-
-1. `bot.active ≠ bot.actually_capturing_audio` → fixed by audio-confirmation gate at `in_call_not_recording → in_call_recording`
-2. `failure_stage` defaulting to `ACTIVE` (callbacks.py:312) → fixed by `unknown` cause
-3. `self_initiated_leave` defaulting in bot.ts:634 → fixed by central classifier producing cause from observed signals, not bot's reason string
-4. `status='completed'` survived Pack J in DELETE-no-container, DELETE-fast-path, FAILED-branch → fixed by single canonical write path
-5. Stuck-in-stopping (lite m30 2026-04-27) — sweep as first line of defense → already partially fixed in commit e16fa7e; full consolidation in Pack Σ
-
-### What this doesn't change
-
-- Bot platform code (browser automation stays the same)
-- Helm chart / runtime-api lifecycle
-- The two-month internal lifecycle invariants this README has documented since v0.10.4
-
-Estimated ~5 days dev across meeting-api / dashboard / docs in v0.10.6.
-
-
+🔵 **Later.** `assist-agent` service (LLM-driven Playwright control via the same `/b/{token}/cdp` endpoint VNC viewer uses); pause-and-resume bot model (required for AI exclusive-control window); per-portal automation accumulation (LFX, AWS Chime, Bloomberg — reduces `software_fault.automation_gap_unresolved` rate over time as we cover more patterns).
