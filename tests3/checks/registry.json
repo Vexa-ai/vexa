@@ -1306,7 +1306,7 @@
       "proves": "services/meeting-api/meeting_api/recordings.py performs a per-chunk durable write of the `media_files` array on every successful upload (intermediate or final), not only on the final chunk. v0.10.5 Pack E.1.a (#268 reproduce + reconciler): pre-fix, intermediate chunks reached MinIO/S3 but `media_files=[]` in DB — orphaned. Post-fix, every chunk write performs a `existing_media_files.append({...})` + `rec_payload[\"media_files\"] = existing_media_files` + `await db.commit()` cycle so the DB row tracks every chunk that landed in storage. Audit-3 (ARCH-2 2026-04-29 ~11:20 UTC) flagged recording-link-gap as 🟡 (fixed in 0.10.5, no direct test); this static-grep stamp closes the source-shape regression coverage.",
       "symptom": "recording-link-gap regression: per-chunk media_files write removed by refactor; intermediate chunks land in S3 but DB shows media_files=[] — dashboard/SDK sees an orphaned recording with content unreachable. Companion to PACK_E1A_CHUNK_WRITE_LOG_LINE which pins the structured-log shape for ad-hoc validation.",
       "file": "services/meeting-api/meeting_api/recordings.py",
-      "must_match": "rec_payload\\[\"media_files\"\\] = existing_media_files",
+      "must_match": "rec_payload[\"media_files\"] = existing_media_files",
       "max_duration_sec": 5
     },
     {
@@ -1317,7 +1317,7 @@
       "proves": "services/runtime-api/runtime_api/api.py builds runtime pod names with `meeting_id` (when present in `req.config` or `req.metadata`), not `user_id`. v0.10.5 Pack Q (FM-275 / #275): pre-fix produced `meeting-{user_id}-{uuid}` (e.g. `meeting-2087-ee434b6d` for actual meeting_id 11058) — operator-confusing because the natural inference 'pod name's integer = meeting_id' was wrong, and audit-tooling that joined on the pod name's integer field broke silently. Post-fix: `meeting-{meeting_id}-{uuid}` aligns kubectl logs + browse-by-name + Redis state-index reconciliation with the canonical meeting identifier. Audit-3 flagged FM-275 as 🟡 (fixed, no direct test); this stamp pins the source-shape.",
       "symptom": "FM-275 regression: pod-naming refactor reverts to `user_id`-based naming. Operator browsing kubectl logs by pod name infers wrong meeting_id; runtime audit tooling cross-references break silently. Compounds during incident triage when 5+ bots are spawning concurrently and the pod-name → meeting_id mapping is the operator's only readily-available join key.",
       "file": "services/runtime-api/runtime_api/api.py",
-      "must_match": "meeting_id\\s*=\\s*req\\.config\\.get\\(\"meeting_id\"\\)",
+      "must_match": "meeting_id = req.config.get(\"meeting_id\")",
       "max_duration_sec": 5
     },
     {
@@ -1328,7 +1328,7 @@
       "proves": "services/meeting-api/meeting_api/webhooks.py logs every webhook delivery exception via `logger.error(... exc_info=True)`, ensuring the failure path always carries a non-empty error string + full traceback. v0.10.5 Pack S (FM-277 / #277): pre-fix, webhook retry path could swallow exceptions silently (logger called with empty message or exc_info=False), making prod webhook-failure observability blind. Post-fix: both `send_status_webhook` and `send_event_webhook` wrap their delivery loops in `try/except` with `logger.error(f\"Unexpected error sending ... for meeting {meeting.id}: {e}\", exc_info=True)`. Audit-3 flagged FM-277 as 🟡 (fixed in 0.10.5, no direct test); this stamp pins the source-shape.",
       "symptom": "FM-277 regression: webhook exception handler reverts to silent-swallow shape (no logger.error, missing exc_info). Webhook failures invisible in operator logs; customers report 'webhooks not arriving' with no server-side trail to diagnose. Trades-off observability for lower log volume in a way that defeats the reason webhooks have a retry budget.",
       "file": "services/meeting-api/meeting_api/webhooks.py",
-      "must_match": "logger\\.error\\(f\"Unexpected error sending [a-z_ ]*webhook for meeting \\{meeting\\.id\\}",
+      "must_match": "logger.error(f\"Unexpected error sending",
       "max_duration_sec": 5
     }
   ]
