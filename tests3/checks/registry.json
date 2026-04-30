@@ -1454,6 +1454,17 @@
       "max_duration_sec": 5
     },
     {
+      "id": "PACK_T_TERMINAL_IDEMPOTENT_REFIRE_BENIGN",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/meeting-api/meeting_api/meetings.py update_meeting_status() treats `completed → completed` and `failed → failed` as benign idempotent re-fires (returns True at DEBUG level), instead of WARNING-and-returning-False. Pack T fix for FM-278 (#278). Pre-fix: three independent code paths — chat persistence, status update, post-meeting tasks — could each fire a redundant `completed → completed` transition under the documented _delayed_stop_finalizer / runtime-api callback race. Each fired a WARNING (~30 per 90-minute window in prod) and the False return short-circuited post-meeting tasks via `if not success`, leaving aggregation undone for some completed meetings. Post-fix: idempotent re-fires log at DEBUG and return True so caller code paths complete normally; warnings reserved for actual invalid transitions.",
+      "symptom": "Production meeting-api logs flooded with 'Invalid status transition completed -> completed' WARNINGs (~30/90min). Some completed meetings have post-meeting tasks (transcript aggregation, webhooks) silently skipped because the False return path short-circuits run_all_tasks.",
+      "file": "services/meeting-api/meeting_api/meetings.py",
+      "must_match": "v0.10.5 Pack T (#278) — Already-terminal idempotent re-fire is benign",
+      "max_duration_sec": 5
+    },
+    {
       "id": "POST_MEETING_RECORDING_STATUS_IMPORT_PATH",
       "tier": "static",
       "found": "2026-04-30",
