@@ -57,9 +57,33 @@ if [ -n "$IMAGE_TAG" ]; then
 fi
 
 if [ -n "$TX_URL" ]; then
+    # v0.10.5 R6 — pass token to BOTH paths.
+    #
+    # The chart has two transcription-token slots that look interchangeable
+    # but aren't:
+    #
+    #   meetingApi.transcriptionServiceToken  → injected as env on the
+    #     meeting-api Deployment only (templates/deployment-meeting-api.yaml).
+    #   secrets.transcriptionServiceToken     → goes into the Opaque Secret
+    #     `vexa-vexa-secrets` (templates/secret.yaml). The bot pods (spawned
+    #     by runtime-api via the runtimeProfiles ConfigMap) and runtime-api
+    #     itself read TRANSCRIPTION_SERVICE_TOKEN from THIS secret.
+    #
+    # Pre-fix: only meetingApi.* was set. meeting-api had the token; runtime-
+    # api / bot pods got an empty string. Recording worked (#235 propagation
+    # for MEETING_API_URL etc landed), but transcription silently failed —
+    # bots authenticated to transcription-service with `Bearer ` (empty)
+    # and got rejected. Symptom: helm meetings show recording_delivered +
+    # 0 transcripts. Recording-aware classifier correctly tags them
+    # COMPLETED, masking the failure unless a human spot-checks transcripts.
+    #
+    # Discovered 2026-04-30 during human stage validation; root cause is the
+    # chart standardisation in ea62d76 (2026-04-08) that moved the secret
+    # template to .Values.secrets.* but never updated this setup script.
     HELM_ARGS+=(
         --set "meetingApi.transcriptionServiceUrl=$TX_URL"
         --set "meetingApi.transcriptionServiceToken=$TX_TOKEN"
+        --set "secrets.transcriptionServiceToken=$TX_TOKEN"
     )
 fi
 

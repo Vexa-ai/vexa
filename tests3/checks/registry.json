@@ -1443,6 +1443,17 @@
       "max_duration_sec": 5
     },
     {
+      "id": "HELM_SETUP_PASSES_TX_TOKEN_TO_SECRET",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "tests3/lib/lke-setup-helm.sh passes the transcription token to BOTH the meeting-api Deployment env (meetingApi.transcriptionServiceToken) AND the cluster Secret resource (secrets.transcriptionServiceToken). The chart's templates/secret.yaml reads from .Values.secrets.transcriptionServiceToken (since chart standardisation in ea62d76, 2026-04-08); runtime-api Deployment + the runtimeProfiles ConfigMap that bot pods inherit BOTH sourceFrom the Opaque Secret. Pre-fix (R6): the script only set meetingApi.* — meeting-api itself had the token but runtime-api and bot pods saw empty strings. Bots authenticated with `Bearer ` (empty) and got rejected silently by transcription-service. The recording-aware classifier (FM-002 v2) correctly tagged the meetings COMPLETED (because recording was delivered), masking the no-transcripts failure unless a human spot-checked. Discovered during v0.10.5 human validation, helm meeting 8: 9.5MB recording delivered, 0 transcripts.",
+      "symptom": "helm meetings show recording delivered to MinIO + 0 transcripts despite transcribe_enabled=true. Bot pods have TRANSCRIPTION_SERVICE_URL set but TRANSCRIPTION_SERVICE_TOKEN empty in their env. transcription-service rejects every bot connection with auth failure. Customer-impact: helm-mode operators get recordings without transcripts; classifier hides the failure as a successful capture.",
+      "file": "tests3/lib/lke-setup-helm.sh",
+      "must_match": "secrets.transcriptionServiceToken=$TX_TOKEN",
+      "max_duration_sec": 5
+    },
+    {
       "id": "POST_MEETING_RECORDING_STATUS_IMPORT_PATH",
       "tier": "static",
       "found": "2026-04-30",
