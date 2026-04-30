@@ -149,10 +149,47 @@ async def _classify_stopped_exit(
         return (MeetingStatus.COMPLETED, requested_reason)
 
     if segment_count == 0:
-        # 125-case: bot was active for 30s+ with transcribe enabled but
-        # produced no segments. This is the silent class — was being marked
-        # `completed` despite producing nothing. Route to FAILED with
-        # specific reason so the dashboard can render distinctly.
+        # v0.10.5 (post-prod-telemetry 2026-04-30) — DELIVERY-AWARE classification.
+        #
+        # Pre-fix: any meeting with transcribe_enabled and 0 transcripts was
+        # routed to FAILED/STOPPED_WITH_NO_AUDIO. This conflated two distinct
+        # outcomes:
+        #   (a) Bot couldn't capture audio at all (real failure)
+        #   (b) Bot DID capture audio (e.g. recording_enabled=true produced a
+        #       multi-MB WAV/webm file delivered to MinIO) but no SPEECH was
+        #       present in the captured audio — silent or quiet meeting.
+        #
+        # (b) is a successful capture from the customer's perspective: the
+        # recording is on disk, downloadable, replayable. Marking the whole
+        # meeting as `failed` lies — and the dashboard hides the recording
+        # because of the failed status, double-burying the delivered artifact.
+        #
+        # Honest fix: if a recording WAS delivered (chunk_count > 0 or any
+        # media_files entry exists with non-zero file_size_bytes), the meeting
+        # COMPLETED — we delivered what was captured. Only fall through to
+        # STOPPED_WITH_NO_AUDIO for the case where neither transcripts nor a
+        # recording entry exists.
+        recordings = data.get("recordings") or []
+        recording_delivered = False
+        for rec in recordings:
+            if not isinstance(rec, dict):
+                continue
+            for mf in (rec.get("media_files") or []):
+                if not isinstance(mf, dict):
+                    continue
+                if int(mf.get("file_size_bytes") or 0) > 0:
+                    recording_delivered = True
+                    break
+            if recording_delivered:
+                break
+
+        if recording_delivered:
+            # Recording delivered, no transcripts → silent/quiet meeting,
+            # not a failure. Map to the closest non-failure reason.
+            return (MeetingStatus.COMPLETED, requested_reason)
+
+        # 125-case: bot was active for 30s+ with transcribe enabled, no
+        # transcripts AND no recording delivered. Real failure — silent class.
         return (MeetingStatus.FAILED, MeetingCompletionReason.STOPPED_WITH_NO_AUDIO)
 
     return (MeetingStatus.COMPLETED, requested_reason)

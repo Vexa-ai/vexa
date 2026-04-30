@@ -1407,6 +1407,17 @@
       "file": "services/vexa-bot/core/src/services/audio.ts",
       "must_match": "Pass 2 — relaxed",
       "max_duration_sec": 5
+    },
+    {
+      "id": "CLASSIFIER_RECORDING_AWARE_NO_AUDIO",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/meeting-api/meeting_api/callbacks.py _classify_stopped_exit checks meeting.data.recordings[*].media_files[*].file_size_bytes > 0 BEFORE classifying as STOPPED_WITH_NO_AUDIO. Pre-fix: any meeting with transcribe_enabled and 0 transcripts was failed/stopped_with_no_audio — including meetings where recording_enabled produced a multi-MB durable audio file. Customer impact: dashboard showed 'failed' for meetings where the WAV/webm was successfully captured and on disk, then hid the recording because of the failed status. Post-fix: recording-aware delivery check — if recording is delivered (any media_files entry has file_size_bytes > 0), classify as COMPLETED even when transcripts=0 (silent/quiet meeting is success-with-no-speech, not failure-with-no-audio).",
+      "symptom": "Customer dashboards show meetings as 'failed' when they actually completed and produced a downloadable recording. Recording hidden from UI even though file is in MinIO. Specifically affects meetings where audio was captured but no one spoke (silent rooms, brief check-ins, recording sessions where the speaker started after meeting bot was admitted).",
+      "file": "services/meeting-api/meeting_api/callbacks.py",
+      "must_match": "DELIVERY-AWARE classification",
+      "max_duration_sec": 5
     }
   ]
 }
