@@ -435,17 +435,25 @@ export async function joinMicrosoftTeams(page: Page, botConfig: BotConfig): Prom
   // or video?") that Teams shows on light-meetings/launch when the bot
   // declines mic+camera. Underlying Join now button stays in the DOM, so
   // earlier readiness checks pass — but the actual click is intercepted by
-  // the modal overlay. Repros 50%+ at scale per upstream issue #226.
+  // the modal overlay. The modal is rendered inside the nested
+  // `light-meetings/launch` iframe, so we iterate every frame on the page
+  // (including the top frame) to find and dismiss it. Upstream issue #226.
   try {
-    const modalContinue = page
-      .locator(
-        'button:has-text("Continue without audio or video"), button:has-text("Continue")',
-      )
-      .first();
-    if (await modalContinue.isVisible().catch(() => false)) {
-      log("ℹ️ Dismissing pre-join 'Continue without audio or video' modal");
-      await modalContinue.click({ force: true }).catch(() => {});
-      await page.waitForTimeout(500);
+    const frames = [page.mainFrame(), ...page.frames()];
+    for (const frame of frames) {
+      try {
+        const modalContinue = frame
+          .locator(
+            'button:has-text("Continue without audio or video"), button:has-text("Continue")',
+          )
+          .first();
+        if (await modalContinue.isVisible({ timeout: 500 }).catch(() => false)) {
+          log("ℹ️ Dismissing pre-join 'Continue without audio or video' modal");
+          await modalContinue.click({ force: true }).catch(() => {});
+          await page.waitForTimeout(500);
+          break;
+        }
+      } catch {}
     }
   } catch {}
 
