@@ -430,6 +430,25 @@ export async function joinMicrosoftTeams(page: Page, botConfig: BotConfig): Prom
     log(`ℹ️ Could not enforce Computer audio: ${error.message}. Continuing...`);
   }
 
+  // Dismiss any blocking pre-join confirmation modal
+  // ("Are you sure you don't want audio or video?" / "Continue without audio
+  // or video?") that Teams shows on light-meetings/launch when the bot
+  // declines mic+camera. Underlying Join now button stays in the DOM, so
+  // earlier readiness checks pass — but the actual click is intercepted by
+  // the modal overlay. Repros 50%+ at scale per upstream issue #226.
+  try {
+    const modalContinue = page
+      .locator(
+        'button:has-text("Continue without audio or video"), button:has-text("Continue")',
+      )
+      .first();
+    if (await modalContinue.isVisible().catch(() => false)) {
+      log("ℹ️ Dismissing pre-join 'Continue without audio or video' modal");
+      await modalContinue.click({ force: true }).catch(() => {});
+      await page.waitForTimeout(500);
+    }
+  } catch {}
+
   log("Step 6: Clicking 'Join now' to enter the meeting...");
   try {
     // Use the more specific "Join now" selector first to avoid ambiguity
