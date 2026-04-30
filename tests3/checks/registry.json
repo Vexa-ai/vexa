@@ -1418,6 +1418,17 @@
       "file": "services/meeting-api/meeting_api/callbacks.py",
       "must_match": "DELIVERY-AWARE classification",
       "max_duration_sec": 5
+    },
+    {
+      "id": "TEAMS_CONTINUE_WITHOUT_MEDIA_HANDLER",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/vexa-bot/core/src/platforms/msteams/join.ts polls for and dismisses the Teams 'Continue without audio or video' confirmation modal inside waitForTeamsPreJoinReadiness. The modal renders intermittently when Chromium's media-permission state for Teams is 'denied' at prejoin boot — wireframe text is 'Are you sure you don't want audio or video?' with a 'Continue without audio or video' button. Pre-fix: when the modal appears it BLOCKS the prejoin name input from rendering; the bot waits the full 45s readiness timeout, fails to find the name input, and times out without ever joining. Customer impact: intermittent Teams join failures with no clear error — bot exits before name typing because of a blocking modal that the join flow had no handler for. Discovery: 2026-04-30 compose verification, modal observed during third Teams verification run (bot 34); manual click unblocked the prejoin and bot proceeded normally.",
+      "symptom": "Intermittent Teams join failures: bot navigates to meeting URL, sees the prejoin page never become ready, times out at the readiness check, and exits without typing its name. Modal text 'Continue without audio or video' is visible in VNC during the timeout window. Symptom is platform-wide for Teams since it depends on Chromium media-permission state, not meeting state.",
+      "file": "services/vexa-bot/core/src/platforms/msteams/join.ts",
+      "must_match": "continueWithoutMediaClickAttempts",
+      "max_duration_sec": 5
     }
   ]
 }
