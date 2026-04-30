@@ -748,7 +748,7 @@ async def request_bot(
             await db.commit()
             raise HTTPException(status_code=500, detail="Failed to start agent container")
 
-        new_meeting.bot_container_id = result.get("container_id") or result.get("name")
+        new_meeting.bot_container_id = result.get("name") or result.get("container_id")
         new_meeting.status = MeetingStatus.ACTIVE.value
         await db.commit()
         await db.refresh(new_meeting)
@@ -825,7 +825,7 @@ async def request_bot(
             await db.commit()
             raise HTTPException(status_code=500, detail="Failed to start browser session container")
 
-        new_meeting.bot_container_id = result.get("container_id") or result.get("name")
+        new_meeting.bot_container_id = result.get("name") or result.get("container_id")
         await db.commit()
         await db.refresh(new_meeting)
 
@@ -1204,7 +1204,13 @@ async def request_bot(
 
     # Update meeting with container info
     container_name = result.get("name", "")
-    new_meeting.bot_container_id = result.get("container_id") or container_name
+    # v0.10.5 R1 fix — store NAME as bot_container_id, not container_id.
+    # runtime-api state is keyed by name in Redis (api.py:315 GET
+    # /containers/{name} → state.get_container(redis, name)). Storing the
+    # container_id instead caused every lookup to 404, routing user-DELETE
+    # through the Pack J no-container branch (no stop signal). Same swap
+    # applied at lines 751, 828.
+    new_meeting.bot_container_id = container_name or result.get("container_id")
     await db.commit()
     await db.refresh(new_meeting)
 

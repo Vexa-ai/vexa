@@ -692,3 +692,175 @@ Action plan:
 ETA: 6-12h for fixes + 1h validate. Ship tomorrow at the earliest.
 
 
+---
+
+## 2026-04-30 evening — runtime regressions during compose retest
+
+**Stage entered**: triage (from validate; static tier green 84/84, runtime
+tier never executed on deploy host — see *Gap A* below).
+**Reporter**: human (CEO/team-lead) flagged "we cannot deliver this. ALso
+please find out which we are regressing." after retest spawn (bots
+40/41/42) hung on stop and produced "preparing audio" / "no audio recording".
+
+### What human observed
+
+1. **Bots don't leave meetings after DELETE** — all three (40 GMeet, 41 Teams, 42 Zoom). Bot containers `meeting-40-d969b41a`, `meeting-41-cbffb495`, `meeting-42-ddb048d2` stayed `Up 6-7 minutes` after DELETE was acknowledged and meeting status flipped to `completed` in DB.
+2. **Meetings 40, 41 stuck "Preparing audio…" in dashboard** — `recording.status="in_progress"`, `media_files[0].is_final=false` even after post-meeting reconciler ran successfully (logs show `[Bug-B-Fix] post_meeting_reconciler finalized recordings for meeting 41: count=1`).
+3. **Meeting 42 (Zoom) shows "No audio recording for this meeting"** — `data.recordings = []` (empty), but transcripts present (11 segments). Zoom Web parecord WAV path produced 0 entries.
+
+### R1 — runtime-api inspect-by-container_id 404 (root regression)
+
+**Classification**: regression. Single root cause for all three observed symptoms.
+
+**Bound check (closest)**: none. **Registry GAP** — see *Gap B*.
+
+**Evidence**:
+
+```
+# Direct probe of runtime-api on the deploy host
+GET /containers/meeting-40-d969b41a   → 200 {"status":"running","container_id":"37a0bdcaae62..."}
+GET /containers/37a0bdcaae62          → 404 {"detail":"Container 37a0bdcaae62 not found"}
+```
+
+The runtime-api endpoint at `services/runtime-api/runtime_api/api.py:315`
+is `@router.get("/containers/{name}")` and the handler does
+`await state.get_container(redis, name)` — Redis state is keyed by NAME
+ONLY. Container_id (Docker hex) is never registered as a key. Lookup by
+container_id always 404s.
+
+But meeting-api stores the wrong identifier. At
+`services/meeting-api/meeting_api/meetings.py:751,828,1207`:
+
+```python
+new_meeting.bot_container_id = result.get("container_id") or result.get("name")
+```
+
+`result.get("container_id")` is a truthy 64-char hex string from
+runtime-api's create response, so the fallback to name never runs. We
+always store container_id. Then on DELETE,
+`meetings.py:1593` calls `GET /containers/<container_id>` which 404s:
+
+```
+DELETE meeting 42: bot_container_id='27dd3ad4...' is stale
+  (runtime-api reports gone/not-running) — routing through
+  no-container Pack J branch
+```
+
+Pack J no-container branch (lines 1614-1636) was *designed* for the case
+where the bot truly is gone (crashed / wiped by stack redeploy). It:
+
+- marks meeting completed ✓
+- runs `run_all_tasks` (post-meeting reconciler) ✓
+- **does NOT send a stop signal to the live bot container** ✗
+
+So Pack J fires for *every* bot tonight, and every bot keeps running.
+Bots keep uploading chunks. Each chunk-upload at
+`services/meeting-api/meeting_api/recordings.py:327` rewrites
+`recording.status` based on the chunk's `is_final` flag — so after the
+reconciler successfully sets `status=completed`, the next chunk arrives
+with `is_final=false` and overwrites it back to `in_progress`. That's
+the "preparing audio" symptom.
+
+For Zoom 42 specifically: the parecord WAV is uploaded as a single chunk
+at meeting-end during the bot's clean-shutdown path. With no stop
+signal, the bot never enters that path. WAV is never uploaded → 0
+entries in `data.recordings`.
+
+**Touched commits (last 30d, recordings/lifecycle paths)**:
+
+```
+9b8ba83  feat: meeting-api — bot orchestration  (introduces buggy precedence)
+f58dfb9  fix(meeting-api): post_meeting reconciler import path (today, late)
+9b16eba  fix(meeting-api): classifier recording-aware
+0b83891  fix(meeting-api): recording metadata fixes (Bug A + Bug B)
+```
+
+The root line `bot_container_id = result.get("container_id") or result.get("name")` was introduced in the very first meeting-api commit `9b8ba83`. So this is **not a recent regression** — it has likely been masked by:
+
+- Pack J was added with a "is the container gone?" check **after** lookups started 404'ing, and the 404 path was misclassified as "real no-container case" rather than "lookup-by-wrong-key-always-404s" (see commit `9b16eba` and earlier Pack X/J work).
+- Bot lifecycle previously went through OTHER stop paths (e.g., bot self-leave → exit → callback) that don't depend on runtime-api inspect, so the inspect-404 was masked.
+- The recent stage hygiene commits started actually exercising the runtime-api inspect path on user-DELETE, exposing the misalignment.
+
+**Proposed fix** (do NOT apply during triage):
+- One-line precedence swap: `result.get("name") or result.get("container_id")` at meetings.py:751, 828, 1207.
+- ALSO: add a runtime-tier registry check that probes runtime-api with the same identifier meeting-api stores, asserting 200 + `status=running`. See *Gap B*.
+
+### R2 — chunk-upload overwrites finalize even after meeting completed
+
+**Classification**: regression-adjacent (data race; mostly a *consequence* of R1, but a real race even with R1 fixed).
+
+**Bound check (closest)**: `RECORDING_FINALIZE_OUTBOX_CONSUMER_IDEMPOTENT` — passes static. Static check verifies idempotency wiring exists; does not test the chunk-vs-reconciler race.
+
+**Evidence**: in `services/meeting-api/meeting_api/recordings.py:327`:
+
+```python
+"status": RecordingStatus.COMPLETED.value if is_final else RecordingStatus.IN_PROGRESS.value,
+```
+
+The chunk handler unconditionally writes status based on the chunk's
+`is_final` flag — without checking whether the parent meeting is already
+in a terminal state. Even if R1 is fixed and the bot leaves promptly,
+there's a window where one final chunk may race the reconciler.
+
+**Proposed gap-filler**: chunk handler should be a no-op for chunks
+arriving after `meeting.status` ∈ {`completed`, `failed`}. Or equivalently:
+once `recording.status="completed"` is set, never downgrade it.
+
+### R3 — Zoom Web 42 produced 0 recording entries
+
+**Classification**: consequence of R1 (not an independent bug).
+
+**Evidence**: `data.recordings = []` for meeting 42; transcripts = 11.
+The Zoom Web parecord finalize-and-upload path is triggered on bot
+clean-shutdown. With R1 unsent stop signal, the bot is killed by
+container-kill (or never killed at all) — parecord WAV finalize path
+never runs.
+
+**Expected behavior after R1 fix**: Zoom Web bot receives clean stop →
+PulseAudio.parecord stops → single WAV uploaded → reconciler flips
+`is_final=true`. Same path as bot 38 which worked tonight (longer
+meeting, clean leave-via-self-trigger).
+
+### Gap A — runtime tier never executes on the deploy host
+
+`make smoke` from this checkout runs the static tier (84/84 green) and
+then errors at `detect`: "No deployment found (no compose, no lite
+container, no k8s)" — because the checkout is on `bbb` (build host)
+while the deploy is on `172.234.192.145` (compose host). We have no
+single-machine workflow to run env/health/contracts against the deploy
+host.
+
+**Implication**: the gate was effectively static-only every time we ran
+`smoke` from this checkout. R1 would have been caught by a runtime
+contract test asserting `runtime-api inspect succeeds for the same
+identifier meeting-api stores`. We had no such test.
+
+**Gap-filler proposed**: tests3/lib/run on this host with `STATE` pointing
+at the deploy host (or via `gh actions` against an ephemeral compose).
+
+### Gap B — no contract check for "the identifier handshake" between meeting-api and runtime-api
+
+The registry has `K8S_BACKEND_CONTAINER_ID_IS_NAME` (helm) but nothing
+analogous for compose/lite. There is no test asserting:
+
+> meeting-api's `bot_container_id` (whatever it is) must round-trip
+> through `runtime-api GET /containers/{bot_container_id}` with
+> 200 status.
+
+**Gap-filler proposed**: contract check that creates a bot, reads
+`bot_container_id` from the meeting record, calls runtime-api inspect
+with that string, asserts 200. Bind to compose + lite + helm modes.
+
+### Next-fix proposal (waiting on human)
+
+Sequence to unblock v0.10.5:
+
+1. **Fix R1 first.** Swap precedence in meetings.py (3 sites). Ship to
+   compose host. Verify a fresh bot's DELETE hits runtime-api
+   successfully (200 not 404), bot exits within stop-grace window.
+2. **Add Gap B contract check** (runtime-api inspect round-trip).
+   Lock R1 against future regression.
+3. **Fix R2** as a defense-in-depth: chunk handler refuses to downgrade
+   `recording.status` once it has been set to `completed`. Add registry
+   check binding to that property.
+4. **Re-run validate matrix** — expect green or expose more.

@@ -1420,6 +1420,17 @@
       "max_duration_sec": 5
     },
     {
+      "id": "MEETING_API_STORES_NAME_NOT_CONTAINER_ID",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/meeting-api/meeting_api/meetings.py stores the runtime-api container NAME (not the Docker container_id hex) as meeting.bot_container_id on bot-create. Property: the value persisted as bot_container_id MUST be the same identifier runtime-api accepts at GET /containers/{name} — i.e., the name (e.g., 'meeting-40-d969b41a'), not the 64-char Docker container_id. Pre-fix (R1): all three create sites (lines 751, 828, 1207) wrote `result.get('container_id') or result.get('name')` — the truthy hex container_id was always preferred. runtime-api's Redis state is keyed by name only (api.py:315 `state.get_container(redis, name)`), so every meeting-api inspect call (`GET /containers/<container_id>`) returned 404. meeting-api then routed the DELETE through the Pack J no-container branch, which marks the meeting completed and runs run_all_tasks but does NOT send the stop signal to the live bot. Bots stayed alive uploading chunks; each chunk-upload at recordings.py:327 overwrote `recording.status='completed'` back to 'in_progress' based on the chunk's is_final=false flag. Symptom triplet: (1) bots don't leave after DELETE, (2) dashboard stuck 'preparing audio', (3) Zoom Web 0-recording-entries on bots that didn't get the parecord-finalize path.",
+      "symptom": "Bot containers remain alive (Up Nm) for many minutes after DELETE/stop. Meeting status flips to completed in DB but recording.status stays in_progress and media_files[*].is_final stays false. Dashboard shows 'preparing audio' indefinitely. Zoom Web meetings that didn't reach the bot's clean-shutdown self-leave path produce zero recording entries even with recording_enabled=true. All three platforms affected; observed 2026-04-30 on bots 40 (GMeet), 41 (Teams), 42 (Zoom). Root regression introduced 9b8ba83 (initial meeting-api commit); was masked by alternate stop paths until recent stage-hygiene work started exercising the runtime-api inspect path on user-DELETE.",
+      "file": "services/meeting-api/meeting_api/meetings.py",
+      "must_match": "v0.10.5 R1 fix — store NAME as bot_container_id",
+      "max_duration_sec": 5
+    },
+    {
       "id": "TEAMS_CONTINUE_WITHOUT_MEDIA_HANDLER",
       "tier": "static",
       "found": "2026-04-30",
