@@ -1432,6 +1432,29 @@
       "max_duration_sec": 5
     },
     {
+      "id": "CONTAINERS_TEST_ACCEPTS_CLEAN_STOP_FAILED",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "tests3/tests/containers.sh status_completed step accepts `failed` as terminal-clean WHEN paired with a clean-stop completion_reason (stopped / stopped_with_no_audio / stopped_before_admission). R5 fix — the recording-aware classifier (FM-002 v2 / commit 9b16eba) correctly marks zero-audio user-stopped meetings as failed; the lifecycle test guards 'not stuck in stopping forever', not 'must have audio'. Without this multi-state acceptance, the helm gate fails forever on synthetic test bots that never deliver audio (the recording path may not work in helm test cluster). Lock prevents a future test refactor from re-tightening to completed-only and breaking the helm gate again.",
+      "symptom": "Helm release-validate matrix red on `bot-lifecycle/status-completed` with status=failed reason=stopped_with_no_audio; gate fails at 88% < 90% threshold. Test contract claims meeting must be `completed` after stop; classifier correctly says `failed` because no audio was delivered; impasse. Same issue could fire on lite/compose if their fixtures stop delivering test audio.",
+      "file": "tests3/tests/containers.sh",
+      "must_match": "v0.10.5 R5",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "POST_MEETING_RECORDING_STATUS_IMPORT_PATH",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/meeting-api/meeting_api/post_meeting.py imports RecordingStatus from .schemas (not .models). The enum lives at schemas.py:1202; models.py has no RecordingStatus symbol. Pre-fix (R0): finalize_in_progress_recordings used `from .models import RecordingStatus`, raising ImportError every time the reconciler fired. Production logs (2026-04-30) showed the error firing on meetings 33/34/35/36/37/40/41 — every meeting ended with recording.status='in_progress' + media_files[*].is_final=false stuck forever, dashboard 'preparing audio' indefinitely. Post-fix: import path corrected; reconciler runs cleanly, [Bug-B-Fix] log line confirms `count=N` finalized recordings.",
+      "symptom": "ERROR meeting_api.post_meeting: Recording finalization failed for meeting <id>: cannot import name 'RecordingStatus' from 'meeting_api.models'. Reconciler claims success on log line `Post-meeting tasks completed for meeting <id>` but recording metadata stays unfinalized; dashboard indefinitely 'preparing audio'.",
+      "file": "services/meeting-api/meeting_api/post_meeting.py",
+      "must_match": "from .schemas import RecordingStatus",
+      "must_not_match": "from .models import RecordingStatus",
+      "max_duration_sec": 5
+    },
+    {
       "id": "RECORDING_STATUS_TERMINAL_STICKY",
       "tier": "static",
       "found": "2026-04-30",
