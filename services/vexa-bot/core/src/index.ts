@@ -2304,13 +2304,40 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     }
   });
 
-  // Monitor frames for WebRTC usage (Teams may use iframes)
+  // v0.10.5 #284 diagnostic — capture page navigation/crash events that destroy
+  // the page.evaluate execution context. Pre-fix the framenavigated handler
+  // explicitly EXCLUDED main-frame navigations, hiding the root cause of #284
+  // ("page.evaluate: Execution context was destroyed, most likely because of a
+  // navigation"). Now we log every navigation, dialog, popup, and crash so the
+  // post-incident audit shows EXACTLY what URL/event killed the context.
   page.on('frameattached', (frame) => {
     log(`[Frame] New frame attached: ${frame.url() || '(empty)'}`);
   });
   page.on('framenavigated', (frame) => {
-    if (frame !== page!.mainFrame()) {
-      log(`[Frame] Sub-frame navigated: ${frame.url()}`);
+    const isMain = frame === page!.mainFrame();
+    log(`[Frame] ${isMain ? 'MAIN-FRAME' : 'sub-frame'} navigated: ${frame.url()}`);
+  });
+  page.on('crash', () => {
+    log(`[Page] !!! TAB CRASHED — Chromium tab process died. Likely OOM or sandbox kill. Last URL: ${page?.url() || '(unknown)'}`);
+  });
+  page.on('close', () => {
+    log(`[Page] PAGE CLOSED — last URL: ${page?.url() || '(unknown)'}`);
+  });
+  page.on('dialog', async (dialog) => {
+    log(`[Page] DIALOG fired (type=${dialog.type()}, msg=${dialog.message()}) — accepting to prevent block`);
+    try { await dialog.accept(); } catch { /* dialog already dismissed */ }
+  });
+  page.on('popup', (popup) => {
+    log(`[Page] POPUP opened: ${popup.url()}`);
+  });
+  page.on('pageerror', (err: Error) => {
+    log(`[Page] PAGE-ERROR: ${err.name}: ${err.message}${err.stack ? '\n' + err.stack.split('\n').slice(0, 3).join('\n') : ''}`);
+  });
+  page.on('requestfailed', (request) => {
+    // Only log failed requests on the main GMeet domain — too noisy otherwise
+    const url = request.url();
+    if (url.includes('meet.google.com') || url.includes('googleusercontent') || url.includes('googleapis')) {
+      log(`[Page] REQUEST-FAILED: ${request.method()} ${url} — ${request.failure()?.errorText || 'unknown'}`);
     }
   });
 
