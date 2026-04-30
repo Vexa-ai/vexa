@@ -250,7 +250,7 @@ async def finalize_in_progress_recordings(meeting: Meeting, db: AsyncSession) ->
     already finalized via the canonical chunk-finalizer path).
     """
     from sqlalchemy.orm import attributes
-    from .models import RecordingStatus
+    from .schemas import RecordingStatus
     from datetime import datetime as _dt
 
     if not meeting or not meeting.data:
