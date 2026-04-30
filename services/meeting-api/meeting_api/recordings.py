@@ -342,21 +342,43 @@ async def internal_upload_recording(
         prior_types = {mf.get("type") for mf in prior_media_files}
         # Determine action: appended (new media_type) vs in_place (same type, latest-metadata refresh)
         chunk_action = "appended" if media_type not in prior_types else "in_place"
+        # Find existing entry of same media_type (the design contract is: ONE entry per type
+        # per recording — see Pack E.1.a comment block above). Pre-fix the in_place branch
+        # OVERWROTE file_size_bytes with the latest chunk's size, leaving the dashboard /
+        # API showing e.g. "479KB" for a recording that had 36 chunks totalling ~17MB.
+        # v0.10.5 (post-prod-telemetry 2026-04-30): accumulate cumulative_bytes and
+        # cumulative_chunk_count, refresh storage_path / chunk_seq / is_final on the SAME
+        # entry so callers see honest sizing.
+        prior_same_type = next(
+            (mf for mf in prior_media_files if mf.get("type") == media_type),
+            None,
+        )
+        prior_bytes = int((prior_same_type or {}).get("file_size_bytes") or 0) if prior_same_type else 0
+        prior_chunk_count = int((prior_same_type or {}).get("chunk_count") or (1 if prior_same_type else 0))
+        prior_first_chunk_at = (prior_same_type or {}).get("first_chunk_at") if prior_same_type else None
+        # When ingesting a new entry for an existing type, accumulate bytes;
+        # for a brand-new type entry (chunk_seq=0 path), bytes = file_size.
+        cumulative_bytes = (prior_bytes + file_size) if prior_same_type else file_size
+        cumulative_chunk_count = (prior_chunk_count + 1) if prior_same_type else 1
+        first_chunk_at = prior_first_chunk_at or datetime.utcnow().isoformat()
         existing_media_files = [
             mf for mf in prior_media_files
             if mf.get("type") != media_type
         ]
         existing_media_files.append({
-            "id": _new_recording_numeric_id(),
+            "id": (prior_same_type or {}).get("id") or _new_recording_numeric_id(),
             "type": media_type,
             "format": media_format,
-            "storage_path": storage_path,
+            "storage_path": storage_path,  # latest chunk's path (consumers list the dir for full chunk inventory)
             "storage_backend": os.environ.get("STORAGE_BACKEND", "minio"),
-            "file_size_bytes": file_size,
+            "file_size_bytes": cumulative_bytes,        # ← cumulative, not just-last-chunk
+            "last_chunk_size_bytes": file_size,         # ← latest-chunk only, for diagnostics
+            "chunk_count": cumulative_chunk_count,      # ← number of chunks accumulated
             "duration_seconds": duration_seconds,
-            "chunk_seq": chunk_seq,
+            "chunk_seq": chunk_seq,                     # ← latest chunk's seq (chunk count = chunk_seq + 1 for canonical 0-indexed)
+            "first_chunk_at": first_chunk_at,
             "metadata": {"sample_rate": sample_rate} if sample_rate else {},
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.utcnow().isoformat(),  # latest update
             "is_final": is_final,
         })
         rec_payload["media_files"] = existing_media_files

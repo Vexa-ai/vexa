@@ -1330,6 +1330,83 @@
       "file": "services/meeting-api/meeting_api/webhooks.py",
       "must_match": "logger.error(f\"Unexpected error sending",
       "max_duration_sec": 5
+    },
+    {
+      "id": "NO_VIDEO_TRANSCEIVER_DIRECTION_FLIP",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/vexa-bot/core/src/services/screen-content.ts must NOT modify transceiver.direction in the WebRTC ontrack handler. v0.10.5 commit 8ab7f49 reverted the SDP-munge added by 42a2c76 (2026-04-12) which set transceiver direction to 'inactive'/'sendonly' — produced malformed SDP (BUNDLE without rtcp-mux), peer entered inconsistent state, ~60-90s later GMeet severed the session and the page eval context was destroyed. Prod telemetry 2026-04-30: 44% of GMeet 24h meetings (19 of 43) matched this exact failure shape. This regression guard ensures any future re-introduction of the direction flip fails closed. Acceptable alternatives if memory pressure returns: chromium launch flags --disable-features=Vp8,Vp9 (codec-level disable, no JS-side WebRTC mutation), or system-level audio capture (attendee paradigm).",
+      "symptom": "GMeet bots crash 60-90s after admission with 'page.evaluate: Execution context was destroyed' and exit reason post_join_setup_error. Recording chunks may have started uploading; subsequent ones shrink as audio degrades; bot exits before is_final fires. In prod manifests as 'failed/joining' with stale failure_stage (FM-003) and NULL completion_reason — looks indistinguishable from a real join failure even though the bot was active for a minute.",
+      "file": "services/vexa-bot/core/src/services/screen-content.ts",
+      "must_not_match": "transceiver(Ref|s)?\\.direction\\s*=\\s*['\\\"]?(inactive|sendonly)",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "RECORDING_MEDIA_FILES_CUMULATIVE_BYTES",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/meeting-api/meeting_api/recordings.py per-chunk write accumulates `cumulative_bytes` across chunks of the same media_type rather than overwriting `file_size_bytes` with the latest chunk's size only. Pre-fix (Pack E.1.a v1, 2026-04-27): each chunk replaced the same-type media_files entry with the new chunk's metadata, so file_size_bytes reflected only the LAST chunk (~480KB) instead of the cumulative size (e.g. 36 chunks ≈ 17MB). Dashboard / SDK consumers reading meeting.data.recordings[].media_files[].file_size_bytes saw a tiny recording for what was actually a 15-minute capture. Post-fix (2026-04-30, post-prod-telemetry): the in_place branch now reads prior_bytes + adds file_size, also tracks chunk_count and first_chunk_at, exposes last_chunk_size_bytes for diagnostics.",
+      "symptom": "Customer-reported 'my hour-long meeting only saved a 500KB file' even though the actual chunk files in MinIO total tens of MB. API/dashboard queries report misleading recording size, breaking download UX expectations and any analytics that key off file_size_bytes for billing or diagnostic gates.",
+      "file": "services/meeting-api/meeting_api/recordings.py",
+      "must_match": "cumulative_bytes",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "POST_MEETING_FINALIZES_IN_PROGRESS_RECORDINGS",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/meeting-api/meeting_api/post_meeting.py defines `finalize_in_progress_recordings(meeting, db)` and calls it as Task 0 of run_all_tasks. Reconciles the case where a bot's terminal-chunk-with-is_final-true never reached the server (bot was killed by SIGKILL grace timeout, page eval context died, network failed mid-flush). Pre-fix, recordings stayed status=IN_PROGRESS with media_files[*].is_final=false indefinitely after the meeting itself transitioned to terminal — consumers polling for is_final=true never saw the recording 'complete' even though the audio chunks were durably persisted. Post-fix, post-meeting tasks unconditionally walk meeting.data.recordings, flip rec.status to COMPLETED for any IN_PROGRESS, and set is_final=true on every media_files entry. Tagged with finalized_by: post_meeting_reconciler for forensic traceability.",
+      "symptom": "Recording entries stuck in IN_PROGRESS indefinitely after meetings that completed successfully. Consumers polling for is_final=true to know when the recording is ready never see it flip — assume the recording is broken or still being written. SDK / dashboard / billing / archival pipelines that gate on the is_final flag stall.",
+      "file": "services/meeting-api/meeting_api/post_meeting.py",
+      "must_match": "finalize_in_progress_recordings",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "GMEET_FALSE_LEFT_ALONE_AUDIO_CROSS_VALIDATE",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/vexa-bot/core/src/platforms/googlemeet/recording.ts implements Layer 2 of the false-LEFT_ALONE_TIMEOUT fix: tracks __vexaLastAudioActivityTs from the audio data processor and refuses to increment alone-time when audio activity has occurred in the last 120s. Pre-fix (#285), the participant counter relied solely on the [data-participant-id] DOM selector; any GMeet UI change that renamed/relocated this attribute returned 0 unique IDs even when multiple speakers were active, firing LEFT_ALONE_TIMEOUT on healthy meetings within 60s after admission. Layer 2 cross-validate provides an independent ground truth — audio is actively flowing means the meeting has speakers, regardless of what the DOM count says.",
+      "symptom": "FM-285 regression: bot exits healthy GMeet meetings prematurely with GOOGLE_MEET_BOT_LEFT_ALONE_TIMEOUT while audio is being captured and transcripts are being produced. Customer impact: lost mid-meeting recording on every affected session; recording cuts off mid-stream while the meeting continues with active speakers.",
+      "file": "services/vexa-bot/core/src/platforms/googlemeet/recording.ts",
+      "must_match": "__vexaLastAudioActivityTs",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "GMEET_PARTICIPANT_COUNTER_MULTI_SELECTOR_FALLBACK",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/vexa-bot/core/src/platforms/googlemeet/recording.ts countParticipantTiles() falls back to data-self-name (and role=region with aria-label containing 'articipant') when the primary [data-participant-id] selector returns 0. Layer 1 of the false-LEFT_ALONE_TIMEOUT fix (#285): any GMeet UI change to the primary attribute no longer takes the count to 0 globally, since the self-name marker is always present once admitted.",
+      "symptom": "Single-selector GMeet UI change cascades to bot global LEFT_ALONE detection; bots leave every healthy meeting within 60s of admission until manually patched.",
+      "file": "services/vexa-bot/core/src/platforms/googlemeet/recording.ts",
+      "must_match": "data-self-name",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "ZOOM_LEAVE_MULTI_SELECTOR_FALLBACK",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/vexa-bot/core/src/platforms/zoom/web/leave.ts uses a multi-selector fallback array for both the Leave button and the Confirm-Leave dialog button. Tries the strict footer-section selector first, then the broader button[aria-label=Leave] as fallback. Pre-fix the brittle attribute-scoped selector failed under transient DOM state when N bots targeted the same Zoom meeting concurrently — ~2/N hit a window where the footer-section attribute was momentarily absent, click never fired, bot exited with WebRTC peer still active = orphan participant in Zoom for 30-60s until keepalive timeout.",
+      "symptom": "Zoom Web orphan-bot regression: multiple bots receive DELETE, exit cleanly from meeting-api's perspective, but stay visible as participants in the Zoom meeting from Zoom's perspective until WebRTC keepalive expires.",
+      "file": "services/vexa-bot/core/src/platforms/zoom/web/leave.ts",
+      "must_match": "v0.10.5 — Multi-selector fallback",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "FIND_MEDIA_ELEMENTS_TWO_PASS_FILTER",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/vexa-bot/core/src/services/audio.ts findMediaElements() implements a two-pass filter: pass 1 strict (srcObject MediaStream + audio tracks), pass 2 relaxed (accepts captureStream() / mozCaptureStream() fallback). Mirrors the downstream createCombinedAudioStream's already-present fallback chain so this finder doesn't artificially filter out elements the consumer can use. Pre-fix, the strict-only filter returned 0 elements on Google Meet pages where video tiles are paused or use captureStream — recording.ts went into degradedNoMedia mode and MediaRecorder was never created, leaving meeting.data.recordings = []. Post-fix, every chunk-emitting GMeet meeting produces >=1 chunk durably stored.",
+      "symptom": "Empty recordings on Google Meet despite recording_enabled=true and active meeting. meeting.data.recordings = [] for every affected meeting; chunks never produced. Customer impact: recording feature looks completely broken on GMeet platform.",
+      "file": "services/vexa-bot/core/src/services/audio.ts",
+      "must_match": "Pass 2 — relaxed",
+      "max_duration_sec": 5
     }
   ]
 }
