@@ -1,6 +1,7 @@
-release_id: 260427-k8s-stabilize
+release_id: '260427'  # canonical id matches worktree (vexa-260427) + branch (release/260427)
+codename: k8s-stabilize  # human-readable handle, surfaces in release notes / report headers
 public_version: v0.10.5
-public_name: "v0.10.5 — Production hardening"
+public_name: "v0.10.5 — Production hardening (k8s-stabilize)"
 milestone: https://github.com/Vexa-ai/vexa/milestone/14
 branch: dev
 summary: |
@@ -63,10 +64,15 @@ summary: |
     runtimeApi, adminApi, dashboard, transcriptionGateway). State-
     bearing services (Postgres/Redis/MinIO) explicitly NOT touched —
     replication shape is a separate cycle.
-  - Cross-cutting: templates/prometheusrule.yaml with 7 alerts (every
-    sweep, every retry-budget-exhausted, every "canonical mechanism
-    failed" path) + idle_loop heartbeat watcher-of-the-watcher.
-    Auto-recover acceptable IFF accompanied by guaranteed observability.
+  - Cross-cutting: idle_loop heartbeat watcher-of-the-watcher pattern
+    inside meeting-api / runtime-api processes. Auto-recover acceptable
+    IFF accompanied by guaranteed observability.
+    Prometheus alert manifests / scrape pipeline / observability
+    infrastructure are [PLATFORM]'s territory (per 2026-04-27 ~15:13Z
+    project-owner clarification) — OSS does NOT ship PrometheusRule
+    YAML, /metrics endpoints, or prometheus_client deps. OSS provides
+    structured log signals where useful (e.g. Pack E.1.a `[E1A]
+    chunk_write` line) for [PLATFORM]'s observers to consume.
 
 deployments:
   modes: [lite, compose, helm]
@@ -74,6 +80,102 @@ deployments:
     lite: Bot-side stdout-JSON discipline (Pack G.1) is mode-independent; lite is the cheapest canonical mode for static-grep checks against bot source.
     compose: Pack C.4 startup-gate chaos test, Pack D.2 durable-DELETE chaos, Pack E.1 chunk-finalize chaos, Pack E.3 stale-stopping sweep chaos, Pack H aggregation_failed sweep chaos — all need meeting-api + Redis + runtime-api co-located with kill-restore primitives.
     helm: Packs A, B, C.5, F, I are canonical chart contracts; helm is the only mode that exercises chart rendering + actual scheduling/PDB/probe behaviour.
+
+# ── Documented invariants (cross-cutting; converged with [PLATFORM] on #272)
+constraints:
+  lifecycle_ownership: |
+    Meeting + bot lifecycle is owned by the application layer
+    (meeting-api + runtime-api + scheduler service). K8s features
+    (autoscaling, eviction, restartPolicy, livenessProbe) are
+    OBSERVABILITY/SAFETY NETS only — never primary lifecycle
+    mechanisms. We want our bugs visible, not hidden behind a K8s
+    auto-recover that masks the underlying state-machine defect.
+
+    Audit of v0.10.5 packs against this principle (validated by
+    [PLATFORM] code review 2026-04-27 13:42:17Z, #272
+    issuecomment-4327366063): every pack respects the constraint.
+    K8s probes (Pack C.4 /readyz, Pack I liveness) are app-layer
+    SIGNALS observed by K8s — not raw process-up checks. K8s cron
+    is the scheduler-as-infrastructure for app-layer sweep LOGIC,
+    not a lifecycle trigger.
+
+    Adding K8s-level lifecycle (e.g. `activeDeadlineSeconds` on a
+    pod, autoscaling-based eviction, podDisruptionBudget as
+    primary completion mechanism) requires explicit groom-stage
+    decision + documented bug-visibility tradeoff. Catch-up rule
+    for v0.10.6 and beyond.
+
+  media_files_canonical_shape: |
+    `meetings.data.recordings[].media_files` is a flat list of
+    entries with the invariant: ONE entry per (recording,
+    media_type) pair. The entry's metadata reflects the latest
+    chunk uploaded for that type (chunk_seq, storage_path,
+    file_size_bytes, duration_seconds, is_final).
+
+    Rationale (decision converged with [PLATFORM] on #272
+    issuecomment-4327366063, 2026-04-27): per-chunk arrays would
+    explode payload size for long recordings + force dashboard UI
+    changes to handle N entries per type. Single-entry-per-type is
+    Pack E.1.a's existing intent and matches the dashboard's
+    fragment-player + seek-to-segment math. Per-chunk history
+    remains reconstructable from the MinIO listing under the
+    session/type prefix.
+
+    The Pack E.1-sibling reconcile sweep (deferred to v0.11.x) MUST
+    maintain this shape: skip if `len(per_type) == 1 AND
+    latest_seq == max(S3 seq for that type)`; otherwise rebuild to
+    single-entry-per-type shape. Sweep ports of platform-team
+    algorithms (which used per-chunk arrays in their environment)
+    must be shape-aligned before landing.
+
+# ── Cross-repo cycle dependencies (converged with [PLATFORM] on #272)
+cycle_dependencies:
+  platform_retirement_gate:
+    description: |
+      Platform-side `cronjob-recording-reconciler.yaml` retires after a
+      24-hour soak of Pack E.1.a v2 in production AND the platform
+      production observer (`len(media_files) < distinct_media_types_in_s3`
+      audit, see #272 issuecomment-4327676126 + 14:32Z heuristic
+      correction) returns 0 orphans across the soak window.
+    purpose: |
+      Removes the K8s-CronJob-based recovery path in favor of the
+      app-layer `_idle_loop_task` sweep (lifecycle_ownership constraint
+      above). Once retired, [PLATFORM] absorbs the existing transient
+      `asyncpg.TimeoutError` failures that recur on freshly-autoscaled
+      nodes (cf. #272 issuecomment-4327983847 root cause analysis); the
+      sweep-as-loop architecture eliminates the failure mode entirely
+      because the in-process loop inherits the meeting-api pod's
+      already-warm asyncpg connection pool.
+    retirement_PR_target: vexa-platform/<TBD>  # opened post-soak by [PLATFORM]
+    shape_alignment_required: |
+      Platform sweep currently writes per-chunk media_files entries.
+      MUST be aligned to OSS Option α (one entry per media_type, latest-
+      chunk metadata) BEFORE retirement OR run no-op during the overlap
+      window to prevent fighting the Pack E.1.a v2 live path. See
+      `media_files_canonical_shape` constraint above.
+    blocking_for_v0_10_5_ship: false  # [PLATFORM] tracks; not OSS-side gate
+    blocking_for_v0_10_6_groom: true  # surface during next groom
+
+  platform_observer_arrival:
+    description: |
+      Platform-side production observer instrumentation arrives when
+      `release/260427`'s meeting-api image reaches production. The
+      observer (Prometheus counters + OTel trace spans + their scrape
+      pipeline) is owned by [PLATFORM] — NOT in OSS scope at any
+      release level. OSS contributes the structured signal that the
+      observer consumes (ASK 2: `[E1A] chunk_write` log line) so
+      [PLATFORM]'s observer can detect race recurrence via a single
+      grep+rate signal rather than an O(N) S3+DB scan per meeting end.
+    oss_contributes:
+      - "ASK 2 ([E1A] chunk_write structured log line) — recordings.py — landed in this release"
+      - "Pack E.1.a v2 lock-before-snapshot fix (Issue 1 critical) — recordings.py — landed in this release"
+      - "Reproducer test wired as required-by-mode in matrix — landed in this release"
+    platform_owns:
+      - "ASK 1 — Prometheus counters / scrape pipeline (their infrastructure tier)"
+      - "ASK 3 — OTel trace spans (optional, their infrastructure tier)"
+      - "Production-traffic regression observer (heuristic + log-line consumption)"
+      - "24h post-deploy soak window classification (any orphans surfaced → reverts retirement)"
+    blocking_for_v0_10_5_ship: false
 
 issues:
 
@@ -367,6 +469,15 @@ issues:
     - {check: BOT_GRACEFUL_LEAVE_UPLOADS_FIRST, modes: [lite, compose]}
     - {check: DELAYED_STOP_FINALIZER_REMOVED, modes: [lite, compose]}
     - {check: STALE_STOPPING_SWEEP_RECOVERS_MEETING, modes: [compose]}
+    # v0.10.5 Pack E.1.a v2 reproducer test (Issue 1 critical race —
+    # see #272 issuecomment-4327366063 + 14:39Z [PLATFORM] approval).
+    # Three pytest cases in services/meeting-api/tests/test_recordings_concurrent_chunks.py:
+    #  1. test_lock_acquired_before_snapshot_in_source — AST static check
+    #  2. test_sequential_audio_then_video_both_persist — sanity baseline
+    #  3. test_concurrent_audio_video_no_lost_entry — asyncio.gather race
+    # Required-by-mode: lite + compose (the meeting-api unit-test surface
+    # is the same in both; helm matrix doesn't run python unit tests).
+    - {check: PACK_E1A_CONCURRENT_CHUNKS_REPRODUCER_PASSES, modes: [lite, compose]}
   required_modes: [compose]
   human_verify:
     - mode: compose
@@ -840,12 +951,13 @@ issues:
     Sweep iterates ALL `browser_session:*` entries by structure; doesn't
     require platform's specific cluster shape.
 
-    (K.3 — KEPT, steady-state observability ~¼ d) Prometheus metric
-    `runtime_api_browser_session_pods_orphaned_total` (counter) + alert
-    `BrowserSessionPodsOrphaned`. Rate > 0 over 5 min = the reconcile
-    sweep is finding orphans = either (a) the K8s reaper IS firing
-    (acceptable as the reconcile path) OR (b) it's firing too
-    aggressively. Either way, observable.
+    (K.3 — REFRAMED to log-line; observability infra is [PLATFORM]'s)
+    Per project-owner clarification 2026-04-27 ~15:13Z, OSS does not
+    ship Prometheus metrics/alerts. The reconcile sweep emits a
+    structured log line on each orphan-find:
+        logger.warning(f"[K2] reconcile_orphan browser_session={key} container={name} k8s_pod_missing=True")
+    [PLATFORM]'s log-pipeline / observer consumes the rate signal.
+    Same observability outcome, OSS stays out of the metrics tier.
 
     (K.4 — REFINED to test the actual prod failure mode, ~¼ d)
     Compose-mode integration test:
@@ -855,14 +967,20 @@ issues:
       4. Assert subsequent client query for that browser_session
          returns 404 NOT stale-entry
 
-    (K.5 — NEW from data Finding 3) `RuntimeApiIdleLoopStalled` alert
-    (analog to meeting-api's `MeetingApiIdleLoopStalled` from Pack C
-    cross-cutting). [PLATFORM] data showed zero `idle_loop` log lines
-    in last 1h with no way to disambiguate "running silently" vs "not
-    running at all." Counter `runtime_api_idle_loop_iterations_total`
-    + gauge `runtime_api_idle_loop_last_iteration_timestamp` at start
-    of each iteration. Same shape, same rationale. Closes the
-    observability gap; defense-in-depth on top of K.2's reconcile.
+    (K.5 — REFRAMED as in-process counter + log line; observability
+    infra is [PLATFORM]'s) Per project-owner clarification 2026-04-27
+    ~15:13Z, OSS doesn't ship Prometheus deps. Implementation:
+    module-level globals `idle_loop_iterations` (int) +
+    `idle_loop_last_iteration_at` (ISO timestamp) updated at start of
+    each iteration in `runtime_api/lifecycle.py`, plus a structured
+    log line every iteration:
+        logger.info(f"[K5] idle_loop iteration={iteration} ts={now}")
+    [PLATFORM]'s observer consumes the log-line cadence + can scrape
+    the in-memory globals via /healthz endpoint if/when their tier
+    needs structured numbers. Closes the observability gap from
+    [PLATFORM] data Finding 3 (no way to disambiguate "running
+    silently" vs "not running at all"); defense-in-depth on top of
+    K.2's reconcile.
 
     Re-prioritized total: ~1 d (unchanged in effort; reshaped in
     sequence). Plan-stage should also confirm rendered chart values
@@ -952,52 +1070,25 @@ issues:
       do: "GET /bots/id/<id> for one meeting"
       expect: "Detail endpoint returns full `m.data` JSONB unchanged"
 
-# ── Pack M — meetings.data row-size monitoring (NEW; pure observability) ──
-- id: meetings-data-row-size-monitoring
-  source: human
-  ref: "260427-k8s-stabilize groom JSONB-as-NoSQL audit"
-  problem: |
-    `meetings.data` JSONB has accumulated 16 distinct field families
-    (status_transition[], recordings[], webhook_deliveries[],
-    completion_reason, scheduler_job_id, participants, languages,
-    notes, name, session_token, mode, agent_enabled,
-    voice_agent_enabled, cameraEnabled, webhook_secret,
-    resolved_timeouts, plus Pack G bot_logs[] + Pack H
-    aggregation_failure_class). Some belong as columns / separate
-    tables (queryable scalars + audit-log arrays). Pack M doesn't
-    pay down the structural debt; it surfaces magnitude so the
-    next architectural-cleanup cycle has data to work from.
-  gap_analysis: |
-    No existing telemetry monitors row size growth. Operators
-    discover bloated rows only via slow queries / TOAST-overflow
-    incidents. Pack M adds the metric + alert so the structural
-    debt becomes visible.
-  new_checks:
-    - MEETINGS_DATA_ROW_SIZE_METRIC_EXPORTED
-  hypothesis: |
-    (M.1) Add Prometheus metric `meetings_data_row_size_bytes`
-          (histogram), sampled via meeting-api periodic task running
-          `pg_column_size(data)` aggregations every IDLE_CHECK_INTERVAL.
-    (M.2) Alert `MeetingsDataRowSizeP99High` — fires when p99
-          exceeds 200 KB (best-guess threshold; develop-stage
-          measurement adjusts). Surfaces the structural debt without
-          committing to a fix in this cycle.
-    (M.3) Document the structural-cleanup follow-on in 260427
-          ship-stage follow-ups (separate cycle, requires forward-
-          only migrations to promote queried JSONB keys to columns +
-          split audit-log arrays into tables).
-    Pure observability. No DB migration. No application logic change.
-  fix_commits: []
-  proves:
-    - {check: MEETINGS_DATA_ROW_SIZE_METRIC_EXPORTED, modes: [compose, helm]}
-  required_modes: [helm]
-  human_verify:
-    - mode: helm
-      do: "Render chart with `monitoring.prometheusRule.enabled=true`; verify `MeetingsDataRowSizeP99High` alert is present"
-      expect: "Alert rendered in PrometheusRule manifest with the documented expression and threshold"
-    - mode: compose
-      do: "Run a meeting; query `curl http://meeting-api/metrics | grep meetings_data_row_size_bytes`"
-      expect: "Histogram metric exposed with bucket counts; visible in any Prometheus scraper"
+# Pack M — meetings.data row-size monitoring — REMOVED FROM OSS SCOPE
+#
+# Originally scoped as "pure observability" adding Prometheus metric
+# `meetings_data_row_size_bytes` (histogram) + `MeetingsDataRowSizeP99High`
+# alert. Per project-owner clarification 2026-04-27 ~15:13Z: Prometheus +
+# observability infrastructure is [PLATFORM]'s territory, not OSS. OSS
+# does not ship `/metrics` endpoints, prometheus_client deps, or
+# PrometheusRule alert manifests.
+#
+# Where the JSONB structural-debt visibility lives instead:
+#  - [PLATFORM] queries `pg_column_size(meetings.data)` directly via
+#    their existing operational tooling
+#  - The structural-cleanup follow-on (split JSONB into columns + audit
+#    tables) remains an OSS concern — opens during a future groom
+#    cycle when [PLATFORM] surfaces row-size data warranting action
+#
+# This entry is preserved as a comment-only stub so the scope-shrink
+# is visible in the audit trail (rather than silently disappearing
+# from a previously-approved plan-approval.yaml).
 
 # ── Pack N — Bot/Server contract parity checks (NEW; #255 epic structural follow-on) ──
 - id: bot-server-contract-parity-checks
@@ -1083,6 +1174,302 @@ issues:
     - mode: compose
       do: "From a fresh clone in a non-interactive shell: `make env TRANSCRIPTION=cpu && make all < /dev/null > make.log 2>&1 &`; wait 15 minutes"
       expect: "Process exits cleanly within 10 minutes; `make.log` does not grow unbounded; no `Invalid Google Meet ID format` spam"
+
+# ── Pack X — Synthetic-bot test rig (NEW; entropy testing without external deps) ──
+- id: synthetic-bot-test-rig
+  source: human
+  ref: 260427-k8s-stabilize live-validation finding 2026-04-27
+  problem: |
+    The Pack J coverage gap (status_change path bypassed _classify_
+    stopped_exit) shipped through the entire validate matrix because
+    the matrix doesn't drive a real meeting end-to-end. Static checks,
+    smoke matrix, unit tests, and reproducer tests all reported green.
+    The bug surfaced only when a human ran a real Zoom bot and noticed
+    a meeting marked `completed/stopped` despite 0 transcripts.
+
+    Industry parlance: we have ASSERTION-based testing (we know what
+    to assert). We need DISCOVERY-based testing (entropy that surfaces
+    behavior we didn't think to assert). The matrix locks known
+    invariants. Real-meeting validation surfaces external-integration
+    bugs. Neither catches OSS-side regressions in callback orderings,
+    classifier branching, JSONB invariants under adversarial inputs.
+  gap_analysis: |
+    No deterministic, fast, no-external-dependency way to drive the
+    OSS-side meeting lifecycle through arbitrary orderings. Real
+    meetings exercise the full stack but are slow, non-deterministic,
+    and require external platforms. Mock-based unit tests don't
+    exercise the actual HTTP handlers + DB + Redis path.
+  new_checks:
+    - PACK_X_PACK_J_STATUS_CHANGE_BYPASS
+    - PACK_X_PACK_J_VIA_EXIT_CALLBACK
+    - PACK_X_PACK_R_STALE_FAILURE_STAGE_TOLERANCE
+    - PACK_X_PACK_T_TERMINAL_IDEMPOTENCY
+  hypothesis: |
+    (X.1) Add an internal-only endpoint
+          `POST /bots/internal/test/session-bootstrap` (gated by
+          `VEXA_ENV != "production"`) that creates a MeetingSession
+          row directly. Path is under `/bots/internal/*` (not
+          top-level `/internal/*`) because that's the namespace
+          api-gateway proxies to meeting-api. Mirrors existing
+          `/bots/internal/callback/*` shape. Lets a synthetic test
+          driver bypass the bot-side WebSocket session-start path
+          and drive callbacks via pure HTTP. Returns 404 in production.
+    (X.2) `tests3/synthetic/rig.sh` — bash+curl primitives:
+          rig_get_user_token, rig_spawn_dryrun, rig_session_bootstrap,
+          rig_callback (POST any callback endpoint with hand-rolled
+          payload), rig_delete_bot, rig_get_state, rig_assert_state.
+          ~120 LoC, no external deps beyond bash+curl+python3.
+    (X.3) `tests3/synthetic/scenarios/<name>.sh` — each scenario is
+          a self-contained reproducer for a specific failure mode.
+          v0.10.5 ships 4 scenarios:
+          - pack-j-status-change-bypass — the bug discovered today
+          - pack-j-via-exit-callback — companion (other path; same
+            classification invariant)
+          - pack-r-stale-failure-stage-tolerance — read-side defense
+          - pack-t-terminal-idempotency — re-fire safety
+    (X.4) `tests3/synthetic/run-all.sh` — runner that emits a
+          matrix-shaped JSON report. Wired into `test-registry.yaml`
+          as a cheap-tier `synthetic` test running on lite + compose.
+          Helm doesn't run it (no compose-style direct DB access).
+    (X.5) [PLATFORM] contributes additional scenarios over time as
+          their incident catalog grows. Each new OSS bug from now on
+          ships paired with a synthetic scenario reproducing it.
+          Cross-repo entropy curation.
+
+    The Pack J discovery proves the value: the same scenario that
+    reproduces the bug is now the deterministic regression test
+    that would have caught it pre-ship. Future bugs of this class
+    fail the matrix before reaching live-validation.
+
+    Industry best practice: defense-in-depth across testing tiers.
+    Synthetic rig is the OSS-tier counterpart to [PLATFORM]'s
+    production-traffic-mirror observer (which they own per the
+    OSS↔PLATFORM SoC).
+  fix_commits: []
+  proves:
+    - {check: PACK_X_PACK_J_STATUS_CHANGE_BYPASS, modes: [lite, compose]}
+    - {check: PACK_X_PACK_J_VIA_EXIT_CALLBACK, modes: [lite, compose]}
+    - {check: PACK_X_PACK_R_STALE_FAILURE_STAGE_TOLERANCE, modes: [lite, compose]}
+    - {check: PACK_X_PACK_T_TERMINAL_IDEMPOTENCY, modes: [lite, compose]}
+  required_modes: [lite, compose]
+  human_verify:
+    - mode: compose
+      do: "On a running compose stack: `BASE=http://localhost:8056 bash tests3/synthetic/run-all.sh`"
+      expect: "All 4 scenarios pass; report at .state-compose/reports/compose/synthetic.json shows status=pass"
+    - mode: compose
+      do: "Verify endpoint gating: with VEXA_ENV=production, `curl -X POST http://localhost:8056/bots/internal/test/session-bootstrap -d '{}'` returns 404"
+      expect: "404 Not Found"
+
+# ── v0.10.6 GROOM SEED — Pack Y: invariant-based entropy expansion ──
+# (Documented here so it carries forward; not in v0.10.5 ship scope.)
+#
+# Pack X v1 (this release) shipped 9 hand-crafted scenarios. Live
+# testing 2026-04-27 surfaced 3 bug classes Pack X v1 didn't cover
+# (DELETE no-container path, status_change=failed reason persistence,
+# stale-stopping recovery threshold UX). Project-owner pushback:
+# "instead of enumerations think on how you can expand entropy in
+# that dimensions" — correct call. Path enumeration is assertion-
+# mindset; invariant-based fuzz is the discovery shape.
+#
+# Pack Y design (v0.10.6 priority):
+#
+# Universal meeting-lifecycle invariants — hold for ANY input sequence:
+#   I1: Status monotonic in legal-transition graph
+#       (catches: started-callback REQUESTED→ACTIVE class)
+#   I2: Terminal status → completion_reason OR failure_stage non-null
+#       (catches: m8 + m28 silent-class today)
+#   I3: Terminal status → end_time non-null
+#       (catches: lifecycle-shutdown bugs)
+#   I4: status_transition[] count == observed transitions
+#       (catches: hidden state changes)
+#   I5: completion_reason ∈ enum when non-null
+#       (catches: Pack R failure_stage='stopping' class)
+#   I6: Sweep eventually recovers stopping > THRESHOLD to terminal
+#       (catches: m27 stale class)
+#   I7: No callback sequence yields 5xx
+#       (catches: service-availability under fuzz; DB connection leaks)
+#
+# Implementation:
+#   - tests3/synthetic/property/test_lifecycle_invariants.py
+#   - hypothesis-based: random callback sequence + payload + timing
+#   - 7 invariants asserted post-condition
+#   - 100s of cases per CI run finds bugs hand-crafted scenarios miss
+#
+# Plus tier-3 time-injection (POST /bots/internal/test/trigger-sweep)
+# unblocks I6 — sweep behavior testable in seconds, not 5+min.
+# Plus tier-5 chaos primitives (rig_chaos docker_stop / network_blackhole)
+# extend invariants to chaos conditions.
+#
+# Estimated: ~3 days dev + [PLATFORM] invariant input.
+# Open during v0.10.6 groom with this entry as the seed.
+
+# ── v0.10.6 GROOM SEED — Pack Σ: meeting lifecycle taxonomy redesign ──
+# (Documented here so it carries forward; not in v0.10.5 ship scope.)
+#
+# Triggered by: v0.10.5 retrospective 2026-04-28 + recall.ai documentation
+# study (https://docs.recall.ai/docs/bot-status-change-events,
+# https://docs.recall.ai/docs/sub-codes). Three concerns conflate in our
+# current binary `completed | failed`:
+#   - Users don't see plain-language explanations of what happened
+#     (no action affordance — "failed" with no specific cause)
+#   - Engineering can't isolate bug rate from user/host/environment-
+#     driven failures (every silent-classification fix in v0.10.5 was a
+#     symptom of this)
+#   - Product can't read funnel cause attribution from the data
+#
+# Pack J's "default to failed when uncertain" is engineering-defensive
+# but user-hostile and product-hostile. v0.10.5 closed the silent-success
+# class; v0.10.6 closes the silent-classification class entirely.
+#
+# === DESIGN ===
+#
+# Two layers, recall.ai-aligned for future API translator compatibility:
+#
+# Layer 1: 9 LIFECYCLE STATES (renamed for recall-compat)
+#   - requested                 (vexa-specific; pre-spawn)
+#   - joining                ↔  bot.joining_call
+#   - in_waiting_room        ↔  bot.in_waiting_room
+#                               (renamed from awaiting_admission)
+#   - in_call_not_recording  ↔  bot.in_call_not_recording
+#                               (NEW; split from active)
+#   - in_call_recording      ↔  bot.in_call_recording
+#                               (NEW; split from active — closes
+#                                bot.active ≠ actually_capturing_audio)
+#   - needs_human_help          (vexa-specific; VNC affordance)
+#   - call_ended             ↔  bot.call_ended (transient)
+#                               (renamed from stopping)
+#   - done                   ↔  bot.done (terminal)
+#                               (renamed from completed)
+#   - fatal                  ↔  bot.fatal (terminal)
+#                               (renamed from failed)
+#
+#   The done/fatal cut rule is mechanical:
+#     done   if meeting reached in_call_recording at any point
+#     fatal  otherwise
+#
+#   This matches recall.ai's billing semantic — they don't bill for
+#   bot.fatal. Useful internal "engineering owns this rate" bucket
+#   even without billing.
+#
+# Layer 2: meeting.data.cause FIELD — agency-prefixed, ~70 named values
+#   user_*           → API caller's action  (user_cancelled,
+#                                            user_stopped, ...)
+#   host_*           → meeting host's action (host_did_not_admit,
+#                                             host_removed_bot_*, ...)
+#   platform_*       → platform's hard rule (platform_meeting_not_started,
+#                                            platform_requires_signin, ...)
+#   zoom_* /         → platform-specific failures
+#   google_meet_* /
+#   teams_* /
+#   webex_*
+#   bot_self_*       → bot's own configured leave (bot_self_left_alone,
+#                                                  bot_self_max_time, ...)
+#   bot_*            → OUR SOFTWARE FAULT (bot_crashed_pre_join,
+#                                          bot_audio_pipeline_failed,
+#                                          bot_internal_error, ...)
+#                      ←── ENGINEERING'S BUCKET. Bug rate query filters
+#                          to bot_* prefix. Clean signal, no pollution.
+#   ux_gap_*         → automation incomplete, escalation unresolved
+#                      (ux_gap_portal_navigation_unresolved, ...)
+#   unknown          → classifier rule didn't fire (engineering must
+#                      add a rule). NEVER user-facing directly; user
+#                      view layer maps to apologetic generic message.
+#
+# === THE THREE-AUDIENCE PAYOFF ===
+#
+# User-facing meeting page: cause → 5-class plain-English status with
+#   action affordance (✅ success / ⚪ aborted / ⚠ blocked-with-action /
+#   🔵 needs-help / 🔴 our-fault)
+#
+# Engineering bug rate (clean signal):
+#   SELECT count(*) FROM meetings
+#   WHERE data->>'cause' LIKE 'bot\_%' ESCAPE '\'
+#     AND end_time > NOW() - INTERVAL '7 days';
+#
+# Product funnel attribution:
+#   GROUP BY agency-prefix → user_decided / host_action /
+#                            platform_blocked / meeting_ended_naturally /
+#                            our_bug / automation_gap
+#
+# === RECALL.AI API TRANSLATOR (forward-compat motivation) ===
+#
+# Future requirement (project-owner direction 2026-04-28):
+#   "we want to create an API translator [for] AI Recall to Vexa"
+#
+# 7 of 9 vexa states map directly to recall events. Translator becomes
+# pure data — static lookup tables, no business logic:
+#
+#   recall_to_vexa: dict mapping recall events → vexa states
+#                   plus recall sub_codes → vexa causes (~80 entries)
+#   vexa_to_recall: inverse, with vexa-specific states (needs_human_help,
+#                   ux_gap_*, unknown) folded into closest recall analog
+#
+# Lands at services/meeting-api/meeting_api/translators/recall.py
+#
+# Recall-specific events we DON'T model (would translate to no-op or
+# closest analog):
+#   bot.recording_permission_allowed/denied  — Zoom Meeting SDK only;
+#                                              we use browser bots
+#   bot.breakout_room_*                       — out of scope until demand
+#
+# === IMPLEMENTATION (Pack Σ scope, target v0.10.6) ===
+#
+# Phase 1 (one cycle):
+#   - schemas.py: rename status enum values
+#   - meeting.data.cause field populated by ONE central classifier
+#     (replaces scattered _classify_stopped_exit calls — every miss
+#      in v0.10.5 was a parallel-write-site bug)
+#   - Audio-confirmation gate: meeting cannot enter in_call_recording
+#     until first segment POSTed successfully (closes bot.active ≠
+#     actually_capturing_audio at the schema level)
+#   - Backfill script populates data.cause for historical rows
+#     (data is JSONB — no schema migration)
+#   - Webhook v2 ships behind opt-in feature flag
+#   - Translator skeleton at translators/recall.py
+#
+# Phase 2 (next cycle):
+#   - Webhook v2 default; v1 deprecated with timeline
+#   - Old status values removed from new code paths
+#
+# Phase 3 (third cycle):
+#   - Old status values removed entirely; v1 webhook retired
+#
+# === PARALLEL-SURFACE-DRIFT PATTERNS PACK Σ ALSO CLOSES ===
+# (Documented in v0.10.5 architectural-debt audit posted to PLATFORM
+#  2026-04-27; symptoms recurred during develop iterations as bugs.)
+#
+#   1. bot.active ≠ bot.actually_capturing_audio
+#      → fixed by in_call_not_recording / in_call_recording split +
+#        audio-confirmation gate
+#   2. failure_stage defaults to ACTIVE when payload omits it
+#      (callbacks.py:312) — paints over real bot crashes (gerry's
+#      symptom 2026-04-27)
+#      → fixed by `unknown` cause as explicit class instead of
+#        default-painting-over
+#   3. self_initiated_leave defaults in bot.ts:634 mask distinct
+#      root causes
+#      → fixed by central classifier producing specific cause from
+#        observed signals, not from bot's reason string
+#   4. status='completed' survived Pack J.4 in DELETE-no-container,
+#      DELETE-fast-path, FAILED-branch
+#      → fixed by single canonical write path (one classifier call,
+#        every site)
+#   5. Stuck-in-stopping (lite m30 2026-04-27) — sweep is the safety
+#      net but synchronous detection at DELETE time is the proper fix
+#      → already partially fixed in v0.10.5 commit e16fa7e; full
+#        consolidation in Pack Σ
+#
+# === ESTIMATED EFFORT ===
+#
+# ~5 days dev across meeting-api / dashboard / docs:
+#   - 1d: schemas.py + central classifier function + audio gate
+#   - 1d: meeting.data.cause field plumbing + backfill script
+#   - 1d: dashboard cause → user-message lookup + meeting page UX
+#   - 1d: webhook v2 + back-compat layer + recall translator skeleton
+#   - 1d: regression matrix updates + Pack Y invariant tests for new
+#         taxonomy
+#
+# Open during v0.10.6 groom with this entry as the seed.
 
 expensive_tests: []
 

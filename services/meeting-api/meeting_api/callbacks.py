@@ -16,8 +16,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import attributes
 
+from sqlalchemy import func
+
 from .database import get_db
-from .models import Meeting, MeetingSession
+from .models import Meeting, MeetingSession, Transcription
 from .schemas import (
     MeetingStatus,
     MeetingCompletionReason,
@@ -33,6 +35,164 @@ from .meetings import (
 from .post_meeting import run_all_tasks
 
 logger = logging.getLogger("meeting_api.callbacks")
+
+
+# v0.10.5 Pack J — exit classification routing rule (#255 silent class).
+#
+# [PLATFORM] data on #255 showed 557 of 1183 (47%) `completed` meetings
+# in 30d are actually misclassified — 432 pre-admission + 125 substantive
+# (transcribe-enabled, ≥30s, 0 segments). The classifier already produces
+# the correct completion_reason; the meeting-api callback handler ignored
+# the signal and wrote status='completed' regardless. This helper closes
+# the silent class by inspecting the same fields the data showed:
+#   - reached_active (from status_transition[]) → distinguishes 432 class
+#   - duration_seconds (from start_time/end_time) → 30s threshold
+#   - transcribe_enabled (from data) → opt-out for recording-only mode
+#   - transcription_count (count(*) from transcriptions table)
+def _failure_stage_from_status(status: str) -> MeetingFailureStage:
+    """Derive failure_stage from current meeting.status at write time.
+
+    v0.10.5 FM-003: payload.failure_stage from the bot's gracefulLeave
+    path can be stale (it reflects the bot's internal stage tracker, not
+    the meeting's actual state). Server-side derivation removes the
+    parallel-surface drift — the failure_stage value matches what
+    status_transition[] would tell you anyway.
+    """
+    return {
+        MeetingStatus.REQUESTED.value: MeetingFailureStage.REQUESTED,
+        MeetingStatus.JOINING.value: MeetingFailureStage.JOINING,
+        MeetingStatus.AWAITING_ADMISSION.value: MeetingFailureStage.AWAITING_ADMISSION,
+        MeetingStatus.ACTIVE.value: MeetingFailureStage.ACTIVE,
+    }.get(status, MeetingFailureStage.ACTIVE)
+
+
+async def _classify_stopped_exit(
+    meeting: Meeting,
+    db: AsyncSession,
+    requested_reason: MeetingCompletionReason,
+) -> tuple[MeetingStatus, MeetingCompletionReason]:
+    """Classify a stopped exit per Pack J's data-driven rules.
+
+    Returns (target_status, completion_reason). When the meeting passes
+    positive-proof-of-success, returns (COMPLETED, requested_reason).
+    Otherwise routes to FAILED with the closest-fit prod-derived reason.
+    """
+    # Pack J.4 — every non-success completion_reason routes to FAILED.
+    # [PLATFORM] data showed these were ALL being silently routed to
+    # COMPLETED despite having explicit failure semantics:
+    #   awaiting_admission_timeout (72), awaiting_admission_rejected (9),
+    #   evicted (6), max_bot_time_exceeded (10), validation_error.
+    # left_alone is debatable (bot legitimately left when alone); routes
+    # to COMPLETED unless the data shows otherwise.
+    _explicit_failure_reasons = {
+        MeetingCompletionReason.AWAITING_ADMISSION_TIMEOUT,
+        MeetingCompletionReason.AWAITING_ADMISSION_REJECTED,
+        MeetingCompletionReason.EVICTED,
+        MeetingCompletionReason.MAX_BOT_TIME_EXCEEDED,
+        MeetingCompletionReason.VALIDATION_ERROR,
+        MeetingCompletionReason.STOPPED_BEFORE_ADMISSION,
+        MeetingCompletionReason.STOPPED_WITH_NO_AUDIO,
+    }
+    if requested_reason in _explicit_failure_reasons:
+        return (MeetingStatus.FAILED, requested_reason)
+    # LEFT_ALONE — bot left because everyone else left. Legitimate end of
+    # meeting; user got their transcript. Stay COMPLETED.
+    if requested_reason == MeetingCompletionReason.LEFT_ALONE:
+        return (MeetingStatus.COMPLETED, requested_reason)
+    # Only STOPPED reaches the deeper success-proof checks below.
+    if requested_reason != MeetingCompletionReason.STOPPED:
+        # Defensive: unknown reason. Mark FAILED rather than silent-completed.
+        logger.warning(f"Pack J: unknown completion_reason {requested_reason!r} — defaulting to FAILED")
+        return (MeetingStatus.FAILED, requested_reason)
+
+    data = meeting.data or {}
+
+    # Did the meeting ever reach active? Walk status_transition[] for it.
+    transitions = data.get("status_transition") or []
+    reached_active = any(
+        isinstance(t, dict) and t.get("to") == MeetingStatus.ACTIVE.value
+        for t in transitions
+    )
+    if not reached_active:
+        # 432-case: bot was created + stopped before reaching admission.
+        return (
+            MeetingStatus.FAILED,
+            MeetingCompletionReason.STOPPED_BEFORE_ADMISSION,
+        )
+
+    # Compute duration. start_time is set when the meeting reaches active;
+    # end_time may not be set yet at exit-callback time, so fall back to now.
+    duration_s = 0.0
+    if meeting.start_time:
+        end_t = meeting.end_time or datetime.utcnow()
+        duration_s = (end_t - meeting.start_time).total_seconds()
+
+    # Was transcription requested? Default True (legacy meetings without
+    # the explicit flag predate the field; treat them as transcribe-enabled).
+    transcribe_enabled = bool(data.get("transcribe_enabled", True))
+
+    # Short meeting OR transcribe disabled — legitimate, route as completed.
+    if duration_s < 30 or not transcribe_enabled:
+        return (MeetingStatus.COMPLETED, requested_reason)
+
+    # Long meeting + transcribe enabled — check actual transcription rows.
+    try:
+        count_stmt = select(func.count()).select_from(Transcription).where(
+            Transcription.meeting_id == meeting.id
+        )
+        segment_count = (await db.execute(count_stmt)).scalar() or 0
+    except Exception as e:
+        # Don't block exit-callback on a transient DB error; log + treat as
+        # legitimate completed (conservative — better to under-route to
+        # FAILED than to spuriously fail genuinely-successful meetings).
+        logger.warning(f"Pack J: segment count query failed for meeting {meeting.id}: {e}")
+        return (MeetingStatus.COMPLETED, requested_reason)
+
+    if segment_count == 0:
+        # v0.10.5 (post-prod-telemetry 2026-04-30) — DELIVERY-AWARE classification.
+        #
+        # Pre-fix: any meeting with transcribe_enabled and 0 transcripts was
+        # routed to FAILED/STOPPED_WITH_NO_AUDIO. This conflated two distinct
+        # outcomes:
+        #   (a) Bot couldn't capture audio at all (real failure)
+        #   (b) Bot DID capture audio (e.g. recording_enabled=true produced a
+        #       multi-MB WAV/webm file delivered to MinIO) but no SPEECH was
+        #       present in the captured audio — silent or quiet meeting.
+        #
+        # (b) is a successful capture from the customer's perspective: the
+        # recording is on disk, downloadable, replayable. Marking the whole
+        # meeting as `failed` lies — and the dashboard hides the recording
+        # because of the failed status, double-burying the delivered artifact.
+        #
+        # Honest fix: if a recording WAS delivered (chunk_count > 0 or any
+        # media_files entry exists with non-zero file_size_bytes), the meeting
+        # COMPLETED — we delivered what was captured. Only fall through to
+        # STOPPED_WITH_NO_AUDIO for the case where neither transcripts nor a
+        # recording entry exists.
+        recordings = data.get("recordings") or []
+        recording_delivered = False
+        for rec in recordings:
+            if not isinstance(rec, dict):
+                continue
+            for mf in (rec.get("media_files") or []):
+                if not isinstance(mf, dict):
+                    continue
+                if int(mf.get("file_size_bytes") or 0) > 0:
+                    recording_delivered = True
+                    break
+            if recording_delivered:
+                break
+
+        if recording_delivered:
+            # Recording delivered, no transcripts → silent/quiet meeting,
+            # not a failure. Map to the closest non-failure reason.
+            return (MeetingStatus.COMPLETED, requested_reason)
+
+        # 125-case: bot was active for 30s+ with transcribe enabled, no
+        # transcripts AND no recording delivered. Real failure — silent class.
+        return (MeetingStatus.FAILED, MeetingCompletionReason.STOPPED_WITH_NO_AUDIO)
+
+    return (MeetingStatus.COMPLETED, requested_reason)
 
 router = APIRouter()
 
@@ -129,76 +289,128 @@ async def bot_exit_callback(
             new_status = MeetingStatus.COMPLETED.value if success else None
         elif meeting.status == MeetingStatus.STOPPING.value:
             # Meeting was in stopping state — user requested stop.
-            # Any exit during stopping is a completed meeting, not a failure:
-            #   exit 1:   self_initiated_leave (bot left the meeting)
-            #   exit 137: SIGKILL from docker stop (container killed after timeout)
-            #   exit 143: SIGTERM caught (graceful container shutdown)
-            logger.info(f"Exit callback: session {session_uid} exit_code={exit_code} during stopping — treating as completed (reason={payload.reason})")
+            # v0.10.5 Pack J — apply data-driven classification rule (#255).
+            # OLD shape: any stopped exit → COMPLETED unconditionally. Result:
+            # 47% misclassification rate (557/1183 in 30d production data).
+            # NEW shape: classify via _classify_stopped_exit() which inspects
+            # reached-active + duration + transcribe-enabled + segment count
+            # to distinguish legitimate stops from STOPPED_BEFORE_ADMISSION
+            # and STOPPED_WITH_NO_AUDIO.
             provided_reason = payload.completion_reason or MeetingCompletionReason.STOPPED
-            meta = {"exit_code": exit_code, "original_reason": payload.reason}
+            target_status, classified_reason = await _classify_stopped_exit(
+                meeting, db, provided_reason
+            )
+            logger.info(
+                f"Exit callback: session {session_uid} exit_code={exit_code} during stopping "
+                f"— Pack J classified as {target_status.value} reason={classified_reason.value} "
+                f"(was: completed reason={provided_reason.value})"
+            )
+            meta = {"exit_code": exit_code, "original_reason": payload.reason, "pack_j_classification": classified_reason.value}
             success = await update_meeting_status(
-                meeting, MeetingStatus.COMPLETED, db,
-                completion_reason=provided_reason,
+                meeting, target_status, db,
+                completion_reason=classified_reason,
                 transition_reason=payload.reason,
                 transition_metadata=meta,
             )
-            new_status = MeetingStatus.COMPLETED.value if success else None
-        elif meeting.status == MeetingStatus.ACTIVE.value and (
-            payload.completion_reason
-            or payload.reason in (
-                "self_initiated_leave",
-                "evicted",
-                "left_alone",
-                "removed_by_host",
-                "meeting_ended_by_host",
-            )
-        ):
-            # Bot was active and self-exited with a known completion reason
-            # (e.g., evicted, left_alone, self_initiated_leave) OR with a
-            # reason string that maps to one of those completion classes.
-            # These exit with code != 0 but are normal completions, not failures.
+            new_status = target_status.value if success else None
+        else:
+            # v0.10.5 FM-001/FM-002/FM-003 (registered 2026-04-28): every
+            # bot exit from a non-stopping state routes through the central
+            # classifier. Pre-fix shape had a narrow allowlist gate
+            # (`payload.completion_reason or payload.reason in {5 strings}`)
+            # for ACTIVE exits, with a `failed + completion_reason=NULL`
+            # else-branch for everything else. PLATFORM 7d aggregate showed
+            # 182 NULL-bucket rows (FM-002) plus 127 mislabeled failure_stage
+            # rows (FM-003) — and meeting 11161 in particular: a 30-min
+            # gmeet meeting with 197 segments delivered, painted FAILED
+            # because `payload.reason="post_join_setup_error"` (gmeet
+            # end-of-meeting page navigation crashing the bot's page.evaluate)
+            # was not in the allowlist (FM-001).
             #
-            # The reason-only branch handles the case where the bot fires its
-            # exit callback without setting completion_reason (observed
-            # 2026-04-26 in meeting_id=26: bot self-initiated leave from active
-            # with reason="self_initiated_leave" but completion_reason empty,
-            # which previously fell through to the failed branch).
-            derived_completion_reason = payload.completion_reason or {
+            # Two structural changes (per ARCH review 2026-04-28):
+            #   (1) Drop the allowlist gate; route ALL non-stopping exits
+            #       through _classify_stopped_exit. The classifier already
+            #       distinguishes reached_active+segments→COMPLETED from
+            #       not-reached-active→STOPPED_BEFORE_ADMISSION. The else
+            #       branch's silent NULL bucket becomes structurally
+            #       impossible.
+            #   (2) failure_stage derives from meeting.status at write time,
+            #       not from the bot's payload. The bot reports its own
+            #       internal stage tracker which is stale on the catch path
+            #       (FM-003).
+            #
+            # Plus: unknown payload.reason values are logged WARN + stuffed
+            # into transition_metadata.unknown_bot_reason so DATA can grep
+            # for new vocabulary before it becomes the next FM-002.
+            _BOT_REASON_TO_COMPLETION = {
                 "self_initiated_leave": MeetingCompletionReason.STOPPED,
                 "evicted": MeetingCompletionReason.EVICTED,
                 "removed_by_host": MeetingCompletionReason.EVICTED,
+                "removed_by_admin": MeetingCompletionReason.EVICTED,
                 "left_alone": MeetingCompletionReason.LEFT_ALONE,
+                "left_alone_timeout": MeetingCompletionReason.LEFT_ALONE,
+                "startup_alone_timeout": MeetingCompletionReason.LEFT_ALONE,
                 "meeting_ended_by_host": MeetingCompletionReason.STOPPED,
-            }.get(payload.reason or "", MeetingCompletionReason.STOPPED)
-            logger.info(f"Exit callback: session {session_uid} exit_code={exit_code} from active with reason={payload.reason} completion_reason={payload.completion_reason or '(derived: ' + str(derived_completion_reason) + ')'} — treating as completed")
-            meta = {"exit_code": exit_code, "original_reason": payload.reason}
+                "normal_completion": MeetingCompletionReason.STOPPED,
+                "post_join_setup_error": MeetingCompletionReason.STOPPED,  # FM-001 — gmeet end-of-meeting nav
+                "admission_timeout": MeetingCompletionReason.AWAITING_ADMISSION_TIMEOUT,
+                "admission_rejected_by_admin": MeetingCompletionReason.AWAITING_ADMISSION_REJECTED,
+                "admission_false_positive": MeetingCompletionReason.STOPPED,
+                "stop_requested_pre_admission": MeetingCompletionReason.STOPPED_BEFORE_ADMISSION,
+                "missing_meeting_url": MeetingCompletionReason.VALIDATION_ERROR,
+                "join_meeting_error": MeetingCompletionReason.STOPPED_BEFORE_ADMISSION,
+            }
+            unknown_reason = bool(
+                payload.reason and payload.reason not in _BOT_REASON_TO_COMPLETION
+            )
+            if unknown_reason:
+                logger.warning(
+                    "Unknown bot exit reason %r — defaulting to STOPPED. "
+                    "Catalog this in _BOT_REASON_TO_COMPLETION.",
+                    payload.reason,
+                )
+            derived_completion_reason = payload.completion_reason or _BOT_REASON_TO_COMPLETION.get(
+                payload.reason or "", MeetingCompletionReason.STOPPED
+            )
+            target_status, classified_reason = await _classify_stopped_exit(
+                meeting, db, derived_completion_reason
+            )
+            logger.info(
+                f"Exit callback: session {session_uid} exit_code={exit_code} "
+                f"from {meeting.status} reason={payload.reason} "
+                f"completion_reason={derived_completion_reason.value} "
+                f"— Pack J classified as {target_status.value}"
+            )
+            meta = {
+                "exit_code": exit_code,
+                "original_reason": payload.reason,
+                "pack_j_classification": classified_reason.value,
+            }
             if payload.platform_specific_error:
                 meta["platform_specific_error"] = payload.platform_specific_error
-            success = await update_meeting_status(
-                meeting, MeetingStatus.COMPLETED, db,
-                completion_reason=derived_completion_reason,
+            if unknown_reason:
+                meta["unknown_bot_reason"] = payload.reason
+            # FM-003: derive failure_stage from current meeting.status, not
+            # from the bot's payload. Only used if target_status == FAILED.
+            update_kwargs = dict(
+                completion_reason=classified_reason,
                 transition_reason=payload.reason,
                 transition_metadata=meta,
             )
-            new_status = MeetingStatus.COMPLETED.value if success else None
-        else:
-            provided_stage = payload.failure_stage or MeetingFailureStage.ACTIVE
-            error_msg = f"Bot exited with code {exit_code}"
-            if payload.reason:
-                error_msg += f"; reason: {payload.reason}"
-            meta = {"exit_code": exit_code}
-            if payload.platform_specific_error:
-                meta["platform_specific_error"] = payload.platform_specific_error
+            if target_status == MeetingStatus.FAILED:
+                update_kwargs["failure_stage"] = _failure_stage_from_status(meeting.status)
+                error_msg = f"Bot exited with code {exit_code}"
+                if payload.reason:
+                    error_msg += f"; reason: {payload.reason}"
+                update_kwargs["error_details"] = error_msg
             success = await update_meeting_status(
-                meeting, MeetingStatus.FAILED, db,
-                failure_stage=provided_stage,
-                error_details=error_msg,
-                transition_reason=payload.reason,
-                transition_metadata=meta,
+                meeting, target_status, db, **update_kwargs
             )
-            new_status = MeetingStatus.FAILED.value if success else None
+            new_status = target_status.value if success else None
 
-            if success and (payload.error_details or payload.platform_specific_error):
+            if success and target_status == MeetingStatus.FAILED and (
+                payload.error_details or payload.platform_specific_error
+            ):
                 if not meeting.data:
                     meeting.data = {}
                 updated_data = dict(meeting.data)
@@ -287,6 +499,22 @@ async def bot_startup_callback(
 
     old_status = meeting.status
     if meeting.status in [MeetingStatus.REQUESTED.value, MeetingStatus.JOINING.value, MeetingStatus.AWAITING_ADMISSION.value, MeetingStatus.FAILED.value]:
+        # v0.10.5 Pack X finding (2026-04-27): the state machine
+        # (schemas.get_valid_status_transitions) FORBIDS direct
+        # REQUESTED→ACTIVE — only REQUESTED→JOINING and JOINING→ACTIVE
+        # are legal. Pre-fix, this branch silently failed when status
+        # was REQUESTED: update_meeting_status returned False, the
+        # callback returned 200 with `meeting_status: "requested"` —
+        # misleading API. Real bots happen to fire `joining` first so
+        # production didn't trip it; synthetic scenarios driving
+        # `started` directly did.
+        #
+        # Fix: drive through legal intermediate transitions. If
+        # currently REQUESTED, transition to JOINING first, then to
+        # ACTIVE. Each step uses the same legal-transition validator.
+        if meeting.status == MeetingStatus.REQUESTED.value:
+            await update_meeting_status(meeting, MeetingStatus.JOINING, db)
+            await db.refresh(meeting)
         success = await update_meeting_status(meeting, MeetingStatus.ACTIVE, db)
         if success:
             if payload.container_id:
@@ -410,7 +638,40 @@ async def bot_status_change_callback(
                 effective_reason = MeetingCompletionReason(pending)
             except ValueError:
                 pass
-        success = await update_meeting_status(meeting, MeetingStatus.COMPLETED, db, completion_reason=effective_reason)
+
+        # v0.10.5 Pack J — apply data-driven classification rule (#255 silent class).
+        #
+        # 2026-04-27 live-validation finding (meeting 26): when the bot self-
+        # reports new_status=COMPLETED via status_change while in STOPPING
+        # state, this handler previously set status='completed' directly with
+        # the bot-reported reason — bypassing Pack J's classifier entirely.
+        # Result: a meeting that was active 6+ min with transcribe_enabled
+        # and 0 transcription segments was marked `completed` instead of
+        # `failed/stopped_with_no_audio`. Same silent class as the
+        # exit_callback STOPPING branch (callbacks.py:236).
+        #
+        # Fix: when transitioning STOPPING → COMPLETED (or active → COMPLETED
+        # with a stoppable bot-reported reason), apply Pack J's classifier so
+        # the same data-driven rules govern both callback paths. The
+        # exit_callback STOPPING branch and the status_change STOPPING→
+        # COMPLETED branch now produce identical classifications for
+        # identical inputs.
+        target_status = MeetingStatus.COMPLETED
+        classified_reason = effective_reason
+        if (
+            meeting.status == MeetingStatus.STOPPING.value
+            and effective_reason is not None
+        ):
+            target_status, classified_reason = await _classify_stopped_exit(
+                meeting, db, effective_reason
+            )
+            logger.info(
+                f"Pack J (status_change path): meeting {meeting.id} "
+                f"STOPPING→{target_status.value} reason={classified_reason.value} "
+                f"(bot-reported: {effective_reason.value})"
+            )
+
+        success = await update_meeting_status(meeting, target_status, db, completion_reason=classified_reason)
         if success:
             meeting.end_time = datetime.utcnow()
             if payload.speaker_events:
@@ -425,8 +686,16 @@ async def bot_status_change_callback(
             background_tasks.add_task(run_all_tasks, meeting.id)
 
     elif new_status == MeetingStatus.FAILED:
+        # v0.10.5 Pack X finding (lite m28, 2026-04-27): bot's
+        # status_change new_status=failed didn't pass completion_reason
+        # through to update_meeting_status — `data.completion_reason`
+        # stayed empty even when the bot supplied one. Now it
+        # propagates: dashboards/observers grouping by completion_reason
+        # see the bot-reported value (or null when bot didn't supply
+        # one — caller responsibility to provide a meaningful reason).
         success = await update_meeting_status(
             meeting, MeetingStatus.FAILED, db,
+            completion_reason=payload.completion_reason,
             failure_stage=payload.failure_stage,
             error_details=str(payload.error_details) if payload.error_details else None,
         )
@@ -527,3 +796,75 @@ async def bot_status_change_callback(
         )
 
     return {"status": "processed", "meeting_id": meeting.id, "meeting_status": meeting.status}
+
+
+# ---------------------------------------------------------------------------
+# v0.10.5 Pack X — Synthetic test harness endpoint
+# ---------------------------------------------------------------------------
+#
+# `POST /bots/internal/test/session-bootstrap` — creates a MeetingSession
+# row for an existing meeting WITHOUT requiring the bot to spawn. Lets
+# the synthetic test rig (`tests3/synthetic/`) drive the full lifecycle
+# via pure HTTP callbacks without external platform dependencies (Zoom
+# DOM, Meet WebRTC, Teams). Catches OSS-side regressions that only
+# surface in callback orderings (e.g. Pack J coverage gap caught
+# 2026-04-27 by real Zoom test — would have caught deterministically
+# with this rig).
+#
+# Path is `/bots/internal/test/...` (not `/internal/test/...`) because
+# the api-gateway proxies the `/bots/internal/*` namespace to
+# meeting-api but does NOT proxy a top-level `/internal/*` path.
+# Mirrors the existing `/bots/internal/callback/*` pattern.
+#
+# Gated by VEXA_ENV != "production" — endpoint returns 404 in production.
+# Synthetic-test traffic must never reach prod meeting-api instances.
+
+class SyntheticSessionBootstrap(BaseModel):
+    meeting_id: int
+    session_uid: Optional[str] = None  # auto-generated if not provided
+
+
+@router.post("/bots/internal/test/session-bootstrap", status_code=201, include_in_schema=False)
+async def synthetic_session_bootstrap(
+    payload: SyntheticSessionBootstrap,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a MeetingSession row directly — synthetic test harness only.
+
+    Allows the synthetic test rig to drive callback paths without spawning
+    a real bot. The bot's natural session-creation path (collector
+    process_session_start_event) is bypassed.
+
+    Returns the session_uid so the test driver can pass it as
+    connection_id in subsequent callback POSTs.
+    """
+    import os
+    if os.getenv("VEXA_ENV") == "production":
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    meeting = await db.get(Meeting, payload.meeting_id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail=f"Meeting {payload.meeting_id} not found")
+
+    import uuid
+    session_uid = payload.session_uid or str(uuid.uuid4())
+
+    # Idempotent — if session_uid already exists, return it as-is.
+    existing_stmt = select(MeetingSession).where(MeetingSession.session_uid == session_uid)
+    existing = (await db.execute(existing_stmt)).scalars().first()
+    if existing:
+        return {"session_uid": session_uid, "meeting_id": payload.meeting_id, "created": False}
+
+    new_session = MeetingSession(
+        meeting_id=payload.meeting_id,
+        session_uid=session_uid,
+        session_start_time=datetime.utcnow(),
+    )
+    db.add(new_session)
+    await db.commit()
+
+    logger.info(
+        f"[Pack X synthetic] Bootstrapped MeetingSession session_uid={session_uid} "
+        f"meeting_id={payload.meeting_id}"
+    )
+    return {"session_uid": session_uid, "meeting_id": payload.meeting_id, "created": True}

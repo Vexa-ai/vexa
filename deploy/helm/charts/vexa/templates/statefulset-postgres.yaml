@@ -18,6 +18,23 @@ spec:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: postgres
     spec:
+      # v0.10.5 Pack I.s — stateful-pod anti-affinity (#272 iter-5).
+      # See deployment-minio.yaml header for the full rationale. Symmetric
+      # spread across postgres/redis/minio/tts-service so that on a 2+
+      # node cluster they distribute and avoid Linode's 7-vol-per-instance
+      # cap during chart-upgrade rolling restarts (which retains old PVs
+      # under reclaimPolicy=Retain, briefly causing 8+ volumes/node).
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/component
+                      operator: In
+                      values: [redis, minio, tts-service]
+                topologyKey: kubernetes.io/hostname
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

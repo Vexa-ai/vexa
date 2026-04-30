@@ -298,7 +298,21 @@ release_label() {
     fi
     rel="${rel:-adhoc}"
     sfx=$(openssl rand -hex 3)
-    echo "${prefix}-${rel}-${sfx}"
+    local label="${prefix}-${rel}-${sfx}"
+    # v0.10.5 fix: Linode LKE label limit is 32 chars (compute is more
+    # generous but inconsistent across cloud providers; cap everywhere
+    # for cross-provider safety). Truncate the release_id portion only;
+    # preserve full prefix (identifier) and full suffix (uniqueness).
+    if [ ${#label} -gt 32 ]; then
+        local max_rel=$((32 - ${#prefix} - ${#sfx} - 2))
+        if [ "$max_rel" -lt 1 ]; then
+            # Pathological: prefix+sfx alone overflows. Rare; truncate prefix.
+            label="${prefix:0:$((32 - ${#sfx} - 1))}-${sfx}"
+        else
+            label="${prefix}-${rel:0:$max_rel}-${sfx}"
+        fi
+    fi
+    echo "$label"
 }
 
 # ─── State helpers ────────────────────────────────────────────────

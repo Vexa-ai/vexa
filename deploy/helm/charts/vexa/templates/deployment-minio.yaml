@@ -19,6 +19,32 @@ spec:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: minio
     spec:
+      # v0.10.5 Pack I.s — stateful-pod anti-affinity (#272 iter-4 fix).
+      #
+      # Linode LKE g6-standard-* nodes cap at 7 attached block volumes
+      # per instance (boot disk + system + user PVCs). When all four
+      # stateful pods (postgres + redis + minio + tts) co-locate on one
+      # node, the 4th PVC fails to attach with:
+      #   "max number of volumes (7) already attached to instance"
+      # MinIO is typically the sufferer (StatefulSet ordering + larger
+      # readiness probe + scheduler picks first-available-node first).
+      #
+      # Soft anti-affinity (preferredDuringSchedulingIgnoredDuringExecution)
+      # spreads stateful pods across nodes when ≥2 nodes are available
+      # without breaking single-node test deployments. Aligns with the
+      # Pack I (chart availability defaults) shape — robustness defaults
+      # should be safe-by-default, not require operator opt-in.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/component
+                      operator: In
+                      values: [postgres, redis, tts-service]
+                topologyKey: kubernetes.io/hostname
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

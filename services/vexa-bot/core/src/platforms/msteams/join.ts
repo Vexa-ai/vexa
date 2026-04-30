@@ -3,6 +3,7 @@ import { log, callJoiningCallback } from "../../utils";
 import { BotConfig } from "../../types";
 import {
   teamsContinueButtonSelectors,
+  teamsContinueWithoutMediaSelectors,
   teamsJoinButtonSelectors,
   teamsCameraButtonSelectors,
   teamsVideoOptionsButtonSelectors,
@@ -39,8 +40,38 @@ async function waitForTeamsPreJoinReadiness(page: Page, timeoutMs: number): Prom
   const start = Date.now();
   let mediaWarmupAttempted = false;
   let continueClickAttempts = 0;
+  let continueWithoutMediaClickAttempts = 0;
 
   while (Date.now() - start < timeoutMs) {
+    // v0.10.5 — "Continue without audio or video" confirmation modal.
+    // Teams renders this BEFORE the prejoin name input when Chromium's
+    // media-permission state is "denied". The modal is intermittent
+    // (depends on permission cache state at page boot) but when it
+    // appears it BLOCKS the prejoin from rendering — Join now never
+    // enables until the modal is dismissed. Click through it eagerly
+    // so the prejoin can proceed.
+    const continueWithoutMediaSelector = teamsContinueWithoutMediaSelectors.join(", ");
+    const continueWithoutMediaVisible = await page
+      .locator(continueWithoutMediaSelector)
+      .first()
+      .isVisible()
+      .catch(() => false);
+    if (continueWithoutMediaVisible && continueWithoutMediaClickAttempts < 3) {
+      continueWithoutMediaClickAttempts += 1;
+      log(
+        `ℹ️ "Continue without audio or video" modal detected, clicking through ` +
+        `(attempt ${continueWithoutMediaClickAttempts})...`,
+      );
+      try {
+        await page.locator(continueWithoutMediaSelector).first().click({ timeout: 5000 });
+        log('✅ Dismissed "Continue without audio or video" modal');
+      } catch (err: any) {
+        log(`ℹ️ Could not click "Continue without audio or video": ${err?.message || err}`);
+      }
+      await page.waitForTimeout(500);
+      continue;
+    }
+
     const joinNowVisible = await page.locator('button:has-text("Join now"), [aria-label*="Join now"]').first().isVisible().catch(() => false);
     const cancelVisible = await page.locator('button:has-text("Cancel"), [aria-label*="Cancel"]').first().isVisible().catch(() => false);
     const nameInputVisible = await page.locator(teamsNameInputSelectors.join(", ")).first().isVisible().catch(() => false);

@@ -84,4 +84,17 @@ spec:
             periodSeconds: 20
           resources:
             {{- toYaml .Values.pgbouncer.resources | nindent 12 }}
+      {{- /* v0.10.5 Pack A.1 — restore tolerations/nodeSelector/affinity dropped in 0.10.4 (#272 issue 2). */}}
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
 {{- end }}

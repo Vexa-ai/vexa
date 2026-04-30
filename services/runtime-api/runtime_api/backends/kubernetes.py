@@ -164,7 +164,21 @@ class KubernetesBackend(Backend):
                 lambda: api.create_namespaced_pod(namespace=ns, body=pod),
             )
             logger.info(f"Created pod {created.metadata.name} in namespace {ns}")
-            return created.metadata.uid or spec.name
+            # v0.10.5 Pack D.1 (#261) — return pod NAME, not UID.
+            #
+            # Old shape returned `pod.metadata.uid` (a UUID like
+            # `75c21577-29f0-4472-98f1-341ecf7c279b`). meeting-api stored
+            # this as `bot_container_id` and later called
+            # `DELETE /containers/{bot_container_id}` to stop the bot.
+            # runtime-api's stop() looks the pod up by NAME via
+            # `delete_namespaced_pod(name=...)`. Looking up the UID
+            # against the name field returned 404 → "Pod not found,
+            # already deleted" → silent no-op. Bot pod ran forever.
+            #
+            # Pod name (e.g. `meeting-23-00efafef`) is unique within a
+            # namespace and is the canonical identifier kubectl/K8s API
+            # use. Returning it as `container_id` makes DELETE work.
+            return created.metadata.name
         except ApiException as e:
             if e.status == 409:
                 logger.info(f"Pod {spec.name} already exists")
@@ -350,7 +364,11 @@ def _pod_to_info(pod) -> Optional[ContainerInfo]:
     pod_ip = pod.status.pod_ip if pod.status else None
 
     return ContainerInfo(
-        id=pod.metadata.uid or pod.metadata.name,
+        # v0.10.5 Pack D.1 (#261) — `id` is the pod NAME, not UID. UID is
+        # K8s-internal and not the field DELETE uses. Pod name is the
+        # canonical lookup key for the K8s API. Same fix as the create
+        # path above (return created.metadata.name).
+        id=pod.metadata.name,
         name=pod.metadata.name,
         status=status_map.get(phase, "unknown"),
         exit_code=exit_code,

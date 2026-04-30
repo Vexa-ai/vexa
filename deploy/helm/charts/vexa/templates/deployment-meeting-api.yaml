@@ -120,15 +120,22 @@ spec:
             {{- with .Values.meetingApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          # v0.10.5 Pack C.4 — readinessProbe gated on consumer-up.
+          # /readyz returns 503 until startup_complete (Redis ping
+          # succeeded AND xgroup_create succeeded AND consumer tasks
+          # alive). K8s Service routes traffic only to Ready pods, so
+          # a pod with no working consumer never receives traffic.
           readinessProbe:
             httpGet:
-              path: /docs
+              path: /readyz
               port: http
             initialDelaySeconds: 15
             periodSeconds: 10
+            failureThreshold: 3
+          # /health = HTTP-loop liveness (always 200 unless event loop wedges)
           livenessProbe:
             httpGet:
-              path: /docs
+              path: /health
               port: http
             initialDelaySeconds: 45
             periodSeconds: 20

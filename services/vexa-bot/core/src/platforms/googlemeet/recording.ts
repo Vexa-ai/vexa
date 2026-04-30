@@ -414,10 +414,30 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
               return null;
             }
             // Setup audio data processing
-            // Audio data processor — no-op now; per-speaker pipeline handles transcription
-            audioService.setupAudioDataProcessor(async (_audioData: Float32Array, _sessionStartTime: number | null) => {
+            // v0.10.5 #285 Layer 2 — track audio energy for cross-validation against
+            // the DOM participant counter. If audio is flowing in the last 120s, the
+            // meeting has speakers regardless of what the DOM count says — so we
+            // refuse to fire LEFT_ALONE_TIMEOUT under those conditions. Closes the
+            // failure mode where DOM-only heuristic returns 0 while transcription
+            // pipeline is actively producing segments.
+            (window as any).__vexaLastAudioActivityTs = 0;
+            const AUDIO_ACTIVITY_THRESHOLD = 0.005; // RMS above silence baseline
+            audioService.setupAudioDataProcessor(async (audioData: Float32Array, _sessionStartTime: number | null) => {
               // Per-speaker pipeline (speaker-streams.ts) handles transcription.
-              // This processor is kept for MediaRecorder / recording only.
+              // This processor checks audio energy for the alone-cross-validation hook.
+              if (!audioData || audioData.length === 0) return;
+              try {
+                let maxAbs = 0;
+                // Cheap scan: 1-of-32 sample stride is plenty to detect non-silence
+                for (let i = 0; i < audioData.length; i += 32) {
+                  const v = Math.abs(audioData[i]);
+                  if (v > maxAbs) maxAbs = v;
+                  if (maxAbs > AUDIO_ACTIVITY_THRESHOLD) break;
+                }
+                if (maxAbs > AUDIO_ACTIVITY_THRESHOLD) {
+                  (window as any).__vexaLastAudioActivityTs = Date.now();
+                }
+              } catch {}
             });
 
             return null;
@@ -734,13 +754,35 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
 
             let lastKnownParticipantCount = 0;
 
+            // v0.10.5 #285 Layer 1 — multi-selector fallback for participant counting.
+            // Single-selector `[data-participant-id]` is fragile to GMeet UI changes;
+            // any rename/relocation of that attribute takes the count to 0 globally
+            // and triggers false LEFT_ALONE_TIMEOUT. Add parallel selectors so a single
+            // DOM-shape change doesn't take the count to 0:
+            //   - `[role="region"][aria-label*="articipant"]` — tile region heuristic
+            //     (matches "participant" / "Participant" / "participants")
+            //   - `[data-self-name]` — bot's own self-tile (always present once admitted)
             const countParticipantTiles = (): number => {
-              const participantElements = document.querySelectorAll('[data-participant-id]');
               const ids = new Set<string>();
-              participantElements.forEach((el: Element) => {
+              // Primary: data-participant-id tiles
+              document.querySelectorAll('[data-participant-id]').forEach((el: Element) => {
                 const id = el.getAttribute('data-participant-id');
                 if (id) ids.add(id);
               });
+              // Fallback 1: aria-labelled participant regions
+              try {
+                document.querySelectorAll('[role="region"][aria-label*="articipant"]').forEach((el: Element, idx: number) => {
+                  const label = el.getAttribute('aria-label') || `region-${idx}`;
+                  ids.add(`region-fallback:${label}`);
+                });
+              } catch {}
+              // Fallback 2: self-name marker — always present after admission
+              try {
+                document.querySelectorAll('[data-self-name]').forEach((el: Element) => {
+                  const name = el.getAttribute('data-self-name') || 'self';
+                  ids.add(`self-fallback:${name}`);
+                });
+              } catch {}
               return ids.size;
             };
 
@@ -828,12 +870,29 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                 }
 
                 if (currentParticipantCount <= 1) {
+                  // v0.10.5 #285 Layer 2 — audio cross-validate before incrementing
+                  // aloneTime. If audio activity within last 120s, the meeting has
+                  // speakers regardless of what the DOM count says (DOM heuristic
+                  // is single-selector fragile; audio is independent ground truth).
+                  // Two independent signals can't both fail in the same way without
+                  // something architecturally wrong.
+                  const lastAudioMs = (window as any).__vexaLastAudioActivityTs || 0;
+                  const audioRecentlyActive = lastAudioMs > 0 && (Date.now() - lastAudioMs) < 120000;
+                  if (audioRecentlyActive) {
+                    if (aloneTime > 0) {
+                      (window as any).logBot(
+                        `🎤 [Google Meet Cross-Validate] DOM count=${currentParticipantCount} but audio activity ${Math.round((Date.now() - lastAudioMs)/1000)}s ago — refusing to count alone-time (false-LEFT_ALONE guard)`
+                      );
+                    }
+                    aloneTime = 0;
+                    return; // skip alone-time block entirely this tick
+                  }
                   aloneTime++;
-                  
+
                   // Determine timeout based on whether speakers have been identified
                   const currentTimeout = speakersIdentified ? everyoneLeftTimeoutSeconds : startupAloneTimeoutSeconds;
                   const timeoutDescription = speakersIdentified ? "post-speaker" : "startup";
-                  
+
                   if (aloneTime >= currentTimeout) {
                     if (speakersIdentified) {
                       (window as any).logBot(`Google Meet meeting ended or bot has been alone for ${everyoneLeftTimeoutSeconds} seconds after speakers were identified. Stopping recorder...`);

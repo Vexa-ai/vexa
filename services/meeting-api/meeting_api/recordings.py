@@ -244,6 +244,79 @@ async def internal_upload_recording(
         #     that confused the fragment player and the seek-to-segment
         #     math. Per-chunk history is still reconstructable from the
         #     MinIO listing under the session/type prefix.
+        #
+        # v0.10.5 Pack E.1.a — per-chunk durable media_files write (#268
+        # reproduction 2026-04-27).
+        #
+        # Pre-Pack-E.1.a: intermediate chunks went to MinIO/S3 but media_files
+        # was only updated on is_final=true. When the bot died mid-active
+        # (e.g. Playwright Execution context destroyed in production today),
+        # 31 chunks landed in S3 with media_files=[] in DB — orphaned.
+        #
+        # Now: every successful chunk upload UPDATES the per-type media_files
+        # entry with the latest chunk's metadata. Dashboard still sees ONE
+        # entry per type (audio, video) — UX unchanged from prior shape;
+        # what changes is the entry exists from chunk_seq=0 onward instead
+        # of waiting for is_final. Even mid-stream death leaves a partial
+        # recording row with `status=IN_PROGRESS` + the latest chunk's
+        # metadata, so the dashboard can show "Recording in progress (X
+        # chunks captured)" rather than "no recording."
+        #
+        # Concurrency: [PLATFORM] code review (#272 issuecomment-4327366063,
+        # 2026-04-27 13:42:17Z) flagged a stale-read race in the v1 shape:
+        # SELECT … FOR UPDATE was acquired AFTER snapshotting meeting.data,
+        # so two concurrent uploads for the same recording (e.g. audio +
+        # video chunk N) both saw media_files=[] pre-lock; one wrote
+        # [audio], the other (using its stale snapshot) wrote [video] —
+        # losing the audio entry despite both S3 uploads succeeding.
+        #
+        # v2 shape (this commit): hold the row lock from BEFORE the
+        # snapshot until after the commit. The S3 upload above stays
+        # OUTSIDE the lock — it's idempotent on the storage_path key, so
+        # no need to serialize S3 round-trips. Only the JSONB read+derive
+        # +write is inside the critical section. Latency cost: one chunk
+        # per ~10s per recording; sub-millisecond lock contention even
+        # under heavy parallel chunk arrival.
+        #
+        # Pre-lock find at line ~187 derives `legacy_id` so the S3
+        # storage_path can be built BEFORE we hold the lock. In the rare
+        # double-create race (two requests both first-chunk-of-session,
+        # neither sees existing_rec pre-lock), each generates a different
+        # random legacy_id and uploads to a different S3 directory; the
+        # post-lock re-find resolves which rec wins, and the loser's
+        # upload is referenced by its OWN storage_path entry under the
+        # winning rec's media_files (paths are self-describing — no data
+        # loss; mild S3 directory fragmentation only).
+        #
+        # Option B (separate recording_chunks table) remains the cleaner
+        # long-term shape but requires migration → deferred to v0.11.x.
+        from sqlalchemy import select as _sql_select
+        # Lock FIRST, then re-snapshot under the lock. This is the
+        # critical-section entry — every JSONB read below must see a
+        # linearizable view, not the pre-lock snapshot at line ~181.
+        locked_meeting = (await db.execute(
+            _sql_select(Meeting)
+            .where(Meeting.id == meeting_session.meeting_id)
+            .with_for_update()
+        )).scalar_one()
+        meeting = locked_meeting
+        meeting_data_dict = dict(meeting.data or {})
+        recordings_list = list(meeting_data_dict.get("recordings") or [])
+        # Re-find existing_rec under the FRESH snapshot. This may differ
+        # from the pre-lock find at line ~187 if a concurrent request
+        # created the rec while we were in S3 upload. Adopt the canonical
+        # legacy_id from the existing rec so subsequent media_files
+        # entries reference the right rec, even if our S3 upload used a
+        # different legacy_id (see above on the rare double-create race).
+        existing_rec = None
+        existing_idx = None
+        for idx, rec in enumerate(recordings_list):
+            if isinstance(rec, dict) and rec.get("session_uid") == session_uid and rec.get("source") == RecordingSource.BOT.value:
+                existing_rec = rec
+                existing_idx = idx
+                legacy_id = rec.get("id") or legacy_id
+                break
+
         if existing_rec is None:
             rec_payload = {
                 "id": legacy_id,
@@ -264,30 +337,90 @@ async def internal_upload_recording(
             was_completed = rec_payload.get("status") == RecordingStatus.COMPLETED.value
 
         status_transitioned_to_completed = False
+        prior_media_files = list(rec_payload.get("media_files") or [])
+        prior_count = len(prior_media_files)
+        prior_types = {mf.get("type") for mf in prior_media_files}
+        # Determine action: appended (new media_type) vs in_place (same type, latest-metadata refresh)
+        chunk_action = "appended" if media_type not in prior_types else "in_place"
+        # Find existing entry of same media_type (the design contract is: ONE entry per type
+        # per recording — see Pack E.1.a comment block above). Pre-fix the in_place branch
+        # OVERWROTE file_size_bytes with the latest chunk's size, leaving the dashboard /
+        # API showing e.g. "479KB" for a recording that had 36 chunks totalling ~17MB.
+        # v0.10.5 (post-prod-telemetry 2026-04-30): accumulate cumulative_bytes and
+        # cumulative_chunk_count, refresh storage_path / chunk_seq / is_final on the SAME
+        # entry so callers see honest sizing.
+        prior_same_type = next(
+            (mf for mf in prior_media_files if mf.get("type") == media_type),
+            None,
+        )
+        prior_bytes = int((prior_same_type or {}).get("file_size_bytes") or 0) if prior_same_type else 0
+        prior_chunk_count = int((prior_same_type or {}).get("chunk_count") or (1 if prior_same_type else 0))
+        prior_first_chunk_at = (prior_same_type or {}).get("first_chunk_at") if prior_same_type else None
+        # When ingesting a new entry for an existing type, accumulate bytes;
+        # for a brand-new type entry (chunk_seq=0 path), bytes = file_size.
+        cumulative_bytes = (prior_bytes + file_size) if prior_same_type else file_size
+        cumulative_chunk_count = (prior_chunk_count + 1) if prior_same_type else 1
+        first_chunk_at = prior_first_chunk_at or datetime.utcnow().isoformat()
+        existing_media_files = [
+            mf for mf in prior_media_files
+            if mf.get("type") != media_type
+        ]
+        existing_media_files.append({
+            "id": (prior_same_type or {}).get("id") or _new_recording_numeric_id(),
+            "type": media_type,
+            "format": media_format,
+            "storage_path": storage_path,  # latest chunk's path (consumers list the dir for full chunk inventory)
+            "storage_backend": os.environ.get("STORAGE_BACKEND", "minio"),
+            "file_size_bytes": cumulative_bytes,        # ← cumulative, not just-last-chunk
+            "last_chunk_size_bytes": file_size,         # ← latest-chunk only, for diagnostics
+            "chunk_count": cumulative_chunk_count,      # ← number of chunks accumulated
+            "duration_seconds": duration_seconds,
+            "chunk_seq": chunk_seq,                     # ← latest chunk's seq (chunk count = chunk_seq + 1 for canonical 0-indexed)
+            "first_chunk_at": first_chunk_at,
+            "metadata": {"sample_rate": sample_rate} if sample_rate else {},
+            "created_at": datetime.utcnow().isoformat(),  # latest update
+            "is_final": is_final,
+        })
+        rec_payload["media_files"] = existing_media_files
+        # v0.10.5 Pack E.1.a observability — [PLATFORM] ASK 2 (#272
+        # issuecomment-4327839749 → 14:32Z reply). Structured single-line
+        # log per chunk write, greppable for ad-hoc validation under
+        # `kubectl logs`. action=`appended` (new media_type entry) or
+        # `in_place` (same type, latest-metadata refresh). The third
+        # value `raced_lost` from [PLATFORM]'s spec wouldn't appear
+        # post-fix; expecting 0 occurrences over 7d post-deploy is the
+        # smoke-signal the production observer keys off.
+        logger.info(
+            "[E1A] chunk_write meeting_id=%s recording_id=%s media_type=%s "
+            "chunk_seq=%s prior_count=%s action=%s is_final=%s",
+            meeting.id, rec_payload.get("id"), media_type,
+            chunk_seq, prior_count, chunk_action, is_final,
+        )
         if is_final:
-            # Replace any existing entry for this media_type with the final one.
-            existing_media_files = [
-                mf for mf in (rec_payload.get("media_files") or [])
-                if mf.get("type") != media_type
-            ]
-            existing_media_files.append({
-                "id": _new_recording_numeric_id(),
-                "type": media_type,
-                "format": media_format,
-                "storage_path": storage_path,
-                "storage_backend": os.environ.get("STORAGE_BACKEND", "minio"),
-                "file_size_bytes": file_size,
-                "duration_seconds": duration_seconds,
-                "chunk_seq": chunk_seq,
-                "metadata": {"sample_rate": sample_rate} if sample_rate else {},
-                "created_at": datetime.utcnow().isoformat(),
-            })
-            rec_payload["media_files"] = existing_media_files
             rec_payload["status"] = RecordingStatus.COMPLETED.value
             rec_payload["completed_at"] = datetime.utcnow().isoformat()
             status_transitioned_to_completed = not was_completed
-        # Intermediate chunk (is_final=false): chunk is in MinIO; no
-        # media_files row yet. Recording stays IN_PROGRESS.
+        else:
+            # Intermediate chunk: keep IN_PROGRESS but durably-write the
+            # latest media_files entry so dashboard shows partial recording.
+            #
+            # v0.10.5 R2 — defense-in-depth: do NOT downgrade COMPLETED
+            # back to IN_PROGRESS. If a stray late chunk arrives after
+            # the reconciler set status=COMPLETED (e.g. bot uploaded one
+            # more chunk during shutdown grace), preserve the terminal
+            # state. The terminal state is sticky — only is_final=true
+            # promotes IN_PROGRESS → COMPLETED, never the reverse.
+            #
+            # Concrete scenario this protects against (observed
+            # 2026-04-30 on bots 36/37/40/41 pre-R1): bot kept uploading
+            # after meeting was marked completed, each non-final chunk
+            # rewrote status=IN_PROGRESS, post_meeting_reconciler's
+            # is_final flag flip got clobbered, dashboard stuck on
+            # "preparing audio" indefinitely. Pairs with R1 root fix —
+            # R1 stops the late chunks at the source; R2 makes the
+            # status field robust even when late chunks slip through.
+            if not was_completed:
+                rec_payload["status"] = RecordingStatus.IN_PROGRESS.value
         recordings_list[existing_idx] = rec_payload
         meeting_data_dict["recordings"] = recordings_list
         meeting.data = meeting_data_dict

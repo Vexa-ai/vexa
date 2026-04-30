@@ -100,6 +100,80 @@ class TestWebhookHelpers:
 
 
 # ===================================================================
+# v0.10.5 additive promote — completion_reason + failure_stage
+# ===================================================================
+
+
+class TestAdditivePromote:
+    """Surface honesty: typed fields hoisted from JSONB data.
+
+    See features/bot-lifecycle/README.md (FM-006) for the full envelope plan.
+    This is the 80%-value half-step landing in 0.10.5.
+    """
+
+    def test_meeting_response_hoists_completion_reason_from_data(self):
+        """Schema construction hoists completion_reason from data → typed field."""
+        from meeting_api.schemas import (
+            MeetingResponse,
+            MeetingCompletionReason,
+            MeetingStatus,
+        )
+
+        meeting = make_meeting(
+            status=MeetingStatus.COMPLETED.value,
+            data={"completion_reason": "stopped", "failure_stage": None},
+        )
+        # native_meeting_id is needed for MeetingResponse construction
+        object.__setattr__(meeting, "native_meeting_id", "abc-defg-hij")
+
+        resp = MeetingResponse.model_validate(meeting)
+        assert resp.completion_reason == MeetingCompletionReason.STOPPED
+        assert resp.failure_stage is None
+
+    def test_meeting_response_hoists_failure_stage_for_failed_meeting(self):
+        """Schema construction hoists both completion_reason + failure_stage from data."""
+        from meeting_api.schemas import (
+            MeetingResponse,
+            MeetingCompletionReason,
+            MeetingFailureStage,
+            MeetingStatus,
+        )
+
+        meeting = make_meeting(
+            status=MeetingStatus.FAILED.value,
+            data={
+                "completion_reason": "stopped_before_admission",
+                "failure_stage": "joining",
+            },
+        )
+        object.__setattr__(meeting, "native_meeting_id", "abc-defg-hij")
+
+        resp = MeetingResponse.model_validate(meeting)
+        assert resp.completion_reason == MeetingCompletionReason.STOPPED_BEFORE_ADMISSION
+        assert resp.failure_stage == MeetingFailureStage.JOINING
+
+    def test_webhook_payload_includes_completion_reason_and_failure_stage(self):
+        """Webhook event data includes hoisted fields; data still ships intact."""
+        from meeting_api.webhooks import _build_meeting_event_data
+
+        now = datetime.utcnow()
+        meeting = make_meeting(
+            status="completed",
+            start_time=now,
+            end_time=now,
+            data={"completion_reason": "evicted", "failure_stage": None, "extra": "kept"},
+        )
+        object.__setattr__(meeting, "native_meeting_id", "abc-defg-hij")
+
+        result = _build_meeting_event_data(meeting)
+        assert result["completion_reason"] == "evicted"
+        assert result["failure_stage"] is None
+        # Back-compat: data blob still ships intact (additive, not replacement)
+        assert result["data"]["completion_reason"] == "evicted"
+        assert result["data"]["extra"] == "kept"
+
+
+# ===================================================================
 # send_completion_webhook
 # ===================================================================
 

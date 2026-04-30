@@ -1111,6 +1111,414 @@
       "file": "tests3/releases/260426-zoom/audio-research.md",
       "must_match": "## Recommendation",
       "max_duration_sec": 5
+    },
+    {
+      "_": "═════ v0.10.5 G3 — grepable claims from scope.yaml (Pack C/D/E/G/H/L) ═════"
+    },
+    {
+      "id": "REDIS_CLIENT_HARDENED_TIMEOUTS",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "meeting-api aioredis.from_url() carries socket_timeout, socket_connect_timeout, socket_keepalive, health_check_interval, retry_on_timeout — Redis client cannot hang indefinitely on a partitioned/slow Redis (Pack C.1).",
+      "symptom": "Bare aioredis.from_url(url) with no timeouts; one Redis socket stall blocks the meeting-api event loop until OS-level TCP keepalive (~hours) eventually closes the socket — no consumer, no /readyz signal, no recovery without pod restart (#267).",
+      "file": "services/meeting-api/meeting_api/main.py",
+      "must_match": "socket_timeout=10",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "MEETING_API_READYZ_GATES_CONSUMER",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "meeting-api exposes `/readyz` distinct from `/health`; `_startup_complete` flag flips True only after Redis ping + consumer-task spawn; readinessProbe targets /readyz (Pack C.4).",
+      "symptom": "Service marks Ready before Redis consumer is up; K8s routes traffic to a pod that can't process callbacks; outbox reads silently fail (#248).",
+      "file": "services/meeting-api/meeting_api/main.py",
+      "must_match": "_startup_complete",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "MEETING_API_COLLECTOR_LIVENESS",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "meeting-api `/health/collector` returns 503 when Redis stream lag>100 AND idle>60s — liveness signal models the consumer's actual ability to drain the queue (Pack C.3).",
+      "symptom": "Liveness probe is bare process-up; consumer hangs on a Redis blocking read but probe stays green; pod silently stops processing while K8s reports Ready (#269).",
+      "file": "services/meeting-api/meeting_api/main.py",
+      "must_match": "/health/collector",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "K8S_BACKEND_CONTAINER_ID_IS_NAME",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "runtime-api kubernetes backend `create()` returns `pod.metadata.name` as container_id — meeting-api stores a kubectl-resolvable identifier for later DELETE (Pack D.1).",
+      "symptom": "container_id is `pod.metadata.uid` (a UUID); subsequent stop+delete fails because k8s API only accepts pod-name identifiers; orphan bot pods accumulate (#261).",
+      "file": "services/runtime-api/runtime_api/backends/kubernetes.py",
+      "must_match": "return created.metadata.name",
+      "must_not_match": "return\\s+created\\.metadata\\.uid",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "BOT_DELETE_DURABLE_RETRY",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "meeting-api carries a Redis Stream outbox for container-stop intents (`container_stop_outbox.py` with `enqueue_stop` producer + `consume_pending_stops` consumer); DELETE is durable across runtime-api outages (Pack D.2 — mirrors 260421 Pack J shape).",
+      "symptom": "DELETE container is fire-and-forget HTTP to runtime-api; if runtime-api is unreachable the stop is silently dropped; bot pod runs forever (#266).",
+      "file": "services/meeting-api/meeting_api/container_stop_outbox.py",
+      "must_match": "async def consume_pending_stops",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "RECORDING_FINALIZE_OUTBOX_CONSUMER_IDEMPOTENT",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "container-stop outbox consumer in `sweeps.py` imports `consume_pending_stops` from `container_stop_outbox` and is wired into the idle_loop pattern (Pack D.2 wiring).",
+      "symptom": "Outbox stream entries pile up unconsumed because no idle_loop sweep reads them; Redis memory grows; stops never reach runtime-api (#266 follow-on).",
+      "file": "services/meeting-api/meeting_api/sweeps.py",
+      "must_match": "from .container_stop_outbox import consume_pending_stops",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "AGGREGATION_FAILURE_CLASS_VIA_TYPED_HELPER",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "post_meeting.py exports `set_aggregation_failure_class(meeting, cls)` — single-write-path discipline for `data['aggregation_failure_class']`; class taxonomy is `AggregationFailureClass` enum/constants (Pack H).",
+      "symptom": "Multiple call sites poke `data['aggregation_failure_class']` directly with magic strings; classifier drift; sweeps query a key that doesn't always exist (#H1).",
+      "file": "services/meeting-api/meeting_api/post_meeting.py",
+      "must_match": "def set_aggregation_failure_class(meeting",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "DELAYED_STOP_FINALIZER_REMOVED",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "meetings.py contains documentation marker explaining the removal of `_delayed_stop_finalizer` (redundant after 260421 Pack J durable exit-callback) — replaced by idle_loop sweep (Pack E.3.1).",
+      "symptom": "Both _delayed_stop_finalizer AND the new sweep run; double-finalize race; meeting flips status twice in <1s; webhooks fire duplicate events (#268 [PLATFORM] comment).",
+      "file": "services/meeting-api/meeting_api/meetings.py",
+      "must_match": "v0.10.5 Pack E.3.1 — REMOVED",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "BOTS_LIST_ENDPOINT_SLIM",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "meetings.py list endpoint projects `data` through `_data_summary(d)` by default; full data only on explicit `include == \"data\"` (include_full_data branch) — payload size bounded for bulk listings (Pack L).",
+      "symptom": "Every /meetings list response carries full meetings.data JSONB blob (potentially MB per row × N rows); dashboard list page payloads grow unbounded; gateway timeouts at scale (#272#... user concern).",
+      "file": "services/meeting-api/meeting_api/meetings.py",
+      "must_match": "if include_full_data else _data_summary",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "BOT_LOGS_STRUCTURED_JSON",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "vexa-bot core exposes `setLogContext({...})` + `logJSON({...})` — every bot log line is structured JSON with auto-injected meeting_id/session_uid/platform/container_name (Pack G.1).",
+      "symptom": "Bot logs are free-form strings; runtime-api log capture cannot index by meeting_id; debugging a single bot in a busy cluster requires grepping unstructured stdout (#272#6).",
+      "file": "services/vexa-bot/core/src/utils/log.ts",
+      "must_match": "export function logJSON",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "PACK_E1A_CONCURRENT_CHUNKS_REPRODUCER_PASSES",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "services/meeting-api/tests/test_recordings_concurrent_chunks.py — 3 pytest cases (AST static check + sequential sanity + concurrent asyncio.gather race) — all pass against current HEAD. Wires the [PLATFORM]-approved Pack E.1.a v2 lock-before-snapshot reproducer test as a required-by-mode gate.",
+      "symptom": "Pack E.1.a regression: SELECT FOR UPDATE moved back to AFTER snapshot, OR the lock-acquisition / re-snapshot pattern broken in some other refactor. Concurrent audio+video chunks lose one media_files entry. (#272 issuecomment-4327366063)",
+      "method": "SHELL_CHECK",
+      "script": "tests3/checks/scripts/pack-e1a-concurrent-chunks-reproducer.sh",
+      "max_duration_sec": 60
+    },
+    {
+      "id": "PACK_E1A_CHUNK_WRITE_LOG_LINE",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "recordings.py emits a structured single-line log per chunk write (`[E1A] chunk_write meeting_id=... recording_id=... media_type=... chunk_seq=... prior_count=... action=...`). [PLATFORM] ASK 2 (#272 issuecomment-4327839749 reply 14:32Z) — greppable signal for ad-hoc validation + post-deploy production observer.",
+      "symptom": "Production observer cannot detect race recurrence without scanning DB+S3 on every meeting end; structured log line eliminates that scan path. Missing line means observability regression for the v0.10.5 hardening.",
+      "file": "services/meeting-api/meeting_api/recordings.py",
+      "must_match": "[E1A] chunk_write",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "PACK_X_DRY_RUN_FLAG_GATED",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "MeetingCreate schema accepts `dry_run` field; request_bot handler enforces `VEXA_ENV != 'production'` gate (HTTP 422 in production). Synthetic-rig safety net — even if a test-shape leaks past route gating, the value is rejected at the application layer.",
+      "symptom": "Test-mode flag accepted in production: synthetic test traffic could create meetings without launching real bots, hiding production usage anomalies. Bypasses the no-platform-bot test boundary.",
+      "file": "services/meeting-api/meeting_api/meetings.py",
+      "must_match": "dry_run=true is a test-mode flag; not allowed in production",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "PACK_X_DRY_RUN_SCHEMA_FIELD",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "MeetingCreate Pydantic schema declares `dry_run: Optional[bool] = Field(False, ...)` so callers can opt in deterministically. The synthetic-rig depends on this field being a first-class schema element (not a magic header).",
+      "symptom": "If someone removes the field, all 7 Pack X scenarios fail with HTTP 422; rig becomes unrunnable; entropy testing offline.",
+      "file": "services/meeting-api/meeting_api/schemas.py",
+      "must_match": "dry_run: Optional[bool] = Field(",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "URL_PLUS_PLATFORM_TRUST_MODEL",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "MeetingCreate accepts (platform + meeting_url) as a valid request shape — schema validator does NOT require parser-extracted native_meeting_id. White-label / enterprise / never-seen-before Zoom URLs (LFX, AWS, Bloomberg, etc.) work via this path. Bot navigates the user-supplied URL directly; vendor backend resolves to canonical join. Avoids per-vendor URL-parser proliferation.",
+      "symptom": "Each new white-label Zoom domain (zoom-lfx.platform.linuxfoundation.org today, AWS Chime tomorrow, etc.) requires a per-vendor parser entry. Schema rejection forces users to translate URLs to canonical zoom.us shape they may not know. Anti-architecture per project-owner principle 2026-04-27.",
+      "file": "services/meeting-api/meeting_api/schemas.py",
+      "must_match": "platform + meeting_url",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "URL_PARSER_BEST_EFFORT_NOT_GATE",
+      "tier": "static",
+      "found": "2026-04-27",
+      "proves": "parse_meeting_url is best-effort metadata extraction, not a validation gate. When the parser raises ValueError (URL shape unrecognized), the model_validator catches it silently — downstream validation accepts (URL + platform) without parser output. Pure URL-only requests still work via the parser; the parser failing doesn't block (URL + platform) requests.",
+      "symptom": "Parser failure rejects valid (URL + platform) requests; user sees 422 even though they supplied enough info. Defeats the white-label escape hatch.",
+      "file": "services/meeting-api/meeting_api/schemas.py",
+      "must_match": "Parser doesn't recognize this URL shape",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "REQUIRE_FM001_STAMP",
+      "tier": "static",
+      "found": "2026-04-29",
+      "fix_release": "v0.10.5",
+      "proves": "services/meeting-api/meeting_api/callbacks.py routes every non-stopping bot exit through `_classify_stopped_exit` — the central FM-001/FM-002/FM-003 classifier. The classifier's PRESENCE in callbacks.py is the proof-of-fix; reverting any of the three FMs requires deleting or bypassing this function. Default-on (static tier runs on every release-validate); audit-1 (ARCH-2 2026-04-29 ~13:15 UTC) recommended flipping this from opt-in to default-on for v0.10.5 ship.",
+      "symptom": "FM-001 / FM-002 / FM-003 silently regress: callbacks.py refactor drops the central classifier, exit handler reverts to `else: status=failed, completion_reason=NULL`, prod resumes 47% misclassification. Companion happy-path + parametrized unit tests in services/meeting-api/tests/test_callbacks.py back this static stamp; if either is removed, the stamp fails closed.",
+      "file": "services/meeting-api/meeting_api/callbacks.py",
+      "must_match": "_classify_stopped_exit",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "BOT_IMAGE_HAS_HALLUCINATION_PHRASES",
+      "tier": "static",
+      "found": "2026-04-29",
+      "fix_release": "v0.10.5",
+      "proves": "services/vexa-bot/core/src/services/hallucinations/ contains the 4-language phrase corpus (en.txt, es.txt, pt.txt, ru.txt) the whisper hallucination filter loads at runtime. FM-274: production bots shipped without the phrase files, hallucination filter ran with empty corpus, long-form hallucinations leaked into transcripts. v0.10.5 Pack P fixed the build path (`build` script copies hallucinations/ into dist/); this check pins the source-side invariant that the corpus exists.",
+      "symptom": "FM-274 regression: phrase files deleted, renamed, or moved out of services/vexa-bot/core/src/services/hallucinations/. Bot image rebuilds with empty hallucination corpus; long-form whisper hallucinations like 'thanks for watching' / 'subscribe to my channel' leak into prod transcripts.",
+      "method": "SHELL_CHECK",
+      "script": "tests3/checks/scripts/bot-image-has-hallucination-phrases.sh",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "PACK_E1A_PER_CHUNK_MEDIA_FILES_WRITE",
+      "tier": "static",
+      "found": "2026-04-29",
+      "fix_release": "v0.10.5",
+      "proves": "services/meeting-api/meeting_api/recordings.py performs a per-chunk durable write of the `media_files` array on every successful upload (intermediate or final), not only on the final chunk. v0.10.5 Pack E.1.a (#268 reproduce + reconciler): pre-fix, intermediate chunks reached MinIO/S3 but `media_files=[]` in DB — orphaned. Post-fix, every chunk write performs a `existing_media_files.append({...})` + `rec_payload[\"media_files\"] = existing_media_files` + `await db.commit()` cycle so the DB row tracks every chunk that landed in storage. Audit-3 (ARCH-2 2026-04-29 ~11:20 UTC) flagged recording-link-gap as 🟡 (fixed in 0.10.5, no direct test); this static-grep stamp closes the source-shape regression coverage.",
+      "symptom": "recording-link-gap regression: per-chunk media_files write removed by refactor; intermediate chunks land in S3 but DB shows media_files=[] — dashboard/SDK sees an orphaned recording with content unreachable. Companion to PACK_E1A_CHUNK_WRITE_LOG_LINE which pins the structured-log shape for ad-hoc validation.",
+      "file": "services/meeting-api/meeting_api/recordings.py",
+      "must_match": "rec_payload[\"media_files\"] = existing_media_files",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "PACK_Q_POD_NAME_USES_MEETING_ID",
+      "tier": "static",
+      "found": "2026-04-29",
+      "fix_release": "v0.10.5",
+      "proves": "services/runtime-api/runtime_api/api.py builds runtime pod names with `meeting_id` (when present in `req.config` or `req.metadata`), not `user_id`. v0.10.5 Pack Q (FM-275 / #275): pre-fix produced `meeting-{user_id}-{uuid}` (e.g. `meeting-2087-ee434b6d` for actual meeting_id 11058) — operator-confusing because the natural inference 'pod name's integer = meeting_id' was wrong, and audit-tooling that joined on the pod name's integer field broke silently. Post-fix: `meeting-{meeting_id}-{uuid}` aligns kubectl logs + browse-by-name + Redis state-index reconciliation with the canonical meeting identifier. Audit-3 flagged FM-275 as 🟡 (fixed, no direct test); this stamp pins the source-shape.",
+      "symptom": "FM-275 regression: pod-naming refactor reverts to `user_id`-based naming. Operator browsing kubectl logs by pod name infers wrong meeting_id; runtime audit tooling cross-references break silently. Compounds during incident triage when 5+ bots are spawning concurrently and the pod-name → meeting_id mapping is the operator's only readily-available join key.",
+      "file": "services/runtime-api/runtime_api/api.py",
+      "must_match": "meeting_id = req.config.get(\"meeting_id\")",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "PACK_S_WEBHOOK_RETRY_LOG_NON_EMPTY_ERROR",
+      "tier": "static",
+      "found": "2026-04-29",
+      "fix_release": "v0.10.5",
+      "proves": "services/meeting-api/meeting_api/webhooks.py logs every webhook delivery exception via `logger.error(... exc_info=True)`, ensuring the failure path always carries a non-empty error string + full traceback. v0.10.5 Pack S (FM-277 / #277): pre-fix, webhook retry path could swallow exceptions silently (logger called with empty message or exc_info=False), making prod webhook-failure observability blind. Post-fix: both `send_status_webhook` and `send_event_webhook` wrap their delivery loops in `try/except` with `logger.error(f\"Unexpected error sending ... for meeting {meeting.id}: {e}\", exc_info=True)`. Audit-3 flagged FM-277 as 🟡 (fixed in 0.10.5, no direct test); this stamp pins the source-shape.",
+      "symptom": "FM-277 regression: webhook exception handler reverts to silent-swallow shape (no logger.error, missing exc_info). Webhook failures invisible in operator logs; customers report 'webhooks not arriving' with no server-side trail to diagnose. Trades-off observability for lower log volume in a way that defeats the reason webhooks have a retry budget.",
+      "file": "services/meeting-api/meeting_api/webhooks.py",
+      "must_match": "logger.error(f\"Unexpected error sending",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "NO_VIDEO_TRANSCEIVER_DIRECTION_FLIP",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/vexa-bot/core/src/services/screen-content.ts must NOT modify transceiver.direction in the WebRTC ontrack handler. v0.10.5 commit 8ab7f49 reverted the SDP-munge added by 42a2c76 (2026-04-12) which set transceiver direction to 'inactive'/'sendonly' — produced malformed SDP (BUNDLE without rtcp-mux), peer entered inconsistent state, ~60-90s later GMeet severed the session and the page eval context was destroyed. Prod telemetry 2026-04-30: 44% of GMeet 24h meetings (19 of 43) matched this exact failure shape. This regression guard ensures any future re-introduction of the direction flip fails closed. Acceptable alternatives if memory pressure returns: chromium launch flags --disable-features=Vp8,Vp9 (codec-level disable, no JS-side WebRTC mutation), or system-level audio capture (attendee paradigm).",
+      "symptom": "GMeet bots crash 60-90s after admission with 'page.evaluate: Execution context was destroyed' and exit reason post_join_setup_error. Recording chunks may have started uploading; subsequent ones shrink as audio degrades; bot exits before is_final fires. In prod manifests as 'failed/joining' with stale failure_stage (FM-003) and NULL completion_reason — looks indistinguishable from a real join failure even though the bot was active for a minute.",
+      "file": "services/vexa-bot/core/src/services/screen-content.ts",
+      "must_not_match": "transceiver(Ref|s)?\\.direction\\s*=\\s*['\\\"]?(inactive|sendonly)",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "RECORDING_MEDIA_FILES_CUMULATIVE_BYTES",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/meeting-api/meeting_api/recordings.py per-chunk write accumulates `cumulative_bytes` across chunks of the same media_type rather than overwriting `file_size_bytes` with the latest chunk's size only. Pre-fix (Pack E.1.a v1, 2026-04-27): each chunk replaced the same-type media_files entry with the new chunk's metadata, so file_size_bytes reflected only the LAST chunk (~480KB) instead of the cumulative size (e.g. 36 chunks ≈ 17MB). Dashboard / SDK consumers reading meeting.data.recordings[].media_files[].file_size_bytes saw a tiny recording for what was actually a 15-minute capture. Post-fix (2026-04-30, post-prod-telemetry): the in_place branch now reads prior_bytes + adds file_size, also tracks chunk_count and first_chunk_at, exposes last_chunk_size_bytes for diagnostics.",
+      "symptom": "Customer-reported 'my hour-long meeting only saved a 500KB file' even though the actual chunk files in MinIO total tens of MB. API/dashboard queries report misleading recording size, breaking download UX expectations and any analytics that key off file_size_bytes for billing or diagnostic gates.",
+      "file": "services/meeting-api/meeting_api/recordings.py",
+      "must_match": "cumulative_bytes",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "POST_MEETING_FINALIZES_IN_PROGRESS_RECORDINGS",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/meeting-api/meeting_api/post_meeting.py defines `finalize_in_progress_recordings(meeting, db)` and calls it as Task 0 of run_all_tasks. Reconciles the case where a bot's terminal-chunk-with-is_final-true never reached the server (bot was killed by SIGKILL grace timeout, page eval context died, network failed mid-flush). Pre-fix, recordings stayed status=IN_PROGRESS with media_files[*].is_final=false indefinitely after the meeting itself transitioned to terminal — consumers polling for is_final=true never saw the recording 'complete' even though the audio chunks were durably persisted. Post-fix, post-meeting tasks unconditionally walk meeting.data.recordings, flip rec.status to COMPLETED for any IN_PROGRESS, and set is_final=true on every media_files entry. Tagged with finalized_by: post_meeting_reconciler for forensic traceability.",
+      "symptom": "Recording entries stuck in IN_PROGRESS indefinitely after meetings that completed successfully. Consumers polling for is_final=true to know when the recording is ready never see it flip — assume the recording is broken or still being written. SDK / dashboard / billing / archival pipelines that gate on the is_final flag stall.",
+      "file": "services/meeting-api/meeting_api/post_meeting.py",
+      "must_match": "finalize_in_progress_recordings",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "GMEET_FALSE_LEFT_ALONE_AUDIO_CROSS_VALIDATE",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/vexa-bot/core/src/platforms/googlemeet/recording.ts implements Layer 2 of the false-LEFT_ALONE_TIMEOUT fix: tracks __vexaLastAudioActivityTs from the audio data processor and refuses to increment alone-time when audio activity has occurred in the last 120s. Pre-fix (#285), the participant counter relied solely on the [data-participant-id] DOM selector; any GMeet UI change that renamed/relocated this attribute returned 0 unique IDs even when multiple speakers were active, firing LEFT_ALONE_TIMEOUT on healthy meetings within 60s after admission. Layer 2 cross-validate provides an independent ground truth — audio is actively flowing means the meeting has speakers, regardless of what the DOM count says.",
+      "symptom": "FM-285 regression: bot exits healthy GMeet meetings prematurely with GOOGLE_MEET_BOT_LEFT_ALONE_TIMEOUT while audio is being captured and transcripts are being produced. Customer impact: lost mid-meeting recording on every affected session; recording cuts off mid-stream while the meeting continues with active speakers.",
+      "file": "services/vexa-bot/core/src/platforms/googlemeet/recording.ts",
+      "must_match": "__vexaLastAudioActivityTs",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "GMEET_PARTICIPANT_COUNTER_MULTI_SELECTOR_FALLBACK",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/vexa-bot/core/src/platforms/googlemeet/recording.ts countParticipantTiles() falls back to data-self-name (and role=region with aria-label containing 'articipant') when the primary [data-participant-id] selector returns 0. Layer 1 of the false-LEFT_ALONE_TIMEOUT fix (#285): any GMeet UI change to the primary attribute no longer takes the count to 0 globally, since the self-name marker is always present once admitted.",
+      "symptom": "Single-selector GMeet UI change cascades to bot global LEFT_ALONE detection; bots leave every healthy meeting within 60s of admission until manually patched.",
+      "file": "services/vexa-bot/core/src/platforms/googlemeet/recording.ts",
+      "must_match": "data-self-name",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "ZOOM_LEAVE_MULTI_SELECTOR_FALLBACK",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/vexa-bot/core/src/platforms/zoom/web/leave.ts uses a multi-selector fallback array for both the Leave button and the Confirm-Leave dialog button. Tries the strict footer-section selector first, then the broader button[aria-label=Leave] as fallback. Pre-fix the brittle attribute-scoped selector failed under transient DOM state when N bots targeted the same Zoom meeting concurrently — ~2/N hit a window where the footer-section attribute was momentarily absent, click never fired, bot exited with WebRTC peer still active = orphan participant in Zoom for 30-60s until keepalive timeout.",
+      "symptom": "Zoom Web orphan-bot regression: multiple bots receive DELETE, exit cleanly from meeting-api's perspective, but stay visible as participants in the Zoom meeting from Zoom's perspective until WebRTC keepalive expires.",
+      "file": "services/vexa-bot/core/src/platforms/zoom/web/leave.ts",
+      "must_match": "v0.10.5 — Multi-selector fallback",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "FIND_MEDIA_ELEMENTS_TWO_PASS_FILTER",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/vexa-bot/core/src/services/audio.ts findMediaElements() implements a two-pass filter: pass 1 strict (srcObject MediaStream + audio tracks), pass 2 relaxed (accepts captureStream() / mozCaptureStream() fallback). Mirrors the downstream createCombinedAudioStream's already-present fallback chain so this finder doesn't artificially filter out elements the consumer can use. Pre-fix, the strict-only filter returned 0 elements on Google Meet pages where video tiles are paused or use captureStream — recording.ts went into degradedNoMedia mode and MediaRecorder was never created, leaving meeting.data.recordings = []. Post-fix, every chunk-emitting GMeet meeting produces >=1 chunk durably stored.",
+      "symptom": "Empty recordings on Google Meet despite recording_enabled=true and active meeting. meeting.data.recordings = [] for every affected meeting; chunks never produced. Customer impact: recording feature looks completely broken on GMeet platform.",
+      "file": "services/vexa-bot/core/src/services/audio.ts",
+      "must_match": "Pass 2 — relaxed",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "CLASSIFIER_RECORDING_AWARE_NO_AUDIO",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/meeting-api/meeting_api/callbacks.py _classify_stopped_exit checks meeting.data.recordings[*].media_files[*].file_size_bytes > 0 BEFORE classifying as STOPPED_WITH_NO_AUDIO. Pre-fix: any meeting with transcribe_enabled and 0 transcripts was failed/stopped_with_no_audio — including meetings where recording_enabled produced a multi-MB durable audio file. Customer impact: dashboard showed 'failed' for meetings where the WAV/webm was successfully captured and on disk, then hid the recording because of the failed status. Post-fix: recording-aware delivery check — if recording is delivered (any media_files entry has file_size_bytes > 0), classify as COMPLETED even when transcripts=0 (silent/quiet meeting is success-with-no-speech, not failure-with-no-audio).",
+      "symptom": "Customer dashboards show meetings as 'failed' when they actually completed and produced a downloadable recording. Recording hidden from UI even though file is in MinIO. Specifically affects meetings where audio was captured but no one spoke (silent rooms, brief check-ins, recording sessions where the speaker started after meeting bot was admitted).",
+      "file": "services/meeting-api/meeting_api/callbacks.py",
+      "must_match": "DELIVERY-AWARE classification",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "RUNTIME_API_STATE_KEYED_BY_NAME",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/runtime-api/runtime_api/state.py keys all container Redis state by the runtime-supplied name parameter, never by Docker container_id or pod uid. Pairs with K8S_BACKEND_CONTAINER_ID_IS_NAME (locks the K8s create() return) and MEETING_API_STORES_NAME_NOT_CONTAINER_ID (locks the meeting-api persist site). Together these three checks lock the identifier-handshake contract: meeting-api stores name → runtime-api Redis state is keyed by name → GET/DELETE/touch routes resolve by name. The set+get+delete+set_stopped Redis ops all use `f\"{KEY_PREFIX}{name}\"` consistently. v0.10.5 R1 + Gap B regression catch — without this lock, a future refactor that keyed state by container_id would silently break the meeting-api/runtime-api round-trip even though MEETING_API_STORES_NAME_NOT_CONTAINER_ID still passes. Compose-mode counterpart of the K8s check (which proves the create() return on the K8s side).",
+      "symptom": "Same symptom triplet as R1: bots don't leave after DELETE, dashboard stuck 'preparing audio', recording metadata never finalized. Runtime-api keys state by container_id; meeting-api looks up by name; lookups 404; Pack J no-container branch fires for every stop; bots run forever uploading chunks that overwrite the reconciler's terminal state.",
+      "file": "services/runtime-api/runtime_api/state.py",
+      "must_match": "{KEY_PREFIX}{name}",
+      "must_not_match": "\\{KEY_PREFIX\\}\\{(container_id|cid|pod_id|id)\\}",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "CONTAINERS_TEST_ACCEPTS_CLEAN_STOP_FAILED",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "tests3/tests/containers.sh status_completed step accepts `failed` as terminal-clean WHEN paired with a clean-stop completion_reason (stopped / stopped_with_no_audio / stopped_before_admission). R5 fix — the recording-aware classifier (FM-002 v2 / commit 9b16eba) correctly marks zero-audio user-stopped meetings as failed; the lifecycle test guards 'not stuck in stopping forever', not 'must have audio'. Without this multi-state acceptance, the helm gate fails forever on synthetic test bots that never deliver audio (the recording path may not work in helm test cluster). Lock prevents a future test refactor from re-tightening to completed-only and breaking the helm gate again.",
+      "symptom": "Helm release-validate matrix red on `bot-lifecycle/status-completed` with status=failed reason=stopped_with_no_audio; gate fails at 88% < 90% threshold. Test contract claims meeting must be `completed` after stop; classifier correctly says `failed` because no audio was delivered; impasse. Same issue could fire on lite/compose if their fixtures stop delivering test audio.",
+      "file": "tests3/tests/containers.sh",
+      "must_match": "v0.10.5 R5",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "HELM_SETUP_PASSES_TX_TOKEN_TO_SECRET",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "tests3/lib/lke-setup-helm.sh passes the transcription token to BOTH the meeting-api Deployment env (meetingApi.transcriptionServiceToken) AND the cluster Secret resource (secrets.transcriptionServiceToken). The chart's templates/secret.yaml reads from .Values.secrets.transcriptionServiceToken (since chart standardisation in ea62d76, 2026-04-08); runtime-api Deployment + the runtimeProfiles ConfigMap that bot pods inherit BOTH sourceFrom the Opaque Secret. Pre-fix (R6): the script only set meetingApi.* — meeting-api itself had the token but runtime-api and bot pods saw empty strings. Bots authenticated with `Bearer ` (empty) and got rejected silently by transcription-service. The recording-aware classifier (FM-002 v2) correctly tagged the meetings COMPLETED (because recording was delivered), masking the no-transcripts failure unless a human spot-checked. Discovered during v0.10.5 human validation, helm meeting 8: 9.5MB recording delivered, 0 transcripts.",
+      "symptom": "helm meetings show recording delivered to MinIO + 0 transcripts despite transcribe_enabled=true. Bot pods have TRANSCRIPTION_SERVICE_URL set but TRANSCRIPTION_SERVICE_TOKEN empty in their env. transcription-service rejects every bot connection with auth failure. Customer-impact: helm-mode operators get recordings without transcripts; classifier hides the failure as a successful capture.",
+      "file": "tests3/lib/lke-setup-helm.sh",
+      "must_match": "secrets.transcriptionServiceToken=$TX_TOKEN",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "PACK_T_TERMINAL_IDEMPOTENT_REFIRE_BENIGN",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/meeting-api/meeting_api/meetings.py update_meeting_status() treats `completed → completed` and `failed → failed` as benign idempotent re-fires (returns True at DEBUG level), instead of WARNING-and-returning-False. Pack T fix for FM-278 (#278). Pre-fix: three independent code paths — chat persistence, status update, post-meeting tasks — could each fire a redundant `completed → completed` transition under the documented _delayed_stop_finalizer / runtime-api callback race. Each fired a WARNING (~30 per 90-minute window in prod) and the False return short-circuited post-meeting tasks via `if not success`, leaving aggregation undone for some completed meetings. Post-fix: idempotent re-fires log at DEBUG and return True so caller code paths complete normally; warnings reserved for actual invalid transitions.",
+      "symptom": "Production meeting-api logs flooded with 'Invalid status transition completed -> completed' WARNINGs (~30/90min). Some completed meetings have post-meeting tasks (transcript aggregation, webhooks) silently skipped because the False return path short-circuits run_all_tasks.",
+      "file": "services/meeting-api/meeting_api/meetings.py",
+      "must_match": "v0.10.5 Pack T (#278) — Already-terminal idempotent re-fire is benign",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "POST_MEETING_RECORDING_STATUS_IMPORT_PATH",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/meeting-api/meeting_api/post_meeting.py imports RecordingStatus from .schemas (not .models). The enum lives at schemas.py:1202; models.py has no RecordingStatus symbol. Pre-fix (R0): finalize_in_progress_recordings used `from .models import RecordingStatus`, raising ImportError every time the reconciler fired. Production logs (2026-04-30) showed the error firing on meetings 33/34/35/36/37/40/41 — every meeting ended with recording.status='in_progress' + media_files[*].is_final=false stuck forever, dashboard 'preparing audio' indefinitely. Post-fix: import path corrected; reconciler runs cleanly, [Bug-B-Fix] log line confirms `count=N` finalized recordings.",
+      "symptom": "ERROR meeting_api.post_meeting: Recording finalization failed for meeting <id>: cannot import name 'RecordingStatus' from 'meeting_api.models'. Reconciler claims success on log line `Post-meeting tasks completed for meeting <id>` but recording metadata stays unfinalized; dashboard indefinitely 'preparing audio'.",
+      "file": "services/meeting-api/meeting_api/post_meeting.py",
+      "must_match": "from .schemas import RecordingStatus",
+      "must_not_match": "from .models import RecordingStatus",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "RECORDING_STATUS_TERMINAL_STICKY",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/meeting-api/meeting_api/recordings.py chunk handler refuses to downgrade recording.status from COMPLETED back to IN_PROGRESS. Defense-in-depth pairing with R1: even if a stray late chunk arrives after the reconciler set status=COMPLETED (or after the bot's own is_final terminal chunk), the terminal state is sticky. Pre-fix (R2): the else branch unconditionally wrote rec_payload['status'] = IN_PROGRESS for every non-final chunk — every late chunk re-marked status=IN_PROGRESS, post_meeting_reconciler's status flip got clobbered, dashboard stuck on 'preparing audio'. Post-fix: only flip to IN_PROGRESS when the recording is not already COMPLETED.",
+      "symptom": "Dashboard shows 'preparing audio' indefinitely on a meeting whose audio is durably stored in MinIO and whose post_meeting_reconciler logged success. Status race between chunk-upload writer and reconciler — chunk wins because it commits last.",
+      "file": "services/meeting-api/meeting_api/recordings.py",
+      "must_match": "v0.10.5 R2 — defense-in-depth",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "MEETING_URL_REJECTS_MALFORMED",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/meeting-api/meeting_api/schemas.py rejects literal-garbage meeting_url values (no scheme + no netloc) at the pydantic field-validator layer, returning HTTP 422 — distinct from the trust-model accept-path for any well-formed URL with platform. Without this gate the request fell through to the body handler where the next downstream error (concurrency 403, redis-publish, db write) surfaced — burning a meeting row and a container slot before failing. Trust model preserved: any urlparse-able URL with scheme + netloc passes through (zoom-lfx, white-label portals, custom domains all keep working). Only the genuinely-not-a-URL case (e.g. 'not-a-url') is rejected. R4 fix.",
+      "symptom": "POST /bots with meeting_url='not-a-url' returns HTTP 403 (concurrency or auth) instead of HTTP 422 (validation error). Test INVALID_URL_REJECTED fails on lite + compose + helm with 'HTTP 403 (expected one of [400, 422])'.",
+      "file": "services/meeting-api/meeting_api/schemas.py",
+      "must_match": "v0.10.5 R4 — minimal URL well-formedness gate",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "MEETING_API_STORES_NAME_NOT_CONTAINER_ID",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/meeting-api/meeting_api/meetings.py stores the runtime-api container NAME (not the Docker container_id hex) as meeting.bot_container_id on bot-create. Property: the value persisted as bot_container_id MUST be the same identifier runtime-api accepts at GET /containers/{name} — i.e., the name (e.g., 'meeting-40-d969b41a'), not the 64-char Docker container_id. Pre-fix (R1): all three create sites (lines 751, 828, 1207) wrote `result.get('container_id') or result.get('name')` — the truthy hex container_id was always preferred. runtime-api's Redis state is keyed by name only (api.py:315 `state.get_container(redis, name)`), so every meeting-api inspect call (`GET /containers/<container_id>`) returned 404. meeting-api then routed the DELETE through the Pack J no-container branch, which marks the meeting completed and runs run_all_tasks but does NOT send the stop signal to the live bot. Bots stayed alive uploading chunks; each chunk-upload at recordings.py:327 overwrote `recording.status='completed'` back to 'in_progress' based on the chunk's is_final=false flag. Symptom triplet: (1) bots don't leave after DELETE, (2) dashboard stuck 'preparing audio', (3) Zoom Web 0-recording-entries on bots that didn't get the parecord-finalize path.",
+      "symptom": "Bot containers remain alive (Up Nm) for many minutes after DELETE/stop. Meeting status flips to completed in DB but recording.status stays in_progress and media_files[*].is_final stays false. Dashboard shows 'preparing audio' indefinitely. Zoom Web meetings that didn't reach the bot's clean-shutdown self-leave path produce zero recording entries even with recording_enabled=true. All three platforms affected; observed 2026-04-30 on bots 40 (GMeet), 41 (Teams), 42 (Zoom). Root regression introduced 9b8ba83 (initial meeting-api commit); was masked by alternate stop paths until recent stage-hygiene work started exercising the runtime-api inspect path on user-DELETE.",
+      "file": "services/meeting-api/meeting_api/meetings.py",
+      "must_match": "v0.10.5 R1 fix — store NAME as bot_container_id",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "TEAMS_CONTINUE_WITHOUT_MEDIA_HANDLER",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/vexa-bot/core/src/platforms/msteams/join.ts polls for and dismisses the Teams 'Continue without audio or video' confirmation modal inside waitForTeamsPreJoinReadiness. The modal renders intermittently when Chromium's media-permission state for Teams is 'denied' at prejoin boot — wireframe text is 'Are you sure you don't want audio or video?' with a 'Continue without audio or video' button. Pre-fix: when the modal appears it BLOCKS the prejoin name input from rendering; the bot waits the full 45s readiness timeout, fails to find the name input, and times out without ever joining. Customer impact: intermittent Teams join failures with no clear error — bot exits before name typing because of a blocking modal that the join flow had no handler for. Discovery: 2026-04-30 compose verification, modal observed during third Teams verification run (bot 34); manual click unblocked the prejoin and bot proceeded normally.",
+      "symptom": "Intermittent Teams join failures: bot navigates to meeting URL, sees the prejoin page never become ready, times out at the readiness check, and exits without typing its name. Modal text 'Continue without audio or video' is visible in VNC during the timeout window. Symptom is platform-wide for Teams since it depends on Chromium media-permission state, not meeting state.",
+      "file": "services/vexa-bot/core/src/platforms/msteams/join.ts",
+      "must_match": "continueWithoutMediaClickAttempts",
+      "max_duration_sec": 5
     }
   ]
 }

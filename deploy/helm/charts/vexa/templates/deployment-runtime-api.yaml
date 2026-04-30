@@ -104,6 +104,19 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: TRANSCRIPTION_SERVICE_TOKEN
+            # v0.10.5 Pack B.3 — runtime-api needs MEETING_API_URL +
+            # RECORDING_ENABLED + STORAGE_BACKEND + MINIO_SECURE on its own
+            # env so profile-load-time `${VAR}` substitution resolves the
+            # values into bot pods' env (#235). meeting-api/redis/minio
+            # vars (above) cover the storage trio; these add the missing.
+            - name: MEETING_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "meeting-api") }}:{{ .Values.meetingApi.service.port | default 8080 }}"
+            - name: RECORDING_ENABLED
+              value: {{ .Values.recording.enabled | default true | quote }}
+            - name: STORAGE_BACKEND
+              value: {{ .Values.recording.storageBackend | default "minio" | quote }}
+            - name: MINIO_SECURE
+              value: {{ .Values.recording.minioSecure | default false | quote }}
             - name: PROFILES_PATH
               value: {{ .Values.runtimeApi.profilesPath | default "/app/profiles.yaml" | quote }}
             - name: LOG_LEVEL

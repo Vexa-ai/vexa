@@ -62,6 +62,13 @@ class MeetingStatus(str, Enum):
 class MeetingCompletionReason(str, Enum):
     """
     Reasons for meeting completion.
+
+    v0.10.5 Pack J — taxonomy expanded with two prod-derived values from
+    [PLATFORM] data on #255 (47% of `completed` meetings in 30d are actually
+    misclassified). The classifier already produces the correct reason; the
+    bug is downstream — meeting-api's exit-callback handler routed every
+    completion_reason to status='completed' regardless. Pack J's J.4 routing
+    rule (in callbacks.py) closes the silent-class.
     """
     STOPPED = "stopped"  # User stopped by API
     VALIDATION_ERROR = "validation_error"  # Post bot validation failed
@@ -70,6 +77,9 @@ class MeetingCompletionReason(str, Enum):
     LEFT_ALONE = "left_alone"  # Timeout for being alone
     EVICTED = "evicted"  # Kicked out from meeting using meeting UI
     MAX_BOT_TIME_EXCEEDED = "max_bot_time_exceeded"  # Scheduler killed bot after max lifetime
+    # v0.10.5 Pack J — prod-derived (data on #255):
+    STOPPED_BEFORE_ADMISSION = "stopped_before_admission"  # User stopped bot before it reached active (432 cases / 30d)
+    STOPPED_WITH_NO_AUDIO = "stopped_with_no_audio"  # Bot ran ≥30s with transcribe enabled but produced 0 segments (125 cases / 30d)
 
 class MeetingFailureStage(str, Enum):
     """
@@ -492,7 +502,7 @@ def parse_meeting_url(url: str) -> dict:
             }
         raise ValueError("Unsupported Teams URL format. Expected /meet/<id>?p=<passcode> or /l/meetup-join/...")
 
-    # Zoom
+    # Zoom — canonical zoom.us / zoomgov.com hosts
     if "zoom.us" in host or "zoomgov.com" in host:
         parts = [p for p in path.split("/") if p]
         native_id = ""
@@ -536,6 +546,44 @@ class MeetingCreate(BaseModel):
         None,
         description="Meeting URL. When provided without native_meeting_id, the URL is parsed to extract platform, native_meeting_id, and passcode automatically. Supports Google Meet, Teams (all formats), and Zoom URLs."
     )
+
+    @field_validator('meeting_url')
+    @classmethod
+    def _meeting_url_well_formed(cls, v):
+        """v0.10.5 R4 — minimal URL well-formedness gate.
+
+        Trust model (per 260427): we accept any URL+platform pair without
+        per-vendor parsing. White-label hosts (LFX, AWS Chime, custom
+        portals) are explicitly supported.
+
+        BUT: a string that isn't even a URL (no scheme + no netloc — e.g.
+        'not-a-url') has nowhere for the bot to navigate. Letting that
+        through to the body handler hides the validation failure behind
+        the next downstream error (concurrency 403, redis-publish failure,
+        etc.) and burns a meeting row + container slot.
+
+        Reject only the genuinely-malformed case. Anything urlparse-able
+        with both scheme and netloc — including unrecognised vendor
+        domains — passes through and the bot navigates as-is.
+        """
+        if v is None:
+            return v
+        s = (v or "").strip()
+        if not s:
+            return v
+        # msteams: deep links — convert to https for urlparse, same as
+        # parse_meeting_url. Treat as valid if the post-rewrite URL parses.
+        check = s
+        if s.lower().startswith("msteams:"):
+            check = "https://teams.microsoft.com" + s[len("msteams:"):]
+        parsed = urlparse(check)
+        if not parsed.scheme or not parsed.netloc:
+            raise ValueError(
+                f"meeting_url is not a well-formed URL "
+                f"(missing scheme or host): {v!r}. "
+                f"Provide a full URL (https://...)."
+            )
+        return v
     teams_base_host: Optional[str] = Field(
         None,
         description="Internal: Teams hostname for short enterprise URLs (e.g. 'teams.microsoft.com', 'gov.teams.microsoft.us'). Populated automatically by the MCP parser."
@@ -576,6 +624,19 @@ class MeetingCreate(BaseModel):
     workspaceGitRepo: Optional[str] = Field(None, description="Git repo URL for workspace setup in browser_session mode")
     workspaceGitToken: Optional[str] = Field(None, description="Git token for workspace repo access")
     workspaceGitBranch: Optional[str] = Field(None, description="Git branch for workspace (default: main)")
+
+    # v0.10.5 Pack X — synthetic-test dry-run flag.
+    # When dry_run=True, meeting record is created but NO bot is launched
+    # via runtime-api. Test driver controls full lifecycle via
+    # /bots/internal/test/* + /bots/internal/callback/* endpoints.
+    # Requires VEXA_ENV != "production" (handler enforces); 422 in prod.
+    # This is the "no platform bot for tests" surface — synthetic
+    # scenarios run without contamination from real bot subprocess
+    # firing its own callbacks.
+    dry_run: Optional[bool] = Field(
+        False,
+        description="Synthetic-test mode: create meeting without launching a real bot. Test driver drives lifecycle via internal callback endpoints. Gated by VEXA_ENV != 'production'.",
+    )
 
     @field_validator('platform')
     @classmethod
@@ -690,7 +751,24 @@ class MeetingCreate(BaseModel):
     @model_validator(mode='before')
     @classmethod
     def parse_meeting_url_if_provided(cls, data: Any) -> Any:
-        """When meeting_url is provided but native_meeting_id is missing, parse the URL."""
+        """When meeting_url is provided, try to extract platform + native_meeting_id.
+
+        v0.10.5 (2026-04-27) — parsing is BEST-EFFORT, not a gate. If the
+        parser fails to recognize a URL shape (e.g., a white-label Zoom
+        like https://zoom-lfx.platform.linuxfoundation.org/meeting/<id>
+        ?password=<uuid>), we DO NOT raise — instead, we leave the URL
+        as-is and rely on the user-supplied `platform` field. The bot
+        navigates to the URL directly; HTTPS resolves vendor redirects
+        to the canonical join page.
+
+        Principle (per project-owner 2026-04-27): "we will have endless
+        like this; we cannot create a parser for every white-label.
+        Instead, allow users to supply (URL + platform) and trust them."
+
+        The caller decides what they're sending us. We try to be helpful
+        (extract the meeting ID for analytics + canonical URL
+        construction) but don't gatekeep.
+        """
         if not isinstance(data, dict):
             return data
         url = data.get("meeting_url")
@@ -709,17 +787,40 @@ class MeetingCreate(BaseModel):
             if parsed.get("teams_base_host") and not data.get("teams_base_host"):
                 data["teams_base_host"] = parsed["teams_base_host"]
         except ValueError:
-            pass  # let the downstream validators produce the error
+            # Parser doesn't recognize this URL shape (white-label /
+            # enterprise / brand-new vendor). That's fine — if the user
+            # also supplied `platform`, the validate_meeting_or_agent
+            # check below accepts (meeting_url + platform) directly.
+            # If they supplied only `meeting_url` with no platform, the
+            # validator raises a clear actionable error (path 1 ask).
+            pass
         return data
 
     @model_validator(mode='after')
     def validate_meeting_or_agent(self):
-        """Ensure at least one of meeting info, agent_enabled, or browser_session mode is provided."""
-        has_meeting = self.platform is not None and self.native_meeting_id is not None
+        """Ensure the request gives us enough to spawn a bot.
+
+        v0.10.5 (2026-04-27) — three valid shapes:
+          (A) platform + native_meeting_id  — explicit, server constructs join URL
+          (B) platform + meeting_url        — user-supplied URL, bot navigates as-is
+          (C) agent_enabled OR mode='browser_session' — non-meeting modes
+
+        Shape (B) is the white-label / enterprise / never-seen-before
+        URL escape hatch. The user knows their meeting is Zoom (or
+        Meet, or Teams) — they tell us. We don't need to recognize the
+        URL shape; the bot's browser handles redirects. No proliferating
+        per-vendor URL parsers.
+        """
+        has_meeting_explicit = self.platform is not None and self.native_meeting_id is not None
+        has_meeting_via_url = self.platform is not None and self.meeting_url is not None
+        has_meeting = has_meeting_explicit or has_meeting_via_url
         has_agent = bool(self.agent_enabled)
         has_browser_session = self.mode == "browser_session"
         if not has_meeting and not has_agent and not has_browser_session:
-            raise ValueError("Either provide platform + native_meeting_id for a meeting, set agent_enabled=true, or set mode='browser_session'")
+            raise ValueError(
+                "Either provide platform + native_meeting_id, OR platform + meeting_url, "
+                "OR set agent_enabled=true, OR set mode='browser_session'"
+            )
         # Teams requires passcode — without it bots can't pass the lobby
         if has_meeting and self.platform == Platform.TEAMS and not self.meeting_url and not self.passcode:
             raise ValueError("Teams meetings require a passcode. Without it, bots cannot join (lobby rejects anonymous guests). Provide the 'passcode' field.")
@@ -735,9 +836,77 @@ class MeetingResponse(BaseModel): # Not inheriting from MeetingBase anymore to a
     bot_container_id: Optional[str]
     start_time: Optional[datetime]
     end_time: Optional[datetime]
+    completion_reason: Optional[MeetingCompletionReason] = Field(
+        None,
+        description="Reason the meeting concluded. Hoisted from data.completion_reason for typed-field access. None during in-flight states.",
+    )
+    failure_stage: Optional[MeetingFailureStage] = Field(
+        None,
+        description="Lifecycle stage at which the meeting failed. Hoisted from data.failure_stage for typed-field access. None when status != failed.",
+    )
     data: Optional[Dict] = Field(default_factory=dict, description="JSON data containing meeting metadata like name, participants, languages, notes, and status reasons")
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="before")
+    @classmethod
+    def _hoist_typed_fields_from_data(cls, values):
+        """Hoist completion_reason + failure_stage from JSONB data → top-level typed fields.
+
+        v0.10.5 mid-flight additive (FM-006 prefix): SDK consumers and Recall-displaced
+        customers expect typed fields, not a JSONB dig. The full `bot_lifecycle` envelope
+        is FM-006 / Pack Σ; this is the 80%-value half-step. Strictly additive: data
+        still ships intact.
+        """
+        # Dict path (e.g. .model_validate({...}) or kwargs construction)
+        if isinstance(values, dict):
+            data = values.get("data")
+            if isinstance(data, dict):
+                values.setdefault("completion_reason", data.get("completion_reason"))
+                values.setdefault("failure_stage", data.get("failure_stage"))
+            return values
+
+        # ORM-attribute path (.model_validate(orm_obj) with from_attributes=True).
+        # Build a dict so the hoisted values aren't shadowed by ORM attribute access.
+        data = getattr(values, "data", None)
+        if not isinstance(data, dict):
+            return values
+
+        out = {}
+        for fname in cls.model_fields:
+            if hasattr(values, fname):
+                out[fname] = getattr(values, fname)
+        out["completion_reason"] = data.get("completion_reason")
+        out["failure_stage"] = data.get("failure_stage")
+        return out
+
+    @field_validator('completion_reason', mode='before')
+    @classmethod
+    def _tolerate_unknown_completion_reason(cls, v):
+        """Read-tolerance: unknown values → None + WARN (mirrors data validator at L849-860)."""
+        if v is None or v == "":
+            return None
+        if isinstance(v, MeetingCompletionReason):
+            return v
+        try:
+            return MeetingCompletionReason(v)
+        except ValueError:
+            logger.warning("MeetingResponse: unknown completion_reason=%r → None (read-tolerant)", v)
+            return None
+
+    @field_validator('failure_stage', mode='before')
+    @classmethod
+    def _tolerate_unknown_failure_stage(cls, v):
+        """Read-tolerance: unknown values → None + WARN (mirrors data validator at L849-860)."""
+        if v is None or v == "":
+            return None
+        if isinstance(v, MeetingFailureStage):
+            return v
+        try:
+            return MeetingFailureStage(v)
+        except ValueError:
+            logger.warning("MeetingResponse: unknown failure_stage=%r → None (read-tolerant)", v)
+            return None
 
     @field_validator('status', mode='before')
     @classmethod
@@ -771,12 +940,31 @@ class MeetingResponse(BaseModel): # Not inheriting from MeetingBase anymore to a
             if reason and reason not in [r.value for r in MeetingCompletionReason]:
                 raise ValueError(f"Invalid completion_reason '{reason}'. Must be one of: {[r.value for r in MeetingCompletionReason]}")
         
-        # Validate failure stage
+        # Validate failure stage (READ-tolerant since v0.10.5 iter-6).
+        #
+        # Pre-iter-6 this raised ValueError on any unrecognized value,
+        # which 500'd /meetings list whenever the DB held a record with
+        # `failure_stage='stopping'` (Pack R bug pre-iter-6 wrote
+        # current_status.value, which can be 'stopping' for quick-stop
+        # transitions). Forward-fix in meetings.py::set_meeting_status
+        # gates writes correctly; here we make reads tolerant so old/
+        # external/manually-poked records don't take the entire list
+        # endpoint down. Strip the invalid value, log a warning, return.
+        # The data is still in the DB — operators can audit + fix at
+        # leisure rather than fight a hard validation error.
         elif status == MeetingStatus.FAILED:
             stage = v.get('failure_stage')
             if stage and stage not in [s.value for s in MeetingFailureStage]:
-                raise ValueError(f"Invalid failure_stage '{stage}'. Must be one of: {[s.value for s in MeetingFailureStage]}")
-        
+                import logging
+                logging.getLogger(__name__).warning(
+                    "MeetingResponse: stripping invalid failure_stage=%r "
+                    "(must be one of %s); see meetings.py Pack R write-path "
+                    "gate. Data remains in DB; update or null at leisure.",
+                    stage, [s.value for s in MeetingFailureStage],
+                )
+                v = dict(v)
+                v['failure_stage'] = None
+
         return v
 
     @field_serializer('data')

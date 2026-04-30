@@ -55,22 +55,71 @@ export class AudioService {
   }
 
   /**
-   * Find active media elements with audio tracks
+   * Find active media elements with audio tracks.
+   *
+   * v0.10.5 — Two-pass filter to fix the recording-empty class on GMeet
+   * (and Zoom on lite/compose). Pre-fix the strict filter required all of:
+   *   - !el.paused
+   *   - el.srcObject instanceof MediaStream
+   *   - el.srcObject.getAudioTracks().length > 0
+   * On Google Meet, video tiles can be paused (off-screen / not active speaker)
+   * or use captureStream() instead of direct srcObject assignment, so the strict
+   * filter returned 0 elements → recording.ts went into degraded mode → no
+   * MediaRecorder → 0 chunks ever uploaded.
+   *
+   * The DOWNSTREAM `createCombinedAudioStream` already has captureStream() +
+   * mozCaptureStream() fallbacks (line 96-99). So this finder just needs to
+   * surface elements that the downstream can actually consume — not artificially
+   * filter them out.
    */
   async findMediaElements(retries: number = 5, delay: number = 2000): Promise<HTMLMediaElement[]> {
     for (let i = 0; i < retries; i++) {
-      const mediaElements = Array.from(
-        document.querySelectorAll("audio, video")
-      ).filter((el: any) => 
-        !el.paused && 
-        el.srcObject instanceof MediaStream && 
+      const all = Array.from(document.querySelectorAll("audio, video"));
+
+      // Pass 1 — strict (existing behavior; preserves prior conservative shape on stable DOM).
+      let mediaElements = all.filter((el: any) =>
+        !el.paused &&
+        el.srcObject instanceof MediaStream &&
         el.srcObject.getAudioTracks().length > 0
       ) as HTMLMediaElement[];
 
       if (mediaElements.length > 0) {
-        log(`Found ${mediaElements.length} active media elements with audio tracks after ${i + 1} attempt(s).`);
+        log(`Found ${mediaElements.length} active media elements with audio tracks (strict) after ${i + 1} attempt(s).`);
         return mediaElements;
       }
+
+      // Pass 2 — relaxed: accept any element where SOME audio path is reachable.
+      // Mirrors the fallback chain in createCombinedAudioStream so we don't drop
+      // elements the downstream code could actually use.
+      mediaElements = all.filter((el: any) => {
+        try {
+          // (a) srcObject MediaStream with audio
+          if (el.srcObject instanceof MediaStream && el.srcObject.getAudioTracks().length > 0) {
+            return true;
+          }
+          // (b) captureStream() yields audio tracks (used by GMeet's React layer)
+          if (typeof el.captureStream === "function") {
+            const cs = el.captureStream();
+            if (cs && typeof cs.getAudioTracks === "function" && cs.getAudioTracks().length > 0) {
+              return true;
+            }
+          }
+          // (c) Firefox legacy
+          if (typeof el.mozCaptureStream === "function") {
+            const cs = el.mozCaptureStream();
+            if (cs && typeof cs.getAudioTracks === "function" && cs.getAudioTracks().length > 0) {
+              return true;
+            }
+          }
+        } catch { /* element not in a state we can probe; skip */ }
+        return false;
+      }) as HTMLMediaElement[];
+
+      if (mediaElements.length > 0) {
+        log(`Found ${mediaElements.length} media elements with audio (relaxed/captureStream fallback) after ${i + 1} attempt(s).`);
+        return mediaElements;
+      }
+
       log(`[Audio] No active media elements found. Retrying in ${delay}ms... (Attempt ${i + 2}/${retries})`);
       await new Promise(resolve => setTimeout(resolve, delay));
     }

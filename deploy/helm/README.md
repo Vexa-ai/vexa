@@ -32,7 +32,7 @@ helm install vexa ./deploy/helm/charts/vexa \
 
 Mutable tags (`:staging`, `:latest`) are pointers managed by `make promote-staging` / `make promote-latest` in the compose Makefile. They always point to a known immutable `YYMMDD-HHMM` build.
 
-The staging values file (`values-staging.yaml`) uses `:staging` which is updated via promotion.
+(`values-staging.yaml` was deprecated and removed in v0.10.5 — `values.yaml` + your operator-side overlay is the canonical pattern; `values-test.yaml` is the test-infrastructure config and remains.)
 
 ### Quickstart
 

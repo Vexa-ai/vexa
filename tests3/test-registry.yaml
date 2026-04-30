@@ -232,3 +232,18 @@ tests:
     script: tests/runtime-api-exit-callback-durable.sh
     features: [bot-lifecycle]
     max_duration_sec: 60
+
+  # ── v0.10.5 Pack X — synthetic-rig scenarios ──────────────────
+  # Drives OSS-side meeting-api lifecycle via direct callback POSTs
+  # without depending on external platforms (Zoom DOM, Meet WebRTC,
+  # Teams). Catches OSS-side regressions in callback handlers,
+  # classifier logic, schema invariants, and idempotency contracts
+  # — deterministically, in seconds. Companion to real-meeting
+  # validation. Each scenario exits 0 pass / non-zero fail; runner
+  # aggregates into a matrix-shaped JSON report.
+  synthetic:
+    tier: cheap
+    runs_in: [lite, compose]
+    script: synthetic/run-all.sh
+    features: [bot-lifecycle, post-meeting-transcription]
+    max_duration_sec: 240

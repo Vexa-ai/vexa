@@ -84,7 +84,9 @@ export function JoinModal() {
     return parseMeetingInput(meetingInput);
   }, [meetingInput]);
 
-  // Update platform and passcode when detected from URL
+  // Update platform and passcode when detected from URL.
+  // platformNeeded URLs (white-label / enterprise) seed the picker with
+  // a heuristic default; the user CAN re-pick to override.
   useEffect(() => {
     if (parsedInput) {
       setPlatform(parsedInput.platform);
@@ -94,6 +96,8 @@ export function JoinModal() {
     }
   }, [parsedInput]);
 
+  // Valid: parsed input present. platformNeeded shows extra UI; submit
+  // uses whatever platform is currently selected (state), regardless.
   const isValid = parsedInput !== null;
 
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
@@ -106,8 +110,19 @@ export function JoinModal() {
       return;
     }
 
+    // platformNeeded: user-supplied platform is canonical; parser couldn't auto-detect
+    // (white-label / enterprise URL like Linux Foundation Zoom). Use the picked
+    // platform in the request.
+    const effectivePlatform = parsedInput.platform || platform;
+    if (parsedInput.platformNeeded && !effectivePlatform) {
+      toast.error("Platform required", {
+        description: "This URL doesn't match a known meeting platform. Please select Google Meet, Zoom, or Teams.",
+      });
+      return;
+    }
+
     const finalPasscode = parsedInput.passcode || passcode.trim() || undefined;
-    if (parsedInput.platform === "teams" && !finalPasscode) {
+    if (effectivePlatform === "teams" && !finalPasscode) {
       toast.error("Passcode required", {
         description: "Microsoft Teams meetings require a passcode",
       });
@@ -116,12 +131,15 @@ export function JoinModal() {
 
     setIsSubmitting(true);
 
+    // Path 3 (URL + platform): when parser identified platform, use parsed
+    // meetingId. Otherwise (platformNeeded), send meeting_url + platform; backend
+    // synthesizes/extracts native_meeting_id best-effort.
     const request: CreateBotRequest = {
-        platform: parsedInput.platform,
-        native_meeting_id: parsedInput.meetingId,
+        platform: effectivePlatform!,
+        native_meeting_id: parsedInput.meetingId || "",
       };
 
-    if ((parsedInput.platform === "teams" || parsedInput.platform === "zoom") && finalPasscode) {
+    if ((effectivePlatform === "teams" || effectivePlatform === "zoom") && finalPasscode) {
       request.passcode = finalPasscode;
     }
 
@@ -372,7 +390,60 @@ export function JoinModal() {
               )}
             </div>
 
-            {parsedInput && (
+            {/* v0.10.5 — platformNeeded fallback for white-label / enterprise URLs */}
+            {parsedInput && parsedInput.platformNeeded && (
+              <div className="space-y-2 animate-fade-in rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+                <p className="text-xs text-amber-700 dark:text-amber-300">
+                  <span className="font-semibold">URL recognized as a meeting link, but vendor isn&apos;t auto-detected.</span> Pick the platform — the bot will navigate the URL directly.
+                </p>
+                <fieldset className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Select meeting platform">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={platform === "google_meet"}
+                    onClick={() => setPlatform("google_meet")}
+                    className={cn(
+                      "flex items-center justify-center gap-2 px-3 py-2 rounded-md border-2 text-xs font-medium transition-all",
+                      platform === "google_meet"
+                        ? "border-green-500 bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-300"
+                        : "border-muted hover:border-green-500/50"
+                    )}
+                  >
+                    Google Meet
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={platform === "zoom"}
+                    onClick={() => setPlatform("zoom")}
+                    className={cn(
+                      "flex items-center justify-center gap-2 px-3 py-2 rounded-md border-2 text-xs font-medium transition-all",
+                      platform === "zoom"
+                        ? "border-blue-500 bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300"
+                        : "border-muted hover:border-blue-500/50"
+                    )}
+                  >
+                    Zoom
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={platform === "teams"}
+                    onClick={() => setPlatform("teams")}
+                    className={cn(
+                      "flex items-center justify-center gap-2 px-3 py-2 rounded-md border-2 text-xs font-medium transition-all",
+                      platform === "teams"
+                        ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300"
+                        : "border-muted hover:border-indigo-500/50"
+                    )}
+                  >
+                    Microsoft Teams
+                  </button>
+                </fieldset>
+              </div>
+            )}
+
+            {parsedInput && !parsedInput.platformNeeded && (
               <div className="flex items-center gap-2 text-sm animate-fade-in">
                 <span className={cn(
                   "inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium",

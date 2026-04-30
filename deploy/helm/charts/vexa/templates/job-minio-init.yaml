@@ -8,7 +8,11 @@ metadata:
   annotations:
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "5"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    # v0.10.5 Pack A.3 — drop `hook-succeeded` from delete-policy so failed
+    # Jobs stay around for diagnosis. The original policy auto-deleted on
+    # success which was fine, but auto-deleted on failure too — leaving no
+    # trace when subsequent runs failed (#249).
+    "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   backoffLimit: 5
   template:
@@ -26,17 +30,51 @@ spec:
         - name: minio-init
           image: minio/mc:latest
           imagePullPolicy: IfNotPresent
+          # v0.10.5 Pack A.3 — replace `sleep 5` with poll-until-ready (#249).
+          # On a fresh PVC, MinIO can take 30+ seconds to attach + initialize.
+          # Hardcoded 5s sleep races MinIO startup → `mc mb` runs against an
+          # unready server → bucket never created → recordings 500 forever
+          # with `NoSuchBucket`. Polling `mc ready` (or fallback HTTP probe)
+          # waits up to 120s for genuine readiness; if MinIO genuinely isn't
+          # up after 2 minutes, exit non-zero so the Job retries (backoffLimit=5)
+          # and the failure is visible in `kubectl get jobs`.
           command:
             - /bin/sh
             - -c
             - |
-              sleep 5
-              mc alias set vexa http://{{ include "vexa.componentName" (list . "minio") }}:{{ .Values.minio.service.port }} ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD}
+              set -e
+              MINIO_HOST="http://{{ include "vexa.componentName" (list . "minio") }}:{{ .Values.minio.service.port }}"
+              echo "Waiting for MinIO at $MINIO_HOST (up to 120s)..."
+              for attempt in $(seq 1 24); do
+                if mc alias set vexa "$MINIO_HOST" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" 2>/dev/null && \
+                   mc admin info vexa >/dev/null 2>&1; then
+                  echo "MinIO ready after $((attempt * 5))s"
+                  break
+                fi
+                echo "MinIO not ready yet (attempt $attempt/24), sleeping 5s..."
+                sleep 5
+              done
+              # Final readiness check — fail loud if MinIO genuinely isn't up
+              mc admin info vexa
               mc mb --ignore-existing vexa/{{ .Values.minio.bucket }}
+              echo "Bucket {{ .Values.minio.bucket }} ensured"
               exit 0
           env:
             - name: MINIO_ROOT_USER
               value: {{ .Values.minio.accessKey | quote }}
             - name: MINIO_ROOT_PASSWORD
               value: {{ .Values.minio.secretKey | quote }}
+      {{- /* v0.10.5 Pack A.1 — tolerations on Job spec for tainted pools. */}}
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
 {{- end }}

@@ -147,6 +147,21 @@ async def update_meeting_status(
         await db.commit()
 
     if not is_valid_status_transition(current_status, new_status):
+        # v0.10.5 Pack T (#278) — Already-terminal idempotent re-fire is benign,
+        # not noise-worthy. Three independent code paths (chat persistence,
+        # status update, post-meeting tasks) racing the documented
+        # _delayed_stop_finalizer / runtime-api callback completion can each
+        # try `completed → completed`. Pre-Pack-T this fired WARNING ×3 per
+        # completed meeting (~30 in 90 min in prod logs). Now: log at DEBUG +
+        # return True so callers' `if not success` short-circuit doesn't break
+        # post-meeting tasks (per the documented race comment in callbacks.py).
+        terminal = {MeetingStatus.COMPLETED, MeetingStatus.FAILED}
+        if current_status == new_status and current_status in terminal:
+            logger.debug(
+                f"Idempotent re-fire of '{current_status.value}' for meeting {meeting.id} "
+                f"(documented race; benign no-op; see callbacks.py:217)"
+            )
+            return True
         logger.warning(f"Invalid status transition '{current_status.value}' -> '{new_status.value}' for meeting {meeting.id}")
         return False
 
@@ -160,11 +175,51 @@ async def update_meeting_status(
         except Exception:
             current_data = {}
 
+    # v0.10.5 Pack R (#276) — failure_stage tracks the stage the meeting
+    # WAS IN when failure happened, not the first ever-stuck value. Pre-
+    # Pack-R, a meeting that failed in 'active' showed failure_stage='joining'
+    # if some early-signal capture had set it; never updated. Result:
+    # dashboards grouping by failure_stage misattributed in-meeting failures
+    # to admission/join issues. Now: every transition to FAILED overwrites.
+    #
+    # v0.10.5 iter-6 fix (caught by compose smoke MEETINGS_LIST 500): only
+    # overwrite when current_status maps to a valid MeetingFailureStage
+    # value. MeetingStatus has more values than MeetingFailureStage —
+    # `stopping`, `completed`, `left_alone` etc. are statuses but not
+    # lifecycle stages. Writing `failure_stage='stopping'` produces a
+    # JSONB record that the Pydantic response-validator rejects (HTTP
+    # 500 on /meetings list). When current_status is transitional/
+    # terminal (not a lifecycle stage), keep whatever was set during the
+    # prior progression; that's the most recent ACTUAL stage reached.
+    if new_status == MeetingStatus.FAILED:
+        try:
+            valid_failure_stages = {s.value for s in MeetingFailureStage}
+            if current_status.value in valid_failure_stages:
+                current_data["failure_stage"] = current_status.value
+            # Else: current_status is transitional (e.g. 'stopping') or
+            # terminal-equivalent. Don't overwrite — last lifecycle stage
+            # set by the natural progression is the right value.
+        except Exception:
+            pass
+
     if new_status == MeetingStatus.COMPLETED:
         if completion_reason:
             current_data["completion_reason"] = completion_reason.value
         meeting.end_time = datetime.utcnow()
     elif new_status == MeetingStatus.FAILED:
+        # v0.10.5 Pack X finding (2026-04-27): persist completion_reason
+        # on FAILED transitions too. Pack J's classifier routes to
+        # FAILED + STOPPED_WITH_NO_AUDIO (or other terminal failure
+        # reasons), but the previous code only wrote completion_reason
+        # to data on COMPLETED. Result: Pack J classification was
+        # CORRECT in the transition_entry log but invisible at top-
+        # level data.completion_reason — dashboards grouping by
+        # data.completion_reason saw empty for the entire #255 silent
+        # class. Surfaced by tests3/synthetic/scenarios/pack-j-via-
+        # exit-callback.sh which asserts completion_reason on the
+        # FAILED meeting and caught it.
+        if completion_reason:
+            current_data["completion_reason"] = completion_reason.value
         if failure_stage:
             current_data["failure_stage"] = failure_stage.value
         if error_details:
@@ -524,75 +579,74 @@ async def _get_running_bots_from_runtime(user_id: int) -> list:
 
 
 async def _delayed_container_stop(container_name: str, meeting_id: int, delay_seconds: int = BOT_STOP_DELAY_SECONDS):
-    """Wait, then stop container via Runtime API. Finalize meeting if still non-terminal."""
-    logger.info(f"[Delayed Stop] Waiting {delay_seconds}s for container {container_name} (meeting {meeting_id})")
-    await asyncio.sleep(delay_seconds)
+    """Enqueue a delayed container-stop intent onto the durable outbox.
 
-    await _stop_via_runtime_api(container_name)
-    logger.info(f"[Delayed Stop] Stopped container {container_name}")
+    v0.10.5 Pack D.2 (#266) — REPLACED the in-process `asyncio.sleep + stop`
+    body with a single XADD onto `meeting-api:container-stops`. The actual
+    runtime-api DELETE is now driven by sweeps.consume_pending_stops on
+    every sweep iteration. Pre-D.2, this function was a fire-and-forget
+    BackgroundTask: meeting-api restart in the 90 s window dropped the
+    pending stop on the floor, leaving bot pods Running indefinitely.
+    Production scale test (release-006, 20-bot Google Meet): 3-of-20
+    DELETEs returned 500 with the meeting marked COMPLETED while pods
+    kept recording for 12+ minutes. Outbox shape mirrors 260421 Pack J's
+    durable exit-callback (same problem class, same fix).
 
-    # Safety finalizer
-    await asyncio.sleep(1)
-    meeting_id_for_redis = None
-    session_token_for_redis = None
-    should_run_post_tasks = False
-    publish_info = None
-    status_transition_info = None
+    Principle filter: ONE durable mechanism for delayed stop (the outbox).
+    No in-process timer competing. Idempotent — runtime-api DELETE is
+    already 200-no-op for already-stopped containers.
+
+    v0.10.5 Pack E.3.1 — REMOVED the redundant `_delayed_stop_finalizer`
+    safety block. 260421 Pack J shipped durable exit-callback delivery
+    in runtime-api's idle_loop; that path is now canonical for
+    `stopping → completed`. Pack J's classifier in callbacks.py routes
+    correctly per data-driven rules. Pack E.3.2 sweep (sweeps.py) catches
+    stale 'stopping' rows that genuinely escape both — operator-actionable
+    signal, not silent recovery.
+
+    What this function still does:
+      1. XADD the delayed-stop intent to the outbox (durable, retried by
+         sweep consumer with exponential backoff and DLQ).
+      2. Eagerly clean up the browser_session:* secondary Redis keys —
+         these are owned by meeting-api and unrelated to runtime-api stop.
+
+    Status finalization is handled by:
+      - Pack J's classifier (canonical, runtime-api callback fires)
+      - Pack E.3.2 sweep (escape hatch — runs every 60s, threshold 5 min)
+    """
+    from .container_stop_outbox import enqueue_stop
+
+    if redis_client is None:
+        # If Redis is unreachable at the moment we try to enqueue, fall
+        # through to a direct stop attempt — the sweep consumer can't pick
+        # up something that wasn't enqueued. /readyz (Pack C.4) gates traffic
+        # on Redis being up, so this branch should be rare; logging it loud
+        # so operator sees the deviation from the canonical path.
+        logger.error(
+            f"[Delayed Stop] Redis unavailable — cannot enqueue stop for "
+            f"{container_name} (meeting {meeting_id}); attempting direct stop."
+        )
+        await asyncio.sleep(delay_seconds)
+        await _stop_via_runtime_api(container_name)
+    else:
+        await enqueue_stop(redis_client, container_name, meeting_id, delay_seconds)
+        logger.info(
+            f"[Delayed Stop] Enqueued stop for {container_name} "
+            f"(meeting {meeting_id}) delay={delay_seconds}s — sweep consumer will fire"
+        )
+
+    # browser_session:* secondary-key cleanup is local to meeting-api and
+    # safe to do immediately (those keys are short-lookup helpers, not
+    # tied to the runtime-api stop ack). Mirrors pre-D.2 behaviour.
     try:
+        meeting_id_for_redis = None
+        session_token_for_redis = None
         async with async_session_local() as db:
             meeting = await db.get(Meeting, meeting_id)
-            if not meeting:
-                return
+            if meeting:
+                meeting_id_for_redis = meeting.id
+                session_token_for_redis = (meeting.data or {}).get("session_token")
 
-            # Snapshot data needed after session closes
-            meeting_id_for_redis = meeting.id
-            session_token_for_redis = (meeting.data or {}).get("session_token")
-
-            terminal_states = [MeetingStatus.COMPLETED.value, MeetingStatus.FAILED.value]
-            if meeting.status not in terminal_states:
-                logger.warning(f"[Delayed Stop] Meeting {meeting_id} still '{meeting.status}' after stop. Finalizing.")
-                reason = MeetingCompletionReason.STOPPED
-                if meeting.data and isinstance(meeting.data, dict):
-                    pending = meeting.data.get("pending_completion_reason")
-                    if pending:
-                        try:
-                            reason = MeetingCompletionReason(pending)
-                        except ValueError:
-                            pass
-                old_status = meeting.status
-                success = await update_meeting_status(
-                    meeting,
-                    MeetingStatus.COMPLETED,
-                    db,
-                    completion_reason=reason,
-                    transition_reason="delayed_stop_finalizer",
-                    transition_metadata={"container_name": container_name, "finalized_by": "delayed_stop"},
-                )
-                if success:
-                    publish_info = (meeting.id, meeting.platform, meeting.platform_specific_id, meeting.user_id)
-                    should_run_post_tasks = True
-                    status_transition_info = {
-                        "old_status": old_status,
-                        "new_status": MeetingStatus.COMPLETED.value,
-                        "reason": "delayed_stop_finalizer",
-                        "transition_source": "delayed_stop",
-                    }
-        # DB session closed here — Redis/HTTP calls below are safe
-
-        if publish_info:
-            await publish_meeting_status_change(
-                publish_info[0], MeetingStatus.COMPLETED.value, redis_client,
-                publish_info[1], publish_info[2], publish_info[3],
-            )
-        if should_run_post_tasks:
-            asyncio.create_task(run_all_tasks(meeting_id))
-            # Fire status webhook for the COMPLETED transition (post-meeting fires completion webhook too,
-            # but status webhook is for users who enabled webhook_events=meeting.status_change etc.)
-            if status_transition_info:
-                from .post_meeting import run_status_webhook_task
-                asyncio.create_task(run_status_webhook_task(meeting_id, status_transition_info))
-
-        # Clean up browser_session Redis keys
         if redis_client and meeting_id_for_redis is not None:
             if session_token_for_redis:
                 await redis_client.delete(f"browser_session:{session_token_for_redis}")
@@ -694,7 +748,7 @@ async def request_bot(
             await db.commit()
             raise HTTPException(status_code=500, detail="Failed to start agent container")
 
-        new_meeting.bot_container_id = result.get("container_id") or result.get("name")
+        new_meeting.bot_container_id = result.get("name") or result.get("container_id")
         new_meeting.status = MeetingStatus.ACTIVE.value
         await db.commit()
         await db.refresh(new_meeting)
@@ -771,7 +825,7 @@ async def request_bot(
             await db.commit()
             raise HTTPException(status_code=500, detail="Failed to start browser session container")
 
-        new_meeting.bot_container_id = result.get("container_id") or result.get("name")
+        new_meeting.bot_container_id = result.get("name") or result.get("container_id")
         await db.commit()
         await db.refresh(new_meeting)
 
@@ -805,6 +859,55 @@ async def request_bot(
 
     # --- Standard meeting bot ---
     native_meeting_id = req.native_meeting_id
+
+    # v0.10.5 (2026-04-27) — Path 3: (platform + meeting_url) without
+    # parser-extractable native_meeting_id is valid. Synthesize a
+    # placeholder native_meeting_id from the URL hash so internal
+    # tracking, dedupe, and cancel flows still work. The bot uses
+    # `meeting_url` directly (browser navigates; Zoom/Meet/Teams
+    # backends resolve white-label/enterprise URLs server-side).
+    #
+    # This is the "no proliferating per-vendor URL parsers" boundary
+    # (per project-owner 2026-04-27 — "we will have endless [LFX-style
+    # white-label URLs]; cannot create a parser for every one. Allow
+    # users to supply (URL + platform) and trust them.").
+    # Best-effort passcode extraction from `?password=...` or `?pwd=...`
+    # query params (white-label URLs use either). Only extracts if
+    # caller didn't supply passcode explicitly. Zoom's join URL accepts
+    # the embedded passcode either way; this just makes the field
+    # available for dashboards/analytics.
+    if req.meeting_url and not req.passcode:
+        import re as _re
+        pw_match = _re.search(r"[?&](?:password|pwd)=([^&\s]+)", req.meeting_url)
+        if pw_match:
+            req.passcode = pw_match.group(1)
+            logger.info(f"Path 3: extracted passcode from meeting_url query")
+
+    if not native_meeting_id and req.meeting_url:
+        # Best-effort numeric-ID extraction (Path 3 enhancement).
+        # Bot adapters validate native_meeting_id format per platform
+        # (Zoom expects 9-11 digits). White-label URLs typically embed
+        # the canonical ID in the path: LFX has /meeting/<numeric>,
+        # AWS has /j/<numeric>, etc. We grep for the first 9-11 digit
+        # run in the URL and use it if found. Falls back to URL hash
+        # only when no numeric ID is present (e.g., truly opaque URLs).
+        import re, hashlib
+        if req.platform.value == "zoom":
+            zoom_id_match = re.search(r"\b(\d{9,11})\b", req.meeting_url)
+            if zoom_id_match:
+                native_meeting_id = zoom_id_match.group(1)
+                logger.info(
+                    f"Path 3 (URL+zoom): extracted native_meeting_id='{native_meeting_id}' "
+                    f"from meeting_url='{req.meeting_url[:60]}...'"
+                )
+        if not native_meeting_id:
+            # Fallback for opaque URLs (no extractable ID).
+            h = hashlib.sha256(req.meeting_url.encode()).hexdigest()[:10]
+            native_meeting_id = f"url-{h}"
+            logger.info(
+                f"Path 3 (URL+{req.platform.value}): meeting_url='{req.meeting_url[:60]}...' "
+                f"→ synthesized native_meeting_id='{native_meeting_id}' (no numeric ID found)"
+            )
 
     # Construct meeting URL
     if req.meeting_url:
@@ -1043,6 +1146,34 @@ async def request_bot(
                 env_vars["ZOOM_CLIENT_ID"] = zoom_cid
                 env_vars["ZOOM_CLIENT_SECRET"] = zoom_csec
 
+    # v0.10.5 Pack X — synthetic dry-run mode.
+    # When req.dry_run=True, skip the runtime-api bot launch + scheduler
+    # + Redis registration. Test driver drives the meeting lifecycle via
+    # /bots/internal/test/* + /bots/internal/callback/* endpoints. The
+    # meeting record + MeetingSession get bootstrapped by the test
+    # surface; the rig owns end-to-end. Catches OSS-side regressions
+    # without contamination from real bot subprocess firing its own
+    # callbacks (which races synthetic callbacks under the previous
+    # "real bot launches and exits in 5s" path).
+    #
+    # Production gate: VEXA_ENV != "production". 422 in prod.
+    if req.dry_run:
+        if os.getenv("VEXA_ENV", "development") == "production":
+            raise HTTPException(
+                status_code=422,
+                detail="dry_run=true is a test-mode flag; not allowed in production",
+            )
+        # Persist meeting record without launching bot. bot_container_id
+        # stays None; test driver bootstraps session via
+        # /bots/internal/test/session-bootstrap.
+        await db.commit()
+        await db.refresh(new_meeting)
+        logger.info(
+            f"[Pack X dry_run] Meeting {meeting_id} created without bot launch; "
+            f"test driver controls lifecycle via callback endpoints."
+        )
+        return MeetingResponse.model_validate(new_meeting)
+
     # Spawn via Runtime API
     result = await _spawn_via_runtime_api(
         profile="meeting",
@@ -1073,7 +1204,13 @@ async def request_bot(
 
     # Update meeting with container info
     container_name = result.get("name", "")
-    new_meeting.bot_container_id = result.get("container_id") or container_name
+    # v0.10.5 R1 fix — store NAME as bot_container_id, not container_id.
+    # runtime-api state is keyed by name in Redis (api.py:315 GET
+    # /containers/{name} → state.get_container(redis, name)). Storing the
+    # container_id instead caused every lookup to 404, routing user-DELETE
+    # through the Pack J no-container branch (no stop signal). Same swap
+    # applied at lines 751, 828.
+    new_meeting.bot_container_id = container_name or result.get("container_id")
     await db.commit()
     await db.refresh(new_meeting)
 
@@ -1212,6 +1349,7 @@ async def list_user_bots(
     offset: int = 0,
     search: Optional[str] = None,
     status: Optional[str] = None,
+    include: Optional[str] = None,  # v0.10.5 Pack L — opt-in full-data backward-compat (?include=data)
     platform: Optional[str] = None,
 ):
     """Returns recent meetings (all statuses) from the database."""
@@ -1232,6 +1370,39 @@ async def list_user_bots(
     meetings = (await db.execute(stmt)).scalars().all()
     has_more = len(meetings) > limit
     meetings = meetings[:limit]
+    # v0.10.5 Pack L — slim list endpoint (#263 + #264).
+    #
+    # OLD shape returned `m.data or {}` — full JSONB blob with
+    # status_transition[], recordings[], webhook_deliveries[], etc.
+    # ~35 KB per meeting; default limit=50 → ~1.7 MB per /meetings page
+    # load. Beyond perf, this is a DoS vector at scale and bad REST hygiene
+    # (list view should be summary; detail endpoint returns full data).
+    #
+    # Audited dashboard usage in services/dashboard/src/components/meetings/
+    # meeting-card.tsx + ai-chat-panel.tsx + export.ts. The list view actually
+    # consumes: name/title, completion_reason, participants[:3], notes (preview),
+    # languages, last status_transition entry, has_recording.
+    #
+    # Backward-compat: ?include=data restores the old behavior (full blob);
+    # opt-in for callers that genuinely need it. Default off.
+    include_full_data = include == "data"
+
+    def _data_summary(d: dict) -> dict:
+        d = d or {}
+        participants = d.get("participants") or []
+        notes = d.get("notes")
+        transitions = d.get("status_transition") or []
+        return {
+            "name": d.get("name") or d.get("title"),
+            "completion_reason": d.get("completion_reason"),
+            "participants": participants[:3],
+            "participants_count": len(participants),
+            "notes_preview": (notes[:120] if isinstance(notes, str) else None),
+            "languages": d.get("languages"),
+            "last_transition": transitions[-1] if transitions else None,
+            "has_recording": bool(d.get("recordings")),
+        }
+
     return {
         "meetings": [
             {
@@ -1242,7 +1413,7 @@ async def list_user_bots(
                 "bot_container_id": m.bot_container_id,
                 "start_time": m.start_time.isoformat() if m.start_time else None,
                 "end_time": m.end_time.isoformat() if m.end_time else None,
-                "data": m.data or {},
+                "data": (m.data or {}) if include_full_data else _data_summary(m.data),
                 "created_at": m.created_at.isoformat() if m.created_at else None,
                 "updated_at": m.updated_at.isoformat() if m.updated_at else None,
             }
@@ -1408,14 +1579,63 @@ async def stop_bot(
             except Exception as e:
                 logger.warning(f"Runtime API lookup failed for meeting {meeting.id}: {e}")
 
+        # v0.10.5 — Validate the resolved container_name actually exists at
+        # runtime-api before treating it as live. Symptom (lite meeting 30,
+        # 2026-04-27): meeting.bot_container_id pointed at "519" but the
+        # bot container had been wiped by a stack redeploy. Without this
+        # check, code assumed bot was alive, sent leave-via-Redis (no bot
+        # listening), enqueued a Pack D.2 outbox stop (succeeded — runtime-
+        # api logged "Process 519 not in registry"), and left the meeting
+        # in `stopping` indefinitely. Pack E.3.2 stale-stopping sweep would
+        # eventually reap it after 5 min, but the user-visible UX is "stuck
+        # in stopping". Same Pack J classifier branch as the truly
+        # no-container case — a stale bot_container_id has identical
+        # semantics: there's no live process to ask, so we apply the
+        # data-driven classifier to the meeting state we already have.
+        if container_name:
+            try:
+                client = _get_httpx_client()
+                cresp = await client.get(
+                    f"{RUNTIME_API_URL}/containers/{container_name}",
+                    timeout=5.0,
+                )
+                if cresp.status_code == 404 or (
+                    cresp.status_code == 200 and (cresp.json() or {}).get("status") != "running"
+                ):
+                    logger.info(
+                        f"DELETE meeting {meeting.id}: bot_container_id={container_name!r} "
+                        f"is stale (runtime-api reports gone/not-running) — routing through "
+                        f"no-container Pack J branch"
+                    )
+                    container_name = None
+            except Exception as e:
+                # Runtime API unreachable — DON'T null out the container_name
+                # (could be a transient network blip). Fall through to the
+                # leave-via-Redis path; Pack E.3.2 sweep is the safety net.
+                logger.warning(
+                    f"DELETE meeting {meeting.id}: runtime-api inspect failed for "
+                    f"{container_name!r} ({e!r}) — keeping live-container assumption"
+                )
+
         if not container_name:
+            # v0.10.5 Pack X finding (helm meeting 8, 2026-04-27): when
+            # runtime-api lookup fails, the previous code went directly
+            # COMPLETED + STOPPED — bypassing Pack J classifier. A bot
+            # active 60s+ with transcribe_enabled and 0 transcripts gets
+            # silently classified as completed/stopped, exactly the
+            # #255 silent class. Fix: route through _classify_stopped_exit
+            # so every DELETE path produces the same data-driven verdict.
+            from .callbacks import _classify_stopped_exit
+            target_status, classified_reason = await _classify_stopped_exit(
+                meeting, db, MeetingCompletionReason.STOPPED
+            )
             old_status = meeting.status
-            success = await update_meeting_status(meeting, MeetingStatus.COMPLETED, db, completion_reason=MeetingCompletionReason.STOPPED)
+            success = await update_meeting_status(meeting, target_status, db, completion_reason=classified_reason)
             if success:
-                await publish_meeting_status_change(meeting.id, MeetingStatus.COMPLETED.value, redis_client, platform_value, native_meeting_id, meeting.user_id)
+                await publish_meeting_status_change(meeting.id, target_status.value, redis_client, platform_value, native_meeting_id, meeting.user_id)
                 await schedule_status_webhook_task(
                     meeting=meeting, background_tasks=background_tasks,
-                    old_status=old_status, new_status=MeetingStatus.COMPLETED.value,
+                    old_status=old_status, new_status=target_status.value,
                     reason="User requested stop (no container)", transition_source="user_stop",
                 )
             background_tasks.add_task(run_all_tasks, meeting.id)
@@ -1433,13 +1653,21 @@ async def stop_bot(
             meeting.data["stop_requested"] = True
             await db.commit()
             background_tasks.add_task(_delayed_container_stop, container_name, meeting.id, 0)
+            # v0.10.5 Pack X — same Pack J routing as the no-container
+            # branch above. Fast-path (pre-active, <5s old) will
+            # naturally classify as STOPPED_BEFORE_ADMISSION via Pack J
+            # because reached_active is False — semantically correct.
+            from .callbacks import _classify_stopped_exit
+            target_status, classified_reason = await _classify_stopped_exit(
+                meeting, db, MeetingCompletionReason.STOPPED
+            )
             old_status = meeting.status
-            success = await update_meeting_status(meeting, MeetingStatus.COMPLETED, db, completion_reason=MeetingCompletionReason.STOPPED)
+            success = await update_meeting_status(meeting, target_status, db, completion_reason=classified_reason)
             if success:
-                await publish_meeting_status_change(meeting.id, MeetingStatus.COMPLETED.value, redis_client, platform_value, native_meeting_id, meeting.user_id)
+                await publish_meeting_status_change(meeting.id, target_status.value, redis_client, platform_value, native_meeting_id, meeting.user_id)
                 await schedule_status_webhook_task(
                     meeting=meeting, background_tasks=background_tasks,
-                    old_status=old_status, new_status=MeetingStatus.COMPLETED.value,
+                    old_status=old_status, new_status=target_status.value,
                     reason="User requested stop (fast-path)", transition_source="user_stop",
                 )
             background_tasks.add_task(run_all_tasks, meeting.id)

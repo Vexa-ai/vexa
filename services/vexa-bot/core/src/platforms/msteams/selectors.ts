@@ -246,6 +246,43 @@ export const teamsContinueButtonSelectors: string[] = [
   'button:has-text("Continue")'
 ];
 
+// v0.10.5 — Pre-join "Continue without audio or video" confirmation dialog.
+//
+// Teams renders this modal when the browser denies (or the OS user dismissed)
+// camera/mic permission. Wireframe of the modal:
+//
+//   "Are you sure you don't want audio or video?
+//    If you change your mind, select the camera icon by your address bar
+//    and then Always allow."
+//   [ Continue without audio or video ]    [ X (dismiss) ]
+//
+// The dialog is intermittent — it fires only when Chromium's media-permission
+// state for the host is "denied" at the moment the prejoin page boots. With
+// our PulseAudio + headless setup the OS-level perm dialog is auto-handled,
+// but Chromium occasionally lands on this confirmation modal anyway (observed
+// 2026-04-30 in compose). When it appears, the bot is BLOCKED — the prejoin
+// "Join now" button never enables until the modal is dismissed.
+//
+// We click "Continue without audio or video" — equivalent to dismissing the
+// modal. We don't actually need browser-level media permissions: the bot
+// receives audio via the RTCPeerConnection ontrack hook (see join.ts
+// addInitScript) and the Vexa Virtual Camera shim handles voice-agent video.
+//
+// Multi-selector coverage: aria-label, exact text, partial text (locale
+// variants), and a generic [role="dialog"] descendant fallback.
+export const teamsContinueWithoutMediaSelectors: string[] = [
+  // Most specific — exact button text
+  'button:has-text("Continue without audio or video")',
+  // aria-label variants
+  'button[aria-label="Continue without audio or video"]',
+  'button[aria-label*="Continue without audio"]',
+  // Partial text — handles trailing/leading whitespace
+  'button:text-matches("Continue without audio or video", "i")',
+  // Inside a dialog (most reliable scope)
+  '[role="dialog"] button:has-text("Continue without audio or video")',
+  '[role="alertdialog"] button:has-text("Continue without audio or video")',
+];
+
 export const teamsJoinButtonSelectors: string[] = [
   'button:has-text("Join")',
   'button:has-text("Join now")'

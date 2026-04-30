@@ -1339,39 +1339,31 @@ export function getVideoBlockInitScript(): string {
               // TypeScript type annotations (those would survive tsc's pass
               // through the template literal and cause a SyntaxError in the
               // browser, killing the whole IIFE silently).
-              const transceiverRef = event.transceiver;
+              // v0.10.5 — DO NOT modify transceiver.direction.
+              //
+              // Pre-fix: setting direction to 'inactive'/'sendonly' triggered
+              // WebRTC renegotiation that produced a malformed offer SDP
+              // (BUNDLE enabled but rtcp-mux missing on the m=video line);
+              // setLocalDescription threw InvalidAccessError, the peer entered
+              // a degraded state, and ~60-90s later GMeet severed the session
+              // → page navigated to workspace.google.com/products/meet/ →
+              // page.evaluate context destroyed → bot exited as
+              // post_join_setup_error. This was the dominant GMeet failure
+              // mode in prod (~44% of meetings 2026-04-30 24h).
+              //
+              // Just disable the track. This stops rendering (sufficient
+              // for gmeet/teams which use standard <video> elements). The
+              // decoder cost we were trying to avoid was largely mitigated
+              // by v0.10.4's --in-process-gpu flag; revisit with launch-flag
+              // codec disable (--disable-features=Vp8,Vp9) if memory pressure
+              // returns. Do NOT munge SDP from inside page.evaluate — see
+              // attendee project for the system-level capture paradigm
+              // that sidesteps this entire bug class.
               setTimeout(() => {
                 try {
                   trackRef.enabled = false;
                 } catch (e) { /* ignore */ }
-                if (transceiverRef) {
-                  try {
-                    const before = transceiverRef.direction;
-                    transceiverRef.direction = before === 'sendrecv' ? 'sendonly' : 'inactive';
-                    console.log('[Vexa] Video transceiver direction ' + before + ' → ' + transceiverRef.direction + ' (id=' + trackId + ')');
-                  } catch (e) {
-                    console.warn('[Vexa] Transceiver direction set failed (id=' + trackId + '):', e);
-                  }
-                } else {
-                  // Fallback: scan pc.getTransceivers() for the matching one.
-                  try {
-                    const transceivers = pc.getTransceivers();
-                    let matched = false;
-                    for (const t of transceivers) {
-                      if (t.receiver && t.receiver.track && t.receiver.track.id === trackId) {
-                        const before = t.direction;
-                        t.direction = before === 'sendrecv' ? 'sendonly' : 'inactive';
-                        console.log('[Vexa] Video transceiver direction ' + before + ' → ' + t.direction + ' (scan-matched id=' + trackId + ')');
-                        matched = true;
-                        break;
-                      }
-                    }
-                    if (!matched) {
-                      console.log('[Vexa] Could not match transceiver for video track id=' + trackId + ' (scanned ' + transceivers.length + ' transceivers); track.enabled=false only');
-                    }
-                  } catch (e) { /* transceiver API unavailable */ }
-                }
-                console.log('[Vexa] Incoming video track disabled (deferred, id=' + trackId + ')');
+                console.log('[Vexa] Incoming video track disabled (track.enabled=false only, no SDP munge, id=' + trackId + ')');
               }, 0);
             }
           });

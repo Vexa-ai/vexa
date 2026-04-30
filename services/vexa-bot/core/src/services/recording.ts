@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { log } from '../utils';
+import { logJSON } from '../utils/log';
 import http from 'http';
 import https from 'https';
 
@@ -160,11 +161,34 @@ export class RecordingService {
       } catch (err: any) {
         const isLastAttempt = attempt === maxRetries;
         if (isLastAttempt) {
-          log(`[Recording] ERROR: Upload failed after ${maxRetries + 1} attempts: ${err.message}`);
+          // v0.10.5 Pack G.1 — recording-loss diagnostic. The structured
+          // record carries enough fields for the operator to recover from
+          // S3 (meeting_id + session_uid + format) without parsing the
+          // free-text message.
+          logJSON({
+            level: "error",
+            msg: "[Recording] Upload failed permanently",
+            attempts: maxRetries + 1,
+            error_message: err?.message,
+            error_name: err?.name,
+            file_size_bytes: fileStats.size,
+            duration_seconds: durationSeconds,
+            recording_meeting_id: this.meetingId,
+            recording_session_uid: this.sessionUid,
+          });
           throw err;
         }
         const delay = baseDelayMs * Math.pow(2, attempt);
-        log(`[Recording] Upload attempt ${attempt + 1}/${maxRetries + 1} failed: ${err.message}. Retrying in ${delay}ms...`);
+        logJSON({
+          level: "warn",
+          msg: "[Recording] Upload attempt failed; will retry",
+          attempt: attempt + 1,
+          attempts_max: maxRetries + 1,
+          retry_delay_ms: delay,
+          error_message: err?.message,
+          recording_meeting_id: this.meetingId,
+          recording_session_uid: this.sessionUid,
+        });
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
@@ -227,15 +251,50 @@ export class RecordingService {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         await this._sendUpload(callbackUrl, token, boundary, body, uploadTimeoutMs);
-        log(`[Recording] Chunk ${chunkSeq}${isFinal ? ' (final)' : ''} uploaded (${chunkData.length} bytes)`);
+        logJSON({
+          level: "info",
+          msg: "[Recording] Chunk uploaded",
+          chunk_seq: chunkSeq,
+          is_final: isFinal,
+          chunk_size_bytes: chunkData.length,
+          recording_meeting_id: this.meetingId,
+          recording_session_uid: this.sessionUid,
+        });
         return;
       } catch (err: any) {
         if (attempt === maxRetries) {
-          log(`[Recording] Chunk ${chunkSeq} upload failed after ${maxRetries + 1} attempts: ${err.message}`);
+          // v0.10.5 Pack G.1 — chunk-loss diagnostic. Whether is_final
+          // or not is load-bearing here: a lost final chunk leaves the
+          // meeting Recording row stuck IN_PROGRESS forever (Pack E.1's
+          // outbox is the durable fix on the meeting-api side; this log
+          // is the bot-side audit record).
+          logJSON({
+            level: "error",
+            msg: "[Recording] Chunk upload failed permanently",
+            chunk_seq: chunkSeq,
+            is_final: isFinal,
+            chunk_size_bytes: chunkData.length,
+            attempts: maxRetries + 1,
+            error_message: err?.message,
+            error_name: err?.name,
+            recording_meeting_id: this.meetingId,
+            recording_session_uid: this.sessionUid,
+          });
           throw err;
         }
         const delay = 500 * Math.pow(2, attempt);
-        log(`[Recording] Chunk ${chunkSeq} upload attempt ${attempt + 1} failed: ${err.message}. Retrying in ${delay}ms...`);
+        logJSON({
+          level: "warn",
+          msg: "[Recording] Chunk upload attempt failed; will retry",
+          chunk_seq: chunkSeq,
+          is_final: isFinal,
+          attempt: attempt + 1,
+          attempts_max: maxRetries + 1,
+          retry_delay_ms: delay,
+          error_message: err?.message,
+          recording_meeting_id: this.meetingId,
+          recording_session_uid: this.sessionUid,
+        });
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
@@ -263,10 +322,28 @@ export class RecordingService {
           res.on('data', (chunk) => { responseData += chunk; });
           res.on('end', () => {
             if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-              log(`[Recording] Upload successful: ${res.statusCode}`);
+              logJSON({
+                level: "info",
+                msg: "[Recording] Upload successful",
+                http_status: res.statusCode,
+                recording_meeting_id: this.meetingId,
+                recording_session_uid: this.sessionUid,
+              });
               resolve();
             } else {
-              log(`[Recording] Upload failed: ${res.statusCode} - ${responseData}`);
+              // v0.10.5 Pack G.1 — capture status code distinct from
+              // message body so operators can route 4xx (caller bug)
+              // vs 5xx (transient platform) automatically.
+              logJSON({
+                level: "warn",
+                msg: "[Recording] Upload returned non-2xx",
+                http_status: res.statusCode,
+                response_body_preview: typeof responseData === "string"
+                  ? responseData.slice(0, 500)
+                  : "",
+                recording_meeting_id: this.meetingId,
+                recording_session_uid: this.sessionUid,
+              });
               reject(new Error(`Upload failed with status ${res.statusCode}: ${responseData}`));
             }
           });
