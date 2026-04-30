@@ -134,32 +134,63 @@ fi
 
 # ── Step: status_completed ───────────────────────
 # Poll for up to 120s — on K8s the BOT_STOP_DELAY_SECONDS=90 path holds
-# meeting.status in `stopping` for ~90s before transitioning to `completed`
-# (see features/bot-lifecycle/README.md:273 "Bot stuck in stopping —
-# Delayed Stop 90s wait"). Immediate query returns `stopping` on helm,
-# which is expected intermediate state — not a failure.
+# meeting.status in `stopping` for ~90s before transitioning to a
+# terminal state (see features/bot-lifecycle/README.md:273 "Bot stuck
+# in stopping — Delayed Stop 90s wait").
+#
+# v0.10.5 R5 — synthetic-bot terminal-state contract.
+# This test creates a bot pointed at a synthetic URL ('lifecycle-test-1')
+# that the bot never actually joins. The recording-aware classifier
+# (FM-002 v2, commit 9b16eba) correctly marks zero-audio user-stopped
+# meetings as `failed` with completion_reason=stopped (or
+# stopped_with_no_audio) — that's a feature, not a bug, in production:
+# a real meeting that produced nothing IS a failure.
+#
+# But for this lifecycle test, what we're actually testing is "the
+# meeting reaches a TERMINAL state cleanly (not stuck in stopping)".
+# A bot that the user deleted is a clean exit regardless of whether
+# it delivered audio. Accept `failed` ONLY when paired with a
+# clean-stop completion_reason.
 STATUS="unknown"
+COMPLETION_REASON=""
 for i in $(seq 1 24); do
-    STATUS=$(curl -sf -H "X-API-Key: $API_TOKEN" "$GATEWAY_URL/meetings" | python3 -c "
+    JSON=$(curl -sf -H "X-API-Key: $API_TOKEN" "$GATEWAY_URL/meetings" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
 meetings=d.get('meetings',[]) if isinstance(d,dict) else d
 for m in meetings:
     if m.get('native_meeting_id')=='lifecycle-test-1':
-        print(m.get('status','?'))
+        # Output 'status|completion_reason' single line
+        print(f\"{m.get('status','?')}|{m.get('completion_reason') or ''}\")
         break
-else: print('gone')
+else: print('gone|')
 " 2>/dev/null)
+    STATUS="${JSON%%|*}"
+    COMPLETION_REASON="${JSON#*|}"
     case "$STATUS" in
         completed|gone|failed) break ;;
     esac
     sleep 5
 done
 
+# Accept-as-clean rules:
+#   - completed | gone — unambiguous clean terminal state
+#   - failed + clean-stop completion_reason — synthetic bot user-stopped
+#     before any data could flow; classifier's failed verdict is correct
+#     production behavior, but the lifecycle contract this test guards
+#     ("not stuck in stopping forever") is satisfied.
+case "${COMPLETION_REASON}" in
+    stopped|stopped_with_no_audio|stopped_before_admission)
+        clean_stop=1 ;;
+    *) clean_stop=0 ;;
+esac
+
 if [ "$STATUS" = "completed" ] || [ "$STATUS" = "gone" ]; then
     step_pass status_completed "meeting.status=$STATUS after stop (waited ${i}x5s)"
+elif [ "$STATUS" = "failed" ] && [ "$clean_stop" = "1" ]; then
+    step_pass status_completed "meeting.status=$STATUS reason=$COMPLETION_REASON — clean lifecycle exit (synthetic bot delivered no audio; not stuck in stopping); waited ${i}x5s"
 else
-    step_fail status_completed "status=$STATUS (expected completed) after ~${i}x5s poll"
+    step_fail status_completed "status=$STATUS reason=$COMPLETION_REASON (expected completed/gone, OR failed+clean-stop) after ~${i}x5s poll"
 fi
 
 # ── Step: timeout_stop ───────────────────────────

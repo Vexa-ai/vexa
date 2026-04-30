@@ -1420,6 +1420,40 @@
       "max_duration_sec": 5
     },
     {
+      "id": "RUNTIME_API_STATE_KEYED_BY_NAME",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/runtime-api/runtime_api/state.py keys all container Redis state by the runtime-supplied name parameter, never by Docker container_id or pod uid. Pairs with K8S_BACKEND_CONTAINER_ID_IS_NAME (locks the K8s create() return) and MEETING_API_STORES_NAME_NOT_CONTAINER_ID (locks the meeting-api persist site). Together these three checks lock the identifier-handshake contract: meeting-api stores name → runtime-api Redis state is keyed by name → GET/DELETE/touch routes resolve by name. The set+get+delete+set_stopped Redis ops all use `f\"{KEY_PREFIX}{name}\"` consistently. v0.10.5 R1 + Gap B regression catch — without this lock, a future refactor that keyed state by container_id would silently break the meeting-api/runtime-api round-trip even though MEETING_API_STORES_NAME_NOT_CONTAINER_ID still passes. Compose-mode counterpart of the K8s check (which proves the create() return on the K8s side).",
+      "symptom": "Same symptom triplet as R1: bots don't leave after DELETE, dashboard stuck 'preparing audio', recording metadata never finalized. Runtime-api keys state by container_id; meeting-api looks up by name; lookups 404; Pack J no-container branch fires for every stop; bots run forever uploading chunks that overwrite the reconciler's terminal state.",
+      "file": "services/runtime-api/runtime_api/state.py",
+      "must_match": "{KEY_PREFIX}{name}",
+      "must_not_match": "\\{KEY_PREFIX\\}\\{(container_id|cid|pod_id|id)\\}",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "RECORDING_STATUS_TERMINAL_STICKY",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/meeting-api/meeting_api/recordings.py chunk handler refuses to downgrade recording.status from COMPLETED back to IN_PROGRESS. Defense-in-depth pairing with R1: even if a stray late chunk arrives after the reconciler set status=COMPLETED (or after the bot's own is_final terminal chunk), the terminal state is sticky. Pre-fix (R2): the else branch unconditionally wrote rec_payload['status'] = IN_PROGRESS for every non-final chunk — every late chunk re-marked status=IN_PROGRESS, post_meeting_reconciler's status flip got clobbered, dashboard stuck on 'preparing audio'. Post-fix: only flip to IN_PROGRESS when the recording is not already COMPLETED.",
+      "symptom": "Dashboard shows 'preparing audio' indefinitely on a meeting whose audio is durably stored in MinIO and whose post_meeting_reconciler logged success. Status race between chunk-upload writer and reconciler — chunk wins because it commits last.",
+      "file": "services/meeting-api/meeting_api/recordings.py",
+      "must_match": "v0.10.5 R2 — defense-in-depth",
+      "max_duration_sec": 5
+    },
+    {
+      "id": "MEETING_URL_REJECTS_MALFORMED",
+      "tier": "static",
+      "found": "2026-04-30",
+      "fix_release": "v0.10.5",
+      "proves": "services/meeting-api/meeting_api/schemas.py rejects literal-garbage meeting_url values (no scheme + no netloc) at the pydantic field-validator layer, returning HTTP 422 — distinct from the trust-model accept-path for any well-formed URL with platform. Without this gate the request fell through to the body handler where the next downstream error (concurrency 403, redis-publish, db write) surfaced — burning a meeting row and a container slot before failing. Trust model preserved: any urlparse-able URL with scheme + netloc passes through (zoom-lfx, white-label portals, custom domains all keep working). Only the genuinely-not-a-URL case (e.g. 'not-a-url') is rejected. R4 fix.",
+      "symptom": "POST /bots with meeting_url='not-a-url' returns HTTP 403 (concurrency or auth) instead of HTTP 422 (validation error). Test INVALID_URL_REJECTED fails on lite + compose + helm with 'HTTP 403 (expected one of [400, 422])'.",
+      "file": "services/meeting-api/meeting_api/schemas.py",
+      "must_match": "v0.10.5 R4 — minimal URL well-formedness gate",
+      "max_duration_sec": 5
+    },
+    {
       "id": "MEETING_API_STORES_NAME_NOT_CONTAINER_ID",
       "tier": "static",
       "found": "2026-04-30",

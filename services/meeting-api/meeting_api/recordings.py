@@ -403,7 +403,24 @@ async def internal_upload_recording(
         else:
             # Intermediate chunk: keep IN_PROGRESS but durably-write the
             # latest media_files entry so dashboard shows partial recording.
-            rec_payload["status"] = RecordingStatus.IN_PROGRESS.value
+            #
+            # v0.10.5 R2 — defense-in-depth: do NOT downgrade COMPLETED
+            # back to IN_PROGRESS. If a stray late chunk arrives after
+            # the reconciler set status=COMPLETED (e.g. bot uploaded one
+            # more chunk during shutdown grace), preserve the terminal
+            # state. The terminal state is sticky — only is_final=true
+            # promotes IN_PROGRESS → COMPLETED, never the reverse.
+            #
+            # Concrete scenario this protects against (observed
+            # 2026-04-30 on bots 36/37/40/41 pre-R1): bot kept uploading
+            # after meeting was marked completed, each non-final chunk
+            # rewrote status=IN_PROGRESS, post_meeting_reconciler's
+            # is_final flag flip got clobbered, dashboard stuck on
+            # "preparing audio" indefinitely. Pairs with R1 root fix —
+            # R1 stops the late chunks at the source; R2 makes the
+            # status field robust even when late chunks slip through.
+            if not was_completed:
+                rec_payload["status"] = RecordingStatus.IN_PROGRESS.value
         recordings_list[existing_idx] = rec_payload
         meeting_data_dict["recordings"] = recordings_list
         meeting.data = meeting_data_dict

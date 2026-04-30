@@ -864,3 +864,111 @@ Sequence to unblock v0.10.5:
    `recording.status` once it has been set to `completed`. Add registry
    check binding to that property.
 4. **Re-run validate matrix** — expect green or expose more.
+
+---
+
+## 2026-04-30 evening — R1 deployed; gate matrix re-run; two NEW failing DoDs
+
+**Stage entered**: triage (auto, from validate; gate red).
+**Validate report**: `tests3/reports/release-0.10.0-260430-1701.md`.
+**Matrix run**: lite + compose + helm; 27 contracts per mode; 4 distinct fails.
+
+### R1 outcome
+
+**R1 fix is verified live on bot 43.** Bot stored as `meeting-43-e2c4dd17`
+(NAME format), runtime-api inspect returns 200, stop signal landed, bot
+self-reported stopped within 1s, container removed cleanly, reconciler
+ran with `is_final=true`, dashboard shows audio. Symptom triplet from
+earlier this evening (bots stuck, preparing audio, no recording) is
+**resolved at the root**.
+
+### What the gate found that I did not introduce
+
+Two DoDs failed that are **pre-existing regressions**, not introduced by
+tonight's R1 work. Confirmed by checking historical reports:
+
+| DoD | When failing | Gate impact |
+|---|---|---|
+| `meeting-urls/invalid-rejected` (`INVALID_URL_REJECTED`) | regressed since release `260421-1502` (was passing in `260417-1454`); now fails on **all 3 modes** | meeting-urls 90% < 100% gate |
+| `bot-lifecycle/status-completed` | helm mode only | bot-lifecycle 88% < 90% gate |
+
+### R4 — INVALID_URL_REJECTED returns 403 instead of 400/422
+
+**Classification**: regression (cross-mode). Was passing 260417 → started
+failing 260421 (lite=401, helm=403) → now 403 on all modes.
+
+**Test**:
+
+```http
+POST $GATEWAY_URL/bots
+auth: api_token  (valid token)
+{"platform":"teams","meeting_url":"not-a-url","bot_name":"url-check-bad"}
+expect: 400 or 422
+got: 403
+```
+
+**Hypothesis**: a request goes through three pipeline stages —
+{api-key auth} → {platform/URL pre-check at gateway} → {pydantic
+validation at meeting-api}. Somewhere between 260417 and 260421 a
+URL/platform pre-check landed at the gateway (or at meeting-api auth
+layer) that returns 403 for malformed URL before validation runs.
+Likely a side-effect of one of the `URL_PLUS_PLATFORM_TRUST_MODEL`
+or `URL_PARSER_BEST_EFFORT_NOT_GATE` packs. The contract says
+validation errors should be 422 (or 400 for hard rejects), not 403
+(which means "your auth is valid but you're not allowed").
+
+**Bound check**: `URL_PARSER_BEST_EFFORT_NOT_GATE` (static, passes —
+verifies parser doesn't raise but doesn't verify the HTTP code).
+The runtime contract `INVALID_URL_REJECTED` is the one that fails;
+no static check guards it.
+
+**Fix candidates** (do NOT apply during triage):
+- Find the 403 source (api-gateway middleware? meeting-api request hook?)
+  via git archeology between `260417` and `260421`.
+- Map it back to 422 for malformed URL (validation error semantics).
+
+### R5 — bot-lifecycle status-completed (helm only)
+
+**Classification**: regression in helm mode classifier. Compose and
+lite modes pass `status-completed`; helm fails with `status=failed
+(expected completed) after ~22x5s poll`.
+
+**Symptom**: in helm, after `DELETE /bots/...`, the meeting status
+ends up `failed` rather than `completed`. The classifier is judging
+the meeting as a failure when it was a clean stop.
+
+**Hypothesis**: the recording-aware classifier from `9b16eba` (FM-002 v2)
+makes the completed-vs-failed distinction stricter. In helm mode the
+in-cluster transcription path or recording delivery may fail (e.g. the
+NetworkPolicy or the in-cluster MinIO not being writable as compose's
+local), pushing the classifier into the failed branch.
+
+**Bound check**: `CLASSIFIER_RECORDING_AWARE_NO_AUDIO` (static, passes —
+verifies the code branch exists). No runtime check exercises this in
+helm mode end-to-end.
+
+**Fix candidates** (do NOT apply during triage):
+- Look at `tests3/.state/reports/helm/containers.json` for the actual
+  helm-mode lifecycle test output.
+- Likely a setup-issue (helm test cluster lacking MinIO bucket / network
+  policy / etc.) rather than a code regression. Could be classified as
+  "helm test infra gap" if the in-cluster recording path is unreliable.
+
+### Combined next-fix proposal (waiting on human)
+
+Three DoDs to address:
+
+1. **R1** — DONE, verified live.
+2. **R2** — chunk-handler defense-in-depth (refuse to downgrade
+   recording.status). Defense even with R1 fixed.
+3. **R4** — restore `INVALID_URL_REJECTED → 422` contract behavior.
+   Cross-mode regression. Find the 403 source via git archeology.
+4. **R5** — investigate `status-completed` failure in helm mode. Likely
+   helm test infra gap rather than code regression; needs evidence from
+   `tests3/.state/reports/helm/containers.json` before classification.
+
+Plus the **gaps** noted in earlier section: Gap A (runtime tier never
+runs from build host); Gap B (no contract check for the
+meeting-api/runtime-api identifier handshake).
+
+Awaiting `fix this first: <id>` direction.

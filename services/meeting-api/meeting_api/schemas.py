@@ -546,6 +546,44 @@ class MeetingCreate(BaseModel):
         None,
         description="Meeting URL. When provided without native_meeting_id, the URL is parsed to extract platform, native_meeting_id, and passcode automatically. Supports Google Meet, Teams (all formats), and Zoom URLs."
     )
+
+    @field_validator('meeting_url')
+    @classmethod
+    def _meeting_url_well_formed(cls, v):
+        """v0.10.5 R4 — minimal URL well-formedness gate.
+
+        Trust model (per 260427): we accept any URL+platform pair without
+        per-vendor parsing. White-label hosts (LFX, AWS Chime, custom
+        portals) are explicitly supported.
+
+        BUT: a string that isn't even a URL (no scheme + no netloc — e.g.
+        'not-a-url') has nowhere for the bot to navigate. Letting that
+        through to the body handler hides the validation failure behind
+        the next downstream error (concurrency 403, redis-publish failure,
+        etc.) and burns a meeting row + container slot.
+
+        Reject only the genuinely-malformed case. Anything urlparse-able
+        with both scheme and netloc — including unrecognised vendor
+        domains — passes through and the bot navigates as-is.
+        """
+        if v is None:
+            return v
+        s = (v or "").strip()
+        if not s:
+            return v
+        # msteams: deep links — convert to https for urlparse, same as
+        # parse_meeting_url. Treat as valid if the post-rewrite URL parses.
+        check = s
+        if s.lower().startswith("msteams:"):
+            check = "https://teams.microsoft.com" + s[len("msteams:"):]
+        parsed = urlparse(check)
+        if not parsed.scheme or not parsed.netloc:
+            raise ValueError(
+                f"meeting_url is not a well-formed URL "
+                f"(missing scheme or host): {v!r}. "
+                f"Provide a full URL (https://...)."
+            )
+        return v
     teams_base_host: Optional[str] = Field(
         None,
         description="Internal: Teams hostname for short enterprise URLs (e.g. 'teams.microsoft.com', 'gov.teams.microsoft.us'). Populated automatically by the MCP parser."
