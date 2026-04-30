@@ -89,8 +89,30 @@ class TestExitCallback:
 
     @pytest.mark.asyncio
     async def test_self_initiated_leave_during_stopping_completes(self, client, mock_db, mock_redis):
-        """self_initiated_leave with exit code 1 during stopping → COMPLETED, not FAILED."""
-        meeting = make_meeting(status=MeetingStatus.STOPPING.value)
+        """self_initiated_leave with exit code 1 during stopping + recording delivered → COMPLETED.
+
+        v0.10.5 FM-002 v2: the classifier now requires reached_active + delivery
+        proof (transcripts OR recording media_files with bytes) to mark COMPLETED.
+        Mock with status_transition showing reached active AND a recording entry
+        so the meeting represents a real productive session that was user-stopped.
+        """
+        # v0.10.5 — needs reached_active in transitions + recording delivery proof
+        # to satisfy the recording-aware classifier (commit 9b16eba).
+        from datetime import datetime as _dt, timedelta
+        start_t = _dt.utcnow() - timedelta(seconds=120)
+        meeting = make_meeting(
+            status=MeetingStatus.STOPPING.value,
+            start_time=start_t,
+            data={
+                "transcribe_enabled": True,
+                "status_transition": [
+                    {"to": MeetingStatus.ACTIVE.value, "at": start_t.isoformat()},
+                ],
+                "recordings": [{
+                    "media_files": [{"file_size_bytes": 1024 * 100}],
+                }],
+            },
+        )
 
         with _patch_find_meeting(meeting):
             with patch("meeting_api.callbacks.update_meeting_status", new_callable=AsyncMock, return_value=True) as mock_update:
@@ -109,8 +131,29 @@ class TestExitCallback:
 
     @pytest.mark.asyncio
     async def test_sigkill_during_stopping_completes(self, client, mock_db, mock_redis):
-        """Exit code 137 (SIGKILL from docker stop) during stopping → COMPLETED, not FAILED."""
-        meeting = make_meeting(status=MeetingStatus.STOPPING.value)
+        """Exit code 137 (SIGKILL from docker stop) during stopping + recording delivered → COMPLETED.
+
+        v0.10.5 FM-002 v2: same recording-aware classifier criteria as
+        test_self_initiated_leave_during_stopping_completes. SIGKILL during
+        stopping with delivered audio is a clean lifecycle exit at the
+        meeting-api level (the SIGKILL came from the orderly docker-stop
+        grace path, not from a crash mid-meeting).
+        """
+        from datetime import datetime as _dt, timedelta
+        start_t = _dt.utcnow() - timedelta(seconds=120)
+        meeting = make_meeting(
+            status=MeetingStatus.STOPPING.value,
+            start_time=start_t,
+            data={
+                "transcribe_enabled": True,
+                "status_transition": [
+                    {"to": MeetingStatus.ACTIVE.value, "at": start_t.isoformat()},
+                ],
+                "recordings": [{
+                    "media_files": [{"file_size_bytes": 1024 * 100}],
+                }],
+            },
+        )
 
         with _patch_find_meeting(meeting):
             with patch("meeting_api.callbacks.update_meeting_status", new_callable=AsyncMock, return_value=True) as mock_update:
