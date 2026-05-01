@@ -29,7 +29,7 @@ import {
   downloadFile,
   generateFilename,
 } from "@/lib/export";
-import { cn } from "@/lib/utils";
+import { cn, parseUTCTimestamp } from "@/lib/utils";
 import { vexaAPI } from "@/lib/api";
 import { toast } from "sonner";
 import { LanguagePicker } from "@/components/language-picker";
@@ -487,7 +487,8 @@ export function TranscriptViewer({
     }
     
     if (meeting.start_time) {
-      output += `Date: ${format(new Date(meeting.start_time), "PPPp")}\n`;
+      // v0.10.5.3 Pack D-1 (#265): parseUTCTimestamp for unsuffixed-ISO API timestamps.
+      output += `Date: ${format(parseUTCTimestamp(meeting.start_time), "PPPp")}\n`;
     }
     
     if (meeting.data?.participants?.length) {

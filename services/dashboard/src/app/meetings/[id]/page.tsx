@@ -57,7 +57,7 @@ import { useLiveTranscripts } from "@/hooks/use-live-transcripts";
 import { PLATFORM_CONFIG, getDetailedStatus } from "@/types/vexa";
 import type { MeetingStatus, Meeting } from "@/types/vexa";
 import { StatusHistory } from "@/components/meetings/status-history";
-import { cn } from "@/lib/utils";
+import { cn, parseUTCTimestamp } from "@/lib/utils";
 import { vexaAPI } from "@/lib/api";
 import { withBasePath } from "@/lib/base-path";
 import { toast } from "sonner";
@@ -470,7 +470,7 @@ export default function MeetingDetailPage() {
     }
     
     if (meeting.start_time) {
-      output += `Date: ${format(new Date(meeting.start_time), "PPPp")}\n`;
+      output += `Date: ${format(parseUTCTimestamp(meeting.start_time), "PPPp")}\n`;
     }
     
     if (meeting.data?.participants?.length) {
@@ -803,11 +803,15 @@ export default function MeetingDetailPage() {
     return <MeetingDetailSkeleton />;
   }
 
+  // v0.10.5.3 Pack D-1: parseUTCTimestamp on both ends so duration is correct
+  // when API returns unsuffixed-ISO timestamps. Pre-fix: new Date() interpreted
+  // both as local-tz → numerical delta is correct (same offset cancels) but
+  // unifying the parse path here matches the rest of the file.
   const duration =
     currentMeeting.start_time && currentMeeting.end_time
       ? Math.round(
-          (new Date(currentMeeting.end_time).getTime() -
-            new Date(currentMeeting.start_time).getTime()) /
+          (parseUTCTimestamp(currentMeeting.end_time).getTime() -
+            parseUTCTimestamp(currentMeeting.start_time).getTime()) /
             60000
         )
       : null;
@@ -1853,8 +1857,12 @@ export default function MeetingDetailPage() {
                   <Calendar className="h-4 w-4 text-muted-foreground" />
                   <div>
                     <p className="text-sm font-medium">Date</p>
-                    <p className="text-sm text-muted-foreground">
-                      {format(new Date(currentMeeting.start_time), "PPPp")}
+                    {/* v0.10.5.3 Pack D-1 (#265): parseUTCTimestamp interprets the
+                        unsuffixed-ISO API timestamp as UTC; date-fns format()
+                        renders in browser-local tz. Pre-fix: new Date() treated
+                        unsuffixed ISO as LOCAL-tz, producing tz-shifted display. */}
+                    <p className="text-sm text-muted-foreground" title={`UTC: ${currentMeeting.start_time}`}>
+                      {format(parseUTCTimestamp(currentMeeting.start_time), "PPPp")}
                     </p>
                   </div>
                 </div>
