@@ -53,6 +53,28 @@ export interface LogContext {
 
 let logContext: LogContext = {};
 
+// v0.10.5.3 Pack O — ring buffer of last N structured-JSON log lines.
+// On exit, performGracefulLeave fetches getLogBuffer() and includes the
+// contents in the exit-callback's payload so meeting-api can persist
+// them into meetings.data.bot_logs JSONB. With Pack G.2 deferred (k8s-side
+// stdout capture is more involved), this in-process ring is the minimum-
+// viable forensic instrumentation: when a bot crashes, the operator gets
+// the last ~200 structured log lines via the meeting row even though the
+// pod's stdout died with it.
+//
+// Cap: 200 lines × ~500 bytes typical = ~100 KB max in-memory. Trimmed
+// further to 50 KB on the meeting-api side before persisting.
+const LOG_BUFFER_CAP = 200;
+const logBuffer: string[] = [];
+
+export function getLogBuffer(): readonly string[] {
+  return logBuffer;
+}
+
+export function clearLogBuffer(): void {
+  logBuffer.length = 0;
+}
+
 /**
  * Set the per-bot log context. Call once from runBot() with values
  * derived from BotConfig (meeting_id, connectionId, platform). Subsequent
@@ -154,4 +176,9 @@ export function logJSON(record: {
   }
   // eslint-disable-next-line no-console
   console.log(line);
+  // v0.10.5.3 Pack O: push to ring buffer for exit-callback flush.
+  logBuffer.push(line);
+  if (logBuffer.length > LOG_BUFFER_CAP) {
+    logBuffer.shift();
+  }
 }

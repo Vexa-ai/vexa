@@ -838,19 +838,29 @@ async function performGracefulLeave(
     log(`[Speaker Events] Failed to read: ${e?.message}`);
   }
 
-  // v0.10.5.3 Pack T — emit final resource summary as a structured log line
-  // BEFORE the exit callback so Pack O's stdout-capture catches it. Then
-  // stop the sampler.
+  // v0.10.5.3 Pack T — fetch the final resource summary BEFORE we stop
+  // the sampler. Pack O's ring buffer flush happens after — last log line
+  // emitted is the cgroup summary, so it's included in bot_logs too.
+  let finalBotResources: any = undefined;
   if (currentBotResourceSampler) {
-    const resSum = currentBotResourceSampler.summary();
+    finalBotResources = currentBotResourceSampler.summary();
     logJSON({
       level: "info",
       msg: "[BotResource] final summary",
-      bot_resources: resSum,
+      bot_resources: finalBotResources,
     });
     currentBotResourceSampler.stop();
     currentBotResourceSampler = null;
   }
+
+  // v0.10.5.3 Pack O — snapshot the structured-log ring buffer for the
+  // exit callback. This is the in-process forensic capture: last ~200
+  // structured JSON lines from bot stdout, sent through the callback so
+  // meeting-api can persist into meetings.data.bot_logs.
+  // (Pack G.2 — k8s-side stdout aggregation — remains a follow-up; this
+  // gives us 80% of the forensic value with one ring buffer.)
+  const { getLogBuffer } = await import("./utils/log");
+  const finalBotLogs = [...getLogBuffer()];
 
   if (meetingApiCallbackUrl && currentConnectionId) {
     // Use unified callback for exit status
@@ -871,7 +881,9 @@ async function performGracefulLeave(
         errorDetails,
         statusMapping.completionReason,
         statusMapping.failureStage,
-        speakerEvents.length > 0 ? speakerEvents : undefined
+        speakerEvents.length > 0 ? speakerEvents : undefined,
+        finalBotLogs.length > 0 ? finalBotLogs : undefined,
+        finalBotResources
       );
       logJSON({
         level: "info",

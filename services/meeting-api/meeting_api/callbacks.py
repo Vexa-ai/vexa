@@ -253,6 +253,14 @@ class BotStatusChangePayload(BaseModel):
     failure_stage: Optional[MeetingFailureStage] = Field(None)
     timestamp: Optional[str] = Field(None)
     speaker_events: Optional[List[Dict]] = Field(None)
+    # v0.10.5.3 Pack O — last N structured-JSON log lines from bot stdout.
+    # Sent only on terminal status (failed/completed). Persisted into
+    # meetings.data.bot_logs JSONB after a 50 KB cap (apply at write-time
+    # to avoid unbounded JSONB row size).
+    bot_logs: Optional[List[str]] = Field(None)
+    # v0.10.5.3 Pack T — cgroup memory + CPU summary at exit time.
+    # Persisted into meetings.data.bot_resources JSONB.
+    bot_resources: Optional[Dict[str, Any]] = Field(None)
 
 
 # ---------------------------------------------------------------------------
@@ -634,6 +642,42 @@ async def bot_status_change_callback(
         raise HTTPException(status_code=404, detail="Meeting session not found")
 
     await db.refresh(meeting)
+
+    # v0.10.5.3 Pack O + Pack T: persist forensic fields on terminal transitions.
+    # - bot_logs: last ~200 structured-JSON log lines from bot stdout (ring
+    #   buffer via Pack O). Capped at 50 KB to bound JSONB row size.
+    # - bot_resources: cgroup memory + CPU summary from Pack T's sampler.
+    #
+    # Persisted regardless of how the status_change branches below land.
+    # Done early so even the stop_requested early-return path captures
+    # them. Future operators querying a failed meeting now have the bot's
+    # last log lines + memory peak in the meeting row.
+    if new_status in (MeetingStatus.FAILED, MeetingStatus.COMPLETED) and (
+        payload.bot_logs or payload.bot_resources
+    ):
+        if not meeting.data:
+            meeting.data = {}
+        d = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+        if payload.bot_logs:
+            # Cap at 50 KB total. Trim from the START (oldest entries) so
+            # we keep the most recent log lines closest to the crash moment.
+            BOT_LOGS_MAX_BYTES = 50 * 1024
+            kept: list[str] = []
+            running = 0
+            for line in reversed(payload.bot_logs):
+                line_bytes = len(line.encode("utf-8")) + 1  # +1 newline cost
+                if running + line_bytes > BOT_LOGS_MAX_BYTES:
+                    break
+                kept.append(line)
+                running += line_bytes
+            d["bot_logs"] = list(reversed(kept))
+            d["bot_logs_truncated"] = len(kept) < len(payload.bot_logs)
+        if payload.bot_resources:
+            d["bot_resources"] = payload.bot_resources
+        meeting.data = d
+        attributes.flag_modified(meeting, "data")
+        # Don't commit here — leaves it to the branch logic below to commit
+        # alongside other status updates. SQLAlchemy unit-of-work bundles.
 
     # Stop was requested: skip the actual status transition (we're winding down),
     # but still fire the status webhook so users subscribed to meeting.status_change
