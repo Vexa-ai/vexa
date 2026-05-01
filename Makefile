@@ -285,6 +285,50 @@ release-teardown:                  ## stage 10: destroy all provisioned infra (a
 	@$(_STAGE) enter idle --actor make:release-teardown --reason "cycle closed"
 
 # ── Compatibility aliases (old names) ──
+release-helm-upgrade-safe:         ## v0.10.5.3 Pack H: pre-flight image-exists check + atomic helm upgrade
+	@# Captures the outage shape from the v0.10.5.2 ship cycle:
+	@# - silent build failures pushed non-existent image tags into helm values
+	@# - non-atomic helm upgrade applied them anyway, killed old pods
+	@# - replicaCount: 1 + maxUnavailable: 1 left zero pods serving = 502
+	@# This target prevents the chain by failing FAST if any image referenced
+	@# by the rendered helm values doesn't actually exist on the registry,
+	@# then calling: helm upgrade ... --atomic --wait --timeout 5m so a
+	@# bad-pod scenario auto-rolls back instead of staying broken.
+	@# Required env: RELEASE_NAME, NAMESPACE, KUBECONFIG, KUBE_CONTEXT, CHART_PATH, VALUES_FILES (space-separated)
+	@test -n "$(RELEASE_NAME)" || (echo "  ERROR: RELEASE_NAME required" && exit 2)
+	@test -n "$(NAMESPACE)" || (echo "  ERROR: NAMESPACE required" && exit 2)
+	@test -n "$(CHART_PATH)" || (echo "  ERROR: CHART_PATH required" && exit 2)
+	@test -n "$(VALUES_FILES)" || (echo "  ERROR: VALUES_FILES required (space-separated -f files)" && exit 2)
+	@VALUES_ARGS=""; for f in $(VALUES_FILES); do VALUES_ARGS="$$VALUES_ARGS -f $$f"; done; \
+	echo "  [pre-flight] rendering chart values..."; \
+	RENDERED=$$(helm template $(RELEASE_NAME) $(CHART_PATH) $$VALUES_ARGS 2>/dev/null); \
+	if [ -z "$$RENDERED" ]; then echo "  ERROR: helm template returned empty" && exit 1; fi; \
+	IMAGES=$$(echo "$$RENDERED" | grep -oE 'image:\s+[^\s\"]+' | awk '{print $$2}' | sed 's/^"//;s/"$$//' | sort -u | grep -v '^$$' | grep -v '\$$'); \
+	if [ -z "$$IMAGES" ]; then echo "  WARN: no images found in rendered template (check chart)"; fi; \
+	echo "  [pre-flight] verifying $$(echo "$$IMAGES" | wc -l) images exist on registry..."; \
+	MISSING=""; \
+	for img in $$IMAGES; do \
+		if docker manifest inspect "$$img" >/dev/null 2>&1; then \
+			echo "    OK   $$img"; \
+		else \
+			echo "    MISS $$img"; \
+			MISSING="$$MISSING $$img"; \
+		fi; \
+	done; \
+	if [ -n "$$MISSING" ]; then \
+		echo ""; \
+		echo "  ABORT: $$(echo $$MISSING | wc -w) image(s) missing on registry — refusing helm upgrade:"; \
+		for img in $$MISSING; do echo "    - $$img"; done; \
+		exit 1; \
+	fi; \
+	echo "  [pre-flight] all images present"; \
+	echo "  [helm-upgrade] $(RELEASE_NAME) → $(NAMESPACE) (atomic, wait, timeout 5m)..."; \
+	helm upgrade $(RELEASE_NAME) $(CHART_PATH) \
+		$(if $(KUBECONFIG),--kubeconfig=$(KUBECONFIG),) \
+		$(if $(KUBE_CONTEXT),--kube-context=$(KUBE_CONTEXT),) \
+		-n $(NAMESPACE) $$VALUES_ARGS \
+		--reuse-values=false --atomic --wait --timeout 5m
+
 release-test: release-provision release-deploy release-full  ## alias: full pipeline up through the gate (requires SCOPE)
 release-test-no-helm:              ## alias: old 2-VM pipeline (creates a transient scope for compatibility)
 	@echo "  release-test-no-helm is deprecated; use release-plan + release-provision + release-full with SCOPE." && exit 2

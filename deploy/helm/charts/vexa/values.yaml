@@ -209,7 +209,11 @@ ttsService:
 
 mcp:
   enabled: true
-  replicaCount: 1
+  # v0.10.5.3 Pack H — bump from 1 to 2 to match other stateless services
+  # (apiGateway, adminApi, meetingApi, runtimeApi, dashboard) and enable
+  # zero-downtime rolling-update with the maxSurge: 1 / maxUnavailable: 0
+  # strategy. Single-replica was a v0.10.5.2 outage source.
+  replicaCount: 2
   image:
     repository: vexaai/mcp
     tag: dev
