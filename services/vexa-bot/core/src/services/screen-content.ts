@@ -1202,10 +1202,29 @@ export function getVirtualCameraInitScript(): string {
         // Disable incoming video to save CPU/memory.
         // The bot only needs audio for transcription — receiving and rendering
         // all participants' video wastes ~87% CPU and ~2GB RAM per bot.
-        // track.enabled=false only hides rendering; the decoder still runs.
-        // We must also set transceiver direction to stop the decoder.
+        // track.enabled=false hides rendering and is the safe disabling primitive.
         // Deferred via setTimeout(0) so Google Meet's track handlers create DOM
         // elements first — the audio capture pipeline needs those elements.
+        //
+        // v0.10.6 (#291): the transceiver.direction mutation that previously lived
+        // here was the second of two duplicate sites of the SDP-munge bug fixed
+        // by v0.10.5 commit 8ab7f49 (which only reverted site 1 in
+        // getVideoBlockInitScript). Mutating transceiver.direction at this point
+        // produces a malformed offer SDP (BUNDLE enabled but rtcp-mux missing on
+        // m=video). Chrome rejects setLocalDescription with InvalidAccessError,
+        // peer enters degraded state, eventually the page navigates and
+        // page.evaluate context is destroyed. Symptoms: GMeet recording_enabled
+        // mid-meeting crash (#284), GMeet 14-min variant when a new track event
+        // fires (#291), Teams 44ms post-admission drop (#281). Same code path
+        // also reachable from Zoom Web (zoom/web/prepare.ts:198-199) and Teams
+        // (msteams/join.ts:144). One fix, three platforms.
+        //
+        // (Note: this comment lives inside a template literal returned by
+        //  getVirtualCameraInitScript, so backticks and dollar-curly braces
+        //  must NOT appear here. Plain text only.)
+        //
+        // Conclusion: track.enabled=false is sufficient. Don't mutate
+        // transceiver.direction here.
         if (!window.__vexa_voice_agent_enabled) {
           pc.addEventListener('track', (event) => {
             if (event.track && event.track.kind === 'video') {
@@ -1213,19 +1232,6 @@ export function getVirtualCameraInitScript(): string {
               const trackRef = event.track;
               setTimeout(() => {
                 trackRef.enabled = false;
-                // Stop the transceiver to prevent WebRTC from decoding video
-                try {
-                  const transceivers = pc.getTransceivers();
-                  for (const t of transceivers) {
-                    if (t.receiver && t.receiver.track === trackRef) {
-                      t.direction = t.direction === 'sendrecv' ? 'sendonly' : 'inactive';
-                      console.log('[Vexa] Video transceiver stopped (id=' + trackId + ', dir=' + t.direction + ')');
-                      break;
-                    }
-                  }
-                } catch (e) {
-                  // transceiver API may not be available in all contexts
-                }
                 console.log('[Vexa] Incoming video track disabled (deferred, id=' + trackId + ')');
               }, 0);
             }
