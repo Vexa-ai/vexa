@@ -254,34 +254,51 @@ scope:
       do: "Click every API Docs / Documentation link in dashboard.vexa.ai."
       expect: "Every link goes to docs.vexa.ai/* or via getDocsUrl(); no internal /docs route hit."
 
-# ── Pack D-3 — Audio playback streaming (likely + #288 fix) ───────────
+# ── Pack D-3 — Audio playback streaming (DEFERRED to v0.10.5.4) ───────
+# Status: DEFERRED. Dashboard inline-streaming feature (commit eddcabf)
+# was reverted in commit a62d658 after empirical testing on LKE meeting 10
+# uncovered a deeper recording-pipeline issue: every chunk uploaded to MinIO
+# starts with bytes 0x43 0xB6 0x75 0x01 (mid-stream Cluster element) instead
+# of the WebM/EBML root header 0x1A 0x45 0xDF 0xA3. None of the 72 chunks has
+# a complete init segment, so even with a perfect presigned URL the browser
+# cannot decode the audio (player hung at "Preparing audio..."). Pack D-3's
+# URL strategy was orthogonally fine — it just couldn't surface anything
+# playable until the recording finalizer is fixed.
+#
+# What stays in v0.10.5.3 (Option B server-side infra — KEPT):
+# - meeting-api/storage.py: MINIO_PUBLIC_ENDPOINT for browser-reachable
+#   presigned URLs (commit 5d06d69).
+# - helm chart: NodePort support for MinIO Service (commit 5d06d69).
+# - compose: MINIO_HOST_BIND env for opt-in external bind (commit 285b940).
+# These are correct improvements with no behavior regression on their own;
+# v0.10.5.4 will need them.
+#
+# Followup tracked for v0.10.5.4:
+# (a) Recording finalizer produces a single concatenated master.webm with
+#     valid EBML init segment.
+# (b) media_files[].storage_path points to that master file.
+# (c) Re-land dashboard inline streaming on top of (a) + (b).
 - id: dashboard-audio-streams-from-bucket
+  status: deferred
+  deferred_to: v0.10.5.4
   source: gh-issue
-  ref: Vexa-ai/vexa#288  # adjacent — meeting-api /recordings/raw range support
+  ref: Vexa-ai/vexa#288
   problem: |
     Dashboard audio playback downloads the full audio file before playback
-    starts. For a 24-min 10 MB file on a 10 Mbps connection that's ~10
-    seconds of dead-air. Should stream from S3-compatible bucket via signed
-    URL or via meeting-api /recordings/.../raw with HTTP range support
-    (currently buffers the whole file in memory — #288).
+    starts. Investigation in v0.10.5.3 revealed deeper issue: chunks have
+    no WebM init segment so bytes are unplayable regardless of URL choice.
   hypothesis: |
-    Path 1 (preferred): meeting-api generates short-lived presigned URL for
-    the audio object; dashboard <audio> sets src to that URL. Browser
-    handles range requests natively. Cleanest. Bundles with #288's removal
-    of the proxy-streaming endpoint or makes that endpoint optional.
-    Path 2: Fix meeting-api /recordings/.../raw to support HTTP Range and
-    stream from S3 without full-buffer. Closes #288 directly. More code but
-    keeps the proxy boundary (auth checks).
-    Pick path 1 unless there's strong reason to keep proxying.
-  fix_commits: []
-  proves:
-    - {check: MEETING_API_PRESIGNED_AUDIO_URL, modes: [lite, compose, helm]}
-    - {check: DASHBOARD_AUDIO_STREAMS, modes: [compose, helm]}
-  required_modes: [lite, compose, helm]
-  human_verify:
-    - mode: helm
-      do: "Click play on a 20+ min meeting recording in dashboard.vexa.ai. Watch network tab."
-      expect: "Audio starts within 1-2s; subsequent seeks fetch range; no full-file pre-download."
+    Original v0.10.5.3 attempt: presigned URL for direct browser fetch.
+    REVERTED — surface bug runs deeper than URL strategy; needs finalizer
+    to produce master.webm with init segment.
+  fix_commits:
+    - eddcabf  # original Pack D-3 dashboard impl
+    - 5d06d69  # Option B server-side infra (KEPT)
+    - 285b940  # Option B compose follow-up (KEPT)
+    - a62d658  # revert dashboard impl, defer feature
+  proves: []  # deferred; checks moved to v0.10.5.4
+  required_modes: []
+  human_verify: []
 
 # ── Pack H — Helm chart hardening (promoted from DEFER) ───────────────
 - id: helm-chart-hardening
