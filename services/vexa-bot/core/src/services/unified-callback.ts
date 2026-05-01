@@ -220,7 +220,11 @@ export function mapExitReasonToStatus(
       case "removed_by_admin":
         return { status: "completed", completionReason: "evicted" };
       case "admission_rejected_by_admin":
-        return { status: "completed", completionReason: "awaiting_admission_rejected" };
+        return {
+          status: "failed",
+          completionReason: "awaiting_admission_rejected",
+          failureStage: "awaiting_admission",
+        };
       default:
         return { status: "completed", completionReason: "stopped" };
     }

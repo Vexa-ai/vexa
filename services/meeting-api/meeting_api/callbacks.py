@@ -775,13 +775,22 @@ async def bot_status_change_callback(
 
     # Publish status change
     if success or (new_status == MeetingStatus.ACTIVE and meeting.status == MeetingStatus.ACTIVE.value):
-        publish_extra = None
+        publish_extra: Optional[Dict[str, Any]] = None
+        if payload.completion_reason or payload.failure_stage or reason:
+            publish_extra = {}
+            if payload.completion_reason:
+                publish_extra["completion_reason"] = payload.completion_reason.value
+            if payload.failure_stage:
+                publish_extra["failure_stage"] = payload.failure_stage.value
+            if reason:
+                publish_extra["reason"] = reason
         if new_status == MeetingStatus.NEEDS_HUMAN_HELP and meeting.data and "escalation" in meeting.data:
-            publish_extra = {
+            publish_extra = publish_extra or {}
+            publish_extra.update({
                 "escalation_reason": meeting.data["escalation"].get("reason"),
                 "vnc_url": meeting.data["escalation"].get("vnc_url"),
                 "escalated_at": meeting.data["escalation"].get("escalated_at"),
-            }
+            })
         await publish_meeting_status_change(meeting.id, new_status.value, redis_client, meeting.platform, meeting.platform_specific_id, meeting.user_id, extra_data=publish_extra)
 
     # Fix 3: Webhook gated on success — only fire for accepted transitions
