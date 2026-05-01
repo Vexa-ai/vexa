@@ -261,6 +261,14 @@ services:
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
       - MINIO_BUCKET=${MINIO_BUCKET:-vexa}
       - MINIO_SECURE=${MINIO_SECURE:-false}
+      # v0.10.5.3 Pack D-3 follow-up (Option B): browser-reachable MinIO
+      # endpoint for presigned download URLs. Default falls back to the
+      # internal hostname which works for in-network browsers (compose VM
+      # reachable on its own LAN). For external browser access set this
+      # to e.g. http://${HOST_PUBLIC_IP}:9000 in .env. storage.py uses
+      # this only when signing URLs; server-side I/O still uses
+      # MINIO_ENDPOINT for fast in-cluster reads.
+      - MINIO_PUBLIC_ENDPOINT=${MINIO_PUBLIC_ENDPOINT:-}
       - RECORDING_ENABLED=${RECORDING_ENABLED:-true}
       - CAPTURE_MODES=${CAPTURE_MODES:-audio}
       - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}

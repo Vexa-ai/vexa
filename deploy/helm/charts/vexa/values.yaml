@@ -119,6 +119,15 @@ meetingApi:
   transcriptionServiceUrl: ""
   transcriptionServiceToken: ""
   minioSecure: "false"
+  # v0.10.5.3 Pack D-3 follow-up (Option B): browser-reachable hostname
+  # used to sign presigned download URLs. MINIO_ENDPOINT (cluster-internal)
+  # stays for server-side I/O. Empty default → falls back to MINIO_ENDPOINT
+  # (correct for dev clusters where the dashboard runs in-cluster, and for
+  # compose/lite where the same hostname resolves externally via published
+  # ports). Set this on production helm deployments where MinIO is
+  # ClusterIP-only — typical value: `http://<lke-node-ip>:<minio.service.nodePort>`
+  # OR `https://minio.<your-domain>` when fronted by an ingress.
+  minioPublicEndpoint: ""
   logLevel: "INFO"
   resources:
     requests:
@@ -375,8 +384,14 @@ minio:
     size: 10Gi
     storageClassName: ""
   service:
+    # v0.10.5.3 Pack D-3 follow-up (Option B): set type=NodePort + nodePort
+    # to expose MinIO browser-side for presigned-URL audio fetches. Then
+    # set meetingApi.minioPublicEndpoint to "http://<node-ip>:<nodePort>".
+    # Default ClusterIP keeps MinIO internal-only (safer for prod clusters
+    # with ingress fronting); switch to NodePort for dev clusters.
     type: ClusterIP
     port: 9000
+    nodePort: ""
   # Proprietary wrapper values leave minio at the OSS default (no override),
   # so the OSS default itself must be cpu-limit-complete. 500m matches the
   # api-gateway / admin-api shape — storage services are typically IO-bound,

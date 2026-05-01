@@ -76,6 +76,25 @@ class MinIOStorageClient(StorageClient):
         else:
             endpoint_url = None
 
+        # v0.10.5.3 Pack D-3 follow-up (Option B):
+        # MINIO_ENDPOINT is the cluster-internal hostname used for server-side
+        # I/O (put_object/get_object) — fast, no NAT traversal.
+        # MINIO_PUBLIC_ENDPOINT is what the BROWSER must use to fetch a
+        # presigned URL — typically a NodePort, ingress, or host-mapped port.
+        # When unset, falls back to MINIO_ENDPOINT (correct for compose/lite
+        # where the bridge network DNS resolves the same hostname externally
+        # via published ports). When set on helm with cluster-internal-only
+        # MinIO Service, points at the externally reachable surface.
+        # Pre-fix: presigned URLs always carried the internal hostname; on
+        # helm with ClusterIP-only MinIO, browsers got DNS-unresolvable URLs
+        # and audio playback hung at "Preparing audio...".
+        public_endpoint_raw = (os.environ.get("MINIO_PUBLIC_ENDPOINT") or "").strip() or self.endpoint
+        if public_endpoint_raw:
+            public_endpoint_url = public_endpoint_raw if "://" in public_endpoint_raw else f"{protocol}://{public_endpoint_raw}"
+        else:
+            public_endpoint_url = endpoint_url
+        self.public_endpoint_url = public_endpoint_url
+
         self.client = boto3.client(
             "s3",
             endpoint_url=endpoint_url,
@@ -84,7 +103,26 @@ class MinIOStorageClient(StorageClient):
             region_name=self.region,
             config=BotoConfig(signature_version="s3v4"),
         )
-        logger.info(f"MinIO storage client initialized: endpoint={endpoint_url}, bucket={self.bucket}")
+        # Separate signing client only differs in endpoint_url. Reuses the
+        # same credentials/region/bucket. Used solely by get_presigned_url.
+        # If public_endpoint_url == endpoint_url, presigned URLs work as
+        # before (no behavior change for compose/lite when MINIO_PUBLIC_ENDPOINT
+        # is unset).
+        if public_endpoint_url != endpoint_url:
+            self._signing_client = boto3.client(
+                "s3",
+                endpoint_url=public_endpoint_url,
+                aws_access_key_id=self.access_key or None,
+                aws_secret_access_key=self.secret_key or None,
+                region_name=self.region,
+                config=BotoConfig(signature_version="s3v4"),
+            )
+        else:
+            self._signing_client = self.client
+        logger.info(
+            f"MinIO storage client initialized: endpoint={endpoint_url}, "
+            f"public_endpoint={public_endpoint_url}, bucket={self.bucket}"
+        )
 
     def upload_file(self, path: str, data: bytes, content_type: str = "application/octet-stream") -> str:
         self.client.put_object(
@@ -103,7 +141,10 @@ class MinIOStorageClient(StorageClient):
         return data
 
     def get_presigned_url(self, path: str, expires: int = 3600) -> str:
-        url = self.client.generate_presigned_url(
+        # v0.10.5.3 Pack D-3 follow-up (Option B): sign against the PUBLIC
+        # endpoint (browser-reachable) rather than the internal endpoint
+        # used for server-side I/O. See __init__ for the rationale.
+        url = self._signing_client.generate_presigned_url(
             "get_object",
             Params={"Bucket": self.bucket, "Key": path},
             ExpiresIn=expires,
