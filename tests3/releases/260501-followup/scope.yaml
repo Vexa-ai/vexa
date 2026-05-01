@@ -1,7 +1,7 @@
 release_id: '260501-followup'
 codename: sdp-munge-complete
-public_version: v0.10.6
-public_name: "v0.10.6 — SDP-munge complete revert + bot stage-tracker fix"
+public_version: v0.10.5.2
+public_name: "v0.10.5.2 — SDP-munge site-2 revert (patch on v0.10.5)"
 milestone: ""  # to be created on plan approval
 branch: dev
 summary: |

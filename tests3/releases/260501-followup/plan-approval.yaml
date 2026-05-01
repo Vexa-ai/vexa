@@ -12,7 +12,7 @@
 
 release_id: '260501-followup'
 codename: sdp-munge-complete
-public_version: v0.10.6
+public_version: v0.10.5.2
 approved_at: '2026-05-01T08:12:38Z'
 approver: dmitry@vexa.ai
 approval_source: |
