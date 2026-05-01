@@ -786,13 +786,21 @@ HELM_REDIS_MAXMEMORY_SET:
   - helm
   state: stateless
   max_duration_sec: 5
-HELM_ROLLING_UPDATE_ZERO_SURGE:
-  proves: "every app-facing Deployment in rendered chart sets strategy.rollingUpdate.maxSurge: 0 \u2014 rolling updates never\
-    \ double DB pool footprint"
-  symptom: "rolling update briefly runs 2 pods, pools 2\xD7, pushes over managed-DB slot cap"
-  found: '2026-04-21'
+HELM_ROLLING_UPDATE_ZERO_DOWNTIME:
+  proves: "every app-facing Deployment in rendered chart sets strategy.rollingUpdate.maxUnavailable: 0 \u2014 OLD pod stays Ready until NEW pod is Ready (zero-downtime)"
+  symptom: "v0.10.5.2 ship outage class: replicaCount: 1 + maxUnavailable: 1 killed OLD pod before NEW Ready, 502s during any image bump (e.g. dashboard + webapp on 2026-05-01)"
+  found: '2026-05-01'
+  superseded_check: HELM_ROLLING_UPDATE_ZERO_SURGE
+  superseded_at: '2026-05-01'
+  superseded_rationale: |
+    Pre-v0.10.5.3 this check enforced maxSurge: 0 to prevent DB pool footprint
+    doubling during rolling upgrade. v0.10.5 Pack C.x shrank per-pod DB pool
+    4x (8 -> 2 connections per holder), so 2x footprint during rolling is
+    well below managed-DB slot cap. The new Pack H invariant (maxUnavailable: 0)
+    addresses a more painful failure class \u2014 zero-downtime rolling \u2014 and the
+    DB pool concern is now adequately covered by per-pod pool sizing.
   type: script
-  script: tests/chart-rolling-update-zero-surge.sh
+  script: tests/chart-rolling-update-zero-downtime.sh
   modes:
   - helm
   state: stateless
