@@ -163,6 +163,11 @@ RUN cd /app/dashboard-build && \
 
 COPY services/dashboard/src /app/dashboard-build/src
 COPY services/dashboard/public /app/dashboard-build/public
+# v0.10.5.3 Pack D-1 (#265 follow-up): scripts/ contains generate-release-version.js
+# which the package.json prebuild hook invokes. Without it, npm run build fails
+# with `Cannot find module .../scripts/generate-release-version.js` (caught
+# during release-deploy 2026-05-01 — lite build was missing this dir).
+COPY services/dashboard/scripts /app/dashboard-build/scripts
 COPY services/dashboard/next.config.ts services/dashboard/tsconfig.json services/dashboard/postcss.config.mjs /app/dashboard-build/
 COPY services/dashboard/components.json /app/dashboard-build/
 # No tailwind.config — postcss handles it
