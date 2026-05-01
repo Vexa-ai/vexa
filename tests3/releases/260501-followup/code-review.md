@@ -107,7 +107,7 @@ ADDED:
   `requested` because by definition they fire before any callback.
 
 **Why this is correct:**
-- Symptom verified live: meeting 11356 (Jeroen) was active for 83s
+- Symptom verified live: meeting 11356 (customer-E) was active for 83s
   but JSONB stored `failure_stage: "joining"`. Post-fix, the same
   scenario stores `"active"`.
 - Server-side derivation in `MeetingResponse.from_orm` (#276)

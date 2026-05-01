@@ -21,7 +21,7 @@ summary: |
     GMeet, Zoom Web, Teams all hook into the same wrapper.
 
     Live prod evidence (2026-05-01 07:31-07:32 UTC, meeting 11356,
-    jeroen.nas@gmail.com, GMeet, recording_enabled=true): bot reached
+    customer-E@redacted, GMeet, recording_enabled=true): bot reached
     active, ran 83 seconds, crashed with
     `page.evaluate Execution context destroyed` at recording.js:102 —
     same stack frame as #284. Three cross-platform issues close

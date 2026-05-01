@@ -40,11 +40,11 @@ No `Execution context destroyed` errors. All meetings exited via
 user-initiated stop, not crash.
 
 Watermarks cleared:
-- Jeroen 1.43-min variant (T+86s) ✓
+- customer-E 1.43-min variant (T+86s) ✓
 - #284 typical 2-4 min window ✓
-- 13-14 min variants (Brian, Max) ✓
-- Ankit 18.5-min variant ✓
-- Josh 24.2-min variant ✓ (longest documented)
+- 13-14 min variants (customer-A, Max) ✓
+- customer-B 18.5-min variant ✓
+- customer-C 24.2-min variant ✓ (longest documented)
 
 ### Runtime checks NOT executed
 
@@ -79,7 +79,7 @@ in the formal registry-execution sense they are "skipped, not run."
    on the exact meetings that were crashing.
 
 3. **Customer re-tests are pending.** 5 emails + 1 Discord DM sent to
-   affected users (Ankit, Jeroen, Josh, Max, Brian). Their re-test
+   affected users (customer-B, customer-E, customer-C, Max, customer-A). Their re-test
    results are the population-level confirmation. As of report
    filing, none have reported back yet.
 
@@ -96,12 +96,12 @@ that v0.10.5.2 targets:
 
 | Meeting | User | Platform | Duration | Crash signature |
 |---|---|---|---|---|
-| 11340 | maxzhang.vip@gmail.com | google_meet | 14.0min | `Execution context destroyed` at recording.js:102 |
-| 11345 | brianj@nordplaner.dk | google_meet | 13.8min | same |
-| 11348 | maxzhang.vip@gmail.com | google_meet | 14.0min | same |
-| 11350 | josh@waha.app | google_meet | 24.2min | same |
-| 11356 | jeroen.nas@gmail.com | google_meet | 1.4min | same |
-| 11359 | ankit150ar@gmail.com | google_meet | 18.4min | same |
+| 11340 | customer-D@redacted | google_meet | 14.0min | `Execution context destroyed` at recording.js:102 |
+| 11345 | customer-A@redacted | google_meet | 13.8min | same |
+| 11348 | customer-D@redacted | google_meet | 14.0min | same |
+| 11350 | customer-C@redacted | google_meet | 24.2min | same |
+| 11356 | customer-E@redacted | google_meet | 1.4min | same |
+| 11359 | customer-B@redacted | google_meet | 18.4min | same |
 
 6 customer crashes, 5 unique users, all `recording_enabled=true`,
 all GMeet, all the exact stack frame the SDP-munge bug produces.

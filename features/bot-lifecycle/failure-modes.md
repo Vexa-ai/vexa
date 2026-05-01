@@ -71,7 +71,7 @@ prod_observations:
   - meeting_id: 11161
     timestamp: 2026-04-28T11:31:02Z
     user_id: 1212
-    user_email: jeroen.nas@gmail.com
+    user_email: customer-E@redacted
     duration_active_s: 1780                # 29m 40s
     transcript_segments: 197
     last_segment_to_crash_gap_s: 14        # short-gap subclass — meeting ended, bot didn't survive nav

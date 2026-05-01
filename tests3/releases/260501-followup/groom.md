@@ -21,12 +21,12 @@ Four streams were swept on 2026-05-01 morning:
 
 1. **Production telemetry** — last-24h meeting outcomes from prod DB. 47 GMeet (14 failed/<null>, 7 awaiting_admission_timeout), 28 Teams (1 failed pre-admission), 3 Zoom. Saved to `tasks/be75ct2dn.output`.
 2. **GitHub issues audit** — open issues filtered to non-Dmitry authors with recent comment activity. 16 issues surfaced. Saved to `tasks/bg793o03c.output`.
-3. **Email scan** — Gmail searched for customer reports in the v0.10.5 deployment window. ekazukii (#281), gerryfp (#145), terrence-yu-eb (#280), dev-faisal-shehzad (#282), xjlin0 (#155), Linode 26690727, Stripe webhook health, OeNB customer status.
+3. **Email scan** — Gmail searched for customer reports in the v0.10.5 deployment window. contributor-1 (#281), gerryfp (#145), terrence-yu-eb (#280), dev-faisal-shehzad (#282), xjlin0 (#155), Linode 26690727, Stripe webhook health, OeNB customer status.
 4. **Discord pull** — last 14 days of #bug-reports, #feature-requests, #general-chat, etc. via bot API. 101 human messages.
 
 **Cleanup pass before grooming**: 5 issues fixed by v0.10.5 already received status comments asking reporters to verify against new image:
 
-- **#171** (Teams anonymous-join modal) — fix `4818e46`. AI-Flow-Logic's working PR branch was independently solved in v0.10.5 the same day they posted; commented and asked them to retest.
+- **#171** (Teams anonymous-join modal) — fix `4818e46`. contributor-2's working PR branch was independently solved in v0.10.5 the same day they posted; commented and asked them to retest.
 - **#190** (bot doesn't auto-leave / false-high participant count) — fix `c038c42` + audio cross-validation; commented + close-on-verify.
 - **#189** (bot leaves when participants join) — same root cause as #190; same fix; commented + close-on-verify.
 - **#284** (GMeet `recording_enabled=true` mid-meeting crash) — fix `8ab7f49` SDP-munge revert; commented `status: fixed-pending-verify`.
@@ -42,7 +42,7 @@ The user signal: *"customer reports first, then telemetry, then email, then Disc
 
 Two strong signals dominate:
 
-1. **Multiple customers reproducing #281 (Teams 44ms post-admission drop)**. v0.10.5 deferred this issue. Now we have ekazukii (GH, selfhost+cloud), tomdean_seer (Discord, Vexa Cloud), and an adjacent symptom from malco6838 (Discord, "delete request" on company Teams meetings). This is the lead bug for v0.10.6.
+1. **Multiple customers reproducing #281 (Teams 44ms post-admission drop)**. v0.10.5 deferred this issue. Now we have contributor-1 (GH, selfhost+cloud), customer-F (Discord, Vexa Cloud), and an adjacent symptom from malco6838 (Discord, "delete request" on company Teams meetings). This is the lead bug for v0.10.6.
 
 2. **Prod telemetry FM-002 split is real**. Of last-24h `failed/<null>` GMeet meetings (n=14), the recording-aware split shows 8 with `fs=joining` (50% recording-delivered = partial success) vs 6 with `fs=active` (0% recording-delivered = true failure). v0.10.5's classifier closed the orphan-recording case (FM-001) and the recording-aware bucket (FM-002 v2). This data confirms the v2 classifier is correct but reveals a NEW class — `awaiting_admission_timeout` (n=7, GMeet) — which is admission-side, not classifier-side, and warrants its own pack.
 
@@ -58,7 +58,7 @@ Operations follow-ups (broken `team@vexa.ai` MX, Linode infra ticket, vexa-lite 
 
 ### Symptom
 
-Teams meetings drop within 44–51ms after admission, mislabeled as `self_initiated_leave` / `stopped`. Two paying customers reproducing on Vexa Cloud; selfhost reporter (ekazukii) reproducing too. Bot reaches lobby, gets admitted, then immediately exits.
+Teams meetings drop within 44–51ms after admission, mislabeled as `self_initiated_leave` / `stopped`. Two paying customers reproducing on Vexa Cloud; selfhost reporter (contributor-1) reproducing too. Bot reaches lobby, gets admitted, then immediately exits.
 
 ### Owner issue
 
@@ -66,14 +66,14 @@ Teams meetings drop within 44–51ms after admission, mislabeled as `self_initia
 
 ### Reporters
 
-- **ekazukii** — GitHub #281, hosted + selfhost
-- **tomdean_seer** — Discord #bug-reports 2026-04-28, Vexa Cloud, all Teams enterprise meetings
+- **contributor-1** — GitHub #281, hosted + selfhost
+- **customer-F** — Discord #bug-reports 2026-04-28, Vexa Cloud, all Teams enterprise meetings
 - **malco6838** — Discord #bug-reports 2026-04-29, adjacent symptom: "connects but sees a delete request" on Teams company meetings (DM follow-up pending)
 
 ### Likely root-cause hypotheses (to confirm in develop)
 
 1. **SDP-munge regression remnant.** v0.10.5 reverted the transceiver-direction flip for `recording_enabled=true` (`8ab7f49`, root cause for #284). The Teams 44ms drop has a similar shape — health on the bot side, drop right after media negotiation completes. The revert may be incomplete for the Teams code path.
-2. **Recording vs. transcribe-only path divergence.** tomdean_seer's repro is `recording_enabled: false, transcribe_enabled: true` — opposite of #284. Suggests two distinct SDP / media-handler bugs that both manifest as "drop right after admission."
+2. **Recording vs. transcribe-only path divergence.** customer-F's repro is `recording_enabled: false, transcribe_enabled: true` — opposite of #284. Suggests two distinct SDP / media-handler bugs that both manifest as "drop right after admission."
 3. **Audio-pipeline cross-validation triggering.** `c038c42`'s Layer 2 cross-validation may be firing too eagerly on Teams when the audio pipeline takes longer to come online than on GMeet, causing a healthy-looking exit. Should not happen in 44ms but worth excluding.
 
 ### Scope estimate
@@ -84,7 +84,7 @@ Teams meetings drop within 44–51ms after admission, mislabeled as `self_initia
 
 ### Repro confidence
 
-**HIGH** — 2 customers + 1 already-on-thread reporter. Concrete meeting IDs available in #281 and from tomdean_seer DM.
+**HIGH** — 2 customers + 1 already-on-thread reporter. Concrete meeting IDs available in #281 and from customer-F DM.
 
 ### Out of scope (this pack)
 
@@ -191,7 +191,7 @@ These are real customer-impact items but they're operator-side, not OSS code. Li
 | `team@vexa.ai` MX bounce | ar0x18 Discord 2026-04-30 — had to come to Discord because email bounced | Fix MX/DNS today; verify with test send. **Blocks every release announcement that mentions this address.** |
 | Linode Support Ticket 26690727 | Email — LKE us-ord/us-mia provision failures | Reply with current state; decide if we open follow-up |
 | Stripe webhook delivery (green.vexa.ai disabled) | Email | Investigate if related to staging env or stale endpoint; re-enable if needed |
-| OeNB customer status update | Email — Marvin/Tobias/Laiba | Out-of-band reply by Dmitry |
+| OeNB customer status update | Email — (customer-OeNB-team) | Out-of-band reply by Dmitry |
 | vexa-lite on Apple Silicon Mac | gdok1 Discord 2026-04-27 | Decision: test + advertise compat, or update docs to declare AMD64-only. Either way doc-side. |
 | Speak API mic permission gap | gdok1 Discord 2026-04-27 — Speak returns 202 but bot has no mic in browser | Worth a triage — but may already be #145-class (`/speak` not on api.cloud.vexa). Cross-check before scoping. |
 
@@ -249,7 +249,7 @@ If the user accepts all three primary packs:
 - [x] Comment v0.10.5-fix status on #171, #190, #189, #224, #284 (done at groom entry).
 - [ ] DM follow-up to **workaddict** (Discord 2026-04-30 — paid customer "try later" error, no response yet).
 - [ ] DM follow-up to **malco6838** (Discord 2026-04-29 — Teams delete-request, asked for meeting ID).
-- [ ] Reply to **AI-Flow-Logic** on #171 thanking + asking for v0.10.5 verification (the `fix(msteams) modal` commit landed exactly their fix path).
+- [ ] Reply to **contributor-2** on #171 thanking + asking for v0.10.5 verification (the `fix(msteams) modal` commit landed exactly their fix path).
 - [ ] Cross-check **gdok1's Speak API** report against #145 — same class or distinct?
 - [ ] Encourage **anurag2069** to file the k8s + Deepgram issue (he said he would; Pack S blocked on his details).
 - [ ] Encourage **.earos** to file the model-selection issue (Pack F's lightest item depends on it).

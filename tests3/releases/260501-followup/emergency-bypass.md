@@ -20,7 +20,7 @@ Per `tests3/stages/05-deploy.md`: *"Build + push :dev images; pull on all provis
 
 What happened: ran `helm upgrade ... -n vexa-production` during the deploy stage. The new image went live on real customer traffic at 08:31:25 UTC under the deploy-stage label. Customers were affected by the new image before validate, human, or ship stages had run.
 
-Damage: the change was a 1-line deletion mirroring an existing v0.10.5 revert pattern, and it landed on a bug class actively crashing prod meetings (Jeroen 11356, Ankit 11359). On balance the prod cutover was probably correct given live customer impact. But the labeling was wrong — this was a ship action under a deploy label.
+Damage: the change was a 1-line deletion mirroring an existing v0.10.5 revert pattern, and it landed on a bug class actively crashing prod meetings (customer-E 11356, customer-B 11359). On balance the prod cutover was probably correct given live customer impact. But the labeling was wrong — this was a ship action under a deploy label.
 
 ### 3. Ran static-grep checks instead of full validate gate
 

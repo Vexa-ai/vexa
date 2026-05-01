@@ -44,9 +44,9 @@ dispatched, all completed clean). For the audit:
 
 ## C. Customer outreach (release-blocking, must complete pre-ship)
 
-- [x] **Email drafts created** — 5 drafts in Gmail (Ankit, Jeroen,
-      Josh, Max, Brian) reviewed + sent by dmitry@vexa.ai.
-- [x] **Discord DM sent to @nasnl (Jeroen)** — message ID
+- [x] **Email drafts created** — 5 drafts in Gmail (customer-B, customer-E,
+      customer-C, Max, customer-A) reviewed + sent by dmitry@vexa.ai.
+- [x] **Discord DM sent to @nasnl (customer-E)** — message ID
       `1499700499086180463` at 09:14:22 UTC.
 - [ ] **Customer re-test signal received from at least one affected
       user** — DEFERRED to post-ship. Treat as soft-gate; if no
