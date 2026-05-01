@@ -77,6 +77,26 @@ async def _classify_stopped_exit(
     positive-proof-of-success, returns (COMPLETED, requested_reason).
     Otherwise routes to FAILED with the closest-fit prod-derived reason.
     """
+    # v0.10.5.3 Pack C: user-initiated stop is NEVER a failure.
+    #
+    # Symptom (live prod 2026-05-01 meetings 11367 + 11368): user issued
+    # DELETE while bot was in awaiting_admission, classifier routed terminal
+    # to FAILED. Wrong — user-initiated stops are intentional, not failures,
+    # regardless of which lifecycle stage the bot was in.
+    #
+    # When the user issues DELETE, meetings.py sets `meeting.data.stop_requested
+    # = True`. We honor that as the canonical signal for "user intent" and
+    # always route to COMPLETED, preserving the requested completion_reason
+    # (typically STOPPED_BEFORE_ADMISSION) for analytics. Mirrors how
+    # AWAITING_ADMISSION_TIMEOUT (system-initiated) routes COMPLETED — both
+    # are "the bot didn't get into the meeting" but the source matters.
+    user_initiated_stop = bool(
+        meeting.data and isinstance(meeting.data, dict)
+        and meeting.data.get("stop_requested")
+    )
+    if user_initiated_stop:
+        return (MeetingStatus.COMPLETED, requested_reason)
+
     # Pack J.4 — every non-success completion_reason routes to FAILED.
     # [PLATFORM] data showed these were ALL being silently routed to
     # COMPLETED despite having explicit failure semantics:
@@ -84,6 +104,11 @@ async def _classify_stopped_exit(
     #   evicted (6), max_bot_time_exceeded (10), validation_error.
     # left_alone is debatable (bot legitimately left when alone); routes
     # to COMPLETED unless the data shows otherwise.
+    #
+    # Note: STOPPED_BEFORE_ADMISSION + STOPPED_WITH_NO_AUDIO are still in
+    # this set for the SYSTEM-initiated case. User-initiated case is
+    # intercepted above (Pack C). The system-initiated case (e.g. bot
+    # internal timeout, scheduler kill) remains a failure.
     _explicit_failure_reasons = {
         MeetingCompletionReason.AWAITING_ADMISSION_TIMEOUT,
         MeetingCompletionReason.AWAITING_ADMISSION_REJECTED,
