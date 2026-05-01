@@ -1,0 +1,198 @@
+release_id: '260501-followup'
+codename: sdp-munge-complete
+public_version: v0.10.5.2
+public_name: "v0.10.5.2 — SDP-munge site-2 revert (patch on v0.10.5)"
+milestone: ""  # to be created on plan approval
+branch: dev
+summary: |
+  **v0.10.6 — Surgical stabilization release. Two-pack, ship in 1-2 hours.**
+
+  Cleans up two correctness gaps left by v0.10.5's hardening pass that
+  are firing on customer meetings in production right now:
+
+  - Pack T (LEAD): Complete the v0.10.5 SDP-munge revert. v0.10.5's
+    `8ab7f49` reverted the `transceiver.direction = sendrecv → sendonly
+    → inactive` mutation at one of two duplicate sites in
+    `services/vexa-bot/core/src/services/screen-content.ts`. Site 2
+    (lines 1218-1228, inside the live RTCPeerConnection wrapper's
+    `pc.addEventListener('track', ...)` handler) is still active in
+    production and firing on every customer meeting that uses the
+    same code path — verified at HEAD of `main`. Cross-platform fix:
+    GMeet, Zoom Web, Teams all hook into the same wrapper.
+
+    Live prod evidence (2026-05-01 07:31-07:32 UTC, meeting 11356,
+    jeroen.nas@gmail.com, GMeet, recording_enabled=true): bot reached
+    active, ran 83 seconds, crashed with
+    `page.evaluate Execution context destroyed` at recording.js:102 —
+    same stack frame as #284. Three cross-platform issues close
+    together: #291 (umbrella), #284 (GMeet 2-4 min variant), #281
+    (Teams 44ms post-admission drop, 2+ Vexa Cloud customers
+    reproducing).
+
+  - Pack F: Bot-side failure_stage tracker keep-current. The bot's
+    in-process tracker is set to `"joining"` once at start of platform
+    handler and never updates to `"awaiting_admission"` / `"active"`
+    on subsequent transitions. Every crash past joining gets
+    persisted to `data.failure_stage` mislabeled. v0.10.5's #276 fix
+    added server-side derivation that hides the user-visible impact
+    via `MeetingResponse.from_orm`, but the JSONB row still stores
+    the wrong value at write-time — corrupting analytics and any
+    consumer that reads raw data. Surgical: ~5 lines in
+    `services/vexa-bot/core/src/index.ts`.
+
+  Both packs share the same `vexa-bot` image rebuild, so Pack F
+  costs zero extra cycle time. No chart changes, no migrations, no
+  schema changes. Ship target: 1-2 hours from plan approval.
+
+deployments:
+  modes: [lite, compose, helm]
+  notes:
+    lite: "Static grep checks (BOT_SDP_MUNGE_SITE2_REMOVED, BOT_NO_TRANSCEIVER_DIRECTION_MUTATION, BOT_FAILURE_STAGE_TRACKER_UPDATES) all run in lite mode against the bot source tree."
+    compose: "Cross-platform smoke — dispatch a real bot on GMeet + Zoom Web + Teams URLs with recording_enabled=true; bot must survive past first video track event without `Execution context destroyed`."
+    helm: "Cross-platform smoke same as compose, on the actual prod-shape bot pod (verifies image artifact reaches runtime)."
+
+constraints:
+  surgical_scope: |
+    v0.10.6 is a surgical 2-pack release targeting a 1-2 hour ship
+    window. May NOT extend scope into Pack S (self-host hardening),
+    Pack C (classifier coverage extension), or Pack F-features
+    (Cloud SQL IAM, leave-when-only-bots, model selection) without
+    an explicit groom-stage redo. Those advance to v0.10.7 or
+    later. Any "while we're at it" temptation during develop is a
+    scope leak, not an opportunity.
+
+  image_artifact_discipline: |
+    The `vexa-bot` image built during develop is the artifact we
+    ship. Image MUST NOT be rebuilt after the gate passes — same
+    rule from v0.10.5's hygiene update to ship stage. If a
+    follow-up correction is needed, it gets v0.10.6.1 patch
+    treatment, not a v0.10.6 image re-tag.
+
+# ── OBJECTIVES ────────────────────────────────────────────────────────
+
+scope:
+
+# ── Pack T — SDP-munge complete revert (cross-platform LEAD) ─────────
+- id: sdp-munge-site2-complete-revert
+  source: gh-issue
+  ref: Vexa-ai/vexa#291
+  closes: [Vexa-ai/vexa#291, Vexa-ai/vexa#284, Vexa-ai/vexa#281]
+  problem: |
+    `services/vexa-bot/core/src/services/screen-content.ts:1218-1228`
+    contains a `transceiver.direction` mutation that produces a
+    malformed offer SDP (BUNDLE enabled but rtcp-mux missing on
+    m=video). Chrome rejects setLocalDescription with
+    InvalidAccessError → peer enters degraded state → page eventually
+    navigates → page.evaluate context destroyed → bot exits.
+
+    v0.10.5 commit `8ab7f49` reverted this pattern at site 1
+    (`getVideoBlockInitScript()`, ~line 1339). Site 2 (the live
+    RTCPeerConnection wrapper's track event listener at lines
+    1218-1228) was missed. Verified active at HEAD of `main`:
+    grep at the file confirms the `for (const t of transceivers)`
+    block is unchanged from pre-v0.10.5.
+
+    Cross-platform exposure (verified by grep across the bot source):
+      - GMeet: getVideoBlockInitScript + RTCPeerConnection wrap → site 2
+        fires on every video track event (first track at admission OR
+        new track mid-meeting).
+      - Teams: services/vexa-bot/core/src/platforms/msteams/join.ts:144
+        invokes the same wrapper via the virtual-camera setup; first
+        video transceiver attaches synchronously at admission → site 2
+        fires within ~44ms of admission → 44ms post-admission drop.
+      - Zoom Web: services/vexa-bot/core/src/platforms/zoom/web/prepare.ts
+        :198-199 explicitly references `getVideoBlockInitScript`; same
+        chain.
+
+    Live prod evidence (2026-05-01 07:31-07:32 UTC, meeting 11356):
+    GMeet, recording_enabled=true, ran 83 seconds in active, crashed
+    with `page.evaluate Execution context destroyed` at recording.js:102.
+    Identical signature to #284 prior repros (2-4 min) and #291
+    customer cases (13.8 min / 14 min). Three platforms, one fix.
+
+  hypothesis: |
+    Remove the `for (const t of transceivers) { ... t.direction = ... }`
+    block at screen-content.ts:1218-1228. The preceding line
+    `trackRef.enabled = false;` is sufficient to disable incoming
+    video — same conclusion the original `8ab7f49` revert reached for
+    site 1. No replacement logic needed; we don't actually want to
+    mutate transceiver.direction at all.
+
+    The mutation was originally introduced as a Chromium-side
+    optimization to "stop the transceiver to prevent WebRTC from
+    decoding video" but the side effect of mutating SDP shape is far
+    more harmful than the CPU saved. The original `8ab7f49` commit
+    message documents this trade-off explicitly.
+
+    No new patterns invented; pure removal mirroring the existing
+    revert at site 1.
+
+  fix_commits: []
+  proves:
+    - {check: BOT_SDP_MUNGE_SITE2_REMOVED, modes: [lite, compose, helm]}
+    - {check: BOT_NO_TRANSCEIVER_DIRECTION_MUTATION, modes: [lite, compose, helm]}
+    - {check: BOT_GMEET_RECORDING_ENABLED_SURVIVES_TRACK_EVENT, modes: [compose, helm]}
+    - {check: BOT_TEAMS_ADMISSION_NOT_44MS_DROP, modes: [compose, helm]}
+    - {check: BOT_ZOOM_WEB_SURVIVES_TRACK_EVENT, modes: [compose, helm]}
+  required_modes: [lite, compose, helm]
+  human_verify:
+    - mode: compose
+      do: "Dispatch a bot at a GMeet meeting with recording_enabled=true; let the meeting run 5 minutes. Verify in bot logs that the [Vexa] Video transceiver stopped (id=..., dir=...) line is absent. Verify meeting reaches and stays in `active` for full 5 min."
+      expect: "Bot remains active 5+ min; zero `[Vexa] Video transceiver stopped` log lines; zero `Execution context destroyed` errors; meeting status finishes as `completed/stopped`."
+    - mode: compose
+      do: "Dispatch a bot at a Teams meeting (consumer or corporate URL); manual admit; observe time from `to: \"active\"` to next status transition."
+      expect: "Bot remains active for ≥60 seconds (vs the 44ms drop pattern in #281)."
+    - mode: compose
+      do: "Dispatch a bot at a Zoom Web meeting; let it run 60 seconds in active."
+      expect: "Bot survives first video track event; meeting reaches `completed/stopped`."
+    - mode: helm
+      do: "Repeat the GMeet recording_enabled=true smoke against the actual prod-shape bot pod (helm). Verify image artifact reaches runtime correctly (no stale cached layer)."
+      expect: "Same survival as compose mode — confirms the fix is in the deployed image, not just the dev tree."
+
+# ── Pack F — Bot-side failure_stage tracker keep-current ─────────────
+- id: bot-failure-stage-tracker-keep-current
+  source: gh-issue
+  ref: Vexa-ai/vexa#294
+  closes: [Vexa-ai/vexa#294]
+  problem: |
+    `services/vexa-bot/core/src/index.ts` sets the in-process
+    `currentFailureStage` tracker to `"joining"` at start of the
+    platform handler and never updates it as the bot transitions
+    through `awaiting_admission → active`. Every crash past joining
+    gets persisted to `data.failure_stage` mislabeled.
+
+    v0.10.5 #276 added server-side derivation in `MeetingResponse.from_orm`
+    so the API/dashboard surface computes the correct failure_stage
+    from the `status_transition` timeline — but the JSONB row still
+    stores the stale value at write-time. Analytics and any
+    consumer reading raw `data->>'failure_stage'` see the wrong value.
+
+    Concrete prod example (meeting 11356, 2026-05-01): bot was
+    `active` for 83 seconds before the SDP-munge crash; JSONB stores
+    `failure_stage: "joining"`; correct value is `"active"`.
+
+  hypothesis: |
+    Update the bot's in-process tracker on each `notifyStatusChange`
+    callback emission. ~5 lines in index.ts plus 1-2 lines in each
+    platform handler that emits `awaiting_admission` / `active`
+    callbacks. Same pattern as the existing tracker initialisation;
+    no new mechanism.
+
+    Tested by observing that for a meeting that crashes at active,
+    the JSONB `data.failure_stage` matches the latest entry's `to`
+    field in `status_transition`.
+
+  fix_commits: []
+  proves:
+    - {check: BOT_FAILURE_STAGE_TRACKER_UPDATES_ON_TRANSITIONS, modes: [lite, compose, helm]}
+    - {check: MEETING_FAILURE_STAGE_MATCHES_TIMELINE, modes: [compose, helm]}
+  required_modes: [lite, compose, helm]
+  human_verify:
+    - mode: lite
+      do: "Static grep `services/vexa-bot/core/src/index.ts` for the tracker update lines on each platform's status transition emit."
+      expect: "Tracker updates exist for `awaiting_admission` AND `active` transitions (in addition to the initial `joining` set)."
+    - mode: compose
+      do: "Force a bot crash post-admission (e.g. kill the bot pod after status reaches `active`). Inspect `meetings.data.failure_stage`."
+      expect: "JSONB `data.failure_stage == \"active\"` (matches latest `status_transition[].to`); not stale at `\"joining\"`."
+
+# ── End of scope ──────────────────────────────────────────────────────

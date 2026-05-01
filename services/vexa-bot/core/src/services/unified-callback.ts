@@ -23,6 +23,43 @@ export type FailureStage =
   | "awaiting_admission"
   | "active";
 
+// v0.10.6 (#294) — bot-side failure_stage tracker keep-current.
+//
+// `currentLifecycleStage` is updated on each successful status_change
+// callback emission for joining / awaiting_admission / active so that
+// crashes past joining no longer get persisted as `failure_stage:
+// "joining"`. v0.10.5's #276 added server-side derivation in
+// MeetingResponse.from_orm — that fixes the API surface but the JSONB
+// row still stored the wrong value at write-time. This tracker fixes
+// it at write-time too.
+//
+// The lifecycle ordering is requested → joining → awaiting_admission →
+// active. The tracker only ever advances (never goes backwards), so
+// ordering is enforced via STAGE_ORDER below.
+const STAGE_ORDER: Record<FailureStage, number> = {
+  requested: 0,
+  joining: 1,
+  awaiting_admission: 2,
+  active: 3,
+};
+
+let currentLifecycleStage: FailureStage = "joining";
+
+export function getCurrentLifecycleStage(): FailureStage {
+  return currentLifecycleStage;
+}
+
+/**
+ * Advance the lifecycle stage tracker. Only advances forward — calling
+ * with an earlier stage is a no-op (defends against stage emit races
+ * where a delayed `joining` callback arrives after `active` has emitted).
+ */
+export function advanceLifecycleStage(next: FailureStage): void {
+  if (STAGE_ORDER[next] > STAGE_ORDER[currentLifecycleStage]) {
+    currentLifecycleStage = next;
+  }
+}
+
 export interface UnifiedCallbackPayload {
   connection_id: string;
   container_id?: string;
@@ -117,6 +154,12 @@ export async function callStatusChangeCallback(
           responseBody.status === 'container_updated' ||
           responseBody.status === 'ignored'
         ) {log(`${status} status change callback sent and processed successfully (status=${responseBody.status})`);
+          // v0.10.6 (#294): advance the lifecycle tracker on each
+          // successful callback. Crashes after this point will now
+          // attribute to the correct stage at write-time.
+          if (status === "joining" || status === "awaiting_admission" || status === "active") {
+            advanceLifecycleStage(status);
+          }
           return; // Success, exit retry loop
         } else {log(`Callback returned unexpected status: ${responseBody.status}, detail: ${responseBody.detail || 'none'}`);
           // If not last attempt, retry
@@ -182,20 +225,33 @@ export function mapExitReasonToStatus(
         return { status: "completed", completionReason: "stopped" };
     }
   } else {
-    // Failed exits
+    // Failed exits.
+    //
+    // v0.10.6 (#294): the tracker keeps the in-process record of the
+    // furthest-advanced lifecycle stage. We use it as a FLOOR for the
+    // returned failure_stage so a crash that happened post-admission
+    // never gets demoted to `joining` just because the reason string
+    // looks early-stage.
+    //
+    // Hard cases (validation_error, missing_meeting_url) still pin to
+    // `requested` because by definition they fire before any callback
+    // emission has advanced the tracker.
+    const trackedStage = getCurrentLifecycleStage();
     switch (reason) {
-      case "teams_error":
-      case "google_meet_error":
-      case "zoom_error":
-        return { status: "failed", failureStage: "joining" };
-      case "post_join_setup_error":
-        return { status: "failed", failureStage: "joining" };
       case "missing_meeting_url":
         return { status: "failed", failureStage: "requested" };
       case "validation_error":
         return { status: "failed", failureStage: "requested" };
+      case "teams_error":
+      case "google_meet_error":
+      case "zoom_error":
+      case "post_join_setup_error":
+        // These can fire at any post-requested stage; trust the tracker.
+        // (Pre-#294 these all returned "joining" regardless of when they
+        // actually fired, mislabeling every active-stage crash as joining.)
+        return { status: "failed", failureStage: trackedStage };
       default:
-        return { status: "failed", failureStage: "active" };
+        return { status: "failed", failureStage: trackedStage };
     }
   }
 }

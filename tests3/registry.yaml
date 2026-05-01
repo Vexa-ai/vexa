@@ -79,6 +79,31 @@ BOT_CREATE_OK:
   - helm
   state: stateful
   max_duration_sec: 30
+BOT_FAILURE_STAGE_TRACKER_UPDATES_ON_TRANSITIONS:
+  proves: "bot's in-process failure_stage tracker advances on each successful status_change callback for joining/awaiting_admission/active — crashes past joining no longer get persisted as failure_stage='joining' (v0.10.6 #294)"
+  symptom: "every meeting that fails post-admission shows failure_stage='joining' in JSONB; #276's server-side derivation hides the user-visible impact but raw data->>'failure_stage' is still wrong; analytics + 3rd-party consumers see the wrong value"
+  found: '2026-05-01'
+  type: grep
+  file: services/vexa-bot/core/src/services/unified-callback.ts
+  must_match: advanceLifecycleStage\s*\(\s*status\s*\)
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BOT_GMEET_RECORDING_ENABLED_SURVIVES_TRACK_EVENT:
+  proves: "bot dispatched against a GMeet meeting with recording_enabled=true survives the first video track event AND remains in 'active' for ≥120s — confirms screen-content.ts:1218-1228 SDP-munge site-2 is removed (v0.10.6 #291/#284)"
+  symptom: "bot reaches active, runs 1-4 minutes, then crashes with 'page.evaluate Execution context destroyed' at recording.js:102 — site-2 transceiver.direction mutation produces malformed offer SDP, Chrome rejects setLocalDescription, peer enters degraded state, page navigates"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.6-bot-stability.sh
+  step: gmeet_recording_survival
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 180
 BOT_DELETE_DURABLE_RETRY:
   proves: "meeting-api DELETE container-stop survives meeting-api restart and runtime-api transient 5xx \u2014 stop intent\
     \ persists in Redis Stream, sweep consumer retries with exponential backoff, DLQ surfaces persistent failures (Pack D.2 / #266)"
@@ -110,6 +135,19 @@ BOT_LOGS_STRUCTURED_JSON:
   - lite
   state: stateless
   max_duration_sec: 5
+BOT_NO_TRANSCEIVER_DIRECTION_MUTATION:
+  proves: "no `transceiver.direction = ` or `t.direction = ` assignment exists anywhere in services/vexa-bot — defends against re-introduction of the SDP-munge bug class (v0.10.6 #291)"
+  symptom: "any future PR that re-introduces transceiver.direction mutation will revive #284 / #291 / #281 cross-platform crash class — bot survival chain depends on this NEVER coming back"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.6-bot-stability.sh
+  step: no_transceiver_direction_mutation
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
 BOT_RECORDING_ENABLED:
   proves: "bots are created with recordingEnabled=true \u2014 audio will be captured and uploaded"
   symptom: "No audio recording for meeting \u2014 RECORDING_ENABLED env var not set or recordingEnabled=false in BOT_CONFIG"
@@ -133,6 +171,31 @@ BOT_RECORDS_INCREMENTALLY:
   - compose
   state: stateless
   max_duration_sec: 10
+BOT_SDP_MUNGE_SITE2_REMOVED:
+  proves: "site-2 of the SDP-munge `for (const t of transceivers)` block is removed from services/vexa-bot/core/src/services/screen-content.ts — closes the v0.10.5 incomplete revert that left this site active in production (v0.10.6 #291)"
+  symptom: "v0.10.5 reverted SDP-munge at screen-content.ts site-1 (~line 1339) but missed identical site-2 (~lines 1218-1228); customer GMeet meetings with recording_enabled=true crashed mid-meeting at recording.js:102 with 'Execution context destroyed' — verified live on 2026-05-01 meeting 11356"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.6-bot-stability.sh
+  step: sdp_munge_site2_removed
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BOT_TEAMS_ADMISSION_NOT_44MS_DROP:
+  proves: "bot dispatched at a Teams meeting (consumer or corporate URL) survives ≥60s post-admission — confirms screen-content.ts site-2 fix closes the 44ms drop in #281"
+  symptom: "Teams enterprise meetings drop in 44-51ms after admission (#281) — first video track event fires synchronously at admission, site-2 mutates transceiver.direction, peer-connection InvalidAccessError, bot exits in 44ms; 2+ Vexa Cloud customers reproducing pre-v0.10.6"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.6-bot-stability.sh
+  step: teams_admission_survival
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 120
 BOT_STATUS_TRANSITIONS:
   proves: "bot status transitions from requested within 30s \u2014 callbacks from bot\u2192meeting-api work"
   symptom: "Bot stuck in 'requested' \u2014 status change callbacks not reaching meeting-api (wrong image, missing callback\
@@ -146,6 +209,18 @@ BOT_STATUS_TRANSITIONS:
   - helm
   state: stateful
   max_duration_sec: 30
+BOT_ZOOM_WEB_SURVIVES_TRACK_EVENT:
+  proves: "bot dispatched at a Zoom Web meeting survives the first video track event AND remains in 'active' for ≥60s — confirms cross-platform fix coverage (v0.10.6 #291)"
+  symptom: "Zoom Web hits the same SDP-munge site-2 via services/vexa-bot/core/src/platforms/zoom/web/prepare.ts:198-199 → getVideoBlockInitScript → live RTCPeerConnection wrapper — pre-v0.10.6 every Zoom Web bot would degrade peer connection on first video track"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.6-bot-stability.sh
+  step: zoom_web_survival
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 120
 BROWSER_IMAGE_IN_ENV:
   proves: "BROWSER_IMAGE is set explicitly in env-example \u2014 not derived from IMAGE_TAG substitution"
   symptom: "BROWSER_IMAGE not in .env \u2014 docker-compose.yml variable substitution fails silently, bots get wrong image"
@@ -887,6 +962,18 @@ MAP_MEETING:
   - helm
   state: stateless
   max_duration_sec: 5
+MEETING_FAILURE_STAGE_MATCHES_TIMELINE:
+  proves: "after a meeting fails, JSONB data->>'failure_stage' matches the latest entry's 'to' field in data->'status_transition' — bot's in-process tracker stays in sync with callback emissions (v0.10.6 #294)"
+  symptom: "JSONB data.failure_stage stores the stale 'joining' value for meetings that failed during 'active' stage — tracker drifted out of sync with status_transition timeline; verified live on 2026-05-01 meeting 11356 (active for 83s, JSONB stored 'joining')"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.6-bot-stability.sh
+  step: meeting_failure_stage_matches_timeline
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 60
 MEETINGS_LIST:
   proves: "GET /meetings returns 200 \u2014 meeting list API works"
   symptom: GET /meetings not returning 200

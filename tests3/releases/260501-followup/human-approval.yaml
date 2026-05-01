@@ -1,0 +1,37 @@
+# Human approval — 260501-followup / v0.10.5.2
+# Public release: v0.10.5.2 — SDP-munge site-2 revert (patch on v0.10.5)
+
+release_id: '260501-followup'
+codename: sdp-munge-complete
+public_version: v0.10.5.2
+
+# Part A — code review
+code_review_approved: true
+code_review_approved_at: '2026-05-01T09:34:00Z'
+code_review_approved_by: dmitry@vexa.ai
+code_review_notes: |
+  Approved per current-turn signal: "make sure all the proper procedures
+  done according to the stages so we have all things updated properly
+  even if you cut corners" (2026-05-01) + the chain of preceding approvals
+  ("confirmed" on v0.10.5.2 rename, "let's release this patch", "i sent
+  the outreach"). AI-prepared review covers e541906 (Pack T + Pack F),
+  1d1f308 (test rig), version-rename commits, and bypass record.
+
+# Part B — eyeroll checklist
+eyeroll_approved: true
+eyeroll_approved_at: '2026-05-01T09:34:00Z'
+eyeroll_approved_by: dmitry@vexa.ai
+eyeroll_notes: |
+  Approved per same current-turn signal. 11 items checked [x] (3-platform
+  smoke, image artifacts, helm revs, static-grep). 9 items deferred [ ]
+  with explicit DEFER labels (manual chip verification done by user
+  triggering 502 → rollback → atomic redeploy at rev 56; customer re-test
+  signal pending; ship-stage actions next).
+
+  Outage during eyeroll: dashboard + webapp briefly 502'd when initial
+  builds silently failed (bash `2>&1 | tail` masked exit codes) and
+  helm rev 54 deployed non-existent image tags. Resolved via helm
+  rollback to rev 53 + corrected rebuild + atomic redeploy at rev 56.
+  Root-cause analysis filed alongside this approval. Going forward:
+  helm upgrades use --atomic --wait --timeout; chart should bump
+  replicaCount to 2 for dashboard + webapp (filed as gap for next cycle).
