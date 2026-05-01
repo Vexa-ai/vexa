@@ -1581,6 +1581,267 @@ WS_PING_PONG:
   - helm
   state: stateful
   max_duration_sec: 30
+# \u2500\u2500 v0.10.5.3 cycle additions (Pack M, O, T, P, C, D-1, D-2, D-3, H) \u2500\u2500
+BOT_RECORDING_CHUNK_BUFFER_TRIMMED:
+  proves: "bot recording.ts splices chunks from __vexaRecordedChunks after upload (gmeet + teams) so the buffer cap stays at 10 max"
+  symptom: "__vexaRecordedChunks grows unbounded for the meeting lifetime; 10+ MB at 24 min real-conversation; tab-process pressure \u2192 page navigation \u2192 recording.js:102 Execution context destroyed"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.5.3-static-greps.sh
+  step: chunk_buffer_trim
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BOT_GMEET_LONG_RECORDING_NO_LEAK:
+  proves: "GMeet bot dispatched at FIXTURE_GMEET_MULTIPARTY_URL with recording_enabled=true survives 25+ min without page-navigation crash; bot_resources.peak_memory_bytes stays bounded"
+  symptom: "long-duration crash class \u2014 Execution context destroyed at recording.js:102 around 14-24 min mark on real-conversation meetings"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.5.3-runtime-smokes.sh
+  step: gmeet_long_recording
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 1800
+BOT_TEAMS_LONG_RECORDING_NO_LEAK:
+  proves: "Teams bot dispatched at FIXTURE_TEAMS_MULTIPARTY_URL with recording_enabled=true survives 25+ min cleanly"
+  symptom: "same chunk-buffer leak class on Teams platform"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.5.3-runtime-smokes.sh
+  step: teams_long_recording
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 1800
+BOT_ZOOM_LONG_RECORDING_NO_LEAK:
+  proves: "Zoom Web bot dispatched at FIXTURE_ZOOM_URL with recording_enabled=true survives \u226560s; verifies no equivalent leak in Zoom's parecord paradigm"
+  symptom: "if Zoom has a different unbounded accumulator (defensive check)"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.5.3-runtime-smokes.sh
+  step: zoom_long_recording
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 1800
+BOT_STDOUT_STREAM_TO_REDIS:
+  proves: "bot maintains an in-process ring buffer of last ~200 structured-JSON log lines (logBuffer in utils/log.ts) \u2014 Pack O Phase 1; getLogBuffer() exported for performGracefulLeave"
+  symptom: "every long-duration crash investigation since v0.10.5 ship has been forensic-blind because bot stdout dies with the pod and was not flushed to JSONB"
+  found: '2026-05-01'
+  type: grep
+  file: services/vexa-bot/core/src/utils/log.ts
+  must_match: 'export function getLogBuffer'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+MEETING_API_FLUSH_BOT_LOGS_ON_TERMINAL:
+  proves: "meeting-api bot_status_change_callback persists payload.bot_logs into meetings.data.bot_logs JSONB on terminal status (failed/completed) with a 50 KB cap"
+  symptom: "bot ring-buffer is sent on the wire but meeting-api drops it; meetings.data.bot_logs never populated"
+  found: '2026-05-01'
+  type: grep
+  file: services/meeting-api/meeting_api/callbacks.py
+  must_match: 'BOT_LOGS_MAX_BYTES'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+MEETING_BOT_LOGS_FIELD_PRESENT_ON_FAILED:
+  proves: "after a forced bot crash, meeting row's data.bot_logs field is populated with the structured-log lines preserving the crash moment"
+  symptom: "operator-side forensic gap: failed meetings have no log evidence to diagnose"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.5.3-runtime-smokes.sh
+  step: meeting_bot_logs_present
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 120
+BOT_RESOURCE_SAMPLER_RUNS:
+  proves: "bot's main loop has a 30s cgroup-stat poller (startBotResourceSampler in index.ts) emitting structured log lines with memory_bytes + cpu_usage_usec from /sys/fs/cgroup"
+  symptom: "no per-meeting memory/CPU telemetry; cannot answer 'did the bot OOM at minute 23'"
+  found: '2026-05-01'
+  type: grep
+  file: services/vexa-bot/core/src/index.ts
+  must_match: 'cgroup.*memory\.current'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+MEETING_BOT_RESOURCES_FIELD_PRESENT:
+  proves: "meeting row's data.bot_resources field has peak_memory_bytes + cpu_usage_usec_total + samples after meeting completes"
+  symptom: "Pack T resource summary not making it through to the JSONB"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.5.3-runtime-smokes.sh
+  step: meeting_bot_resources_present
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 120
+STAGE_DOC_DEVELOP_NO_FALLBACKS_RULE:
+  proves: "tests3/stages/03-develop.md contains the 'No fallbacks unless explicitly decided' rule under May NOT"
+  symptom: "fallback patterns added to OSS code without scope-stage decision-record (Pack M's chunk-buffer leak was committed exactly this way)"
+  found: '2026-05-01'
+  type: grep
+  file: tests3/stages/03-develop.md
+  must_match: '(?i)no fallback.*explicit.*decision'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BOT_NO_UNJUSTIFIED_FALLBACKS:
+  proves: "soft-grep across services/vexa-bot/core/src/ surfaces fallback patterns; pass with WARN on existing 117 patterns; develop-stage rule is primary enforcement"
+  symptom: "new fallback added without #NNN issue ref \u2014 repeats the v0.10.5.2 chunk-buffer leak pattern"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.5.3-no-fallbacks-pii.sh
+  step: bot_fallback_audit
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 10
+RELEASE_DOCS_NO_PII:
+  proves: "tests3/releases/<id>/* artifacts use anonymized customer refs (customer-A, customer-B, ...); no real-looking emails outside @redacted/@example.com/@vexa.ai/@anthropic.com"
+  symptom: "PII leak into OSS public repo (real names + emails) like the v0.10.5.2 cycle"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.5.3-no-fallbacks-pii.sh
+  step: release_docs_pii
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 10
+MEETING_API_USER_STOP_IS_COMPLETED:
+  proves: "user-initiated DELETE during awaiting_admission produces meeting status=completed (not failed) with completion_reason=stopped_before_admission"
+  symptom: "v0.10.5.2 cycle bug: user-stops were classified as failed because STOPPED_BEFORE_ADMISSION was in _explicit_failure_reasons set"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.5.3-runtime-smokes.sh
+  step: user_stop_completed
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 120
+DASHBOARD_RENDERS_LOCAL_TZ:
+  proves: "dashboard meeting card uses parseUTCTimestamp + toLocaleString with Intl.DateTimeFormat resolved tz"
+  symptom: "meeting times rendered in tz-shifted form (#265) due to inconsistent parseUTCTimestamp usage"
+  found: '2026-05-01'
+  type: grep
+  file: services/dashboard/src/components/meetings/meeting-card.tsx
+  must_match: 'toLocaleString.*Intl\.DateTimeFormat'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+DASHBOARD_NO_INLINE_DOCS_LINKS:
+  proves: "dashboard header docs link uses getDocsUrl helper (external docs.vexa.ai); no inline href=/docs at startup pages"
+  symptom: "dashboard.vexa.ai/docs route reachable; users land on internal docs instead of canonical docs.vexa.ai"
+  found: '2026-05-01'
+  type: grep
+  file: services/dashboard/src/components/layout/header.tsx
+  must_match: 'getDocsUrl'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+MEETING_API_PRESIGNED_AUDIO_URL:
+  proves: "meeting-api /recordings/{id}/media/{mid}/download returns a presigned S3/MinIO URL when storage_backend in {s3, minio}"
+  symptom: "audio playback always proxies through /raw which buffers the whole file in service memory (#288 \u2014 10s dead-air on 24-min recordings)"
+  found: '2026-05-01'
+  type: grep
+  file: services/meeting-api/meeting_api/recordings.py
+  must_match: 'get_presigned_url\(mf\.storage_path'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+DASHBOARD_AUDIO_STREAMS:
+  proves: "dashboard's getRecordingAudioUrl async-fetches /download response and returns presigned URL (or /raw for local backend) \u2014 browser streams directly with HTTP Range"
+  symptom: "every audio fragment src points at /raw proxy; full-file pre-download before playback"
+  found: '2026-05-01'
+  type: grep
+  file: services/dashboard/src/lib/api.ts
+  must_match: 'getRecordingAudioUrl.*async'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+HELM_DEPLOYMENT_MAX_UNAVAILABLE_ZERO:
+  proves: "vexa.deploymentStrategy helper renders maxUnavailable: 0 + maxSurge: 1 (zero-downtime rolling update)"
+  symptom: "v0.10.5.2 outage class: maxUnavailable: 1 + replicaCount: 1 killed OLD pod before NEW Ready, 502s during any image bump"
+  found: '2026-05-01'
+  type: grep
+  file: deploy/helm/charts/vexa/templates/_helpers.tpl
+  must_match: 'maxUnavailable: 0'
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 5
+HELM_REPLICA_COUNT_TWO_FOR_STATELESS:
+  proves: "values.yaml mcp.replicaCount: 2 (matches the rest of stateless services)"
+  symptom: "single-replica stateless service has zero-downtime exposure during rolling-update; v0.10.5.2 outage shape"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.5.3-static-greps.sh
+  step: helm_replica_count_two
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 5
+HELM_UPGRADE_PREFLIGHT_IMAGE_CHECK:
+  proves: "Makefile release-helm-upgrade-safe target verifies every chart-rendered image:tag exists on Docker Hub via docker manifest inspect before applying helm"
+  symptom: "v0.10.5.2 outage: silent build failures pushed non-existent image tags into helm values; upgrade applied them anyway \u2192 ImagePullBackOff outage"
+  found: '2026-05-01'
+  type: grep
+  file: Makefile
+  must_match: 'docker manifest inspect'
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 5
+HELM_UPGRADE_ATOMIC_DEFAULT:
+  proves: "release-helm-upgrade-safe always calls helm upgrade with --atomic --wait --timeout 5m flags"
+  symptom: "non-atomic upgrade leaves prod broken on failed image-pull; manual rollback needed"
+  found: '2026-05-01'
+  type: grep
+  file: Makefile
+  must_match: 'helm upgrade.*--atomic.*--wait.*--timeout'
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 5
 auth-meeting:
   type: script
   script: tests/auth-meeting.sh
