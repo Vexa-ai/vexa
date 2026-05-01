@@ -18,10 +18,24 @@ RUN rm -rf node_modules/@vexaai/transcript-rendering && \
 # Copy source code
 COPY services/dashboard/src ./src
 COPY services/dashboard/public ./public
+COPY services/dashboard/scripts ./scripts
 COPY services/dashboard/next.config.ts services/dashboard/tsconfig.json services/dashboard/postcss.config.mjs services/dashboard/eslint.config.mjs ./
 COPY services/dashboard/components.json ./
 
-# Build application
+# Version disclosure (NEXT_PUBLIC_VEXA_OSS_VERSION + RELEASE_DATE).
+#
+# Source of truth lives in deploy/helm/charts/vexa/Chart.yaml appVersion
+# (relative to repo root) but Docker's build context is .. — Chart.yaml
+# isn't accessible from inside the build's WORKDIR. Caller MUST pass these
+# as build-args, extracting from the chart on the host. The generator script
+# (scripts/generate-release-version.js, run via npm prebuild hook) consumes
+# them as its first-priority source.
+ARG NEXT_PUBLIC_VEXA_OSS_VERSION
+ARG NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE
+ENV NEXT_PUBLIC_VEXA_OSS_VERSION=$NEXT_PUBLIC_VEXA_OSS_VERSION
+ENV NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE=$NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE
+
+# Build application (npm prebuild → generate-release-version.js → next build)
 RUN npm run build
 
 # Production stage
