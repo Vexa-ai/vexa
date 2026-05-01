@@ -1,0 +1,38 @@
+# Human approval — 260501-followup / v0.10.5.2
+# Public release: v0.10.5.2 — SDP-munge site-2 revert (patch on v0.10.5)
+#
+# This is the human-stage signoff. AI prepares the artifacts (code-review.md,
+# human-checklist.md); human approves both parts before stage advances to ship.
+#
+# Per CLAUDE.md: AI does NOT auto-flip these. Both flags require explicit
+# current-turn approval from dmitry@vexa.ai.
+
+release_id: '260501-followup'
+codename: sdp-munge-complete
+public_version: v0.10.5.2
+
+# Part A — code review
+# AI generated `code-review.md` summarizing per-commit changes, risk, open
+# questions. Human reads + approves.
+code_review_approved: false
+code_review_approved_at: ""
+code_review_approved_by: ""
+code_review_notes: |
+  Pre-fill: AI-prepared review covers e541906 (Pack T + Pack F),
+  1d1f308 (test rig), version-rename commits, and bypass record.
+  Open questions for human surfaced at the bottom of code-review.md.
+
+# Part B — eyeroll checklist
+# Human ticks each item in human-checklist.md. Some items are DEFERRED
+# acceptably per the emergency-hotfix shape (documented in checklist).
+eyeroll_approved: false
+eyeroll_approved_at: ""
+eyeroll_approved_by: ""
+eyeroll_notes: |
+  Pre-fill: 11 items checked [x] (smoke, image artifacts, helm revs,
+  static-grep). 9 items deferred [ ] with explicit acknowledgement
+  (manual chip verification, customer re-test signal, ship-stage
+  actions still pending).
+
+# When BOTH are approved: stage advances `human → ship` via
+#   python3 tests3/lib/stage.py enter ship
