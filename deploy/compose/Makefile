@@ -152,7 +152,14 @@ build-bot-image: check_docker
 
 build-lite: check_docker
 	@echo "Building $(DOCKERHUB_USER)/vexa-lite:$(BUILD_TAG)..."
-	docker build --platform linux/amd64 -t $(DOCKERHUB_USER)/vexa-lite:$(BUILD_TAG) -f $(ROOT)/deploy/lite/Dockerfile.lite $(ROOT)
+	@# v0.10.5.3 Pack D-1 follow-up: pass NEXT_PUBLIC_VEXA_OSS_VERSION as build-arg
+	@# so the dashboard's prebuild generator inside the lite container has a
+	@# version source. VERSION file is the canonical truth.
+	docker build --platform linux/amd64 \
+		--build-arg NEXT_PUBLIC_VEXA_OSS_VERSION=$(VERSION) \
+		--build-arg NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE=$(shell date +%Y-%m-%d) \
+		-t $(DOCKERHUB_USER)/vexa-lite:$(BUILD_TAG) \
+		-f $(ROOT)/deploy/lite/Dockerfile.lite $(ROOT)
 
 build-transcript-rendering:
 	@echo "Building transcript-rendering package..."
