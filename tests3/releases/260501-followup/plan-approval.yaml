@@ -1,0 +1,158 @@
+# Plan approval — 260501-followup (codename sdp-munge-complete)
+# Public release: v0.10.6 — SDP-munge complete revert + bot stage-tracker fix
+# Milestone: TBD (create on plan approval)
+#
+# APPROVED 2026-05-01 by dmitry@vexa.ai — explicit "approved" signal in
+# current turn. All 17 line-items flipped to true: 10 issue-level fields
+# (2 issues × 5 fields) + 7 registry check definitions.
+#
+# Surgical 2-pack release. Target ship: 1-2 hours from approval.
+#   Pack T — SDP-munge complete revert (cross-platform, closes #291 + #284 + #281)
+#   Pack F — Bot-side failure_stage tracker keep-current (closes #294)
+
+release_id: '260501-followup'
+codename: sdp-munge-complete
+public_version: v0.10.6
+approved_at: '2026-05-01T08:12:38Z'
+approver: dmitry@vexa.ai
+approval_source: |
+  Project-owner explicit current-turn signal 2026-05-01:
+  "prroved" (typo for "approved") in response to scope.yaml +
+  plan-approval.yaml summary. v0.10.6 surgical 2-pack release with
+  ship target of 1-2 hours from approval per the same conversation
+  ("we want to release it in 1-2 hours now"). Two packs (Pack T
+  SDP-munge complete revert, Pack F failure_stage tracker) with 7
+  new registry checks; all flipped to true.
+
+# ── OBJECTIVES ────────────────────────────────────────────────────────
+
+scope_approved:
+
+  - issue: sdp-munge-site2-complete-revert
+    hypothesis: true       # Pure removal of screen-content.ts:1218-1228 block; mirrors v0.10.5's site-1 revert. trackRef.enabled=false (preceding line) sufficient. No new pattern. Cross-platform fix (GMeet + Zoom Web + Teams hook same wrapper).
+    proves: true           # 5 checks: BOT_SDP_MUNGE_SITE2_REMOVED, BOT_NO_TRANSCEIVER_DIRECTION_MUTATION (both static-grep), plus 3 cross-platform smoke survival checks (GMeet + Teams + Zoom Web).
+    required_modes: true   # [lite, compose, helm] — lite covers static greps; compose covers cross-platform smoke; helm verifies image artifact reaches runtime.
+    human_verify: true     # 4 manual smoke items: GMeet recording_enabled=true 5-min survival, Teams 60s+ active, Zoom Web survival, helm-mode artifact verification.
+    closes_issues: true    # Closes #291 (umbrella), #284 (GMeet 2-4 min variant), #281 (Teams 44ms drop)
+
+  - issue: bot-failure-stage-tracker-keep-current
+    hypothesis: true       # ~5 lines in index.ts + 1-2 per platform handler to update tracker on each notifyStatusChange callback for awaiting_admission/active. Cleans up at write-time the stale value that #276 only fixed at read-time.
+    proves: true           # 2 checks: BOT_FAILURE_STAGE_TRACKER_UPDATES_ON_TRANSITIONS (static grep) + MEETING_FAILURE_STAGE_MATCHES_TIMELINE (runtime DB check after a forced crash).
+    required_modes: true   # [lite, compose, helm] — lite for static grep; compose for forced-crash + JSONB inspection.
+    human_verify: true     # 2 manual items: source grep for tracker updates; force a post-admission bot crash and verify JSONB matches timeline.
+    closes_issues: true    # Closes #294
+
+# ── REGISTRY CHANGES ──────────────────────────────────────────────────
+# 7 new check IDs introduced. All approved.
+
+registry_changes_approved:
+
+  - check: BOT_SDP_MUNGE_SITE2_REMOVED
+    approved: true
+    purpose: |
+      Static grep against the bot source confirming the
+      `for (const t of transceivers)` block at
+      services/vexa-bot/core/src/services/screen-content.ts:1218-1228
+      is removed. Defends against the exact regression v0.10.5 shipped
+      (incomplete revert) — must_match the deletion at write-time.
+    type: script
+    dispatch: BOT_SDP_MUNGE_SITE2_CHECK
+    modes: [lite, compose, helm]
+    state: stateless
+    max_duration_sec: 5
+    must_match: "site2_block_removed=true"
+
+  - check: BOT_NO_TRANSCEIVER_DIRECTION_MUTATION
+    approved: true
+    purpose: |
+      Static grep across the bot source AND compiled dist confirming
+      no `transceiver.direction = ` or `t.direction = ` assignment
+      anywhere. Catches future regressions that re-introduce the
+      pattern (whether by copy-paste or by a third party PR).
+    type: script
+    dispatch: BOT_NO_TRANSCEIVER_DIRECTION_MUTATION_CHECK
+    modes: [lite, compose, helm]
+    state: stateless
+    max_duration_sec: 5
+    must_match: "transceiver_direction_assignments=0"
+
+  - check: BOT_GMEET_RECORDING_ENABLED_SURVIVES_TRACK_EVENT
+    approved: true
+    purpose: |
+      Runtime smoke — dispatch a bot at a synthetic GMeet meeting
+      with recording_enabled=true; verify the bot survives at least
+      120 seconds in `active` (covers the 2-4 min #284 crash window
+      and #284 fastest-variant timing). Looks for absence of
+      `[Vexa] Video transceiver stopped` log line + absence of
+      `Execution context destroyed` error.
+    type: script
+    dispatch: BOT_GMEET_RECORDING_SURVIVAL_CHECK
+    modes: [compose, helm]
+    state: stateful
+    max_duration_sec: 180
+
+  - check: BOT_TEAMS_ADMISSION_NOT_44MS_DROP
+    approved: true
+    purpose: |
+      Runtime smoke — dispatch a bot at a Teams meeting (consumer URL
+      sufficient for 44ms drop class — both consumer and corporate
+      hit the same code path post-admission). Bot must remain in
+      `active` for ≥60 seconds (vs the 44ms drop in #281).
+    type: script
+    dispatch: BOT_TEAMS_ADMISSION_SURVIVAL_CHECK
+    modes: [compose, helm]
+    state: stateful
+    max_duration_sec: 120
+
+  - check: BOT_ZOOM_WEB_SURVIVES_TRACK_EVENT
+    approved: true
+    purpose: |
+      Runtime smoke — dispatch a bot at a Zoom Web meeting; bot must
+      survive the first video track event (which fires at admission)
+      and remain in `active` for ≥60 seconds.
+    type: script
+    dispatch: BOT_ZOOM_WEB_SURVIVAL_CHECK
+    modes: [compose, helm]
+    state: stateful
+    max_duration_sec: 120
+
+  - check: BOT_FAILURE_STAGE_TRACKER_UPDATES_ON_TRANSITIONS
+    approved: true
+    purpose: |
+      Static grep in services/vexa-bot/core/src/index.ts confirming
+      the in-process tracker is updated on each `notifyStatusChange`
+      emission for `awaiting_admission` AND `active` (in addition to
+      the initial `joining` set). Defends the fix against revert.
+    type: script
+    dispatch: BOT_FAILURE_STAGE_TRACKER_UPDATES_CHECK
+    modes: [lite, compose, helm]
+    state: stateless
+    max_duration_sec: 5
+    must_match: "tracker_updates_on_active=true tracker_updates_on_awaiting_admission=true"
+
+  - check: MEETING_FAILURE_STAGE_MATCHES_TIMELINE
+    approved: true
+    purpose: |
+      Runtime — after a meeting fails, query the DB for
+      `data->>'failure_stage'` and confirm it matches the latest
+      entry's `to` field in `data->'status_transition'`. Catches
+      regressions where the bot tracker drifts out of sync with the
+      callback emissions.
+    type: script
+    dispatch: MEETING_FAILURE_STAGE_TIMELINE_MATCH_CHECK
+    modes: [compose, helm]
+    state: stateful
+    max_duration_sec: 60
+
+# ── DOD CHANGES ───────────────────────────────────────────────────────
+# Features whose DoDs change weight / add / remove with this release.
+
+dod_changes_approved: []   # No DoD changes proposed for v0.10.6.
+                           # Pack T extends existing bot-recording DoD's
+                           # cross-platform survival expectation but
+                           # does not add new DoD weights — the
+                           # surface stays the same shape, just the
+                           # implementation gets less buggy.
+                           # Pack F similarly extends existing
+                           # failure-stage-correctness DoD without
+                           # changing the weight.
