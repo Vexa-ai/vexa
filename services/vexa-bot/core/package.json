@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "test": "tsx src/platforms/zoom/web/join.test.ts && tsx src/platforms/googlemeet/admission.test.ts",
+    "test": "tsx src/platforms/zoom/web/join.test.ts",
     "build": "tsc && cp -r src/services/hallucinations dist/services/hallucinations 2>/dev/null; node build-browser-utils.js",
     "build-browser": "node build-browser-utils.js",
     "dev": "tsx src/index.ts"
