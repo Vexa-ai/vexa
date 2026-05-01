@@ -47,7 +47,16 @@ services:
       - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-vexa-access-key}
       - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-vexa-secret-key}
     ports:
-      - "127.0.0.1:${MINIO_HOST_PORT:-9000}:9000"
+      # v0.10.5.3 Pack D-3 follow-up (Option B):
+      # MINIO_HOST_BIND defaults to 127.0.0.1 (safe — only the host can reach
+      # MinIO; presigned URLs only work for browsers running on the host).
+      # For external-browser audio playback (e.g. dashboard accessed from a
+      # remote machine), set MINIO_HOST_BIND=0.0.0.0 + set MINIO_PUBLIC_ENDPOINT
+      # to e.g. http://<host-public-ip>:${MINIO_HOST_PORT}. The presigned URL
+      # signature uses MINIO_PUBLIC_ENDPOINT; without that env, presigned URLs
+      # carry the in-network hostname `minio:9000` which only resolves inside
+      # the docker bridge network.
+      - "${MINIO_HOST_BIND:-127.0.0.1}:${MINIO_HOST_PORT:-9000}:9000"
       - "127.0.0.1:${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
     volumes:
       - minio-data:/data
