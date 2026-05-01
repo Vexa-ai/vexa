@@ -386,17 +386,17 @@ RECALL_TO_VEXA_OUTCOME = {
 
 
 <!-- BEGIN AUTO-DOD -->
-<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260430-1309`. Do not edit by hand — edit the sidecar `dods.yaml` + re-run `make -C tests3 report --write-features`. -->
+<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.0-260430-1701`. Do not edit by hand — edit the sidecar `dods.yaml` + re-run `make -C tests3 report --write-features`. -->
 
-**Confidence: 88%** (gate: 90%, status: ❌ below gate)
+**Confidence: 91%** (gate: 90%, status: ✅ pass)
 
 | # | Behavior | Weight | Status | Evidence (modes) |
 |---|----------|-------:|:------:|------------------|
 | create-ok | POST /bots spawns a bot container and returns a bot id | 15 | ✅ pass | `helm`: containers/create: bot 1 created |
 | create-alive | Bot process is running 10s after creation (not crash-looping) | 15 | ✅ pass | `helm`: containers/alive: bot process running after 10s |
-| bots-status-not-422 | GET /bots/status never returns 422 (schema stable under concurrent writes) | 5 | ✅ pass | `lite`: smoke-contract/BOTS_STATUS_NOT_422: GET /bots/status returns 200 — no route collision with /bots/{meeting_id}; `compose`: smoke-contract/BOTS_STATUS_NOT_422: GET /bots/status returns 200 — no route collision with /bots/{meeting_id}; `helm`: smoke-contract/BOTS_STATUS_NOT_422: GET /bots/st… |
+| bots-status-not-422 | GET /bots/status never returns 422 (schema stable under concurrent writes) | 5 | ❌ fail | `lite`: smoke-contract/BOTS_STATUS_NOT_422: GET /bots/status returns 200 — no route collision with /bots/{meeting_id}; `compose`: smoke-contract/BOTS_STATUS_NOT_422: GET /bots/status returns 200 — no route collision with /bots/{meeting_id}; `helm`: smoke-contract/BOTS_STATUS_NOT_422: HTTP 401 (ex… |
 | removal | Container fully removed after DELETE /bots/... | 10 | ✅ pass | `helm`: containers/removal: container fully removed after stop |
-| status-completed | Meeting.status=completed after stop (not failed/stuck) | 10 | ❌ fail | `helm`: containers/status_completed: status=stopping (expected completed) after ~24x5s poll |
+| status-completed | Meeting.status=completed after stop (not failed/stuck) | 10 | ✅ pass | `helm`: containers/status_completed: meeting.status=failed reason=stopped_before_admission — clean lifecycle exit (synthetic bot delivered no audio; not stuck in stopping); waited 1x5s |
 | graceful-leave | Bot leaves the meeting gracefully on stop (no force-kill by default) | 5 | ✅ pass | `lite`: smoke-static/GRACEFUL_LEAVE: self_initiated_leave during stopping treated as completed, not failed; `compose`: smoke-static/GRACEFUL_LEAVE: self_initiated_leave during stopping treated as completed, not failed; `helm`: smoke-static/GRACEFUL_LEAVE: self_initiated_leave during stopping trea… |
 | route-collision | No Starlette route collisions — /bots/{id} and /bots/{platform}/{native_id} do not clash | 5 | ✅ pass | `lite`: smoke-static/ROUTE_COLLISION: bot detail route is /bots/id/{id}, not /bots/{id} which collides with /bots/status; `compose`: smoke-static/ROUTE_COLLISION: bot detail route is /bots/id/{id}, not /bots/{id} which collides with /bots/status; `helm`: smoke-static/ROUTE_COLLISION: bot detail r… |
 | timeout-stop | Bot auto-stops after automatic_leave timeout (no_one_joined_timeout) | 10 | ⚠️ skip | `helm`: containers/timeout_stop: bot still running after 60s (timeout may count from lobby) |
