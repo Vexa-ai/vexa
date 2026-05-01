@@ -40,9 +40,18 @@ jobs:
       # it packages the chart, pushes the .tgz to `gh-pages`, refreshes
       # `index.yaml`, and drafts a matching GitHub Release. Same commit
       # with no version bump is a no-op.
+      #
+      # 2026-05-01: skip_existing added because patch releases that bump
+      # Chart.yaml.appVersion only (not version) re-package the same
+      # vexa-X.Y.Z.tgz and the action otherwise fails with
+      # "422 tag_name already_exists" when the GH release already exists.
+      # mark_as_latest is the helper for not flapping :latest pointer
+      # across appVersion-only bumps.
       - name: Release chart
         uses: helm/chart-releaser-action@v1.6.0
         with:
           charts_dir: deploy/helm/charts
+          skip_existing: true
+          mark_as_latest: false
         env:
           CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
