@@ -324,6 +324,14 @@ services:
     build:
       context: ../..
       dockerfile: services/dashboard/Dockerfile
+      # v0.10.5.3 Pack D-1 follow-up: thread version through to the
+      # prebuild generator. The chart yaml isn't in the dashboard build
+      # context (build context is repo root, but the script runs from
+      # /app inside the image), so we provide the version as a build-arg.
+      # VEXA_VERSION is read from the .env file by docker compose.
+      args:
+        NEXT_PUBLIC_VEXA_OSS_VERSION: ${VEXA_VERSION:-dev}
+        NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE: ${VEXA_RELEASE_DATE:-}
     image: vexaai/dashboard:${IMAGE_TAG}
     mem_limit: 1g
     ports:

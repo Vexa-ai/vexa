@@ -167,7 +167,10 @@ build-transcript-rendering:
 
 build: check_docker build-bot-image build-transcript-rendering build-lite
 	@echo "Building all images with tag: $(BUILD_TAG)"
-	IMAGE_TAG=$(BUILD_TAG) $(COMPOSE_CMD) build
+	@# v0.10.5.3 Pack D-1 follow-up: VEXA_VERSION + VEXA_RELEASE_DATE are
+	@# read by docker-compose.yml's dashboard service `args:` block to feed
+	@# the prebuild generator inside the dashboard image build.
+	IMAGE_TAG=$(BUILD_TAG) VEXA_VERSION=$(VERSION) VEXA_RELEASE_DATE=$(shell date +%Y-%m-%d) $(COMPOSE_CMD) build
 	@echo "$(BUILD_TAG)" > $(LAST_TAG_FILE)
 	@echo ""
 	@echo "All images tagged: $(BUILD_TAG)"
