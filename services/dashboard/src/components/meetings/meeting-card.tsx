@@ -76,9 +76,19 @@ export function MeetingCard({ meeting }: MeetingCardProps) {
   const [editedTitle, setEditedTitle] = useState("");
   const [isSavingTitle, setIsSavingTitle] = useState(false);
 
+  // v0.10.5.3 Pack D-1 (#265): use parseUTCTimestamp consistently so the
+  // unsuffixed-ISO timestamps the API returns are interpreted as UTC. Then
+  // date-fns format() / toLocaleString() render in the browser's local
+  // timezone (resolved via Intl.DateTimeFormat().resolvedOptions().timeZone).
+  // Pre-fix: new Date(...) was interpreting unsuffixed ISO as local-time,
+  // producing displayed times shifted by the user's UTC offset.
+  const browserTz = typeof Intl !== "undefined"
+    ? Intl.DateTimeFormat().resolvedOptions().timeZone
+    : "UTC";
   const duration = meeting.start_time && meeting.end_time
     ? Math.round(
-        (new Date(meeting.end_time).getTime() - new Date(meeting.start_time).getTime()) / 60000
+        (parseUTCTimestamp(meeting.end_time).getTime()
+          - parseUTCTimestamp(meeting.start_time).getTime()) / 60000
       )
     : null;
 
@@ -362,16 +372,32 @@ export function MeetingCard({ meeting }: MeetingCardProps) {
               {/* Meta row */}
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 {meeting.start_time && (
-                  <div className="flex items-center gap-1.5 text-muted-foreground">
-                    <Calendar className="h-3.5 w-3.5" />
-                    <span>{format(new Date(meeting.start_time), "MMM d, yyyy")}</span>
-                  </div>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className="flex items-center gap-1.5 text-muted-foreground cursor-help">
+                        <Calendar className="h-3.5 w-3.5" />
+                        <span>{format(parseUTCTimestamp(meeting.start_time), "MMM d, yyyy")}</span>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">
+                      <p className="text-xs">
+                        {parseUTCTimestamp(meeting.start_time).toLocaleString(undefined, {
+                          dateStyle: "medium",
+                          timeStyle: "long",
+                          timeZone: browserTz,
+                        })}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground/80">
+                        UTC: {format(parseUTCTimestamp(meeting.start_time), "yyyy-MM-dd HH:mm:ss 'UTC'")}
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
                 )}
 
                 {meeting.start_time && (
                   <div className="flex items-center gap-1.5 text-muted-foreground">
                     <Clock className="h-3.5 w-3.5" />
-                    <span>{formatDistanceToNow(new Date(meeting.start_time), { addSuffix: true })}</span>
+                    <span>{formatDistanceToNow(parseUTCTimestamp(meeting.start_time), { addSuffix: true })}</span>
                   </div>
                 )}
 
