@@ -335,45 +335,13 @@ export const vexaAPI = {
     return handleResponse(response);
   },
 
-  // v0.10.5.3 Pack D-3 (#288 sibling): get a presigned S3/MinIO URL for
-  // playback. The /download endpoint returns either a presigned URL (S3/
-  // MinIO storage_backend — browser streams directly with HTTP Range
-  // support) or a /raw proxy path (local storage_backend — explicit
-  // decision per Pack P, not a runtime fallback). Pre-fix we always
-  // returned the /raw proxy path which buffered the whole file in
-  // meeting-api memory before serving (#288). For 24-min meetings @ 10 MB
-  // that's ~10s of dead-air on first byte.
-  async getRecordingAudioUrl(recordingId: number, mediaFileId: number): Promise<string> {
-    const response = await fetch(
-      withBasePath(`/api/vexa/recordings/${recordingId}/media/${mediaFileId}/download`)
-    );
-    if (!response.ok) {
-      throw new Error(`Failed to get download URL: ${response.status}`);
-    }
-    const data = await response.json() as { download_url: string };
-    // The /download endpoint returns either a full https://... presigned URL
-    // (S3/MinIO) or a /recordings/.../raw relative path (local storage).
-    // Pass through; if it's a relative path, prepend basePath. If it's an
-    // absolute URL, leave as-is (browser fetches directly from S3).
-    if (/^https?:\/\//.test(data.download_url)) {
-      return data.download_url;
-    }
-    return withBasePath(`/api/vexa${data.download_url}`);
+  // Recordings - get the proxied URL for streaming audio via /raw endpoint
+  getRecordingAudioUrl(recordingId: number, mediaFileId: number): string {
+    return withBasePath(`/api/vexa/recordings/${recordingId}/media/${mediaFileId}/raw`);
   },
 
-  // Same shape for video (the /download endpoint serves both audio + video
-  // — content_type determined by media_file format).
-  async getRecordingVideoUrl(recordingId: number, mediaFileId: number): Promise<string> {
-    return this.getRecordingAudioUrl(recordingId, mediaFileId);
-  },
-
-  // v0.10.5.3 Pack D-3: explicit synchronous fallback to the /raw endpoint
-  // for callers that can't await (e.g. JSX src= prop on first paint). Used
-  // by audio-player.tsx for the synchronous initial src; once the
-  // presigned URL fetches, audio.src is updated to the streaming URL.
-  // This is an explicit decision (file PII-D-3 in scope.yaml proves[]),
-  // not a runtime fallback per Pack P.
-  getRecordingAudioRawUrl(recordingId: number, mediaFileId: number): string {
+  // Recordings - get the proxied URL for streaming video via /raw endpoint
+  getRecordingVideoUrl(recordingId: number, mediaFileId: number): string {
     return withBasePath(`/api/vexa/recordings/${recordingId}/media/${mediaFileId}/raw`);
   },
 
