@@ -23,6 +23,8 @@ Gate verdict recorded; stage transitioned to `human` (green) or `triage` (red).
 - Edit code.
 - Change infra.
 - Re-try failed tests without root-cause investigation ("flake retry" is forbidden — see triage).
+- **Pass the gate while `BOT_NO_UNJUSTIFIED_FALLBACKS` reports new fallback patterns added in this cycle's diff** without a corresponding `#NNN` issue ref on the same line. The check surfaces matches as warnings on existing code (false-positive risk is high) but FAILS the gate when a NEW fallback is introduced. Captured 2026-05-01 after the v0.10.5.2 cycle shipped `__vexaRecordedChunks` chunk-buffer leak as a "fallback for shutdown-flush" that crashed customer meetings at 24 min. The develop stage's text rule against fallbacks is primary enforcement; this check is the validate-stage backstop.
+- **Pass the gate while `RELEASE_DOCS_NO_PII` finds customer PII in `tests3/releases/<id>/`**. Any real-looking email not `@redacted` or common-name pattern in release artifacts fails the gate. Captured 2026-05-01 after the v0.10.5.2 cycle leaked 5 customer names + emails + GH/Discord handles into the OSS public repo. Anonymize at write-time (`customer-A`, `customer-B`, ...); never copy real names from prod telemetry into release docs.
 
 ## Next
 `human` (on green) | `triage` (on red).
