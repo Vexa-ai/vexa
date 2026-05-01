@@ -327,20 +327,30 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
                 (window as any).__vexaRecordingFlushed = false;
                 (window as any).__vexaChunkSeq = 0;
 
-                // Pack B (issue #218): incremental chunk upload, matches googlemeet.
+                // v0.10.5.3 Pack M: chunk-buffer trim — splice on success/failure,
+                // cap at VEXA_RECORDED_CHUNKS_CAP. See googlemeet/recording.ts
+                // for the full design rationale. No fallback path per Pack P.
+                const VEXA_RECORDED_CHUNKS_CAP = 10;
                 recorder.ondataavailable = async (event: BlobEvent) => {
                   if (!(event.data && event.data.size > 0)) {
                     (window as any).logBot?.("[Teams Recording] dataavailable fired with empty data (skipping)");
                     return;
                   }
-                  (window as any).__vexaRecordedChunks.push(event.data);
+                  const buffer = (window as any).__vexaRecordedChunks as Blob[];
+                  buffer.push(event.data);
+                  if (buffer.length > VEXA_RECORDED_CHUNKS_CAP) {
+                    const dropped = buffer.shift();
+                    (window as any).logBot?.(
+                      `[Teams Recording] WARN __vexaRecordedChunks exceeded cap ${VEXA_RECORDED_CHUNKS_CAP}, dropped oldest (${dropped?.size ?? 0} bytes); reconciler will re-fetch from S3`
+                    );
+                  }
 
                   const chunkSeq = (window as any).__vexaChunkSeq as number;
                   (window as any).__vexaChunkSeq = chunkSeq + 1;
                   try {
                     const mime = recorder.mimeType || "audio/webm";
-                    const buffer = await event.data.arrayBuffer();
-                    const bytes = new Uint8Array(buffer);
+                    const arrBuffer = await event.data.arrayBuffer();
+                    const bytes = new Uint8Array(arrBuffer);
                     let binary = "";
                     const encodeChunkSize = 0x8000;
                     for (let i = 0; i < bytes.length; i += encodeChunkSize) {
@@ -357,19 +367,24 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
                         isFinal: false,
                         mimeType: mime,
                       });
+                      // Pack M: splice on success/failure, reconciler covers re-fetch
+                      const idx = buffer.indexOf(event.data);
+                      if (idx >= 0) buffer.splice(idx, 1);
                       if (!ok) {
                         (window as any).logBot?.(
-                          `[Teams Recording] Chunk ${chunkSeq} upload returned false — bot-side sink rejected`
+                          `[Teams Recording] Chunk ${chunkSeq} upload returned false — bot-side sink rejected; reconciler will re-fetch`
                         );
                       }
                     } else {
                       (window as any).logBot?.(
-                        `[Teams Recording] __vexaSaveRecordingChunk not exposed — chunk ${chunkSeq} will rely on shutdown fallback`
+                        `[Teams Recording] WARN __vexaSaveRecordingChunk not exposed — chunk ${chunkSeq} cannot be uploaded; buffer cap will drop on next chunk`
                       );
                     }
                   } catch (err: any) {
+                    const idx = buffer.indexOf(event.data);
+                    if (idx >= 0) buffer.splice(idx, 1);
                     (window as any).logBot?.(
-                      `[Teams Recording] Chunk ${chunkSeq} upload prep/send FAILED: ${err?.message || err}`
+                      `[Teams Recording] Chunk ${chunkSeq} upload prep/send FAILED: ${err?.message || err}; spliced from buffer; reconciler will re-fetch`
                     );
                   }
                 };

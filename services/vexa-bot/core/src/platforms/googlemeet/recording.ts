@@ -335,26 +335,49 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                 (window as any).__vexaRecordingFlushed = false;
                 (window as any).__vexaChunkSeq = 0;
 
-                // Pack B (issue #218): upload each chunk immediately to MinIO
-                // via meeting-api, rather than buffering the whole WebM until
-                // shutdown. On ungraceful exit, already-uploaded chunks are
-                // durable. The buffer is still populated as a fallback for
-                // the shutdown-flush path — the server-side `chunk_seq`
-                // contract is idempotent across duplicate arrivals.
+                // v0.10.5.3 Pack M (issue #294 follow-up): upload each chunk
+                // immediately to meeting-api. Keep the buffer ONLY for chunks
+                // that are still pending upload — splice on success, cap at
+                // VEXA_RECORDED_CHUNKS_CAP. Pre-v0.10.5.3 this buffer accumulated
+                // every chunk for the entire meeting lifetime as a "fallback for
+                // shutdown-flush", growing to 10+ MB on real-conversation
+                // 24-min meetings and contributing to the tab-process pressure
+                // that triggered page-navigation crashes.
+                //
+                // No fallback path here per the no-fallbacks rule (Pack P).
+                // The fallback case (chunk in buffer that never uploaded) is
+                // handled by post_meeting_reconciler running server-side, which
+                // re-fetches missing chunks from S3 — the bot doesn't need to
+                // hold them. If __vexaSaveRecordingChunk returns false (sink
+                // rejected), we surface the error and DROP the chunk from the
+                // browser-side buffer regardless; meeting-api's chunk_seq
+                // contract handles resync via the reconciler.
+                const VEXA_RECORDED_CHUNKS_CAP = 10;
                 recorder.ondataavailable = async (event: BlobEvent) => {
                   if (!(event.data && event.data.size > 0)) {
                     (window as any).logBot?.("[Google Recording] dataavailable fired with empty data (skipping)");
                     return;
                   }
-                  (window as any).__vexaRecordedChunks.push(event.data);
+                  const buffer = (window as any).__vexaRecordedChunks as Blob[];
+                  buffer.push(event.data);
+                  // Defensive cap — should never trip in normal operation
+                  // because successful uploads splice. If it trips, log and
+                  // drop the oldest, surface as a metric for Pack T to
+                  // capture.
+                  if (buffer.length > VEXA_RECORDED_CHUNKS_CAP) {
+                    const dropped = buffer.shift();
+                    (window as any).logBot?.(
+                      `[Google Recording] WARN __vexaRecordedChunks exceeded cap ${VEXA_RECORDED_CHUNKS_CAP}, dropped oldest (${dropped?.size ?? 0} bytes); reconciler will re-fetch from S3`
+                    );
+                  }
 
                   // Best-effort immediate upload; do NOT block the recorder.
                   const chunkSeq = (window as any).__vexaChunkSeq as number;
                   (window as any).__vexaChunkSeq = chunkSeq + 1;
                   try {
                     const mimeType = recorder.mimeType || "audio/webm";
-                    const buffer = await event.data.arrayBuffer();
-                    const bytes = new Uint8Array(buffer);
+                    const arrBuffer = await event.data.arrayBuffer();
+                    const bytes = new Uint8Array(arrBuffer);
                     let binary = "";
                     const encodeChunkSize = 0x8000;
                     for (let i = 0; i < bytes.length; i += encodeChunkSize) {
@@ -374,19 +397,34 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
                         isFinal: false,
                         mimeType,
                       });
+                      // Pack M (#294-followup): splice the chunk out of the
+                      // buffer regardless of upload result. If ok=true the
+                      // chunk is durable in S3. If ok=false (sink rejected),
+                      // post_meeting_reconciler re-fetches from S3 server-side.
+                      // Either way, the browser-side buffer doesn't need to
+                      // keep it.
+                      const idx = buffer.indexOf(event.data);
+                      if (idx >= 0) buffer.splice(idx, 1);
                       if (!ok) {
                         (window as any).logBot?.(
-                          `[Google Recording] Chunk ${chunkSeq} upload returned false — bot-side sink rejected (see bot-container logs)`
+                          `[Google Recording] Chunk ${chunkSeq} upload returned false — bot-side sink rejected (see bot-container logs); reconciler will re-fetch`
                         );
                       }
                     } else {
+                      // No upload function exposed — leave chunk in buffer for
+                      // a single 30s window then drop. This is a misconfig path
+                      // (page.exposeBinding never ran), not a runtime fallback.
                       (window as any).logBot?.(
-                        `[Google Recording] __vexaSaveRecordingChunk not exposed — chunk ${chunkSeq} will rely on the legacy full-blob shutdown path`
+                        `[Google Recording] WARN __vexaSaveRecordingChunk not exposed — chunk ${chunkSeq} cannot be uploaded; buffer cap will drop on next chunk`
                       );
                     }
                   } catch (err: any) {
+                    // On exception during upload prep/send, splice the chunk
+                    // anyway — the reconciler covers re-fetch.
+                    const idx = buffer.indexOf(event.data);
+                    if (idx >= 0) buffer.splice(idx, 1);
                     (window as any).logBot?.(
-                      `[Google Recording] Chunk ${chunkSeq} upload prep/send FAILED: ${err?.message || err}`
+                      `[Google Recording] Chunk ${chunkSeq} upload prep/send FAILED: ${err?.message || err}; spliced from buffer; reconciler will re-fetch`
                     );
                   }
                 };
