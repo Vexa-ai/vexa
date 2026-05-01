@@ -1,21 +1,20 @@
 /**
- * Get the webapp URL for API documentation links
+ * Get the webapp URL (vexa.ai marketing + billing/account).
+ * Used for "Account & Billing" links etc.
  */
 export function getWebappUrl(): string {
-  if (typeof window !== "undefined") {
-    // Client-side: use environment variable or default
-    return process.env.NEXT_PUBLIC_WEBAPP_URL || "https://webapp.vexa.ai";
-  }
-  // Server-side: use environment variable or default
-  return process.env.NEXT_PUBLIC_WEBAPP_URL || "https://webapp.vexa.ai";
+  return process.env.NEXT_PUBLIC_WEBAPP_URL || "https://vexa.ai";
 }
 
 /**
- * Get the full URL for a docs path
+ * Get the full URL for a docs path on the docs site (Mintlify at
+ * docs.vexa.ai). Previously this was wrongly rooted at webapp host;
+ * fixed 2026-05-01 — `API Docs` in the sidebar pointed at
+ * webapp.vexa.ai which is not a docs site.
  */
 export function getDocsUrl(path: string): string {
-  const webappUrl = getWebappUrl();
+  const docsUrl = process.env.NEXT_PUBLIC_DOCS_URL || "https://docs.vexa.ai";
   // Remove leading slash if present to avoid double slashes
   const cleanPath = path.startsWith("/") ? path : `/${path}`;
-  return `${webappUrl}${cleanPath}`;
+  return `${docsUrl}${cleanPath}`;
 }

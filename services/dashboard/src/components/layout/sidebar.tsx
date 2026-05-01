@@ -28,6 +28,7 @@ import { useJoinModalStore } from "@/stores/join-modal-store";
 import { useAdminAuthStore } from "@/stores/admin-auth-store";
 import { AdminAuthModal } from "@/components/admin/admin-auth-modal";
 import { useRuntimeConfig } from "@/hooks/use-runtime-config";
+import { VersionChip } from "@/components/version-chip";
 import { withBasePath } from "@/lib/base-path";
 
 interface SidebarProps {
@@ -373,12 +374,10 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
             </a>
 
             <div className="px-3">
-              <p className="text-[11px] text-muted-foreground">
-                vexa v{process.env.NEXT_PUBLIC_APP_VERSION}
-              </p>
-              <p className="text-[11px] text-muted-foreground">
-                Open Source · API-first
-              </p>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] text-muted-foreground">vexa</span>
+                <VersionChip variant="minimal" look="pill" />
+              </div>
             </div>
           </div>
         </div>

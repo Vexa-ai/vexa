@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Settings, Menu, LogOut, User, BookOpen, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/ui/logo";
+import { VersionChip } from "@/components/version-chip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -49,11 +50,14 @@ export function Header({ onMenuClick }: HeaderProps) {
           <span className="sr-only">Toggle menu</span>
         </Button>
 
-        {/* Logo */}
-        <Link href="/" className="flex items-center gap-2 group">
-          <Logo size="md" showText={false} className="group-hover:scale-105 transition-transform" />
-          <span className="hidden sm:inline-block text-[15px] font-semibold tracking-[-0.01em] text-foreground">vexa</span>
-        </Link>
+        {/* Logo + version chip */}
+        <div className="flex items-center gap-2.5">
+          <Link href="/" className="flex items-center gap-2 group">
+            <Logo size="md" showText={false} className="group-hover:scale-105 transition-transform" />
+            <span className="hidden sm:inline-block text-[15px] font-semibold tracking-[-0.01em] text-foreground">vexa</span>
+          </Link>
+          <VersionChip className="hidden sm:inline-flex" />
+        </div>
 
         {/* Spacer */}
         <div className="flex-1" />
