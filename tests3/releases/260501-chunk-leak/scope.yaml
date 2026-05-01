@@ -1,0 +1,324 @@
+release_id: '260501-chunk-leak'
+codename: chunk-leak-and-friends
+public_version: v0.10.5.3
+public_name: "v0.10.5.3 — Chunk-leak fix + observability + chart hardening"
+milestone: ""  # to be created on plan approval
+branch: dev
+summary: |
+  **v0.10.5.3 — Surgical bug-fix release with observability + chart-hardening
+  bundling.** Closes the long-duration crash class (14-24 min variant) that
+  v0.10.5.2 did NOT address. Adds the bot-side observability that should have
+  been in place before v0.10.5.2 (Pack G.2 forensic blindness was the root
+  cause of having to guess at root cause). Adds chart-level safety nets that
+  would have prevented the v0.10.5.2 outage. Bakes the "no fallbacks unless
+  explicitly decided" principle into develop + validate stages so this class
+  of bug doesn't recur.
+
+  Walked under the FORMAL protocol with NO BYPASS — provision will stand up
+  fresh test infra (compose mode at minimum), validate will run the full
+  registry × scope matrix, human will eyeroll on the test cluster, ship will
+  cut prod over with --atomic --wait --timeout. The 2-3 hour cost is
+  explicitly accepted to catch the kind of regressions the v0.10.5.2 bypass
+  cycle shipped on top of.
+
+  Customer PII discipline: this scope.yaml + every release artifact uses
+  anonymized refs (customer-A through customer-F). Real names + emails live
+  in private CRM / vexa-platform only.
+
+deployments:
+  modes: [lite, compose, helm]
+  notes:
+    lite: "Static-grep checks for the chunk-buffer trim + Pack P fallback-pattern guard."
+    compose: "Cross-platform smoke with FIXTURE meeting URLs; force a real-conversation 25+ min meeting to repro the chunk leak; verify Pack O captures stdout; verify Pack T captures resource samples."
+    helm: "Cross-platform smoke on prod-shape cluster; verify Pack H chart hardening (replicaCount=2, --atomic, image-exists pre-flight) blocks a deliberate broken-image deploy."
+
+constraints:
+  no_bypass: |
+    Project-owner directive 2026-05-01: this cycle walks every stage formally.
+    No VEXA_BYPASS_STAGE=1 escape valve. No "skip provision". No "smoke instead
+    of validate". If the protocol forces a 2-3 hour walk, that's the cost of
+    catching the kind of regressions the v0.10.5.2 cycle shipped (which forced
+    a 30-min prod outage during human-stage eyeroll).
+
+  no_unjustified_fallbacks: |
+    Per Pack P (which lands in this cycle): no fallback code path may exist
+    without an explicit decision-record (filed issue + scope.yaml entry naming
+    the fallback). Pack M's chunk-buffer leak was caused by exactly this
+    pattern (a "shutdown-flush fallback" buffer that was never trimmed).
+    Going forward, every fallback gets challenged at code review.
+
+  pii_discipline: |
+    All release artifacts (groom.md, scope.yaml, validate-report.md,
+    code-review.md, human-checklist.md) use anonymized customer refs
+    (customer-A, customer-B, ...). Real names + emails belong only in
+    private channels. This scope.yaml itself is the canonical example.
+    Pack P's registry check should also flag PII patterns in tests3/releases/.
+
+# ── OBJECTIVES ────────────────────────────────────────────────────────
+
+scope:
+
+# ── Pack M — Chunk-accumulation memory leak (LEAD) ────────────────────
+- id: chunk-buffer-trim
+  source: gh-issue
+  ref: ""  # new issue to file in develop
+  problem: |
+    services/vexa-bot/core/src/platforms/googlemeet/recording.ts:349 pushes
+    every audio chunk into window.__vexaRecordedChunks but never removes
+    them after successful upload. The "fallback for shutdown-flush path"
+    comment justifies the design but produces an unbounded leak. For real-
+    conversation meetings (2+ participants, audio activity), reaches 10+ MB
+    of Blob references at ~24 min, contributing to tab-process pressure
+    that eventually causes page navigation → page.evaluate context destroyed.
+    A real customer reproduced this on v0.10.5.2 with a 24m17s meeting.
+    Same pattern in Teams + Zoom recording.ts — must audit + fix all three.
+  hypothesis: |
+    Splice the chunk out of __vexaRecordedChunks after __vexaSaveRecordingChunk
+    returns ok. Three lines per platform recording.ts. Plus a defensive cap
+    on buffer length (e.g. 10 chunks max — about 2-5 MB of unsent chunks)
+    so a future regression can't cause unbounded growth even if splice is
+    skipped. No new pattern; pure leak fix.
+  fix_commits: []
+  proves:
+    - {check: BOT_RECORDING_CHUNK_BUFFER_TRIMMED, modes: [lite, compose, helm]}
+    - {check: BOT_GMEET_LONG_RECORDING_NO_LEAK, modes: [compose, helm]}
+    - {check: BOT_TEAMS_LONG_RECORDING_NO_LEAK, modes: [compose, helm]}
+    - {check: BOT_ZOOM_LONG_RECORDING_NO_LEAK, modes: [compose, helm]}
+  required_modes: [lite, compose, helm]
+  human_verify:
+    - mode: compose
+      do: "Dispatch a bot at a fresh 25-min real-conversation GMeet (FIXTURE_GMEET_MULTIPARTY_URL) with recording_enabled=true. Stream bot stdout (Pack O must be live). Watch __vexaRecordedChunks length in browser console — should stay below 10 entries throughout."
+      expect: "Bot survives 25+ min, no Execution context destroyed, chunks count remains bounded (<10 in flight)."
+
+# ── Pack O — Bot stdout JSONB capture (Pack G.2) ──────────────────────
+- id: bot-stdout-jsonb-capture
+  source: gh-issue
+  ref: Vexa-ai/vexa#272
+  problem: |
+    Bot pod stdout (already structured JSON per Pack G.1 in v0.10.5) is lost
+    when the pod terminates. Every long-duration crash investigation since
+    v0.10.5 ship has been forensic-blind: we cannot tell whether a navigation
+    event was logged, what the page navigated TO, whether mid-meeting peer
+    connections appeared, whether GMeet's "still here?" prompt fired.
+    Pack M cannot be empirically validated without this — needs to verify
+    no leak in the next live crash.
+  hypothesis: |
+    runtime-api streams bot pod stdout into a Redis Stream keyed by
+    bot_container_id (cap: 1000 lines). On meeting transition to terminal
+    state (failed/completed) in meeting-api status_change handler, drain the
+    Redis Stream and flush into meetings.data.bot_logs JSONB field with a
+    50 KB cap. Compliance-coupled: bot_logs purges with the meeting row's
+    data retention. No long-lived aggregator; this is per-meeting only.
+  fix_commits: []
+  proves:
+    - {check: BOT_STDOUT_STREAM_TO_REDIS, modes: [lite, compose, helm]}
+    - {check: MEETING_API_FLUSH_BOT_LOGS_ON_TERMINAL, modes: [lite, compose, helm]}
+    - {check: MEETING_BOT_LOGS_FIELD_PRESENT_ON_FAILED, modes: [compose, helm]}
+  required_modes: [lite, compose, helm]
+  human_verify:
+    - mode: compose
+      do: "Dispatch a bot, force a crash (kill pod), inspect meetings.data.bot_logs in the resulting failed meeting row."
+      expect: "bot_logs field present, contains the last ~50 KB of bot stdout (structured JSON lines), preserves the moment of crash."
+
+# ── Pack T — Bot resource telemetry (mem + CPU) ───────────────────────
+- id: bot-resource-telemetry
+  source: gh-issue
+  ref: ""  # new
+  problem: |
+    Bot pod could be at 1.8 GB at the moment of crash; we have no idea.
+    Memory pressure is the leading hypothesis for the long-duration crash
+    class but we cannot confirm or refute. Project-owner directive 2026-05-01:
+    "telemetry should look into bot memory and cpu".
+  hypothesis: |
+    In the bot's main loop, periodically (every 30s) sample
+    /sys/fs/cgroup/memory.current + /sys/fs/cgroup/cpu.stat — these report
+    the bot container's actual usage (cgroup v2). Emit as structured log line
+    (Pack G.1 logger) so Pack O captures it into JSONB. On terminal
+    transition, attach peak memory + average CPU + sample count to the
+    status_change callback's error_details (or a new bot_resources field).
+  fix_commits: []
+  proves:
+    - {check: BOT_RESOURCE_SAMPLER_RUNS, modes: [lite, compose, helm]}
+    - {check: MEETING_BOT_RESOURCES_FIELD_PRESENT, modes: [compose, helm]}
+  required_modes: [lite, compose, helm]
+  human_verify:
+    - mode: compose
+      do: "Dispatch a long-duration meeting; on completion, query meetings.data.bot_resources."
+      expect: "Field present with peak_memory_bytes + avg_cpu_percent + sample_count."
+
+# ── Pack P — No-fallbacks principle into stage docs + check ───────────
+- id: no-fallbacks-principle
+  source: project-owner-directive
+  ref: ""
+  problem: |
+    The chunk-buffer leak was committed with an explicit comment justifying
+    the fallback design. Nobody objected at review time because there was no
+    rule. Pattern repeats (see emergency-bypass.md from 260501-followup):
+    "default-secret-change-me", auth-cookie schema-fallback, env-example
+    fallbacks, server-side failure_stage derivation as a fallback for the
+    bot tracker. Each "for safety," each producing a different bug class.
+  hypothesis: |
+    Two changes:
+    P.1: tests3/stages/03-develop.md "May NOT" gains:
+      "Add a fallback code path (any code that runs on the failure side of an
+      `if (!ok)` / `try-catch` / 'in case the primary path fails' comment)
+      without a corresponding scope.yaml `proves[]` entry that names the
+      fallback explicitly. If the fallback isn't worth filing an issue for,
+      it isn't worth shipping."
+    P.2: registry check `BOT_NO_UNJUSTIFIED_FALLBACKS` — grep services/vexa-bot
+      for known fallback signatures (`fallback` comment without a #NNN issue
+      ref on adjacent line). False-positive risk is high; this is a soft
+      guard that surfaces matches as warnings; the develop-stage rule is the
+      primary enforcement.
+    P.3: registry check `RELEASE_DOCS_NO_PII` — grep tests3/releases/* for
+      common PII patterns (real-looking emails not @redacted; common
+      first-name + capitalized last-name pairs). Fail the gate if any match
+      added in this cycle's diff.
+  fix_commits: []
+  proves:
+    - {check: STAGE_DOC_DEVELOP_NO_FALLBACKS_RULE, modes: [lite, compose, helm]}
+    - {check: BOT_NO_UNJUSTIFIED_FALLBACKS, modes: [lite, compose, helm]}
+    - {check: RELEASE_DOCS_NO_PII, modes: [lite, compose, helm]}
+  required_modes: [lite, compose, helm]
+  human_verify:
+    - mode: lite
+      do: "Read tests3/stages/03-develop.md after this cycle ships."
+      expect: "Contains the no-fallbacks rule under May NOT."
+
+# ── Pack C — Classifier user-stop fix ─────────────────────────────────
+- id: classifier-user-stop-completed
+  source: gh-issue
+  ref: ""
+  problem: |
+    meeting-api status_change classifier marks user-initiated DELETE during
+    awaiting_admission as `failed`. Should be `completed` — user-initiated
+    stops are NEVER failures regardless of lifecycle stage. Reproduces
+    deterministically: dispatch bot, wait until awaiting_admission, DELETE.
+    Project-owner reproducer: meetings 11367 + 11368 (both today).
+  hypothesis: |
+    In meeting-api status_change handler, branch on transition source:
+    if source=user (i.e. user-initiated DELETE), terminal status MUST be
+    `completed` regardless of previous stage. completion_reason still tracks
+    the stage at-stop-time (`stopped_before_admission` for awaiting_admission;
+    `stopped` for active). Single-conditional fix.
+  fix_commits: []
+  proves:
+    - {check: MEETING_API_USER_STOP_IS_COMPLETED, modes: [lite, compose, helm]}
+  required_modes: [lite, compose, helm]
+  human_verify:
+    - mode: compose
+      do: "Dispatch bot, wait until status=awaiting_admission, DELETE the bot. Inspect resulting meeting row."
+      expect: "status=completed, completion_reason=stopped_before_admission."
+
+# ── Pack D-1 — Dashboard timezone ─────────────────────────────────────
+- id: dashboard-timezone
+  source: gh-issue
+  ref: Vexa-ai/vexa#265
+  problem: |
+    Dashboard meeting list renders timestamps in UTC, not the viewing user's
+    local timezone. Industry-standard is local-tz with UTC tooltip on hover.
+  hypothesis: |
+    services/dashboard/src/components/meeting-row.tsx (or wherever time
+    rendering lives) — switch from toISOString() to toLocaleString() with
+    browser-detected Intl.DateTimeFormat().resolvedOptions().timeZone.
+    Add UTC as title attribute for hover tooltip. ~10-line change.
+  fix_commits: []
+  proves:
+    - {check: DASHBOARD_RENDERS_LOCAL_TZ, modes: [lite, compose, helm]}
+  required_modes: [lite, compose, helm]
+  human_verify:
+    - mode: helm
+      do: "Visit dashboard.vexa.ai meeting list after deploy."
+      expect: "Times display in browser local tz; UTC visible on hover."
+
+# ── Pack D-2 — Dashboard /docs → docs.vexa.ai ─────────────────────────
+- id: dashboard-docs-redirect
+  source: gh-issue
+  ref: ""  # new
+  problem: |
+    Dashboard has internal /docs routes that should redirect to or be
+    replaced by docs.vexa.ai (canonical docs URL since v0.10.5.1's
+    docs-link-fix work). Inconsistent — some links use getDocsUrl() helper
+    (correct), some use /docs (wrong).
+  hypothesis: |
+    Audit services/dashboard/src/ for any <Link href="/docs"> or /docs/...
+    inline references. Replace with `getDocsUrl(path)` helper from
+    services/dashboard/src/lib/docs/webapp-url.ts (already exists).
+    Optionally remove the /docs route handler entirely.
+  fix_commits: []
+  proves:
+    - {check: DASHBOARD_NO_INLINE_DOCS_LINKS, modes: [lite, compose, helm]}
+  required_modes: [lite, compose, helm]
+  human_verify:
+    - mode: helm
+      do: "Click every API Docs / Documentation link in dashboard.vexa.ai."
+      expect: "Every link goes to docs.vexa.ai/* or via getDocsUrl(); no internal /docs route hit."
+
+# ── Pack D-3 — Audio playback streaming (likely + #288 fix) ───────────
+- id: dashboard-audio-streams-from-bucket
+  source: gh-issue
+  ref: Vexa-ai/vexa#288  # adjacent — meeting-api /recordings/raw range support
+  problem: |
+    Dashboard audio playback downloads the full audio file before playback
+    starts. For a 24-min 10 MB file on a 10 Mbps connection that's ~10
+    seconds of dead-air. Should stream from S3-compatible bucket via signed
+    URL or via meeting-api /recordings/.../raw with HTTP range support
+    (currently buffers the whole file in memory — #288).
+  hypothesis: |
+    Path 1 (preferred): meeting-api generates short-lived presigned URL for
+    the audio object; dashboard <audio> sets src to that URL. Browser
+    handles range requests natively. Cleanest. Bundles with #288's removal
+    of the proxy-streaming endpoint or makes that endpoint optional.
+    Path 2: Fix meeting-api /recordings/.../raw to support HTTP Range and
+    stream from S3 without full-buffer. Closes #288 directly. More code but
+    keeps the proxy boundary (auth checks).
+    Pick path 1 unless there's strong reason to keep proxying.
+  fix_commits: []
+  proves:
+    - {check: MEETING_API_PRESIGNED_AUDIO_URL, modes: [lite, compose, helm]}
+    - {check: DASHBOARD_AUDIO_STREAMS, modes: [compose, helm]}
+  required_modes: [lite, compose, helm]
+  human_verify:
+    - mode: helm
+      do: "Click play on a 20+ min meeting recording in dashboard.vexa.ai. Watch network tab."
+      expect: "Audio starts within 1-2s; subsequent seeks fetch range; no full-file pre-download."
+
+# ── Pack H — Helm chart hardening (promoted from DEFER) ───────────────
+- id: helm-chart-hardening
+  source: incident
+  ref: ""  # post-mortem from 260501-followup emergency-bypass.md
+  problem: |
+    During v0.10.5.2 ship cycle, dashboard + webapp pods went 502 because:
+    - replicaCount: 1 + default rolling-update killed OLD pod before NEW Ready
+    - helm upgrade didn't use --atomic, so failed image-pull stayed broken
+    - no pre-flight image-exists check before applying values
+    Resolved manually with helm rollback + atomic redeploy, but a real
+    customer-impact outage during what should have been a routine bump.
+  hypothesis: |
+    Three small changes:
+    H.1: deploy/helm/charts/vexa/templates/{dashboard,webapp,mcp,api-gateway}-
+         deployment.yaml — strategy: rollingUpdate { maxUnavailable: 0,
+         maxSurge: 1 }. Old pod stays up until new is Ready.
+    H.2: deploy/helm/charts/vexa/values.yaml — replicaCount: 2 default for
+         stateless services. PodDisruptionBudget minAvailable: 1.
+    H.3: Makefile new target `release-helm-upgrade-safe` that:
+         (a) renders chart values
+         (b) greps every `image:` reference + verifies via docker manifest inspect
+         (c) fails fast if any image is missing
+         (d) calls helm upgrade --atomic --wait --timeout 5m
+  fix_commits: []
+  proves:
+    - {check: HELM_DEPLOYMENT_MAX_UNAVAILABLE_ZERO, modes: [helm]}
+    - {check: HELM_REPLICA_COUNT_TWO_FOR_STATELESS, modes: [helm]}
+    - {check: HELM_UPGRADE_PREFLIGHT_IMAGE_CHECK, modes: [helm]}
+    - {check: HELM_UPGRADE_ATOMIC_DEFAULT, modes: [helm]}
+  required_modes: [helm]
+  human_verify:
+    - mode: helm
+      do: "Set values-test.yaml dashboard.image.tag to a known-bad tag (e.g. :nonexistent). Run release-helm-upgrade-safe."
+      expect: "Make target fails BEFORE applying helm; output names the missing image. No pods churn."
+    - mode: helm
+      do: "Run release-helm-upgrade-safe with valid tags; mid-upgrade, watch pod state."
+      expect: "Old pod stays Ready until new pod reaches Ready (zero unavailable replicas at any sample point)."
+
+# ── End of scope ──────────────────────────────────────────────────────
