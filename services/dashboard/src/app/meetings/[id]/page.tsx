@@ -484,8 +484,17 @@ export default function MeetingDetailPage() {
       let timestamp = "";
       if (segment.absolute_start_time) {
         try {
-          const date = new Date(segment.absolute_start_time);
-          timestamp = date.toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "").replace("Z", "");
+          // v0.10.5.3 Pack D-1 follow-up: parse as UTC then format in
+          // browser-local tz so the copied transcript matches what the user
+          // sees on screen (e.g. "2026-05-01 14:32:11" not "11:32:11").
+          const date = parseUTCTimestamp(segment.absolute_start_time);
+          const yyyy = date.getFullYear().toString().padStart(4, "0");
+          const mo = (date.getMonth() + 1).toString().padStart(2, "0");
+          const dd = date.getDate().toString().padStart(2, "0");
+          const hh = date.getHours().toString().padStart(2, "0");
+          const mm = date.getMinutes().toString().padStart(2, "0");
+          const ss = date.getSeconds().toString().padStart(2, "0");
+          timestamp = `${yyyy}-${mo}-${dd} ${hh}:${mm}:${ss}`;
         } catch {
           timestamp = segment.absolute_start_time;
         }
@@ -745,6 +754,11 @@ export default function MeetingDetailPage() {
   // when the recording actually started — causing a large offset.
   // Convert playback position (seconds from session start) to absolute wall-clock
   // time so the transcript viewer can highlight the matching segment.
+  //
+  // NOTE: returns an ISO string WITH `Z` (UTC). This is intentional — the
+  // value is consumed by formatAbsoluteTimestamp() in transcript-segment.tsx
+  // which calls parseUTCTimestamp() then renders in browser-local tz. Do not
+  // "fix" this to a local-tz string; that would cause a double-shift.
   const playbackAbsoluteTime = useMemo((): string | null => {
     if (playbackTime == null || !isPlaybackActive || recordingFragments.length === 0) return null;
     if (recordingFragments.length === 1) {

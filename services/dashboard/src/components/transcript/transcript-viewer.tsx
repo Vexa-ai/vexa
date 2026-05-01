@@ -502,8 +502,17 @@ export function TranscriptViewer({
       let timestamp = "";
       if (segment.absolute_start_time) {
         try {
-          const date = new Date(segment.absolute_start_time);
-          timestamp = date.toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "").replace("Z", "");
+          // v0.10.5.3 Pack D-1 follow-up: parse as UTC then format in
+          // browser-local tz so the copied transcript matches what the user
+          // sees on screen (e.g. "2026-05-01 14:32:11" not "11:32:11Z").
+          const date = parseUTCTimestamp(segment.absolute_start_time);
+          const yyyy = date.getFullYear().toString().padStart(4, "0");
+          const mo = (date.getMonth() + 1).toString().padStart(2, "0");
+          const dd = date.getDate().toString().padStart(2, "0");
+          const hh = date.getHours().toString().padStart(2, "0");
+          const mm = date.getMinutes().toString().padStart(2, "0");
+          const ss = date.getSeconds().toString().padStart(2, "0");
+          timestamp = `${yyyy}-${mo}-${dd} ${hh}:${mm}:${ss}`;
         } catch {
           timestamp = segment.absolute_start_time;
         }
@@ -863,10 +872,16 @@ export function TranscriptViewer({
                 // ---- Chat message item ----
                 if (item.type === "chat") {
                   const msg = item.message;
+                  // v0.10.5.3 Pack D-1 follow-up: msg.timestamp is a numeric
+                  // epoch (Unix ms, see ChatMessage type) so new Date(ms)
+                  // positions correctly with no tz interpretation needed —
+                  // unlike absolute_start_time which is an unsuffixed-ISO string.
+                  // Render with getHours/Minutes/Seconds (NOT getUTC*) so chat
+                  // bubbles match transcript segment timestamps in browser-local tz.
                   const chatTime = new Date(msg.timestamp);
-                  const hh = chatTime.getUTCHours().toString().padStart(2, "0");
-                  const mm = chatTime.getUTCMinutes().toString().padStart(2, "0");
-                  const ss = chatTime.getUTCSeconds().toString().padStart(2, "0");
+                  const hh = chatTime.getHours().toString().padStart(2, "0");
+                  const mm = chatTime.getMinutes().toString().padStart(2, "0");
+                  const ss = chatTime.getSeconds().toString().padStart(2, "0");
                   const displayTime = `${hh}:${mm}:${ss}`;
 
                   return (
