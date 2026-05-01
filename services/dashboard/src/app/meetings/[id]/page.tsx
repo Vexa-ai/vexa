@@ -182,38 +182,57 @@ export default function MeetingDetailPage() {
 
   // Build ordered recording fragments for multi-fragment playback.
   // Each recording has a session_uid, created_at, and media_files with duration.
-  // Sort by created_at so fragments play sequentially.
-  const recordingFragments = useMemo((): AudioFragment[] => {
-    // Include recordings that have audio media files, whether completed or in_progress
-    // (in_progress recordings may have snapshot uploads available for playback)
-    const availableRecordings = recordings
-      .filter(r => (r.status === "completed" || r.status === "in_progress") && r.media_files?.some(mf => mf.type === "audio"))
-      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  // v0.10.5.3 Pack D-3 (#288): fragment URLs are presigned S3/MinIO URLs
+  // when the storage backend supports them — browser streams directly with
+  // HTTP Range. For local-storage backends (dev / self-host), fallback to
+  // the /raw proxy path is an EXPLICIT decision baked into the meeting-api
+  // /download endpoint (not a runtime fallback per Pack P).
+  //
+  // Pre-fix: every fragment src was the /raw endpoint, which buffered the
+  // whole file in meeting-api memory before serving (#288). For 24-min
+  // meetings @ 10 MB that's ~10s of dead-air on first byte.
+  const [recordingFragments, setRecordingFragments] = useState<AudioFragment[]>([]);
+  const [videoSrc, setVideoSrc] = useState<string | null>(null);
 
-    return availableRecordings.map(rec => {
-      const audioMedia = rec.media_files.find(mf => mf.type === "audio")!;
-      return {
-        src: vexaAPI.getRecordingAudioUrl(rec.id, audioMedia.id),
-        duration: audioMedia.duration_seconds || 0,
-        sessionUid: rec.session_uid,
-        createdAt: rec.created_at,
-      };
-    });
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const availableRecordings = recordings
+        .filter(r => (r.status === "completed" || r.status === "in_progress") && r.media_files?.some(mf => mf.type === "audio"))
+        .sort((a, b) => a.created_at.localeCompare(b.created_at));
+      const frags = await Promise.all(availableRecordings.map(async rec => {
+        const audioMedia = rec.media_files.find(mf => mf.type === "audio")!;
+        const src = await vexaAPI.getRecordingAudioUrl(rec.id, audioMedia.id);
+        return {
+          src,
+          duration: audioMedia.duration_seconds || 0,
+          sessionUid: rec.session_uid,
+          createdAt: rec.created_at,
+        } as AudioFragment;
+      }));
+      if (!cancelled) setRecordingFragments(frags);
+    })();
+    return () => { cancelled = true; };
+  }, [recordings]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      for (const rec of recordings) {
+        if (rec.status !== "completed" && rec.status !== "in_progress") continue;
+        const videoMedia = rec.media_files?.find((mf: { type: string }) => mf.type === "video");
+        if (videoMedia) {
+          const src = await vexaAPI.getRecordingVideoUrl(rec.id, videoMedia.id);
+          if (!cancelled) setVideoSrc(src);
+          return;
+        }
+      }
+      if (!cancelled) setVideoSrc(null);
+    })();
+    return () => { cancelled = true; };
   }, [recordings]);
 
   const hasRecordingAudio = recordingFragments.length > 0;
-
-  // Find the first video media file across all recordings for the VideoPlayer.
-  const videoSrc = useMemo(() => {
-    for (const rec of recordings) {
-      if (rec.status !== "completed" && rec.status !== "in_progress") continue;
-      const videoMedia = rec.media_files?.find((mf: { type: string }) => mf.type === "video");
-      if (videoMedia) {
-        return vexaAPI.getRecordingVideoUrl(rec.id, videoMedia.id);
-      }
-    }
-    return null;
-  }, [recordings]);
 
   // Derive each session's start time (wall-clock ms) from segment data.
   // segment.start_time is relative to session start, and segment.absolute_start_time
