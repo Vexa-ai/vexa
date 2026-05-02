@@ -59,6 +59,7 @@ import { RecordingService } from "./recording";
 import { logJSON } from "../utils/log";
 import { log } from "../utils";
 import { BotConfig } from "../types";
+import { getSegmentPublisher } from "../index";
 
 // ───────────────────────────────────────────────────────────────────────
 // Types
@@ -215,6 +216,31 @@ export class UnifiedRecordingPipeline {
         error_message: err?.message,
         error_name: err?.name,
       });
+    });
+
+    // Unified segment-to-audio alignment hook. The capture source emits
+    // 'started' on the first audio sample (= t=0 of the master file).
+    // - MediaRecorderCapture fires it from window.__vexaRecordingStarted
+    //   (called by browser-side BrowserMediaRecorderPipeline on
+    //   MediaRecorder.onstart)
+    // - PulseAudioCapture fires it on the first parecord stdout byte
+    // Pipeline-level hook means EVERY platform gets correct
+    // segment-to-audio alignment automatically — no per-platform
+    // recording.ts handler needed. Replaces the platform-side
+    // exposeFunction("__vexaRecordingStarted") and source.on('started')
+    // boilerplate that was duplicated in googlemeet, msteams, and
+    // zoom/web recording.ts.
+    this.source.on("started", () => {
+      const publisher = getSegmentPublisher();
+      if (publisher) {
+        publisher.resetSessionStart();
+        logJSON({
+          level: "info",
+          msg: "[audio-pipeline] session-start re-aligned to capture t=0",
+          platform: this.platform,
+          sessionStartMs: publisher.sessionStartMs,
+        });
+      }
     });
 
     await this.source.start();
@@ -580,6 +606,27 @@ export class MediaRecorderCapture extends EventEmitter implements AudioCaptureSo
           }
         },
       );
+
+      // Unified 'started' event (mirrors PulseAudioCapture). The browser-side
+      // BrowserMediaRecorderPipeline calls window.__vexaRecordingStarted from
+      // MediaRecorder.onstart — that's t=0 of the master. We turn that into a
+      // source-level 'started' event so EVERY platform's recording.ts can use
+      // the same hook to call publisher.resetSessionStart() for segment-to-
+      // audio alignment, regardless of capture mechanism (parecord vs
+      // MediaRecorder). Pre-unification: GMeet/Teams hand-rolled an
+      // exposeFunction handler; Zoom Web had no equivalent. Now unified.
+      const startedFireOnce = (() => {
+        let fired = false;
+        return () => {
+          if (fired) return;
+          fired = true;
+          this.emit("started");
+        };
+      })();
+      await page.exposeFunction("__vexaRecordingStarted", () => {
+        startedFireOnce();
+      });
+
       this.callbacksExposed = true;
     }
 

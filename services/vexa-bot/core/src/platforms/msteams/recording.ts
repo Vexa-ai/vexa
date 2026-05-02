@@ -31,13 +31,9 @@ let recordingService: RecordingService | null = null;
 export async function startTeamsRecording(page: Page, botConfig: BotConfig): Promise<void> {
   log("Starting Teams recording");
 
-  // Reset segment publisher session start to align with recording start.
-  // SegmentPublisher was created pre-admission; recording starts post-admission.
-  const publisher = getSegmentPublisher();
-  if (publisher) {
-    publisher.resetSessionStart();
-    log(`[Teams Recording] Session start reset to ${new Date(publisher.sessionStartMs).toISOString()}`);
-  }
+  // (Segment publisher session-start re-alignment is owned by
+  // UnifiedRecordingPipeline — same hook for all 3 platforms via the
+  // AudioCaptureSource 'started' event.)
 
   const wantsAudioCapture =
     !!botConfig.recordingEnabled &&
@@ -67,14 +63,9 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
       // Mirrors the GMeet fix in googlemeet/recording.ts.
       await ensureBrowserUtils(page, require('path').join(__dirname, '../../browser-utils.global.js'));
 
-      // Expose the recording-started callback BEFORE pipeline starts —
-      // BrowserMediaRecorderPipeline calls it as soon as MediaRecorder.onstart fires.
-      await page.exposeFunction("__vexaRecordingStarted", () => {
-        if (publisher) {
-          publisher.resetSessionStart();
-          log(`[Teams Recording] Session start re-aligned to MediaRecorder start: ${new Date(publisher.sessionStartMs).toISOString()}`);
-        }
-      });
+      // (Note: __vexaRecordingStarted is now exposed inside MediaRecorderCapture
+      // and publisher.resetSessionStart() is owned by UnifiedRecordingPipeline —
+      // same hook for all 3 platforms via the AudioCaptureSource 'started' event.)
 
       const audioCapture = new MediaRecorderCapture({
         page,

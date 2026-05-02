@@ -24,14 +24,9 @@ let recordingService: RecordingService | null = null;
 export async function startGoogleRecording(page: Page, botConfig: BotConfig): Promise<void> {
   log("Starting Google Meet recording");
 
-  // Reset segment publisher session start to align with recording start.
-  // SegmentPublisher was created pre-admission; recording starts post-admission.
-  // Without this reset, segment.start_time would be offset by the admission wait time.
-  const publisher = getSegmentPublisher();
-  if (publisher) {
-    publisher.resetSessionStart();
-    log(`[Recording] Session start reset to ${new Date(publisher.sessionStartMs).toISOString()}`);
-  }
+  // (Segment publisher session-start re-alignment is owned by
+  // UnifiedRecordingPipeline — it subscribes to source.on('started')
+  // which fires on the first audio sample. Same hook for all 3 platforms.)
 
   const wantsAudioCapture =
     !!botConfig.recordingEnabled &&
@@ -63,15 +58,10 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
       // The ensureBrowserUtils call MUST stay before pipeline.start().
       await ensureBrowserUtils(page, require('path').join(__dirname, '../../browser-utils.global.js'));
 
-      // Expose the recording-started callback BEFORE pipeline starts,
-      // since the browser-side BrowserMediaRecorderPipeline calls it as
-      // soon as MediaRecorder.onstart fires.
-      await page.exposeFunction("__vexaRecordingStarted", () => {
-        if (publisher) {
-          publisher.resetSessionStart();
-          log(`[Recording] Session start re-aligned to MediaRecorder start: ${new Date(publisher.sessionStartMs).toISOString()}`);
-        }
-      });
+      // (Note: __vexaRecordingStarted is now exposed inside MediaRecorderCapture
+      // and the publisher.resetSessionStart() wiring is owned by
+      // UnifiedRecordingPipeline — same hook for all 3 platforms via the
+      // AudioCaptureSource 'started' event. No per-platform handler needed.)
 
       const audioCapture = new MediaRecorderCapture({
         page,

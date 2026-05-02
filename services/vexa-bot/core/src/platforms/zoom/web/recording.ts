@@ -38,26 +38,12 @@ export async function startZoomWebRecording(page: Page | null, botConfig: BotCon
       // uploadChunk() so chunks land in MinIO immediately. No local-disk
       // WAV; the master is built server-side by recording_finalizer.py at
       // bot_exit_callback.
+      // (Segment-to-audio alignment is owned by UnifiedRecordingPipeline —
+      // it subscribes to source.on('started') and calls
+      // publisher.resetSessionStart(). Same hook for all 3 platforms;
+      // no per-platform handler needed here.)
       recordingService = new RecordingService(botConfig.meeting_id, sessionUid);
       const source = new PulseAudioCapture();
-
-      // Pack U.4 segment-alignment hook (#GH-zoom-segment-drift, 2026-05-02):
-      // Reset SegmentPublisher.sessionStartMs the moment parecord delivers
-      // its first sample — that's t=0 of the master.wav. Without this,
-      // segment timestamps remain anchored to per-speaker-pipeline init
-      // (~admission moment) which can be 20-30s BEFORE parecord-start.
-      // Result pre-fix: clicking a segment in the dashboard seeks the
-      // audio player past end-of-file. GMeet/Teams have an equivalent
-      // hook via __vexaRecordingStarted (browser-side, fires on
-      // MediaRecorder.onstart) — Zoom Web wasn't covered because
-      // parecord doesn't fire a browser event.
-      source.on('started', () => {
-        const publisher = getSegmentPublisher();
-        if (publisher) {
-          publisher.resetSessionStart();
-          log(`[Zoom Web] Session start re-aligned to parecord t=0: ${new Date(publisher.sessionStartMs).toISOString()}`);
-        }
-      });
 
       pipeline = new UnifiedRecordingPipeline({
         source,
