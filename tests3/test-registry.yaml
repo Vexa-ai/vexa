@@ -226,6 +226,19 @@ tests:
     features: [infrastructure]
     max_duration_sec: 20
 
+  # v0.10.5.3 FM-274 regression guard. Three-layer defense for the bot
+  # hallucination corpus (source files exist + .gitignore exception +
+  # build-script fail-loud). See tests/v0.10.5.3-hallucination-corpus.sh
+  # for the script, tests3/registry.yaml for HALLUCINATION_CORPUS_PRESENT
+  # / _GITIGNORE_EXCEPTION / _BUILD_FAIL_LOUD entries, and
+  # features/bot-lifecycle/dods.yaml for DoD bindings.
+  v0.10.5.3-hallucination-corpus:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: tests/v0.10.5.3-hallucination-corpus.sh
+    features: [bot-lifecycle]
+    max_duration_sec: 5
+
   chart-pgbouncer-optional:
     tier: cheap
     runs_in: [helm]

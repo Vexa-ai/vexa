@@ -300,6 +300,45 @@ scope:
   required_modes: []
   human_verify: []
 
+# ── Pack FM-274 — Hallucinations corpus regression guard ──────────────
+# Detected during this release's audit (informal, scaffolded for v0.10.6).
+# Bot ships with empty whisper-hallucination filter since v0.10.0 (when
+# WhisperLive was removed and the corpus went with it). Long-form
+# hallucinations like "thanks for watching" / "subscribe to my channel"
+# leaked into prod transcripts for ~3 months. Three-layer fix:
+#   (1) restore corpus files (commit 3d9b0d1)
+#   (2) .gitignore exception so they can't silently re-disappear
+#   (3) build script `&&` (fail-loud) instead of `2>/dev/null;` (silent-fail)
+# This pack registers the regression-guard test in scope so the matrix
+# runs it across all 3 modes — not just compose where stale .state was.
+- id: hallucinations-corpus-restored
+  source: cycle-internal
+  ref: ""  # FM-274 pre-existing
+  problem: |
+    Bot hallucination corpus (services/vexa-bot/core/src/services/
+    hallucinations/{en,es,pt,ru}.txt) was deleted with WhisperLive in
+    v0.10.0 (commit e55e878) and never re-located to the bot codebase.
+    Bot images shipped with empty filter; whisper hallucinations leaked
+    into prod transcripts. FM-274 detected by static check at locks/
+    but check was orphan (not bound to any DoD), so the regression went
+    to prod for ~3 months.
+  hypothesis: |
+    Three-layer fix: (1) restore phrase files at the new canonical bot
+    path; (2) .gitignore negation rule so global *.txt can't silently
+    drop them; (3) core/package.json build script uses `&&` instead of
+    `2>/dev/null;` so future cp failures abort build. Bind all three to
+    a registry test that runs in every mode.
+  fix_commits:
+    - 3d9b0d1  # restore phrase files + .gitignore exception + fail-loud build
+    - a320867  # registry checks + bot-lifecycle DoD bindings
+  proves:
+    - {test: v0.10.5.3-hallucination-corpus, modes: [lite, compose, helm]}
+  required_modes: [lite, compose, helm]
+  human_verify:
+    - mode: compose
+      do: "After release-deploy, ssh root@$COMPOSE_VM_IP, run `docker exec vexa-bot-1 ls /app/vexa-bot/core/dist/services/hallucinations/`. Should list en.txt, es.txt, pt.txt, ru.txt."
+      expect: "All 4 files present in the runtime image."
+
 # ── Pack H — Helm chart hardening (promoted from DEFER) ───────────────
 - id: helm-chart-hardening
   source: incident
