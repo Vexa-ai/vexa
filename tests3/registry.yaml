@@ -1728,6 +1728,48 @@ BOT_NO_UNJUSTIFIED_FALLBACKS:
   - helm
   state: stateless
   max_duration_sec: 10
+HALLUCINATION_CORPUS_PRESENT:
+  proves: "services/vexa-bot/core/src/services/hallucinations/{en,es,pt,ru}.txt exist + non-empty (each \u2265 5 phrase lines). Bot image build copies these to dist; whisper hallucination filter loads them at runtime to drop 'thanks for watching' / 'subscribe to my channel' class artifacts before publishing to Redis."
+  symptom: "FM-274 regression class: phrase corpus deleted/renamed/moved. Bot ships with empty filter. Long-form whisper hallucinations leak into prod transcripts. Originally regressed when WhisperLive was removed (v0.10.0 commit e55e878) and corpus went with it; FM-274 detected by orphan static check that wasn't bound to any DoD until v0.10.5.3."
+  found: '2026-05-02'
+  fix_release: v0.10.5.3
+  type: script
+  script: tests/v0.10.5.3-hallucination-corpus.sh
+  step: HALLUCINATION_CORPUS_PRESENT
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+HALLUCINATION_CORPUS_GITIGNORE_EXCEPTION:
+  proves: ".gitignore has the '!services/vexa-bot/core/src/services/hallucinations/*.txt' exception, protecting corpus from the global '*.txt' rule that would otherwise silently drop the files on git add."
+  symptom: "global '*.txt' rule silently re-disappears the corpus on next git add (exactly how the original v0.10.0 regression slipped past CI \u2014 deleted corpus was never visible as 'missing files' because *.txt is gitignored)."
+  found: '2026-05-02'
+  fix_release: v0.10.5.3
+  type: script
+  script: tests/v0.10.5.3-hallucination-corpus.sh
+  step: HALLUCINATION_CORPUS_GITIGNORE_EXCEPTION
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+HALLUCINATION_CORPUS_BUILD_FAIL_LOUD:
+  proves: "services/vexa-bot/core/package.json `build` script chains the cp step with '&&' (fails fast on missing source), NOT '2>/dev/null;' (silent failure that masked FM-274 from v0.10.0 to v0.10.5.2)."
+  symptom: "build script swallows cp's missing-source error \u2014 build always succeeds even when corpus didn't make it to dist. Empty filter ships to runtime. Audit-categories \u00a76 (operational hygiene): silent-failure pattern."
+  found: '2026-05-02'
+  fix_release: v0.10.5.3
+  type: script
+  script: tests/v0.10.5.3-hallucination-corpus.sh
+  step: HALLUCINATION_CORPUS_BUILD_FAIL_LOUD
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
 RELEASE_DOCS_NO_PII:
   proves: "tests3/releases/<id>/* artifacts use anonymized customer refs (customer-A, customer-B, ...); no real-looking emails outside @redacted/@example.com/@vexa.ai/@anthropic.com"
   symptom: "PII leak into OSS public repo (real names + emails) like the v0.10.5.2 cycle"

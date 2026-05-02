@@ -160,3 +160,44 @@ dods:
     modes:
     - lite
     - compose
+
+# v0.10.5.3 FM-274 regression guard — three-layer defense for the bot
+# hallucination corpus. The original FM-274 (corpus dropped when
+# WhisperLive was removed, v0.10.0) shipped to prod and leaked
+# "thanks for watching" / "subscribe to my channel" hallucinations into
+# customer transcripts for ~3 months because:
+#   1. Corpus files weren't required by any DoD (orphan static check)
+#   2. .gitignore *.txt rule silently dropped restoration attempts
+#   3. Build script `2>/dev/null;` swallowed the cp's missing-source error
+# Each layer below pins one of the three. Total weight 15 = same gate-pull
+# as create-ok / create-alive, reflecting transcript-quality importance.
+
+- id: hallucination-corpus-present
+  label: "bot hallucination corpus (en, es, pt, ru) exists at services/vexa-bot/core/src/services/hallucinations/ — non-empty, ≥5 phrases each"
+  weight: 5
+  evidence:
+    check: HALLUCINATION_CORPUS_PRESENT
+    modes:
+    - lite
+    - compose
+    - helm
+
+- id: hallucination-corpus-gitignore-exception
+  label: ".gitignore has the negation rule '!services/vexa-bot/core/src/services/hallucinations/*.txt' protecting the corpus from the global '*.txt' ignore"
+  weight: 5
+  evidence:
+    check: HALLUCINATION_CORPUS_GITIGNORE_EXCEPTION
+    modes:
+    - lite
+    - compose
+    - helm
+
+- id: hallucination-corpus-build-fail-loud
+  label: "core/package.json build script uses '&&' (fail-fast) for the cp step, not '2>/dev/null;' (silent-fail) — corpus copy failure aborts build"
+  weight: 5
+  evidence:
+    check: HALLUCINATION_CORPUS_BUILD_FAIL_LOUD
+    modes:
+    - lite
+    - compose
+    - helm
