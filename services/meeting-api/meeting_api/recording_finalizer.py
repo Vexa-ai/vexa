@@ -323,19 +323,26 @@ async def finalize_recording_master(meeting_id: int, db: AsyncSession) -> None:
     so by the time meeting.status flips to terminal, media_file.storage_path
     points at the master.
 
-    Operates on the SQL Recording + MediaFile tables (DB metadata mode).
-    In meeting_data mode (default for now) Recording rows do not exist;
-    this function will simply find no rows and return — the integrating
-    callback handles the meeting_data case via a separate path.
+    Handles BOTH metadata storage modes:
+
+    1. SQL Recording + MediaFile tables (`recording_metadata_mode=db`)
+    2. meeting.data->'recordings' JSONB array (`recording_metadata_mode=meeting_data`,
+       which is the production default and what every R12-R14 real-meeting
+       test ran on)
+
+    The original v0.10.6 Pack U.5 implementation handled only path 1, which
+    silently no-op'd on every real meeting. Path 2 added 2026-05-02 after
+    real-meeting test on lite/compose/helm exposed the gap (storage_path
+    stuck at last chunk; dashboard read chunk fragment; "preparing audio"
+    forever).
     """
+    storage = create_storage_client()
+    finalized_any = False
+
+    # ── Path 1: SQL Recording table mode ──────────────────────────
     # Pull all in-flight Recording rows for this meeting + their MediaFiles.
     # We filter out only `failed` recordings — `in_progress`, `uploading`,
-    # and `completed` are all valid finalization candidates: the bot can
-    # exit before, during, or just-after the final-chunk upload that
-    # promotes status to `completed`. Idempotency is provided by the
-    # master-file-exists check inside the inner sync core, so re-running
-    # on an already-finalized recording is cheap (one HEAD request per
-    # media file).
+    # and `completed` are all valid finalization candidates.
     stmt = (
         select(Recording)
         .where(
@@ -346,73 +353,159 @@ async def finalize_recording_master(meeting_id: int, db: AsyncSession) -> None:
     result = await db.execute(stmt)
     recordings = result.scalars().all()
 
-    if not recordings:
-        logger.info(
-            "[FINALIZER] no Recording rows for meeting_id=%s — skipping "
-            "(meeting_data mode or recording never started)",
-            meeting_id,
-        )
-        return
-
-    storage = create_storage_client()
-
-    for rec in recordings:
-        # Pull MediaFiles for this recording. In production the per-chunk
-        # upload path keeps ONE MediaFile row per (recording, media_type)
-        # and rewrites its storage_path to the latest chunk. So we expect
-        # 1-2 rows per recording (audio, optionally video).
-        mf_stmt = (
-            select(MediaFile)
-            .where(
-                MediaFile.recording_id == rec.id,
-                MediaFile.type.in_(("audio", "video")),
+    if recordings:
+        for rec in recordings:
+            mf_stmt = (
+                select(MediaFile)
+                .where(
+                    MediaFile.recording_id == rec.id,
+                    MediaFile.type.in_(("audio", "video")),
+                )
             )
-        )
-        mf_result = await db.execute(mf_stmt)
-        media_files = mf_result.scalars().all()
+            mf_result = await db.execute(mf_stmt)
+            media_files = mf_result.scalars().all()
 
-        if not media_files:
-            logger.info(
-                "[FINALIZER] recording_id=%s has no audio/video MediaFile rows "
-                "— skipping",
-                rec.id,
-            )
-            continue
-
-        for mf in media_files:
-            if not mf.storage_path or not mf.format:
-                logger.warning(
-                    "[FINALIZER] media_file_id=%s missing storage_path or format "
-                    "— skipping (storage_path=%r format=%r)",
-                    mf.id, mf.storage_path, mf.format,
+            if not media_files:
+                logger.info(
+                    "[FINALIZER] recording_id=%s has no audio/video MediaFile rows — skipping",
+                    rec.id,
                 )
                 continue
 
-            # Run the sync I/O in a thread-pool so we don't block the
-            # event loop. boto3 is sync; download_file/upload_file/
-            # list_objects all do blocking network I/O.
-            master_key = await asyncio.to_thread(
-                _finalize_one_media_file_sync,
-                storage,
-                mf.id,
-                mf.storage_path,
-                mf.format,
+            for mf in media_files:
+                if not mf.storage_path or not mf.format:
+                    logger.warning(
+                        "[FINALIZER] media_file_id=%s missing storage_path or format — skipping",
+                        mf.id,
+                    )
+                    continue
+                master_key = await asyncio.to_thread(
+                    _finalize_one_media_file_sync,
+                    storage,
+                    mf.id,
+                    mf.storage_path,
+                    mf.format,
+                )
+                if master_key is None:
+                    continue
+                if mf.storage_path != master_key:
+                    mf.storage_path = master_key
+                    logger.info(
+                        "[FINALIZER] [SQL] media_file_id=%s storage_path → master: %s",
+                        mf.id, master_key,
+                    )
+                    finalized_any = True
+
+    # ── Path 2: meeting_data JSONB mode (production default) ──────
+    # Recordings live in meeting.data->'recordings' (array) →
+    # recording.media_files (array) → media_file fields including
+    # storage_path. We mutate the JSONB structure in place and
+    # flag_modified() to force SQLAlchemy to detect the change.
+    from .models import Meeting
+    meeting_q = await db.execute(select(Meeting).where(Meeting.id == meeting_id))
+    meeting = meeting_q.scalars().first()
+
+    if meeting is None:
+        if not recordings and not finalized_any:
+            logger.info(
+                "[FINALIZER] meeting_id=%s — no Meeting row, no SQL Recording rows; nothing to finalize",
+                meeting_id,
             )
+        return
+
+    meeting_data = dict(meeting.data or {})
+    rec_list = list(meeting_data.get("recordings") or [])
+
+    if not rec_list:
+        if not recordings and not finalized_any:
+            logger.info(
+                "[FINALIZER] meeting_id=%s — no recordings found in SQL or meeting_data; nothing to finalize",
+                meeting_id,
+            )
+        # SQL path may have committed updates; flush them.
+        if finalized_any:
+            await db.commit()
+        return
+
+    for rec_idx, rec_payload in enumerate(rec_list):
+        if not isinstance(rec_payload, dict):
+            continue
+        if rec_payload.get("status") == "failed":
+            continue
+        media_files = list(rec_payload.get("media_files") or [])
+        if not media_files:
+            continue
+
+        for mf_idx, mf in enumerate(media_files):
+            if not isinstance(mf, dict):
+                continue
+            mf_type = mf.get("type")
+            mf_format = (mf.get("format") or "").lower()
+            mf_path = mf.get("storage_path") or ""
+            mf_id = mf.get("id")
+
+            if mf_type not in ("audio", "video"):
+                continue
+            if not mf_path or not mf_format:
+                logger.warning(
+                    "[FINALIZER] [DATA] meeting_id=%s rec_idx=%s mf_idx=%s missing path/format — skipping",
+                    meeting_id, rec_idx, mf_idx,
+                )
+                continue
+            if mf_format not in ("webm", "wav"):
+                logger.warning(
+                    "[FINALIZER] [DATA] meeting_id=%s mf_id=%s unsupported format=%r — skipping",
+                    meeting_id, mf_id, mf_format,
+                )
+                continue
+
+            try:
+                master_key = await asyncio.to_thread(
+                    _finalize_one_media_file_sync,
+                    storage,
+                    mf_id or f"meeting_data:{meeting_id}/{rec_idx}/{mf_idx}",
+                    mf_path,
+                    mf_format,
+                )
+            except Exception as fin_err:
+                logger.error(
+                    "[FINALIZER] [DATA] meeting_id=%s mf_id=%s failed: %s",
+                    meeting_id, mf_id, str(fin_err)[:200],
+                )
+                raise
 
             if master_key is None:
-                # Storage list returned 0 chunks. No-fallback contract:
-                # leave the existing storage_path alone and move on.
+                # No-fallback: leave storage_path alone if list returned 0 chunks.
+                continue
+            if mf.get("storage_path") == master_key:
+                # Idempotent re-run.
                 continue
 
-            if mf.storage_path == master_key:
-                # Already pointing at the master (idempotent re-run).
-                continue
-
-            mf.storage_path = master_key
+            mf["storage_path"] = master_key
+            mf["finalized_at"] = mf.get("finalized_at") or _now_iso()
+            mf["finalized_by"] = "recording_finalizer.master"
+            media_files[mf_idx] = mf
+            finalized_any = True
             logger.info(
-                "[FINALIZER] media_file_id=%s storage_path updated to master: %s",
-                mf.id, master_key,
+                "[FINALIZER] [DATA] meeting_id=%s mf_id=%s storage_path → master: %s",
+                meeting_id, mf_id, master_key,
             )
 
-    # Single commit at the end — all media_file updates land atomically.
-    await db.commit()
+        rec_payload["media_files"] = media_files
+        rec_list[rec_idx] = rec_payload
+
+    if finalized_any:
+        meeting_data["recordings"] = rec_list
+        meeting.data = meeting_data
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(meeting, "data")
+        await db.commit()
+        logger.info(
+            "[FINALIZER] meeting_id=%s — committed master storage_path update(s) to meeting.data",
+            meeting_id,
+        )
+
+
+def _now_iso() -> str:
+    from datetime import datetime
+    return datetime.utcnow().isoformat()
