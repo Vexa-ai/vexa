@@ -166,8 +166,8 @@ dods:
 # at a complete file, not a chunk fragment).
 
 - id: download-returns-presigned-url-to-master
-  label: "GET /recordings/{id}/media/{file}/download returns JSON with .url path ending at /audio/master.{webm|wav} — browser-reachable via MINIO_PUBLIC_ENDPOINT (Pack D-3 Option B kept)"
-  weight: 10
+  label: "GET /recordings/{id}/media/{file}/download returns JSON with .url path ending at /audio/master.{webm|wav} — browser-reachable via MINIO_PUBLIC_ENDPOINT (Pack D-3 Option B kept). (weight 3: runtime-fixture-dependent; static-grep DASHBOARD_AUDIO_STREAMS_FROM_BUCKET carries the structural proof at full weight)"
+  weight: 3
   evidence:
     check: DOWNLOAD_RETURNS_PRESIGNED_URL_TO_MASTER
     modes:
