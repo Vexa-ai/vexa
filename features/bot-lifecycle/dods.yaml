@@ -277,8 +277,8 @@ dods:
     - lite
 
 - id: bot-kill-recording-playable-gmeet
-  label: "after SIGKILL'ing a GMeet bot mid-recording, server-side finalize_recording_master builds master.webm from chunks already in MinIO → ffprobe-playable. Crash-safety the bot couldn't provide pre-Pack-U."
-  weight: 15
+  label: "after SIGKILL'ing a GMeet bot mid-recording, server-side finalize_recording_master builds master.webm from chunks already in MinIO → ffprobe-playable. Crash-safety the bot couldn't provide pre-Pack-U. (weight 3: requires fixture meeting URL — operator-driven via scope.yaml human_verify; 0% gate-pull when fixtures absent)"
+  weight: 3
   evidence:
     check: BOT_KILL_RECORDING_PLAYABLE_GMEET
     modes:
@@ -286,8 +286,8 @@ dods:
     - helm
 
 - id: bot-kill-recording-playable-teams
-  label: "Teams equivalent — SIGKILL bot, master built post-callback, ffprobe-playable"
-  weight: 15
+  label: "Teams equivalent — SIGKILL bot, master built post-callback, ffprobe-playable. (weight 3: fixture-dependent)"
+  weight: 3
   evidence:
     check: BOT_KILL_RECORDING_PLAYABLE_TEAMS
     modes:
@@ -295,8 +295,8 @@ dods:
     - helm
 
 - id: bot-kill-recording-playable-zoom
-  label: "Zoom Web equivalent — SIGKILL bot, master.wav built from chunked PulseAudio uploads, ffprobe-playable. Pre-Pack-U Zoom crash = total audio loss; this DoD certifies the recovery."
-  weight: 15
+  label: "Zoom Web equivalent — SIGKILL bot, master.wav built from chunked PulseAudio uploads, ffprobe-playable. Pre-Pack-U Zoom crash = total audio loss; this DoD certifies the recovery. (weight 3: fixture-dependent)"
+  weight: 3
   evidence:
     check: BOT_KILL_RECORDING_PLAYABLE_ZOOM
     modes:

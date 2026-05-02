@@ -240,14 +240,26 @@ tests:
     max_duration_sec: 5
 
   # ── v0.10.6 Pack U — audio recording unification ─────────────
-  # NOT registered as test-registry.yaml entries. v0.10.6-static-greps.sh
-  # and v0.10.6-runtime-smokes.sh are step-runner scripts invoked
-  # PER-CHECK from tests3/registry.yaml — same pattern as v0.10.5.3-
-  # static-greps.sh and v0.10.5.3-runtime-smokes.sh. The matrix runner
-  # picks them up via the registry's `script: ... step: ...` fields.
-  # Adding them here too caused dual-invocation (test-registry tries to
-  # call without step arg → script errors → no JSON report → all Pack U
-  # DoDs flagged ⬜ missing in v0.10.6 first-validate R7).
+  # Single-invocation multi-step scripts: each runs all its step IDs in
+  # one matrix run, emits one JSON with the steps array. Same pattern as
+  # containers.sh / webhooks.sh. The earlier (R7) attempt registered
+  # them with `steps: [...]` and the script expected $1 — that's the
+  # old per-step pattern from v0.10.5.3-static-greps.sh which was never
+  # actually wired into the matrix. R8 rewrite: scripts orchestrate all
+  # steps internally; one test-registry entry per script.
+  v0.10.6-static-greps:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: tests/v0.10.6-static-greps.sh
+    features: [bot-lifecycle, post-meeting-transcription, dashboard]
+    max_duration_sec: 30
+
+  v0.10.6-runtime-smokes:
+    tier: meeting
+    runs_in: [compose, helm]
+    script: tests/v0.10.6-runtime-smokes.sh
+    features: [bot-lifecycle, post-meeting-transcription, dashboard]
+    max_duration_sec: 600
 
   chart-pgbouncer-optional:
     tier: cheap

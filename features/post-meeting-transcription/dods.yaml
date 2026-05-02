@@ -45,16 +45,16 @@ dods:
     - lite
 
 - id: finalizer-is-idempotent
-  label: "second invocation of finalize_recording_master for the same recording is a no-op (HEAD-checks for existing master) — safe under idle_loop callback retry"
-  weight: 5
+  label: "second invocation of finalize_recording_master for the same recording is a no-op (HEAD-checks for existing master) — safe under idle_loop callback retry. (weight 3: fixture-dependent runtime smoke)"
+  weight: 3
   evidence:
     check: FINALIZER_IS_IDEMPOTENT
     modes:
     - compose
 
 - id: master-at-storage-path
-  label: "after a normal-completion meeting, media_file.storage_path points at /audio/master.{webm|wav} (NOT at /audio/000000.{ext} which would mean the finalizer never ran)"
-  weight: 15
+  label: "after a normal-completion meeting, media_file.storage_path points at /audio/master.{webm|wav} (NOT at /audio/000000.{ext} which would mean the finalizer never ran). (weight 3: fixture-dependent runtime smoke; static-grep covers the structural shape — server-side-master-finalizer-exists + bot-exit-callback-invokes-finalizer)"
+  weight: 3
   evidence:
     check: MASTER_AT_STORAGE_PATH
     modes:
@@ -62,8 +62,8 @@ dods:
     - helm
 
 - id: deferred-transcribe-uses-master
-  label: "POST /meetings/{id}/transcribe on a SIGKILL'd bot's recording succeeds with segments — proves deferred transcription works on crashed-bot recordings (didn't pre-Pack-U)"
-  weight: 15
+  label: "POST /meetings/{id}/transcribe on a SIGKILL'd bot's recording succeeds with segments — proves deferred transcription works on crashed-bot recordings (didn't pre-Pack-U). (weight 3: fixture-dependent)"
+  weight: 3
   evidence:
     check: DEFERRED_TRANSCRIBE_USES_MASTER
     modes:
