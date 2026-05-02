@@ -426,5 +426,55 @@ proposed resolution: implement the 4 fixes above, re-validate.
 
 Stage transition: `triage → develop` to apply fixes.
 
+---
+
+## SIXTH-PASS TRIAGE (2026-05-02 — authoritative validate after R11 iterate green)
+
+R11 iterate gated GREEN under scope-filter. Authoritative `release-validate`
+(full matrix, no scope-filter) ran more tests and surfaced one Pack U
+relocation issue + a few known-flaky pre-existing failures:
+
+| Test/Step | Mode | Class | Action |
+|---|---|---|---|
+| `bot-records-incrementally` | compose | REGRESSION-OF-CLEANUP (Pack U.2/U.3 relocation) | **FIX** — update grep targets to shared modules |
+| `smoke-env DASHBOARD_API_KEY_VALID` | compose | GAP (transient state) | ACCEPT — VM-side dashboard token reseating timing |
+| `webhooks e2e_completion` | helm | GAP (known-flaky) | ACCEPT — webhook delivery race within 20s budget |
+| `smoke-contract` | helm | GAP (recurring) | ACCEPT — pre-existing |
+| `synthetic` | compose | under investigation | DEFER — not gating any DoD |
+| `containers` | lite | GAP (recurring) | ACCEPT — same Pack C path-coverage gap |
+
+### `bot-records-incrementally` [REGRESSION-OF-CLEANUP]
+
+- **status:** fail in compose (BOT_RECORDS_INCREMENTALLY check)
+- **bound check:** BOT_RECORDS_INCREMENTALLY (weight 10 on bot-lifecycle)
+- **symptom:** "incremental-upload contract missing: googlemeet:timeslice
+  googlemeet:chunk-sink msteams:timeslice msteams:chunk-sink"
+- **root cause:** the check greps platform recording.ts for
+  `recorder.start(<≥15000>)` and `__vexaSaveRecordingChunk`. Pack U.2/U.3
+  moved both into shared modules (BrowserMediaRecorderPipeline in
+  utils/browser.ts + MediaRecorderCapture in services/audio-pipeline.ts).
+  Same protected behavior; just relocated. Same class as the
+  chunk_buffer_trim relocation in fifth-pass triage.
+- **NOT a code regression.** Pack B incremental-upload contract is
+  preserved end-to-end.
+- **fix:** update bot-records-incrementally.sh to look for the timeslice
+  + chunk-sink in browser.ts + audio-pipeline.ts (the shared modules).
+  Belt-and-braces guard added: also assert platform recording.ts files
+  DON'T carry their own MediaRecorder construction (would mean
+  unification regressed).
+
+### Resolution
+
+| Test | Class | Action |
+|---|---|---|
+| bot-records-incrementally | REGRESSION-OF-CLEANUP | **FIX** |
+| All others | GAP / under investigation | **ACCEPT** (don't bind high-weight DoDs at gate; surfaced for future cycles) |
+
+<!-- human directive (project owner): "continue until human gate" still applies -->
+fix this first: yes (bot-records-incrementally update)
+proposed resolution: update grep targets to shared modules; belt-and-braces guard for platform-side regression; commit + push + revalidate.
+
+Stage transition: `triage → develop`.
+
 Stage transition: `triage → develop` to apply the one-line env gate fix.
 
