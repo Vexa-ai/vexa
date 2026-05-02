@@ -1,19 +1,18 @@
 import { Page } from 'playwright';
 import { BotConfig } from '../../../types';
 import { RecordingService } from '../../../services/recording';
-import { setActiveRecordingService, getRawCaptureService } from '../../../index';
+import { getRawCaptureService, getSegmentPublisher } from '../../../index';
 import { log } from '../../../utils';
-import { spawn, ChildProcess } from 'child_process';
+import { PulseAudioCapture, UnifiedRecordingPipeline } from '../../../services/audio-pipeline';
 import { zoomParticipantNameSelector } from './selectors';
 import { dismissZoomPopups } from './prepare';
 import { startZoomRichObservation } from './observe';
 
 let recordingService: RecordingService | null = null;
 let recordingStopResolver: (() => void) | null = null;
-let parecordProcess: ChildProcess | null = null;
+let pipeline: UnifiedRecordingPipeline | null = null;
 let speakerPollInterval: NodeJS.Timeout | null = null;
 let lastActiveSpeaker: string | null = null;
-let activeBotConfig: BotConfig | null = null;
 let popupDismissInterval: NodeJS.Timeout | null = null;
 
 /** Current DOM-polled active speaker — used by per-speaker pipeline as fallback name */
@@ -24,24 +23,39 @@ export function getLastActiveSpeaker(): string | null {
 export async function startZoomWebRecording(page: Page | null, botConfig: BotConfig): Promise<void> {
   if (!page) throw new Error('[Zoom Web] Page required for recording');
 
-  activeBotConfig = botConfig;
-
-  // Recording service
   const wantsAudioCapture =
     !!botConfig.recordingEnabled &&
     (!Array.isArray(botConfig.captureModes) || botConfig.captureModes.includes('audio'));
   const sessionUid = botConfig.connectionId || `zoom-web-${Date.now()}`;
 
   if (wantsAudioCapture) {
-    recordingService = new RecordingService(botConfig.meeting_id, sessionUid);
-    setActiveRecordingService(recordingService);
-    recordingService.start();
-    log('[Zoom Web] Recording service started');
-  }
+    if (!botConfig.recordingUploadUrl || !botConfig.token) {
+      log('[Zoom Web] recordingUploadUrl or token missing — skipping audio capture');
+    } else {
+      // Pack U.4 (v0.10.6): unified audio pipeline. PulseAudioCapture spawns
+      // parecord on zoom_sink.monitor, slices PCM into 15s WAV chunks; the
+      // UnifiedRecordingPipeline forwards each chunk to RecordingService.
+      // uploadChunk() so chunks land in MinIO immediately. No local-disk
+      // WAV; the master is built server-side by recording_finalizer.py at
+      // bot_exit_callback.
+      // (Segment-to-audio alignment is owned by UnifiedRecordingPipeline —
+      // it subscribes to source.on('started') and calls
+      // publisher.resetSessionStart(). Same hook for all 3 platforms;
+      // no per-platform handler needed here.)
+      recordingService = new RecordingService(botConfig.meeting_id, sessionUid);
+      const source = new PulseAudioCapture();
 
-  // Start PulseAudio capture from zoom_sink monitor.
-  // Zoom web client routes audio through PulseAudio null sink (same as native SDK fallback).
-  await startPulseAudioCapture();
+      pipeline = new UnifiedRecordingPipeline({
+        source,
+        recordingService,
+        uploadUrl: botConfig.recordingUploadUrl,
+        token: botConfig.token,
+        platform: 'zoom-web',
+      });
+      await pipeline.start();
+      log('[Zoom Web] Unified recording pipeline started (PulseAudio → chunked upload)');
+    }
+  }
 
   // Start speaker detection polling via DOM
   startSpeakerPolling(page, botConfig);
@@ -91,23 +105,17 @@ export async function stopZoomWebRecording(): Promise<void> {
     recordingStopResolver = null;
   }
 
-  // Stop PulseAudio capture
-  if (parecordProcess) {
-    parecordProcess.kill('SIGTERM');
-    parecordProcess = null;
+  // Stop the unified pipeline. This kills parecord, emits the final chunk
+  // with isFinal=true, and drains the upload queue so meeting-api flips
+  // Recording.status to COMPLETED before the bot exits. Pack P / Pack U
+  // contract: the pipeline owns the shutdown sequence — no manual SIGTERM
+  // fallback here.
+  if (pipeline) {
+    await pipeline.stop();
+    pipeline = null;
   }
 
-  activeBotConfig = null;
-
-  if (recordingService) {
-    try {
-      await recordingService.finalize();
-      log('[Zoom Web] Recording finalized');
-    } catch (err: any) {
-      log(`[Zoom Web] Error finalizing recording: ${err.message}`);
-    }
-    recordingService = null;
-  }
+  recordingService = null;
 }
 
 export async function reconfigureZoomWebRecording(language: string | null, task: string | null): Promise<void> {
@@ -117,62 +125,6 @@ export async function reconfigureZoomWebRecording(language: string | null, task:
 
 export function getZoomWebRecordingService(): RecordingService | null {
   return recordingService;
-}
-
-// ---- PulseAudio capture ----
-
-async function startPulseAudioCapture(): Promise<void> {
-  return new Promise((resolve, reject) => {
-    parecordProcess = spawn('parecord', [
-      '--raw',
-      '--format=s16le',
-      '--rate=16000',
-      '--channels=1',
-      `--device=${process.env.PULSE_SINK || 'zoom_sink'}.monitor`,
-    ]);
-
-    if (!parecordProcess?.stdout) {
-      reject(new Error('[Zoom Web] Failed to start parecord'));
-      return;
-    }
-
-    let started = false;
-
-    parecordProcess.stdout.on('data', (chunk: Buffer) => {
-      if (!started) {
-        log('[Zoom Web] PulseAudio capture receiving audio');
-        started = true;
-        resolve();
-      }
-      // Audio recording only — transcription is handled by the per-speaker pipeline
-      // in index.ts (startPerSpeakerAudioCapture → browser ScriptProcessor → handlePerSpeakerAudioData)
-      if (recordingService) {
-        recordingService.appendPCMBuffer(chunk);
-      }
-    });
-
-    parecordProcess.stderr?.on('data', (data: Buffer) => {
-      log(`[Zoom Web] parecord stderr: ${data.toString().trim()}`);
-    });
-
-    parecordProcess.on('error', (err: Error) => {
-      log(`[Zoom Web] parecord error: ${err.message}`);
-      if (!started) reject(err);
-    });
-
-    parecordProcess.on('exit', (code, signal) => {
-      log(`[Zoom Web] parecord exited: code=${code}, signal=${signal}`);
-      parecordProcess = null;
-    });
-
-    // Optimistic resolve after 1s even with no data yet
-    setTimeout(() => {
-      if (!started) {
-        log('[Zoom Web] PulseAudio capture started (waiting for data)');
-        resolve();
-      }
-    }, 1000);
-  });
 }
 
 // ---- Speaker detection via DOM polling ----
@@ -222,4 +174,3 @@ function startSpeakerPolling(page: Page, botConfig: BotConfig): void {
     }
   }, 250);
 }
-

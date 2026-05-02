@@ -24,11 +24,17 @@ function formatTimestamp(seconds: number): string {
 }
 
 function formatAbsoluteTimestamp(utcAbsoluteTime: string): string {
+  // v0.10.5.3 Pack D-1 follow-up: parseUTCTimestamp handles unsuffixed-ISO
+  // (no `Z`) so we land on the right instant; getHours/Minutes/Seconds (NOT
+  // getUTC*) then renders in the viewer's browser-local timezone — matching
+  // the rest of the dashboard sweep. Pre-fix this rendered UTC, which is why
+  // the meeting detail page kept showing UTC even after meeting-card and
+  // duration math were patched.
   try {
     const date = parseUTCTimestamp(utcAbsoluteTime);
-    const hh = date.getUTCHours().toString().padStart(2, "0");
-    const mm = date.getUTCMinutes().toString().padStart(2, "0");
-    const ss = date.getUTCSeconds().toString().padStart(2, "0");
+    const hh = date.getHours().toString().padStart(2, "0");
+    const mm = date.getMinutes().toString().padStart(2, "0");
+    const ss = date.getSeconds().toString().padStart(2, "0");
     return `${hh}:${mm}:${ss}`;
   } catch (error) {
     console.error("Error parsing absolute timestamp:", error);

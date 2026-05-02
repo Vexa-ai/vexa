@@ -365,21 +365,46 @@ async def internal_upload_recording(
             mf for mf in prior_media_files
             if mf.get("type") != media_type
         ]
+        # Pack U.7 — preserve master path against late-chunk overwrite.
+        # If recording_finalizer.master already committed (storage_path ends at
+        # /audio/master.{webm|wav} OR is_final=True), a late-arriving chunk POST
+        # from a graceful-leaving bot must NOT stomp storage_path back to its
+        # own chunk path. Real-meeting test on helm 2026-05-02 caught the race:
+        # chunk N+1 landed AFTER Pack U.5 wrote master, then post_meeting_
+        # reconciler saw is_final=False and overrode finalized_by → dashboard
+        # served chunk path instead of master and "Preparing audio..." stuck.
+        prior_sp = (prior_same_type or {}).get("storage_path") or ""
+        prior_is_final = bool((prior_same_type or {}).get("is_final"))
+        master_finalized = (
+            prior_sp.endswith("/audio/master.webm")
+            or prior_sp.endswith("/audio/master.wav")
+            or prior_is_final
+        )
+        new_storage_path = prior_sp if master_finalized else storage_path
+        new_is_final = True if master_finalized else is_final
+        if master_finalized and not is_final:
+            logger.warning(
+                "[E1A] late_chunk_after_finalize meeting_id=%s recording_id=%s media_type=%s "
+                "chunk_seq=%s — preserving master storage_path=%s",
+                meeting_id, recording_id, media_type, chunk_seq, prior_sp,
+            )
         existing_media_files.append({
             "id": (prior_same_type or {}).get("id") or _new_recording_numeric_id(),
             "type": media_type,
             "format": media_format,
-            "storage_path": storage_path,  # latest chunk's path (consumers list the dir for full chunk inventory)
+            "storage_path": new_storage_path,
             "storage_backend": os.environ.get("STORAGE_BACKEND", "minio"),
-            "file_size_bytes": cumulative_bytes,        # ← cumulative, not just-last-chunk
-            "last_chunk_size_bytes": file_size,         # ← latest-chunk only, for diagnostics
-            "chunk_count": cumulative_chunk_count,      # ← number of chunks accumulated
+            "file_size_bytes": cumulative_bytes,
+            "last_chunk_size_bytes": file_size,
+            "chunk_count": cumulative_chunk_count,
             "duration_seconds": duration_seconds,
-            "chunk_seq": chunk_seq,                     # ← latest chunk's seq (chunk count = chunk_seq + 1 for canonical 0-indexed)
+            "chunk_seq": chunk_seq,
             "first_chunk_at": first_chunk_at,
             "metadata": {"sample_rate": sample_rate} if sample_rate else {},
-            "created_at": datetime.utcnow().isoformat(),  # latest update
-            "is_final": is_final,
+            "created_at": datetime.utcnow().isoformat(),
+            "is_final": new_is_final,
+            "finalized_at": (prior_same_type or {}).get("finalized_at") if master_finalized else (prior_same_type or {}).get("finalized_at"),
+            "finalized_by": (prior_same_type or {}).get("finalized_by") if master_finalized else (prior_same_type or {}).get("finalized_by"),
         })
         rec_payload["media_files"] = existing_media_files
         # v0.10.5 Pack E.1.a observability — [PLATFORM] ASK 2 (#272
@@ -527,14 +552,35 @@ async def get_recording(
     return RecordingResponse.model_validate(recording)
 
 
-@router.get("/recordings/{recording_id}/media/{media_file_id}/download", summary="Get download URL for a media file")
+@router.get("/recordings/{recording_id}/media/{media_file_id}/download", summary="Get presigned download URL for a media file")
 async def download_media_file(
     recording_id: int, media_file_id: int,
     auth: tuple = Depends(get_user_and_token),
     db: AsyncSession = Depends(get_db),
 ):
-    _, user = auth
+    """Return a short-lived presigned URL pointing at the master media file in MinIO.
+
+    Pack U.8 (v0.10.6) contract:
+    - After Pack U.5+U.6, `recording_finalizer` builds a single
+      `<prefix>/master.{webm|wav}` server-side at bot_exit_callback and
+      rewrites `media_file.storage_path` to point at it. This endpoint
+      hands the dashboard a 1-hour presigned URL to that master so the
+      browser can stream directly from MinIO with native HTTP Range
+      (no in-process proxying through meeting-api).
+    - Option B chosen: return HTTP 200 + JSON `{"url": "<presigned>", ...}`
+      rather than a 302 redirect. Keeps the API stable and lets the
+      dashboard control the `<audio>` lifecycle (preload, autoplay).
+    - TTL: 3600s (1 hour). Long enough for browser playback even on long
+      meetings, short enough to limit credential-leak blast radius if
+      the URL escapes the dashboard session.
+    - `local` storage backend (dev-only) cannot mint presigned URLs; the
+      response surfaces a `/raw` fallback path (still proxied in-process).
+      For `minio`/`s3` backends, returns the presigned URL directly.
+    - 404 when the master file does not yet exist (meeting still in
+      progress, finalizer crashed, etc.). Callers MUST handle this.
+    """
     content_type_map = {"wav": "audio/wav", "webm": "video/webm", "opus": "audio/opus", "mp3": "audio/mpeg", "jpg": "image/jpeg", "png": "image/png"}
+    _, user = auth
 
     if get_recording_metadata_mode() == "meeting_data":
         _, rec = await _find_meeting_data_recording(db, user.id, recording_id)
@@ -549,27 +595,65 @@ async def download_media_file(
             raise HTTPException(status_code=404, detail="Media file not found")
         fmt = str(mf.get("format", "bin")).lower()
         ct = content_type_map.get(fmt, "application/octet-stream")
-        if mf.get("storage_backend") == "local":
-            url = f"/recordings/{recording_id}/media/{media_file_id}/raw"
-        else:
-            url = get_storage_client().get_presigned_url(mf["storage_path"], expires=3600)
-        return {"download_url": url, "filename": f"{recording_id}_{mf.get('type', 'audio')}.{fmt}", "content_type": ct, "file_size_bytes": mf.get("file_size_bytes")}
+        storage_path = mf.get("storage_path")
+        storage_backend = mf.get("storage_backend")
+        type_label = mf.get("type", "audio")
+        file_size = mf.get("file_size_bytes")
+    else:
+        recording = await db.get(Recording, recording_id)
+        if not recording or recording.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Recording not found")
+        stmt = select(MediaFile).where(and_(MediaFile.id == media_file_id, MediaFile.recording_id == recording_id))
+        mf_obj = (await db.execute(stmt)).scalars().first()
+        if not mf_obj:
+            raise HTTPException(status_code=404, detail="Media file not found")
+        fmt = (mf_obj.format or "bin").lower()
+        ct = content_type_map.get(fmt, "application/octet-stream")
+        storage_path = mf_obj.storage_path
+        storage_backend = mf_obj.storage_backend
+        type_label = mf_obj.type
+        file_size = mf_obj.file_size_bytes
 
-    recording = await db.get(Recording, recording_id)
-    if not recording or recording.user_id != user.id:
-        raise HTTPException(status_code=404, detail="Recording not found")
-    stmt = select(MediaFile).where(and_(MediaFile.id == media_file_id, MediaFile.recording_id == recording_id))
-    mf = (await db.execute(stmt)).scalars().first()
-    if not mf:
-        raise HTTPException(status_code=404, detail="Media file not found")
-    ct = content_type_map.get(mf.format.lower(), "application/octet-stream")
-    if mf.storage_backend == "local":
+    if not storage_path:
+        raise HTTPException(status_code=404, detail="Media file storage path not set")
+
+    storage = get_storage_client()
+    # Master may not exist yet: meeting still in progress, or finalizer
+    # crashed before producing the concatenated master. Surface a 404 so
+    # the dashboard can fall back to /raw (Pack P: this is the LAST
+    # allowed fallback in the playback path until master_ready flag exists).
+    try:
+        master_present = storage.file_exists(storage_path)
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning(f"file_exists check failed for {storage_path}: {e}")
+        master_present = False
+    if not master_present:
+        raise HTTPException(status_code=404, detail="Media file content not found in storage")
+
+    if storage_backend == "local":
+        # Local backend can't mint presigned URLs (no signed-URL semantics
+        # on filesystem). Fall back to the legacy /raw proxy path. This is
+        # an explicit per-deployment decision (Pack P), not a runtime
+        # fallback — local storage is dev-only.
         url = f"/recordings/{recording_id}/media/{media_file_id}/raw"
     else:
-        url = get_storage_client().get_presigned_url(mf.storage_path, expires=3600)
-    return {"download_url": url, "filename": f"{mf.recording_id}_{mf.type}.{mf.format}", "content_type": ct, "file_size_bytes": mf.file_size_bytes}
+        url = storage.get_presigned_url(storage_path, expires=3600)
+
+    return {
+        "url": url,
+        "download_url": url,  # legacy alias kept for back-compat with v0.10.5 clients
+        "filename": f"{recording_id}_{type_label}.{fmt}",
+        "content_type": ct,
+        "file_size_bytes": file_size,
+        "expires_in": 3600,
+    }
 
 
+# Legacy: in-process proxy through meeting-api. Kept for back-compat with
+# clients pre-Pack U.8 (v0.10.6). The new playback path uses /download +
+# presigned URLs so the browser streams directly from MinIO with native
+# HTTP Range. /raw remains as the LAST allowed fallback when /download
+# returns 404 (master not yet built — Pack P).
 @router.get("/recordings/{recording_id}/media/{media_file_id}/raw", summary="Download media file content")
 async def download_media_file_raw(
     recording_id: int, media_file_id: int,

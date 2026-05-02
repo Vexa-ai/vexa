@@ -33,6 +33,7 @@ from .meetings import (
     get_redis,
 )
 from .post_meeting import run_all_tasks
+from .recording_finalizer import finalize_recording_master
 
 logger = logging.getLogger("meeting_api.callbacks")
 
@@ -77,6 +78,26 @@ async def _classify_stopped_exit(
     positive-proof-of-success, returns (COMPLETED, requested_reason).
     Otherwise routes to FAILED with the closest-fit prod-derived reason.
     """
+    # v0.10.5.3 Pack C: user-initiated stop is NEVER a failure.
+    #
+    # Symptom (live prod 2026-05-01 meetings 11367 + 11368): user issued
+    # DELETE while bot was in awaiting_admission, classifier routed terminal
+    # to FAILED. Wrong — user-initiated stops are intentional, not failures,
+    # regardless of which lifecycle stage the bot was in.
+    #
+    # When the user issues DELETE, meetings.py sets `meeting.data.stop_requested
+    # = True`. We honor that as the canonical signal for "user intent" and
+    # always route to COMPLETED, preserving the requested completion_reason
+    # (typically STOPPED_BEFORE_ADMISSION) for analytics. Mirrors how
+    # AWAITING_ADMISSION_TIMEOUT (system-initiated) routes COMPLETED — both
+    # are "the bot didn't get into the meeting" but the source matters.
+    user_initiated_stop = bool(
+        meeting.data and isinstance(meeting.data, dict)
+        and meeting.data.get("stop_requested")
+    )
+    if user_initiated_stop:
+        return (MeetingStatus.COMPLETED, requested_reason)
+
     # Pack J.4 — every non-success completion_reason routes to FAILED.
     # [PLATFORM] data showed these were ALL being silently routed to
     # COMPLETED despite having explicit failure semantics:
@@ -84,6 +105,11 @@ async def _classify_stopped_exit(
     #   evicted (6), max_bot_time_exceeded (10), validation_error.
     # left_alone is debatable (bot legitimately left when alone); routes
     # to COMPLETED unless the data shows otherwise.
+    #
+    # Note: STOPPED_BEFORE_ADMISSION + STOPPED_WITH_NO_AUDIO are still in
+    # this set for the SYSTEM-initiated case. User-initiated case is
+    # intercepted above (Pack C). The system-initiated case (e.g. bot
+    # internal timeout, scheduler kill) remains a failure.
     _explicit_failure_reasons = {
         MeetingCompletionReason.AWAITING_ADMISSION_TIMEOUT,
         MeetingCompletionReason.AWAITING_ADMISSION_REJECTED,
@@ -228,6 +254,14 @@ class BotStatusChangePayload(BaseModel):
     failure_stage: Optional[MeetingFailureStage] = Field(None)
     timestamp: Optional[str] = Field(None)
     speaker_events: Optional[List[Dict]] = Field(None)
+    # v0.10.5.3 Pack O — last N structured-JSON log lines from bot stdout.
+    # Sent only on terminal status (failed/completed). Persisted into
+    # meetings.data.bot_logs JSONB after a 50 KB cap (apply at write-time
+    # to avoid unbounded JSONB row size).
+    bot_logs: Optional[List[str]] = Field(None)
+    # v0.10.5.3 Pack T — cgroup memory + CPU summary at exit time.
+    # Persisted into meetings.data.bot_resources JSONB.
+    bot_resources: Optional[Dict[str, Any]] = Field(None)
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +313,18 @@ async def bot_exit_callback(
             meta = {"exit_code": exit_code}
             if payload.platform_specific_error:
                 meta["platform_specific_error"] = payload.platform_specific_error
+            # Pack U.7 (v0.10.6) — build master.{webm|wav} from chunks BEFORE status flip,
+            # so post-meeting transcribe and dashboard playback never read a stale
+            # storage_path. Idempotent (HEAD-checks for existing master).
+            try:
+                await finalize_recording_master(meeting.id, db)
+            except Exception as fin_err:
+                logger.error(
+                    "Exit callback: finalize_recording_master failed for meeting %s — "
+                    "continuing with status update (master may be absent; operator can "
+                    "re-trigger). error_class=%s error=%s",
+                    meeting.id, type(fin_err).__name__, str(fin_err)[:200],
+                )
             success = await update_meeting_status(
                 meeting, MeetingStatus.COMPLETED, db,
                 completion_reason=provided_reason,
@@ -306,6 +352,18 @@ async def bot_exit_callback(
                 f"(was: completed reason={provided_reason.value})"
             )
             meta = {"exit_code": exit_code, "original_reason": payload.reason, "pack_j_classification": classified_reason.value}
+            # Pack U.7 (v0.10.6) — build master.{webm|wav} from chunks BEFORE status flip,
+            # so post-meeting transcribe and dashboard playback never read a stale
+            # storage_path. Idempotent (HEAD-checks for existing master).
+            try:
+                await finalize_recording_master(meeting.id, db)
+            except Exception as fin_err:
+                logger.error(
+                    "Exit callback: finalize_recording_master failed for meeting %s — "
+                    "continuing with status update (master may be absent; operator can "
+                    "re-trigger). error_class=%s error=%s",
+                    meeting.id, type(fin_err).__name__, str(fin_err)[:200],
+                )
             success = await update_meeting_status(
                 meeting, target_status, db,
                 completion_reason=classified_reason,
@@ -403,6 +461,18 @@ async def bot_exit_callback(
                 if payload.reason:
                     error_msg += f"; reason: {payload.reason}"
                 update_kwargs["error_details"] = error_msg
+            # Pack U.7 (v0.10.6) — build master.{webm|wav} from chunks BEFORE status flip,
+            # so post-meeting transcribe and dashboard playback never read a stale
+            # storage_path. Idempotent (HEAD-checks for existing master).
+            try:
+                await finalize_recording_master(meeting.id, db)
+            except Exception as fin_err:
+                logger.error(
+                    "Exit callback: finalize_recording_master failed for meeting %s — "
+                    "continuing with status update (master may be absent; operator can "
+                    "re-trigger). error_class=%s error=%s",
+                    meeting.id, type(fin_err).__name__, str(fin_err)[:200],
+                )
             success = await update_meeting_status(
                 meeting, target_status, db, **update_kwargs
             )
@@ -609,6 +679,42 @@ async def bot_status_change_callback(
         raise HTTPException(status_code=404, detail="Meeting session not found")
 
     await db.refresh(meeting)
+
+    # v0.10.5.3 Pack O + Pack T: persist forensic fields on terminal transitions.
+    # - bot_logs: last ~200 structured-JSON log lines from bot stdout (ring
+    #   buffer via Pack O). Capped at 50 KB to bound JSONB row size.
+    # - bot_resources: cgroup memory + CPU summary from Pack T's sampler.
+    #
+    # Persisted regardless of how the status_change branches below land.
+    # Done early so even the stop_requested early-return path captures
+    # them. Future operators querying a failed meeting now have the bot's
+    # last log lines + memory peak in the meeting row.
+    if new_status in (MeetingStatus.FAILED, MeetingStatus.COMPLETED) and (
+        payload.bot_logs or payload.bot_resources
+    ):
+        if not meeting.data:
+            meeting.data = {}
+        d = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+        if payload.bot_logs:
+            # Cap at 50 KB total. Trim from the START (oldest entries) so
+            # we keep the most recent log lines closest to the crash moment.
+            BOT_LOGS_MAX_BYTES = 50 * 1024
+            kept: list[str] = []
+            running = 0
+            for line in reversed(payload.bot_logs):
+                line_bytes = len(line.encode("utf-8")) + 1  # +1 newline cost
+                if running + line_bytes > BOT_LOGS_MAX_BYTES:
+                    break
+                kept.append(line)
+                running += line_bytes
+            d["bot_logs"] = list(reversed(kept))
+            d["bot_logs_truncated"] = len(kept) < len(payload.bot_logs)
+        if payload.bot_resources:
+            d["bot_resources"] = payload.bot_resources
+        meeting.data = d
+        attributes.flag_modified(meeting, "data")
+        # Don't commit here — leaves it to the branch logic below to commit
+        # alongside other status updates. SQLAlchemy unit-of-work bundles.
 
     # Stop was requested: skip the actual status transition (we're winding down),
     # but still fire the status webhook so users subscribed to meeting.status_change

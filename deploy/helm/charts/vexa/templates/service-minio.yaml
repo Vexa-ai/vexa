@@ -11,6 +11,12 @@ spec:
     - name: api
       port: {{ .Values.minio.service.port }}
       targetPort: api
+      {{- if and (eq .Values.minio.service.type "NodePort") .Values.minio.service.nodePort }}
+      # v0.10.5.3 Pack D-3 follow-up (Option B): NodePort makes MinIO
+      # browser-reachable for presigned-URL audio fetches. Fixed nodePort
+      # so MINIO_PUBLIC_ENDPOINT can reference it deterministically.
+      nodePort: {{ .Values.minio.service.nodePort }}
+      {{- end }}
     - name: console
       port: 9001
       targetPort: console

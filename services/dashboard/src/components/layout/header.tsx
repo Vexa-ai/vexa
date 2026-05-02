@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/tooltip";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useAuthStore } from "@/stores/auth-store";
+import { getDocsUrl } from "@/lib/docs/webapp-url";
 import { useRuntimeConfig } from "@/hooks/use-runtime-config";
 
 interface HeaderProps {
@@ -67,10 +68,12 @@ export function Header({ onMenuClick }: HeaderProps) {
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="ghost" size="icon" asChild className="text-muted-foreground">
-                <Link href="/docs">
+                {/* v0.10.5.3 Pack D-2: link to canonical docs.vexa.ai (was internal /docs).
+                    External link via <a> + getDocsUrl() since docs live in a separate site. */}
+                <a href={getDocsUrl("/")} target="_blank" rel="noopener noreferrer">
                   <BookOpen className="h-5 w-5" />
                   <span className="sr-only">Full Documentation</span>
-                </Link>
+                </a>
               </Button>
             </TooltipTrigger>
             <TooltipContent>

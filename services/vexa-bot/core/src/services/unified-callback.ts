@@ -72,6 +72,20 @@ export interface UnifiedCallbackPayload {
   failure_stage?: FailureStage;
   timestamp?: string;
   speaker_events?: any[];
+  // v0.10.5.3 Pack O: ring-buffer of last N structured-JSON log lines from
+  // the bot's stdout, sent on terminal status_change for forensic capture.
+  // meeting-api persists these into meetings.data.bot_logs JSONB.
+  bot_logs?: string[];
+  // v0.10.5.3 Pack T: cgroup-based resource summary at exit time.
+  // meeting-api persists this into meetings.data.bot_resources JSONB.
+  bot_resources?: {
+    samples: number;
+    peak_memory_bytes: number | null;
+    last_memory_bytes: number | null;
+    cpu_usage_usec_total: number | null;
+    sampler_started_at: string;
+    cgroup_available: boolean;
+  };
 }
 
 /**
@@ -86,7 +100,15 @@ export async function callStatusChangeCallback(
   errorDetails?: any,
   completionReason?: CompletionReason,
   failureStage?: FailureStage,
-  speakerEvents?: any[]
+  speakerEvents?: any[],
+  // v0.10.5.3 Pack O + Pack T — terminal-only forensic fields.
+  // bot_logs: last N structured-JSON log lines from bot stdout (ring buffer).
+  // bot_resources: cgroup memory + CPU summary at exit time.
+  // Optional in callback shape; only populated by performGracefulLeave on
+  // terminal status (failed/completed). meeting-api persists both into
+  // meetings.data JSONB on the status_change handler.
+  botLogs?: string[],
+  botResources?: UnifiedCallbackPayload["bot_resources"]
 ): Promise<void> {log(`🔥 UNIFIED CALLBACK: ${status.toUpperCase()} - reason: ${reason || 'none'}`);
   
   if (!botConfig.meetingApiCallbackUrl) {log("Warning: No callback URL configured. Cannot send status change callback.");
@@ -118,6 +140,8 @@ export async function callStatusChangeCallback(
         failure_stage: failureStage,
         timestamp: new Date().toISOString(),
         speaker_events: speakerEvents,
+        bot_logs: botLogs,
+        bot_resources: botResources,
       };
 
       log(`Sending unified status change callback to ${baseUrl} (attempt ${attempt + 1}/${maxRetries})`);

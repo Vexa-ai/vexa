@@ -93,10 +93,19 @@ USER_ID=$(curl -sf "$GATEWAY_URL/admin/users/email/test@vexa.ai" \
     -H "X-Admin-API-Key: $ADMIN_TOKEN" 2>/dev/null | \
     python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
 if [ -z "$USER_ID" ]; then
+    # max_concurrent_bots=3 — match lke-setup-helm.sh; helm cluster supports
+    # concurrent multi-bot validation. Default admin-api applies 0 (DB) →
+    # gateway falls back to 1, silently rate-limiting multi-bot scenarios.
     USER_ID=$(curl -sf -X POST "$GATEWAY_URL/admin/users" \
         -H "X-Admin-API-Key: $ADMIN_TOKEN" -H "Content-Type: application/json" \
-        -d '{"email":"test@vexa.ai","name":"Test User"}' 2>/dev/null | \
+        -d '{"email":"test@vexa.ai","name":"Test User","max_concurrent_bots":3}' 2>/dev/null | \
         python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+fi
+# Ensure existing user (re-load case) also has the right limit.
+if [ -n "$USER_ID" ]; then
+    curl -sf -X PATCH "$GATEWAY_URL/admin/users/$USER_ID" \
+        -H "X-Admin-API-Key: $ADMIN_TOKEN" -H "Content-Type: application/json" \
+        -d '{"max_concurrent_bots":3}' 2>/dev/null >/dev/null || true
 fi
 
 API_TOKEN=""

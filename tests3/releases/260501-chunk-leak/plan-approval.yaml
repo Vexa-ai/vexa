@@ -1,0 +1,303 @@
+release_id: 260501-chunk-leak
+codename: chunk-leak-and-friends
+public_version: v0.10.5.3
+approved_at: '2026-05-01T10:46:36Z'
+approver: dmitry@vexa.ai
+approval_source: 'Project-owner explicit current-turn signal 2026-05-01: ''go''. Following the 9-pack plan presentation with options to approve plan gate, review pack-by-pack, or send back for revision.
+  ''go'' selected option 1: approve all 57 lines (36 issue-fields + 21 registry-checks).
+
+
+  Cycle directive (project-owner): ''Go through formal cycle without any corner cuts.'' Plan -> develop -> provision (real test infra) -> deploy -> validate -> human -> ship -> teardown. No VEXA_BYPASS_STAGE
+  except for documented break-glass (security/PII).'
+scope_approved:
+- issue: chunk-buffer-trim
+  hypothesis: true
+  proves: true
+  required_modes: true
+  human_verify: true
+- issue: bot-stdout-jsonb-capture
+  hypothesis: true
+  proves: true
+  required_modes: true
+  human_verify: true
+- issue: bot-resource-telemetry
+  hypothesis: true
+  proves: true
+  required_modes: true
+  human_verify: true
+- issue: no-fallbacks-principle
+  hypothesis: true
+  proves: true
+  required_modes: true
+  human_verify: true
+- issue: classifier-user-stop-completed
+  hypothesis: true
+  proves: true
+  required_modes: true
+  human_verify: true
+- issue: dashboard-timezone
+  hypothesis: true
+  proves: true
+  required_modes: true
+  human_verify: true
+- issue: dashboard-docs-redirect
+  hypothesis: true
+  proves: true
+  required_modes: true
+  human_verify: true
+- issue: dashboard-audio-streams-from-bucket
+  hypothesis: true
+  proves: true
+  required_modes: true
+  human_verify: true
+- issue: helm-chart-hardening
+  hypothesis: true
+  proves: true
+  required_modes: true
+  human_verify: true
+registry_changes_approved:
+- check: BOT_RECORDING_CHUNK_BUFFER_TRIMMED
+  approved: true
+  purpose: 'Static grep across services/vexa-bot/core/src/platforms/{googlemeet,
+
+    msteams,zoom/web}/recording.ts confirming the chunk splice-on-success
+
+    pattern is present. Defends against re-introduction of the leak.
+
+    '
+  type: script
+  dispatch: BOT_RECORDING_CHUNK_BUFFER_CHECK
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+- check: BOT_GMEET_LONG_RECORDING_NO_LEAK
+  approved: true
+  purpose: "Runtime smoke \u2014 dispatch a GMeet bot at FIXTURE_GMEET_MULTIPARTY_URL\nwith recording_enabled=true, observe bot resource telemetry (Pack T)\nshows memory bounded throughout 25+ min, bot\
+    \ stdout (Pack O) shows\n__vexaRecordedChunks count below 10 in flight.\n"
+  type: script
+  dispatch: BOT_GMEET_LONG_RECORDING_CHECK
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 1800
+- check: BOT_TEAMS_LONG_RECORDING_NO_LEAK
+  approved: true
+  purpose: Same pattern as BOT_GMEET_LONG_RECORDING_NO_LEAK against Teams (FIXTURE_TEAMS_MULTIPARTY_URL).
+  type: script
+  dispatch: BOT_TEAMS_LONG_RECORDING_CHECK
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 1800
+- check: BOT_ZOOM_LONG_RECORDING_NO_LEAK
+  approved: true
+  purpose: Same pattern as BOT_GMEET_LONG_RECORDING_NO_LEAK against Zoom (FIXTURE_ZOOM_URL).
+  type: script
+  dispatch: BOT_ZOOM_LONG_RECORDING_CHECK
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 1800
+- check: BOT_STDOUT_STREAM_TO_REDIS
+  approved: true
+  purpose: runtime-api streams bot pod stdout into a Redis Stream keyed by bot_container_id (cap 1000 lines). Verify dispatch + tail + finalize.
+  type: script
+  dispatch: BOT_STDOUT_STREAM_CHECK
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 60
+- check: MEETING_API_FLUSH_BOT_LOGS_ON_TERMINAL
+  approved: true
+  purpose: meeting-api status_change handler drains the Redis Stream for the bot_container_id and flushes into meetings.data.bot_logs JSONB on transition to failed/completed.
+  type: script
+  dispatch: MEETING_API_BOT_LOGS_FLUSH_CHECK
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 60
+- check: MEETING_BOT_LOGS_FIELD_PRESENT_ON_FAILED
+  approved: true
+  purpose: After a forced-crash bot exit, query meetings.data.bot_logs and verify the structured log lines around the crash are present.
+  type: script
+  dispatch: MEETING_BOT_LOGS_PRESENCE_CHECK
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 120
+- check: BOT_RESOURCE_SAMPLER_RUNS
+  approved: true
+  purpose: Bot's main loop has a 30s cgroup-stat poller emitting structured log lines with memory_bytes + cpu_pct.
+  type: grep
+  file: services/vexa-bot/core/src/index.ts
+  must_match: cgroup.*memory\.current
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+- check: MEETING_BOT_RESOURCES_FIELD_PRESENT
+  approved: true
+  purpose: After a meeting completes, meetings.data.bot_resources field has peak_memory_bytes + avg_cpu_percent + sample_count.
+  type: script
+  dispatch: MEETING_BOT_RESOURCES_CHECK
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 120
+- check: STAGE_DOC_DEVELOP_NO_FALLBACKS_RULE
+  approved: true
+  purpose: tests3/stages/03-develop.md contains the 'No fallbacks unless explicitly decided' rule under May NOT.
+  type: grep
+  file: tests3/stages/03-develop.md
+  must_match: (?i)no fallback.*explicit.*decision
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+- check: BOT_NO_UNJUSTIFIED_FALLBACKS
+  approved: true
+  purpose: 'Soft grep across services/vexa-bot/core/src/ for fallback patterns
+
+    not annotated with a #NNN issue ref. False-positive risk is high;
+
+    surfaces matches as warnings in the report. Develop-stage rule is
+
+    primary enforcement.
+
+    '
+  type: script
+  dispatch: BOT_FALLBACK_AUDIT_CHECK
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 10
+- check: RELEASE_DOCS_NO_PII
+  approved: true
+  purpose: 'Grep tests3/releases/* for common PII patterns: real-looking emails
+
+    not @redacted, common name patterns. Fails the gate if PII is added
+
+    in this cycle''s diff. Defends against the customer-name leak that
+
+    v0.10.5.2 cycle suffered.
+
+    '
+  type: script
+  dispatch: RELEASE_DOCS_PII_CHECK
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 10
+- check: MEETING_API_USER_STOP_IS_COMPLETED
+  approved: true
+  purpose: Force a user-DELETE during awaiting_admission. Verify resulting meeting status=completed (not failed), completion_reason=stopped_before_admission.
+  type: script
+  dispatch: MEETING_API_USER_STOP_CHECK
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 120
+- check: DASHBOARD_RENDERS_LOCAL_TZ
+  approved: true
+  purpose: Static grep dashboard time-rendering component for toLocaleString() (not toISOString()) + Intl.DateTimeFormat usage for tz detection.
+  type: grep
+  file: services/dashboard/src/components/meeting-row.tsx
+  must_match: toLocaleString.*Intl\.DateTimeFormat
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+- check: DASHBOARD_NO_INLINE_DOCS_LINKS
+  approved: true
+  purpose: "Grep services/dashboard/src/ for any inline /docs href; should be zero \u2014 every docs link goes through getDocsUrl helper."
+  type: script
+  dispatch: DASHBOARD_DOCS_LINKS_CHECK
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+- check: MEETING_API_PRESIGNED_AUDIO_URL
+  approved: true
+  purpose: meeting-api endpoint returns a presigned S3 URL for audio playback (not a buffered proxy stream).
+  type: script
+  dispatch: MEETING_API_PRESIGNED_AUDIO_CHECK
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 30
+- check: DASHBOARD_AUDIO_STREAMS
+  approved: true
+  purpose: Dashboard audio playback uses range-supported endpoint or presigned URL; first-byte-time < 2s on 20-min meeting.
+  type: script
+  dispatch: DASHBOARD_AUDIO_STREAM_CHECK
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 60
+- check: HELM_DEPLOYMENT_MAX_UNAVAILABLE_ZERO
+  approved: true
+  purpose: 'Stateless service deployment templates (dashboard, webapp, mcp, api-gateway) have strategy.rollingUpdate.maxUnavailable: 0.'
+  type: script
+  dispatch: HELM_MAX_UNAVAILABLE_CHECK
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 10
+- check: HELM_REPLICA_COUNT_TWO_FOR_STATELESS
+  approved: true
+  purpose: 'values.yaml + values-base.yaml default replicaCount: 2 for stateless services. PodDisruptionBudget minAvailable: 1 set.'
+  type: script
+  dispatch: HELM_REPLICA_COUNT_CHECK
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 10
+- check: HELM_UPGRADE_PREFLIGHT_IMAGE_CHECK
+  approved: true
+  purpose: Makefile release-helm-upgrade-safe target verifies every chart-rendered image:tag exists on Docker Hub before calling helm upgrade. Fails fast on missing image.
+  type: script
+  dispatch: HELM_PREFLIGHT_IMAGE_CHECK
+  modes:
+  - helm
+  state: stateful
+  max_duration_sec: 60
+- check: HELM_UPGRADE_ATOMIC_DEFAULT
+  approved: true
+  purpose: release-helm-upgrade-safe always calls helm upgrade with --atomic --wait --timeout 5m flags.
+  type: grep
+  file: Makefile
+  must_match: helm upgrade.*--atomic.*--wait.*--timeout
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 5
+dod_changes_approved: []

@@ -47,7 +47,16 @@ services:
       - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-vexa-access-key}
       - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-vexa-secret-key}
     ports:
-      - "127.0.0.1:${MINIO_HOST_PORT:-9000}:9000"
+      # v0.10.5.3 Pack D-3 follow-up (Option B):
+      # MINIO_HOST_BIND defaults to 127.0.0.1 (safe — only the host can reach
+      # MinIO; presigned URLs only work for browsers running on the host).
+      # For external-browser audio playback (e.g. dashboard accessed from a
+      # remote machine), set MINIO_HOST_BIND=0.0.0.0 + set MINIO_PUBLIC_ENDPOINT
+      # to e.g. http://<host-public-ip>:${MINIO_HOST_PORT}. The presigned URL
+      # signature uses MINIO_PUBLIC_ENDPOINT; without that env, presigned URLs
+      # carry the in-network hostname `minio:9000` which only resolves inside
+      # the docker bridge network.
+      - "${MINIO_HOST_BIND:-127.0.0.1}:${MINIO_HOST_PORT:-9000}:9000"
       - "127.0.0.1:${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
     volumes:
       - minio-data:/data
@@ -261,6 +270,14 @@ services:
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
       - MINIO_BUCKET=${MINIO_BUCKET:-vexa}
       - MINIO_SECURE=${MINIO_SECURE:-false}
+      # v0.10.5.3 Pack D-3 follow-up (Option B): browser-reachable MinIO
+      # endpoint for presigned download URLs. Default falls back to the
+      # internal hostname which works for in-network browsers (compose VM
+      # reachable on its own LAN). For external browser access set this
+      # to e.g. http://${HOST_PUBLIC_IP}:9000 in .env. storage.py uses
+      # this only when signing URLs; server-side I/O still uses
+      # MINIO_ENDPOINT for fast in-cluster reads.
+      - MINIO_PUBLIC_ENDPOINT=${MINIO_PUBLIC_ENDPOINT:-}
       - RECORDING_ENABLED=${RECORDING_ENABLED:-true}
       - CAPTURE_MODES=${CAPTURE_MODES:-audio}
       - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
@@ -324,6 +341,14 @@ services:
     build:
       context: ../..
       dockerfile: services/dashboard/Dockerfile
+      # v0.10.5.3 Pack D-1 follow-up: thread version through to the
+      # prebuild generator. The chart yaml isn't in the dashboard build
+      # context (build context is repo root, but the script runs from
+      # /app inside the image), so we provide the version as a build-arg.
+      # VEXA_VERSION is read from the .env file by docker compose.
+      args:
+        NEXT_PUBLIC_VEXA_OSS_VERSION: ${VEXA_VERSION:-dev}
+        NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE: ${VEXA_RELEASE_DATE:-}
     image: vexaai/dashboard:${IMAGE_TAG}
     mem_limit: 1g
     ports:

@@ -163,6 +163,19 @@ RUN cd /app/dashboard-build && \
 
 COPY services/dashboard/src /app/dashboard-build/src
 COPY services/dashboard/public /app/dashboard-build/public
+# v0.10.5.3 Pack D-1 (#265 follow-up): scripts/ contains generate-release-version.js
+# which the package.json prebuild hook invokes. Without it, npm run build fails
+# with `Cannot find module .../scripts/generate-release-version.js`.
+COPY services/dashboard/scripts /app/dashboard-build/scripts
+# Pack D-1 follow-up #2: generator looks for deploy/helm/charts/vexa/Chart.yaml
+# OR a NEXT_PUBLIC_VEXA_OSS_VERSION env var. The chart yaml isn't normally in
+# the lite build context, so we provide the version as a build-arg sourced
+# from the repo VERSION file. Falls back to "dev" if not set (for ad-hoc
+# builds outside the make-driven pipeline).
+ARG NEXT_PUBLIC_VEXA_OSS_VERSION=dev
+ARG NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE
+ENV NEXT_PUBLIC_VEXA_OSS_VERSION=$NEXT_PUBLIC_VEXA_OSS_VERSION
+ENV NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE=$NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE
 COPY services/dashboard/next.config.ts services/dashboard/tsconfig.json services/dashboard/postcss.config.mjs /app/dashboard-build/
 COPY services/dashboard/components.json /app/dashboard-build/
 # No tailwind.config — postcss handles it

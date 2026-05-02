@@ -57,6 +57,9 @@ let browserInstance: Browser | null = null;
 // --- Recording service reference (set by platform handlers) ---
 let activeRecordingService: RecordingService | null = null;
 let activeVideoRecordingService: VideoRecordingService | null = null;
+// v0.10.5.3 Pack T — module-level holder so performGracefulLeave can read
+// the resource summary at exit time and stop the sampler.
+let currentBotResourceSampler: ReturnType<typeof startBotResourceSampler> | null = null;
 let botPaSinkModuleId: string | null = null; // PulseAudio module ID for per-bot sink cleanup
 let currentBotConfig: BotConfig | null = null;
 export function setActiveRecordingService(svc: RecordingService | null): void {
@@ -835,6 +838,30 @@ async function performGracefulLeave(
     log(`[Speaker Events] Failed to read: ${e?.message}`);
   }
 
+  // v0.10.5.3 Pack T — fetch the final resource summary BEFORE we stop
+  // the sampler. Pack O's ring buffer flush happens after — last log line
+  // emitted is the cgroup summary, so it's included in bot_logs too.
+  let finalBotResources: any = undefined;
+  if (currentBotResourceSampler) {
+    finalBotResources = currentBotResourceSampler.summary();
+    logJSON({
+      level: "info",
+      msg: "[BotResource] final summary",
+      bot_resources: finalBotResources,
+    });
+    currentBotResourceSampler.stop();
+    currentBotResourceSampler = null;
+  }
+
+  // v0.10.5.3 Pack O — snapshot the structured-log ring buffer for the
+  // exit callback. This is the in-process forensic capture: last ~200
+  // structured JSON lines from bot stdout, sent through the callback so
+  // meeting-api can persist into meetings.data.bot_logs.
+  // (Pack G.2 — k8s-side stdout aggregation — remains a follow-up; this
+  // gives us 80% of the forensic value with one ring buffer.)
+  const { getLogBuffer } = await import("./utils/log");
+  const finalBotLogs = [...getLogBuffer()];
+
   if (meetingApiCallbackUrl && currentConnectionId) {
     // Use unified callback for exit status
     const statusMapping = mapExitReasonToStatus(finalCallbackReason, finalCallbackExitCode);
@@ -854,7 +881,9 @@ async function performGracefulLeave(
         errorDetails,
         statusMapping.completionReason,
         statusMapping.failureStage,
-        speakerEvents.length > 0 ? speakerEvents : undefined
+        speakerEvents.length > 0 ? speakerEvents : undefined,
+        finalBotLogs.length > 0 ? finalBotLogs : undefined,
+        finalBotResources
       );
       logJSON({
         level: "info",
@@ -2015,6 +2044,109 @@ export async function startPerSpeakerAudioCapture(pageToCaptureFrom: Page): Prom
 }
 
 // ==================================================================
+// v0.10.5.3 Pack T — bot resource telemetry (cgroup mem + CPU sampler)
+// ==================================================================
+
+interface BotResourceSampler {
+  stop: () => void;
+  summary: () => {
+    samples: number;
+    peak_memory_bytes: number | null;
+    last_memory_bytes: number | null;
+    cpu_usage_usec_total: number | null;
+    sampler_started_at: string;
+    cgroup_available: boolean;
+  };
+}
+
+/**
+ * Periodically polls /sys/fs/cgroup/memory.current and /sys/fs/cgroup/cpu.stat
+ * (cgroup v2). Emits a structured log line per sample. Tracks peak memory
+ * + last sample for the exit-callback to attach to bot_resources field.
+ *
+ * Designed to be safe on hosts where cgroup paths don't exist (dev macOS
+ * runs, non-cgroup-v2 systems): all file reads are wrapped in try/catch
+ * and the sampler emits a single "cgroup_unavailable" log line then
+ * stops sampling. Per Pack P (no fallbacks unless explicitly decided),
+ * we do NOT silently swap to a per-process /proc/self/status reader —
+ * if cgroup is unavailable the telemetry is unavailable, full stop.
+ */
+function startBotResourceSampler(): BotResourceSampler {
+  const fs = require("fs") as typeof import("fs");
+  const sampleIntervalMs = 30_000;
+  const startedAt = new Date().toISOString();
+  const memoryPath = "/sys/fs/cgroup/memory.current";
+  const cpuStatPath = "/sys/fs/cgroup/cpu.stat";
+  let samples = 0;
+  let peakMemory: number | null = null;
+  let lastMemory: number | null = null;
+  let cumulativeCpuUsec: number | null = null;
+  let cgroupAvailable = false;
+
+  // Probe cgroup availability once at start.
+  try {
+    fs.statSync(memoryPath);
+    fs.statSync(cpuStatPath);
+    cgroupAvailable = true;
+  } catch {
+    logJSON({
+      level: "info",
+      msg: "[BotResource] cgroup_unavailable — sampler disabled (expected on dev macOS / non-cgroup-v2 hosts)",
+      memory_path: memoryPath,
+      cpu_stat_path: cpuStatPath,
+    });
+  }
+
+  const tick = () => {
+    if (!cgroupAvailable) return;
+    try {
+      const memRaw = fs.readFileSync(memoryPath, "utf-8").trim();
+      const memBytes = parseInt(memRaw, 10);
+      if (!Number.isNaN(memBytes)) {
+        lastMemory = memBytes;
+        if (peakMemory === null || memBytes > peakMemory) peakMemory = memBytes;
+      }
+      const cpuStat = fs.readFileSync(cpuStatPath, "utf-8");
+      const cpuUsageMatch = cpuStat.match(/usage_usec\s+(\d+)/);
+      if (cpuUsageMatch) cumulativeCpuUsec = parseInt(cpuUsageMatch[1], 10);
+      samples += 1;
+      logJSON({
+        level: "debug",
+        msg: "[BotResource] sample",
+        sample_index: samples,
+        memory_bytes: memBytes,
+        cpu_usage_usec: cumulativeCpuUsec,
+        peak_memory_bytes: peakMemory,
+      });
+    } catch (err: any) {
+      // Per Pack P: no silent fallback. Log and stop sampling on error.
+      logJSON({
+        level: "warn",
+        msg: "[BotResource] sample failed — disabling sampler",
+        error_message: err?.message || String(err),
+      });
+      cgroupAvailable = false;
+    }
+  };
+
+  // Sample once immediately for a baseline, then on interval.
+  tick();
+  const handle = setInterval(tick, sampleIntervalMs);
+
+  return {
+    stop: () => clearInterval(handle),
+    summary: () => ({
+      samples,
+      peak_memory_bytes: peakMemory,
+      last_memory_bytes: lastMemory,
+      cpu_usage_usec_total: cumulativeCpuUsec,
+      sampler_started_at: startedAt,
+      cgroup_available: cgroupAvailable,
+    }),
+  };
+}
+
+// ==================================================================
 
 export async function runBot(botConfig: BotConfig): Promise<void> {// Store botConfig globally for command validation
   (globalThis as any).botConfig = botConfig;
@@ -2043,6 +2175,16 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     connection_id: botConfig.connectionId,
     bot_name: botConfig.botName,
   });
+
+  // v0.10.5.3 Pack T — bot resource telemetry (cgroup-based mem + CPU sampler).
+  // Reads /sys/fs/cgroup/memory.current + /sys/fs/cgroup/cpu.stat every 30s
+  // and emits a structured-log line per sample. Pack O ingests these into
+  // the per-meeting JSONB so operators can answer "did the bot run out of
+  // memory?" without guesswork. Cost: 2 file reads × every 30s ~= 0; the
+  // sampler is non-blocking and skips sampling on hosts where cgroup paths
+  // don't exist (dev macOS / non-cgroupv2 hosts). Sampler is stored at
+  // module scope so performGracefulLeave can fetch the summary at exit.
+  currentBotResourceSampler = startBotResourceSampler();
 
   // Destructure other needed config values
   const { meetingUrl, platform, botName } = botConfig;

@@ -212,12 +212,54 @@ tests:
     features: [infrastructure]
     max_duration_sec: 20
 
-  chart-rolling-update-zero-surge:
+  # v0.10.5.3 Pack H follow-up: chart-rolling-update-zero-surge entry was
+  # superseded by chart-rolling-update-zero-downtime. The old check enforced
+  # maxSurge: 0 (no DB-pool doubling during rolling), but Pack H intentionally
+  # flipped to maxSurge: 1, maxUnavailable: 0 to fix the v0.10.5.2-class outage
+  # (OLD pod killed before NEW Ready → 502s). v0.10.5 Pack C.x already shrunk
+  # per-pod DB pool 4×, so 2× footprint during rolling is well under cap.
+  # See registry.yaml HELM_ROLLING_UPDATE_ZERO_DOWNTIME for full rationale.
+  chart-rolling-update-zero-downtime:
     tier: cheap
     runs_in: [helm]
-    script: tests/chart-rolling-update-zero-surge.sh
+    script: tests/chart-rolling-update-zero-downtime.sh
     features: [infrastructure]
     max_duration_sec: 20
+
+  # v0.10.5.3 FM-274 regression guard. Three-layer defense for the bot
+  # hallucination corpus (source files exist + .gitignore exception +
+  # build-script fail-loud). See tests/v0.10.5.3-hallucination-corpus.sh
+  # for the script, tests3/registry.yaml for HALLUCINATION_CORPUS_PRESENT
+  # / _GITIGNORE_EXCEPTION / _BUILD_FAIL_LOUD entries, and
+  # features/bot-lifecycle/dods.yaml for DoD bindings.
+  v0.10.5.3-hallucination-corpus:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: tests/v0.10.5.3-hallucination-corpus.sh
+    features: [bot-lifecycle]
+    max_duration_sec: 5
+
+  # ── v0.10.6 Pack U — audio recording unification ─────────────
+  # Single-invocation multi-step scripts: each runs all its step IDs in
+  # one matrix run, emits one JSON with the steps array. Same pattern as
+  # containers.sh / webhooks.sh. The earlier (R7) attempt registered
+  # them with `steps: [...]` and the script expected $1 — that's the
+  # old per-step pattern from v0.10.5.3-static-greps.sh which was never
+  # actually wired into the matrix. R8 rewrite: scripts orchestrate all
+  # steps internally; one test-registry entry per script.
+  v0.10.6-static-greps:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: tests/v0.10.6-static-greps.sh
+    features: [bot-lifecycle, post-meeting-transcription, dashboard]
+    max_duration_sec: 30
+
+  v0.10.6-runtime-smokes:
+    tier: meeting
+    runs_in: [compose, helm]
+    script: tests/v0.10.6-runtime-smokes.sh
+    features: [bot-lifecycle, post-meeting-transcription, dashboard]
+    max_duration_sec: 600
 
   chart-pgbouncer-optional:
     tier: cheap

@@ -155,6 +155,13 @@ test_data/
 *.mp4
 *.txt
 !**/requirements.txt
+# v0.10.5.3 fix: hallucinations corpus files were silently dropped when
+# *.txt was added globally. The corpus is loaded by hallucination-filter.ts
+# at runtime — without these files the bot ships with empty filter,
+# letting whisper hallucinations ("thanks for watching", "subscribe to my
+# channel") leak into transcripts. See services/vexa-bot/core/src/services/
+# hallucinations/ for the canonical location.
+!services/vexa-bot/core/src/services/hallucinations/*.txt
 manifest.csv
 docker-compose.override.yml
 .env.test
@@ -169,5 +176,7 @@ tests3/.state
 tests3/.state-lite
 tests3/.state-compose
 tests3/.state-helm
+# Suffixed snapshots from teardown / iteration captures contain the same credentials.
+tests3/.state-*
 
 tests3/.current-stage

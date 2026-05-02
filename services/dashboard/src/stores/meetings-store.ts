@@ -48,6 +48,14 @@ interface MeetingsState {
   // Filters (server-side)
   _filters: { search?: string; status?: string; platform?: string };
 
+  // Pagination cursor (#304): explicit offset that advances by the
+  // unfiltered API page size — NOT by `meetings.length` which is the
+  // post-filter array. Mixing the two caused duplicate rows whenever a
+  // page contained `data.redacted=true` shells (filtered client-side):
+  // the next request asked for an offset N positions before where the
+  // previous page actually ended → API returned N rows already shown.
+  _offset: number;
+
   // Actions
   fetchMeetings: (filters?: { search?: string; status?: string; platform?: string }) => Promise<void>;
   fetchMoreMeetings: () => Promise<void>;
@@ -88,6 +96,7 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
   hasMore: false,
   isLoadingMore: false,
   _filters: {},
+  _offset: 0,
   isLoadingMeetings: false,
   isLoadingMeeting: false,
   isLoadingTranscripts: false,
@@ -98,14 +107,25 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
   // Fetch first page of meetings (with optional server-side filters)
   fetchMeetings: async (filters?: { search?: string; status?: string; platform?: string }) => {
     const activeFilters = filters ?? get()._filters;
-    set({ isLoadingMeetings: true, error: null, _filters: activeFilters });
+    set({ isLoadingMeetings: true, error: null, _filters: activeFilters, _offset: 0 });
     try {
-      const result = await vexaAPI.getMeetings({ limit: 50, offset: 0, ...activeFilters });
+      const PAGE = 50;
+      const result = await vexaAPI.getMeetings({ limit: PAGE, offset: 0, ...activeFilters });
       const meetings = result.meetings.filter((m) => !isHiddenDeletedMeeting(m));
       meetings.sort((a, b) =>
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
       );
-      set({ meetings, hasMore: result.has_more, isLoadingMeetings: false, subscriptionRequired: false });
+      // #304: advance _offset by the UNFILTERED page size (PAGE), NOT by
+      // meetings.length. The API returns up to PAGE rows; client-side
+      // filter may drop some (redacted shells); next request must ask
+      // for offset PAGE regardless of how many survived the filter.
+      set({
+        meetings,
+        hasMore: result.has_more,
+        isLoadingMeetings: false,
+        subscriptionRequired: false,
+        _offset: PAGE,
+      });
     } catch (error) {
       if (error instanceof VexaAPIError && error.status === 402) {
         set({
@@ -124,17 +144,29 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
 
   // Fetch next page and append
   fetchMoreMeetings: async () => {
-    const { meetings, hasMore, isLoadingMore, _filters } = get();
+    const { meetings, hasMore, isLoadingMore, _filters, _offset } = get();
     if (!hasMore || isLoadingMore) return;
     set({ isLoadingMore: true });
     try {
-      const result = await vexaAPI.getMeetings({ limit: 50, offset: meetings.length, ..._filters });
+      const PAGE = 50;
+      // #304: use the explicit _offset cursor, NOT meetings.length.
+      const result = await vexaAPI.getMeetings({ limit: PAGE, offset: _offset, ..._filters });
       const newMeetings = result.meetings.filter((m) => !isHiddenDeletedMeeting(m));
-      const merged = [...meetings, ...newMeetings];
+      // #304 belt-and-suspenders: dedupe by meeting.id. Defends against
+      // any future filter / WebSocket-update race where the same meeting
+      // could land in `meetings` twice.
+      const seen = new Set(meetings.map((m) => m.id));
+      const deduped = newMeetings.filter((m) => !seen.has(m.id));
+      const merged = [...meetings, ...deduped];
       merged.sort((a, b) =>
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
       );
-      set({ meetings: merged, hasMore: result.has_more, isLoadingMore: false });
+      set({
+        meetings: merged,
+        hasMore: result.has_more,
+        isLoadingMore: false,
+        _offset: _offset + PAGE,
+      });
     } catch (error) {
       set({ isLoadingMore: false });
       console.error("Failed to load more meetings:", error);

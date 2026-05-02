@@ -115,6 +115,14 @@ spec:
             {{- end }}
             - name: MINIO_SECURE
               value: {{ .Values.meetingApi.minioSecure | default "false" | quote }}
+            # v0.10.5.3 Pack D-3 follow-up (Option B): MINIO_PUBLIC_ENDPOINT
+            # is the browser-reachable hostname used to sign download URLs.
+            # MINIO_ENDPOINT (above) stays in-cluster for fast server-side I/O.
+            # When unset/empty, storage.py falls back to MINIO_ENDPOINT.
+            # Set this when MinIO Service.type=NodePort and you have an
+            # external IP, OR when an ingress fronts MinIO under an FQDN.
+            - name: MINIO_PUBLIC_ENDPOINT
+              value: {{ .Values.meetingApi.minioPublicEndpoint | default "" | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.meetingApi.logLevel | default "INFO" | quote }}
             {{- with .Values.meetingApi.extraEnv }}

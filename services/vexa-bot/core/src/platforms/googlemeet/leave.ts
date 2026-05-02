@@ -3,6 +3,7 @@ import { log, callLeaveCallback } from "../../utils";
 import { logJSON } from "../../utils/log";
 import { BotConfig } from "../../types";
 import { googleLeaveSelectors } from "./selectors";
+import { stopGoogleRecording } from "./recording";
 
 // Prepare for recording by exposing necessary functions
 export async function prepareForRecording(page: Page, botConfig: BotConfig): Promise<void> {
@@ -101,23 +102,22 @@ export async function leaveGoogleMeet(page: Page | null, botConfig?: BotConfig, 
     return false;
   }
 
-  // Flush browser-side recording blob before UI leave and process shutdown.
-  // This ensures Google Meet audio is persisted before upload is attempted.
+  // Pack U.2 (v0.10.6): drain the unified recording pipeline before UI leave.
+  // This stops the browser-side MediaRecorder, emits the final isFinal=true
+  // chunk, and waits for the upload queue to drain so meeting-api flips
+  // Recording.status to COMPLETED before the bot exits. Replaces the old
+  // __vexaFlushRecordingBlob full-blob path (dead under chunked upload).
   try {
-    log("[leaveGoogleMeet] Flushing browser recording blob before leave...");
-    await page.evaluate(async () => {
-      const flushFn = (window as any).__vexaFlushRecordingBlob;
-      if (typeof flushFn === "function") {
-        await flushFn("manual_leave");
-      }
-    });
+    log("[leaveGoogleMeet] Stopping recording pipeline before leave...");
+    await stopGoogleRecording();
   } catch (flushError: any) {
-    // v0.10.5 Pack G.1 — recording-flush failure means the final blob
-    // never made it from the browser context to disk; the audio upload
-    // path will have nothing to send. Diagnostic-critical.
+    // v0.10.5 Pack G.1 — recording-flush failure means the final chunk
+    // never made it; chunks already in MinIO are still durable, but the
+    // recording_finalizer won't see is_final=true and the meeting Recording
+    // row will stay IN_PROGRESS until reconciler cleanup.
     logJSON({
       level: "error",
-      msg: "[leaveGoogleMeet] Recording flush failed",
+      msg: "[leaveGoogleMeet] Recording pipeline stop failed",
       error_message: flushError?.message,
       error_name: flushError?.name,
       error_stack: flushError?.stack,
