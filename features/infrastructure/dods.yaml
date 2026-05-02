@@ -134,16 +134,16 @@ dods:
     modes:
     - helm
 
-- id: chart-rolling-update-zero-surge
-  label: "every app-facing Deployment in rendered chart has strategy.rollingUpdate.maxSurge: 0 — rolling updates never double DB-pool footprint"
+- id: chart-rolling-update-zero-downtime
+  label: "every app-facing Deployment in rendered chart has strategy.rollingUpdate.maxUnavailable: 0 — OLD pod stays Ready until NEW pod is Ready (zero-downtime, prevents v0.10.5.2 outage class)"
   weight: 10
   evidence:
-    check: HELM_ROLLING_UPDATE_ZERO_SURGE
+    check: HELM_ROLLING_UPDATE_ZERO_DOWNTIME
     modes:
     - helm
 
 - id: chart-api-gateway-ha-replica-count
-  label: "apiGateway.replicaCount default ≥ 2 — so maxSurge: 0 rollouts remain zero-downtime for the front door"
+  label: "apiGateway.replicaCount default ≥ 2 — so maxUnavailable: 0 rollouts have surge headroom for the front door"
   weight: 5
   evidence:
     check: HELM_API_GATEWAY_REPLICA_COUNT_HA
