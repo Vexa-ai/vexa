@@ -240,46 +240,14 @@ tests:
     max_duration_sec: 5
 
   # ── v0.10.6 Pack U — audio recording unification ─────────────
-  # Static checks that don't need a deployed bot. Verifies platform
-  # recording.ts files are within LOC budget post-Pack-U, no bot-side
-  # master construction remains, finalize_recording_master is invoked
-  # from bot_exit_callback BEFORE update_meeting_status. See
-  # tests/v0.10.6-static-greps.sh for the script body, tests3/registry.yaml
-  # for PLATFORM_RECORDING_TS_LINE_BUDGET / NO_PER_PLATFORM_MASTER_CONSTRUCTION
-  # / BOT_EXIT_CALLBACK_INVOKES_FINALIZER / FINALIZER_BEFORE_STATUS_FLIP entries,
-  # and features/bot-lifecycle/dods.yaml + features/post-meeting-transcription/
-  # dods.yaml for DoD bindings.
-  v0.10.6-static-greps:
-    tier: cheap
-    runs_in: [lite, compose, helm]
-    script: tests/v0.10.6-static-greps.sh
-    features: [bot-lifecycle, post-meeting-transcription]
-    max_duration_sec: 30
-    steps:
-      - platform_recording_line_budget
-      - no_bot_master_construction
-      - finalizer_invoked_in_exit_callback
-      - finalizer_before_status
-
-  # Runtime smokes for Pack U. Most steps require live test cluster +
-  # fixture meeting URLs; skip cleanly when fixtures aren't set. The
-  # download_presigned_master step has a real implementation that
-  # validates against any completed recording in the test user's data.
-  # See scope.yaml human_verify[] for operator-driven validation steps.
-  v0.10.6-runtime-smokes:
-    tier: meeting
-    runs_in: [compose, helm]
-    script: tests/v0.10.6-runtime-smokes.sh
-    features: [bot-lifecycle, post-meeting-transcription, dashboard]
-    max_duration_sec: 600
-    steps:
-      - finalizer_idempotency
-      - master_at_storage_path
-      - bot_kill_gmeet_master_playable
-      - bot_kill_teams_master_playable
-      - bot_kill_zoom_master_playable
-      - deferred_transcribe_master
-      - download_presigned_master
+  # NOT registered as test-registry.yaml entries. v0.10.6-static-greps.sh
+  # and v0.10.6-runtime-smokes.sh are step-runner scripts invoked
+  # PER-CHECK from tests3/registry.yaml — same pattern as v0.10.5.3-
+  # static-greps.sh and v0.10.5.3-runtime-smokes.sh. The matrix runner
+  # picks them up via the registry's `script: ... step: ...` fields.
+  # Adding them here too caused dual-invocation (test-registry tries to
+  # call without step arg → script errors → no JSON report → all Pack U
+  # DoDs flagged ⬜ missing in v0.10.6 first-validate R7).
 
   chart-pgbouncer-optional:
     tier: cheap

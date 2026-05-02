@@ -14,28 +14,44 @@ test_begin "v0.10.5.3-static-greps-$step"
 case "$step" in
 
   chunk_buffer_trim)
-    # Pack M: verify each platform's recording.ts has the splice-on-success
-    # pattern after __vexaSaveRecordingChunk. The splice is what closes
-    # the chunk-accumulation leak.
+    # Pack M: verify the chunk-buffer trim discipline. Pre-Pack-U the
+    # cap=10 + splice-on-upload pattern lived in each platform's
+    # recording.ts (duplicated). v0.10.6 Pack U.2 unified GMeet + Teams
+    # capture into BrowserMediaRecorderPipeline (utils/browser.ts);
+    # browser.ts is now the canonical home for the discipline. Pack M
+    # intent (no chunk-accumulation leak) is preserved either way.
+    f="$ROOT_DIR/services/vexa-bot/core/src/utils/browser.ts"
+    if [ ! -f "$f" ]; then
+      step_fail BOT_RECORDING_CHUNK_BUFFER_TRIMMED "browser.ts missing"
+      exit 1
+    fi
     bad=""
-    for plat_path in \
-        "services/vexa-bot/core/src/platforms/googlemeet/recording.ts" \
-        "services/vexa-bot/core/src/platforms/msteams/recording.ts"; do
-      f="$ROOT_DIR/$plat_path"
-      if [ ! -f "$f" ]; then bad+=" missing:$(basename $(dirname $plat_path))"; continue; fi
-      # Look for splice() of __vexaRecordedChunks within ondataavailable handler
-      if ! grep -qE '__vexaRecordedChunks.*splice|buffer\.splice' "$f"; then
-        bad+=" no-splice:$(basename $(dirname $plat_path))"
-      fi
-      # Look for the cap (VEXA_RECORDED_CHUNKS_CAP)
-      if ! grep -q 'VEXA_RECORDED_CHUNKS_CAP' "$f"; then
-        bad+=" no-cap:$(basename $(dirname $plat_path))"
+    if ! grep -q 'class BrowserMediaRecorderPipeline' "$f"; then
+      bad+=" no-pipeline-class"
+    fi
+    # Splice removes uploaded chunks from the in-flight buffer
+    if ! grep -qE '\.splice\(' "$f"; then
+      bad+=" no-splice"
+    fi
+    # Defensive cap (numeric or named — accept current naming variants)
+    if ! grep -qE 'CHUNKS_CAP|CHUNK_CAP|chunksCap|chunkCap|=\s*10' "$f"; then
+      bad+=" no-cap"
+    fi
+    # Belt-and-braces: confirm platform recording.ts files don't carry
+    # a duplicate buffer (would mean Pack U.2/U.3 unification regressed).
+    for plat in googlemeet msteams; do
+      pf="$ROOT_DIR/services/vexa-bot/core/src/platforms/$plat/recording.ts"
+      [ ! -f "$pf" ] && continue
+      stripped=$(sed 's://.*$::' "$pf")
+      if echo "$stripped" | grep -qE '__vexaRecordedChunks\s*=|VEXA_RECORDED_CHUNKS_CAP'; then
+        bad+=" platform-regressed:$plat"
       fi
     done
     if [ -z "$bad" ]; then
-      step_pass BOT_RECORDING_CHUNK_BUFFER_TRIMMED "splice+cap present in gmeet+teams"
+      step_pass BOT_RECORDING_CHUNK_BUFFER_TRIMMED \
+        "splice+cap in BrowserMediaRecorderPipeline (browser.ts); no per-platform regression"
     else
-      step_fail BOT_RECORDING_CHUNK_BUFFER_TRIMMED "missing in:$bad"
+      step_fail BOT_RECORDING_CHUNK_BUFFER_TRIMMED "missing/regressed:$bad"
       exit 1
     fi
     ;;

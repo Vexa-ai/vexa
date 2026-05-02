@@ -315,5 +315,116 @@ already green.
 Stage transition: `triage → develop` to expand scope to v0.10.6 +
 implement Pack U.
 
+---
+
+## FIFTH-PASS TRIAGE (2026-05-02 — first v0.10.6 validate red, R7)
+
+After Pack U landed across 11 commits (audio-pipeline.ts + 3 platform
+migrations + finalizer + callback hook + presigned download + dashboard
+re-land + DoD bindings + tests), full-deploy succeeded but validate
+matrix gate-failed 3 features:
+
+- bot-lifecycle: 59% < 90%
+- dashboard: 81% < 90%
+- post-meeting-transcription: 0% < 60%
+
+Root cause is a test-wiring issue, NOT a code regression: every Pack U
+DoD shows as `⬜ missing` in the report because the v0.10.6-static-greps
+script wasn't invoked correctly. The matrix runner emitted
+`tests/v0.10.6-static-greps.sh: line 11: 1: usage: ... <step>` on every
+mode — the script expects a step argument but was called with none.
+
+Cross-checking with v0.10.5.3-static-greps (which works): that script is
+NOT in test-registry.yaml. It's only invoked via per-check entries in
+registry.yaml that look like:
+    type: script
+    script: tests/v0.10.5.3-static-greps.sh
+    step: chunk_buffer_trim
+The matrix runner picks those up via the registry path and invokes the
+script per-step with the step name as $1.
+
+I added v0.10.6-static-greps to BOTH registry.yaml (per-check, correct
+pattern) AND test-registry.yaml (with `steps: [...]` field, which the
+runner misinterprets as a single invocation). The conflicting double
+registration causes the runner to ignore the registry-path checks
+because the test-registry-path check fails first.
+
+### `pack-u-static-greps-not-invoked` [REGRESSION-OF-CLEANUP]
+- **status:** matrix runner can't find the v0.10.6-static-greps step
+  results; cascade: 4 SHARED/RECORDING_USES_SHARED_PIPELINE checks
+  show as missing → bot-lifecycle drops to 59% (those are weight 5-10
+  each, plus 3× weight-15 BOT_KILL_RECORDING_PLAYABLE_* missing too).
+- **bound check:** N/A — wiring layer.
+- **root cause:** dual registration in test-registry.yaml +
+  registry.yaml. Same script can't appear in both — they use different
+  invocation contracts.
+- **fix:** drop the v0.10.6-static-greps entry from test-registry.yaml.
+  Same for v0.10.6-runtime-smokes (consistency). The per-check
+  registry.yaml entries already invoke the scripts correctly with step
+  args.
+
+### `bot-recording-chunk-buffer-trimmed-relocation` [REGRESSION-OF-CLEANUP]
+- **status:** v0.10.5.3-static-greps.sh's `chunk_buffer_trim` step
+  greps platform recording.ts files for `splice|VEXA_RECORDED_CHUNKS_CAP`
+  but Pack U.2 + U.3 moved both into `BrowserMediaRecorderPipeline`
+  (utils/browser.ts). The Pack M discipline is preserved (cap=10 +
+  splice on upload — verified 7 hits in browser.ts) — just relocated.
+- **bound check:** BOT_RECORDING_CHUNK_BUFFER_TRIMMED.
+- **root cause:** v0.10.5.3 check expected per-platform location;
+  Pack U unified into shared module.
+- **fix:** update v0.10.5.3-static-greps.sh's chunk_buffer_trim step
+  to look in `services/vexa-bot/core/src/utils/browser.ts` for
+  `BrowserMediaRecorderPipeline` containing both splice and cap. Same
+  Pack M intent, just relocated.
+
+### `tests3-label-release-traceable-truncation` [GAP — pre-existing]
+- **status:** smoke-static check fails with
+  `'vexa-t3-check-260501-chun-0f73ed' does not match
+   ^vexa-t3-check-260501-chunk-leak-[0-9a-f]{6}$`
+- **bound check:** TESTS3_LABEL_RELEASE_TRACEABLE.
+- **root cause:** Linode 32-char label cap (real constraint — see
+  common.sh:302 comment) truncates release_id from "260501-chunk-leak"
+  (17 chars) to "260501-chun" (11 chars). The check pattern uses the
+  full release_id which is incorrect post-truncation. This was failing
+  in R6 too (same 90/92 smoke-static count); didn't gate-fail then
+  because no DoD with significant weight was bound to it. v0.10.6's
+  added DoDs raised the gate-pull from other features and exposed this.
+- **NOT a code regression.** common.sh release_label is correct (32-char
+  cap is by design for cross-cloud safety). The check pattern is wrong.
+- **fix:** update tests3/checks/scripts/tests3-label-release-traceable.sh
+  to allow truncated release_id segments — match prefix-of-release_id
+  rather than full string. Per "no regressions to what we have already
+  done" directive: the protected behavior (label-traceable to a release)
+  is intact; only the check pattern needs updating.
+
+### `chart-rolling-update-zero-surge-stale-test` [GAP — recurring]
+- Same as second-pass + R6 triage. Stale test-registry entry pointing
+  at a deleted script. Drop the stale entry per prior directive.
+
+### `containers status_completed in helm/lite` [GAP — recurring]
+- Same Pack C/J path-coverage gap. Accept per prior directive.
+
+### `synthetic missing in compose` [under investigation]
+- The synthetic-rig test was registered as `runs_in: [lite, compose]`
+  but compose report shows missing. Worth a quick look — may be a
+  fixture/env issue, not a code regression.
+
+### Resolution
+
+| DoD | Class | Action |
+|---|---|---|
+| pack-u-static-greps-not-invoked | REGRESSION-OF-CLEANUP | **FIX** — drop test-registry duplicate entries |
+| bot-recording-chunk-buffer-trimmed-relocation | REGRESSION-OF-CLEANUP | **FIX** — update grep target to browser.ts |
+| tests3-label-release-traceable-truncation | GAP | **FIX** — update check pattern (was failing R6 too) |
+| chart-rolling-update-zero-surge-stale-test | GAP | **FIX** — drop stale test-registry entry (per prior directive) |
+| containers status_completed | GAP recurring | **ACCEPT** (per prior directive) |
+| synthetic missing | under investigation | investigate during develop |
+
+<!-- human directive (project owner): "continue until human gate" -->
+fix this first: yes (all REGRESSION + GAP-fix entries above)
+proposed resolution: implement the 4 fixes above, re-validate.
+
+Stage transition: `triage → develop` to apply fixes.
+
 Stage transition: `triage → develop` to apply the one-line env gate fix.
 
