@@ -1,0 +1,26 @@
+# Spanish hallucination phrases (exact, deduplicated)
+# Updated: 2025-08-31
+
+ ¡Adiós!
+ Chau.
+ ¡Gracias!
+ Gracias.
+ ¡Gracias por ver el vídeo!
+ Gracias por ver este video.
+ ¡Muchas gracias!
+ Muchas gracias.
+ Muchas gracias por su participación.
+ No, no, no.
+ No, no, no, no, no, no.
+ No, no, no, no, no, no, no, no, no.
+ Sí, sí, sí, sí.
+ Sí, sí, sí, sí, sí.
+ Sí, sí, sí, sí, sí, sí, sí, sí.
+ ¡Suscríbete al canal!
+ ¡Suscríbete al canal y dale a like!
+ y a las personas que nos ayudan.
+ Y eso es todo por hoy.
+ Y eso es todo por hoy, nos vemos en el próximo video, chau.
+ y nos vemos en el próximo video.
+ Gracias por ver el video.
+ ¡Muchas gracias y hasta pronto!
