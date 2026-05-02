@@ -239,6 +239,28 @@ tests:
     features: [bot-lifecycle]
     max_duration_sec: 5
 
+  # ── v0.10.6 Pack U — audio recording unification ─────────────
+  # Static checks that don't need a deployed bot. Verifies platform
+  # recording.ts files are within LOC budget post-Pack-U, no bot-side
+  # master construction remains, finalize_recording_master is invoked
+  # from bot_exit_callback BEFORE update_meeting_status. See
+  # tests/v0.10.6-static-greps.sh for the script body, tests3/registry.yaml
+  # for PLATFORM_RECORDING_TS_LINE_BUDGET / NO_PER_PLATFORM_MASTER_CONSTRUCTION
+  # / BOT_EXIT_CALLBACK_INVOKES_FINALIZER / FINALIZER_BEFORE_STATUS_FLIP entries,
+  # and features/bot-lifecycle/dods.yaml + features/post-meeting-transcription/
+  # dods.yaml for DoD bindings.
+  v0.10.6-static-greps:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: tests/v0.10.6-static-greps.sh
+    features: [bot-lifecycle, post-meeting-transcription]
+    max_duration_sec: 30
+    steps:
+      - platform_recording_line_budget
+      - no_bot_master_construction
+      - finalizer_invoked_in_exit_callback
+      - finalizer_before_status
+
   chart-pgbouncer-optional:
     tier: cheap
     runs_in: [helm]
