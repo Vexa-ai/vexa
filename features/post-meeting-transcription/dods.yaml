@@ -28,6 +28,16 @@ dods:
     - compose
     - helm
 
+- id: finalizer-handles-meeting-data-mode
+  label: "recording_finalizer.py has the meeting_data JSONB path (Pack U.5 followup, commit 5af580e). Pre-fix only handled SQL Recording table → silent no-op on every real meeting in production-default config. Caught when helm shipped with a stale image and 6 meetings landed status=completed but storage_path stuck at last chunk."
+  weight: 15
+  evidence:
+    check: FINALIZER_HANDLES_MEETING_DATA_MODE
+    modes:
+    - lite
+    - compose
+    - helm
+
 - id: bot-exit-callback-invokes-finalizer
   label: "callbacks.py:bot_exit_callback awaits finalize_recording_master in all 3 exit branches (graceful, was-stopping, else/crash) BEFORE the corresponding update_meeting_status — closes the race where /transcribe could read stale storage_path"
   weight: 15

@@ -2098,6 +2098,19 @@ DOWNLOAD_RETURNS_PRESIGNED_URL_TO_MASTER:
   - helm
   state: stateful
   max_duration_sec: 60
+FINALIZER_HANDLES_MEETING_DATA_MODE:
+  proves: "recording_finalizer.py has the meeting_data JSONB path (Pack U.5 followup, commit 5af580e). Production runs in `meeting_data` mode where recordings live in meeting.data->'recordings' JSONB array; SQL Recording table is empty. Pre-fix the finalizer queried only the SQL table, found 0 rows, logged 'meeting_data mode or recording never started', and silently no-op'd on every real meeting. Asserts the [DATA] log emit + flag_modified(meeting,'data') is present."
+  symptom: "meetings reach completed but storage_path stays at last chunk (audio/0000NN.{ext}); dashboard hangs at 'preparing audio'; finalized_by absent or set to post_meeting_reconciler. Reproduced on helm tonight when stale meeting-api image was deployed without the followup."
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-static-greps.sh
+  step: finalizer_meeting_data_path
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
 UNIFIED_ALIGNMENT_HOOK_IN_PIPELINE:
   proves: "segment-to-audio alignment lives in ONE place — UnifiedRecordingPipeline subscribes to source.on('started') and calls publisher.resetSessionStart(). Per-platform recording.ts files do NOT have their own page.exposeFunction('__vexaRecordingStarted', ...) handler with publisher.resetSessionStart inside, and do NOT call publisher.resetSessionStart() at function entry. Matches Pack U design intent: tiny per-platform shims, all behavior in shared modules."
   symptom: "pre-fix: GMeet/Teams had platform-side __vexaRecordingStarted handlers, Zoom had source.on('started') handler — three separate-but-identical handlers. Drift risk + duplicated maintenance. Captured 2026-05-02 after real-meeting test exposed Zoom segment-to-audio drift (Zoom mtg 23: segments 169s vs audio 159s = clicks past end-of-file)."

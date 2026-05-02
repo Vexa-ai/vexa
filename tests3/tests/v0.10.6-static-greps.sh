@@ -188,6 +188,37 @@ else
   step_fail DASHBOARD_AUDIO_STREAMS_FROM_BUCKET "dashboard api.ts has no /download or getRecordingAudioStreamUrl"
 fi
 
+# ── FINALIZER_HANDLES_MEETING_DATA_MODE ────────────────────────────
+# Pack U.5 followup: recording_finalizer.py must have the meeting_data
+# JSONB path. Pre-fix only handled SQL Recording table → silent no-op
+# on every real meeting in production-default config.
+fin_path="$ROOT_DIR/services/meeting-api/meeting_api/recording_finalizer.py"
+fin_bad=""
+if [ ! -f "$fin_path" ]; then
+  fin_bad+=" file-missing"
+else
+  # The [DATA] log line is the canonical signal. Multiple hits expected
+  # (one per debug log + comment + warn).
+  if [ "$(grep -c '\[DATA\] meeting_id' "$fin_path")" -lt 2 ]; then
+    fin_bad+=" no-DATA-log-emit"
+  fi
+  # flag_modified(meeting, 'data') is the SQLAlchemy hook that makes the
+  # JSONB mutation persistent — without it the path is silently no-op.
+  if ! grep -q 'flag_modified(meeting, "data")' "$fin_path"; then
+    fin_bad+=" no-flag_modified"
+  fi
+  # Must read meeting.data->'recordings' (the JSONB structure)
+  if ! grep -qE "meeting_data\.get\(.recordings.\)|data\.get\(.recordings.\)" "$fin_path"; then
+    fin_bad+=" no-meeting-data-recordings-read"
+  fi
+fi
+if [ -z "$fin_bad" ]; then
+  step_pass FINALIZER_HANDLES_MEETING_DATA_MODE \
+    "recording_finalizer.py has the meeting_data JSONB mode path (Pack U.5 followup)"
+else
+  step_fail FINALIZER_HANDLES_MEETING_DATA_MODE "missing:$fin_bad"
+fi
+
 # ── UNIFIED_ALIGNMENT_HOOK_IN_PIPELINE ─────────────────────────────
 # Segment-to-audio alignment lives in ONE place — UnifiedRecordingPipeline.
 # Verifies:
