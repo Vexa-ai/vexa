@@ -78,7 +78,14 @@ selected = set()
 if scope_path:
     with open(scope_path) as f:
         scope = yaml.safe_load(f)
-    for issue in (scope.get("issues") or []):
+    # v0.10.5.3 fix: scope.yaml structure uses top-level key `scope:` for
+    # the issues list (per tests3/releases/_template/scope.yaml). The
+    # legacy `issues:` key is also accepted for backward compat with any
+    # external tooling. Without this, --scope selected 0 tests on every
+    # invocation (the if branch silently ran 0 tests, which is why
+    # release-iterate never actually ran scope-filtered tests).
+    issues_list = scope.get("scope") or scope.get("issues") or []
+    for issue in issues_list:
         for p in (issue.get("proves") or []):
             proof_modes = p.get("modes") or []
             if proof_modes and mode not in proof_modes:
