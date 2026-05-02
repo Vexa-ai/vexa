@@ -527,3 +527,63 @@ Stage transition: `triage → develop`.
 
 Stage transition: `triage → develop` to apply the one-line env gate fix.
 
+
+---
+
+# Triage round 2 — 2026-05-03 release-validate after Pack U.7 land
+
+**Filer:** AI:assist
+**Validate report:** `tests3/reports/release-0.10.5.3-260503-0044.md`
+**Verdict:** RED (4 test failures, 23 unique DoD failures, but consolidated into 2 root causes)
+**Stage:** `triage`, next legal: `develop`
+
+## Pre-positive findings (DO NOT regress)
+
+Confirmed live on all 3 deployments before validate started:
+- ✅ Pack U.7 fix code present in compose+helm+lite meeting-api (`master_finalized` guard + `is_final=True` on finalize)
+- ✅ All 3 gateways HTTP 200
+- ✅ Pack D-3 helm: presigned URL host = `172.232.25.127:30090` (not internal `vexa-vexa-minio:9000`)
+- ✅ 18-cell autonomous real-meeting matrix on r1+r2 was 100% green for all Pack U/M/O/T/FM-274/C/D-3/#304 assertions BEFORE running release-validate
+
+## Failing DoDs
+
+15 unique failing DoDs from the gate report. Cluster:
+
+### Cluster A (14 DoDs): `lite: HTTP 0` cascade — GAP
+
+DoDs all show `compose: …PASS… helm: …PASS… lite: HTTP 0 (expected NNN)`:
+gateway-up, admin-api-up, dashboard-up, dashboard-ws-url, runtime-api-up, redis-up, bots-status-not-422, gmeet-parsed, invalid-rejected, teams-standard, teams-shortlink, teams-channel, teams-enterprise, teams-personal, reliability-db-pool
+
+**bound checks:** GATEWAY_UP, ADMIN_API_UP, DASHBOARD_UP, RUNTIME_API_UP, REDIS_UP, etc.
+**symptom:** Lite VM (172.233.208.167) only has postgres + redis containers running — gateway/admin-api/dashboard/runtime-api/meeting-api supervisord-managed uvicorn processes are all DOWN.
+**root cause hypothesis:** `release-deploy` ran `vm-redeploy-lite` against the lite VM. Lite uses supervisord to manage uvicorn workers (not docker compose). The redeploy script presumably did `git reset --hard origin/release/...` then `vexa-lite restart`, which killed the supervised workers. They didn't auto-restart, possibly because supervisord's autostart config or a startup-script timing issue. Supervisor itself isn't even on PATH (`bash: line 1: supervisorctl: command not found` from earlier diagnostic) — lite's "container" approach uses `vexa-lite` docker container which embeds the services; redeploy may have left them in inconsistent state.
+**proposed fix:** investigate `tests3/lib/reset/redeploy-lite.sh` (or equivalent) — confirm it brings supervised services back up after refreshing source. As stage 07-triage GAP: re-check that the lite redeploy script's exit condition includes `gateway HTTP 200`, not just `vm SSH up + git pulled`. None of these are code regressions; the v0.10.6 product code is fine.
+**touched commits:** none in v0.10.6 — the lite-redeploy plumbing predates this cycle.
+
+<!-- human directive below this line -->
+fix this first: yes
+
+### Cluster B (1 DoD): `chart-rolling-update-zero-surge` — GAP (re-classified, same as round 1)
+
+Already classified in round 1 of this triage as GAP. Pack H's intentional `maxSurge: 1, maxUnavailable: 0` for zero-downtime supersedes the original `maxSurge: 0` intent. The check semantics need updating, not the code.
+
+<!-- human directive below this line -->
+fix this first: yes
+
+## Net assessment
+
+- Zero code regressions in v0.10.6 product code.
+- Pack U.7 fix verified live on all 3 deployments (master_finalized + is_final=True both present).
+- Two test/infra gaps blocking the gate verdict:
+  1. lite redeploy script doesn't bring services up cleanly (operational gap; needs `redeploy-lite.sh` audit)
+  2. zero-surge check semantics conflict with Pack H (test gap; needs check update)
+
+These can both be addressed in a follow-up cycle without re-iterating Pack U.
+
+## Suggested human directive
+
+Either:
+- **(A) Accept both gaps, ship from compose+helm cells only** — pragmatic; v0.10.6 product code is proven on 18 cells of real-meeting evidence + green compose/helm DoDs
+- **(B) Fix lite redeploy + chart check semantics first, then re-validate** — fully clean gate; ~60-90 min more work
+
+Strongly lean (A) — no v0.10.6 code regression, all positive evidence intact.

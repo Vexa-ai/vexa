@@ -33,7 +33,15 @@ export STATE
 
 mkdir -p "$STATE"
 echo "$MODE" > "$STATE/deploy_mode"
+# v0.10.6 Pack U.7 follow-up: clear stale per-mode reports before each run.
+# aggregate.py reads every *.json under $STATE/reports/<mode>/; stale files
+# from prior cycles (e.g. chart-rolling-update-zero-surge.json from when the
+# check was bound, before Pack H deprecated it) leak into the gate report
+# as ❌ fail despite no current binding. Caught 2026-05-03 release-validate:
+# 14 of 15 unique DoD failures were lite-down cascade, 1 was a stale May-1
+# zero-surge file. Cleaning per-mode at run start fixes the pattern durably.
 mkdir -p "$STATE/reports/$MODE"
+find "$STATE/reports/$MODE" -maxdepth 1 -name '*.json' -type f -delete
 
 # Bootstrap credentials BEFORE any user-level test script runs — some tests
 # source common.sh and state_read api_token at top level. Contract-tier checks
