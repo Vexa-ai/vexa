@@ -261,6 +261,26 @@ tests:
       - finalizer_invoked_in_exit_callback
       - finalizer_before_status
 
+  # Runtime smokes for Pack U. Most steps require live test cluster +
+  # fixture meeting URLs; skip cleanly when fixtures aren't set. The
+  # download_presigned_master step has a real implementation that
+  # validates against any completed recording in the test user's data.
+  # See scope.yaml human_verify[] for operator-driven validation steps.
+  v0.10.6-runtime-smokes:
+    tier: meeting
+    runs_in: [compose, helm]
+    script: tests/v0.10.6-runtime-smokes.sh
+    features: [bot-lifecycle, post-meeting-transcription, dashboard]
+    max_duration_sec: 600
+    steps:
+      - finalizer_idempotency
+      - master_at_storage_path
+      - bot_kill_gmeet_master_playable
+      - bot_kill_teams_master_playable
+      - bot_kill_zoom_master_playable
+      - deferred_transcribe_master
+      - download_presigned_master
+
   chart-pgbouncer-optional:
     tier: cheap
     runs_in: [helm]
