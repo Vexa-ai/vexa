@@ -42,6 +42,16 @@ class StorageClient(ABC):
         """Check if a file exists in storage."""
         ...
 
+    @abstractmethod
+    def list_objects(self, prefix: str) -> list:
+        """List storage paths under prefix. Returns a sorted list of full paths.
+
+        Used by recording_finalizer to enumerate per-session chunks under
+        `recordings/<user>/<rec>/<session>/<media_type>/`. Sorted ascending
+        so byte-concat order matches the chunk_seq order.
+        """
+        ...
+
 
 class MinIOStorageClient(StorageClient):
     """MinIO/S3-compatible storage client using boto3."""
@@ -162,6 +172,18 @@ class MinIOStorageClient(StorageClient):
         except self.client.exceptions.ClientError:
             return False
 
+    def list_objects(self, prefix: str) -> list:
+        # Paginate so we don't truncate at 1000 (S3 default page size).
+        # Sorted ascending so callers can rely on chunk_seq lexicographic
+        # ordering (zero-padded 6-digit seq numbers sort correctly).
+        keys = []
+        paginator = self.client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                keys.append(obj["Key"])
+        keys.sort()
+        return keys
+
 
 class LocalStorageClient(StorageClient):
     """Filesystem-based storage client for development/testing."""
@@ -213,6 +235,23 @@ class LocalStorageClient(StorageClient):
 
     def file_exists(self, path: str) -> bool:
         return os.path.exists(self._full_path(path))
+
+    def list_objects(self, prefix: str) -> list:
+        # Walk the local filesystem under the prefix directory; return
+        # storage-relative paths (forward-slash) so callers can treat them
+        # interchangeably with MinIO keys.
+        normalized_prefix = self._normalize_path(prefix) if prefix else ""
+        full_prefix = os.path.join(self.base_dir, normalized_prefix) if normalized_prefix else self.base_dir
+        keys = []
+        if not os.path.isdir(full_prefix):
+            return keys
+        for root, _dirs, files in os.walk(full_prefix):
+            for fname in files:
+                full_path = os.path.join(root, fname)
+                rel = os.path.relpath(full_path, self.base_dir).replace("\\", "/")
+                keys.append(rel)
+        keys.sort()
+        return keys
 
 
 def create_storage_client(backend: Optional[str] = None) -> StorageClient:
