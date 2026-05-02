@@ -176,5 +176,7 @@ tests3/.state
 tests3/.state-lite
 tests3/.state-compose
 tests3/.state-helm
+# Suffixed snapshots from teardown / iteration captures contain the same credentials.
+tests3/.state-*
 
 tests3/.current-stage
