@@ -95,7 +95,12 @@ export async function startZoomRichObservation(page: Page): Promise<void> {
       }
     }
     function getRMS(entry: { node: AnalyserNode, buffer: Float32Array }): number {
-      entry.node.getFloatTimeDomainData(entry.buffer);
+      // v0.10.5.3 fix: TypeScript 5.7+ tightened Float32Array generic to
+      // distinguish ArrayBuffer from SharedArrayBuffer. `new Float32Array(N)`
+      // returns Float32Array<ArrayBufferLike>; getFloatTimeDomainData expects
+      // Float32Array<ArrayBuffer>. They're identical at runtime — cast is
+      // safe because buffer was created with `new Float32Array(fftSize)`.
+      entry.node.getFloatTimeDomainData(entry.buffer as Float32Array<ArrayBuffer>);
       let sum = 0;
       for (let i = 0; i < entry.buffer.length; i++) sum += entry.buffer[i] * entry.buffer[i];
       return Math.sqrt(sum / entry.buffer.length);
