@@ -224,11 +224,21 @@ def extract_native_id_and_pass(platform: str, url: str) -> tuple[str, Optional[s
         passcode = (qs.get("p") or [None])[0]
         return nid, passcode
     if platform == "zoom_web":
+        # Path forms:
+        #   /j/<id>              (zoom.us/j/...)
+        #   /wc/<id>/start       (app.zoom.us/wc/<id>/start)
+        #   /wc/join/<id>        (alternative wc form)
         nid = parts[-1] if parts else url
         if "j" in parts:
             i = parts.index("j")
             if i + 1 < len(parts):
                 nid = parts[i + 1]
+        elif "wc" in parts:
+            i = parts.index("wc")
+            for j in range(i + 1, len(parts)):
+                if parts[j].isdigit():
+                    nid = parts[j]
+                    break
         passcode = (qs.get("pwd") or [None])[0]
         return nid, passcode
     return url, None
@@ -239,15 +249,33 @@ def extract_native_id(platform: str, url: str) -> str:
     return extract_native_id_and_pass(platform, url)[0]
 
 
-def get_meeting(gateway: str, token: str, platform: str, native_id: str) -> Optional[dict]:
-    plat = PLATFORM_NATIVE_KEY[platform]
+def get_meeting(
+    gateway: str, token: str, platform: str, native_id: str,
+    internal_id: Optional[int] = None,
+) -> Optional[dict]:
+    """Fetch meeting state. Prefers GET /meetings/{internal_id} when known.
+
+    The /meetings/{platform}/{native_id} path supports only PATCH/DELETE —
+    so we route through the internal id, which we capture from the
+    dispatch response.
+    """
+    if internal_id is not None:
+        try:
+            r = http("GET", f"{gateway}/meetings/{internal_id}", token=token, timeout=15)
+            return r if isinstance(r, dict) else None
+        except HttpError as e:
+            if e.status == 404:
+                return None
+            raise
+    # fallback: list + filter by native_id
     try:
-        r = http("GET", f"{gateway}/meetings/{plat}/{native_id}", token=token, timeout=15)
-        return r if isinstance(r, dict) else None
-    except HttpError as e:
-        if e.status == 404:
-            return None
-        raise
+        items = list_meetings(gateway, token, limit=20)
+        for m in items:
+            if m.get("native_meeting_id") == native_id:
+                return m
+        return None
+    except HttpError:
+        return None
 
 
 def list_meetings(gateway: str, token: str, limit: int = 5) -> list[dict]:
@@ -348,9 +376,12 @@ class Sample:
     rss_bytes: Optional[int] = None
 
 
-def sample_meeting(gateway: str, token: str, platform: str, native_id: str) -> Sample:
+def sample_meeting(
+    gateway: str, token: str, platform: str, native_id: str,
+    internal_id: Optional[int] = None,
+) -> Sample:
     s = Sample(t=time.time())
-    m = get_meeting(gateway, token, platform, native_id)
+    m = get_meeting(gateway, token, platform, native_id, internal_id=internal_id)
     if m:
         s.status = m.get("status") or m.get("meeting_status")
         data = m.get("data") or {}
@@ -480,11 +511,25 @@ def verify_recording(
             if url:
                 presigned_url = url
                 p = urllib.parse.urlparse(url).path
-                if p.endswith("/audio/master.webm") or p.endswith("/audio/master.wav"):
-                    passed(report, "DOWNLOAD_URL_POINTS_AT_MASTER", actual=p)
+                # Two valid forms:
+                # 1. helm: presigned MinIO URL with .../audio/master.{webm|wav}
+                # 2. lite/compose: gateway-proxy /recordings/<rid>/media/<mfid>/raw
+                #    (which streams the media_file's storage_path — already
+                #    certified by STORAGE_PATH_AT_MASTER above)
+                ends_at_master = (
+                    p.endswith("/audio/master.webm") or p.endswith("/audio/master.wav")
+                )
+                is_raw_proxy = p.endswith("/raw") and "/recordings/" in p
+                if ends_at_master:
+                    passed(report, "DOWNLOAD_URL_POINTS_AT_MASTER",
+                           f"presigned MinIO at master: {p}", actual=p)
+                elif is_raw_proxy and sp.endswith(("/master.webm", "/master.wav")):
+                    passed(report, "DOWNLOAD_URL_POINTS_AT_MASTER",
+                           f"gateway /raw proxy backed by master storage_path", actual=p)
                 else:
                     failed(report, "DOWNLOAD_URL_POINTS_AT_MASTER",
-                           f"download url path does not point at master: {p}", actual=p)
+                           f"url does not point at master and storage_path is not master: {p}",
+                           actual=p)
             else:
                 skipped(report, "DOWNLOAD_URL_POINTS_AT_MASTER", "no url in response")
         except HttpError as e:
@@ -1029,7 +1074,8 @@ def main() -> int:
     deadline = time.time() + args.admit_timeout
     admitted = False
     while time.time() < deadline:
-        m = get_meeting(gateway, token, args.platform, report.native_id)
+        m = get_meeting(gateway, token, args.platform, report.native_id,
+                        internal_id=report.meeting_internal_id)
         st = m.get("status") if m else None
         if st in ("active", "completed", "failed"):
             log(f"  admitted (status={st})")
@@ -1050,7 +1096,8 @@ def main() -> int:
     log(f"recording {args.duration}s — sampling state every 10s")
     monitor_until = time.time() + args.duration
     while time.time() < monitor_until:
-        s = sample_meeting(gateway, token, args.platform, report.native_id)
+        s = sample_meeting(gateway, token, args.platform, report.native_id,
+                           internal_id=report.meeting_internal_id)
         s.rss_bytes = sample_bot_rss(args.deployment, report.native_id)
         report.samples.append({
             "t": s.t,
@@ -1078,11 +1125,17 @@ def main() -> int:
         else:
             failed(report, "BOT_SIGKILL_OK", "could not locate or kill bot")
 
-    # 5. wait for callback
+    # 5. wait for callback + Pack U.5 finalizer to land its final write.
+    # Why poll twice: status=completed flips inside bot_exit_callback BEFORE
+    # post_meeting.run_all_tasks Task 0 (finalize_in_progress_recordings) runs.
+    # That Task 0 transiently overwrites finalized_by → post_meeting_reconciler;
+    # the canonical Pack U.5 path re-asserts via callback retries / idle_loop.
+    # Querying between those writes returns a stale post_meeting_reconciler view.
     deadline = time.time() + args.callback_timeout
     final_meeting = None
     while time.time() < deadline:
-        m = get_meeting(gateway, token, args.platform, report.native_id)
+        m = get_meeting(gateway, token, args.platform, report.native_id,
+                        internal_id=report.meeting_internal_id)
         st = m.get("status") if m else None
         if st in ("completed", "failed"):
             final_meeting = m
@@ -1096,6 +1149,24 @@ def main() -> int:
         return 1
     passed(report, "CALLBACK_TERMINAL_REACHED",
            f"status={final_meeting.get('status')} after {int(args.callback_timeout)}s budget")
+
+    # Stabilization wait: poll for finalized_by=recording_finalizer.master
+    # for up to 60s. Falls through with whatever we have if it doesn't stabilize.
+    stab_deadline = time.time() + 60
+    while time.time() < stab_deadline:
+        recs = (final_meeting.get("data") or {}).get("recordings") or []
+        if recs:
+            mfs = recs[0].get("media_files") or []
+            audio = next((mf for mf in mfs if mf.get("type") == "audio"), mfs[0] if mfs else None)
+            if audio and audio.get("finalized_by") == "recording_finalizer.master" \
+                    and (audio.get("storage_path") or "").endswith(("/master.webm", "/master.wav")):
+                log(f"  stabilized: finalized_by=recording_finalizer.master after {int(stab_deadline - time.time())}s remaining")
+                break
+        time.sleep(5)
+        m2 = get_meeting(gateway, token, args.platform, report.native_id,
+                         internal_id=report.meeting_internal_id)
+        if m2:
+            final_meeting = m2
 
     # 6. verify recording-side assertions
     verify_recording(report, gateway, token, final_meeting)
