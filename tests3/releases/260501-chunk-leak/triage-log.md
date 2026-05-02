@@ -138,3 +138,84 @@ Two failures resurfaced (same classes as first-pass triage):
 
 Stage transition: `triage → develop` invoked with reason "fix #1 chart-zero-surge stale registry entry; #2 accept gap per prior directive".
 
+---
+
+## THIRD-PASS TRIAGE (2026-05-02 — audit found CRITICAL after green gate)
+
+After iter-3 validate landed GREEN and stage transitioned to `human`, the
+project owner directed running an informal audit (precursor to formal
+audit-stage landing in v0.10.6 — scaffolds added in this same release as
+`tests3/stages/08-audit.md` + `tests3/audit-categories.md`).
+
+**Stage transition:** `human → triage` triggered by audit CRITICAL finding.
+This is the audit-stage proposal working as designed: validate's binary
+test-pass is necessary but not sufficient; audit catches architectural /
+security / discipline gaps the test matrix can't.
+
+### `services/api-gateway/main.py:2057-2071` [CRITICAL — security regression]
+
+**status:** new code in this release introduces an unauthenticated public
+proxy to the meeting-api `/bots/internal/callback/*` endpoint family.
+
+**bound check:** none — this is exactly the audit-stage gap; no test
+catches "new public route added without auth gate".
+
+**symptom:** quote from informal audit:
+> New public proxy `/bots/internal/callback/*` with `require_auth=False`
+> and NO `VEXA_ENV != production` gate. Companion `/bots/internal/test/*`
+> route DOES gate on `_PACK_X_TEST_ROUTES_ENABLED` — asymmetric. Pre-release
+> these callbacks were docker-network-only. Anyone with a session_uid
+> (UUIDv4) can drive arbitrary meeting state transitions in production.
+
+**root cause:** the synthetic-rig Pack X added two adjacent api-gateway
+proxy routes — `/bots/internal/test/*` and `/bots/internal/callback/*`.
+The test route was correctly env-gated (404s in prod). The callback route's
+docstring acknowledges it's for the synthetic rig ("Lets the synthetic
+test rig drive callback orderings via the same endpoints the real bot
+uses") but the env gate was omitted. Production exposure: anyone who can
+guess or scrape a session_uid (UUIDv4 — not authentication) can POST to
+the callback endpoint and drive meeting state transitions (e.g. force
+status=completed prematurely, inject failure_stage, or trigger webhook
+deliveries).
+
+**proposed fix:** wrap `synthetic_callback_proxy` with the SAME
+`_PACK_X_TEST_ROUTES_ENABLED` check the test proxy uses (one line). This
+mirrors the proven pattern + makes the discipline symmetric. Update the
+docstring to be explicit that the route is synthetic-rig-only and gated
+on the env var. Same approach the audit found: "Wrap with the same
+`_PACK_X_TEST_ROUTES_ENABLED` check OR add `X-Bot-Auth: $BOT_CALLBACK_TOKEN`
+shared secret. Decide whether public bot callbacks are intended; document
+explicitly."
+
+**touched commits:** Pack X (whichever commit added the synthetic-rig
+proxy routes; 2057-2071 is in this release's diff).
+
+<!-- human directive: -->
+fix this first: yes
+proposed resolution: env gate (`_PACK_X_TEST_ROUTES_ENABLED`) — same
+as adjacent test proxy. Update docstring.
+
+### Pre-positives — audit categories with no findings
+
+The audit explicitly verified zero findings in:
+- SQL injection (no f-string in execute() in new diffs)
+- Hardcoded secrets / tokens in YAML / CI / code
+- CORS allow-origin: * or missing CORS config
+- Exit-code masking — all new shell scripts have `set -euo pipefail`
+- Network calls without timeout (httpx 30s/5s, Redis socket_timeout=10)
+- Unbounded production data structures (chunks=10, log buffer=200,
+  stream=10000, JSONB write=50KB — caps verified)
+- Async paths with sync I/O blocking
+- Race-condition workarounds with sleep() (production code uses asyncio.wait_for)
+- Hand-rolled retry / connection-pool / auth (uses redis-py, helm --atomic, FastAPI auth)
+- print() in services (new bot uses logJSON)
+- TODO/FIXME without rationale
+- Customer real names / emails / internal IPs in OSS files (Option B
+  redaction discipline holds)
+- Test integrity (new tests assert state transitions, no `assert True`
+  padding)
+- Path traversal / SSRF in storage paths
+- Webhook envelope leakage
+
+Stage transition: `triage → develop` to apply the one-line env gate fix.
+

@@ -2060,13 +2060,27 @@ async def synthetic_test_proxy(path: str, request: Request):
     include_in_schema=False,
 )
 async def synthetic_callback_proxy(path: str, request: Request):
-    """Forward bot lifecycle callbacks to meeting-api.
+    """Forward bot lifecycle callbacks to meeting-api — SYNTHETIC RIG ONLY.
 
-    require_auth=False because bot callbacks don't carry user tokens
-    (matches the in-cluster behavior where runtime-api delivers
-    callbacks without auth). Lets the synthetic test rig drive
-    callback orderings via the same endpoints the real bot uses.
+    v0.10.5.3 audit (CRITICAL): this route was previously ungated; in
+    production, anyone with a session_uid (UUIDv4) could POST here and
+    drive arbitrary meeting state transitions via meeting-api's internal
+    callback endpoint (force completion, inject failure_stage, trigger
+    webhook deliveries). Audit finding bounced human → triage → develop.
+    Production exposure was real because session_uids are not authentication.
+
+    Real bot callbacks in production go runtime-api → meeting-api directly
+    (in-cluster, docker-network-only, no auth needed because the network
+    boundary IS the boundary). The api-gateway proxy here exists ONLY for
+    the Pack X synthetic test rig that drives callbacks from outside the
+    cluster. Same env gate as the synthetic_test_proxy route below — both
+    return 404 in production.
+
+    require_auth=False because synthetic-rig callers don't carry user
+    tokens (the rig is its own boundary).
     """
+    if not _PACK_X_TEST_ROUTES_ENABLED:
+        raise HTTPException(status_code=404, detail="Not Found")
     url = f"{MEETING_API_URL}/bots/internal/callback/{path}"
     return await forward_request(app.state.http_client, request.method, url, request, require_auth=False)
 
