@@ -212,10 +212,17 @@ tests:
     features: [infrastructure]
     max_duration_sec: 20
 
-  chart-rolling-update-zero-surge:
+  # v0.10.5.3 Pack H follow-up: chart-rolling-update-zero-surge entry was
+  # superseded by chart-rolling-update-zero-downtime. The old check enforced
+  # maxSurge: 0 (no DB-pool doubling during rolling), but Pack H intentionally
+  # flipped to maxSurge: 1, maxUnavailable: 0 to fix the v0.10.5.2-class outage
+  # (OLD pod killed before NEW Ready → 502s). v0.10.5 Pack C.x already shrunk
+  # per-pod DB pool 4×, so 2× footprint during rolling is well under cap.
+  # See registry.yaml HELM_ROLLING_UPDATE_ZERO_DOWNTIME for full rationale.
+  chart-rolling-update-zero-downtime:
     tier: cheap
     runs_in: [helm]
-    script: tests/chart-rolling-update-zero-surge.sh
+    script: tests/chart-rolling-update-zero-downtime.sh
     features: [infrastructure]
     max_duration_sec: 20
 

@@ -103,3 +103,38 @@ proposed resolution: A | B | other:
 Then human can ship without the develop loop.
 
 **Awaiting human directive on each failure (`fix this first:` line).**
+
+---
+
+## SECOND-PASS TRIAGE (2026-05-02 — after fresh re-provision)
+
+User destroyed test infra; re-provisioned + redeployed all 3 modes from
+commit `05287f2` (post-Pack-D-3 revert). Validate matrix RED again.
+
+Two failures resurfaced (same classes as first-pass triage):
+
+### `chart-rolling-update-zero-surge` [REGRESSION-OF-CLEANUP]
+- **status:** fail in helm; 0/1
+- **bound check:** HELM_ROLLING_UPDATE_ZERO_SURGE
+- **symptom:** `admin-api:missing-maxSurge-0 ...` (5 services)
+- **root cause:** in first-pass cleanup I dropped `tests/chart-rolling-update-zero-surge.sh` + dropped the entry from `registry.yaml`, but missed `tests3/test-registry.yaml:215-220` which still references the deleted script. Matrix runner reads test-registry.yaml, finds an entry pointing at a missing script, marks it failed.
+- **NOT a code regression.** Pack H's `maxSurge: 1, maxUnavailable: 0` strategy is correct; the new `chart-rolling-update-zero-downtime.sh` test passes against it.
+- **fix:** drop the stale entry from `tests3/test-registry.yaml`.
+
+### `status_completed` [GAP — RECURRING]
+- **status:** fail in helm mode (weight 10, gates bot-lifecycle at 88% < 90%)
+- **bound check:** `status_completed` in containers.sh
+- **symptom:** `status=stopping reason= (expected completed/gone) after ~24x5s poll`
+- **root cause:** synthetic-bot test polls 120s; this cycle's helm pod had 4 startup-DNS-race crashes (`socket.gaierror: postgres unreachable`). Bot exit callback fires (logs show 10+ "classified as completed"), but status update may not have applied within the 120s window when meeting-api was restarting.
+- **Pack C / Pack J classifier code is correct** — empirically validated last cycle (meeting 10 ran 36.4 min, exited status=completed). No meetings stuck in DB right now.
+- **fix:** accept as recurring gap (same as prior directive #2). File a gh-issue for v0.10.5.4 to extend the test poll budget OR gate test on meeting-api readiness probe.
+
+### Resolution (project-owner pre-existing pattern: #1 fix, #2 accept)
+
+| DoD | Class | Action |
+|---|---|---|
+| chart-rolling-update-zero-surge | REGRESSION-OF-CLEANUP | **FIX** — drop test-registry.yaml entry |
+| status_completed | GAP (recurring) | **ACCEPT** — file v0.10.5.4 followup for fixture |
+
+Stage transition: `triage → develop` invoked with reason "fix #1 chart-zero-surge stale registry entry; #2 accept gap per prior directive".
+
