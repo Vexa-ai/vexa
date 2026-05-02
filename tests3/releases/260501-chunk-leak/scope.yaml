@@ -536,4 +536,35 @@ scope:
       do: "After a normal completed meeting, manually re-fire bot_exit_callback (curl with X-Pack-X-Test if env-gated) — finalizer should be idempotent."
       expect: "Second invocation logs 'master already exists, skipping'; storage_path unchanged; no duplicate writes."
 
+# ── #304 — Dashboard /meetings list duplicate rows ────────────────────
+- id: dashboard-meetings-pagination-duplicates
+  source: gh-issue
+  ref: Vexa-ai/vexa#304
+  problem: |
+    Dashboard /meetings page shows duplicate rows (3-6× per meeting) when
+    redacted shells (`data.redacted=true` or `platform_specific_id==null`
+    rows from the DELETE-with-PII-scrub flow) are present in the user's
+    history. Backend has exactly one row per native_meeting_id; the
+    dashboard's pagination math is wrong.
+  hypothesis: |
+    services/dashboard/src/stores/meetings-store.ts:131 passes
+    `offset: meetings.length` to the next page request, where `meetings`
+    is the post-filter array (after isHiddenDeletedMeeting drops
+    redacted shells). Each filtered shell makes the next request ask
+    for an offset N positions earlier than where the previous page
+    actually ended → API returns N rows already shown.
+
+    Fix: track an explicit `_offset` in the store that advances by the
+    unfiltered API page size (50), not by `meetings.length`. Plus dedupe
+    the merged list by meeting.id on each fetchMoreMeetings call as
+    belt-and-suspenders against any future filter / WS-update race.
+  fix_commits: []
+  proves:
+    - {check: DASHBOARD_MEETINGS_PAGINATION_TRACKS_UNFILTERED_OFFSET, modes: [lite, compose, helm]}
+  required_modes: [lite, compose, helm]
+  human_verify:
+    - mode: helm
+      do: "Open dashboard /meetings on an account with redacted-shell history (or generate via DELETE /meetings/{platform}/{native_meeting_id} on a few finalized meetings, then refresh). Scroll the list."
+      expect: "No duplicate rows. Each meeting appears at most once regardless of how many redacted shells exist in the user's history."
+
 # ── End of scope ──────────────────────────────────────────────────────

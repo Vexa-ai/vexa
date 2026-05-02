@@ -188,6 +188,41 @@ else
   step_fail DASHBOARD_AUDIO_STREAMS_FROM_BUCKET "dashboard api.ts has no /download or getRecordingAudioStreamUrl"
 fi
 
+# ── DASHBOARD_MEETINGS_PAGINATION_TRACKS_UNFILTERED_OFFSET ────────
+# GH #304 fix: meetings-store.ts paginates by explicit _offset cursor
+# (advances by unfiltered API page size 50), NOT by post-filter
+# meetings.length. Plus dedupe by meeting.id when merging pages.
+ms="$ROOT_DIR/services/dashboard/src/stores/meetings-store.ts"
+if [ ! -f "$ms" ]; then
+  step_fail DASHBOARD_MEETINGS_PAGINATION_TRACKS_UNFILTERED_OFFSET "meetings-store.ts missing"
+else
+  pag_bad=""
+  # Must declare _offset in state
+  if ! grep -qE '_offset\s*:\s*number|_offset\s*:\s*0' "$ms"; then
+    pag_bad+=" no-_offset-declared"
+  fi
+  # fetchMoreMeetings must read _offset from store (NOT meetings.length)
+  if ! grep -qE 'offset:\s*_offset' "$ms"; then
+    pag_bad+=" no-_offset-cursor-in-fetchMore"
+  fi
+  # Must NOT use offset: meetings.length (pre-fix shape) anywhere
+  # (strip comments first — the // comment about NOT using it is OK).
+  stripped_ms=$(sed 's://.*$::' "$ms")
+  if echo "$stripped_ms" | grep -qE 'offset:\s*meetings\.length'; then
+    pag_bad+=" old-offset-meetings.length-still-present"
+  fi
+  # Belt-and-suspenders dedupe: must check seen set / .has(m.id) on merge
+  if ! grep -qE 'seen.*has|new Set\(meetings.*id|filter.*seen' "$ms"; then
+    pag_bad+=" no-dedupe-on-merge"
+  fi
+  if [ -z "$pag_bad" ]; then
+    step_pass DASHBOARD_MEETINGS_PAGINATION_TRACKS_UNFILTERED_OFFSET \
+      "meetings-store.ts uses explicit _offset cursor + dedupe-by-meeting.id (closes #304 duplicate-rows class)"
+  else
+    step_fail DASHBOARD_MEETINGS_PAGINATION_TRACKS_UNFILTERED_OFFSET "missing/regressed:$pag_bad"
+  fi
+fi
+
 echo ""
 echo "  ──────────────────────────────────────────────"
 test_end

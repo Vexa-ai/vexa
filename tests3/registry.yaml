@@ -2098,6 +2098,19 @@ DOWNLOAD_RETURNS_PRESIGNED_URL_TO_MASTER:
   - helm
   state: stateful
   max_duration_sec: 60
+DASHBOARD_MEETINGS_PAGINATION_TRACKS_UNFILTERED_OFFSET:
+  proves: "dashboard meetings-store.ts paginates by an explicit _offset cursor that advances by the unfiltered API page size (50), NOT by post-filter meetings.length; next-page merge dedupes by meeting.id"
+  symptom: "GH issue #304 — /meetings list shows duplicate rows (3-6×) when redacted shells (`data.redacted=true` or `platform_specific_id==null`) are filtered out client-side, because next page request asks for offset N positions before where the previous page actually ended"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-static-greps.sh
+  step: dashboard_meetings_pagination_offset
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
 DASHBOARD_AUDIO_STREAMS_FROM_BUCKET:
   proves: "dashboard ui reads /api/vexa/recordings/{id}/media/{file_id}/download (NOT /raw); response is a presigned URL; <audio src> binds to it; native HTTP Range fires on user seek"
   symptom: "dashboard pre-downloads the full file before play; user perceives long loading delay; bandwidth cost amplified"

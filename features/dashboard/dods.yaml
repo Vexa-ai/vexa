@@ -184,3 +184,17 @@ dods:
     - lite
     - compose
     - helm
+
+# GH #304 — meetings-store.ts paginates by explicit _offset cursor
+# (advances by unfiltered API page size, NOT by post-filter
+# meetings.length); plus dedupes by meeting.id on merge. Closes the
+# duplicate-rows-when-redacted-shells-present class.
+- id: dashboard-meetings-pagination-tracks-unfiltered-offset
+  label: "dashboard meetings-store.ts paginates by explicit _offset cursor + dedupes by meeting.id (closes GH #304 — duplicate rows when redacted shells filtered out)"
+  weight: 10
+  evidence:
+    check: DASHBOARD_MEETINGS_PAGINATION_TRACKS_UNFILTERED_OFFSET
+    modes:
+    - lite
+    - compose
+    - helm
