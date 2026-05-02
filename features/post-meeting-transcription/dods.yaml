@@ -1,6 +1,71 @@
-# Intentionally un-gated: legacy feature carries no machine-readable
-# DoDs yet. Populate `dods:` before this feature's next release or
-# its expected behavior changes.
+# v0.10.6 Pack U — post-meeting transcription becomes crash-safe.
+#
+# Pre-Pack-U the post-meeting transcribe pipeline was fundamentally not
+# chunk-aware: it read media_file.storage_path as a single file path.
+# That path historically pointed at whichever bot-side artifact ended
+# up at chunk_seq=0 — usually the bot's master upload if graceful exit,
+# the last chunk if crashed. Either way: broken when the bot crashed,
+# and broken under Pack M (master shrunk to ~270KB tail fragment).
+#
+# Pack U makes media_file.storage_path always point at server-built
+# master.{webm|wav}, so deferred transcribe works regardless of how the
+# bot exited. No code change in the transcribe handler — only the data
+# it reads improves. Gate is set conservatively (60%) for the v0.10.6
+# release; subsequent cycles can ratchet up as the runtime smokes
+# graduate from operator-driven to automated.
+
 gate:
-  confidence_min: 0    # not enforced until dods: is populated
-dods: []   # intentionally un-gated, reason: DoDs not yet authored
+  confidence_min: 60
+
+dods:
+- id: server-side-master-finalizer-exists
+  label: "services/meeting-api/meeting_api/recording_finalizer.py defines async finalize_recording_master(meeting_id, db) — single server-side function that builds master.{webm|wav} from chunks in MinIO"
+  weight: 15
+  evidence:
+    check: SERVER_SIDE_MASTER_FINALIZER_EXISTS
+    modes:
+    - lite
+    - compose
+    - helm
+
+- id: bot-exit-callback-invokes-finalizer
+  label: "callbacks.py:bot_exit_callback awaits finalize_recording_master in all 3 exit branches (graceful, was-stopping, else/crash) BEFORE the corresponding update_meeting_status — closes the race where /transcribe could read stale storage_path"
+  weight: 15
+  evidence:
+    check: BOT_EXIT_CALLBACK_INVOKES_FINALIZER
+    modes:
+    - lite
+
+- id: finalizer-before-status-flip
+  label: "in bot_exit_callback every `await finalize_recording_master` line precedes the corresponding `await update_meeting_status` line — race-window check"
+  weight: 10
+  evidence:
+    check: FINALIZER_BEFORE_STATUS_FLIP
+    modes:
+    - lite
+
+- id: finalizer-is-idempotent
+  label: "second invocation of finalize_recording_master for the same recording is a no-op (HEAD-checks for existing master) — safe under idle_loop callback retry"
+  weight: 5
+  evidence:
+    check: FINALIZER_IS_IDEMPOTENT
+    modes:
+    - compose
+
+- id: master-at-storage-path
+  label: "after a normal-completion meeting, media_file.storage_path points at /audio/master.{webm|wav} (NOT at /audio/000000.{ext} which would mean the finalizer never ran)"
+  weight: 15
+  evidence:
+    check: MASTER_AT_STORAGE_PATH
+    modes:
+    - compose
+    - helm
+
+- id: deferred-transcribe-uses-master
+  label: "POST /meetings/{id}/transcribe on a SIGKILL'd bot's recording succeeds with segments — proves deferred transcription works on crashed-bot recordings (didn't pre-Pack-U)"
+  weight: 15
+  evidence:
+    check: DEFERRED_TRANSCRIBE_USES_MASTER
+    modes:
+    - compose
+    - helm

@@ -201,3 +201,103 @@ dods:
     - lite
     - compose
     - helm
+
+# ── v0.10.6 Pack U — audio recording unification ────────────────────
+# Pack U structurally fixes the audio playback regression (Pack M's
+# chunk-buffer cap broke bot-side master construction → ~270KB
+# unplayable fragments) AND the long-standing crash-mid-meeting audio
+# loss class. Master is now built server-side at bot_exit_callback;
+# bot-side capture is unified across GMeet/Teams/Zoom Web via
+# services/audio-pipeline.ts. ~2300 LOC of platform duplication deleted.
+
+- id: shared-audio-pipeline-module-exists
+  label: "services/vexa-bot/core/src/services/audio-pipeline.ts exports UnifiedRecordingPipeline + MediaRecorderCapture + PulseAudioCapture — single bot-side capture module driving all 3 platforms"
+  weight: 5
+  evidence:
+    check: SHARED_AUDIO_PIPELINE_MODULE_EXISTS
+    modes:
+    - lite
+    - compose
+    - helm
+
+- id: gmeet-recording-uses-shared-pipeline
+  label: "googlemeet/recording.ts imports UnifiedRecordingPipeline + MediaRecorderCapture from services/audio-pipeline (Pack U.2 — no longer hand-rolls MediaRecorder boilerplate)"
+  weight: 10
+  evidence:
+    check: GMEET_RECORDING_USES_SHARED_PIPELINE
+    modes:
+    - lite
+    - compose
+    - helm
+
+- id: teams-recording-uses-shared-pipeline
+  label: "msteams/recording.ts imports UnifiedRecordingPipeline + MediaRecorderCapture from services/audio-pipeline (Pack U.3)"
+  weight: 10
+  evidence:
+    check: TEAMS_RECORDING_USES_SHARED_PIPELINE
+    modes:
+    - lite
+    - compose
+    - helm
+
+- id: zoom-web-recording-uses-shared-pipeline
+  label: "zoom/web/recording.ts imports UnifiedRecordingPipeline + PulseAudioCapture; chunked-upload model (Pack U.4 — pre-Pack-U: total audio loss on bot crash)"
+  weight: 10
+  evidence:
+    check: ZOOM_WEB_RECORDING_USES_SHARED_PIPELINE
+    modes:
+    - lite
+    - compose
+    - helm
+
+- id: zoom-web-uploads-chunks-periodically
+  label: "PulseAudioCapture in audio-pipeline.ts emits 15s WAV chunks during a Zoom meeting (uploadChunk fires multiple times before finalize)"
+  weight: 10
+  evidence:
+    check: ZOOM_WEB_UPLOADS_CHUNKS_PERIODICALLY
+    modes:
+    - lite
+    - compose
+    - helm
+
+- id: platform-recording-ts-line-budget
+  label: "after Pack U unification, every platform recording.ts is within LOC budget (gmeet ≤ 800, msteams ≤ 1000, zoom/web ≤ 200) — captures the duplication-removal as a static guard"
+  weight: 5
+  evidence:
+    check: PLATFORM_RECORDING_TS_LINE_BUDGET
+    modes:
+    - lite
+
+- id: no-per-platform-master-construction
+  label: "no platform recording.ts retains __vexaSaveRecordingBlob or __vexaRecordedChunks master-blob assembly — master is exclusively server-side"
+  weight: 10
+  evidence:
+    check: NO_PER_PLATFORM_MASTER_CONSTRUCTION
+    modes:
+    - lite
+
+- id: bot-kill-recording-playable-gmeet
+  label: "after SIGKILL'ing a GMeet bot mid-recording, server-side finalize_recording_master builds master.webm from chunks already in MinIO → ffprobe-playable. Crash-safety the bot couldn't provide pre-Pack-U."
+  weight: 15
+  evidence:
+    check: BOT_KILL_RECORDING_PLAYABLE_GMEET
+    modes:
+    - compose
+    - helm
+
+- id: bot-kill-recording-playable-teams
+  label: "Teams equivalent — SIGKILL bot, master built post-callback, ffprobe-playable"
+  weight: 15
+  evidence:
+    check: BOT_KILL_RECORDING_PLAYABLE_TEAMS
+    modes:
+    - compose
+    - helm
+
+- id: bot-kill-recording-playable-zoom
+  label: "Zoom Web equivalent — SIGKILL bot, master.wav built from chunked PulseAudio uploads, ffprobe-playable. Pre-Pack-U Zoom crash = total audio loss; this DoD certifies the recovery."
+  weight: 15
+  evidence:
+    check: BOT_KILL_RECORDING_PLAYABLE_ZOOM
+    modes:
+    - compose
