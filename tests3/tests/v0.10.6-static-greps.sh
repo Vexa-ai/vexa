@@ -188,6 +188,47 @@ else
   step_fail DASHBOARD_AUDIO_STREAMS_FROM_BUCKET "dashboard api.ts has no /download or getRecordingAudioStreamUrl"
 fi
 
+# ── BROWSER_UTILS_INJECTED_BEFORE_PIPELINE_START ──────────────────
+# Pack U.2/U.3 regression guard: ensureBrowserUtils() MUST run BEFORE
+# pipeline.start() in every platform that uses MediaRecorderCapture.
+# The pipeline's startBrowserCapture page.evaluate accesses
+# window.VexaBrowserUtils which is set up by ensureBrowserUtils. Wrong
+# ordering → undefined classes → silent throw → 0 chunks → meeting fails.
+# Captured 2026-05-02 after 3 failed real-meeting tests across helm + lite.
+order_bad=""
+for plat in googlemeet msteams; do
+  pf="$ROOT_DIR/services/vexa-bot/core/src/platforms/$plat/recording.ts"
+  [ ! -f "$pf" ] && continue
+  # Strip single-line `//` comments before grepping for ordering — comment
+  # references to "pipeline.start()" must not count as call sites.
+  stripped_pf=$(sed 's://.*$::' "$pf")
+  ensure_line=$(echo "$stripped_pf" | grep -n 'ensureBrowserUtils(page' | head -1 | cut -d: -f1)
+  # Match the OUTER pipeline.start() call (the Node-side
+  # `await pipeline.start();` after `pipeline = new UnifiedRecordingPipeline(...)`).
+  # The browser-side `await pipeline.start();` inside startBrowserCapture is
+  # for the BrowserMediaRecorderPipeline — different object, on the page side.
+  # Both should appear AFTER ensureBrowserUtils, so taking the first match
+  # is sufficient as a guard.
+  start_line=$(echo "$stripped_pf" | grep -n 'await pipeline\.start()' | head -1 | cut -d: -f1)
+  if [ -z "$ensure_line" ]; then
+    order_bad+=" $plat:no-ensureBrowserUtils"
+    continue
+  fi
+  if [ -z "$start_line" ]; then
+    order_bad+=" $plat:no-pipeline.start"
+    continue
+  fi
+  if [ "$ensure_line" -gt "$start_line" ]; then
+    order_bad+=" $plat:ensure-after-start(${ensure_line}>${start_line})"
+  fi
+done
+if [ -z "$order_bad" ]; then
+  step_pass BROWSER_UTILS_INJECTED_BEFORE_PIPELINE_START \
+    "ensureBrowserUtils precedes pipeline.start() in every MediaRecorder platform"
+else
+  step_fail BROWSER_UTILS_INJECTED_BEFORE_PIPELINE_START "ordering violations:$order_bad"
+fi
+
 # ── DASHBOARD_MEETINGS_PAGINATION_TRACKS_UNFILTERED_OFFSET ────────
 # GH #304 fix: meetings-store.ts paginates by explicit _offset cursor
 # (advances by unfiltered API page size 50), NOT by post-filter

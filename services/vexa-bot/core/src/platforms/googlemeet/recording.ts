@@ -49,6 +49,30 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
       log("[Google Recording] recordingUploadUrl or token missing — skipping audio capture");
     } else {
       recordingService = new RecordingService(botConfig.meeting_id, sessionUid);
+
+      // CRITICAL: inject browser-utils bundle BEFORE constructing the
+      // MediaRecorderCapture pipeline. The pipeline's startBrowserCapture
+      // callback runs page.evaluate which accesses
+      // (window as any).VexaBrowserUtils.BrowserAudioService /
+      // BrowserMediaRecorderPipeline. If ensureBrowserUtils hasn't run
+      // yet, those classes are undefined → page.evaluate throws inside
+      // the async callback, the error is silently absorbed by the
+      // promise chain, and the bot runs to completion having captured
+      // ZERO audio chunks (#regression: Pack U.2 ordering bug; classifier
+      // then fires STOPPED_WITH_NO_AUDIO → meeting.status=failed).
+      // The ensureBrowserUtils call MUST stay before pipeline.start().
+      await ensureBrowserUtils(page, require('path').join(__dirname, '../../browser-utils.global.js'));
+
+      // Expose the recording-started callback BEFORE pipeline starts,
+      // since the browser-side BrowserMediaRecorderPipeline calls it as
+      // soon as MediaRecorder.onstart fires.
+      await page.exposeFunction("__vexaRecordingStarted", () => {
+        if (publisher) {
+          publisher.resetSessionStart();
+          log(`[Recording] Session start re-aligned to MediaRecorder start: ${new Date(publisher.sessionStartMs).toISOString()}`);
+        }
+      });
+
       const audioCapture = new MediaRecorderCapture({
         page,
         botConfig,
@@ -148,18 +172,10 @@ export async function startGoogleRecording(page: Page, botConfig: BotConfig): Pr
     }
   } else {
     log("[Google Recording] Audio capture disabled by config.");
+    // Even with capture disabled, speaker detection still needs the
+    // browser-utils bundle for DOM observation. Ensure it's loaded.
+    await ensureBrowserUtils(page, require('path').join(__dirname, '../../browser-utils.global.js'));
   }
-
-  // Expose callback so the browser can signal when MediaRecorder actually starts.
-  // This re-aligns sessionStartMs with the recording, fixing click-to-seek offset.
-  await page.exposeFunction("__vexaRecordingStarted", () => {
-    if (publisher) {
-      publisher.resetSessionStart();
-      log(`[Recording] Session start re-aligned to MediaRecorder start: ${new Date(publisher.sessionStartMs).toISOString()}`);
-    }
-  });
-
-  await ensureBrowserUtils(page, require('path').join(__dirname, '../../browser-utils.global.js'));
 
   // Speaker detection + meeting monitoring: this is the platform-specific DOM
   // logic that stays. It's structurally independent of audio capture (the

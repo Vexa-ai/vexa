@@ -301,3 +301,13 @@ dods:
     check: BOT_KILL_RECORDING_PLAYABLE_ZOOM
     modes:
     - compose
+
+- id: browser-utils-injected-before-pipeline-start
+  label: "every platform recording.ts that uses MediaRecorderCapture calls ensureBrowserUtils() BEFORE pipeline.start() — Pack U.2/U.3 regression guard. Wrong ordering produced 0 chunks every meeting (post-Pack-U gate green, real-meeting tests on helm/lite all failed STOPPED_WITH_NO_AUDIO until 2026-05-02 when ordering was fixed)."
+  weight: 15
+  evidence:
+    check: BROWSER_UTILS_INJECTED_BEFORE_PIPELINE_START
+    modes:
+    - lite
+    - compose
+    - helm

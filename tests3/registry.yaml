@@ -2098,6 +2098,19 @@ DOWNLOAD_RETURNS_PRESIGNED_URL_TO_MASTER:
   - helm
   state: stateful
   max_duration_sec: 60
+BROWSER_UTILS_INJECTED_BEFORE_PIPELINE_START:
+  proves: "every platform recording.ts that uses MediaRecorderCapture calls ensureBrowserUtils() BEFORE pipeline.start() — guards Pack U.2/U.3 regression where wrong ordering caused the pipeline's page.evaluate to access an undefined window.VexaBrowserUtils, throw silently, and produce 0 audio chunks (every real meeting then classified STOPPED_WITH_NO_AUDIO → status=failed)"
+  symptom: "meetings reach status=active for ~3 min then go status=failed with chunks=0; bot logs show 'Browser utils available:' (empty list); recordings field absent"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-static-greps.sh
+  step: browser_utils_before_pipeline
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
 DASHBOARD_MEETINGS_PAGINATION_TRACKS_UNFILTERED_OFFSET:
   proves: "dashboard meetings-store.ts paginates by an explicit _offset cursor that advances by the unfiltered API page size (50), NOT by post-filter meetings.length; next-page merge dedupes by meeting.id"
   symptom: "GH issue #304 — /meetings list shows duplicate rows (3-6×) when redacted shells (`data.redacted=true` or `platform_specific_id==null`) are filtered out client-side, because next page request asks for offset N positions before where the previous page actually ended"

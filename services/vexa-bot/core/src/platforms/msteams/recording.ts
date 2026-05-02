@@ -55,6 +55,27 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
       log("[Teams Recording] recordingUploadUrl or token missing — skipping audio capture");
     } else {
       recordingService = new RecordingService(botConfig.meeting_id, sessionUid);
+
+      // CRITICAL: inject browser-utils bundle BEFORE constructing the
+      // MediaRecorderCapture pipeline. The pipeline's startBrowserCapture
+      // callback runs page.evaluate which accesses window.VexaBrowserUtils.
+      // If ensureBrowserUtils hasn't run yet, those classes are undefined →
+      // page.evaluate throws inside the async callback, the error is silently
+      // absorbed, and the bot runs to completion having captured ZERO audio
+      // chunks (#regression: Pack U.3 ordering bug; classifier then fires
+      // STOPPED_WITH_NO_AUDIO → meeting.status=failed).
+      // Mirrors the GMeet fix in googlemeet/recording.ts.
+      await ensureBrowserUtils(page, require('path').join(__dirname, '../../browser-utils.global.js'));
+
+      // Expose the recording-started callback BEFORE pipeline starts —
+      // BrowserMediaRecorderPipeline calls it as soon as MediaRecorder.onstart fires.
+      await page.exposeFunction("__vexaRecordingStarted", () => {
+        if (publisher) {
+          publisher.resetSessionStart();
+          log(`[Teams Recording] Session start re-aligned to MediaRecorder start: ${new Date(publisher.sessionStartMs).toISOString()}`);
+        }
+      });
+
       const audioCapture = new MediaRecorderCapture({
         page,
         botConfig,
@@ -149,18 +170,9 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
     }
   } else {
     log("[Teams Recording] Audio capture disabled by config.");
+    // Speaker detection still needs the browser-utils bundle for DOM observation.
+    await ensureBrowserUtils(page, require('path').join(__dirname, '../../browser-utils.global.js'));
   }
-
-  // Expose callback so the browser can signal when MediaRecorder actually starts.
-  // This re-aligns sessionStartMs with the recording, fixing click-to-seek offset.
-  await page.exposeFunction("__vexaRecordingStarted", () => {
-    if (publisher) {
-      publisher.resetSessionStart();
-      log(`[Teams Recording] Session start re-aligned to MediaRecorder start: ${new Date(publisher.sessionStartMs).toISOString()}`);
-    }
-  });
-
-  await ensureBrowserUtils(page, require('path').join(__dirname, '../../browser-utils.global.js'));
 
   // Speaker detection + meeting monitoring + caption-driven per-speaker routing:
   // platform-specific DOM logic that stays. It's structurally independent of
