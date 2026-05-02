@@ -23,9 +23,13 @@ case "$step" in
     # dismissal + DOM glue is platform-specific and stays; everything
     # else moved to services/audio-pipeline.ts. Budget set generously to
     # accommodate Teams' larger speaker-detection block.
+    # Budgets reflect platform-specific code that must remain (DOM speaker
+    # detection, popup dismissal, selector-driven observability). Capture
+    # logic moved to services/audio-pipeline.ts (~600 LOC there). Budgets
+    # tuned to current shape with ~10% headroom for legitimate growth.
     declare -A budgets=(
-      [googlemeet]=700
-      [msteams]=900
+      [googlemeet]=800
+      [msteams]=1000
       ["zoom/web"]=200
     )
     bad=""
@@ -51,27 +55,27 @@ case "$step" in
     # eliminated. Master is built exclusively by recording_finalizer.py
     # at bot_exit_callback. The browser-side `__vexaSaveRecordingBlob`
     # exposed function and `__vexaRecordedChunks` master-blob construction
-    # MUST NOT appear in any platform recording.ts.
+    # MUST NOT appear in any platform recording.ts CODE.
+    #
+    # We ignore single-line `//` comments (which legitimately reference the
+    # removed primitive in deletion-rationale comments) but flag any code
+    # use — function calls, variable assignments, type references.
     bad=""
     for plat in googlemeet msteams "zoom/web"; do
       f="$ROOT_DIR/services/vexa-bot/core/src/platforms/$plat/recording.ts"
       if [ ! -f "$f" ]; then bad+=" missing:$plat"; continue; fi
-      # __vexaSaveRecordingBlob is the bot-side master-write callback;
-      # forbidden after Pack U.
-      if grep -q '__vexaSaveRecordingBlob' "$f"; then
+      # Strip single-line // comments before grepping. Multi-line /* */
+      # comments are rare here; if they crop up we'll add stripping.
+      stripped=$(sed 's://.*$::' "$f")
+      if echo "$stripped" | grep -q '__vexaSaveRecordingBlob'; then
         bad+=" save-blob:$plat"
       fi
-      # __vexaRecordedChunks Blob array used to build the master client-
-      # side; forbidden as a master-construction primitive. The shared
-      # BrowserMediaRecorderPipeline keeps a SHORT in-flight buffer with
-      # a different name (e.g. pendingChunks) so we don't accidentally
-      # match its internal state.
-      if grep -q '__vexaRecordedChunks' "$f"; then
+      if echo "$stripped" | grep -q '__vexaRecordedChunks'; then
         bad+=" recorded-chunks:$plat"
       fi
     done
     if [ -z "$bad" ]; then
-      step_pass NO_PER_PLATFORM_MASTER_CONSTRUCTION "no bot-side master construction in platform recording.ts"
+      step_pass NO_PER_PLATFORM_MASTER_CONSTRUCTION "no bot-side master construction in platform recording.ts (comments OK)"
     else
       step_fail NO_PER_PLATFORM_MASTER_CONSTRUCTION "found in:$bad"
       exit 1

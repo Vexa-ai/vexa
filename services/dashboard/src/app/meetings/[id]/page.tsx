@@ -183,36 +183,62 @@ export default function MeetingDetailPage() {
   // Build ordered recording fragments for multi-fragment playback.
   // Each recording has a session_uid, created_at, and media_files with duration.
   // Sort by created_at so fragments play sequentially.
-  const recordingFragments = useMemo((): AudioFragment[] => {
-    // Include recordings that have audio media files, whether completed or in_progress
-    // (in_progress recordings may have snapshot uploads available for playback)
-    const availableRecordings = recordings
-      .filter(r => (r.status === "completed" || r.status === "in_progress") && r.media_files?.some(mf => mf.type === "audio"))
-      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  //
+  // Pack U.8 (v0.10.6, re-applies reverted Pack D-3 — commit a62d658 — on
+  // top of the new master-recording contract from Pack U.5+U.6): each
+  // fragment src is a 1-hour presigned MinIO URL pointing at
+  // <prefix>/master.{webm|wav}. The browser streams directly from MinIO
+  // with native HTTP Range — no in-process proxying through meeting-api.
+  // Pre-fix (v0.10.5.3): the /raw endpoint buffered the whole file in
+  // meeting-api memory before serving (#288). For 24-min meetings @ 10MB
+  // that was ~10s of dead-air on first byte.
+  //
+  // The async fetch happens once per recordings change. While in flight,
+  // recordingFragments is the previous (or empty) array — the AudioPlayer
+  // shows a "Preparing audio…" state.
+  const [recordingFragments, setRecordingFragments] = useState<AudioFragment[]>([]);
+  const [videoSrc, setVideoSrc] = useState<string | null>(null);
 
-    return availableRecordings.map(rec => {
-      const audioMedia = rec.media_files.find(mf => mf.type === "audio")!;
-      return {
-        src: vexaAPI.getRecordingAudioUrl(rec.id, audioMedia.id),
-        duration: audioMedia.duration_seconds || 0,
-        sessionUid: rec.session_uid,
-        createdAt: rec.created_at,
-      };
-    });
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const availableRecordings = recordings
+        .filter(r => (r.status === "completed" || r.status === "in_progress") && r.media_files?.some(mf => mf.type === "audio"))
+        .sort((a, b) => a.created_at.localeCompare(b.created_at));
+      const frags = await Promise.all(availableRecordings.map(async rec => {
+        const audioMedia = rec.media_files.find(mf => mf.type === "audio")!;
+        const src = await vexaAPI.getRecordingAudioStreamUrl(rec.id, audioMedia.id);
+        return {
+          src,
+          duration: audioMedia.duration_seconds || 0,
+          sessionUid: rec.session_uid,
+          createdAt: rec.created_at,
+        } as AudioFragment;
+      }));
+      if (!cancelled) setRecordingFragments(frags);
+    })();
+    return () => { cancelled = true; };
   }, [recordings]);
 
   const hasRecordingAudio = recordingFragments.length > 0;
 
   // Find the first video media file across all recordings for the VideoPlayer.
-  const videoSrc = useMemo(() => {
-    for (const rec of recordings) {
-      if (rec.status !== "completed" && rec.status !== "in_progress") continue;
-      const videoMedia = rec.media_files?.find((mf: { type: string }) => mf.type === "video");
-      if (videoMedia) {
-        return vexaAPI.getRecordingVideoUrl(rec.id, videoMedia.id);
+  // Same Pack U.8 contract as above — presigned URL with /raw fallback.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      for (const rec of recordings) {
+        if (rec.status !== "completed" && rec.status !== "in_progress") continue;
+        const videoMedia = rec.media_files?.find((mf: { type: string }) => mf.type === "video");
+        if (videoMedia) {
+          const src = await vexaAPI.getRecordingVideoStreamUrl(rec.id, videoMedia.id);
+          if (!cancelled) setVideoSrc(src);
+          return;
+        }
       }
-    }
-    return null;
+      if (!cancelled) setVideoSrc(null);
+    })();
+    return () => { cancelled = true; };
   }, [recordings]);
 
   // Derive each session's start time (wall-clock ms) from segment data.
