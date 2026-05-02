@@ -215,6 +215,10 @@ release-iterate:                   ## stage 06 fast variant — scope-filtered t
 	done; wait
 	@$(MAKE) --no-print-directory release-report
 
+hot-iterate:                       ## dev loop — rebuild ONE image, recreate on compose only, run scope tests (~5min vs ~30min)
+	@test -n "$(SERVICE)" || (echo "  ERROR: set SERVICE=<vexa-bot|dashboard|meeting-api|runtime-api|admin-api|api-gateway|mcp|tts-service|vexa-lite>" && exit 2)
+	@bash $(CURDIR)/tests3/lib/hot-iterate.sh "$(SERVICE)" "$(SCOPE)"
+
 release-reset:                     ## stage 6a: wipe stack+volumes on all provisioned modes (keeps VMs/cluster)
 	@test -n "$(SCOPE)" || (echo "  ERROR: set SCOPE" && exit 2)
 	@MODES="$(_SCOPE_MODES)"; \

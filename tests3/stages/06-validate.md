@@ -16,6 +16,30 @@
    - **green** → `lib/stage.py enter human`.
    - **red**   → `lib/stage.py enter triage`.
 
+## Authoritative-only — validate is the slow path
+
+Validate is the AUTHORITATIVE cross-mode gate, not the dev loop. Each
+invocation:
+1. Resets the entire stack on every scope mode (release-reset).
+2. Rebuilds + pushes ALL images that have any code change since last
+   release-build (8+ images: bot, lite, runtime-api, api-gateway,
+   admin-api, mcp, meeting-api, dashboard, tts-service).
+3. Runs the full registry × scope matrix on lite + compose + helm.
+
+Wall-clock cost: ~20-30 min per invocation. Justified for the gate,
+NOT for dev iteration.
+
+**On red → triage → develop, do NOT re-fire `release-validate` for
+each iteration of the fix.** The hot-iterate dev loop in
+`tests3/stages/03-develop.md` (Make target: `make hot-iterate SERVICE=<n>
+[SCOPE=<s>]`) rebuilds ONE image and runs scope-filtered tests on
+compose only — typical inner-loop time <5 min.
+
+When the hot-iterate cycle converges (compose tests pass for the fix),
+THEN run the full authoritative `release-deploy` + `release-validate`
+ONCE to re-enter human stage. That single authoritative run is fresh,
+cross-mode, and gate-grade.
+
 ## Exit
 Gate verdict recorded; stage transitioned to `human` (green) or `triage` (red).
 
