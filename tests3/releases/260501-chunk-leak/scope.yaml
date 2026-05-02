@@ -1,25 +1,60 @@
 release_id: '260501-chunk-leak'
-codename: chunk-leak-and-friends
-public_version: v0.10.5.3
-public_name: "v0.10.5.3 — Chunk-leak fix + observability + chart hardening"
+codename: chunk-leak-and-audio-unification
+public_version: v0.10.6
+public_name: "v0.10.6 — Chunk-leak fix + observability + chart hardening + Pack U audio unification"
 milestone: ""  # to be created on plan approval
 branch: dev
+
+# v0.10.5.3 was retargeted as v0.10.6 mid-cycle (2026-05-02) after R6
+# validate gated GREEN but project-owner human-gate UI verification revealed
+# the audio playback regression (Pack M's chunk-buffer cap broke bot-side
+# master construction; downloaded recordings were ~270KB unplayable
+# fragments). v0.10.5.3 will NOT ship. v0.10.6 supersedes it with:
+#   - All v0.10.5.3 work (Pack M, O, T, C/J, H, X, FM-274, audit fix)
+#   - Pack U: server-side audio concat + bot-side capture unification
+#   - Pack D-3 un-deferred: master.webm enables streaming playback
+# See triage-log.md FOURTH-PASS section for full retargeting rationale.
+
 summary: |
-  **v0.10.5.3 — Surgical bug-fix release with observability + chart-hardening
-  bundling.** Closes the long-duration crash class (14-24 min variant) that
-  v0.10.5.2 did NOT address. Adds the bot-side observability that should have
-  been in place before v0.10.5.2 (Pack G.2 forensic blindness was the root
-  cause of having to guess at root cause). Adds chart-level safety nets that
-  would have prevented the v0.10.5.2 outage. Bakes the "no fallbacks unless
-  explicitly decided" principle into develop + validate stages so this class
-  of bug doesn't recur.
+  **v0.10.6 — Chunk-leak fix + observability + chart hardening + audio
+  unification.** Bundles the v0.10.5.3 surgical bug-fix work (chunk-leak,
+  Pack G.2 observability, Pack H chart safety) with Pack U: a structural
+  fix for the audio recording pipeline that closes both the playback
+  regression (Pack M's master-construction interaction) and the long-
+  standing crash-mid-meeting audio loss class.
+
+  Pack U moves master.webm construction off the bot (where it depended on
+  graceful-leave firing) and onto meeting-api's existing exit-callback
+  reconciler. Same hook that already transitions meeting status from
+  active → completed/failed now also builds the master from chunks.
+  Crash-safe: idle_loop's vanished-container detection drives the same
+  callback path with exit_code=failed. No new sweeper service.
+
+  Pack U also unifies the bot-side recording code: the duplicated
+  MediaRecorder + chunk-buffer logic across googlemeet/recording.ts (1003)
+  + msteams/recording.ts (1490) collapses into a single shared module
+  (`services/audio-pipeline.ts`); per-platform recording.ts shrinks to
+  ~150 LOC of selectors + DOM glue. Zoom Web's parecord wraps in the same
+  AudioCaptureSource interface so all 3 platforms emit chunks via one
+  pipeline. Net: ~2300 LOC deleted, one master-construction algorithm
+  per format (webm + wav), no per-platform shutdown-flush logic to
+  diverge.
+
+  Downstream wins for free:
+  - /download endpoint switches to presigned URL pointing at master.webm
+    → browser fetches directly from MinIO, native HTTP Range support →
+    playback streams from any byte offset, no full-file pre-download.
+  - /meetings/{id}/transcribe (deferred transcription) reads
+    media_file.storage_path which now always points at the master →
+    crash-mid-meeting recordings become transcribable for the first time.
+  - Pack D-3 (dashboard inline streaming, deferred from v0.10.5.3 to
+    v0.10.5.4) re-enabled here because its prerequisite (master.webm
+    with valid init segment) now exists.
 
   Walked under the FORMAL protocol with NO BYPASS — provision will stand up
   fresh test infra (compose mode at minimum), validate will run the full
-  registry × scope matrix, human will eyeroll on the test cluster, ship will
-  cut prod over with --atomic --wait --timeout. The 2-3 hour cost is
-  explicitly accepted to catch the kind of regressions the v0.10.5.2 bypass
-  cycle shipped on top of.
+  registry × scope matrix INCLUDING new Pack U DoDs, human will eyeroll on
+  the test cluster, ship will cut prod over with --atomic --wait --timeout.
 
   Customer PII discipline: this scope.yaml + every release artifact uses
   anonymized refs (customer-A through customer-F). Real names + emails live
@@ -254,51 +289,44 @@ scope:
       do: "Click every API Docs / Documentation link in dashboard.vexa.ai."
       expect: "Every link goes to docs.vexa.ai/* or via getDocsUrl(); no internal /docs route hit."
 
-# ── Pack D-3 — Audio playback streaming (DEFERRED to v0.10.5.4) ───────
-# Status: DEFERRED. Dashboard inline-streaming feature (commit eddcabf)
-# was reverted in commit a62d658 after empirical testing on LKE meeting 10
-# uncovered a deeper recording-pipeline issue: every chunk uploaded to MinIO
-# starts with bytes 0x43 0xB6 0x75 0x01 (mid-stream Cluster element) instead
-# of the WebM/EBML root header 0x1A 0x45 0xDF 0xA3. None of the 72 chunks has
-# a complete init segment, so even with a perfect presigned URL the browser
-# cannot decode the audio (player hung at "Preparing audio..."). Pack D-3's
-# URL strategy was orthogonally fine — it just couldn't surface anything
-# playable until the recording finalizer is fixed.
+# ── Pack D-3 — Audio playback streaming (UN-DEFERRED for v0.10.6) ─────
+# Originally deferred to v0.10.5.4 because the recording-finalizer
+# prerequisite (master.webm with valid init segment) didn't exist.
+# Pack U lands that prerequisite IN THIS RELEASE — server-side concat
+# at bot_exit_callback produces master.webm from the chunks already in
+# MinIO. So Pack D-3's URL-strategy fix can re-land here too: /download
+# returns a presigned URL pointing at master.webm; browser fetches
+# directly from MinIO with native HTTP Range support.
 #
-# What stays in v0.10.5.3 (Option B server-side infra — KEPT):
-# - meeting-api/storage.py: MINIO_PUBLIC_ENDPOINT for browser-reachable
-#   presigned URLs (commit 5d06d69).
-# - helm chart: NodePort support for MinIO Service (commit 5d06d69).
-# - compose: MINIO_HOST_BIND env for opt-in external bind (commit 285b940).
-# These are correct improvements with no behavior regression on their own;
-# v0.10.5.4 will need them.
-#
-# Followup tracked for v0.10.5.4:
-# (a) Recording finalizer produces a single concatenated master.webm with
-#     valid EBML init segment.
-# (b) media_files[].storage_path points to that master file.
-# (c) Re-land dashboard inline streaming on top of (a) + (b).
+# Option B server-side infra (commits 5d06d69 + 285b940) was kept across
+# the v0.10.5.3 → v0.10.6 retarget; only the dashboard-side revert
+# (a62d658) needs to be re-applied.
 - id: dashboard-audio-streams-from-bucket
-  status: deferred
-  deferred_to: v0.10.5.4
   source: gh-issue
   ref: Vexa-ai/vexa#288
   problem: |
     Dashboard audio playback downloads the full audio file before playback
-    starts. Investigation in v0.10.5.3 revealed deeper issue: chunks have
-    no WebM init segment so bytes are unplayable regardless of URL choice.
+    starts. Bandwidth-heavy on long meetings; user perceives long "loading"
+    delay before the scrubber is interactive.
   hypothesis: |
-    Original v0.10.5.3 attempt: presigned URL for direct browser fetch.
-    REVERTED — surface bug runs deeper than URL strategy; needs finalizer
-    to produce master.webm with init segment.
+    With Pack U landing master.webm in the bucket, /download endpoint
+    returns a presigned URL pointing at master.webm. Browser <audio>
+    element fetches directly from MinIO; MinIO supports HTTP Range
+    natively so seek-from-arbitrary-byte works without server help.
+    Re-land dashboard side of Pack D-3 (was reverted in a62d658).
   fix_commits:
-    - eddcabf  # original Pack D-3 dashboard impl
-    - 5d06d69  # Option B server-side infra (KEPT)
-    - 285b940  # Option B compose follow-up (KEPT)
-    - a62d658  # revert dashboard impl, defer feature
-  proves: []  # deferred; checks moved to v0.10.5.4
-  required_modes: []
-  human_verify: []
+    - eddcabf  # original Pack D-3 dashboard impl (to be re-applied)
+    - 5d06d69  # Option B server-side infra (KEPT — in v0.10.5.3 cycle)
+    - 285b940  # Option B compose follow-up (KEPT — in v0.10.5.3 cycle)
+    - a62d658  # revert dashboard impl (to be partly reverted under Pack U.8)
+  proves:
+    - {check: DOWNLOAD_RETURNS_PRESIGNED_URL_TO_MASTER, modes: [lite, compose, helm]}
+    - {check: DASHBOARD_AUDIO_STREAMS_FROM_BUCKET, modes: [lite, compose, helm]}
+  required_modes: [lite, compose, helm]
+  human_verify:
+    - mode: helm
+      do: "Open dashboard, navigate to a completed meeting with a recording, click Play. Audio should start within 2s, scrubber should be draggable to any position with sub-second seek latency."
+      expect: "Streaming playback from any byte offset works; no full-file pre-download spinner."
 
 # ── Pack FM-274 — Hallucinations corpus regression guard ──────────────
 # Detected during this release's audit (informal, scaffolded for v0.10.6).
@@ -376,5 +404,136 @@ scope:
     - mode: helm
       do: "Run release-helm-upgrade-safe with valid tags; mid-upgrade, watch pod state."
       expect: "Old pod stays Ready until new pod reaches Ready (zero unavailable replicas at any sample point)."
+
+# ──────────────────────────────────────────────────────────────────────
+# ── Pack U — Audio recording unification + server-side master concat ──
+# ──────────────────────────────────────────────────────────────────────
+#
+# Lead bug for this pack (CRITICAL, project-owner-found at human-gate):
+# downloaded recordings are ~270KB unplayable fragments. Root-cause
+# traced 100%: Pack M's chunk-buffer cap (commit 43881da) shrank the
+# buffer that bot-side master construction relies on at graceful-leave.
+# Master uploads as a tail fragment and overwrites chunk_seq=0 (which
+# originally held the EBML init segment). See triage-log.md FOURTH-PASS.
+#
+# Pack U is the structural fix:
+#   1. Move master construction off the bot, onto meeting-api's existing
+#      bot_exit_callback handler (which already reconciles meeting state
+#      from active → completed/failed for both graceful and crashed bots
+#      via runtime-api's idle_loop reaper).
+#   2. Unify the bot-side capture pipeline so all 3 platforms emit chunks
+#      via one shared module — eliminates ~2300 LOC of duplication
+#      between googlemeet/recording.ts (1003) + msteams/recording.ts (1490).
+#   3. Bring Zoom Web onto the chunked-upload model (today its parecord
+#      pipeline writes a single growing WAV to bot-pod local disk; if the
+#      bot crashes, all audio is lost — see GH #296).
+#
+# MIN constraint (project-owner directive 2026-05-02):
+#   Recording must be playable/downloadable in any case of bot crash —
+#   must not rely on bot lifecycle.
+# MAX constraint:
+#   Playback on site without full-file pre-download (browser streams
+#   from MinIO with HTTP Range support — pairs with Pack D-3 above).
+
+- id: bot-audio-pipeline-unified
+  source: gh-issue
+  ref: Vexa-ai/vexa#296
+  problem: |
+    services/vexa-bot/core/src/platforms/googlemeet/recording.ts (1003 LOC)
+    and msteams/recording.ts (1490 LOC) duplicate ~80% of their content:
+    MediaRecorder injection + mimeType selection + chunk buffer + cap-and-
+    splice logic + shutdown-flush sequence + per-chunk upload error
+    handling. Differences are platform-specific selectors + log prefixes +
+    sessionUid prefix. Every fix in this layer must be applied twice;
+    Pack M's chunk-buffer cap diverges between platforms in subtle ways.
+
+    Zoom Web (services/vexa-bot/core/src/platforms/zoom/web/recording.ts,
+    225 LOC) uses parecord (Node subprocess) — a different paradigm
+    entirely. Its WAV file grows on bot-pod local disk and is uploaded
+    only at meeting-end via recordingService.upload(). If the bot crashes
+    mid-meeting, ALL audio is lost (the file never made it to the bucket).
+  hypothesis: |
+    Introduce a shared services/audio-pipeline.ts (Node-side module) with:
+      - AudioChunk type: { format: 'webm'|'wav', data: Buffer, seq: number,
+                            is_final: boolean, mimeType?: string }
+      - AudioCaptureSource interface with start()/stop() + chunk events
+      - UnifiedRecordingPipeline class that drives capture lifecycle,
+        forwards chunks to RecordingService.uploadChunk(), handles
+        shutdown-final-chunk semantics
+      - MediaRecorderCapture impl (used by GMeet + Teams; takes a Page
+        + selectors as constructor args)
+      - PulseAudioCapture impl (used by Zoom Web; wraps parecord, slices
+        the PCM stream into 15s WAV chunks for periodic upload)
+    Per-platform recording.ts shrinks to ~150 LOC: instantiate the
+    capture source, pass the pipeline its config, hand off; selectors
+    + popup dismissal + speaker detection stay platform-local.
+  fix_commits: []
+  proves:
+    - {check: SHARED_AUDIO_PIPELINE_MODULE_EXISTS, modes: [lite, compose, helm]}
+    - {check: GMEET_RECORDING_USES_SHARED_PIPELINE, modes: [lite, compose, helm]}
+    - {check: TEAMS_RECORDING_USES_SHARED_PIPELINE, modes: [lite, compose, helm]}
+    - {check: ZOOM_WEB_RECORDING_USES_SHARED_PIPELINE, modes: [lite, compose, helm]}
+    - {check: ZOOM_WEB_UPLOADS_CHUNKS_PERIODICALLY, modes: [lite, compose, helm]}
+    - {check: PLATFORM_RECORDING_TS_LINE_BUDGET, modes: [lite]}  # static LOC budget per file
+    - {check: NO_PER_PLATFORM_MASTER_CONSTRUCTION, modes: [lite]}  # __vexaSaveRecordingBlob removed
+  required_modes: [lite, compose, helm]
+  human_verify:
+    - mode: compose
+      do: "Run a 5-min GMeet recording. Tail bot stdout. Confirm chunks upload via the shared pipeline log lines (single set of [audio-pipeline] tags, not [Google Recording] / [Teams Recording] divergent prefixes)."
+      expect: "Chunks 0..N visible; all uploads via the unified path; no platform-specific master-construction code path triggers."
+
+- id: server-side-master-finalizer
+  source: cycle-internal
+  ref: ""  # new GH issue to file under v0.10.6
+  problem: |
+    Bot-side master construction is fundamentally fragile: depends on
+    graceful-leave firing (so SIGKILL'd bots produce no master); duplicates
+    across 3 platforms with subtly divergent buffer management; broken by
+    Pack M's chunk-buffer cap. The post-meeting transcribe pipeline
+    (/meetings/{id}/transcribe) reads media_file.storage_path which today
+    points at whichever bot-side artifact ended up at chunk_seq=0 (master
+    if graceful, last chunk if crashed). Either way, broken.
+  hypothesis: |
+    Add services/meeting-api/meeting_api/recording_finalizer.py:
+      async def finalize_recording_master(meeting_id, db) -> None:
+          # 1. List recording chunks under recordings/<user>/<storage_id>/
+          #    <session>/audio/0*.{webm|wav} via storage list API.
+          # 2. Idempotency check: if master.{webm|wav} already exists +
+          #    media_file.master_ready=true, return.
+          # 3. Detect format from first chunk; dispatch:
+          #    - WebM: byte-concat (chunk 0 has init segment, 1+ are
+          #      Cluster-only — direct concat is valid container)
+          #    - WAV: RIFF-aware merge (sum data chunk sizes; rewrite
+          #      master RIFF + fmt + data headers)
+          # 4. Stream-upload master.{format} to bucket.
+          # 5. Update media_file.storage_path → master path; flip
+          #    media_file.master_ready=true.
+    Hook synchronously into bot_exit_callback BEFORE update_meeting_status:
+      await finalize_recording_master(meeting.id, db)   # blocks ~1-3s
+      success = await update_meeting_status(meeting, target_status, ...)
+    If finalizer raises (MinIO transient down) → callback returns non-2xx
+    → runtime-api's existing idle_loop retries durably (DoD already exists:
+    runtime-api-idle-loop-sweeps-pending-callbacks). No new sweeper service.
+    Synchronous-before-status-flip ensures /meetings/{id}/transcribe never
+    sees a stale storage_path for a meeting it considers terminal.
+  fix_commits: []
+  proves:
+    - {check: SERVER_SIDE_MASTER_FINALIZER_EXISTS, modes: [lite, compose, helm]}
+    - {check: BOT_EXIT_CALLBACK_INVOKES_FINALIZER, modes: [lite]}  # static
+    - {check: FINALIZER_IS_IDEMPOTENT, modes: [compose]}  # repeat invocation safe
+    - {check: MASTER_AT_STORAGE_PATH, modes: [compose, helm]}  # post-meeting
+    - {check: BOT_KILL_RECORDING_PLAYABLE_GMEET, modes: [compose, helm]}
+    - {check: BOT_KILL_RECORDING_PLAYABLE_TEAMS, modes: [compose, helm]}
+    - {check: BOT_KILL_RECORDING_PLAYABLE_ZOOM, modes: [compose]}  # parecord chunked depends on Pack U.4
+    - {check: DEFERRED_TRANSCRIBE_USES_MASTER, modes: [compose, helm]}
+    - {check: FINALIZER_BEFORE_STATUS_FLIP, modes: [lite]}  # static order check
+  required_modes: [lite, compose, helm]
+  human_verify:
+    - mode: helm
+      do: "Run a 10-min GMeet recording. SIGKILL the bot pod at minute 5 via `kubectl delete pod --grace-period=0`. Wait 60s for idle_loop to detect + fire callback. Then GET /recordings/{id}/media/{file_id}/raw."
+      expect: "Bytes downloaded are a complete master WebM (ffprobe duration ≥4 minutes). Pre-Pack-U this case returned an empty / unplayable fragment."
+    - mode: compose
+      do: "After a normal completed meeting, manually re-fire bot_exit_callback (curl with X-Pack-X-Test if env-gated) — finalizer should be idempotent."
+      expect: "Second invocation logs 'master already exists, skipping'; storage_path unchanged; no duplicate writes."
 
 # ── End of scope ──────────────────────────────────────────────────────

@@ -219,3 +219,101 @@ The audit explicitly verified zero findings in:
 
 Stage transition: `triage → develop` to apply the one-line env gate fix.
 
+---
+
+## FOURTH-PASS TRIAGE (2026-05-02 — audio regression + v0.10.6 retargeting)
+
+After R6 validate landed GREEN and stage transitioned to `human` for the
+v0.10.5.3 ship, project-owner human-gate UI verification revealed the
+audio playback / download is broken — downloaded files are empty for
+recordings produced this cycle. Originally (mis-)classified by AI as
+pre-existing; project owner pushed back ("no, you are wrong — this is
+the fresh regression, 10.5.2 does not have this") and was correct.
+
+Stage transition: `human → triage` triggered by the audio regression.
+
+### `recording-master-uploaded-as-fragment-overwrites-chunk-zero` [REGRESSION]
+
+**status:** confirmed regression, not in any test fixture, found by
+project-owner human-gate UI verification.
+
+**bound check:** none — no test exists for "downloaded recording is
+playable end-to-end." This is exactly the gap that escaped Pack G.2-class
+forensic discipline; the validate matrix gates on `BOT_RECORDS_INCREMENTALLY`
++ `RECORDING_UPLOAD_SUPPORTS_CHUNK_SEQ` (chunks land in MinIO) but never
+on "the artifact at media_file.storage_path is a complete playable
+recording." Adds DoD `BOT_KILL_RECORDING_PLAYABLE` (per platform) +
+`DEFERRED_TRANSCRIBE_USES_MASTER` in v0.10.6.
+
+**symptom:** dashboard /raw and /download endpoints return ~270KB of
+WebM bytes that no decoder can play. ffmpeg reports "Invalid data found
+when processing input." Same pattern across helm + compose + lite.
+
+**root cause (traced, 100% confirmed):**
+- Pre-Pack-M, `__vexaRecordedChunks` accumulated ALL chunks unbounded
+  for the meeting lifetime. At graceful-leave, `__vexaSaveRecordingBlob`
+  read the full buffer → built complete master WebM (with valid EBML
+  init segment from the first MediaRecorder Blob) → wrote to local disk
+  → `recordingService.upload(callbackUrl, token)` POSTed to
+  `/internal/recordings/upload` with chunk_seq=0 → stored at
+  `audio/000000.webm` as the FULL playable master. /raw served it.
+- Post-Pack-M (commit 43881da's chunk-cap=10 + splice-on-success):
+  `__vexaRecordedChunks` holds 0-10 recent chunks at any moment.
+  At graceful-leave, master construction reads the buffer → builds
+  a tail fragment (~270KB instead of ~10MB) → uploads that fragment
+  with chunk_seq=0 → OVERWRITES `audio/000000.webm` (which originally
+  contained the chunk-0 data with EBML init segment) → master is now
+  unplayable. media_file.storage_path → fragment.
+- Crash-mid-meeting case (orthogonal but related): bot SIGKILL'd →
+  __vexaSaveRecordingBlob never runs → no master upload → media_file.
+  storage_path stays at the LATEST chunk (Cluster-only, no init
+  segment) → also unplayable. This was always broken; Pack M just
+  exposed it on the graceful path too.
+
+**touched commits:** 43881da (Pack M chunk-buffer cap + splice).
+
+**bigger picture (per ARCH review with project owner this conversation):**
+the bot-side master construction pattern is fundamentally fragile —
+relies on graceful-leave to fire (loses crash-recordings entirely),
+duplicates across 3 platform recording.ts files (1003+1490+225 LOC,
+~80% duplicated), and Pack M's trim discipline is incompatible with it.
+
+The fix is structural, not surgical:
+1. Move master construction OFF the bot, ONTO the server (meeting-api).
+2. Trigger from the existing `bot_exit_callback` reconciler (which
+   already fires on graceful exit AND on crash-detected-by-idle_loop).
+3. Unify the bot-side capture pipeline so all 3 platforms share a single
+   `AudioCaptureSource` interface + chunk-emitter + uploader; per-platform
+   recording.ts collapses to ~150 LOC of just selectors + DOM glue.
+4. Add MIN-bound DoD `BOT_KILL_RECORDING_PLAYABLE` × 3 platforms — SIGKILL
+   bot mid-recording, verify master still gets built post-callback.
+5. Add `MASTER_AT_STORAGE_PATH` to gate that media_file.storage_path
+   always points at master, not a fragment.
+6. Add `DEFERRED_TRANSCRIBE_USES_MASTER` so /meetings/{id}/transcribe
+   gets the full audio.
+
+**proposed fix scope:** Pack U epic — server-side concat finalizer +
+bot-side capture unification. ~22-26h dev/test/validate. Bundles into
+v0.10.6 with everything currently unreleased from v0.10.5.3 cycle.
+Per project-owner directive 2026-05-02: "we will have this in one
+release together with what is unreleased now because we can not release
+with regressions."
+
+**Release retargeting:** v0.10.5.3 will not ship. v0.10.6 supersedes it
+with the chunk-leak/observability/chart-hardening packs PLUS Pack U
+audio unification PLUS audit-CRITICAL fix that already landed.
+Release_id stays `260501-chunk-leak` for continuity.
+
+<!-- human directive: 2026-05-02, project owner: -->
+fix this first: yes
+proposed resolution: implement Pack U epic in this same release;
+re-target version v0.10.5.3 → v0.10.6; harden registry to gate
+everything achieved in v0.10.5.3 PLUS the new Pack U deliverables;
+walk dev → validate → human again with no regressions to what's
+already green.
+
+Stage transition: `triage → develop` to expand scope to v0.10.6 +
+implement Pack U.
+
+Stage transition: `triage → develop` to apply the one-line env gate fix.
+

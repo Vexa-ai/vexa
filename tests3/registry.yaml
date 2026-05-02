@@ -1892,6 +1892,225 @@ HELM_UPGRADE_ATOMIC_DEFAULT:
   - helm
   state: stateless
   max_duration_sec: 5
+# ── v0.10.6 cycle additions (Pack U — audio recording unification) ────
+SHARED_AUDIO_PIPELINE_MODULE_EXISTS:
+  proves: "shared services/audio-pipeline.ts exports AudioChunk, AudioCaptureSource, UnifiedRecordingPipeline — single module driving capture lifecycle for all 3 platforms"
+  symptom: "recording capture logic duplicated across googlemeet/recording.ts (1003 LOC) + msteams/recording.ts (1490 LOC) + zoom/web/recording.ts (225 LOC); fixes must be applied N times; Pack M trim diverged between platforms"
+  found: '2026-05-02'
+  type: grep
+  file: services/vexa-bot/core/src/services/audio-pipeline.ts
+  must_match: 'class UnifiedRecordingPipeline'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+GMEET_RECORDING_USES_SHARED_PIPELINE:
+  proves: "googlemeet/recording.ts imports UnifiedRecordingPipeline + MediaRecorderCapture from services/audio-pipeline; no longer hand-rolls MediaRecorder + chunk-buffer logic"
+  symptom: "GMeet has its own copy of MediaRecorder boilerplate; Pack M's chunk-buffer cap was applied here separately from Teams"
+  found: '2026-05-02'
+  type: grep
+  file: services/vexa-bot/core/src/platforms/googlemeet/recording.ts
+  must_match: 'from .*services/audio-pipeline'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+TEAMS_RECORDING_USES_SHARED_PIPELINE:
+  proves: "msteams/recording.ts imports UnifiedRecordingPipeline + MediaRecorderCapture from services/audio-pipeline; no longer hand-rolls MediaRecorder + chunk-buffer logic"
+  symptom: "Teams duplicates ~80% of GMeet recording.ts; chunk-buffer trim drift risk"
+  found: '2026-05-02'
+  type: grep
+  file: services/vexa-bot/core/src/platforms/msteams/recording.ts
+  must_match: 'from .*services/audio-pipeline'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+ZOOM_WEB_RECORDING_USES_SHARED_PIPELINE:
+  proves: "zoom/web/recording.ts imports UnifiedRecordingPipeline + PulseAudioCapture from services/audio-pipeline; chunked upload model"
+  symptom: "Zoom Web's parecord uploads only one final WAV at meeting-end; bot crash = total audio loss (GH #296)"
+  found: '2026-05-02'
+  type: grep
+  file: services/vexa-bot/core/src/platforms/zoom/web/recording.ts
+  must_match: 'from .*services/audio-pipeline'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+ZOOM_WEB_UPLOADS_CHUNKS_PERIODICALLY:
+  proves: "PulseAudioCapture in services/audio-pipeline.ts emits 15s WAV chunks during a Zoom Web meeting (uploadChunk fires multiple times before finalize)"
+  symptom: "Zoom Web today uploads zero chunks during a meeting and one final WAV at the end; SIGKILL mid-meeting = all audio lost"
+  found: '2026-05-02'
+  type: grep
+  file: services/vexa-bot/core/src/services/audio-pipeline.ts
+  must_match: 'class PulseAudioCapture'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+PLATFORM_RECORDING_TS_LINE_BUDGET:
+  proves: "after Pack U unification, every platform recording.ts is ≤200 LOC (just selectors + DOM glue + capture-source instantiation; all upload + buffer + lifecycle logic moved to shared)"
+  symptom: "duplicated capture code rots out of sync; Pack M-style fix-once-apply-N drift"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-static-greps.sh
+  step: platform_recording_line_budget
+  modes:
+  - lite
+  state: stateless
+  max_duration_sec: 5
+NO_PER_PLATFORM_MASTER_CONSTRUCTION:
+  proves: "no platform recording.ts retains __vexaSaveRecordingBlob or equivalent bot-side master assembly — master is constructed exclusively server-side by recording_finalizer.py"
+  symptom: "bot-side master construction depends on graceful-leave firing; Pack M shrunk the buffer it relies on; crash-mid-meeting produces no master at all"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-static-greps.sh
+  step: no_bot_master_construction
+  modes:
+  - lite
+  state: stateless
+  max_duration_sec: 5
+SERVER_SIDE_MASTER_FINALIZER_EXISTS:
+  proves: "services/meeting-api/meeting_api/recording_finalizer.py defines async finalize_recording_master(meeting_id, db) that lists chunks, dispatches concat by format (webm|wav), and updates media_file.storage_path"
+  symptom: "no server-side path to assemble the master; download/transcribe pipelines depend on bot-side construction"
+  found: '2026-05-02'
+  type: grep
+  file: services/meeting-api/meeting_api/recording_finalizer.py
+  must_match: 'async def finalize_recording_master'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BOT_EXIT_CALLBACK_INVOKES_FINALIZER:
+  proves: "callbacks.py:bot_exit_callback awaits finalize_recording_master BEFORE update_meeting_status — so by the time meeting.status is terminal, master.{webm|wav} exists at media_file.storage_path"
+  symptom: "race window between status flip and master build allows /transcribe to read stale storage_path"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-static-greps.sh
+  step: finalizer_invoked_in_exit_callback
+  modes:
+  - lite
+  state: stateless
+  max_duration_sec: 5
+FINALIZER_BEFORE_STATUS_FLIP:
+  proves: "in callbacks.py:bot_exit_callback the finalize_recording_master await appears textually BEFORE the update_meeting_status await on every code path"
+  symptom: "if status flips first, /transcribe + dashboard playback can fetch a recording.storage_path that still points at a single chunk"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-static-greps.sh
+  step: finalizer_before_status
+  modes:
+  - lite
+  state: stateless
+  max_duration_sec: 5
+FINALIZER_IS_IDEMPOTENT:
+  proves: "second invocation of finalize_recording_master for the same meeting is a no-op — master.webm already exists, function returns early without re-uploading"
+  symptom: "non-idempotent retry doubles storage cost + risks corrupting master under concurrent invocation (idle_loop retry race)"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-runtime-smokes.sh
+  step: finalizer_idempotency
+  modes:
+  - compose
+  state: stateful
+  max_duration_sec: 60
+MASTER_AT_STORAGE_PATH:
+  proves: "after a normal-completion meeting, media_file.storage_path points at audio/master.{webm|wav}, NOT at audio/000000.{webm|wav} (which is the first chunk)"
+  symptom: "post-Pack-M, storage_path points at the broken bot-uploaded master fragment; pre-Pack-M, same path but bot-built whole-master; either way bot-controlled"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-runtime-smokes.sh
+  step: master_at_storage_path
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 300
+BOT_KILL_RECORDING_PLAYABLE_GMEET:
+  proves: "after SIGKILL'ing a GMeet bot mid-recording, idle_loop fires exit callback → finalize_recording_master builds master.webm from chunks already in MinIO → master is ffprobe-playable with duration ≥ chunks_uploaded × 15s"
+  symptom: "today, crash-mid-meeting GMeet recording is unrecoverable: storage_path stays at last chunk (Cluster-only, no init segment); ffprobe fails"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-runtime-smokes.sh
+  step: bot_kill_gmeet_master_playable
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 600
+BOT_KILL_RECORDING_PLAYABLE_TEAMS:
+  proves: "after SIGKILL'ing a Teams bot mid-recording, idle_loop fires exit callback → master.webm built → ffprobe-playable"
+  symptom: "same crash-recovery class as GMeet on Teams platform"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-runtime-smokes.sh
+  step: bot_kill_teams_master_playable
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 600
+BOT_KILL_RECORDING_PLAYABLE_ZOOM:
+  proves: "after SIGKILL'ing a Zoom Web bot mid-recording, master.wav built from chunked PulseAudio uploads → ffprobe-playable; depends on Pack U.4 (chunked upload from parecord)"
+  symptom: "today Zoom Web crash = total audio loss (parecord WAV is on bot-pod local disk, never uploaded incrementally)"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-runtime-smokes.sh
+  step: bot_kill_zoom_master_playable
+  modes:
+  - compose
+  state: stateful
+  max_duration_sec: 600
+DEFERRED_TRANSCRIBE_USES_MASTER:
+  proves: "POST /meetings/{id}/transcribe on a SIGKILL-mid-meeting recording fetches master.{webm|wav} from storage_path, ffmpeg-converts, returns segments — proving deferred transcription works on crashed-bot recordings (didn't pre-Pack-U)"
+  symptom: "post-meeting transcribe pipeline is fundamentally not chunk-aware: it reads single-file storage_path. Today crash = no transcribable audio."
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-runtime-smokes.sh
+  step: deferred_transcribe_master
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 600
+DOWNLOAD_RETURNS_PRESIGNED_URL_TO_MASTER:
+  proves: "GET /recordings/{id}/media/{file_id}/download returns a 200/302 with a presigned URL whose path component ends in /audio/master.{webm|wav}; URL is browser-reachable (uses MINIO_PUBLIC_ENDPOINT for helm/compose)"
+  symptom: "today /download still proxies bytes through meeting-api OR points at a chunk fragment"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-runtime-smokes.sh
+  step: download_presigned_master
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 60
+DASHBOARD_AUDIO_STREAMS_FROM_BUCKET:
+  proves: "dashboard ui reads /api/vexa/recordings/{id}/media/{file_id}/download (NOT /raw); response is a presigned URL; <audio src> binds to it; native HTTP Range fires on user seek"
+  symptom: "dashboard pre-downloads the full file before play; user perceives long loading delay; bandwidth cost amplified"
+  found: '2026-05-02'
+  type: grep
+  file: services/dashboard/src/lib/api.ts
+  must_match: 'getRecordingAudioUrl|recordings/.*/download'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
 auth-meeting:
   type: script
   script: tests/auth-meeting.sh
