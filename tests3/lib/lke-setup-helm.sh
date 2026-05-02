@@ -49,6 +49,15 @@ HELM_ARGS=(
     --values "$VALUES_FILE"
     --set "dashboard.env.VEXA_PUBLIC_API_URL=$GATEWAY_URL"
     --set "dashboard.env.NEXT_PUBLIC_APP_URL=$DASHBOARD_URL"
+    # v0.10.6 Pack D-3 — expose MinIO via NodePort + tell meeting-api
+    # to sign presigned URLs against the public endpoint. Without this,
+    # browsers receive `http://vexa-vexa-minio:9000/...` URLs that fail
+    # to resolve (in-cluster DNS only) → dashboard audio playback hangs
+    # at "Preparing audio...". Real-meeting tests on 2026-05-02 caught
+    # this on helm only (compose+lite have docker-host MinIO reachable).
+    --set "minio.service.type=NodePort"
+    --set "minio.service.nodePort=30090"
+    --set "meetingApi.minioPublicEndpoint=http://${NODE_IP}:30090"
 )
 
 if [ -n "$IMAGE_TAG" ]; then

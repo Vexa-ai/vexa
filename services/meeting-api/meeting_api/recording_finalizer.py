@@ -484,6 +484,14 @@ async def finalize_recording_master(meeting_id: int, db: AsyncSession) -> None:
             mf["storage_path"] = master_key
             mf["finalized_at"] = mf.get("finalized_at") or _now_iso()
             mf["finalized_by"] = "recording_finalizer.master"
+            # Pack U.7 — set is_final=True so the chunk_write handler's defensive
+            # check (recordings.py: refuse overwrite when is_final or storage_path
+            # ends at /master.*) keeps a late-arriving chunk POST from stomping
+            # the master path back to the chunk path. Without this, real-meeting
+            # tests on helm reproduce the race: chunk N+1 lands after Pack U.5
+            # commits, chunk_write overwrites mf.storage_path → dashboard sees
+            # chunk-path, post_meeting_reconciler then sets finalized_by back.
+            mf["is_final"] = True
             media_files[mf_idx] = mf
             finalized_any = True
             logger.info(

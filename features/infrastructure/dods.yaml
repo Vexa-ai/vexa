@@ -157,3 +157,11 @@ dods:
     check: HELM_PGBOUNCER_OPTIONAL_AND_WIRED
     modes:
     - helm
+
+- id: helm-lke-setup-exposes-minio-nodeport
+  label: "Pack D-3 helm wiring — tests3/lib/lke-setup-helm.sh sets minio.service.type=NodePort + nodePort + meetingApi.minioPublicEndpoint=http://<node>:<port> so dashboard browsers reach presigned URLs. Without it, audio playback hangs at 'Preparing audio' on every helm-deployed cluster."
+  weight: 5
+  evidence:
+    check: HELM_LKE_SETUP_EXPOSES_MINIO_NODEPORT
+    modes:
+    - helm

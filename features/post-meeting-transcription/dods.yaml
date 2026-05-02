@@ -79,3 +79,23 @@ dods:
     modes:
     - compose
     - helm
+
+- id: chunk-write-preserves-master-path
+  label: "Pack U.7 — recordings.py chunk-write handler refuses to overwrite storage_path back to chunk path when prior media_file is at master OR is_final=True. Caught 2026-05-03 on helm: late-arriving chunk POST after bot graceful exit raced Pack U.5's master commit, dashboard audio stuck at 'Preparing audio'."
+  weight: 10
+  evidence:
+    check: CHUNK_WRITE_PRESERVES_MASTER_PATH
+    modes:
+    - lite
+    - compose
+    - helm
+
+- id: recording-finalizer-sets-is-final
+  label: "Pack U.7 — recording_finalizer.py sets mf['is_final']=True when writing master path, signaling chunk_write's defensive guard. Without it, late-chunk POST stomps the master."
+  weight: 5
+  evidence:
+    check: RECORDING_FINALIZER_SETS_IS_FINAL
+    modes:
+    - lite
+    - compose
+    - helm

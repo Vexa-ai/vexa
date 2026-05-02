@@ -365,21 +365,46 @@ async def internal_upload_recording(
             mf for mf in prior_media_files
             if mf.get("type") != media_type
         ]
+        # Pack U.7 — preserve master path against late-chunk overwrite.
+        # If recording_finalizer.master already committed (storage_path ends at
+        # /audio/master.{webm|wav} OR is_final=True), a late-arriving chunk POST
+        # from a graceful-leaving bot must NOT stomp storage_path back to its
+        # own chunk path. Real-meeting test on helm 2026-05-02 caught the race:
+        # chunk N+1 landed AFTER Pack U.5 wrote master, then post_meeting_
+        # reconciler saw is_final=False and overrode finalized_by → dashboard
+        # served chunk path instead of master and "Preparing audio..." stuck.
+        prior_sp = (prior_same_type or {}).get("storage_path") or ""
+        prior_is_final = bool((prior_same_type or {}).get("is_final"))
+        master_finalized = (
+            prior_sp.endswith("/audio/master.webm")
+            or prior_sp.endswith("/audio/master.wav")
+            or prior_is_final
+        )
+        new_storage_path = prior_sp if master_finalized else storage_path
+        new_is_final = True if master_finalized else is_final
+        if master_finalized and not is_final:
+            logger.warning(
+                "[E1A] late_chunk_after_finalize meeting_id=%s recording_id=%s media_type=%s "
+                "chunk_seq=%s — preserving master storage_path=%s",
+                meeting_id, recording_id, media_type, chunk_seq, prior_sp,
+            )
         existing_media_files.append({
             "id": (prior_same_type or {}).get("id") or _new_recording_numeric_id(),
             "type": media_type,
             "format": media_format,
-            "storage_path": storage_path,  # latest chunk's path (consumers list the dir for full chunk inventory)
+            "storage_path": new_storage_path,
             "storage_backend": os.environ.get("STORAGE_BACKEND", "minio"),
-            "file_size_bytes": cumulative_bytes,        # ← cumulative, not just-last-chunk
-            "last_chunk_size_bytes": file_size,         # ← latest-chunk only, for diagnostics
-            "chunk_count": cumulative_chunk_count,      # ← number of chunks accumulated
+            "file_size_bytes": cumulative_bytes,
+            "last_chunk_size_bytes": file_size,
+            "chunk_count": cumulative_chunk_count,
             "duration_seconds": duration_seconds,
-            "chunk_seq": chunk_seq,                     # ← latest chunk's seq (chunk count = chunk_seq + 1 for canonical 0-indexed)
+            "chunk_seq": chunk_seq,
             "first_chunk_at": first_chunk_at,
             "metadata": {"sample_rate": sample_rate} if sample_rate else {},
-            "created_at": datetime.utcnow().isoformat(),  # latest update
-            "is_final": is_final,
+            "created_at": datetime.utcnow().isoformat(),
+            "is_final": new_is_final,
+            "finalized_at": (prior_same_type or {}).get("finalized_at") if master_finalized else (prior_same_type or {}).get("finalized_at"),
+            "finalized_by": (prior_same_type or {}).get("finalized_by") if master_finalized else (prior_same_type or {}).get("finalized_by"),
         })
         rec_payload["media_files"] = existing_media_files
         # v0.10.5 Pack E.1.a observability — [PLATFORM] ASK 2 (#272

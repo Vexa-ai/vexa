@@ -2163,6 +2163,43 @@ DASHBOARD_AUDIO_STREAMS_FROM_BUCKET:
   - helm
   state: stateless
   max_duration_sec: 5
+CHUNK_WRITE_PRESERVES_MASTER_PATH:
+  proves: "recordings.py chunk-write handler refuses to overwrite storage_path back to a chunk path when the prior media_file already had storage_path ending at /master.{webm|wav} OR is_final=True. Real-meeting test on helm 2026-05-03 caught the race: chunk N+1 landed AFTER Pack U.5 wrote master → dashboard saw chunk path, audio playback stuck at 'Preparing audio'."
+  symptom: "late-arriving chunk POST after bot graceful exit overwrites master storage_path; downstream consumers (dashboard /download, post-meeting transcribe) read chunk_seq=0 path instead of master.{webm|wav}"
+  found: '2026-05-03'
+  type: grep
+  file: services/meeting-api/meeting_api/recordings.py
+  must_match: 'master_finalized\s*='
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+RECORDING_FINALIZER_SETS_IS_FINAL:
+  proves: "recording_finalizer.py — when committing storage_path to master.{webm|wav}, also sets mf['is_final']=True so chunk_write's defensive guard activates"
+  symptom: "Pack U.5 finalizer leaves is_final=False after writing master; late-chunk handler doesn't recognize 'master already committed' state; chunk-write race overwrites the master path"
+  found: '2026-05-03'
+  type: grep
+  file: services/meeting-api/meeting_api/recording_finalizer.py
+  must_match: 'mf\["is_final"\]\s*=\s*True'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+HELM_LKE_SETUP_EXPOSES_MINIO_NODEPORT:
+  proves: "tests3/lib/lke-setup-helm.sh sets minio.service.type=NodePort + nodePort + meetingApi.minioPublicEndpoint so presigned URLs are externally reachable from browser"
+  symptom: "helm cluster's MinIO presigned URLs point at vexa-vexa-minio:9000 (in-cluster DNS); browser audio playback hangs at 'Preparing audio' indefinitely"
+  found: '2026-05-03'
+  type: grep
+  file: tests3/lib/lke-setup-helm.sh
+  must_match: 'meetingApi\.minioPublicEndpoint'
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 5
 auth-meeting:
   type: script
   script: tests/auth-meeting.sh
