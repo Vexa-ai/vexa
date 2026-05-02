@@ -587,3 +587,70 @@ Either:
 - **(B) Fix lite redeploy + chart check semantics first, then re-validate** — fully clean gate; ~60-90 min more work
 
 Strongly lean (A) — no v0.10.6 code regression, all positive evidence intact.
+
+---
+
+# Triage round 3 — 2026-05-03 release-validate after triage round-2 fixes landed
+
+**Filer:** AI:assist
+**Validate report:** `tests3/reports/release-0.10.5.3-260503-0119.md`
+**Verdict:** RED (1 feature below gate: infrastructure 97% / 100%)
+**Stage:** `triage`, next legal: `develop`
+
+## What got better since round 2
+
+- ✅ **lite redeploy fixed**: gateway/admin/dashboard/runtime all up cleanly (the squatter-cleanup + verify-gateway changes worked).
+- ✅ **chart-rolling-update-zero-surge**: stale May-1 file gone (run-matrix per-mode cleanup landed).
+- ✅ **All v0.10.6 static-greps GREEN on all 3 modes** — Pack U product code proven.
+- ✅ **All Pack U.7 hardening static-greps GREEN** (CHUNK_WRITE_PRESERVES_MASTER_PATH, RECORDING_FINALIZER_SETS_IS_FINAL, HELM_LKE_SETUP_EXPOSES_MINIO_NODEPORT).
+- ✅ **Webhooks compose**: 3 events fire (e2e_completion, e2e_status, e2e_status_non_completed).
+- ✅ **Containers test on helm**: create/alive/removal/status_completed all green.
+
+## Cycle-2 failures (all environmental / post-deploy timing — not v0.10.6 code regressions)
+
+### Helm smoke-contract (3 failures)
+- `BROWSER_SESSION_CDP`: `Name or service not known` — gateway can't resolve browser-session pod hostname yet
+- `BOT_STATUS_TRANSITIONS`: bot stuck in 'requested' 30s — runtime-api status callback not firing yet
+- `INTERNAL_TRANSCRIPT_REQUIRES_AUTH`: DNS error (`Name or service not known`)
+
+**root cause hypothesis:** Helm upgrade rolled meeting-api and other pods. The run-matrix fired immediately after `helm upgrade` returned. Some pods (particularly transient ones spawned for browser-session tests) hadn't completed startup. Coredns or kube-dns may also have lagged on the test cluster.
+
+**proposed fix:** Add a "pods settled" wait after helm upgrade in `tests3/lib/lke-setup-helm.sh` / `lke-upgrade.sh` — wait for `kubectl get pods` to show all desired replicas Ready, then sleep 15s for DNS cache settle, before signaling deploy success.
+
+### Compose smoke-env (1 failure)
+- `DASHBOARD_API_KEY_VALID`: dashboard's `VEXA_API_KEY` returns 401 from /bots/status
+
+**root cause hypothesis:** The compose redeploy restarted meeting-api with new code (Pack U.7) but the dashboard container holds the api_token from the prior run that's now stale (admin re-bootstrapped the test user during redeploy → minted a new token → dashboard's env never refreshed).
+
+**proposed fix:** `redeploy-compose.sh` already has a "reseat dashboard VEXA_API_KEY" step (probe-and-regenerate). Either it didn't run, or it ran but didn't restart dashboard container so dashboard kept reading stale env. Need to verify the script actually executed the reseat phase. Probably a one-line addition: `docker compose restart dashboard` after the env reseat.
+
+### Helm webhooks (1 failure)
+- `e2e_completion`: webhook_delivery missing — bot didn't complete within window so no webhook event fired
+
+**root cause hypothesis:** Same bot-spawn-stuck-in-requested cascade as helm BOT_STATUS_TRANSITIONS. No bot ran → no completion → no webhook.
+
+**proposed fix:** Same as helm smoke-contract fixes (settle wait after deploy).
+
+## Net assessment
+
+- Zero v0.10.6 product code regressions in cycle 2.
+- Pack U.7 fix verified live + static greps GREEN on all 3 deployments.
+- 3 environmental gaps (helm pods-not-settled timing, compose dashboard-token-cache):
+  1. Helm post-deploy race (3 contract DoDs + 1 webhook DoD)
+  2. Compose dashboard token cache after redeploy (1 env DoD)
+  3. Both are deploy-script hardening, not v0.10.6 product code
+
+These are IDENTICAL CLASS to round-2's lite-redeploy gap — `release-deploy` script doesn't reliably leave the cluster in a fully-settled state for `release-validate` to query. Each cycle uncovers another instance.
+
+## Suggested human directive
+
+**(A) Accept all 3 cycle-2 environmental gaps + run audio harness for empirical Pack U validation, then proceed to human stage.** v0.10.6 product code is proven on:
+- 18 cells of real-meeting evidence (r1+r2 autonomous matrix, all GREEN)
+- Static-greps for every Pack U/M/O/T/FM-274/C/D-3/Pack-U.7/#304 check on all 3 modes
+- Pack U.7 fix verified live on all 3 deployments
+
+**(B) Fix the 3 environmental gaps in another cycle (deploy-settle wait, compose dashboard restart on reseat) — adds ~30 min for another release-deploy + release-validate cycle, with no Pack U coverage gain.**
+
+Strongly lean (A) — environmental gaps are a separate workstream from v0.10.6 product code. Real-meeting audio validation gives stronger Pack U evidence than the gate-mechanical contracts here.
+
+<!-- human directive below this line -->

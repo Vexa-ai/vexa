@@ -101,9 +101,9 @@ make down
 
 
 <!-- BEGIN AUTO-DOD -->
-<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.5.3-260502-1637`. Do not edit by hand — edit the sidecar `dods.yaml` + re-run `make -C tests3 report --write-features`. -->
+<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.5.3-260503-0119`. Do not edit by hand — edit the sidecar `dods.yaml` + re-run `make -C tests3 report --write-features`. -->
 
-**Confidence: 100%** (gate: 100%, status: ✅ pass)
+**Confidence: 97%** (gate: 100%, status: ❌ below gate)
 
 | # | Behavior | Weight | Status | Evidence (modes) |
 |---|----------|-------:|:------:|------------------|
@@ -125,6 +125,7 @@ make down
 | chart-rolling-update-zero-downtime | every app-facing Deployment in rendered chart has strategy.rollingUpdate.maxUnavailable: 0 — OLD pod stays Ready until NEW pod is Ready (zero-downtime, prevents v0.10.5.2 outage class) | 10 | ✅ pass | `helm`: chart-rolling-update-zero-downtime/HELM_ROLLING_UPDATE_ZERO_DOWNTIME: 7 Deployments — ['admin-api', 'api-gateway', 'mcp', 'meeting-api', 'redis', 'runtime-api', 'tts-service'] |
 | chart-api-gateway-ha-replica-count | apiGateway.replicaCount default ≥ 2 — so maxUnavailable: 0 rollouts have surge headroom for the front door | 5 | ✅ pass | `helm`: smoke-static/HELM_API_GATEWAY_REPLICA_COUNT_HA: apiGateway.replicaCount default is 2 — maxSurge: 0 rollouts stay zero-downtime for the front door |
 | chart-pgbouncer-optional-and-wired | chart supports optional PgBouncer (pgbouncer.enabled: false default); enabled=true rewires every service's DB_HOST to pgbouncer via vexa.dbHostEffective | 10 | ✅ pass | `helm`: chart-pgbouncer-optional/HELM_PGBOUNCER_OPTIONAL_AND_WIRED: pgbouncer optional subchart + DB_HOST rewire contract holds |
+| helm-lke-setup-exposes-minio-nodeport | Pack D-3 helm wiring — tests3/lib/lke-setup-helm.sh sets minio.service.type=NodePort + nodePort + meetingApi.minioPublicEndpoint=http://<node>:<port> so dashboard browsers reach presigned URLs. Without it, audio playback hangs at 'Preparing audio' on every helm-deployed cluster. | 5 | ⬜ missing | `helm`: check HELM_LKE_SETUP_EXPOSES_MINIO_NODEPORT not found in any report |
 
 <!-- END AUTO-DOD -->
 

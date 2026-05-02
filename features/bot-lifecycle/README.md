@@ -386,9 +386,9 @@ RECALL_TO_VEXA_OUTCOME = {
 
 
 <!-- BEGIN AUTO-DOD -->
-<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.5.3-260502-1637`. Do not edit by hand — edit the sidecar `dods.yaml` + re-run `make -C tests3 report --write-features`. -->
+<!-- Auto-written by tests3/lib/aggregate.py from release tag `0.10.5.3-260503-0119`. Do not edit by hand — edit the sidecar `dods.yaml` + re-run `make -C tests3 report --write-features`. -->
 
-**Confidence: 92%** (gate: 90%, status: ✅ pass)
+**Confidence: 93%** (gate: 90%, status: ✅ pass)
 
 | # | Behavior | Weight | Status | Evidence (modes) |
 |---|----------|-------:|:------:|------------------|
@@ -402,7 +402,7 @@ RECALL_TO_VEXA_OUTCOME = {
 | timeout-stop | Bot auto-stops after automatic_leave timeout (no_one_joined_timeout) | 10 | ⚠️ skip | `helm`: containers/timeout_stop: bot still running after 60s (timeout may count from lobby) |
 | concurrency-slot | Concurrent-bot slot released immediately on stop — next create succeeds | 10 | ✅ pass | `helm`: containers/concurrency_slot: slot released, B created (HTTP 201) |
 | no-orphans | No zombie/exited bot containers left after a lifecycle run | 10 | ✅ pass | `helm`: containers/no_orphans: no exited/zombie containers |
-| status-webhooks-fire | Status-change webhooks fire for every transition when enabled in webhook_events | 5 | ✅ pass | `helm`: webhooks/e2e_status: 5 status-change webhook(s) fired: meeting.status_change |
+| status-webhooks-fire | Status-change webhooks fire for every transition when enabled in webhook_events | 5 | ✅ pass | `helm`: webhooks/e2e_status: 2 status-change webhook(s) fired: meeting.status_change |
 | recording-incremental-chunk-upload | bot uploads each MediaRecorder chunk as it arrives; meeting-api accepts chunk_seq on /internal/recordings/upload | 15 | ✅ pass | `lite`: smoke-static/RECORDING_UPLOAD_SUPPORTS_CHUNK_SEQ: /internal/recordings/upload accepts chunk_seq: int form parameter; `compose`: smoke-static/RECORDING_UPLOAD_SUPPORTS_CHUNK_SEQ: /internal/recordings/upload accepts chunk_seq: int form parameter |
 | bot-records-incrementally | bot recording.ts calls MediaRecorder.start with ≥15s timeslice AND uploads each chunk via __vexaSaveRecordingChunk | 10 | ✅ pass | `lite`: bot-records-incrementally/BOT_RECORDS_INCREMENTALLY: ≥15s MediaRecorder timeslice + __vexaSaveRecordingChunk wired in shared modules (browser.ts + audio-pipeline.ts); no per-platform regression; `compose`: bot-records-incrementally/BOT_RECORDS_INCREMENTALLY: ≥15s MediaRecorder timeslice +… |
 | recording-survives-mid-meeting-kill | SIGKILL mid-recording leaves already-uploaded chunks durable in MinIO; Recording.status stays IN_PROGRESS until is_final=true | 10 | ✅ pass | `compose`: recording-survives-sigkill/RECORDING_SURVIVES_MID_MEETING_KILL: chunk_seq contract verified statically (see RECORDING_UPLOAD_SUPPORTS_CHUNK_SEQ) |
@@ -423,6 +423,8 @@ RECALL_TO_VEXA_OUTCOME = {
 | bot-kill-recording-playable-gmeet | after SIGKILL'ing a GMeet bot mid-recording, server-side finalize_recording_master builds master.webm from chunks already in MinIO → ffprobe-playable. Crash-safety the bot couldn't provide pre-Pack-U. (weight 3: requires fixture meeting URL — operator-driven via scope.yaml human_verify; 0% gate-pull when fixtures absent) | 3 | ⬜ missing | `compose`: v0.10.6-runtime-smokes/BOT_KILL_RECORDING_PLAYABLE_GMEET: FIXTURE_GMEET_MULTIPARTY_URL not set — operator-driven; see scope.yaml human_verify; `helm`: check BOT_KILL_RECORDING_PLAYABLE_GMEET not found in any report |
 | bot-kill-recording-playable-teams | Teams equivalent — SIGKILL bot, master built post-callback, ffprobe-playable. (weight 3: fixture-dependent) | 3 | ⬜ missing | `compose`: v0.10.6-runtime-smokes/BOT_KILL_RECORDING_PLAYABLE_TEAMS: FIXTURE_TEAMS_MULTIPARTY_URL not set — operator-driven; see scope.yaml human_verify; `helm`: check BOT_KILL_RECORDING_PLAYABLE_TEAMS not found in any report |
 | bot-kill-recording-playable-zoom | Zoom Web equivalent — SIGKILL bot, master.wav built from chunked PulseAudio uploads, ffprobe-playable. Pre-Pack-U Zoom crash = total audio loss; this DoD certifies the recovery. (weight 3: fixture-dependent) | 3 | ⚠️ skip | `compose`: v0.10.6-runtime-smokes/BOT_KILL_RECORDING_PLAYABLE_ZOOM: FIXTURE_ZOOM_URL not set — operator-driven; see scope.yaml human_verify |
+| unified-alignment-hook-in-pipeline | segment-to-audio alignment hook (publisher.resetSessionStart) lives in UnifiedRecordingPipeline ONLY — per-platform recording.ts files have no exposeFunction('__vexaRecordingStarted') handler and no premature publisher.resetSessionStart() call. Same hook for all 3 platforms via source.on('started'). | 10 | ✅ pass | `lite`: v0.10.6-static-greps/UNIFIED_ALIGNMENT_HOOK_IN_PIPELINE: alignment hook lives only in UnifiedRecordingPipeline; no per-platform handlers; `compose`: v0.10.6-static-greps/UNIFIED_ALIGNMENT_HOOK_IN_PIPELINE: alignment hook lives only in UnifiedRecordingPipeline; no per-platform handlers; `h… |
+| browser-utils-injected-before-pipeline-start | every platform recording.ts that uses MediaRecorderCapture calls ensureBrowserUtils() BEFORE pipeline.start() — Pack U.2/U.3 regression guard. Wrong ordering produced 0 chunks every meeting (post-Pack-U gate green, real-meeting tests on helm/lite all failed STOPPED_WITH_NO_AUDIO until 2026-05-02 when ordering was fixed). | 15 | ✅ pass | `lite`: v0.10.6-static-greps/BROWSER_UTILS_INJECTED_BEFORE_PIPELINE_START: ensureBrowserUtils precedes pipeline.start() in every MediaRecorder platform; `compose`: v0.10.6-static-greps/BROWSER_UTILS_INJECTED_BEFORE_PIPELINE_START: ensureBrowserUtils precedes pipeline.start() in every MediaRecorde… |
 
 <!-- END AUTO-DOD -->
 
