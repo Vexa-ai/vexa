@@ -93,11 +93,20 @@ if scope_path:
             if "test" in p:
                 selected.add(p["test"])
             elif "check" in p:
-                # Check ID → include every smoke-* tier that runs in this mode.
-                # Aggregator will pick out the specific check from whatever tier
-                # reports it. Cheap (< 2min total) so no reason to be clever.
+                # Check ID → include every smoke-* tier that runs in this mode,
+                # plus the v0.10.6-* Pack U scripts (single-invocation multi-step
+                # tests that emit their step IDs as registry check IDs). Pre-
+                # v0.10.6 the check-ID branch only included smoke-*, which
+                # silently dropped Pack U DoDs from scope-filtered runs.
+                # Aggregator picks the specific check from whatever tier reports
+                # it. Cheap (< 2min total) so no reason to be clever.
                 for t in tests:
-                    if t.startswith("smoke-") and want_runs_in(t):
+                    if not want_runs_in(t):
+                        continue
+                    if t.startswith("smoke-"):
+                        selected.add(t)
+                    elif t in ("v0.10.6-static-greps", "v0.10.5.3-hallucination-corpus"):
+                        # Cheap tests that emit check-ID-shaped step IDs.
                         selected.add(t)
 else:
     for name, spec in tests.items():
