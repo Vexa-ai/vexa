@@ -109,11 +109,21 @@ export interface AudioCaptureSource extends EventEmitter {
   /** Stop the capture. Emits a final chunk with isFinal=true, then resolves. */
   stop(): Promise<void>;
 
-  // EventEmitter typing for the 'chunk' event:
+  // EventEmitter typing for events emitted by the source:
+  //   'chunk'    — every audio chunk produced by the capture
+  //   'started'  — fired ONCE on the first sample of audio (the moment t=0
+  //                of the master recording starts). Listeners use this to
+  //                align segment-publisher session origin to audio origin
+  //                (Zoom Web specific: parecord-start can lag per-speaker
+  //                pipeline init by 20-30s; without re-aligning here, segment
+  //                timestamps map past the end of the audio file in the dashboard).
+  //   'error'    — capture-side errors
   on(event: "chunk", listener: (chunk: AudioChunk) => void): this;
+  on(event: "started", listener: () => void): this;
   on(event: "error", listener: (err: Error) => void): this;
   on(event: string | symbol, listener: (...args: any[]) => void): this;
   emit(event: "chunk", chunk: AudioChunk): boolean;
+  emit(event: "started"): boolean;
   emit(event: "error", err: Error): boolean;
   emit(event: string | symbol, ...args: any[]): boolean;
 }
@@ -363,6 +373,12 @@ export class PulseAudioCapture extends EventEmitter implements AudioCaptureSourc
         if (!started) {
           log(`[PulseAudioCapture] receiving audio from ${this.device}.monitor`);
           started = true;
+          // Emit 'started' BEFORE resolve() so listeners (zoom/web/recording.ts
+          // attaches one to call publisher.resetSessionStart) can hook the
+          // exact moment audio sample 0 enters the buffer. Without this,
+          // segment-to-audio alignment drifts by however long parecord
+          // took to spawn + warm up (10-30s in practice).
+          this.emit("started");
           resolve();
         }
         this._appendAndSlice(buf);

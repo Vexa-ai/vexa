@@ -1,7 +1,7 @@
 import { Page } from 'playwright';
 import { BotConfig } from '../../../types';
 import { RecordingService } from '../../../services/recording';
-import { getRawCaptureService } from '../../../index';
+import { getRawCaptureService, getSegmentPublisher } from '../../../index';
 import { log } from '../../../utils';
 import { PulseAudioCapture, UnifiedRecordingPipeline } from '../../../services/audio-pipeline';
 import { zoomParticipantNameSelector } from './selectors';
@@ -40,6 +40,25 @@ export async function startZoomWebRecording(page: Page | null, botConfig: BotCon
       // bot_exit_callback.
       recordingService = new RecordingService(botConfig.meeting_id, sessionUid);
       const source = new PulseAudioCapture();
+
+      // Pack U.4 segment-alignment hook (#GH-zoom-segment-drift, 2026-05-02):
+      // Reset SegmentPublisher.sessionStartMs the moment parecord delivers
+      // its first sample — that's t=0 of the master.wav. Without this,
+      // segment timestamps remain anchored to per-speaker-pipeline init
+      // (~admission moment) which can be 20-30s BEFORE parecord-start.
+      // Result pre-fix: clicking a segment in the dashboard seeks the
+      // audio player past end-of-file. GMeet/Teams have an equivalent
+      // hook via __vexaRecordingStarted (browser-side, fires on
+      // MediaRecorder.onstart) — Zoom Web wasn't covered because
+      // parecord doesn't fire a browser event.
+      source.on('started', () => {
+        const publisher = getSegmentPublisher();
+        if (publisher) {
+          publisher.resetSessionStart();
+          log(`[Zoom Web] Session start re-aligned to parecord t=0: ${new Date(publisher.sessionStartMs).toISOString()}`);
+        }
+      });
+
       pipeline = new UnifiedRecordingPipeline({
         source,
         recordingService,
