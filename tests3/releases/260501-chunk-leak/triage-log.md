@@ -476,5 +476,54 @@ proposed resolution: update grep targets to shared modules; belt-and-braces guar
 
 Stage transition: `triage → develop`.
 
+---
+
+## SEVENTH-PASS TRIAGE (2026-05-02 — project-owner adds #304 mid-cycle)
+
+R13 authoritative validate gated GREEN; stage → human. Project owner
+identified GH issue #304 ("Dashboard /meetings list duplicates rows when
+redacted shells are present") in dashboard human-eyeroll and directed
+inclusion in v0.10.6 cycle: "let's take and fix this one in this
+iteration as well now."
+
+This is a project-owner-driven scope addition mid-human-stage — same
+pattern as the earlier audio regression that triggered the v0.10.6
+retarget. Treating as a triage-class entry with `fix this first: yes`
+directive captured.
+
+### `dashboard-meetings-pagination-duplicates-on-redacted-shells` [REGRESSION/CARRY-OVER]
+
+- **status:** open GH issue #304; visible in dashboard meetings list
+  (3-6× duplication of certain meetings post-redact-DELETE).
+- **bound check:** none yet (Pack U-style relocation didn't trigger it
+  because this is in dashboard code, not bot/server). Adds new static
+  check DASHBOARD_MEETINGS_PAGINATION_TRACKS_UNFILTERED_OFFSET in this
+  iteration.
+- **symptom:** dashboard /meetings page shows duplicate rows. Backend
+  has exactly ONE row per native_meeting_id; only the dashboard
+  pagination math is wrong.
+- **root cause** (per #304 analysis):
+  services/dashboard/src/stores/meetings-store.ts paginates by passing
+  `offset: meetings.length` to the next page request, where `meetings`
+  is the POST-FILTER array. The filter (`isHiddenDeletedMeeting`) drops
+  rows where `data.redacted === true` or `platform_specific_id == null`
+  — shells from the DELETE-with-PII-scrub flow. Each filtered row makes
+  the next request ask for an offset N positions earlier than where the
+  previous page actually ended → API returns N rows already shown.
+- **fix** (per #304 suggestion):
+  1. Track explicit `_offset` in the store that advances by the
+     unfiltered API page size (50), NOT by `meetings.length`.
+  2. Belt-and-suspenders: dedupe merged list by meeting.id after the
+     `[...meetings, ...newMeetings]` concat — defends against any future
+     filter / WS-update race.
+
+<!-- human directive (project owner): -->
+fix this first: yes
+proposed resolution: implement the explicit-offset + dedupe pattern from
+issue #304, add static-grep check + DoD binding, push + redeploy
+dashboard image + revalidate matrix.
+
+Stage transition: `triage → develop`.
+
 Stage transition: `triage → develop` to apply the one-line env gate fix.
 
