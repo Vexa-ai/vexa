@@ -33,6 +33,7 @@ from .meetings import (
     get_redis,
 )
 from .post_meeting import run_all_tasks
+from .recording_finalizer import finalize_recording_master
 
 logger = logging.getLogger("meeting_api.callbacks")
 
@@ -312,6 +313,18 @@ async def bot_exit_callback(
             meta = {"exit_code": exit_code}
             if payload.platform_specific_error:
                 meta["platform_specific_error"] = payload.platform_specific_error
+            # Pack U.7 (v0.10.6) — build master.{webm|wav} from chunks BEFORE status flip,
+            # so post-meeting transcribe and dashboard playback never read a stale
+            # storage_path. Idempotent (HEAD-checks for existing master).
+            try:
+                await finalize_recording_master(meeting.id, db)
+            except Exception as fin_err:
+                logger.error(
+                    "Exit callback: finalize_recording_master failed for meeting %s — "
+                    "continuing with status update (master may be absent; operator can "
+                    "re-trigger). error_class=%s error=%s",
+                    meeting.id, type(fin_err).__name__, str(fin_err)[:200],
+                )
             success = await update_meeting_status(
                 meeting, MeetingStatus.COMPLETED, db,
                 completion_reason=provided_reason,
@@ -339,6 +352,18 @@ async def bot_exit_callback(
                 f"(was: completed reason={provided_reason.value})"
             )
             meta = {"exit_code": exit_code, "original_reason": payload.reason, "pack_j_classification": classified_reason.value}
+            # Pack U.7 (v0.10.6) — build master.{webm|wav} from chunks BEFORE status flip,
+            # so post-meeting transcribe and dashboard playback never read a stale
+            # storage_path. Idempotent (HEAD-checks for existing master).
+            try:
+                await finalize_recording_master(meeting.id, db)
+            except Exception as fin_err:
+                logger.error(
+                    "Exit callback: finalize_recording_master failed for meeting %s — "
+                    "continuing with status update (master may be absent; operator can "
+                    "re-trigger). error_class=%s error=%s",
+                    meeting.id, type(fin_err).__name__, str(fin_err)[:200],
+                )
             success = await update_meeting_status(
                 meeting, target_status, db,
                 completion_reason=classified_reason,
@@ -436,6 +461,18 @@ async def bot_exit_callback(
                 if payload.reason:
                     error_msg += f"; reason: {payload.reason}"
                 update_kwargs["error_details"] = error_msg
+            # Pack U.7 (v0.10.6) — build master.{webm|wav} from chunks BEFORE status flip,
+            # so post-meeting transcribe and dashboard playback never read a stale
+            # storage_path. Idempotent (HEAD-checks for existing master).
+            try:
+                await finalize_recording_master(meeting.id, db)
+            except Exception as fin_err:
+                logger.error(
+                    "Exit callback: finalize_recording_master failed for meeting %s — "
+                    "continuing with status update (master may be absent; operator can "
+                    "re-trigger). error_class=%s error=%s",
+                    meeting.id, type(fin_err).__name__, str(fin_err)[:200],
+                )
             success = await update_meeting_status(
                 meeting, target_status, db, **update_kwargs
             )
