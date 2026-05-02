@@ -188,6 +188,50 @@ else
   step_fail DASHBOARD_AUDIO_STREAMS_FROM_BUCKET "dashboard api.ts has no /download or getRecordingAudioStreamUrl"
 fi
 
+# ── UNIFIED_ALIGNMENT_HOOK_IN_PIPELINE ─────────────────────────────
+# Segment-to-audio alignment lives in ONE place — UnifiedRecordingPipeline.
+# Verifies:
+#   (1) audio-pipeline.ts UnifiedRecordingPipeline subscribes to
+#       source.on('started') and calls publisher.resetSessionStart().
+#   (2) NO per-platform recording.ts has its own
+#       page.exposeFunction('__vexaRecordingStarted', ...) handler
+#       with publisher.resetSessionStart inside. Browser-side trigger
+#       calls (window.__vexaRecordingStarted?.()) are OK — they fire
+#       UP to the shared exposed function in MediaRecorderCapture.
+#   (3) NO per-platform recording.ts calls publisher.resetSessionStart()
+#       at function entry (premature reset that pre-dates the unified hook).
+ap="$ROOT_DIR/services/vexa-bot/core/src/services/audio-pipeline.ts"
+align_bad=""
+# (1) pipeline must own the hook
+if [ ! -f "$ap" ] || ! grep -qE "this\.source\.on\(\"started\"" "$ap"; then
+  align_bad+=" pipeline-no-started-hook"
+fi
+if [ -f "$ap" ] && ! grep -qE "publisher\.resetSessionStart" "$ap"; then
+  align_bad+=" pipeline-no-resetSessionStart"
+fi
+# (2) + (3): platform recording.ts files must NOT own alignment.
+# Strip // comments first (deletion-rationale comments are OK).
+for plat in googlemeet msteams "zoom/web"; do
+  pf="$ROOT_DIR/services/vexa-bot/core/src/platforms/$plat/recording.ts"
+  [ ! -f "$pf" ] && continue
+  stripped_pf=$(sed 's://.*$::' "$pf")
+  # exposeFunction("__vexaRecordingStarted", ...) — forbidden in platform files
+  # (MediaRecorderCapture in audio-pipeline.ts owns this).
+  if echo "$stripped_pf" | grep -qE 'exposeFunction\([^)]*__vexaRecordingStarted'; then
+    align_bad+=" $plat:exposeFunction-redundant"
+  fi
+  # publisher.resetSessionStart() in platform code — forbidden after unification.
+  if echo "$stripped_pf" | grep -qE 'publisher\.resetSessionStart\(\)'; then
+    align_bad+=" $plat:platform-side-reset"
+  fi
+done
+if [ -z "$align_bad" ]; then
+  step_pass UNIFIED_ALIGNMENT_HOOK_IN_PIPELINE \
+    "alignment hook lives only in UnifiedRecordingPipeline; no per-platform handlers"
+else
+  step_fail UNIFIED_ALIGNMENT_HOOK_IN_PIPELINE "violations:$align_bad"
+fi
+
 # ── BROWSER_UTILS_INJECTED_BEFORE_PIPELINE_START ──────────────────
 # Pack U.2/U.3 regression guard: ensureBrowserUtils() MUST run BEFORE
 # pipeline.start() in every platform that uses MediaRecorderCapture.

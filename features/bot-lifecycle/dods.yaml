@@ -302,6 +302,16 @@ dods:
     modes:
     - compose
 
+- id: unified-alignment-hook-in-pipeline
+  label: "segment-to-audio alignment hook (publisher.resetSessionStart) lives in UnifiedRecordingPipeline ONLY — per-platform recording.ts files have no exposeFunction('__vexaRecordingStarted') handler and no premature publisher.resetSessionStart() call. Same hook for all 3 platforms via source.on('started')."
+  weight: 10
+  evidence:
+    check: UNIFIED_ALIGNMENT_HOOK_IN_PIPELINE
+    modes:
+    - lite
+    - compose
+    - helm
+
 - id: browser-utils-injected-before-pipeline-start
   label: "every platform recording.ts that uses MediaRecorderCapture calls ensureBrowserUtils() BEFORE pipeline.start() — Pack U.2/U.3 regression guard. Wrong ordering produced 0 chunks every meeting (post-Pack-U gate green, real-meeting tests on helm/lite all failed STOPPED_WITH_NO_AUDIO until 2026-05-02 when ordering was fixed)."
   weight: 15

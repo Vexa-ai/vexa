@@ -2098,6 +2098,19 @@ DOWNLOAD_RETURNS_PRESIGNED_URL_TO_MASTER:
   - helm
   state: stateful
   max_duration_sec: 60
+UNIFIED_ALIGNMENT_HOOK_IN_PIPELINE:
+  proves: "segment-to-audio alignment lives in ONE place — UnifiedRecordingPipeline subscribes to source.on('started') and calls publisher.resetSessionStart(). Per-platform recording.ts files do NOT have their own page.exposeFunction('__vexaRecordingStarted', ...) handler with publisher.resetSessionStart inside, and do NOT call publisher.resetSessionStart() at function entry. Matches Pack U design intent: tiny per-platform shims, all behavior in shared modules."
+  symptom: "pre-fix: GMeet/Teams had platform-side __vexaRecordingStarted handlers, Zoom had source.on('started') handler — three separate-but-identical handlers. Drift risk + duplicated maintenance. Captured 2026-05-02 after real-meeting test exposed Zoom segment-to-audio drift (Zoom mtg 23: segments 169s vs audio 159s = clicks past end-of-file)."
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-static-greps.sh
+  step: unified_alignment_hook
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
 BROWSER_UTILS_INJECTED_BEFORE_PIPELINE_START:
   proves: "every platform recording.ts that uses MediaRecorderCapture calls ensureBrowserUtils() BEFORE pipeline.start() — guards Pack U.2/U.3 regression where wrong ordering caused the pipeline's page.evaluate to access an undefined window.VexaBrowserUtils, throw silently, and produce 0 audio chunks (every real meeting then classified STOPPED_WITH_NO_AUDIO → status=failed)"
   symptom: "meetings reach status=active for ~3 min then go status=failed with chunks=0; bot logs show 'Browser utils available:' (empty list); recordings field absent"
