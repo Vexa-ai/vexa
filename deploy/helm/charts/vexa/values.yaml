@@ -215,6 +215,15 @@ ttsService:
       cpu: 100m
       memory: 512Mi
   extraEnv: []
+  # First-boot voice-model download takes 60-180s. Defaults below clear that
+  # window; subsequent restarts come up fast (PVC retains models). Operators
+  # on slow registries / first-boot in air-gapped envs should bump these.
+  # Caught 2026-05-03 on prod cluster: original 15s/45s defaults killed pod
+  # in download-loop until v0.10.6.1 exposed the values knobs.
+  readinessProbe:
+    initialDelaySeconds: 300
+  livenessProbe:
+    initialDelaySeconds: 600
 
 mcp:
   enabled: true

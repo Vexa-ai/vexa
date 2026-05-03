@@ -63,17 +63,22 @@ spec:
           volumeMounts:
             - name: voices
               mountPath: /app/voices
+          # First-boot voice-model download takes 60-180s (en_US-amy-medium ~60MB
+          # pulled into the persistent volume on first start). Initial delays
+          # are values-overridable so prod / on-prem can extend them; defaults
+          # tuned to clear the first download. Subsequent restarts come up fast
+          # because the PVC retains models.
           readinessProbe:
             httpGet:
               path: /docs
               port: http
-            initialDelaySeconds: 15
+            initialDelaySeconds: {{ .Values.ttsService.readinessProbe.initialDelaySeconds | default 300 }}
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /docs
               port: http
-            initialDelaySeconds: 45
+            initialDelaySeconds: {{ .Values.ttsService.livenessProbe.initialDelaySeconds | default 600 }}
             periodSeconds: 20
           resources:
             {{- toYaml .Values.ttsService.resources | nindent 12 }}
