@@ -63,8 +63,8 @@ class PaginatedMeetingUserStatResponse(BaseModel):
     items: List[MeetingUserStat]
 
 # Security - Reuse logic from meeting-api/auth.py for admin token verification
-API_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", auto_error=False) # Use a distinct header
-USER_API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False) # For user-facing endpoints
+API_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", scheme_name="AdminApiKey", auto_error=False)
+USER_API_KEY_HEADER = APIKeyHeader(name="X-API-Key", scheme_name="UserApiKey", auto_error=False)
 ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN") # Read from environment
 ANALYTICS_API_TOKEN = os.getenv("ANALYTICS_API_TOKEN") # Read-only analytics token
 
