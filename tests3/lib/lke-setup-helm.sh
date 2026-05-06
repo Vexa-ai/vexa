@@ -49,6 +49,15 @@ HELM_ARGS=(
     --values "$VALUES_FILE"
     --set "dashboard.env.VEXA_PUBLIC_API_URL=$GATEWAY_URL"
     --set "dashboard.env.NEXT_PUBLIC_APP_URL=$DASHBOARD_URL"
+    # v0.10.6 Pack D-3 — expose MinIO via NodePort + tell meeting-api
+    # to sign presigned URLs against the public endpoint. Without this,
+    # browsers receive `http://vexa-vexa-minio:9000/...` URLs that fail
+    # to resolve (in-cluster DNS only) → dashboard audio playback hangs
+    # at "Preparing audio...". Real-meeting tests on 2026-05-02 caught
+    # this on helm only (compose+lite have docker-host MinIO reachable).
+    --set "minio.service.type=NodePort"
+    --set "minio.service.nodePort=30090"
+    --set "meetingApi.minioPublicEndpoint=http://${NODE_IP}:30090"
 )
 
 if [ -n "$IMAGE_TAG" ]; then
@@ -153,11 +162,22 @@ USER_ID=$(curl -sf "$GATEWAY_URL/admin/users/email/test@vexa.ai" \
     python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
 
 if [ -z "$USER_ID" ]; then
+    # max_concurrent_bots=3 — helm test cluster supports concurrent multi-bot
+    # validation (Pack U synthetic-rig dispatches 3 bots in parallel for
+    # cross-platform smokes). Default admin-api would apply 0 (DB) → gateway
+    # falls back to 1, which silently rate-limits multi-bot scenarios.
     USER_ID=$(curl -sf -X POST "$GATEWAY_URL/admin/users" \
         -H "X-Admin-API-Key: $ADMIN_TOKEN" \
         -H "Content-Type: application/json" \
-        -d '{"email":"test@vexa.ai","name":"Test User"}' 2>/dev/null | \
+        -d '{"email":"test@vexa.ai","name":"Test User","max_concurrent_bots":3}' 2>/dev/null | \
         python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+fi
+# Ensure existing user (re-provision case) also has the right limit.
+if [ -n "$USER_ID" ]; then
+    curl -sf -X PATCH "$GATEWAY_URL/admin/users/$USER_ID" \
+        -H "X-Admin-API-Key: $ADMIN_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d '{"max_concurrent_bots":3}' 2>/dev/null >/dev/null || true
 fi
 
 API_TOKEN=""

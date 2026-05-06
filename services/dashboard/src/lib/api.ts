@@ -335,12 +335,69 @@ export const vexaAPI = {
     return handleResponse(response);
   },
 
-  // Recordings - get the proxied URL for streaming audio via /raw endpoint
+  // Pack U.8 (v0.10.6, re-applies reverted Pack D-3 on top of the new
+  // master-recording contract, see commit a62d658): /download returns a
+  // 1-hour presigned MinIO URL pointing at <prefix>/master.{webm|wav}
+  // built server-side by recording_finalizer at bot_exit_callback. The
+  // browser streams directly from MinIO with native HTTP Range — no
+  // in-process proxying through meeting-api.
+  //
+  // JSON shape: { url: string, download_url?: string, filename: string,
+  //   content_type: string, file_size_bytes: number, expires_in: number }.
+  // `download_url` is a back-compat alias of `url`.
+  //
+  // 404 from /download means the master doesn't exist yet (meeting still
+  // in progress, or finalizer crashed). The caller falls back to /raw
+  // (legacy in-process proxy) so the dashboard at least renders SOMETHING
+  // — this is the LAST allowed fallback in this code path (Pack P rule);
+  // kept until Pack U master_ready flag exists.
+  async getRecordingAudioStreamUrl(
+    recordingId: number,
+    mediaFileId: number
+  ): Promise<string> {
+    try {
+      const response = await fetch(
+        withBasePath(`/api/vexa/recordings/${recordingId}/media/${mediaFileId}/download`)
+      );
+      if (response.ok) {
+        const data = (await response.json()) as { url?: string; download_url?: string };
+        const presigned = data.url || data.download_url || "";
+        // Local-storage backend returns a relative `/raw` path; absolute
+        // (https://...) URLs go straight to MinIO.
+        if (presigned && /^https?:\/\//.test(presigned)) {
+          return presigned;
+        }
+        if (presigned) {
+          return withBasePath(`/api/vexa${presigned}`);
+        }
+      }
+      // 404 / non-OK / empty body → fall through to /raw fallback below.
+    } catch {
+      // Network error → fall through to /raw fallback below.
+    }
+    // fallback: master may not exist if finalizer crashed; /raw streams chunks (tested in BOT_KILL_RECORDING_PLAYABLE_*) — kept until Pack U master_ready flag exists
+    return withBasePath(
+      `/api/vexa/recordings/${recordingId}/media/${mediaFileId}/raw`
+    );
+  },
+
+  // Sibling for video: the /download endpoint serves both audio + video
+  // (content_type derived from media_file format).
+  async getRecordingVideoStreamUrl(
+    recordingId: number,
+    mediaFileId: number
+  ): Promise<string> {
+    return this.getRecordingAudioStreamUrl(recordingId, mediaFileId);
+  },
+
+  // Legacy synchronous helpers — return the /raw proxy URL directly.
+  // Kept for callers that can't await (e.g. JSX `src=` on first paint).
+  // New code should prefer getRecordingAudioStreamUrl (presigned URL +
+  // direct browser-to-MinIO streaming).
   getRecordingAudioUrl(recordingId: number, mediaFileId: number): string {
     return withBasePath(`/api/vexa/recordings/${recordingId}/media/${mediaFileId}/raw`);
   },
 
-  // Recordings - get the proxied URL for streaming video via /raw endpoint
   getRecordingVideoUrl(recordingId: number, mediaFileId: number): string {
     return withBasePath(`/api/vexa/recordings/${recordingId}/media/${mediaFileId}/raw`);
   },

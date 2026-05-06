@@ -33,7 +33,15 @@ export STATE
 
 mkdir -p "$STATE"
 echo "$MODE" > "$STATE/deploy_mode"
+# v0.10.6 Pack U.7 follow-up: clear stale per-mode reports before each run.
+# aggregate.py reads every *.json under $STATE/reports/<mode>/; stale files
+# from prior cycles (e.g. chart-rolling-update-zero-surge.json from when the
+# check was bound, before Pack H deprecated it) leak into the gate report
+# as ❌ fail despite no current binding. Caught 2026-05-03 release-validate:
+# 14 of 15 unique DoD failures were lite-down cascade, 1 was a stale May-1
+# zero-surge file. Cleaning per-mode at run start fixes the pattern durably.
 mkdir -p "$STATE/reports/$MODE"
+find "$STATE/reports/$MODE" -maxdepth 1 -name '*.json' -type f -delete
 
 # Bootstrap credentials BEFORE any user-level test script runs — some tests
 # source common.sh and state_read api_token at top level. Contract-tier checks
@@ -78,7 +86,14 @@ selected = set()
 if scope_path:
     with open(scope_path) as f:
         scope = yaml.safe_load(f)
-    for issue in (scope.get("issues") or []):
+    # v0.10.5.3 fix: scope.yaml structure uses top-level key `scope:` for
+    # the issues list (per tests3/releases/_template/scope.yaml). The
+    # legacy `issues:` key is also accepted for backward compat with any
+    # external tooling. Without this, --scope selected 0 tests on every
+    # invocation (the if branch silently ran 0 tests, which is why
+    # release-iterate never actually ran scope-filtered tests).
+    issues_list = scope.get("scope") or scope.get("issues") or []
+    for issue in issues_list:
         for p in (issue.get("proves") or []):
             proof_modes = p.get("modes") or []
             if proof_modes and mode not in proof_modes:
@@ -86,11 +101,20 @@ if scope_path:
             if "test" in p:
                 selected.add(p["test"])
             elif "check" in p:
-                # Check ID → include every smoke-* tier that runs in this mode.
-                # Aggregator will pick out the specific check from whatever tier
-                # reports it. Cheap (< 2min total) so no reason to be clever.
+                # Check ID → include every smoke-* tier that runs in this mode,
+                # plus the v0.10.6-* Pack U scripts (single-invocation multi-step
+                # tests that emit their step IDs as registry check IDs). Pre-
+                # v0.10.6 the check-ID branch only included smoke-*, which
+                # silently dropped Pack U DoDs from scope-filtered runs.
+                # Aggregator picks the specific check from whatever tier reports
+                # it. Cheap (< 2min total) so no reason to be clever.
                 for t in tests:
-                    if t.startswith("smoke-") and want_runs_in(t):
+                    if not want_runs_in(t):
+                        continue
+                    if t.startswith("smoke-"):
+                        selected.add(t)
+                    elif t in ("v0.10.6-static-greps", "v0.10.5.3-hallucination-corpus"):
+                        # Cheap tests that emit check-ID-shaped step IDs.
                         selected.add(t)
 else:
     for name, spec in tests.items():

@@ -786,13 +786,21 @@ HELM_REDIS_MAXMEMORY_SET:
   - helm
   state: stateless
   max_duration_sec: 5
-HELM_ROLLING_UPDATE_ZERO_SURGE:
-  proves: "every app-facing Deployment in rendered chart sets strategy.rollingUpdate.maxSurge: 0 \u2014 rolling updates never\
-    \ double DB pool footprint"
-  symptom: "rolling update briefly runs 2 pods, pools 2\xD7, pushes over managed-DB slot cap"
-  found: '2026-04-21'
+HELM_ROLLING_UPDATE_ZERO_DOWNTIME:
+  proves: "every app-facing Deployment in rendered chart sets strategy.rollingUpdate.maxUnavailable: 0 \u2014 OLD pod stays Ready until NEW pod is Ready (zero-downtime)"
+  symptom: "v0.10.5.2 ship outage class: replicaCount: 1 + maxUnavailable: 1 killed OLD pod before NEW Ready, 502s during any image bump (e.g. dashboard + webapp on 2026-05-01)"
+  found: '2026-05-01'
+  superseded_check: HELM_ROLLING_UPDATE_ZERO_SURGE
+  superseded_at: '2026-05-01'
+  superseded_rationale: |
+    Pre-v0.10.5.3 this check enforced maxSurge: 0 to prevent DB pool footprint
+    doubling during rolling upgrade. v0.10.5 Pack C.x shrank per-pod DB pool
+    4x (8 -> 2 connections per holder), so 2x footprint during rolling is
+    well below managed-DB slot cap. The new Pack H invariant (maxUnavailable: 0)
+    addresses a more painful failure class \u2014 zero-downtime rolling \u2014 and the
+    DB pool concern is now adequately covered by per-pod pool sizing.
   type: script
-  script: tests/chart-rolling-update-zero-surge.sh
+  script: tests/chart-rolling-update-zero-downtime.sh
   modes:
   - helm
   state: stateless
@@ -1581,6 +1589,617 @@ WS_PING_PONG:
   - helm
   state: stateful
   max_duration_sec: 30
+# \u2500\u2500 v0.10.5.3 cycle additions (Pack M, O, T, P, C, D-1, D-2, D-3, H) \u2500\u2500
+BOT_RECORDING_CHUNK_BUFFER_TRIMMED:
+  proves: "bot recording.ts splices chunks from __vexaRecordedChunks after upload (gmeet + teams) so the buffer cap stays at 10 max"
+  symptom: "__vexaRecordedChunks grows unbounded for the meeting lifetime; 10+ MB at 24 min real-conversation; tab-process pressure \u2192 page navigation \u2192 recording.js:102 Execution context destroyed"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.5.3-static-greps.sh
+  step: chunk_buffer_trim
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BOT_GMEET_LONG_RECORDING_NO_LEAK:
+  proves: "GMeet bot dispatched at FIXTURE_GMEET_MULTIPARTY_URL with recording_enabled=true survives 25+ min without page-navigation crash; bot_resources.peak_memory_bytes stays bounded"
+  symptom: "long-duration crash class \u2014 Execution context destroyed at recording.js:102 around 14-24 min mark on real-conversation meetings"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.5.3-runtime-smokes.sh
+  step: gmeet_long_recording
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 1800
+BOT_TEAMS_LONG_RECORDING_NO_LEAK:
+  proves: "Teams bot dispatched at FIXTURE_TEAMS_MULTIPARTY_URL with recording_enabled=true survives 25+ min cleanly"
+  symptom: "same chunk-buffer leak class on Teams platform"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.5.3-runtime-smokes.sh
+  step: teams_long_recording
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 1800
+BOT_ZOOM_LONG_RECORDING_NO_LEAK:
+  proves: "Zoom Web bot dispatched at FIXTURE_ZOOM_URL with recording_enabled=true survives \u226560s; verifies no equivalent leak in Zoom's parecord paradigm"
+  symptom: "if Zoom has a different unbounded accumulator (defensive check)"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.5.3-runtime-smokes.sh
+  step: zoom_long_recording
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 1800
+BOT_STDOUT_STREAM_TO_REDIS:
+  proves: "bot maintains an in-process ring buffer of last ~200 structured-JSON log lines (logBuffer in utils/log.ts) \u2014 Pack O Phase 1; getLogBuffer() exported for performGracefulLeave"
+  symptom: "every long-duration crash investigation since v0.10.5 ship has been forensic-blind because bot stdout dies with the pod and was not flushed to JSONB"
+  found: '2026-05-01'
+  type: grep
+  file: services/vexa-bot/core/src/utils/log.ts
+  must_match: 'export function getLogBuffer'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+MEETING_API_FLUSH_BOT_LOGS_ON_TERMINAL:
+  proves: "meeting-api bot_status_change_callback persists payload.bot_logs into meetings.data.bot_logs JSONB on terminal status (failed/completed) with a 50 KB cap"
+  symptom: "bot ring-buffer is sent on the wire but meeting-api drops it; meetings.data.bot_logs never populated"
+  found: '2026-05-01'
+  type: grep
+  file: services/meeting-api/meeting_api/callbacks.py
+  must_match: 'BOT_LOGS_MAX_BYTES'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+MEETING_BOT_LOGS_FIELD_PRESENT_ON_FAILED:
+  proves: "after a forced bot crash, meeting row's data.bot_logs field is populated with the structured-log lines preserving the crash moment"
+  symptom: "operator-side forensic gap: failed meetings have no log evidence to diagnose"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.5.3-runtime-smokes.sh
+  step: meeting_bot_logs_present
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 120
+BOT_RESOURCE_SAMPLER_RUNS:
+  proves: "bot's main loop has a 30s cgroup-stat poller (startBotResourceSampler in index.ts) emitting structured log lines with memory_bytes + cpu_usage_usec from /sys/fs/cgroup"
+  symptom: "no per-meeting memory/CPU telemetry; cannot answer 'did the bot OOM at minute 23'"
+  found: '2026-05-01'
+  type: grep
+  file: services/vexa-bot/core/src/index.ts
+  must_match: 'cgroup.*memory\.current'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+MEETING_BOT_RESOURCES_FIELD_PRESENT:
+  proves: "meeting row's data.bot_resources field has peak_memory_bytes + cpu_usage_usec_total + samples after meeting completes"
+  symptom: "Pack T resource summary not making it through to the JSONB"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.5.3-runtime-smokes.sh
+  step: meeting_bot_resources_present
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 120
+STAGE_DOC_DEVELOP_NO_FALLBACKS_RULE:
+  proves: "tests3/stages/03-develop.md contains the 'No fallbacks unless explicitly decided' rule under May NOT"
+  symptom: "fallback patterns added to OSS code without scope-stage decision-record (Pack M's chunk-buffer leak was committed exactly this way)"
+  found: '2026-05-01'
+  type: grep
+  file: tests3/stages/03-develop.md
+  must_match: '(?i)no fallback.*explicit.*decision'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BOT_NO_UNJUSTIFIED_FALLBACKS:
+  proves: "soft-grep across services/vexa-bot/core/src/ surfaces fallback patterns; pass with WARN on existing 117 patterns; develop-stage rule is primary enforcement"
+  symptom: "new fallback added without #NNN issue ref \u2014 repeats the v0.10.5.2 chunk-buffer leak pattern"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.5.3-no-fallbacks-pii.sh
+  step: bot_fallback_audit
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 10
+HALLUCINATION_CORPUS_PRESENT:
+  proves: "services/vexa-bot/core/src/services/hallucinations/{en,es,pt,ru}.txt exist + non-empty (each \u2265 5 phrase lines). Bot image build copies these to dist; whisper hallucination filter loads them at runtime to drop 'thanks for watching' / 'subscribe to my channel' class artifacts before publishing to Redis."
+  symptom: "FM-274 regression class: phrase corpus deleted/renamed/moved. Bot ships with empty filter. Long-form whisper hallucinations leak into prod transcripts. Originally regressed when WhisperLive was removed (v0.10.0 commit e55e878) and corpus went with it; FM-274 detected by orphan static check that wasn't bound to any DoD until v0.10.5.3."
+  found: '2026-05-02'
+  fix_release: v0.10.5.3
+  type: script
+  script: tests/v0.10.5.3-hallucination-corpus.sh
+  step: HALLUCINATION_CORPUS_PRESENT
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+HALLUCINATION_CORPUS_GITIGNORE_EXCEPTION:
+  proves: ".gitignore has the '!services/vexa-bot/core/src/services/hallucinations/*.txt' exception, protecting corpus from the global '*.txt' rule that would otherwise silently drop the files on git add."
+  symptom: "global '*.txt' rule silently re-disappears the corpus on next git add (exactly how the original v0.10.0 regression slipped past CI \u2014 deleted corpus was never visible as 'missing files' because *.txt is gitignored)."
+  found: '2026-05-02'
+  fix_release: v0.10.5.3
+  type: script
+  script: tests/v0.10.5.3-hallucination-corpus.sh
+  step: HALLUCINATION_CORPUS_GITIGNORE_EXCEPTION
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+HALLUCINATION_CORPUS_BUILD_FAIL_LOUD:
+  proves: "services/vexa-bot/core/package.json `build` script chains the cp step with '&&' (fails fast on missing source), NOT '2>/dev/null;' (silent failure that masked FM-274 from v0.10.0 to v0.10.5.2)."
+  symptom: "build script swallows cp's missing-source error \u2014 build always succeeds even when corpus didn't make it to dist. Empty filter ships to runtime. Audit-categories \u00a76 (operational hygiene): silent-failure pattern."
+  found: '2026-05-02'
+  fix_release: v0.10.5.3
+  type: script
+  script: tests/v0.10.5.3-hallucination-corpus.sh
+  step: HALLUCINATION_CORPUS_BUILD_FAIL_LOUD
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+RELEASE_DOCS_NO_PII:
+  proves: "tests3/releases/<id>/* artifacts use anonymized customer refs (customer-A, customer-B, ...); no real-looking emails outside @redacted/@example.com/@vexa.ai/@anthropic.com"
+  symptom: "PII leak into OSS public repo (real names + emails) like the v0.10.5.2 cycle"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.5.3-no-fallbacks-pii.sh
+  step: release_docs_pii
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 10
+MEETING_API_USER_STOP_IS_COMPLETED:
+  proves: "user-initiated DELETE during awaiting_admission produces meeting status=completed (not failed) with completion_reason=stopped_before_admission"
+  symptom: "v0.10.5.2 cycle bug: user-stops were classified as failed because STOPPED_BEFORE_ADMISSION was in _explicit_failure_reasons set"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.5.3-runtime-smokes.sh
+  step: user_stop_completed
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 120
+DASHBOARD_RENDERS_LOCAL_TZ:
+  proves: "dashboard meeting card uses parseUTCTimestamp + toLocaleString with Intl.DateTimeFormat resolved tz"
+  symptom: "meeting times rendered in tz-shifted form (#265) due to inconsistent parseUTCTimestamp usage"
+  found: '2026-05-01'
+  type: grep
+  file: services/dashboard/src/components/meetings/meeting-card.tsx
+  must_match: 'toLocaleString.*Intl\.DateTimeFormat'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+DASHBOARD_NO_INLINE_DOCS_LINKS:
+  proves: "dashboard header docs link uses getDocsUrl helper (external docs.vexa.ai); no inline href=/docs at startup pages"
+  symptom: "dashboard.vexa.ai/docs route reachable; users land on internal docs instead of canonical docs.vexa.ai"
+  found: '2026-05-01'
+  type: grep
+  file: services/dashboard/src/components/layout/header.tsx
+  must_match: 'getDocsUrl'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+MEETING_API_PRESIGNED_AUDIO_URL:
+  proves: "meeting-api /recordings/{id}/media/{mid}/download returns a presigned S3/MinIO URL when storage_backend in {s3, minio}"
+  symptom: "audio playback always proxies through /raw which buffers the whole file in service memory (#288 \u2014 10s dead-air on 24-min recordings)"
+  found: '2026-05-01'
+  type: grep
+  file: services/meeting-api/meeting_api/recordings.py
+  must_match: 'get_presigned_url\(mf\.storage_path'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+DASHBOARD_AUDIO_STREAMS:
+  proves: "dashboard's getRecordingAudioUrl async-fetches /download response and returns presigned URL (or /raw for local backend) \u2014 browser streams directly with HTTP Range"
+  symptom: "every audio fragment src points at /raw proxy; full-file pre-download before playback"
+  found: '2026-05-01'
+  type: grep
+  file: services/dashboard/src/lib/api.ts
+  must_match: 'getRecordingAudioUrl.*async'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+HELM_DEPLOYMENT_MAX_UNAVAILABLE_ZERO:
+  proves: "vexa.deploymentStrategy helper renders maxUnavailable: 0 + maxSurge: 1 (zero-downtime rolling update)"
+  symptom: "v0.10.5.2 outage class: maxUnavailable: 1 + replicaCount: 1 killed OLD pod before NEW Ready, 502s during any image bump"
+  found: '2026-05-01'
+  type: grep
+  file: deploy/helm/charts/vexa/templates/_helpers.tpl
+  must_match: 'maxUnavailable: 0'
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 5
+HELM_REPLICA_COUNT_TWO_FOR_STATELESS:
+  proves: "values.yaml mcp.replicaCount: 2 (matches the rest of stateless services)"
+  symptom: "single-replica stateless service has zero-downtime exposure during rolling-update; v0.10.5.2 outage shape"
+  found: '2026-05-01'
+  type: script
+  script: tests/v0.10.5.3-static-greps.sh
+  step: helm_replica_count_two
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 5
+HELM_UPGRADE_PREFLIGHT_IMAGE_CHECK:
+  proves: "Makefile release-helm-upgrade-safe target verifies every chart-rendered image:tag exists on Docker Hub via docker manifest inspect before applying helm"
+  symptom: "v0.10.5.2 outage: silent build failures pushed non-existent image tags into helm values; upgrade applied them anyway \u2192 ImagePullBackOff outage"
+  found: '2026-05-01'
+  type: grep
+  file: Makefile
+  must_match: 'docker manifest inspect'
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 5
+HELM_UPGRADE_ATOMIC_DEFAULT:
+  proves: "release-helm-upgrade-safe always calls helm upgrade with --atomic --wait --timeout 5m flags"
+  symptom: "non-atomic upgrade leaves prod broken on failed image-pull; manual rollback needed"
+  found: '2026-05-01'
+  type: grep
+  file: Makefile
+  must_match: 'helm upgrade.*--atomic.*--wait.*--timeout'
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 5
+# ── v0.10.6 cycle additions (Pack U — audio recording unification) ────
+SHARED_AUDIO_PIPELINE_MODULE_EXISTS:
+  proves: "shared services/audio-pipeline.ts exports AudioChunk, AudioCaptureSource, UnifiedRecordingPipeline — single module driving capture lifecycle for all 3 platforms"
+  symptom: "recording capture logic duplicated across googlemeet/recording.ts (1003 LOC) + msteams/recording.ts (1490 LOC) + zoom/web/recording.ts (225 LOC); fixes must be applied N times; Pack M trim diverged between platforms"
+  found: '2026-05-02'
+  type: grep
+  file: services/vexa-bot/core/src/services/audio-pipeline.ts
+  must_match: 'class UnifiedRecordingPipeline'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+GMEET_RECORDING_USES_SHARED_PIPELINE:
+  proves: "googlemeet/recording.ts imports UnifiedRecordingPipeline + MediaRecorderCapture from services/audio-pipeline; no longer hand-rolls MediaRecorder + chunk-buffer logic"
+  symptom: "GMeet has its own copy of MediaRecorder boilerplate; Pack M's chunk-buffer cap was applied here separately from Teams"
+  found: '2026-05-02'
+  type: grep
+  file: services/vexa-bot/core/src/platforms/googlemeet/recording.ts
+  must_match: 'from .*services/audio-pipeline'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+TEAMS_RECORDING_USES_SHARED_PIPELINE:
+  proves: "msteams/recording.ts imports UnifiedRecordingPipeline + MediaRecorderCapture from services/audio-pipeline; no longer hand-rolls MediaRecorder + chunk-buffer logic"
+  symptom: "Teams duplicates ~80% of GMeet recording.ts; chunk-buffer trim drift risk"
+  found: '2026-05-02'
+  type: grep
+  file: services/vexa-bot/core/src/platforms/msteams/recording.ts
+  must_match: 'from .*services/audio-pipeline'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+ZOOM_WEB_RECORDING_USES_SHARED_PIPELINE:
+  proves: "zoom/web/recording.ts imports UnifiedRecordingPipeline + PulseAudioCapture from services/audio-pipeline; chunked upload model"
+  symptom: "Zoom Web's parecord uploads only one final WAV at meeting-end; bot crash = total audio loss (GH #296)"
+  found: '2026-05-02'
+  type: grep
+  file: services/vexa-bot/core/src/platforms/zoom/web/recording.ts
+  must_match: 'from .*services/audio-pipeline'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+ZOOM_WEB_UPLOADS_CHUNKS_PERIODICALLY:
+  proves: "PulseAudioCapture in services/audio-pipeline.ts emits 15s WAV chunks during a Zoom Web meeting (uploadChunk fires multiple times before finalize)"
+  symptom: "Zoom Web today uploads zero chunks during a meeting and one final WAV at the end; SIGKILL mid-meeting = all audio lost"
+  found: '2026-05-02'
+  type: grep
+  file: services/vexa-bot/core/src/services/audio-pipeline.ts
+  must_match: 'class PulseAudioCapture'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+PLATFORM_RECORDING_TS_LINE_BUDGET:
+  proves: "after Pack U unification, every platform recording.ts is ≤200 LOC (just selectors + DOM glue + capture-source instantiation; all upload + buffer + lifecycle logic moved to shared)"
+  symptom: "duplicated capture code rots out of sync; Pack M-style fix-once-apply-N drift"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-static-greps.sh
+  step: platform_recording_line_budget
+  modes:
+  - lite
+  state: stateless
+  max_duration_sec: 5
+NO_PER_PLATFORM_MASTER_CONSTRUCTION:
+  proves: "no platform recording.ts retains __vexaSaveRecordingBlob or equivalent bot-side master assembly — master is constructed exclusively server-side by recording_finalizer.py"
+  symptom: "bot-side master construction depends on graceful-leave firing; Pack M shrunk the buffer it relies on; crash-mid-meeting produces no master at all"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-static-greps.sh
+  step: no_bot_master_construction
+  modes:
+  - lite
+  state: stateless
+  max_duration_sec: 5
+SERVER_SIDE_MASTER_FINALIZER_EXISTS:
+  proves: "services/meeting-api/meeting_api/recording_finalizer.py defines async finalize_recording_master(meeting_id, db) that lists chunks, dispatches concat by format (webm|wav), and updates media_file.storage_path"
+  symptom: "no server-side path to assemble the master; download/transcribe pipelines depend on bot-side construction"
+  found: '2026-05-02'
+  type: grep
+  file: services/meeting-api/meeting_api/recording_finalizer.py
+  must_match: 'async def finalize_recording_master'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BOT_EXIT_CALLBACK_INVOKES_FINALIZER:
+  proves: "callbacks.py:bot_exit_callback awaits finalize_recording_master BEFORE update_meeting_status — so by the time meeting.status is terminal, master.{webm|wav} exists at media_file.storage_path"
+  symptom: "race window between status flip and master build allows /transcribe to read stale storage_path"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-static-greps.sh
+  step: finalizer_invoked_in_exit_callback
+  modes:
+  - lite
+  state: stateless
+  max_duration_sec: 5
+FINALIZER_BEFORE_STATUS_FLIP:
+  proves: "in callbacks.py:bot_exit_callback the finalize_recording_master await appears textually BEFORE the update_meeting_status await on every code path"
+  symptom: "if status flips first, /transcribe + dashboard playback can fetch a recording.storage_path that still points at a single chunk"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-static-greps.sh
+  step: finalizer_before_status
+  modes:
+  - lite
+  state: stateless
+  max_duration_sec: 5
+FINALIZER_IS_IDEMPOTENT:
+  proves: "second invocation of finalize_recording_master for the same meeting is a no-op — master.webm already exists, function returns early without re-uploading"
+  symptom: "non-idempotent retry doubles storage cost + risks corrupting master under concurrent invocation (idle_loop retry race)"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-runtime-smokes.sh
+  step: finalizer_idempotency
+  modes:
+  - compose
+  state: stateful
+  max_duration_sec: 60
+MASTER_AT_STORAGE_PATH:
+  proves: "after a normal-completion meeting, media_file.storage_path points at audio/master.{webm|wav}, NOT at audio/000000.{webm|wav} (which is the first chunk)"
+  symptom: "post-Pack-M, storage_path points at the broken bot-uploaded master fragment; pre-Pack-M, same path but bot-built whole-master; either way bot-controlled"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-runtime-smokes.sh
+  step: master_at_storage_path
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 300
+BOT_KILL_RECORDING_PLAYABLE_GMEET:
+  proves: "after SIGKILL'ing a GMeet bot mid-recording, idle_loop fires exit callback → finalize_recording_master builds master.webm from chunks already in MinIO → master is ffprobe-playable with duration ≥ chunks_uploaded × 15s"
+  symptom: "today, crash-mid-meeting GMeet recording is unrecoverable: storage_path stays at last chunk (Cluster-only, no init segment); ffprobe fails"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-runtime-smokes.sh
+  step: bot_kill_gmeet_master_playable
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 600
+BOT_KILL_RECORDING_PLAYABLE_TEAMS:
+  proves: "after SIGKILL'ing a Teams bot mid-recording, idle_loop fires exit callback → master.webm built → ffprobe-playable"
+  symptom: "same crash-recovery class as GMeet on Teams platform"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-runtime-smokes.sh
+  step: bot_kill_teams_master_playable
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 600
+BOT_KILL_RECORDING_PLAYABLE_ZOOM:
+  proves: "after SIGKILL'ing a Zoom Web bot mid-recording, master.wav built from chunked PulseAudio uploads → ffprobe-playable; depends on Pack U.4 (chunked upload from parecord)"
+  symptom: "today Zoom Web crash = total audio loss (parecord WAV is on bot-pod local disk, never uploaded incrementally)"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-runtime-smokes.sh
+  step: bot_kill_zoom_master_playable
+  modes:
+  - compose
+  state: stateful
+  max_duration_sec: 600
+DEFERRED_TRANSCRIBE_USES_MASTER:
+  proves: "POST /meetings/{id}/transcribe on a SIGKILL-mid-meeting recording fetches master.{webm|wav} from storage_path, ffmpeg-converts, returns segments — proving deferred transcription works on crashed-bot recordings (didn't pre-Pack-U)"
+  symptom: "post-meeting transcribe pipeline is fundamentally not chunk-aware: it reads single-file storage_path. Today crash = no transcribable audio."
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-runtime-smokes.sh
+  step: deferred_transcribe_master
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 600
+DOWNLOAD_RETURNS_PRESIGNED_URL_TO_MASTER:
+  proves: "GET /recordings/{id}/media/{file_id}/download returns a 200/302 with a presigned URL whose path component ends in /audio/master.{webm|wav}; URL is browser-reachable (uses MINIO_PUBLIC_ENDPOINT for helm/compose)"
+  symptom: "today /download still proxies bytes through meeting-api OR points at a chunk fragment"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-runtime-smokes.sh
+  step: download_presigned_master
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 60
+FINALIZER_HANDLES_MEETING_DATA_MODE:
+  proves: "recording_finalizer.py has the meeting_data JSONB path (Pack U.5 followup, commit 5af580e). Production runs in `meeting_data` mode where recordings live in meeting.data->'recordings' JSONB array; SQL Recording table is empty. Pre-fix the finalizer queried only the SQL table, found 0 rows, logged 'meeting_data mode or recording never started', and silently no-op'd on every real meeting. Asserts the [DATA] log emit + flag_modified(meeting,'data') is present."
+  symptom: "meetings reach completed but storage_path stays at last chunk (audio/0000NN.{ext}); dashboard hangs at 'preparing audio'; finalized_by absent or set to post_meeting_reconciler. Reproduced on helm tonight when stale meeting-api image was deployed without the followup."
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-static-greps.sh
+  step: finalizer_meeting_data_path
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+UNIFIED_ALIGNMENT_HOOK_IN_PIPELINE:
+  proves: "segment-to-audio alignment lives in ONE place — UnifiedRecordingPipeline subscribes to source.on('started') and calls publisher.resetSessionStart(). Per-platform recording.ts files do NOT have their own page.exposeFunction('__vexaRecordingStarted', ...) handler with publisher.resetSessionStart inside, and do NOT call publisher.resetSessionStart() at function entry. Matches Pack U design intent: tiny per-platform shims, all behavior in shared modules."
+  symptom: "pre-fix: GMeet/Teams had platform-side __vexaRecordingStarted handlers, Zoom had source.on('started') handler — three separate-but-identical handlers. Drift risk + duplicated maintenance. Captured 2026-05-02 after real-meeting test exposed Zoom segment-to-audio drift (Zoom mtg 23: segments 169s vs audio 159s = clicks past end-of-file)."
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-static-greps.sh
+  step: unified_alignment_hook
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+BROWSER_UTILS_INJECTED_BEFORE_PIPELINE_START:
+  proves: "every platform recording.ts that uses MediaRecorderCapture calls ensureBrowserUtils() BEFORE pipeline.start() — guards Pack U.2/U.3 regression where wrong ordering caused the pipeline's page.evaluate to access an undefined window.VexaBrowserUtils, throw silently, and produce 0 audio chunks (every real meeting then classified STOPPED_WITH_NO_AUDIO → status=failed)"
+  symptom: "meetings reach status=active for ~3 min then go status=failed with chunks=0; bot logs show 'Browser utils available:' (empty list); recordings field absent"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-static-greps.sh
+  step: browser_utils_before_pipeline
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+DASHBOARD_MEETINGS_PAGINATION_TRACKS_UNFILTERED_OFFSET:
+  proves: "dashboard meetings-store.ts paginates by an explicit _offset cursor that advances by the unfiltered API page size (50), NOT by post-filter meetings.length; next-page merge dedupes by meeting.id"
+  symptom: "GH issue #304 — /meetings list shows duplicate rows (3-6×) when redacted shells (`data.redacted=true` or `platform_specific_id==null`) are filtered out client-side, because next page request asks for offset N positions before where the previous page actually ended"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6-static-greps.sh
+  step: dashboard_meetings_pagination_offset
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+DASHBOARD_AUDIO_STREAMS_FROM_BUCKET:
+  proves: "dashboard ui reads /api/vexa/recordings/{id}/media/{file_id}/download (NOT /raw); response is a presigned URL; <audio src> binds to it; native HTTP Range fires on user seek"
+  symptom: "dashboard pre-downloads the full file before play; user perceives long loading delay; bandwidth cost amplified"
+  found: '2026-05-02'
+  type: grep
+  file: services/dashboard/src/lib/api.ts
+  must_match: 'getRecordingAudioUrl|recordings/.*/download'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+CHUNK_WRITE_PRESERVES_MASTER_PATH:
+  proves: "recordings.py chunk-write handler refuses to overwrite storage_path back to a chunk path when the prior media_file already had storage_path ending at /master.{webm|wav} OR is_final=True. Real-meeting test on helm 2026-05-03 caught the race: chunk N+1 landed AFTER Pack U.5 wrote master → dashboard saw chunk path, audio playback stuck at 'Preparing audio'."
+  symptom: "late-arriving chunk POST after bot graceful exit overwrites master storage_path; downstream consumers (dashboard /download, post-meeting transcribe) read chunk_seq=0 path instead of master.{webm|wav}"
+  found: '2026-05-03'
+  type: grep
+  file: services/meeting-api/meeting_api/recordings.py
+  must_match: 'master_finalized\s*='
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+RECORDING_FINALIZER_SETS_IS_FINAL:
+  proves: "recording_finalizer.py — when committing storage_path to master.{webm|wav}, also sets mf['is_final']=True so chunk_write's defensive guard activates"
+  symptom: "Pack U.5 finalizer leaves is_final=False after writing master; late-chunk handler doesn't recognize 'master already committed' state; chunk-write race overwrites the master path"
+  found: '2026-05-03'
+  type: grep
+  file: services/meeting-api/meeting_api/recording_finalizer.py
+  must_match: 'mf\["is_final"\]\s*=\s*True'
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+HELM_LKE_SETUP_EXPOSES_MINIO_NODEPORT:
+  proves: "tests3/lib/lke-setup-helm.sh sets minio.service.type=NodePort + nodePort + meetingApi.minioPublicEndpoint so presigned URLs are externally reachable from browser"
+  symptom: "helm cluster's MinIO presigned URLs point at vexa-vexa-minio:9000 (in-cluster DNS); browser audio playback hangs at 'Preparing audio' indefinitely"
+  found: '2026-05-03'
+  type: grep
+  file: tests3/lib/lke-setup-helm.sh
+  must_match: 'meetingApi\.minioPublicEndpoint'
+  modes:
+  - helm
+  state: stateless
+  max_duration_sec: 5
 auth-meeting:
   type: script
   script: tests/auth-meeting.sh

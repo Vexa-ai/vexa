@@ -3,6 +3,7 @@ import { log, callLeaveCallback } from "../../utils";
 import { logJSON } from "../../utils/log";
 import { BotConfig } from "../../types";
 import { teamsLeaveSelectors, teamsPrimaryHangupButtonSelector } from "./selectors";
+import { stopTeamsRecording } from "./recording";
 
 // Prepare for recording by exposing necessary functions
 export async function prepareForRecording(page: Page, botConfig: BotConfig): Promise<void> {
@@ -102,22 +103,22 @@ export async function leaveMicrosoftTeams(page: Page | null, botConfig?: BotConf
     return false;
   }
 
-  // Flush browser-side recording blob before callback/leave path.
-  // This ensures Teams audio is persisted before upload is attempted.
+  // Pack U.3 (v0.10.6): drain the unified recording pipeline before UI leave.
+  // This stops the browser-side MediaRecorder, emits the final isFinal=true
+  // chunk, and waits for the upload queue to drain so meeting-api flips
+  // Recording.status to COMPLETED before the bot exits. Replaces the old
+  // __vexaFlushRecordingBlob full-blob path (dead under chunked upload).
   try {
-    log("[leaveMicrosoftTeams] Flushing browser recording blob before leave...");
-    await page.evaluate(async () => {
-      const flushFn = (window as any).__vexaFlushRecordingBlob;
-      if (typeof flushFn === "function") {
-        await flushFn("manual_leave");
-      }
-    });
+    log("[leaveMicrosoftTeams] Stopping recording pipeline before leave...");
+    await stopTeamsRecording();
   } catch (flushError: any) {
-    // v0.10.5 Pack G.1 — recording-flush failure is diagnostic-critical
-    // (audio upload runs against an unflushed blob → silent loss).
+    // v0.10.5 Pack G.1 — recording-flush failure means the final chunk
+    // never made it; chunks already in MinIO are still durable, but the
+    // recording_finalizer won't see is_final=true and the meeting Recording
+    // row will stay IN_PROGRESS until reconciler cleanup.
     logJSON({
       level: "error",
-      msg: "[leaveMicrosoftTeams] Recording flush failed",
+      msg: "[leaveMicrosoftTeams] Recording pipeline stop failed",
       error_message: flushError?.message,
       error_name: flushError?.name,
       error_stack: flushError?.stack,

@@ -2,8 +2,9 @@ import { Page } from "playwright";
 import { log } from "../../utils";
 import { BotConfig } from "../../types";
 import { RecordingService } from "../../services/recording";
-import { setActiveRecordingService, getSegmentPublisher } from "../../index";
+import { getSegmentPublisher } from "../../index";
 import { ensureBrowserUtils } from "../../utils/injection";
+import { MediaRecorderCapture, UnifiedRecordingPipeline } from "../../services/audio-pipeline";
 import {
   teamsParticipantSelectors,
   teamsSpeakingClassNames,
@@ -20,108 +21,154 @@ import {
   teamsCaptionSelectors
 } from "./selectors";
 
+// Pack U.3 (v0.10.6): module-level pipeline holder so the leave path
+// (leaveMicrosoftTeams → stopTeamsRecording) can drive shutdown without
+// reaching back through window globals like the old __vexaFlushRecordingBlob.
+let pipeline: UnifiedRecordingPipeline | null = null;
+let recordingService: RecordingService | null = null;
+
 // Modified to use new services - Teams recording functionality
 export async function startTeamsRecording(page: Page, botConfig: BotConfig): Promise<void> {
   log("Starting Teams recording");
 
-  // Reset segment publisher session start to align with recording start.
-  // SegmentPublisher was created pre-admission; recording starts post-admission.
-  const publisher = getSegmentPublisher();
-  if (publisher) {
-    publisher.resetSessionStart();
-    log(`[Teams Recording] Session start reset to ${new Date(publisher.sessionStartMs).toISOString()}`);
-  }
+  // (Segment publisher session-start re-alignment is owned by
+  // UnifiedRecordingPipeline — same hook for all 3 platforms via the
+  // AudioCaptureSource 'started' event.)
 
   const wantsAudioCapture =
     !!botConfig.recordingEnabled &&
     (!Array.isArray(botConfig.captureModes) || botConfig.captureModes.includes("audio"));
   const sessionUid = botConfig.connectionId || `teams-${Date.now()}`;
-  let recordingService: RecordingService | null = null;
 
+  // Pack U.3 (v0.10.6): unified audio pipeline. The bot encodes WebM/Opus
+  // chunks via a browser-side MediaRecorder (BrowserMediaRecorderPipeline)
+  // and uploads each chunk to meeting-api as it's produced; the master is
+  // built server-side by recording_finalizer.py at bot_exit_callback. No
+  // local-disk WAV scaffold, no __vexaSaveRecordingBlob full-blob path —
+  // those were dead under chunked upload.
   if (wantsAudioCapture) {
-    recordingService = new RecordingService(botConfig.meeting_id, sessionUid);
-    setActiveRecordingService(recordingService);
+    if (!botConfig.recordingUploadUrl || !botConfig.token) {
+      log("[Teams Recording] recordingUploadUrl or token missing — skipping audio capture");
+    } else {
+      recordingService = new RecordingService(botConfig.meeting_id, sessionUid);
 
-    await page.exposeFunction("__vexaSaveRecordingBlob", async (payload: { base64: string; mimeType?: string }) => {
-      try {
-        if (!recordingService) {
-          log("[Teams Recording] Recording service not initialized; dropping blob.");
-          return false;
-        }
+      // CRITICAL: inject browser-utils bundle BEFORE constructing the
+      // MediaRecorderCapture pipeline. The pipeline's startBrowserCapture
+      // callback runs page.evaluate which accesses window.VexaBrowserUtils.
+      // If ensureBrowserUtils hasn't run yet, those classes are undefined →
+      // page.evaluate throws inside the async callback, the error is silently
+      // absorbed, and the bot runs to completion having captured ZERO audio
+      // chunks (#regression: Pack U.3 ordering bug; classifier then fires
+      // STOPPED_WITH_NO_AUDIO → meeting.status=failed).
+      // Mirrors the GMeet fix in googlemeet/recording.ts.
+      await ensureBrowserUtils(page, require('path').join(__dirname, '../../browser-utils.global.js'));
 
-        const mimeType = (payload?.mimeType || "").toLowerCase();
-        let format = "webm";
-        if (mimeType.includes("wav")) format = "wav";
-        else if (mimeType.includes("ogg")) format = "ogg";
-        else if (mimeType.includes("mp4") || mimeType.includes("m4a")) format = "m4a";
+      // (Note: __vexaRecordingStarted is now exposed inside MediaRecorderCapture
+      // and publisher.resetSessionStart() is owned by UnifiedRecordingPipeline —
+      // same hook for all 3 platforms via the AudioCaptureSource 'started' event.)
 
-        const blobBuffer = Buffer.from(payload.base64 || "", "base64");
-        if (!blobBuffer.length) {
-          log("[Teams Recording] Received empty audio blob.");
-          return false;
-        }
+      const audioCapture = new MediaRecorderCapture({
+        page,
+        botConfig,
+        sessionUid,
+        platform: "teams",
+        timesliceMs: 30000,
+        startBrowserCapture: async (page, timesliceMs) => {
+          await page.evaluate(async ({ timesliceMs }) => {
+            const u = (window as any).VexaBrowserUtils;
+            (window as any).logBot(`[Teams Recording] Browser utils available: ${Object.keys(u || {}).join(', ')}`);
 
-        await recordingService.writeBlob(blobBuffer, format);
-        log(`[Teams Recording] Saved browser audio blob (${blobBuffer.length} bytes, ${format}).`);
-        return true;
-      } catch (error: any) {
-        log(`[Teams Recording] Failed to persist browser blob: ${error?.message || String(error)}`);
-        return false;
-      }
-    });
+            const audioService = new u.BrowserAudioService({
+              targetSampleRate: 16000,
+              bufferSize: 4096,
+              inputChannels: 1,
+              outputChannels: 1,
+            });
+            (window as any).__vexaAudioService = audioService;
 
-    // Pack B (issue #218): incremental chunk upload — mirrors googlemeet/recording.ts.
-    await page.exposeFunction(
-      "__vexaSaveRecordingChunk",
-      async (payload: { base64: string; chunkSeq: number; isFinal: boolean; mimeType?: string }) => {
-        try {
-          if (!recordingService) {
-            log("[Teams Recording] Recording service not initialized; dropping chunk.");
-            return false;
-          }
-          if (!botConfig.recordingUploadUrl || !botConfig.token) {
-            return false;
-          }
-          const mimeType = (payload?.mimeType || "").toLowerCase();
-          let format = "webm";
-          if (mimeType.includes("wav")) format = "wav";
-          else if (mimeType.includes("ogg")) format = "ogg";
-          else if (mimeType.includes("mp4") || mimeType.includes("m4a")) format = "m4a";
+            // 10 retries × 3s delay = up to 30s wait time.
+            const mediaElements: HTMLMediaElement[] = await audioService.findMediaElements(10, 3000);
+            if (mediaElements.length === 0) {
+              (window as any).logBot(
+                "[Teams BOT Warning] No active media elements found after retries; " +
+                "continuing in degraded monitoring mode (session remains active)."
+              );
+              (window as any).__vexaDegradedNoMedia = true;
+              return;
+            }
 
-          const buf = Buffer.from(payload.base64 || "", "base64");
-          if (!buf.length) return false;
+            const combinedStream: MediaStream = await audioService.createCombinedAudioStream(mediaElements);
 
-          await recordingService.uploadChunk(
-            botConfig.recordingUploadUrl,
-            botConfig.token,
-            buf,
-            payload.chunkSeq,
-            !!payload.isFinal,
-            format,
-          );
-          return true;
-        } catch (error: any) {
-          log(`[Teams Recording] uploadChunk failed (seq=${payload?.chunkSeq}): ${error?.message || String(error)}`);
-          return false;
-        }
-      },
-    );
+            // Spin up the unified browser-side MediaRecorder pipeline.
+            const pipeline = new u.BrowserMediaRecorderPipeline({
+              stream: combinedStream,
+              timesliceMs,
+              chunkCallback: (window as any).__vexaSaveRecordingChunk,
+            });
+            (window as any).__vexaMediaRecorderPipeline = pipeline;
+            // Keep __vexaMediaRecorder pointing at the underlying MediaRecorder
+            // for any legacy code that pokes at it directly.
+            await pipeline.start();
+            (window as any).__vexaMediaRecorder = pipeline.getMediaRecorder();
+            // Signal Node.js that recording started — re-aligns segment timestamps
+            (window as any).__vexaRecordingStarted?.();
+
+            // Initialize the audio data processor for the alone-cross-validation
+            // hook (mirrors GMeet pattern). The per-speaker transcription
+            // pipeline runs separately; this hook only needs RMS energy to
+            // detect speech activity.
+            const processor = await audioService.initializeAudioProcessor(combinedStream);
+            if (processor) {
+              (window as any).__vexaLastAudioActivityTs = 0;
+              const AUDIO_ACTIVITY_THRESHOLD = 0.005; // RMS above silence baseline
+              audioService.setupAudioDataProcessor((audioData: Float32Array) => {
+                if (!audioData || audioData.length === 0) return;
+                try {
+                  let maxAbs = 0;
+                  // Cheap scan: 1-of-32 sample stride is plenty to detect non-silence
+                  for (let i = 0; i < audioData.length; i += 32) {
+                    const v = Math.abs(audioData[i]);
+                    if (v > maxAbs) maxAbs = v;
+                    if (maxAbs > AUDIO_ACTIVITY_THRESHOLD) break;
+                  }
+                  if (maxAbs > AUDIO_ACTIVITY_THRESHOLD) {
+                    (window as any).__vexaLastAudioActivityTs = Date.now();
+                  }
+                } catch {}
+              });
+            }
+          }, { timesliceMs });
+        },
+        stopBrowserCapture: async (page) => {
+          await page.evaluate(async () => {
+            const p = (window as any).__vexaMediaRecorderPipeline;
+            if (p && typeof p.stop === "function") {
+              await p.stop();
+            }
+          });
+        },
+      });
+
+      pipeline = new UnifiedRecordingPipeline({
+        source: audioCapture,
+        recordingService,
+        uploadUrl: botConfig.recordingUploadUrl,
+        token: botConfig.token,
+        platform: "teams",
+      });
+      await pipeline.start();
+      log("[Teams Recording] Unified recording pipeline started (MediaRecorder → chunked upload)");
+    }
   } else {
     log("[Teams Recording] Audio capture disabled by config.");
+    // Speaker detection still needs the browser-utils bundle for DOM observation.
+    await ensureBrowserUtils(page, require('path').join(__dirname, '../../browser-utils.global.js'));
   }
 
-  // Expose callback so the browser can signal when MediaRecorder actually starts.
-  // This re-aligns sessionStartMs with the recording, fixing click-to-seek offset.
-  await page.exposeFunction("__vexaRecordingStarted", () => {
-    if (publisher) {
-      publisher.resetSessionStart();
-      log(`[Teams Recording] Session start re-aligned to MediaRecorder start: ${new Date(publisher.sessionStartMs).toISOString()}`);
-    }
-  });
-
-  await ensureBrowserUtils(page, require('path').join(__dirname, '../../browser-utils.global.js'));
-
-  // Pass the necessary config fields and the resolved URL into the page context
+  // Speaker detection + meeting monitoring + caption-driven per-speaker routing:
+  // platform-specific DOM logic that stays. It's structurally independent of
+  // audio capture (the pipeline handles audio; this evaluator handles DOM
+  // observation + caption polling + alone-time monitoring).
   await page.evaluate(
     async (pageArgs: {
       botConfigData: BotConfig;
@@ -150,1296 +197,747 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
       const { botConfigData, selectors } = pageArgs;
       const selectorsTyped = selectors as any;
 
-      // Use browser utility classes from the global bundle
-      const { BrowserAudioService } = (window as any).VexaBrowserUtils;
-
-      const audioService = new BrowserAudioService({
-        targetSampleRate: 16000,
-        bufferSize: 4096,
-        inputChannels: 1,
-        outputChannels: 1
-      });
-
-      (window as any).__vexaAudioService = audioService;
       (window as any).__vexaBotConfig = botConfigData;
-      (window as any).__vexaMediaRecorder = null;
-      (window as any).__vexaRecordedChunks = [];
-      (window as any).__vexaRecordingFlushed = false;
-
-      const isAudioRecordingEnabled =
-        !!(botConfigData as any)?.recordingEnabled &&
-        (!Array.isArray((botConfigData as any)?.captureModes) ||
-          (botConfigData as any)?.captureModes.includes("audio"));
-
-      const getSupportedMediaRecorderMimeType = (): string => {
-        const candidates = [
-          "audio/webm;codecs=opus",
-          "audio/webm",
-          "audio/ogg;codecs=opus",
-          "audio/ogg",
-        ];
-        for (const mime of candidates) {
-          try {
-            if ((window as any).MediaRecorder?.isTypeSupported?.(mime)) {
-              return mime;
-            }
-          } catch {}
-        }
-        return "";
-      };
-
-      const flushBrowserRecordingBlob = async (reason: string): Promise<void> => {
-        if (!isAudioRecordingEnabled) return;
-        if ((window as any).__vexaRecordingFlushed) return;
-
-        try {
-          const recorder: MediaRecorder | null = (window as any).__vexaMediaRecorder;
-          const chunks: Blob[] = (window as any).__vexaRecordedChunks || [];
-
-          const finalizeAndSend = async () => {
-            if ((window as any).__vexaRecordingFlushed) return;
-            (window as any).__vexaRecordingFlushed = true;
-
-            try {
-              // Pack B (issue #218): prefer sending a final-chunk finalizer;
-              // fall back to the legacy full-blob save for local disk copy.
-              const mimeType =
-                (window as any).__vexaMediaRecorder?.mimeType || "audio/webm";
-              const chunkSeq = ((window as any).__vexaChunkSeq as number) ?? 0;
-
-              let chunkFinalized = false;
-              if (typeof (window as any).__vexaSaveRecordingChunk === "function") {
-                try {
-                  await (window as any).__vexaSaveRecordingChunk({
-                    base64: "",
-                    chunkSeq,
-                    isFinal: true,
-                    mimeType,
-                  });
-                  (window as any).logBot?.(
-                    `[Teams Recording] Finalized recording (chunk_seq=${chunkSeq}, ${reason}).`
-                  );
-                  chunkFinalized = true;
-                } catch (err: any) {
-                  (window as any).logBot?.(
-                    `[Teams Recording] Chunk finalizer failed: ${err?.message || err}`
-                  );
-                }
-              }
-
-              const recorded = (window as any).__vexaRecordedChunks || [];
-              if (recorded.length) {
-                const blob = new Blob(recorded, { type: mimeType });
-                const buffer = await blob.arrayBuffer();
-                const bytes = new Uint8Array(buffer);
-                let binary = "";
-                const chunkSize = 0x8000;
-                for (let i = 0; i < bytes.length; i += chunkSize) {
-                  binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-                }
-                const base64 = btoa(binary);
-
-                if (typeof (window as any).__vexaSaveRecordingBlob === "function") {
-                  await (window as any).__vexaSaveRecordingBlob({
-                    base64,
-                    mimeType: blob.type || mimeType,
-                  });
-                  (window as any).logBot?.(
-                    `[Teams Recording] Flushed ${bytes.length} bytes (${blob.type || mimeType}) on ${reason}${chunkFinalized ? " (chunk upload already final)" : ""}.`
-                  );
-                } else if (!chunkFinalized) {
-                  (window as any).logBot?.("[Teams Recording] Node blob sink is not available.");
-                }
-              } else if (!chunkFinalized) {
-                (window as any).logBot?.(`[Teams Recording] No media chunks to flush (${reason}).`);
-              }
-            } catch (err: any) {
-              (window as any).logBot?.(
-                `[Teams Recording] Failed to flush blob: ${err?.message || err}`
-              );
-            } finally {
-              (window as any).__vexaRecordedChunks = [];
-            }
-          };
-
-          if (recorder && recorder.state !== "inactive") {
-            await new Promise<void>((resolveStop) => {
-              const onStop = async () => {
-                recorder.removeEventListener("stop", onStop as any);
-                await finalizeAndSend();
-                resolveStop();
-              };
-              recorder.addEventListener("stop", onStop as any, { once: true });
-              try {
-                recorder.stop();
-              } catch {
-                setTimeout(async () => {
-                  await finalizeAndSend();
-                  resolveStop();
-                }, 200);
-              }
-            });
-          } else if (chunks.length > 0) {
-            await finalizeAndSend();
-          }
-        } catch (err: any) {
-          (window as any).logBot?.(
-            `[Teams Recording] Unexpected flush error: ${err?.message || err}`
-          );
-        }
-      };
-
-      (window as any).__vexaFlushRecordingBlob = flushBrowserRecordingBlob;
 
       await new Promise<void>((resolve, reject) => {
         try {
-          (window as any).logBot("Starting Teams recording process with new services.");
-          
-          // Find and create combined audio stream
-          audioService.findMediaElements(10, 3000).then(async (mediaElements: HTMLMediaElement[]) => {
-            if (mediaElements.length === 0) {
-              reject(
-                new Error(
-                  "[Teams BOT Error] No active media elements found after multiple retries. Ensure the Teams meeting media is playing."
-                )
-              );
-              return;
-            }
+          (window as any).logBot("Starting Teams speaker detection + monitoring.");
 
-            // Create combined audio stream
-            return await audioService.createCombinedAudioStream(mediaElements);
-          }).then(async (combinedStream: MediaStream | undefined) => {
-            if (!combinedStream) {
-              reject(new Error("[Teams BOT Error] Failed to create combined audio stream"));
-              return;
-            }
+          const audioService = (window as any).__vexaAudioService;
+          // No audioService means audio capture wasn't started (recordingEnabled=false
+          // or upload URL missing); we still want speaker observation, but with no
+          // session-start anchor for events we can't accumulate them.
+          const degradedNoMedia = !!(window as any).__vexaDegradedNoMedia;
 
-            if (isAudioRecordingEnabled) {
-              try {
-                const mimeType = getSupportedMediaRecorderMimeType();
-                const recorderOptions = mimeType ? ({ mimeType } as MediaRecorderOptions) : undefined;
-                const recorder = recorderOptions
-                  ? new MediaRecorder(combinedStream, recorderOptions)
-                  : new MediaRecorder(combinedStream);
-
-                (window as any).__vexaMediaRecorder = recorder;
-                (window as any).__vexaRecordedChunks = [];
-                (window as any).__vexaRecordingFlushed = false;
-                (window as any).__vexaChunkSeq = 0;
-
-                // Pack B (issue #218): incremental chunk upload, matches googlemeet.
-                recorder.ondataavailable = async (event: BlobEvent) => {
-                  if (!(event.data && event.data.size > 0)) {
-                    (window as any).logBot?.("[Teams Recording] dataavailable fired with empty data (skipping)");
-                    return;
-                  }
-                  (window as any).__vexaRecordedChunks.push(event.data);
-
-                  const chunkSeq = (window as any).__vexaChunkSeq as number;
-                  (window as any).__vexaChunkSeq = chunkSeq + 1;
-                  try {
-                    const mime = recorder.mimeType || "audio/webm";
-                    const buffer = await event.data.arrayBuffer();
-                    const bytes = new Uint8Array(buffer);
-                    let binary = "";
-                    const encodeChunkSize = 0x8000;
-                    for (let i = 0; i < bytes.length; i += encodeChunkSize) {
-                      binary += String.fromCharCode(...bytes.subarray(i, i + encodeChunkSize));
-                    }
-                    const base64 = btoa(binary);
-                    if (typeof (window as any).__vexaSaveRecordingChunk === "function") {
-                      (window as any).logBot?.(
-                        `[Teams Recording] Uploading chunk ${chunkSeq} (${bytes.length} bytes)`
-                      );
-                      const ok = await (window as any).__vexaSaveRecordingChunk({
-                        base64,
-                        chunkSeq,
-                        isFinal: false,
-                        mimeType: mime,
-                      });
-                      if (!ok) {
-                        (window as any).logBot?.(
-                          `[Teams Recording] Chunk ${chunkSeq} upload returned false — bot-side sink rejected`
-                        );
-                      }
-                    } else {
-                      (window as any).logBot?.(
-                        `[Teams Recording] __vexaSaveRecordingChunk not exposed — chunk ${chunkSeq} will rely on shutdown fallback`
-                      );
-                    }
-                  } catch (err: any) {
-                    (window as any).logBot?.(
-                      `[Teams Recording] Chunk ${chunkSeq} upload prep/send FAILED: ${err?.message || err}`
-                    );
-                  }
-                };
-
-                recorder.start(30000);
-                // Signal Node.js that recording started — re-aligns segment timestamps
-                (window as any).__vexaRecordingStarted?.();
-                (window as any).logBot?.(
-                  `[Teams Recording] MediaRecorder started (${recorder.mimeType || mimeType || "default"}).`
-                );
-              } catch (err: any) {
-                (window as any).logBot?.(
-                  `[Teams Recording] Failed to start MediaRecorder: ${err?.message || err}`
-                );
-              }
-            }
-
-            // Initialize audio processor
-            return await audioService.initializeAudioProcessor(combinedStream);
-          }).then(async (processor: any) => {
-            // Audio data processor — no-op now; per-speaker pipeline handles transcription
-            audioService.setupAudioDataProcessor(async (_audioData: Float32Array, _sessionStartTime: number | null) => {
-              // Per-speaker pipeline (speaker-streams.ts) handles transcription.
-              // This processor is kept for MediaRecorder / recording only.
-            });
-
-            return null;
-          }).then(() => {
-            // Initialize Teams-specific speaker detection (browser context)
+          // Initialize Teams-specific speaker detection (browser context)
+          if (!degradedNoMedia) {
             (window as any).logBot("Initializing Teams speaker detection...");
+          }
 
-            // Unified Teams speaker detection - NO FALLBACKS (signal-only approach)
-            const initializeTeamsSpeakerDetection = (audioService: any, botConfigData: any) => {
-              (window as any).logBot("Setting up ROBUST Teams speaker detection (NO FALLBACKS - signal-only)...");
-              
-              // Teams-specific configuration for speaker detection
-              const participantSelectors = selectors.participantSelectors;
-              
-              // ============================================================================
-              // UNIFIED SPEAKER DETECTION SYSTEM (NO FALLBACKS)
-              // ============================================================================
-              
-              // Participant Identity Cache
-              interface ParticipantIdentity {
-                id: string;
-                name: string;
-                element: HTMLElement;
-                lastSeen: number;
+          // Unified Teams speaker detection - NO FALLBACKS (signal-only approach)
+          const initializeTeamsSpeakerDetection = (audioService: any, botConfigData: any) => {
+            (window as any).logBot("Setting up ROBUST Teams speaker detection (NO FALLBACKS - signal-only)...");
+
+            // Teams-specific configuration for speaker detection
+            const participantSelectors = selectors.participantSelectors;
+
+            // ============================================================================
+            // UNIFIED SPEAKER DETECTION SYSTEM (NO FALLBACKS)
+            // ============================================================================
+
+            // Participant Identity Cache
+            interface ParticipantIdentity {
+              id: string;
+              name: string;
+              element: HTMLElement;
+              lastSeen: number;
+            }
+
+            class ParticipantRegistry {
+              private cache = new Map<HTMLElement, ParticipantIdentity>();
+              private idToElement = new Map<string, HTMLElement>();
+
+              getIdentity(element: HTMLElement): ParticipantIdentity {
+                if (!this.cache.has(element)) {
+                  const id = this.extractId(element);
+                  const name = this.extractName(element);
+
+                  const identity: ParticipantIdentity = {
+                    id,
+                    name,
+                    element,
+                    lastSeen: Date.now()
+                  };
+
+                  this.cache.set(element, identity);
+                  this.idToElement.set(id, element);
+                }
+
+                return this.cache.get(element)!;
               }
-              
-              class ParticipantRegistry {
-                private cache = new Map<HTMLElement, ParticipantIdentity>();
-                private idToElement = new Map<string, HTMLElement>();
 
-                getIdentity(element: HTMLElement): ParticipantIdentity {
-                  if (!this.cache.has(element)) {
-                    const id = this.extractId(element);
-                    const name = this.extractName(element);
-                    
-                    const identity: ParticipantIdentity = {
-                      id,
-                      name,
-                      element,
-                      lastSeen: Date.now()
-                    };
-                    
-                    this.cache.set(element, identity);
-                    this.idToElement.set(id, element);
-                  }
-                  
-                  return this.cache.get(element)!;
+              invalidate(element: HTMLElement) {
+                const identity = this.cache.get(element);
+                if (identity) {
+                  this.idToElement.delete(identity.id);
+                  this.cache.delete(element);
                 }
+              }
 
-                getNameById(id: string): string | null {
-                  const element = this.idToElement.get(id);
-                  if (!element) return null;
-                  const identity = this.cache.get(element);
-                  return identity?.name || null;
-                }
-
-                invalidate(element: HTMLElement) {
-                  const identity = this.cache.get(element);
-                  if (identity) {
-                    this.idToElement.delete(identity.id);
-                    this.cache.delete(element);
-                  }
-                }
-
-                private extractId(element: HTMLElement): string {
-                  // Use data-acc-element-id as primary (most stable)
-                  let id = element.getAttribute('data-acc-element-id') ||
-                           element.getAttribute('data-tid') ||
-                        element.getAttribute('data-participant-id') ||
-                        element.getAttribute('data-user-id') ||
-                        element.getAttribute('data-object-id') ||
-                        element.getAttribute('id');
-                
+              private extractId(element: HTMLElement): string {
+                // data-acc-element-id is the most stable Teams id attribute
+                let id = element.getAttribute('data-acc-element-id') ||
+                         element.getAttribute('data-tid') ||
+                         element.getAttribute('data-participant-id') ||
+                         element.getAttribute('data-user-id') ||
+                         element.getAttribute('data-object-id') ||
+                         element.getAttribute('id');
                 if (!id) {
-                    const stableChild = element.querySelector(selectorsTyped.participantIdSelectors?.join(', ') || '[data-tid]');
+                  const stableChild = element.querySelector(selectorsTyped.participantIdSelectors?.join(', ') || '[data-tid]');
                   if (stableChild) {
-                    id = stableChild.getAttribute('data-tid') || 
+                    id = stableChild.getAttribute('data-tid') ||
                          stableChild.getAttribute('data-participant-id') ||
                          stableChild.getAttribute('data-user-id');
                   }
                 }
-                
                 if (!id) {
                   if (!(element as any).dataset.vexaGeneratedId) {
                     (element as any).dataset.vexaGeneratedId = 'teams-id-' + Math.random().toString(36).substr(2, 9);
                   }
-                    id = (element as any).dataset.vexaGeneratedId as string;
+                  id = (element as any).dataset.vexaGeneratedId as string;
                 }
-                
-                  return id!;
+                return id!;
               }
-              
-                private extractName(element: HTMLElement): string {
-                  const nameSelectors = selectors.nameSelectors || [];
-                
+
+              private extractName(element: HTMLElement): string {
+                const nameSelectors = selectors.nameSelectors || [];
+                const forbiddenSubstrings = [
+                  "more_vert", "mic_off", "mic", "videocam", "videocam_off",
+                  "present_to_all", "devices", "speaker", "speakers", "microphone",
+                  "camera", "camera_off", "share", "chat", "participant", "user"
+                ];
                 for (const selector of nameSelectors) {
-                    const nameElement = element.querySelector(selector) as HTMLElement;
-                  if (nameElement) {
-                    let nameText = nameElement.textContent || 
-                                  nameElement.innerText || 
-                                  nameElement.getAttribute('title') ||
-                                  nameElement.getAttribute('aria-label');
-                    
-                    if (nameText && nameText.trim()) {
-                      nameText = nameText.trim();
-                      
-                      const forbiddenSubstrings = [
-                        "more_vert", "mic_off", "mic", "videocam", "videocam_off", 
-                        "present_to_all", "devices", "speaker", "speakers", "microphone",
-                        "camera", "camera_off", "share", "chat", "participant", "user"
-                      ];
-                      
-                        if (!forbiddenSubstrings.some(sub => nameText!.toLowerCase().includes(sub.toLowerCase()))) {
-                        if (nameText.length > 1 && nameText.length < 50) {
-                          return nameText;
-                        }
-                      }
-                    }
-                  }
+                  const nameElement = element.querySelector(selector) as HTMLElement;
+                  if (!nameElement) continue;
+                  let nameText = nameElement.textContent ||
+                                 nameElement.innerText ||
+                                 nameElement.getAttribute('title') ||
+                                 nameElement.getAttribute('aria-label');
+                  if (!nameText || !nameText.trim()) continue;
+                  nameText = nameText.trim();
+                  if (forbiddenSubstrings.some(sub => nameText!.toLowerCase().includes(sub.toLowerCase()))) continue;
+                  if (nameText.length > 1 && nameText.length < 50) return nameText;
                 }
-                
-                  const ariaLabel = element.getAttribute('aria-label');
+                const ariaLabel = element.getAttribute('aria-label');
                 if (ariaLabel && ariaLabel.includes('name')) {
                   const nameMatch = ariaLabel.match(/name[:\s]+([^,]+)/i);
                   if (nameMatch && nameMatch[1]) {
                     const nameText = nameMatch[1].trim();
-                    if (nameText.length > 1 && nameText.length < 50) {
-                      return nameText;
-                    }
+                    if (nameText.length > 1 && nameText.length < 50) return nameText;
                   }
                 }
-                
-                  const id = this.extractId(element);
-                  return `Teams Participant (${id})`;
+                return `Teams Participant (${this.extractId(element)})`;
+              }
+            }
+
+            // Unified State Machine
+            type SpeakingState = 'speaking' | 'silent' | 'unknown';
+
+            interface ParticipantState {
+              state: SpeakingState;
+              hasSignal: boolean;
+              lastChangeTime: number;
+              lastEventTime: number;
+            }
+
+            class SpeakerStateMachine {
+              private state = new Map<string, ParticipantState>();
+              private readonly MIN_STATE_CHANGE_MS = 200;
+
+              updateState(participantId: string, detectionResult: { isSpeaking: boolean; hasSignal: boolean }): boolean {
+                const current = this.state.get(participantId);
+                const now = Date.now();
+                if (!detectionResult.hasSignal) {
+                  if (current?.hasSignal) {
+                    this.state.set(participantId, { state: 'unknown', hasSignal: false, lastChangeTime: now, lastEventTime: current.lastEventTime });
+                  }
+                  return false;
                 }
+                const newState: SpeakingState = detectionResult.isSpeaking ? 'speaking' : 'silent';
+                if (current?.state === newState && current?.hasSignal) return false;
+                if (current && (now - current.lastChangeTime) < this.MIN_STATE_CHANGE_MS) return false;
+                this.state.set(participantId, { state: newState, hasSignal: true, lastChangeTime: now, lastEventTime: current?.lastEventTime || 0 });
+                return true;
               }
 
-              // Unified State Machine
-              type SpeakingState = 'speaking' | 'silent' | 'unknown';
-
-              interface ParticipantState {
-                state: SpeakingState;
-                hasSignal: boolean;
-                lastChangeTime: number;
-                lastEventTime: number;
+              getState(participantId: string): SpeakingState | null {
+                return this.state.get(participantId)?.state || null;
               }
 
-              class SpeakerStateMachine {
-                private state = new Map<string, ParticipantState>();
-                private readonly MIN_STATE_CHANGE_MS = 200;
+              remove(participantId: string) {
+                this.state.delete(participantId);
+              }
+            }
 
-                updateState(participantId: string, detectionResult: { isSpeaking: boolean; hasSignal: boolean }): boolean {
-                  const current = this.state.get(participantId);
-                  const now = Date.now();
+            // Detection: voice-level-stream-outline + vdi-frame-occlusion (NO FALLBACKS)
+            class TeamsSpeakingDetector {
+              private readonly VOICE_LEVEL_SELECTOR = '[data-tid="voice-level-stream-outline"]';
 
-                  if (!detectionResult.hasSignal) {
-                    if (current?.hasSignal) {
-                      this.state.set(participantId, {
-                        state: 'unknown',
-                        hasSignal: false,
-                        lastChangeTime: now,
-                        lastEventTime: current.lastEventTime
-                      });
-                    }
-                    return false;
-                  }
-
-                  const newState: SpeakingState = detectionResult.isSpeaking ? 'speaking' : 'silent';
-
-                  if (current?.state === newState && current?.hasSignal) {
-                    return false;
-                  }
-
-                  if (current && (now - current.lastChangeTime) < this.MIN_STATE_CHANGE_MS) {
-                    return false;
-                  }
-
-                  this.state.set(participantId, {
-                    state: newState,
-                    hasSignal: true,
-                    lastChangeTime: now,
-                    lastEventTime: current?.lastEventTime || 0
-                  });
-
-                  return true;
+              detectSpeakingState(element: HTMLElement): { isSpeaking: boolean; hasSignal: boolean } {
+                const voiceOutline = element.querySelector(this.VOICE_LEVEL_SELECTOR) as HTMLElement | null;
+                if (!voiceOutline) return { isSpeaking: false, hasSignal: false };
+                // vdi-frame-occlusion class presence (on voiceOutline or any
+                // ancestor) = speaking; absence = not speaking.
+                let current: HTMLElement | null = voiceOutline;
+                while (current) {
+                  if (current.classList.contains('vdi-frame-occlusion')) return { isSpeaking: true, hasSignal: true };
+                  current = current.parentElement;
                 }
-
-                getState(participantId: string): SpeakingState | null {
-                  return this.state.get(participantId)?.state || null;
-                }
-
-                remove(participantId: string) {
-                  this.state.delete(participantId);
-                }
+                return { isSpeaking: false, hasSignal: true };
               }
 
-              // Robust Detection Logic (NO FALLBACKS)
-              type SpeakingDetectionResult = {
-                isSpeaking: boolean;
-                hasSignal: boolean;
-              };
+              hasRequiredSignal(element: HTMLElement): boolean {
+                return element.querySelector(this.VOICE_LEVEL_SELECTOR) !== null;
+              }
+            }
 
-              class TeamsSpeakingDetector {
-                private readonly VOICE_LEVEL_SELECTOR = '[data-tid="voice-level-stream-outline"]';
+            class EventDebouncer {
+              private timers = new Map<string, number>();
+              constructor(private readonly delayMs: number = 300) {}
+              debounce(key: string, fn: () => void) {
+                if (this.timers.has(key)) clearTimeout(this.timers.get(key)!);
+                const timer = setTimeout(() => { fn(); this.timers.delete(key); }, this.delayMs) as unknown as number;
+                this.timers.set(key, timer);
+              }
+              cancel(key: string) {
+                if (this.timers.has(key)) { clearTimeout(this.timers.get(key)!); this.timers.delete(key); }
+              }
+            }
 
-                detectSpeakingState(element: HTMLElement): SpeakingDetectionResult {
-                  const voiceOutline = element.querySelector(this.VOICE_LEVEL_SELECTOR) as HTMLElement | null;
-                  
-                  if (!voiceOutline) {
-                    return { isSpeaking: false, hasSignal: false };
-                  }
+            // Initialize components
+            const registry = new ParticipantRegistry();
+            const stateMachine = new SpeakerStateMachine();
+            const detector = new TeamsSpeakingDetector();
+            const debouncer = new EventDebouncer(300);
+            const observers = new Map<HTMLElement, MutationObserver[]>();
+            const rafHandles = new Map<string, number>();
 
-                  // Check if voice-level-stream-outline or any of its parents has vdi-frame-occlusion class
-                  // vdi-frame-occlusion class presence = speaking, absence = not speaking
-                  let current: HTMLElement | null = voiceOutline;
-                  let hasVdiFrameOcclusion = false;
-                  
-                  // Check the element itself and walk up the parent chain
-                  while (current && !hasVdiFrameOcclusion) {
-                    if (current.classList.contains('vdi-frame-occlusion')) {
-                      hasVdiFrameOcclusion = true;
-                      break;
-                    }
-                    current = current.parentElement;
-                  }
-                  
-                  return {
-                    isSpeaking: hasVdiFrameOcclusion,
-                    hasSignal: true
-                  };
-                }
+            // State for tracking speaking status (for cleanup)
+            const speakingStates = new Map<string, SpeakingState>();
 
-                hasRequiredSignal(element: HTMLElement): boolean {
-                  return element.querySelector(this.VOICE_LEVEL_SELECTOR) !== null;
-                }
+            // Event emission helper
+            function sendTeamsSpeakerEvent(eventType: string, identity: ParticipantIdentity) {
+              const eventAbsoluteTimeMs = Date.now();
+              const sessionStartTime = audioService?.getSessionAudioStartTime?.() ?? null;
 
-                private isElementVisible(el: HTMLElement): boolean {
-                const cs = getComputedStyle(el);
-                const rect = el.getBoundingClientRect();
-                const ariaHidden = el.getAttribute('aria-hidden') === 'true';
-                const transform = cs.transform || '';
-                  const scaledToZero = /matrix\((?:[^,]+,){4}\s*0(?:,|\s*\))/.test(transform) ||
-                                       transform.includes('scale(0');
-
-                return (
-                  rect.width > 0 &&
-                  rect.height > 0 &&
-                  cs.display !== 'none' &&
-                  cs.visibility !== 'hidden' &&
-                  cs.opacity !== '0' &&
-                  !ariaHidden &&
-                    !scaledToZero
-                  );
-                }
+              if (sessionStartTime === null) {
+                return;
               }
 
-              // Event Debouncer
-              class EventDebouncer {
-                private timers = new Map<string, number>();
-                private readonly delayMs: number;
+              const relativeTimestampMs = eventAbsoluteTimeMs - sessionStartTime;
 
-                constructor(delayMs: number = 300) {
-                  this.delayMs = delayMs;
-                }
-
-                debounce(key: string, fn: () => void) {
-                  if (this.timers.has(key)) {
-                    clearTimeout(this.timers.get(key)!);
-                  }
-
-                  const timer = setTimeout(() => {
-                    fn();
-                    this.timers.delete(key);
-                  }, this.delayMs) as unknown as number;
-
-                  this.timers.set(key, timer);
-                }
-
-                cancel(key: string) {
-                  if (this.timers.has(key)) {
-                    clearTimeout(this.timers.get(key)!);
-                    this.timers.delete(key);
-                  }
-                }
-
-                cancelAll() {
-                  this.timers.forEach(timer => clearTimeout(timer));
-                  this.timers.clear();
-                }
+              // Accumulate for persistence (direct bot accumulation)
+              (window as any).__vexaSpeakerEvents = (window as any).__vexaSpeakerEvents || [];
+              (window as any).__vexaSpeakerEvents.push({
+                event_type: eventType,
+                participant_name: identity.name,
+                participant_id: identity.id,
+                relative_timestamp_ms: relativeTimestampMs,
+              });
+            }
+            // Unified Observer System
+            function observeParticipant(element: HTMLElement) {
+              if ((element as any).dataset.vexaObserverAttached) return;
+              // Only observe if voice-level-stream-outline signal exists
+              if (!detector.hasRequiredSignal(element)) {
+                (window as any).logBot(`⚠️ [Unified] Skipping participant - no voice-level-stream-outline signal found`);
+                return;
               }
-
-              // Initialize components
-              const registry = new ParticipantRegistry();
-              const stateMachine = new SpeakerStateMachine();
-              const detector = new TeamsSpeakingDetector();
-              const debouncer = new EventDebouncer(300);
-              const observers = new Map<HTMLElement, MutationObserver[]>();
-              const rafHandles = new Map<string, number>();
-              
-              // State for tracking speaking status (for cleanup)
-              const speakingStates = new Map<string, SpeakingState>();
-              
-              // Event emission helper
-              function sendTeamsSpeakerEvent(eventType: string, identity: ParticipantIdentity) {
-                const eventAbsoluteTimeMs = Date.now();
-                const sessionStartTime = audioService.getSessionAudioStartTime();
-
-                if (sessionStartTime === null) {
-                  return;
-                }
-
-                const relativeTimestampMs = eventAbsoluteTimeMs - sessionStartTime;
-
-                // Accumulate for persistence (direct bot accumulation)
-                (window as any).__vexaSpeakerEvents = (window as any).__vexaSpeakerEvents || [];
-                (window as any).__vexaSpeakerEvents.push({
-                  event_type: eventType,
-                  participant_name: identity.name,
-                  participant_id: identity.id,
-                  relative_timestamp_ms: relativeTimestampMs,
-                });
+              const identity = registry.getIdentity(element);
+              (element as any).dataset.vexaObserverAttached = 'true';
+              (window as any).logBot(`👁️ [Unified] Observing: ${identity.name} (ID: ${identity.id}) - signal present`);
+              const voiceOutline = element.querySelector('[data-tid="voice-level-stream-outline"]') as HTMLElement;
+              if (!voiceOutline) {
+                (window as any).logBot(`❌ [Unified] Voice outline disappeared for ${identity.name}`);
+                return;
               }
-              // Unified Observer System
-              function observeParticipant(element: HTMLElement) {
-                if ((element as any).dataset.vexaObserverAttached) {
-                  return;
-                }
-
-                // ROBUST CHECK: Only observe if signal exists
+              // Observer on voice-level element (PRIMARY SIGNAL)
+              const voiceObserver = new MutationObserver(() => checkAndEmit(identity));
+              voiceObserver.observe(voiceOutline, { attributes: true, attributeFilter: ['style', 'class', 'aria-hidden'] });
+              // Observer on container (detect signal loss)
+              const containerObserver = new MutationObserver(() => {
                 if (!detector.hasRequiredSignal(element)) {
-                  (window as any).logBot(`⚠️ [Unified] Skipping participant - no voice-level-stream-outline signal found`);
-                  return;
-                }
-
-                const identity = registry.getIdentity(element);
-                (element as any).dataset.vexaObserverAttached = 'true';
-
-                (window as any).logBot(`👁️ [Unified] Observing: ${identity.name} (ID: ${identity.id}) - signal present`);
-
-                const voiceOutline = element.querySelector('[data-tid="voice-level-stream-outline"]') as HTMLElement;
-                if (!voiceOutline) {
-                  (window as any).logBot(`❌ [Unified] Voice outline disappeared for ${identity.name}`);
-                  return;
-                }
-
-                // Observer on voice-level element (PRIMARY SIGNAL)
-                const voiceObserver = new MutationObserver(() => {
-                  checkAndEmit(identity);
-                });
-                voiceObserver.observe(voiceOutline, {
-                  attributes: true,
-                  attributeFilter: ['style', 'class', 'aria-hidden'],
-                  childList: false,
-                  subtree: false
-                });
-
-                // Observer on container (detect signal loss)
-                const containerObserver = new MutationObserver(() => {
-                  if (!detector.hasRequiredSignal(element)) {
-                    (window as any).logBot(`⚠️ [Unified] Voice-level signal lost for ${identity.name} - stopping observation`);
-                    handleParticipantRemoved(identity);
-                    return;
-                  }
-                  checkAndEmit(identity);
-                });
-                containerObserver.observe(element, {
-                  childList: true,
-                  subtree: true,
-                  attributes: false
-                });
-
-                observers.set(element, [voiceObserver, containerObserver]);
-
-                // rAF-based polling
-                scheduleRAFCheck(identity);
-
-                // Initial check
-                checkAndEmit(identity);
-              }
-
-              function checkAndEmit(identity: ParticipantIdentity) {
-                if (!identity.element.isConnected) {
+                  (window as any).logBot(`⚠️ [Unified] Voice-level signal lost for ${identity.name} - stopping observation`);
                   handleParticipantRemoved(identity);
                   return;
                 }
+                checkAndEmit(identity);
+              });
+              containerObserver.observe(element, { childList: true, subtree: true });
+              observers.set(element, [voiceObserver, containerObserver]);
+              scheduleRAFCheck(identity);
+              checkAndEmit(identity);
+            }
 
-                const detectionResult = detector.detectSpeakingState(identity.element);
+            function checkAndEmit(identity: ParticipantIdentity) {
+              if (!identity.element.isConnected) { handleParticipantRemoved(identity); return; }
+              const detectionResult = detector.detectSpeakingState(identity.element);
+              if (stateMachine.updateState(identity.id, detectionResult) && detectionResult.hasSignal) {
+                const newState: SpeakingState = detectionResult.isSpeaking ? 'speaking' : 'silent';
+                speakingStates.set(identity.id, newState);
+                debouncer.debounce(identity.id, () => emitEvent(newState, identity));
+              }
+            }
 
-                if (stateMachine.updateState(identity.id, detectionResult)) {
-                  if (detectionResult.hasSignal) {
-                    const newState: SpeakingState = detectionResult.isSpeaking ? 'speaking' : 'silent';
-                    speakingStates.set(identity.id, newState);
-                    debouncer.debounce(identity.id, () => {
-                      emitEvent(newState, identity);
+            function scheduleRAFCheck(identity: ParticipantIdentity) {
+              const check = () => {
+                if (!identity.element.isConnected) { handleParticipantRemoved(identity); return; }
+                checkAndEmit(identity);
+                rafHandles.set(identity.id, requestAnimationFrame(check));
+              };
+              rafHandles.set(identity.id, requestAnimationFrame(check));
+            }
+
+            function handleParticipantRemoved(identity: ParticipantIdentity) {
+              debouncer.cancel(identity.id);
+              if (stateMachine.getState(identity.id) === 'speaking') emitEvent('silent', identity);
+              const obs = observers.get(identity.element);
+              if (obs) { obs.forEach(o => o.disconnect()); observers.delete(identity.element); }
+              const rafHandle = rafHandles.get(identity.id);
+              if (rafHandle) { cancelAnimationFrame(rafHandle); rafHandles.delete(identity.id); }
+              stateMachine.remove(identity.id);
+              speakingStates.delete(identity.id);
+              registry.invalidate(identity.element);
+              delete (identity.element as any).dataset.vexaObserverAttached;
+              (window as any).logBot(`🗑️ [Unified] Removed: ${identity.name} (ID: ${identity.id})`);
+            }
+
+            function emitEvent(state: SpeakingState, identity: ParticipantIdentity) {
+              if (state === 'unknown') return;
+              const eventType = state === 'speaking' ? 'SPEAKER_START' : 'SPEAKER_END';
+              const emoji = state === 'speaking' ? '🎤' : '🔇';
+              (window as any).logBot(`${emoji} [Unified] ${eventType}: ${identity.name} (ID: ${identity.id}) [signal-based]`);
+              sendTeamsSpeakerEvent(eventType, identity);
+            }
+
+            function scanAndObserveAll() {
+              let foundCount = 0, observedCount = 0;
+              // Include [role="menuitem"] directly (most reliable selector)
+              const allSelectors = [...participantSelectors, '[role="menuitem"]'];
+              const seenElements = new WeakSet<HTMLElement>();
+              for (const selector of allSelectors) {
+                document.querySelectorAll(selector).forEach(el => {
+                  if (el instanceof HTMLElement && !seenElements.has(el)) {
+                    seenElements.add(el);
+                    foundCount++;
+                    if (detector.hasRequiredSignal(el)) { observeParticipant(el); observedCount++; }
+                  }
+                });
+              }
+              (window as any).logBot(`🔍 [Unified] Scanned ${foundCount} participants, observing ${observedCount} with signal`);
+            }
+
+            // Initialize speaker detection
+            scanAndObserveAll();
+
+            // Monitor for new/removed participants
+            const bodyObserver = new MutationObserver((mutationsList) => {
+              const allSelectors = [...participantSelectors, '[role="menuitem"]'];
+              for (const mutation of mutationsList) {
+                if (mutation.type !== 'childList') continue;
+                mutation.addedNodes.forEach(node => {
+                  if (node.nodeType !== Node.ELEMENT_NODE) return;
+                  const elementNode = node as HTMLElement;
+                  for (const selector of allSelectors) {
+                    if (elementNode.matches(selector)) observeParticipant(elementNode);
+                    elementNode.querySelectorAll(selector).forEach(childEl => {
+                      if (childEl instanceof HTMLElement) observeParticipant(childEl);
                     });
                   }
-                }
-              }
-
-              function scheduleRAFCheck(identity: ParticipantIdentity) {
-                const check = () => {
-                  if (!identity.element.isConnected) {
+                });
+                mutation.removedNodes.forEach(node => {
+                  if (node.nodeType !== Node.ELEMENT_NODE) return;
+                  const elementNode = node as HTMLElement;
+                  for (const selector of participantSelectors) {
+                    if (!elementNode.matches(selector)) continue;
+                    const identity = registry.getIdentity(elementNode);
+                    if (speakingStates.get(identity.id) === 'speaking') {
+                      (window as any).logBot(`🔇 [Unified] SPEAKER_END (Participant removed while speaking): ${identity.name} (ID: ${identity.id})`);
+                      emitEvent('silent', identity);
+                    }
                     handleParticipantRemoved(identity);
-                    return;
                   }
+                });
+              }
+            });
+            const meetingContainer = document.querySelector(selectorsTyped.meetingContainerSelectors[0]) || document.body;
+            bodyObserver.observe(meetingContainer, { childList: true, subtree: true });
 
-                  checkAndEmit(identity);
-                  
-                  const handle = requestAnimationFrame(check);
-                  rafHandles.set(identity.id, handle);
-                };
+            // Simple participant counting - poll every 5 seconds using ARIA list
+            let currentParticipantCount = 0;
 
-                const handle = requestAnimationFrame(check);
-                rafHandles.set(identity.id, handle);
+            const countParticipants = () => {
+              const names = collectAriaParticipants();
+              const totalCount = botConfigData?.name ? names.length + 1 : names.length;
+              if (totalCount !== currentParticipantCount) {
+                (window as any).logBot(`🔢 Participant count: ${currentParticipantCount} → ${totalCount}`);
+                currentParticipantCount = totalCount;
+              }
+              return totalCount;
+            };
+
+            // Do initial count immediately, then poll every 5 seconds
+            countParticipants();
+            setInterval(countParticipants, 5000);
+
+            // Per-speaker audio routing: Teams has ONE mixed stream. Caption
+            // text drives speaker boundaries (captions only fire on real
+            // speech, so no false activations). A ring buffer holds recent
+            // audio to look back across the caption delay; flush on text
+            // growth (new words) — refinements (punctuation/case) are ignored.
+            const MAX_QUEUE_AGE_MS = 10000;
+            const MIN_TEXT_GROWTH = 3; // chars — below this = refinement
+            interface QueuedChunk {
+              data: Float32Array;
+              timestamp: number;
+            }
+            const audioQueue: QueuedChunk[] = [];
+            let captionsEnabled = false;
+            let lastCaptionSpeaker: string | null = null;
+            let lastFlushedTextLength: number = 0;
+
+            const setupPerSpeakerAudioRouting = () => {
+              const audioEl = document.querySelector('audio') as HTMLAudioElement | null;
+              if (!audioEl || !(audioEl.srcObject instanceof MediaStream)) {
+                (window as any).logBot?.('[Teams PerSpeaker] No audio element found, skipping per-speaker routing');
+                return;
               }
 
-              function handleParticipantRemoved(identity: ParticipantIdentity) {
-                debouncer.cancel(identity.id);
-
-                if (stateMachine.getState(identity.id) === 'speaking') {
-                  emitEvent('silent', identity);
-                }
-
-                const obs = observers.get(identity.element);
-                if (obs) {
-                  obs.forEach(o => o.disconnect());
-                  observers.delete(identity.element);
-                }
-
-                const rafHandle = rafHandles.get(identity.id);
-                if (rafHandle) {
-                  cancelAnimationFrame(rafHandle);
-                  rafHandles.delete(identity.id);
-                }
-
-                stateMachine.remove(identity.id);
-                speakingStates.delete(identity.id);
-                registry.invalidate(identity.element);
-                delete (identity.element as any).dataset.vexaObserverAttached;
-
-                (window as any).logBot(`🗑️ [Unified] Removed: ${identity.name} (ID: ${identity.id})`);
+              const stream = audioEl.srcObject as MediaStream;
+              if (stream.getAudioTracks().length === 0) {
+                (window as any).logBot?.('[Teams PerSpeaker] Audio stream has no tracks');
+                return;
               }
 
-              function emitEvent(state: SpeakingState, identity: ParticipantIdentity) {
-                if (state === 'unknown') {
-                      return;
-                    }
+              const ctx = new AudioContext({ sampleRate: 16000 });
+              const source = ctx.createMediaStreamSource(stream);
+              const processor = ctx.createScriptProcessor(4096, 1, 1);
+              const botNameLower = ((botConfigData as any)?.botName || (botConfigData as any)?.name || 'vexa').toLowerCase();
 
-                const eventType = state === 'speaking' ? 'SPEAKER_START' : 'SPEAKER_END';
-                const emoji = state === 'speaking' ? '🎤' : '🔇';
-
-                (window as any).logBot(`${emoji} [Unified] ${eventType}: ${identity.name} (ID: ${identity.id}) [signal-based]`);
-                sendTeamsSpeakerEvent(eventType, identity);
-              }
-
-              function scanAndObserveAll() {
-                let foundCount = 0;
-                let observedCount = 0;
-
-                // CRITICAL: Also check [role="menuitem"] directly (most reliable selector)
-                const allSelectors = [...participantSelectors, '[role="menuitem"]'];
-                const seenElements = new WeakSet<HTMLElement>();
-
-                for (const selector of allSelectors) {
-                  const elements = document.querySelectorAll(selector);
-                  elements.forEach(el => {
-                    if (el instanceof HTMLElement && !seenElements.has(el)) {
-                      seenElements.add(el);
-                      foundCount++;
-                      if (detector.hasRequiredSignal(el)) {
-                        observeParticipant(el);
-                        observedCount++;
-                      }
-                    }
-                  });
-                }
-
-                (window as any).logBot(`🔍 [Unified] Scanned ${foundCount} participants, observing ${observedCount} with signal`);
-              }
-
-              // Initialize speaker detection
-              scanAndObserveAll();
-              
-              // Monitor for new participants
-              const bodyObserver = new MutationObserver((mutationsList) => {
-                for (const mutation of mutationsList) {
-                  if (mutation.type === 'childList') {
-                    mutation.addedNodes.forEach(node => {
-                      if (node.nodeType === Node.ELEMENT_NODE) {
-                        const elementNode = node as HTMLElement;
-                        
-                        // Check if the added node matches any participant selector OR [role="menuitem"]
-                        const allSelectors = [...participantSelectors, '[role="menuitem"]'];
-                        for (const selector of allSelectors) {
-                          if (elementNode.matches(selector)) {
-                            // observeParticipant will check for signal before observing
-                            observeParticipant(elementNode);
-                          }
-                          
-                          // Check children
-                          const childElements = elementNode.querySelectorAll(selector);
-                          childElements.forEach(childEl => {
-                            if (childEl instanceof HTMLElement) {
-                              // observeParticipant will check for signal before observing
-                              observeParticipant(childEl);
-                            }
-                          });
-                        }
-                      }
-                    });
-                    
-                    mutation.removedNodes.forEach(node => {
-                      if (node.nodeType === Node.ELEMENT_NODE) {
-                        const elementNode = node as HTMLElement;
-                        
-                        // Check if removed node was a participant
-                        for (const selector of participantSelectors) {
-                          if (elementNode.matches(selector)) {
-                            const identity = registry.getIdentity(elementNode);
-                            if (speakingStates.get(identity.id) === 'speaking') {
-                              (window as any).logBot(`🔇 [Unified] SPEAKER_END (Participant removed while speaking): ${identity.name} (ID: ${identity.id})`);
-                              emitEvent('silent', identity);
-                            }
-                            handleParticipantRemoved(identity);
-                          }
-                        }
-                      }
-                    });
-                  }
-                }
-              });
-
-              // Start observing the Teams meeting container
-              const meetingContainer = document.querySelector(selectorsTyped.meetingContainerSelectors[0]) || document.body;
-              bodyObserver.observe(meetingContainer, {
-                childList: true,
-                subtree: true
-              });
-
-              // Simple participant counting - poll every 5 seconds using ARIA list
-              let currentParticipantCount = 0;
-              
-              const countParticipants = () => {
-                const names = collectAriaParticipants();
-                const totalCount = botConfigData?.name ? names.length + 1 : names.length;
-                if (totalCount !== currentParticipantCount) {
-                  (window as any).logBot(`🔢 Participant count: ${currentParticipantCount} → ${totalCount}`);
-                  currentParticipantCount = totalCount;
-                }
-                return totalCount;
-              };
-              
-              // Do initial count immediately, then poll every 5 seconds
-              countParticipants();
-              setInterval(countParticipants, 5000);
-
-              // ─── Per-speaker audio routing with caption-driven boundaries ─
-              // Teams has ONE mixed audio stream. We use two speaker signals:
-              //   1. CAPTIONS (primary): Teams live captions provide speaker name
-              //      with each text segment. Captions only fire when Teams ASR
-              //      detects real speech, so no false activations from mic noise.
-              //   2. DOM blue squares (fallback): voice-level-stream-outline +
-              //      vdi-frame-occlusion class. Used when captions unavailable.
-              //
-              // A ring buffer stores recent audio so that when a caption arrives
-              // (with inherent delay), we can look back and attribute the audio
-              // to the correct speaker retroactively.
-
-              const RING_BUFFER_CHUNK_SIZE = 4096;
-              const RING_BUFFER_SAMPLE_RATE = 16000;
-
-              // ── Caption-driven audio routing ─────────────────────────
-              // Audio accumulates in a queue. Flushed to speaker when
-              // caption text GROWS (new words spoken). Refinements
-              // (punctuation, capitalization) are ignored — they would
-              // steal the next speaker's audio from the queue.
-              // Max queue age 10s — longer buffer for non-English captions which fire slower.
-              const MAX_QUEUE_AGE_MS = 10000;
-              const MIN_TEXT_GROWTH = 3; // chars — below this = refinement
-              interface QueuedChunk {
-                data: Float32Array;
-                timestamp: number;
-              }
-              const audioQueue: QueuedChunk[] = [];
-              let captionsEnabled = false;
-              let lastCaptionSpeaker: string | null = null;
-              let lastCaptionText: string = '';
-              let lastCaptionTimestamp: number = 0;
-              let lastFlushedTextLength: number = 0;
-
-              const setupPerSpeakerAudioRouting = () => {
-                const audioEl = document.querySelector('audio') as HTMLAudioElement | null;
-                if (!audioEl || !(audioEl.srcObject instanceof MediaStream)) {
-                  (window as any).logBot?.('[Teams PerSpeaker] No audio element found, skipping per-speaker routing');
-                  return;
-                }
-
-                const stream = audioEl.srcObject as MediaStream;
-                if (stream.getAudioTracks().length === 0) {
-                  (window as any).logBot?.('[Teams PerSpeaker] Audio stream has no tracks');
-                  return;
-                }
-
-                const ctx = new AudioContext({ sampleRate: 16000 });
-                const source = ctx.createMediaStreamSource(stream);
-                const processor = ctx.createScriptProcessor(4096, 1, 1);
-                const botNameLower = ((botConfigData as any)?.botName || (botConfigData as any)?.name || 'vexa').toLowerCase();
-
-                processor.onaudioprocess = (e: AudioProcessingEvent) => {
-                  const data = e.inputBuffer.getChannelData(0);
-                  const now = Date.now();
-
-                  // Skip silence — don't queue chunks with no speech energy.
-                  // This prevents silence from being flushed to the wrong speaker
-                  // on speaker transitions.
-                  let sum = 0;
-                  for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
-                  const rms = Math.sqrt(sum / data.length);
-                  if (rms < 0.01) return;
-
-                  audioQueue.push({ data: new Float32Array(data), timestamp: now });
-
-                  // Drop entries older than MAX_QUEUE_AGE_MS
-                  while (audioQueue.length > 0 && now - audioQueue[0].timestamp > MAX_QUEUE_AGE_MS) {
-                    audioQueue.shift();
-                  }
-                };
-
-                source.connect(processor);
-                processor.connect(ctx.destination);
-                (window as any).logBot?.('[Teams PerSpeaker] Audio routing active (caption-aware with ring buffer)');
-              };
-
-              // ─── Caption observer ─────────────────────────────────────────
-              // Watches Teams live caption DOM for new entries. When a new
-              // caption appears with a speaker name, we:
-              //   1. Flush ring buffer audio to that speaker (lookback)
-              //   2. Set lastCaptionSpeaker so ongoing audio routes to them
-              //   3. Send caption text to Node.js for storage/matching
-              const captionSels = selectorsTyped.captionSelectors;
-              let captionObserver: MutationObserver | null = null;
-              let lastSeenCaptionCount = 0;
-
-              // ── Caption DOM variance ──────────────────────────────────────
-              // Teams renders captions differently for host vs guest:
-              //
-              //   HOST:  wrapper > window-wrapper > virtual-list-content
-              //            > items-renderer > ChatMessageCompact > author + text
-              //
-              //   GUEST: wrapper > window-wrapper > virtual-list-content
-              //            > (div) > author + text  (NO items-renderer wrapper)
-              //
-              // The ONLY stable elements across both views are:
-              //   [data-tid="author"]           — speaker name
-              //   [data-tid="closed-caption-text"] — caption text
-              //
-              // These always appear as sibling-adjacent pairs in document order
-              // inside the wrapper. We find them directly and pair by index.
-              // This is robust against any container restructuring Teams may do.
-              // ────────────────────────────────────────────────────────────────
-
-              let lastProcessedCaptionKey = '';
-
-              const processCaptions = () => {
-                const wrapper = document.querySelector(captionSels.rendererWrapper);
-                if (!wrapper) return;
-
-                // Find author/text atoms directly — the only stable data-tids
-                const authorEls = wrapper.querySelectorAll('[data-tid="author"]');
-                const textEls = wrapper.querySelectorAll('[data-tid="closed-caption-text"]');
-
-                if (authorEls.length === 0 || textEls.length === 0) return;
-
-                // Use the LAST pair — most recent caption entry.
-                // Authors and texts appear in matched pairs in document order.
-                const lastAuthor = authorEls[authorEls.length - 1];
-                const lastText = textEls[textEls.length - 1];
-
-                const speaker = (lastAuthor.textContent || '').trim();
-                const text = (lastText.textContent || '').trim();
-                if (!speaker || !text) return;
-
-                // Deduplicate: Teams updates text in-place as ASR refines.
-                // Only process when speaker changes or text grows significantly.
-                const captionKey = speaker + '::' + text;
-                if (captionKey === lastProcessedCaptionKey) return;
-                lastProcessedCaptionKey = captionKey;
-
+              processor.onaudioprocess = (e: AudioProcessingEvent) => {
+                const data = e.inputBuffer.getChannelData(0);
                 const now = Date.now();
-                const botNameLower2 = ((botConfigData as any)?.botName || (botConfigData as any)?.name || 'vexa').toLowerCase();
-                const speakerLower = speaker.toLowerCase();
-                if (speakerLower.includes(botNameLower2) || speakerLower.includes('vexa')) return;
 
-                if (speaker !== lastCaptionSpeaker) {
-                  // Speaker changed. Queue contains new speaker's audio
-                  // (~1-1.5s accumulated during caption delay). Flush to
-                  // new speaker to preserve their opening words.
-                  lastFlushedTextLength = 0;
-                  const queued = audioQueue.length;
-                  if (queued > 0 && !speakerLower.includes(botNameLower2) && !speakerLower.includes('vexa')) {
-                    // Only flush recent chunks (last 2s) — the caption delay lookback.
-                    // Older chunks are stale silence from the gap between speakers.
-                    const lookbackCutoff = now - 2000;
-                    let discarded = 0;
-                    while (audioQueue.length > 0 && audioQueue[0].timestamp < lookbackCutoff) {
-                      audioQueue.shift();
-                      discarded++;
-                    }
-                    let flushed = 0;
-                    while (audioQueue.length > 0) {
-                      const entry = audioQueue.shift()!;
-                      if (typeof (window as any).__vexaTeamsAudioData === 'function') {
-                        (window as any).__vexaTeamsAudioData(speaker, Array.from(entry.data));
-                      }
-                      flushed++;
-                    }
-                    (window as any).logBot?.('[Teams Captions] Speaker change: ' +
-                      (lastCaptionSpeaker || '(none)') + ' → ' + speaker +
-                      ' (flushed ' + flushed + ' chunks, discarded ' + discarded + ' stale)');
-                  } else {
-                    (window as any).logBot?.('[Teams Captions] Speaker change: ' +
-                      (lastCaptionSpeaker || '(none)') + ' → ' + speaker);
-                  }
-                }
+                // Skip silence — don't queue chunks with no speech energy.
+                // This prevents silence from being flushed to the wrong speaker
+                // on speaker transitions.
+                let sum = 0;
+                for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
+                const rms = Math.sqrt(sum / data.length);
+                if (rms < 0.01) return;
 
-                lastCaptionSpeaker = speaker;
-                lastCaptionText = text;
-                lastCaptionTimestamp = now;
+                audioQueue.push({ data: new Float32Array(data), timestamp: now });
 
-                // ── Flush only when text GREW (new words spoken) ─────
-                // Refinements (punctuation, case) change text by 1-2 chars.
-                // New words grow by 5+. Skip refinements to prevent
-                // stealing the next speaker's audio from the queue.
-                // Compare against PREVIOUS text length (not cumulative max)
-                // because Teams replaces caption text per entry, not appends.
-                const textGrowth = text.length - lastFlushedTextLength;
-                // Flush when: text grew by >3 chars (new words), OR text is
-                // shorter (new caption entry = new sentence, always flush)
-                if (textGrowth > MIN_TEXT_GROWTH || text.length < lastFlushedTextLength) {
-                  if (!speakerLower.includes(botNameLower2) && !speakerLower.includes('vexa')) {
-                    let flushed = 0;
-                    while (audioQueue.length > 0) {
-                      const entry = audioQueue.shift()!;
-                      if (typeof (window as any).__vexaTeamsAudioData === 'function') {
-                        (window as any).__vexaTeamsAudioData(speaker, Array.from(entry.data));
-                      }
-                      flushed++;
-                    }
-                    if (flushed > 0) {
-                      (window as any).logBot?.('[Teams Captions] Flushed ' + flushed + ' chunks to ' + speaker +
-                        ' (text ' + (textGrowth > 0 ? '+' + textGrowth : textGrowth) + ' chars)');
-                    }
-                  }
-                  lastFlushedTextLength = text.length;
-                }
-
-                if (typeof (window as any).__vexaTeamsCaptionData === 'function') {
-                  (window as any).__vexaTeamsCaptionData(speaker, text, now);
+                // Drop entries older than MAX_QUEUE_AGE_MS
+                while (audioQueue.length > 0 && now - audioQueue[0].timestamp > MAX_QUEUE_AGE_MS) {
+                  audioQueue.shift();
                 }
               };
 
-              const startCaptionObserver = () => {
-                const wrapper = document.querySelector(captionSels.rendererWrapper);
-                if (!wrapper) {
-                  // Captions not enabled yet — check periodically
-                  return false;
-                }
+              source.connect(processor);
+              processor.connect(ctx.destination);
+              (window as any).logBot?.('[Teams PerSpeaker] Audio routing active (caption-aware with ring buffer)');
+            };
 
-                captionsEnabled = true;
-                (window as any).logBot?.('[Teams Captions] Caption wrapper found — caption-driven routing ACTIVE');
+            // Caption observer: watches Teams live captions for speaker name +
+            // text. Caption DOM differs host vs guest (host has items-renderer
+            // wrapper, guest doesn't), but [data-tid="author"] +
+            // [data-tid="closed-caption-text"] are stable across both. We pair
+            // them by document order — robust to container restructuring.
+            const captionSels = selectorsTyped.captionSelectors;
+            let captionObserver: MutationObserver | null = null;
 
-                let captionMutationCount = 0;
-                captionObserver = new MutationObserver((mutations) => {
-                  captionMutationCount++;
-                  if (captionMutationCount <= 3 || captionMutationCount % 50 === 0) {
-                    (window as any).logBot?.('[Teams Captions] MutationObserver fired (#' + captionMutationCount + ', ' + mutations.length + ' mutations)');
+            let lastProcessedCaptionKey = '';
+
+            const processCaptions = () => {
+              const wrapper = document.querySelector(captionSels.rendererWrapper);
+              if (!wrapper) return;
+
+              // Find author/text atoms directly — the only stable data-tids
+              const authorEls = wrapper.querySelectorAll('[data-tid="author"]');
+              const textEls = wrapper.querySelectorAll('[data-tid="closed-caption-text"]');
+
+              if (authorEls.length === 0 || textEls.length === 0) return;
+
+              // Use the LAST pair — most recent caption entry.
+              // Authors and texts appear in matched pairs in document order.
+              const lastAuthor = authorEls[authorEls.length - 1];
+              const lastText = textEls[textEls.length - 1];
+
+              const speaker = (lastAuthor.textContent || '').trim();
+              const text = (lastText.textContent || '').trim();
+              if (!speaker || !text) return;
+
+              // Deduplicate: Teams updates text in-place as ASR refines.
+              // Only process when speaker changes or text grows significantly.
+              const captionKey = speaker + '::' + text;
+              if (captionKey === lastProcessedCaptionKey) return;
+              lastProcessedCaptionKey = captionKey;
+
+              const now = Date.now();
+              const botNameLower2 = ((botConfigData as any)?.botName || (botConfigData as any)?.name || 'vexa').toLowerCase();
+              const speakerLower = speaker.toLowerCase();
+              if (speakerLower.includes(botNameLower2) || speakerLower.includes('vexa')) return;
+
+              if (speaker !== lastCaptionSpeaker) {
+                // Speaker changed. Queue contains new speaker's audio
+                // (~1-1.5s accumulated during caption delay). Flush to
+                // new speaker to preserve their opening words.
+                lastFlushedTextLength = 0;
+                const queued = audioQueue.length;
+                if (queued > 0 && !speakerLower.includes(botNameLower2) && !speakerLower.includes('vexa')) {
+                  // Only flush recent chunks (last 2s) — the caption delay lookback.
+                  // Older chunks are stale silence from the gap between speakers.
+                  const lookbackCutoff = now - 2000;
+                  let discarded = 0;
+                  while (audioQueue.length > 0 && audioQueue[0].timestamp < lookbackCutoff) {
+                    audioQueue.shift();
+                    discarded++;
                   }
-                  processCaptions();
-                });
-
-                captionObserver.observe(wrapper, {
-                  childList: true,
-                  subtree: true,
-                  characterData: true
-                });
-
-                // Initial scan
-                processCaptions();
-
-                // Backup: poll every 200ms in case MutationObserver misses changes
-                // (faster poll = tighter speaker transition gaps)
-                // (Teams may use virtual DOM updates that don't trigger mutations)
-                let pollCount = 0;
-                setInterval(() => {
-                  pollCount++;
-                  processCaptions();
-                  // Deep DOM inspection every 5 seconds for debugging
-                  if (pollCount % 10 === 0) {
-                    const w = document.querySelector(captionSels.rendererWrapper);
-                    if (w) {
-                      const items = w.querySelectorAll(captionSels.captionItem);
-                      const allTids = Array.from(w.querySelectorAll('[data-tid]')).map((el: any) => el.getAttribute('data-tid'));
-                      const childCount = w.children.length;
-                      const innerLen = w.innerHTML.length;
-                      (window as any).logBot?.('[Teams Captions POLL] wrapper children=' + childCount +
-                        ', items=' + items.length + ', data-tids=[' + allTids.join(',') + '], innerHTML.length=' + innerLen);
-                    } else {
-                      (window as any).logBot?.('[Teams Captions POLL] wrapper GONE');
+                  let flushed = 0;
+                  while (audioQueue.length > 0) {
+                    const entry = audioQueue.shift()!;
+                    if (typeof (window as any).__vexaTeamsAudioData === 'function') {
+                      (window as any).__vexaTeamsAudioData(speaker, Array.from(entry.data));
                     }
+                    flushed++;
                   }
-                }, 200);
-
-                return true;
-              };
-
-              // Try to detect if captions are already enabled; poll until found or give up
-              const captionDetectionInterval = setInterval(() => {
-                if (startCaptionObserver()) {
-                  clearInterval(captionDetectionInterval);
-                }
-              }, 2000);
-
-              // Also watch for the wrapper to appear via body mutation
-              const captionWrapperWatcher = new MutationObserver(() => {
-                if (!captionsEnabled && startCaptionObserver()) {
-                  captionWrapperWatcher.disconnect();
-                  clearInterval(captionDetectionInterval);
-                }
-              });
-              captionWrapperWatcher.observe(document.body, { childList: true, subtree: true });
-
-              // Delay slightly to ensure audio element is ready
-              setTimeout(setupPerSpeakerAudioRouting, 2000);
-              
-              // Expose participant count for meeting monitoring
-              // Accessible-roles based participant collection (robust and simple)
-              function collectAriaParticipants(): string[] {
-                try {
-                  // Find all menuitems in the Participants panel that contain an avatar/image
-                  const menuItems = Array.from(document.querySelectorAll('[role="menuitem"]')) as HTMLElement[];
-                  const names = new Set<string>();
-                  for (const item of menuItems) {
-                    const hasImg = !!(item.querySelector('img') || item.querySelector('[role="img"]'));
-                    if (!hasImg) continue;
-                    // Derive accessible-like name
-                    const aria = item.getAttribute('aria-label');
-                    let name = aria && aria.trim() ? aria.trim() : '';
-                    if (!name) {
-                      const text = (item.textContent || '').trim();
-                      if (text) name = text;
-                    }
-                    if (name) {
-                      names.add(name);
-                    }
-                  }
-                  return Array.from(names);
-                } catch (err: any) {
-                  const msg = (err && err.message) ? err.message : String(err);
-                  (window as any).logBot?.(`⚠️ [ARIA Participants] Error collecting participants: ${msg}`);
-                  return [];
+                  (window as any).logBot?.('[Teams Captions] Speaker change: ' +
+                    (lastCaptionSpeaker || '(none)') + ' → ' + speaker +
+                    ' (flushed ' + flushed + ' chunks, discarded ' + discarded + ' stale)');
+                } else {
+                  (window as any).logBot?.('[Teams Captions] Speaker change: ' +
+                    (lastCaptionSpeaker || '(none)') + ' → ' + speaker);
                 }
               }
 
-              (window as any).getTeamsActiveParticipantsCount = () => {
-                // Use ARIA role-based collection and include the bot if name is known
-                const names = collectAriaParticipants();
-                const total = botConfigData?.name ? names.length + 1 : names.length;
-                return total;
-              };
-              (window as any).getTeamsActiveParticipants = () => {
-                // Return ARIA role-based names plus bot (if known)
-                const names = collectAriaParticipants();
-                if (botConfigData?.name) names.push(botConfigData.name);
-                (window as any).logBot(`🔍 [ARIA Participants] ${JSON.stringify(names)}`);
-                return names;
-              };
+              lastCaptionSpeaker = speaker;
+
+              // Flush only when text GREW (new words). Refinements
+              // (punctuation/case) change text by 1-2 chars; new words grow by
+              // 5+. Compare against PREVIOUS text length, not cumulative max
+              // (Teams replaces caption text per entry, not appends).
+              const textGrowth = text.length - lastFlushedTextLength;
+              if (textGrowth > MIN_TEXT_GROWTH || text.length < lastFlushedTextLength) {
+                if (!speakerLower.includes(botNameLower2) && !speakerLower.includes('vexa')) {
+                  let flushed = 0;
+                  while (audioQueue.length > 0) {
+                    const entry = audioQueue.shift()!;
+                    if (typeof (window as any).__vexaTeamsAudioData === 'function') {
+                      (window as any).__vexaTeamsAudioData(speaker, Array.from(entry.data));
+                    }
+                    flushed++;
+                  }
+                  if (flushed > 0) {
+                    (window as any).logBot?.('[Teams Captions] Flushed ' + flushed + ' chunks to ' + speaker +
+                      ' (text ' + (textGrowth > 0 ? '+' + textGrowth : textGrowth) + ' chars)');
+                  }
+                }
+                lastFlushedTextLength = text.length;
+              }
+
+              if (typeof (window as any).__vexaTeamsCaptionData === 'function') {
+                (window as any).__vexaTeamsCaptionData(speaker, text, now);
+              }
             };
 
-            // Setup Teams meeting monitoring (browser context)
-            const setupTeamsMeetingMonitoring = (botConfigData: any, audioService: any, resolve: any) => {
-              (window as any).logBot("Setting up Teams meeting monitoring...");
-              
-              const leaveCfg = (botConfigData && (botConfigData as any).automaticLeave) || {};
-              // Config values are in milliseconds, convert to seconds
-              const startupAloneTimeoutSeconds = leaveCfg.noOneJoinedTimeout
-                ? Math.floor(Number(leaveCfg.noOneJoinedTimeout) / 1000)
-                : Number(leaveCfg.startupAloneTimeoutSeconds ?? (20 * 60));
-              const everyoneLeftTimeoutSeconds = leaveCfg.everyoneLeftTimeout
-                ? Math.floor(Number(leaveCfg.everyoneLeftTimeout) / 1000)
-                : Number(leaveCfg.everyoneLeftTimeoutSeconds ?? 60);
-              
-              let aloneTime = 0;
-              let lastParticipantCount = 0;
-              let speakersIdentified = false;
-              let hasEverHadMultipleParticipants = false;
-              let monitoringStopped = false;
-
-              const stopWithFlush = async (
-                reason: string,
-                finish: () => void
-              ) => {
-                if (monitoringStopped) return;
-                monitoringStopped = true;
-                clearInterval(checkInterval);
-                try {
-                  if (typeof (window as any).__vexaFlushRecordingBlob === "function") {
-                    await (window as any).__vexaFlushRecordingBlob(reason);
-                  }
-                } catch (flushErr: any) {
-                  (window as any).logBot?.(
-                    `[Teams Recording] Flush error during shutdown (${reason}): ${flushErr?.message || flushErr}`
-                  );
-                }
-                audioService.disconnect();
-                finish();
-              };
-
-              // Teams removal detection function (browser context)
-              const checkForRemoval = () => {
-                try {
-                  // 1) Strong text heuristics on body text
-                  const bodyText = (document.body?.innerText || '').toLowerCase();
-                  const removalPhrases = [
-                    "you've been removed from this meeting",
-                    'you have been removed from this meeting',
-                    'removed from meeting',
-                    'meeting ended',
-                    'call ended'
-                  ];
-                  if (removalPhrases.some(p => bodyText.includes(p))) {
-                    (window as any).logBot('🚨 Teams removal detected via body text');
-                    return true;
-                  }
-
-                  // 2) Button heuristics
-                  const buttons = Array.from(document.querySelectorAll('button')) as HTMLElement[];
-                  for (const btn of buttons) {
-                    const txt = (btn.textContent || btn.innerText || '').trim().toLowerCase();
-                    const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
-                    if (txt === 'rejoin' || txt === 'dismiss' || aria.includes('rejoin') || aria.includes('dismiss')) {
-                      if (btn.offsetWidth > 0 && btn.offsetHeight > 0) {
-                        const cs = getComputedStyle(btn);
-                        if (cs.display !== 'none' && cs.visibility !== 'hidden') {
-                          (window as any).logBot('🚨 Teams removal detected via visible buttons (Rejoin/Dismiss)');
-                          return true;
-                        }
-                      }
-                    }
-                  }
-
-                  return false;
-                } catch (error: any) {
-                  (window as any).logBot(`Error checking for Teams removal: ${error.message}`);
-                  return false;
-                }
-              };
-
-              const checkInterval = setInterval(() => {
-                // First check for removal state
-                if (checkForRemoval()) {
-                  (window as any).logBot("🚨 Bot has been removed from the Teams meeting. Initiating graceful leave...");
-                  void stopWithFlush("removed_by_admin", () =>
-                    reject(new Error("TEAMS_BOT_REMOVED_BY_ADMIN"))
-                  );
-                  return;
-                }
-                // Check participant count using the comprehensive speaker detection system
-                const currentParticipantCount = (window as any).getTeamsActiveParticipantsCount ? (window as any).getTeamsActiveParticipantsCount() : 0;
-                
-                if (currentParticipantCount !== lastParticipantCount) {
-                  (window as any).logBot(`🔢 Teams participant count changed: ${lastParticipantCount} → ${currentParticipantCount}`);
-                  const participantList = (window as any).getTeamsActiveParticipants ? (window as any).getTeamsActiveParticipants() : [];
-                  (window as any).logBot(`👥 Current participants: ${JSON.stringify(participantList)}`);
-                  
-                  lastParticipantCount = currentParticipantCount;
-                  
-                  // Track if we've ever had multiple participants
-                  if (currentParticipantCount > 1) {
-                    hasEverHadMultipleParticipants = true;
-                    speakersIdentified = true; // Once we see multiple participants, we've identified speakers
-                    (window as any).logBot("Teams Speakers identified - switching to post-speaker monitoring mode");
-                  }
-                }
-
-                if (currentParticipantCount === 0) {
-                  aloneTime++;
-                  
-                  // Determine timeout based on whether speakers have been identified
-                  const currentTimeout = speakersIdentified ? everyoneLeftTimeoutSeconds : startupAloneTimeoutSeconds;
-                  const timeoutDescription = speakersIdentified ? "post-speaker" : "startup";
-                  
-                  (window as any).logBot(`⏱️ Teams bot alone time: ${aloneTime}s/${currentTimeout}s (${timeoutDescription} mode, speakers identified: ${speakersIdentified})`);
-                  
-                  if (aloneTime >= currentTimeout) {
-                    if (speakersIdentified) {
-                      (window as any).logBot(`Teams meeting ended or bot has been alone for ${everyoneLeftTimeoutSeconds} seconds after speakers were identified. Stopping recorder...`);
-                      void stopWithFlush("left_alone_timeout", () =>
-                        reject(new Error("TEAMS_BOT_LEFT_ALONE_TIMEOUT"))
-                      );
-                    } else {
-                      (window as any).logBot(`Teams bot has been alone for ${startupAloneTimeoutSeconds} seconds during startup with no other participants. Stopping recorder...`);
-                      void stopWithFlush("startup_alone_timeout", () =>
-                        reject(new Error("TEAMS_BOT_STARTUP_ALONE_TIMEOUT"))
-                      );
-                    }
-                  } else if (aloneTime > 0 && aloneTime % 10 === 0) { // Log every 10 seconds to avoid spam
-                    if (speakersIdentified) {
-                      (window as any).logBot(`Teams bot has been alone for ${aloneTime} seconds (${timeoutDescription} mode). Will leave in ${currentTimeout - aloneTime} more seconds.`);
-                    } else {
-                      const remainingMinutes = Math.floor((currentTimeout - aloneTime) / 60);
-                      const remainingSeconds = (currentTimeout - aloneTime) % 60;
-                      (window as any).logBot(`Teams bot has been alone for ${aloneTime} seconds during startup. Will leave in ${remainingMinutes}m ${remainingSeconds}s.`);
-                    }
-                  }
-                } else {
-                  aloneTime = 0; // Reset if others are present
-                  if (hasEverHadMultipleParticipants && !speakersIdentified) {
-                    speakersIdentified = true;
-                    (window as any).logBot("Teams speakers identified - switching to post-speaker monitoring mode");
-                  }
-                }
-              }, 1000);
-
-              // Listen for page unload
-              window.addEventListener("beforeunload", () => {
-                (window as any).logBot("Teams page is unloading. Stopping recorder...");
-                void stopWithFlush("beforeunload", () => resolve());
-              });
-
-              document.addEventListener("visibilitychange", () => {
-                if (document.visibilityState === "hidden") {
-                  (window as any).logBot("Teams document is hidden. Stopping recorder...");
-                  void stopWithFlush("visibility_hidden", () => resolve());
-                }
-              });
+            const startCaptionObserver = () => {
+              const wrapper = document.querySelector(captionSels.rendererWrapper);
+              if (!wrapper) return false; // captions not enabled yet — check again later
+              captionsEnabled = true;
+              (window as any).logBot?.('[Teams Captions] Caption wrapper found — caption-driven routing ACTIVE');
+              captionObserver = new MutationObserver(processCaptions);
+              captionObserver.observe(wrapper, { childList: true, subtree: true, characterData: true });
+              processCaptions();
+              // Backup poll in case MutationObserver misses virtual-DOM updates.
+              setInterval(processCaptions, 200);
+              return true;
             };
 
-            // Initialize Teams-specific speaker detection
+            // Try to detect if captions are already enabled; poll until found or give up
+            const captionDetectionInterval = setInterval(() => {
+              if (startCaptionObserver()) {
+                clearInterval(captionDetectionInterval);
+              }
+            }, 2000);
+
+            // Also watch for the wrapper to appear via body mutation
+            const captionWrapperWatcher = new MutationObserver(() => {
+              if (!captionsEnabled && startCaptionObserver()) {
+                captionWrapperWatcher.disconnect();
+                clearInterval(captionDetectionInterval);
+              }
+            });
+            captionWrapperWatcher.observe(document.body, { childList: true, subtree: true });
+
+            // Delay slightly to ensure audio element is ready
+            setTimeout(setupPerSpeakerAudioRouting, 2000);
+
+            // ARIA-roles-based participant collection (find menuitems in
+            // Participants panel that contain an avatar/image).
+            function collectAriaParticipants(): string[] {
+              try {
+                const menuItems = Array.from(document.querySelectorAll('[role="menuitem"]')) as HTMLElement[];
+                const names = new Set<string>();
+                for (const item of menuItems) {
+                  const hasImg = !!(item.querySelector('img') || item.querySelector('[role="img"]'));
+                  if (!hasImg) continue;
+                  const aria = item.getAttribute('aria-label');
+                  let name = aria && aria.trim() ? aria.trim() : (item.textContent || '').trim();
+                  if (name) names.add(name);
+                }
+                return Array.from(names);
+              } catch (err: any) {
+                (window as any).logBot?.(`⚠️ [ARIA Participants] Error: ${err?.message || String(err)}`);
+                return [];
+              }
+            }
+
+            (window as any).getTeamsActiveParticipantsCount = () => {
+              const names = collectAriaParticipants();
+              return botConfigData?.name ? names.length + 1 : names.length;
+            };
+            (window as any).getTeamsActiveParticipants = () => {
+              const names = collectAriaParticipants();
+              if (botConfigData?.name) names.push(botConfigData.name);
+              (window as any).logBot(`🔍 [ARIA Participants] ${JSON.stringify(names)}`);
+              return names;
+            };
+          };
+
+          // Setup Teams meeting monitoring (browser context)
+          // Pack U.3 (v0.10.6): no longer flushes recording from browser context.
+          // The audio pipeline is drained by stopTeamsRecording() (Node side) via
+          // leaveMicrosoftTeams. Here we just disconnect audioService and signal
+          // the outer promise.
+          const setupTeamsMeetingMonitoring = (botConfigData: any, audioService: any, resolve: any) => {
+            (window as any).logBot("Setting up Teams meeting monitoring...");
+
+            const leaveCfg = (botConfigData && (botConfigData as any).automaticLeave) || {};
+            // Config values are in milliseconds, convert to seconds
+            const startupAloneTimeoutSeconds = leaveCfg.noOneJoinedTimeout
+              ? Math.floor(Number(leaveCfg.noOneJoinedTimeout) / 1000)
+              : Number(leaveCfg.startupAloneTimeoutSeconds ?? (20 * 60));
+            const everyoneLeftTimeoutSeconds = leaveCfg.everyoneLeftTimeout
+              ? Math.floor(Number(leaveCfg.everyoneLeftTimeout) / 1000)
+              : Number(leaveCfg.everyoneLeftTimeoutSeconds ?? 60);
+
+            let aloneTime = 0;
+            let lastParticipantCount = 0;
+            let speakersIdentified = false;
+            let hasEverHadMultipleParticipants = false;
+            let monitoringStopped = false;
+
+            const stopMonitoring = (
+              reason: string,
+              finish: () => void
+            ) => {
+              if (monitoringStopped) return;
+              monitoringStopped = true;
+              clearInterval(checkInterval);
+              try {
+                if (audioService && typeof audioService.disconnect === "function") {
+                  audioService.disconnect();
+                }
+              } catch (err: any) {
+                (window as any).logBot?.(
+                  `[Teams Recording] audioService.disconnect error during shutdown (${reason}): ${err?.message || err}`
+                );
+              }
+              finish();
+            };
+
+            // Teams removal detection: text heuristics + Rejoin/Dismiss buttons.
+            const checkForRemoval = () => {
+              try {
+                const bodyText = (document.body?.innerText || '').toLowerCase();
+                const removalPhrases = [
+                  "you've been removed from this meeting", 'you have been removed from this meeting',
+                  'removed from meeting', 'meeting ended', 'call ended'
+                ];
+                if (removalPhrases.some(p => bodyText.includes(p))) {
+                  (window as any).logBot('🚨 Teams removal detected via body text');
+                  return true;
+                }
+                const buttons = Array.from(document.querySelectorAll('button')) as HTMLElement[];
+                for (const btn of buttons) {
+                  const txt = (btn.textContent || btn.innerText || '').trim().toLowerCase();
+                  const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+                  if (!(txt === 'rejoin' || txt === 'dismiss' || aria.includes('rejoin') || aria.includes('dismiss'))) continue;
+                  if (btn.offsetWidth <= 0 || btn.offsetHeight <= 0) continue;
+                  const cs = getComputedStyle(btn);
+                  if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+                  (window as any).logBot('🚨 Teams removal detected via visible buttons (Rejoin/Dismiss)');
+                  return true;
+                }
+                return false;
+              } catch (error: any) {
+                (window as any).logBot(`Error checking for Teams removal: ${error.message}`);
+                return false;
+              }
+            };
+
+            const checkInterval = setInterval(() => {
+              if (checkForRemoval()) {
+                (window as any).logBot("🚨 Bot has been removed from the Teams meeting. Initiating graceful leave...");
+                stopMonitoring("removed_by_admin", () => reject(new Error("TEAMS_BOT_REMOVED_BY_ADMIN")));
+                return;
+              }
+              const currentParticipantCount = (window as any).getTeamsActiveParticipantsCount ? (window as any).getTeamsActiveParticipantsCount() : 0;
+
+              if (currentParticipantCount !== lastParticipantCount) {
+                (window as any).logBot(`🔢 Teams participant count changed: ${lastParticipantCount} → ${currentParticipantCount}`);
+                const participantList = (window as any).getTeamsActiveParticipants ? (window as any).getTeamsActiveParticipants() : [];
+                (window as any).logBot(`👥 Current participants: ${JSON.stringify(participantList)}`);
+                lastParticipantCount = currentParticipantCount;
+                if (currentParticipantCount > 1) {
+                  hasEverHadMultipleParticipants = true;
+                  speakersIdentified = true;
+                  (window as any).logBot("Teams Speakers identified - switching to post-speaker monitoring mode");
+                }
+              }
+
+              if (currentParticipantCount === 0) {
+                aloneTime++;
+                const currentTimeout = speakersIdentified ? everyoneLeftTimeoutSeconds : startupAloneTimeoutSeconds;
+                const timeoutDescription = speakersIdentified ? "post-speaker" : "startup";
+                if (aloneTime >= currentTimeout) {
+                  if (speakersIdentified) {
+                    (window as any).logBot(`Teams meeting ended or bot has been alone for ${everyoneLeftTimeoutSeconds} seconds after speakers were identified. Stopping recorder...`);
+                    stopMonitoring("left_alone_timeout", () => reject(new Error("TEAMS_BOT_LEFT_ALONE_TIMEOUT")));
+                  } else {
+                    (window as any).logBot(`Teams bot has been alone for ${startupAloneTimeoutSeconds} seconds during startup with no other participants. Stopping recorder...`);
+                    stopMonitoring("startup_alone_timeout", () => reject(new Error("TEAMS_BOT_STARTUP_ALONE_TIMEOUT")));
+                  }
+                } else if (aloneTime > 0 && aloneTime % 10 === 0) { // log every 10s to avoid spam
+                  if (speakersIdentified) {
+                    (window as any).logBot(`Teams bot has been alone for ${aloneTime} seconds (${timeoutDescription} mode). Will leave in ${currentTimeout - aloneTime} more seconds.`);
+                  } else {
+                    const remainingMinutes = Math.floor((currentTimeout - aloneTime) / 60);
+                    const remainingSeconds = (currentTimeout - aloneTime) % 60;
+                    (window as any).logBot(`Teams bot has been alone for ${aloneTime} seconds during startup. Will leave in ${remainingMinutes}m ${remainingSeconds}s.`);
+                  }
+                }
+              } else {
+                aloneTime = 0;
+                if (hasEverHadMultipleParticipants && !speakersIdentified) {
+                  speakersIdentified = true;
+                  (window as any).logBot("Teams speakers identified - switching to post-speaker monitoring mode");
+                }
+              }
+            }, 1000);
+
+            // Listen for page unload
+            window.addEventListener("beforeunload", () => {
+              (window as any).logBot("Teams page is unloading. Stopping recorder...");
+              stopMonitoring("beforeunload", () => resolve());
+            });
+
+            document.addEventListener("visibilitychange", () => {
+              if (document.visibilityState === "hidden") {
+                (window as any).logBot("Teams document is hidden. Stopping recorder...");
+                stopMonitoring("visibility_hidden", () => resolve());
+              }
+            });
+          };
+
+          // Initialize Teams-specific speaker detection
+          if (!degradedNoMedia) {
             initializeTeamsSpeakerDetection(audioService, botConfigData);
-            
-            // Setup Teams meeting monitoring
-            setupTeamsMeetingMonitoring(botConfigData, audioService, resolve);
-          }).catch((err: any) => {
-            reject(err);
-          });
+          }
 
+          // Setup Teams meeting monitoring
+          setupTeamsMeetingMonitoring(botConfigData, audioService, resolve);
         } catch (error: any) {
           return reject(new Error("[Teams BOT Error] " + error.message));
         }
@@ -1472,4 +970,30 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
       } as any
     }
   );
+}
+
+/**
+ * Stop the unified recording pipeline. Called from leaveMicrosoftTeams before
+ * the UI leave + process shutdown, replacing the old __vexaFlushRecordingBlob
+ * browser-side fn. Drains the upload queue (including the final isFinal=true
+ * chunk) so meeting-api flips Recording.status to COMPLETED before the bot
+ * exits.
+ */
+export async function stopTeamsRecording(): Promise<void> {
+  if (!pipeline) {
+    log("[Teams Recording] stopTeamsRecording: no active pipeline");
+    return;
+  }
+  log("[Teams Recording] Stopping unified pipeline (drain final chunk)");
+  try {
+    await pipeline.stop();
+  } catch (err: any) {
+    log(`[Teams Recording] pipeline.stop() error: ${err?.message || err}`);
+  }
+  pipeline = null;
+  recordingService = null;
+}
+
+export function getTeamsRecordingService(): RecordingService | null {
+  return recordingService;
 }

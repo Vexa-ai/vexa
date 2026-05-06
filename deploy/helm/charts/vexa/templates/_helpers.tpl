@@ -105,11 +105,28 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{- define "vexa.deploymentStrategy" -}}
+{{/*
+v0.10.5.3 Pack H — zero-downtime rolling update.
+
+Pre-fix: maxSurge: 0, maxUnavailable: 1. With replicaCount: 1, this killed
+the OLD pod before creating the NEW pod, causing 502s during any image
+bump (e.g. the v0.10.5.2 cycle outage where dashboard + webapp went 502
+because new image tags didn't exist on the registry — old pods were
+already killed by the time helm upgrade tried to create the new pods).
+
+Post-fix: maxSurge: 1, maxUnavailable: 0. NEW pod is created first;
+helm waits until it's Ready before killing the OLD. With --atomic --wait
+on the helm upgrade call (release-helm-upgrade-safe Make target),
+failed image pulls auto-rollback without ever exposing the outage.
+
+Works on replicaCount=1 (1 old -> 1 old + 1 new -> 1 new) and
+replicaCount>1 (rolling progresses one extra at a time).
+*/}}
 strategy:
   type: RollingUpdate
   rollingUpdate:
-    maxSurge: 0
-    maxUnavailable: 1
+    maxSurge: 1
+    maxUnavailable: 0
 {{- end -}}
 
 {{/*

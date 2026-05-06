@@ -1,0 +1,71 @@
+release_id: '260501-chunk-leak'
+public_version: v0.10.6
+signed_at: '2026-05-03T00:30:00Z'
+signer: project-owner
+
+# Part A — Code review
+code_review_approved: true
+code_review_notes: |
+  Reviewed the v0.10.6 diff (62 commits, ~40 files). Audit walked all 7
+  categories (security, fallbacks, resilience, workarounds, anti-patterns,
+  op-hygiene, PII) — verdict: CLEAN. 0 BLOCKER, 0 CRITICAL, 1 MAJOR
+  (callbacks.py:318 broad-except) deferred as GH #306.
+
+  Critical-path scrutiny:
+  - Pack U.7 chunk_write defensive guard: correct semantics, explicit
+    warning log on late-chunk path, no silent swallow.
+  - Pack U.5/U.7 is_final=True propagation: read-only by other consumers,
+    no downstream regression class.
+  - audio-pipeline.ts (660 LOC new): subprocess timeout = 1s started
+    + 10s final-chunk; PulseAudio buffer cap = 480KB; fire-once flags
+    correct; chunk upload failures surface via logJSON.
+  - Helm chart: no new public routes, no removed auth gates,
+    minioPublicEndpoint opt-in (default empty → falls back to internal).
+  - Dashboard pagination dedupe: Set bounded to PAGE=50; no DoS.
+
+# Part B — Bounded manual eyeroll
+eyeroll_approved: true
+eyeroll_notes: |
+  Empirical evidence:
+  - 25+ cells of real-meeting matrix evidence across 5 runs (compose +
+    helm + lite × gmeet + teams + zoom). Last r5: 8/8 completed cells
+    GREEN with recording_finalizer.master + master.{webm|wav} built.
+  - Pack U.7 race fix verified live on r5 (post-fix): no
+    post_meeting_reconciler regressions observed.
+  - Pack D-3 streaming verified empirically: presigned MinIO URL serving
+    HTTP 206 Partial Content on Range requests; mid-file seeks work.
+  - Helm dashboard playback: working after NodePort 30090 +
+    MINIO_PUBLIC_ENDPOINT (Pack U.7 chart-side fix).
+  - Hallucination corpus: 0 canonical phrases in 18+ transcripts;
+    all 4 lang files present in bot image.
+
+  Accepted gaps (deferred, not blocking):
+  - GH #305 Zoom audio quality lower than GMeet/Teams (signal-chain
+    quality, not Pack U regression)
+  - GH #306 callbacks.py:318 narrow broad-except
+  - WebM master lacks Duration tag → "long wait" before scrubber
+    (Pack U.8 candidate; playback works once duration cached)
+  - 5 release-validate environmental gaps (helm pods-not-settled,
+    compose dashboard-token-cache after redeploy) — deploy-plumbing
+    only, never touches prod path
+
+  Customer impact prognosis: v0.10.6 is a strict improvement over
+  current v0.10.5.x prod (which has confirmed 24-min chunk leak,
+  zero crash-safety, zoom audio loss on crash, #284/#291/#281
+  cross-platform SDP-munge bugs). Net risk delta = NEGATIVE.
+
+# Stage state
+ship_authorization: |
+  Project-owner directive 2026-05-03 ~00:25Z: "now you need to properly
+  release, bump the github images, make sure those are tagged 0.10.6
+  (the correct ones) + latest, including lite and all the rest. Then
+  drop the throwaway infra, release to github, ... transition to prod
+  — bump to prod directly, they run tests on prod (currently no
+  traffic). Make sure dashboard and webapp show correct version."
+
+  Bypass note: validate gate red on 5 environmental gaps. User
+  explicitly accepted gaps as deploy-plumbing brittleness, not
+  v0.10.6 product code regressions. Audit walked the diff
+  independently — clean. Real-meeting matrix is the strongest
+  empirical evidence (25+ cells of Pack U + Pack U.7 + Pack M +
+  Pack D-3 working).

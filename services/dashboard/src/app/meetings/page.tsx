@@ -22,7 +22,7 @@ import { getDetailedStatus } from "@/types/vexa";
 import { DocsLink } from "@/components/docs/docs-link";
 import { getWebappUrl } from "@/lib/docs/webapp-url";
 import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/utils";
+import { cn, parseUTCTimestamp } from "@/lib/utils";
 import { usePendingMeeting } from "@/hooks/use-pending-meeting";
 import { toast } from "sonner";
 import { withBasePath } from "@/lib/base-path";
@@ -69,8 +69,12 @@ function formatDuration(startTime: string | null, endTime: string | null): strin
   return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
 }
 
+// v0.10.5.3 Pack D-1 (#265): parseUTCTimestamp interprets the unsuffixed-ISO
+// API timestamp as UTC. date-fns format() then renders in browser-local tz.
+// Pre-fix: new Date(dateStr) with unsuffixed-ISO was treated as local time,
+// producing a tz-shifted display.
 function formatDate(dateStr: string): string {
-  const d = new Date(dateStr);
+  const d = parseUTCTimestamp(dateStr);
   return format(d, "MMM d, HH:mm");
 }
 
@@ -391,7 +395,7 @@ function MeetingRow({ meeting }: { meeting: Meeting }) {
             <>
               {formatDate(meeting.start_time)}
               <span className="block text-[10px] text-muted-foreground/70">
-                {formatDistanceToNow(new Date(meeting.start_time), { addSuffix: true })}
+                {formatDistanceToNow(parseUTCTimestamp(meeting.start_time), { addSuffix: true })}
               </span>
             </>
           ) : meeting.created_at ? (

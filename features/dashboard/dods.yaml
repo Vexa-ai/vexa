@@ -157,3 +157,44 @@ dods:
     check: PACKAGES_CI_WORKFLOW_EXISTS
     modes:
     - lite
+
+# ── v0.10.6 Pack U.8 — audio playback streams from bucket ──────────
+# Dashboard plays audio via /download → presigned URL → MinIO with
+# native HTTP Range support. Pre-Pack-U the dashboard pre-downloaded
+# the full file before scrubber became interactive. Pairs with
+# Pack U.5/U.6/U.7 (master.{webm|wav} server-built so the URL points
+# at a complete file, not a chunk fragment).
+
+- id: download-returns-presigned-url-to-master
+  label: "GET /recordings/{id}/media/{file}/download returns JSON with .url path ending at /audio/master.{webm|wav} — browser-reachable via MINIO_PUBLIC_ENDPOINT (Pack D-3 Option B kept). (weight 3: runtime-fixture-dependent; static-grep DASHBOARD_AUDIO_STREAMS_FROM_BUCKET carries the structural proof at full weight)"
+  weight: 3
+  evidence:
+    check: DOWNLOAD_RETURNS_PRESIGNED_URL_TO_MASTER
+    modes:
+    - lite
+    - compose
+    - helm
+
+- id: dashboard-audio-streams-from-bucket
+  label: "dashboard reads /recordings/.../download (NOT /raw); <audio src> binds to the presigned URL; native HTTP Range fires on user seek"
+  weight: 10
+  evidence:
+    check: DASHBOARD_AUDIO_STREAMS_FROM_BUCKET
+    modes:
+    - lite
+    - compose
+    - helm
+
+# GH #304 — meetings-store.ts paginates by explicit _offset cursor
+# (advances by unfiltered API page size, NOT by post-filter
+# meetings.length); plus dedupes by meeting.id on merge. Closes the
+# duplicate-rows-when-redacted-shells-present class.
+- id: dashboard-meetings-pagination-tracks-unfiltered-offset
+  label: "dashboard meetings-store.ts paginates by explicit _offset cursor + dedupes by meeting.id (closes GH #304 — duplicate rows when redacted shells filtered out)"
+  weight: 10
+  evidence:
+    check: DASHBOARD_MEETINGS_PAGINATION_TRACKS_UNFILTERED_OFFSET
+    modes:
+    - lite
+    - compose
+    - helm

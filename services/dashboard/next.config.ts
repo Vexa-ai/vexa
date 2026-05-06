@@ -55,6 +55,27 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  // v0.10.5.3 Pack D-2: redirect dashboard's internal /docs/* to canonical
+  // docs.vexa.ai. Anyone landing on dashboard.vexa.ai/docs (typed in URL bar
+  // or external link) goes to the unified docs site. The internal docs pages
+  // under src/app/docs/ remain in the codebase for now (decoupling them is
+  // a larger cleanup — out of scope for this surgical patch); they are no
+  // longer reachable at runtime via standard navigation.
+  async redirects() {
+    const docsBase = process.env.NEXT_PUBLIC_DOCS_URL || "https://docs.vexa.ai";
+    return [
+      {
+        source: "/docs",
+        destination: docsBase,
+        permanent: true,
+      },
+      {
+        source: "/docs/:path*",
+        destination: `${docsBase}/:path*`,
+        permanent: true,
+      },
+    ];
+  },
 };
 
 export default nextConfig;

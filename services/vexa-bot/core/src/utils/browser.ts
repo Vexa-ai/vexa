@@ -299,3 +299,241 @@ export class BrowserAudioService {
   }
 }
 
+/**
+ * BrowserMediaRecorderPipeline — Pack U.2 (v0.10.6) shared MediaRecorder driver.
+ *
+ * Runs in browser context. Wraps a MediaRecorder over a combined audio
+ * MediaStream, encodes each chunk to base64, and pushes it to the Node-side
+ * `__vexaSaveRecordingChunk` callback exposed by services/audio-pipeline.ts:
+ * MediaRecorderCapture. Replaces the inline ondataavailable + chunk-buffer
+ * boilerplate that previously lived in googlemeet/recording.ts and
+ * msteams/recording.ts.
+ *
+ * Pack M discipline survives here: the in-flight chunk buffer is short-lived
+ * (we splice on callback resolution; the cap is purely defensive). No bot-side
+ * master assembly — the master is built server-side from the chunk_seq
+ * sequence by recording_finalizer.py.
+ *
+ * Pack P / develop stage rule (no fallbacks): if the chunkCallback throws or
+ * returns false, we splice the chunk anyway and log; the server-side
+ * reconciler covers re-fetch via the chunk_seq contract. If MediaRecorder
+ * cannot be constructed (no supported mimeType), we log and refuse to start —
+ * no silent fallback to a different recording mechanism.
+ *
+ * Lifecycle:
+ *   const pipeline = new BrowserMediaRecorderPipeline({ stream, timesliceMs, chunkCallback });
+ *   await pipeline.start();   // creates MediaRecorder, calls .start(timesliceMs)
+ *   // ... meeting runs, chunks flow on each timeslice ...
+ *   await pipeline.stop();    // resolves AFTER the final chunk callback completes
+ */
+export interface BrowserMediaRecorderPipelineOptions {
+  /** Combined audio stream (typically from BrowserAudioService.createCombinedAudioStream). */
+  stream: MediaStream;
+  /** MediaRecorder timeslice in ms. */
+  timesliceMs: number;
+  /**
+   * Bridge to the Node-side __vexaSaveRecordingChunk callback. Returns the
+   * Node side's success indicator (Boolean — true if uploaded, false if the
+   * sink rejected). We splice the chunk regardless of return value because
+   * the server-side reconciler covers re-fetch.
+   */
+  chunkCallback: (payload: {
+    base64: string;
+    chunkSeq: number;
+    isFinal: boolean;
+    mimeType: string;
+  }) => Promise<boolean>;
+}
+
+export class BrowserMediaRecorderPipeline {
+  private opts: BrowserMediaRecorderPipelineOptions;
+  private recorder: MediaRecorder | null = null;
+  private chunkSeq: number = 0;
+  private pending: Blob[] = [];
+  private static readonly BUFFER_CAP = 10;
+  private finalChunkPromise: Promise<void> | null = null;
+  private resolveFinalChunk: (() => void) | null = null;
+  private mimeType: string = "audio/webm";
+
+  constructor(opts: BrowserMediaRecorderPipelineOptions) {
+    this.opts = opts;
+  }
+
+  /** Returns the underlying MediaRecorder (null until start()). */
+  getMediaRecorder(): MediaRecorder | null {
+    return this.recorder;
+  }
+
+  async start(): Promise<void> {
+    if (this.recorder) {
+      (window as any).logBot?.("[BrowserMediaRecorderPipeline] start() called twice — ignoring");
+      return;
+    }
+
+    // Pick the best supported MediaRecorder mimeType. No fallback beyond the
+    // candidate list — if none of these work, we log and refuse.
+    const candidates = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/ogg;codecs=opus",
+      "audio/ogg",
+    ];
+    let chosen = "";
+    for (const mime of candidates) {
+      try {
+        if ((window as any).MediaRecorder?.isTypeSupported?.(mime)) {
+          chosen = mime;
+          break;
+        }
+      } catch {}
+    }
+
+    let recorder: MediaRecorder;
+    try {
+      recorder = chosen
+        ? new MediaRecorder(this.opts.stream, { mimeType: chosen })
+        : new MediaRecorder(this.opts.stream);
+    } catch (err: any) {
+      (window as any).logBot?.(
+        `[BrowserMediaRecorderPipeline] Failed to construct MediaRecorder: ${err?.message || err}`
+      );
+      return;
+    }
+
+    this.recorder = recorder;
+    this.mimeType = recorder.mimeType || chosen || "audio/webm";
+
+    recorder.ondataavailable = async (event: BlobEvent) => {
+      if (!(event.data && event.data.size > 0)) {
+        (window as any).logBot?.("[BrowserMediaRecorderPipeline] dataavailable fired with empty data (skipping)");
+        return;
+      }
+
+      // Push to defensive buffer + cap-check. The cap should never trip in
+      // normal operation because successful uploads splice. If it does, we
+      // drop the oldest and log — server-side reconciler covers re-fetch
+      // from S3 via the chunk_seq contract.
+      this.pending.push(event.data);
+      if (this.pending.length > BrowserMediaRecorderPipeline.BUFFER_CAP) {
+        const dropped = this.pending.shift();
+        (window as any).logBot?.(
+          `[BrowserMediaRecorderPipeline] WARN buffer exceeded cap ${BrowserMediaRecorderPipeline.BUFFER_CAP}, dropped oldest (${dropped?.size ?? 0} bytes); reconciler will re-fetch from S3`
+        );
+      }
+
+      const seq = this.chunkSeq;
+      this.chunkSeq = seq + 1;
+
+      try {
+        const arrBuffer = await event.data.arrayBuffer();
+        const bytes = new Uint8Array(arrBuffer);
+        let binary = "";
+        const encodeChunkSize = 0x8000;
+        for (let i = 0; i < bytes.length; i += encodeChunkSize) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + encodeChunkSize));
+        }
+        const base64 = btoa(binary);
+
+        (window as any).logBot?.(
+          `[BrowserMediaRecorderPipeline] Uploading chunk ${seq} (${bytes.length} bytes)`
+        );
+
+        try {
+          const ok = await this.opts.chunkCallback({
+            base64,
+            chunkSeq: seq,
+            isFinal: false,
+            mimeType: this.mimeType,
+          });
+          if (!ok) {
+            (window as any).logBot?.(
+              `[BrowserMediaRecorderPipeline] Chunk ${seq} callback returned false — sink rejected; reconciler will re-fetch`
+            );
+          }
+        } catch (cbErr: any) {
+          (window as any).logBot?.(
+            `[BrowserMediaRecorderPipeline] Chunk ${seq} callback threw: ${cbErr?.message || cbErr}; reconciler will re-fetch`
+          );
+        } finally {
+          // Splice the chunk regardless of callback outcome — see Pack M.
+          const idx = this.pending.indexOf(event.data);
+          if (idx >= 0) this.pending.splice(idx, 1);
+        }
+      } catch (err: any) {
+        // Splice on encode failure too — chunk is unrecoverable.
+        const idx = this.pending.indexOf(event.data);
+        if (idx >= 0) this.pending.splice(idx, 1);
+        (window as any).logBot?.(
+          `[BrowserMediaRecorderPipeline] Chunk ${seq} encode FAILED: ${err?.message || err}; spliced from buffer`
+        );
+      }
+    };
+
+    recorder.onstop = async () => {
+      // Emit a final chunk (empty body OK — server treats isFinal=true as the
+      // signal to flip Recording.status, regardless of payload size).
+      try {
+        const finalSeq = this.chunkSeq;
+        this.chunkSeq = finalSeq + 1;
+        await this.opts.chunkCallback({
+          base64: "",
+          chunkSeq: finalSeq,
+          isFinal: true,
+          mimeType: this.mimeType,
+        });
+        (window as any).logBot?.(
+          `[BrowserMediaRecorderPipeline] Final chunk emitted (seq=${finalSeq})`
+        );
+      } catch (err: any) {
+        (window as any).logBot?.(
+          `[BrowserMediaRecorderPipeline] Final chunk callback failed: ${err?.message || err}`
+        );
+      } finally {
+        if (this.resolveFinalChunk) {
+          this.resolveFinalChunk();
+          this.resolveFinalChunk = null;
+        }
+      }
+    };
+
+    recorder.start(this.opts.timesliceMs);
+    (window as any).logBot?.(
+      `[BrowserMediaRecorderPipeline] MediaRecorder started (${this.mimeType}, timeslice=${this.opts.timesliceMs}ms)`
+    );
+  }
+
+  async stop(): Promise<void> {
+    if (!this.recorder) {
+      (window as any).logBot?.("[BrowserMediaRecorderPipeline] stop() called before start() — ignoring");
+      return;
+    }
+    if (this.recorder.state === "inactive") {
+      (window as any).logBot?.("[BrowserMediaRecorderPipeline] recorder already inactive");
+      return;
+    }
+
+    this.finalChunkPromise = new Promise<void>((resolve) => {
+      this.resolveFinalChunk = resolve;
+      // Safety timeout — onstop must fire within 10s of stop(), else we
+      // resolve so the bot can exit.
+      setTimeout(() => {
+        if (this.resolveFinalChunk) {
+          (window as any).logBot?.("[BrowserMediaRecorderPipeline] final chunk timeout — resolving");
+          this.resolveFinalChunk();
+          this.resolveFinalChunk = null;
+        }
+      }, 10000);
+    });
+
+    try {
+      this.recorder.stop();
+    } catch (err: any) {
+      (window as any).logBot?.(
+        `[BrowserMediaRecorderPipeline] recorder.stop() threw: ${err?.message || err}`
+      );
+    }
+
+    await this.finalChunkPromise;
+  }
+}
+
