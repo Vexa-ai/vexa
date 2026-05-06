@@ -106,7 +106,8 @@ export class ZoomSDKManager {
         meetingNumber: meetingId,
         displayName: this.config.botName,
         password: password || '',
-        onBehalfToken: this.config.obfToken || ''
+        onBehalfToken: this.config.obfToken || '',
+        zakToken: this.config.zakToken || ''
       });
     });
   }
