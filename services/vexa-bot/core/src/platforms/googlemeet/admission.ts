@@ -84,6 +84,14 @@ export async function checkForWaitingRoomIndicators(page: Page): Promise<boolean
   return false;
 }
 
+async function throwIfGoogleAdmissionRejected(page: Page, context: string): Promise<void> {
+  const isRejected = await checkForGoogleRejection(page);
+  if (isRejected) {
+    log(`🚨 Bot was rejected from the Google Meet meeting by admin (${context})`);
+    throw new Error("Bot admission was rejected by meeting admin");
+  }
+}
+
 // New function to wait for Google Meet meeting admission (canonical Teams-style)
 export async function waitForGoogleMeetingAdmission(
   page: Page,
@@ -158,19 +166,16 @@ export async function waitForGoogleMeetingAdmission(
       const effectiveTimeout = () => timeout + getEscalationExtensionMs();
 
       while (Date.now() - startTime < effectiveTimeout()) {
+        // Host denial can leave stale waiting-room text in the DOM. Check the
+        // terminal rejection state before treating the page as still waiting.
+        await throwIfGoogleAdmissionRejected(page, "waiting-room polling");
+
         // Check if we're still in waiting room using visibility
         const stillWaiting = await checkForWaitingRoomIndicators(page);
 
         if (!stillWaiting) {
           log("Google Meet waiting room indicator disappeared - checking if bot was admitted or rejected...");
           unknownStateDuration += checkInterval;
-
-          // CRITICAL: Check for rejection first since that's a definitive outcome
-          const isRejected = await checkForGoogleRejection(page);
-          if (isRejected) {
-            log("🚨 Bot was rejected from the Google Meet meeting by admin");
-            throw new Error("Bot admission was rejected by meeting admin");
-          }
 
           // Check for admission indicators since waiting room disappeared and no rejection found
           const admissionFound = await checkForGoogleAdmissionIndicators(page);
@@ -261,10 +266,10 @@ export async function waitForGoogleMeetingAdmission(
         const checkInterval = 2000;
         const startTime2 = Date.now();
         while (Date.now() - startTime2 < timeout) {
+          await throwIfGoogleAdmissionRejected(page, "late waiting-room polling");
+
           const stillWaiting = await checkForWaitingRoomIndicators(page);
           if (!stillWaiting) {
-            const isRejected2 = await checkForGoogleRejection(page);
-            if (isRejected2) throw new Error("Bot admission was rejected by meeting admin");
             const admissionFound2 = await checkForGoogleAdmissionIndicators(page);
             if (admissionFound2) return true;
           }

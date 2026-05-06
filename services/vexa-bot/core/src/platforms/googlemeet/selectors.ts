@@ -29,6 +29,22 @@ export const googleWaitingRoomIndicators: string[] = [
 ];
 
 export const googleRejectionIndicators: string[] = [
+  // Waiting-room denial patterns. Google Meet can leave some lobby text in
+  // the DOM after a host rejects the bot, so these must be checked before
+  // waiting-room indicators in admission polling.
+  'text*="denied your request"',
+  'text*="denied your request to join"',
+  'text*="Your request to join was denied"',
+  'text*="You were denied"',
+  'text*="weren\'t allowed to join"',
+  'text*="not allowed to join"',
+  'text*="not admitted"',
+  'text*="can\'t join this call"',
+  'text*="cannot join this call"',
+  'text*="Ask to join again"',
+  'button:has-text("Ask to join again")',
+  'button:has-text("Return to home screen")',
+
   // Meeting not found or access denied patterns
   'text="Meeting not found"',
   'text="Can\'t join the meeting"',
