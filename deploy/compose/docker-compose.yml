@@ -260,6 +260,10 @@ services:
       - RUNTIME_API_TOKEN=${BOT_API_TOKEN:-}
       - MEETING_API_URL=http://meeting-api:8080
       - BOT_IMAGE_NAME=${BROWSER_IMAGE}
+      - ZOOM_SDK=${ZOOM_SDK:-}
+      - ZOOM_WEB=${ZOOM_WEB:-}
+      - ZOOM_CLIENT_ID=${ZOOM_CLIENT_ID:-}
+      - ZOOM_CLIENT_SECRET=${ZOOM_CLIENT_SECRET:-}
       - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa
       - TTS_SERVICE_URL=http://tts-service:8002
       - POST_MEETING_HOOKS=${POST_MEETING_HOOKS:-http://agent-api:8100/internal/webhooks/meeting-completed}

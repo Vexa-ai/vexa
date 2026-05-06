@@ -1099,6 +1099,10 @@ async def request_bot(
         bot_config["defaultAvatarUrl"] = req.default_avatar_url
     if os.getenv("SHOW_AVATAR", "true").lower() == "false":
         bot_config["showAvatar"] = False
+    if req.zoom_obf_token:
+        bot_config["obfToken"] = req.zoom_obf_token
+    if req.zoom_zak_token:
+        bot_config["zakToken"] = req.zoom_zak_token
     if meeting_data.get("capture_modes"):
         bot_config["captureModes"] = meeting_data["capture_modes"]
     if req.authenticated:
