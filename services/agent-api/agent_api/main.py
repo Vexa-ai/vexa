@@ -9,7 +9,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -317,16 +316,22 @@ async def rename_session(session_id: str, req: SessionRenameRequest):
 @app.post("/api/workspaces", dependencies=[Depends(require_api_key)])
 async def upload_workspace_endpoint(request: Request, user_id: str, name: str):
     """Upload a workspace from local as tar.gz."""
+    _validate_key_segment(user_id, "user_id")
+    _validate_key_segment(name, "workspace")
     body = await request.body()
     if not body:
         raise HTTPException(400, "Empty body")
-    result = await workspace.upload_workspace(user_id, name, body)
+    try:
+        result = await workspace.upload_workspace(user_id, name, body)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     return result
 
 
 @app.get("/api/workspaces", dependencies=[Depends(require_api_key)])
 async def list_workspaces_endpoint(user_id: str):
     """List user's named workspaces."""
+    _validate_key_segment(user_id, "user_id")
     ws = await workspace.list_workspaces(user_id)
     return {"workspaces": ws}
 
@@ -334,6 +339,8 @@ async def list_workspaces_endpoint(user_id: str):
 @app.delete("/api/workspaces/{name}", dependencies=[Depends(require_api_key)])
 async def delete_workspace_endpoint(name: str, user_id: str):
     """Delete a named workspace."""
+    _validate_key_segment(user_id, "user_id")
+    _validate_key_segment(name, "workspace")
     await workspace.delete_workspace(user_id, name)
     return {"status": "deleted"}
 
@@ -341,6 +348,8 @@ async def delete_workspace_endpoint(name: str, user_id: str):
 @app.get("/api/workspaces/{name}/files", dependencies=[Depends(require_api_key)])
 async def list_workspace_template_files(name: str, user_id: str):
     """List files in a named workspace (from S3)."""
+    _validate_key_segment(user_id, "user_id")
+    _validate_key_segment(name, "workspace")
     files = await workspace.list_workspace_files_s3(user_id, name)
     return {"files": files}
 
@@ -348,6 +357,8 @@ async def list_workspace_template_files(name: str, user_id: str):
 @app.post("/api/workspaces/{name}/file", dependencies=[Depends(require_api_key)])
 async def write_workspace_template_file(name: str, req: FileWriteRequest):
     """Write a single file to a named workspace in S3."""
+    _validate_key_segment(req.user_id, "user_id")
+    _validate_key_segment(name, "workspace")
     _validate_path(req.path)
     await workspace.write_workspace_file_s3(req.user_id, name, req.path, req.content)
     return {"path": req.path, "status": "written"}
@@ -512,11 +523,17 @@ async def workspace_status(user_id: str):
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
-_SAFE_PATH = re.compile(r"^[a-zA-Z0-9._/\-]+$")
-
-
 def _validate_path(path: str) -> str:
     """Validate a workspace file path."""
-    if not path or ".." in path or path.startswith("/") or not _SAFE_PATH.match(path):
+    try:
+        return workspace.validate_workspace_path(path)
+    except ValueError:
         raise HTTPException(400, "Invalid path")
-    return path
+
+
+def _validate_key_segment(value: str, label: str = "segment") -> str:
+    """Validate a workspace key segment."""
+    try:
+        return workspace.validate_key_segment(value, label)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))

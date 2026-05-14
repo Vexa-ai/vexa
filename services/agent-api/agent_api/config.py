@@ -51,5 +51,14 @@ DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "")
 AGENT_WORKSPACE_PATH = os.getenv("AGENT_WORKSPACE_PATH", "/root/.claude/projects/-workspace")
 AGENT_STREAM_FORMAT = os.getenv("AGENT_STREAM_FORMAT", "stream-json")
 
-# CORS
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
+# CORS. Default to local dashboard origins; deployments that expose Agent API
+# directly can still set CORS_ORIGINS explicitly.
+DEFAULT_CORS_ORIGINS = ",".join(
+    [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
+    ]
+)
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")

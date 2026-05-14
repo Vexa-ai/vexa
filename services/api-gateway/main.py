@@ -1220,6 +1220,12 @@ async def _get_meeting_context(client: httpx.AsyncClient, user_id: str) -> Optio
           dependencies=[Depends(api_key_scheme)])
 async def agent_chat_proxy(request: Request):
     """Forward chat to agent-api with meeting context injection."""
+    client_key = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
+    if not client_key:
+        raise HTTPException(status_code=401, detail="Missing API key")
+    user_data = await _resolve_token(app.state.http_client, client_key)
+    if not user_data:
+        raise HTTPException(status_code=401, detail="Invalid API key")
     if not AGENT_API_URL:
         raise HTTPException(503, "Agent API not configured")
 
@@ -1239,12 +1245,7 @@ async def agent_chat_proxy(request: Request):
                     meta = json.loads(meta_raw)
                     if meta.get("meeting_aware"):
                         # Resolve internal user_id from API key
-                        client_key = request.headers.get("x-api-key")
-                        internal_uid = user_id
-                        if client_key:
-                            user_data = await _resolve_token(app.state.http_client, client_key)
-                            if user_data:
-                                internal_uid = str(user_data["user_id"])
+                        internal_uid = str(user_data["user_id"])
                         context = await _get_meeting_context(app.state.http_client, internal_uid)
                         if context:
                             extra_headers["x-meeting-context"] = context
@@ -1260,13 +1261,9 @@ async def agent_chat_proxy(request: Request):
         headers.pop(h, None)
 
     # Auth: inject identity headers
-    client_key = headers.get("x-api-key")
-    if client_key:
-        user_data = await _resolve_token(app.state.http_client, client_key)
-        if user_data:
-            headers["x-user-id"] = str(user_data["user_id"])
-            headers["x-user-scopes"] = ",".join(user_data.get("scopes", []))
-            headers["x-user-limits"] = str(user_data.get("max_concurrent", 1))
+    headers["x-user-id"] = str(user_data["user_id"])
+    headers["x-user-scopes"] = ",".join(user_data.get("scopes", []))
+    headers["x-user-limits"] = str(user_data.get("max_concurrent", 1))
 
     headers.update(extra_headers)
     params = dict(request.query_params)

@@ -155,7 +155,7 @@ Redis    S3/MinIO
 | `S3_BUCKET` | `workspaces` | S3 bucket for workspaces |
 | `AGENT_WORKSPACE_PATH` | `/workspace` | Agent session storage path inside container |
 | `AGENT_STREAM_FORMAT` | `stream-json` | Agent CLI output format |
-| `CORS_ORIGINS` | `*` | Allowed CORS origins |
+| `CORS_ORIGINS` | `http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001` | Allowed CORS origins |
 | `LOG_LEVEL` | `INFO` | Log level |
 
 ## Use Cases

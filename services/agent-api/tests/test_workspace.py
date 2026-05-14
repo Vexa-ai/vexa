@@ -138,6 +138,24 @@ class TestPathValidation:
             result = _validate_path(p)
             assert result == p
 
+    def test_workspace_name_traversal_rejected(self):
+        from agent_api.main import _validate_key_segment
+        from fastapi import HTTPException
+
+        for value in ["../other", "team/default", "team\\default", "", "bad\x00name"]:
+            with pytest.raises(HTTPException) as exc_info:
+                _validate_key_segment(value, "workspace")
+            assert exc_info.value.status_code == 400
+
+
+class TestArchivePathValidation:
+    def test_archive_member_path_traversal_rejected(self):
+        with pytest.raises(ValueError):
+            workspace.validate_workspace_path("../escape.txt")
+
+    def test_archive_member_path_normalized(self):
+        assert workspace.validate_workspace_path("./src/app.py") == "src/app.py"
+
 
 # ---------------------------------------------------------------------------
 # Large file doesn't crash

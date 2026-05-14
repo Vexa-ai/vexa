@@ -6,12 +6,49 @@ Supports both S3/MinIO backends and local filesystem fallback.
 
 import asyncio
 import logging
+import posixpath
+import re
 import shlex
 from typing import Optional, Protocol
 
 from agent_api import config
 
 logger = logging.getLogger("agent_api.workspace")
+
+_SAFE_SEGMENT = re.compile(r"^[a-zA-Z0-9._@-]+$")
+_SAFE_PATH = re.compile(r"^[a-zA-Z0-9._/\-]+$")
+
+
+def validate_key_segment(value: str, label: str = "segment") -> str:
+    """Validate an S3 key segment such as user_id or workspace name."""
+    if (
+        not value
+        or "/" in value
+        or "\\" in value
+        or ".." in value
+        or not _SAFE_SEGMENT.match(value)
+    ):
+        raise ValueError(f"Invalid {label}")
+    return value
+
+
+def validate_workspace_path(path: str) -> str:
+    """Validate a workspace-relative file path."""
+    cleaned = path
+    while cleaned.startswith("./"):
+        cleaned = cleaned[2:]
+    normalized = posixpath.normpath(cleaned)
+    if (
+        not cleaned
+        or cleaned.startswith("/")
+        or normalized in ("", ".", "..")
+        or normalized.startswith("../")
+        or "\\" in cleaned
+        or "\x00" in cleaned
+        or not _SAFE_PATH.match(cleaned)
+    ):
+        raise ValueError("Invalid path")
+    return normalized
 
 
 class ExecProtocol(Protocol):
@@ -40,6 +77,8 @@ async def _exec(container: str, cmd: str, timeout: int = 120) -> tuple[int, str]
 # --- S3 helpers ---
 
 def _s3_uri(user_id: str, workspace_name: str = "default") -> str:
+    user_id = validate_key_segment(user_id, "user_id")
+    workspace_name = validate_key_segment(workspace_name, "workspace")
     return f"s3://{config.S3_BUCKET}/workspaces/{user_id}/{workspace_name}/"
 
 
@@ -149,6 +188,8 @@ async def workspace_exists(user_id: str, workspace_name: str = "default") -> boo
     """Check if a workspace prefix exists in S3."""
     if config.STORAGE_BACKEND != "s3":
         return False
+    user_id = validate_key_segment(user_id, "user_id")
+    workspace_name = validate_key_segment(workspace_name, "workspace")
     try:
         s3 = _get_s3_client()
         resp = s3.list_objects_v2(
@@ -214,15 +255,18 @@ async def upload_workspace(user_id: str, name: str, tar_bytes: bytes) -> dict:
     import io
     import tarfile
     s3 = _get_s3_client()
+    user_id = validate_key_segment(user_id, "user_id")
+    name = validate_key_segment(name, "workspace")
     prefix = f"workspaces/{user_id}/{name}/"
 
     with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:gz") as tar:
         file_count = 0
         for member in tar.getmembers():
             if member.isfile():
+                path = validate_workspace_path(member.name)
                 f = tar.extractfile(member)
                 if f:
-                    key = prefix + member.name.lstrip("./")
+                    key = prefix + path
                     s3.put_object(Bucket=config.S3_BUCKET, Key=key, Body=f.read())
                     file_count += 1
     return {"name": name, "file_count": file_count}
@@ -231,6 +275,7 @@ async def upload_workspace(user_id: str, name: str, tar_bytes: bytes) -> dict:
 async def list_workspaces(user_id: str) -> list[dict]:
     """List workspace names for a user from S3 prefixes."""
     s3 = _get_s3_client()
+    user_id = validate_key_segment(user_id, "user_id")
     prefix = f"workspaces/{user_id}/"
     resp = s3.list_objects_v2(Bucket=config.S3_BUCKET, Prefix=prefix, Delimiter="/")
     workspaces = []
@@ -243,6 +288,8 @@ async def list_workspaces(user_id: str) -> list[dict]:
 async def delete_workspace(user_id: str, name: str) -> bool:
     """Delete all objects under a workspace prefix."""
     s3 = _get_s3_client()
+    user_id = validate_key_segment(user_id, "user_id")
+    name = validate_key_segment(name, "workspace")
     prefix = f"workspaces/{user_id}/{name}/"
     resp = s3.list_objects_v2(Bucket=config.S3_BUCKET, Prefix=prefix)
     objects = resp.get("Contents", [])
@@ -257,6 +304,8 @@ async def delete_workspace(user_id: str, name: str) -> bool:
 async def list_workspace_files_s3(user_id: str, name: str) -> list[str]:
     """List files in a specific workspace from S3."""
     s3 = _get_s3_client()
+    user_id = validate_key_segment(user_id, "user_id")
+    name = validate_key_segment(name, "workspace")
     prefix = f"workspaces/{user_id}/{name}/"
     resp = s3.list_objects_v2(Bucket=config.S3_BUCKET, Prefix=prefix)
     files = []
@@ -270,6 +319,9 @@ async def list_workspace_files_s3(user_id: str, name: str) -> list[str]:
 async def write_workspace_file_s3(user_id: str, name: str, path: str, content: str) -> bool:
     """Write a single file to a workspace in S3."""
     s3 = _get_s3_client()
+    user_id = validate_key_segment(user_id, "user_id")
+    name = validate_key_segment(name, "workspace")
+    path = validate_workspace_path(path)
     key = f"workspaces/{user_id}/{name}/{path}"
     s3.put_object(Bucket=config.S3_BUCKET, Key=key, Body=content.encode())
     return True

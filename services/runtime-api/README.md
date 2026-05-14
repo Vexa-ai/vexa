@@ -327,7 +327,7 @@ Callbacks fire on: `stopped` (clean exit or idle timeout), `failed` (non-zero ex
 | `CALLBACK_RETRIES` | `3` | Max callback delivery attempts |
 | `CALLBACK_BACKOFF` | `1,5,30` | Backoff delays in seconds |
 | `API_KEYS` | _(empty)_ | Comma-separated API keys (empty = no auth) |
-| `CORS_ORIGINS` | `*` | Allowed CORS origins |
+| `CORS_ORIGINS` | `http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001` | Allowed CORS origins |
 | `LOG_LEVEL` | `INFO` | Log level |
 | `HOST` | `0.0.0.0` | Server bind address |
 | `PORT` | `8090` | Server port |
