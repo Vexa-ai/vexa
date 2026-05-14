@@ -120,6 +120,7 @@ services:
       context: ../../services/runtime-api
       dockerfile: Dockerfile
     image: vexaai/runtime-api:${IMAGE_TAG}
+    user: "0:0"
     group_add:
       - "${DOCKER_GID:-998}"
     ports:
@@ -144,6 +145,8 @@ services:
       - DB_PASSWORD=${DB_PASSWORD:-postgres}
       - DB_SSL_MODE=disable
       - PROFILES_PATH=/app/profiles.yaml
+      - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
+      - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
       - ALLOW_PRIVATE_CALLBACKS=1
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
