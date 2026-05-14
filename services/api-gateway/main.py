@@ -160,8 +160,17 @@ def custom_openapi():
 
 app.openapi = custom_openapi
 
-# Add CORS middleware
-_cors_raw = os.getenv("CORS_ORIGINS", "*").strip()
+# Add CORS middleware. Default to local dashboard origins instead of wildcard;
+# deployments that need broader browser access should set CORS_ORIGINS explicitly.
+_default_cors_origins = ",".join(
+    [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
+    ]
+)
+_cors_raw = os.getenv("CORS_ORIGINS", _default_cors_origins).strip()
 _cors_wildcard = _cors_raw == "*"
 CORS_ORIGINS = ["*"] if _cors_wildcard else [
     origin.strip()

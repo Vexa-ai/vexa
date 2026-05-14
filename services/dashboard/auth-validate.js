@@ -1,6 +1,6 @@
 const { chromium } = require('playwright');
 
-const TOKEN = 'vxa_user_jIwBRUBlQcLeV0aCuYXOtvzNnlC28wpttcPxOXET';
+const TOKEN = process.env.VEXA_DASHBOARD_TEST_TOKEN || 'dev-placeholder-token';
 
 (async () => {
   const browser = await chromium.launch({ headless: true });

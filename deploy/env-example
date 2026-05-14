@@ -32,6 +32,10 @@ MINIO_CONSOLE_HOST_PORT=9001
 # Admin
 ADMIN_TOKEN=changeme
 
+# Browser access. Keep explicit origins by default; use a comma-separated list
+# for hosted domains.
+CORS_ORIGINS=http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001
+
 # Image tag — pre-built from DockerHub by default.
 # `make build` writes a local tag to .last-tag which overrides this.
 IMAGE_TAG=latest
