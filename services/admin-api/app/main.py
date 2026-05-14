@@ -1,8 +1,11 @@
 import hmac
+import ipaddress
 import logging
 import secrets
 import string
 import os
+import re
+from urllib.parse import urlparse
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, status, Security, Response
 from fastapi.security import APIKeyHeader
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,7 +16,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, cast, literal
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy import Text
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 # Import admin models (User, APIToken) from admin-models package
 from admin_models.models import User, APIToken, Base
@@ -33,6 +36,59 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger("admin_api")
+
+_SAFE_GIT_BRANCH = re.compile(r"^[A-Za-z0-9._/-]{1,128}$")
+_SENSITIVE_LOG_KEYS = ("token", "secret", "password", "api_key", "apikey", "credential")
+
+
+def _sanitize_for_log(value):
+    if isinstance(value, dict):
+        sanitized = {}
+        for key, child in value.items():
+            key_text = str(key).lower()
+            if any(marker in key_text for marker in _SENSITIVE_LOG_KEYS):
+                sanitized[key] = "[REDACTED]"
+            else:
+                sanitized[key] = _sanitize_for_log(child)
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_for_log(item) for item in value]
+    return value
+
+
+def _validate_github_repo_url(repo: str) -> str:
+    parsed = urlparse(repo)
+    if parsed.scheme != "https" or parsed.hostname is None:
+        raise ValueError("workspace_git.repo must be an https:// GitHub URL")
+    hostname = parsed.hostname.lower()
+    if hostname != "github.com":
+        try:
+            ip = ipaddress.ip_address(hostname)
+        except ValueError:
+            pass
+        else:
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                raise ValueError("workspace_git.repo must not target private or local addresses")
+        raise ValueError("workspace_git.repo host must be github.com")
+    if parsed.username or parsed.password:
+        raise ValueError("workspace_git.repo must not embed credentials; use token instead")
+    if not parsed.path or parsed.path in ("/", "/.git"):
+        raise ValueError("workspace_git.repo must include an owner and repository path")
+    return repo
+
+
+def _validate_git_branch(branch: str) -> str:
+    if (
+        not branch
+        or branch.startswith("-")
+        or branch.startswith("/")
+        or branch.endswith("/")
+        or ".." in branch
+        or "@{" in branch
+        or not _SAFE_GIT_BRANCH.match(branch)
+    ):
+        raise ValueError("workspace_git.branch contains invalid characters")
+    return branch
 
 from admin_models.security_headers import SecurityHeadersMiddleware
 
@@ -222,9 +278,29 @@ async def set_user_webhook(
 
 
 class WorkspaceGitUpdate(BaseModel):
-    repo: Optional[str] = None
-    token: Optional[str] = None
-    branch: Optional[str] = "main"
+    repo: Optional[str] = Field(None, max_length=2048)
+    token: Optional[str] = Field(None, max_length=2048)
+    branch: Optional[str] = Field("main", max_length=128)
+
+    @field_validator("repo")
+    @classmethod
+    def validate_repo(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or value == "":
+            return value
+        try:
+            return _validate_github_repo_url(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @field_validator("branch")
+    @classmethod
+    def validate_branch(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        try:
+            return _validate_git_branch(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
 
 @user_router.put("/workspace-git",
              response_model=UserResponse,
@@ -437,7 +513,7 @@ async def update_user(user_id: int, user_update: UserUpdate, db: AsyncSession = 
 
     # Get the update data, excluding unset fields to only update provided values
     update_data = user_update.model_dump(exclude_unset=True)
-    logger.info(f"Admin PATCH for user {user_id}. Raw update_data: {update_data}")
+    logger.info(f"Admin PATCH for user {user_id}. update_data: {_sanitize_for_log(update_data)}")
 
     # Prevent changing email via this endpoint (if desired)
     if 'email' in update_data and update_data['email'] != db_user.email:
@@ -450,7 +526,12 @@ async def update_user(user_id: int, user_update: UserUpdate, db: AsyncSession = 
     if 'data' in update_data:
         new_data = update_data.pop('data')  # Remove from update_data to handle separately
         if new_data is not None:
-            logger.info(f"Admin updating data field for user ID: {user_id}. Current: {db_user.data}, New: {new_data}")
+            logger.info(
+                "Admin updating data field for user ID: %s. Current: %s, New: %s",
+                user_id,
+                _sanitize_for_log(db_user.data),
+                _sanitize_for_log(new_data),
+            )
             
             # Merge incoming keys into existing data (preserves keys not in the patch)
             db_user.data = {**(db_user.data or {}), **new_data}

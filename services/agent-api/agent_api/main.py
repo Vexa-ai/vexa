@@ -6,6 +6,7 @@ message recreates it seamlessly.
 """
 
 import asyncio
+import hmac
 import json
 import logging
 import os
@@ -60,6 +61,16 @@ app.add_middleware(
 )
 
 cm = ContainerManager()
+
+
+async def require_internal_secret(request: Request) -> None:
+    """Guard service-to-service routes with the shared internal secret."""
+    if not config.DEV_MODE and not config.INTERNAL_API_SECRET:
+        raise HTTPException(503, "INTERNAL_API_SECRET not configured")
+    if config.INTERNAL_API_SECRET:
+        provided = request.headers.get("x-internal-secret", "")
+        if not hmac.compare_digest(provided, config.INTERNAL_API_SECRET):
+            raise HTTPException(403, "Invalid internal secret")
 
 
 # ── Request / response models ──────────────────────────────────────────────
@@ -250,11 +261,8 @@ async def chat(req: ChatRequest, request: Request):
 @app.post("/internal/chat")
 async def internal_chat(req: ChatRequest, request: Request):
     """Internal chat endpoint for scheduler — no user API key required.
-    Protected by INTERNAL_API_SECRET if configured."""
-    if config.INTERNAL_API_SECRET:
-        provided = request.headers.get("x-internal-secret", "")
-        if provided != config.INTERNAL_API_SECRET:
-            raise HTTPException(403, "Invalid internal secret")
+    Protected by INTERNAL_API_SECRET."""
+    await require_internal_secret(request)
     return _chat_stream(req)
 
 
@@ -487,8 +495,9 @@ async def put_workspace_file(req: FileWriteRequest):
 
 
 @app.post("/internal/workspace/save")
-async def workspace_save(req: UserIdRequest):
+async def workspace_save(req: UserIdRequest, request: Request):
     """Sync workspace from container to S3."""
+    await require_internal_secret(request)
     container = cm.get_container_name(req.user_id)
     if not container:
         raise HTTPException(404, f"No container for user {req.user_id}")
@@ -501,6 +510,7 @@ async def workspace_save(req: UserIdRequest):
 @app.post("/internal/webhooks/meeting-completed")
 async def webhook_meeting_completed(request: Request):
     """Receive post-meeting webhook from meeting-api."""
+    await require_internal_secret(request)
     body = await request.json()
     event_type = body.get("event_type", "unknown")
     event_id = body.get("event_id", "?")
@@ -510,8 +520,9 @@ async def webhook_meeting_completed(request: Request):
 
 
 @app.get("/internal/workspace/status")
-async def workspace_status(user_id: str):
+async def workspace_status(user_id: str, request: Request):
     """Check workspace and container status."""
+    await require_internal_secret(request)
     exists = await workspace.workspace_exists(user_id)
     container = cm.get_container_name(user_id)
     return {

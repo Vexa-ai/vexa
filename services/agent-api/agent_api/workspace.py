@@ -5,11 +5,13 @@ Supports both S3/MinIO backends and local filesystem fallback.
 """
 
 import asyncio
+import ipaddress
 import logging
 import posixpath
 import re
 import shlex
 from typing import Optional, Protocol
+from urllib.parse import urlparse
 
 from agent_api import config
 
@@ -17,6 +19,7 @@ logger = logging.getLogger("agent_api.workspace")
 
 _SAFE_SEGMENT = re.compile(r"^[a-zA-Z0-9._@-]+$")
 _SAFE_PATH = re.compile(r"^[a-zA-Z0-9._/\-]+$")
+_SAFE_GIT_BRANCH = re.compile(r"^[A-Za-z0-9._/-]{1,128}$")
 
 
 def validate_key_segment(value: str, label: str = "segment") -> str:
@@ -49,6 +52,43 @@ def validate_workspace_path(path: str) -> str:
     ):
         raise ValueError("Invalid path")
     return normalized
+
+
+def validate_git_repo_url(repo_url: str) -> str:
+    """Validate a user-configured git repo URL before cloning it."""
+    parsed = urlparse(repo_url)
+    if parsed.scheme != "https" or parsed.hostname is None:
+        raise ValueError("Invalid git repo URL")
+    hostname = parsed.hostname.lower()
+    if hostname != "github.com":
+        try:
+            ip = ipaddress.ip_address(hostname)
+        except ValueError:
+            pass
+        else:
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                raise ValueError("Invalid git repo URL")
+        raise ValueError("Invalid git repo URL")
+    if parsed.username or parsed.password:
+        raise ValueError("Invalid git repo URL")
+    if not parsed.path or parsed.path in ("/", "/.git"):
+        raise ValueError("Invalid git repo URL")
+    return repo_url
+
+
+def validate_git_branch(branch: str) -> str:
+    """Validate a branch/ref name supplied for workspace git clone."""
+    if (
+        not branch
+        or branch.startswith("-")
+        or branch.startswith("/")
+        or branch.endswith("/")
+        or ".." in branch
+        or "@{" in branch
+        or not _SAFE_GIT_BRANCH.match(branch)
+    ):
+        raise ValueError("Invalid git branch")
+    return branch
 
 
 class ExecProtocol(Protocol):
@@ -380,9 +420,11 @@ async def git_clone_init(container: str, repo_url: str, branch: str = "main",
     """Clone a git repo into an empty workspace."""
     workspace = config.WORKSPACE_PATH
 
-    # Validate URL scheme — only https:// allowed
-    if not repo_url.startswith("https://"):
-        logger.error(f"Rejected git clone URL with non-https scheme: {repo_url[:50]}")
+    try:
+        repo_url = validate_git_repo_url(repo_url)
+        branch = validate_git_branch(branch)
+    except ValueError:
+        logger.error("Rejected unsafe git clone configuration")
         return False
 
     # Build clone URL with token if provided

@@ -25,6 +25,7 @@ IDLE_TIMEOUT = int(os.getenv("IDLE_TIMEOUT", "300"))
 # Auth
 API_KEY = os.getenv("API_KEY", "")
 INTERNAL_API_SECRET = os.getenv("INTERNAL_API_SECRET", "")
+DEV_MODE = os.getenv("DEV_MODE", "false").lower() == "true"
 
 # Self-reference URL (for scheduler callback targets)
 AGENT_API_INTERNAL_URL = os.getenv("AGENT_API_INTERNAL_URL", "http://agent-api:8100")

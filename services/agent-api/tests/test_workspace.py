@@ -157,6 +157,50 @@ class TestArchivePathValidation:
         assert workspace.validate_workspace_path("./src/app.py") == "src/app.py"
 
 
+class TestGitCloneValidation:
+    @pytest.mark.asyncio
+    async def test_git_clone_rejects_loopback_repo(self):
+        fake, calls = _mock_exec()
+
+        with patch.object(workspace, "_exec", side_effect=fake):
+            ok = await workspace.git_clone_init(
+                "ctr-1",
+                "https://127.0.0.1/private.git",
+                "main",
+            )
+
+        assert ok is False
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_git_clone_accepts_github_repo(self):
+        fake, calls = _mock_exec([(0, "ok"), (0, "ok")])
+
+        with patch.object(workspace, "_exec", side_effect=fake):
+            ok = await workspace.git_clone_init(
+                "ctr-1",
+                "https://github.com/acme/private.git",
+                "main",
+            )
+
+        assert ok is True
+        assert "git clone" in calls[0][1]
+
+    @pytest.mark.asyncio
+    async def test_git_clone_rejects_unsafe_branch(self):
+        fake, calls = _mock_exec()
+
+        with patch.object(workspace, "_exec", side_effect=fake):
+            ok = await workspace.git_clone_init(
+                "ctr-1",
+                "https://github.com/acme/private.git",
+                "../main",
+            )
+
+        assert ok is False
+        assert calls == []
+
+
 # ---------------------------------------------------------------------------
 # Large file doesn't crash
 # ---------------------------------------------------------------------------
