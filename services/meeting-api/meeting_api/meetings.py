@@ -39,6 +39,7 @@ from .schemas import (
     MeetingFailureStage,
     is_valid_status_transition,
     get_status_source,
+    redact_sensitive_data,
 )
 
 from .auth import get_user_and_token
@@ -560,7 +561,7 @@ async def _get_running_bots_from_runtime(user_id: int) -> list:
             except Exception:
                 pass
 
-        safe_data = {k: v for k, v in meeting_data.items() if k != "webhook_secret"} if meeting_data else {}
+        safe_data = redact_sensitive_data(meeting_data) or {}
 
         bots_status.append({
             "container_id": c.get("container_id"),
@@ -1358,6 +1359,8 @@ async def list_user_bots(
 ):
     """Returns recent meetings (all statuses) from the database."""
     _, current_user = auth_data
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
     stmt = select(Meeting).where(Meeting.user_id == current_user.id)
     if search:
         q = f"%{search}%"
@@ -1417,7 +1420,7 @@ async def list_user_bots(
                 "bot_container_id": m.bot_container_id,
                 "start_time": m.start_time.isoformat() if m.start_time else None,
                 "end_time": m.end_time.isoformat() if m.end_time else None,
-                "data": (m.data or {}) if include_full_data else _data_summary(m.data),
+                "data": (redact_sensitive_data(m.data) or {}) if include_full_data else _data_summary(m.data),
                 "created_at": m.created_at.isoformat() if m.created_at else None,
                 "updated_at": m.updated_at.isoformat() if m.updated_at else None,
             }

@@ -417,6 +417,8 @@ async def create_user(user_in: UserCreate, response: Response, db: AsyncSession 
             response_model=List[UserResponse], # Use List import
             summary="List all users")
 async def list_users(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)):
+    skip = max(0, skip)
+    limit = max(1, min(limit, 100))
     result = await db.execute(select(User).offset(skip).limit(limit))
     users = result.scalars().all()
     
@@ -670,6 +672,9 @@ async def list_meetings_with_users(
     Retrieves a paginated list of all meetings, with user details embedded.
     This provides a comprehensive overview for administrators.
     """
+    skip = max(0, skip)
+    limit = max(1, min(limit, 100))
+
     # First, get the total count of meetings for pagination headers
     count_result = await db.execute(select(func.count(Meeting.id)))
     total = count_result.scalar_one()
@@ -708,6 +713,8 @@ async def get_users_table(
     Returns user table data for analytics without exposing sensitive information.
     Excludes: data JSONB field, API tokens
     """
+    skip = max(0, skip)
+    limit = max(1, min(limit, 1000))
     result = await db.execute(select(User).offset(skip).limit(limit))
     users = result.scalars().all()
     
@@ -739,6 +746,8 @@ async def get_meetings_table(
     Returns meeting table data for analytics without exposing sensitive information.
     Excludes: data JSONB field, transcriptions content
     """
+    skip = max(0, skip)
+    limit = max(1, min(limit, 1000))
     result = await db.execute(select(Meeting).offset(skip).limit(limit))
     meetings = result.scalars().all()
     return [MeetingTableResponse.model_validate(m) for m in meetings]

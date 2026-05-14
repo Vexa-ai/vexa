@@ -46,6 +46,7 @@ RUNTIME_API_URL = os.getenv("RUNTIME_API_URL", "http://runtime-api:8090")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")  # Optional override, e.g. https://api.vexa.ai
 TRANSCRIPT_SHARE_TTL_SECONDS = int(os.getenv("TRANSCRIPT_SHARE_TTL_SECONDS", "900"))  # 15 min
 TRANSCRIPT_SHARE_TTL_MAX_SECONDS = int(os.getenv("TRANSCRIPT_SHARE_TTL_MAX_SECONDS", "86400"))  # 24h max
+MAX_PROXY_BODY_BYTES = int(os.getenv("MAX_PROXY_BODY_BYTES", str(2 * 1024 * 1024)))
 
 # Rate limiting — requests per minute per API key (or per IP for unauthenticated).
 # 0 = disabled. Separate limits for auth'd API calls vs admin/WebSocket.
@@ -369,6 +370,12 @@ async def forward_request(client: httpx.AsyncClient, method: str, url: str, requ
     forwarded_params = dict(request.query_params)
 
     content = await request.body()
+    if len(content) > MAX_PROXY_BODY_BYTES:
+        return Response(
+            content=json.dumps({"detail": "Request body too large"}),
+            status_code=413,
+            media_type="application/json",
+        )
 
     try:
         resp = await client.request(method, url, headers=headers, params=forwarded_params or None, content=content)
@@ -1230,6 +1237,8 @@ async def agent_chat_proxy(request: Request):
         raise HTTPException(503, "Agent API not configured")
 
     body = await request.body()
+    if len(body) > MAX_PROXY_BODY_BYTES:
+        raise HTTPException(status_code=413, detail="Request body too large")
     extra_headers = {}
 
     # Parse body to check meeting_aware session
@@ -2045,7 +2054,7 @@ async def browser_delete_storage(token: str):
 # runs from the HOST, which has no docker-DNS access; the gateway
 # proxy is the only way to reach meeting-api externally.
 import os
-_PACK_X_TEST_ROUTES_ENABLED = os.environ.get("VEXA_ENV", "development") != "production"
+_PACK_X_TEST_ROUTES_ENABLED = os.environ.get("SYNTHETIC_ROUTES_ENABLED", "false").lower() == "true"
 
 
 @app.api_route(
