@@ -402,7 +402,7 @@ export function RestTranscriptsPreview({
   token,
 }: RestTranscriptsPreviewProps) {
   const displayToken = token ? maskToken(token) : "vx_sk_...";
-  const copyToken = token || "YOUR_API_KEY";
+  const copyToken = token || "<api-key>";
   const curlCommand = `curl ${API_BASE_URL}/transcripts/${platform}/${nativeId} \\\n  -H 'X-API-Key: ${copyToken}'`;
 
   return (
@@ -464,7 +464,7 @@ export function RestRecordingsPreview({
   token,
 }: RestRecordingsPreviewProps) {
   const displayToken = token ? maskToken(token) : "vx_sk_...";
-  const copyToken = token || "YOUR_API_KEY";
+  const copyToken = token || "<api-key>";
   const curlListCommand = `curl ${API_BASE_URL}/recordings \\\n  -H 'X-API-Key: ${copyToken}'`;
   const curlDownloadCommand = `curl -L ${API_BASE_URL}/recordings/{id}/media/{media_id}/raw \\\n  -H 'X-API-Key: ${copyToken}' \\\n  -o recording.wav`;
   const fullCopy = `${curlListCommand}\n\n${curlDownloadCommand}`;

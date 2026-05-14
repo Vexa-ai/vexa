@@ -72,7 +72,7 @@ uvicorn agent_api.main:app --host 0.0.0.0 --port 8100
 # Stream a response from the agent (SSE)
 curl -N -X POST http://localhost:8100/api/chat \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your-api-key" \
+  -H "X-API-Key: <api-key>" \
   -d '{
     "user_id": "user-1",
     "message": "What files are in the workspace?"
@@ -83,7 +83,7 @@ curl -N -X POST http://localhost:8100/api/chat \
 
 ```bash
 curl http://localhost:8100/api/sessions?user_id=user-1 \
-  -H "X-API-Key: your-api-key"
+  -H "X-API-Key: <api-key>"
 ```
 
 ## API Reference

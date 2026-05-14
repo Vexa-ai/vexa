@@ -22,7 +22,7 @@
 #     -e DATABASE_URL="postgresql://user:pass@host:5432/vexa" \
 #     -e ADMIN_API_TOKEN="your-secret-token" \
 #     -e TRANSCRIPTION_SERVICE_URL="http://host:8083/v1/audio/transcriptions" \
-#     -e TRANSCRIPTION_SERVICE_TOKEN="your-api-key" \
+#     -e TRANSCRIPTION_SERVICE_TOKEN="<api-key>" \
 #     vexa-lite
 # =============================================================================
 

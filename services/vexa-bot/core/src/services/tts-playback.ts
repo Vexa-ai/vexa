@@ -1,4 +1,4 @@
-import { spawn, execSync, ChildProcess } from 'child_process';
+import { spawn, execFileSync, ChildProcess } from 'child_process';
 import { Readable } from 'stream';
 import { log } from '../utils';
 import https from 'https';
@@ -10,8 +10,8 @@ import http from 'http';
  */
 function unmuteTtsAudio(): void {
   try {
-    execSync('pactl set-sink-mute tts_sink 0', { stdio: 'pipe' });
-    execSync('pactl set-source-mute virtual_mic 0', { stdio: 'pipe' });
+    execFileSync('pactl', ['set-sink-mute', 'tts_sink', '0'], { stdio: 'pipe' });
+    execFileSync('pactl', ['set-source-mute', 'virtual_mic', '0'], { stdio: 'pipe' });
     log('[TTS] PulseAudio unmuted (tts_sink + virtual_mic)');
   } catch (err: any) {
     log(`[TTS] pactl unmute failed: ${err.message}`);
@@ -24,8 +24,8 @@ function unmuteTtsAudio(): void {
  */
 function muteTtsAudio(): void {
   try {
-    execSync('pactl set-sink-mute tts_sink 1', { stdio: 'pipe' });
-    execSync('pactl set-source-mute virtual_mic 1', { stdio: 'pipe' });
+    execFileSync('pactl', ['set-sink-mute', 'tts_sink', '1'], { stdio: 'pipe' });
+    execFileSync('pactl', ['set-source-mute', 'virtual_mic', '1'], { stdio: 'pipe' });
     log('[TTS] PulseAudio muted (tts_sink + virtual_mic)');
   } catch (err: any) {
     log(`[TTS] pactl mute failed: ${err.message}`);

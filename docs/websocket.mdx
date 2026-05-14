@@ -17,7 +17,7 @@ To start a transcription bot for a meeting:
 
 ```bash
 POST /bots
-Headers: X-API-Key: YOUR_API_KEY
+Headers: X-API-Key: <api-key>
 Body: {
   "platform": "google_meet",
   "native_meeting_id": "your-meeting-id"
@@ -46,7 +46,7 @@ Derive the WebSocket URL from your API base URL:
 Authentication is performed using the `X-API-Key` header:
 
 ```
-Headers: X-API-Key: YOUR_API_KEY
+Headers: X-API-Key: <api-key>
 ```
 
 ### Meeting Identity
@@ -68,7 +68,7 @@ Before connecting to WebSocket, fetch the last full  transcript via REST API:
 
 ```
 GET /transcripts/{platform}/{native_id}[?meeting_id=...]
-Headers: X-API-Key: YOUR_API_KEY
+Headers: X-API-Key: <api-key>
 ```
 
 **Response Format**:

@@ -36,7 +36,7 @@ export default function WebSocketPage() {
               WebSocket URL format (derived from your API URL):
             </p>
             <pre className="bg-muted p-4 rounded-lg text-sm">
-              <code>wss://api.vexa.ai/ws?api_key=YOUR_API_KEY</code>
+              <code>wss://api.vexa.ai/ws?api_key=<api-key></code>
             </pre>
             <p className="text-sm text-muted-foreground mt-4">
               <strong>Note:</strong> Authentication is done via query parameter since browsers cannot set custom headers for WebSocket connections.
@@ -98,7 +98,7 @@ export default function WebSocketPage() {
           </TabsList>
           <TabsContent value="javascript">
             <pre className="bg-muted p-4 rounded-lg text-sm overflow-x-auto">
-              <code>{`const ws = new WebSocket('wss://api.vexa.ai/ws?api_key=YOUR_API_KEY');
+              <code>{`const ws = new WebSocket('wss://api.vexa.ai/ws?api_key=<api-key>');
 
 ws.onopen = () => {
   // Subscribe to meeting

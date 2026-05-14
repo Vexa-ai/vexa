@@ -19,7 +19,7 @@ import { ScreenContentService, getVirtualCameraInitScript, getVideoBlockInitScri
 import { ScreenShareService } from "./services/screen-share"; // kept for Teams; unused for Google Meet camera-feed approach
 import { createClient, RedisClientType } from 'redis';
 import { Page, Browser, BrowserContext } from 'playwright-core';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { ensureBrowserDataDir, syncBrowserDataFromS3, syncBrowserDataToS3, cleanStaleLocks, BROWSER_DATA_DIR } from './s3-sync';
 // HTTP imports removed - using unified callback service instead
 
@@ -732,7 +732,7 @@ async function performGracefulLeave(
   // Clean up per-bot PulseAudio sink if one was created
   if (botPaSinkModuleId) {
     try {
-      execSync(`pactl unload-module ${botPaSinkModuleId}`, { stdio: 'ignore' });
+      execFileSync('pactl', ['unload-module', botPaSinkModuleId], { stdio: 'ignore' });
       log(`[Graceful Leave] Unloaded PulseAudio sink module ${botPaSinkModuleId}`);
     } catch (e: any) {
       log(`[Graceful Leave] Warning: Could not unload PulseAudio sink module: ${e.message}`);
@@ -2259,8 +2259,14 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
       && (process.env.ZOOM_WEB === 'true' || process.env.ZOOM_SDK !== 'true')) {
     const sinkName = `bot_sink_${botConfig.meeting_id}`;
     try {
-      const moduleId = execSync(
-        `pactl load-module module-null-sink sink_name=${sinkName} sink_properties=device.description="BotSink_${botConfig.meeting_id}"`,
+      const moduleId = execFileSync(
+        'pactl',
+        [
+          'load-module',
+          'module-null-sink',
+          `sink_name=${sinkName}`,
+          `sink_properties=device.description=BotSink_${botConfig.meeting_id}`,
+        ],
         { stdio: ['ignore', 'pipe', 'ignore'] }
       ).toString().trim();
       botPaSinkModuleId = moduleId;
@@ -2276,7 +2282,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     log('[Bot] Authenticated mode: downloading userdata from S3...');
     ensureBrowserDataDir();
     syncBrowserDataFromS3(botConfig);
-    cleanStaleLocks(BROWSER_DATA_DIR);
+    cleanStaleLocks();
 
     const authArgs = getAuthenticatedBrowserArgs();
     const context: BrowserContext = await chromium.launchPersistentContext(BROWSER_DATA_DIR, {

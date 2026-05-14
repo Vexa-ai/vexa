@@ -1,4 +1,4 @@
-fastapi
-uvicorn[standard]
+fastapi>=0.110
+uvicorn[standard]>=0.29
 h11>=0.16.0                       # CVE-2025-43859 (uvicorn transitive)
 email-validator
