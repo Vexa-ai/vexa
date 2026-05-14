@@ -54,6 +54,7 @@ from .config import (
 from .post_meeting import run_all_tasks, run_status_webhook_task
 
 logger = logging.getLogger("meeting_api.meetings")
+_WEAK_PRODUCTION_SECRETS = {"changeme", "vexa-internal-secret", "vexa-admin-token", "vexa-dev-jwt-secret"}
 
 router = APIRouter()
 
@@ -92,6 +93,8 @@ def mint_meeting_token(
     secret = os.environ.get("ADMIN_TOKEN")
     if not secret:
         raise ValueError("ADMIN_TOKEN not configured; cannot mint MeetingToken")
+    if os.getenv("VEXA_ENV", "development").lower() == "production" and secret in _WEAK_PRODUCTION_SECRETS:
+        raise ValueError("ADMIN_TOKEN is not safely configured for production")
 
     now = int(datetime.utcnow().timestamp())
     header = {"alg": "HS256", "typ": "JWT"}

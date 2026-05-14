@@ -39,6 +39,7 @@ logger = logging.getLogger("admin_api")
 
 _SAFE_GIT_BRANCH = re.compile(r"^[A-Za-z0-9._/-]{1,128}$")
 _SENSITIVE_LOG_KEYS = ("token", "secret", "password", "api_key", "apikey", "credential")
+_WEAK_PRODUCTION_SECRETS = {"changeme", "vexa-internal-secret", "vexa-admin-token", "vexa-dev-jwt-secret"}
 
 
 def _sanitize_for_log(value):
@@ -54,6 +55,14 @@ def _sanitize_for_log(value):
     if isinstance(value, list):
         return [_sanitize_for_log(item) for item in value]
     return value
+
+
+def _is_production() -> bool:
+    return os.getenv("VEXA_ENV", "development").lower() == "production"
+
+
+def _is_weak_secret(value: Optional[str]) -> bool:
+    return (value or "").strip() in _WEAK_PRODUCTION_SECRETS
 
 
 def _validate_github_repo_url(repo: str) -> str:
@@ -132,6 +141,12 @@ async def verify_admin_token(admin_api_key: str = Security(API_KEY_HEADER)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Admin authentication is not configured on the server."
+        )
+    if _is_production() and _is_weak_secret(ADMIN_API_TOKEN):
+        logger.error("CRITICAL: weak ADMIN_API_TOKEN refused in production")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Admin authentication is not safely configured on the server.",
         )
     
     if not admin_api_key or not hmac.compare_digest(admin_api_key, ADMIN_API_TOKEN):
@@ -930,6 +945,8 @@ async def validate_token(request: Request, payload: dict, db: AsyncSession = Dep
     # Fail closed: if INTERNAL_API_SECRET is not configured, reject unless in dev mode
     if not DEV_MODE and not INTERNAL_API_SECRET:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="INTERNAL_API_SECRET not configured")
+    if _is_production() and _is_weak_secret(INTERNAL_API_SECRET):
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="INTERNAL_API_SECRET is not safely configured")
     # Authenticate the caller (gateway) via shared secret
     if INTERNAL_API_SECRET:
         provided = request.headers.get("X-Internal-Secret", "")
