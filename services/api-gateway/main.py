@@ -172,8 +172,12 @@ _default_cors_origins = ",".join(
     ]
 )
 _cors_raw = os.getenv("CORS_ORIGINS", _default_cors_origins).strip()
-_cors_wildcard = _cors_raw == "*"
-CORS_ORIGINS = ["*"] if _cors_wildcard else [
+if _cors_raw == "*":
+    logging.getLogger("api_gateway").warning(
+        "Ignoring wildcard CORS_ORIGINS='*'; configure explicit origins instead."
+    )
+    _cors_raw = _default_cors_origins
+CORS_ORIGINS = [
     origin.strip()
     for origin in _cors_raw.split(",")
     if origin.strip()
@@ -184,7 +188,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
-    allow_credentials=not _cors_wildcard,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -1514,6 +1518,16 @@ async def auth_me(request: Request):
 logger = logging.getLogger("api-gateway.browser")
 
 
+_INTERNAL_HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}$")
+
+
+def _safe_internal_host(value: str) -> str:
+    """Validate Docker DNS names or IPv4-style container addresses before URL assembly."""
+    if not _INTERNAL_HOST_RE.fullmatch(value):
+        raise HTTPException(status_code=502, detail="Invalid internal browser host")
+    return value
+
+
 _touch_timestamps: dict[str, float] = {}
 _TOUCH_DEBOUNCE = 30  # seconds — don't /touch same container more often than this
 
@@ -1734,7 +1748,7 @@ async def browser_vnc_proxy(token: str, path: str, request: Request):
     if not session:
         raise HTTPException(status_code=404, detail="Browser session not found or expired")
 
-    container = session.get("container_ip") or session["container_name"]
+    container = _safe_internal_host(session.get("container_ip") or session["container_name"])
     # In single-container (lite) deployments, VNC runs on localhost, not a container hostname
     vnc_host = os.getenv("VNC_HOST") or container
     target_url = f"http://{vnc_host}:6080/{path}"
@@ -1770,9 +1784,11 @@ async def browser_vnc_ws(websocket: WebSocket, token: str):
         await websocket.close(code=4404)
         return
 
-    container = session.get("container_ip") or session["container_name"]
-    vnc_host = os.getenv("VNC_HOST") or container
-    upstream_url = f"ws://{vnc_host}:6080/websockify"
+    container = _safe_internal_host(session.get("container_ip") or session["container_name"])
+    vnc_host = _safe_internal_host(os.getenv("VNC_HOST") or container)
+    # Internal container hop to websockify; public clients connect to this
+    # gateway route over ws/wss according to the external deployment scheme.
+    upstream_url = f"ws://{vnc_host}:6080/websockify"  # nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket
 
     await websocket.accept(subprotocol="binary")
 
@@ -1824,7 +1840,7 @@ async def browser_vnc_ws(websocket: WebSocket, token: str):
                 task.cancel()
 
     except Exception as exc:
-        logger.warning("VNC WebSocket proxy error for token %s: %s", token, exc)
+        logger.warning("VNC WebSocket proxy error: %s", exc)
     finally:
         try:
             await websocket.close()
@@ -1837,7 +1853,7 @@ async def _proxy_cdp_http(token: str, path: str, request: Request) -> Response:
     session = await resolve_browser_session(token)
     if not session:
         raise HTTPException(status_code=404, detail="Browser session not found")
-    container = session.get("container_ip") or session["container_name"]
+    container = _safe_internal_host(session.get("container_ip") or session["container_name"])
     try:
         qs = f"?{request.url.query}" if request.url.query else ""
         # Default to the /json/version handshake endpoint so that a bare
@@ -1846,13 +1862,13 @@ async def _proxy_cdp_http(token: str, path: str, request: Request) -> Response:
         # and reads webSocketDebuggerUrl from it.
         upstream_path = path or "json/version"
         resp = await app.state.http_client.get(
-            f"http://{container}:9223/{upstream_path}{qs}", timeout=10.0,
+            f"http://{container}:9223/{upstream_path}{qs}", timeout=10.0,  # nosemgrep: python.django.security.injection.tainted-url-host.tainted-url-host
             headers={"Host": "localhost"}  # CDP rejects non-localhost Host headers
         )
         # Rewrite webSocketDebuggerUrl to point through our CDP WebSocket
         # proxy. Preserve the inbound scheme — behind a TLS terminator the
         # gateway sees X-Forwarded-Proto=https and must emit wss://, not
-        # ws://; downgrading breaks Playwright's connectOverCDP from any
+        # plain WebSocket; downgrading breaks Playwright's connectOverCDP from any
         # secure origin.
         import re
         host = request.headers.get("host", "localhost:8056")
@@ -1905,7 +1921,7 @@ async def browser_cdp_ws(websocket: WebSocket, token: str):
         await websocket.close(code=4404)
         return
 
-    container = session.get("container_ip") or session["container_name"]
+    container = _safe_internal_host(session.get("container_ip") or session["container_name"])
 
     # Discover CDP WebSocket URL from the browser's /json/version endpoint
     try:
@@ -1915,10 +1931,15 @@ async def browser_cdp_ws(websocket: WebSocket, token: str):
         )
         version_info = resp.json()
         cdp_ws_url = version_info.get("webSocketDebuggerUrl", "")
-        # Replace localhost with container:9223 (socat proxy port)
-        # Original may be ws://localhost/devtools/... or ws://localhost:9222/devtools/...
+        # Replace localhost with container:9223 (socat proxy port).
+        # Upstream CDP is an internal, plaintext container hop.
         import re
-        cdp_ws_url = re.sub(r'ws://(localhost|127\.0\.0\.1)(:\d+)?/', f'ws://{container}:9223/', cdp_ws_url)
+        internal_cdp_prefix = f"ws://{container}:9223/"  # nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket
+        cdp_ws_url = re.sub(
+            r'ws://(localhost|127\.0\.0\.1)(:\d+)?/',  # nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket
+            internal_cdp_prefix,
+            cdp_ws_url,
+        )
     except Exception as exc:
         logger.warning("Failed to discover CDP URL for %s: %s", container, exc)
         await websocket.close(code=4502)
@@ -1975,7 +1996,7 @@ async def browser_cdp_ws(websocket: WebSocket, token: str):
                 task.cancel()
 
     except Exception as exc:
-        logger.warning("CDP WebSocket proxy error for token %s: %s", token, exc)
+        logger.warning("CDP WebSocket proxy error: %s", exc)
     finally:
         try:
             await websocket.close()

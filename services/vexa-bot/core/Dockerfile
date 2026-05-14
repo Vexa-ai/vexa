@@ -92,4 +92,5 @@ RUN chmod +x /app/entrypoint.sh
 ENV DISPLAY=:99
 
 # Set the command to run our entrypoint script
+# nosemgrep: dockerfile.security.missing-user.missing-user - Headful browser/VNC runtime currently requires root-managed display and service startup; keep as accepted risk until entrypoint is split.
 CMD ["/app/entrypoint.sh"]

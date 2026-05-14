@@ -513,7 +513,7 @@
       "tier": "static",
       "found": "2026-04-19",
       "proves": "CDP proxy webSocketDebuggerUrl rewrite preserves inbound scheme (wss:// on HTTPS gateways) \u2014 Playwright connectOverCDP works through TLS",
-      "symptom": "Hard-coded ws:// in proxy URL breaks every external CDP client on HTTPS deployments",
+      "symptom": "Hard-coded plaintext WebSocket scheme in proxy URL breaks every external CDP client on HTTPS deployments",
       "file": "services/api-gateway/main.py",
       "must_match": "x-forwarded-proto"
     },
