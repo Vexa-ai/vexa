@@ -123,6 +123,7 @@ API_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", auto_error=False) # Use a 
 USER_API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False) # For user-facing endpoints
 ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN") # Read from environment
 ANALYTICS_API_TOKEN = os.getenv("ANALYTICS_API_TOKEN") # Read-only analytics token
+MAX_TOKEN_EXPIRES_IN_SECONDS = 60 * 60 * 24 * 90
 
 async def verify_admin_token(admin_api_key: str = Security(API_KEY_HEADER)):
     """Dependency to verify the admin API token."""
@@ -608,7 +609,17 @@ async def create_token_for_user(
     # Token prefix uses the first scope
     token_value = generate_secure_token(scope=scope_list[0])
     expires_at = None
-    if expires_in is not None and expires_in > 0:
+    if expires_in is not None:
+        if expires_in <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="expires_in must be a positive number of seconds",
+            )
+        if expires_in > MAX_TOKEN_EXPIRES_IN_SECONDS:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"expires_in must not exceed {MAX_TOKEN_EXPIRES_IN_SECONDS} seconds",
+            )
         expires_at = datetime.utcnow().replace(tzinfo=None) + timedelta(seconds=expires_in)
 
     db_token = APIToken(

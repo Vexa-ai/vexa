@@ -154,6 +154,7 @@ export async function callStatusChangeCallback(
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(botConfig.internalSecret ? { 'X-Internal-Secret': botConfig.internalSecret } : {}),
         },
         body: JSON.stringify(payload),
         signal: controller.signal

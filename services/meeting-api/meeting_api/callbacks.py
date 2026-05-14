@@ -34,8 +34,10 @@ from .meetings import (
 )
 from .post_meeting import run_all_tasks
 from .recording_finalizer import finalize_recording_master
+from .collector.auth import require_internal_secret
 
 logger = logging.getLogger("meeting_api.callbacks")
+router = APIRouter(dependencies=[Depends(require_internal_secret)])
 
 
 # v0.10.5 Pack J — exit classification routing rule (#255 silent class).
@@ -219,9 +221,6 @@ async def _classify_stopped_exit(
         return (MeetingStatus.FAILED, MeetingCompletionReason.STOPPED_WITH_NO_AUDIO)
 
     return (MeetingStatus.COMPLETED, requested_reason)
-
-router = APIRouter()
-
 
 # ---------------------------------------------------------------------------
 # Frozen payload models (must match tests/contracts/test_callback_contracts.py)

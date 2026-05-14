@@ -1987,8 +1987,11 @@ async def browser_save_storage(token: str):
 
     # Forward to meeting-api (internal call, no user API key needed)
     try:
+        internal_secret = os.getenv("INTERNAL_API_SECRET", "")
+        headers = {"X-Internal-Secret": internal_secret} if internal_secret else {}
         resp = await app.state.http_client.post(
             f"{MEETING_API_URL}/internal/browser-sessions/{token}/save",
+            headers=headers,
             timeout=60.0,  # sync can take a while
         )
         if resp.status_code >= 400:
@@ -2010,8 +2013,11 @@ async def browser_delete_storage(token: str):
         raise HTTPException(status_code=500, detail="Session missing user_id")
 
     try:
+        internal_secret = os.getenv("INTERNAL_API_SECRET", "")
+        headers = {"X-Internal-Secret": internal_secret} if internal_secret else {}
         resp = await app.state.http_client.delete(
             f"{MEETING_API_URL}/internal/browser-sessions/{user_id}/storage",
+            headers=headers,
             timeout=60.0,
         )
         if resp.status_code >= 400:

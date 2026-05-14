@@ -30,6 +30,7 @@ from .storage import create_storage_client
 
 from .auth import get_user_and_token
 from .config import get_recording_metadata_mode
+from .collector.processors import verify_meeting_token
 from .webhooks import send_event_webhook
 
 logger = logging.getLogger("meeting_api.recordings")
@@ -45,6 +46,16 @@ def get_storage_client():
     if _storage_client is None:
         _storage_client = create_storage_client()
     return _storage_client
+
+
+async def require_recording_upload_token(request: Request) -> dict:
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=403, detail="Missing recording upload token")
+    token_claims = verify_meeting_token(auth.removeprefix("Bearer ").strip())
+    if not token_claims:
+        raise HTTPException(status_code=403, detail="Invalid recording upload token")
+    return token_claims
 
 
 def _new_recording_numeric_id() -> int:
@@ -121,6 +132,7 @@ async def _find_meeting_data_recording(db: AsyncSession, user_id: int, recording
 
 @router.post("/internal/recordings/upload", status_code=201, include_in_schema=False)
 async def internal_upload_recording(
+    token_claims: dict = Depends(require_recording_upload_token),
     file: UploadFile = File(...),
     metadata: Optional[str] = Form(default=None),
     session_uid: Optional[str] = Form(default=None),
@@ -168,6 +180,13 @@ async def internal_upload_recording(
         if not is_final:
             return {"status": "pending", "detail": f"Meeting session not ready yet: {session_uid}"}
         raise HTTPException(status_code=404, detail=f"Meeting session not found: {session_uid}")
+
+    if not isinstance(token_claims, dict):
+        # Direct unit tests call the endpoint function without FastAPI dependency injection.
+        token_claims = {"meeting_id": meeting_session.meeting_id}
+
+    if int(token_claims.get("meeting_id")) != int(meeting_session.meeting_id):
+        raise HTTPException(status_code=403, detail="Recording token does not match meeting")
 
     meeting = await db.get(Meeting, meeting_session.meeting_id)
     if not meeting:

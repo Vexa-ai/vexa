@@ -42,6 +42,7 @@ from .schemas import (
 )
 
 from .auth import get_user_and_token
+from .collector.auth import require_internal_secret
 from .config import (
     REDIS_URL,
     RUNTIME_API_URL,
@@ -357,6 +358,7 @@ async def _schedule_bot_timeout(
                 "request": {
                     "method": "DELETE",
                     "url": f"{MEETING_API_URL}/bots/internal/timeout/{meeting_id}",
+                    "headers": {"X-Internal-Secret": os.getenv("INTERNAL_API_SECRET", "")},
                     "timeout": 30,
                 },
                 "metadata": {
@@ -810,6 +812,7 @@ async def request_bot(
             "session_token": session_token,
             "redisUrl": REDIS_URL,
             "meetingApiCallbackUrl": f"{MEETING_API_URL}/bots/internal/callback/exited",
+            "internalSecret": os.getenv("INTERNAL_API_SECRET", ""),
             **s3_config,
         }
 
@@ -1084,6 +1087,7 @@ async def request_bot(
             "everyoneLeftTimeout": resolved_max_time_left_alone,
         },
         "meetingApiCallbackUrl": f"{MEETING_API_URL}/bots/internal/callback/exited",
+        "internalSecret": os.getenv("INTERNAL_API_SECRET", ""),
         "recordingEnabled": user_recording_config.get("enabled", os.getenv("RECORDING_ENABLED", "true").lower() == "true"),
         "transcribeEnabled": transcribe,
         "captureModes": user_recording_config.get("capture_modes", os.getenv("CAPTURE_MODES", "audio").split(",")),
@@ -1241,7 +1245,7 @@ async def request_bot(
 
 
 @router.post("/internal/browser-sessions/{token}/save")
-async def save_browser_session(token: str):
+async def save_browser_session(token: str, _: None = Depends(require_internal_secret)):
     """Save browser session storage to S3 via Redis command."""
     if not redis_client:
         raise HTTPException(status_code=500, detail="Redis not available")
@@ -1300,7 +1304,7 @@ async def save_browser_session(token: str):
 
 
 @router.delete("/internal/browser-sessions/{user_id}/storage")
-async def delete_browser_storage(user_id: int):
+async def delete_browser_storage(user_id: int, _: None = Depends(require_internal_secret)):
     """Delete stored browser data from S3 for a user via MinIO API."""
     import boto3
     from botocore.config import Config as BotoConfig
@@ -1719,6 +1723,7 @@ async def stop_bot(
 async def scheduler_timeout_stop(
     meeting_id: int,
     background_tasks: BackgroundTasks,
+    _: None = Depends(require_internal_secret),
     db: AsyncSession = Depends(get_db),
 ):
     """Called by the scheduler when max_bot_time expires.

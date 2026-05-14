@@ -444,6 +444,27 @@ class TestTokenEndpoints:
             app.dependency_overrides.clear()
 
     @pytest.mark.asyncio
+    async def test_create_token_rejects_invalid_expiry(self):
+        """Token creation rejects zero, negative, and over-limit expires_in."""
+        fake_user = make_fake_user()
+        mock_db = make_mock_db(fake_user)
+
+        app.dependency_overrides[get_db] = lambda: mock_db
+        app.dependency_overrides[verify_admin_token] = noop_verify_admin
+
+        try:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                negative = await client.post("/admin/users/1/tokens?expires_in=-1")
+                zero = await client.post("/admin/users/1/tokens?expires_in=0")
+                huge = await client.post("/admin/users/1/tokens?expires_in=9999999999")
+            assert negative.status_code == 422
+            assert zero.status_code == 422
+            assert huge.status_code == 422
+        finally:
+            app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
     async def test_create_token_user_not_found(self):
         """POST /admin/users/{id}/tokens returns 404 when user doesn't exist."""
         mock_db = make_mock_db(None)
