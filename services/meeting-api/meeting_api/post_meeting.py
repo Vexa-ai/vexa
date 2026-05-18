@@ -156,7 +156,16 @@ async def aggregate_transcription(meeting: Meeting, db: AsyncSession):
             meeting.data = existing_data
             from sqlalchemy.orm.attributes import flag_modified
             flag_modified(meeting, "data")
-            logger.info(f"Aggregated transcription data for meeting {meeting_id}")
+            logger.info(
+                f"Aggregated transcription data for meeting {meeting_id}: "
+                f"{len(segments)} segments, {len(unique_speakers)} speakers, "
+                f"languages={sorted(unique_languages)}"
+            )
+        else:
+            logger.info(
+                f"Aggregated transcription for meeting {meeting_id}: "
+                f"{len(segments)} segments (no metadata changes)"
+            )
 
         # Success — clear any prior transient failure_class.
         clear_aggregation_failure_class(meeting)
@@ -315,6 +324,7 @@ async def run_all_tasks(meeting_id: int):
         async with async_session_local() as db:
             meeting = await db.get(Meeting, meeting_id)
             if meeting:
+                logger.info(f"[Post-meeting] Task 0: finalizing recordings for meeting {meeting_id}")
                 count = await finalize_in_progress_recordings(meeting, db)
                 if count > 0:
                     await db.commit()
@@ -328,6 +338,7 @@ async def run_all_tasks(meeting_id: int):
             if not meeting:
                 logger.error(f"Meeting {meeting_id} not found for post-meeting tasks")
                 return
+            logger.info(f"[Post-meeting] Task 1: aggregating transcription for meeting {meeting_id}")
             await aggregate_transcription(meeting, db)
             await db.commit()
     except Exception as e:
@@ -338,6 +349,7 @@ async def run_all_tasks(meeting_id: int):
         async with async_session_local() as db:
             meeting = await db.get(Meeting, meeting_id)
             if meeting:
+                logger.info(f"[Post-meeting] Task 2: sending completion webhook for meeting {meeting_id}")
                 await send_completion_webhook(meeting, db)
                 await db.commit()
     except Exception as e:
@@ -348,6 +360,7 @@ async def run_all_tasks(meeting_id: int):
         async with async_session_local() as db:
             meeting = await db.get(Meeting, meeting_id)
             if meeting:
+                logger.info(f"[Post-meeting] Task 3: firing internal hooks for meeting {meeting_id}")
                 await fire_post_meeting_hooks(meeting, db)
                 await db.commit()
     except Exception as e:
