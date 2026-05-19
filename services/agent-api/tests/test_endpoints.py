@@ -230,22 +230,48 @@ class TestWorkspaceEndpoints:
 
 class TestInternalEndpoints:
     def test_workspace_save_no_container(self, client):
-        resp = client.post(
-            "/internal/workspace/save",
-            json={"user_id": "unknown-user"},
-        )
+        with patch("agent_api.config.DEV_MODE", True):
+            resp = client.post(
+                "/internal/workspace/save",
+                json={"user_id": "unknown-user"},
+            )
         assert resp.status_code == 404
 
     def test_workspace_status(self, client):
-        resp = client.get(
-            "/internal/workspace/status",
-            params={"user_id": "test-user"},
-        )
+        with patch("agent_api.config.DEV_MODE", True):
+            resp = client.get(
+                "/internal/workspace/status",
+                params={"user_id": "test-user"},
+            )
         assert resp.status_code == 200
         data = resp.json()
         assert data["user_id"] == "test-user"
         assert "workspace_in_storage" in data
         assert "container_running" in data
+
+    def test_internal_workspace_status_fails_closed_without_secret(self, client):
+        with patch("agent_api.config.DEV_MODE", False), \
+             patch("agent_api.config.INTERNAL_API_SECRET", ""):
+            resp = client.get(
+                "/internal/workspace/status",
+                params={"user_id": "test-user"},
+            )
+        assert resp.status_code == 503
+
+    def test_internal_workspace_status_requires_matching_secret(self, client):
+        with patch("agent_api.config.DEV_MODE", False), \
+             patch("agent_api.config.INTERNAL_API_SECRET", "internal-secret"):
+            missing = client.get(
+                "/internal/workspace/status",
+                params={"user_id": "test-user"},
+            )
+            ok = client.get(
+                "/internal/workspace/status",
+                params={"user_id": "test-user"},
+                headers={"X-Internal-Secret": "internal-secret"},
+            )
+        assert missing.status_code == 403
+        assert ok.status_code == 200
 
 
 # ---------------------------------------------------------------------------

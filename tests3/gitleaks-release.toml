@@ -1,0 +1,11 @@
+title = "Vexa release Gitleaks policy"
+
+[allowlist]
+description = "Exclude local-only secrets and generated build artifacts from release source scanning."
+paths = [
+  '''(^|/)\.env$''',
+  '''^deploy/compose/\.env$''',
+  '''(^|/)\.next/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)\.git/''',
+]

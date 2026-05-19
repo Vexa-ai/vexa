@@ -138,6 +138,68 @@ class TestPathValidation:
             result = _validate_path(p)
             assert result == p
 
+    def test_workspace_name_traversal_rejected(self):
+        from agent_api.main import _validate_key_segment
+        from fastapi import HTTPException
+
+        for value in ["../other", "team/default", "team\\default", "", "bad\x00name"]:
+            with pytest.raises(HTTPException) as exc_info:
+                _validate_key_segment(value, "workspace")
+            assert exc_info.value.status_code == 400
+
+
+class TestArchivePathValidation:
+    def test_archive_member_path_traversal_rejected(self):
+        with pytest.raises(ValueError):
+            workspace.validate_workspace_path("../escape.txt")
+
+    def test_archive_member_path_normalized(self):
+        assert workspace.validate_workspace_path("./src/app.py") == "src/app.py"
+
+
+class TestGitCloneValidation:
+    @pytest.mark.asyncio
+    async def test_git_clone_rejects_loopback_repo(self):
+        fake, calls = _mock_exec()
+
+        with patch.object(workspace, "_exec", side_effect=fake):
+            ok = await workspace.git_clone_init(
+                "ctr-1",
+                "https://127.0.0.1/private.git",
+                "main",
+            )
+
+        assert ok is False
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_git_clone_accepts_github_repo(self):
+        fake, calls = _mock_exec([(0, "ok"), (0, "ok")])
+
+        with patch.object(workspace, "_exec", side_effect=fake):
+            ok = await workspace.git_clone_init(
+                "ctr-1",
+                "https://github.com/acme/private.git",
+                "main",
+            )
+
+        assert ok is True
+        assert "git clone" in calls[0][1]
+
+    @pytest.mark.asyncio
+    async def test_git_clone_rejects_unsafe_branch(self):
+        fake, calls = _mock_exec()
+
+        with patch.object(workspace, "_exec", side_effect=fake):
+            ok = await workspace.git_clone_init(
+                "ctr-1",
+                "https://github.com/acme/private.git",
+                "../main",
+            )
+
+        assert ok is False
+        assert calls == []
+
 
 # ---------------------------------------------------------------------------
 # Large file doesn't crash

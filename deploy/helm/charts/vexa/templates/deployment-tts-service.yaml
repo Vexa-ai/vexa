@@ -25,7 +25,7 @@ spec:
         {{- toYaml .Values.global.podAnnotations | nindent 8 }}
     spec:
       securityContext:
-        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+        {{- toYaml (mergeOverwrite (deepCopy .Values.global.podSecurityContext) .Values.ttsService.podSecurityContext) | nindent 8 }}
       # v0.10.5 Pack I.s — stateful-pod anti-affinity (#272 iter-5).
       # See deployment-minio.yaml header for the full rationale.
       affinity:

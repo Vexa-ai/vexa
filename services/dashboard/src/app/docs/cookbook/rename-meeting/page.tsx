@@ -68,7 +68,7 @@ async function renameMeeting(platform, nativeMeetingId, newName) {
     {
       method: 'PATCH',
       headers: {
-        'X-API-Key': 'your-api-key',
+        'X-API-Key': '<api-key>',
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
@@ -99,7 +99,7 @@ async function updateMeetingMetadata(platform, nativeMeetingId, updates) {
     {
       method: 'PATCH',
       headers: {
-        'X-API-Key': 'your-api-key',
+        'X-API-Key': '<api-key>',
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
@@ -154,7 +154,7 @@ def rename_meeting(platform, native_meeting_id, new_name, api_key):
     return updated_meeting
 
 # Usage
-rename_meeting('google_meet', 'abc-defg-hij', 'Team Standup - Q1 Planning', 'your-api-key')
+rename_meeting('google_meet', 'abc-defg-hij', 'Team Standup - Q1 Planning', '<api-key>')
 
 # Update multiple fields at once
 def update_meeting_metadata(platform, native_meeting_id, updates, api_key):
@@ -183,7 +183,7 @@ update_meeting_metadata('google_meet', 'abc-defg-hij', {
     "notes": "Discussion about Q1 goals",
     "participants": ["Alice", "Bob", "Charlie"],
     "languages": ["en"]
-}, 'your-api-key')`}</code>
+}, '<api-key>')`}</code>
                 </pre>
               </div>
             </TabsContent>
@@ -195,7 +195,7 @@ update_meeting_metadata('google_meet', 'abc-defg-hij', {
                   <code>{`# Rename a meeting
 curl -X PATCH \\
   "https://your-api-url/meetings/google_meet/abc-defg-hij" \\
-  -H "X-API-Key: your-api-key" \\
+  -H "X-API-Key: <api-key>" \\
   -H "Content-Type: application/json" \\
   -d '{
     "data": {
@@ -206,7 +206,7 @@ curl -X PATCH \\
 # Update multiple fields
 curl -X PATCH \\
   "https://your-api-url/meetings/google_meet/abc-defg-hij" \\
-  -H "X-API-Key: your-api-key" \\
+  -H "X-API-Key: <api-key>" \\
   -H "Content-Type: application/json" \\
   -d '{
     "data": {

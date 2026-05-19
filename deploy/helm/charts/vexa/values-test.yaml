@@ -66,6 +66,7 @@ dashboard:
     VEXA_PUBLIC_API_URL: ""       # set at install time via --set
     NEXT_PUBLIC_APP_URL: ""       # set at install time via --set
     NEXT_PUBLIC_HOSTED_MODE: "false"
+    VEXA_ALLOW_DIRECT_LOGIN: "true"
 
 # Bundled deps
 postgres:

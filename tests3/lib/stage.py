@@ -16,8 +16,8 @@ Usage:
 
 Library use:
   import stage; s = stage.current()
-  stage.assert_is("validate")
-  stage.enter("triage", actor="AI:triage", reason="red")
+  stage.assert_is("develop-verify")
+  stage.enter("develop-deliver", actor="AI:verify", reason="red")
 """
 from __future__ import annotations
 
@@ -41,27 +41,53 @@ CURRENT = T3 / ".current-stage"
 LOG = T3 / ".state" / "stage-log.ndjson"
 STAGES_DIR = T3 / "stages"
 
-# Canonical state machine (§5.5). For each stage, the set of legal predecessors.
-# "idle" is reachable from teardown or a fresh repo. Develop can be entered from
-# plan (first time) or triage (after a failure).
-TRANSITIONS = {
-    "idle":      {"teardown", None},          # None = uninitialised repo
-    "groom":     {"idle"},
-    "plan":      {"groom"},
-    "develop":   {"plan", "triage"},
-    "provision": {"develop"},                 # first-time provision
-    "deploy":    {"provision", "develop"},    # post-develop, post-provision
-    "validate":  {"deploy"},
-    "triage":    {"validate", "human"},       # validate(red) or human(gap)
-    "human":     {"validate"},                # validate(green)
-    "ship":      {"human"},
-    "teardown":  {"ship"},
-}
+# Canonical state machine (redesigned 2026-05-15). The release system is an
+# environment promotion flow. Each owned environment follows the same breathing
+# inner loop:
+#
+#   design → deliver → verify → sign
+#
+# This repo owns public release readiness:
+#
+#   scope → develop → stage → release → done
+#
+# Production is a downstream handoff owned by the production/operations system,
+# not a tests3 stage.
+LEVELS = ["scope", "develop", "stage", "release"]
+ROLES = ["design", "deliver", "verify", "sign"]
 
-STAGE_ORDER = [
-    "idle", "groom", "plan", "develop", "provision", "deploy",
-    "validate", "triage", "human", "ship", "teardown",
-]
+STAGE_ORDER = [f"{level}-{role}" for level in LEVELS for role in ROLES] + ["done"]
+
+
+def _build_transitions() -> dict[str, set[Optional[str]]]:
+    transitions: dict[str, set[Optional[str]]] = {stage: set() for stage in STAGE_ORDER}
+
+    transitions["scope-design"].add(None)
+    transitions["scope-design"].add("done")
+    transitions["done"].add(None)
+
+    for idx, level in enumerate(LEVELS):
+        transitions[f"{level}-deliver"].add(f"{level}-design")
+        transitions[f"{level}-verify"].add(f"{level}-deliver")
+        transitions[f"{level}-sign"].add(f"{level}-verify")
+
+        if idx + 1 < len(LEVELS):
+            transitions[f"{LEVELS[idx + 1]}-design"].add(f"{level}-sign")
+        else:
+            transitions["done"].add(f"{level}-sign")
+
+        # Hard feedback/pushback. Verification and human judgment both bounce
+        # to the materialization step; if the failure proves the intent is
+        # wrong, the operator can bounce further to design explicitly.
+        transitions[f"{level}-deliver"].add(f"{level}-verify")
+        transitions[f"{level}-deliver"].add(f"{level}-sign")
+        transitions[f"{level}-design"].add(f"{level}-verify")
+        transitions[f"{level}-design"].add(f"{level}-sign")
+
+    return transitions
+
+
+TRANSITIONS = _build_transitions()
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -140,7 +166,7 @@ def objectives(name: str) -> str:
 
 
 def next_stages(name: Optional[str] = None) -> list[str]:
-    name = name or (current().get("stage") or "idle")
+    name = name or (current().get("stage") or "done")
     out = [s for s, preds in TRANSITIONS.items() if name in preds]
     return out
 

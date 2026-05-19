@@ -3,6 +3,7 @@ import { BotConfig } from "../../types";
 import { log, callStartupCallback } from "../../utils";
 import { hasStopSignalReceived, triggerPostAdmissionCamera, triggerPostAdmissionChat, startVideoRecordingIfNeeded, enterBrowserFullscreen } from "../../index";
 import { enableTeamsLiveCaptions } from "../msteams/captions";
+import { startTeamsAcceptanceSignalsHeartbeat } from "../../services/acceptance-signals";
 
 export type AdmissionDecision = {
   admitted: boolean;
@@ -169,6 +170,7 @@ export async function runMeetingFlow(
         // text directly from Teams ASR, used as primary speaker detection signal.
         // Captions are per-user, so the bot can always enable them for itself.
         if (platform === 'teams') {
+          startTeamsAcceptanceSignalsHeartbeat(page, botConfig);
           enableTeamsLiveCaptions(page).catch((err: any) => {
             log(`[Captions] Failed to enable live captions (non-fatal, falling back to DOM signals): ${err?.message || err}`);
           });
@@ -254,5 +256,4 @@ export async function runMeetingFlow(
     await gracefulLeaveFunction(page, 1, "post_join_setup_error", errorDetails);
   }
 }
-
 

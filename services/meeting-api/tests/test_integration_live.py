@@ -136,7 +136,7 @@ class TestAuthNoKey:
 
     def test_request_with_wrong_key_returns_403(self, anon_client):
         resp = anon_client.get(
-            "/bots/status", headers={"X-API-Key": "wrong-key-12345"}
+            "/bots/status", headers={"X-API-Key": "invalid-test-key"}
         )
         assert resp.status_code == 403
 

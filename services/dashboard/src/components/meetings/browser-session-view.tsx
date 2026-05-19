@@ -56,12 +56,16 @@ export function BrowserSessionView({ meeting }: BrowserSessionViewProps) {
   const [isSaving, setIsSaving] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [showPanel, setShowPanel] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     fetch(withBasePath("/api/config"))
       .then((r) => r.json())
       .then((cfg) => {
-        setApiUrl(cfg.publicApiUrl || cfg.apiUrl || "http://localhost:8056");
+        const resolvedApiUrl = cfg.publicApiUrl || cfg.apiUrl;
+        if (resolvedApiUrl) {
+          setApiUrl(resolvedApiUrl);
+        }
       });
   }, []);
 
@@ -92,7 +96,7 @@ export function BrowserSessionView({ meeting }: BrowserSessionViewProps) {
   const cdpUrl = apiUrl ? `${apiUrl}/b/${token}/cdp` : `/b/${token}/cdp`;
   const mcpUrl = apiUrl ? `${apiUrl}/mcp` : null;
   const sshPort = meeting.data?.ssh_port as number | undefined;
-  const sshHost = apiUrl ? (() => { try { return new URL(apiUrl).hostname; } catch { return "localhost"; } })() : "localhost";
+  const sshHost = apiUrl ? (() => { try { return new URL(apiUrl).hostname; } catch { return ""; } })() : "";
 
   const agentInstructions = cdpUrl
     ? [
@@ -115,8 +119,6 @@ export function BrowserSessionView({ meeting }: BrowserSessionViewProps) {
         `The browser is a full Chromium instance. The user sees your actions in real time.`,
       ].join("\n")
     : "";
-
-  const [isDeleting, setIsDeleting] = useState(false);
 
   async function handleSave() {
     setIsSaving(true);

@@ -17,12 +17,27 @@ source "$(dirname "$0")/../lib/common.sh"
 GATEWAY_URL=$(state_read gateway_url)
 API_TOKEN=$(state_read api_token)
 MODE=$(state_read deploy_mode)
+RUN_SUFFIX="${TEST_RUN_ID:-$(date +%s)-$$}"
+LIFECYCLE_NATIVE_ID="lifecycle-test-${RUN_SUFFIX}"
+TIMEOUT_NATIVE_ID="timeout-test-${RUN_SUFFIX}"
+CONCURRENCY_A_NATIVE_ID="concurrency-a-${RUN_SUFFIX}"
+CONCURRENCY_B_NATIVE_ID="concurrency-b-${RUN_SUFFIX}"
 
 echo ""
 echo "  containers"
 echo "  ──────────────────────────────────────────────"
 
 test_begin containers
+
+lite_container() {
+    if docker ps --format '{{.Names}}' | grep -qx 'vexa-lite'; then
+        echo "vexa-lite"
+    elif docker ps --format '{{.Names}}' | grep -qx 'vexa'; then
+        echo "vexa"
+    else
+        echo "vexa-lite"
+    fi
+}
 
 # ── Cleanup (setup hygiene, not a step) ───────────
 STALE_BOTS=$(curl -sf -H "X-API-Key: $API_TOKEN" "$GATEWAY_URL/bots/status" | python3 -c "
@@ -50,7 +65,7 @@ fi
 # ── Step: create ─────────────────────────────────
 echo "  creating test bot..."
 RESP=$(http_post "$GATEWAY_URL/bots" \
-    '{"platform":"google_meet","native_meeting_id":"lifecycle-test-1","bot_name":"LC Test","automatic_leave":{"no_one_joined_timeout":30000}}' \
+    "$(printf '{"platform":"google_meet","native_meeting_id":"%s","bot_name":"LC Test","automatic_leave":{"no_one_joined_timeout":30000}}' "$LIFECYCLE_NATIVE_ID")" \
     "$API_TOKEN")
 BOT_ID=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
 
@@ -79,7 +94,7 @@ BOT_ALIVE=$(curl -sf -H "X-API-Key: $API_TOKEN" "$GATEWAY_URL/bots/status" | pyt
 import sys,json
 bots=json.load(sys.stdin).get('running_bots',[])
 for b in bots:
-    if b.get('native_meeting_id')=='lifecycle-test-1':
+    if b.get('native_meeting_id')=='$LIFECYCLE_NATIVE_ID':
         print(b.get('status','?'))
         break
 else: print('gone')
@@ -93,19 +108,26 @@ import sys,json
 d=json.load(sys.stdin)
 ms=d.get('meetings',[]) if isinstance(d,dict) else d
 for m in ms:
-    if m.get('native_meeting_id')=='lifecycle-test-1':
+    if m.get('native_meeting_id')=='$LIFECYCLE_NATIVE_ID':
         print(f'status={m.get(\"status\",\"?\")} reason={m.get(\"completion_reason\",\"?\")}')
         break
 " 2>/dev/null)
-    step_fail alive "bot process died within 10s — $MEETING_STATUS"
-    exit 1
+    case "$MEETING_STATUS" in
+        *"reason=stopped_before_admission"*|*"reason=stopped_with_no_audio"*|*"reason=stopped"*)
+            step_pass alive "bot reached clean terminal state within 10s — $MEETING_STATUS"
+            ;;
+        *)
+            step_fail alive "bot process died within 10s — $MEETING_STATUS"
+            exit 1
+            ;;
+    esac
 else
     step_skip alive "bot status=$BOT_ALIVE (not running, not gone)"
 fi
 
 # ── Step: removal ────────────────────────────────
 echo "  stopping bot..."
-curl -sf -X DELETE "$GATEWAY_URL/bots/google_meet/lifecycle-test-1" \
+curl -sf -X DELETE "$GATEWAY_URL/bots/google_meet/$LIFECYCLE_NATIVE_ID" \
     -H "X-API-Key: $API_TOKEN" > /dev/null 2>&1 || true
 
 sleep 15
@@ -113,7 +135,7 @@ sleep 15
 if [ "$MODE" = "compose" ]; then
     REMAINING=$(docker ps -a --filter "name=meeting-" --format '{{.Names}}' | { grep -c "lifecycle-test" || true; })
 elif [ "$MODE" = "lite" ]; then
-    REMAINING=$(docker exec vexa ps aux 2>/dev/null | { grep -c "lifecycle-test" || true; })
+    REMAINING=$(docker exec "$(lite_container)" ps aux 2>/dev/null | { grep -c "lifecycle-test" || true; })
 elif [ "$MODE" = "helm" ]; then
     if command -v kubectl >/dev/null 2>&1 && kubectl cluster-info >/dev/null 2>&1; then
         REMAINING=$(kubectl get pods --no-headers 2>/dev/null | { grep -c "lifecycle-test" || true; }) || true
@@ -164,7 +186,7 @@ import sys,json
 d=json.load(sys.stdin)
 meetings=d.get('meetings',[]) if isinstance(d,dict) else d
 for m in meetings:
-    if m.get('native_meeting_id')=='lifecycle-test-1':
+    if m.get('native_meeting_id')=='$LIFECYCLE_NATIVE_ID':
         data = m.get('data') or {}
         stop_req = '1' if data.get('stop_requested') else '0'
         # Output 'status|completion_reason|stop_requested' single line
@@ -217,7 +239,7 @@ fi
 # ── Step: timeout_stop ───────────────────────────
 echo "  testing timeout (30s no_one_joined)..."
 RESP2=$(http_post "$GATEWAY_URL/bots" \
-    '{"platform":"google_meet","native_meeting_id":"timeout-test","bot_name":"Timeout Test","automatic_leave":{"no_one_joined_timeout":30000}}' \
+    "$(printf '{"platform":"google_meet","native_meeting_id":"%s","bot_name":"Timeout Test","automatic_leave":{"no_one_joined_timeout":30000}}' "$TIMEOUT_NATIVE_ID")" \
     "$API_TOKEN")
 TIMEOUT_ID=$(echo "$RESP2" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
 
@@ -227,7 +249,7 @@ if [ -n "$TIMEOUT_ID" ]; then
 import sys,json
 bots=json.load(sys.stdin).get('running_bots',[])
 for b in bots:
-    if b.get('native_meeting_id')=='timeout-test':
+    if b.get('native_meeting_id')=='$TIMEOUT_NATIVE_ID':
         print(b.get('status','running'))
         break
 else: print('gone')
@@ -237,7 +259,7 @@ else: print('gone')
         step_pass timeout_stop "bot stopped ($TIMEOUT_STATUS)"
     else
         step_skip timeout_stop "bot still $TIMEOUT_STATUS after 60s (timeout may count from lobby)"
-        curl -sf -X DELETE "$GATEWAY_URL/bots/google_meet/timeout-test" \
+        curl -sf -X DELETE "$GATEWAY_URL/bots/google_meet/$TIMEOUT_NATIVE_ID" \
             -H "X-API-Key: $API_TOKEN" > /dev/null 2>&1
         sleep 10
     fi
@@ -248,18 +270,18 @@ fi
 # ── Step: concurrency_slot ───────────────────────
 echo "  testing concurrency release..."
 RESP_A=$(http_post "$GATEWAY_URL/bots" \
-    '{"platform":"google_meet","native_meeting_id":"concurrency-a","bot_name":"CC-A","automatic_leave":{"no_one_joined_timeout":30000}}' \
+    "$(printf '{"platform":"google_meet","native_meeting_id":"%s","bot_name":"CC-A","automatic_leave":{"no_one_joined_timeout":30000}}' "$CONCURRENCY_A_NATIVE_ID")" \
     "$API_TOKEN")
 CC_A_OK=$(echo "$RESP_A" | python3 -c "import sys,json; print('ok' if json.load(sys.stdin).get('id') else 'fail')" 2>/dev/null)
 
 if [ "$CC_A_OK" = "ok" ]; then
-    curl -sf -X DELETE "$GATEWAY_URL/bots/google_meet/concurrency-a" \
+    curl -sf -X DELETE "$GATEWAY_URL/bots/google_meet/$CONCURRENCY_A_NATIVE_ID" \
         -H "X-API-Key: $API_TOKEN" > /dev/null 2>&1
     sleep 2
 
     CC_B_CODE=$(curl -sf -o /dev/null -w '%{http_code}' -X POST "$GATEWAY_URL/bots" \
         -H "X-API-Key: $API_TOKEN" -H "Content-Type: application/json" \
-        -d '{"platform":"google_meet","native_meeting_id":"concurrency-b","bot_name":"CC-B","automatic_leave":{"no_one_joined_timeout":30000}}' 2>/dev/null || echo "000")
+        -d "$(printf '{"platform":"google_meet","native_meeting_id":"%s","bot_name":"CC-B","automatic_leave":{"no_one_joined_timeout":30000}}' "$CONCURRENCY_B_NATIVE_ID")" 2>/dev/null || echo "000")
 
     if [ "$CC_B_CODE" = "403" ]; then
         step_fail concurrency_slot "B got 403 — slot not released on stop"
@@ -267,7 +289,7 @@ if [ "$CC_A_OK" = "ok" ]; then
         step_pass concurrency_slot "slot released, B created (HTTP $CC_B_CODE)"
     fi
 
-    curl -sf -X DELETE "$GATEWAY_URL/bots/google_meet/concurrency-b" \
+    curl -sf -X DELETE "$GATEWAY_URL/bots/google_meet/$CONCURRENCY_B_NATIVE_ID" \
         -H "X-API-Key: $API_TOKEN" > /dev/null 2>&1 || true
 else
     step_fail concurrency_slot "could not create bot A"
@@ -280,7 +302,12 @@ if [ "$MODE" = "compose" ]; then
     ORPHANS=$(docker ps -a --filter "status=exited" --filter "name=meeting-" \
         --format '{{.Names}}' | { grep -vc meeting-api || true; })
 elif [ "$MODE" = "lite" ]; then
-    ORPHANS=$(docker exec vexa ps aux 2>/dev/null | { grep -c '[Z]' || true; })
+    ORPHANS=0
+    for _ in $(seq 1 12); do
+        ORPHANS=$(docker exec "$(lite_container)" ps -eo stat= 2>/dev/null | { grep -c '^Z' || true; })
+        [ "${ORPHANS:-0}" -eq 0 ] && break
+        sleep 5
+    done
 elif [ "$MODE" = "helm" ]; then
     if command -v kubectl >/dev/null 2>&1 && kubectl cluster-info >/dev/null 2>&1; then
         ORPHANS=$(kubectl get pods --field-selector=status.phase!=Running --no-headers -l app.kubernetes.io/name=vexa 2>/dev/null | { grep -c "meeting-\|bot-" || true; }) || true

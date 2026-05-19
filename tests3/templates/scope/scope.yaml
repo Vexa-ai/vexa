@@ -1,0 +1,77 @@
+# Machine-readable release contract produced during `scope-deliver`.
+
+release_id: REPLACE-WITH-RELEASE-ID
+branch: REPLACE-WITH-BRANCH
+summary: |
+  <One-paragraph summary of the release contract.>
+
+source_artifacts:
+  scope_design: releases/REPLACE-WITH-RELEASE-ID/scope-design.md
+  scope_doc: releases/REPLACE-WITH-RELEASE-ID/scope.md
+
+deployments:
+  modes: [lite, compose, helm]
+  notes: {}
+
+tradeoffs:
+  - trade: "<A vs B>"
+    chosen: ""
+    cost_accepted: ""
+
+architectural_decisions:
+  - id: ADR-1
+    title: ""
+    decision: ""
+    alternatives: []
+    rationale: ""
+    consequences: ""
+
+release_level_principle_compliance:
+  justification_release_level: ""
+  blast_radius_aggregate: ""
+  api_backwards_compatibility: ""
+  db_migrations: ""
+  workarounds: ""
+  fallbacks: ""
+  industry_best_practice: ""
+
+issues:
+  - id: REPLACE-WITH-ISSUE-SLUG
+    title: ""
+    source: gh-issue
+    ref: ""
+    link: ""
+    problem: ""
+    hypothesis: ""
+    justification:
+      problem: ""
+      why_this_approach: ""
+      alternatives_considered: []
+      why_cleanest_now: ""
+    blast_radius:
+      who_affected: ""
+      severity_if_wrong: ""
+      detection_signal: ""
+      rollback_path: ""
+      mitigation_if_rollback_slow: ""
+    api_compat:
+      public_surfaces_changed: []
+      verdict: compatible
+      notes: ""
+    migration_decision:
+      type: none
+      notes: ""
+    code_to_change: []
+    tests_to_add: []
+    registry_changes: []
+    proves: []
+    required_modes: []
+    human_checklist_draft: []
+    explicit_decisions: []
+
+deferred:
+  - id: REPLACE-WITH-DEFERRED-ID
+    link: ""
+    reason: ""
+    target_cycle: ""
+

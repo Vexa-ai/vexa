@@ -1,0 +1,298 @@
+local_human_checklist:
+  release: 260508-v0.10.6.1
+  generated_at: 2026-05-13T11:45:00Z
+  purpose: >
+    Human validates only the end-to-end behavior that automation cannot fully
+    see: browser UX, real-meeting flow, audible/visible results, and judgment
+    that the feature works as expected.
+  modes_validated: [lite, compose]
+
+  human_gate_routing:
+    purpose: >
+      Machine-prepared split for the develop-code bounce path. This does not
+      approve or skip any item. It separates the narrow checks that should be
+      required for develop-human from edge checks that should either move to
+      sampled/risk-accepted validation or be explicitly kept strict by a human.
+    required_for_develop_human:
+      - lite-dashboard-login-and-meetings
+      - compose-dashboard-login-and-meetings
+      - compose-real-gmeet-bot-lifecycle
+      - compose-recording-playback-full-duration
+      - compose-byo-tts-speak-audible
+    sampled_or_risk_accepted:
+      - compose-recording-finalizing-state
+      - compose-voice-agent-camera
+      - compose-teams-continue-without-av
+      - compose-gmeet-host-not-started-fast-fail
+    ai_note: >
+      If the release system accepts this split, update the stage/checklist
+      validator so required_for_develop_human remains strict while sampled or
+      risk-accepted items require an explicit human risk note instead of full
+      walkthrough. Until then, the current stage rule still treats all items as
+      required.
+
+  handoff_urls:
+    lite:
+      dashboard_login: http://127.0.0.1:3100/login
+      gateway_docs: http://127.0.0.1:8156/docs
+      gateway_root: http://127.0.0.1:8156/
+    compose:
+      dashboard_login: http://127.0.0.1:3001/login
+      gateway_docs: http://127.0.0.1:8056/docs
+      gateway_root: http://127.0.0.1:8056/
+      admin_api_docs: http://127.0.0.1:8057/docs
+      tts_endpoint: http://127.0.0.1:8002/v1/audio/speech
+
+  automated_evidence_green:
+    - report: tests3/.state-compose/reports/compose/local-human-mechanical-gate.json
+      proves:
+        - LOCAL_HUMAN_TARGET_URLS_READY
+        - LOCAL_HUMAN_CONTAINERS_HEALTHY
+        - LOCAL_HUMAN_TRANSCRIPTION_LB_READY
+        - LOCAL_HUMAN_RECENT_LOGS_CLEAN
+        - LOCAL_HUMAN_MEMORY_WITHIN_LIMIT
+        - LOCAL_HUMAN_COMPOSE_ENV_SSOT
+        - LOCAL_HUMAN_NO_TEST_CONTAINERS
+        - LOCAL_HUMAN_RECORDINGS_TABLES_DROPPED
+    - report: tests3/.state-compose/reports/compose/dashboard-browser-auth.json
+      proves:
+        - DASHBOARD_BROWSER_MEETINGS_AUTH_OK
+      evidence: "Real browser direct-login opens /meetings and a meeting detail page on the handoff target without Authentication failed/session-expired/Invalid API key UI."
+    - report: tests3/.state-lite/reports/lite/dashboard-stale-auth-detail.json
+      proves:
+        - DASHBOARD_DETAIL_STALE_AUTH_RECOVERS
+      evidence: "A stale lite dashboard cookie/localStorage token on /meetings/170 does not leak raw Invalid API key into the human-visible detail UI."
+    - report: tests3/.state-compose/reports/compose/dashboard-cookie-isolation.json
+      proves:
+        - DASHBOARD_AUTH_COOKIES_ISOLATED
+      evidence: "One browser logs into both localhost dashboards and keeps both /meetings sessions authenticated with vexa-token-compose + vexa-token-lite cookies."
+    - report: tests3/.state-compose/reports/compose/dashboard-recording-playback-ready.json
+      proves:
+        - DASHBOARD_COMPLETED_RECORDING_PLAYBACK_READY
+        - LOCAL_HUMAN_BROWSER_HANDOFF_ENDPOINTS_SSOT
+      evidence: "Real browser opens a completed compose meeting and all browser-consumed URLs are reachable from the canonical dashboard handoff surface; current evidence carrier is recording playback loading audio metadata instead of Recording is processing... or Preparing audio..."
+    - report: tests3/.state-compose/reports/compose/smoke-bot-transcription-roundtrip-roundtrip.json
+      proves:
+        - SMOKE_BOT_TRANSCRIPTION_ROUNDTRIP
+      evidence: "Required tx preflight: configured bot transcription endpoint returns HTTP 200 + non-empty segment(s)."
+    - report: tests3/.state-compose/reports/compose/no-placeholder-transcription-token.json
+      proves:
+        - TRANSCRIPTION_TOKEN_NO_PLACEHOLDER_FALLBACK
+      evidence: "Static handoff guard requires deploy/compose/.env as the local transcription URL/token SSOT and rejects local/dev/example token fallback, caller-env override, and host/generated-env token scavenging in local deploy/smoke paths."
+    - report: tests3/.state-compose/reports/compose/advisory-dependency-floors.json
+      proves:
+        - PRE_RELEASE_SECURITY_DEPENDENCY_FLOORS
+      evidence: "GHSA-9wv6-78fw-fq5c dependency blocker class is included in v0.10.6.1: dashboard PostCSS resolves to 8.5.10, and transcription-service uses a bounded stdlib multipart parser without python-multipart."
+    - report: tests3/.state-lite/reports/lite/advisory-dependency-floors.json
+      proves:
+        - PRE_RELEASE_SECURITY_DEPENDENCY_FLOORS
+      evidence: "Same advisory dependency proof is green for lite."
+    - report: tests3/.state-compose/reports/compose/live-bot-transcript-pipeline.json
+      proves:
+        - LIVE_BOT_TRANSCRIPT_SEGMENTS_PRESENT
+      evidence: "Supplemental live evidence from the fresh delivery/playback meeting: meeting 10099 has 6 recording chunk(s) and 17 transcript segment(s) through GET /transcripts."
+    - report: tests3/.state-lite/reports/lite/walkability-smoke-lite.json
+      proves:
+        - WALKABILITY_AUTH_ROUND_TRIP_WORKS
+        - WALKABILITY_MEETINGS_PAGE_HAS_DATA
+        - WALKABILITY_MEETING_DETAIL_API_LOADS
+        - WALKABILITY_TRANSCRIPTION_URL_CONFIGURED
+        - WALKABILITY_TTS_SPEAK_ROUND_TRIP
+        - WALKABILITY_DASHBOARD_LOGIN_RENDERS
+    - report: tests3/.state-compose/reports/compose/walkability-smoke-compose.json
+      proves:
+        - WALKABILITY_AUTH_ROUND_TRIP_WORKS
+        - WALKABILITY_MEETINGS_PAGE_HAS_DATA
+        - WALKABILITY_MEETING_DETAIL_API_LOADS
+        - WALKABILITY_TRANSCRIPTION_URL_CONFIGURED
+        - WALKABILITY_TTS_SPEAK_ROUND_TRIP
+        - WALKABILITY_DASHBOARD_LOGIN_RENDERS
+    - report: tests3/.state/reports/none/scope-proof-gate-local.json
+      proves:
+        - SCOPE_LOCAL_PROOFS_ALL_GREEN
+
+  ai_observer_protocol:
+    responsibility: >
+      AI/operator watches logs and backend state while the human performs each
+      browser or meeting action. Human approval should reflect both what the
+      human sees and what the observer confirms in logs/API/database state.
+    log_sources:
+      - docker logs --since 0m -f vexa-lite
+      - docker compose -f deploy/compose/docker-compose.yml logs -f api-gateway meeting-api runtime-api dashboard tts-service
+      - docker ps --format '{{.Names}} {{.Status}}'
+    record_findings_in: notes
+
+  items:
+    - id: lite-dashboard-login-and-meetings
+      human_gate_class: required_for_develop_human
+      mode: lite
+      human_does: "Log in at http://127.0.0.1:3100/login with test@vexa.ai, open /meetings, then open a post-fix meeting detail page. Do not use pre-fix meeting 171 as approval evidence."
+      human_confirms: "The lite dashboard is usable; the selected post-fix meeting detail page is coherent and shows no Authentication failed, Invalid API key, or Something went wrong banner."
+      ai_observes: "No new lite log errors; selected meeting detail API returns 200 for the logged-in session; auth uses vexa-token-lite."
+      approved: false
+      signed_by: ""
+      signed_at: ""
+      machine_validation:
+        status: passed
+        evidence:
+          - "tests3/.state-lite/reports/lite/walkability-smoke-lite.json: WALKABILITY_AUTH_ROUND_TRIP_WORKS, WALKABILITY_MEETINGS_PAGE_HAS_DATA, WALKABILITY_MEETING_DETAIL_API_LOADS, WALKABILITY_DASHBOARD_LOGIN_RENDERS all pass."
+          - "tests3/.state-lite/reports/lite/dashboard-stale-auth-detail.json: DASHBOARD_DETAIL_STALE_AUTH_RECOVERS pass."
+      notes: "Machine validated lite auth/detail walkability; human approval remains unsigned."
+
+    - id: compose-dashboard-login-and-meetings
+      human_gate_class: required_for_develop_human
+      mode: compose
+      human_does: "Log in at http://127.0.0.1:3001/login with test@vexa.ai, open /meetings, then open meeting 10099 for transcript and playback state if still present."
+      human_confirms: "The compose dashboard is usable after also using lite; meeting detail shows transcript/recording affordances that match the actual backend state, meeting 10099 does not remain stuck at Recording is processing... or Preparing audio..., and no auth/API-key error appears."
+      ai_observes: "No new compose dashboard/api-gateway/meeting-api errors; browser auth uses vexa-token-compose and does not collide with lite."
+      approved: false
+      signed_by: ""
+      signed_at: ""
+      machine_validation:
+        status: passed
+        evidence:
+          - "tests3/.state-compose/reports/compose/advisory-dependency-floors.json: PRE_RELEASE_SECURITY_DEPENDENCY_FLOORS pass after GHSA-9wv6-78fw-fq5c was pulled into scope."
+          - "tests3/.state-compose/reports/compose/dashboard-browser-auth.json: DASHBOARD_BROWSER_MEETINGS_AUTH_OK pass."
+          - "tests3/.state-compose/reports/compose/dashboard-cookie-isolation.json: DASHBOARD_AUTH_COOKIES_ISOLATED pass."
+          - "tests3/.state-compose/reports/compose/dashboard-auth.json: login 200, compose cookie flags correct, /me returns test@vexa.ai, /api/vexa/meetings returns 200."
+          - "tests3/.state-compose/reports/compose/live-bot-transcript-pipeline.json: meeting 10099 has 6 chunk(s), 17 segment(s)."
+          - "tests3/.state-compose/reports/compose/dashboard-recording-playback-ready.json: meeting 10099 loads playback metadata and does not render Recording is processing... or Preparing audio..."
+      notes: "Machine evidence is green after the playback proxy/code-review fix. Human still needs the final browser judgment for this item."
+
+    - id: compose-real-gmeet-bot-lifecycle
+      human_gate_class: required_for_develop_human
+      mode: compose
+      human_does: "Create/open a real Google Meet, click Join Meeting in compose, paste the Meet URL, keep transcription enabled, start bot named Vexa human gate, admit it if needed, talk for 30-60 seconds, then stop the bot."
+      human_confirms: "Bot joins, status transitions make sense, spoken phrases appear in transcript during or shortly after the meeting, stop completes, and transcript remains available after stop."
+      ai_observes: "Bot container lifecycle, meeting status transitions, transcript segment creation, transcription calls, and callback/finalizer/webhook logs."
+      approved: true
+      signed_by: "dmitry@vexa.ai"
+      signed_at: "2026-05-13T22:15:41Z"
+      machine_validation:
+        status: passed
+        evidence:
+          - "tests3/.state-compose/reports/compose/live-bot-transcript-pipeline.json: LIVE_BOT_TRANSCRIPT_SEGMENTS_PRESENT pass for meeting 10099."
+          - "tests3/.state-compose/reports/compose/smoke-bot-transcription-roundtrip-roundtrip.json: SMOKE_BOT_TRANSCRIPTION_ROUNDTRIP pass."
+          - "tests3/.state-compose/reports/compose/no-placeholder-transcription-token.json: TRANSCRIPTION_TOKEN_NO_PLACEHOLDER_FALLBACK pass."
+      human_observation:
+        observed_at: 2026-05-13T22:10:18Z
+        source: "chat from signer/operator"
+        summary: "Human sent bot(s) to a meeting, spoke, and transcript appeared."
+      notes: "Signed by human in chat: bot(s) were sent to a meeting, human spoke, and transcript appeared. Machine validated transcript pipeline and transcription SSOT."
+
+    - id: compose-recording-playback-full-duration
+      human_gate_class: required_for_develop_human
+      mode: compose
+      human_does: "After the fresh meeting stops, or using another completed multi-chunk meeting, open the recording in compose and play/scrub it."
+      human_confirms: "Playback uses the full expected duration, is audible, and does not truncate to the first chunk."
+      ai_observes: "Meeting API response has recording.playback_url; no dashboard media-selection or playback errors appear in logs."
+      approved: false
+      signed_by: ""
+      signed_at: ""
+      machine_validation:
+        status: passed
+        evidence:
+          - "tests3/.state-compose/reports/compose/dashboard-recording-playback-ready.json: DASHBOARD_COMPLETED_RECORDING_PLAYBACK_READY and LOCAL_HUMAN_BROWSER_HANDOFF_ENDPOINTS_SSOT pass for meeting 10099."
+          - "Direct proxy probe for recording 766276821980 returned HTTP 206 with Content-Range bytes 0-1023/2636416 through the dashboard same-origin proxy."
+      notes: "Machine proof is green after canonical raw_url proxy fix. Human still needs the sensory playback/scrub judgment before this item can be approved."
+
+    - id: compose-recording-finalizing-state
+      human_gate_class: sampled_or_risk_accepted
+      mode: compose
+      human_does: "Open the fresh meeting detail page immediately after stop while finalization is still in flight."
+      human_confirms: "The UI shows an explicit finalizing state first, then becomes playable without a broken or blank player."
+      ai_observes: "Finalizer logs progress; recording.playback_url appears after master finalization."
+      approved: false
+      signed_by: ""
+      signed_at: ""
+      machine_validation:
+        status: passed_static
+        evidence:
+          - "tests3/.state-compose/reports/compose/recording-finalizing-state.json: DASHBOARD_RENDERS_FINALIZING_STATE_ON_NULL_PLAYBACK_URL pass."
+      notes: "Machine static proof passes; runtime human sampling remains optional/risk-accepted."
+
+    - id: compose-voice-agent-camera
+      human_gate_class: sampled_or_risk_accepted
+      mode: compose
+      human_does: "Dispatch a bot with `voice_agent_enabled=true` in a real meeting."
+      human_confirms: "The bot's virtual camera initializes and the meeting experience matches the intended voice-agent behavior."
+      ai_observes: "Bot logs contain no camera initialization warning/failure shape."
+      approved: false
+      signed_by: ""
+      signed_at: ""
+      machine_validation:
+        status: passed_static
+        evidence:
+          - "tests3/.state-compose/reports/compose/v0.10.6.1-static-greps.json: BOT_CONFIG_CAMERA_ENABLED_WHEN_VOICE_AGENT pass."
+      notes: "Machine static proof passes; live camera behavior remains sampled/risk-accepted."
+
+    - id: compose-teams-continue-without-av
+      human_gate_class: sampled_or_risk_accepted
+      mode: compose
+      human_does: "Dispatch a Teams bot to a meeting where the Continue-without-AV modal appears."
+      human_confirms: "The modal is dismissed and the bot proceeds into the meeting normally."
+      ai_observes: "Teams join logs show the modal handler path and no admission timeout."
+      approved: false
+      signed_by: ""
+      signed_at: ""
+      machine_validation:
+        status: passed
+        evidence:
+          - "tests3/.state-compose/reports/compose/v0.10.6.1-teams-modal-modal_dismissed.json: TEAMS_CONTINUE_NO_AV_MODAL_DISMISSED pass."
+      notes: "Machine proof passes; live Teams fixture remains sampled/risk-accepted."
+
+    - id: compose-gmeet-host-not-started-fast-fail
+      human_gate_class: sampled_or_risk_accepted
+      mode: compose
+      human_does: "Dispatch a GMeet bot to a meeting whose host has not started."
+      human_confirms: "The bot exits with a clear classified failure quickly instead of hanging through the old timeout."
+      ai_observes: "Logs show host-not-started classification within the expected window."
+      approved: false
+      signed_by: ""
+      signed_at: ""
+      machine_validation:
+        status: passed
+        evidence:
+          - "tests3/.state-compose/reports/compose/v0.10.6.1-gmeet-fast-fail-rejection_under_30s.json: GMEET_REJECTION_PAGE_FAST_FAIL_UNDER_30S pass."
+          - "tests3/.state-compose/reports/compose/v0.10.6.1-gmeet-fast-fail-eviction_retry_or_fail_clean.json: GMEET_WAITING_ROOM_EVICTION_RETRY_OR_FAIL_CLEAN pass."
+      notes: "Machine proof passes; live host-not-started sampling remains optional/risk-accepted."
+
+    - id: compose-byo-tts-speak-audible
+      human_gate_class: required_for_develop_human
+      mode: compose
+      human_does: "Run `/speak` or the dashboard speak flow into a real meeting with phrase: This is the Vexa human gate audio check."
+      human_confirms: "The phrase is actually heard in the meeting and does not sound like silence/corruption."
+      ai_observes: "TTS and bot playback logs show successful synthesis/playback without response-format errors."
+      approved: true
+      signed_by: "dmitry@vexa.ai"
+      signed_at: "2026-05-13T22:15:41Z"
+      machine_validation:
+        status: passed_machine_audio_path
+        evidence:
+          - "tests3/.state-compose/reports/compose/walkability-smoke-compose.json: WALKABILITY_TTS_SPEAK_ROUND_TRIP pass."
+          - "tests3/.state-compose/reports/compose/v0.10.6.1-speak-e2e-speak_delivers_audio.json: BOT_SPEAK_DELIVERS_AUDIO_TO_MEETING pass for static path + runtime 202; audible-audio remains human sensory judgment."
+          - "tests3/.state-compose/reports/compose/v0.10.6.1-static-greps.json: BOT_SPEAK_HONORS_PROVIDER_PARAM pass."
+      human_observation:
+        observed_at: 2026-05-13T22:10:18Z
+        source: "chat from signer/operator"
+        summary: "Human checked the speak window and reported it worked."
+      notes: "Signed by human in chat: speak window was checked and worked. Machine validated TTS generation/dispatch path."
+
+sign:
+  stage: develop-human
+  signer: ""
+  signed_at: ""
+  attestation_confirmed:
+    doc_still_describes_reality: false
+    local_validation_green: false
+    local_human_checklist_walked: false
+    i_authored_any_new_prose: false
+  signed_artefact:
+    path: tests3/releases/260508-v0.10.6.1/local-human-checklist.yaml
+    revision: ""
+    git_sha: ""
+  rationale_in_my_own_words:
+    what_we_are_doing: |
+    why_right_call_given_current_state: |
+    what_im_uncertain_about_and_what_would_change_my_mind: |
+  notes_since_prior_sign: |

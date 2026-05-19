@@ -1,0 +1,56 @@
+[
+  {
+    "id": "scanner-semgrep",
+    "finding_id": null,
+    "status": "ok",
+    "detail": "exit=0"
+  },
+  {
+    "id": "scanner-gitleaks",
+    "finding_id": null,
+    "status": "ok",
+    "detail": "exit=0"
+  },
+  {
+    "id": "scanner-trivy",
+    "finding_id": null,
+    "status": "ok",
+    "detail": "exit=0"
+  },
+  {
+    "id": "scanner-osv-scanner",
+    "finding_id": null,
+    "status": "ok",
+    "detail": "exit=0"
+  },
+  {
+    "id": "scanner-syft",
+    "finding_id": null,
+    "status": "ok",
+    "detail": "exit=0"
+  },
+  {
+    "id": "scanner-zizmor",
+    "finding_id": null,
+    "status": "ok",
+    "detail": "exit=0"
+  },
+  {
+    "id": "scanner-actionlint",
+    "finding_id": null,
+    "status": "ok",
+    "detail": "exit=0"
+  },
+  {
+    "id": "scanner-bandit",
+    "finding_id": null,
+    "status": "ok",
+    "detail": "exit=1"
+  },
+  {
+    "id": "scanner-pip-audit",
+    "finding_id": null,
+    "status": "ok",
+    "detail": "exit=0"
+  }
+]

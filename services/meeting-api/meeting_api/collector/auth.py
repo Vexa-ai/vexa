@@ -10,6 +10,11 @@ logger = logging.getLogger(__name__)
 
 INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET", "")
 DEV_MODE = os.getenv("DEV_MODE", "false").lower() == "true"
+_WEAK_PRODUCTION_SECRETS = {"changeme", "vexa-internal-secret", "vexa-admin-token", "vexa-dev-jwt-secret"}
+
+
+def _is_production() -> bool:
+    return os.getenv("VEXA_ENV", "development").lower() == "production"
 
 
 async def get_current_user(request: Request) -> UserProxy:
@@ -37,6 +42,11 @@ async def require_internal_secret(request: Request) -> None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="INTERNAL_API_SECRET not configured",
+        )
+    if _is_production() and INTERNAL_API_SECRET in _WEAK_PRODUCTION_SECRETS:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="INTERNAL_API_SECRET is not safely configured",
         )
     if INTERNAL_API_SECRET:
         provided = request.headers.get("X-Internal-Secret", "")

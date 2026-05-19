@@ -31,7 +31,6 @@ class Meeting(Base):
 
     transcriptions = relationship("Transcription", back_populates="meeting")
     sessions = relationship("MeetingSession", back_populates="meeting", cascade="all, delete-orphan")
-    recordings = relationship("Recording", back_populates="meeting", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index('ix_meeting_user_platform_native_id_created_at',
@@ -100,46 +99,9 @@ class MeetingSession(Base):
     )
 
 
-class Recording(Base):
-    __tablename__ = "recordings"
-
-    id = Column(Integer, primary_key=True, index=True)
-    meeting_id = Column(Integer, ForeignKey("meetings.id"), nullable=True, index=True)
-    user_id = Column(Integer, nullable=False, index=True)
-    session_uid = Column(String, nullable=True, index=True)
-    source = Column(String(50), nullable=False, default='bot')
-    status = Column(String(50), nullable=False, default='in_progress', index=True)
-    error_message = Column(Text, nullable=True)
-    created_at = Column(DateTime, server_default=func.now(), index=True)
-    completed_at = Column(DateTime, nullable=True)
-
-    meeting = relationship("Meeting", back_populates="recordings")
-    media_files = relationship("MediaFile", back_populates="recording", cascade="all, delete-orphan")
-
-    __table_args__ = (
-        Index('ix_recording_meeting_session', 'meeting_id', 'session_uid'),
-        Index('ix_recording_user_created', 'user_id', 'created_at'),
-    )
-
-
-class MediaFile(Base):
-    __tablename__ = "media_files"
-
-    id = Column(Integer, primary_key=True, index=True)
-    recording_id = Column(Integer, ForeignKey("recordings.id"), nullable=False, index=True)
-    type = Column(String(50), nullable=False)
-    format = Column(String(20), nullable=False)
-    storage_path = Column(String(1024), nullable=False)
-    storage_backend = Column(String(50), nullable=False, default='minio')
-    file_size_bytes = Column(Integer, nullable=True)
-    duration_seconds = Column(Float, nullable=True)
-    extra_metadata = Column(
-        "metadata", JSONB, nullable=False,
-        server_default=text("'{}'::jsonb"), default=lambda: {},
-    )
-    created_at = Column(DateTime, server_default=func.now())
-
-    recording = relationship("Recording", back_populates="media_files")
+# v0.10.6.1 — Recording and MediaFile ORM models removed. Recording
+# metadata is stored exclusively in meeting.data['recordings'] (JSONB);
+# the relational tables are being dropped by migration m331.
 
 
 class CalendarEvent(Base):

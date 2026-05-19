@@ -144,4 +144,5 @@ EXPOSE 6080 22
 WORKDIR /app/vexa-bot/core
 
 # Run entrypoint
+# nosemgrep: dockerfile.security.missing-user.missing-user - Browser-session mode intentionally starts sshd/Xvfb/noVNC as root; storage is permission-bounded and this remains a tracked accepted risk.
 CMD ["/app/vexa-bot/entrypoint.sh"]

@@ -23,8 +23,19 @@
 # Requires: bash, curl, jq (or python3), netcat.
 set -uo pipefail
 
-: "${BASE:=http://localhost:8056}"
-: "${ADMIN_TOKEN:=changeme}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+: "${STATE:=$ROOT/tests3/.state}"
+: "${MODE:=$(cat "$STATE/deploy_mode" 2>/dev/null || echo local)}"
+: "${BASE:=$(cat "$STATE/gateway_url" 2>/dev/null || echo http://localhost:8056)}"
+: "${ADMIN_TOKEN:=$(cat "$STATE/admin_token" 2>/dev/null || echo changeme)}"
+if [ -z "${INTERNAL_API_SECRET:-}" ] && command -v docker >/dev/null 2>&1; then
+    case "$MODE" in
+        compose) INTERNAL_API_SECRET="$(docker exec vexa-meeting-api-1 printenv INTERNAL_API_SECRET 2>/dev/null || true)" ;;
+        lite) INTERNAL_API_SECRET="$(docker exec vexa-lite printenv INTERNAL_API_SECRET 2>/dev/null || true)" ;;
+    esac
+fi
+: "${INTERNAL_API_SECRET:=}"
 
 # ─── Internal helpers ──────────────────────────────────────────────
 
@@ -37,6 +48,10 @@ _rig_jq() {
 
 rig_get_user_token() {
     # Issue a fresh token for the default test user (bot+browser+tx scopes).
+    if [ -s "$STATE/api_token" ]; then
+        cat "$STATE/api_token"
+        return 0
+    fi
     curl -sf -X POST "$BASE/admin/users/1/tokens?scopes=bot,browser,tx&name=synthetic-rig" \
         -H "X-Admin-API-Key: $ADMIN_TOKEN" | _rig_jq 'd["token"]'
 }
@@ -79,6 +94,7 @@ rig_session_bootstrap() {
         body=$(printf '{"meeting_id": %s}' "$meeting_id")
     fi
     curl -sf -X POST "$BASE/bots/internal/test/session-bootstrap" \
+        -H "X-Internal-Secret: $INTERNAL_API_SECRET" \
         -H "Content-Type: application/json" \
         -d "$body" | _rig_jq 'd["session_uid"]'
 }
@@ -105,6 +121,7 @@ rig_callback() {
     local body
     body="{\"connection_id\": \"$session_uid\"$extra}"
     curl -sf -X POST "$BASE/bots/internal/callback/$endpoint" \
+        -H "X-Internal-Secret: $INTERNAL_API_SECRET" \
         -H "Content-Type: application/json" \
         -d "$body"
 }
@@ -210,6 +227,51 @@ rig_drive_to_active() {
     sleep 1
 }
 
+rig_seed_transcription() {
+    # Insert synthetic transcript rows directly into the active local DB.
+    # Synthetic scenarios use dry_run meetings, so there is no collector
+    # pipeline to create segments naturally; the classifier only needs a
+    # positive transcription count for the meeting.
+    local meeting_id=$1
+    local count=${2:-1}
+    local pg_container="vexa-postgres-1"
+    if [ "$MODE" = "lite" ]; then
+        pg_container="vexa-lite-postgres"
+    fi
+
+    docker exec -i "$pg_container" psql -U postgres -d vexa -v ON_ERROR_STOP=1 >/dev/null <<SQL
+WITH sess AS (
+    SELECT session_uid
+    FROM meeting_sessions
+    WHERE meeting_id = ${meeting_id}
+    ORDER BY id
+    LIMIT 1
+)
+INSERT INTO transcriptions (
+    meeting_id,
+    start_time,
+    end_time,
+    text,
+    speaker,
+    language,
+    session_uid,
+    segment_id,
+    created_at
+)
+SELECT
+    ${meeting_id},
+    gs::double precision,
+    (gs + 1)::double precision,
+    'synthetic transcript segment ' || gs::text,
+    'Synthetic Speaker',
+    'en',
+    (SELECT session_uid FROM sess),
+    'synthetic-' || ${meeting_id}::text || '-' || gs::text,
+    NOW()
+FROM generate_series(1, ${count}) AS gs
+SQL
+}
+
 # ─── Race / parallel primitives (v0.10.6 tier-1 entropy) ──────────
 
 rig_parallel() {
@@ -223,7 +285,7 @@ rig_parallel() {
     #   # final state must be deterministic regardless of arrival order
     local pids=() max_rc=0
     for cmd in "$@"; do
-        bash -c "$cmd" &
+        eval "$cmd" &
         pids+=($!)
     done
     for pid in "${pids[@]}"; do

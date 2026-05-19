@@ -16,11 +16,15 @@ ENV PATH="/system/bin:$PATH"
 # Workspace templates (copied into /workspace on first init)
 COPY features/knowledge-workspace/templates/knowledge/ /templates/knowledge/
 
+WORKDIR /workspace
+
+RUN useradd --create-home --uid 10001 appuser \
+    && chown -R appuser:appuser /workspace /templates
+USER appuser
+
 # Git config for auto-commits
 RUN git config --global user.email "vexa@agent" && \
     git config --global user.name "Vexa Agent"
-
-WORKDIR /workspace
 
 # Container stays alive for docker exec
 CMD ["sleep", "infinity"]

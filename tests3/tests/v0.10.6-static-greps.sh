@@ -36,7 +36,9 @@ test_begin v0.10.6-static-greps
 # Speaker detection + popup dismissal stays platform-specific.
 declare -A budgets=(
   [googlemeet]=800
-  [msteams]=1000
+  # Teams carries caption-driven routing plus the captionless blue-square
+  # fallback required for tenants that withhold captions from bots.
+  [msteams]=1100
   ["zoom/web"]=200
 )
 budget_bad=""
@@ -337,6 +339,21 @@ else
   else
     step_fail DASHBOARD_MEETINGS_PAGINATION_TRACKS_UNFILTERED_OFFSET "missing/regressed:$pag_bad"
   fi
+fi
+
+# ── HELM_LKE_SETUP_EXPOSES_MINIO_NODEPORT ─────────────────────────
+# Browser audio playback needs presigned URLs that point at a browser-reachable
+# MinIO endpoint on LKE. The setup script must wire both sides together:
+# expose MinIO as a fixed NodePort and set meetingApi.minioPublicEndpoint.
+lke_setup="$ROOT_DIR/tests3/lib/lke-setup-helm.sh"
+if [ ! -f "$lke_setup" ]; then
+  step_fail HELM_LKE_SETUP_EXPOSES_MINIO_NODEPORT "tests3/lib/lke-setup-helm.sh missing"
+elif grep -q 'minio.service.type=NodePort' "$lke_setup" \
+  && grep -q 'minio.service.nodePort=' "$lke_setup" \
+  && grep -q 'meetingApi.minioPublicEndpoint=' "$lke_setup"; then
+  step_pass HELM_LKE_SETUP_EXPOSES_MINIO_NODEPORT "lke setup exposes MinIO NodePort and wires meetingApi.minioPublicEndpoint"
+else
+  step_fail HELM_LKE_SETUP_EXPOSES_MINIO_NODEPORT "lke setup does not wire MinIO NodePort + meetingApi.minioPublicEndpoint"
 fi
 
 echo ""

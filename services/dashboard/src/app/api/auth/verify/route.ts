@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import jwt from "jsonwebtoken";
 import { getRegistrationConfig, validateEmailForRegistration } from "@/lib/registration";
 import { findUserByEmail, createUser, createUserToken, type ApiError } from "@/lib/vexa-admin-api";
+import { getAuthCookieName, getUserInfoCookieName } from "@/lib/auth-cookies";
 
 function isSecureRequest(): boolean {
   return process.env.NEXTAUTH_URL?.startsWith("https://") ||
@@ -186,7 +187,7 @@ export async function POST(request: NextRequest) {
 
     // Step 5: Set token in HTTP-only cookie
     const cookieStore = await cookies();
-    cookieStore.set("vexa-token", apiToken, {
+    cookieStore.set(getAuthCookieName(), apiToken, {
       httpOnly: true,
       secure: isSecureRequest(),
       sameSite: "lax",
@@ -194,7 +195,7 @@ export async function POST(request: NextRequest) {
       path: "/",
     });
     // Set user-info cookie so getAuthenticatedUserId can resolve the user
-    cookieStore.set("vexa-user-info", JSON.stringify({ email: user!.email, name: user!.name }), {
+    cookieStore.set(getUserInfoCookieName(), JSON.stringify({ email: user!.email, name: user!.name }), {
       httpOnly: true,
       secure: isSecureRequest(),
       sameSite: "lax",

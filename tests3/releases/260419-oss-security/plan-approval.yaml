@@ -222,7 +222,7 @@ registry_changes_approved:
     rationale: |
       Static check: the CDP proxy rewrite path (~main.py:1824) must
       derive the outgoing ws scheme from the request, not hard-code
-      ws://. Either `request.url.scheme` or `X-Forwarded-Proto`
+      a plaintext WebSocket scheme. Either `request.url.scheme` or `X-Forwarded-Proto`
       substring presence in main.py is sufficient evidence.
     approved: true
 
