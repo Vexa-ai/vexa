@@ -1,83 +1,91 @@
-# Vexa v0.10.4 — Zoom Web bot
+# Vexa v0.10.6.1 - recording trust, meeting actions, lifecycle hotfix
 
-**Release date:** 2026-04-27
-**Cycle:** `260426-zoom`
-**Highlight:** Zoom support via the official Zoom **Web Client** (no proprietary SDK required).
+Release date: 2026-05-19
 
----
+This is a focused hotfix release. It restores trust in completed-meeting
+playback, live meeting actions, bot lifecycle convergence, and
+billing-sensitive post-meeting completion hooks without changing public webhook
+contracts.
 
-## What's new
+## Highlights
 
-### 🎯 Zoom Web is the bot's default join path
+### Recording playback is canonical again
 
-Spawn a Zoom bot with the same API as Google Meet / MS Teams — **no Zoom SDK credentials, no special configuration**:
+- Multi-chunk recordings now finalize into one canonical master recording
+  instead of letting dashboard playback stop at the first chunk.
+- `playback_url` in `meeting.data` is the source of truth for dashboard audio
+  and video playback.
+- Bot-exit finalization runs before terminal status flips, closing the race
+  where a completed meeting could point at stale or partial recording data.
+- The dead relational `recordings` / `media_files` read path was removed after
+  archive/restore tooling was added for rollback discipline.
 
-```bash
-curl -X POST $GATEWAY/bots \
-  -H "X-API-Key: $TOKEN" -H "Content-Type: application/json" \
-  -d '{"platform":"zoom","native_meeting_id":"89164742472","passcode":"abc123","bot_name":"Vexa"}'
-```
+### Live meeting actions are back on the production-shaped path
 
-The bot opens `app.zoom.us/wc/`, fills the name, joins audio, sits through the waiting room if any, and starts publishing transcript segments — same flow as our other platforms.
+- `/speak` and TTS playback were revalidated through the same bot command path
+  used by live meetings.
+- TTS language auto-detection was verified for English, Spanish, Russian, and
+  Japanese, including warm-cache behavior.
+- Teams can continue through the "without AV" join path.
+- Voice-agent mode no longer implicitly turns on the bot camera/avatar.
+  `camera_enabled` is now an explicit opt-in.
+- Bot acceptance signals are persisted into `meeting.data` so operator review
+  can distinguish admission, roster visibility, audio route, speaker signal,
+  captions, and camera capability.
 
-> **Migration note:** previously, `platform=zoom` routed to the native Zoom SDK path (which required `ZOOM_CLIENT_ID` + `ZOOM_CLIENT_SECRET`). That path is still available but is now **opt-in** via `ZOOM_SDK=true`. Operators using only Web don't need to do anything; the legacy `ZOOM_WEB=true` env-var is also still honoured for backward-compat. Wave 3 will retire both env-vars in favour of an explicit `platform: zoom_sdk` enum value.
+### Lifecycle and billing hooks are idempotent
 
-### 🚀 4× CPU reduction per Zoom bot
+- Browser-session DELETE now converges to terminal meeting state instead of
+  leaving sessions stuck in `stopping`.
+- Internal post-meeting completion hooks claim an outbound-event ledger entry
+  before sending, with stable event IDs and retry metadata.
+- Public webhook payloads, event names, and HMAC behavior stay compatible.
+- No new database column was introduced for the post-meeting hook latch; the
+  claim state lives in existing `meeting.data`.
 
-A single Chromium flag — `--in-process-gpu` — collapses the gpu-process work into the renderer. Measured on this release's smoke matrix:
+### Public artifact shape
 
-| | Before | After |
-|---|--:|--:|
-| Total CPU per Zoom bot | ~440% | **~115%** |
-| GPU process | 357% (SwiftShader software-WebGL) | **gone** |
-| K8s `cpu_limit` budget | 4000m (emergency bump) | **1500m** (original p95-based) |
+- Public image tag: `0.10.6.1-260519-2028`.
+- GitHub PR: [#331](https://github.com/Vexa-ai/vexa/pull/331).
+- Included images:
+  `api-gateway`, `admin-api`, `runtime-api`, `meeting-api`, `mcp`,
+  `dashboard`, `tts-service`, `vexa-lite`, and `vexa-bot`.
+- `agent-api` remains no-ship for v0.10.x and is intentionally excluded from
+  public promotion loops.
 
-Bot density per node tripled. No transcription quality regressions. Audio + chat + admission all unaffected.
+## Validation
 
-### 🛠 Bug fixes
+- Local meeting-api tests: `268 passed, 10 skipped`.
+- Local API-gateway tests: `90 passed, 4 skipped`.
+- Final LKE smoke on `0.10.6.1-260519-2028`: `46/46` report JSON files pass.
+- PR checks are green: unit/integration jobs, transcript rendering, CodeQL, and
+  GitGuardian.
+- Human validation:
+  - `/speak` was heard clearly in a live Teams meeting.
+  - transcript quality replacement samples passed.
+  - dashboard playback and transcript sync passed with caveats.
+  - bot join/acceptance and dashboard stop behavior passed.
+  - manual latency was accepted after input-quality caveat review.
 
-- **Chat persistence race** (cycle-scope, all platforms) — DELETE-vs-exit-callback race was leaving chat messages stranded in Redis. Removed the early-exit guard so chat flushes regardless of status-update outcome.
-- **Awaiting-admission false positive** (Zoom Web) — the `isAdmitted()` waiting-room exclusion was firing too late; bots were reporting `active` while still in the Zoom waiting room. Fixed by checking waiting-room text before the weaker fallbacks.
-- **Web-as-default dispatch** (Zoom) — the bot's index.ts no longer requires `ZOOM_WEB=true` to route to the Web client.
-- **CPU resource budget restored** — the temporary 4000m/2500m bump that was needed before `--in-process-gpu` is reverted to the original 1500m/1000m. Helm chart + compose `runtime-api/profiles.yaml` both updated.
+## Known caveats carried forward
 
----
+- [#318](https://github.com/Vexa-ai/vexa/issues/318) - Zoom Web can still show
+  zero-VAD/no-transcript behavior when audio is joined but Zoom no longer
+  exposes the expected DOM audio stream surface.
+- [#339](https://github.com/Vexa-ai/vexa/issues/339) - Zoom Web audio-join
+  confirmation can fail after the toolbar appears joined, causing
+  `needs_human_help` and zero transcripts.
 
-## Helm chart
+Both caveats were observed as pre-existing Zoom Web reliability surfaces rather
+than v0.10.6.1 regressions. Teams and Google Meet validation passed for the
+hotfix behaviors in this release.
 
-- **Chart version:** `0.10.4` (was `0.10.3`)
-- **App version:** `0.10.4`
-- Fetch the packaged chart from the GitHub release artifacts.
+## Upgrade notes
 
-```bash
-helm install vexa oci://... --version 0.10.4
-# or, from the GitHub release tarball:
-helm install vexa ./vexa-0.10.4.tgz
-```
-
----
-
-## Validation summary
-
-Smoke matrix run across **all three modes** (compose / lite / helm) on Linode:
-
-| Mode | Tests | Pass | Notes |
-|---|--:|--:|---|
-| compose | 11 | 9 | 2 pre-existing infra failures (chart-version drift #228, dashboard API-key staleness) — not blocking |
-| lite | 10 | 7 | same pre-existing + flaky e2e_completion timing |
-| helm | 12 | 9 | same pre-existing + flaky webhook inject timing on cold cluster |
-
-All in-scope claims for `260426-zoom` (`BOT_CREATE_OK`, `BOT_STATUS_TRANSITIONS`, `SEGMENT_PIPELINE`, `ZOOM_WEB_AUDIO_RESEARCH_NOTE_EXISTS`) ✅ green.
-
----
-
-## Carried forward to Wave 2
-
-- Full incoming-video disable on Zoom Web (decoder shutdown via SDP-munge or transceiver-direction trick — five attempts in this cycle made progress but didn't fully land; `--in-process-gpu` mooted the urgency).
-- Zoom Web platform-enum split (`zoom` → Web, `zoom_sdk` → SDK direct routing both sides; retire `ZOOM_WEB`/`ZOOM_SDK` env-vars).
-- `meeting-tts-zoom` tier-meeting test.
-- Three Zoom-specific DoDs under `realtime-transcription/zoom`.
-
----
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
+- For Kubernetes/Helm deployments, pin service images with
+  `global.imageTag=0.10.6.1-260519-2028` and set the bot image to
+  `vexaai/vexa-bot:0.10.6.1-260519-2028`.
+- For compose/lite users, use images from the same immutable tag or the
+  promoted release tag once the release promotion step completes.
+- Keep existing webhook consumers unchanged; public webhook contract
+  compatibility is part of the release guarantee.
