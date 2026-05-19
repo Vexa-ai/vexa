@@ -51,6 +51,7 @@ import { BotStatusIndicator, BotFailedIndicator } from "@/components/meetings/bo
 import { WsEventLog, RestTranscriptsPreview, RestRecordingsPreview } from "@/components/meetings/ws-event-log";
 // ChatPanel removed — chat messages now render inline in TranscriptViewer
 import { AIChatPanel } from "@/components/ai";
+import { AiNotesCard } from "@/components/ai/ai-notes-card";
 import { useMeetingsStore } from "@/stores/meetings-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { useLiveTranscripts } from "@/hooks/use-live-transcripts";
@@ -733,6 +734,22 @@ export default function MeetingDetailPage() {
       setIsSavingNotes(false);
     }
   }, [currentMeeting, editedNotes, isSavingNotes, updateMeetingData]);
+
+  // Handle regenerating AI notes (Phase 1 MVP)
+  const handleRegenerateNotes = useCallback(async () => {
+    if (!currentMeeting) return;
+    try {
+      // Proxy through dashboard → meeting-api /internal/meetings/{id}/ai-notes
+      const resp = await fetch(`/api/vexa/internal/meetings/${currentMeeting.id}/ai-notes`, {
+        method: "POST",
+      });
+      if (!resp.ok) throw new Error("Regeneration failed");
+      toast.success("AI notes regenerated");
+      await loadMeeting(currentMeeting.platform, currentMeeting.platform_specific_id);
+    } catch (err) {
+      toast.error("Failed to regenerate AI notes");
+    }
+  }, [currentMeeting]);
 
   // Handle setting cursor to end when textarea is focused
   const handleNotesFocus = useCallback((e: React.FocusEvent<HTMLTextAreaElement>) => {
@@ -2052,6 +2069,13 @@ export default function MeetingDetailPage() {
               )}
             </CardContent>
           </Card>
+
+          {/* AI Notes (Phase 1 MVP) */}
+          <AiNotesCard
+            meetingData={currentMeeting.data}
+            meetingStatus={currentMeeting.status}
+            onRegenerate={handleRegenerateNotes}
+          />
 
           {/* TTS - Speak in Meeting */}
           {(currentMeeting.status === "active" || currentMeeting.status === "joining") && (

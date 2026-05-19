@@ -366,6 +366,17 @@ async def run_all_tasks(meeting_id: int):
     except Exception as e:
         logger.error(f"Post-meeting hooks failed for meeting {meeting_id}: {e}", exc_info=True)
 
+    # Task 4 (Phase 1 MVP): Generate AI post-meeting notes
+    try:
+        from .meeting_intelligence import generate_ai_notes
+        result = await generate_ai_notes(meeting_id)
+        if result:
+            logger.info(f"[Post-meeting] Task 4: AI notes generated for meeting {meeting_id}")
+        else:
+            logger.info(f"[Post-meeting] Task 4: AI notes skipped for meeting {meeting_id}")
+    except Exception as e:
+        logger.error(f"AI notes generation failed for meeting {meeting_id}: {e}", exc_info=True)
+
     logger.info(f"Post-meeting tasks completed for meeting {meeting_id}")
 
 

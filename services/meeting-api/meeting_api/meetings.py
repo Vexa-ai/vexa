@@ -2088,3 +2088,31 @@ async def transcribe_meeting(
         segment_count=stored,
         message=f"Transcribed {stored} segments from recording ({len(speakers)} speakers: {', '.join(speakers)})",
     )
+
+
+# ---------------------------------------------------------------------------
+# AI Notes (Phase 1 MVP)
+# ---------------------------------------------------------------------------
+
+@router.post("/internal/meetings/{meeting_id}/ai-notes")
+async def regenerate_ai_notes(meeting_id: int, db: AsyncSession = Depends(get_db)):
+    """Regenerate AI notes for a completed meeting.
+
+    Endpoint: POST /internal/meetings/{meeting_id}/ai-notes
+    Requires: user authentication
+    """
+    from .meeting_intelligence import generate_ai_notes
+
+    meeting = await db.get(Meeting, meeting_id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    if meeting.status not in ("completed", "failed"):
+        raise HTTPException(status_code=400, detail="AI notes can only be generated for completed or failed meetings")
+
+    result = await generate_ai_notes(meeting_id)
+
+    return {
+        "success": result,
+        "message": "AI notes generated successfully" if result else "AI notes generation skipped (no transcripts or AI not configured)",
+    }
