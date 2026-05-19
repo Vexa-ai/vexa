@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUserId } from "@/lib/auth-utils";
 
 const getAdminConfig = () => {
-  const VEXA_ADMIN_API_URL = process.env.VEXA_ADMIN_API_URL || "";
+  const VEXA_ADMIN_API_URL =
+    process.env.VEXA_ADMIN_API_URL ||
+    process.env.VEXA_API_URL ||
+    "http://localhost:18056";
   const VEXA_ADMIN_API_KEY = process.env.VEXA_ADMIN_API_KEY || "";
   return { VEXA_ADMIN_API_URL, VEXA_ADMIN_API_KEY };
 };

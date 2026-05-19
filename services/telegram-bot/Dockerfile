@@ -9,8 +9,4 @@ COPY services/telegram-bot/bot.py .
 
 EXPOSE 8200
 
-RUN useradd --create-home --uid 10001 appuser \
-    && chown -R appuser:appuser /app
-USER appuser
-
 CMD ["python", "bot.py"]

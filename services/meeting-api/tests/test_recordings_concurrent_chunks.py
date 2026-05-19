@@ -44,6 +44,8 @@ covers that surface in production traffic.
 from __future__ import annotations
 
 import asyncio
+import ast
+import inspect
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -77,15 +79,104 @@ class MockResult(_BaseMockResult):
 
 
 # ───────────────────────────────────────────────────────────────────────
-# Test 1 (REMOVED in v0.10.6.1): the prior `use_meeting_data` AST-walker
-# scanned for an `if use_meeting_data:` branch that no longer exists —
-# v0.10.6.1 dropped the relational `Recording`/`MediaFile` ORM tables
-# and the `RECORDING_METADATA_MODE` toggle, making the JSONB write the
-# only path. The runtime concurrency tests (2 + 3 below) still exercise
-# the lock-before-snapshot invariant end-to-end via _StatefulMockDB; the
-# AST guard was scaffolding for the toggled branch and has no signal
-# left to assert on.
+# Test 1 — static assertion: lock is acquired BEFORE snapshot.
+#
+# This test parses the source of internal_upload_recording and asserts
+# that within the `if use_meeting_data:` branch, the SELECT … FOR
+# UPDATE call appears textually BEFORE the first re-derivation of
+# meeting_data_dict / recordings_list. Catches the v1-shape regression
+# without needing any database. Cheap, fast, deterministic.
 # ───────────────────────────────────────────────────────────────────────
+
+
+def test_lock_acquired_before_snapshot_in_source():
+    """The Pack E.1.a v2 invariant: SELECT FOR UPDATE BEFORE snapshot.
+
+    If this fails, someone has reintroduced the stale-snapshot race
+    flagged by [PLATFORM] in #272 issuecomment-4327366063. The v2
+    contract is explicit:
+
+      1. Phase 1 (no lock): load meeting, derive legacy_id for storage_path
+      2. Phase 2 (no lock): S3 upload (idempotent on key)
+      3. Phase 3 (LOCKED):  SELECT FOR UPDATE → re-snapshot → JSONB write
+
+    The static check below confirms phase 3's lock acquisition appears
+    before the first ``meeting.data`` snapshot DERIVATION inside the
+    meeting_data branch (the pre-lock snapshot at ~line 181 is a
+    storage_path helper only — not a JSONB write source).
+    """
+    src = inspect.getsource(recordings_module.internal_upload_recording)
+    tree = ast.parse(src)
+
+    # Find the `if use_meeting_data:` branch that owns the JSONB write.
+    # We want the LAST one (the JSONB-write block), since the function
+    # also has a `if use_meeting_data:` near the top for storage_path
+    # derivation that's structurally distinct.
+    target_if_node = None
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.If)
+            and isinstance(node.test, ast.Name)
+            and node.test.id == "use_meeting_data"
+            # The JSONB-write branch contains a `with_for_update` call;
+            # the storage_path branch does not.
+            and any(
+                "with_for_update" in ast.dump(child)
+                for child in ast.walk(node)
+            )
+        ):
+            target_if_node = node
+            break
+
+    assert target_if_node is not None, (
+        "could not locate the `if use_meeting_data:` block that contains "
+        "the with_for_update() call. The function shape has changed; "
+        "review services/meeting-api/meeting_api/recordings.py and update "
+        "this test."
+    )
+
+    # Walk the body in source order. Find the first `with_for_update`
+    # node and the first `meeting.data` access node. Lock must come
+    # first.
+    first_lock_lineno: int | None = None
+    first_data_access_lineno: int | None = None
+
+    for child in ast.walk(target_if_node):
+        # Find with_for_update() method calls
+        if (
+            first_lock_lineno is None
+            and isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Attribute)
+            and child.func.attr == "with_for_update"
+        ):
+            first_lock_lineno = child.lineno
+        # Find meeting.data attribute reads (ast.Attribute on Name=meeting)
+        # We're looking for the MeetingDataDict re-derivation: dict(meeting.data or {})
+        if (
+            first_data_access_lineno is None
+            and isinstance(child, ast.Attribute)
+            and child.attr == "data"
+            and isinstance(child.value, ast.Name)
+            and child.value.id == "meeting"
+        ):
+            first_data_access_lineno = child.lineno
+
+    assert first_lock_lineno is not None, (
+        "no with_for_update() call found inside the meeting_data branch — "
+        "Pack E.1.a v2 contract violated."
+    )
+    assert first_data_access_lineno is not None, (
+        "no meeting.data access found inside the meeting_data branch — "
+        "function shape unexpected; review test."
+    )
+    assert first_lock_lineno < first_data_access_lineno, (
+        f"REGRESSION (Pack E.1.a v2): SELECT FOR UPDATE at line "
+        f"{first_lock_lineno} must come BEFORE meeting.data access at "
+        f"line {first_data_access_lineno} inside the meeting_data write "
+        f"branch. The current shape has the lock AFTER the snapshot, "
+        f"reintroducing the race [PLATFORM] flagged in #272 "
+        f"(issuecomment-4327366063)."
+    )
 
 
 # ───────────────────────────────────────────────────────────────────────
@@ -202,6 +293,7 @@ async def test_sequential_audio_then_video_both_persist():
     fake_storage.upload_file = MagicMock(return_value=None)
 
     with patch.object(recordings_module, "get_storage_client", return_value=fake_storage), \
+         patch.object(recordings_module, "get_recording_metadata_mode", return_value="meeting_data"), \
          patch.object(recordings_module.attributes, "flag_modified", new=MagicMock()):
         # First upload: audio
         await recordings_module.internal_upload_recording(
@@ -254,6 +346,7 @@ async def test_concurrent_audio_video_no_lost_entry():
     fake_storage.upload_file = MagicMock(return_value=None)
 
     with patch.object(recordings_module, "get_storage_client", return_value=fake_storage), \
+         patch.object(recordings_module, "get_recording_metadata_mode", return_value="meeting_data"), \
          patch.object(recordings_module.attributes, "flag_modified", new=MagicMock()):
         # Fire both concurrently — the real prod shape that triggered
         # the original race report.

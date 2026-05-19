@@ -4,7 +4,6 @@
 # Reads local: .env (for TRANSCRIPTION_SERVICE_URL + TOKEN)
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
-source "$ROOT/tests3/lib/test-account.env"
 
 export KUBECONFIG=$(state_read lke_kubeconfig_path)
 NODE_IP=$(state_read lke_node_ip)
@@ -23,10 +22,6 @@ rm -f "$STATE/admin_token" "$STATE/api_token"
 TX_URL=$(grep -E '^TRANSCRIPTION_SERVICE_URL=' "$ROOT/.env" 2>/dev/null | cut -d= -f2- || echo "")
 TX_TOKEN=$(grep -E '^TRANSCRIPTION_SERVICE_TOKEN=' "$ROOT/.env" 2>/dev/null | cut -d= -f2- || echo "")
 IMAGE_TAG=$(grep -E '^IMAGE_TAG=' "$ROOT/.env" 2>/dev/null | cut -d= -f2- || echo "")
-BROWSER_IMAGE=$(grep -E '^BROWSER_IMAGE=' "$ROOT/.env" 2>/dev/null | cut -d= -f2- || echo "")
-if [ -z "$BROWSER_IMAGE" ] && [ -n "$IMAGE_TAG" ]; then
-    BROWSER_IMAGE="vexaai/vexa-bot:$IMAGE_TAG"
-fi
 
 if [ -n "$TX_URL" ]; then
     pass ".env: TX_URL=${TX_URL:0:40}..."
@@ -35,9 +30,6 @@ else
 fi
 if [ -n "$IMAGE_TAG" ]; then
     info ".env: IMAGE_TAG=$IMAGE_TAG"
-fi
-if [ -n "$BROWSER_IMAGE" ]; then
-    info ".env: BROWSER_IMAGE=$BROWSER_IMAGE"
 fi
 
 # ── 2. Verify cluster reachable ──────────────────
@@ -69,15 +61,8 @@ HELM_ARGS=(
 )
 
 if [ -n "$IMAGE_TAG" ]; then
-    HELM_ARGS+=(--set-string "global.imageTag=$IMAGE_TAG")
+    HELM_ARGS+=(--set "global.imageTag=$IMAGE_TAG")
     info "using global.imageTag=$IMAGE_TAG"
-fi
-if [ -n "$BROWSER_IMAGE" ]; then
-    HELM_ARGS+=(
-        --set-string "meetingApi.botImageName=$BROWSER_IMAGE"
-        --set-string "runtimeApi.browserImage=$BROWSER_IMAGE"
-    )
-    info "using browser image=$BROWSER_IMAGE"
 fi
 
 if [ -n "$TX_URL" ]; then
@@ -172,19 +157,19 @@ info "bootstrapping credentials..."
 ADMIN_TOKEN=$(kubectl exec deploy/vexa-vexa-admin-api -- printenv ADMIN_API_TOKEN 2>/dev/null)
 
 # Find or create test user
-USER_ID=$(curl -sf "$GATEWAY_URL/admin/users/email/$TEST_ACCOUNT_EMAIL" \
+USER_ID=$(curl -sf "$GATEWAY_URL/admin/users/email/test@vexa.ai" \
     -H "X-Admin-API-Key: $ADMIN_TOKEN" 2>/dev/null | \
     python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
 
 if [ -z "$USER_ID" ]; then
-    # TEST_ACCOUNT_MAX_CONCURRENT_BOTS — helm test cluster supports concurrent multi-bot
+    # max_concurrent_bots=3 — helm test cluster supports concurrent multi-bot
     # validation (Pack U synthetic-rig dispatches 3 bots in parallel for
     # cross-platform smokes). Default admin-api would apply 0 (DB) → gateway
     # falls back to 1, which silently rate-limits multi-bot scenarios.
     USER_ID=$(curl -sf -X POST "$GATEWAY_URL/admin/users" \
         -H "X-Admin-API-Key: $ADMIN_TOKEN" \
         -H "Content-Type: application/json" \
-        -d "{\"email\":\"$TEST_ACCOUNT_EMAIL\",\"name\":\"$TEST_ACCOUNT_NAME\",\"max_concurrent_bots\":$TEST_ACCOUNT_MAX_CONCURRENT_BOTS}" 2>/dev/null | \
+        -d '{"email":"test@vexa.ai","name":"Test User","max_concurrent_bots":3}' 2>/dev/null | \
         python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
 fi
 # Ensure existing user (re-provision case) also has the right limit.
@@ -192,7 +177,7 @@ if [ -n "$USER_ID" ]; then
     curl -sf -X PATCH "$GATEWAY_URL/admin/users/$USER_ID" \
         -H "X-Admin-API-Key: $ADMIN_TOKEN" \
         -H "Content-Type: application/json" \
-        -d "{\"max_concurrent_bots\":$TEST_ACCOUNT_MAX_CONCURRENT_BOTS}" 2>/dev/null >/dev/null || true
+        -d '{"max_concurrent_bots":3}' 2>/dev/null >/dev/null || true
 fi
 
 API_TOKEN=""
@@ -201,7 +186,7 @@ if [ -n "$USER_ID" ]; then
         -H "X-Admin-API-Key: $ADMIN_TOKEN" 2>/dev/null | \
         python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || echo "")
     if [ -n "$API_TOKEN" ]; then
-        pass "API token: created for $TEST_ACCOUNT_EMAIL"
+        pass "API token: created for test@vexa.ai"
     else
         fail "could not create API token"
     fi

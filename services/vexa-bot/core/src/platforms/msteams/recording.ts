@@ -214,9 +214,6 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
             (window as any).logBot("Initializing Teams speaker detection...");
           }
 
-          let activeVoiceOutlineSpeaker: string | null = null;
-          let lastVoiceOutlineAt = 0;
-
           // Unified Teams speaker detection - NO FALLBACKS (signal-only approach)
           const initializeTeamsSpeakerDetection = (audioService: any, botConfigData: any) => {
             (window as any).logBot("Setting up ROBUST Teams speaker detection (NO FALLBACKS - signal-only)...");
@@ -438,11 +435,6 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
               }
               const identity = registry.getIdentity(element);
               (element as any).dataset.vexaObserverAttached = 'true';
-              (window as any).__vexaAcceptanceSignals = {
-                ...((window as any).__vexaAcceptanceSignals || {}),
-                speaker_signal_seen: true,
-                speaker_signal_observed_at: new Date().toISOString(),
-              };
               (window as any).logBot(`👁️ [Unified] Observing: ${identity.name} (ID: ${identity.id}) - signal present`);
               const voiceOutline = element.querySelector('[data-tid="voice-level-stream-outline"]') as HTMLElement;
               if (!voiceOutline) {
@@ -505,14 +497,6 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
               const eventType = state === 'speaking' ? 'SPEAKER_START' : 'SPEAKER_END';
               const emoji = state === 'speaking' ? '🎤' : '🔇';
               (window as any).logBot(`${emoji} [Unified] ${eventType}: ${identity.name} (ID: ${identity.id}) [signal-based]`);
-              if (state === 'speaking') {
-                activeVoiceOutlineSpeaker = identity.name;
-                lastVoiceOutlineAt = Date.now();
-                flushAudioQueueToSpeaker(identity.name, 'blue-square start', Date.now() - 2000);
-              } else if (activeVoiceOutlineSpeaker === identity.name) {
-                flushAudioQueueToSpeaker(identity.name, 'blue-square end');
-                activeVoiceOutlineSpeaker = null;
-              }
               sendTeamsSpeakerEvent(eventType, identity);
             }
 
@@ -600,37 +584,7 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
             const audioQueue: QueuedChunk[] = [];
             let captionsEnabled = false;
             let lastCaptionSpeaker: string | null = null;
-            let lastCaptionAt = 0;
             let lastFlushedTextLength: number = 0;
-            const isBotSpeakerName = (speaker: string) => {
-              const botNameLower = ((botConfigData as any)?.botName || (botConfigData as any)?.name || 'vexa').toLowerCase();
-              const lower = speaker.toLowerCase();
-              return lower.includes(botNameLower) || lower.includes('vexa');
-            };
-
-            function flushAudioQueueToSpeaker(speaker: string, reason: string, cutoffMs?: number): number {
-              if (!speaker || isBotSpeakerName(speaker)) return 0;
-              if (typeof (window as any).__vexaTeamsAudioData !== 'function') return 0;
-              let discarded = 0;
-              if (cutoffMs) {
-                while (audioQueue.length > 0 && audioQueue[0].timestamp < cutoffMs) {
-                  audioQueue.shift();
-                  discarded++;
-                }
-              }
-              let flushed = 0;
-              while (audioQueue.length > 0) {
-                const entry = audioQueue.shift()!;
-                (window as any).__vexaTeamsAudioData(speaker, Array.from(entry.data));
-                flushed++;
-              }
-              if (flushed > 0) {
-                (window as any).logBot?.('[Teams PerSpeaker] Flushed ' + flushed +
-                  ' chunk(s) to ' + speaker + ' via ' + reason +
-                  (discarded > 0 ? ' (discarded ' + discarded + ' stale)' : ''));
-              }
-              return flushed;
-            }
 
             const setupPerSpeakerAudioRouting = () => {
               const audioEl = document.querySelector('audio') as HTMLAudioElement | null;
@@ -644,29 +598,6 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
                 (window as any).logBot?.('[Teams PerSpeaker] Audio stream has no tracks');
                 return;
               }
-
-              const flushCaptionlessMixedAudio = () => {
-                const now = Date.now();
-                const captionsStale = !captionsEnabled || lastCaptionAt === 0 || (now - lastCaptionAt) > 15000;
-                const voiceOutlineFresh = activeVoiceOutlineSpeaker && (now - lastVoiceOutlineAt) < 5000;
-                if (captionsStale && voiceOutlineFresh) {
-                  flushAudioQueueToSpeaker(activeVoiceOutlineSpeaker!, 'blue-square active');
-                  return;
-                }
-                if (!captionsStale || audioQueue.length < 8) return;
-                if (typeof (window as any).__vexaTeamsAudioData !== 'function') return;
-
-                let flushed = 0;
-                while (audioQueue.length > 0) {
-                  const entry = audioQueue.shift()!;
-                  (window as any).__vexaTeamsAudioData('Meeting audio', Array.from(entry.data));
-                  flushed++;
-                }
-                if (flushed > 0) {
-                  (window as any).logBot?.('[Teams PerSpeaker] Caption routing unavailable/stale — flushed ' +
-                    flushed + ' mixed-audio chunks to Meeting audio safety route');
-                }
-              };
 
               const ctx = new AudioContext({ sampleRate: 16000 });
               const source = ctx.createMediaStreamSource(stream);
@@ -691,22 +622,11 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
                 while (audioQueue.length > 0 && now - audioQueue[0].timestamp > MAX_QUEUE_AGE_MS) {
                   audioQueue.shift();
                 }
-
-                if (activeVoiceOutlineSpeaker && (now - lastVoiceOutlineAt) < 5000 && audioQueue.length >= 4) {
-                  flushAudioQueueToSpeaker(activeVoiceOutlineSpeaker, 'blue-square streaming');
-                }
               };
 
               source.connect(processor);
               processor.connect(ctx.destination);
-              setInterval(flushCaptionlessMixedAudio, 3000);
-              (window as any).__vexaAcceptanceSignals = {
-                ...((window as any).__vexaAcceptanceSignals || {}),
-                audio_route_active: true,
-                audio_route: 'caption-aware-with-captionless-mixed-audio-safety-route',
-                audio_route_observed_at: new Date().toISOString(),
-              };
-              (window as any).logBot?.('[Teams PerSpeaker] Audio routing active (caption-aware with captionless mixed-audio safety route)');
+              (window as any).logBot?.('[Teams PerSpeaker] Audio routing active (caption-aware with ring buffer)');
             };
 
             // Caption observer: watches Teams live captions for speaker name +
@@ -745,7 +665,6 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
               lastProcessedCaptionKey = captionKey;
 
               const now = Date.now();
-              lastCaptionAt = now;
               const botNameLower2 = ((botConfigData as any)?.botName || (botConfigData as any)?.name || 'vexa').toLowerCase();
               const speakerLower = speaker.toLowerCase();
               if (speakerLower.includes(botNameLower2) || speakerLower.includes('vexa')) return;
@@ -959,14 +878,6 @@ export async function startTeamsRecording(page: Page, botConfig: BotConfig): Pro
               if (currentParticipantCount !== lastParticipantCount) {
                 (window as any).logBot(`🔢 Teams participant count changed: ${lastParticipantCount} → ${currentParticipantCount}`);
                 const participantList = (window as any).getTeamsActiveParticipants ? (window as any).getTeamsActiveParticipants() : [];
-                const botName = String((window as any).botConfig?.botName || (window as any).botConfig?.name || '').trim();
-                (window as any).__vexaAcceptanceSignals = {
-                  ...((window as any).__vexaAcceptanceSignals || {}),
-                  participant_roster_seen: true,
-                  participant_count: currentParticipantCount,
-                  self_visible_in_roster: !!botName && participantList.includes(botName),
-                  participant_roster_observed_at: new Date().toISOString(),
-                };
                 (window as any).logBot(`👥 Current participants: ${JSON.stringify(participantList)}`);
                 lastParticipantCount = currentParticipantCount;
                 if (currentParticipantCount > 1) {

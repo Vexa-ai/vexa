@@ -66,7 +66,7 @@ from vexa_client import VexaClient
 
 # Initialize the client
 client = VexaClient(
-    api_key="<api-key>",            # For user operations
+    api_key="your-api-key-here",            # For user operations
 )
 
 meeting_id = "abc-def-ghi"

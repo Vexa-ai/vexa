@@ -5,10 +5,9 @@ Polls the ``webhook:retry_queue`` list every POLL_INTERVAL seconds. Each
 entry carries its own ``next_retry_at`` timestamp and exponential backoff
 schedule. Entries older than MAX_AGE_SECONDS (24 h) are dropped.
 
-When an entry contains ``metadata.meeting_id``, the worker updates delivery
-bookkeeping on terminal outcomes. Legacy customer webhooks update
-``data.webhook_delivery``. New internal outbox entries with
-``metadata.outbound_event_key`` update ``data.outbound_events``.
+When an entry contains ``metadata.meeting_id``, the worker updates the
+meeting's ``data.webhook_delivery`` JSONB field on terminal outcomes
+(delivered or permanently failed/expired).
 
 Usage (inside meeting-api startup)::
 
@@ -70,9 +69,8 @@ def set_session_factory(factory: Callable) -> None:
 async def _update_meeting_delivery_status(
     meeting_id: int,
     status: dict,
-    outbound_event_key: str | None = None,
 ) -> None:
-    """Update meeting delivery state using an independent DB session."""
+    """Update meeting.data['webhook_delivery'] using an independent DB session."""
     if _session_factory is None:
         logger.warning(
             f"[retry-worker] Cannot update meeting {meeting_id} — no DB session factory configured"
@@ -89,25 +87,12 @@ async def _update_meeting_delivery_status(
                 logger.warning(f"[retry-worker] Meeting {meeting_id} not found, skipping status update")
                 return
 
-            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
-            if outbound_event_key:
-                events = dict(data.get("outbound_events") or {})
-                event = dict(events.get(outbound_event_key) or {"key": outbound_event_key})
-                event.update(status)
-                event["updated_at"] = datetime.now(timezone.utc).isoformat()
-                events[outbound_event_key] = event
-                data["outbound_events"] = events
-            else:
-                data["webhook_delivery"] = status
+            data = dict(meeting.data) if meeting.data else {}
+            data["webhook_delivery"] = status
             meeting.data = data
             flag_modified(meeting, "data")
             await session.commit()
-            logger.info(
-                "[retry-worker] Updated meeting %s %s: %s",
-                meeting_id,
-                f"outbound_events[{outbound_event_key}]" if outbound_event_key else "webhook_delivery",
-                status.get("status"),
-            )
+            logger.info(f"[retry-worker] Updated meeting {meeting_id} webhook_delivery: {status.get('status')}")
     except Exception as e:
         logger.error(f"[retry-worker] Failed to update meeting {meeting_id} delivery status: {e}", exc_info=True)
 
@@ -188,7 +173,6 @@ async def _process_queue(redis_client: Any) -> int:
         attempt = entry.get("attempt", 0)
         metadata = entry.get("metadata") or {}
         meeting_id = metadata.get("meeting_id")
-        outbound_event_key = metadata.get("outbound_event_key")
         url = entry.get("url", "")
 
         # Drop entries older than MAX_AGE
@@ -204,7 +188,7 @@ async def _process_queue(redis_client: Any) -> int:
                     "status": "failed",
                     "error": f"Expired after {MAX_AGE_SECONDS}s",
                     "failed_at": datetime.now(timezone.utc).isoformat(),
-                }, outbound_event_key=outbound_event_key)
+                })
             processed += 1
             continue
 
@@ -224,7 +208,7 @@ async def _process_queue(redis_client: Any) -> int:
                     "attempts": attempt + 1,
                     "status": "delivered",
                     "delivered_at": datetime.now(timezone.utc).isoformat(),
-                }, outbound_event_key=outbound_event_key)
+                })
         else:
             # Check if we've exhausted the backoff schedule
             if attempt >= len(BACKOFF_SCHEDULE):
@@ -239,7 +223,7 @@ async def _process_queue(redis_client: Any) -> int:
                         "status": "failed",
                         "error": "Exhausted all retry attempts",
                         "failed_at": datetime.now(timezone.utc).isoformat(),
-                    }, outbound_event_key=outbound_event_key)
+                    })
             else:
                 # Re-enqueue with bumped attempt and next backoff
                 entry["attempt"] = attempt + 1

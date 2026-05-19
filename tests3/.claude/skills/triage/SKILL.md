@@ -1,5 +1,3 @@
-# ⚠ STALE 2026-05-12 — descriptions reference the OLD state machine (idle→groom→plan→develop→provision→deploy→validate→triage→human→ship→teardown). The current model has 13 stages with do→audit→human pattern at three levels. Authoritative: tests3/stages/release-flow.md + per-stage 00-idle.md…12-teardown.md. Full skill-directory rewrite is v0.10.7 pack state-machine-docs-rewrite.
-
 ---
 name: triage
 description: "Invoke on a RED validate gate — classify every failing DoD as regression or gap, surface the next-fix target for human decision. Entered from stage `validate` (on red) or stage `human` (when a human finds a gap). Produces `releases/<id>/triage-log.md`. Do NOT invoke to write code — that's stage `develop`. Use when the user says 'triage', 'classify the failures', 'what broke', 'regression or gap', or after `release-validate` fails. INNER-loop exit seam."

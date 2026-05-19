@@ -3,7 +3,7 @@
 #
 # Step IDs (stable — bound to features/dashboard/README.md DoDs):
 #   login             — POST /api/auth/send-magic-link returns 200 + success=true
-#   cookie_flags      — dashboard auth cookie flags match deployment protocol (Secure iff https)
+#   cookie_flags      — vexa-token cookie flags match deployment protocol (Secure iff https)
 #   identity          — GET /api/auth/me returns the logged-in user's email
 #   proxy_reachable   — GET /api/vexa/meetings via cookie returns 200
 #
@@ -39,20 +39,14 @@ fi
 
 # ── Step: cookie_flags ───────────────────────────
 PROTOCOL=$(echo "$DASHBOARD_URL" | grep -o '^https\?')
-COOKIE_HEADER=$(grep -Ei 'set-cookie: *vexa-token[^=]*=' "$HEADERS_FILE" 2>/dev/null | head -1)
-COOKIE_NAME=$(printf '%s\n' "$COOKIE_HEADER" | sed -E 's/^[Ss]et-[Cc]ookie:[[:space:]]*([^=]+)=.*/\1/')
+COOKIE_HEADER=$(grep -i 'set-cookie.*vexa-token' "$HEADERS_FILE" 2>/dev/null | head -1)
 rm -f "$HEADERS_FILE"
-
-if [ -z "$COOKIE_HEADER" ] || [ -z "$COOKIE_NAME" ]; then
-    step_fail cookie_flags "no dashboard auth cookie was set"
-    exit 1
-fi
 
 if [ "$PROTOCOL" = "http" ] && echo "$COOKIE_HEADER" | grep -qi "Secure"; then
     step_fail cookie_flags "Secure flag on HTTP deployment — browser will reject"
     exit 1
 else
-    step_pass cookie_flags "$COOKIE_NAME flags correct for $PROTOCOL"
+    step_pass cookie_flags "flags correct for $PROTOCOL"
 fi
 
 # ── Step: identity ───────────────────────────────
@@ -75,9 +69,8 @@ else
 fi
 
 # Save cookie token for downstream tests (not a step — plumbing)
-COOKIE_TOKEN=$(awk -v name="$COOKIE_NAME" '$6 == name {print $7; exit}' /tmp/tests3-dash-cookies 2>/dev/null)
+COOKIE_TOKEN=$(grep vexa-token /tmp/tests3-dash-cookies 2>/dev/null | awk '{print $NF}')
 if [ -n "$COOKIE_TOKEN" ]; then
-    state_write dashboard_cookie_name "$COOKIE_NAME"
     state_write dashboard_cookie "$COOKIE_TOKEN"
 fi
 

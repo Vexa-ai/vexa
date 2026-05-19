@@ -88,7 +88,7 @@ describe("parseMeetingInput", () => {
   // Path 3 (URL + platform) trust model handles the rest.
   describe("platformNeeded — white-label / enterprise URLs", () => {
     const LFX_URL =
-      "https://zoom-lfx.platform.linuxfoundation.org/meeting/96088138284?password=example-passcode";
+      "https://zoom-lfx.platform.linuxfoundation.org/meeting/96088138284?password=c9e528a8-3852-4b82-89c2-96d6f22526ad";
 
     it("flags LFX zoom-portal URL as platformNeeded with zoom heuristic", () => {
       const r = parseMeetingInput(LFX_URL);
@@ -99,7 +99,7 @@ describe("parseMeetingInput", () => {
       // Best-effort numeric ID extraction
       expect(r?.meetingId).toBe("96088138284");
       // Passcode under password= query param
-      expect(r?.passcode).toBe("example-passcode");
+      expect(r?.passcode).toBe("c9e528a8-3852-4b82-89c2-96d6f22526ad");
       expect(r?.originalUrl).toBe(LFX_URL);
     });
 

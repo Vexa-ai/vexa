@@ -9,7 +9,7 @@
 # Transcription service
 # Get a key at vexa.ai OR self-host services/transcription-service/ with GPU
 TRANSCRIPTION_SERVICE_URL=https://transcription.vexa.ai/v1/audio/transcriptions
-TRANSCRIPTION_SERVICE_TOKEN=
+TRANSCRIPTION_SERVICE_TOKEN=your-token
 
 # ============================================================================
 # Ports — change these to avoid conflicts with other stacks
@@ -31,10 +31,6 @@ MINIO_CONSOLE_HOST_PORT=9001
 
 # Admin
 ADMIN_TOKEN=changeme
-
-# Browser access. The API is API-key authenticated and origin agnostic by
-# default; set a comma-separated allowlist when a deployment needs one.
-CORS_ORIGINS=*
 
 # Image tag — pre-built from DockerHub by default.
 # `make build` writes a local tag to .last-tag which overrides this.

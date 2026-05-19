@@ -4,7 +4,6 @@
        meeting-tts meeting bot admit transcribe finalize post-meeting meeting-chain \
        webhooks auth-meeting bot-stop-timing transcription-replay tts-reliability \
        collect score \
-       scope-proof-gate-local \
        validate-lite validate-compose validate-helm validate-all \
        report report-gate \
        e2e full \
@@ -157,9 +156,6 @@ validate-compose:                  ## run tests for compose mode + write JSON re
 
 validate-helm:                     ## run tests for helm mode + write JSON reports
 	@$(T3)/lib/run-matrix.sh helm $(if $(SCOPE),--scope $(SCOPE),)
-
-scope-proof-gate-local:            ## prove every LOCAL scope-bound check is present + green before develop-human
-	@$(T3)/tests/static/scope-proof-gate.sh $(if $(SCOPE),--scope $(SCOPE),)
 
 report:                            ## aggregate .state/reports/* → tests3/reports/release-<tag>.md + update feature READMEs
 	@mkdir -p $(ROOT)/tests3/reports

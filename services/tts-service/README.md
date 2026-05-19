@@ -6,26 +6,10 @@ Bot containers need text-to-speech to participate as voice agents in meetings. T
 
 ## What
 
-OpenAI-compatible `/v1/audio/speech` endpoint with **two backends** the caller picks per-request:
+A local text-to-speech service using **Piper TTS** (ONNX models). Exposes an OpenAI-compatible `/v1/audio/speech` endpoint so existing code that targets OpenAI's TTS API works without changes. Voice models are auto-downloaded from HuggingFace on first use.
 
-| `provider` | Backend | Network calls | Auth | Quality |
-|---|---|---|---|---|
-| `piper` *(default)* | [Piper TTS](https://github.com/rhasspy/piper) — local ONNX inference | None at synth time; voices auto-download from HuggingFace on first request per language | None required | Robotic but clear; ~30 languages |
-| `openai` | OpenAI `https://api.openai.com/v1/audio/speech` | Yes — every request | `OPENAI_API_KEY` env var | Higher; counts against your OpenAI usage |
-
-The endpoint shape stays identical — callers swap `provider` and the response is interchangeable audio bytes.
-
-Input: JSON body
-```json
-{"model": "tts-1", "input": "Hola, ¿cómo estás?", "voice": "auto", "response_format": "wav", "provider": "piper"}
-```
-
-- `provider`: `piper` (default) or `openai`. Omitted = `piper`.
-- `voice`: explicit Piper name (`en_US-amy-medium`), OpenAI alias (`alloy`/`nova`/...), or `auto` (Piper provider only — auto-detects language from `input` and picks a matching voice; downloads the voice on first use).
-- `response_format`: `wav` (default) or `pcm` (raw Int16LE 24kHz mono).
-- `model`: ignored by Piper, passed through to OpenAI.
-
-Output: audio bytes (WAV 24kHz mono by default, or raw PCM).
+Input: JSON body `{"model": "tts-1", "input": "text to speak", "voice": "nova", "response_format": "wav"}`
+Output: Audio (WAV 24kHz mono by default, or raw PCM)
 
 ### Endpoints
 
@@ -54,10 +38,9 @@ Supported formats: `wav` (default), `pcm` (raw Int16LE 24kHz mono)
 
 ### Dependencies
 
-- **Piper TTS** (bundled) — local ONNX inference, no external calls.
-- **OpenAI TTS** (optional) — only invoked when callers pass `provider=openai`. Requires `OPENAI_API_KEY`.
-- No database, no Redis, no other Vexa services.
-- No API keys required for the default Piper provider.
+- **Piper TTS** (bundled) — local ONNX inference, no external calls
+- No database, no Redis, no other Vexa services
+- No API keys required for operation
 
 ## How
 

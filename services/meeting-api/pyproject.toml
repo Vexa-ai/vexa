@@ -12,7 +12,7 @@ dependencies = [
     "pydantic>=2.0",
     "pydantic[email]>=2.0",
     "alembic>=1.13",
-    "python-multipart>=0.0.20",
+    "python-multipart>=0.0.6",
     "boto3>=1.34",
 ]
 

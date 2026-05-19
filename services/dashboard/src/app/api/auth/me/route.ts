@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { getAuthCookieName } from "@/lib/auth-cookies";
 
 /**
  * Get current user info from token.
@@ -8,14 +7,10 @@ import { getAuthCookieName } from "@/lib/auth-cookies";
  * User identity resolved via gateway /auth/me.
  */
 export async function GET() {
-  const VEXA_API_URL = process.env.VEXA_API_URL;
-  if (!VEXA_API_URL) {
-    return NextResponse.json({ error: "VEXA_API_URL is required" }, { status: 500 });
-  }
+  const VEXA_API_URL = process.env.VEXA_API_URL || "http://localhost:8056";
 
   const cookieStore = await cookies();
-  const authCookieName = getAuthCookieName();
-  const cookieToken = cookieStore.get(authCookieName)?.value;
+  const cookieToken = cookieStore.get("vexa-token")?.value;
   const token = cookieToken || "";
 
   if (!token) {
@@ -32,7 +27,7 @@ export async function GET() {
     });
 
     if (!response.ok) {
-      if (cookieToken) cookieStore.delete(authCookieName);
+      if (cookieToken) cookieStore.delete("vexa-token");
       return NextResponse.json(
         { error: "Invalid token" },
         { status: 401 }

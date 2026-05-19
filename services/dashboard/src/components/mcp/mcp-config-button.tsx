@@ -79,7 +79,7 @@ export function MCPConfigButton() {
               "Authorization:${VEXA_API_KEY}",
             ],
             env: {
-              VEXA_API_KEY: "<api-key>",
+              VEXA_API_KEY: "YOUR_API_KEY_HERE",
             },
           },
         },

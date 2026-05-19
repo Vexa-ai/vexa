@@ -11,13 +11,11 @@ without ever dropping tables, columns, or data.  It handles:
 """
 
 import logging
-import re
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import DeclarativeMeta
 
 logger = logging.getLogger("schema_sync")
-_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # Mapping from SQLAlchemy types to Postgres column types for ALTER TABLE
 _TYPE_MAP = {
@@ -69,12 +67,6 @@ def _col_default_sql(col):
     return ""
 
 
-def _quote_identifier(identifier: str) -> str:
-    if not _IDENTIFIER_RE.fullmatch(identifier):
-        raise ValueError(f"Unsafe SQL identifier: {identifier!r}")
-    return f'"{identifier}"'
-
-
 def _sync_tables(conn: Connection, base):
     """Create missing tables via create_all(checkfirst=True)."""
     base.metadata.create_all(conn, checkfirst=True)
@@ -111,11 +103,9 @@ def _sync_columns(conn: Connection, base):
                 elif pg_type == "JSONB" or pg_type == "JSON":
                     default = " DEFAULT '{}'"
 
-            table_name = _quote_identifier(table.name)
-            col_name = _quote_identifier(col.name)
-            stmt = f"ALTER TABLE {table_name} ADD COLUMN {col_name} {pg_type}{nullable}{default}"
+            stmt = f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {pg_type}{nullable}{default}'
             logger.info(f"Adding column: {stmt}")
-            conn.exec_driver_sql(stmt)
+            conn.execute(text(stmt))
 
 
 def _sync_indexes(conn: Connection, base):

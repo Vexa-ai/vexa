@@ -1,35 +1,36 @@
 import { cookies } from "next/headers";
-import { getAuthCookieName, getUserInfoCookieName } from "@/lib/auth-cookies";
 
 /**
- * Resolve the authenticated user's ID from the configured auth cookie.
+ * Resolve the authenticated user's ID from the vexa-token cookie.
  *
- * Uses the auth cookie (an API key) to look up the owning user via the
+ * Uses the vexa-token (an API key) to look up the owning user via the
  * Admin API's user-facing auth endpoint, which resolves token -> user.
- * Resolves through the configured admin /users/email/ endpoint when user-info is available.
+ * Falls back to the admin /users/email/ lookup when user-info is available.
  *
  * Returns the numeric user ID as a string, or null if unauthenticated.
  */
 export async function getAuthenticatedUserId(): Promise<string | null> {
-  const VEXA_ADMIN_API_URL = process.env.VEXA_ADMIN_API_URL;
+  const VEXA_ADMIN_API_URL =
+    process.env.VEXA_ADMIN_API_URL ||
+    process.env.VEXA_API_URL ||
+    "http://localhost:18056";
   const VEXA_ADMIN_API_KEY = process.env.VEXA_ADMIN_API_KEY || "";
 
-  if (!VEXA_ADMIN_API_URL || !VEXA_ADMIN_API_KEY) return null;
+  if (!VEXA_ADMIN_API_KEY) return null;
 
   const cookieStore = await cookies();
-  const token = cookieStore.get(getAuthCookieName())?.value;
+  const token = cookieStore.get("vexa-token")?.value;
   if (!token) return null;
 
   // Validate the token by calling the API gateway (same as /api/auth/me)
-  const VEXA_API_URL = process.env.VEXA_API_URL;
-  if (!VEXA_API_URL) return null;
+  const VEXA_API_URL = process.env.VEXA_API_URL || "http://localhost:18056";
   const verifyRes = await fetch(`${VEXA_API_URL}/meetings`, {
     headers: { "X-API-Key": token },
   });
   if (!verifyRes.ok) return null;
 
   // Get the user's email from the SSO cookie, then resolve to a user ID
-  const userInfoStr = cookieStore.get(getUserInfoCookieName())?.value;
+  const userInfoStr = cookieStore.get("vexa-user-info")?.value;
   if (!userInfoStr) return null;
 
   let email: string;

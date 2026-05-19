@@ -39,11 +39,9 @@ from .schemas import (
     MeetingFailureStage,
     is_valid_status_transition,
     get_status_source,
-    redact_sensitive_data,
 )
 
 from .auth import get_user_and_token
-from .collector.auth import require_internal_secret
 from .config import (
     REDIS_URL,
     RUNTIME_API_URL,
@@ -51,11 +49,9 @@ from .config import (
     BOT_IMAGE_NAME,
     BOT_STOP_DELAY_SECONDS,
 )
-from .dispatch_check import dispatch_check
 from .post_meeting import run_all_tasks, run_status_webhook_task
 
 logger = logging.getLogger("meeting_api.meetings")
-_WEAK_PRODUCTION_SECRETS = {"changeme", "vexa-internal-secret", "vexa-admin-token", "vexa-dev-jwt-secret"}
 
 router = APIRouter()
 
@@ -94,8 +90,6 @@ def mint_meeting_token(
     secret = os.environ.get("ADMIN_TOKEN")
     if not secret:
         raise ValueError("ADMIN_TOKEN not configured; cannot mint MeetingToken")
-    if os.getenv("VEXA_ENV", "development").lower() == "production" and secret in _WEAK_PRODUCTION_SECRETS:
-        raise ValueError("ADMIN_TOKEN is not safely configured for production")
 
     now = int(datetime.utcnow().timestamp())
     header = {"alg": "HS256", "typ": "JWT"}
@@ -140,7 +134,6 @@ async def update_meeting_status(
         select(Meeting)
         .where(Meeting.id == meeting.id)
         .with_for_update()
-        .execution_options(populate_existing=True)
     )
     result = await db.execute(locked_stmt)
     meeting = result.scalar_one()
@@ -364,7 +357,6 @@ async def _schedule_bot_timeout(
                 "request": {
                     "method": "DELETE",
                     "url": f"{MEETING_API_URL}/bots/internal/timeout/{meeting_id}",
-                    "headers": {"X-Internal-Secret": os.getenv("INTERNAL_API_SECRET", "")},
                     "timeout": 30,
                 },
                 "metadata": {
@@ -411,7 +403,6 @@ async def _spawn_via_runtime_api(
     user_id: int,
     callback_url: str,
     metadata: Dict[str, Any],
-    callback_headers: Optional[Dict[str, str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Create a container via Runtime API POST /containers."""
     try:
@@ -423,7 +414,6 @@ async def _spawn_via_runtime_api(
                 "config": config,
                 "user_id": str(user_id),
                 "callback_url": callback_url,
-                "callback_headers": callback_headers or {},
                 "metadata": metadata,
             },
             timeout=30.0,
@@ -568,7 +558,7 @@ async def _get_running_bots_from_runtime(user_id: int) -> list:
             except Exception:
                 pass
 
-        safe_data = redact_sensitive_data(meeting_data) or {}
+        safe_data = {k: v for k, v in meeting_data.items() if k != "webhook_secret"} if meeting_data else {}
 
         bots_status.append({
             "container_id": c.get("container_id"),
@@ -733,25 +723,6 @@ async def request_bot(
 ):
     user_token, current_user = auth_data
 
-    # Env-gated dispatch-check (T-038, scope item #18 of v0.10.6.1).
-    # No-op when DISPATCH_CHECK_URL is unset (the OSS-self-host default).
-    # Otherwise an opaque external authority decides whether this user
-    # may create a bot. Fail-OPEN on transport / 5xx — see
-    # dispatch_check.py docstring for the rationale + behavior matrix.
-    _dc_platform = req.platform.value if req.platform is not None else None
-    _dc_mode = req.mode if req.mode is not None else ("agent" if req.agent_enabled else "bot")
-    check = await dispatch_check(
-        user_id=current_user.id,
-        action="create-bot",
-        context={"platform": _dc_platform, "mode": _dc_mode},
-        client=_get_httpx_client(),
-    )
-    if not check.allow:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail={"error": "dispatch-denied", "reason": check.reason or "action not allowed"},
-        )
-
     # --- Agent-only mode ---
     if req.agent_enabled and req.platform is None:
         new_meeting = Meeting(
@@ -771,7 +742,6 @@ async def request_bot(
             user_id=current_user.id,
             callback_url=f"{MEETING_API_URL}/bots/internal/callback/exited",
             metadata={"meeting_id": new_meeting.id},
-            callback_headers={"X-Internal-Secret": os.getenv("INTERNAL_API_SECRET", "")},
         )
         if not result:
             new_meeting.status = MeetingStatus.FAILED.value
@@ -840,29 +810,15 @@ async def request_bot(
             "session_token": session_token,
             "redisUrl": REDIS_URL,
             "meetingApiCallbackUrl": f"{MEETING_API_URL}/bots/internal/callback/exited",
-            "internalSecret": os.getenv("INTERNAL_API_SECRET", ""),
             **s3_config,
         }
 
-        # #313 — Pre-fix: metadata only carried meeting_id, no connection_id.
-        # runtime-api's _fire_exit_callback gates on connection_id presence
-        # and silently dropped the callback for every browser_session DELETE,
-        # leaving the meeting stuck in 'stopping'. browser_session has no
-        # MeetingSession (different lifecycle from bot dispatches), so we
-        # synthesize a connection_id with the deterministic prefix `bs:` +
-        # meeting_id. callbacks._find_meeting_by_session recognizes the
-        # prefix and routes by meeting_id directly, no fake MeetingSession
-        # row needed.
         result = await _spawn_via_runtime_api(
             profile="browser-session",
             config={"image": BOT_IMAGE_NAME, "env": {"BOT_CONFIG": json.dumps(bot_config), "BOT_MODE": "browser_session"}},
             user_id=current_user.id,
             callback_url=f"{MEETING_API_URL}/bots/internal/callback/exited",
-            callback_headers={"X-Internal-Secret": os.getenv("INTERNAL_API_SECRET", "")},
-            metadata={
-                "meeting_id": new_meeting.id,
-                "connection_id": f"bs:{new_meeting.id}",
-            },
+            metadata={"meeting_id": new_meeting.id},
         )
         if not result:
             new_meeting.status = MeetingStatus.FAILED.value
@@ -1128,7 +1084,6 @@ async def request_bot(
             "everyoneLeftTimeout": resolved_max_time_left_alone,
         },
         "meetingApiCallbackUrl": f"{MEETING_API_URL}/bots/internal/callback/exited",
-        "internalSecret": os.getenv("INTERNAL_API_SECRET", ""),
         "recordingEnabled": user_recording_config.get("enabled", os.getenv("RECORDING_ENABLED", "true").lower() == "true"),
         "transcribeEnabled": transcribe,
         "captureModes": user_recording_config.get("capture_modes", os.getenv("CAPTURE_MODES", "audio").split(",")),
@@ -1140,11 +1095,6 @@ async def request_bot(
         bot_config["recordingEnabled"] = bool(req.recording_enabled)
     if req.voice_agent_enabled is not None:
         bot_config["voiceAgentEnabled"] = bool(req.voice_agent_enabled)
-    # camera_enabled is independent of voice_agent_enabled. Default is False
-    # (the bot keeps its outgoing camera off). An operator that wants the
-    # avatar / screen-content stream must opt in explicitly.
-    if req.camera_enabled is not None:
-        bot_config["cameraEnabled"] = bool(req.camera_enabled)
     if req.default_avatar_url:
         bot_config["defaultAvatarUrl"] = req.default_avatar_url
     if os.getenv("SHOW_AVATAR", "true").lower() == "false":
@@ -1168,7 +1118,6 @@ async def request_bot(
     # Build env for Runtime API
     env_vars = {
         "BOT_CONFIG": json.dumps(bot_config),
-        "INTERNAL_API_SECRET": os.getenv("INTERNAL_API_SECRET", ""),
         "LOG_LEVEL": os.getenv("LOG_LEVEL", "INFO").upper(),
         "VIDEO_HWACCEL": os.getenv("VIDEO_HWACCEL", "none").lower(),
     }
@@ -1231,7 +1180,6 @@ async def request_bot(
         config={"image": BOT_IMAGE_NAME, "env": env_vars},
         user_id=current_user.id,
         callback_url=f"{MEETING_API_URL}/bots/internal/callback/exited",
-        callback_headers={"X-Internal-Secret": os.getenv("INTERNAL_API_SECRET", "")},
         metadata={"meeting_id": meeting_id, "connection_id": connection_id},
     )
 
@@ -1293,7 +1241,7 @@ async def request_bot(
 
 
 @router.post("/internal/browser-sessions/{token}/save")
-async def save_browser_session(token: str, _: None = Depends(require_internal_secret)):
+async def save_browser_session(token: str):
     """Save browser session storage to S3 via Redis command."""
     if not redis_client:
         raise HTTPException(status_code=500, detail="Redis not available")
@@ -1352,7 +1300,7 @@ async def save_browser_session(token: str, _: None = Depends(require_internal_se
 
 
 @router.delete("/internal/browser-sessions/{user_id}/storage")
-async def delete_browser_storage(user_id: int, _: None = Depends(require_internal_secret)):
+async def delete_browser_storage(user_id: int):
     """Delete stored browser data from S3 for a user via MinIO API."""
     import boto3
     from botocore.config import Config as BotoConfig
@@ -1406,8 +1354,6 @@ async def list_user_bots(
 ):
     """Returns recent meetings (all statuses) from the database."""
     _, current_user = auth_data
-    limit = max(1, min(limit, 100))
-    offset = max(0, offset)
     stmt = select(Meeting).where(Meeting.user_id == current_user.id)
     if search:
         q = f"%{search}%"
@@ -1467,7 +1413,7 @@ async def list_user_bots(
                 "bot_container_id": m.bot_container_id,
                 "start_time": m.start_time.isoformat() if m.start_time else None,
                 "end_time": m.end_time.isoformat() if m.end_time else None,
-                "data": (redact_sensitive_data(m.data) or {}) if include_full_data else _data_summary(m.data),
+                "data": (m.data or {}) if include_full_data else _data_summary(m.data),
                 "created_at": m.created_at.isoformat() if m.created_at else None,
                 "updated_at": m.updated_at.isoformat() if m.updated_at else None,
             }
@@ -1773,7 +1719,6 @@ async def stop_bot(
 async def scheduler_timeout_stop(
     meeting_id: int,
     background_tasks: BackgroundTasks,
-    _: None = Depends(require_internal_secret),
     db: AsyncSession = Depends(get_db),
 ):
     """Called by the scheduler when max_bot_time expires.
@@ -1955,42 +1900,6 @@ class TranscribeResponse(BaseModel):
     message: str
 
 
-def _find_finalized_audio_master(meeting: Meeting) -> tuple[Optional[str], str, Optional[str]]:
-    """Return (storage_path, media_format, session_uid) for the canonical audio master.
-
-    Deferred transcription must consume the producer-owned master written by
-    recording_finalizer. Chunk paths and post_meeting_reconciler markers are
-    intentionally not valid inputs: they represent capture/finalization state,
-    not a stable recording artifact.
-    """
-    meeting_data = meeting.data or {}
-    recs = meeting_data.get("recordings", [])
-    for rec in (recs if isinstance(recs, list) else [recs]):
-        if not isinstance(rec, dict) or rec.get("status") != "completed":
-            continue
-        playback_url = rec.get("playback_url")
-        for mf in rec.get("media_files", []):
-            if not isinstance(mf, dict):
-                continue
-            storage_path = mf.get("storage_path") or ""
-            is_audio_master = (
-                mf.get("type") == "audio"
-                and mf.get("finalized_by") == "recording_finalizer.master"
-                and storage_path.endswith(("/audio/master.webm", "/audio/master.wav"))
-            )
-            if is_audio_master:
-                return storage_path, mf.get("format", "webm"), rec.get("session_uid")
-        if isinstance(playback_url, dict) and playback_url.get("audio"):
-            # playback_url without a matching finalized media file is an
-            # invariant violation. Keep scanning in case a later recording is
-            # valid; the caller will surface "finalizing" if none are valid.
-            logger.warning(
-                "Meeting %s has playback_url.audio without finalized audio media_file",
-                meeting.id,
-            )
-    return None, "webm", None
-
-
 @router.post(
     "/meetings/{meeting_id}/transcribe",
     summary="Trigger deferred transcription for a completed meeting",
@@ -2013,7 +1922,7 @@ async def transcribe_meeting(
         raise HTTPException(status_code=400, detail=f"Meeting status is '{meeting.status}', expected 'completed' or 'failed'")
 
     # 0. Check if realtime segments already exist — deferred would create duplicates
-    from .models import Transcription
+    from .models import Recording, MediaFile, Transcription
     existing_count = (await db.execute(
         select(func.count(Transcription.id)).where(Transcription.meeting_id == meeting_id)
     )).scalar() or 0
@@ -2023,22 +1932,47 @@ async def transcribe_meeting(
             detail=f"This meeting is already transcribed ({existing_count} segments). Multiple transcripts per meeting not implemented.",
         )
 
-    # 1. Ensure the recording finalizer has produced the canonical master
-    # before deferred transcription starts. No chunk-path fallback: Whisper
-    # consumes recording_finalizer.master only.
-    from .recording_finalizer import finalize_recording_master
+    # 1. Find recording — check recordings table first, then meeting.data (legacy)
     from .storage import create_storage_client
     import subprocess
     import tempfile
 
-    await finalize_recording_master(meeting_id, db)
-    await db.refresh(meeting)
-    storage_path, media_format, session_uid = _find_finalized_audio_master(meeting)
+    storage_path = None
+    media_format = "webm"
+    session_uid = None
+
+    recording = (await db.execute(
+        select(Recording).where(Recording.meeting_id == meeting_id, Recording.status == "completed")
+    )).scalars().first()
+    if recording:
+        media_file = (await db.execute(
+            select(MediaFile).where(
+                MediaFile.recording_id == recording.id,
+                MediaFile.type.in_(["audio", "video"]),
+            )
+        )).scalars().first()
+        if media_file:
+            storage_path = media_file.storage_path
+            media_format = media_file.format
+            session_uid = recording.session_uid
+
+    # Fallback: check meeting.data['recordings'] (legacy inline storage)
     if not storage_path:
-        raise HTTPException(
-            status_code=409,
-            detail="Recording finalization is still in progress. Retry after recording.playback_url.audio is available.",
-        )
+        meeting_data = meeting.data or {}
+        recs = meeting_data.get("recordings", [])
+        for rec in (recs if isinstance(recs, list) else [recs]):
+            if rec.get("status") == "completed":
+                for mf in rec.get("media_files", []):
+                    if mf.get("type") in ("audio", "video") and mf.get("storage_path"):
+                        storage_path = mf["storage_path"]
+                        media_format = mf.get("format", "webm")
+                        session_uid = rec.get("session_uid")
+                        break
+            if storage_path:
+                break
+
+    if not storage_path:
+        raise HTTPException(status_code=404, detail="No completed recording with audio found for this meeting")
 
     # 2. Download audio from storage
     try:

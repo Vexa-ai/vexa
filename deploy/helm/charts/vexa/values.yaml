@@ -205,11 +205,6 @@ ttsService:
   persistence:
     size: 5Gi
     storageClassName: ""
-  # The image runs as uid/gid 999. The voices PVC must be group-writable on
-  # first boot so Piper can download voice models before readiness turns green.
-  podSecurityContext:
-    fsGroup: 999
-    fsGroupChangePolicy: OnRootMismatch
   # Load-tested shape (from proprietary wrapper staging values): TTS is
   # bursty — lean cpu request, bigger memory for voice cache.
   resources:
@@ -266,11 +261,7 @@ dashboard:
   # env:
   #   ENABLE_AZURE_AD_AUTH: "true"
   #   NEXTAUTH_URL: ""
-  env:
-    # Default-refuse: dashboard direct login (passwordless via /api/auth/send-magic-link
-    # without SMTP) is disabled unless an operator explicitly opts in. Override to
-    # "true" only in dev/test profiles (see values-test.yaml).
-    VEXA_ALLOW_DIRECT_LOGIN: "false"
+  env: {}
   extraEnv: []
   extraSecretName: ""
   extraSecretEnv: {}

@@ -19,7 +19,7 @@ import { ScreenContentService, getVirtualCameraInitScript, getVideoBlockInitScri
 import { ScreenShareService } from "./services/screen-share"; // kept for Teams; unused for Google Meet camera-feed approach
 import { createClient, RedisClientType } from 'redis';
 import { Page, Browser, BrowserContext } from 'playwright-core';
-import { execFileSync } from 'child_process';
+import { execSync } from 'child_process';
 import { ensureBrowserDataDir, syncBrowserDataFromS3, syncBrowserDataToS3, cleanStaleLocks, BROWSER_DATA_DIR } from './s3-sync';
 // HTTP imports removed - using unified callback service instead
 
@@ -732,7 +732,7 @@ async function performGracefulLeave(
   // Clean up per-bot PulseAudio sink if one was created
   if (botPaSinkModuleId) {
     try {
-      execFileSync('pactl', ['unload-module', botPaSinkModuleId], { stdio: 'ignore' });
+      execSync(`pactl unload-module ${botPaSinkModuleId}`, { stdio: 'ignore' });
       log(`[Graceful Leave] Unloaded PulseAudio sink module ${botPaSinkModuleId}`);
     } catch (e: any) {
       log(`[Graceful Leave] Warning: Could not unload PulseAudio sink module: ${e.message}`);
@@ -868,7 +868,6 @@ async function performGracefulLeave(
 
     const botConfig = {
       meetingApiCallbackUrl,
-      internalSecret: currentBotConfig?.internalSecret,
       connectionId: currentConnectionId,
       container_name: process.env.HOSTNAME || 'unknown'
     };
@@ -1808,13 +1807,6 @@ async function handleTeamsAudioData(speakerName: string, audioDataArray: number[
   // Add speaker if new — name is already known from DOM/caption
   if (!speakerManager.hasSpeaker(speakerId)) {
     log(`[🎙️ TEAMS SPEAKER] "${speakerName}" — first audio received`);
-    await page.evaluate(() => {
-      (window as any).__vexaAcceptanceSignals = {
-        ...((window as any).__vexaAcceptanceSignals || {}),
-        first_audio_received: true,
-        first_audio_observed_at: new Date().toISOString(),
-      };
-    }).catch(() => {});
     speakerManager.addSpeaker(speakerId, speakerName);
     await segmentPublisher.publishSpeakerEvent({
       speaker: speakerName,
@@ -2266,14 +2258,8 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
       && (process.env.ZOOM_WEB === 'true' || process.env.ZOOM_SDK !== 'true')) {
     const sinkName = `bot_sink_${botConfig.meeting_id}`;
     try {
-      const moduleId = execFileSync(
-        'pactl',
-        [
-          'load-module',
-          'module-null-sink',
-          `sink_name=${sinkName}`,
-          `sink_properties=device.description=BotSink_${botConfig.meeting_id}`,
-        ],
+      const moduleId = execSync(
+        `pactl load-module module-null-sink sink_name=${sinkName} sink_properties=device.description="BotSink_${botConfig.meeting_id}"`,
         { stdio: ['ignore', 'pipe', 'ignore'] }
       ).toString().trim();
       botPaSinkModuleId = moduleId;
@@ -2289,7 +2275,7 @@ export async function runBot(botConfig: BotConfig): Promise<void> {// Store botC
     log('[Bot] Authenticated mode: downloading userdata from S3...');
     ensureBrowserDataDir();
     syncBrowserDataFromS3(botConfig);
-    cleanStaleLocks();
+    cleanStaleLocks(BROWSER_DATA_DIR);
 
     const authArgs = getAuthenticatedBrowserArgs();
     const context: BrowserContext = await chromium.launchPersistentContext(BROWSER_DATA_DIR, {

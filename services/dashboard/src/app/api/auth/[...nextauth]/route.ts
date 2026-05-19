@@ -3,7 +3,6 @@ import GoogleProvider from "next-auth/providers/google";
 import AzureADProvider from "next-auth/providers/azure-ad";
 import { cookies } from "next/headers";
 import { findUserByEmail, createUser, createUserToken } from "@/lib/vexa-admin-api";
-import { getAuthCookieName, getUserInfoCookieName } from "@/lib/auth-cookies";
 
 function isSecureRequest(): boolean {
   return process.env.NEXTAUTH_URL?.startsWith("https://") ||
@@ -154,18 +153,11 @@ export const authOptions: NextAuthOptions = {
 
           // Step 3: Set cookie (same as existing auth flow)
           const cookieStore = await cookies();
-          cookieStore.set(getAuthCookieName(), apiToken, {
+          cookieStore.set("vexa-token", apiToken, {
             httpOnly: true,
             secure: isSecureRequest(),
             sameSite: "lax",
             maxAge: 60 * 60 * 24 * 30, // 30 days
-            path: "/",
-          });
-          cookieStore.set(getUserInfoCookieName(), JSON.stringify({ email: vexaUser.email, name: vexaUser.name }), {
-            httpOnly: true,
-            secure: isSecureRequest(),
-            sameSite: "lax",
-            maxAge: 60 * 60 * 24 * 30,
             path: "/",
           });
 
@@ -218,3 +210,4 @@ export const authOptions: NextAuthOptions = {
 const handler = NextAuth(authOptions);
 
 export { handler as GET, handler as POST };
+

@@ -50,21 +50,6 @@ async function handleResponse<T>(response: Response): Promise<T> {
       }
     }
 
-    const authRejected =
-      response.status === 401 ||
-      ((response.status === 403 || response.status === 401) &&
-        /invalid api key|missing api key|authentication failed|not authenticated|unauthorized/i.test(errorMessage));
-    if (authRejected && typeof window !== "undefined") {
-      try {
-        window.localStorage.removeItem("vexa-auth");
-      } catch {
-        // Ignore storage failures; redirecting through auth is the important bit.
-      }
-      if (!window.location.pathname.startsWith("/login")) {
-        window.location.assign(withBasePath("/login"));
-      }
-    }
-
     throw new VexaAPIError(errorMessage, response.status, details);
   }
   return response.json();
@@ -403,51 +388,6 @@ export const vexaAPI = {
     mediaFileId: number
   ): Promise<string> {
     return this.getRecordingAudioStreamUrl(recordingId, mediaFileId);
-  },
-
-  // v0.10.6.1 — Canonical playback path (ADR-2). The dashboard reads
-  // `recording.playback_url.audio` (a stable route like
-  // `/recordings/<id>/master?type=audio`) and calls this helper to
-  // resolve it to a presigned URL. The dashboard no longer picks the
-  // master from `media_files[]`; the backend produces it.
-  //
-  // v0.10.6.1 contract:
-  //   - 404 (master not yet produced) → returns null. Caller renders an
-  //     explicit "finalizing" UI state. NOT a silent fallback (principle 5).
-  //   - Network error → throws. Caller distinguishes "connection error"
-  //     (transient/retryable) from "not ready" (await server-side work).
-  //   - Success → { url, duration_seconds }. duration_seconds is sourced
-  //     from the master media file; the dashboard no longer peeks into
-  //     media_files[] for duration.
-  async getRecordingMasterStreamUrl(
-    recordingId: number,
-    type: "audio" | "video"
-  ): Promise<{ url: string; duration_seconds: number | null } | null> {
-    const response = await fetch(
-      withBasePath(`/api/vexa/recordings/${recordingId}/master?type=${type}`)
-    );
-    if (response.status === 404) {
-      return null;
-    }
-    if (!response.ok) {
-      throw new Error(
-        `getRecordingMasterStreamUrl(${recordingId}, ${type}) failed: HTTP ${response.status}`
-      );
-    }
-    const data = (await response.json()) as {
-      url?: string;
-      download_url?: string;
-      duration_seconds?: number | null;
-    };
-    if (!(data.url || data.download_url)) {
-      throw new Error(
-        `getRecordingMasterStreamUrl(${recordingId}, ${type}) response had no url`
-      );
-    }
-    return {
-      url: withBasePath(`/api/vexa/recordings/${recordingId}/master?type=${type}&proxy=1`),
-      duration_seconds: data.duration_seconds ?? null,
-    };
   },
 
   // Legacy synchronous helpers — return the /raw proxy URL directly.

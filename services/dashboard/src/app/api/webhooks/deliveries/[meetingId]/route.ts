@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { getAuthCookieName } from "@/lib/auth-cookies";
 
 /**
  * GET /api/webhooks/deliveries/:meetingId
@@ -11,12 +10,9 @@ export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ meetingId: string }> }
 ) {
-  const VEXA_API_URL = process.env.VEXA_API_URL;
-  if (!VEXA_API_URL) {
-    return NextResponse.json({ error: "VEXA_API_URL is required" }, { status: 500 });
-  }
+  const VEXA_API_URL = process.env.VEXA_API_URL || "http://localhost:18056";
   const cookieStore = await cookies();
-  const userToken = cookieStore.get(getAuthCookieName())?.value;
+  const userToken = cookieStore.get("vexa-token")?.value;
   const apiKey = userToken || process.env.VEXA_API_KEY || "";
   const { meetingId } = await params;
 

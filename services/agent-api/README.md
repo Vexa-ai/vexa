@@ -72,7 +72,7 @@ uvicorn agent_api.main:app --host 0.0.0.0 --port 8100
 # Stream a response from the agent (SSE)
 curl -N -X POST http://localhost:8100/api/chat \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: <api-key>" \
+  -H "X-API-Key: your-api-key" \
   -d '{
     "user_id": "user-1",
     "message": "What files are in the workspace?"
@@ -83,7 +83,7 @@ curl -N -X POST http://localhost:8100/api/chat \
 
 ```bash
 curl http://localhost:8100/api/sessions?user_id=user-1 \
-  -H "X-API-Key: <api-key>"
+  -H "X-API-Key: your-api-key"
 ```
 
 ## API Reference
@@ -155,7 +155,7 @@ Redis    S3/MinIO
 | `S3_BUCKET` | `workspaces` | S3 bucket for workspaces |
 | `AGENT_WORKSPACE_PATH` | `/workspace` | Agent session storage path inside container |
 | `AGENT_STREAM_FORMAT` | `stream-json` | Agent CLI output format |
-| `CORS_ORIGINS` | `http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001` | Allowed CORS origins |
+| `CORS_ORIGINS` | `*` | Allowed CORS origins |
 | `LOG_LEVEL` | `INFO` | Log level |
 
 ## Use Cases

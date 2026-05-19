@@ -6,10 +6,10 @@ message recreates it seamlessly.
 """
 
 import asyncio
-import hmac
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -61,16 +61,6 @@ app.add_middleware(
 )
 
 cm = ContainerManager()
-
-
-async def require_internal_secret(request: Request) -> None:
-    """Guard service-to-service routes with the shared internal secret."""
-    if not config.DEV_MODE and not config.INTERNAL_API_SECRET:
-        raise HTTPException(503, "INTERNAL_API_SECRET not configured")
-    if config.INTERNAL_API_SECRET:
-        provided = request.headers.get("x-internal-secret", "")
-        if not hmac.compare_digest(provided, config.INTERNAL_API_SECRET):
-            raise HTTPException(403, "Invalid internal secret")
 
 
 # ── Request / response models ──────────────────────────────────────────────
@@ -261,8 +251,11 @@ async def chat(req: ChatRequest, request: Request):
 @app.post("/internal/chat")
 async def internal_chat(req: ChatRequest, request: Request):
     """Internal chat endpoint for scheduler — no user API key required.
-    Protected by INTERNAL_API_SECRET."""
-    await require_internal_secret(request)
+    Protected by INTERNAL_API_SECRET if configured."""
+    if config.INTERNAL_API_SECRET:
+        provided = request.headers.get("x-internal-secret", "")
+        if provided != config.INTERNAL_API_SECRET:
+            raise HTTPException(403, "Invalid internal secret")
     return _chat_stream(req)
 
 
@@ -324,22 +317,16 @@ async def rename_session(session_id: str, req: SessionRenameRequest):
 @app.post("/api/workspaces", dependencies=[Depends(require_api_key)])
 async def upload_workspace_endpoint(request: Request, user_id: str, name: str):
     """Upload a workspace from local as tar.gz."""
-    _validate_key_segment(user_id, "user_id")
-    _validate_key_segment(name, "workspace")
     body = await request.body()
     if not body:
         raise HTTPException(400, "Empty body")
-    try:
-        result = await workspace.upload_workspace(user_id, name, body)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
+    result = await workspace.upload_workspace(user_id, name, body)
     return result
 
 
 @app.get("/api/workspaces", dependencies=[Depends(require_api_key)])
 async def list_workspaces_endpoint(user_id: str):
     """List user's named workspaces."""
-    _validate_key_segment(user_id, "user_id")
     ws = await workspace.list_workspaces(user_id)
     return {"workspaces": ws}
 
@@ -347,8 +334,6 @@ async def list_workspaces_endpoint(user_id: str):
 @app.delete("/api/workspaces/{name}", dependencies=[Depends(require_api_key)])
 async def delete_workspace_endpoint(name: str, user_id: str):
     """Delete a named workspace."""
-    _validate_key_segment(user_id, "user_id")
-    _validate_key_segment(name, "workspace")
     await workspace.delete_workspace(user_id, name)
     return {"status": "deleted"}
 
@@ -356,8 +341,6 @@ async def delete_workspace_endpoint(name: str, user_id: str):
 @app.get("/api/workspaces/{name}/files", dependencies=[Depends(require_api_key)])
 async def list_workspace_template_files(name: str, user_id: str):
     """List files in a named workspace (from S3)."""
-    _validate_key_segment(user_id, "user_id")
-    _validate_key_segment(name, "workspace")
     files = await workspace.list_workspace_files_s3(user_id, name)
     return {"files": files}
 
@@ -365,8 +348,6 @@ async def list_workspace_template_files(name: str, user_id: str):
 @app.post("/api/workspaces/{name}/file", dependencies=[Depends(require_api_key)])
 async def write_workspace_template_file(name: str, req: FileWriteRequest):
     """Write a single file to a named workspace in S3."""
-    _validate_key_segment(req.user_id, "user_id")
-    _validate_key_segment(name, "workspace")
     _validate_path(req.path)
     await workspace.write_workspace_file_s3(req.user_id, name, req.path, req.content)
     return {"path": req.path, "status": "written"}
@@ -495,9 +476,8 @@ async def put_workspace_file(req: FileWriteRequest):
 
 
 @app.post("/internal/workspace/save")
-async def workspace_save(req: UserIdRequest, request: Request):
+async def workspace_save(req: UserIdRequest):
     """Sync workspace from container to S3."""
-    await require_internal_secret(request)
     container = cm.get_container_name(req.user_id)
     if not container:
         raise HTTPException(404, f"No container for user {req.user_id}")
@@ -510,7 +490,6 @@ async def workspace_save(req: UserIdRequest, request: Request):
 @app.post("/internal/webhooks/meeting-completed")
 async def webhook_meeting_completed(request: Request):
     """Receive post-meeting webhook from meeting-api."""
-    await require_internal_secret(request)
     body = await request.json()
     event_type = body.get("event_type", "unknown")
     event_id = body.get("event_id", "?")
@@ -520,9 +499,8 @@ async def webhook_meeting_completed(request: Request):
 
 
 @app.get("/internal/workspace/status")
-async def workspace_status(user_id: str, request: Request):
+async def workspace_status(user_id: str):
     """Check workspace and container status."""
-    await require_internal_secret(request)
     exists = await workspace.workspace_exists(user_id)
     container = cm.get_container_name(user_id)
     return {
@@ -534,17 +512,11 @@ async def workspace_status(user_id: str, request: Request):
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
+_SAFE_PATH = re.compile(r"^[a-zA-Z0-9._/\-]+$")
+
+
 def _validate_path(path: str) -> str:
     """Validate a workspace file path."""
-    try:
-        return workspace.validate_workspace_path(path)
-    except ValueError:
+    if not path or ".." in path or path.startswith("/") or not _SAFE_PATH.match(path):
         raise HTTPException(400, "Invalid path")
-
-
-def _validate_key_segment(value: str, label: str = "segment") -> str:
-    """Validate a workspace key segment."""
-    try:
-        return workspace.validate_key_segment(value, label)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
+    return path

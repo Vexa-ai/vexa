@@ -13,8 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import Meeting
 from .database import async_session_local
-from .outbound_events import claim_outbound_event, event_key, mark_outbound_event
-from .webhook_delivery import deliver_with_result, build_envelope
+from .webhook_delivery import deliver, build_envelope
 
 from .config import TRANSCRIPTION_COLLECTOR_URL, POST_MEETING_HOOKS
 from .webhooks import send_completion_webhook
@@ -186,17 +185,8 @@ async def aggregate_transcription(meeting: Meeting, db: AsyncSession):
         return False
 
 
-async def fire_post_meeting_hooks(meeting: Meeting, db: AsyncSession) -> None:
-    """Fire POST_MEETING_HOOKS to configured internal services (billing, analytics, etc.).
-
-    v0.10.6.1 #330 — internal billing/usage hooks must be duplicate-safe
-    and retryable without adding a database column. Each configured
-    destination gets one ``meeting.data.outbound_events`` ledger entry under a
-    ``SELECT ... FOR UPDATE`` row lock. The ledger claim commits before HTTP
-    delivery, so concurrent callers either see a pending/queued/delivered event
-    and skip, or the retry sweep can recover the narrow crash-after-claim
-    window.
-    """
+async def fire_post_meeting_hooks(meeting: Meeting, db: AsyncSession):
+    """Fire POST_MEETING_HOOKS to configured internal services (billing, analytics, etc.)."""
     if not POST_MEETING_HOOKS:
         return
 
@@ -218,7 +208,7 @@ async def fire_post_meeting_hooks(meeting: Meeting, db: AsyncSession) -> None:
     duration_seconds = (meeting.end_time - meeting.start_time).total_seconds()
     meeting_data = meeting.data or {}
 
-    event_data = {
+    payload = build_envelope("meeting.completed", {
         "meeting": {
             "id": meeting.id,
             "user_id": meeting.user_id,
@@ -231,43 +221,14 @@ async def fire_post_meeting_hooks(meeting: Meeting, db: AsyncSession) -> None:
             "created_at": meeting.created_at.isoformat() if meeting.created_at else None,
             "transcription_enabled": meeting_data.get("transcribe_enabled", False),
         },
-    }
+    })
 
     for hook_url in POST_MEETING_HOOKS:
-        key = event_key("post_meeting_hooks", "meeting.completed", meeting.id, hook_url)
-        payload = build_envelope("meeting.completed", event_data, event_id=key)
-        key, ledger_event, should_deliver = await claim_outbound_event(
-            db,
-            meeting_id=meeting.id,
-            channel="post_meeting_hooks",
-            event_type="meeting.completed",
-            destination=hook_url,
-            payload=payload,
-        )
-        if not should_deliver:
-            logger.info(
-                "fire_post_meeting_hooks: meeting %s hook %s already %s; skipping",
-                meeting.id,
-                key,
-                ledger_event.get("status"),
-            )
-            continue
-
-        result = await deliver_with_result(
+        await deliver(
             url=hook_url,
             payload=payload,
             timeout=10.0,
             label=f"post-meeting-hook meeting={meeting.id}",
-            metadata={"meeting_id": meeting.id, "outbound_event_key": key},
-        )
-        await mark_outbound_event(
-            db,
-            meeting_id=meeting.id,
-            key=key,
-            status=result.status,
-            attempts=int(ledger_event.get("attempts") or 0) + 1,
-            error=result.error,
-            status_code=result.response.status_code if result.response is not None else None,
         )
 
 
@@ -317,22 +278,6 @@ async def finalize_in_progress_recordings(meeting: Meeting, db: AsyncSession) ->
         any_changed = False
         for mf in media_files:
             if not isinstance(mf, dict):
-                continue
-            # #311 — Single-writer policy for master_path.
-            # If recording_finalizer has already written a master path on
-            # this media_files entry, treat it as the canonical owner and
-            # only observe — do NOT overwrite is_final / finalized_at /
-            # finalized_by. The race window: recording_finalizer uploads
-            # the master to storage and updates JSONB storage_path; if
-            # post_meeting fires between those two writes (or right after
-            # storage_path lands but before is_final flips), the
-            # pre-#311 code would stomp finalized_by="post_meeting_reconciler"
-            # over recording_finalizer's mark. Now: presence of a master
-            # storage_path is the signal that recording_finalizer owns
-            # this entry; we observe and skip.
-            sp = (mf.get("storage_path") or "")
-            if sp.endswith("/audio/master.webm") or sp.endswith("/audio/master.wav"):
-                # Observed: recording_finalizer is in flight or done. Don't write.
                 continue
             if not mf.get("is_final"):
                 mf["is_final"] = True

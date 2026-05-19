@@ -595,22 +595,14 @@ def main() -> int:
 
     if args.gate_check:
         strict = set()
-        overrides: Dict[str, int] = {}
         if scope:
             strict = set(scope.get("strict_features") or [])
-            overrides = {k: int(v) for k, v in (scope.get("feature_thresholds_override") or {}).items()}
         failures: List[str] = []
         for f in features:
-            if f.name in strict:
-                required_min = 100
-            elif f.name in overrides:
-                required_min = overrides[f.name]
-            else:
-                required_min = f.gate_confidence_min
+            required_min = 100 if f.name in strict else f.gate_confidence_min
             if f.confidence < required_min:
                 failures.append(f"{f.name}: {f.confidence}% < {required_min}%"
-                                + (" [strict]" if f.name in strict else "")
-                                + (" [release-override]" if f.name in overrides else ""))
+                                + (" [strict]" if f.name in strict else ""))
         # Also surface any scope-level required-mode failure (issue with a fail in a required mode).
         if scope:
             for issue in scope.get("issues") or []:

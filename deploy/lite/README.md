@@ -94,9 +94,7 @@ Edit `.env` at repo root. Created automatically on first `make lite`.
 | `MINIO_ACCESS_KEY`  | --                         | MinIO access key                  |
 | `MINIO_SECRET_KEY`  | --                         | MinIO secret key                  |
 | `LOG_LEVEL`         | `info`                     | Logging level for all services    |
-| `OPENAI_API_KEY`    | --                         | Optional. Only consumed when `/speak` callers pass `provider=openai`. Default `provider=piper` runs locally with no key. |
-| `PIPER_VOICES_DIR`  | `/app/voices`              | Where Piper TTS caches downloaded voice models (mount a volume to persist across restarts). |
-| `PIPER_DEFAULT_VOICES` | `en_US-amy-medium,en_US-danny-low` | Voices pre-loaded on startup. Other languages auto-download on first use via `provider=piper` auto-language detection. |
+| `OPENAI_API_KEY`    | --                         | For OpenAI TTS voices (optional)  |
 
 
 ## Debugging

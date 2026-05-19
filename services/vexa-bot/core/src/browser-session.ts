@@ -1,6 +1,6 @@
 import { chromium } from 'playwright-extra';
 import { createClient, RedisClientType } from 'redis';
-import { execFileSync } from 'child_process';
+import { execSync } from 'child_process';
 import { mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { getBrowserSessionArgs } from './constans';
@@ -12,19 +12,6 @@ import { s3Sync, syncBrowserDataFromS3, syncBrowserDataToS3, cleanStaleLocks, BR
 const WORKSPACE_DIR = '/workspace';
 
 // --- Git workspace helpers ---
-
-function runGit(args: string[], cwd?: string, timeout: number = 60000): void {
-  execFileSync('git', args, { cwd, stdio: 'pipe', timeout });
-}
-
-function readGit(args: string[], cwd?: string): string {
-  return execFileSync('git', args, {
-    cwd,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: 60000,
-  }).trim();
-}
 
 function gitRepoUrl(config: BrowserSessionConfig): string {
   const repo = config.workspaceGitRepo!;
@@ -42,8 +29,7 @@ function syncWorkspaceFromGit(config: BrowserSessionConfig): void {
     if (existsSync(join(WORKSPACE_DIR, '.git'))) {
       // Already cloned — pull latest (ignore errors if remote branch doesn't exist yet)
       try {
-        runGit(['fetch', 'origin'], WORKSPACE_DIR);
-        runGit(['reset', '--hard', `origin/${branch}`], WORKSPACE_DIR);
+        execSync(`git fetch origin && git reset --hard origin/${branch}`, { cwd: WORKSPACE_DIR, stdio: 'pipe', timeout: 60000 });
         console.log('[browser-session] Git pull complete');
       } catch {
         console.log('[browser-session] Git pull skipped (remote branch may not exist yet)');
@@ -51,20 +37,20 @@ function syncWorkspaceFromGit(config: BrowserSessionConfig): void {
     } else {
       // Fresh clone — try with branch, fall back to bare clone, fall back to init
       try {
-        runGit(['clone', '--branch', branch, url, WORKSPACE_DIR], undefined, 120000);
+        execSync(`git clone --branch ${branch} "${url}" ${WORKSPACE_DIR}`, { stdio: 'pipe', timeout: 120000 });
       } catch {
         // Repo might be empty — clone without branch
         try {
-          runGit(['clone', url, WORKSPACE_DIR], undefined, 120000);
+          execSync(`git clone "${url}" ${WORKSPACE_DIR}`, { stdio: 'pipe', timeout: 120000 });
         } catch {
           // Truly empty repo or auth issue — init locally and set remote
-          runGit(['init'], WORKSPACE_DIR);
-          runGit(['remote', 'add', 'origin', url], WORKSPACE_DIR);
+          execSync('git init', { cwd: WORKSPACE_DIR, stdio: 'pipe' });
+          execSync(`git remote add origin "${url}"`, { cwd: WORKSPACE_DIR, stdio: 'pipe' });
           console.log('[browser-session] Initialized empty workspace with remote');
         }
       }
-      runGit(['config', 'user.email', 'bot@vexa.ai'], WORKSPACE_DIR);
-      runGit(['config', 'user.name', 'Vexa Bot'], WORKSPACE_DIR);
+      execSync('git config user.email "bot@vexa.ai"', { cwd: WORKSPACE_DIR, stdio: 'pipe' });
+      execSync('git config user.name "Vexa Bot"', { cwd: WORKSPACE_DIR, stdio: 'pipe' });
       console.log('[browser-session] Git clone complete');
     }
   } catch (err: any) {
@@ -76,13 +62,13 @@ function syncWorkspaceToGit(config: BrowserSessionConfig): void {
   const branch = config.workspaceGitBranch || 'main';
   console.log(`[browser-session] Git push workspace to ${config.workspaceGitRepo}`);
   try {
-    runGit(['add', '-A'], WORKSPACE_DIR);
-    const status = readGit(['status', '--porcelain'], WORKSPACE_DIR);
+    execSync('git add -A', { cwd: WORKSPACE_DIR, stdio: 'pipe' });
+    const status = execSync('git status --porcelain', { cwd: WORKSPACE_DIR, encoding: 'utf8' }).trim();
     if (status) {
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      runGit(['commit', '-m', `save ${timestamp}`], WORKSPACE_DIR);
+      execSync(`git commit -m "save ${timestamp}"`, { cwd: WORKSPACE_DIR, stdio: 'pipe' });
     }
-    runGit(['push', 'origin', branch], WORKSPACE_DIR);
+    execSync(`git push origin ${branch}`, { cwd: WORKSPACE_DIR, stdio: 'pipe', timeout: 60000 });
     console.log('[browser-session] Git push complete');
   } catch (err: any) {
     console.log(`[browser-session] Git push failed: ${err.message}`);

@@ -20,11 +20,6 @@ function isHiddenDeletedMeeting(meeting: Meeting): boolean {
   return redacted || missingNativeId;
 }
 
-function recordingsFromMeeting(meeting: Meeting | null): RecordingData[] {
-  const recordings = meeting?.data?.recordings;
-  return Array.isArray(recordings) ? (recordings as RecordingData[]) : [];
-}
-
 interface MeetingsState {
   // Data
   meetings: Meeting[];
@@ -66,7 +61,7 @@ interface MeetingsState {
   fetchMoreMeetings: () => Promise<void>;
   fetchMeeting: (id: string, options?: { silent?: boolean }) => Promise<void>;
   refreshMeeting: (id: string) => Promise<void>;
-  fetchTranscripts: (platform: Platform, nativeId: string, meetingId?: string, options?: { silent?: boolean }) => Promise<void>;
+  fetchTranscripts: (platform: Platform, nativeId: string, meetingId?: string) => Promise<void>;
   updateMeetingData: (platform: Platform, nativeId: string, data: MeetingDataUpdate) => Promise<void>;
   deleteMeeting: (platform: Platform, nativeId: string, meetingId?: string) => Promise<void>;
   setCurrentMeeting: (meeting: Meeting | null) => void;
@@ -178,8 +173,7 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
     }
   },
 
-  // Fetch single meeting detail directly. List rows can be intentionally thin,
-  // while detail rows carry canonical recording/transcription lifecycle data.
+  // Fetch single meeting — checks loaded list first, then fetches by ID
   // Use silent: true to avoid showing loading state (for polling/refresh)
   fetchMeeting: async (id: string, options?: { silent?: boolean }) => {
     const { silent = false } = options || {};
@@ -189,27 +183,24 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
     }
 
     try {
-      let meeting: Meeting;
-      try {
-        meeting = await vexaAPI.getMeeting(id);
-      } catch (e) {
-        if (e instanceof VexaAPIError && e.status === 404) {
-          set({ error: `Meeting with ID ${id} not found`, isLoadingMeeting: false });
-          return;
+      // Check already-loaded meetings first (may include paginated results)
+      const { meetings: existing } = get();
+      let meeting = existing.find((m) => m.id.toString() === id);
+
+      if (!meeting) {
+        // Not in local list — fetch directly by ID
+        try {
+          meeting = await vexaAPI.getMeeting(id);
+        } catch (e) {
+          if (e instanceof VexaAPIError && e.status === 404) {
+            set({ error: `Meeting with ID ${id} not found`, isLoadingMeeting: false });
+            return;
+          }
+          throw e;
         }
-        throw e;
       }
 
-      const { meetings } = get();
-      const updatedMeetings = meetings.map((m) =>
-        m.id.toString() === id ? meeting : m
-      );
-      set({
-        currentMeeting: meeting,
-        meetings: updatedMeetings,
-        recordings: recordingsFromMeeting(meeting),
-        isLoadingMeeting: false,
-      });
+      set({ currentMeeting: meeting, isLoadingMeeting: false });
     } catch (error) {
       if (error instanceof VexaAPIError && error.status === 402) {
         set({ subscriptionRequired: true, isLoadingMeeting: false, error: null });
@@ -228,20 +219,13 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
       const meeting = await vexaAPI.getMeeting(id);
       if (meeting) {
         const { currentMeeting, meetings } = get();
-        const currentRecordingCount = recordingsFromMeeting(currentMeeting).length;
-        const nextRecordingCount = recordingsFromMeeting(meeting).length;
         if (currentMeeting?.status !== meeting.status ||
-            currentMeeting?.updated_at !== meeting.updated_at ||
-            currentRecordingCount !== nextRecordingCount) {
+            currentMeeting?.updated_at !== meeting.updated_at) {
           // Update in meetings list if present
           const updatedMeetings = meetings.map((m) =>
             m.id.toString() === id ? meeting : m
           );
-          set({
-            meetings: updatedMeetings,
-            currentMeeting: meeting,
-            recordings: recordingsFromMeeting(meeting),
-          });
+          set({ meetings: updatedMeetings, currentMeeting: meeting });
         }
       }
     } catch (error) {
@@ -251,11 +235,8 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
   },
 
   // Fetch transcripts for a meeting
-  fetchTranscripts: async (platform: Platform, nativeId: string, meetingId?: string, options?: { silent?: boolean }) => {
-    const { silent = false } = options || {};
-    if (!silent) {
-      set({ isLoadingTranscripts: true, error: null });
-    }
+  fetchTranscripts: async (platform: Platform, nativeId: string, meetingId?: string) => {
+    set({ isLoadingTranscripts: true, error: null });
     try {
       const result = await vexaAPI.getMeetingWithTranscripts(platform, nativeId, meetingId);
       // Reuse the same canonical pipeline as WS/bootstraps:
@@ -263,25 +244,20 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
       // - sort by absolute_start_time
       // - collapse overlap (containment / expansion / tail-repeat)
       get().bootstrapTranscripts(result.segments);
-      // Store the authoritative recording list, including empty responses so
-      // navigating between meetings cannot leave stale playback controls behind.
-      set({ recordings: result.recordings });
-      if (!silent) {
-        set({ isLoadingTranscripts: false });
+      // Store recordings from the transcript response
+      if (result.recordings.length > 0) {
+        set({ recordings: result.recordings });
       }
+      set({ isLoadingTranscripts: false });
     } catch (error) {
       if (error instanceof VexaAPIError && error.status === 402) {
-        set({ subscriptionRequired: true, ...(silent ? {} : { isLoadingTranscripts: false, error: null }) });
+        set({ subscriptionRequired: true, isLoadingTranscripts: false, error: null });
         return;
       }
-      if (!silent) {
-        set({
-          error: (error as Error).message,
-          isLoadingTranscripts: false
-        });
-      } else {
-        console.error("Failed to silently refresh transcripts:", error);
-      }
+      set({
+        error: (error as Error).message,
+        isLoadingTranscripts: false
+      });
     }
   },
 
@@ -294,10 +270,7 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
       // Update current meeting if it matches
       const { currentMeeting, meetings } = get();
       if (currentMeeting?.platform_specific_id === nativeId) {
-        set({
-          currentMeeting: updatedMeeting,
-          recordings: recordingsFromMeeting(updatedMeeting),
-        });
+        set({ currentMeeting: updatedMeeting });
       }
 
       // Update in meetings list
@@ -335,7 +308,7 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
   },
 
   setCurrentMeeting: (meeting: Meeting | null) => {
-    set({ currentMeeting: meeting, recordings: recordingsFromMeeting(meeting) });
+    set({ currentMeeting: meeting });
   },
 
   clearCurrentMeeting: () => {

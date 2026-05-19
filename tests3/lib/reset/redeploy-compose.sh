@@ -40,4 +40,3 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
     sleep 2
 done
 make setup-api-key 2>&1 | tail -3 || echo "  [redeploy-compose] setup-api-key reported non-zero; continuing"
-docker compose --env-file "$ENV_FILE" up -d --force-recreate dashboard 2>&1 | tail -5 || true

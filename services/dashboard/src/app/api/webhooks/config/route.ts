@@ -2,10 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import crypto from "crypto";
 import { getAuthenticatedUserId } from "@/lib/auth-utils";
-import { getAuthCookieName } from "@/lib/auth-cookies";
 
 const getAdminConfig = () => {
-  const VEXA_ADMIN_API_URL = process.env.VEXA_ADMIN_API_URL || "";
+  const VEXA_ADMIN_API_URL =
+    process.env.VEXA_ADMIN_API_URL ||
+    process.env.VEXA_API_URL ||
+    "http://localhost:18056";
   const VEXA_ADMIN_API_KEY = process.env.VEXA_ADMIN_API_KEY || "";
   return { VEXA_ADMIN_API_URL, VEXA_ADMIN_API_KEY };
 };
@@ -75,7 +77,7 @@ export async function PUT(request: NextRequest) {
   }
 
   const cookieStore = await cookies();
-  const token = cookieStore.get(getAuthCookieName())?.value;
+  const token = cookieStore.get("vexa-token")?.value;
 
   try {
     const body = await request.json();
@@ -134,7 +136,7 @@ export async function PUT(request: NextRequest) {
     }
 
     // Also update the gateway's webhook URL for this user
-    const VEXA_API_URL = process.env.VEXA_API_URL;
+    const VEXA_API_URL = process.env.VEXA_API_URL || "http://localhost:18056";
     if (token) {
       await fetch(`${VEXA_API_URL}/user/webhook`, {
         method: "PUT",

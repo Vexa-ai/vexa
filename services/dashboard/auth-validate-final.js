@@ -1,11 +1,10 @@
 const { chromium } = require('playwright');
 
-const TOKEN = process.env.VEXA_DASHBOARD_TEST_TOKEN;
-if (!TOKEN) throw new Error('VEXA_DASHBOARD_TEST_TOKEN is required');
+const TOKEN = 'vxa_user_jIwBRUBlQcLeV0aCuYXOtvzNnlC28wpttcPxOXET';
 const USER = {
   id: 2,
-  email: 'test@vexa.ai',
-  name: 'test',
+  email: '2280905@gmail.com',
+  name: '2280905',
   max_concurrent_bots: 3,
   created_at: '2026-03-23T18:25:20.956223'
 };

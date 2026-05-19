@@ -4,7 +4,6 @@ These endpoints receive status updates from vexa-bot containers.
 Payload shapes are frozen (see tests/contracts/test_callback_contracts.py).
 """
 
-import asyncio
 import json
 import logging
 import secrets
@@ -35,10 +34,8 @@ from .meetings import (
 )
 from .post_meeting import run_all_tasks
 from .recording_finalizer import finalize_recording_master
-from .collector.auth import require_internal_secret
 
 logger = logging.getLogger("meeting_api.callbacks")
-router = APIRouter(dependencies=[Depends(require_internal_secret)])
 
 
 # v0.10.5 Pack J — exit classification routing rule (#255 silent class).
@@ -223,6 +220,9 @@ async def _classify_stopped_exit(
 
     return (MeetingStatus.COMPLETED, requested_reason)
 
+router = APIRouter()
+
+
 # ---------------------------------------------------------------------------
 # Frozen payload models (must match tests/contracts/test_callback_contracts.py)
 # ---------------------------------------------------------------------------
@@ -262,9 +262,6 @@ class BotStatusChangePayload(BaseModel):
     # v0.10.5.3 Pack T — cgroup memory + CPU summary at exit time.
     # Persisted into meetings.data.bot_resources JSONB.
     bot_resources: Optional[Dict[str, Any]] = Field(None)
-    # Bot-observed raw meeting acceptance signals. Internal JSONB metadata;
-    # dashboards/tests can derive acceptance classes later.
-    acceptance_signals: Optional[Dict[str, Any]] = Field(None)
 
 
 # ---------------------------------------------------------------------------
@@ -272,19 +269,6 @@ class BotStatusChangePayload(BaseModel):
 # ---------------------------------------------------------------------------
 
 async def _find_meeting_by_session(session_uid: str, db: AsyncSession) -> tuple[Optional[MeetingSession], Optional[Meeting]]:
-    # #313 — browser_session callbacks carry connection_id="bs:<meeting_id>"
-    # because that flow has no MeetingSession row at all (it's a different
-    # lifecycle from regular bot dispatches). Recognize the prefix and
-    # route by meeting_id directly. Returns (None, meeting) — no session
-    # row exists to return for this flow.
-    if session_uid.startswith("bs:"):
-        try:
-            meeting_id = int(session_uid[3:])
-        except ValueError:
-            return None, None
-        meeting = await db.get(Meeting, meeting_id)
-        return None, meeting
-
     session_stmt = select(MeetingSession).where(MeetingSession.session_uid == session_uid)
     meeting_session = (await db.execute(session_stmt)).scalars().first()
     if not meeting_session:
@@ -334,12 +318,7 @@ async def bot_exit_callback(
             # storage_path. Idempotent (HEAD-checks for existing master).
             try:
                 await finalize_recording_master(meeting.id, db)
-            except (asyncio.CancelledError, MemoryError):
-                # #306: never swallow cancellation or memory pressure — these
-                # signal external forces we must propagate (task shutdown,
-                # OOM). Operator can re-trigger finalize on retry.
-                raise
-            except (OSError, ValueError, KeyError, RuntimeError) as fin_err:
+            except Exception as fin_err:
                 logger.error(
                     "Exit callback: finalize_recording_master failed for meeting %s — "
                     "continuing with status update (master may be absent; operator can "
@@ -378,12 +357,7 @@ async def bot_exit_callback(
             # storage_path. Idempotent (HEAD-checks for existing master).
             try:
                 await finalize_recording_master(meeting.id, db)
-            except (asyncio.CancelledError, MemoryError):
-                # #306: never swallow cancellation or memory pressure — these
-                # signal external forces we must propagate (task shutdown,
-                # OOM). Operator can re-trigger finalize on retry.
-                raise
-            except (OSError, ValueError, KeyError, RuntimeError) as fin_err:
+            except Exception as fin_err:
                 logger.error(
                     "Exit callback: finalize_recording_master failed for meeting %s — "
                     "continuing with status update (master may be absent; operator can "
@@ -492,12 +466,7 @@ async def bot_exit_callback(
             # storage_path. Idempotent (HEAD-checks for existing master).
             try:
                 await finalize_recording_master(meeting.id, db)
-            except (asyncio.CancelledError, MemoryError):
-                # #306: never swallow cancellation or memory pressure — these
-                # signal external forces we must propagate (task shutdown,
-                # OOM). Operator can re-trigger finalize on retry.
-                raise
-            except (OSError, ValueError, KeyError, RuntimeError) as fin_err:
+            except Exception as fin_err:
                 logger.error(
                     "Exit callback: finalize_recording_master failed for meeting %s — "
                     "continuing with status update (master may be absent; operator can "
@@ -711,19 +680,6 @@ async def bot_status_change_callback(
 
     await db.refresh(meeting)
 
-    acceptance_signals_updated = False
-    if payload.acceptance_signals:
-        if not meeting.data:
-            meeting.data = {}
-        d = dict(meeting.data) if isinstance(meeting.data, dict) else {}
-        history = list(d.get("bot_acceptance_signal_history") or [])
-        history.append(payload.acceptance_signals)
-        d["bot_acceptance_signals"] = payload.acceptance_signals
-        d["bot_acceptance_signal_history"] = history[-20:]
-        meeting.data = d
-        attributes.flag_modified(meeting, "data")
-        acceptance_signals_updated = True
-
     # v0.10.5.3 Pack O + Pack T: persist forensic fields on terminal transitions.
     # - bot_logs: last ~200 structured-JSON log lines from bot stdout (ring
     #   buffer via Pack O). Capped at 50 KB to bound JSONB row size.
@@ -766,9 +722,6 @@ async def bot_status_change_callback(
     # on the bot side (see releases/260418-webhooks/triage-log.md candidate b).
     if (meeting.data and isinstance(meeting.data, dict) and meeting.data.get("stop_requested")
             and new_status not in [MeetingStatus.COMPLETED, MeetingStatus.FAILED]):
-        if acceptance_signals_updated:
-            await db.commit()
-            await db.refresh(meeting)
         await schedule_status_webhook_task(
             meeting=meeting,
             background_tasks=background_tasks,
@@ -882,7 +835,6 @@ async def bot_status_change_callback(
         elif meeting.status == MeetingStatus.ACTIVE.value:
             if payload.container_id:
                 meeting.bot_container_id = payload.container_id
-            if payload.container_id or acceptance_signals_updated:
                 await db.commit()
                 await db.refresh(meeting)
             return {"status": "container_updated", "meeting_id": meeting.id, "meeting_status": meeting.status}

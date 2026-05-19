@@ -129,9 +129,6 @@ services:
       - AGENT_IMAGE=${AGENT_IMAGE}
       - BROWSER_IMAGE=${BROWSER_IMAGE}
       - REDIS_URL=redis://redis:6379
-      - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
-      - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
-      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
@@ -265,10 +262,7 @@ services:
       - BOT_IMAGE_NAME=${BROWSER_IMAGE}
       - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa
       - TTS_SERVICE_URL=http://tts-service:8002
-      # agent-api is not shipped in this compose profile. Operators can opt in
-      # with POST_MEETING_HOOKS, but the default must not point at a disabled
-      # service or every completed meeting emits DNS errors before handoff.
-      - POST_MEETING_HOOKS=${POST_MEETING_HOOKS:-}
+      - POST_MEETING_HOOKS=${POST_MEETING_HOOKS:-http://agent-api:8100/internal/webhooks/meeting-completed}
       - TRANSCRIPTION_COLLECTOR_URL=http://meeting-api:8080
       - STORAGE_BACKEND=${STORAGE_BACKEND:-minio}
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
@@ -355,7 +349,6 @@ services:
       args:
         NEXT_PUBLIC_VEXA_OSS_VERSION: ${VEXA_VERSION:-dev}
         NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE: ${VEXA_RELEASE_DATE:-}
-        VEXA_API_URL: http://api-gateway:8000
     image: vexaai/dashboard:${IMAGE_TAG}
     mem_limit: 1g
     ports:
@@ -368,10 +361,6 @@ services:
       - VEXA_ADMIN_API_KEY=${ADMIN_API_TOKEN:-changeme}
       - VEXA_ADMIN_API_URL=http://admin-api:8001
       - JWT_SECRET=${JWT_SECRET:-vexa-dev-jwt-secret}
-      - VEXA_AUTH_COOKIE_NAME=${VEXA_AUTH_COOKIE_NAME:-vexa-token-compose}
-      - VEXA_USER_INFO_COOKIE_NAME=${VEXA_USER_INFO_COOKIE_NAME:-vexa-user-info-compose}
-      - VEXA_ALLOW_DIRECT_LOGIN=${VEXA_ALLOW_DIRECT_LOGIN:-true}
-      - MINIO_INTERNAL_ENDPOINT=${MINIO_INTERNAL_ENDPOINT:-http://minio:9000}
       - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-}
     init: true
     depends_on:
@@ -388,11 +377,6 @@ services:
     mem_limit: 1g
     expose:
       - "8002"
-    # v0.10.6.1 (scope.yaml tts-auto-language-detection.code_to_change):
-    # host-expose the TTS port so host-side proves (TTS_AUTO_LANG_PICKS_RIGHT_VOICE,
-    # TTS_NEW_LANG_VOICE_AUTO_DOWNLOAD_CACHED) can curl localhost:8002.
-    ports:
-      - "127.0.0.1:8002:8002"
     environment:
       - TTS_API_TOKEN=${TTS_API_TOKEN:-}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}

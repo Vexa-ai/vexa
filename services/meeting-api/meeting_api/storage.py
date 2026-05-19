@@ -27,23 +27,6 @@ class StorageClient(ABC):
         """Download file from storage. Returns file content as bytes."""
         ...
 
-    def upload_file_path(self, key: str, src_file_path: str, content_type: str = "application/octet-stream") -> str:
-        """Stream-upload from a local file path. Default implementation
-        falls back to upload_file(read-all-bytes); MinIO/S3 backends
-        override with multipart streaming for bounded memory."""
-        with open(src_file_path, "rb") as fh:
-            data = fh.read()
-        return self.upload_file(key, data, content_type)
-
-    def download_file_to_path(self, key: str, dest_file_path: str) -> str:
-        """Stream-download to a local file path. Default implementation
-        falls back to download_file(read-all); MinIO/S3 backends
-        override with multipart streaming for bounded memory."""
-        data = self.download_file(key)
-        with open(dest_file_path, "wb") as fh:
-            fh.write(data)
-        return dest_file_path
-
     @abstractmethod
     def get_presigned_url(self, path: str, expires: int = 3600) -> str:
         """Generate a presigned download URL. expires is in seconds."""
@@ -67,13 +50,6 @@ class StorageClient(ABC):
         `recordings/<user>/<rec>/<session>/<media_type>/`. Sorted ascending
         so byte-concat order matches the chunk_seq order.
         """
-
-    @abstractmethod
-    def list_objects_bounded(self, prefix: str, max_keys: int = 10000) -> list:
-        """Bounded variant of list_objects. Stops enumerating at max_keys and
-        logs a warning when truncation occurs. Callers that scan user-wide
-        prefixes (sweeps, finalizers) should prefer this to avoid unbounded
-        memory growth from a user with very many chunks."""
         ...
 
 
@@ -168,39 +144,11 @@ class MinIOStorageClient(StorageClient):
         logger.info(f"Uploaded {len(data)} bytes to {self.bucket}/{path}")
         return path
 
-    def upload_file_path(self, key: str, src_file_path: str, content_type: str = "application/octet-stream") -> str:
-        """Stream-upload from a local file path. boto3's upload_file uses
-        multipart with bounded memory regardless of file size.
-
-        Use this for objects that are already on local disk to avoid
-        the bytes-in-memory round-trip required by upload_file().
-        """
-        self.client.upload_file(
-            Filename=src_file_path,
-            Bucket=self.bucket,
-            Key=key,
-            ExtraArgs={"ContentType": content_type},
-        )
-        size = os.path.getsize(src_file_path)
-        logger.info(f"Uploaded {size} bytes to {self.bucket}/{key} (streamed from {src_file_path})")
-        return key
-
     def download_file(self, path: str) -> bytes:
         response = self.client.get_object(Bucket=self.bucket, Key=path)
         data = response["Body"].read()
         logger.info(f"Downloaded {len(data)} bytes from {self.bucket}/{path}")
         return data
-
-    def download_file_to_path(self, key: str, dest_file_path: str) -> str:
-        """Stream-download to a local file path. Bounded memory."""
-        self.client.download_file(
-            Bucket=self.bucket,
-            Key=key,
-            Filename=dest_file_path,
-        )
-        size = os.path.getsize(dest_file_path)
-        logger.info(f"Downloaded {size} bytes from {self.bucket}/{key} (streamed to {dest_file_path})")
-        return dest_file_path
 
     def get_presigned_url(self, path: str, expires: int = 3600) -> str:
         # v0.10.5.3 Pack D-3 follow-up (Option B): sign against the PUBLIC
@@ -233,30 +181,6 @@ class MinIOStorageClient(StorageClient):
         for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
             for obj in page.get("Contents", []):
                 keys.append(obj["Key"])
-        keys.sort()
-        return keys
-
-    def list_objects_bounded(self, prefix: str, max_keys: int = 10000) -> list:
-        keys = []
-        paginator = self.client.get_paginator("list_objects_v2")
-        truncated = False
-        for page in paginator.paginate(
-            Bucket=self.bucket,
-            Prefix=prefix,
-            PaginationConfig={"PageSize": min(1000, max_keys)},
-        ):
-            for obj in page.get("Contents", []):
-                if len(keys) >= max_keys:
-                    truncated = True
-                    break
-                keys.append(obj["Key"])
-            if truncated:
-                break
-        if truncated:
-            logger.warning(
-                "storage.list_objects_bounded truncated at max_keys=%d prefix=%s",
-                max_keys, prefix,
-            )
         keys.sort()
         return keys
 
@@ -326,31 +250,6 @@ class LocalStorageClient(StorageClient):
                 full_path = os.path.join(root, fname)
                 rel = os.path.relpath(full_path, self.base_dir).replace("\\", "/")
                 keys.append(rel)
-        keys.sort()
-        return keys
-
-    def list_objects_bounded(self, prefix: str, max_keys: int = 10000) -> list:
-        normalized_prefix = self._normalize_path(prefix) if prefix else ""
-        full_prefix = os.path.join(self.base_dir, normalized_prefix) if normalized_prefix else self.base_dir
-        keys = []
-        if not os.path.isdir(full_prefix):
-            return keys
-        truncated = False
-        for root, _dirs, files in os.walk(full_prefix):
-            for fname in files:
-                if len(keys) >= max_keys:
-                    truncated = True
-                    break
-                full_path = os.path.join(root, fname)
-                rel = os.path.relpath(full_path, self.base_dir).replace("\\", "/")
-                keys.append(rel)
-            if truncated:
-                break
-        if truncated:
-            logger.warning(
-                "storage.list_objects_bounded truncated at max_keys=%d prefix=%s",
-                max_keys, prefix,
-            )
         keys.sort()
         return keys
 

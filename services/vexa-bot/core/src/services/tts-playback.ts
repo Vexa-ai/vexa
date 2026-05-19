@@ -1,4 +1,4 @@
-import { spawn, execFileSync, ChildProcess } from 'child_process';
+import { spawn, execSync, ChildProcess } from 'child_process';
 import { Readable } from 'stream';
 import { log } from '../utils';
 import https from 'https';
@@ -10,8 +10,8 @@ import http from 'http';
  */
 function unmuteTtsAudio(): void {
   try {
-    execFileSync('pactl', ['set-sink-mute', 'tts_sink', '0'], { stdio: 'pipe' });
-    execFileSync('pactl', ['set-source-mute', 'virtual_mic', '0'], { stdio: 'pipe' });
+    execSync('pactl set-sink-mute tts_sink 0', { stdio: 'pipe' });
+    execSync('pactl set-source-mute virtual_mic 0', { stdio: 'pipe' });
     log('[TTS] PulseAudio unmuted (tts_sink + virtual_mic)');
   } catch (err: any) {
     log(`[TTS] pactl unmute failed: ${err.message}`);
@@ -24,8 +24,8 @@ function unmuteTtsAudio(): void {
  */
 function muteTtsAudio(): void {
   try {
-    execFileSync('pactl', ['set-sink-mute', 'tts_sink', '1'], { stdio: 'pipe' });
-    execFileSync('pactl', ['set-source-mute', 'virtual_mic', '1'], { stdio: 'pipe' });
+    execSync('pactl set-sink-mute tts_sink 1', { stdio: 'pipe' });
+    execSync('pactl set-source-mute virtual_mic 1', { stdio: 'pipe' });
     log('[TTS] PulseAudio muted (tts_sink + virtual_mic)');
   } catch (err: any) {
     log(`[TTS] pactl mute failed: ${err.message}`);
@@ -308,31 +308,23 @@ export class TTSPlaybackService {
 
   /**
    * Synthesize text to speech via the Vexa TTS service and play it.
-   *
-   * Default `provider='piper'` runs locally; `provider='openai'` requires
-   * OPENAI_API_KEY to be set on the upstream tts-service.
-   * Default `voice='auto'` lets the upstream Piper provider detect input
-   * language and pick a matching voice (see services/tts-service/main.py).
+   * Streams the audio for low latency.
    */
   async synthesizeAndPlay(
     text: string,
-    provider: string = 'piper',
-    voice: string = 'auto'
+    provider: string = 'openai',
+    voice: string = 'alloy'
   ): Promise<void> {
     this._currentText = text;
-    log(`[TTS] Synthesizing with provider=${provider} voice=${voice}: "${text.substring(0, 50)}..."`);
-    await this.synthesizeViaTtsService(text, voice, provider);
+    log(`[TTS] Synthesizing with ${provider}, voice=${voice}: "${text.substring(0, 50)}..."`);
+    await this.synthesizeViaTtsService(text, voice);
     this._currentText = null;
   }
 
   /**
-   * TTS synthesis via Vexa TTS service. Dispatches by upstream Content-Type:
-   *   - audio/pcm           → stream directly to paplay (low-latency, default for piper)
-   *   - audio/wav | audio/x-wav | audio/wave | audio/mpeg | audio/mp3
-   *                         → buffer to /tmp file, hand off to existing playFile()
-   *   - anything else       → reject with explicit error (no silent guess)
+   * TTS synthesis via Vexa TTS service. Streams response audio directly to paplay.
    */
-  private async synthesizeViaTtsService(text: string, voice: string, provider: string = 'piper'): Promise<void> {
+  private async synthesizeViaTtsService(text: string, voice: string): Promise<void> {
     const ttsServiceUrl = process.env.TTS_SERVICE_URL?.trim();
     if (!ttsServiceUrl) {
       throw new Error('[TTS] TTS_SERVICE_URL not set');
@@ -340,19 +332,12 @@ export class TTSPlaybackService {
 
     this._isPlaying = true;
 
-    // Ask for PCM only on the Piper provider (the local optimized path).
-    // For other providers (openai, future BYO endpoints), let the upstream
-    // pick its native format and we dispatch on Content-Type.
-    const requestBody: Record<string, unknown> = {
+    const postData = JSON.stringify({
       model: 'tts-1',
       input: text,
       voice: voice,
-      provider: provider,
-    };
-    if (provider === 'piper') {
-      requestBody.response_format = 'pcm';
-    }
-    const postData = JSON.stringify(requestBody);
+      response_format: 'pcm' // Raw PCM Int16LE 24kHz mono
+    });
 
     const base = ttsServiceUrl.replace(/\/$/, '');
     const url = new URL(`${base}/v1/audio/speech`);
@@ -381,91 +366,42 @@ export class TTSPlaybackService {
           return;
         }
 
-        const contentType = (res.headers['content-type'] || '').toLowerCase().split(';')[0].trim();
+        // Unmute PulseAudio before playback
+        unmuteTtsAudio();
 
-        // Streaming PCM path — fastest, used for the Piper provider's
-        // raw Int16LE 24kHz output.
-        if (contentType === 'audio/pcm' || contentType === '') {
-          unmuteTtsAudio();
-          const paplay = spawn('paplay', [
-            '--raw',
-            '--format=s16le',
-            '--rate=24000',
-            '--channels=1',
-            '--device=tts_sink'
-          ], { stdio: ['pipe', 'pipe', 'pipe'] });
+        // Stream response directly to paplay (OpenAI pcm format = Int16LE 24kHz mono)
+        const paplay = spawn('paplay', [
+          '--raw',
+          '--format=s16le',
+          '--rate=24000',
+          '--channels=1',
+          '--device=tts_sink'
+        ], { stdio: ['pipe', 'pipe', 'pipe'] });
 
-          this.paplayProcess = paplay;
+        this.paplayProcess = paplay;
 
-          paplay.stderr?.on('data', (data: Buffer) => {
-            log(`[TTS Playback] paplay stderr: ${data.toString().trim()}`);
-          });
-
-          paplay.on('exit', (code) => {
-            this._isPlaying = false;
-            this.paplayProcess = null;
-            this._currentText = null;
-            muteTtsAudio();
-            if (code === 0 || code === null) resolve();
-            else reject(new Error(`paplay exited with code ${code}`));
-          });
-
-          paplay.on('error', (err) => {
-            this._isPlaying = false;
-            this.paplayProcess = null;
-            muteTtsAudio();
-            reject(err);
-          });
-
-          // Pipe HTTP response body directly to paplay stdin.
-          res.pipe(paplay.stdin!);
-          return;
-        }
-
-        // Buffered file path — for upstream providers returning a
-        // complete audio file (OpenAI returns audio/mpeg by default;
-        // BYO TTS endpoints may return audio/wav). Hand off to the
-        // existing ffmpeg → paplay pipeline via playFile().
-        const supportedFile: Record<string, string> = {
-          'audio/wav': 'wav',
-          'audio/x-wav': 'wav',
-          'audio/wave': 'wav',
-          'audio/mpeg': 'mp3',
-          'audio/mp3': 'mp3',
-        };
-        if (!(contentType in supportedFile)) {
-          this._isPlaying = false;
-          reject(new Error(
-            `[TTS] unsupported upstream Content-Type '${contentType}' — ` +
-            `expected audio/pcm, audio/wav, or audio/mpeg`
-          ));
-          return;
-        }
-
-        const ext = supportedFile[contentType];
-        const chunks: Buffer[] = [];
-        res.on('data', (chunk: Buffer) => chunks.push(chunk));
-        res.on('end', async () => {
-          const buffer = Buffer.concat(chunks);
-          const fs = await import('fs');
-          const path = await import('path');
-          const tmpPath = path.join('/tmp', `tts-${Date.now()}.${ext}`);
-          fs.writeFileSync(tmpPath, buffer);
-          try {
-            await this.playFile(tmpPath);
-            this._currentText = null;
-            resolve();
-          } catch (err) {
-            reject(err);
-          } finally {
-            try { fs.unlinkSync(tmpPath); } catch {}
-            this._isPlaying = false;
-          }
+        paplay.stderr?.on('data', (data: Buffer) => {
+          log(`[TTS Playback] paplay stderr: ${data.toString().trim()}`);
         });
-        res.on('error', (err) => {
+
+        paplay.on('exit', (code) => {
           this._isPlaying = false;
+          this.paplayProcess = null;
+          this._currentText = null;
+          muteTtsAudio();
+          if (code === 0 || code === null) resolve();
+          else reject(new Error(`paplay exited with code ${code}`));
+        });
+
+        paplay.on('error', (err) => {
+          this._isPlaying = false;
+          this.paplayProcess = null;
+          muteTtsAudio();
           reject(err);
         });
+
+        // Pipe HTTP response body directly to paplay stdin
+        res.pipe(paplay.stdin!);
       });
 
       req.on('error', (err) => {
