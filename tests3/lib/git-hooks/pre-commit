@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Stage-aware pre-commit guard — surface #5 of §5.7 enforcement.
 #
-# Refuses commits made outside the `develop` stage unless:
+# Refuses commits made outside the `develop` stage (legacy), any
+# `develop-*` stage (new release flow: develop-design, develop-deliver,
+# develop-verify, develop-sign), or the narrow public-artifact subset of
+# `release-deliver` unless:
 #   - the only changed file is CLAUDE.md / tests3/README.md / tests3/stages/*
 #   - VEXA_BYPASS_STAGE=1 is set (explicit, auditable)
 #
@@ -24,9 +27,29 @@ fi
 
 STAGE=$(awk '/^stage:/{print $2}' "$STAGE_FILE")
 
-# `develop` is the only stage where code commits are legal.
-if [ "$STAGE" = "develop" ]; then
-    exit 0
+# Code commits are legal in legacy `develop` or any new-flow `develop-*` stage.
+case "$STAGE" in
+    develop|develop-*)
+        exit 0
+        ;;
+esac
+
+# Release-deliver is allowed to commit public artifact metadata and release
+# plumbing, but not arbitrary product runtime code.
+if [ "$STAGE" = "release-deliver" ]; then
+    CHANGED=$(git diff --cached --name-only)
+    RELEASE_ONLY=1
+    for f in $CHANGED; do
+        case "$f" in
+            VERSION|RELEASE_NOTES.md|deploy/env-example|deploy/compose/Makefile|tests3/lib/lke-setup-helm.sh|tests3/lib/git-hooks/*)
+                ;;
+            *)
+                RELEASE_ONLY=0; break ;;
+        esac
+    done
+    if [ "$RELEASE_ONLY" = "1" ]; then
+        exit 0
+    fi
 fi
 
 # Permit commits that only touch protocol docs / stage files / skill files —

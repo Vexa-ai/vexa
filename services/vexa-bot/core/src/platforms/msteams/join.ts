@@ -36,6 +36,28 @@ async function warmUpTeamsMediaDevices(page: Page): Promise<void> {
   }
 }
 
+export async function dismissTeamsContinueWithoutMediaModal(page: Page): Promise<boolean> {
+  const continueWithoutMediaSelector = teamsContinueWithoutMediaSelectors.join(", ");
+  const frames = Array.from(new Set([page.mainFrame(), ...page.frames()]));
+
+  for (const frame of frames) {
+    try {
+      const modalContinue = frame.locator(continueWithoutMediaSelector).first();
+      if (await modalContinue.isVisible({ timeout: 500 }).catch(() => false)) {
+        log('ℹ️ "Continue without audio or video" modal detected, clicking through...');
+        await modalContinue.click({ force: true, timeout: 5000 });
+        log('✅ Dismissed "Continue without audio or video" modal');
+        await page.waitForTimeout(500);
+        return true;
+      }
+    } catch (err: any) {
+      log(`ℹ️ Could not click "Continue without audio or video": ${err?.message || err}`);
+    }
+  }
+
+  return false;
+}
+
 async function waitForTeamsPreJoinReadiness(page: Page, timeoutMs: number): Promise<boolean> {
   const start = Date.now();
   let mediaWarmupAttempted = false;
@@ -50,25 +72,8 @@ async function waitForTeamsPreJoinReadiness(page: Page, timeoutMs: number): Prom
     // appears it BLOCKS the prejoin from rendering — Join now never
     // enables until the modal is dismissed. Click through it eagerly
     // so the prejoin can proceed.
-    const continueWithoutMediaSelector = teamsContinueWithoutMediaSelectors.join(", ");
-    const continueWithoutMediaVisible = await page
-      .locator(continueWithoutMediaSelector)
-      .first()
-      .isVisible()
-      .catch(() => false);
-    if (continueWithoutMediaVisible && continueWithoutMediaClickAttempts < 3) {
+    if (continueWithoutMediaClickAttempts < 3 && await dismissTeamsContinueWithoutMediaModal(page)) {
       continueWithoutMediaClickAttempts += 1;
-      log(
-        `ℹ️ "Continue without audio or video" modal detected, clicking through ` +
-        `(attempt ${continueWithoutMediaClickAttempts})...`,
-      );
-      try {
-        await page.locator(continueWithoutMediaSelector).first().click({ timeout: 5000 });
-        log('✅ Dismissed "Continue without audio or video" modal');
-      } catch (err: any) {
-        log(`ℹ️ Could not click "Continue without audio or video": ${err?.message || err}`);
-      }
-      await page.waitForTimeout(500);
       continue;
     }
 
@@ -325,11 +330,12 @@ export async function joinMicrosoftTeams(page: Page, botConfig: BotConfig): Prom
   // We must configure all of these before clicking "Join now" in Step 6.
 
   log("Step 3: Camera handling...");
-  if (botConfig.voiceAgentEnabled) {
-    // Voice agent needs camera ON so the virtual camera canvas stream is sent via WebRTC.
+  if (botConfig.cameraEnabled) {
+    // Outgoing avatar/screen-content video needs camera ON so the virtual
+    // camera canvas stream is sent via WebRTC. Voice-only bots keep video off.
     // The getUserMedia + enumerateDevices patches ensure Teams gets our canvas stream.
     // Try to turn camera ON if it's off.
-    log("ℹ️ Voice agent enabled — keeping camera ON for virtual camera feed");
+    log("ℹ️ Camera capability enabled — keeping camera ON for virtual camera feed");
     try {
       const turnOnBtn = page.locator([
         'button[aria-label="Turn on video"]',
@@ -359,7 +365,7 @@ export async function joinMicrosoftTeams(page: Page, botConfig: BotConfig): Prom
 
       if (turnOnVisible) {
         await turnOnBtn.click();
-        log("✅ Camera/video turned ON for voice agent");
+        log("✅ Camera/video turned ON for virtual camera feed");
         await page.waitForTimeout(300);
       } else if (turnOffVisible) {
         log("ℹ️ Camera/video already ON");
@@ -380,7 +386,7 @@ export async function joinMicrosoftTeams(page: Page, botConfig: BotConfig): Prom
         }
       }
     } catch (error) {
-      log("ℹ️ Could not enable camera for voice agent");
+      log("ℹ️ Could not enable camera for virtual camera feed");
     }
   } else {
     // Normal bot mode — turn camera off to be unobtrusive
@@ -460,6 +466,16 @@ export async function joinMicrosoftTeams(page: Page, botConfig: BotConfig): Prom
   } catch (error: any) {
     log(`ℹ️ Could not enforce Computer audio: ${error.message}. Continuing...`);
   }
+
+  // Dismiss any blocking pre-join confirmation modal
+  // ("Are you sure you don't want audio or video?" / "Continue without audio
+  // or video?") that Teams shows on light-meetings/launch when the bot
+  // declines mic+camera. Underlying Join now button stays in the DOM, so
+  // earlier readiness checks pass — but the actual click is intercepted by
+  // the modal overlay. The modal is rendered inside the nested
+  // `light-meetings/launch` iframe, so we iterate every frame on the page
+  // (including the top frame) to find and dismiss it. Upstream issue #226.
+  await dismissTeamsContinueWithoutMediaModal(page).catch(() => false);
 
   log("Step 6: Clicking 'Join now' to enter the meeting...");
   try {

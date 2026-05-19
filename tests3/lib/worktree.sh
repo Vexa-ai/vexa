@@ -29,6 +29,12 @@ worktree_create() {
         return 1
     fi
 
+    local copy_current_tests3=0
+    if [ "$base" = "WORKTREE_CURRENT" ]; then
+        base="HEAD"
+        copy_current_tests3=1
+    fi
+
     if git -C "$ROOT" show-ref --quiet "refs/heads/${branch}"; then
         info "branch $branch exists — checking out into $target"
         git -C "$ROOT" worktree add "$target" "$branch"
@@ -37,14 +43,18 @@ worktree_create() {
         git -C "$ROOT" worktree add -b "$branch" "$target" "$base"
     fi
 
+    if [ "$copy_current_tests3" = "1" ]; then
+        cp "$ROOT/tests3/lib/stage.py" "$target/tests3/lib/stage.py"
+    fi
+
     # Bootstrap the worktree's stage state: fresh worktree has no
-    # .current-stage, so seed it at idle with this release_id. From idle,
-    # `make release-groom` is the legal next step.
-    python3 "$target/tests3/lib/stage.py" enter idle \
+    # .current-stage, so seed it at done with this release_id. From done,
+    # scope-design is the legal next step.
+    python3 "$target/tests3/lib/stage.py" enter done \
         --release "$rel" --actor worktree-create >/dev/null
 
-    pass "worktree ready: $target (stage=idle, release=$rel)"
-    info "next: cd $target && make release-groom ID=$rel"
+    pass "worktree ready: $target (stage=done, release=$rel)"
+    info "next: cd $target && python3 tests3/lib/stage.py enter scope-design --release $rel"
 }
 
 worktree_list() {

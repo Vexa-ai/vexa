@@ -180,3 +180,6 @@ tests3/.state-helm
 tests3/.state-*
 
 tests3/.current-stage
+
+# Accidental nested test-state artifact (created by mis-cwd test runs).
+tests3/tests3/

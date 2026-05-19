@@ -5,8 +5,52 @@ import { checkEscalation, triggerEscalation, getEscalationExtensionMs } from "..
 import {
   googleInitialAdmissionIndicators,
   googleWaitingRoomIndicators,
-  googleRejectionIndicators
+  googleRejectionIndicators,
+  googleHostNotStartedIndicators
 } from "./selectors";
+
+// #316 — How long to wait, after detecting a host-not-started page, before
+// fast-failing with the classified reason. Short enough that callers see
+// the failure and can retry quickly (vs. burning the full 120s
+// max_wait_for_admission), but long enough to absorb a few seconds of
+// transient host-joining-right-now state.
+const GMEET_HOST_NOT_STARTED_GRACE_MS = 30_000;
+
+// #316 — How long the bot tolerates "unknown state" inside the waiting-
+// room loop (waiting room indicator gone, neither admission nor rejection
+// found) before classifying as silent eviction. Google evicts bots from
+// the waiting room after ~5 minutes; without this we sit in unknown state
+// until the outer timeout.
+const GMEET_WAITING_ROOM_EVICTION_GRACE_MS = 30_000;
+
+// Detect the "host has not started" page. Returns true if any of the
+// host-not-started indicators is visible.
+export async function checkForGoogleHostNotStarted(page: Page): Promise<boolean> {
+  for (const selector of googleHostNotStartedIndicators) {
+    try {
+      const element = page.locator(selector).first();
+      if (await element.isVisible({ timeout: 200 }).catch(() => false)) {
+        log(`🛈 Google Meet host-not-started page detected: "${selector}"`);
+        return true;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
+// Sentinel error class for the GMeet admission classifier (#316). Callers
+// (lifecycle / status-change emit) should map these to the corresponding
+// completion_reason values rather than a generic "admission failed".
+export class GMeetAdmissionFailedError extends Error {
+  reason: string;
+  constructor(reason: string, message: string) {
+    super(message);
+    this.name = "GMeetAdmissionFailedError";
+    this.reason = reason;
+  }
+}
 
 // Function to check if bot has been rejected from the meeting
 export async function checkForGoogleRejection(page: Page): Promise<boolean> {
@@ -124,10 +168,44 @@ export async function waitForGoogleMeetingAdmission(
     }
     
     log("Bot not yet admitted - checking for Google Meet waiting room indicators...");
-    
+
+    // #316 — Host-not-started fast-fail. Before going into the waiting-
+    // room flow we check if the page is showing "host hasn't started" /
+    // "meeting hasn't begun" copy. If so, give it GMEET_HOST_NOT_STARTED_GRACE_MS
+    // for the host to potentially join, then fast-fail with a classified
+    // reason instead of burning the full timeout.
+    const hostNotStartedAtStart = await checkForGoogleHostNotStarted(page);
+    if (hostNotStartedAtStart) {
+      log(`🛈 Host-not-started page detected at admission start; granting ${GMEET_HOST_NOT_STARTED_GRACE_MS}ms for host to join...`);
+      const graceStart = Date.now();
+      while (Date.now() - graceStart < GMEET_HOST_NOT_STARTED_GRACE_MS) {
+        await page.waitForTimeout(2000);
+        if (await checkForGoogleAdmissionIndicators(page)) {
+          log("✅ Host joined during grace period — bot admitted");
+          return true;
+        }
+        if (await checkForWaitingRoomIndicators(page)) {
+          log("ℹ️ Waiting-room appeared during grace period — falling through to waiting-room handling");
+          break;
+        }
+        if (!(await checkForGoogleHostNotStarted(page))) {
+          log("ℹ️ Host-not-started page cleared during grace — re-checking admission state");
+          break;
+        }
+      }
+      // If we're still on the host-not-started page after the grace, fast-fail.
+      if (await checkForGoogleHostNotStarted(page)) {
+        throw new GMeetAdmissionFailedError(
+          "gmeet_host_not_started",
+          `GMeet host has not started the meeting after ${GMEET_HOST_NOT_STARTED_GRACE_MS}ms grace; fast-failing rather than burning full admission timeout (#316)`,
+        );
+      }
+    }
+
     // Check for waiting room indicators using visibility checks
     let stillInWaitingRoom = false;
-    
+    let everInWaitingRoom = false;
+
     const waitingRoomVisible = await checkForWaitingRoomIndicators(page);
     
     if (waitingRoomVisible) {
@@ -146,8 +224,9 @@ export async function waitForGoogleMeetingAdmission(
       }
       
       stillInWaitingRoom = true;
+      everInWaitingRoom = true;
     }
-    
+
     // If we're in waiting room, wait for the full timeout period for admission
     if (stillInWaitingRoom) {
       log(`Bot is in Google Meet waiting room. Waiting for ${timeout}ms for admission...`);
@@ -180,9 +259,23 @@ export async function waitForGoogleMeetingAdmission(
             return true;
           }
 
+          // #316 — Eviction detection. Google evicts waiting-room
+          // bots after ~5 min. Symptom: waiting-room indicator gone,
+          // neither admission nor rejection visible, sustained
+          // unknown state. Once we cross the eviction grace, classify
+          // as evicted and fail cleanly with a reason callers can
+          // optionally retry on.
+          if (everInWaitingRoom && unknownStateDuration >= GMEET_WAITING_ROOM_EVICTION_GRACE_MS) {
+            throw new GMeetAdmissionFailedError(
+              "gmeet_waiting_room_evicted",
+              `GMeet bot was in waiting room then transitioned to unknown state for >=${GMEET_WAITING_ROOM_EVICTION_GRACE_MS}ms with no admission or rejection — likely evicted by Google after ~5min cap (#316)`,
+            );
+          }
+
           // Keep waiting if neither admitted nor rejected
         } else {
           unknownStateDuration = 0;
+          everInWaitingRoom = true;
         }
 
         // Escalation check

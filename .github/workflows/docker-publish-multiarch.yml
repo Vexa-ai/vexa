@@ -1,0 +1,119 @@
+name: Publish multi-arch Docker images
+
+# Builds + pushes multi-arch (linux/amd64,linux/arm64) Docker images for
+# the public-facing self-host surfaces. Triggered on:
+#
+#   - workflow_dispatch (manual run from the Actions tab)
+#   - push of a tag matching v*.*.* (release event)
+#
+# vexa-lite is the primary target — it's the image M-series Mac users
+# pull for self-host (#321, customer reports 2026-04-27 / 2026-05-06).
+#
+# vexa-bot is intentionally NOT in this matrix — its native-builder
+# stage pins linux/amd64 because the Zoom Meeting SDK binary is amd64-
+# only. A separate workflow / scoping decision is needed for an
+# arm64-without-Zoom-SDK bot variant.
+#
+# Required secrets (set per-repo under Settings → Secrets and variables
+# → Actions): DOCKERHUB_USERNAME, DOCKERHUB_TOKEN. The job soft-skips
+# when either is unset so forks without the secrets don't fail.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_override:
+        description: "Override the image tag (default: tag-from-ref or 'dev')"
+        required: false
+        default: ""
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+jobs:
+  has-secrets:
+    runs-on: ubuntu-latest
+    outputs:
+      ok: ${{ steps.check.outputs.ok }}
+    steps:
+      - id: check
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [[ -n "$DOCKERHUB_USERNAME" && -n "$DOCKERHUB_TOKEN" ]]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Docker push skipped::DOCKERHUB_USERNAME or DOCKERHUB_TOKEN secret not set; skipping image publish."
+          fi
+
+  vexa-lite:
+    needs: has-secrets
+    if: needs.has-secrets.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve tag
+        id: tag
+        env:
+          TAG_OVERRIDE: ${{ inputs.tag_override }}
+        run: |
+          # Priority: workflow_dispatch input > git tag > 'dev'.
+          if [[ -n "$TAG_OVERRIDE" ]]; then
+            TAG="$TAG_OVERRIDE"
+          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG="dev"
+          fi
+          echo "TAG=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build & push vexa-lite (linux/amd64,linux/arm64)
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
+        with:
+          context: .
+          file: ./deploy/lite/Dockerfile.lite
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/vexa-lite:${{ steps.tag.outputs.TAG }}
+          build-args: |
+            NEXT_PUBLIC_VEXA_OSS_VERSION=${{ steps.tag.outputs.TAG }}
+            NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE=${{ steps.tag.outputs.TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify arm64 layer in pushed manifest
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          IMAGE_TAG: ${{ steps.tag.outputs.TAG }}
+        run: |
+          set -e
+          IMAGE="${DOCKERHUB_USERNAME}/vexa-lite:${IMAGE_TAG}"
+          docker buildx imagetools inspect "$IMAGE" | tee /tmp/manifest.txt
+          if ! grep -q 'linux/arm64' /tmp/manifest.txt; then
+            echo "::error title=arm64 missing::Pushed manifest for $IMAGE does not include linux/arm64."
+            exit 1
+          fi
+          echo "::notice title=arm64 OK::$IMAGE manifest includes linux/arm64."

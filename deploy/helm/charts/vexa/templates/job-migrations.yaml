@@ -51,6 +51,20 @@ spec:
               set -e
               echo "Running idempotent schema sync..."
               python -c "import asyncio; from meeting_api.database import init_db; asyncio.run(init_db()); print('Schema sync complete.')"
+              # v0.10.6.1 #328 — Schema convergence above (ensure_schema
+              # via init_db) does NOT auto-add the
+              # uq_media_files_recording_type UniqueConstraint to
+              # existing tables — schema_sync handles tables/columns/
+              # indexes only. On FRESH cluster installs, create_all
+              # picks up the model declaration and the constraint is in
+              # place. On UPGRADES of existing clusters, the constraint
+              # stays absent; the application-level filter in
+              # recordings.py is the canonical enforcement contract on
+              # both. Operators who want the schema-level guard on a
+              # pre-existing cluster's DB run the one-shot script at
+              # tests3/lib/migrations/m328-dedup-media-files.py from
+              # any host with DB env access — see the script's --help
+              # for --dry-run / --apply / --add-constraint flags.
           env:
             - name: DB_HOST
               value: {{ include "vexa.dbHostEffective" . | quote }}

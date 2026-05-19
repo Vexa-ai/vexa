@@ -224,7 +224,7 @@ issues:
     problem: |
       Playwright's `chromium.connectOverCDP()` against hosted Vexa
       fails because (a) api-gateway/main.py:1824 hard-codes
-      `proxy_ws_url = f"ws://{host}/..."` in the CDP
+      a plaintext WebSocket scheme in the CDP
       webSocketDebuggerUrl rewrite — the scheme is never `wss://`
       even on an HTTPS gateway; (b) the route
       `/b/{token}/cdp/{path:path}` matches `/cdp/json/version` but
@@ -235,7 +235,7 @@ issues:
     hypothesis: |
       Deriving the outgoing scheme from the incoming request (via
       `request.url.scheme` or X-Forwarded-Proto) produces a correct
-      `wss://` on TLS gateways and `ws://` on local dev. Adding an
+      `wss://` on TLS gateways and a plaintext WebSocket only on local dev. Adding an
       explicit no-trailing-slash route (or disabling FastAPI's 307
       for this path) removes the scheme-downgrade redirect.
     gap_analysis: |

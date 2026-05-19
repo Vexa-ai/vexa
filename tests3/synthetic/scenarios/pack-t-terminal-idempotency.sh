@@ -30,6 +30,7 @@ echo "    meeting reached terminal status=$status"
 # Re-fire same terminal — should be idempotent (200, no transition flip)
 code=$(curl -s -o /dev/null -w '%{http_code}' \
     -X POST "$BASE/bots/internal/callback/exited" \
+    -H "X-Internal-Secret: $INTERNAL_API_SECRET" \
     -H "Content-Type: application/json" \
     -d "{\"connection_id\":\"$session_uid\",\"exit_code\":0,\"reason\":\"self_initiated_leave\",\"completion_reason\":\"stopped\"}")
 case "$code" in

@@ -316,17 +316,23 @@ def _terminate_process_group(pid: int, timeout: int = 10) -> bool:
 
         deadline = time.time() + timeout
         while time.time() < deadline:
-            try:
-                os.kill(pid, 0)
-                time.sleep(0.5)
-            except ProcessLookupError:
+            if not _pid_alive(pid):
+                _reap_pid(pid)
                 logger.info(f"Process {pid} terminated gracefully")
                 return True
+            time.sleep(0.5)
 
         logger.warning(f"Process {pid} did not terminate, sending SIGKILL")
         os.killpg(pgid, signal.SIGKILL)
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            if not _pid_alive(pid):
+                _reap_pid(pid)
+                return True
+            time.sleep(0.25)
         return True
     except ProcessLookupError:
+        _reap_pid(pid)
         return True
     except PermissionError:
         logger.error(f"Permission denied terminating process {pid}")
@@ -335,4 +341,12 @@ def _terminate_process_group(pid: int, timeout: int = 10) -> bool:
         logger.error(f"Error terminating process {pid}: {e}")
         return False
 
+
+def _reap_pid(pid: int) -> None:
+    try:
+        os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        pass
+    except ProcessLookupError:
+        pass
 

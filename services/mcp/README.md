@@ -120,14 +120,14 @@ You will need your Vexa API key to connect to the MCP. If you do not have one, p
         "X-API-Key: ${VEXA_API_KEY}"
       ],
       "env": {
-        "VEXA_API_KEY": "YOUR_API_KEY_HERE"
+        "VEXA_API_KEY": "<api-key>"
       }
     }
   }
 }
 ```
 
-- **Important:** Replace `YOUR_API_KEY_HERE` with your real Vexa API key. Do not share your API key with others.
+- **Important:** Replace `<api-key>` with your real Vexa API key. Do not share your API key with others.
 
 
 ## 4. Start Using the MCP

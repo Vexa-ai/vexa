@@ -27,12 +27,17 @@ T3="$ROOT/tests3"
 # back to the repo-level .state dir.
 STATE="${STATE:-$T3/.state}"
 REGISTRY="$T3/test-registry.yaml"
+source "$T3/lib/common.sh"
 
 export MODE
 export STATE
 
 mkdir -p "$STATE"
 echo "$MODE" > "$STATE/deploy_mode"
+detect_urls "$MODE"
+state_write gateway_url "$GATEWAY_URL"
+state_write admin_url "$ADMIN_URL"
+state_write dashboard_url "$DASHBOARD_URL"
 # v0.10.6 Pack U.7 follow-up: clear stale per-mode reports before each run.
 # aggregate.py reads every *.json under $STATE/reports/<mode>/; stale files
 # from prior cycles (e.g. chart-rolling-update-zero-surge.json from when the
@@ -86,9 +91,9 @@ selected = set()
 if scope_path:
     with open(scope_path) as f:
         scope = yaml.safe_load(f)
-    # v0.10.5.3 fix: scope.yaml structure uses top-level key `scope:` for
+    # v0.10.5.3 fix: scope.yaml structure uses top-level key scope: for
     # the issues list (per tests3/releases/_template/scope.yaml). The
-    # legacy `issues:` key is also accepted for backward compat with any
+    # legacy issues: key is also accepted for backward compat with any
     # external tooling. Without this, --scope selected 0 tests on every
     # invocation (the if branch silently ran 0 tests, which is why
     # release-iterate never actually ran scope-filtered tests).
@@ -108,13 +113,39 @@ if scope_path:
                 # silently dropped Pack U DoDs from scope-filtered runs.
                 # Aggregator picks the specific check from whatever tier reports
                 # it. Cheap (< 2min total) so no reason to be clever.
+                #
+                # 2026-05-11 (v0.10.6.1 dispatch-surface repair, T-038):
+                # Extended the whitelist from a hardcoded 2-entry list to a
+                # pattern match on v0.10.5.3-*, v0.10.6-*, v0.10.6.1-*.
+                # All v0.10.x release-specific scripts emit registry check IDs
+                # as their step IDs (same pattern as v0.10.6-static-greps);
+                # the prior hardcoded list silently dropped 9 v0.10.6.1
+                # scripts from scope-filtered runs even when they were
+                # present on disk and registered in test-registry.yaml.
                 for t in tests:
                     if not want_runs_in(t):
                         continue
                     if t.startswith("smoke-"):
                         selected.add(t)
-                    elif t in ("v0.10.6-static-greps", "v0.10.5.3-hallucination-corpus"):
-                        # Cheap tests that emit check-ID-shaped step IDs.
+                    elif (t.startswith("v0.10.6.1-")
+                          or t.startswith("v0.10.6-")
+                          or t.startswith("v0.10.5.3-")):
+                        # Release-specific multi-step / per-step scripts that
+                        # emit check IDs as step IDs.
+                        selected.add(t)
+                    elif t in (
+                        # v0.10.6.1 architectural-cleanup proves — single-purpose
+                        # scripts not prefixed by release tag. test_begin name
+                        # matches this key, and the script emits the relevant
+                        # check ID via step_pass / step_fail.
+                        "recording-playback-url-canonical",
+                        "recording-finalizing-state",
+                        "recordings-tables-dropped",
+                        "dashboard-playback-canonical",
+                        "no-recordings-table-references",
+                        "no-media-files-table-references",
+                        "no-placeholder-transcription-token",
+                    ):
                         selected.add(t)
 else:
     for name, spec in tests.items():
@@ -167,7 +198,7 @@ while IFS=$'\t' read -r NAME SCRIPT; do
     # Don't let a test's non-zero exit abort the matrix (set -e would).
     # We still care about the exit code for the summary.
     set +e
-    ( cd "$T3" && bash -c "$SCRIPT_EXPANDED" )
+    ( cd "$T3" && bash -c "$SCRIPT_EXPANDED" </dev/null )
     RC=$?
     set -e
 

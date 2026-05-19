@@ -1,8 +1,10 @@
 """Tests for admin-api CRUD route definitions and endpoint availability."""
 
 import os
+import io
+import logging
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # Set required env vars before importing app
 os.environ.setdefault("ADMIN_API_TOKEN", "test-admin-token")
@@ -14,6 +16,7 @@ os.environ.setdefault("DB_USER", "test")
 os.environ.setdefault("DB_PASSWORD", "test")
 
 from app.main import app, verify_admin_token, verify_analytics_or_admin_token, get_current_user
+import app.main as admin_main
 from admin_models.database import get_db
 from httpx import AsyncClient, ASGITransport
 
@@ -136,11 +139,116 @@ class TestRouteDefinitions:
         routes = _route_paths_and_methods()
         assert ("/user/webhook", "PUT") in routes
 
+    def test_user_workspace_git_route_exists(self):
+        routes = _route_paths_and_methods()
+        assert ("/user/workspace-git", "PUT") in routes
+
 
 # --- Endpoint integration tests (with mocked DB and auth) ---
 
 class TestUserEndpoints:
     """Test user CRUD endpoints with mocked dependencies."""
+
+    @pytest.mark.asyncio
+    async def test_list_users_redacts_sensitive_data(self):
+        """GET /admin/users redacts sensitive JSONB values for analytics/list access."""
+        fake_user = make_fake_user(data={
+            "workspace_git": {
+                "repo": "https://github.com/acme/private",
+                "token": "GIT_SECRET",
+                "branch": "main",
+            },
+            "env": {"OPENAI_API_KEY": "sk-secret", "NORMAL": "ok"},
+        })
+        mock_db = make_mock_db(fake_user)
+
+        app.dependency_overrides[get_db] = lambda: mock_db
+        app.dependency_overrides[verify_analytics_or_admin_token] = noop_verify_analytics
+
+        try:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.get("/admin/users")
+            assert resp.status_code == 200, resp.text
+            data = resp.json()[0]["data"]
+            assert data["workspace_git"]["token"] == "[REDACTED]"
+            assert data["env"]["OPENAI_API_KEY"] == "[REDACTED]"
+            assert data["env"]["NORMAL"] == "ok"
+        finally:
+            app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_workspace_git_rejects_loopback_repo(self):
+        """User workspace git config rejects private/local clone targets."""
+        fake_user = make_fake_user(data={})
+        mock_db = make_mock_db(fake_user)
+
+        app.dependency_overrides[get_db] = lambda: mock_db
+        app.dependency_overrides[get_current_user] = lambda: fake_user
+
+        try:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.put(
+                    "/user/workspace-git",
+                    json={"repo": "https://127.0.0.1/private.git", "token": "tok", "branch": "main"},
+                )
+            assert resp.status_code == 422
+            assert "workspace_git.repo" in resp.text
+        finally:
+            app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_workspace_git_response_redacts_token(self):
+        """User workspace git responses do not echo the stored clone token."""
+        fake_user = make_fake_user(data={})
+        mock_db = make_mock_db(fake_user)
+
+        app.dependency_overrides[get_db] = lambda: mock_db
+        app.dependency_overrides[get_current_user] = lambda: fake_user
+
+        try:
+            transport = ASGITransport(app=app)
+            with patch.object(admin_main.attributes, "flag_modified", lambda *_: None):
+                async with AsyncClient(transport=transport, base_url="http://test") as client:
+                    resp = await client.put(
+                        "/user/workspace-git",
+                        json={"repo": "https://github.com/acme/private.git", "token": "tok", "branch": "main"},
+                    )
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["data"]["workspace_git"]["token"] == "[REDACTED]"
+            assert fake_user.data["workspace_git"]["token"] == "tok"
+        finally:
+            app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_patch_user_redacts_secrets_in_logs(self):
+        """Admin PATCH logs do not write raw user.data secrets."""
+        fake_user = make_fake_user(data={"env": {}})
+        mock_db = make_mock_db(fake_user)
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        admin_main.logger.addHandler(handler)
+        admin_main.logger.setLevel(logging.INFO)
+
+        app.dependency_overrides[get_db] = lambda: mock_db
+        app.dependency_overrides[verify_admin_token] = noop_verify_admin
+
+        try:
+            transport = ASGITransport(app=app)
+            with patch.object(admin_main.attributes, "flag_modified", lambda *_: None):
+                async with AsyncClient(transport=transport, base_url="http://test") as client:
+                    resp = await client.patch(
+                        "/admin/users/1",
+                        json={"data": {"env": {"OPENAI_API_KEY": "sk-log-secret"}}},
+                    )
+            assert resp.status_code == 200, resp.text
+            logs = stream.getvalue()
+            assert "sk-log-secret" not in logs
+            assert "[REDACTED]" in logs
+        finally:
+            admin_main.logger.removeHandler(handler)
+            app.dependency_overrides.clear()
 
     @pytest.mark.asyncio
     async def test_create_user_returns_201(self):
@@ -332,6 +440,27 @@ class TestTokenEndpoints:
             assert resp.status_code == 201, resp.text
             body = resp.json()
             assert "token" in body
+        finally:
+            app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_create_token_rejects_invalid_expiry(self):
+        """Token creation rejects zero, negative, and over-limit expires_in."""
+        fake_user = make_fake_user()
+        mock_db = make_mock_db(fake_user)
+
+        app.dependency_overrides[get_db] = lambda: mock_db
+        app.dependency_overrides[verify_admin_token] = noop_verify_admin
+
+        try:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                negative = await client.post("/admin/users/1/tokens?expires_in=-1")
+                zero = await client.post("/admin/users/1/tokens?expires_in=0")
+                huge = await client.post("/admin/users/1/tokens?expires_in=9999999999")
+            assert negative.status_code == 422
+            assert zero.status_code == 422
+            assert huge.status_code == 422
         finally:
             app.dependency_overrides.clear()
 

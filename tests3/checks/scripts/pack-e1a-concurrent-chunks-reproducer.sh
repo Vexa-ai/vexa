@@ -46,10 +46,15 @@ fi
 
 # Confirm all 3 expected tests ran and passed.
 PASSED=$(echo "$OUT" | grep -oE "[0-9]+ passed" | head -1 | awk '{print $1}' || echo 0)
-if [ "${PASSED:-0}" -lt 3 ]; then
-    echo "FAIL: expected ≥3 tests passed, got '${PASSED}'" >&2
+# v0.10.6.1: was ≥3 (AST + sequential + concurrent). The AST static test
+# was removed when the `use_meeting_data` toggle was deleted with the
+# relational-recordings drop (ADR-1) — the branch it asserted on no
+# longer exists. The two runtime tests (sequential + concurrent asyncio.gather)
+# still exercise the lock-before-snapshot invariant end-to-end.
+if [ "${PASSED:-0}" -lt 2 ]; then
+    echo "FAIL: expected ≥2 tests passed, got '${PASSED}'" >&2
     echo "$OUT" | tail -10 >&2
     exit 1
 fi
 
-echo "ok: Pack E.1.a v2 reproducer passes (${PASSED} tests, AST + sequential + concurrent asyncio.gather)"
+echo "ok: Pack E.1.a v2 reproducer passes (${PASSED} tests, sequential + concurrent asyncio.gather)"

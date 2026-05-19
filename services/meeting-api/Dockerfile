@@ -17,11 +17,14 @@ RUN pip install --no-cache-dir /admin-models
 COPY services/meeting-api/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy app code
-COPY services/meeting-api .
-
 # Run as non-root
 RUN useradd -r -s /bin/false appuser
+
+# Copy app code with deterministic ownership/permissions. Source worktrees can
+# contain 0600 files from local edits; the runtime user must still read them.
+COPY --chown=appuser:appuser services/meeting-api .
+RUN chmod -R a+rX /app
+
 USER appuser
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

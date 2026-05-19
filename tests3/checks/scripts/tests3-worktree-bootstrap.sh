@@ -3,9 +3,9 @@
 #
 # Creates a sandbox worktree ../vexa-check-<rand>, asserts:
 #   (a) target dir exists
-#   (b) tests3/.current-stage seeded at stage: idle, release_id: <test_id>
+#   (b) tests3/.current-stage seeded at stage: done, release_id: <test_id>
 #   (c) branch release/<test_id> exists
-#   (d) stage.py next from the new worktree prints `groom`
+#   (d) stage.py next from the new worktree prints `scope-design`
 # Cleans up unconditionally.
 set -euo pipefail
 
@@ -22,8 +22,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Dispatch the same helper the Makefile target uses, to keep one code path.
-bash "$ROOT/tests3/lib/worktree.sh" create "$TEST_ID" >/dev/null
+# Dispatch the same helper the Makefile target uses. Use HEAD for this
+# self-test so it verifies the state machine currently under release, not the
+# last shipped main branch.
+bash "$ROOT/tests3/lib/worktree.sh" create "$TEST_ID" WORKTREE_CURRENT >/dev/null
 
 fail=0
 
@@ -39,8 +41,8 @@ STAGE_FILE="$TARGET/tests3/.current-stage"
 if [ -f "$STAGE_FILE" ]; then
     STAGE=$(awk '/^stage:/ {gsub(/["'\'' ]/, "", $2); print $2; exit}' "$STAGE_FILE")
     REL=$(awk '/^release_id:/ {gsub(/["'\'' ]/, "", $2); print $2; exit}' "$STAGE_FILE")
-    if [ "$STAGE" = "idle" ] && [ "$REL" = "$TEST_ID" ]; then
-        echo "ok: .current-stage seeded at stage=idle, release_id=$TEST_ID"
+    if [ "$STAGE" = "done" ] && [ "$REL" = "$TEST_ID" ]; then
+        echo "ok: .current-stage seeded at stage=done, release_id=$TEST_ID"
     else
         echo "FAIL: .current-stage shows stage=$STAGE, release_id=$REL" >&2; fail=1
     fi
@@ -58,10 +60,10 @@ fi
 # (d)
 if [ -d "$TARGET" ]; then
     NEXT=$(python3 "$TARGET/tests3/lib/stage.py" next | tr -d '[:space:]')
-    if [ "$NEXT" = "groom" ]; then
-        echo "ok: stage.py next reports groom"
+    if [ "$NEXT" = "scope-design" ]; then
+        echo "ok: stage.py next reports scope-design"
     else
-        echo "FAIL: stage.py next reports '$NEXT', expected 'groom'" >&2; fail=1
+        echo "FAIL: stage.py next reports '$NEXT', expected 'scope-design'" >&2; fail=1
     fi
 fi
 

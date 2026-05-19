@@ -176,19 +176,44 @@ def die(msg: str, code: int = 2) -> None:
     sys.exit(code)
 
 
+_SENSITIVE_LOG_VALUES: list[str] = []
+
+
+def remember_sensitive(value: Optional[str]) -> None:
+    if value and value not in _SENSITIVE_LOG_VALUES:
+        _SENSITIVE_LOG_VALUES.append(value)
+
+
+def _redact_sensitive(msg: str) -> str:
+    redacted = msg
+    for value in _SENSITIVE_LOG_VALUES:
+        redacted = redacted.replace(value, "<redacted>")
+    return redacted
+
+
 def log(msg: str) -> None:
-    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+    # lgtm[py/clear-text-logging-sensitive-data] Messages pass through _redact_sensitive before output.
+    line = f"[{time.strftime('%H:%M:%S')}] {_redact_sensitive(msg)}\n"
+    os.write(sys.stdout.fileno(), line.encode("utf-8", errors="replace"))
 
 
 # ─── bot dispatch / lifecycle ───────────────────────────────────────────
 
-def dispatch_bot(gateway: str, token: str, platform: str, url: str, name: str) -> dict:
+def dispatch_bot(
+    gateway: str,
+    token: str,
+    platform: str,
+    url: str,
+    name: str,
+    transcribe_enabled: bool,
+) -> dict:
     native_id, passcode = extract_native_id_and_pass(platform, url)
     payload: dict[str, Any] = {
         "platform": PLATFORM_DISPATCH_KEY[platform],
         "native_meeting_id": native_id,
         "bot_name": name,
         "language": "en",
+        "transcribe_enabled": transcribe_enabled,
     }
     if passcode:
         payload["passcode"] = passcode
@@ -296,9 +321,20 @@ def stop_bot_normal(gateway: str, token: str, platform: str, native_id: str) -> 
     http("DELETE", f"{gateway}/bots/{plat}/{native_id}", token=token, timeout=30)
 
 
-def kill_bot_crash(deployment: str, native_id: str) -> bool:
+def kill_bot_crash(
+    deployment: str,
+    native_id: str,
+    container_id: Optional[str] = None,
+) -> bool:
     """SIGKILL the bot container/pod. Returns True on success."""
     if deployment == "compose":
+        if container_id:
+            try:
+                log(f"docker kill -s KILL {container_id}")
+                subprocess.run(["docker", "kill", "-s", "KILL", container_id], timeout=10, check=True)
+                return True
+            except Exception:
+                log("crash-kill compose by bot_container_id failed")
         # docker container name pattern: vexa-bot-<...> — find the one whose env names match the meeting
         try:
             cl = subprocess.run(
@@ -316,8 +352,8 @@ def kill_bot_crash(deployment: str, native_id: str) -> bool:
                     log(f"docker kill -s KILL {name}")
                     subprocess.run(["docker", "kill", "-s", "KILL", name], timeout=10)
                     return True
-        except Exception as e:
-            log(f"crash-kill compose failed: {e}")
+        except Exception:
+            log("crash-kill compose failed")
             return False
         return False
     if deployment == "helm":
@@ -340,8 +376,8 @@ def kill_bot_crash(deployment: str, native_id: str) -> bool:
                         timeout=15,
                     )
                     return True
-        except Exception as e:
-            log(f"crash-kill helm failed: {e}")
+        except Exception:
+            log("crash-kill helm failed")
             return False
         return False
     if deployment == "lite":
@@ -359,8 +395,8 @@ def kill_bot_crash(deployment: str, native_id: str) -> bool:
                 capture_output=True, text=True, timeout=20,
             )
             return cl.returncode == 0
-        except Exception as e:
-            log(f"crash-kill lite failed: {e}")
+        except Exception:
+            log("crash-kill lite failed")
             return False
     return False
 
@@ -423,6 +459,8 @@ class Report:
     master_duration_sec: Optional[float] = None
     samples: list[dict] = field(default_factory=list)
     assertions: list[dict] = field(default_factory=list)
+    transcribe_enabled: bool = True
+    deferred_transcribe_after_crash: bool = False
     verdict: str = "running"
 
     def add(self, r: AssertionResult) -> None:
@@ -657,6 +695,92 @@ def verify_recording(
                    actual=per_minute)
     else:
         skipped(report, "CHUNK_RATE_PLAUSIBLE", "chunk_count metadata absent")
+
+
+def verify_deferred_transcription_after_disruption(
+    report: Report,
+    gateway: str,
+    token: str,
+) -> None:
+    """Trigger deferred transcription only after the master finalization gate.
+
+    This proves the crash path does not merely produce playable audio, but also
+    leaves a canonical recording artifact that the deferred transcription route
+    can consume and persist.
+    """
+    if report.meeting_internal_id is None or not report.native_id:
+        skipped(report, "DEFERRED_TRANSCRIBE_USES_MASTER", "missing meeting id/native id")
+        return
+    if report.mode != "crash":
+        skipped(report, "DEFERRED_TRANSCRIBE_USES_MASTER", "only meaningful for --mode crash")
+        return
+
+    try:
+        resp = http(
+            "POST",
+            f"{gateway}/meetings/{report.meeting_internal_id}/transcribe",
+            token=token,
+            body={},
+            timeout=180,
+        )
+    except HttpError as e:
+        failed(
+            report,
+            "DEFERRED_TRANSCRIBE_USES_MASTER",
+            f"POST /meetings/{report.meeting_internal_id}/transcribe failed HTTP {e.status}: {e.body[:300]}",
+            expected="HTTP 200 with segment_count > 0",
+            actual=f"HTTP {e.status}",
+        )
+        return
+
+    segment_count = int((resp or {}).get("segment_count") or 0) if isinstance(resp, dict) else 0
+    if segment_count <= 0:
+        failed(
+            report,
+            "DEFERRED_TRANSCRIBE_USES_MASTER",
+            f"deferred transcribe returned {segment_count} segments",
+            expected=">0 segments",
+            actual=segment_count,
+        )
+        return
+
+    try:
+        tx = http(
+            "GET",
+            f"{gateway}/transcripts/{PLATFORM_NATIVE_KEY[report.platform]}/{report.native_id}",
+            token=token,
+            timeout=30,
+        )
+        persisted = tx.get("segments") if isinstance(tx, dict) else []
+    except HttpError as e:
+        failed(
+            report,
+            "DEFERRED_TRANSCRIPT_PERSISTED_AFTER_CRASH",
+            f"GET /transcripts failed HTTP {e.status}: {e.body[:300]}",
+        )
+        return
+
+    if len(persisted or []) >= segment_count:
+        passed(
+            report,
+            "DEFERRED_TRANSCRIBE_USES_MASTER",
+            f"POST stored {segment_count} segment(s) from finalized master",
+            actual=segment_count,
+        )
+        passed(
+            report,
+            "DEFERRED_TRANSCRIPT_PERSISTED_AFTER_CRASH",
+            f"GET /transcripts returned {len(persisted)} persisted segment(s)",
+            actual=len(persisted),
+        )
+    else:
+        failed(
+            report,
+            "DEFERRED_TRANSCRIPT_PERSISTED_AFTER_CRASH",
+            f"POST stored {segment_count}, GET returned {len(persisted or [])}",
+            expected=f">={segment_count}",
+            actual=len(persisted or []),
+        )
 
 
 def ffprobe_duration(url: str) -> Optional[float]:
@@ -895,8 +1019,8 @@ def verify_corpus_in_bot_image(report: Report) -> None:
             failed(report, "HALLUCINATION_CORPUS_IN_IMAGE",
                    f"{label} missing: {missing}", actual=present)
             return True
-        except Exception as e:
-            log(f"  corpus check via {label} failed: {e}")
+        except Exception:
+            log(f"  corpus check via {label} failed")
             return False
 
     if report.deployment == "compose":
@@ -1034,6 +1158,12 @@ def main() -> int:
     ap.add_argument("--api-token", default=None)
     ap.add_argument("--admin-token", default=None)
     ap.add_argument("--bot-name", default="tests3-auto")
+    ap.add_argument("--transcribe-enabled", action=argparse.BooleanOptionalAction, default=True)
+    ap.add_argument(
+        "--deferred-transcribe-after-crash",
+        action="store_true",
+        help="after --mode crash finalizes a master recording, POST /transcribe and assert persisted segments",
+    )
     ap.add_argument("--output", default=None)
     ap.add_argument("--admit-timeout", type=int, default=180,
                     help="seconds to wait for admission to active")
@@ -1042,6 +1172,8 @@ def main() -> int:
     args = ap.parse_args()
 
     gateway, token, admin = resolve_endpoints(args)
+    remember_sensitive(token)
+    remember_sensitive(admin)
     log(f"deployment={args.deployment} gateway={gateway}")
     log(f"platform={args.platform} mode={args.mode} duration={args.duration}s")
 
@@ -1053,12 +1185,21 @@ def main() -> int:
         duration_sec=args.duration,
         meeting_url=args.url,
         bot_name=args.bot_name,
+        transcribe_enabled=args.transcribe_enabled,
+        deferred_transcribe_after_crash=args.deferred_transcribe_after_crash,
     )
     report.native_id = extract_native_id(args.platform, args.url)
 
     # 1. dispatch
     try:
-        b = dispatch_bot(gateway, token, args.platform, args.url, args.bot_name)
+        b = dispatch_bot(
+            gateway,
+            token,
+            args.platform,
+            args.url,
+            args.bot_name,
+            args.transcribe_enabled,
+        )
     except HttpError as e:
         die(f"dispatch failed: {e}", code=2)
         return 2  # unreachable
@@ -1120,7 +1261,9 @@ def main() -> int:
         except HttpError as e:
             failed(report, "BOT_DELETE_OK", f"HTTP {e.status}", actual=e.body[:200])
     else:  # crash
-        if kill_bot_crash(args.deployment, report.native_id):
+        latest = get_meeting(gateway, token, args.platform, report.native_id,
+                             internal_id=report.meeting_internal_id) or {}
+        if kill_bot_crash(args.deployment, report.native_id, latest.get("bot_container_id")):
             passed(report, "BOT_SIGKILL_OK", "SIGKILL'd bot")
         else:
             failed(report, "BOT_SIGKILL_OK", "could not locate or kill bot")
@@ -1170,6 +1313,8 @@ def main() -> int:
 
     # 6. verify recording-side assertions
     verify_recording(report, gateway, token, final_meeting)
+    if args.deferred_transcribe_after_crash:
+        verify_deferred_transcription_after_disruption(report, gateway, token)
     verify_memory_pattern(report)
     verify_corpus_in_bot_image(report)
     verify_dashboard_pagination(report, gateway, token)

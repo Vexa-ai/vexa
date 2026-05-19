@@ -53,6 +53,111 @@ VOICE_ALIASES: dict[str, str] = {
     "shimmer": "en_US-lessac-medium",
 }
 
+# Default Piper voice per ISO-639-1 language code. Used when the caller
+# does not pin a specific voice and we infer language from the input text.
+# All names match the rhasspy/piper-voices catalogue on HuggingFace.
+LANG_DEFAULT_VOICE: dict[str, str] = {
+    "en": "en_US-amy-medium",
+    "es": "es_ES-davefx-medium",
+    "fr": "fr_FR-siwis-medium",
+    "de": "de_DE-thorsten-medium",
+    "it": "it_IT-paola-medium",
+    "pt": "pt_BR-faber-medium",
+    "nl": "nl_NL-mls-medium",
+    "pl": "pl_PL-mc_speech-medium",
+    "ru": "ru_RU-irina-medium",
+    "uk": "uk_UA-ukrainian_tts-medium",
+    "zh": "zh_CN-huayan-medium",
+    # ja: rhasspy/piper-voices has no Japanese voice today; entries
+    # detected as 'ja' fall through to the English default fallback
+    # with a structured WARN (tts.lang_detection.unmapped). Followed
+    # up under TTS engine-swap research.
+    "ar": "ar_JO-kareem-medium",
+    "tr": "tr_TR-dfki-medium",
+    "ro": "ro_RO-mihai-medium",
+    "cs": "cs_CZ-jirka-medium",
+    "hu": "hu_HU-anna-medium",
+    "el": "el_GR-rapunzelina-low",
+    "fi": "fi_FI-harri-medium",
+    "da": "da_DK-talesyntese-medium",
+    "sv": "sv_SE-nst-medium",
+    "no": "no_NO-talesyntese-medium",
+    "ca": "ca_ES-upc_ona-medium",
+    "vi": "vi_VN-vais1000-medium",
+    "fa": "fa_IR-amir-medium",
+    "sk": "sk_SK-lili-medium",
+    "sl": "sl_SI-artur-medium",
+    "lv": "lv_LV-aivars-medium",
+    "sr": "sr_RS-serbski_institut-medium",
+    "hi": "hi_IN-pratham-medium",
+}
+
+# Unicode-script → ISO-639-1 hint. Cheap pre-check before invoking
+# langdetect; for non-Latin scripts the script alone is enough to pick
+# a language with high confidence.
+_SCRIPT_RANGES: list[tuple[int, int, str]] = [
+    (0x0400, 0x04FF, "ru"),    # Cyrillic — overridden to "uk" if Ukrainian-only chars present (handled below)
+    (0x0500, 0x052F, "ru"),    # Cyrillic Supplement
+    (0x0590, 0x05FF, "he"),    # Hebrew (no voice today; falls through to en + WARN)
+    (0x0600, 0x06FF, "ar"),    # Arabic
+    (0x0750, 0x077F, "ar"),    # Arabic Supplement
+    (0x08A0, 0x08FF, "ar"),    # Arabic Extended-A
+    (0x0900, 0x097F, "hi"),    # Devanagari
+    (0x0E00, 0x0E7F, "th"),    # Thai (no voice today; falls through to en + WARN)
+    (0x0370, 0x03FF, "el"),    # Greek
+    (0x3040, 0x309F, "ja"),    # Hiragana
+    (0x30A0, 0x30FF, "ja"),    # Katakana
+    (0xAC00, 0xD7AF, "ko"),    # Hangul (no voice today; falls through to en + WARN)
+    (0x4E00, 0x9FFF, "zh"),    # CJK Unified Ideographs (defaults to zh; ja text without kana is ambiguous but rare)
+]
+
+
+def _detect_language(text: str) -> Optional[str]:
+    """Return ISO-639-1 lang code for `text`, or None if undetermined.
+
+    Strategy:
+      1. Pre-pass for Hiragana/Katakana — definitive Japanese marker even
+         when mixed with CJK Unified Ideographs (kanji).
+      2. Unicode-script heuristic for the first non-ASCII char.
+      3. Latin-script disambiguation via langdetect.
+    """
+    if not text:
+        return None
+
+    # 1. Whole-text scan: any kana → Japanese (kanji-only is ambiguous
+    # zh↔ja, defaults to zh below; with kana present the answer is
+    # unambiguous).
+    for ch in text:
+        cp = ord(ch)
+        if (0x3040 <= cp <= 0x309F) or (0x30A0 <= cp <= 0x30FF):
+            return "ja"
+        if (0xAC00 <= cp <= 0xD7AF):
+            # Hangul anywhere → Korean.
+            return "ko"
+
+    # 2. Script heuristic — first non-ASCII char drives the decision.
+    for ch in text:
+        cp = ord(ch)
+        if cp < 0x80:
+            continue
+        for lo, hi, lang in _SCRIPT_RANGES:
+            if lo <= cp <= hi:
+                return lang
+        # First non-ASCII char isn't a tracked script; fall through to langdetect.
+        break
+
+    # 3. langdetect for Latin-script text (en/es/fr/de/it/pt/nl/...).
+    try:
+        from langdetect import detect, DetectorFactory
+        DetectorFactory.seed = 0  # deterministic — same text → same result
+        return detect(text)
+    except Exception as exc:
+        # langdetect raises LangDetectException on inputs too short / no
+        # detectable features. Surface a structured signal instead of
+        # silently swallowing — caller logs `tts.lang_detection.failed`.
+        logger.debug("[TTS] langdetect failed on text len=%d: %s", len(text), exc)
+        return None
+
 # ---------------------------------------------------------------------------
 # Audio resampling (linear interpolation — lightweight, no scipy needed)
 # ---------------------------------------------------------------------------
@@ -77,9 +182,61 @@ def _resample_int16(pcm_int16: bytes, src_rate: int, dst_rate: int) -> bytes:
 _loaded_voices: dict[str, "PiperVoice"] = {}  # type: ignore[name-defined]
 
 
-def _resolve_voice_name(name: str) -> str:
-    """Resolve an alias (e.g. 'alloy') or pass through a Piper voice name."""
-    return VOICE_ALIASES.get(name, name)
+def _resolve_voice_name(name: str, *, text: str = "") -> str:
+    """Resolve a voice request to a Piper voice name.
+
+    Resolution order:
+      1. `auto` (or empty) → detect language of `text`, look up
+         LANG_DEFAULT_VOICE; if no mapping, log a structured WARN
+         (`tts.lang_detection.unmapped`) and use English default.
+      2. Known OpenAI-style alias (alloy / nova / echo / …):
+         a. If the input text is Latin-script-only (no Cyrillic, CJK,
+            Arabic, etc.), use the alias's English Piper voice as the
+            historical default.
+         b. If the text has a non-Latin script, the alias would route
+            English espeak-ng over non-Latin codepoints and emit
+            letter-by-letter spelling. Detect language from text and
+            override the alias with the detected language's voice. Log
+            a structured INFO (`tts.alias_overridden_by_language`) so
+            the override is observable.
+         c. Honors backward-compat for English-only callers; protects
+            every other caller from the "speaking-letter-by-letter"
+            failure mode.
+      3. Anything else → pass through as a literal Piper voice name.
+    """
+    if name in (None, "", "auto"):
+        lang = _detect_language(text)
+        if lang and lang in LANG_DEFAULT_VOICE:
+            chosen = LANG_DEFAULT_VOICE[lang]
+            logger.info("[TTS] auto-lang detected=%s voice=%s text_len=%d", lang, chosen, len(text))
+            return chosen
+        logger.warning(
+            "[TTS] tts.lang_detection.unmapped detected=%s text_len=%d "
+            "— falling back to English default (#NEW-tts-lang-fallback)",
+            lang, len(text),
+        )
+        return LANG_DEFAULT_VOICE["en"]
+
+    if name in VOICE_ALIASES:
+        # Alias = backward-compat OpenAI voice name. They all map to
+        # English Piper voices. If the text is non-Latin, English voice
+        # would mispronounce letter-by-letter — override.
+        has_non_latin = any(ord(ch) >= 0x80 for ch in text)
+        if has_non_latin:
+            lang = _detect_language(text)
+            if lang and lang != "en" and lang in LANG_DEFAULT_VOICE:
+                chosen = LANG_DEFAULT_VOICE[lang]
+                logger.info(
+                    "[TTS] tts.alias_overridden_by_language alias=%s detected=%s "
+                    "voice=%s text_len=%d — alias would emit letter-by-letter on "
+                    "non-Latin input",
+                    name, lang, chosen, len(text),
+                )
+                return chosen
+        return VOICE_ALIASES[name]
+
+    # Pass-through literal Piper voice name (e.g. en_US-amy-medium).
+    return name
 
 
 def _ensure_voice(voice_name: str) -> "PiperVoice":  # type: ignore[name-defined]
@@ -226,10 +383,10 @@ async def speech(
     if not text.strip():
         raise HTTPException(status_code=400, detail="'input' text is empty")
 
-    voice_name = _resolve_voice_name(voice_param)
+    voice_name = _resolve_voice_name(voice_param, text=text)
 
     logger.info(
-        "[TTS] Synthesizing: voice=%s (%s), format=%s, len=%d",
+        "[TTS] Synthesizing: voice_param=%s resolved=%s format=%s len=%d",
         voice_param,
         voice_name,
         response_format,

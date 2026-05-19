@@ -45,8 +45,17 @@ def create_app() -> FastAPI:
         openapi_url="/openapi.json" if public_docs else None,
     )
 
-    # CORS
-    cors_origins = os.getenv("CORS_ORIGINS", "*").split(",")
+    # CORS. Default to local dashboard origins; deployments that expose this
+    # service directly can still set CORS_ORIGINS explicitly.
+    default_cors_origins = ",".join(
+        [
+            "http://localhost:3000",
+            "http://localhost:3001",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:3001",
+        ]
+    )
+    cors_origins = os.getenv("CORS_ORIGINS", default_cors_origins).split(",")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[o.strip() for o in cors_origins],

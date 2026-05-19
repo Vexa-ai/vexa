@@ -67,3 +67,11 @@ for i in $(seq 1 30); do
     fi
     sleep 2
 done
+
+# Fresh resets wipe Postgres, so any VEXA_API_KEY already present in the
+# compose env can point at a token row that no longer exists. Reuse the
+# canonical compose target to probe/regenerate the dashboard key, then restart
+# dashboard so its process environment reads the regenerated value.
+echo "  [reset-compose] reseating dashboard VEXA_API_KEY (probe-and-regenerate)..."
+make setup-api-key 2>&1 | tail -3 || echo "  [reset-compose] setup-api-key reported non-zero; continuing"
+docker compose --env-file "$ENV_FILE" up -d --force-recreate dashboard 2>&1 | tail -5 || true

@@ -513,7 +513,7 @@
       "tier": "static",
       "found": "2026-04-19",
       "proves": "CDP proxy webSocketDebuggerUrl rewrite preserves inbound scheme (wss:// on HTTPS gateways) \u2014 Playwright connectOverCDP works through TLS",
-      "symptom": "Hard-coded ws:// in proxy URL breaks every external CDP client on HTTPS deployments",
+      "symptom": "Hard-coded plaintext WebSocket scheme in proxy URL breaks every external CDP client on HTTPS deployments",
       "file": "services/api-gateway/main.py",
       "must_match": "x-forwarded-proto"
     },
@@ -1484,7 +1484,7 @@
       "proves": "services/meeting-api/meeting_api/recordings.py chunk handler refuses to downgrade recording.status from COMPLETED back to IN_PROGRESS. Defense-in-depth pairing with R1: even if a stray late chunk arrives after the reconciler set status=COMPLETED (or after the bot's own is_final terminal chunk), the terminal state is sticky. Pre-fix (R2): the else branch unconditionally wrote rec_payload['status'] = IN_PROGRESS for every non-final chunk — every late chunk re-marked status=IN_PROGRESS, post_meeting_reconciler's status flip got clobbered, dashboard stuck on 'preparing audio'. Post-fix: only flip to IN_PROGRESS when the recording is not already COMPLETED.",
       "symptom": "Dashboard shows 'preparing audio' indefinitely on a meeting whose audio is durably stored in MinIO and whose post_meeting_reconciler logged success. Status race between chunk-upload writer and reconciler — chunk wins because it commits last.",
       "file": "services/meeting-api/meeting_api/recordings.py",
-      "must_match": "v0.10.5 R2 — defense-in-depth",
+      "must_match": "Terminal state is sticky: never downgrade COMPLETED",
       "max_duration_sec": 5
     },
     {

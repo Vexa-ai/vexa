@@ -8,12 +8,15 @@ import time
 import logging
 import asyncio
 import json
+from dataclasses import dataclass
+from email import policy
+from email.parser import BytesParser
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 import numpy as np
 import soundfile as sf
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends, Request
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 import uvicorn
@@ -91,6 +94,7 @@ VAD_FILTER = _env_bool("VAD_FILTER", True)
 VAD_FILTER_THRESHOLD = _env_float("VAD_FILTER_THRESHOLD", 0.5)
 VAD_MIN_SILENCE_DURATION_MS = _env_int("VAD_MIN_SILENCE_DURATION_MS", 160)
 VAD_MAX_SPEECH_DURATION_S = _env_float("VAD_MAX_SPEECH_DURATION_S", 15.0)  # max segment length before forced split
+MAX_MULTIPART_BODY_BYTES = _env_int("MAX_MULTIPART_BODY_BYTES", 32 * 1024 * 1024)
 
 # Temperature fallback chain
 USE_TEMPERATURE_FALLBACK = _env_bool("USE_TEMPERATURE_FALLBACK", False)
@@ -206,6 +210,55 @@ def _deferred_capacity_available(active_rt: int, active_df: int) -> bool:
     return deferred_limit > 0 and active_df < deferred_limit and total_active < MAX_CONCURRENT_TRANSCRIPTIONS
 
 
+@dataclass
+class ParsedUpload:
+    filename: str
+    content_type: str
+    data: bytes
+
+
+async def _parse_bounded_multipart(request: Request) -> tuple[ParsedUpload, Dict[str, str]]:
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" not in content_type or "boundary=" not in content_type:
+        raise HTTPException(status_code=400, detail="Expected multipart/form-data")
+
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > MAX_MULTIPART_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="Multipart body too large")
+
+    message = BytesParser(policy=policy.default).parsebytes(
+        f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("latin-1") + bytes(body)
+    )
+    if not message.is_multipart():
+        raise HTTPException(status_code=400, detail="Malformed multipart body")
+
+    fields: Dict[str, str] = {}
+    upload: Optional[ParsedUpload] = None
+    for part in message.iter_parts():
+        if part.is_multipart():
+            raise HTTPException(status_code=400, detail="Nested multipart parts are not supported")
+        name = part.get_param("name", header="content-disposition")
+        if not name:
+            continue
+        filename = part.get_filename()
+        payload = part.get_payload(decode=True) or b""
+        if filename is not None:
+            if name == "file":
+                upload = ParsedUpload(
+                    filename=filename,
+                    content_type=part.get_content_type() or "application/octet-stream",
+                    data=payload,
+                )
+            continue
+        fields[name] = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+
+    if upload is None:
+        raise HTTPException(status_code=400, detail="File field is required")
+    return upload, fields
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize Whisper model on startup"""
@@ -270,17 +323,6 @@ async def health_check():
 @app.post("/v1/audio/transcriptions")
 async def transcribe_audio(
     request: Request,
-    file: UploadFile = File(...),
-    requested_model: str = Form(..., alias="model"),
-    temperature: str = Form("0"),
-    language: Optional[str] = Form(None),
-    prompt: Optional[str] = Form(None),
-    response_format: str = Form("verbose_json"),
-    timestamp_granularities: str = Form("segment"),
-    max_speech_duration_s: Optional[str] = Form(None),
-    min_silence_duration_ms: Optional[str] = Form(None),
-    transcription_tier_form: Optional[str] = Form(None, alias="transcription_tier"),
-    task: str = Form("transcribe"),
     _: bool = Depends(verify_api_token)
 ):
     """
@@ -295,6 +337,18 @@ async def transcribe_audio(
     - Limits concurrent transcriptions to prevent GPU/CPU overload
     - Returns 429/503 when queue is full to signal backpressure
     """
+    file, form = await _parse_bounded_multipart(request)
+    requested_model = form.get("model", "")
+    temperature = form.get("temperature", "0")
+    language = form.get("language") or None
+    prompt = form.get("prompt") or None
+    response_format = form.get("response_format", "verbose_json")
+    timestamp_granularities = form.get("timestamp_granularities", "segment")
+    max_speech_duration_s = form.get("max_speech_duration_s") or None
+    min_silence_duration_ms = form.get("min_silence_duration_ms") or None
+    transcription_tier_form = form.get("transcription_tier") or None
+    task = form.get("task", "transcribe")
+
     if not requested_model:
         raise HTTPException(status_code=400, detail="Model parameter is required")
     global waiting_requests, active_realtime_requests, active_deferred_requests
@@ -362,8 +416,7 @@ async def transcribe_audio(
             f"Worker {WORKER_ID} received transcription request - "
             f"tier={transcription_tier}, filename: {file.filename}, content_type: {file.content_type}"
         )
-        # Read audio file
-        audio_bytes = await file.read()
+        audio_bytes = file.data
         logger.info(f"Worker {WORKER_ID} read {len(audio_bytes)} bytes of audio data")
         
         # Convert to format suitable for faster-whisper

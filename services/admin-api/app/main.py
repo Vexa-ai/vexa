@@ -1,8 +1,11 @@
 import hmac
+import ipaddress
 import logging
 import secrets
 import string
 import os
+import re
+from urllib.parse import urlparse
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, status, Security, Response
 from fastapi.security import APIKeyHeader
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,7 +16,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, cast, literal
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy import Text
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 # Import admin models (User, APIToken) from admin-models package
 from admin_models.models import User, APIToken, Base
@@ -26,6 +29,7 @@ from meeting_api.schemas import (UserCreate, UserResponse, TokenResponse, UserDe
                                  MeetingPerformanceMetrics, MeetingTelematicsResponse, UserMeetingStats,
                                  UserUsagePatterns, UserAnalyticsResponse)
 from meeting_api.webhook_url import validate_webhook_url
+from meeting_api.dispatch_check import dispatch_check
 
 # Logging configuration
 logging.basicConfig(
@@ -33,6 +37,68 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger("admin_api")
+
+_SAFE_GIT_BRANCH = re.compile(r"^[A-Za-z0-9._/-]{1,128}$")
+_SENSITIVE_LOG_KEYS = ("token", "secret", "password", "api_key", "apikey", "credential")
+_WEAK_PRODUCTION_SECRETS = {"changeme", "vexa-internal-secret", "vexa-admin-token", "vexa-dev-jwt-secret"}
+
+
+def _sanitize_for_log(value):
+    if isinstance(value, dict):
+        sanitized = {}
+        for key, child in value.items():
+            key_text = str(key).lower()
+            if any(marker in key_text for marker in _SENSITIVE_LOG_KEYS):
+                sanitized[key] = "[REDACTED]"
+            else:
+                sanitized[key] = _sanitize_for_log(child)
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_for_log(item) for item in value]
+    return value
+
+
+def _is_production() -> bool:
+    return os.getenv("VEXA_ENV", "development").lower() == "production"
+
+
+def _is_weak_secret(value: Optional[str]) -> bool:
+    return (value or "").strip() in _WEAK_PRODUCTION_SECRETS
+
+
+def _validate_github_repo_url(repo: str) -> str:
+    parsed = urlparse(repo)
+    if parsed.scheme != "https" or parsed.hostname is None:
+        raise ValueError("workspace_git.repo must be an https:// GitHub URL")
+    hostname = parsed.hostname.lower()
+    if hostname != "github.com":
+        try:
+            ip = ipaddress.ip_address(hostname)
+        except ValueError:
+            pass
+        else:
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                raise ValueError("workspace_git.repo must not target private or local addresses")
+        raise ValueError("workspace_git.repo host must be github.com")
+    if parsed.username or parsed.password:
+        raise ValueError("workspace_git.repo must not embed credentials; use token instead")
+    if not parsed.path or parsed.path in ("/", "/.git"):
+        raise ValueError("workspace_git.repo must include an owner and repository path")
+    return repo
+
+
+def _validate_git_branch(branch: str) -> str:
+    if (
+        not branch
+        or branch.startswith("-")
+        or branch.startswith("/")
+        or branch.endswith("/")
+        or ".." in branch
+        or "@{" in branch
+        or not _SAFE_GIT_BRANCH.match(branch)
+    ):
+        raise ValueError("workspace_git.branch contains invalid characters")
+    return branch
 
 from admin_models.security_headers import SecurityHeadersMiddleware
 
@@ -63,10 +129,11 @@ class PaginatedMeetingUserStatResponse(BaseModel):
     items: List[MeetingUserStat]
 
 # Security - Reuse logic from meeting-api/auth.py for admin token verification
-API_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", auto_error=False) # Use a distinct header
-USER_API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False) # For user-facing endpoints
+API_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", scheme_name="AdminApiKey", auto_error=False)
+USER_API_KEY_HEADER = APIKeyHeader(name="X-API-Key", scheme_name="UserApiKey", auto_error=False)
 ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN") # Read from environment
 ANALYTICS_API_TOKEN = os.getenv("ANALYTICS_API_TOKEN") # Read-only analytics token
+MAX_TOKEN_EXPIRES_IN_SECONDS = 60 * 60 * 24 * 90
 
 async def verify_admin_token(admin_api_key: str = Security(API_KEY_HEADER)):
     """Dependency to verify the admin API token."""
@@ -75,6 +142,12 @@ async def verify_admin_token(admin_api_key: str = Security(API_KEY_HEADER)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Admin authentication is not configured on the server."
+        )
+    if _is_production() and _is_weak_secret(ADMIN_API_TOKEN):
+        logger.error("CRITICAL: weak ADMIN_API_TOKEN refused in production")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Admin authentication is not safely configured on the server.",
         )
     
     if not admin_api_key or not hmac.compare_digest(admin_api_key, ADMIN_API_TOKEN):
@@ -222,9 +295,29 @@ async def set_user_webhook(
 
 
 class WorkspaceGitUpdate(BaseModel):
-    repo: Optional[str] = None
-    token: Optional[str] = None
-    branch: Optional[str] = "main"
+    repo: Optional[str] = Field(None, max_length=2048)
+    token: Optional[str] = Field(None, max_length=2048)
+    branch: Optional[str] = Field("main", max_length=128)
+
+    @field_validator("repo")
+    @classmethod
+    def validate_repo(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or value == "":
+            return value
+        try:
+            return _validate_github_repo_url(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @field_validator("branch")
+    @classmethod
+    def validate_branch(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        try:
+            return _validate_git_branch(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
 
 @user_router.put("/workspace-git",
              response_model=UserResponse,
@@ -340,6 +433,8 @@ async def create_user(user_in: UserCreate, response: Response, db: AsyncSession 
             response_model=List[UserResponse], # Use List import
             summary="List all users")
 async def list_users(skip: int = 0, limit: int = 100, db: AsyncSession = Depends(get_db)):
+    skip = max(0, skip)
+    limit = max(1, min(limit, 100))
     result = await db.execute(select(User).offset(skip).limit(limit))
     users = result.scalars().all()
     
@@ -437,7 +532,7 @@ async def update_user(user_id: int, user_update: UserUpdate, db: AsyncSession = 
 
     # Get the update data, excluding unset fields to only update provided values
     update_data = user_update.model_dump(exclude_unset=True)
-    logger.info(f"Admin PATCH for user {user_id}. Raw update_data: {update_data}")
+    logger.info(f"Admin PATCH for user {user_id}. update_data: {_sanitize_for_log(update_data)}")
 
     # Prevent changing email via this endpoint (if desired)
     if 'email' in update_data and update_data['email'] != db_user.email:
@@ -450,7 +545,12 @@ async def update_user(user_id: int, user_update: UserUpdate, db: AsyncSession = 
     if 'data' in update_data:
         new_data = update_data.pop('data')  # Remove from update_data to handle separately
         if new_data is not None:
-            logger.info(f"Admin updating data field for user ID: {user_id}. Current: {db_user.data}, New: {new_data}")
+            logger.info(
+                "Admin updating data field for user ID: %s. Current: %s, New: %s",
+                user_id,
+                _sanitize_for_log(db_user.data),
+                _sanitize_for_log(new_data),
+            )
             
             # Merge incoming keys into existing data (preserves keys not in the patch)
             db_user.data = {**(db_user.data or {}), **new_data}
@@ -527,7 +627,17 @@ async def create_token_for_user(
     # Token prefix uses the first scope
     token_value = generate_secure_token(scope=scope_list[0])
     expires_at = None
-    if expires_in is not None and expires_in > 0:
+    if expires_in is not None:
+        if expires_in <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="expires_in must be a positive number of seconds",
+            )
+        if expires_in > MAX_TOKEN_EXPIRES_IN_SECONDS:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"expires_in must not exceed {MAX_TOKEN_EXPIRES_IN_SECONDS} seconds",
+            )
         expires_at = datetime.utcnow().replace(tzinfo=None) + timedelta(seconds=expires_in)
 
     db_token = APIToken(
@@ -578,6 +688,9 @@ async def list_meetings_with_users(
     Retrieves a paginated list of all meetings, with user details embedded.
     This provides a comprehensive overview for administrators.
     """
+    skip = max(0, skip)
+    limit = max(1, min(limit, 100))
+
     # First, get the total count of meetings for pagination headers
     count_result = await db.execute(select(func.count(Meeting.id)))
     total = count_result.scalar_one()
@@ -616,6 +729,8 @@ async def get_users_table(
     Returns user table data for analytics without exposing sensitive information.
     Excludes: data JSONB field, API tokens
     """
+    skip = max(0, skip)
+    limit = max(1, min(limit, 1000))
     result = await db.execute(select(User).offset(skip).limit(limit))
     users = result.scalars().all()
     
@@ -647,6 +762,8 @@ async def get_meetings_table(
     Returns meeting table data for analytics without exposing sensitive information.
     Excludes: data JSONB field, transcriptions content
     """
+    skip = max(0, skip)
+    limit = max(1, min(limit, 1000))
     result = await db.execute(select(Meeting).offset(skip).limit(limit))
     meetings = result.scalars().all()
     return [MeetingTableResponse.model_validate(m) for m in meetings]
@@ -829,6 +946,8 @@ async def validate_token(request: Request, payload: dict, db: AsyncSession = Dep
     # Fail closed: if INTERNAL_API_SECRET is not configured, reject unless in dev mode
     if not DEV_MODE and not INTERNAL_API_SECRET:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="INTERNAL_API_SECRET not configured")
+    if _is_production() and _is_weak_secret(INTERNAL_API_SECRET):
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="INTERNAL_API_SECRET is not safely configured")
     # Authenticate the caller (gateway) via shared secret
     if INTERNAL_API_SECRET:
         provided = request.headers.get("X-Internal-Secret", "")
@@ -860,6 +979,27 @@ async def validate_token(request: Request, payload: dict, db: AsyncSession = Dep
 
     # Read scopes from DB column, not prefix
     scopes = list(api_token.scopes) if api_token.scopes else ["legacy"]
+
+    # Env-gated dispatch-check (T-038, scope item #18 of v0.10.6.1).
+    # No-op when DISPATCH_CHECK_URL is unset (the OSS-self-host default).
+    # Only consulted for tokens that carry bot-dispatch capability —
+    # tx-only / browser-only tokens skip the call entirely. The opaque
+    # authority decides whether the underlying user may dispatch bots.
+    # Fail-OPEN on transport / 5xx — see dispatch_check.py docstring.
+    if any(s in ("bot", "legacy") for s in scopes):
+        dc_result = await dispatch_check(
+            user_id=user.id,
+            action="admin-create-bot",
+            context={"email": user.email},
+        )
+        if not dc_result.allow:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail={
+                    "error": "dispatch-denied",
+                    "reason": dc_result.reason or "action not allowed",
+                },
+            )
 
     response = {
         "user_id": user.id,

@@ -27,6 +27,13 @@ read -r token meeting_id session_uid native_id <<<"$(rig_setup_meeting pack-fm00
 echo "    meeting_id=$meeting_id"
 
 rig_drive_to_active "$session_uid" "$native_id"
+for _ in $(seq 1 5); do
+    status_now=$(rig_get_state "$token" "$meeting_id" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
+    [ "$status_now" = "active" ] && break
+    rig_callback "$session_uid" status_change status=active container_id="$native_id" >/dev/null || true
+    sleep 1
+done
+[ "${status_now:-}" = "active" ] || { echo "FAIL: meeting did not reach active before FM-001 exit probe; got '$status_now'" >&2; exit 1; }
 
 # Cross duration threshold + seed at least one transcript segment so the
 # classifier sees this as a successful meeting (reached_active +

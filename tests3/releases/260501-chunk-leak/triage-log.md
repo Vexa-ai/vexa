@@ -24,7 +24,7 @@ The 2 validate failures below are NOT regressions of these positive results — 
 
 **status:** fail in mode `helm`
 **bound check:** `HELM_ROLLING_UPDATE_ZERO_SURGE` (registry.yaml; type:script, tests/chart-rolling-update-zero-surge.sh)
-**symptom:** `admin-api:missing-maxSurge-0 api-gateway:missing-maxSurge-0 mcp:missing-maxSurge-0 meeting-api:missing-maxSurge-0 runtime-api:missing-maxSurge-0`
+**symptom:** `admin-api:missing maxSurge 0 api-gateway:missing maxSurge 0 mcp:missing maxSurge 0 meeting-api:missing maxSurge 0 runtime-api:missing maxSurge 0`
 
 **root cause hypothesis:** The check was added 2026-04-21 with intent: *"every app-facing Deployment in rendered chart sets strategy.rollingUpdate.maxSurge: 0 — rolling updates never double DB pool footprint"*. Pack H of v0.10.5.3 (commit `7b989c3`) intentionally flips the helper to `maxSurge: 1, maxUnavailable: 0` to prevent the v0.10.5.2-class outage (OLD pod killed before NEW pod Ready → 502s during image bump). The two invariants conflict: zero-surge prevents DB pool doubling but breaks zero-downtime; surge-1 prevents the outage but transiently doubles DB pool footprint during a rolling upgrade.
 
@@ -116,7 +116,7 @@ Two failures resurfaced (same classes as first-pass triage):
 ### `chart-rolling-update-zero-surge` [REGRESSION-OF-CLEANUP]
 - **status:** fail in helm; 0/1
 - **bound check:** HELM_ROLLING_UPDATE_ZERO_SURGE
-- **symptom:** `admin-api:missing-maxSurge-0 ...` (5 services)
+- **symptom:** `admin-api:missing maxSurge 0 ...` (5 services)
 - **root cause:** in first-pass cleanup I dropped `tests/chart-rolling-update-zero-surge.sh` + dropped the entry from `registry.yaml`, but missed `tests3/test-registry.yaml:215-220` which still references the deleted script. Matrix runner reads test-registry.yaml, finds an entry pointing at a missing script, marks it failed.
 - **NOT a code regression.** Pack H's `maxSurge: 1, maxUnavailable: 0` strategy is correct; the new `chart-rolling-update-zero-downtime.sh` test passes against it.
 - **fix:** drop the stale entry from `tests3/test-registry.yaml`.

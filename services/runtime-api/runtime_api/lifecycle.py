@@ -198,8 +198,18 @@ async def _fire_exit_callback(redis, name: str, exit_code: int = 0) -> None:
         return
 
     metadata = container_data.get("metadata", {})
+    # #313 — connection_id missing means the dispatching service didn't
+    # plumb it. Pre-fix this method silently returned, leaving the
+    # caller stuck. The proper fix is at the dispatch site (callers
+    # MUST pass connection_id); we now log loud + structured so any
+    # remaining offenders are visible, then return — the Pack E.3.2
+    # stale-stopping sweep is the durable safety net for this case.
     if not metadata.get("connection_id"):
-        logger.warning(f"No connection_id in metadata for {name} — skipping exit callback")
+        logger.warning(
+            "No connection_id in metadata for %s — dispatcher must include "
+            "connection_id; sweep will reconcile (#313)",
+            name,
+        )
         return
 
     payload = {
@@ -217,6 +227,7 @@ async def _fire_exit_callback(redis, name: str, exit_code: int = 0) -> None:
     # Store as pending for retry
     await state.store_pending_callback(redis, name, {
         "url": callback_url,
+        "headers": container_data.get("callback_headers") or {},
         "payload": payload,
         "attempts": 0,
     })
@@ -238,13 +249,14 @@ async def _deliver_callback(redis, name: str) -> None:
         return
 
     url = cb["url"]
+    headers = cb.get("headers") or {}
     payload = cb["payload"]
     backoff = config.CALLBACK_BACKOFF
 
     for attempt in range(config.CALLBACK_RETRIES):
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(url, json=payload)
+                resp = await client.post(url, json=payload, headers=headers)
                 if resp.status_code < 400:
                     logger.info(f"Callback delivered for {name} -> {url} (attempt {attempt + 1})")
                     await state.delete_pending_callback(redis, name)

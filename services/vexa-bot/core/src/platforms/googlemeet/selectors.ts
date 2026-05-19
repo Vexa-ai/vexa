@@ -28,6 +28,34 @@ export const googleWaitingRoomIndicators: string[] = [
   '[aria-label*="waiting for admission"]',
 ];
 
+// #316 — Patterns surfaced when the meeting host has not started the
+// meeting yet. Distinct from the "asking to be let in" waiting-room
+// state and from terminal rejection. Today the bot stalls 120s on a
+// hidden name input when it lands on this state; with these
+// indicators we can fast-fail in <30s and let the caller retry.
+export const googleHostNotStartedIndicators: string[] = [
+  // Modern Google Meet copy variants seen on guest links when the host
+  // hasn't joined yet.
+  'text*="The meeting hasn\'t started"',
+  'text*="meeting hasn\'t started"',
+  'text*="Your meeting hasn\'t started"',
+  'text*="The host hasn\'t started"',
+  'text*="host hasn\'t joined"',
+  'text*="Wait for the host"',
+  'text*="Waiting for the meeting host"',
+  'text*="The meeting hasn\'t begun"',
+  'text*="The meeting will start"',
+  // Aria/dialog wrappers that some surfaces use.
+  '[role="dialog"]:has-text("hasn\'t started")',
+  '[role="alertdialog"]:has-text("hasn\'t started")',
+  // Hidden-name-input symptom (#316): the join page renders the name
+  // field as visually hidden when the meeting isn't joinable yet,
+  // so the bot's name-input wait stalls. Checking for the join button
+  // being disabled-or-missing alongside the absence of admission /
+  // waiting-room indicators is the secondary signal — handled in
+  // admission.ts (not selector-level).
+];
+
 export const googleRejectionIndicators: string[] = [
   // Meeting not found or access denied patterns
   'text="Meeting not found"',

@@ -1,7 +1,8 @@
 import { chromium } from 'playwright';
 
 const BASE_URL = 'http://localhost:3002';
-const USER_TOKEN = 'vxa_user_GTHNVLYFDps2UlZP80wFGeLBBEwJwC51aOn3h6vc';
+const USER_TOKEN = process.env.VEXA_DASHBOARD_TEST_TOKEN;
+if (!USER_TOKEN) throw new Error('VEXA_DASHBOARD_TEST_TOKEN is required');
 
 async function main() {
   const browser = await chromium.launch({ headless: true });

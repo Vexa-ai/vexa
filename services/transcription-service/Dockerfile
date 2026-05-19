@@ -21,7 +21,9 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 COPY main.py .
 
 # Create models directory
-RUN mkdir -p /app/models
+RUN useradd --create-home --uid 10001 appuser \
+    && mkdir -p /app/models \
+    && chown -R appuser:appuser /app
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
@@ -29,5 +31,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 
 EXPOSE 8000
 
-CMD ["python3", "main.py"]
+USER appuser
 
+CMD ["python3", "main.py"]

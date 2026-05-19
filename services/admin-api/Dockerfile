@@ -16,15 +16,18 @@ RUN pip install --no-cache-dir /app/libs/admin-models
 COPY ./services/meeting-api /app/services/meeting-api
 RUN pip install --no-cache-dir /app/services/meeting-api
 
+# Run as non-root. Create the user before copying app code so COPY can set
+# ownership even when the source checkout has restrictive local file modes.
+RUN useradd -r -s /bin/false appuser
+
 # Copy application code and requirements
-COPY ./services/admin-api/requirements.txt /app/
-COPY ./services/admin-api/app /app/app
+COPY --chown=appuser:appuser ./services/admin-api/requirements.txt /app/
+COPY --chown=appuser:appuser ./services/admin-api/app /app/app
 
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Run as non-root
-RUN useradd -r -s /bin/false appuser
+RUN chmod -R a+rX /app
 USER appuser
 
 EXPOSE 8001

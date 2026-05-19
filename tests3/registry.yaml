@@ -101,6 +101,7 @@ BOT_GMEET_RECORDING_ENABLED_SURVIVES_TRACK_EVENT:
   step: gmeet_recording_survival
   modes:
   - compose
+  - lite
   - helm
   state: stateful
   max_duration_sec: 180
@@ -292,7 +293,7 @@ CDP_NO_SLASH_REDIRECT:
 CDP_WS_SCHEME_PRESERVED:
   proves: "CDP proxy webSocketDebuggerUrl rewrite preserves inbound scheme (wss:// on HTTPS gateways) \u2014 Playwright connectOverCDP\
     \ works through TLS"
-  symptom: Hard-coded ws:// in proxy URL breaks every external CDP client on HTTPS deployments
+  symptom: Hard-coded plaintext WebSocket scheme in proxy URL breaks every external CDP client on HTTPS deployments
   found: '2026-04-19'
   type: grep
   file: services/api-gateway/main.py
@@ -2454,3 +2455,1082 @@ webhooks:
   features:
   - webhooks
   tier: cheap
+
+# ── 260508-v0.10.6.1 new checks (scope.yaml proves[] bindings) ────────
+# Stub entries — full wiring (script paths, grep patterns, http endpoints)
+# is filled in during develop as each fix lands. Each entry carries the
+# proves/symptom from plan-approval.yaml registry_changes_approved.
+
+BOT_CONFIG_CAMERA_ENABLED_INDEPENDENT_OF_VOICE_AGENT:
+  proves: "meeting-api meetings.py does NOT force-couple bot_config['cameraEnabled'] to voice_agent_enabled. camera_enabled is honored only when the operator passes it explicitly; default stays off."
+  symptom: "voice_agent_enabled=true silently turns on the outgoing virtual camera / avatar stream — /speak should not require enabling a video camera."
+  found: '2026-05-17'
+  type: grep
+  # Replaces the prior BOT_CONFIG_CAMERA_ENABLED_WHEN_VOICE_AGENT check
+  # from PR #239 which encoded the inverse (and incorrect) coupling.
+  # The bot reads botConfig.cameraEnabled; meeting-api writes it.
+  file: services/meeting-api/meeting_api/meetings.py
+  must_not_match: 'bot_config\["cameraEnabled"\] = bool\(req\.voice_agent_enabled\)'
+  must_match: 'if req\.camera_enabled is not None:'
+  modes:
+  - compose
+  - lite
+  - helm
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+BOT_TEAMS_JOIN_CAMERA_GATED_BY_CAMERA_ENABLED:
+  proves: "Teams pre-join camera handling turns video on only when botConfig.cameraEnabled is true; voice_agent_enabled/speak does not publish an outgoing avatar/video tile."
+  symptom: "A Teams voice-only bot can speak but still appears as a video/avatar participant because pre-join handling treats voiceAgentEnabled as the camera gate."
+  found: '2026-05-19'
+  type: grep
+  file: services/vexa-bot/core/src/platforms/msteams/join.ts
+  must_not_match: 'if \(botConfig\.voiceAgentEnabled\) \{'
+  must_match: 'if \(botConfig\.cameraEnabled\) \{'
+  modes:
+  - compose
+  - lite
+  - helm
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+BOT_SPEAK_DELIVERS_AUDIO_TO_MEETING:
+  proves: "End-to-end /speak smoke test confirms audible audio reaches the meeting (not just 202 from dispatch)"
+  symptom: "/speak returns 202 but no audio audible in meeting"
+  found: '2026-05-04'
+  type: script
+  script: tests/v0.10.6.1-speak-e2e.sh
+  step: speak_delivers_audio
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 240
+  release: 260508-v0.10.6.1
+
+BOT_SPEAK_HONORS_PROVIDER_PARAM:
+  proves: "Bot /speak handler reads and acts on the provider param; fall-through paths log a structured WARN, not silently ignore"
+  symptom: "Bot ignores provider param on /speak; falls back without signaling to caller"
+  found: '2026-05-04'
+  type: grep
+  file: services/vexa-bot/core/src/services/speak.ts
+  must_match: provider
+  modes:
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+CALLBACKS_FINALIZE_NARROW_EXCEPT:
+  proves: "callbacks.py re-raises asyncio.CancelledError and MemoryError around finalize_recording_master rather than swallowing them; #306 audit MAJOR finding addressed"
+  symptom: "callbacks.py finalize_recording_master handler swallowed CancelledError + MemoryError under bare except Exception (#306)"
+  found: '2026-05-02'
+  type: grep
+  file: services/meeting-api/meeting_api/callbacks.py
+  must_match: 'asyncio\.CancelledError, MemoryError'
+  modes:
+  - compose
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+CHUNK_WRITE_PRIOR_COUNT_LOG_ACCURATE:
+  proves: "chunk_write log uses prior_chunks (same-type chunk count) instead of misleading prior_count (count of media_file type-entries)"
+  symptom: "Log showed prior_count=1 even on chunks 5+ because the field counted media_file type-entries, not chunks (#312)"
+  found: '2026-05-04'
+  type: grep
+  file: services/meeting-api/meeting_api/recordings.py
+  must_match: 'prior_chunks=%s'
+  modes:
+  - compose
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+# DASHBOARD_PLAYBACK_PREFERS_MASTER — retired in 260508-v0.10.6.1.
+# Tested the now-deleted pickMasterMediaFile() shape on the dashboard.
+# Superseded by DASHBOARD_READS_PLAYBACK_URL_NOT_MEDIA_FILES (canonical
+# playback_url contract; pickMasterMediaFile no longer exists).
+
+DOCKER_IMAGES_MANIFEST_INCLUDES_ARM64:
+  proves: "Each vexaai/* image's manifest includes a linux/arm64 layer"
+  symptom: "vexaai/* images are AMD64-only; Apple Silicon contributors hit Rosetta overhead (#321)"
+  found: '2026-05-06'
+  type: script
+  script: tests/v0.10.6.1-arm64-manifest.sh
+  step: arm64_in_manifest
+  modes:
+  - compose
+  state: stateless
+  max_duration_sec: 60
+  release: 260508-v0.10.6.1
+
+GMEET_REJECTION_PAGE_FAST_FAIL_UNDER_30S:
+  proves: "GMeet bot detects the host-not-started page, grants a 30s grace for the host to join, and fast-fails with a classified reason (gmeet_host_not_started) rather than burning the full max_wait_for_admission"
+  symptom: "Bot stalled 120s on hidden name input when meeting host hadn't started; no fast-fail, no classified reason (#316)"
+  found: '2026-05-04'
+  type: script
+  script: tests/v0.10.6.1-gmeet-fast-fail.sh
+  step: rejection_under_30s
+  modes:
+  - compose
+  state: stateless
+  max_duration_sec: 10
+  release: 260508-v0.10.6.1
+
+GMEET_WAITING_ROOM_EVICTION_RETRY_OR_FAIL_CLEAN:
+  proves: "GMeet admission flow tracks everInWaitingRoom, applies a 30s eviction grace once waiting-room indicator disappears, and throws gmeet_waiting_room_evicted instead of polling silently until the outer timeout"
+  symptom: "Google evicts the bot from the waiting room after ~5min; pre-fix bot polled in unknown state without classifying the eviction"
+  found: '2026-05-06'
+  type: script
+  script: tests/v0.10.6.1-gmeet-fast-fail.sh
+  step: eviction_retry_or_fail_clean
+  modes:
+  - compose
+  state: stateless
+  max_duration_sec: 10
+  release: 260508-v0.10.6.1
+
+MASTER_WEBM_HAS_EBML_DURATION:
+  proves: "ffprobe of finalized master.webm reports a non-zero Duration in EBML SegmentInfo"
+  symptom: "Dashboard scrubber loads with delay because master.webm has no Duration tag (#302 follow-up)"
+  found: '2026-05-02'
+  type: script
+  script: tests/v0.10.6.1-webm-duration.sh
+  step: ebml_duration_present
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 120
+  release: 260508-v0.10.6.1
+
+# MEDIA_FILES_MASTER_INDEX_BACKFILLED — retired in 260508-v0.10.6.1.
+# Tied to the deleted pickMasterMediaFile() shape and its v0.10.6.1-dashboard-master.sh
+# host script. The backfill itself (tests3/lib/backfill-master-index.py) is preserved as
+# operator-run for the historical recordings; canonical playback now flows via
+# recording.playback_url proven by RECORDING_HAS_PLAYBACK_URL_AFTER_FINALIZE.
+
+# MIN_AUDIO_S_HONORED_IN_VEXA_LITE — REMOVED 2026-05-08 during develop.
+# Investigation: MIN_AUDIO_S env var does not exist in code OR current docs.
+# Customer-E (Discord 2026-05-06) misremembered. No drift to fix.
+# Replaced by VEXA_LITE_APPLE_SILICON_CAVEAT_DOCUMENTED (the real gap).
+
+RUNTIME_API_DELETE_EMITS_EXIT_CALLBACK:
+  proves: "meeting-api browser_session dispatch (meetings.py) plumbs connection_id='bs:<meeting_id>' through metadata; callbacks._find_meeting_by_session recognizes the bs: prefix and routes by meeting_id; runtime-api DELETE handler then fires the exit callback (no longer silently skipped)"
+  symptom: "browser_session DELETE left meetings stuck in 'stopping' because meeting-api dispatch never set connection_id, runtime-api skipped the callback, and the Pack E.3.2 sweep was defeated by webhook-retry updated_at bumps (#313)"
+  found: '2026-05-04'
+  type: grep
+  file: services/meeting-api/meeting_api/meetings.py
+  must_match: 'connection_id.*bs:'
+  modes:
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+SINGLE_WRITER_FOR_RECORDING_MASTER_PATH:
+  proves: "post_meeting.finalize_in_progress_recordings observes media_files entries whose storage_path is a master.{webm,wav} path and does NOT mutate them — recording_finalizer is the sole writer for master entries (Pack U.7 second race fixed)"
+  symptom: "Race window: master uploaded to storage + storage_path set in JSONB but is_final not yet flipped; post_meeting saw is_final=False and stomped finalized_by='post_meeting_reconciler' (#311)"
+  found: '2026-05-04'
+  type: grep
+  file: services/meeting-api/meeting_api/post_meeting.py
+  must_match: 'sp\.endswith\("/audio/master\.webm"\)'
+  modes:
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+STALE_AUDIT_SWEEP_DECISIONS_FILED:
+  proves: "Each of #166 #113 #128 #96 #198 has either a closing comment with rationale or a reconfirm note + label"
+  symptom: "Backlog noise — issues unconfirmed since pre-0.10 refactor"
+  found: '2026-05-08'
+  type: script
+  script: tests/v0.10.6.1-stale-audit.sh
+  step: decisions_filed
+  modes:
+  - compose
+  state: stateless
+  max_duration_sec: 60
+  release: 260508-v0.10.6.1
+
+STUCK_MEETING_SWEEP_USES_PROGRESS_TIMESTAMP:
+  proves: "Pack E.3.2 sweep computes staleness from data.status_transition (immutable append-only history) — last_progress_at — rather than meeting.updated_at which is poisoned by webhook-retry bumps"
+  symptom: "Pack E.3.2 sweep defeated by webhook-retry updated_at bumps; meetings genuinely stuck in 'stopping' looked fresh and were never finalized (#313)"
+  found: '2026-05-04'
+  type: grep
+  file: services/meeting-api/meeting_api/sweeps.py
+  must_match: last_progress_at
+  modes:
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+SWAGGER_CURL_EXAMPLE_SHOWS_CORRECT_HEADER:
+  proves: "admin-api /openapi.json exposes a distinct AdminApiKey scheme with name=X-Admin-API-Key so Swagger renders correct curl examples"
+  symptom: "Swagger curl examples showed api-gateway header instead of admin-api header (#80, PR #319)"
+  found: '2025-12-05'
+  type: http
+  url: $ADMIN_URL/openapi.json
+  method: GET
+  expect_code: 200
+  expect_jsonpath: '$.components.securitySchemes.AdminApiKey.name'
+  modes:
+  - compose
+  state: stateless
+  max_duration_sec: 30
+  release: 260508-v0.10.6.1
+
+TEAMS_CONTINUE_NO_AV_MODAL_DISMISSED:
+  proves: "Teams bot dismisses 'Continue without audio or video?' modal and proceeds to Join within normal admission window"
+  symptom: "Bot stuck on Teams light-meetings/launch by Continue-w/o-AV modal (#226, PR #283)"
+  found: '2026-04-21'
+  type: script
+  script: tests/v0.10.6.1-teams-modal.sh
+  step: modal_dismissed
+  modes:
+  - compose
+  state: stateful
+  max_duration_sec: 180
+  release: 260508-v0.10.6.1
+
+TTS_POD_READY_AFTER_FIRST_BOOT:
+  proves: "Helm-deployed vexa-tts pod reaches Ready within 90s on a fresh cluster (model download path resilient)"
+  symptom: "TTS pod CrashLoopBackOff (154 restarts) on prod cluster; 9fde7d2 probe-delay fix incomplete (#315 #308)"
+  found: '2026-05-04'
+  type: script
+  script: tests/v0.10.6.1-tts-pod.sh
+  step: pod_ready_after_first_boot
+  modes:
+  - helm
+  state: stateful
+  max_duration_sec: 180
+  release: 260508-v0.10.6.1
+
+VEXA_LITE_APPLE_SILICON_CAVEAT_DOCUMENTED:
+  proves: "vexa-lite deployment docs explicitly call out the Apple Silicon Rosetta-emulation caveat and link to #321"
+  symptom: "Customers (customer-B 2026-04-27) hit silent self_initiated_leave on M-series Macs; docs gave no warning"
+  found: '2026-05-06'
+  type: grep
+  file: docs/vexa-lite-deployment.mdx
+  must_match: 'Apple Silicon'
+  modes:
+  - lite
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+  notes: |
+    Investigation 2026-05-08: original VEXA_LITE_ENV_DOC_DRIFT_CHECK was based on
+    customer-B + customer-E reports. OPENAI_API_KEY is still used by tts-service
+    (genuine). MIN_AUDIO_S is in neither code nor docs (customer-E misremembered).
+    The only real gap was the missing Apple Silicon caveat — narrowed to that.
+
+# ── 260508-v0.10.6.1 OPTION-3 SCOPE EXTENSION (2026-05-08) ────────────
+# Authorized mid-develop. See releases/260508-v0.10.6.1/protocol-exception.md.
+
+TTS_AUTO_LANG_PICKS_RIGHT_VOICE:
+  proves: "tts-service detects language from input text and selects a Piper voice matching that language (es text → es voice, etc.)"
+  symptom: "/v1/audio/speech defaults to en_US voice regardless of input language; non-English text gets phonemized via espeak-ng-EN, mispronounced silently"
+  found: '2026-05-08'
+  type: script
+  script: tests/v0.10.6.1-tts-auto-lang.sh
+  step: detects_and_picks_voice
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 60
+  release: 260508-v0.10.6.1
+  option3: true
+
+TTS_NEW_LANG_VOICE_AUTO_DOWNLOAD_CACHED:
+  proves: "First request for a new language triggers Piper voice download + cache; subsequent calls hit cached voice without re-download"
+  symptom: "No automated coverage of the auto-download-on-new-language path"
+  found: '2026-05-08'
+  type: script
+  script: tests/v0.10.6.1-tts-auto-lang.sh
+  step: voice_download_caches
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 120
+  release: 260508-v0.10.6.1
+  option3: true
+
+TTS_PLAYBACK_HANDLES_WAV_AND_MP3_RESPONSES:
+  proves: "Bot tts-playback dispatches by Content-Type — audio/pcm → streaming paplay; audio/wav or audio/mpeg → buffer-to-file then existing playFile path"
+  symptom: "synthesizeViaTtsService hardcodes response_format=pcm; users with BYO TTS returning wav/mp3 cannot play through the bot"
+  found: '2026-05-08'
+  type: script
+  script: tests/v0.10.6.1-tts-byo-playback.sh
+  step: handles_wav_and_mp3
+  modes:
+  - compose
+  state: stateful
+  max_duration_sec: 60
+  release: 260508-v0.10.6.1
+  option3: true
+
+WEBHOOK_NO_UPDATED_AT_AUTOTOUCH:
+  proves: "webhooks.py persists webhook bookkeeping (webhook_delivery + webhook_deliveries) via a raw UPDATE that explicitly sets updated_at=meeting.updated_at, overriding the SQLAlchemy onupdate=func.now() default — so meetings.updated_at remains a 'domain progress' signal and is not poisoned by webhook retry storms"
+  symptom: "Pre-fix: webhook delivery writes appended to data->'webhook_deliveries' via the ORM, which bumped updated_at on every retry. Pack E.3.2 stale-stopping sweep filtered on `updated_at < threshold` and silently failed to fire because retry storms kept the row 'fresh' (#327, #313 root cause #2)"
+  found: '2026-05-08'
+  type: script
+  script: tests/v0.10.6.1-webhook-no-autotouch.sh
+  step: no_autotouch
+  modes:
+  - compose
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+  option3: true
+
+# MEDIA_FILES_UNIQUE_CONSTRAINT_ENFORCED — retired in 260508-v0.10.6.1.
+# Constraint was on the relational media_files table, which v0.10.6.1
+# drops outright (ADR-1, drop-relational-recordings-tables scope item).
+# Superseded by MEDIA_FILES_TABLE_NOT_REFERENCED + RECORDINGS_TABLE_DROPPED_IN_PROD.
+
+SPEAK_DEFAULTS_PROPAGATE_AUTO_LANGUAGE:
+  proves: "/speak default voice='auto' + provider='piper' propagate from meeting-api voice_agent.bot_speak through bot tts-playback.synthesizeAndPlay; redis pubsub command carries voice='auto' so tts-service language detection actually fires"
+  symptom: "Pre-fix: meeting-api /speak hardcoded voice='alloy' overriding bot's 'auto' default; even with TTS auto-language correct, end-to-end customer path was pinned English (#314 follow-up)"
+  found: '2026-05-10'
+  type: script
+  script: tests/v0.10.6.1-speak-defaults.sh
+  step: defaults_propagate
+  modes:
+  - compose
+  state: stateless
+  max_duration_sec: 30
+  release: 260508-v0.10.6.1
+  option3: true
+
+# ── 260508-v0.10.6.1 CEO MID-TASK SCOPE EXTENSION (2026-05-11) ────────
+# Two scope items added during T-038 dispatch-surface repair. Their
+# prove-checks are expected to FAIL until parallel code-fix agents land
+# the underlying code changes.
+
+POST_MEETING_HOOKS_FIRE_ONCE_PER_SESSION:
+  proves: "fire_post_meeting_hooks claims one meeting.data.outbound_events entry per internal hook destination before HTTP delivery; concurrent callers skip pending/queued/delivered entries, Redis retry owns queued failures, and the stale-pending sweep recovers claim-before-send crashes without adding a database column"
+  symptom: "fire_post_meeting_hooks fired 4× per session from 6 call sites (exit_callback + status_change_callback + sweep retries); paying customer overcharged 3× (#330)"
+  found: '2026-05-11'
+  type: script
+  script: tests/v0.10.6.1-post-meeting-idempotency.sh
+  step: fires_once_per_session
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 60
+  release: 260508-v0.10.6.1
+  option3: true
+  pending_code_fix: true   # cleared when develop validation passes
+
+BOT_CREATE_HONORS_DISPATCH_CHECK_DENY:
+  proves: "POST /bots reads DISPATCH_CHECK_URL env; when the mock returns {allow:false,reason:X}, /bots returns 402 with reason in body — OSS-generic (no Stripe/billing semantics in code)"
+  symptom: "POST /bots has no pre-creation authority call-out; deny decisions made elsewhere don't reach the OSS dispatcher (T-033 B1)"
+  found: '2026-05-11'
+  type: script
+  script: tests/v0.10.6.1-dispatch-check-deny.sh
+  step: bots_endpoint_honors_deny
+  modes:
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 30
+  release: 260508-v0.10.6.1
+  option3: true
+  pending_code_fix: true   # parallel code-fix agent dispatching
+
+BOT_CREATE_NOOP_WHEN_DISPATCH_CHECK_UNSET:
+  proves: "POST /bots is a no-op pass-through when DISPATCH_CHECK_URL env is unset — self-hosters get no behavior change"
+  symptom: "OSS self-hosters must not see new external HTTP dependency; un-configured dispatch check must allow (T-033 B1 backward-compat)"
+  found: '2026-05-11'
+  type: script
+  script: tests/v0.10.6.1-dispatch-check-noop.sh
+  step: noop_when_unset
+  modes:
+  - compose
+  - lite
+  - helm
+  state: stateless
+  max_duration_sec: 30
+  release: 260508-v0.10.6.1
+  option3: true
+  pending_code_fix: true
+
+ADMIN_BOT_CREATE_HONORS_DISPATCH_CHECK_DENY:
+  proves: "admin-api bot-create path reads DISPATCH_CHECK_URL env identically; admin-side dispatches honor opaque allow/deny decisions"
+  symptom: "Admin-side bot-create bypassed any external authority entirely (T-033 B7)"
+  found: '2026-05-11'
+  type: script
+  script: tests/v0.10.6.1-dispatch-check-admin-deny.sh
+  step: admin_bots_endpoint_honors_deny
+  modes:
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 30
+  release: 260508-v0.10.6.1
+  option3: true
+  pending_code_fix: true
+
+# ── 260508-v0.10.6.1 PROTOCOL-EXCEPTION #4 (2026-05-11) ──────────────
+# Validate-coverage closure: smoke-bot-transcription-roundtrip.
+# Caught at T-038 human-gate when bot 10060 produced zero transcripts
+# because TRANSCRIPTION_SERVICE_TOKEN was placeholder + validate matrix
+# had zero end-to-end roundtrip check against the transcription endpoint.
+
+SMOKE_BOT_TRANSCRIPTION_ROUNDTRIP:
+  proves: "bot's TranscriptionClient credentials + URL + auth-routing can complete a synth-audio → whisper-transcribe roundtrip; catches token-mismatch (HTTP 401), endpoint-unreachable (transport-err), and model-load failure (HTTP 500 OOM)"
+  symptom: "bot dispatches successfully and uploads chunks but every transcription call fails (401/500/timeout); transcripts never populate even though everything looks 'wired' in compose env (#regression caught at T-038 human-gate 2026-05-11)"
+  found: '2026-05-11'
+  type: script
+  script: tests/smoke-bot-transcription-roundtrip.sh
+  step: roundtrip
+  modes:
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 30
+  release: 260508-v0.10.6.1
+  protocol_exception: 4
+
+TRANSCRIPTION_TOKEN_NO_PLACEHOLDER_FALLBACK:
+  proves: "deploy/compose/.env is the LOCAL deployment SSOT for transcription URL/token; local deploy writes both compose and lite from that file, and smoke verifies runtime env matches it without caller-env overrides or fallback files"
+  symptom: "local deploy/test harness accepts parameters from multiple sources, masking a runtime deployed without the SSOT transcription credentials"
+  found: '2026-05-13'
+  type: static-grep
+  script: tests/static/no-placeholder-transcription-token.sh
+  step: TRANSCRIPTION_TOKEN_NO_PLACEHOLDER_FALLBACK
+  modes: [lite, compose]
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+DASHBOARD_CONFIG_NO_STALE_LOCALHOST_DEFAULTS:
+  proves: "dashboard source/config contains no stale localhost:8066, localhost:18056, or ws://localhost:3001 defaults"
+  symptom: "dashboard builds or validates against the wrong local API gateway target, causing /ws and /api proxy failures after deployment"
+  found: '2026-05-14'
+  type: static-grep
+  script: tests/static/dashboard-config-ssot.sh
+  step: DASHBOARD_CONFIG_NO_STALE_LOCALHOST_DEFAULTS
+  modes: [lite, compose]
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+DASHBOARD_REWRITES_REQUIRE_BUILD_SSOT:
+  proves: "dashboard image requires VEXA_API_URL at build time and does not mutate Next.js rewrite manifests at runtime"
+  symptom: "runtime container patching hides a mismatched build target until WebSocket/API proxying fails in the human browser"
+  found: '2026-05-14'
+  type: static-grep
+  script: tests/static/dashboard-config-ssot.sh
+  step: DASHBOARD_REWRITES_REQUIRE_BUILD_SSOT
+  modes: [lite, compose]
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+DASHBOARD_ADMIN_URL_EXPLICIT_SSOT:
+  proves: "dashboard admin routes use VEXA_ADMIN_API_URL explicitly instead of borrowing VEXA_API_URL as a second source"
+  symptom: "auth/profile/webhook routes silently switch between admin-api and gateway URLs, masking deployment drift and surfacing Invalid API key errors to the user"
+  found: '2026-05-14'
+  type: static-grep
+  script: tests/static/dashboard-config-ssot.sh
+  step: DASHBOARD_ADMIN_URL_EXPLICIT_SSOT
+  modes: [lite, compose]
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+DASHBOARD_CLIENT_URLS_FROM_RUNTIME_CONFIG:
+  proves: "dashboard browser helpers get websocket/session URLs from /api/config or request origin, not hardcoded localhost endpoints"
+  symptom: "human gate browser receives stale local deployment URLs and cannot observe live transcript/status updates without refreshes"
+  found: '2026-05-14'
+  type: static-grep
+  script: tests/static/dashboard-config-ssot.sh
+  step: DASHBOARD_CLIENT_URLS_FROM_RUNTIME_CONFIG
+  modes: [lite, compose]
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+TEST_ACCOUNT_BOT_LIMIT_IS_CANONICAL:
+  proves: "local validation account test@vexa.ai has max_concurrent_bots equal to tests3/lib/test-account.env TEST_ACCOUNT_MAX_CONCURRENT_BOTS in each in-scope deployment"
+  symptom: "parallel compose/lite/fresh-bot human validation trips the concurrent bot limiter even though the stack and bot pipeline are otherwise healthy"
+  found: '2026-05-14'
+  type: script
+  script: tests/test-account-bot-limit.sh
+  step: TEST_ACCOUNT_BOT_LIMIT_IS_CANONICAL
+  modes: [lite, compose]
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+TEST_ACCOUNT_NO_STALE_SLOT_CONSUMERS:
+  proves: "test@vexa.ai has no stale requested/joining/awaiting_admission/active non-browser bot rows older than 2h consuming concurrent-bot slots"
+  symptom: "third bot cannot be dispatched even though max_concurrent_bots=3 because abandoned old meetings still count against the limiter"
+  found: '2026-05-14'
+  type: script
+  script: tests/test-account-bot-limit.sh
+  step: TEST_ACCOUNT_NO_STALE_SLOT_CONSUMERS
+  modes: [lite, compose]
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+# ── 260508-v0.10.6.1 (v3 — 2026-05-12) ───────────────────────────────
+# Six new check ids added at develop-code for the three new architectural
+# items: recordings-playback-url-canonical, drop-relational-recordings-tables,
+# migrations-convention-readme. See scope.yaml for full per-issue blocks.
+
+RECORDING_HAS_PLAYBACK_URL_AFTER_FINALIZE:
+  proves: "recording_finalizer writes playback_url onto the JSONB recording element when master assembly succeeds; the field is non-empty for every completed recording"
+  symptom: "recording.status='completed' but recording.playback_url is null/missing on the JSONB; dashboard shows 'finalizing' indefinitely"
+  found: '2026-05-12'
+  type: script
+  script: tests/recording-playback-url-canonical.sh
+  step: recording_has_playback_url_after_finalize
+  modes:
+  - compose
+  state: stateful
+  max_duration_sec: 60
+  release: 260508-v0.10.6.1
+
+DASHBOARD_READS_PLAYBACK_URL_NOT_MEDIA_FILES:
+  proves: "dashboard meeting page uses recording.playback_url directly; pickMasterMediaFile() function is no longer in the dashboard codebase"
+  symptom: "static-grep finds pickMasterMediaFile or .find(m => m.storage_path...) in services/dashboard/"
+  found: '2026-05-12'
+  type: static-grep
+  script: tests/static/dashboard-playback-canonical.sh
+  step: dashboard_reads_playback_url
+  modes:
+  - compose
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+DASHBOARD_RENDERS_FINALIZING_STATE_ON_NULL_PLAYBACK_URL:
+  proves: "dashboard audio-player renders an explicit 'finalizing' UI state when recording.playback_url is null on a completed recording, rather than silently failing"
+  symptom: "null playback_url + status=completed → dashboard either crashes, shows blank player, or falls back to picking media_files[0]"
+  found: '2026-05-12'
+  type: script
+  script: tests/recording-finalizing-state.sh
+  step: dashboard_renders_finalizing_state
+  modes:
+  - compose
+  state: stateful
+  max_duration_sec: 30
+  release: 260508-v0.10.6.1
+
+DASHBOARD_COMPLETED_RECORDING_PLAYBACK_READY:
+  proves: "a real browser opens a completed meeting with recording.playback_url.audio, fetches the master recording route successfully, loads audio metadata, and renders playback controls instead of 'Recording is processing...' or 'Preparing audio...'"
+  symptom: "completed recording has backend master/playback_url but dashboard remains stuck in Recording is processing or Preparing audio"
+  found: '2026-05-13'
+  type: script
+  script: tests/dashboard-recording-playback-ready.sh
+  step: DASHBOARD_COMPLETED_RECORDING_PLAYBACK_READY
+  modes:
+  - compose
+  state: stateful
+  max_duration_sec: 60
+  release: 260508-v0.10.6.1
+
+DASHBOARD_POST_MEETING_ARTIFACT_POLL_PRESENT:
+  proves: "the meeting detail page keeps polling post-meeting artifacts after stop/completion until recording playback can render, so the UI updates without a manual reload when finalization finishes seconds later"
+  symptom: "human page remains stuck on 'Recording is processing...' even though the backend finished the recording shortly after"
+  found: '2026-05-14'
+  type: script
+  script: tests/dashboard-recording-playback-ready.sh
+  step: DASHBOARD_POST_MEETING_ARTIFACT_POLL_PRESENT
+  modes:
+  - compose
+  state: stateful
+  max_duration_sec: 60
+  release: 260508-v0.10.6.1
+
+DASHBOARD_TRANSCRIPT_RENDERED_VISIBLE:
+  proves: "a real browser opens the completed delivery meeting, the dashboard transcript API returns segment(s), and at least one transcript text snippet is visible in the rendered human page"
+  symptom: "backend GET /transcripts is green, but the human dashboard page still shows no transcript"
+  found: '2026-05-14'
+  type: script
+  script: tests/dashboard-recording-playback-ready.sh
+  step: DASHBOARD_TRANSCRIPT_RENDERED_VISIBLE
+  modes:
+  - compose
+  state: stateful
+  max_duration_sec: 60
+  release: 260508-v0.10.6.1
+
+LOCAL_HUMAN_BROWSER_HANDOFF_ENDPOINTS_SSOT:
+  proves: "every URL handed to the local human browser during validation is derived from the canonical handoff surface and is browser-reachable from that surface; internal Docker hostnames, host-local storage endpoints, and ad hoc public-endpoint fallbacks are not accepted as human-gate proof"
+  symptom: "machine-local checks pass because the test runner can reach an internal/host-local endpoint, but the human browser sees a stuck UI because it was handed a URL outside the canonical handoff surface"
+  found: '2026-05-13'
+  type: script
+  script: tests/dashboard-recording-playback-ready.sh
+  step: LOCAL_HUMAN_BROWSER_HANDOFF_ENDPOINTS_SSOT
+  modes:
+  - compose
+  state: stateful
+  max_duration_sec: 60
+  release: 260508-v0.10.6.1
+
+PRE_RELEASE_SECURITY_DEPENDENCY_FLOORS:
+  proves: "pre-release security dependency controls are enforced for the GHSA-9wv6-78fw-fq5c dependency-blocker class: dashboard postcss is >= 8.5.10 and transcription-service no longer installs python-multipart or reads the full multipart body before enforcing its size limit"
+  symptom: "dependency scanner reports the release tree still contains vulnerable postcss or python-multipart versions after the advisory was pulled into v0.10.6.1"
+  found: '2026-05-14'
+  type: static-grep
+  script: tests/static/advisory-dependency-floors.sh
+  step: PRE_RELEASE_SECURITY_DEPENDENCY_FLOORS
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+RECORDINGS_TABLE_NOT_REFERENCED:
+  proves: "no select(Recording), from .models import Recording, or Recording.* reference exists in services/ outside of archived legacy paths"
+  symptom: "static-grep finds a Recording ORM reference, meaning the codebase still queries the dropped table"
+  found: '2026-05-12'
+  type: static-grep
+  script: tests/static/no-recordings-table-references.sh
+  step: recordings_table_not_referenced
+  modes:
+  - compose
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+MEDIA_FILES_TABLE_NOT_REFERENCED:
+  proves: "no select(MediaFile), from .models import MediaFile, or MediaFile.* reference exists in services/ outside of archived legacy paths"
+  symptom: "static-grep finds a MediaFile ORM reference; codebase still queries the dropped table"
+  found: '2026-05-12'
+  type: static-grep
+  script: tests/static/no-media-files-table-references.sh
+  step: media_files_table_not_referenced
+  modes:
+  - compose
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+RECORDINGS_TABLE_DROPPED_IN_PROD:
+  proves: "the recordings and media_files tables do not exist in the runtime DB (after m331-drop-relational-recordings.py runs)"
+  symptom: "SELECT 1 FROM recordings LIMIT 1 succeeds (table still present) — drop migration didn't run or rolled back"
+  found: '2026-05-12'
+  type: script
+  script: tests/recordings-tables-dropped.sh
+  step: tables_dropped
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 15
+  release: 260508-v0.10.6.1
+
+# ── 260508-v0.10.6.1 walkability-smoke gate (2026-05-12) ─────────────
+# Harness-gap fix surfaced at develop-human: LOCAL=1 deploys could exit
+# success on a stack no human could walk. These six proves run AFTER
+# release-deploy and BEFORE release-validate; develop-human gate is
+# refused if any fails. See tests3/tests/walkability-smoke.sh.
+
+WALKABILITY_AUTH_ROUND_TRIP_WORKS:
+  proves: "api-gateway returns 401 without token and 200 with a valid token from api_tokens; auth round-trip works end-to-end"
+  symptom: "dashboard shows 'Invalid API key' or 'Missing API key' for an authenticated user; auth flow regressed silently"
+  found: '2026-05-12'
+  type: script
+  script: tests/walkability-smoke.sh
+  step: WALKABILITY_AUTH_ROUND_TRIP_WORKS
+  modes: [compose, lite]
+  state: stateful
+  max_duration_sec: 10
+  release: 260508-v0.10.6.1
+
+WALKABILITY_MEETINGS_PAGE_HAS_DATA:
+  proves: "deployed stack has at least 1 meeting row; humans walking the dashboard have something to click"
+  symptom: "fresh LOCAL=1 lite stack with empty DB; human-checklist items requiring a meeting record are dead in the water"
+  found: '2026-05-12'
+  type: script
+  script: tests/walkability-smoke.sh
+  step: WALKABILITY_MEETINGS_PAGE_HAS_DATA
+  modes: [compose, lite]
+  state: stateful
+  max_duration_sec: 10
+  release: 260508-v0.10.6.1
+
+WALKABILITY_MEETING_DETAIL_API_LOADS:
+  proves: "GET /meetings/<id> with auth returns 200 + JSON with id; the detail view a human clicks actually loads"
+  symptom: "dashboard /meetings/<id> shows 'Something went wrong' or empty state; backend route broken"
+  found: '2026-05-12'
+  type: script
+  script: tests/walkability-smoke.sh
+  step: WALKABILITY_MEETING_DETAIL_API_LOADS
+  modes: [compose, lite]
+  state: stateful
+  max_duration_sec: 10
+  release: 260508-v0.10.6.1
+
+WALKABILITY_TRANSCRIPTION_URL_CONFIGURED:
+  proves: "TRANSCRIPTION_SERVICE_URL is set + non-placeholder; LOCAL=1 inner loop check (reachability is canonical-stage-only)"
+  symptom: "stack deployed with dummy/placeholder transcription URL; transcription pipeline silently broken; canonical-stage gate would have caught it but LOCAL=1 didn't"
+  found: '2026-05-12'
+  type: script
+  script: tests/walkability-smoke.sh
+  step: WALKABILITY_TRANSCRIPTION_URL_CONFIGURED
+  modes: [compose, lite]
+  state: stateful
+  max_duration_sec: 10
+  release: 260508-v0.10.6.1
+
+WALKABILITY_TTS_SPEAK_ROUND_TRIP:
+  proves: "POST /v1/audio/speech to TTS service returns 200 + >1KB audio; /speak path is functional"
+  symptom: "/speak endpoint silently broken; bot can't speak in meetings; customer-A escalation reproduces"
+  found: '2026-05-12'
+  type: script
+  script: tests/walkability-smoke.sh
+  step: WALKABILITY_TTS_SPEAK_ROUND_TRIP
+  modes: [compose, lite]
+  state: stateful
+  max_duration_sec: 30
+  release: 260508-v0.10.6.1
+
+WALKABILITY_DASHBOARD_LOGIN_RENDERS:
+  proves: "GET /login returns 2xx + non-trivial HTML; dashboard front door renders for a human"
+  symptom: "dashboard /login returns 500 or empty body; humans cannot log in to walk the checklist"
+  found: '2026-05-12'
+  type: script
+  script: tests/walkability-smoke.sh
+  step: WALKABILITY_DASHBOARD_LOGIN_RENDERS
+  modes: [compose, lite]
+  state: stateful
+  max_duration_sec: 10
+  release: 260508-v0.10.6.1
+
+# ── 260508-v0.10.6.1 registry-canonical gate (2026-05-12) ──────────────
+# Prereq for develop-human: registry.yaml is canonical source of truth
+# for check IDs across scope.yaml + prove scripts. Drift between them
+# means the matrix returns "missing" on a real-running prove (or
+# accepts a phantom check id with no implementation). See
+# tests3/tests/static/registry-canonical.sh.
+
+REGISTRY_COVERS_ALL_SCOPE_PROVES:
+  proves: "every {check: X} in the current release's scope.yaml proves[] is registered in registry.yaml"
+  symptom: "scope.yaml references a check id that doesn't exist in registry → matrix returns missing forever; or a prove runs but the matrix can't find it in catalog"
+  found: '2026-05-12'
+  type: script
+  script: tests/static/registry-canonical.sh
+  step: REGISTRY_COVERS_ALL_SCOPE_PROVES
+  modes: [any]
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+REGISTRY_COVERS_ALL_SCRIPT_STEP_IDS:
+  proves: "every step_pass/step_fail <ID> emitted by tests3/tests/**/*.sh is registered in registry.yaml"
+  symptom: "a script emits a check id that's not in registry → JSON written but report-renderer can't classify it"
+  found: '2026-05-12'
+  type: script
+  script: tests/static/registry-canonical.sh
+  step: REGISTRY_COVERS_ALL_SCRIPT_STEP_IDS
+  modes: [any]
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+REGISTRY_HAS_NO_ORPHAN_IDS:
+  proves: "every check id in registry.yaml has at least one referrer (in current scope.yaml OR in a script)"
+  symptom: "registry accumulates dead entries over time; orphan ids confuse contributors browsing registry"
+  found: '2026-05-12'
+  type: script
+  script: tests3/tests/static/registry-canonical.sh
+  step: REGISTRY_HAS_NO_ORPHAN_IDS
+  modes: [any]
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+# ── 260508-v0.10.6.1 scope-proof gate (2026-05-13) ────────────────────
+# develop-human must not open just because the registry is consistent and the
+# stack is walkable. This gate proves the current release's scope-bound LOCAL
+# (`lite` / `compose`) proof cells are actually present and green in the
+# latest reports. Missing/skip/fail all block the human checkpoint.
+
+SCOPE_LOCAL_PROOFS_ALL_GREEN:
+  proves: "every scope.yaml prove runnable on LOCAL=1 (`lite` / `compose`) is present and `pass` in the latest LOCAL reports before develop-human opens"
+  symptom: "human checkpoint opens on a colour-blind matrix: a required scope proof is missing, skipped, or failing, but the stack still looked walkable"
+  found: '2026-05-13'
+  type: script
+  script: tests/static/scope-proof-gate.sh
+  step: SCOPE_LOCAL_PROOFS_ALL_GREEN
+  modes: [any]
+  state: stateless
+  max_duration_sec: 10
+  release: 260508-v0.10.6.1
+
+# ── 260508-v0.10.6.1 local-human mechanical gate (2026-05-13) ─────────
+# Machine-owned checks removed from the human checklist. Humans should spend
+# attention on end-to-end UI behavior; these checks are observable from Docker,
+# HTTP, logs, DB metadata, and generated env files.
+
+LOCAL_HUMAN_TARGET_URLS_READY:
+  proves: "the lite and compose target URLs handed to the human return 2xx before the checkpoint opens"
+  symptom: "human receives a checklist but the URL handoff points at dead or wrong surfaces"
+  found: '2026-05-13'
+  type: script
+  script: tests/local-human-mechanical-gate.sh
+  step: LOCAL_HUMAN_TARGET_URLS_READY
+  modes: [compose]
+  state: stateful
+  max_duration_sec: 10
+  release: 260508-v0.10.6.1
+
+LOCAL_HUMAN_CONTAINERS_HEALTHY:
+  proves: "LOCAL lite + compose containers needed for human validation are running and healthy"
+  symptom: "human validation starts against a partially dead LOCAL stack"
+  found: '2026-05-13'
+  type: script
+  script: tests/local-human-mechanical-gate.sh
+  step: LOCAL_HUMAN_CONTAINERS_HEALTHY
+  modes: [compose]
+  state: stateful
+  max_duration_sec: 10
+  release: 260508-v0.10.6.1
+
+LOCAL_HUMAN_TRANSCRIPTION_LB_READY:
+  proves: "when LOCAL compose points at transcription-lb, the lb/workers are healthy, attached to the runtime bot network, resolvable from runtime-api, and meeting-api/runtime-api match the deploy/compose/.env SSOT before human validation"
+  symptom: "live bots upload recording chunks but every Whisper call fails with transport errors; human sees zero transcript segments"
+  found: '2026-05-13'
+  type: script
+  script: tests/local-human-mechanical-gate.sh
+  step: LOCAL_HUMAN_TRANSCRIPTION_LB_READY
+  modes: [compose]
+  state: stateful
+  max_duration_sec: 10
+  release: 260508-v0.10.6.1
+
+LOCAL_HUMAN_RECENT_LOGS_CLEAN:
+  proves: "recent LOCAL service logs have no ERROR/TRACEBACK/CRITICAL/FATAL lines before human validation begins"
+  symptom: "humans eyeball the UI while services are already emitting obvious runtime errors"
+  found: '2026-05-13'
+  type: script
+  script: tests/local-human-mechanical-gate.sh
+  step: LOCAL_HUMAN_RECENT_LOGS_CLEAN
+  modes: [compose]
+  state: stateful
+  max_duration_sec: 10
+  release: 260508-v0.10.6.1
+
+LOCAL_HUMAN_MEMORY_WITHIN_LIMIT:
+  proves: "vexa-lite memory is below 2GiB before human validation"
+  symptom: "human validates a lite stack already beyond the documented memory envelope"
+  found: '2026-05-13'
+  type: script
+  script: tests/local-human-mechanical-gate.sh
+  step: LOCAL_HUMAN_MEMORY_WITHIN_LIMIT
+  modes: [compose]
+  state: stateful
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+LOCAL_HUMAN_LITE_RECORDING_FILES_PRESENT:
+  proves: "lite DB final local recording storage paths exist under /var/lib/vexa/recordings before human playback validation"
+  symptom: "lite DB advertises playback_url/final media but the disposable container layer lost the actual recording file after redeploy"
+  found: '2026-05-13'
+  type: script
+  script: tests/local-human-mechanical-gate.sh
+  step: LOCAL_HUMAN_LITE_RECORDING_FILES_PRESENT
+  modes: [compose]
+  state: stateful
+  max_duration_sec: 10
+  release: 260508-v0.10.6.1
+
+DASHBOARD_BROWSER_MEETINGS_AUTH_OK:
+  proves: "a real browser can direct-login, open /meetings and a meeting detail page, and avoid Authentication failed/session-expired/Invalid API key UI"
+  symptom: "curl sees 200 HTML but the hydrated dashboard rejects the session at /meetings or /meetings/<id>"
+  found: '2026-05-13'
+  type: script
+  script: tests/dashboard-browser-auth.sh
+  step: DASHBOARD_BROWSER_MEETINGS_AUTH_OK
+  modes: [compose, lite]
+  state: stateful
+  max_duration_sec: 45
+  release: 260508-v0.10.6.1
+
+DASHBOARD_DETAIL_STALE_AUTH_RECOVERS:
+  proves: "a stale dashboard cookie/localStorage token on a meeting detail route is cleared or redirected instead of rendering raw Invalid API key"
+  symptom: "human opens /meetings/<id> after auth/token drift and sees Something went wrong / Invalid API key"
+  found: '2026-05-13'
+  type: script
+  script: tests/dashboard-stale-auth-detail.sh
+  step: DASHBOARD_DETAIL_STALE_AUTH_RECOVERS
+  modes: [compose, lite]
+  state: stateful
+  max_duration_sec: 45
+  release: 260508-v0.10.6.1
+
+DASHBOARD_AUTH_COOKIES_ISOLATED:
+  proves: "one browser can log into both LOCAL dashboards on localhost and keep both /meetings sessions authenticated with deployment-specific token cookies"
+  symptom: "logging into one localhost deployment overwrites the other deployment's vexa-token cookie, causing Authentication failed/session-expired after successful login"
+  found: '2026-05-13'
+  type: script
+  script: tests/dashboard-cookie-isolation.sh
+  step: DASHBOARD_AUTH_COOKIES_ISOLATED
+  modes: [compose]
+  state: stateful
+  max_duration_sec: 60
+  release: 260508-v0.10.6.1
+
+LIVE_BOT_TRANSCRIPT_SEGMENTS_PRESENT:
+  proves: "the configured delivery meeting, or newest real admitted transcribe_enabled bot with recording chunks, has non-empty transcript segments through GET /transcripts"
+  symptom: "human opens a meeting detail page after bot admission and sees recordings/chunks but no transcription"
+  found: '2026-05-13'
+  type: script
+  script: tests/live-bot-transcript-pipeline.sh
+  step: LIVE_BOT_TRANSCRIPT_SEGMENTS_PRESENT
+  modes: [compose]
+  state: stateful
+  max_duration_sec: 30
+  release: 260508-v0.10.6.1
+
+LOCAL_HUMAN_COMPOSE_ENV_SSOT:
+  proves: "deploy/compose/.env contains every deploy/env-example key plus non-empty LOCAL overrides"
+  symptom: "LOCAL compose validation runs with env drift from the declared deployment contract"
+  found: '2026-05-13'
+  type: script
+  script: tests/local-human-mechanical-gate.sh
+  step: LOCAL_HUMAN_COMPOSE_ENV_SSOT
+  modes: [compose]
+  state: stateful
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+LOCAL_HUMAN_NO_TEST_CONTAINERS:
+  proves: "no leftover lifecycle/webhook/spoof test containers are present before human validation"
+  symptom: "stale test containers contaminate human validation or Docker ps inspection"
+  found: '2026-05-13'
+  type: script
+  script: tests/local-human-mechanical-gate.sh
+  step: LOCAL_HUMAN_NO_TEST_CONTAINERS
+  modes: [compose]
+  state: stateful
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+LOCAL_HUMAN_RECORDINGS_TABLES_DROPPED:
+  proves: "compose DB has no recordings/media_files relational tables before human playback validation"
+  symptom: "human validates recording playback while the dead relational tables are still present"
+  found: '2026-05-13'
+  type: script
+  script: tests/local-human-mechanical-gate.sh
+  step: LOCAL_HUMAN_RECORDINGS_TABLES_DROPPED
+  modes: [compose]
+  state: stateful
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+DASHBOARD_DETAIL_FETCHES_CANONICAL_RECORDING_STATE:
+  proves: "dashboard meeting detail fetches the authoritative meeting row and hydrates recording state from meeting.data.recordings"
+  symptom: "SPA navigation to an active deferred-recording meeting trusts the thin meetings-list row, leaving recordings/transcribe_enabled empty until a hard reload"
+  found: '2026-05-14'
+  type: script
+  script: tests/static/dashboard-recording-state-ssot.sh
+  step: DASHBOARD_DETAIL_FETCHES_CANONICAL_RECORDING_STATE
+  modes: [compose, lite]
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+DASHBOARD_ACTIVE_RECORDING_UI_USES_MEETING_DATA:
+  proves: "dashboard meeting page derives active recording UI from canonical meeting.data.recordings when transcript-derived recording state has not arrived"
+  symptom: "active recording with transcribe_enabled=false renders 'No transcript yet / Waiting for speech to transcribe...' instead of 'Recording in progress'"
+  found: '2026-05-14'
+  type: script
+  script: tests/static/dashboard-recording-state-ssot.sh
+  step: DASHBOARD_ACTIVE_RECORDING_UI_USES_MEETING_DATA
+  modes: [compose, lite]
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+DASHBOARD_DEFERRED_RECORDING_EMPTY_STATE:
+  proves: "transcript empty state distinguishes deferred recording from realtime transcription waiting state"
+  symptom: "deferred recording flow looks broken during capture/finalization because the transcript panel says it is waiting for speech"
+  found: '2026-05-14'
+  type: script
+  script: tests/static/dashboard-recording-state-ssot.sh
+  step: DASHBOARD_DEFERRED_RECORDING_EMPTY_STATE
+  modes: [compose, lite]
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+DEFERRED_TRANSCRIBE_WAITS_FOR_RECORDING_MASTER:
+  proves: "POST /meetings/{id}/transcribe accepts only audio media finalized by recording_finalizer.master; it does not consume last-chunk storage_path or post_meeting_reconciler metadata"
+  symptom: "deferred transcription starts before recording finalization, reads an incomplete chunk path, and returns zero/broken transcript despite the recording later becoming playable"
+  found: '2026-05-14'
+  type: script
+  script: tests/static/deferred-transcribe-master-gate.sh
+  step: DEFERRED_TRANSCRIBE_WAITS_FOR_RECORDING_MASTER
+  modes: [compose, lite, helm]
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+DISRUPTIVE_DEFERRED_TRANSCRIPTION_HARNESS_EXISTS:
+  proves: "autonomous_real_meeting.py can dispatch a recording-only bot, SIGKILL it, wait for finalized master, POST deferred transcribe, and assert persisted transcript segments"
+  symptom: "release registry claims crash robustness but only proves recording playback, not deferred transcript persistence after bot disruption"
+  found: '2026-05-14'
+  type: script
+  script: tests/static/deferred-transcribe-master-gate.sh
+  step: DISRUPTIVE_DEFERRED_TRANSCRIPTION_HARNESS_EXISTS
+  modes: [compose, lite, helm]
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+RUNTIME_EXIT_CALLBACK_SENDS_INTERNAL_SECRET:
+  proves: "runtime-api persists callback_headers and sends X-Internal-Secret back to meeting-api exit callbacks"
+  symptom: "bot exits but meeting-api rejects runtime callback with 403, leaving meetings stuck requested/active and recording finalization unobservable"
+  found: '2026-05-14'
+  type: script
+  script: tests/static/deferred-transcribe-master-gate.sh
+  step: RUNTIME_EXIT_CALLBACK_SENDS_INTERNAL_SECRET
+  modes: [compose, lite, helm]
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+BOT_STATUS_CALLBACK_HAS_INTERNAL_SECRET_FALLBACK:
+  proves: "bot status callbacks carry X-Internal-Secret from BOT_CONFIG or INTERNAL_API_SECRET env"
+  symptom: "bot joins or waits but meeting-api rejects status_change with 403, so tests never reach active and dashboard state drifts"
+  found: '2026-05-14'
+  type: script
+  script: tests/static/deferred-transcribe-master-gate.sh
+  step: BOT_STATUS_CALLBACK_HAS_INTERNAL_SECRET_FALLBACK
+  modes: [compose, lite, helm]
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
+
+DISRUPTIVE_CRASH_KILLS_CANONICAL_BOT_CONTAINER:
+  proves: "compose disruptive harness kills the meeting-api bot_container_id before fallback discovery"
+  symptom: "crash robustness test records chunks but fails to drop the active bot, creating false red/green evidence about recording persistence"
+  found: '2026-05-14'
+  type: script
+  script: tests/static/deferred-transcribe-master-gate.sh
+  step: DISRUPTIVE_CRASH_KILLS_CANONICAL_BOT_CONTAINER
+  modes: [compose]
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.1
