@@ -86,7 +86,6 @@ export interface UnifiedCallbackPayload {
     sampler_started_at: string;
     cgroup_available: boolean;
   };
-  acceptance_signals?: Record<string, any>;
 }
 
 /**
@@ -109,8 +108,7 @@ export async function callStatusChangeCallback(
   // terminal status (failed/completed). meeting-api persists both into
   // meetings.data JSONB on the status_change handler.
   botLogs?: string[],
-  botResources?: UnifiedCallbackPayload["bot_resources"],
-  acceptanceSignals?: UnifiedCallbackPayload["acceptance_signals"]
+  botResources?: UnifiedCallbackPayload["bot_resources"]
 ): Promise<void> {log(`🔥 UNIFIED CALLBACK: ${status.toUpperCase()} - reason: ${reason || 'none'}`);
   
   if (!botConfig.meetingApiCallbackUrl) {log("Warning: No callback URL configured. Cannot send status change callback.");
@@ -144,7 +142,6 @@ export async function callStatusChangeCallback(
         speaker_events: speakerEvents,
         bot_logs: botLogs,
         bot_resources: botResources,
-        acceptance_signals: acceptanceSignals,
       };
 
       log(`Sending unified status change callback to ${baseUrl} (attempt ${attempt + 1}/${maxRetries})`);
@@ -157,9 +154,6 @@ export async function callStatusChangeCallback(
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...((botConfig.internalSecret || process.env.INTERNAL_API_SECRET)
-            ? { 'X-Internal-Secret': botConfig.internalSecret || process.env.INTERNAL_API_SECRET || '' }
-            : {}),
         },
         body: JSON.stringify(payload),
         signal: controller.signal

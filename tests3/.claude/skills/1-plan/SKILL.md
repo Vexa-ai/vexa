@@ -1,5 +1,3 @@
-# ⚠ STALE 2026-05-12 — descriptions reference the OLD state machine (idle→groom→plan→develop→provision→deploy→validate→triage→human→ship→teardown). The current model has 13 stages with do→audit→human pattern at three levels. Authoritative: tests3/stages/release-flow.md + per-stage 00-idle.md…12-teardown.md. Full skill-directory rewrite is v0.10.7 pack state-machine-docs-rewrite.
-
 ---
 name: 1-plan
 description: "Invoke after 0-groom — produce scope.yaml + DoD/Registry change proposals + get human line-by-line approval. Stage 02. Refuses to advance without plan-approval.yaml fully signed. Use when the user says 'plan the release', 'scope this', 'write scope.yaml', 'approve the scope'."

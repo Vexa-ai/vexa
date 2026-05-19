@@ -6,11 +6,14 @@ import { getAuthenticatedUserId } from "@/lib/auth-utils";
  * POST /api/webhooks/rotate-secret — rotate webhook signing secret
  */
 export async function POST(request: NextRequest) {
-  const VEXA_ADMIN_API_URL = process.env.VEXA_ADMIN_API_URL || "";
+  const VEXA_ADMIN_API_URL =
+    process.env.VEXA_ADMIN_API_URL ||
+    process.env.VEXA_API_URL ||
+    "http://localhost:18056";
   const VEXA_ADMIN_API_KEY = process.env.VEXA_ADMIN_API_KEY || "";
 
-  if (!VEXA_ADMIN_API_URL || !VEXA_ADMIN_API_KEY) {
-    return NextResponse.json({ error: "Admin API URL/key not configured" }, { status: 503 });
+  if (!VEXA_ADMIN_API_KEY) {
+    return NextResponse.json({ error: "Admin API not configured" }, { status: 503 });
   }
 
   // Resolve user from authenticated token instead of client-supplied userId

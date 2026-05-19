@@ -20,7 +20,6 @@ import uuid
 from typing import Optional
 from urllib.parse import urlparse
 
-import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -41,7 +40,6 @@ class CreateContainerRequest(BaseModel):
     user_id: str
     config: dict = Field(default_factory=dict)
     callback_url: Optional[str] = None
-    callback_headers: dict[str, str] = Field(default_factory=dict)
     metadata: dict = Field(default_factory=dict)
     name: Optional[str] = None
 
@@ -266,7 +264,6 @@ async def create_container(req: CreateContainerRequest, request: Request):
         "ports": {},
         "container_id": "",
         "callback_url": req.callback_url,
-        "callback_headers": req.callback_headers,
         "metadata": req.metadata,
     }
     await state.set_container(redis, name, container_data)
@@ -334,18 +331,7 @@ async def get_container(name: str, request: Request):
 
 @router.delete("/containers/{name}")
 async def delete_container(name: str, request: Request):
-    """Stop and remove a container.
-
-    #313 — Also fires the exit callback. Pre-fix: callbacks fired only
-    from the reaper / event listener path (handle_container_exit). DELETE-
-    initiated stops bypassed that, so meeting-api never saw the exit
-    notification and the meeting stayed in 'stopping' until the Pack E.3.2
-    sweep. Now: read state, synthesize a stopped-via-DELETE exit, fire the
-    callback (with a synthesized connection_id when missing — see
-    lifecycle._fire_exit_callback). Sweep remains as the durable fallback.
-    """
-    from .lifecycle import _fire_exit_callback
-
+    """Stop and remove a container."""
     backend = _get_backend(request)
     redis = _get_redis(request)
 
@@ -353,19 +339,6 @@ async def delete_container(name: str, request: Request):
     await backend.remove(name)
     await state.set_stopped(redis, name)
     logger.info(f"Stopped and removed {name}")
-
-    # Fire the exit callback so meeting-api can transition the
-    # meeting through stopping → completed without waiting for the
-    # stale-stopping sweep. Failures here do NOT fail the DELETE
-    # response — the sweep is the durable safety net.
-    try:
-        await _fire_exit_callback(redis, name, exit_code=0)
-    except (httpx.HTTPError, OSError, ValueError) as exc:
-        logger.warning(
-            "DELETE %s: exit callback dispatch failed (sweep will reconcile): %s",
-            name, exc,
-        )
-
     return {"name": name, "status": "stopped"}
 
 

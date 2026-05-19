@@ -32,7 +32,7 @@ function buildUrl(path: string, query?: Record<string, string>): string {
 function getAuthHeader(authType: "user" | "admin" | "none"): string {
   switch (authType) {
     case "user":
-      return "X-API-Key: <api-key>";
+      return "X-API-Key: YOUR_API_KEY";
     case "admin":
       return "X-Admin-API-Key: YOUR_ADMIN_API_KEY";
     case "none":
@@ -45,7 +45,7 @@ function getAuthHeader(authType: "user" | "admin" | "none"): string {
 function getAuthHeaderJs(authType: "user" | "admin" | "none"): string {
   switch (authType) {
     case "user":
-      return "'X-API-Key': '<api-key>'";
+      return "'X-API-Key': 'YOUR_API_KEY'";
     case "admin":
       return "'X-Admin-API-Key': 'YOUR_ADMIN_API_KEY'";
     case "none":

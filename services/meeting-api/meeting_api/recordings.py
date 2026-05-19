@@ -12,14 +12,14 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
-from sqlalchemy import text
+from sqlalchemy import and_, desc, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import attributes
 
 from .database import get_db
-from .models import Meeting, MeetingSession
+from .models import Meeting, MeetingSession, Recording, MediaFile
 from .schemas import (
     RecordingResponse,
     RecordingListResponse,
@@ -29,7 +29,7 @@ from .schemas import (
 from .storage import create_storage_client
 
 from .auth import get_user_and_token
-from .collector.processors import verify_meeting_token
+from .config import get_recording_metadata_mode
 from .webhooks import send_event_webhook
 
 logger = logging.getLogger("meeting_api.recordings")
@@ -45,16 +45,6 @@ def get_storage_client():
     if _storage_client is None:
         _storage_client = create_storage_client()
     return _storage_client
-
-
-async def require_recording_upload_token(request: Request) -> dict:
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        raise HTTPException(status_code=403, detail="Missing recording upload token")
-    token_claims = verify_meeting_token(auth.removeprefix("Bearer ").strip())
-    if not token_claims:
-        raise HTTPException(status_code=403, detail="Invalid recording upload token")
-    return token_claims
 
 
 def _new_recording_numeric_id() -> int:
@@ -131,7 +121,6 @@ async def _find_meeting_data_recording(db: AsyncSession, user_id: int, recording
 
 @router.post("/internal/recordings/upload", status_code=201, include_in_schema=False)
 async def internal_upload_recording(
-    token_claims: dict = Depends(require_recording_upload_token),
     file: UploadFile = File(...),
     metadata: Optional[str] = Form(default=None),
     session_uid: Optional[str] = Form(default=None),
@@ -144,7 +133,7 @@ async def internal_upload_recording(
     # per-chunk, `chunk_seq` is incremented per chunk and `is_final` stays
     # False until the last one. Each chunk gets its own object in MinIO under
     # a per-session prefix; each creates a distinct `media_files[]` entry
-    # in meeting.data.recordings[].media_files. Recording status stays
+    # (meeting_data mode) or MediaFile row (DB mode). Recording.status stays
     # IN_PROGRESS until is_final=True — that's the "partial recording" marker.
     # Legacy one-shot callers that don't pass chunk_seq default to 0 with
     # is_final=True; behavior is byte-identical to today for that path.
@@ -180,39 +169,46 @@ async def internal_upload_recording(
             return {"status": "pending", "detail": f"Meeting session not ready yet: {session_uid}"}
         raise HTTPException(status_code=404, detail=f"Meeting session not found: {session_uid}")
 
-    if not isinstance(token_claims, dict):
-        # Direct unit tests call the endpoint function without FastAPI dependency injection.
-        token_claims = {"meeting_id": meeting_session.meeting_id}
-
-    if int(token_claims.get("meeting_id")) != int(meeting_session.meeting_id):
-        raise HTTPException(status_code=403, detail="Recording token does not match meeting")
-
     meeting = await db.get(Meeting, meeting_session.meeting_id)
     if not meeting:
         raise HTTPException(status_code=404, detail=f"Meeting not found for session: {session_uid}")
 
     user_id = meeting.user_id
-    # TODO(v0.10.7): bound UploadFile body size for defense-in-depth against
-    # compromised internal callers. Route is JWT-authed via
-    # require_recording_upload_token (HS256, aud/iss/scope/exp) and meeting-api
-    # is on Docker `expose:` not `ports:` — not externally reachable today.
     file_data = await file.read()
     file_size = len(file_data)
 
-    meeting_data_dict = dict(meeting.data or {})
-    recordings_list = list(meeting_data_dict.get("recordings") or [])
+    use_meeting_data = get_recording_metadata_mode() == "meeting_data"
+    meeting_data_dict = dict(meeting.data or {}) if use_meeting_data else {}
+    recordings_list = list(meeting_data_dict.get("recordings") or []) if use_meeting_data else []
     existing_rec = None
     existing_idx = None
-    recording_id = _new_recording_numeric_id()
+    legacy_id = _new_recording_numeric_id() if use_meeting_data else None
 
-    for idx, rec in enumerate(recordings_list):
-        if isinstance(rec, dict) and rec.get("session_uid") == session_uid and rec.get("source") == RecordingSource.BOT.value:
-            existing_rec = rec
-            existing_idx = idx
-            recording_id = rec.get("id") or recording_id
-            break
+    if use_meeting_data:
+        for idx, rec in enumerate(recordings_list):
+            if isinstance(rec, dict) and rec.get("session_uid") == session_uid and rec.get("source") == RecordingSource.BOT.value:
+                existing_rec = rec
+                existing_idx = idx
+                legacy_id = rec.get("id") or legacy_id
+                break
 
-    storage_id = recording_id
+    recording = None
+    if not use_meeting_data:
+        # Incremental-upload aware: look up an existing Recording for this
+        # session_uid first. Chunks 1..N reuse it; chunk 0 creates it. The
+        # one-shot legacy path lands here with chunk_seq=0 and no prior
+        # row — same as before.
+        existing_stmt = select(Recording).where(
+            Recording.meeting_id == meeting.id,
+            Recording.session_uid == session_uid,
+            Recording.source == "bot",
+        )
+        recording = (await db.execute(existing_stmt)).scalars().first()
+        if recording is None:
+            recording = Recording(meeting_id=meeting.id, user_id=user_id, session_uid=session_uid, source="bot", status="uploading")
+            db.add(recording)
+            await db.flush()
+    storage_id = legacy_id if use_meeting_data else recording.id
 
     # Incremental-upload storage path: per-session + per-media-type directory
     # + zero-padded chunk index. media_type is part of the path because audio
@@ -230,133 +226,283 @@ async def internal_upload_recording(
         storage.upload_file(storage_path, file_data, content_type=content_type)
     except Exception as e:
         logger.error(f"Storage upload failed for {session_uid}: {e}", exc_info=True)
+        if recording:
+            recording.status = "failed"
+            recording.error_message = str(e)
+            await db.commit()
         raise HTTPException(status_code=500, detail="Failed to upload recording to storage")
 
-    # JSONB-only path (v0.10.6.1): write recording metadata into meeting.data.
-    # Media-file materialization policy:
-    #   - Every successful chunk upload UPDATES the per-type media_files entry
-    #     with the latest chunk's metadata (one entry per media_type per
-    #     recording — see Pack E.1.a history).
-    #   - Concurrency: SELECT ... FOR UPDATE held BEFORE we snapshot
-    #     meeting.data, so concurrent audio+video uploads serialize on the
-    #     meeting row and don't lose each other's media_files entries.
-    from sqlalchemy import select as _sql_select
-    locked_meeting = (await db.execute(
-        _sql_select(Meeting)
-        .where(Meeting.id == meeting_session.meeting_id)
-        .with_for_update()
-    )).scalar_one()
-    meeting = locked_meeting
-    meeting_data_dict = dict(meeting.data or {})
-    recordings_list = list(meeting_data_dict.get("recordings") or [])
-    # Re-find existing_rec under the FRESH (locked) snapshot. Adopt the
-    # canonical recording_id from the existing rec if present.
-    existing_rec = None
-    existing_idx = None
-    for idx, rec in enumerate(recordings_list):
-        if isinstance(rec, dict) and rec.get("session_uid") == session_uid and rec.get("source") == RecordingSource.BOT.value:
-            existing_rec = rec
-            existing_idx = idx
-            recording_id = rec.get("id") or recording_id
-            break
+    if use_meeting_data:
+        # Media-file materialization policy (Bug C+D fix, 2026-04-21):
+        #   - Intermediate chunks (is_final=false) upload to MinIO for
+        #     SIGKILL safety but do NOT append media_files entries.
+        #   - The final chunk (is_final=true) + every distinct media_type
+        #     (audio, video) yields ONE media_files entry per type pointing
+        #     at the final-chunk storage_path.
+        #   - This gives the dashboard ONE audio entry + (optionally) ONE
+        #     video entry per recording, instead of N per-chunk entries
+        #     that confused the fragment player and the seek-to-segment
+        #     math. Per-chunk history is still reconstructable from the
+        #     MinIO listing under the session/type prefix.
+        #
+        # v0.10.5 Pack E.1.a — per-chunk durable media_files write (#268
+        # reproduction 2026-04-27).
+        #
+        # Pre-Pack-E.1.a: intermediate chunks went to MinIO/S3 but media_files
+        # was only updated on is_final=true. When the bot died mid-active
+        # (e.g. Playwright Execution context destroyed in production today),
+        # 31 chunks landed in S3 with media_files=[] in DB — orphaned.
+        #
+        # Now: every successful chunk upload UPDATES the per-type media_files
+        # entry with the latest chunk's metadata. Dashboard still sees ONE
+        # entry per type (audio, video) — UX unchanged from prior shape;
+        # what changes is the entry exists from chunk_seq=0 onward instead
+        # of waiting for is_final. Even mid-stream death leaves a partial
+        # recording row with `status=IN_PROGRESS` + the latest chunk's
+        # metadata, so the dashboard can show "Recording in progress (X
+        # chunks captured)" rather than "no recording."
+        #
+        # Concurrency: [PLATFORM] code review (#272 issuecomment-4327366063,
+        # 2026-04-27 13:42:17Z) flagged a stale-read race in the v1 shape:
+        # SELECT … FOR UPDATE was acquired AFTER snapshotting meeting.data,
+        # so two concurrent uploads for the same recording (e.g. audio +
+        # video chunk N) both saw media_files=[] pre-lock; one wrote
+        # [audio], the other (using its stale snapshot) wrote [video] —
+        # losing the audio entry despite both S3 uploads succeeding.
+        #
+        # v2 shape (this commit): hold the row lock from BEFORE the
+        # snapshot until after the commit. The S3 upload above stays
+        # OUTSIDE the lock — it's idempotent on the storage_path key, so
+        # no need to serialize S3 round-trips. Only the JSONB read+derive
+        # +write is inside the critical section. Latency cost: one chunk
+        # per ~10s per recording; sub-millisecond lock contention even
+        # under heavy parallel chunk arrival.
+        #
+        # Pre-lock find at line ~187 derives `legacy_id` so the S3
+        # storage_path can be built BEFORE we hold the lock. In the rare
+        # double-create race (two requests both first-chunk-of-session,
+        # neither sees existing_rec pre-lock), each generates a different
+        # random legacy_id and uploads to a different S3 directory; the
+        # post-lock re-find resolves which rec wins, and the loser's
+        # upload is referenced by its OWN storage_path entry under the
+        # winning rec's media_files (paths are self-describing — no data
+        # loss; mild S3 directory fragmentation only).
+        #
+        # Option B (separate recording_chunks table) remains the cleaner
+        # long-term shape but requires migration → deferred to v0.11.x.
+        from sqlalchemy import select as _sql_select
+        # Lock FIRST, then re-snapshot under the lock. This is the
+        # critical-section entry — every JSONB read below must see a
+        # linearizable view, not the pre-lock snapshot at line ~181.
+        locked_meeting = (await db.execute(
+            _sql_select(Meeting)
+            .where(Meeting.id == meeting_session.meeting_id)
+            .with_for_update()
+        )).scalar_one()
+        meeting = locked_meeting
+        meeting_data_dict = dict(meeting.data or {})
+        recordings_list = list(meeting_data_dict.get("recordings") or [])
+        # Re-find existing_rec under the FRESH snapshot. This may differ
+        # from the pre-lock find at line ~187 if a concurrent request
+        # created the rec while we were in S3 upload. Adopt the canonical
+        # legacy_id from the existing rec so subsequent media_files
+        # entries reference the right rec, even if our S3 upload used a
+        # different legacy_id (see above on the rare double-create race).
+        existing_rec = None
+        existing_idx = None
+        for idx, rec in enumerate(recordings_list):
+            if isinstance(rec, dict) and rec.get("session_uid") == session_uid and rec.get("source") == RecordingSource.BOT.value:
+                existing_rec = rec
+                existing_idx = idx
+                legacy_id = rec.get("id") or legacy_id
+                break
 
-    if existing_rec is None:
-        rec_payload = {
-            "id": recording_id,
-            "meeting_id": meeting.id,
-            "user_id": user_id,
-            "session_uid": session_uid,
-            "source": RecordingSource.BOT.value,
-            "status": RecordingStatus.COMPLETED.value if is_final else RecordingStatus.IN_PROGRESS.value,
-            "created_at": datetime.utcnow().isoformat(),
-            "completed_at": datetime.utcnow().isoformat() if is_final else None,
-            "media_files": [],
-        }
-        existing_idx = len(recordings_list)
-        recordings_list.append(rec_payload)
-        was_completed = False
-    else:
-        rec_payload = dict(existing_rec)
-        was_completed = rec_payload.get("status") == RecordingStatus.COMPLETED.value
+        if existing_rec is None:
+            rec_payload = {
+                "id": legacy_id,
+                "meeting_id": meeting.id,
+                "user_id": user_id,
+                "session_uid": session_uid,
+                "source": RecordingSource.BOT.value,
+                "status": RecordingStatus.COMPLETED.value if is_final else RecordingStatus.IN_PROGRESS.value,
+                "created_at": datetime.utcnow().isoformat(),
+                "completed_at": datetime.utcnow().isoformat() if is_final else None,
+                "media_files": [],
+            }
+            existing_idx = len(recordings_list)
+            recordings_list.append(rec_payload)
+            was_completed = False
+        else:
+            rec_payload = dict(existing_rec)
+            was_completed = rec_payload.get("status") == RecordingStatus.COMPLETED.value
 
-    status_transitioned_to_completed = False
-    prior_media_files = list(rec_payload.get("media_files") or [])
-    prior_types = {mf.get("type") for mf in prior_media_files}
-    chunk_action = "appended" if media_type not in prior_types else "in_place"
-    prior_same_type = next(
-        (mf for mf in prior_media_files if mf.get("type") == media_type),
-        None,
-    )
-    prior_bytes = int((prior_same_type or {}).get("file_size_bytes") or 0) if prior_same_type else 0
-    prior_chunk_count = int((prior_same_type or {}).get("chunk_count") or (1 if prior_same_type else 0))
-    prior_first_chunk_at = (prior_same_type or {}).get("first_chunk_at") if prior_same_type else None
-    cumulative_bytes = (prior_bytes + file_size) if prior_same_type else file_size
-    cumulative_chunk_count = (prior_chunk_count + 1) if prior_same_type else 1
-    first_chunk_at = prior_first_chunk_at or datetime.utcnow().isoformat()
-    existing_media_files = [
-        mf for mf in prior_media_files
-        if mf.get("type") != media_type
-    ]
-    # Pack U.7 — preserve master path against late-chunk overwrite.
-    prior_sp = (prior_same_type or {}).get("storage_path") or ""
-    prior_is_final = bool((prior_same_type or {}).get("is_final"))
-    master_finalized = (
-        prior_sp.endswith("/audio/master.webm")
-        or prior_sp.endswith("/audio/master.wav")
-        or prior_is_final
-    )
-    new_storage_path = prior_sp if master_finalized else storage_path
-    new_is_final = True if master_finalized else is_final
-    if master_finalized and not is_final:
-        logger.warning(
-            "[E1A] late_chunk_after_finalize meeting_id=%s recording_id=%s media_type=%s "
-            "chunk_seq=%s — preserving master storage_path=%s",
-            meeting.id, recording_id, media_type, chunk_seq, prior_sp,
+        status_transitioned_to_completed = False
+        prior_media_files = list(rec_payload.get("media_files") or [])
+        prior_count = len(prior_media_files)
+        prior_types = {mf.get("type") for mf in prior_media_files}
+        # Determine action: appended (new media_type) vs in_place (same type, latest-metadata refresh)
+        chunk_action = "appended" if media_type not in prior_types else "in_place"
+        # Find existing entry of same media_type (the design contract is: ONE entry per type
+        # per recording — see Pack E.1.a comment block above). Pre-fix the in_place branch
+        # OVERWROTE file_size_bytes with the latest chunk's size, leaving the dashboard /
+        # API showing e.g. "479KB" for a recording that had 36 chunks totalling ~17MB.
+        # v0.10.5 (post-prod-telemetry 2026-04-30): accumulate cumulative_bytes and
+        # cumulative_chunk_count, refresh storage_path / chunk_seq / is_final on the SAME
+        # entry so callers see honest sizing.
+        prior_same_type = next(
+            (mf for mf in prior_media_files if mf.get("type") == media_type),
+            None,
         )
-    existing_media_files.append({
-        "id": (prior_same_type or {}).get("id") or _new_recording_numeric_id(),
-        "type": media_type,
-        "format": media_format,
-        "storage_path": new_storage_path,
-        "storage_backend": os.environ.get("STORAGE_BACKEND", "minio"),
-        "file_size_bytes": cumulative_bytes,
-        "last_chunk_size_bytes": file_size,
-        "chunk_count": cumulative_chunk_count,
-        "duration_seconds": duration_seconds,
-        "chunk_seq": chunk_seq,
-        "first_chunk_at": first_chunk_at,
-        "metadata": {"sample_rate": sample_rate} if sample_rate else {},
-        "created_at": datetime.utcnow().isoformat(),
-        "is_final": new_is_final,
-        "finalized_at": (prior_same_type or {}).get("finalized_at"),
-        "finalized_by": (prior_same_type or {}).get("finalized_by"),
-    })
-    rec_payload["media_files"] = existing_media_files
-    logger.info(
-        "[E1A] chunk_write meeting_id=%s recording_id=%s media_type=%s "
-        "chunk_seq=%s prior_chunks=%s action=%s is_final=%s",
-        meeting.id, rec_payload.get("id"), media_type,
-        chunk_seq, prior_chunk_count, chunk_action, is_final,
-    )
+        prior_bytes = int((prior_same_type or {}).get("file_size_bytes") or 0) if prior_same_type else 0
+        prior_chunk_count = int((prior_same_type or {}).get("chunk_count") or (1 if prior_same_type else 0))
+        prior_first_chunk_at = (prior_same_type or {}).get("first_chunk_at") if prior_same_type else None
+        # When ingesting a new entry for an existing type, accumulate bytes;
+        # for a brand-new type entry (chunk_seq=0 path), bytes = file_size.
+        cumulative_bytes = (prior_bytes + file_size) if prior_same_type else file_size
+        cumulative_chunk_count = (prior_chunk_count + 1) if prior_same_type else 1
+        first_chunk_at = prior_first_chunk_at or datetime.utcnow().isoformat()
+        existing_media_files = [
+            mf for mf in prior_media_files
+            if mf.get("type") != media_type
+        ]
+        # Pack U.7 — preserve master path against late-chunk overwrite.
+        # If recording_finalizer.master already committed (storage_path ends at
+        # /audio/master.{webm|wav} OR is_final=True), a late-arriving chunk POST
+        # from a graceful-leaving bot must NOT stomp storage_path back to its
+        # own chunk path. Real-meeting test on helm 2026-05-02 caught the race:
+        # chunk N+1 landed AFTER Pack U.5 wrote master, then post_meeting_
+        # reconciler saw is_final=False and overrode finalized_by → dashboard
+        # served chunk path instead of master and "Preparing audio..." stuck.
+        prior_sp = (prior_same_type or {}).get("storage_path") or ""
+        prior_is_final = bool((prior_same_type or {}).get("is_final"))
+        master_finalized = (
+            prior_sp.endswith("/audio/master.webm")
+            or prior_sp.endswith("/audio/master.wav")
+            or prior_is_final
+        )
+        new_storage_path = prior_sp if master_finalized else storage_path
+        new_is_final = True if master_finalized else is_final
+        if master_finalized and not is_final:
+            logger.warning(
+                "[E1A] late_chunk_after_finalize meeting_id=%s recording_id=%s media_type=%s "
+                "chunk_seq=%s — preserving master storage_path=%s",
+                meeting_id, recording_id, media_type, chunk_seq, prior_sp,
+            )
+        existing_media_files.append({
+            "id": (prior_same_type or {}).get("id") or _new_recording_numeric_id(),
+            "type": media_type,
+            "format": media_format,
+            "storage_path": new_storage_path,
+            "storage_backend": os.environ.get("STORAGE_BACKEND", "minio"),
+            "file_size_bytes": cumulative_bytes,
+            "last_chunk_size_bytes": file_size,
+            "chunk_count": cumulative_chunk_count,
+            "duration_seconds": duration_seconds,
+            "chunk_seq": chunk_seq,
+            "first_chunk_at": first_chunk_at,
+            "metadata": {"sample_rate": sample_rate} if sample_rate else {},
+            "created_at": datetime.utcnow().isoformat(),
+            "is_final": new_is_final,
+            "finalized_at": (prior_same_type or {}).get("finalized_at") if master_finalized else (prior_same_type or {}).get("finalized_at"),
+            "finalized_by": (prior_same_type or {}).get("finalized_by") if master_finalized else (prior_same_type or {}).get("finalized_by"),
+        })
+        rec_payload["media_files"] = existing_media_files
+        # v0.10.5 Pack E.1.a observability — [PLATFORM] ASK 2 (#272
+        # issuecomment-4327839749 → 14:32Z reply). Structured single-line
+        # log per chunk write, greppable for ad-hoc validation under
+        # `kubectl logs`. action=`appended` (new media_type entry) or
+        # `in_place` (same type, latest-metadata refresh). The third
+        # value `raced_lost` from [PLATFORM]'s spec wouldn't appear
+        # post-fix; expecting 0 occurrences over 7d post-deploy is the
+        # smoke-signal the production observer keys off.
+        logger.info(
+            "[E1A] chunk_write meeting_id=%s recording_id=%s media_type=%s "
+            "chunk_seq=%s prior_count=%s action=%s is_final=%s",
+            meeting.id, rec_payload.get("id"), media_type,
+            chunk_seq, prior_count, chunk_action, is_final,
+        )
+        if is_final:
+            rec_payload["status"] = RecordingStatus.COMPLETED.value
+            rec_payload["completed_at"] = datetime.utcnow().isoformat()
+            status_transitioned_to_completed = not was_completed
+        else:
+            # Intermediate chunk: keep IN_PROGRESS but durably-write the
+            # latest media_files entry so dashboard shows partial recording.
+            #
+            # v0.10.5 R2 — defense-in-depth: do NOT downgrade COMPLETED
+            # back to IN_PROGRESS. If a stray late chunk arrives after
+            # the reconciler set status=COMPLETED (e.g. bot uploaded one
+            # more chunk during shutdown grace), preserve the terminal
+            # state. The terminal state is sticky — only is_final=true
+            # promotes IN_PROGRESS → COMPLETED, never the reverse.
+            #
+            # Concrete scenario this protects against (observed
+            # 2026-04-30 on bots 36/37/40/41 pre-R1): bot kept uploading
+            # after meeting was marked completed, each non-final chunk
+            # rewrote status=IN_PROGRESS, post_meeting_reconciler's
+            # is_final flag flip got clobbered, dashboard stuck on
+            # "preparing audio" indefinitely. Pairs with R1 root fix —
+            # R1 stops the late chunks at the source; R2 makes the
+            # status field robust even when late chunks slip through.
+            if not was_completed:
+                rec_payload["status"] = RecordingStatus.IN_PROGRESS.value
+        recordings_list[existing_idx] = rec_payload
+        meeting_data_dict["recordings"] = recordings_list
+        meeting.data = meeting_data_dict
+        attributes.flag_modified(meeting, "data")
+        await db.commit()
+        if status_transitioned_to_completed:
+            asyncio.create_task(send_event_webhook(meeting.id, "recording.completed", {"recording": rec_payload}))
+        final_media = rec_payload.get("media_files") or []
+        mf_id = final_media[-1]["id"] if (is_final and final_media) else None
+        return {"recording_id": rec_payload["id"], "media_file_id": mf_id, "storage_path": storage_path, "status": rec_payload["status"], "chunk_seq": chunk_seq}
+
+    # DB mode — same materialization policy as meeting_data mode (Bug C+D fix):
+    # intermediate chunks upload to MinIO for SIGKILL safety but do NOT create
+    # a MediaFile row. On is_final=true, one MediaFile row per media_type is
+    # created (replacing any earlier same-type row for this Recording).
+    was_completed = recording.status == "completed"
+    media_file = None
     if is_final:
-        rec_payload["status"] = RecordingStatus.COMPLETED.value
-        rec_payload["completed_at"] = datetime.utcnow().isoformat()
-        status_transitioned_to_completed = not was_completed
+        # Retire any existing MediaFile for this recording + media_type.
+        from sqlalchemy import delete
+        await db.execute(
+            delete(MediaFile).where(
+                MediaFile.recording_id == recording.id,
+                MediaFile.type == media_type,
+            )
+        )
+        file_metadata = {"chunk_seq": chunk_seq}
+        if sample_rate:
+            file_metadata["sample_rate"] = sample_rate
+        media_file = MediaFile(
+            recording_id=recording.id,
+            type=media_type,
+            format=media_format,
+            storage_path=storage_path,
+            storage_backend=os.environ.get("STORAGE_BACKEND", "minio"),
+            file_size_bytes=file_size,
+            duration_seconds=duration_seconds,
+            extra_metadata=file_metadata,
+        )
+        db.add(media_file)
+        recording.status = "completed"
+        recording.completed_at = datetime.utcnow()
     else:
-        # Terminal state is sticky: never downgrade COMPLETED → IN_PROGRESS
-        # if a stray late chunk arrives after reconciler finalization.
+        # Keep in-progress; never downgrade from completed → uploading if a
+        # late chunk arrives after a final.
         if not was_completed:
-            rec_payload["status"] = RecordingStatus.IN_PROGRESS.value
-    recordings_list[existing_idx] = rec_payload
-    meeting_data_dict["recordings"] = recordings_list
-    meeting.data = meeting_data_dict
-    attributes.flag_modified(meeting, "data")
+            recording.status = "uploading"
     await db.commit()
-    if status_transitioned_to_completed:
-        asyncio.create_task(send_event_webhook(meeting.id, "recording.completed", {"recording": rec_payload}))
-    final_media = rec_payload.get("media_files") or []
-    mf_id = final_media[-1]["id"] if (is_final and final_media) else None
-    return {"recording_id": rec_payload["id"], "media_file_id": mf_id, "storage_path": storage_path, "status": rec_payload["status"], "chunk_seq": chunk_seq}
+    await db.refresh(recording)
+    if media_file:
+        await db.refresh(media_file)
+
+    if is_final and not was_completed:
+        asyncio.create_task(send_event_webhook(meeting.id, "recording.completed", {
+            "recording": {"id": recording.id, "meeting_id": recording.meeting_id, "session_uid": session_uid, "status": recording.status, "media_file_id": (media_file.id if media_file else None), "file_size_bytes": file_size, "media_type": media_type, "media_format": media_format}
+        }))
+    return {"recording_id": recording.id, "media_file_id": (media_file.id if media_file else None), "storage_path": storage_path, "status": recording.status, "chunk_seq": chunk_seq}
 
 
 @router.get("/recordings", response_model=RecordingListResponse, summary="List recordings for the authenticated user")
@@ -368,9 +514,22 @@ async def list_recordings(
     db: AsyncSession = Depends(get_db),
 ):
     _, user = auth
-    recs = await _list_meeting_data_recordings(db, user.id, meeting_id=meeting_id)
-    page = recs[offset:offset + limit]
-    return RecordingListResponse(recordings=[RecordingResponse.model_validate(r) for r in page])
+    if get_recording_metadata_mode() == "meeting_data":
+        recs = await _list_meeting_data_recordings(db, user.id, meeting_id=meeting_id)
+        page = recs[offset:offset + limit]
+        return RecordingListResponse(recordings=[RecordingResponse.model_validate(r) for r in page])
+
+    stmt = select(Recording).where(Recording.user_id == user.id)
+    if meeting_id is not None:
+        stmt = stmt.where(Recording.meeting_id == meeting_id)
+    stmt = stmt.order_by(desc(Recording.created_at)).offset(offset).limit(limit)
+    result = await db.execute(stmt)
+    recordings = result.scalars().all()
+    items = []
+    for rec in recordings:
+        await db.refresh(rec, ["media_files"])
+        items.append(RecordingResponse.model_validate(rec))
+    return RecordingListResponse(recordings=items)
 
 
 @router.get("/recordings/{recording_id}", response_model=RecordingResponse, summary="Get a single recording")
@@ -380,63 +539,17 @@ async def get_recording(
     db: AsyncSession = Depends(get_db),
 ):
     _, user = auth
-    _, rec = await _find_meeting_data_recording(db, user.id, recording_id)
-    if rec is None:
+    if get_recording_metadata_mode() == "meeting_data":
+        _, rec = await _find_meeting_data_recording(db, user.id, recording_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="Recording not found")
+        return RecordingResponse.model_validate(rec)
+
+    recording = await db.get(Recording, recording_id)
+    if not recording or recording.user_id != user.id:
         raise HTTPException(status_code=404, detail="Recording not found")
-    return RecordingResponse.model_validate(rec)
-
-
-@router.get("/recordings/{recording_id}/master", summary="Get presigned URL for the canonical master media file of a given type")
-async def get_recording_master(
-    recording_id: int,
-    type: str = Query(..., regex="^(audio|video)$", description="Media type: audio | video"),
-    auth: tuple = Depends(get_user_and_token),
-    db: AsyncSession = Depends(get_db),
-):
-    """v0.10.6.1 — Canonical playback endpoint (ADR-2).
-
-    The dashboard reads `recording.playback_url.audio` (or `.video`) from
-    the meeting payload — a stable route. Hitting this endpoint resolves
-    the route to the master media file's presigned URL on each call.
-
-    Producer-writes / consumer-reads model: `recording_finalizer` writes
-    `playback_url` onto the JSONB recording element once master assembly
-    completes. The dashboard reads it. Selection logic
-    (`pickMasterMediaFile()`) is deleted; the dashboard no longer reasons
-    about which media_files[] entry is the master.
-
-    Returns 404 when no master exists yet for the requested type (meeting
-    still in progress, finalizer crashed, no-such-type recording). The
-    dashboard renders "finalizing" on 404 — explicit state, NOT a silent
-    fallback (principle 5).
-    """
-    _, user = auth
-
-    _, rec = await _find_meeting_data_recording(db, user.id, recording_id)
-    if rec is None:
-        raise HTTPException(status_code=404, detail="Recording not found")
-    # Find the master media file of the requested type. Master =
-    # finalized_by == "recording_finalizer.master".
-    master_mf = None
-    for mf in rec.get("media_files") or []:
-        if mf.get("type") == type and mf.get("finalized_by") == "recording_finalizer.master":
-            master_mf = mf
-            break
-    if not master_mf:
-        raise HTTPException(status_code=404, detail=f"No master {type} file for recording {recording_id} (still finalizing or not produced)")
-    media_file_id = master_mf.get("id")
-    if media_file_id is None:
-        raise HTTPException(status_code=404, detail="Master media file id missing")
-
-    # Delegate to the existing per-id endpoint logic, then enrich with
-    # duration_seconds (v0.10.6.1 Task 9). Dashboard reads duration from
-    # the master response directly so it no longer needs to peek into
-    # media_files[] for duration.
-    response = await download_media_file(recording_id, media_file_id, auth, db)
-    response["media_file_id"] = media_file_id
-    response["raw_url"] = f"/recordings/{recording_id}/media/{media_file_id}/raw"
-    response["duration_seconds"] = master_mf.get("duration_seconds")
-    return response
+    await db.refresh(recording, ["media_files"])
+    return RecordingResponse.model_validate(recording)
 
 
 @router.get("/recordings/{recording_id}/media/{media_file_id}/download", summary="Get presigned download URL for a media file")
@@ -469,22 +582,37 @@ async def download_media_file(
     content_type_map = {"wav": "audio/wav", "webm": "video/webm", "opus": "audio/opus", "mp3": "audio/mpeg", "jpg": "image/jpeg", "png": "image/png"}
     _, user = auth
 
-    _, rec = await _find_meeting_data_recording(db, user.id, recording_id)
-    if rec is None:
-        raise HTTPException(status_code=404, detail="Recording not found")
-    mf = None
-    for f in rec.get("media_files") or []:
-        if int(f.get("id", -1)) == media_file_id:
-            mf = f
-            break
-    if not mf:
-        raise HTTPException(status_code=404, detail="Media file not found")
-    fmt = str(mf.get("format", "bin")).lower()
-    ct = content_type_map.get(fmt, "application/octet-stream")
-    storage_path = mf.get("storage_path")
-    storage_backend = mf.get("storage_backend")
-    type_label = mf.get("type", "audio")
-    file_size = mf.get("file_size_bytes")
+    if get_recording_metadata_mode() == "meeting_data":
+        _, rec = await _find_meeting_data_recording(db, user.id, recording_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="Recording not found")
+        mf = None
+        for f in rec.get("media_files") or []:
+            if int(f.get("id", -1)) == media_file_id:
+                mf = f
+                break
+        if not mf:
+            raise HTTPException(status_code=404, detail="Media file not found")
+        fmt = str(mf.get("format", "bin")).lower()
+        ct = content_type_map.get(fmt, "application/octet-stream")
+        storage_path = mf.get("storage_path")
+        storage_backend = mf.get("storage_backend")
+        type_label = mf.get("type", "audio")
+        file_size = mf.get("file_size_bytes")
+    else:
+        recording = await db.get(Recording, recording_id)
+        if not recording or recording.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Recording not found")
+        stmt = select(MediaFile).where(and_(MediaFile.id == media_file_id, MediaFile.recording_id == recording_id))
+        mf_obj = (await db.execute(stmt)).scalars().first()
+        if not mf_obj:
+            raise HTTPException(status_code=404, detail="Media file not found")
+        fmt = (mf_obj.format or "bin").lower()
+        ct = content_type_map.get(fmt, "application/octet-stream")
+        storage_path = mf_obj.storage_path
+        storage_backend = mf_obj.storage_backend
+        type_label = mf_obj.type
+        file_size = mf_obj.file_size_bytes
 
     if not storage_path:
         raise HTTPException(status_code=404, detail="Media file storage path not set")
@@ -541,16 +669,27 @@ async def download_media_file_raw(
     ct = "application/octet-stream"
     filename = ""
 
-    _, rec = await _find_meeting_data_recording(db, user.id, recording_id)
-    if rec is None:
-        raise HTTPException(status_code=404, detail="Recording not found")
-    for f in rec.get("media_files") or []:
-        if int(f.get("id", -1)) == media_file_id:
-            storage_path = f.get("storage_path")
-            fmt = str(f.get("format", "bin")).lower()
-            ct = content_type_map.get(fmt, ct)
-            filename = f"{recording_id}_{f.get('type', 'audio')}.{fmt}"
-            break
+    if get_recording_metadata_mode() == "meeting_data":
+        _, rec = await _find_meeting_data_recording(db, user.id, recording_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="Recording not found")
+        for f in rec.get("media_files") or []:
+            if int(f.get("id", -1)) == media_file_id:
+                storage_path = f.get("storage_path")
+                fmt = str(f.get("format", "bin")).lower()
+                ct = content_type_map.get(fmt, ct)
+                filename = f"{recording_id}_{f.get('type', 'audio')}.{fmt}"
+                break
+    else:
+        recording = await db.get(Recording, recording_id)
+        if not recording or recording.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Recording not found")
+        stmt = select(MediaFile).where(and_(MediaFile.id == media_file_id, MediaFile.recording_id == recording_id))
+        mf = (await db.execute(stmt)).scalars().first()
+        if mf:
+            storage_path = mf.storage_path
+            ct = content_type_map.get(mf.format.lower(), ct)
+            filename = f"{mf.recording_id}_{mf.type}.{mf.format}"
 
     if not storage_path:
         raise HTTPException(status_code=404, detail="Media file not found")
@@ -589,20 +728,35 @@ async def delete_recording(
     db: AsyncSession = Depends(get_db),
 ):
     _, user = auth
-    meeting, rec = await _find_meeting_data_recording(db, user.id, recording_id)
-    if meeting is None or rec is None:
+    if get_recording_metadata_mode() == "meeting_data":
+        meeting, rec = await _find_meeting_data_recording(db, user.id, recording_id)
+        if meeting is None or rec is None:
+            raise HTTPException(status_code=404, detail="Recording not found")
+        storage = get_storage_client()
+        for mf in rec.get("media_files") or []:
+            path = mf.get("storage_path")
+            if path:
+                try:
+                    storage.delete_file(path)
+                except Exception as e:
+                    logger.warning(f"Failed to delete {path}: {e}")
+        current = dict(meeting.data or {})
+        current["recordings"] = [r for r in (current.get("recordings") or []) if not (isinstance(r, dict) and int(r.get("id", -1)) == recording_id)]
+        meeting.data = current
+        attributes.flag_modified(meeting, "data")
+        await db.commit()
+        return {"status": "deleted", "recording_id": recording_id}
+
+    recording = await db.get(Recording, recording_id)
+    if not recording or recording.user_id != user.id:
         raise HTTPException(status_code=404, detail="Recording not found")
+    await db.refresh(recording, ["media_files"])
     storage = get_storage_client()
-    for mf in rec.get("media_files") or []:
-        path = mf.get("storage_path")
-        if path:
-            try:
-                storage.delete_file(path)
-            except Exception as e:
-                logger.warning(f"Failed to delete {path}: {e}")
-    current = dict(meeting.data or {})
-    current["recordings"] = [r for r in (current.get("recordings") or []) if not (isinstance(r, dict) and int(r.get("id", -1)) == recording_id)]
-    meeting.data = current
-    attributes.flag_modified(meeting, "data")
+    for mf in recording.media_files:
+        try:
+            storage.delete_file(mf.storage_path)
+        except Exception as e:
+            logger.warning(f"Failed to delete {mf.storage_path}: {e}")
+    await db.delete(recording)
     await db.commit()
     return {"status": "deleted", "recording_id": recording_id}

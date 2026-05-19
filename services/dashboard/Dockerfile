@@ -10,7 +10,7 @@ COPY packages/transcript-rendering/dist/ /transcript-rendering/dist/
 # Install dependencies (package.json only — no lockfile, to avoid path mismatch after sed)
 COPY services/dashboard/package.json ./
 RUN sed -i 's|"@vexaai/transcript-rendering":.*|"@vexaai/transcript-rendering": "file:/transcript-rendering",|' package.json && \
-    npm install --ignore-scripts --legacy-peer-deps
+    npm install --ignore-scripts
 # Ensure transcript-rendering is physically copied (not symlinked)
 RUN rm -rf node_modules/@vexaai/transcript-rendering && \
     cp -r /transcript-rendering node_modules/@vexaai/transcript-rendering
@@ -32,13 +32,10 @@ COPY services/dashboard/components.json ./
 # them as its first-priority source.
 ARG NEXT_PUBLIC_VEXA_OSS_VERSION
 ARG NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE
-ARG VEXA_API_URL
 ENV NEXT_PUBLIC_VEXA_OSS_VERSION=$NEXT_PUBLIC_VEXA_OSS_VERSION
 ENV NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE=$NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE
-ENV VEXA_API_URL=$VEXA_API_URL
 
 # Build application (npm prebuild → generate-release-version.js → next build)
-RUN test -n "$VEXA_API_URL" || (echo "VEXA_API_URL build arg is required for dashboard rewrites" >&2; exit 1)
 RUN npm run build
 
 # Production stage

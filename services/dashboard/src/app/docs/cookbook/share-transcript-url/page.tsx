@@ -85,7 +85,7 @@ async function createTranscriptShare(platform, nativeMeetingId, meetingId, ttlSe
     {
       method: 'POST',
       headers: {
-        'X-API-Key': '<api-key>',
+        'X-API-Key': 'your-api-key',
         'Content-Type': 'application/json'
       }
     }
@@ -164,7 +164,7 @@ share = create_transcript_share(
     'abc-defg-hij',
     meeting_id=123,  # optional
     ttl_seconds=7200,  # optional: 2 hours (default is 3600 = 1 hour)
-    api_key='<api-key>'
+    api_key='your-api-key'
 )
 
 # The share['url'] can be used directly:
@@ -180,7 +180,7 @@ share = create_transcript_share(
                   <code>{`# Create a share URL
 curl -X POST \\
   "https://your-api-url/transcripts/google_meet/abc-defg-hij/share?meeting_id=123&ttl_seconds=7200" \\
-  -H "X-API-Key: <api-key>" \\
+  -H "X-API-Key: your-api-key" \\
   -H "Content-Type: application/json"
 
 # Response:

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import redis.asyncio as aioredis
 
 from ..database import get_db, async_session_local
-from ..models import Meeting, Transcription, MeetingSession
+from ..models import Meeting, Transcription, MeetingSession, Recording
 from ..storage import create_storage_client
 from ..schemas import (
     MeetingResponse,
@@ -62,17 +62,37 @@ async def _purge_recordings_for_meeting(
     user_id: int,
 ) -> Dict[str, int]:
     """
-    Delete recording storage objects for a meeting. v0.10.6.1 — JSONB-only:
-    recording metadata lives entirely in meeting.data['recordings']; the
-    purge path here only enumerates storage targets to delete from MinIO/S3.
-    The meeting.data payload itself is rewritten by the caller.
+    Delete recording DB rows and storage objects for a meeting.
+    Handles both meeting.data metadata mode and normalized Recording model mode.
     """
     # backend -> set(paths)
     targets_by_backend: Dict[str, set[str]] = {}
     for backend, path in _extract_storage_targets_from_meeting_data(meeting.data):
         targets_by_backend.setdefault(backend, set()).add(path)
 
+    # Collect normalized recording rows/media paths and mark rows for deletion.
+    table_exists_result = await db.execute(text("SELECT to_regclass('public.recordings') IS NOT NULL"))
+    recordings_table_exists = bool(table_exists_result.scalar())
+    if recordings_table_exists:
+        stmt_recordings = select(Recording).where(
+            Recording.meeting_id == meeting.id,
+            Recording.user_id == user_id,
+        )
+        result_recordings = await db.execute(stmt_recordings)
+        recordings = result_recordings.scalars().all()
+    else:
+        logger.info("[API] recordings table unavailable in this environment; skipping model recording cleanup")
+        recordings = []
     model_recordings_deleted = 0
+
+    for recording in recordings:
+        await db.refresh(recording, ["media_files"])
+        for media_file in (recording.media_files or []):
+            if media_file.storage_path:
+                backend = (media_file.storage_backend or os.getenv("STORAGE_BACKEND", "minio")).strip().lower()
+                targets_by_backend.setdefault(backend, set()).add(media_file.storage_path)
+        await db.delete(recording)
+        model_recordings_deleted += 1
 
     storage_files_deleted = 0
     storage_files_targeted = sum(len(v) for v in targets_by_backend.values())

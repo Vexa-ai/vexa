@@ -73,7 +73,7 @@ export default function TrackMeetingStatusPage() {
                 <code className="text-xs text-muted-foreground">JavaScript/TypeScript Example</code>
                 <pre className="bg-muted p-4 rounded-lg text-sm overflow-x-auto">
                   <code>{`// Connect to WebSocket
-const ws = new WebSocket('wss://your-api-url/ws?api_key=<api-key>');
+const ws = new WebSocket('wss://your-api-url/ws?api_key=your-api-key');
 
 ws.onopen = () => {
   // Subscribe to meeting
@@ -138,7 +138,7 @@ import websockets
 import json
 
 async def track_meeting_status():
-    uri = "wss://your-api-url/ws?api_key=<api-key>"
+    uri = "wss://your-api-url/ws?api_key=your-api-key"
     
     async with websockets.connect(uri) as websocket:
         # Subscribe to meeting
@@ -192,7 +192,7 @@ asyncio.run(track_meeting_status())`}</code>
                   <code>{`# Install wscat: npm install -g wscat
 
 # Connect to WebSocket
-wscat -c "wss://your-api-url/ws?api_key=<api-key>"
+wscat -c "wss://your-api-url/ws?api_key=your-api-key"
 
 # Subscribe to meeting
 {"action":"subscribe","meetings":[{"platform":"google_meet","native_id":"abc-defg-hij"}]}

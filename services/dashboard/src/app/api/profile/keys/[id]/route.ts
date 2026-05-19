@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { getAuthCookieName } from "@/lib/auth-cookies";
 
 /**
  * DELETE /api/profile/keys/:id — revoke an API key via admin API
@@ -9,15 +8,18 @@ export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const VEXA_ADMIN_API_URL = process.env.VEXA_ADMIN_API_URL || "";
+  const VEXA_ADMIN_API_URL =
+    process.env.VEXA_ADMIN_API_URL ||
+    process.env.VEXA_API_URL ||
+    "http://localhost:18056";
   const VEXA_ADMIN_API_KEY = process.env.VEXA_ADMIN_API_KEY || "";
 
-  if (!VEXA_ADMIN_API_URL || !VEXA_ADMIN_API_KEY) {
-    return NextResponse.json({ error: "Admin API URL/key not configured" }, { status: 503 });
+  if (!VEXA_ADMIN_API_KEY) {
+    return NextResponse.json({ error: "Admin API not configured" }, { status: 503 });
   }
 
   const cookieStore = await cookies();
-  const token = cookieStore.get(getAuthCookieName())?.value;
+  const token = cookieStore.get("vexa-token")?.value;
   if (!token) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }

@@ -27,28 +27,11 @@ ROOT = os.environ.get("ROOT", subprocess.check_output(
     ["git", "rev-parse", "--show-toplevel"], text=True).strip())
 STATE = os.environ.get("STATE", os.path.join(ROOT, "tests3", ".state"))
 REGISTRY = os.path.join(ROOT, "tests3", "checks", "registry.json")
-TEST_ACCOUNT_ENV = os.path.join(ROOT, "tests3", "lib", "test-account.env")
 
 os.makedirs(STATE, exist_ok=True)
 
 
 LOG_FILE = os.path.join(STATE, "tests3.log")
-
-def load_test_account_contract():
-    values = {
-        "TEST_ACCOUNT_EMAIL": "test@vexa.ai",
-        "TEST_ACCOUNT_NAME": "Test User",
-        "TEST_ACCOUNT_MAX_CONCURRENT_BOTS": "3",
-    }
-    if os.path.isfile(TEST_ACCOUNT_ENV):
-        with open(TEST_ACCOUNT_ENV) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, value = line.split("=", 1)
-                values[key] = value
-    return values
 
 def red(s):   return f"\033[31m{s}\033[0m"
 def green(s): return f"\033[32m{s}\033[0m"
@@ -120,24 +103,6 @@ def kubectl_available():
 
 def http_check(url, expect_code=200, headers=None):
     """Curl a URL. Returns (actual_code, body)."""
-    mode = state_read("deploy_mode")
-    if mode == "lite":
-        admin_url = state_read("admin_url")
-        admin_path = url[len(admin_url):] if admin_url and url.startswith(admin_url) else ""
-        if admin_url and url.startswith(admin_url) and admin_path.startswith("/admin"):
-            internal_url = "http://127.0.0.1:8057" + url[len(admin_url):]
-            cmd = ["docker", "exec", "vexa-lite", "curl", "-sf", "-w", "\n%{http_code}", "-o", "-"]
-            for h in (headers or []):
-                cmd += ["-H", h]
-            cmd.append(internal_url)
-            try:
-                r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-                lines = r.stdout.strip().rsplit("\n", 1)
-                body = lines[0] if len(lines) > 1 else ""
-                code = int(lines[-1]) if lines[-1].isdigit() else 0
-                return code, body
-            except Exception as e:
-                return 0, str(e)
     cmd = ["curl", "-sf", "-w", "\n%{http_code}", "-o", "-"]
     for h in (headers or []):
         cmd += ["-H", h]
@@ -150,17 +115,6 @@ def http_check(url, expect_code=200, headers=None):
         return code, body
     except Exception as e:
         return 0, str(e)
-
-
-def host_reachable_url(url):
-    """Map Docker-internal local service names to their host-published ports."""
-    mode = state_read("deploy_mode")
-    if mode in ("compose", "lite"):
-        for host in ("transcription-lb", "transcription-api"):
-            prefix = f"http://{host}/"
-            if url.startswith(prefix):
-                return "http://localhost:8085/" + url[len(prefix):]
-    return url
 
 
 # ─── Static method helpers (260419-oss-security) ─────────────────
@@ -394,22 +348,23 @@ def check_health(lock):
 
     url = lock["url"]
 
-    # Special: Transcription health — derive URL from the running deployment first.
+    # Special: Transcription health — derive URL from .env or container env
     if url == "TRANSCRIPTION_HEALTH":
         env_file = os.path.join(ROOT, ".env")
         tx_url = ""
-        code, val = svc_exec("meeting-api", ["printenv", "TRANSCRIPTION_SERVICE_URL"])
-        if code == 0 and val:
-            tx_url = val
-        if not tx_url and os.path.isfile(env_file):
+        if os.path.isfile(env_file):
             for line in open(env_file):
                 if line.startswith("TRANSCRIPTION_SERVICE_URL="):
                     tx_url = line.strip().split("=", 1)[1]
         if not tx_url:
+            # Try reading from meeting-api container
+            code, val = svc_exec("meeting-api", ["printenv", "TRANSCRIPTION_SERVICE_URL"])
+            if code == 0 and val:
+                tx_url = val
+        if not tx_url:
             return True, "no transcription URL configured — skipped"
         # Replace /v1/audio/transcriptions with /health
         health_url = tx_url.rsplit("/v1/", 1)[0] + "/health" if "/v1/" in tx_url else tx_url + "/health"
-        health_url = host_reachable_url(health_url)
         code, body = http_check(health_url)
         if code == 200:
             return True, ""
@@ -530,23 +485,12 @@ def check_health(lock):
                 capture_output=True, text=True, timeout=10,
             )
             rc, out = r3.returncode, (r3.stdout or "").strip()
-        elif mode == "lite":
-            r = subprocess.run(
-                ["docker", "exec", "vexa-lite-postgres",
-                 "psql", "-U", "postgres", "-tAc",
-                 "SELECT datname FROM pg_database WHERE datname LIKE 'readme%' OR datname LIKE '%recover%'"],
-                capture_output=True, text=True, timeout=10,
-            )
-            if r.returncode == 0:
-                rc, out = r.returncode, (r.stdout or "").strip()
-            else:
-                # Canonical lite can also run Postgres inside the all-in-one container.
-                rc, out = svc_exec("vexa-lite", [
-                    "psql", "-h", "localhost", "-U", "postgres", "-tAc",
-                    "SELECT datname FROM pg_database WHERE datname LIKE 'readme%' OR datname LIKE '%recover%'"
-                ])
         else:
-            rc, out = svc_exec("postgres", [
+            # On lite, postgres runs inside the single vexa-lite container.
+            # -h localhost forces TCP (lite Postgres binds TCP, not the default
+            # unix socket path; plain `psql` fails on the lite container).
+            pg_svc = "postgres" if mode == "compose" else "vexa-lite"
+            rc, out = svc_exec(pg_svc, [
                 "psql", "-h", "localhost", "-U", "postgres", "-tAc",
                 "SELECT datname FROM pg_database WHERE datname LIKE 'readme%' OR datname LIKE '%recover%'"
             ])
@@ -597,19 +541,10 @@ def check_health(lock):
     if url == "MINIO_HEALTH":
         mode = state_read("deploy_mode", required=True)
         if mode == "compose":
-            env_path = os.path.join(ROOT, "deploy", "compose", ".env")
-            port = os.environ.get("MINIO_HOST_PORT", "")
-            if not port and os.path.isfile(env_path):
-                with open(env_path) as f:
-                    for line in f:
-                        if line.startswith("MINIO_HOST_PORT="):
-                            port = line.strip().split("=", 1)[1]
-                            break
-            port = port or "9000"
-            code, body = http_check(f"http://localhost:{port}/minio/health/live")
+            code, body = http_check("http://localhost:9000/minio/health/live")
             if code == 200:
                 return True, ""
-            return False, f"HTTP {code} from localhost:{port}"
+            return False, f"HTTP {code} from localhost:9000"
         elif mode == "helm":
             if not kubectl_available():
                 return True, "skipped (no kubectl access)"
@@ -950,11 +885,6 @@ def check_browser_session_cdp(gw, token):
 
         session_data = json.loads(body)
         session_token = session_data.get("data", {}).get("session_token", "")
-        if session_token == "[REDACTED]":
-            # Public meeting responses redact JSONB secrets. The gateway also
-            # indexes browser sessions by meeting id, which is the non-secret
-            # token clients can use when the raw session token is redacted.
-            session_token = str(session_data.get("id") or "")
         native_id = session_data.get("native_meeting_id", "")
     except Exception as e:
         return False, f"session creation error: {e}"
@@ -966,26 +896,18 @@ def check_browser_session_cdp(gw, token):
     # once after pod ready, once immediately after to catch IP resolution races
     time.sleep(20)
 
-    # Hit CDP proxy. K8s pod IP can appear a few seconds after the browser
-    # session row is created; retry so we validate dynamic IP resolution
-    # instead of racing pod scheduling.
-    cdp_code = 0
-    cdp_body = ""
-    for _attempt in range(6):
-        try:
-            r = subprocess.run(
-                ["curl", "-sL", "-w", "\n%{http_code}",
-                 f"{gw}/b/{session_token}/cdp/json/version"],
-                capture_output=True, text=True, timeout=15)
-            lines = r.stdout.strip().rsplit("\n", 1)
-            cdp_code = int(lines[-1]) if lines[-1].isdigit() else 0
-            cdp_body = lines[0] if len(lines) > 1 else ""
-        except Exception as e:
-            cdp_code = 0
-            cdp_body = str(e)
-        if cdp_code == 200 and "webSocketDebuggerUrl" in cdp_body:
-            break
-        time.sleep(10)
+    # Hit CDP proxy
+    try:
+        r = subprocess.run(
+            ["curl", "-sL", "-w", "\n%{http_code}",
+             f"{gw}/b/{session_token}/cdp/json/version"],
+            capture_output=True, text=True, timeout=15)
+        lines = r.stdout.strip().rsplit("\n", 1)
+        cdp_code = int(lines[-1]) if lines[-1].isdigit() else 0
+        cdp_body = lines[0] if len(lines) > 1 else ""
+    except Exception as e:
+        cdp_code = 0
+        cdp_body = str(e)
 
     # Clean up — wait for container to fully stop before next check
     subprocess.run(
@@ -1214,9 +1136,9 @@ def check_bot_status_transitions(gw, token):
     except Exception as e:
         return False, f"bot creation error: {e}"
 
-    # Poll for status transition (max 60s)
+    # Poll for status transition (max 30s)
     final_status = "requested"
-    for i in range(12):
+    for i in range(6):
         time.sleep(5)
         try:
             r = subprocess.run(
@@ -1227,20 +1149,6 @@ def check_bot_status_transitions(gw, token):
                 if b.get("native_meeting_id") == native_id:
                     final_status = b.get("data", {}).get("meeting_status") or b.get("meeting_status", "requested")
                     break
-            if final_status == "requested":
-                # Fast-fail synthetic bots can leave the runtime list before
-                # the poll observes a running state. Also, runtime status can
-                # lag the meeting row. Fall back to the meeting row; any
-                # non-requested status proves callbacks/status persistence
-                # moved the row out of requested.
-                mr = subprocess.run(
-                    ["curl", "-sf", "-H", f"X-API-Key: {token}", f"{gw}/meetings?limit=50"],
-                    capture_output=True, text=True, timeout=10)
-                meetings = json.loads(mr.stdout).get("meetings", [])
-                for m in meetings:
-                    if m.get("native_meeting_id") == native_id:
-                        final_status = m.get("status") or final_status
-                        break
         except Exception:
             pass
         if final_status != "requested":
@@ -1262,20 +1170,20 @@ def check_transcription_token():
     env_file = os.path.join(ROOT, ".env")
     tx_url = ""
     tx_token = ""
-    code, val = svc_exec("meeting-api", ["printenv", "TRANSCRIPTION_SERVICE_URL"])
-    if code == 0 and val:
-        tx_url = val
-    code, val = svc_exec("meeting-api", ["printenv", "TRANSCRIPTION_SERVICE_TOKEN"])
-    if code == 0 and val:
-        tx_token = val
-
+    if os.path.isfile(env_file):
+        for line in open(env_file):
+            if line.startswith("TRANSCRIPTION_SERVICE_URL="):
+                tx_url = line.strip().split("=", 1)[1]
+            if line.startswith("TRANSCRIPTION_SERVICE_TOKEN="):
+                tx_token = line.strip().split("=", 1)[1]
     if not tx_url:
-        if os.path.isfile(env_file):
-            for line in open(env_file):
-                if line.startswith("TRANSCRIPTION_SERVICE_URL="):
-                    tx_url = line.strip().split("=", 1)[1]
-                if line.startswith("TRANSCRIPTION_SERVICE_TOKEN="):
-                    tx_token = line.strip().split("=", 1)[1]
+        # Try from container
+        code, val = svc_exec("meeting-api", ["printenv", "TRANSCRIPTION_SERVICE_URL"])
+        if code == 0 and val:
+            tx_url = val
+        code, val = svc_exec("meeting-api", ["printenv", "TRANSCRIPTION_SERVICE_TOKEN"])
+        if code == 0 and val:
+            tx_token = val
     if not tx_url:
         return True, "no transcription URL configured — skipped"
 
@@ -1284,25 +1192,18 @@ def check_transcription_token():
         return False, f"test audio not found: {test_audio} — copy from services/transcription-service/tests/test_audio.wav"
 
     try:
-        tx_url = host_reachable_url(tx_url)
-        last_code = 0
-        for attempt in range(1, 4):
-            r = subprocess.run(
-                ["curl", "-s", "-w", "\n%{http_code}", "-X", "POST", tx_url,
-                 "-H", f"Authorization: Bearer {tx_token}",
-                 "-F", f"file=@{test_audio}", "-F", "language=en", "-F", "model=large-v3-turbo"],
-                capture_output=True, text=True, timeout=45)
-            lines = r.stdout.strip().rsplit("\n", 1)
-            code = int(lines[-1]) if lines[-1].isdigit() else 0
-            last_code = code
-            if code == 200:
-                return True, f"HTTP 200 on attempt {attempt}"
-            if code == 403:
-                return False, "token rejected (403) — expired or invalid"
-            if code != 503:
-                break
-            time.sleep(2 * attempt)
-        return False, f"HTTP {last_code}"
+        r = subprocess.run(
+            ["curl", "-s", "-w", "\n%{http_code}", "-X", "POST", tx_url,
+             "-H", f"Authorization: Bearer {tx_token}",
+             "-F", f"file=@{test_audio}", "-F", "language=en", "-F", "model=large-v3-turbo"],
+            capture_output=True, text=True, timeout=30)
+        lines = r.stdout.strip().rsplit("\n", 1)
+        code = int(lines[-1]) if lines[-1].isdigit() else 0
+        if code == 200:
+            return True, ""
+        if code == 403:
+            return False, "token rejected (403) — expired or invalid"
+        return False, f"HTTP {code}"
     except Exception as e:
         return False, str(e)
 
@@ -1316,10 +1217,10 @@ def _check_internal_transcript_auth():
     Uses python3 (available in every Vexa Python image) rather than curl
     (not installed in api-gateway).
     """
+    url = "http://meeting-api:8080/internal/transcripts/1"
     probe = (
-        "import os, urllib.request, urllib.error, sys\n"
-        "base = os.getenv('MEETING_API_URL', 'http://meeting-api:8080').rstrip('/')\n"
-        "req = urllib.request.Request(base + '/internal/transcripts/1')\n"
+        "import urllib.request, urllib.error, sys\n"
+        f"req = urllib.request.Request({url!r})\n"
         "try:\n"
         "    urllib.request.urlopen(req, timeout=5)\n"
         "    print('200')\n"
@@ -1391,7 +1292,7 @@ def check_cors_preflight(gw):
 
 def check_ws_ping(gw, token):
     """WebSocket ping/pong check. Tries websockets module, falls back to HTTP upgrade check."""
-    ws_url = gw.replace("http://", "ws://").replace("https://", "wss://")  # nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket
+    ws_url = gw.replace("http://", "ws://").replace("https://", "wss://")
     ws_url = f"{ws_url}/ws?api_key={token}"
     try:
         r = subprocess.run(
@@ -1431,24 +1332,16 @@ except ImportError:
 
 def bootstrap_creds():
     """Ensure admin_token and api_token exist in .state for contract checks.
-
-    Re-bootstrap if either cached token is stale for the current deployment.
-    This matters when lite and compose are both running: an admin token can be
-    valid on the new target while the cached user API token still belongs to
-    the previous target and makes every user-level check fail with 401.
-    """
+    Re-bootstraps if the cached admin_token doesn't validate (stale from a different deploy)."""
     admin_token = state_read("admin_token")
     api_token = state_read("api_token")
 
-    # Quick validation: if we have both, check both tokens still work.
+    # Quick validation: if we have both, check admin token still works
     if admin_token and api_token:
         admin_url = state_read("admin_url", required=True)
-        gw = state_read("gateway_url", required=True)
         code, _ = http_check(f"{admin_url}/admin/users?limit=1",
                              headers=[f"X-Admin-API-Key: {admin_token}"])
-        api_code, _ = http_check(f"{gw}/bots/status",
-                                 headers=[f"X-API-Key: {api_token}"])
-        if code == 200 and api_code == 200:
+        if code == 200:
             return  # both valid
         # Stale — clear and re-bootstrap
         for f in ("admin_token", "api_token"):
@@ -1470,14 +1363,10 @@ def bootstrap_creds():
 
     admin_url = state_read("admin_url", required=True)
     gw = state_read("gateway_url", required=True)
-    test_account = load_test_account_contract()
-    test_email = test_account["TEST_ACCOUNT_EMAIL"]
-    test_name = test_account["TEST_ACCOUNT_NAME"]
-    test_limit = int(test_account["TEST_ACCOUNT_MAX_CONCURRENT_BOTS"])
 
     # Find or create test user
     code, body = http_check(
-        f"{admin_url}/admin/users/email/{test_email}",
+        f"{admin_url}/admin/users/email/test@vexa.ai",
         headers=[f"X-Admin-API-Key: {admin_token}"])
     if code == 200:
         try:
@@ -1489,7 +1378,7 @@ def bootstrap_creds():
         cmd = ["curl", "-sf", "-X", "POST",
                "-H", f"X-Admin-API-Key: {admin_token}",
                "-H", "Content-Type: application/json",
-               "-d", json.dumps({"email": test_email, "name": test_name, "max_concurrent_bots": test_limit}),
+               "-d", '{"email":"test@vexa.ai","name":"Test User","max_concurrent_bots":3}',
                f"{admin_url}/admin/users"]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -1497,13 +1386,13 @@ def bootstrap_creds():
         except Exception:
             return
 
-    # Ensure existing users match tests3/lib/test-account.env. Safe to re-patch
-    # even on existing users; human-gate dispatches run parallel bots.
+    # Ensure max_concurrent_bots >= 3 (tests create multiple bots in parallel —
+    # webhook-test + spoof-test etc). Safe to re-patch even on existing users.
     subprocess.run([
         "curl", "-sf", "-X", "PATCH",
         "-H", f"X-Admin-API-Key: {admin_token}",
         "-H", "Content-Type: application/json",
-        "-d", json.dumps({"max_concurrent_bots": test_limit}),
+        "-d", '{"max_concurrent_bots":3}',
         f"{admin_url}/admin/users/{user_id}"
     ], capture_output=True, text=True, timeout=10)
 

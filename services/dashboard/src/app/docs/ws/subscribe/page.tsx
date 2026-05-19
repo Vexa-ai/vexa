@@ -78,7 +78,7 @@ export default function WebSocketSubscribePage() {
             </TabsList>
             <TabsContent value="javascript">
               <pre className="bg-muted p-4 rounded-lg text-sm overflow-x-auto">
-                <code>{`const ws = new WebSocket('wss://api.vexa.ai/ws?api_key=<api-key>');
+                <code>{`const ws = new WebSocket('wss://api.vexa.ai/ws?api_key=YOUR_API_KEY');
 
 ws.onopen = () => {
   // Subscribe to a meeting
@@ -106,7 +106,7 @@ import websockets
 import json
 
 async def subscribe():
-    uri = "wss://api.vexa.ai/ws?api_key=<api-key>"
+    uri = "wss://api.vexa.ai/ws?api_key=YOUR_API_KEY"
     
     async with websockets.connect(uri) as websocket:
         # Subscribe to meeting

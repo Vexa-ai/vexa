@@ -1,121 +1,29 @@
-# Audit categories — Vexa release-audit rubric
+# Audit categories — Vexa release-audit checklist
 
-> Loaded at every audit stage (`plan-audit`, `develop-audit`, `stage-audit`).
-> Same rubric, three different targets: the *proposal* (plan-audit), the
-> *diff* (develop-audit), the *canonical deployment artefacts* (stage-audit).
+> Loaded by stage `audit` (see `tests3/stages/08-audit.md`). Each category
+> is a checklist of bad patterns to look for in the cycle's diff. Categories
+> evolve by appending: every retro that finds a class of bug we missed
+> graduates the pattern into here.
 
----
-
-## The 7 principles (every audit MUST answer each, explicitly)
-
-Each audit produces a findings doc with one section per principle. **No
-section may say "n/a" without one sentence justifying why.**
-
-### 1. Justification (understand what we're doing and why)
-- **What problem does this fix?** — concrete user-visible behaviour or
-  internal invariant.
-- **Why this approach?** — what's the single sentence cause?
-- **What alternatives were considered and rejected, and why?** —
-  minimum two alternatives. "Just write it this way" is not an audit
-  answer.
-- **Why is this the cleanest solution given our current state?** — not
-  the textbook ideal; the cleanest *now*, given existing code,
-  dependencies, time budget, and known follow-ups.
-
-### 2. Blast radius + mitigation
-- **Who/what is affected if this is wrong?** — scope: one customer? one
-  mode? all paying accounts? all OSS adopters? quantify when possible
-  (e.g. "73 historical recordings", "all helm deployments").
-- **Severity if it fails in prod** — data loss / silent corruption /
-  UX regression / downtime / cosmetic.
-- **Detection** — would we notice in <1 min, <1h, <1 day, only when a
-  customer complains? Name the signal (Sentry alert, dashboard metric,
-  a specific log line).
-- **Rollback path** — revert commit alone? requires reprovision? needs
-  data fixup? feature-flag off? Concrete steps.
-- **Mitigation if rollback is slow** — temporary workaround the on-call
-  can apply while the fix is being prepared.
-
-Findings that don't specify blast radius + rollback are themselves a
-BLOCKER.
-
-### 3. API backwards compatibility
-- Public surfaces: **REST endpoints**, **webhook payloads**, **CLI
-  flags**, **env var contracts**, **docker image entry points**,
-  **published Python/TS package signatures**, **registry check IDs**.
-- Any rename, removal, or required-field addition to the above is a
-  **BLOCKER** unless paired with a deprecation window + scope.yaml
-  `explicit_decisions:` entry + migration path documented in
-  `docs/`.
-- New optional fields, new endpoints, new env vars with sensible
-  defaults — fine.
-
-### 4. No database migrations (unless explicitly decided)
-- Schema changes (ALTER TABLE, new columns with backfill, new
-  required columns, type changes, dropped columns) are a **BLOCKER**
-  unless `scope.yaml:explicit_decisions:` has a migration-decision
-  entry that names:
-  - the migration tool and how it's run,
-  - the rollback path,
-  - whether it's online (zero-downtime) or requires window,
-  - the blast radius answer for the migration itself.
-- Default = no migration. We prefer additive code paths,
-  configuration toggles, and feature flags over schema churn.
-
-### 5. Fail fast — no fallbacks unless explicitly agreed
-- Every `if (!ok)` / try-except / "default-when-missing" /
-  "buffer-kept-just-in-case" / "shutdown-flush" path needs:
-  (a) a `proves[]` entry naming the fallback, AND
-  (b) a `#NNN` GH issue ref on the same source line, AND
-  (c) an `explicit_decisions:` entry in scope.yaml.
-- Default = throw and let the caller see it. Silent fallbacks
-  produce the kind of bug class we've shipped repeatedly
-  (chunk-buffer leak v0.10.5.2, default-secret-change-me, env-example
-  fallbacks).
-- See category 2 (Undocumented fallbacks) below for the existing
-  pattern library.
-
-### 6. Security
-- Auth, secrets handling, PII in release artefacts, unbounded
-  resources, OWASP top-10. See category 1 (Security gaps) below.
-- **Findings go to private GitHub Security advisories, NOT public docs.**
-  The release doc carries only the boolean gate status (✅/⏳/❌); the
-  audit-findings doc (`plan-audit-findings.md`, `stage-audit-findings.md`)
-  may reference a finding by advisory ID but MUST NOT enumerate the
-  vulnerability. See `tests3/sign-template.md` "Security findings and
-  the public sign" for the full workflow. A public artefact with a
-  CVE-class hint is a BLOCKER finding.
-
-### 7. Industry best practice
-- Idempotency on hooks/handlers, structured error semantics,
-  observability hooks (metrics + structured logs), naming hygiene,
-  dependency hygiene, no copy-pasted boilerplate where a shared utility
-  exists.
-- See categories 3, 4, 5, 6, 8 below for the pattern library.
+> Status: SCAFFOLD landed in v0.10.5.3. Full audit-stage wiring (Makefile
+> target, stage.py TRANSITIONS, skill) lands in v0.10.6.
 
 ---
 
-## Severity scale
+## How to read this file
 
-- **BLOCKER** — must fix before stage exits; data-loss /
-  security-exposure / API-breakage / unagreed migration / missing
-  blast-radius answer.
-- **CRITICAL** — must fix this cycle; resilience anti-pattern in
-  critical path.
-- **MAJOR** — file follow-up, can ship.
+Each category has:
+- **Why it's here** — a concrete recent bite (release tag + impact). If a
+  category lacks this, it doesn't belong yet — get cut.
+- **Patterns to grep** — exact code patterns that are bad. The static
+  layer scripts each map to ≥1 of these.
+- **Default severity** — what severity a match gets unless context downgrades.
+
+Severity scale (from `tests3/stages/08-audit.md`):
+- **BLOCKER** — must fix before ship; data-loss / security-exposure class.
+- **CRITICAL** — must fix this cycle; resilience anti-pattern in critical path.
+- **MAJOR** — file followup, can ship.
 - **MINOR** — hygiene; track only.
-
----
-
-## Pattern library (categories 1-9 — concrete greppable patterns)
-
-Each category below has:
-- **Why it's here** — a concrete recent bite.
-- **Patterns to grep** — exact code patterns that are bad.
-- **Default severity** under the rubric above.
-
-Categories evolve by appending: every retro that finds a class of bug
-we missed graduates the pattern into here.
 
 ---
 

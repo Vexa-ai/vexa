@@ -46,7 +46,6 @@ RUNTIME_API_URL = os.getenv("RUNTIME_API_URL", "http://runtime-api:8090")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")  # Optional override, e.g. https://api.vexa.ai
 TRANSCRIPT_SHARE_TTL_SECONDS = int(os.getenv("TRANSCRIPT_SHARE_TTL_SECONDS", "900"))  # 15 min
 TRANSCRIPT_SHARE_TTL_MAX_SECONDS = int(os.getenv("TRANSCRIPT_SHARE_TTL_MAX_SECONDS", "86400"))  # 24h max
-MAX_PROXY_BODY_BYTES = int(os.getenv("MAX_PROXY_BODY_BYTES", str(2 * 1024 * 1024)))
 
 # Rate limiting — requests per minute per API key (or per IP for unauthenticated).
 # 0 = disabled. Separate limits for auth'd API calls vs admin/WebSocket.
@@ -161,11 +160,10 @@ def custom_openapi():
 
 app.openapi = custom_openapi
 
-# Add CORS middleware. The API is API-key authenticated and origin agnostic,
-# so the default must admit browser dashboards from arbitrary customer origins.
+# Add CORS middleware
 _cors_raw = os.getenv("CORS_ORIGINS", "*").strip()
-CORS_WILDCARD = _cors_raw == "*"
-CORS_ORIGINS = [
+_cors_wildcard = _cors_raw == "*"
+CORS_ORIGINS = ["*"] if _cors_wildcard else [
     origin.strip()
     for origin in _cors_raw.split(",")
     if origin.strip()
@@ -176,7 +174,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
-    allow_credentials=not CORS_WILDCARD,
+    allow_credentials=not _cors_wildcard,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -362,12 +360,6 @@ async def forward_request(client: httpx.AsyncClient, method: str, url: str, requ
     forwarded_params = dict(request.query_params)
 
     content = await request.body()
-    if len(content) > MAX_PROXY_BODY_BYTES:
-        return Response(
-            content=json.dumps({"detail": "Request body too large"}),
-            status_code=413,
-            media_type="application/json",
-        )
 
     try:
         resp = await client.request(method, url, headers=headers, params=forwarded_params or None, content=content)
@@ -378,13 +370,8 @@ async def forward_request(client: httpx.AsyncClient, method: str, url: str, requ
 
 
 def _token_hash(api_key: str) -> str:
-    """Short keyed digest for cache/rate-limit keys without storing raw tokens."""
-    pepper = (
-        os.getenv("API_GATEWAY_TOKEN_HASH_SECRET")
-        or os.getenv("INTERNAL_API_SECRET")
-        or "development-cache-pepper"
-    )
-    return hashlib.pbkdf2_hmac("sha256", api_key.encode(), pepper.encode(), 120_000, dklen=16).hex()
+    """Short hash of full token for cache/rate-limit keys (avoids prefix collisions)."""
+    return hashlib.sha256(api_key.encode()).hexdigest()[:16]
 
 
 async def _resolve_token(client: httpx.AsyncClient, api_key: str) -> Optional[dict]:
@@ -713,16 +700,6 @@ async def list_recordings_proxy(request: Request):
 async def get_recording_proxy(recording_id: int, request: Request):
     """Forward request to Bot Manager to get recording details."""
     url = f"{MEETING_API_URL}/recordings/{recording_id}"
-    return await forward_request(app.state.http_client, "GET", url, request)
-
-@app.get("/recordings/{recording_id}/master",
-         tags=["Recordings"],
-         summary="Get canonical master recording URL",
-         description="Resolves the canonical playback URL for a finalized recording master.",
-         dependencies=[Depends(api_key_scheme)])
-async def get_recording_master_proxy(recording_id: int, request: Request):
-    """Forward request to Bot Manager to resolve the canonical master URL."""
-    url = f"{MEETING_API_URL}/recordings/{recording_id}/master"
     return await forward_request(app.state.http_client, "GET", url, request)
 
 @app.get("/recordings/{recording_id}/media/{media_file_id}/download",
@@ -1234,18 +1211,10 @@ async def _get_meeting_context(client: httpx.AsyncClient, user_id: str) -> Optio
           dependencies=[Depends(api_key_scheme)])
 async def agent_chat_proxy(request: Request):
     """Forward chat to agent-api with meeting context injection."""
-    client_key = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
-    if not client_key:
-        raise HTTPException(status_code=401, detail="Missing API key")
-    user_data = await _resolve_token(app.state.http_client, client_key)
-    if not user_data:
-        raise HTTPException(status_code=401, detail="Invalid API key")
     if not AGENT_API_URL:
         raise HTTPException(503, "Agent API not configured")
 
     body = await request.body()
-    if len(body) > MAX_PROXY_BODY_BYTES:
-        raise HTTPException(status_code=413, detail="Request body too large")
     extra_headers = {}
 
     # Parse body to check meeting_aware session
@@ -1261,7 +1230,12 @@ async def agent_chat_proxy(request: Request):
                     meta = json.loads(meta_raw)
                     if meta.get("meeting_aware"):
                         # Resolve internal user_id from API key
-                        internal_uid = str(user_data["user_id"])
+                        client_key = request.headers.get("x-api-key")
+                        internal_uid = user_id
+                        if client_key:
+                            user_data = await _resolve_token(app.state.http_client, client_key)
+                            if user_data:
+                                internal_uid = str(user_data["user_id"])
                         context = await _get_meeting_context(app.state.http_client, internal_uid)
                         if context:
                             extra_headers["x-meeting-context"] = context
@@ -1277,9 +1251,13 @@ async def agent_chat_proxy(request: Request):
         headers.pop(h, None)
 
     # Auth: inject identity headers
-    headers["x-user-id"] = str(user_data["user_id"])
-    headers["x-user-scopes"] = ",".join(user_data.get("scopes", []))
-    headers["x-user-limits"] = str(user_data.get("max_concurrent", 1))
+    client_key = headers.get("x-api-key")
+    if client_key:
+        user_data = await _resolve_token(app.state.http_client, client_key)
+        if user_data:
+            headers["x-user-id"] = str(user_data["user_id"])
+            headers["x-user-scopes"] = ",".join(user_data.get("scopes", []))
+            headers["x-user-limits"] = str(user_data.get("max_concurrent", 1))
 
     headers.update(extra_headers)
     params = dict(request.query_params)
@@ -1521,16 +1499,6 @@ async def auth_me(request: Request):
 logger = logging.getLogger("api-gateway.browser")
 
 
-_INTERNAL_HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}$")
-
-
-def _safe_internal_host(value: str) -> str:
-    """Validate Docker DNS names or IPv4-style container addresses before URL assembly."""
-    if not _INTERNAL_HOST_RE.fullmatch(value):
-        raise HTTPException(status_code=502, detail="Invalid internal browser host")
-    return value
-
-
 _touch_timestamps: dict[str, float] = {}
 _TOUCH_DEBOUNCE = 30  # seconds — don't /touch same container more often than this
 
@@ -1751,7 +1719,7 @@ async def browser_vnc_proxy(token: str, path: str, request: Request):
     if not session:
         raise HTTPException(status_code=404, detail="Browser session not found or expired")
 
-    container = _safe_internal_host(session.get("container_ip") or session["container_name"])
+    container = session.get("container_ip") or session["container_name"]
     # In single-container (lite) deployments, VNC runs on localhost, not a container hostname
     vnc_host = os.getenv("VNC_HOST") or container
     target_url = f"http://{vnc_host}:6080/{path}"
@@ -1787,11 +1755,9 @@ async def browser_vnc_ws(websocket: WebSocket, token: str):
         await websocket.close(code=4404)
         return
 
-    container = _safe_internal_host(session.get("container_ip") or session["container_name"])
-    vnc_host = _safe_internal_host(os.getenv("VNC_HOST") or container)
-    # Internal container hop to websockify; public clients connect to this
-    # gateway route over ws/wss according to the external deployment scheme.
-    upstream_url = f"ws://{vnc_host}:6080/websockify"  # nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket
+    container = session.get("container_ip") or session["container_name"]
+    vnc_host = os.getenv("VNC_HOST") or container
+    upstream_url = f"ws://{vnc_host}:6080/websockify"
 
     await websocket.accept(subprotocol="binary")
 
@@ -1843,7 +1809,7 @@ async def browser_vnc_ws(websocket: WebSocket, token: str):
                 task.cancel()
 
     except Exception as exc:
-        logger.warning("VNC WebSocket proxy error: %s", exc)
+        logger.warning("VNC WebSocket proxy error for token %s: %s", token, exc)
     finally:
         try:
             await websocket.close()
@@ -1856,7 +1822,7 @@ async def _proxy_cdp_http(token: str, path: str, request: Request) -> Response:
     session = await resolve_browser_session(token)
     if not session:
         raise HTTPException(status_code=404, detail="Browser session not found")
-    container = _safe_internal_host(session.get("container_ip") or session["container_name"])
+    container = session.get("container_ip") or session["container_name"]
     try:
         qs = f"?{request.url.query}" if request.url.query else ""
         # Default to the /json/version handshake endpoint so that a bare
@@ -1865,13 +1831,13 @@ async def _proxy_cdp_http(token: str, path: str, request: Request) -> Response:
         # and reads webSocketDebuggerUrl from it.
         upstream_path = path or "json/version"
         resp = await app.state.http_client.get(
-            f"http://{container}:9223/{upstream_path}{qs}", timeout=10.0,  # nosemgrep: python.django.security.injection.tainted-url-host.tainted-url-host
+            f"http://{container}:9223/{upstream_path}{qs}", timeout=10.0,
             headers={"Host": "localhost"}  # CDP rejects non-localhost Host headers
         )
         # Rewrite webSocketDebuggerUrl to point through our CDP WebSocket
         # proxy. Preserve the inbound scheme — behind a TLS terminator the
         # gateway sees X-Forwarded-Proto=https and must emit wss://, not
-        # plain WebSocket; downgrading breaks Playwright's connectOverCDP from any
+        # ws://; downgrading breaks Playwright's connectOverCDP from any
         # secure origin.
         import re
         host = request.headers.get("host", "localhost:8056")
@@ -1924,7 +1890,7 @@ async def browser_cdp_ws(websocket: WebSocket, token: str):
         await websocket.close(code=4404)
         return
 
-    container = _safe_internal_host(session.get("container_ip") or session["container_name"])
+    container = session.get("container_ip") or session["container_name"]
 
     # Discover CDP WebSocket URL from the browser's /json/version endpoint
     try:
@@ -1934,15 +1900,10 @@ async def browser_cdp_ws(websocket: WebSocket, token: str):
         )
         version_info = resp.json()
         cdp_ws_url = version_info.get("webSocketDebuggerUrl", "")
-        # Replace localhost with container:9223 (socat proxy port).
-        # Upstream CDP is an internal, plaintext container hop.
+        # Replace localhost with container:9223 (socat proxy port)
+        # Original may be ws://localhost/devtools/... or ws://localhost:9222/devtools/...
         import re
-        internal_cdp_prefix = f"ws://{container}:9223/"  # nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket
-        cdp_ws_url = re.sub(
-            r'ws://(localhost|127\.0\.0\.1)(:\d+)?/',  # nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket
-            internal_cdp_prefix,
-            cdp_ws_url,
-        )
+        cdp_ws_url = re.sub(r'ws://(localhost|127\.0\.0\.1)(:\d+)?/', f'ws://{container}:9223/', cdp_ws_url)
     except Exception as exc:
         logger.warning("Failed to discover CDP URL for %s: %s", container, exc)
         await websocket.close(code=4502)
@@ -1999,7 +1960,7 @@ async def browser_cdp_ws(websocket: WebSocket, token: str):
                 task.cancel()
 
     except Exception as exc:
-        logger.warning("CDP WebSocket proxy error: %s", exc)
+        logger.warning("CDP WebSocket proxy error for token %s: %s", token, exc)
     finally:
         try:
             await websocket.close()
@@ -2020,11 +1981,8 @@ async def browser_save_storage(token: str):
 
     # Forward to meeting-api (internal call, no user API key needed)
     try:
-        internal_secret = os.getenv("INTERNAL_API_SECRET", "")
-        headers = {"X-Internal-Secret": internal_secret} if internal_secret else {}
         resp = await app.state.http_client.post(
             f"{MEETING_API_URL}/internal/browser-sessions/{token}/save",
-            headers=headers,
             timeout=60.0,  # sync can take a while
         )
         if resp.status_code >= 400:
@@ -2046,11 +2004,8 @@ async def browser_delete_storage(token: str):
         raise HTTPException(status_code=500, detail="Session missing user_id")
 
     try:
-        internal_secret = os.getenv("INTERNAL_API_SECRET", "")
-        headers = {"X-Internal-Secret": internal_secret} if internal_secret else {}
         resp = await app.state.http_client.delete(
             f"{MEETING_API_URL}/internal/browser-sessions/{user_id}/storage",
-            headers=headers,
             timeout=60.0,
         )
         if resp.status_code >= 400:
@@ -2078,7 +2033,7 @@ async def browser_delete_storage(token: str):
 # runs from the HOST, which has no docker-DNS access; the gateway
 # proxy is the only way to reach meeting-api externally.
 import os
-_PACK_X_TEST_ROUTES_ENABLED = os.environ.get("SYNTHETIC_ROUTES_ENABLED", "false").lower() == "true"
+_PACK_X_TEST_ROUTES_ENABLED = os.environ.get("VEXA_ENV", "development") != "production"
 
 
 @app.api_route(

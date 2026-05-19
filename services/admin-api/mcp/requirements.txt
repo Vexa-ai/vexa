@@ -3,8 +3,5 @@ uvicorn>=0.22.0
 httpx>=0.28.1
 h11>=0.16.0                       # CVE-2025-43859
 pydantic>=1.10.7
-python-dotenv>=1.2.1
+python-dotenv>=1.0.0
 fastapi-mcp
-
-python-multipart>=0.0.20
-mcp>=1.23.3

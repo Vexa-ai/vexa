@@ -53,7 +53,7 @@ export default function MCPPage() {
 
   const buildMCPConfig = (masked: boolean): string => {
     const mcpUrl = getMCPUrl();
-    const rawKey = config?.authToken || "<api-key>";
+    const rawKey = config?.authToken || "YOUR_API_KEY_HERE";
     const apiKey = masked && config?.authToken ? maskKey(rawKey) : rawKey;
 
     return JSON.stringify({

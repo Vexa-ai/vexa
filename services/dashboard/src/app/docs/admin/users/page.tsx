@@ -131,7 +131,7 @@ export default function AdminUsersPage() {
         ]}
         responseExample={{
           id: "token-123",
-          token: "<new-user-token>", // Only shown once!
+          token: "vex_abc123def456...", // Only shown once!
           user_id: "user-123",
           created_at: "2024-01-01T12:00:00Z",
         }}

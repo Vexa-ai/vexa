@@ -120,12 +120,10 @@ export const useAuthStore = create<AuthState>()(
       checkAuth: async () => {
         const { token, user } = get();
 
-        // Use localStorage as a quick visual hint, but keep loading until the
-        // server verifies the HTTP-only cookie. Otherwise protected pages can
-        // render once with a stale persisted token and fire unauthorized API
-        // requests before checkAuth clears the state.
+        // Use localStorage as a quick pre-render hint so UI doesn't flash,
+        // but ALWAYS verify with the server below.
         if (user && token) {
-          set({ isAuthenticated: true, isLoading: true, didLogout: false });
+          set({ isAuthenticated: true, isLoading: false, didLogout: false });
         }
 
         // Always verify with server — localStorage may be stale (e.g. different

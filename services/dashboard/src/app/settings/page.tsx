@@ -299,7 +299,7 @@ function SettingsContent() {
           <CardContent>
             <pre className="bg-muted p-4 rounded-lg text-sm overflow-x-auto">
 {`# Vexa API Configuration (required)
-	VEXA_API_URL=<your-api-gateway-url>
+VEXA_API_URL=http://localhost:18056
 VEXA_ADMIN_API_KEY=your_admin_api_key_here
 
 # AI Assistant Configuration (optional)

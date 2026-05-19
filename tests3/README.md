@@ -1,29 +1,5 @@
 ---
 
-> **⚠ STALE FOR THE STATE-MACHINE SECTIONS (2026-05-12).** The state
-> machine was redesigned 2026-05-12 to a 13-stage flow with the
-> `do → audit → human` pattern at three levels (plan / dev / stage)
-> plus `release` + `teardown`. This README's sections describing the
-> old `idle → groom → plan → develop → provision → deploy → validate →
-> triage → human → ship → teardown` flow (notably §5.5 onwards) are
-> **stale** and will be rewritten in v0.10.7 (pack
-> `state-machine-docs-rewrite`).
->
-> **Authoritative references in the meantime:**
->
-> - `tests3/stages/release-flow.md` — current 13-stage flow + reverse edges
-> - `tests3/stages/00-idle.md` … `12-teardown.md` — per-stage contracts
-> - `tests3/lib/stage.py` — `TRANSITIONS` + `STAGE_ORDER`
-> - `tests3/audit-categories.md` — the 7-principle audit rubric used at every audit stage
-> - `tests3/communication-standard.md` — artefact-type voice (decision-request vs commitment)
-> - `CLAUDE.md` — what a sign means + rationale-ownership at choke points
->
-> Parts 1-4 (Why / The model overview / Vocabulary / Service inventory)
-> remain valid. The detailed state-machine description in Part 5 is the
-> stale part.
-
----
-
 # Vexa Release System
 
 # Part 1 — Why

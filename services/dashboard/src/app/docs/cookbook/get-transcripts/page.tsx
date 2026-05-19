@@ -81,7 +81,7 @@ async function getTranscripts(platform, nativeMeetingId) {
     \`https://your-api-url/transcripts/\${platform}/\${nativeMeetingId}\`,
     {
       headers: {
-        'X-API-Key': '<api-key>',
+        'X-API-Key': 'your-api-key',
         'Content-Type': 'application/json'
       }
     }
@@ -150,7 +150,7 @@ def get_transcripts(platform, native_meeting_id, api_key):
     return data['segments']
 
 # Usage
-segments = get_transcripts('google_meet', 'abc-defg-hij', '<api-key>')
+segments = get_transcripts('google_meet', 'abc-defg-hij', 'your-api-key')
 
 # Display transcripts
 for segment in segments:
@@ -166,7 +166,7 @@ for segment in segments:
                   <code>{`# Fetch transcripts
 curl -X GET \\
   "https://your-api-url/transcripts/google_meet/abc-defg-hij" \\
-  -H "X-API-Key: <api-key>" \\
+  -H "X-API-Key: your-api-key" \\
   -H "Content-Type: application/json"
 
 # Response:
@@ -213,7 +213,7 @@ curl -X GET \\
               <h4 className="text-sm font-semibold">Quick Example</h4>
               <pre className="bg-muted p-4 rounded-lg text-sm overflow-x-auto">
                 <code>{`// Connect and subscribe
-const ws = new WebSocket('wss://your-api-url/ws?api_key=<api-key>');
+const ws = new WebSocket('wss://your-api-url/ws?api_key=your-api-key');
 
 ws.onopen = () => {
   ws.send(JSON.stringify({
@@ -284,7 +284,7 @@ bootstrapSegments.forEach(seg => {
 });
 
 // 2. Connect WebSocket
-const ws = new WebSocket('wss://your-api-url/ws?api_key=<api-key>');
+const ws = new WebSocket('wss://your-api-url/ws?api_key=your-api-key');
 ws.onopen = () => {
   ws.send(JSON.stringify({
     action: 'subscribe',

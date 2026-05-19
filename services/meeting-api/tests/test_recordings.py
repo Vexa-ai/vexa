@@ -51,7 +51,8 @@ class TestListRecordings:
         })
         mock_db.execute = AsyncMock(return_value=MockResult([meeting]))
 
-        resp = await client.get("/recordings")
+        with patch("meeting_api.recordings.get_recording_metadata_mode", return_value="meeting_data"):
+            resp = await client.get("/recordings")
 
         assert resp.status_code == 200
         data = resp.json()
@@ -85,7 +86,8 @@ class TestGetRecording:
         mock_db.execute = AsyncMock(return_value=MockResult([]))
         mock_db.get = AsyncMock(return_value=None)
 
-        resp = await client.get("/recordings/99999")
+        with patch("meeting_api.recordings.get_recording_metadata_mode", return_value="meeting_data"):
+            resp = await client.get("/recordings/99999")
 
         assert resp.status_code == 404
 
@@ -116,7 +118,8 @@ class TestGetRecording:
         })
         mock_db.execute = AsyncMock(return_value=MockResult([meeting]))
 
-        resp = await client.get("/recordings/1001")
+        with patch("meeting_api.recordings.get_recording_metadata_mode", return_value="meeting_data"):
+            resp = await client.get("/recordings/1001")
 
         assert resp.status_code == 200
         data = resp.json()
@@ -137,7 +140,8 @@ class TestDeleteRecording:
         mock_db.execute = AsyncMock(return_value=MockResult([]))
         mock_db.get = AsyncMock(return_value=None)
 
-        resp = await client.delete("/recordings/99999")
+        with patch("meeting_api.recordings.get_recording_metadata_mode", return_value="meeting_data"):
+            resp = await client.delete("/recordings/99999")
 
         assert resp.status_code == 404
 
@@ -157,10 +161,11 @@ class TestDeleteRecording:
         })
         mock_db.execute = AsyncMock(return_value=MockResult([meeting]))
 
-        mock_storage = MagicMock()
-        with patch("meeting_api.recordings.get_storage_client", return_value=mock_storage):
-            with patch("meeting_api.recordings.attributes.flag_modified", MagicMock()):
-                resp = await client.delete("/recordings/1001")
+        with patch("meeting_api.recordings.get_recording_metadata_mode", return_value="meeting_data"):
+            mock_storage = MagicMock()
+            with patch("meeting_api.recordings.get_storage_client", return_value=mock_storage):
+                with patch("meeting_api.recordings.attributes.flag_modified", MagicMock()):
+                    resp = await client.delete("/recordings/1001")
 
         assert resp.status_code == 200
         assert resp.json()["status"] == "deleted"

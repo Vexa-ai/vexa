@@ -51,12 +51,12 @@ async function proxyRequest(
     );
   }
 
-  const VEXA_ADMIN_API_URL = process.env.VEXA_ADMIN_API_URL || "";
+  const VEXA_ADMIN_API_URL = process.env.VEXA_ADMIN_API_URL || process.env.VEXA_API_URL || "http://localhost:18056";
   const VEXA_ADMIN_API_KEY = process.env.VEXA_ADMIN_API_KEY || "";
 
-  if (!VEXA_ADMIN_API_URL || !VEXA_ADMIN_API_KEY) {
+  if (!VEXA_ADMIN_API_KEY) {
     return NextResponse.json(
-      { error: "Admin API URL/key not configured" },
+      { error: "Admin API key not configured" },
       { status: 500 }
     );
   }

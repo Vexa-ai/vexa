@@ -33,10 +33,6 @@ export async function GET() {
     missingConfig: [],
   };
 
-  const allowDirectLogin = ["1", "true", "yes"].includes(
-    (process.env.VEXA_ALLOW_DIRECT_LOGIN || "").toLowerCase()
-  );
-
   // Check Azure AD / Entra ID OAuth configuration (optional)
   const enableAzureAdAuth = process.env.ENABLE_AZURE_AD_AUTH;
   const azureAdClientId = process.env.AZURE_AD_CLIENT_ID;
@@ -91,17 +87,13 @@ export async function GET() {
       status.authMode = "magic-link";
     }
   } else {
-    status.checks.smtp.error = allowDirectLogin
-      ? "SMTP not configured; direct login explicitly enabled"
-      : "SMTP not configured; direct login disabled";
-    if (!allowDirectLogin && status.authMode === "direct") {
-      status.status = "degraded";
-    }
+    // SMTP is optional - direct login mode will be used if no other auth is configured
+    status.checks.smtp.error = "SMTP not configured";
   }
 
   // Check Admin API configuration
   const adminApiKey = process.env.VEXA_ADMIN_API_KEY;
-  const adminApiUrl = process.env.VEXA_ADMIN_API_URL;
+  const adminApiUrl = process.env.VEXA_ADMIN_API_URL || process.env.VEXA_API_URL;
 
   if (adminApiKey && adminApiKey !== "your_admin_api_key_here") {
     status.checks.adminApi.configured = true;

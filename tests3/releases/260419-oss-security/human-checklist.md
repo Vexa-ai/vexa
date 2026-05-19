@@ -4,7 +4,7 @@ Stage: `human` · gate: **GREEN** · 2 modes deployed
 
 | mode | gateway | admin | dashboard | api_token |
 |------|---------|-------|-----------|-----------|
-| **compose** | http://172.237.153.125:8056 | http://172.237.153.125:8057 | http://172.237.153.125:3001 | `<redacted-bot-token>` |
+| **compose** | http://172.237.153.125:8056 | http://172.237.153.125:8057 | http://172.237.153.125:3001 | `vxa_bot_D9AQmFqZaTFDrZbj6oHfBWwjtSKhaaSJHtMFniZk` |
 | **lite** | http://172.237.153.161:8056 | http://172.237.153.161:8057 | http://172.237.153.161:3000 | `vxa_bot_mYZyI9nP3xN2oHPXTpVnNWciRfLEP9guWNO5SJ4V` |
 
 Admin token on both: `changeme`.
@@ -55,7 +55,7 @@ Automated check (`WEBHOOK_SSRF_INPUT_REJECTED`) is green on compose. Manual conf
 # Try to set webhook_url pointing at an internal service.
 curl -s -o /dev/null -w '%{http_code}\n' \
   -X PUT http://172.237.153.125:8056/user/webhook \
-  -H 'X-API-Key: <redacted-bot-token>' \
+  -H 'X-API-Key: vxa_bot_D9AQmFqZaTFDrZbj6oHfBWwjtSKhaaSJHtMFniZk' \
   -H 'Content-Type: application/json' \
   -d '{"webhook_url":"http://redis:6379/"}'
 ```
@@ -67,7 +67,7 @@ Sanity — a valid public URL should succeed:
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' \
   -X PUT http://172.237.153.125:8056/user/webhook \
-  -H 'X-API-Key: <redacted-bot-token>' \
+  -H 'X-API-Key: vxa_bot_D9AQmFqZaTFDrZbj6oHfBWwjtSKhaaSJHtMFniZk' \
   -H 'Content-Type: application/json' \
   -d '{"webhook_url":"https://example.com/hook"}'
 ```
@@ -136,7 +136,7 @@ Two static checks confirm the code path (`CDP_WS_SCHEME_PRESERVED`, `CDP_NO_SLAS
 ```bash
 # 1. Create a browser session
 curl -s -X POST http://172.237.153.125:8056/browser-sessions \
-  -H 'X-API-Key: <redacted-bot-token>' \
+  -H 'X-API-Key: vxa_bot_D9AQmFqZaTFDrZbj6oHfBWwjtSKhaaSJHtMFniZk' \
   -H 'Content-Type: application/json' \
   -d '{}' | jq -r '.session_token'
 # → sets $TOKEN

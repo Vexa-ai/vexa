@@ -114,10 +114,10 @@ async function adminRequest<T>(
   options: RequestInit = {},
   timeout = DEFAULT_TIMEOUT
 ): Promise<ApiResult<T>> {
-  const VEXA_ADMIN_API_URL = process.env.VEXA_ADMIN_API_URL || "";
+  const VEXA_ADMIN_API_URL = process.env.VEXA_ADMIN_API_URL || process.env.VEXA_API_URL || "http://localhost:18056";
   const VEXA_ADMIN_API_KEY = process.env.VEXA_ADMIN_API_KEY || "";
 
-  if (!VEXA_ADMIN_API_URL || !VEXA_ADMIN_API_KEY || VEXA_ADMIN_API_KEY === "your_admin_api_key_here") {
+  if (!VEXA_ADMIN_API_KEY || VEXA_ADMIN_API_KEY === "your_admin_api_key_here") {
     return {
       success: false,
       error: {

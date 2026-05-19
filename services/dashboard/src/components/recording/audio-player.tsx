@@ -12,11 +12,8 @@ import { cn } from "@/lib/utils";
 export interface AudioFragment {
   /** URL to stream this fragment's audio */
   src: string;
-  /** Duration in seconds (from the master endpoint's duration_seconds).
-   *  null means unknown (the audio element will read it from the file
-   *  on load). v0.10.6.1: no `|| 0` default — distinguishing "unknown"
-   *  from "zero-length" is load-bearing for the timeline math. */
-  duration: number | null;
+  /** Duration in seconds (from media_files[].duration_seconds). 0 or null means unknown. */
+  duration: number;
   /** Session UID this fragment belongs to */
   sessionUid: string;
   /** ISO timestamp when this recording started (from recordings[].created_at) */

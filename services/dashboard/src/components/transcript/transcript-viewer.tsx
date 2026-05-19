@@ -120,25 +120,6 @@ export function TranscriptViewer({
   const [selectedSpeakers, setSelectedSpeakers] = useState<string[]>([]);
   const [transcribeLanguage, setTranscribeLanguage] = useState("auto");
   const [isTranscribing, setIsTranscribing] = useState(false);
-  const deferredRecordingMasters = useMemo(() => {
-    const recordings = meeting.data?.recordings;
-    if (!Array.isArray(recordings)) return { hasRecording: false, hasAudioMaster: false };
-    const hasRecording = recordings.length > 0;
-    const hasAudioMaster = recordings.some((recording) => {
-      if (!recording || typeof recording !== "object") return false;
-      const rec = recording as {
-        playback_url?: { audio?: string | null } | null;
-        media_files?: Array<{ type?: string; finalized_by?: string; storage_path?: string }>;
-      };
-      if (rec.playback_url?.audio) return true;
-      return (rec.media_files || []).some((file) =>
-        file?.type === "audio" &&
-        file?.finalized_by === "recording_finalizer.master" &&
-        Boolean(file?.storage_path?.endsWith("/audio/master.webm") || file?.storage_path?.endsWith("/audio/master.wav"))
-      );
-    });
-    return { hasRecording, hasAudioMaster };
-  }, [meeting.data?.recordings]);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -155,7 +136,7 @@ export function TranscriptViewer({
   });
   const [isChatgptPromptExpanded, setIsChatgptPromptExpanded] = useState(false);
   const [editedChatgptPrompt, setEditedChatgptPrompt] = useState(chatgptPrompt);
-  const chatgptPromptTextareaRef = useRef<HTMLInputElement>(null);
+  const chatgptPromptTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Measure scroll container for auto-follow
   const isNearBottom = useCallback((el: HTMLElement) => {
@@ -792,7 +773,7 @@ export function TranscriptViewer({
             </div>
             <div className="space-y-2">
               <Input
-                ref={chatgptPromptTextareaRef}
+                ref={chatgptPromptTextareaRef as any}
                 value={editedChatgptPrompt}
                 onChange={(e) => setEditedChatgptPrompt(e.target.value)}
                 onBlur={handleChatgptPromptBlur}
@@ -827,29 +808,16 @@ export function TranscriptViewer({
                   <div className="w-16 h-16 rounded-full bg-muted/50 flex items-center justify-center mb-4">
                     <Mic className="h-8 w-8 text-muted-foreground/50" />
                   </div>
-                  {!deferredRecordingMasters.hasAudioMaster ? (
-                    <>
-                      <h3 className="font-medium mb-1">
-                        {deferredRecordingMasters.hasRecording ? "Recording is finalizing" : "Recording is processing"}
-                      </h3>
-                      <p className="text-sm text-muted-foreground">
-                        Transcription will be available after the recording master is finalized.
-                      </p>
-                    </>
-                  ) : (
-                    <>
-                      <h3 className="font-medium mb-1">Recording available</h3>
-                      <p className="text-sm text-muted-foreground mb-6">
-                        This meeting was recorded without real-time transcription.
-                      </p>
-                    </>
-                  )}
-                  {deferredRecordingMasters.hasAudioMaster && isTranscribing ? (
+                  <h3 className="font-medium mb-1">Recording available</h3>
+                  <p className="text-sm text-muted-foreground mb-6">
+                    This meeting was recorded without real-time transcription.
+                  </p>
+                  {isTranscribing ? (
                     <div className="flex items-center gap-2 text-muted-foreground">
                       <Loader2 className="h-4 w-4 animate-spin" />
                       <span className="text-sm">Transcribing recording...</span>
                     </div>
-                  ) : deferredRecordingMasters.hasAudioMaster ? (
+                  ) : (
                     <div className="flex flex-col items-center gap-3">
                       <div className="w-48">
                         <LanguagePicker value={transcribeLanguage} onValueChange={setTranscribeLanguage} />
@@ -858,7 +826,7 @@ export function TranscriptViewer({
                         Transcribe Recording
                       </Button>
                     </div>
-                  ) : null}
+                  )}
                 </>
               ) : hasActiveFilters ? (
                 <>

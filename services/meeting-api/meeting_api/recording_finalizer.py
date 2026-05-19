@@ -37,14 +37,13 @@ Idempotency:
 import asyncio
 import io
 import logging
-import os
 import struct
 from typing import List, Optional, Tuple
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from .models import Meeting
+from .models import MediaFile, Recording
 from .storage import StorageClient, create_storage_client
 
 logger = logging.getLogger("meeting_api.recording_finalizer")
@@ -185,189 +184,21 @@ def _build_wav_master(chunks: List[bytes]) -> bytes:
 # ---------------------------------------------------------------------------
 
 def _build_webm_master(chunks: List[bytes]) -> bytes:
-    """Byte-concat WebM chunks (legacy in-memory path).
+    """Byte-concat WebM chunks.
 
-    Kept as a fallback for tiny meetings + tests that pre-load chunks.
-    Production path uses _build_webm_master_streaming() instead — see
-    its docstring for memory bounds and rationale.
+    The MediaRecorder pipeline in the bot emits a self-describing chunk 0
+    (EBML header + Segment header + first Cluster) followed by
+    Cluster-only chunks (1..N). Concatenating them in seq order yields
+    a valid WebM container — Cluster elements stack inside the Segment.
+
+    No transcoding, no muxing — just byte-level concat. This is the same
+    technique the bot used client-side; the only difference is server-side
+    runs against the durable MinIO objects, not an in-memory buffer that
+    Pack M's cap could shrink.
     """
     if not chunks:
         raise ValueError("_build_webm_master requires at least one chunk")
     return b"".join(chunks)
-
-
-def _build_webm_master_streaming_file(
-    storage: "StorageClient",  # type: ignore[name-defined]
-    chunk_keys: List[str],
-) -> str:
-    """Streamed byte-concat of WebM chunks to a local temp file.
-
-    Returns the path of the assembled master. Caller is responsible
-    for cleanup.
-
-    Why BYTE-CONCAT (and not ffmpeg `-f concat`):
-      The bot's MediaRecorder pipeline emits a self-describing chunk 0
-      (EBML header + Segment header + first Cluster) followed by
-      Cluster-only chunks (1..N). The chunks are NOT standalone WebM
-      containers. ffmpeg's concat demuxer expects a list of standalone
-      files with compatible stream layout — it silently drops Cluster-
-      only inputs. Pack U.5's byte-concat is correct: stacking Cluster
-      elements inside the Segment yields a valid container.
-
-    Bounded memory:
-      - download_file_to_path streams chunk to disk via boto3 multipart.
-      - Local file copy uses a 1 MB buffer; bounded regardless of chunk
-        size.
-      - No bytes-in-memory round-trip at any point.
-
-    Peak RAM through this path ≈ a few MB constant, regardless of
-    meeting length.
-    """
-    import shutil
-    import tempfile
-
-    if not chunk_keys:
-        raise ValueError("_build_webm_master_streaming_file requires at least one chunk")
-
-    with tempfile.NamedTemporaryFile(
-        prefix="webm-master-", suffix=".webm", delete=False
-    ) as out_fh:
-        out_path = out_fh.name
-
-    chunk_dir = tempfile.mkdtemp(prefix="webm-chunks-")
-    try:
-        with open(out_path, "wb") as out:
-            for idx, key in enumerate(chunk_keys):
-                chunk_path = os.path.join(chunk_dir, f"{idx:06d}.webm")
-                storage.download_file_to_path(key, chunk_path)
-                with open(chunk_path, "rb") as src:
-                    shutil.copyfileobj(src, out, length=1024 * 1024)
-                os.remove(chunk_path)
-        return out_path
-    except Exception:
-        try:
-            os.remove(out_path)
-        except OSError:
-            pass
-        raise
-    finally:
-        try:
-            os.rmdir(chunk_dir)
-        except OSError:
-            # If chunks weren't all cleaned up (mid-iteration crash),
-            # remove the dir tree non-destructively.
-            shutil.rmtree(chunk_dir, ignore_errors=True)
-
-
-def _build_webm_master_streaming(
-    storage: "StorageClient",  # type: ignore[name-defined]
-    chunk_keys: List[str],
-) -> bytes:
-    """Bytes-in/bytes-out wrapper for backward compat with the unit
-    test exec-loader. Production path uses _build_webm_master_streaming_file
-    + storage.upload_file_path so no bytes-in-memory round-trip happens.
-    """
-    out_path = _build_webm_master_streaming_file(storage, chunk_keys)
-    try:
-        with open(out_path, "rb") as fh:
-            return fh.read()
-    finally:
-        try:
-            os.remove(out_path)
-        except OSError:
-            pass
-
-
-def _inject_webm_duration_file(src_path: str) -> str:
-    """File-to-file variant of duration injection (#302). Returns the
-    path of the duration-injected file (caller must clean up).
-
-    On failure — ffmpeg missing, non-zero exit, empty output, timeout —
-    returns the SOURCE path unchanged so the byte-concat output is
-    still uploaded. Emits a structured WARN per failure mode. This is
-    the explicitly approved fallback for #302; the failure is
-    observable, the recording still plays without the duration tag.
-
-    Bounded memory: ffmpeg streams the input file; only the Python
-    subprocess wait costs RAM (negligible).
-    """
-    import subprocess
-    import tempfile
-
-    with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as dst_fh:
-        dst_path = dst_fh.name
-
-    try:
-        proc = subprocess.run(
-            [
-                "ffmpeg", "-y",
-                "-loglevel", "error",
-                "-fflags", "+genpts",
-                "-i", src_path,
-                "-c", "copy",
-                dst_path,
-            ],
-            capture_output=True,
-            timeout=120,
-            check=False,
-        )
-        if proc.returncode != 0:
-            logger.warning(
-                "[FINALIZER] webm.duration_inject.failed rc=%s stderr=%s "
-                "— falling back to byte-concat output (#302)",
-                proc.returncode, proc.stderr[:300].decode("utf-8", errors="replace"),
-            )
-            try:
-                os.remove(dst_path)
-            except OSError:
-                pass
-            return src_path
-        if os.path.getsize(dst_path) == 0:
-            logger.warning("[FINALIZER] webm.duration_inject.empty_output — falling back (#302)")
-            try:
-                os.remove(dst_path)
-            except OSError:
-                pass
-            return src_path
-        return dst_path
-    except FileNotFoundError:
-        logger.warning("[FINALIZER] webm.duration_inject.ffmpeg_missing — falling back (#302)")
-        try:
-            os.remove(dst_path)
-        except OSError:
-            pass
-        return src_path
-    except subprocess.TimeoutExpired:
-        logger.warning("[FINALIZER] webm.duration_inject.timeout (>120s) — falling back (#302)")
-        try:
-            os.remove(dst_path)
-        except OSError:
-            pass
-        return src_path
-
-
-def _inject_webm_duration(webm_bytes: bytes) -> bytes:
-    """Bytes-in/bytes-out wrapper for backward compat with tests that
-    pre-load chunks. Production path uses _inject_webm_duration_file."""
-    import tempfile
-    with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as src_fh:
-        src_path = src_fh.name
-        src_fh.write(webm_bytes)
-    try:
-        out_path = _inject_webm_duration_file(src_path)
-        with open(out_path, "rb") as fh:
-            data = fh.read()
-        if out_path != src_path:
-            try:
-                os.remove(out_path)
-            except OSError:
-                pass
-        return data
-    finally:
-        try:
-            os.remove(src_path)
-        except OSError:
-            pass
 
 
 # ---------------------------------------------------------------------------
@@ -436,7 +267,7 @@ def _finalize_one_media_file_sync(
     # objects (defensive: there shouldn't be one given the file_exists
     # check above, but a partial run could leave an unrelated master.*
     # of a different format around).
-    all_keys = storage.list_objects_bounded(prefix + "/")
+    all_keys = storage.list_objects(prefix + "/")
     chunk_keys = [k for k in all_keys if not _is_master_key(k)]
 
     if not chunk_keys:
@@ -453,60 +284,31 @@ def _finalize_one_media_file_sync(
         media_file_id, fmt, len(chunk_keys), prefix,
     )
 
-    # Format-detect using ONLY the first chunk's header bytes — bounded
-    # memory, no need to download the whole list.
-    first_chunk_bytes = storage.download_file(chunk_keys[0])
-    actual_fmt = _detect_format(first_chunk_bytes[:12], fmt)
-    # Hint to GC; we don't need the full first chunk past the format
-    # cross-check (webm path streams everything via ffmpeg, wav path
-    # re-downloads via _build_wav_master).
-    del first_chunk_bytes
+    # Download all chunks in seq order. list_objects returns sorted
+    # ascending; chunk seq is zero-padded 6 digits → lexicographic sort
+    # equals numeric sort.
+    chunks: List[bytes] = []
+    for k in chunk_keys:
+        chunks.append(storage.download_file(k))
+
+    # Format detect + cross-check against declared extension. Uses the
+    # FIRST chunk's bytes — webm chunk 0 has the EBML header, wav chunks
+    # all have the RIFF header.
+    actual_fmt = _detect_format(chunks[0][:12], fmt)
 
     if actual_fmt == "webm":
-        # Bounded-memory path: chunks downloaded to disk, concatenated
-        # via shutil (1 MB buffered I/O), duration-injected via ffmpeg
-        # file-to-file, uploaded via boto3 multipart. No bytes-in-memory
-        # round-trip — peak RAM is a few MB constant regardless of
-        # meeting length.
-        concat_path = _build_webm_master_streaming_file(storage, chunk_keys)
-        try:
-            final_path = _inject_webm_duration_file(concat_path)
-            try:
-                storage.upload_file_path(master_key, final_path, content_type="video/webm")
-            finally:
-                if final_path != concat_path:
-                    try:
-                        os.remove(final_path)
-                    except OSError:
-                        pass
-        finally:
-            try:
-                os.remove(concat_path)
-            except OSError:
-                pass
-        master_size = None  # logged via storage.upload_file_path itself
+        master_bytes = _build_webm_master(chunks)
+        content_type = "video/webm"
     else:  # wav
-        # WAV path: in-memory concat. WAV streams aren't long-meeting
-        # (typically post-meeting transcribe use only). Convert to
-        # streaming if memory profiling ever surfaces an issue.
-        chunks: List[bytes] = []
-        for k in chunk_keys:
-            chunks.append(storage.download_file(k))
         master_bytes = _build_wav_master(chunks)
-        storage.upload_file(master_key, master_bytes, content_type="audio/wav")
-        master_size = len(master_bytes)
+        content_type = "audio/wav"
 
-    if master_size is not None:
-        logger.info(
-            "[FINALIZER] master uploaded: media_file_id=%s key=%s size=%d chunks=%d",
-            media_file_id, master_key, master_size, len(chunk_keys),
-        )
-    else:
-        # webm path — size already logged by storage.upload_file_path.
-        logger.info(
-            "[FINALIZER] master uploaded: media_file_id=%s key=%s chunks=%d (size streamed)",
-            media_file_id, master_key, len(chunk_keys),
-        )
+    storage.upload_file(master_key, master_bytes, content_type=content_type)
+
+    logger.info(
+        "[FINALIZER] master uploaded: media_file_id=%s key=%s size=%d chunks=%d",
+        media_file_id, master_key, len(master_bytes), len(chunk_keys),
+    )
     return master_key
 
 
@@ -521,37 +323,108 @@ async def finalize_recording_master(meeting_id: int, db: AsyncSession) -> None:
     so by the time meeting.status flips to terminal, media_file.storage_path
     points at the master.
 
-    v0.10.6.1 — JSONB-only. Recordings live in
-    meeting.data->'recordings' (array) → recording.media_files (array) →
-    media_file fields including storage_path. We mutate the JSONB
-    structure in place and flag_modified() to force SQLAlchemy to detect
-    the change.
+    Handles BOTH metadata storage modes:
+
+    1. SQL Recording + MediaFile tables (`recording_metadata_mode=db`)
+    2. meeting.data->'recordings' JSONB array (`recording_metadata_mode=meeting_data`,
+       which is the production default and what every R12-R14 real-meeting
+       test ran on)
+
+    The original v0.10.6 Pack U.5 implementation handled only path 1, which
+    silently no-op'd on every real meeting. Path 2 added 2026-05-02 after
+    real-meeting test on lite/compose/helm exposed the gap (storage_path
+    stuck at last chunk; dashboard read chunk fragment; "preparing audio"
+    forever).
     """
     storage = create_storage_client()
     finalized_any = False
 
-    meeting_q = await db.execute(
-        select(Meeting)
-        .where(Meeting.id == meeting_id)
-        .execution_options(populate_existing=True)
+    # ── Path 1: SQL Recording table mode ──────────────────────────
+    # Pull all in-flight Recording rows for this meeting + their MediaFiles.
+    # We filter out only `failed` recordings — `in_progress`, `uploading`,
+    # and `completed` are all valid finalization candidates.
+    stmt = (
+        select(Recording)
+        .where(
+            Recording.meeting_id == meeting_id,
+            Recording.status != "failed",
+        )
     )
+    result = await db.execute(stmt)
+    recordings = result.scalars().all()
+
+    if recordings:
+        for rec in recordings:
+            mf_stmt = (
+                select(MediaFile)
+                .where(
+                    MediaFile.recording_id == rec.id,
+                    MediaFile.type.in_(("audio", "video")),
+                )
+            )
+            mf_result = await db.execute(mf_stmt)
+            media_files = mf_result.scalars().all()
+
+            if not media_files:
+                logger.info(
+                    "[FINALIZER] recording_id=%s has no audio/video MediaFile rows — skipping",
+                    rec.id,
+                )
+                continue
+
+            for mf in media_files:
+                if not mf.storage_path or not mf.format:
+                    logger.warning(
+                        "[FINALIZER] media_file_id=%s missing storage_path or format — skipping",
+                        mf.id,
+                    )
+                    continue
+                master_key = await asyncio.to_thread(
+                    _finalize_one_media_file_sync,
+                    storage,
+                    mf.id,
+                    mf.storage_path,
+                    mf.format,
+                )
+                if master_key is None:
+                    continue
+                if mf.storage_path != master_key:
+                    mf.storage_path = master_key
+                    logger.info(
+                        "[FINALIZER] [SQL] media_file_id=%s storage_path → master: %s",
+                        mf.id, master_key,
+                    )
+                    finalized_any = True
+
+    # ── Path 2: meeting_data JSONB mode (production default) ──────
+    # Recordings live in meeting.data->'recordings' (array) →
+    # recording.media_files (array) → media_file fields including
+    # storage_path. We mutate the JSONB structure in place and
+    # flag_modified() to force SQLAlchemy to detect the change.
+    from .models import Meeting
+    meeting_q = await db.execute(select(Meeting).where(Meeting.id == meeting_id))
     meeting = meeting_q.scalars().first()
 
     if meeting is None:
-        logger.info(
-            "[FINALIZER] meeting_id=%s — no Meeting row; nothing to finalize",
-            meeting_id,
-        )
+        if not recordings and not finalized_any:
+            logger.info(
+                "[FINALIZER] meeting_id=%s — no Meeting row, no SQL Recording rows; nothing to finalize",
+                meeting_id,
+            )
         return
 
     meeting_data = dict(meeting.data or {})
     rec_list = list(meeting_data.get("recordings") or [])
 
     if not rec_list:
-        logger.info(
-            "[FINALIZER] meeting_id=%s — no recordings in meeting.data; nothing to finalize",
-            meeting_id,
-        )
+        if not recordings and not finalized_any:
+            logger.info(
+                "[FINALIZER] meeting_id=%s — no recordings found in SQL or meeting_data; nothing to finalize",
+                meeting_id,
+            )
+        # SQL path may have committed updates; flush them.
+        if finalized_any:
+            await db.commit()
         return
 
     for rec_idx, rec_payload in enumerate(rec_list):
@@ -627,36 +500,6 @@ async def finalize_recording_master(meeting_id: int, db: AsyncSession) -> None:
             )
 
         rec_payload["media_files"] = media_files
-
-        # v0.10.6.1 — canonical playback_url field (ADR-2). Producer
-        # writes this once master assembly succeeds; dashboard reads it
-        # directly instead of running pickMasterMediaFile() over the
-        # media_files array. Null sub-field means "no master for this
-        # type yet" — dashboard renders explicit "finalizing" UI state.
-        # The URL is stable (a route, not a presigned URL); the backend
-        # endpoint at /recordings/<id>/master resolves to a fresh
-        # presigned URL on each fetch.
-        recording_id = rec_payload.get("id")
-        if recording_id is not None:
-            has_audio_master = any(
-                mf.get("type") == "audio" and mf.get("finalized_by") == "recording_finalizer.master"
-                for mf in media_files
-            )
-            has_video_master = any(
-                mf.get("type") == "video" and mf.get("finalized_by") == "recording_finalizer.master"
-                for mf in media_files
-            )
-            if has_audio_master or has_video_master:
-                rec_payload["playback_url"] = {
-                    "audio": f"/recordings/{recording_id}/master?type=audio" if has_audio_master else None,
-                    "video": f"/recordings/{recording_id}/master?type=video" if has_video_master else None,
-                }
-                # Mark JSONB dirty even if we only re-wrote playback_url with no
-                # new finalizations — idempotent fix-up writes are valuable
-                # (e.g. backfill after the original commit succeeded but
-                # playback_url got dropped).
-                finalized_any = True
-
         rec_list[rec_idx] = rec_payload
 
     if finalized_any:

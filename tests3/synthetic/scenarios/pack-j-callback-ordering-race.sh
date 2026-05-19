@@ -37,21 +37,13 @@ rig_parallel \
     "rig_callback '$session_uid' exited exit_code=0 reason=self_initiated_leave completion_reason=stopped >/dev/null" || true
 sleep 3
 
-# Both paths route through Pack J and must land in a safe terminal failure
-# class. The precise no-audio reason can vary by which concurrent callback
-# wins the race against the stop/delete transition.
-state=$(rig_get_state "$token" "$meeting_id")
-status=$(echo "$state" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status',''))")
-reason=$(echo "$state" | python3 -c "import json,sys; d=json.load(sys.stdin).get('data') or {}; print(d.get('completion_reason') or '')")
-if [ "$status" = "failed" ] && {
-    [ "$reason" = "stopped_with_no_audio" ] || [ "$reason" = "stopped_before_admission" ]
-}; then
-    echo "  ✓ status = failed"
-    echo "  ✓ completion_reason = $reason"
+# Both paths route through Pack J → same classification regardless of order.
+if rig_assert_state "$token" "$meeting_id" \
+    status=failed \
+    completion_reason=stopped_with_no_audio; then
     echo "    ✅ classification invariant under callback-ordering race"
     exit 0
 else
-    echo "  ✗ status/reason: expected failed + stopped_with_no_audio|stopped_before_admission, got $status + $reason" >&2
     echo "    ❌ ordering race produces inconsistent classification" >&2
     exit 1
 fi

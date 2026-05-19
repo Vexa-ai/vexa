@@ -79,7 +79,7 @@ console.log('\n=== buildZoomWebClientUrl — v0.10.5 white-label passthrough ===
 // browser needs to be able to click through it. Canonical zoom.us paths
 // stay rewritten because they have no portal layer.
 const LFX_URL =
-  'https://zoom-lfx.platform.linuxfoundation.org/meeting/96088138284?password=example-passcode';
+  'https://zoom-lfx.platform.linuxfoundation.org/meeting/96088138284?password=c9e528a8-3852-4b82-89c2-96d6f22526ad';
 
 expect(
   'LFX zoom-portal — passthrough so user can VNC into portal page',

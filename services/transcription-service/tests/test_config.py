@@ -4,20 +4,12 @@ Tests config parsing, quality heuristics, and tier logic without a running model
 """
 import os
 import sys
-import asyncio
-import io
-from types import SimpleNamespace
 import pytest
-from fastapi import HTTPException
-from fastapi.testclient import TestClient
-import numpy as np
-import soundfile as sf
 
 # Add service root to path
 SERVICE_ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, SERVICE_ROOT)
 
-import main as transcription_main
 from main import (
     _env_bool,
     _env_int,
@@ -26,56 +18,10 @@ from main import (
     _looks_like_hallucination,
     _normalize_transcription_tier,
     _deferred_capacity_available,
-    _parse_bounded_multipart,
-    MAX_MULTIPART_BODY_BYTES,
     NO_SPEECH_THRESHOLD,
     LOG_PROB_THRESHOLD,
     COMPRESSION_RATIO_THRESHOLD,
 )
-
-
-class _FakeRequest:
-    def __init__(self, content_type, chunks):
-        self.headers = {"content-type": content_type}
-        self._chunks = chunks
-
-    async def stream(self):
-        for chunk in self._chunks:
-            yield chunk
-
-
-def _multipart_body(boundary, parts):
-    body = bytearray()
-    for headers, payload in parts:
-        body.extend(f"--{boundary}\r\n".encode("utf-8"))
-        for name, value in headers.items():
-            body.extend(f"{name}: {value}\r\n".encode("utf-8"))
-        body.extend(b"\r\n")
-        body.extend(payload)
-        body.extend(b"\r\n")
-    body.extend(f"--{boundary}--\r\n".encode("utf-8"))
-    return bytes(body)
-
-
-class _Segment:
-    start = 0.0
-    end = 0.25
-    text = " hello"
-    avg_logprob = -0.1
-    compression_ratio = 1.0
-    no_speech_prob = 0.1
-
-
-class _FakeModel:
-    def transcribe(self, audio_array, **kwargs):
-        return [_Segment()], SimpleNamespace(language="en", language_probability=0.99)
-
-
-def _wav_bytes():
-    audio = np.zeros(1600, dtype=np.float32)
-    buf = io.BytesIO()
-    sf.write(buf, audio, 16000, format="WAV")
-    return buf.getvalue()
 
 
 # --- _env_bool ---
@@ -232,65 +178,3 @@ class TestDeferredCapacityAvailable:
 
     def test_has_capacity_with_some_active(self):
         assert _deferred_capacity_available(5, 3) is True
-
-
-# --- _parse_bounded_multipart ---
-
-class TestParseBoundedMultipart:
-    def test_parses_file_and_fields_without_python_multipart(self):
-        boundary = "vexa-boundary"
-        body = _multipart_body(
-            boundary,
-            [
-                (
-                    {
-                        "Content-Disposition": 'form-data; name="model"',
-                    },
-                    b"whisper-1",
-                ),
-                (
-                    {
-                        "Content-Disposition": 'form-data; name="file"; filename="sample.wav"',
-                        "Content-Type": "audio/wav",
-                    },
-                    b"RIFF....WAVE",
-                ),
-            ],
-        )
-        request = _FakeRequest(f"multipart/form-data; boundary={boundary}", [body])
-
-        upload, fields = asyncio.run(_parse_bounded_multipart(request))
-
-        assert fields["model"] == "whisper-1"
-        assert upload.filename == "sample.wav"
-        assert upload.content_type == "audio/wav"
-        assert upload.data == b"RIFF....WAVE"
-
-    def test_rejects_oversized_body_while_streaming(self):
-        request = _FakeRequest(
-            "multipart/form-data; boundary=vexa-boundary",
-            [b"x" * (MAX_MULTIPART_BODY_BYTES + 1)],
-        )
-
-        with pytest.raises(HTTPException) as exc:
-            asyncio.run(_parse_bounded_multipart(request))
-
-        assert exc.value.status_code == 413
-
-    def test_route_accepts_openai_compatible_multipart_without_python_multipart(self):
-        previous_model = transcription_main.model
-        transcription_main.model = _FakeModel()
-        try:
-            client = TestClient(transcription_main.app)
-            response = client.post(
-                "/v1/audio/transcriptions",
-                files={"file": ("sample.wav", _wav_bytes(), "audio/wav")},
-                data={"model": "whisper-1", "response_format": "verbose_json"},
-            )
-        finally:
-            transcription_main.model = previous_model
-
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["text"] == "hello"
-        assert payload["segments"][0]["text"] == " hello"

@@ -10,42 +10,6 @@ import logging # Import logging for status validation warnings
 # Setup logger for status validation warnings
 logger = logging.getLogger(__name__)
 
-_SENSITIVE_DATA_KEYS = {
-    "api_key",
-    "apikey",
-    "authorization",
-    "credential",
-    "credentials",
-    "password",
-    "passcode",
-    "secret",
-    "session_token",
-    "token",
-    "webhook_secret",
-}
-
-
-def redact_sensitive_data(data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Redact sensitive user/meeting JSONB values from public API responses."""
-    if data is None:
-        return None
-
-    def _redact(value: Any) -> Any:
-        if isinstance(value, dict):
-            redacted = {}
-            for key, child in value.items():
-                key_text = str(key).lower()
-                if any(marker in key_text for marker in _SENSITIVE_DATA_KEYS):
-                    redacted[key] = "[REDACTED]"
-                else:
-                    redacted[key] = _redact(child)
-            return redacted
-        if isinstance(value, list):
-            return [_redact(item) for item in value]
-        return value
-
-    return _redact(data)
-
 # --- Language Codes from faster-whisper ---
 # These are the accepted language codes from the faster-whisper library
 # Source: faster_whisper.tokenizer._LANGUAGE_CODES
@@ -364,8 +328,10 @@ class UserResponse(UserBase):
 
     @field_serializer('data')
     def exclude_webhook_secret(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """Redact sensitive JSONB fields from public user responses."""
-        return redact_sensitive_data(data)
+        """Exclude webhook_secret from API responses for security."""
+        if data is None:
+            return None
+        return {k: v for k, v in data.items() if k != 'webhook_secret'}
 
     class Config:
         from_attributes = True
@@ -388,14 +354,8 @@ class TokenResponse(TokenBase):
     class Config:
         from_attributes = True
 
-class UserDetailResponse(UserBase):
-    id: int
-    created_at: datetime
-    max_concurrent_bots: int = Field(..., description="Maximum number of concurrent bots allowed for the user")
+class UserDetailResponse(UserResponse):
     api_tokens: List[TokenResponse] = []
-
-    class Config:
-        from_attributes = True
 
 # --- ADD UserUpdate Schema for PATCH ---
 class UserUpdate(BaseModel):
@@ -634,15 +594,11 @@ class MeetingCreate(BaseModel):
     )
     voice_agent_enabled: Optional[bool] = Field(
         False,
-        description="Enable voice agent (TTS via /speak, chat, screen share) capabilities for this meeting. Does NOT enable the outgoing camera/avatar — that is gated by camera_enabled and defaults to off."
-    )
-    camera_enabled: Optional[bool] = Field(
-        False,
-        description="Enable the bot's outgoing virtual camera (avatar/screen-content stream). Default off. Independent of voice_agent_enabled — a voice-only bot keeps camera off."
+        description="Enable voice agent (TTS, chat, screen share, avatar streaming) capabilities for this meeting"
     )
     default_avatar_url: Optional[str] = Field(
         None,
-        description="Custom default avatar image URL for the bot's camera feed. Shown when no screen content is active. If omitted, the default Vexa logo is used. Only relevant when camera_enabled=true."
+        description="Custom default avatar image URL for the bot's camera feed. Shown when no screen content is active. If omitted, the default Vexa logo is used."
     )
     automatic_leave: Optional[AutomaticLeave] = Field(
         None,
@@ -1013,8 +969,10 @@ class MeetingResponse(BaseModel): # Not inheriting from MeetingBase anymore to a
 
     @field_serializer('data')
     def exclude_webhook_secret_from_data(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """Redact sensitive JSONB fields from meeting responses."""
-        return redact_sensitive_data(data)
+        """Exclude webhook_secret from API responses for security."""
+        if data is None:
+            return None
+        return {k: v for k, v in data.items() if k != 'webhook_secret'}
 
     class Config:
         from_attributes = True

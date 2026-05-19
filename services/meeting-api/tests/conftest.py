@@ -16,10 +16,6 @@ os.environ.setdefault("DB_USER", "test_user")
 os.environ.setdefault("DB_PASSWORD", "test_pass")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379")
 os.environ.setdefault("ADMIN_TOKEN", "test-admin-secret")
-TEST_INTERNAL_API_SECRET = os.environ.setdefault(
-    "INTERNAL_API_SECRET",
-    "unit-test-internal-token",
-)
 
 # Ensure libs/admin-models is importable (needed by collector modules)
 _repo = Path(__file__).resolve().parent.parent.parent.parent
@@ -210,11 +206,7 @@ async def client(mock_db, mock_redis) -> AsyncGenerator[AsyncClient, None]:
     meetings_mod.set_redis(mock_redis)
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(
-        transport=transport,
-        base_url="http://test",
-        headers={"X-Internal-Secret": TEST_INTERNAL_API_SECRET},
-    ) as ac:
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
 
     # Cleanup
