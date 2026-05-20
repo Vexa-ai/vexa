@@ -657,6 +657,13 @@ tests:
     features: [dashboard, infrastructure, realtime-transcription]
     max_duration_sec: 5
 
+  lite-recording-storage-persistent:
+    tier: cheap
+    runs_in: [lite]
+    script: tests/static/lite-recording-storage-persistent.sh
+    features: [dashboard, post-meeting-transcription, infrastructure]
+    max_duration_sec: 5
+
   dashboard-recording-state-ssot:
     tier: cheap
     runs_in: [lite, compose]
@@ -698,6 +705,13 @@ tests:
     script: tests/dashboard-browser-auth.sh
     features: [dashboard]
     max_duration_sec: 45
+
+  dashboard-browser-view:
+    tier: meeting
+    runs_in: [lite, compose, helm]
+    script: tests/dashboard-browser-view.sh
+    features: [dashboard, browser-session, remote-browser]
+    max_duration_sec: 90
 
   dashboard-stale-auth-detail:
     tier: cheap

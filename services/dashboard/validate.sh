@@ -5,7 +5,19 @@ set -u
 
 PORT=${1:-3001}
 BASE="http://localhost:$PORT"
+EXPECTED_WS_URL="${DASHBOARD_WS_URL:-}"
+EXPECTED_API_URL="${VEXA_API_URL:-}"
 PASS=0; FAIL=0; WARN=0
+
+if [[ -z "$EXPECTED_API_URL" ]]; then
+  echo "ERROR: VEXA_API_URL is required for dashboard validation"
+  exit 2
+fi
+
+if [[ -z "$EXPECTED_WS_URL" ]]; then
+  proto="ws"
+  EXPECTED_WS_URL="${proto}://localhost:${PORT}/ws"
+fi
 
 check() {
   local label="$1" url="$2" expect="$3"
@@ -101,8 +113,8 @@ check_health
 
 # 4. Config endpoint returns correct values
 echo "[Config]"
-check_json "wsUrl set" "$BASE/api/config" "['wsUrl']" "ws://localhost:3001/ws"
-check_json "apiUrl set" "$BASE/api/config" "['apiUrl']" "http://localhost:8066"
+check_json "wsUrl set" "$BASE/api/config" "['wsUrl']" "$EXPECTED_WS_URL"
+check_json "apiUrl set" "$BASE/api/config" "['apiUrl']" "$EXPECTED_API_URL"
 
 # 5. API proxy works (dashboard proxies to gateway)
 echo "[API Proxy]"

@@ -62,8 +62,7 @@ export function BrowserSessionView({ meeting }: BrowserSessionViewProps) {
     fetch(withBasePath("/api/config"))
       .then((r) => r.json())
       .then((cfg) => {
-        const resolvedApiUrl = cfg.publicApiUrl || cfg.apiUrl;
-        setApiUrl(resolvedApiUrl || "");
+        setApiUrl(cfg.apiUrl || "");
       })
       .catch(() => {
         setApiUrl("");

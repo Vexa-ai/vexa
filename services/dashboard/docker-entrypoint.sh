@@ -1,18 +1,10 @@
 #!/bin/sh
-# Patch Next.js standalone rewrites with runtime VEXA_API_URL.
-# Rewrites in next.config.ts are baked at build time. This script
-# replaces the build-time placeholder with the runtime value before
-# starting the server.
+# Next.js standalone rewrites are baked at build time from VEXA_API_URL.
+# Do not patch them at runtime: build args and runtime env must agree.
 
-if [ -n "$VEXA_API_URL" ]; then
-  # Next.js standalone bakes rewrite destinations at build time into multiple files.
-  # Replace the build-time default (http://localhost:8066) with the runtime VEXA_API_URL.
-  for f in .next/required-server-files.json .next/routes-manifest.json; do
-    if [ -f "$f" ]; then
-      sed -i "s|http://localhost:8066|${VEXA_API_URL}|g" "$f"
-    fi
-  done
-  echo "Patched rewrites: localhost:8066 -> ${VEXA_API_URL}"
+if [ -z "${VEXA_API_URL:-}" ]; then
+  echo "ERROR: VEXA_API_URL is required for dashboard runtime config" >&2
+  exit 1
 fi
 
 exec node server.js
