@@ -258,7 +258,8 @@ setup-api-key: check_docker
 			if [ -f $(LAST_TAG_FILE) ]; then \
 				export IMAGE_TAG=$$(cat $(LAST_TAG_FILE)); \
 			else \
-				export IMAGE_TAG=dev; \
+				export IMAGE_TAG=$$(grep -E '^IMAGE_TAG=' $(ENV_FILE) 2>/dev/null | cut -d= -f2 || echo "dev"); \
+				IMAGE_TAG=$${IMAGE_TAG:-dev}; \
 			fi; \
 			$(COMPOSE_CMD) up -d dashboard; \
 		else \

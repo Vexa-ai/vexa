@@ -30,8 +30,17 @@ docker rm -f vexa-postgres 2>/dev/null || true
 # Drop postgres data so migrations start fresh. Lite's PG uses default volume.
 docker volume ls -q | grep -E '^vexa-' | xargs -r docker volume rm -f 2>/dev/null || true
 
-echo "  [reset-lite] make lite"
-make lite 2>&1 | tail -10
+echo "  [reset-lite] lite deploy targets"
+if [ -n "${VM_IMAGE_TAG:-}" ]; then
+    for f in /root/vexa/.env /root/.env; do
+        [ -f "$f" ] || continue
+        sed -i "s|^#*IMAGE_TAG=.*|IMAGE_TAG=${VM_IMAGE_TAG}|" "$f"
+        sed -i "s|^#*BROWSER_IMAGE=.*|BROWSER_IMAGE=vexaai/vexa-bot:${VM_IMAGE_TAG}|" "$f"
+    done
+    echo "  [reset-lite] pinned IMAGE_TAG=${VM_IMAGE_TAG}"
+fi
+set -o pipefail
+make -C deploy/lite preflight up init-db test 2>&1 | tail -10
 
 # Wait for gateway to respond
 echo "  [reset-lite] waiting for services..."

@@ -14,11 +14,17 @@ git fetch origin "${VM_BRANCH}"
 git reset --hard "origin/${VM_BRANCH}"
 cd deploy/compose
 
-# Some deployments store IMAGE_TAG in /root/.env, others in /root/vexa/.env
 ENV_FILE="/root/vexa/.env"
-[ -f /root/.env ] && ENV_FILE="/root/.env"
 
 echo "  [redeploy-compose] using env: $ENV_FILE"
+if [ -n "${VM_IMAGE_TAG:-}" ]; then
+    for f in "$ENV_FILE" /root/.env; do
+        [ -f "$f" ] || continue
+        sed -i "s|^#*IMAGE_TAG=.*|IMAGE_TAG=${VM_IMAGE_TAG}|" "$f"
+        sed -i "s|^#*BROWSER_IMAGE=.*|BROWSER_IMAGE=vexaai/vexa-bot:${VM_IMAGE_TAG}|" "$f"
+    done
+    echo "  [redeploy-compose] pinned IMAGE_TAG=${VM_IMAGE_TAG}"
+fi
 docker compose --env-file "$ENV_FILE" pull 2>&1 | tail -5
 docker compose --env-file "$ENV_FILE" up -d --force-recreate 2>&1 | tail -5
 
