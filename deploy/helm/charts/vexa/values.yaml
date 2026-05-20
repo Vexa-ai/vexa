@@ -217,11 +217,11 @@ ttsService:
   # bursty — lean cpu request, bigger memory for voice cache.
   resources:
     requests:
-      cpu: 10m
-      memory: 256Mi
+      cpu: 250m
+      memory: 768Mi
     limits:
-      cpu: 100m
-      memory: 512Mi
+      cpu: 1000m
+      memory: 1536Mi
   extraEnv: []
   # First-boot voice-model download takes 60-180s. Defaults below clear that
   # window; subsequent restarts come up fast (PVC retains models). Operators
