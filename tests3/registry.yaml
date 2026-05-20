@@ -2736,6 +2736,51 @@ VEXA_LITE_APPLE_SILICON_CAVEAT_DOCUMENTED:
 # ── 260508-v0.10.6.1 OPTION-3 SCOPE EXTENSION (2026-05-08) ────────────
 # Authorized mid-develop. See releases/260508-v0.10.6.1/protocol-exception.md.
 
+TTS_RUNTIME_ENV_WIRED:
+  proves: "Runtime-launched bot profiles receive TTS_SERVICE_URL across compose and helm, so /speak acceptance reaches the meeting audio data plane"
+  symptom: "/speak returns 202 but Helm bot pods have no TTS_SERVICE_URL and therefore cannot render audio"
+  found: '2026-05-20'
+  type: script
+  script: tests/v0.10.6.1-tts-auto-lang.sh
+  step: runtime_tts_env_wired
+  modes:
+  - compose
+  - helm
+  state: static
+  max_duration_sec: 10
+  release: 260508-v0.10.6.1
+  option3: true
+
+TTS_MAJOR_VOICES_CONFIGURED:
+  proves: "tts-service is configured to strict-prepare the supported major language voices before accepting release-gate traffic"
+  symptom: "First non-English /speak can block on voice download or fall back to wrong-language output"
+  found: '2026-05-20'
+  type: script
+  script: tests/v0.10.6.1-tts-auto-lang.sh
+  step: major_voices_configured
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 10
+  release: 260508-v0.10.6.1
+  option3: true
+
+TTS_MAJOR_VOICE_FIRST_CALL_PROMPT:
+  proves: "A Portuguese auto-language /v1/audio/speech request returns non-empty audio promptly on the first release-gate call"
+  symptom: "Portuguese /speak is accepted but either spells letters, stalls on model download, or produces no prompt audible output"
+  found: '2026-05-20'
+  type: script
+  script: tests/v0.10.6.1-tts-auto-lang.sh
+  step: major_voice_first_call_prompt
+  modes:
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 10
+  release: 260508-v0.10.6.1
+  option3: true
+
 TTS_AUTO_LANG_PICKS_RIGHT_VOICE:
   proves: "tts-service detects language from input text and selects a Piper voice matching that language (es text → es voice, etc.)"
   symptom: "/v1/audio/speech defaults to en_US voice regardless of input language; non-English text gets phonemized via espeak-ng-EN, mispronounced silently"

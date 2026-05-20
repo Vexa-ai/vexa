@@ -37,11 +37,49 @@ API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
 # the vexa-bot (paplay) expects 24000 Hz.  We resample when they differ.
 OUTPUT_SAMPLE_RATE = int(os.getenv("TTS_OUTPUT_SAMPLE_RATE", "24000"))
 
-# Default voices to pre-load on startup (empty = lazy load all)
-DEFAULT_VOICES = os.getenv(
-    "PIPER_DEFAULT_VOICES",
-    "en_US-amy-medium,en_US-danny-low",
-).split(",")
+# Piper voices that should be ready before a deployment accepts traffic. These
+# are the supported "major language" voices for prompt /speak output today.
+MAJOR_DEFAULT_VOICES = [
+    "en_US-amy-medium",
+    "en_US-danny-low",
+    "es_ES-davefx-medium",
+    "fr_FR-siwis-medium",
+    "de_DE-thorsten-medium",
+    "it_IT-paola-medium",
+    "pt_BR-faber-medium",
+    "nl_NL-mls-medium",
+    "pl_PL-mc_speech-medium",
+    "ru_RU-irina-medium",
+    "uk_UA-ukrainian_tts-medium",
+    "zh_CN-huayan-medium",
+    "ar_JO-kareem-medium",
+    "tr_TR-dfki-medium",
+    "hi_IN-pratham-medium",
+]
+
+
+def _configured_default_voices() -> list[str]:
+    raw = os.getenv("PIPER_DEFAULT_VOICES", "major").strip()
+    if raw.lower() == "major":
+        return MAJOR_DEFAULT_VOICES.copy()
+    return [voice.strip() for voice in raw.split(",") if voice.strip()]
+
+
+DEFAULT_VOICES = _configured_default_voices()
+DEFAULT_LOADED_VOICES = [
+    voice.strip()
+    for voice in os.getenv(
+        "PIPER_LOAD_VOICES",
+        "en_US-amy-medium,en_US-danny-low,pt_BR-faber-medium,es_ES-davefx-medium",
+    ).split(",")
+    if voice.strip()
+]
+PIPER_PRELOAD_STRICT = os.getenv("PIPER_PRELOAD_STRICT", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 # Map OpenAI voice names to Piper voice names for backward compatibility
 VOICE_ALIASES: dict[str, str] = {
@@ -182,6 +220,27 @@ def _resample_int16(pcm_int16: bytes, src_rate: int, dst_rate: int) -> bytes:
 _loaded_voices: dict[str, "PiperVoice"] = {}  # type: ignore[name-defined]
 
 
+def _download_voice_model(voice_name: str) -> None:
+    """Ensure a Piper voice model exists locally without loading it into RAM."""
+    from piper.download_voices import download_voice
+
+    model_path = VOICES_DIR / f"{voice_name}.onnx"
+    config_path = VOICES_DIR / f"{voice_name}.onnx.json"
+
+    if model_path.exists() and config_path.exists():
+        return
+
+    logger.info("[TTS] Downloading voice: %s -> %s", voice_name, VOICES_DIR)
+    try:
+        download_voice(voice_name, VOICES_DIR)
+    except Exception as exc:
+        logger.error("[TTS] Failed to download voice %s: %s", voice_name, exc)
+        raise HTTPException(
+            status_code=404,
+            detail=f"Voice '{voice_name}' not found and could not be downloaded: {exc}",
+        ) from exc
+
+
 def _resolve_voice_name(name: str, *, text: str = "") -> str:
     """Resolve a voice request to a Piper voice name.
 
@@ -242,24 +301,13 @@ def _resolve_voice_name(name: str, *, text: str = "") -> str:
 def _ensure_voice(voice_name: str) -> "PiperVoice":  # type: ignore[name-defined]
     """Return a loaded PiperVoice, downloading the model if needed."""
     from piper import PiperVoice
-    from piper.download_voices import download_voice
 
     if voice_name in _loaded_voices:
         return _loaded_voices[voice_name]
 
     model_path = VOICES_DIR / f"{voice_name}.onnx"
     config_path = VOICES_DIR / f"{voice_name}.onnx.json"
-
-    if not model_path.exists() or not config_path.exists():
-        logger.info("[TTS] Downloading voice: %s -> %s", voice_name, VOICES_DIR)
-        try:
-            download_voice(voice_name, VOICES_DIR)
-        except Exception as exc:
-            logger.error("[TTS] Failed to download voice %s: %s", voice_name, exc)
-            raise HTTPException(
-                status_code=404,
-                detail=f"Voice '{voice_name}' not found and could not be downloaded: {exc}",
-            ) from exc
+    _download_voice_model(voice_name)
 
     logger.info("[TTS] Loading voice: %s", voice_name)
     voice = PiperVoice.load(str(model_path), str(config_path))
@@ -281,14 +329,20 @@ def _ensure_voice(voice_name: str) -> "PiperVoice":  # type: ignore[name-defined
 async def lifespan(app: FastAPI):
     VOICES_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Pre-load default voices at startup
+    # Prepare default voices at startup. Release deployments should fail
+    # readiness when a promised voice model cannot be made local; only a small
+    # hot subset is loaded into RAM to keep Helm memory predictable.
     for v in DEFAULT_VOICES:
         v = v.strip()
         if v:
             try:
-                _ensure_voice(v)
+                _download_voice_model(v)
+                if v in DEFAULT_LOADED_VOICES:
+                    _ensure_voice(v)
             except Exception:
-                logger.warning("[TTS] Could not pre-load voice: %s", v, exc_info=True)
+                logger.warning("[TTS] Could not prepare voice: %s", v, exc_info=True)
+                if PIPER_PRELOAD_STRICT:
+                    raise
 
     yield
 
@@ -331,6 +385,14 @@ async def health():
         "service": "tts-service",
         "provider": "piper",
         "output_sample_rate": OUTPUT_SAMPLE_RATE,
+        "configured_default_voices": DEFAULT_VOICES,
+        "default_loaded_voices": DEFAULT_LOADED_VOICES,
+        "preload_strict": PIPER_PRELOAD_STRICT,
+        "prepared_voices": sorted(
+            p.name[:-5]
+            for p in VOICES_DIR.glob("*.onnx")
+            if not p.name.endswith(".onnx.json")
+        ),
         "loaded_voices": list(_loaded_voices.keys()),
         "voice_aliases": VOICE_ALIASES,
     }

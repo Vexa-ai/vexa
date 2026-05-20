@@ -57,6 +57,12 @@ spec:
               value: {{ .Values.ttsService.apiToken | default "" | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.ttsService.logLevel | default "INFO" | quote }}
+            - name: PIPER_DEFAULT_VOICES
+              value: {{ .Values.ttsService.defaultVoices | default "major" | quote }}
+            - name: PIPER_LOAD_VOICES
+              value: {{ .Values.ttsService.loadVoices | default "en_US-amy-medium,en_US-danny-low,pt_BR-faber-medium,es_ES-davefx-medium" | quote }}
+            - name: PIPER_PRELOAD_STRICT
+              value: {{ .Values.ttsService.preloadStrict | default true | quote }}
             {{- with .Values.ttsService.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

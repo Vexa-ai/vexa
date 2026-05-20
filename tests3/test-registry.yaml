@@ -347,6 +347,27 @@ tests:
     features: [infrastructure]
     max_duration_sec: 60
 
+  v0.10.6.1-tts-auto-lang-runtime_tts_env_wired:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-tts-auto-lang.sh runtime_tts_env_wired
+    features: [speaking-bot]
+    max_duration_sec: 10
+
+  v0.10.6.1-tts-auto-lang-major_voices_configured:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-tts-auto-lang.sh major_voices_configured
+    features: [speaking-bot]
+    max_duration_sec: 10
+
+  v0.10.6.1-tts-auto-lang-major_voice_first_call_prompt:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-tts-auto-lang.sh major_voice_first_call_prompt
+    features: [speaking-bot]
+    max_duration_sec: 10
+
   v0.10.6.1-tts-auto-lang-detects_and_picks_voice:
     tier: cheap
     runs_in: [compose, helm]

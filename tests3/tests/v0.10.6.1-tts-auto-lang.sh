@@ -2,6 +2,11 @@
 # v0.10.6.1-tts-auto-lang — Piper voice auto-selection from input language.
 #
 # Steps (compose / helm — TTS_URL must point at a running tts-service):
+#   runtime_tts_env_wired      — runtime-launched bot profiles receive
+#                                 TTS_SERVICE_URL across compose/helm.
+#   major_voices_configured    — /health proves major supported voices are
+#                                 startup-prepared under strict mode.
+#   major_voice_first_call_prompt — Portuguese first-call synthesis is prompt.
 #   detects_and_picks_voice    — Spanish/Russian/Japanese inputs render via
 #                                 the matching Piper voice (script reports
 #                                 voice_param + resolved voice from /health
@@ -35,6 +40,97 @@ PY
 }
 
 case "$step" in
+
+  runtime_tts_env_wired)
+    failed=0
+    require_line() {
+      local file="$1"
+      local pattern="$2"
+      local label="$3"
+      if grep -Fq "$pattern" "$file"; then
+        echo "    ok   $label"
+      else
+        echo "    FAIL $label: missing '$pattern' in $file"
+        failed=1
+      fi
+    }
+
+    require_line "services/runtime-api/profiles.yaml" 'TTS_SERVICE_URL: "${TTS_SERVICE_URL}"' "runtime profile passes TTS_SERVICE_URL to bot"
+    require_line "deploy/compose/docker-compose.yml" "TTS_SERVICE_URL=http://tts-service:8002" "compose runtime-api can resolve profile TTS_SERVICE_URL"
+    require_line "deploy/helm/charts/vexa/templates/deployment-runtime-api.yaml" "name: TTS_SERVICE_URL" "helm runtime-api can resolve profile TTS_SERVICE_URL"
+    require_line "deploy/helm/charts/vexa/values.yaml" 'TTS_SERVICE_URL: "${TTS_SERVICE_URL}"' "helm runtime profiles pass TTS_SERVICE_URL to bot pods"
+
+    if (( failed == 0 )); then
+      step_pass TTS_RUNTIME_ENV_WIRED "runtime-launched bot profiles receive TTS_SERVICE_URL on compose and helm"
+    else
+      step_fail TTS_RUNTIME_ENV_WIRED "one or more runtime TTS env bindings are missing"
+    fi
+    ;;
+
+  major_voices_configured)
+    health=$(curl -sS "$TTS_URL/health")
+    failed=0
+    for voice in \
+      en_US-amy-medium \
+      es_ES-davefx-medium \
+      fr_FR-siwis-medium \
+      de_DE-thorsten-medium \
+      it_IT-paola-medium \
+      pt_BR-faber-medium \
+      ru_RU-irina-medium \
+      hi_IN-pratham-medium
+    do
+      if jq -e --arg voice "$voice" '.configured_default_voices | index($voice)' >/dev/null <<<"$health"; then
+        echo "    ok   configured $voice"
+      else
+        echo "    FAIL missing configured voice $voice"
+        failed=1
+      fi
+    done
+
+    if jq -e '.preload_strict == true' >/dev/null <<<"$health"; then
+      echo "    ok   preload_strict=true"
+    else
+      echo "    FAIL preload_strict is not true"
+      failed=1
+    fi
+
+    if jq -e '.default_loaded_voices | index("pt_BR-faber-medium")' >/dev/null <<<"$health"; then
+      echo "    ok   pt_BR hot-loaded"
+    else
+      echo "    FAIL Portuguese voice is not in default_loaded_voices"
+      failed=1
+    fi
+
+    if (( failed == 0 )); then
+      step_pass TTS_MAJOR_VOICES_CONFIGURED "major supported voices are configured for strict startup preparation"
+    else
+      step_fail TTS_MAJOR_VOICES_CONFIGURED "major voice preparation contract not satisfied"
+    fi
+    ;;
+
+  major_voice_first_call_prompt)
+    text="Olá, esta é uma validação de fala em português da Vexa."
+    body=$(jq -n --arg t "$text" '{model:"tts-1", input:$t, voice:"auto", response_format:"wav"}')
+    tmp=$(mktemp --suffix=.wav)
+    t0=$(now_ms)
+    code=$(curl -sS -o "$tmp" -w '%{http_code}' \
+      -X POST "$TTS_URL/v1/audio/speech" \
+      "${AUTH_HEADER[@]}" \
+      -H "Content-Type: application/json" \
+      -d "$body")
+    t1=$(now_ms)
+    dur_ms=$((t1 - t0))
+    size=$(stat -c%s "$tmp" 2>/dev/null || echo 0)
+    rm -f "$tmp"
+
+    echo "    portuguese first-call code=$code size=$size elapsed=${dur_ms}ms"
+    if [[ "$code" == "200" ]] && (( size >= 1000 )) && (( dur_ms <= 6000 )); then
+      step_pass TTS_MAJOR_VOICE_FIRST_CALL_PROMPT "Portuguese auto voice rendered promptly on first release-gate call (${dur_ms}ms)"
+    else
+      step_fail TTS_MAJOR_VOICE_FIRST_CALL_PROMPT "Portuguese first call was not prompt/non-empty (code=$code size=$size elapsed=${dur_ms}ms)"
+    fi
+    ;;
 
   detects_and_picks_voice)
     # Three samples with unambiguous scripts/languages.
