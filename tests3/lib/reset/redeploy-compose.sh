@@ -26,6 +26,11 @@ if [ -n "${VM_IMAGE_TAG:-}" ]; then
     echo "  [redeploy-compose] pinned IMAGE_TAG=${VM_IMAGE_TAG}"
 fi
 docker compose --env-file "$ENV_FILE" pull 2>&1 | tail -5
+BOT_IMAGE="$(grep -E '^BROWSER_IMAGE=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
+if [ -n "$BOT_IMAGE" ]; then
+    echo "  [redeploy-compose] pulling runtime bot image: $BOT_IMAGE"
+    docker pull "$BOT_IMAGE" 2>&1 | tail -3
+fi
 docker compose --env-file "$ENV_FILE" up -d --force-recreate 2>&1 | tail -5
 
 # v0.10.5 R3 follow-up (#272 iter-5): re-validate dashboard's VEXA_API_KEY
