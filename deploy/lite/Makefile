@@ -129,8 +129,10 @@ up:
 	@if ! docker info > /dev/null 2>&1; then echo "ERROR: Docker is not running."; exit 1; fi
 	@IMAGE_TAG=$$(grep -E '^IMAGE_TAG=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
 	IMAGE_TAG=$${IMAGE_TAG:-latest}; \
-	TX_URL=$$(grep -E '^TRANSCRIPTION_SERVICE_URL=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
-	TX_TOKEN=$$(grep -E '^TRANSCRIPTION_SERVICE_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
+	TX_URL=$$(grep -E '^LITE_TRANSCRIPTION_SERVICE_URL=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
+	TX_URL=$${TX_URL:-$$(grep -E '^TRANSCRIPTION_SERVICE_URL=' $(ENV_FILE) 2>/dev/null | cut -d= -f2)}; \
+	TX_TOKEN=$$(grep -E '^LITE_TRANSCRIPTION_SERVICE_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
+	TX_TOKEN=$${TX_TOKEN:-$$(grep -E '^TRANSCRIPTION_SERVICE_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2)}; \
 	ADMIN_TK=$$(grep -E '^ADMIN_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
 	ADMIN_TK=$${ADMIN_TK:-changeme}; \
 	echo "Starting PostgreSQL..."; \
@@ -157,11 +159,14 @@ up:
 	echo "Starting Vexa Lite..."; \
 	docker rm -f vexa-lite 2>/dev/null || true; \
 	docker run -d --name vexa-lite --shm-size=2g --network host \
+		-v vexa-lite-recordings:/var/lib/vexa/recordings \
 		-e DATABASE_URL=postgresql://postgres:postgres@localhost:5432/vexa \
 		-e DB_PASSWORD=postgres \
 		-e DB_SSL_MODE=disable \
 		-e REDIS_URL=redis://localhost:6379/0 \
 		-e ADMIN_API_TOKEN=$$ADMIN_TK \
+		-e VEXA_AUTH_COOKIE_NAME=vexa-token-lite \
+		-e VEXA_USER_INFO_COOKIE_NAME=vexa-user-info-lite \
 		-e TRANSCRIPTION_SERVICE_URL=$$TX_URL \
 		-e TRANSCRIPTION_SERVICE_TOKEN=$$TX_TOKEN \
 		$(DOCKERHUB_USER)/$(IMAGE_NAME):$$IMAGE_TAG > /dev/null; \

@@ -123,7 +123,7 @@ export default function MeetingDetailPage() {
   } = useMeetingsStore();
   const authToken = useAuthStore((s) => s.token);
   const { config: runtimeConfig, isLoading: isRuntimeConfigLoading } = useRuntimeConfig();
-  const apiBaseUrl = runtimeConfig?.publicApiUrl || runtimeConfig?.apiUrl || "";
+  const apiBaseUrl = runtimeConfig?.apiUrl || "";
   const gatewayBrowserBase = apiBaseUrl.replace(/\/+$/, "");
   const browserRouteUrl = useCallback(
     (path: string) => {
@@ -999,15 +999,21 @@ export default function MeetingDetailPage() {
 
   // Browser view available for any active meeting bot (VNC runs in all bot containers)
   const hasBrowserView = !!(['requested', 'joining', 'awaiting_admission', 'active'].includes(currentMeeting?.status));
+  const browserSessionEscalation = currentMeeting.data?.escalation as Record<string, unknown> | undefined;
+  const browserSessionToken =
+    (browserSessionEscalation?.session_token as string | undefined) ||
+    (currentMeeting.data?.session_token as string | undefined) ||
+    String(currentMeeting.id);
+  const browserVncUrl = browserSessionToken
+    ? browserRouteUrl(`/b/${browserSessionToken}/vnc/vnc.html?autoconnect=true&resize=scale&reconnect=true&view_only=false&path=b/${browserSessionToken}/vnc/websockify`)
+    : "";
 
   const browserViewIframe = hasBrowserView && viewMode === 'browser' ? (() => {
-    const meetingId = currentMeeting.id;
-    const vncUrl = browserRouteUrl(`/b/${meetingId}/vnc/vnc.html?autoconnect=true&resize=scale&reconnect=true&view_only=false&path=b/${meetingId}/vnc/websockify`);
     return (
       <div className="flex-1 overflow-hidden">
-        {vncUrl ? (
+        {browserVncUrl ? (
           <iframe
-            src={vncUrl}
+            src={browserVncUrl}
             className="w-full h-full border-0"
             allow="clipboard-read; clipboard-write"
           />
@@ -1046,7 +1052,7 @@ export default function MeetingDetailPage() {
               Browser
             </Button>
           </div>
-          <Button variant="outline" size="sm" className="h-8" onClick={() => { const mid = currentMeeting.id; const url = `/b/${mid}/vnc/vnc.html?autoconnect=true&resize=scale&reconnect=true&view_only=false&path=b/${mid}/vnc/websockify`; window.open(url, "_blank"); }}>
+          <Button variant="outline" size="sm" className="h-8" disabled={!browserVncUrl} onClick={() => { if (browserVncUrl) window.open(browserVncUrl, "_blank"); }}>
             <ExternalLink className="h-3.5 w-3.5 mr-1" />
             Fullscreen
           </Button>

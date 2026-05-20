@@ -264,6 +264,62 @@ BROWSER_SESSION_OK:
   - helm
   state: stateful
   max_duration_sec: 30
+DASHBOARD_BROWSER_VIEW_RUNTIME_GATEWAY:
+  proves: "dashboard browser view creates/opens a live browser_session meeting using the browser-facing gateway URL from /api/config, not internal DNS or localhost"
+  symptom: "Browser view iframe points at dashboard same-origin /b, api-gateway, svc.cluster.local, or localhost; human sees refused connection or DNS failure"
+  found: '2026-05-21'
+  type: script
+  script: tests/dashboard-browser-view.sh
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 90
+DASHBOARD_BROWSER_VIEW_CSP_ALLOWS_SAME_HOST:
+  proves: "gateway VNC responses allow iframe embedding from the same public dashboard host on a different port while preserving cross-host denial"
+  symptom: "Browser iframe request is blocked by Content-Security-Policy frame-ancestors; Playwright reports net::ERR_BLOCKED_BY_RESPONSE"
+  found: '2026-05-21'
+  type: script
+  script: tests/dashboard-browser-view.sh
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 90
+DASHBOARD_BROWSER_VIEW_IFRAME_LOADS:
+  proves: "Playwright can load /meetings/{id}, click Browser, observe a gateway /b/{token}/vnc iframe HTTP 200, and see no CSP/request failures"
+  symptom: "Meeting detail browser tab renders blank, refused connection, DNS error, or blocked iframe despite /api/config looking correct"
+  found: '2026-05-21'
+  type: script
+  script: tests/dashboard-browser-view.sh
+  modes:
+  - lite
+  - compose
+  - helm
+  state: stateful
+  max_duration_sec: 90
+LITE_RECORDING_STORAGE_PERSISTENT:
+  proves: "Lite docker run mounts persistent storage at /var/lib/vexa/recordings so redeploy/restart does not erase local recording artifacts"
+  symptom: "Completed Lite meetings show 'Recording is processing...' forever after container replacement because meeting.data points at local files that were lost with the old container"
+  found: '2026-05-21'
+  type: script
+  script: tests/static/lite-recording-storage-persistent.sh
+  modes:
+  - lite
+  state: stateless
+  max_duration_sec: 5
+LITE_RECORDING_STORAGE_DIR_SSOT:
+  proves: "Lite runtime LOCAL_STORAGE_DIR matches the persistent recording mount path"
+  symptom: "Lite mounts one path but recording storage writes to another, so files still disappear or playback cannot find them"
+  found: '2026-05-21'
+  type: script
+  script: tests/static/lite-recording-storage-persistent.sh
+  modes:
+  - lite
+  state: stateless
+  max_duration_sec: 5
 CACHE_HEADERS:
   proves: "dashboard HTML has cache control \u2014 deploy won't serve stale JS bundles"
   symptom: "Old JS bundle served after deploy \u2014 HTML page cached by browser"
@@ -2974,8 +3030,8 @@ DASHBOARD_CONFIG_NO_STALE_LOCALHOST_DEFAULTS:
   release: 260508-v0.10.6.1
 
 DASHBOARD_REWRITES_REQUIRE_BUILD_SSOT:
-  proves: "dashboard /api/config derives browser WebSocket URLs from runtime public API config, normalizes loopback public URLs against the request host for remote self-hosted browsers, and keeps Next.js build-time rewrites as fallback only"
-  symptom: "portable dashboard image bakes one substrate's internal API hostname, or remote Lite exposes ws://localhost:8056 to a tester's browser, so WebSocket behavior passes in one substrate and fails in another"
+  proves: "dashboard /api/config derives browser API/WebSocket URLs from runtime public API config, infers Compose public API URLs from API_GATEWAY_HOST_PORT, normalizes loopback public URLs against the request host for remote self-hosted browsers, and keeps Next.js build-time rewrites as fallback only"
+  symptom: "portable dashboard image bakes one substrate's internal API hostname, remote Compose exposes http://api-gateway:8000 to a tester's browser, or remote Lite exposes ws://localhost:8056, so browser behavior passes in one substrate and fails in another"
   found: '2026-05-14'
   type: static-grep
   script: tests/static/dashboard-config-ssot.sh

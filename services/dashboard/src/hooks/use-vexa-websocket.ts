@@ -28,6 +28,28 @@ interface UseVexaWebSocketReturn {
   disconnect: () => void;
 }
 
+interface SpeakerTranscriptSegment {
+  segment_id?: string;
+  absolute_start_time?: number | string;
+  absolute_end_time?: number | string;
+  start?: number;
+  start_time?: number;
+  end?: number;
+  end_time?: number;
+  text?: string;
+  speaker?: string;
+  language?: string;
+  completed?: boolean;
+  session_uid?: string;
+  updated_at?: string;
+}
+
+type SpeakerTranscriptMessage = WebSocketIncomingMessage & {
+  speaker?: string;
+  confirmed?: SpeakerTranscriptSegment[];
+  pending?: SpeakerTranscriptSegment[];
+};
+
 const PING_INTERVAL = 25000; // 25 seconds
 const RECONNECT_DELAY = 3000; // 3 seconds
 
@@ -44,8 +66,11 @@ async function fetchConfig(): Promise<{ wsUrl: string; authToken: string | null 
     return cachedConfig;
   } catch {
     console.error("[WS] Failed to fetch config for WebSocket URL");
-    const proto = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
-    const host = typeof window !== "undefined" ? window.location.host : "localhost:3001"; // SSR-only fallback; WS is browser-only
+    if (typeof window === "undefined") {
+      throw new Error("WebSocket config is unavailable outside the browser");
+    }
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const host = window.location.host;
     return {
       wsUrl: `${proto}//${host}/ws`,
       authToken: null
@@ -104,26 +129,31 @@ export function useVexaWebSocket(
         switch (message.type) {
           case "transcript": {
             // New format: per-speaker bundle with confirmed + pending arrays
-            const speaker = (message as any).speaker || "";
+            const transcriptMessage = message as SpeakerTranscriptMessage;
+            const speaker = transcriptMessage.speaker || "";
             const allSegs = [
-              ...((message as any).confirmed || []),
-              ...((message as any).pending || []),
+              ...(transcriptMessage.confirmed || []),
+              ...(transcriptMessage.pending || []),
             ];
             for (const seg of allSegs) {
               if (!seg.text?.trim()) continue;
+              const segmentId = seg.segment_id ?? seg.absolute_start_time;
+              if (segmentId == null) continue;
+              const absoluteStart = String(seg.absolute_start_time ?? segmentId);
+              const absoluteEnd = String(seg.absolute_end_time ?? absoluteStart);
               const segment: TranscriptSegment = {
-                id: seg.segment_id || seg.absolute_start_time,
+                id: String(segmentId),
                 meeting_id: nativeId,
                 start_time: seg.start || seg.start_time || 0,
                 end_time: seg.end || seg.end_time || 0,
-                absolute_start_time: seg.absolute_start_time,
-                absolute_end_time: seg.absolute_end_time,
+                absolute_start_time: absoluteStart,
+                absolute_end_time: absoluteEnd,
                 text: seg.text,
                 speaker: seg.speaker || speaker,
                 language: seg.language || "en",
                 completed: seg.completed ?? false,
                 session_uid: seg.session_uid || "",
-                created_at: seg.absolute_start_time,
+                created_at: absoluteStart,
                 updated_at: seg.updated_at,
                 segment_id: seg.segment_id,
               };

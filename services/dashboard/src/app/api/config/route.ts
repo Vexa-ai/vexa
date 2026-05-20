@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { getAuthCookieName } from "@/lib/auth-cookies";
+import { resolveBrowserApiUrl } from "@/lib/browser-api-url";
 
 /**
  * Public configuration endpoint that exposes runtime environment variables to the client.
@@ -29,32 +30,21 @@ export async function GET(request: NextRequest) {
     return `${wsProto}://${trimmed.replace(/^https?:\/\//, "")}/ws`;
   };
 
-  const isLoopbackHost = (hostname: string) =>
-    hostname === "localhost" ||
-    hostname === "127.0.0.1" ||
-    hostname === "0.0.0.0" ||
-    hostname === "::1";
-
   const host = request.headers.get("x-forwarded-host") || request.headers.get("host")!;
-  const requestHostname = host.split(":")[0];
-  let publicApiUrl = configuredPublicApiUrl;
-  if (configuredPublicApiUrl) {
-    try {
-      const configured = new URL(configuredPublicApiUrl);
-      if (isLoopbackHost(configured.hostname) && !isLoopbackHost(requestHostname)) {
-        configured.hostname = requestHostname;
-        publicApiUrl = configured.toString().replace(/\/+$/, "");
-      }
-    } catch {
-      publicApiUrl = configuredPublicApiUrl;
-    }
-  }
+  const requestProto = request.headers.get("x-forwarded-proto") === "https" ? "https" : "http";
+  const { apiUrl: browserApiUrl, publicApiUrl } = resolveBrowserApiUrl({
+    internalApiUrl: apiUrl,
+    configuredPublicApiUrl,
+    requestHost: host,
+    requestProto,
+    gatewayHostPort: process.env.API_GATEWAY_HOST_PORT,
+  });
 
   // Browser-facing API config is the runtime SSOT. Next.js rewrites are a
   // same-origin fallback only: their target is compiled into the image, so they
   // cannot be the source of truth for portable Helm deployments.
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;
-  const proto = request.headers.get('x-forwarded-proto') === 'https' ? 'wss' : 'ws';
+  const proto = requestProto === 'https' ? 'wss' : 'ws';
   let wsUrl: string;
   if (publicApiUrl) {
     wsUrl = wsUrlFromHttpBase(publicApiUrl);
@@ -79,7 +69,7 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     wsUrl,
-    apiUrl,
+    apiUrl: browserApiUrl,
     publicApiUrl,
     decisionListenerUrl,
     authToken: authToken || null,

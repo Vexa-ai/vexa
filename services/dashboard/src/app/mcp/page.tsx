@@ -12,7 +12,6 @@ import { withBasePath } from "@/lib/base-path";
 interface RuntimeConfig {
   wsUrl: string;
   apiUrl: string;
-  publicApiUrl?: string;
   authToken: string | null;
 }
 
@@ -39,7 +38,7 @@ export default function MCPPage() {
   }, []);
 
   const getMCPUrl = () => {
-    const base = config?.publicApiUrl || config?.apiUrl;
+    const base = config?.apiUrl;
     if (!base) {
       return "https://api.cloud.vexa.ai/mcp";
     }
@@ -53,7 +52,7 @@ export default function MCPPage() {
 
   const buildMCPConfig = (masked: boolean): string => {
     const mcpUrl = getMCPUrl();
-    const rawKey = config?.authToken || "YOUR_API_KEY_HERE";
+    const rawKey = config?.authToken || "<api-key>";
     const apiKey = masked && config?.authToken ? maskKey(rawKey) : rawKey;
 
     return JSON.stringify({
