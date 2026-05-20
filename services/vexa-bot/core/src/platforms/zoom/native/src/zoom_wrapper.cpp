@@ -231,6 +231,7 @@ private:
     std::string displayNameStorage_;
     std::string passwordStorage_;
     std::string onBehalfTokenStorage_;
+    std::string zakTokenStorage_;
 };
 
 ZoomSDKNode::ZoomSDKNode(const Napi::CallbackInfo& info)
@@ -364,6 +365,7 @@ Napi::Value ZoomSDKNode::JoinMeeting(const Napi::CallbackInfo& info) {
     displayNameStorage_ = opts.Get("displayName").As<Napi::String>().Utf8Value();
     passwordStorage_    = "";
     onBehalfTokenStorage_ = "";
+    zakTokenStorage_ = "";
     if (opts.Has("password") && !opts.Get("password").IsNull()
             && opts.Get("password").IsString()) {
         passwordStorage_ = opts.Get("password").As<Napi::String>().Utf8Value();
@@ -371,6 +373,10 @@ Napi::Value ZoomSDKNode::JoinMeeting(const Napi::CallbackInfo& info) {
     if (opts.Has("onBehalfToken") && !opts.Get("onBehalfToken").IsNull()
             && opts.Get("onBehalfToken").IsString()) {
         onBehalfTokenStorage_ = opts.Get("onBehalfToken").As<Napi::String>().Utf8Value();
+    }
+    if (opts.Has("zakToken") && !opts.Get("zakToken").IsNull()
+            && opts.Get("zakToken").IsString()) {
+        zakTokenStorage_ = opts.Get("zakToken").As<Napi::String>().Utf8Value();
     }
 
     JoinParam joinParam = {};
@@ -388,6 +394,7 @@ Napi::Value ZoomSDKNode::JoinMeeting(const Napi::CallbackInfo& info) {
     param.userName                  = displayNameStorage_.c_str();
     param.psw                       = passwordStorage_.empty() ? nullptr : passwordStorage_.c_str();
     param.onBehalfToken             = onBehalfTokenStorage_.empty() ? nullptr : onBehalfTokenStorage_.c_str();
+    param.userZAK                   = zakTokenStorage_.empty() ? nullptr : zakTokenStorage_.c_str();
     param.isVideoOff                = true;
     param.isAudioOff                = false;
     param.eAudioRawdataSamplingRate = AudioRawdataSamplingRate_32K;

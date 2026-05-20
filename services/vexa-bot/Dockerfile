@@ -136,6 +136,7 @@ RUN chmod +x /app/vexa-bot/entrypoint.sh
 
 # Set environment
 ENV DISPLAY=:99
+ENV LD_LIBRARY_PATH=/app/vexa-bot/core/src/platforms/zoom/native/zoom_meeting_sdk:${LD_LIBRARY_PATH}
 
 # Expose noVNC web interface and SSH for browser session mode
 EXPOSE 6080 22

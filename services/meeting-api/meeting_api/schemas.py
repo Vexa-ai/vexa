@@ -592,6 +592,10 @@ class MeetingCreate(BaseModel):
         None,
         description="Optional one-time Zoom OBF token. If omitted for Zoom meetings, the backend will mint one from the user's stored Zoom OAuth connection."
     )
+    zoom_zak_token: Optional[str] = Field(
+        None,
+        description="Optional one-time Zoom ZAK token for joining as a specific Zoom user."
+    )
     voice_agent_enabled: Optional[bool] = Field(
         False,
         description="Enable voice agent (TTS, chat, screen share, avatar streaming) capabilities for this meeting"
@@ -673,6 +677,16 @@ class MeetingCreate(BaseModel):
             platform = info.data.get('platform') if info.data else None
             if platform != Platform.ZOOM:
                 raise ValueError("zoom_obf_token is only supported for Zoom meetings")
+        return v
+
+    @field_validator('zoom_zak_token')
+    @classmethod
+    def validate_zoom_zak_token(cls, v, info: ValidationInfo):
+        """Validate ZAK token usage based on platform."""
+        if v is not None and v != "":
+            platform = info.data.get('platform') if info.data else None
+            if platform != Platform.ZOOM:
+                raise ValueError("zoom_zak_token is only supported for Zoom meetings")
         return v
 
     @field_validator('language')

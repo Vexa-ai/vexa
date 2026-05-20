@@ -26,6 +26,8 @@ export const BotConfigSchema = z.object({
   meetingUrl: z.string().url().nullable(),
   botName: z.string(),
   token: z.string().optional(),
+  obfToken: z.string().optional(),
+  zakToken: z.string().optional(),
   connectionId: z.string().optional(),
   nativeMeetingId: z.string().optional(),
   language: z.string().nullish(),
