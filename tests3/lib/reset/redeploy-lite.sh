@@ -12,7 +12,19 @@ cd /root/vexa
 git fetch origin "${VM_BRANCH}"
 git reset --hard "origin/${VM_BRANCH}"
 
-docker pull vexaai/vexa-lite:dev 2>&1 | tail -3
+ENV_FILE="/root/vexa/.env"
+if [ -n "${VM_IMAGE_TAG:-}" ]; then
+    for f in "$ENV_FILE" /root/.env; do
+        [ -f "$f" ] || continue
+        sed -i "s|^#*IMAGE_TAG=.*|IMAGE_TAG=${VM_IMAGE_TAG}|" "$f"
+        sed -i "s|^#*BROWSER_IMAGE=.*|BROWSER_IMAGE=vexaai/vexa-bot:${VM_IMAGE_TAG}|" "$f"
+    done
+    echo "  [redeploy-lite] pinned IMAGE_TAG=${VM_IMAGE_TAG}"
+fi
+
+IMAGE_TAG="$(grep -E '^IMAGE_TAG=' "$ENV_FILE" 2>/dev/null | cut -d= -f2)"
+IMAGE_TAG="${IMAGE_TAG:-latest}"
+docker pull "vexaai/vexa-lite:${IMAGE_TAG}" 2>&1 | tail -3
 docker stop vexa-lite 2>/dev/null || true
 docker rm -f vexa-lite 2>/dev/null || true
 
@@ -33,7 +45,8 @@ for squatter in vexa-postgres-1 vexa-redis-1; do
 done
 
 # vexa-postgres stays up — keeping state
-make lite 2>&1 | tail -10
+set -o pipefail
+make -C deploy/lite preflight up init-db test 2>&1 | tail -10
 
 # v0.10.6 Pack U.7 follow-up — verify the gateway actually came up.
 # `make lite` prints success markers but a port-conflict or DB-init failure

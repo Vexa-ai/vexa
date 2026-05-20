@@ -104,6 +104,8 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: TRANSCRIPTION_SERVICE_TOKEN
+            - name: TTS_SERVICE_URL
+              value: "http://{{ include "vexa.componentName" (list . "tts-service") }}:{{ .Values.ttsService.service.port }}"
             # v0.10.5 Pack B.3 — runtime-api needs MEETING_API_URL +
             # RECORDING_ENABLED + STORAGE_BACKEND + MINIO_SECURE on its own
             # env so profile-load-time `${VAR}` substitution resolves the

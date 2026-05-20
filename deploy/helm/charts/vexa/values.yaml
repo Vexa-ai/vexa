@@ -202,18 +202,26 @@ ttsService:
     port: 8002
   apiToken: ""
   logLevel: "INFO"
+  defaultVoices: "major"
+  loadVoices: "en_US-amy-medium,en_US-danny-low,pt_BR-faber-medium,es_ES-davefx-medium"
+  preloadStrict: true
   persistence:
     size: 5Gi
     storageClassName: ""
+  # The image runs as uid/gid 999. The voices PVC must be group-writable on
+  # first boot so Piper can download voice models before readiness turns green.
+  podSecurityContext:
+    fsGroup: 999
+    fsGroupChangePolicy: OnRootMismatch
   # Load-tested shape (from proprietary wrapper staging values): TTS is
   # bursty — lean cpu request, bigger memory for voice cache.
   resources:
     requests:
-      cpu: 10m
-      memory: 256Mi
+      cpu: 250m
+      memory: 768Mi
     limits:
-      cpu: 100m
-      memory: 512Mi
+      cpu: 1000m
+      memory: 1536Mi
   extraEnv: []
   # First-boot voice-model download takes 60-180s. Defaults below clear that
   # window; subsequent restarts come up fast (PVC retains models). Operators
@@ -261,7 +269,11 @@ dashboard:
   # env:
   #   ENABLE_AZURE_AD_AUTH: "true"
   #   NEXTAUTH_URL: ""
-  env: {}
+  env:
+    # Default-refuse: dashboard direct login (passwordless via /api/auth/send-magic-link
+    # without SMTP) is disabled unless an operator explicitly opts in. Override to
+    # "true" only in dev/test profiles (see values-test.yaml).
+    VEXA_ALLOW_DIRECT_LOGIN: "false"
   extraEnv: []
   extraSecretName: ""
   extraSecretEnv: {}
@@ -472,6 +484,7 @@ runtimeProfiles: |
         REDIS_URL: "${REDIS_URL}"
         TRANSCRIPTION_SERVICE_URL: "${TRANSCRIPTION_SERVICE_URL}"
         TRANSCRIPTION_SERVICE_TOKEN: "${TRANSCRIPTION_SERVICE_TOKEN}"
+        TTS_SERVICE_URL: "${TTS_SERVICE_URL}"
         # v0.10.5 Pack B.3 — propagate recording/storage env to bot pods (#235).
         # Without these, bot transcribes (has TRANSCRIPTION_SERVICE_*) and
         # silently skips recording upload (no MEETING_API_URL → no endpoint
@@ -507,6 +520,7 @@ runtimeProfiles: |
         DISPLAY: "${DISPLAY:-:99}"
         NODE_ENV: "production"
         REDIS_URL: "${REDIS_URL}"
+        TTS_SERVICE_URL: "${TTS_SERVICE_URL}"
         # v0.10.5 Pack B.3 — recording/storage env propagation.
         MEETING_API_URL: "${MEETING_API_URL}"
         RECORDING_ENABLED: "${RECORDING_ENABLED:-true}"

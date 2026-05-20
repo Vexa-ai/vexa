@@ -25,6 +25,57 @@ class TestHealthEndpoint:
         data = resp.json()
         assert data["status"] == "ok"
         assert data["service"] == "tts-service"
+        assert data["provider"] == "piper"
+        assert data["preload_strict"] is True
+        assert "pt_BR-faber-medium" in data["configured_default_voices"]
+        assert "hi_IN-pratham-medium" in data["configured_default_voices"]
+        assert "pt_BR-faber-medium" in data["default_loaded_voices"]
+        assert "prepared_voices" in data
+
+
+class TestDefaultVoiceConfiguration:
+    def test_major_alias_expands_supported_release_voices(self, monkeypatch):
+        import main
+
+        monkeypatch.setenv("PIPER_DEFAULT_VOICES", "major")
+
+        voices = main._configured_default_voices()
+
+        assert "en_US-amy-medium" in voices
+        assert "pt_BR-faber-medium" in voices
+        assert "es_ES-davefx-medium" in voices
+        assert "hi_IN-pratham-medium" in voices
+
+    def test_explicit_voice_list_is_preserved(self, monkeypatch):
+        import main
+
+        monkeypatch.setenv("PIPER_DEFAULT_VOICES", "en_US-amy-medium, pt_BR-faber-medium")
+
+        assert main._configured_default_voices() == [
+            "en_US-amy-medium",
+            "pt_BR-faber-medium",
+        ]
+
+
+class TestAutoLanguageVoiceResolution:
+    def test_portuguese_release_phrase_resolves_to_portuguese_voice_when_langdetect_available(self):
+        pytest.importorskip("langdetect")
+        import main
+
+        text = "Olá, esta é uma validação de fala em português da Vexa."
+
+        assert main._detect_language(text) == "pt"
+        assert main._resolve_voice_name("auto", text=text) == "pt_BR-faber-medium"
+
+
+class TestVoicePathValidation:
+    def test_rejects_path_traversal_voice_name(self):
+        import main
+
+        with pytest.raises(main.HTTPException) as exc:
+            main._voice_model_paths("../secret")
+
+        assert exc.value.status_code == 400
 
 
 class TestVoiceValidation:
@@ -80,22 +131,6 @@ class TestSpeechEndpointValidation:
             headers={"Content-Type": "application/json"},
         )
         assert resp.status_code == 400
-
-    def test_no_openai_key_returns_503(self):
-        """When OPENAI_API_KEY is empty, should return 503."""
-        import main
-        original = main.OPENAI_API_KEY
-        main.OPENAI_API_KEY = ""
-        try:
-            c = TestClient(app)
-            resp = c.post(
-                "/v1/audio/speech",
-                json={"model": "tts-1", "input": "hello", "voice": "alloy"},
-            )
-            assert resp.status_code == 503
-            assert "OPENAI_API_KEY" in resp.json()["detail"]
-        finally:
-            main.OPENAI_API_KEY = original
 
 
 class TestApiKeyAuth:
