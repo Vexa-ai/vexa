@@ -2929,13 +2929,13 @@ DASHBOARD_CONFIG_NO_STALE_LOCALHOST_DEFAULTS:
   release: 260508-v0.10.6.1
 
 DASHBOARD_REWRITES_REQUIRE_BUILD_SSOT:
-  proves: "dashboard image requires VEXA_API_URL at build time and does not mutate Next.js rewrite manifests at runtime"
-  symptom: "runtime container patching hides a mismatched build target until WebSocket/API proxying fails in the human browser"
+  proves: "dashboard /api/config derives browser WebSocket URLs from runtime public API config, normalizes loopback public URLs against the request host for remote self-hosted browsers, and keeps Next.js build-time rewrites as fallback only"
+  symptom: "portable dashboard image bakes one substrate's internal API hostname, or remote Lite exposes ws://localhost:8056 to a tester's browser, so WebSocket behavior passes in one substrate and fails in another"
   found: '2026-05-14'
   type: static-grep
   script: tests/static/dashboard-config-ssot.sh
   step: DASHBOARD_REWRITES_REQUIRE_BUILD_SSOT
-  modes: [lite, compose]
+  modes: [lite, compose, helm]
   state: stateless
   max_duration_sec: 5
   release: 260508-v0.10.6.1

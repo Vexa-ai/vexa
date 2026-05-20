@@ -208,8 +208,8 @@ detect_urls() {
             local lite_container gateway_port dashboard_port
             lite_container="$(_lite_container 2>/dev/null || true)"
             if [ -n "$lite_container" ]; then
-                gateway_port="$(docker port "$lite_container" 8056/tcp 2>/dev/null | sed -E 's/.*:([0-9]+)$/\1/' | head -1)"
-                dashboard_port="$(docker port "$lite_container" 3000/tcp 2>/dev/null | sed -E 's/.*:([0-9]+)$/\1/' | head -1)"
+                gateway_port="$(docker port "$lite_container" 8056/tcp 2>/dev/null | sed -E 's/.*:([0-9]+)$/\1/' | head -1 || true)"
+                dashboard_port="$(docker port "$lite_container" 3000/tcp 2>/dev/null | sed -E 's/.*:([0-9]+)$/\1/' | head -1 || true)"
             fi
             : "${GATEWAY_URL:=http://localhost:${gateway_port:-8056}}"
             : "${ADMIN_URL:=$GATEWAY_URL}"

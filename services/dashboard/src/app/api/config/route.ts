@@ -17,17 +17,49 @@ export async function GET(request: NextRequest) {
   }
   const decisionListenerUrl =
     process.env.NEXT_PUBLIC_DECISION_LISTENER_URL || "http://localhost:8765";
+  const configuredPublicApiUrl =
+    process.env.VEXA_PUBLIC_API_URL ||
+    process.env.NEXT_PUBLIC_VEXA_API_URL ||
+    process.env.NEXT_PUBLIC_API_URL ||
+    "";
 
-  // WS goes through the dashboard via Next.js rewrite — derive from request host.
-  // Explicit NEXT_PUBLIC_APP_URL takes precedence, but localhost is ignored for remote access.
+  const wsUrlFromHttpBase = (baseUrl: string) => {
+    const trimmed = baseUrl.replace(/\/+$/, "");
+    const wsProto = trimmed.startsWith("https://") ? "wss" : "ws";
+    return `${wsProto}://${trimmed.replace(/^https?:\/\//, "")}/ws`;
+  };
+
+  const isLoopbackHost = (hostname: string) =>
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "0.0.0.0" ||
+    hostname === "::1";
+
+  const host = request.headers.get("x-forwarded-host") || request.headers.get("host")!;
+  const requestHostname = host.split(":")[0];
+  let publicApiUrl = configuredPublicApiUrl;
+  if (configuredPublicApiUrl) {
+    try {
+      const configured = new URL(configuredPublicApiUrl);
+      if (isLoopbackHost(configured.hostname) && !isLoopbackHost(requestHostname)) {
+        configured.hostname = requestHostname;
+        publicApiUrl = configured.toString().replace(/\/+$/, "");
+      }
+    } catch {
+      publicApiUrl = configuredPublicApiUrl;
+    }
+  }
+
+  // Browser-facing API config is the runtime SSOT. Next.js rewrites are a
+  // same-origin fallback only: their target is compiled into the image, so they
+  // cannot be the source of truth for portable Helm deployments.
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;
-  const host = request.headers.get('host')!;
   const proto = request.headers.get('x-forwarded-proto') === 'https' ? 'wss' : 'ws';
   let wsUrl: string;
-  if (appUrl && !appUrl.includes('localhost')) {
-    const wsProto = appUrl.startsWith('https') ? 'wss' : 'ws';
-    const wsHost = appUrl.replace(/^https?:\/\//, '');
-    wsUrl = `${wsProto}://${wsHost}/ws`;
+  if (publicApiUrl) {
+    wsUrl = wsUrlFromHttpBase(publicApiUrl);
+  } else if (appUrl && !appUrl.includes('localhost')) {
+    wsUrl = wsUrlFromHttpBase(appUrl);
   } else {
     wsUrl = `${proto}://${host}/ws`;
   }
@@ -44,14 +76,6 @@ export async function GET(request: NextRequest) {
   // Hosted mode flags (read at runtime, not build time)
   const hostedMode = process.env.NEXT_PUBLIC_HOSTED_MODE === "true";
   const webappUrl = process.env.NEXT_PUBLIC_WEBAPP_URL || "https://vexa.ai";
-
-  // Public API URL for client-facing configs (MCP, browser session links, docs).
-  // If not explicitly configured, clients should use same-origin dashboard routes.
-  const publicApiUrl =
-    process.env.VEXA_PUBLIC_API_URL ||
-    process.env.NEXT_PUBLIC_VEXA_API_URL ||
-    process.env.NEXT_PUBLIC_API_URL ||
-    "";
 
   return NextResponse.json({
     wsUrl,

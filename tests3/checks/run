@@ -22,6 +22,7 @@ import re
 import subprocess
 import sys
 import time
+from urllib.parse import urlparse
 
 ROOT = os.environ.get("ROOT", subprocess.check_output(
     ["git", "rev-parse", "--show-toplevel"], text=True).strip())
@@ -759,6 +760,15 @@ def check_health(lock):
         for h in internal_hosts:
             if h in ws_url:
                 return False, f"wsUrl contains internal hostname '{h}': {ws_url}"
+        dash_host = urlparse(dash).hostname or ""
+        ws_host = urlparse(ws_url).hostname or ""
+        loopback_hosts = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+        if ws_host in loopback_hosts and dash_host not in loopback_hosts:
+            return False, f"wsUrl contains loopback host for remote dashboard {dash_host}: {ws_url}"
+        auth_token = state_read("api_token") or json.loads(body).get("authToken", "")
+        ok, detail = check_ws_ping_url(ws_url, auth_token)
+        if not ok:
+            return False, f"wsUrl is not connectable: {ws_url} ({detail})"
         return True, ws_url
 
     url = url.replace("$GATEWAY_URL", state_read("gateway_url", required=True))
@@ -1389,28 +1399,33 @@ def check_cors_preflight(gw):
     return True, ""
 
 
-def check_ws_ping(gw, token):
-    """WebSocket ping/pong check. Tries websockets module, falls back to HTTP upgrade check."""
-    ws_url = gw.replace("http://", "ws://").replace("https://", "wss://")  # nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket
-    ws_url = f"{ws_url}/ws?api_key={token}"
+def check_ws_ping_url(ws_url, token=""):
+    """WebSocket ping/pong check for a fully resolved browser URL."""
+    if token and "api_key=" not in ws_url:
+        separator = "&" if "?" in ws_url else "?"
+        ws_url = f"{ws_url}{separator}api_key={token}"
     try:
         r = subprocess.run(
-            ["python3", "-c", f"""
-import asyncio, json
+            ["python3", "-c", """
+import asyncio, json, sys
+ws_url = sys.argv[1]
 try:
     import websockets
     async def t():
-        async with websockets.connect('{ws_url}') as ws:
-            await ws.send(json.dumps({{"action":"ping"}}))
+        async with websockets.connect(ws_url) as ws:
+            await ws.send(json.dumps({"action":"ping"}))
             msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
             if msg.get('type') == 'pong': print('OK')
             else: print('BAD:' + json.dumps(msg))
-    asyncio.run(t())
+    try:
+        asyncio.run(t())
+    except Exception as e:
+        print('FAIL:' + type(e).__name__ + ':' + str(e))
 except ImportError:
     # Fallback: check WS endpoint responds to HTTP upgrade
     import urllib.request
-    url = '{gw}/ws?api_key={token}'
-    req = urllib.request.Request(url, headers={{'Upgrade': 'websocket', 'Connection': 'Upgrade', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': 'dGVzdA=='}})
+    url = ws_url.replace('ws://', 'http://', 1).replace('wss://', 'https://', 1)
+    req = urllib.request.Request(url, headers={'Upgrade': 'websocket', 'Connection': 'Upgrade', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ=='})
     try:
         urllib.request.urlopen(req, timeout=5)
     except urllib.error.HTTPError as e:
@@ -1419,7 +1434,7 @@ except ImportError:
     except Exception as e:
         if '101' in str(e) or 'Switching' in str(e): print('OK')
         else: print('FAIL:' + str(e))
-"""],
+""", ws_url],
             capture_output=True, text=True, timeout=10
         )
         if "OK" in r.stdout:
@@ -1427,6 +1442,12 @@ except ImportError:
         return False, f"no pong: {r.stdout.strip()} {r.stderr.strip()}"
     except Exception as e:
         return False, str(e)
+
+
+def check_ws_ping(gw, token):
+    """WebSocket ping/pong check."""
+    ws_url = gw.replace("http://", "ws://").replace("https://", "wss://")  # nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket
+    return check_ws_ping_url(f"{ws_url}/ws", token)
 
 
 def bootstrap_creds():
