@@ -93,13 +93,22 @@ FBAPPS
   echo "[entrypoint] Starting SSH server on port 22"
   /usr/sbin/sshd
 
-  # Run node and keep container alive even if node crashes
+  # Run node, then exit so K8s sees the pod terminate.
+  # Optional post-exit VNC debug window: set
+  # VEXA_BROWSER_SESSION_VNC_KEEPALIVE_SECONDS to a positive integer to
+  # keep the container alive that long after node exits. Default 0 =
+  # exit immediately so that "stop" from the dashboard frees the slot.
   echo "[entrypoint] Starting browser session node process..."
   node dist/docker.js
   EXIT_CODE=$?
-  echo "[entrypoint] node dist/docker.js exited with code $EXIT_CODE — keeping container alive for VNC access"
-  # Keep alive so VNC + websockify remain accessible
-  wait
+  KEEPALIVE="${VEXA_BROWSER_SESSION_VNC_KEEPALIVE_SECONDS:-0}"
+  if [[ "$KEEPALIVE" =~ ^[0-9]+$ ]] && [ "$KEEPALIVE" -gt 0 ]; then
+    echo "[entrypoint] node dist/docker.js exited with code $EXIT_CODE — keeping container alive ${KEEPALIVE}s for VNC access"
+    sleep "$KEEPALIVE"
+  else
+    echo "[entrypoint] node dist/docker.js exited with code $EXIT_CODE — exiting (set VEXA_BROWSER_SESSION_VNC_KEEPALIVE_SECONDS>0 to debug)"
+  fi
+  exit "$EXIT_CODE"
 else
   # Meeting mode — start VNC for browser view on dashboard
   echo "[entrypoint] Meeting mode — starting VNC for browser view"
