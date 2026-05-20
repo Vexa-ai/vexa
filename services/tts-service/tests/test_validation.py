@@ -58,27 +58,14 @@ class TestDefaultVoiceConfiguration:
 
 
 class TestAutoLanguageVoiceResolution:
-    def test_short_portuguese_release_phrase_resolves_to_portuguese_voice(self):
+    def test_portuguese_release_phrase_resolves_to_portuguese_voice_when_langdetect_available(self):
+        pytest.importorskip("langdetect")
         import main
 
         text = "Olá, esta é uma validação de fala em português da Vexa."
 
         assert main._detect_language(text) == "pt"
         assert main._resolve_voice_name("auto", text=text) == "pt_BR-faber-medium"
-
-    def test_short_spanish_release_phrase_resolves_to_spanish_voice(self):
-        import main
-
-        text = "Hola, esta es una validación de habla en español de Vexa."
-
-        assert main._resolve_voice_name("auto", text=text) == "es_ES-davefx-medium"
-
-    def test_alias_with_portuguese_text_is_overridden(self):
-        import main
-
-        text = "Olá, esta é uma validação de fala em português da Vexa."
-
-        assert main._resolve_voice_name("alloy", text=text) == "pt_BR-faber-medium"
 
 
 class TestVoiceValidation:

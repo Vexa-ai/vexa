@@ -41,6 +41,7 @@ croniter>=2.0
 # TTS Service
 piper-tts>=1.4.0
 numpy>=1.21.0
+langdetect>=1.0.9
 
 # Utilities
 python-dotenv>=1.2.1

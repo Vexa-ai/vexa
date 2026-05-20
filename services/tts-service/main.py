@@ -130,69 +130,6 @@ LANG_DEFAULT_VOICE: dict[str, str] = {
     "hi": "hi_IN-pratham-medium",
 }
 
-_LATIN_LANGUAGE_MARKERS: list[tuple[str, tuple[str, ...]]] = [
-    (
-        "pt",
-        (
-            "ã", "õ", "ç",
-            "ção", "ções",
-            " olá ", " esta ", " isto ", "português", "validação", "fala",
-        ),
-    ),
-    (
-        "es",
-        (
-            "¿", "¡", "ñ",
-            " el ", " la ", " los ", " las ", " una ", " este ", " esta ",
-            "español", "validación", "habla",
-        ),
-    ),
-    (
-        "fr",
-        (
-            "œ", "ç", " à ", " une ", " des ", " les ", " français",
-            "validation", "parole",
-        ),
-    ),
-    (
-        "de",
-        (
-            "ß", "ä", "ö", "ü",
-            " der ", " die ", " das ", " und ", " deutsch",
-        ),
-    ),
-    (
-        "it",
-        (
-            " italiana", " italiano", " una ", " questo ", " questa ",
-            "validazione", "parlato",
-        ),
-    ),
-]
-
-
-def _detect_latin_language_hint(text: str) -> Optional[str]:
-    """Cheap deterministic hints for short Latin-script release phrases.
-
-    Statistical detectors are weak on short formulaic sentences. The release
-    gate uses short phrases like "Olá..." where one missed guess turns into the
-    exact failure humans heard: English espeak spelling Portuguese text. These
-    hints intentionally cover only high-signal markers; ambiguous text still
-    falls through to langdetect.
-    """
-    normalized = f" {text.strip().lower()} "
-    scores = {
-        lang: sum(1 for marker in markers if marker in normalized)
-        for lang, markers in _LATIN_LANGUAGE_MARKERS
-    }
-    best_lang, best_score = max(scores.items(), key=lambda item: item[1])
-    if best_score == 0:
-        return None
-    if sum(1 for score in scores.values() if score == best_score) > 1:
-        return None
-    return best_lang
-
-
 # Unicode-script → ISO-639-1 hint. Cheap pre-check before invoking
 # langdetect; for non-Latin scripts the script alone is enough to pick
 # a language with high confidence.
@@ -246,10 +183,6 @@ def _detect_language(text: str) -> Optional[str]:
                 return lang
         # First non-ASCII char isn't a tracked script; fall through to langdetect.
         break
-
-    latin_hint = _detect_latin_language_hint(text)
-    if latin_hint:
-        return latin_hint
 
     # 3. langdetect for Latin-script text (en/es/fr/de/it/pt/nl/...).
     try:

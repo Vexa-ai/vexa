@@ -60,6 +60,14 @@ for rel in requirement_paths:
     elif version_tuple(match.group(1)) < (0, 0, 20):
         failures.append(f"{rel} has python-multipart>={match.group(1)}, expected >=0.0.20")
 
+lite_requirements = (root / "deploy/lite/requirements.txt").read_text()
+tts_requirements = (root / "services/tts-service/requirements.txt").read_text()
+for package in ("piper-tts", "numpy", "langdetect"):
+    if re.search(rf"^{re.escape(package)}\b", tts_requirements, re.M) and not re.search(
+        rf"^{re.escape(package)}\b", lite_requirements, re.M
+    ):
+        failures.append(f"deploy/lite/requirements.txt is missing tts-service dependency {package}")
+
 pyproject = root / "services/meeting-api/pyproject.toml"
 pyproject_text = pyproject.read_text()
 match = re.search(r'"python-multipart\s*>=\s*([0-9.]+)"', pyproject_text)
@@ -72,7 +80,7 @@ if failures:
     print("; ".join(failures))
     sys.exit(1)
 
-print("postcss versions=" + ",".join(sorted(set(postcss_versions))) + "; transcription-service uses bounded stdlib multipart parser; remaining python-multipart floors >=0.0.20")
+print("postcss versions=" + ",".join(sorted(set(postcss_versions))) + "; transcription-service uses bounded stdlib multipart parser; remaining python-multipart floors >=0.0.20; lite carries tts-service runtime deps")
 PY
 )"; then
   step_pass PRE_RELEASE_SECURITY_DEPENDENCY_FLOORS "$output"
