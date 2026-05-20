@@ -47,10 +47,16 @@ fi
 client_localhost="$(rg -n 'localhost:3001|localhost:8056|localhost:8066|localhost:8765' \
   "$ROOT_DIR/services/dashboard/src/hooks" \
   "$ROOT_DIR/services/dashboard/src/components/meetings/browser-session-view.tsx" 2>/dev/null || true)"
-if [ -z "$client_localhost" ]; then
-  step_pass DASHBOARD_CLIENT_URLS_FROM_RUNTIME_CONFIG "browser websocket/session helpers derive URLs from /api/config or request origin"
+browser_view_runtime_gateway="$(rg -n 'cfg\.publicApiUrl \|\| cfg\.apiUrl|runtimeConfig\?\.publicApiUrl \|\| runtimeConfig\?\.apiUrl|browserRouteUrl|gatewayBrowserBase' \
+  "$ROOT_DIR/services/dashboard/src/components/meetings/browser-session-view.tsx" \
+  "$ROOT_DIR/services/dashboard/src/app/meetings/[id]/page.tsx" 2>/dev/null || true)"
+browser_view_same_origin_only="$(rg -n 'const vncUrl = [`"'"'"']/b/|withBasePath\(`/b/\$\{.*\}/vnc' \
+  "$ROOT_DIR/services/dashboard/src/components/meetings/browser-session-view.tsx" \
+  "$ROOT_DIR/services/dashboard/src/app/meetings/[id]/page.tsx" 2>/dev/null || true)"
+if [ -z "$client_localhost" ] && [ -n "$browser_view_runtime_gateway" ] && [ -z "$browser_view_same_origin_only" ]; then
+  step_pass DASHBOARD_CLIENT_URLS_FROM_RUNTIME_CONFIG "browser websocket/session helpers and VNC views derive browser-facing gateway URLs from /api/config or request origin"
 else
-  step_fail DASHBOARD_CLIENT_URLS_FROM_RUNTIME_CONFIG "$(printf '%s' "$client_localhost" | head -10 | tr '\n' ' ')"
+  step_fail DASHBOARD_CLIENT_URLS_FROM_RUNTIME_CONFIG "$(printf '%s\n%s\n%s' "$client_localhost" "$browser_view_runtime_gateway" "$browser_view_same_origin_only" | head -10 | tr '\n' ' ')"
 fi
 
 test_end

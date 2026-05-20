@@ -122,8 +122,16 @@ export default function MeetingDetailPage() {
     clearCurrentMeeting,
   } = useMeetingsStore();
   const authToken = useAuthStore((s) => s.token);
-  const { config: runtimeConfig } = useRuntimeConfig();
+  const { config: runtimeConfig, isLoading: isRuntimeConfigLoading } = useRuntimeConfig();
   const apiBaseUrl = runtimeConfig?.publicApiUrl || runtimeConfig?.apiUrl || "";
+  const gatewayBrowserBase = apiBaseUrl.replace(/\/+$/, "");
+  const browserRouteUrl = useCallback(
+    (path: string) => {
+      if (isRuntimeConfigLoading) return "";
+      return gatewayBrowserBase ? `${gatewayBrowserBase}${path}` : withBasePath(path);
+    },
+    [gatewayBrowserBase, isRuntimeConfigLoading]
+  );
 
   // Agent panel state
   const [agentPanelOpen, setAgentPanelOpen] = useState(false);
@@ -994,15 +1002,20 @@ export default function MeetingDetailPage() {
 
   const browserViewIframe = hasBrowserView && viewMode === 'browser' ? (() => {
     const meetingId = currentMeeting.id;
-    // VNC loads from same origin — nginx proxies /b/ routes to the gateway
-    const vncUrl = `/b/${meetingId}/vnc/vnc.html?autoconnect=true&resize=scale&reconnect=true&view_only=false&path=b/${meetingId}/vnc/websockify`;
+    const vncUrl = browserRouteUrl(`/b/${meetingId}/vnc/vnc.html?autoconnect=true&resize=scale&reconnect=true&view_only=false&path=b/${meetingId}/vnc/websockify`);
     return (
       <div className="flex-1 overflow-hidden">
-        <iframe
-          src={vncUrl}
-          className="w-full h-full border-0"
-          allow="clipboard-read; clipboard-write"
-        />
+        {vncUrl ? (
+          <iframe
+            src={vncUrl}
+            className="w-full h-full border-0"
+            allow="clipboard-read; clipboard-write"
+          />
+        ) : (
+          <div className="h-full flex items-center justify-center">
+            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          </div>
+        )}
       </div>
     );
   })() : null;
@@ -1792,13 +1805,16 @@ export default function MeetingDetailPage() {
                       const sessionToken = escalation?.session_token as string
                         || currentMeeting.data?.session_token as string;
                       if (!sessionToken) return null;
-                      const vncUrl = withBasePath(`/b/${sessionToken}/vnc/vnc.html?autoconnect=true&resize=scale&reconnect=true&view_only=false&path=b/${sessionToken}/vnc/websockify`);
+                      const vncUrl = browserRouteUrl(`/b/${sessionToken}/vnc/vnc.html?autoconnect=true&resize=scale&reconnect=true&view_only=false&path=b/${sessionToken}/vnc/websockify`);
                       return (
                         <Button
                           variant="default"
                           size="sm"
                           className="gap-2 bg-orange-600 hover:bg-orange-700"
-                          onClick={() => window.open(vncUrl, "_blank")}
+                          disabled={!vncUrl}
+                          onClick={() => {
+                            if (vncUrl) window.open(vncUrl, "_blank");
+                          }}
                         >
                           <Monitor className="h-4 w-4" />
                           Open Remote Browser
@@ -1817,7 +1833,9 @@ export default function MeetingDetailPage() {
                           className="gap-2"
                           onClick={async () => {
                             try {
-                              const response = await fetch(withBasePath(`/b/${sessionToken}/save`), {
+                              const saveUrl = browserRouteUrl(`/b/${sessionToken}/save`);
+                              if (!saveUrl) throw new Error("Runtime config is still loading");
+                              const response = await fetch(saveUrl, {
                                 method: "POST",
                               });
                               if (!response.ok) throw new Error(await response.text());
