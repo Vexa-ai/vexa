@@ -55,7 +55,7 @@ import { useMeetingsStore } from "@/stores/meetings-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { useLiveTranscripts } from "@/hooks/use-live-transcripts";
 import { PLATFORM_CONFIG, getDetailedStatus } from "@/types/vexa";
-import type { MeetingStatus, Meeting } from "@/types/vexa";
+import type { MeetingStatus, Meeting, RecordingData } from "@/types/vexa";
 import { StatusHistory } from "@/components/meetings/status-history";
 import { cn, parseUTCTimestamp } from "@/lib/utils";
 import { vexaAPI } from "@/lib/api";
@@ -122,8 +122,16 @@ export default function MeetingDetailPage() {
     clearCurrentMeeting,
   } = useMeetingsStore();
   const authToken = useAuthStore((s) => s.token);
-  const { config: runtimeConfig } = useRuntimeConfig();
+  const { config: runtimeConfig, isLoading: isRuntimeConfigLoading } = useRuntimeConfig();
   const apiBaseUrl = runtimeConfig?.publicApiUrl || runtimeConfig?.apiUrl || "";
+  const gatewayBrowserBase = apiBaseUrl.replace(/\/+$/, "");
+  const browserRouteUrl = useCallback(
+    (path: string) => {
+      if (isRuntimeConfigLoading) return "";
+      return gatewayBrowserBase ? `${gatewayBrowserBase}${path}` : withBasePath(path);
+    },
+    [gatewayBrowserBase, isRuntimeConfigLoading]
+  );
 
   // Agent panel state
   const [agentPanelOpen, setAgentPanelOpen] = useState(false);
@@ -198,45 +206,99 @@ export default function MeetingDetailPage() {
   // shows a "Preparing audio…" state.
   const [recordingFragments, setRecordingFragments] = useState<AudioFragment[]>([]);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
+  // v0.10.6.1 — surface connection errors from the master-stream-URL lookup.
+  // Distinct from "master not ready yet" (returned as null → "finalizing"
+  // UI). A non-null value here means a real network/HTTP failure that the
+  // user should see, not be silently retried-into-empty-state.
+  const [playbackConnectionError, setPlaybackConnectionError] = useState<string | null>(null);
+
+  // v0.10.6.1 — ADR-2 canonical playback path. Dashboard reads
+  // `recording.playback_url.audio` (a stable backend route) and calls
+  // vexaAPI.getRecordingMasterStreamUrl() to resolve it to a presigned
+  // URL. No client-side picking from media_files[]. Null playback_url
+  // → render "finalizing" UI state (no silent fallback to chunk 0).
+  //
+  // The signature pattern from pre-fix avoided URL refetch storms when
+  // recordings[] reference changed but content didn't — kept here on
+  // the playback_url field directly.
+  const audioMediaSignature = useMemo(() => {
+    return recordings
+      .filter(r => (r.status === "completed" || r.status === "in_progress"))
+      .filter(r => r.playback_url?.audio)
+      .sort((a, b) => a.created_at.localeCompare(b.created_at))
+      .map(r => `${r.id}:${r.playback_url?.audio ?? ""}`)
+      .join("|");
+  }, [recordings]);
 
   useEffect(() => {
+    if (!audioMediaSignature) {
+      setRecordingFragments([]);
+      return;
+    }
     let cancelled = false;
     (async () => {
       const availableRecordings = recordings
-        .filter(r => (r.status === "completed" || r.status === "in_progress") && r.media_files?.some(mf => mf.type === "audio"))
+        .filter(r => (r.status === "completed" || r.status === "in_progress") && r.playback_url?.audio)
         .sort((a, b) => a.created_at.localeCompare(b.created_at));
-      const frags = await Promise.all(availableRecordings.map(async rec => {
-        const audioMedia = rec.media_files.find(mf => mf.type === "audio")!;
-        const src = await vexaAPI.getRecordingAudioStreamUrl(rec.id, audioMedia.id);
-        return {
-          src,
-          duration: audioMedia.duration_seconds || 0,
-          sessionUid: rec.session_uid,
-          createdAt: rec.created_at,
-        } as AudioFragment;
-      }));
-      if (!cancelled) setRecordingFragments(frags);
+      try {
+        const results = await Promise.all(availableRecordings.map(async rec => {
+          const result = await vexaAPI.getRecordingMasterStreamUrl(rec.id, "audio");
+          if (!result) {
+            // 404 — master not ready for this recording yet.
+            return null;
+          }
+          return {
+            src: result.url,
+            duration: result.duration_seconds ?? null,
+            sessionUid: rec.session_uid,
+            createdAt: rec.created_at,
+          } as AudioFragment;
+        }));
+        if (!cancelled) {
+          setRecordingFragments(results.filter((f): f is AudioFragment => f !== null));
+          setPlaybackConnectionError(null);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setPlaybackConnectionError(err instanceof Error ? err.message : String(err));
+          setRecordingFragments([]);
+        }
+      }
     })();
     return () => { cancelled = true; };
-  }, [recordings]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [audioMediaSignature]);
 
   const hasRecordingAudio = recordingFragments.length > 0;
 
-  // Find the first video media file across all recordings for the VideoPlayer.
-  // Same Pack U.8 contract as above — presigned URL with /raw fallback.
+  // Find the first video master across all recordings for the VideoPlayer.
+  // v0.10.6.1 ADR-2: read recording.playback_url.video; no client-side
+  // selection from media_files[].
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      for (const rec of recordings) {
-        if (rec.status !== "completed" && rec.status !== "in_progress") continue;
-        const videoMedia = rec.media_files?.find((mf: { type: string }) => mf.type === "video");
-        if (videoMedia) {
-          const src = await vexaAPI.getRecordingVideoStreamUrl(rec.id, videoMedia.id);
-          if (!cancelled) setVideoSrc(src);
+      try {
+        for (const rec of recordings) {
+          if (rec.status !== "completed" && rec.status !== "in_progress") continue;
+          if (!rec.playback_url?.video) continue;
+          const result = await vexaAPI.getRecordingMasterStreamUrl(rec.id, "video");
+          if (!result) {
+            // 404 — video master not ready for this recording yet; try the next.
+            continue;
+          }
+          if (!cancelled) {
+            setVideoSrc(result.url);
+            setPlaybackConnectionError(null);
+          }
           return;
         }
+        if (!cancelled) setVideoSrc(null);
+      } catch (err) {
+        if (!cancelled) {
+          setPlaybackConnectionError(err instanceof Error ? err.message : String(err));
+          setVideoSrc(null);
+        }
       }
-      if (!cancelled) setVideoSrc(null);
     })();
     return () => { cancelled = true; };
   }, [recordings]);
@@ -666,15 +728,19 @@ export default function MeetingDetailPage() {
     setCurrentLanguage(fromSegment || "auto");
   }, [currentMeeting, transcripts, validLangCodes]);
 
-  // No longer need polling - WebSocket handles status updates for early states
-  // Removed auto-refresh polling since WebSocket provides real-time updates
-
   // Fetch transcripts when meeting is loaded
   // Use specific properties as dependencies to avoid unnecessary refetches
   const meetingPlatform = currentMeeting?.platform;
   const meetingNativeId = currentMeeting?.platform_specific_id;
   const meetingNumericId = currentMeeting?.id ? String(currentMeeting.id) : undefined;
   const meetingStatus = currentMeeting?.status;
+  const isPostMeetingStatus =
+    forcePostMeetingMode || meetingStatus === "stopping" || meetingStatus === "completed";
+  const shouldPollPostMeetingArtifacts =
+    isPostMeetingStatus &&
+    currentMeeting?.data?.recording_enabled !== false &&
+    !hasRecordingAudio &&
+    !playbackConnectionError;
 
   useEffect(() => {
     // Active browser sessions use VNC — no transcript fetch needed.
@@ -706,6 +772,38 @@ export default function MeetingDetailPage() {
       fetchChatMessages(meetingPlatform, meetingNativeId);
     }
   }, [shouldUseWebSocket, meetingPlatform, meetingNativeId, fetchChatMessages]);
+
+  // Recording masters are finalized asynchronously after the bot stops. The
+  // status WebSocket can report "completed" before playback_url/audio is ready,
+  // so keep refreshing post-meeting artifacts until the player can render.
+  useEffect(() => {
+    if (!meetingId || !meetingPlatform || !meetingNativeId) return;
+    if (!shouldPollPostMeetingArtifacts) return;
+
+    let cancelled = false;
+    const refreshPostMeetingArtifacts = () => {
+      if (cancelled) return;
+      refreshMeeting(meetingId);
+      fetchTranscripts(meetingPlatform, meetingNativeId, meetingNumericId, { silent: true });
+      fetchChatMessages(meetingPlatform, meetingNativeId);
+    };
+
+    refreshPostMeetingArtifacts();
+    const interval = window.setInterval(refreshPostMeetingArtifacts, 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [
+    meetingId,
+    meetingPlatform,
+    meetingNativeId,
+    meetingNumericId,
+    shouldPollPostMeetingArtifacts,
+    refreshMeeting,
+    fetchTranscripts,
+    fetchChatMessages,
+  ]);
 
   // Handle saving notes on blur
   const handleNotesBlur = useCallback(async () => {
@@ -839,13 +937,31 @@ export default function MeetingDetailPage() {
   const isPostMeetingFlow =
     forcePostMeetingMode ||
     currentMeeting.status === "stopping" || currentMeeting.status === "completed";
-  const hasRecordingEntries = recordings.length > 0;
+  const meetingRecordings = Array.isArray(currentMeeting.data?.recordings)
+    ? (currentMeeting.data.recordings as RecordingData[])
+    : [];
+  const effectiveRecordings = recordings.length > 0 ? recordings : meetingRecordings;
+  const hasRecordingEntries = effectiveRecordings.length > 0;
+  const hasActiveRecording = effectiveRecordings.some((recording) =>
+    recording.status === "in_progress" || recording.status === "uploading"
+  );
+  const recordingWasRequested = currentMeeting.data?.recording_enabled !== false;
   const noAudioRecordingForMeeting =
-    (currentMeeting.data?.recording_enabled === false && !hasRecordingAudio) ||
-    (currentMeeting.status === "completed" && !hasRecordingEntries);
-  const canUseSegmentPlayback = isPostMeetingFlow && !noAudioRecordingForMeeting;
-  const recordingTopBar = isPostMeetingFlow ? (
-    hasRecordingAudio ? (
+    currentMeeting.data?.recording_enabled === false && !hasRecordingAudio;
+  const missingRequestedRecording =
+    isPostMeetingFlow && recordingWasRequested && currentMeeting.status === "completed" && !hasRecordingEntries;
+  const canUseSegmentPlayback = isPostMeetingFlow && !noAudioRecordingForMeeting && !missingRequestedRecording;
+  const recordingTopBar = (isPostMeetingFlow || hasActiveRecording) ? (
+    hasActiveRecording && !isPostMeetingFlow ? (
+      <div className="flex items-center gap-2 px-4 py-2 bg-muted/50 rounded-lg border text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Recording in progress...
+      </div>
+    ) : playbackConnectionError ? (
+      <div className="flex items-center gap-2 px-4 py-2 bg-destructive/10 rounded-lg border border-destructive/30 text-sm text-destructive">
+        Connection error loading recording: {playbackConnectionError}
+      </div>
+    ) : hasRecordingAudio ? (
       <div className="flex flex-col gap-2">
         {videoSrc && (
           <VideoPlayer ref={videoPlayerRef} src={videoSrc} className="max-h-[360px]" />
@@ -861,6 +977,10 @@ export default function MeetingDetailPage() {
     ) : noAudioRecordingForMeeting ? (
       <div className="flex items-center gap-2 px-4 py-2 bg-muted/50 rounded-lg border text-sm text-muted-foreground">
         No audio recording for this meeting.
+      </div>
+    ) : missingRequestedRecording ? (
+      <div className="flex items-center gap-2 px-4 py-2 bg-destructive/10 rounded-lg border border-destructive/30 text-sm text-destructive">
+        Recording was enabled, but no finalized recording artifact is available yet.
       </div>
     ) : (
       <div className="flex items-center gap-2 px-4 py-2 bg-muted/50 rounded-lg border text-sm text-muted-foreground">
@@ -882,15 +1002,20 @@ export default function MeetingDetailPage() {
 
   const browserViewIframe = hasBrowserView && viewMode === 'browser' ? (() => {
     const meetingId = currentMeeting.id;
-    // VNC loads from same origin — nginx proxies /b/ routes to the gateway
-    const vncUrl = `/b/${meetingId}/vnc/vnc.html?autoconnect=true&resize=scale&reconnect=true&view_only=false&path=b/${meetingId}/vnc/websockify`;
+    const vncUrl = browserRouteUrl(`/b/${meetingId}/vnc/vnc.html?autoconnect=true&resize=scale&reconnect=true&view_only=false&path=b/${meetingId}/vnc/websockify`);
     return (
       <div className="flex-1 overflow-hidden">
-        <iframe
-          src={vncUrl}
-          className="w-full h-full border-0"
-          allow="clipboard-read; clipboard-write"
-        />
+        {vncUrl ? (
+          <iframe
+            src={vncUrl}
+            className="w-full h-full border-0"
+            allow="clipboard-read; clipboard-write"
+          />
+        ) : (
+          <div className="h-full flex items-center justify-center">
+            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          </div>
+        )}
       </div>
     );
   })() : null;
@@ -1680,13 +1805,16 @@ export default function MeetingDetailPage() {
                       const sessionToken = escalation?.session_token as string
                         || currentMeeting.data?.session_token as string;
                       if (!sessionToken) return null;
-                      const vncUrl = withBasePath(`/b/${sessionToken}/vnc/vnc.html?autoconnect=true&resize=scale&reconnect=true&view_only=false&path=b/${sessionToken}/vnc/websockify`);
+                      const vncUrl = browserRouteUrl(`/b/${sessionToken}/vnc/vnc.html?autoconnect=true&resize=scale&reconnect=true&view_only=false&path=b/${sessionToken}/vnc/websockify`);
                       return (
                         <Button
                           variant="default"
                           size="sm"
                           className="gap-2 bg-orange-600 hover:bg-orange-700"
-                          onClick={() => window.open(vncUrl, "_blank")}
+                          disabled={!vncUrl}
+                          onClick={() => {
+                            if (vncUrl) window.open(vncUrl, "_blank");
+                          }}
                         >
                           <Monitor className="h-4 w-4" />
                           Open Remote Browser
@@ -1705,7 +1833,9 @@ export default function MeetingDetailPage() {
                           className="gap-2"
                           onClick={async () => {
                             try {
-                              const response = await fetch(withBasePath(`/b/${sessionToken}/save`), {
+                              const saveUrl = browserRouteUrl(`/b/${sessionToken}/save`);
+                              if (!saveUrl) throw new Error("Runtime config is still loading");
+                              const response = await fetch(saveUrl, {
                                 method: "POST",
                               });
                               if (!response.ok) throw new Error(await response.text());

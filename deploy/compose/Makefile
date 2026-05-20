@@ -17,8 +17,10 @@ BUILD_TAG := $(VERSION)-$(shell date +%y%m%d-%H%M)
 # DockerHub namespace
 DOCKERHUB_USER ?= vexaai
 
-# All images that get built and published
-IMAGES := api-gateway admin-api runtime-api meeting-api agent-api mcp dashboard tts-service vexa-lite
+# All images that get built and published.
+# agent-api remains NO-SHIP for v0.10.x (see docker-compose.yml); do not
+# promote a non-deployed image to :dev/:latest as part of public releases.
+IMAGES := api-gateway admin-api runtime-api meeting-api mcp dashboard tts-service vexa-lite
 BOT_IMAGE := vexa-bot
 
 -include $(ENV_FILE)
@@ -256,7 +258,8 @@ setup-api-key: check_docker
 			if [ -f $(LAST_TAG_FILE) ]; then \
 				export IMAGE_TAG=$$(cat $(LAST_TAG_FILE)); \
 			else \
-				export IMAGE_TAG=dev; \
+				export IMAGE_TAG=$$(grep -E '^IMAGE_TAG=' $(ENV_FILE) 2>/dev/null | cut -d= -f2 || echo "dev"); \
+				IMAGE_TAG=$${IMAGE_TAG:-dev}; \
 			fi; \
 			$(COMPOSE_CMD) up -d dashboard; \
 		else \

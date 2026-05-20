@@ -15,14 +15,15 @@ VM_IP=$(state_read vm_ip)
 # checkout on the VM (was previously hardcoded to `dev`, which broke whenever
 # the cycle ran on a release/<id> branch and `dev` didn't exist on origin).
 VM_BRANCH=$(state_read vm_branch)
+VM_IMAGE_TAG="$(state_read image_tag 2>/dev/null || true)"
 echo ""
-echo "  vm-reset: $(basename "$SCRIPT") on $VM_IP (branch=${VM_BRANCH})"
+echo "  vm-reset: $(basename "$SCRIPT") on $VM_IP (branch=${VM_BRANCH}, image_tag=${VM_IMAGE_TAG:-unset})"
 echo "  ──────────────────────────────────────────────"
 
 # Inject VM_BRANCH into the remote shell. `ssh -o SendEnv` would require
 # sshd config; the inline-export form here is portable and matches how the
 # rest of the harness wraps SSH.
 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    "root@$VM_IP" "VM_BRANCH=${VM_BRANCH} bash -s" < "$SCRIPT"
+    "root@$VM_IP" "VM_BRANCH=${VM_BRANCH} VM_IMAGE_TAG=${VM_IMAGE_TAG} bash -s" < "$SCRIPT"
 
 echo "  ──────────────────────────────────────────────"

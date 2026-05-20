@@ -22,7 +22,7 @@
 #     -e DATABASE_URL="postgresql://user:pass@host:5432/vexa" \
 #     -e ADMIN_API_TOKEN="your-secret-token" \
 #     -e TRANSCRIPTION_SERVICE_URL="http://host:8083/v1/audio/transcriptions" \
-#     -e TRANSCRIPTION_SERVICE_TOKEN="your-api-key" \
+#     -e TRANSCRIPTION_SERVICE_TOKEN="<api-key>" \
 #     vexa-lite
 # =============================================================================
 
@@ -157,7 +157,7 @@ COPY packages/transcript-rendering/dist/ /transcript-rendering/dist/
 COPY services/dashboard/package.json /app/dashboard-build/
 RUN cd /app/dashboard-build && \
     sed -i 's|file:../../../packages/transcript-rendering|file:/transcript-rendering|' package.json && \
-    npm install --ignore-scripts && \
+    npm install --ignore-scripts --legacy-peer-deps && \
     rm -rf node_modules/@vexaai/transcript-rendering && \
     cp -r /transcript-rendering node_modules/@vexaai/transcript-rendering
 
@@ -236,6 +236,9 @@ ENV ADMIN_API_URL=http://localhost:8057 \
 
 # TTS Service
 ENV TTS_SERVICE_URL=http://localhost:8059 \
+    PIPER_DEFAULT_VOICES=major \
+    PIPER_LOAD_VOICES=en_US-amy-medium,en_US-danny-low,pt_BR-faber-medium,es_ES-davefx-medium \
+    PIPER_PRELOAD_STRICT=true \
     OPENAI_API_KEY=
 
 # Display for headless browsers
