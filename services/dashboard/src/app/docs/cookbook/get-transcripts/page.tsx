@@ -166,7 +166,7 @@ for segment in segments:
                   <code>{`# Fetch transcripts
 curl -X GET \\
   "https://your-api-url/transcripts/google_meet/abc-defg-hij" \\
-  -H "X-API-Key: your-api-key" \\
+  -H "X-API-Key: $VEXA_API_KEY" \\
   -H "Content-Type: application/json"
 
 # Response:

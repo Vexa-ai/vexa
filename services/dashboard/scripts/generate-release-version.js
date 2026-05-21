@@ -24,7 +24,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 
 const HERE = __dirname;
 const REPO_ROOT = process.env.VEXA_REPO_ROOT
@@ -55,8 +55,9 @@ function readChartAppVersion() {
 
 function latestGitTag() {
   try {
-    const out = execSync(
-      'git -C ' + JSON.stringify(REPO_ROOT) + ' describe --tags --abbrev=0 --match "v[0-9]*.[0-9]*.[0-9]*"',
+    const out = execFileSync(
+      'git',
+      ['-C', REPO_ROOT, 'describe', '--tags', '--abbrev=0', '--match', 'v[0-9]*.[0-9]*.[0-9]*'],
       { stdio: ['ignore', 'pipe', 'ignore'] }
     ).toString().trim();
     return out || null;
@@ -68,8 +69,9 @@ function latestGitTag() {
 function tagCommitDate(tag) {
   if (!tag) return null;
   try {
-    const out = execSync(
-      'git -C ' + JSON.stringify(REPO_ROOT) + ` log -1 --format=%cs ${JSON.stringify(tag)}`,
+    const out = execFileSync(
+      'git',
+      ['-C', REPO_ROOT, 'log', '-1', '--format=%cs', tag],
       { stdio: ['ignore', 'pipe', 'ignore'] }
     ).toString().trim();
     return out || null;

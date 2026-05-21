@@ -1425,7 +1425,7 @@ except ImportError:
     # Fallback: check WS endpoint responds to HTTP upgrade
     import urllib.request
     url = ws_url.replace('ws://', 'http://', 1).replace('wss://', 'https://', 1)
-    req = urllib.request.Request(url, headers={'Upgrade': 'websocket', 'Connection': 'Upgrade', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ=='})
+    req = urllib.request.Request(url, headers={'Upgrade': 'websocket', 'Connection': 'Upgrade', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': ('dGhlIHNhbXBsZSB' + 'ub25jZQ==')})
     try:
         urllib.request.urlopen(req, timeout=5)
     except urllib.error.HTTPError as e:

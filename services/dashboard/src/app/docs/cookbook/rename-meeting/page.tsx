@@ -195,7 +195,7 @@ update_meeting_metadata('google_meet', 'abc-defg-hij', {
                   <code>{`# Rename a meeting
 curl -X PATCH \\
   "https://your-api-url/meetings/google_meet/abc-defg-hij" \\
-  -H "X-API-Key: your-api-key" \\
+  -H "X-API-Key: $VEXA_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
     "data": {
@@ -206,7 +206,7 @@ curl -X PATCH \\
 # Update multiple fields
 curl -X PATCH \\
   "https://your-api-url/meetings/google_meet/abc-defg-hij" \\
-  -H "X-API-Key: your-api-key" \\
+  -H "X-API-Key: $VEXA_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
     "data": {

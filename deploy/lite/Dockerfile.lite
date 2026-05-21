@@ -156,7 +156,7 @@ COPY packages/transcript-rendering/dist/ /transcript-rendering/dist/
 # Copy dashboard source (package.json only — no lockfile, to avoid path mismatch after sed)
 COPY services/dashboard/package.json /app/dashboard-build/
 RUN cd /app/dashboard-build && \
-    sed -i 's|file:../../../packages/transcript-rendering|file:/transcript-rendering|' package.json && \
+    sed -i 's|file:../../packages/transcript-rendering|file:/transcript-rendering|' package.json && \
     npm install --ignore-scripts --legacy-peer-deps && \
     rm -rf node_modules/@vexaai/transcript-rendering && \
     cp -r /transcript-rendering node_modules/@vexaai/transcript-rendering

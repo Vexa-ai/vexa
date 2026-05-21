@@ -180,7 +180,7 @@ share = create_transcript_share(
                   <code>{`# Create a share URL
 curl -X POST \\
   "https://your-api-url/transcripts/google_meet/abc-defg-hij/share?meeting_id=123&ttl_seconds=7200" \\
-  -H "X-API-Key: your-api-key" \\
+  -H "X-API-Key: $VEXA_API_KEY" \\
   -H "Content-Type: application/json"
 
 # Response:

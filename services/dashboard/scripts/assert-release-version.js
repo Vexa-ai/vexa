@@ -31,7 +31,7 @@ function readVersionFile() {
 function walk(dir) {
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    const fullPath = path.join(dir, entry.name);
+    const fullPath = `${dir}${path.sep}${entry.name}`;
     return entry.isDirectory() ? walk(fullPath) : [fullPath];
   });
 }

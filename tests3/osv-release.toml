@@ -1,0 +1,51 @@
+# OSV release-gate exceptions for v0.10.6.2.1.
+#
+# These are not silent suppressions: each row is a short-lived exception for a
+# finding where the advisory points to a version that is not currently
+# installable from the package index, or where the available fix is a breaking
+# framework move outside this corrective release.
+
+[[IgnoredVulns]]
+id = "GHSA-mj87-hwqh-73pj"
+ignoreUntil = 2026-05-28
+reason = "python-multipart fixed version 0.0.26 is not available from the package index used by builds; current release uses latest installable 0.0.20 and must revisit when upstream publishes a fixed artifact."
+
+[[IgnoredVulns]]
+id = "GHSA-pp6c-gr5w-3c5g"
+ignoreUntil = 2026-05-28
+reason = "python-multipart fixed version 0.0.27 is not available from the package index used by builds; current release uses latest installable 0.0.20 and must revisit when upstream publishes a fixed artifact."
+
+[[IgnoredVulns]]
+id = "GHSA-wp53-j4wj-2cfg"
+ignoreUntil = 2026-05-28
+reason = "python-multipart fixed version 0.0.22 is not available from the package index used by builds; current release uses latest installable 0.0.20 and must revisit when upstream publishes a fixed artifact."
+
+[[IgnoredVulns]]
+id = "GHSA-mf9w-mj56-hr94"
+ignoreUntil = 2026-05-28
+reason = "python-dotenv fixed version 1.2.2 is not available from the package index used by builds; current release uses latest installable 1.2.1 and must revisit when upstream publishes a fixed artifact."
+
+[[IgnoredVulns]]
+id = "GHSA-gc5v-m9x4-r6x2"
+ignoreUntil = 2026-05-28
+reason = "requests fixed version 2.33.0 is not available from the package index used by builds; current release uses latest installable 2.32.5 and must revisit when upstream publishes a fixed artifact."
+
+[[IgnoredVulns]]
+id = "GHSA-qx2v-qp2m-jg93"
+ignoreUntil = 2026-05-28
+reason = "PostCSS finding is inside Next 16.2.6; the available Next advisory path is canary/downgrade, not a safe corrective-release change. Track for framework upgrade."
+
+[[IgnoredVulns]]
+id = "GHSA-c7w3-x93f-qmm8"
+ignoreUntil = 2026-05-28
+reason = "Nodemailer 8.x creates a NextAuth/Auth Core peer-range conflict in this dashboard; keep valid dependency graph and track with auth dependency upgrade."
+
+[[IgnoredVulns]]
+id = "GHSA-vvjj-xcjg-gr5g"
+ignoreUntil = 2026-05-28
+reason = "Nodemailer 8.x creates a NextAuth/Auth Core peer-range conflict in this dashboard; keep valid dependency graph and track with auth dependency upgrade."
+
+[[IgnoredVulns]]
+id = "GHSA-pxg6-pf52-xh8x"
+ignoreUntil = 2026-05-28
+reason = "Cookie finding is inside @auth/core 0.34.3; npm's available fix requires a breaking auth-core move outside this corrective release."

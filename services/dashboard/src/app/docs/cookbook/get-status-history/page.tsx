@@ -208,7 +208,7 @@ def get_all_meetings_with_history(api_key):
                   <code>{`# Get meeting with status history via transcripts endpoint
 curl -X GET \\
   "https://your-api-url/transcripts/google_meet/abc-defg-hij" \\
-  -H "X-API-Key: your-api-key" \\
+  -H "X-API-Key: $VEXA_API_KEY" \\
   -H "Content-Type: application/json"
 
 # Response includes status_transition in data.data:
@@ -256,7 +256,7 @@ curl -X GET \\
 # Or get from meetings list
 curl -X GET \\
   "https://your-api-url/meetings" \\
-  -H "X-API-Key: your-api-key" \\
+  -H "X-API-Key: $VEXA_API_KEY" \\
   -H "Content-Type: application/json"`}</code>
                 </pre>
               </div>
