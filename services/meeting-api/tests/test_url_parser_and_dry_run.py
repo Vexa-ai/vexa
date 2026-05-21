@@ -61,7 +61,7 @@ class TestParserBestEffort:
         with pytest.raises(ValueError):
             parse_meeting_url(
                 "https://zoom-lfx.platform.linuxfoundation.org/meeting/96088138284"
-                "?password=c9e528a8-3852-4b82-89c2-96d6f22526ad"
+                "?password=example-passcode"
             )
 
     def test_arbitrary_url_unrecognized_raises(self):

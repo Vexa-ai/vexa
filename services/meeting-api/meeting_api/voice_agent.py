@@ -51,8 +51,15 @@ async def bot_speak(
             "action": "speak",
             "meeting_id": meeting.id,
             "text": req["text"],
-            "provider": req.get("provider", "openai"),
-            "voice": req.get("voice", "alloy"),
+            # v0.10.6.1 — default `voice='auto'` so tts-service detects
+            # the input text's language and picks a matching Piper voice.
+            # Caller can override with an explicit Piper voice name (e.g.
+            # 'en_US-amy-medium') or an OpenAI alias (alloy/echo/...) for
+            # backward compat. Default `provider='piper'` (local engine,
+            # no key required); set provider='openai' to route through
+            # OpenAI's TTS API (requires OPENAI_API_KEY) — wired in #315.
+            "provider": req.get("provider", "piper"),
+            "voice": req.get("voice", "auto"),
         }
     elif req.get("audio_url") or req.get("audio_base64"):
         command = {

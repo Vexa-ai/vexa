@@ -657,6 +657,13 @@ tests:
     features: [dashboard, infrastructure, realtime-transcription]
     max_duration_sec: 5
 
+  dashboard-release-version-ssot:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: tests/static/dashboard-release-version-ssot.sh
+    features: [dashboard, infrastructure]
+    max_duration_sec: 5
+
   lite-recording-storage-persistent:
     tier: cheap
     runs_in: [lite]

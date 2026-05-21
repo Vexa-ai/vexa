@@ -88,7 +88,12 @@ async def get_db() -> AsyncSession:
 
 
 async def init_db():
-    """Converge database schema to match meeting-api models (idempotent)."""
+    """Converge database schema to match meeting-api models (idempotent).
+
+    v0.10.6.1 — recordings/media_files tables removed from the model;
+    they are dropped by tests3/lib/migrations/m331-drop-relational-recordings.py.
+    All recording metadata lives in meeting.data['recordings'] (JSONB).
+    """
     from schema_sync import ensure_schema
     from admin_models.models import Base as AdminBase
     logger.info(f"Initializing database tables at {DB_HOST}:{DB_PORT}/{DB_NAME}")

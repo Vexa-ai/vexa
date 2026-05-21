@@ -3065,6 +3065,42 @@ DASHBOARD_CLIENT_URLS_FROM_RUNTIME_CONFIG:
   max_duration_sec: 5
   release: 260508-v0.10.6.1
 
+DASHBOARD_RELEASE_VERSION_CANONICAL_SOURCE:
+  proves: "dashboard release identity comes from the canonical release version shared by root VERSION and Helm appVersion"
+  symptom: "dashboard shows one release while the chart/source identify another, making production canary identity untrustworthy"
+  found: '2026-05-21'
+  type: static-grep
+  script: tests/static/dashboard-release-version-ssot.sh
+  step: DASHBOARD_RELEASE_VERSION_CANONICAL_SOURCE
+  modes: [lite, compose, helm]
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.2.1
+
+DASHBOARD_RELEASE_VERSION_DOCKER_BUILD_GUARD:
+  proves: "dashboard and lite Docker builds copy canonical VERSION/Chart.yaml and reject stale NEXT_PUBLIC_VEXA_OSS_VERSION overrides"
+  symptom: "a digest-retagged or stale-build dashboard image displays an older VersionChip than the Docker tag being promoted"
+  found: '2026-05-21'
+  type: static-grep
+  script: tests/static/dashboard-release-version-ssot.sh
+  step: DASHBOARD_RELEASE_VERSION_DOCKER_BUILD_GUARD
+  modes: [lite, compose, helm]
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.2.1
+
+DASHBOARD_RELEASE_VERSION_BUNDLE_ASSERTION:
+  proves: "dashboard build asserts the generated release identity is present in the compiled Next.js bundle before image promotion"
+  symptom: "source VERSION is correct but compiled dashboard assets still contain stale release metadata"
+  found: '2026-05-21'
+  type: static-grep
+  script: tests/static/dashboard-release-version-ssot.sh
+  step: DASHBOARD_RELEASE_VERSION_BUNDLE_ASSERTION
+  modes: [lite, compose, helm]
+  state: stateless
+  max_duration_sec: 5
+  release: 260508-v0.10.6.2.1
+
 TEST_ACCOUNT_BOT_LIMIT_IS_CANONICAL:
   proves: "local validation account test@vexa.ai has max_concurrent_bots equal to tests3/lib/test-account.env TEST_ACCOUNT_MAX_CONCURRENT_BOTS in each in-scope deployment"
   symptom: "parallel compose/lite/fresh-bot human validation trips the concurrent bot limiter even though the stack and bot pipeline are otherwise healthy"

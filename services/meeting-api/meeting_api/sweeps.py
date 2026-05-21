@@ -1,4 +1,4 @@
-"""v0.10.5 Pack E.3.2 + Pack D.2 + future H.4 + E.1-sibling sweeps.
+"""v0.10.5 Pack E.3.2 + Pack D.2 + H.4 + E.1-sibling sweeps.
 
 Long-running idle-loop equivalent for meeting-api. Each sweep is a
 periodic scan that catches state-machine rows that genuinely got
@@ -7,6 +7,9 @@ exit-callback in callbacks.py, Pack E.1's chunk-finalize outbox, etc).
 
 Active responsibilities:
   - Pack E.3.2: stale-stopping sweep (postgres scan + force-finalize).
+  - Pack H.4: aggregation retry for transient infra failures.
+  - Pack E.1-sibling: unfinalized recording repair/finalize.
+  - v0.10.6.1: stale outbound-event recovery for the internal hook ledger.
   - Pack D.2 (#266): durable container-stop outbox consumer
     (Redis Stream `meeting-api:container-stops` → runtime-api DELETE
     with retry + DLQ). The producer side is `_delayed_container_stop`
@@ -25,14 +28,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
+import uuid
 from typing import Any, Callable, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import attributes
 
-from .models import Meeting
+from .models import Meeting, MeetingSession
+from .outbound_events import find_stale_pending_events, mark_outbound_event
 from .schemas import MeetingStatus, MeetingCompletionReason
+from .webhook_delivery import deliver_with_result
 
 logger = logging.getLogger("meeting_api.sweeps")
 
@@ -44,6 +52,9 @@ logger = logging.getLogger("meeting_api.sweeps")
 # means the canonical path genuinely failed — log loud, force-finalize.
 STALE_STOPPING_THRESHOLD_SECONDS = 300  # 5 min
 STALE_STOPPING_POLL_INTERVAL = 60  # check every 60 s
+UNFINALIZED_RECORDINGS_MIN_AGE_SECONDS = 120
+UNFINALIZED_RECORDINGS_LIMIT = 100
+STALE_OUTBOUND_EVENT_THRESHOLD_SECONDS = 300
 
 # v0.10.5 Pack K.5 (meeting-api side analog).
 # Module-level state for /health probe / Pack M metrics.
@@ -58,10 +69,18 @@ async def _sweep_stale_stopping(
 ) -> int:
     """One iteration of the stale-stopping sweep.
 
-    Scans for rows where status='stopping' AND updated_at older than
-    STALE_STOPPING_THRESHOLD_SECONDS. Force-completes each with
+    Scans for rows where status='stopping' AND the time since the meeting
+    last *progressed* (last status_transition.at, fall back to created_at)
+    exceeds STALE_STOPPING_THRESHOLD_SECONDS. Force-completes each with
     `completion_reason=STOPPED` + transition_reason='stale_stopping_sweep'
     so the source is visible in audit logs.
+
+    #313 — pre-fix used `updated_at` as the staleness predicate, which is
+    bumped by every webhook-retry. A meeting stuck in 'stopping' with
+    active webhook retries kept looking fresh and the sweep never fired.
+    Now we read the immutable transition timestamps from
+    `data.status_transition` (append-only history), which reflects actual
+    progress; webhook retries do not append to that list.
 
     Returns the number of rows swept. Operators reading logs see:
       WARNING [sweep] meeting <id> stuck stopping for X s — finalizing
@@ -77,16 +96,47 @@ async def _sweep_stale_stopping(
     swept = 0
 
     async with db_session_factory() as db:
+        # SQL pre-filter: status='stopping' AND created_at < threshold.
+        # created_at is immutable so it's safe; updated_at is poisoned by
+        # webhook retries (#313). Post-filter by status_transition below.
         stmt = (
             select(Meeting)
             .where(Meeting.status == MeetingStatus.STOPPING.value)
-            .where(Meeting.updated_at < threshold)
-            .limit(50)  # bound per-iteration to avoid sweep starving other work
+            .where(Meeting.created_at < threshold)
+            .limit(200)  # candidate cap — we post-filter in Python
         )
-        rows = (await db.execute(stmt)).scalars().all()
+        candidates = (await db.execute(stmt)).scalars().all()
 
-        for meeting in rows:
-            stuck_for = (datetime.utcnow() - meeting.updated_at).total_seconds()
+        # Post-filter: compute the actual last-progress timestamp from
+        # data.status_transition (append-only). Falls back to created_at
+        # for rows missing the JSONB history (legacy data).
+        rows = []
+        for meeting in candidates:
+            data = (meeting.data or {}) if isinstance(meeting.data, dict) else {}
+            transitions = data.get("status_transition") or []
+            last_progress_at = meeting.created_at
+            for t in transitions:
+                if not isinstance(t, dict):
+                    continue
+                at_str = t.get("at")
+                if not at_str:
+                    continue
+                try:
+                    at_dt = datetime.fromisoformat(at_str.replace("Z", "+00:00"))
+                    # Strip tzinfo to compare with naive utcnow()-derived threshold.
+                    if at_dt.tzinfo is not None:
+                        at_dt = at_dt.replace(tzinfo=None)
+                except (ValueError, AttributeError):
+                    continue
+                if at_dt > last_progress_at:
+                    last_progress_at = at_dt
+            if last_progress_at < threshold:
+                rows.append((meeting, last_progress_at))
+            if len(rows) >= 50:  # bound work per iteration
+                break
+
+        for meeting, last_progress_at in rows:
+            stuck_for = (datetime.utcnow() - last_progress_at).total_seconds()
             logger.warning(
                 f"[sweep] meeting {meeting.id} stuck stopping for {stuck_for:.0f}s — "
                 f"finalizing via stale-stopping sweep "
@@ -271,6 +321,258 @@ async def _sweep_container_stops() -> dict:
     return await consume_pending_stops(redis_client, _stop_via_runtime_api)
 
 
+def _new_recording_numeric_id() -> int:
+    return int(uuid.uuid4().int % 900000000000 + 100000000000)
+
+
+def _parse_recording_chunk_key(user_id: int, session_uid: str, key: str) -> Optional[tuple[int, str, str]]:
+    """Return (recording_id, media_type, media_format) for a canonical chunk key."""
+    parts = key.split("/")
+    if len(parts) < 6:
+        return None
+    if parts[0] != "recordings" or parts[1] != str(user_id) or parts[3] != session_uid:
+        return None
+    media_type = parts[4]
+    filename = parts[-1]
+    if media_type not in {"audio", "video"} or filename.startswith("master."):
+        return None
+    if "." not in filename:
+        return None
+    try:
+        recording_id = int(parts[2])
+    except (TypeError, ValueError):
+        return None
+    return recording_id, media_type, filename.rsplit(".", 1)[-1].lower()
+
+
+def _recording_has_playback_url(rec: dict) -> bool:
+    playback_url = rec.get("playback_url") if isinstance(rec, dict) else None
+    if not isinstance(playback_url, dict):
+        return False
+    return bool(playback_url.get("audio") or playback_url.get("video"))
+
+
+async def _sweep_unfinalized_recordings(
+    db_session_factory: Callable[[], AsyncSession],
+) -> int:
+    """Repair terminal meetings whose durable chunks never became playback_url.
+
+    Canonical path: bot exit callback calls recording_finalizer before terminal
+    status. This sweep is the local OSS safety net for escaped states:
+      * meeting is terminal and recording was requested;
+      * JSONB recording exists but lacks playback_url; or
+      * chunks exist in storage for a MeetingSession but meeting.data.recordings
+        was lost by a stale JSONB writer.
+
+    The sweep is idempotent. It only seeds enough JSONB metadata for
+    recording_finalizer to own the master path/playback_url write.
+    """
+    from datetime import datetime, timedelta
+    from .recording_finalizer import finalize_recording_master
+    from .storage import create_storage_client
+
+    cutoff = datetime.utcnow() - timedelta(seconds=UNFINALIZED_RECORDINGS_MIN_AGE_SECONDS)
+    swept = 0
+
+    storage = create_storage_client()
+
+    async with db_session_factory() as db:
+        id_rows = (await db.execute(
+            select(Meeting.id)
+            .where(Meeting.status.in_([MeetingStatus.COMPLETED.value, MeetingStatus.FAILED.value]))
+            .where(Meeting.created_at < cutoff)
+            .order_by(Meeting.id.desc())
+            .limit(UNFINALIZED_RECORDINGS_LIMIT)
+        )).fetchall()
+
+        for row in id_rows:
+            meeting_id = row[0]
+            meeting = (await db.execute(
+                select(Meeting)
+                .where(Meeting.id == meeting_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )).scalar_one_or_none()
+            if meeting is None:
+                continue
+
+            data = dict(meeting.data or {}) if isinstance(meeting.data, dict) else {}
+            if data.get("recording_enabled") is False:
+                continue
+
+            recordings = list(data.get("recordings") or [])
+            has_unfinalized_jsonb = any(
+                isinstance(rec, dict)
+                and rec.get("status") != "failed"
+                and rec.get("media_files")
+                and not _recording_has_playback_url(rec)
+                for rec in recordings
+            )
+
+            changed = False
+            sessions = (await db.execute(
+                select(MeetingSession).where(MeetingSession.meeting_id == meeting.id)
+            )).scalars().all()
+
+            existing_sessions = {
+                rec.get("session_uid")
+                for rec in recordings
+                if isinstance(rec, dict) and rec.get("session_uid")
+            }
+
+            for session in sessions:
+                if session.session_uid in existing_sessions:
+                    continue
+
+                prefix = f"recordings/{meeting.user_id}/"
+                try:
+                    keys = storage.list_objects_bounded(prefix)
+                except Exception as e:
+                    logger.warning(
+                        "[sweep] unfinalized-recordings storage list failed "
+                        "meeting_id=%s prefix=%s error=%s",
+                        meeting.id, prefix, str(e)[:200],
+                    )
+                    continue
+
+                grouped: dict[tuple[int, str, str], list[str]] = {}
+                for key in keys:
+                    parsed = _parse_recording_chunk_key(meeting.user_id, session.session_uid, key)
+                    if parsed is None:
+                        continue
+                    grouped.setdefault(parsed, []).append(key)
+
+                if not grouped:
+                    continue
+
+                now = datetime.utcnow().isoformat()
+                media_files = []
+                recording_id = None
+                for (rec_id, media_type, media_format), chunk_keys in sorted(grouped.items()):
+                    chunk_keys = sorted(chunk_keys)
+                    recording_id = recording_id or rec_id
+                    media_files.append({
+                        "id": _new_recording_numeric_id(),
+                        "type": media_type,
+                        "format": media_format,
+                        "storage_path": chunk_keys[-1],
+                        "storage_backend": os.environ.get("STORAGE_BACKEND", "minio"),
+                        "file_size_bytes": None,
+                        "last_chunk_size_bytes": None,
+                        "chunk_count": len(chunk_keys),
+                        "duration_seconds": None,
+                        "chunk_seq": len(chunk_keys) - 1,
+                        "first_chunk_at": getattr(session.session_start_time, "isoformat", lambda: now)(),
+                        "metadata": {},
+                        "created_at": now,
+                        "is_final": False,
+                        "finalized_at": None,
+                        "finalized_by": None,
+                    })
+
+                if recording_id is None or not media_files:
+                    continue
+
+                recordings.append({
+                    "id": recording_id,
+                    "meeting_id": meeting.id,
+                    "user_id": meeting.user_id,
+                    "session_uid": session.session_uid,
+                    "source": "bot",
+                    "status": "completed",
+                    "created_at": now,
+                    "completed_at": now,
+                    "media_files": media_files,
+                })
+                existing_sessions.add(session.session_uid)
+                changed = True
+                logger.warning(
+                    "[sweep] unfinalized-recordings recovered JSONB metadata "
+                    "meeting_id=%s recording_id=%s session_uid=%s media_files=%s",
+                    meeting.id, recording_id, session.session_uid, len(media_files),
+                )
+
+            if changed:
+                data["recordings"] = recordings
+                meeting.data = data
+                attributes.flag_modified(meeting, "data")
+                await db.commit()
+
+            if changed or has_unfinalized_jsonb:
+                try:
+                    await finalize_recording_master(meeting.id, db)
+                    swept += 1
+                    logger.warning(
+                        "[sweep] unfinalized-recordings finalized meeting_id=%s "
+                        "changed=%s had_unfinalized_jsonb=%s",
+                        meeting.id, changed, has_unfinalized_jsonb,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "[sweep] unfinalized-recordings finalize failed meeting_id=%s: %s",
+                        meeting.id, str(e)[:200], exc_info=True,
+                    )
+                    await db.rollback()
+
+    return swept
+
+
+async def _sweep_stale_outbound_events(
+    db_session_factory: Callable[[], AsyncSession],
+) -> int:
+    """Recover internal outbound events stuck after claim-before-POST crash."""
+    swept = 0
+    async with db_session_factory() as db:
+        stale = await find_stale_pending_events(
+            db,
+            max_age_seconds=STALE_OUTBOUND_EVENT_THRESHOLD_SECONDS,
+            limit=100,
+        )
+
+    for item in stale:
+        meeting_id = item["meeting_id"]
+        key = item["key"]
+        event = item["event"]
+        destination = event.get("destination")
+        payload = event.get("payload")
+        if not isinstance(destination, str) or not isinstance(payload, dict):
+            async with db_session_factory() as db:
+                await mark_outbound_event(
+                    db,
+                    meeting_id=meeting_id,
+                    key=key,
+                    status="failed",
+                    error="stale pending event missing destination or payload",
+                )
+            continue
+
+        logger.warning(
+            "[sweep] recovering stale outbound event meeting_id=%s key=%s",
+            meeting_id,
+            key,
+        )
+        result = await deliver_with_result(
+            url=destination,
+            payload=payload,
+            timeout=10.0,
+            label=f"stale-outbound-event meeting={meeting_id}",
+            metadata={"meeting_id": meeting_id, "outbound_event_key": key},
+        )
+        async with db_session_factory() as db:
+            await mark_outbound_event(
+                db,
+                meeting_id=meeting_id,
+                key=key,
+                status=result.status,
+                attempts=int(event.get("attempts") or 0) + 1,
+                error=result.error,
+                status_code=result.response.status_code if result.response is not None else None,
+            )
+        swept += 1
+
+    return swept
+
+
 async def start_sweeps(
     db_session_factory: Callable[[], AsyncSession],
 ) -> None:
@@ -280,8 +582,8 @@ async def start_sweeps(
       - Pack E.3.2: stale-stopping sweep
       - Pack H.4: aggregation_failure_class='transient_infra' retry
       - Pack D.2: container-stop outbox consumer (durable retry + DLQ)
-
-    Future Pack E.1-sibling (sweep_unfinalized_recordings) wires in here.
+      - Pack E.1-sibling: unfinalized recordings repair/finalize
+      - v0.10.6.1: stale outbound-event recovery
 
     Pattern mirrors webhook_retry_worker.start_retry_worker — same
     shape, different responsibility.
@@ -289,7 +591,7 @@ async def start_sweeps(
     global _stop_event, sweep_iterations, sweep_last_iteration_at
     _stop_event = asyncio.Event()
 
-    logger.info("[sweeps] Starting meeting-api idle sweeps loop (Pack E.3.2 + H.4 + D.2)")
+    logger.info("[sweeps] Starting meeting-api idle sweeps loop (Pack E.3.2 + H.4 + E.1-sibling + D.2)")
 
     while not _stop_event.is_set():
         sweep_iterations += 1
@@ -317,6 +619,16 @@ async def start_sweeps(
             logger.error(f"[sweeps] iteration {sweep_iterations} aggregation-retry error: {e}", exc_info=True)
 
         try:
+            finalized = await _sweep_unfinalized_recordings(db_session_factory)
+            if finalized > 0:
+                logger.warning(
+                    f"[sweeps] iteration {sweep_iterations}: "
+                    f"repaired/finalized {finalized} unfinalized recording meeting(s)"
+                )
+        except Exception as e:
+            logger.error(f"[sweeps] iteration {sweep_iterations} unfinalized-recordings error: {e}", exc_info=True)
+
+        try:
             stop_summary = await _sweep_container_stops()
             if stop_summary and (
                 stop_summary.get("processed") or stop_summary.get("dlq")
@@ -334,6 +646,19 @@ async def start_sweeps(
         except Exception as e:
             logger.error(
                 f"[sweeps] iteration {sweep_iterations} container-stops error: {e}",
+                exc_info=True,
+            )
+
+        try:
+            outbound_recovered = await _sweep_stale_outbound_events(db_session_factory)
+            if outbound_recovered > 0:
+                logger.warning(
+                    f"[sweeps] iteration {sweep_iterations}: "
+                    f"recovered {outbound_recovered} stale outbound event(s)"
+                )
+        except Exception as e:
+            logger.error(
+                f"[sweeps] iteration {sweep_iterations} stale-outbound-events error: {e}",
                 exc_info=True,
             )
 

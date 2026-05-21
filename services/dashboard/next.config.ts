@@ -14,9 +14,10 @@ const basePath = normalizeBasePath(process.env.NEXT_PUBLIC_BASE_PATH);
 // Read version from vexa monorepo root VERSION file
 function getVersion(): string {
   const candidates = [
+    process.env.VEXA_REPO_ROOT ? path.resolve(process.env.VEXA_REPO_ROOT, "VERSION") : null,
     path.resolve(__dirname, "../../VERSION"),       // services/dashboard -> vexa root
     path.resolve(__dirname, "VERSION"),              // local fallback
-  ];
+  ].filter((p): p is string => Boolean(p));
   for (const p of candidates) {
     try {
       return fs.readFileSync(p, "utf-8").trim();

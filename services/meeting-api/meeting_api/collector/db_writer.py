@@ -51,6 +51,15 @@ async def process_redis_to_postgres(redis_c: aioredis.Redis, local_transcription
                     try:
                         meeting_id = int(meeting_id_str)
                         hash_key = f"meeting:{meeting_id}:segments"
+                        if await db.get(Meeting, meeting_id) is None:
+                            logger.warning(
+                                "Dropping orphan Redis transcription segments for missing meeting_id=%s",
+                                meeting_id,
+                            )
+                            await redis_c.delete(hash_key)
+                            await redis_c.srem("active_meetings", meeting_id_str)
+                            continue
+
                         redis_segments = await redis_c.hgetall(hash_key)
 
                         if not redis_segments:

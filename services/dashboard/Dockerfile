@@ -21,22 +21,25 @@ COPY services/dashboard/public ./public
 COPY services/dashboard/scripts ./scripts
 COPY services/dashboard/next.config.ts services/dashboard/tsconfig.json services/dashboard/postcss.config.mjs services/dashboard/eslint.config.mjs ./
 COPY services/dashboard/components.json ./
+COPY VERSION /repo/VERSION
+COPY deploy/helm/charts/vexa/Chart.yaml /repo/deploy/helm/charts/vexa/Chart.yaml
 
 # Version disclosure (NEXT_PUBLIC_VEXA_OSS_VERSION + RELEASE_DATE).
 #
-# Source of truth lives in deploy/helm/charts/vexa/Chart.yaml appVersion
-# (relative to repo root) but Docker's build context is .. — Chart.yaml
-# isn't accessible from inside the build's WORKDIR. Caller MUST pass these
-# as build-args, extracting from the chart on the host. The generator script
-# (scripts/generate-release-version.js, run via npm prebuild hook) consumes
-# them as its first-priority source.
+# The generator validates any env/build-arg override against the canonical
+# VERSION and Chart.yaml copied above, then the assertion checks the compiled
+# Next.js bundle. This prevents digest-retagged or stale-build dashboard images
+# from silently displaying an older release identity.
 ARG NEXT_PUBLIC_VEXA_OSS_VERSION
 ARG NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE
+ARG VEXA_API_URL
 ENV NEXT_PUBLIC_VEXA_OSS_VERSION=$NEXT_PUBLIC_VEXA_OSS_VERSION
 ENV NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE=$NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE
+ENV VEXA_API_URL=$VEXA_API_URL
+ENV VEXA_REPO_ROOT=/repo
 
 # Build application (npm prebuild → generate-release-version.js → next build)
-RUN npm run build
+RUN npm run build && npm run assert-release-version
 
 # Production stage
 FROM node:20-alpine AS runner
