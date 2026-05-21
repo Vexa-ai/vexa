@@ -15,6 +15,15 @@ source "$(dirname "$0")/../lib/common.sh"
 
 DASHBOARD_URL=$(state_read dashboard_url)
 COOKIE_TOKEN=$(state_read dashboard_cookie)
+COOKIE_NAME=$(cat "$STATE/dashboard_cookie_name" 2>/dev/null || true)
+if [ -z "$COOKIE_NAME" ]; then
+    MODE=$(cat "$STATE/deploy_mode" 2>/dev/null || detect_mode)
+    case "$MODE" in
+        lite) COOKIE_NAME="vexa-token-lite" ;;
+        compose) COOKIE_NAME="vexa-token-compose" ;;
+        *) COOKIE_NAME="vexa-token" ;;
+    esac
+fi
 
 echo ""
 echo "  dashboard-proxy"
@@ -22,7 +31,7 @@ echo "  ────────────────────────
 
 test_begin dashboard-proxy
 
-COOKIE_HEADER="Cookie: vexa-token=$COOKIE_TOKEN"
+COOKIE_HEADER="Cookie: $COOKIE_NAME=$COOKIE_TOKEN"
 
 # ── Step: meetings_list ──────────────────────────
 MEETINGS_RESP=$(curl -sf -H "$COOKIE_HEADER" "$DASHBOARD_URL/api/vexa/meetings")
@@ -46,12 +55,12 @@ else
     PAGE_RESULT=$(python3 -c "
 import json, urllib.request
 req=urllib.request.Request('$DASHBOARD_URL/api/vexa/meetings?limit=2&offset=0')
-req.add_header('Cookie','vexa-token=$COOKIE_TOKEN')
+req.add_header('Cookie','$COOKIE_NAME=$COOKIE_TOKEN')
 try:
     d=json.load(urllib.request.urlopen(req, timeout=10))
     p1=d.get('meetings',[])
     req2=urllib.request.Request('$DASHBOARD_URL/api/vexa/meetings?limit=2&offset=2')
-    req2.add_header('Cookie','vexa-token=$COOKIE_TOKEN')
+    req2.add_header('Cookie','$COOKIE_NAME=$COOKIE_TOKEN')
     d2=json.load(urllib.request.urlopen(req2, timeout=10))
     p2=d2.get('meetings',[])
     ids1=set(m.get('id','') for m in p1)
@@ -101,7 +110,7 @@ for m in d.get('meetings',[]):
     if p and nid:
         try:
             req=urllib.request.Request('$DASHBOARD_URL/api/vexa/transcripts/'+p+'/'+nid)
-            req.add_header('Cookie','vexa-token=$COOKIE_TOKEN')
+            req.add_header('Cookie','$COOKIE_NAME=$COOKIE_TOKEN')
             resp=json.load(urllib.request.urlopen(req, timeout=10))
             segs=resp.get('segments',[]) if isinstance(resp,dict) else resp
             if len(segs)>0:

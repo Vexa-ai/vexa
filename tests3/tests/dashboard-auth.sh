@@ -40,6 +40,7 @@ fi
 # ── Step: cookie_flags ───────────────────────────
 PROTOCOL=$(echo "$DASHBOARD_URL" | grep -o '^https\?')
 COOKIE_HEADER=$(grep -i 'set-cookie.*vexa-token' "$HEADERS_FILE" 2>/dev/null | head -1)
+COOKIE_NAME=$(printf '%s' "$COOKIE_HEADER" | sed -n -E 's/^[Ss]et-[Cc]ookie:[[:space:]]*([^=;]+)=.*/\1/p')
 rm -f "$HEADERS_FILE"
 
 if [ "$PROTOCOL" = "http" ] && echo "$COOKIE_HEADER" | grep -qi "Secure"; then
@@ -72,6 +73,9 @@ fi
 COOKIE_TOKEN=$(grep vexa-token /tmp/tests3-dash-cookies 2>/dev/null | awk '{print $NF}')
 if [ -n "$COOKIE_TOKEN" ]; then
     state_write dashboard_cookie "$COOKIE_TOKEN"
+fi
+if [ -n "$COOKIE_NAME" ]; then
+    state_write dashboard_cookie_name "$COOKIE_NAME"
 fi
 
 echo "  ──────────────────────────────────────────────"
