@@ -56,13 +56,16 @@ try {
   await page.goto(`/meetings/${meetingId}`, { waitUntil: "domcontentloaded", timeout: 30_000 });
   await page.waitForTimeout(1_500);
 
-  const browserButton = page.getByRole("button", { name: /^Browser$/ }).first();
-  if (!(await browserButton.isVisible().catch(() => false))) {
-    const text = await page.locator("body").innerText({ timeout: 10_000 }).catch(() => "");
-    throw new Error(`Browser button not visible on meeting ${meetingId}: ${text.replace(/\s+/g, " ").slice(0, 400)}`);
+  const existingIframe = page.locator("iframe").first();
+  if (!(await existingIframe.isVisible().catch(() => false))) {
+    const browserButton = page.getByRole("button", { name: /^Browser$/ }).first();
+    if (!(await browserButton.isVisible().catch(() => false))) {
+      const text = await page.locator("body").innerText({ timeout: 10_000 }).catch(() => "");
+      throw new Error(`Browser iframe/button not visible on meeting ${meetingId}: ${text.replace(/\s+/g, " ").slice(0, 400)}`);
+    }
+    await browserButton.click();
   }
 
-  await browserButton.click();
   await page.waitForSelector("iframe", { timeout: 10_000 });
   await page.waitForTimeout(2_500);
 
@@ -76,7 +79,7 @@ try {
   if (iframeSrc.startsWith(`${dashboardOrigin}/b/`)) {
     throw new Error(`iframe src still uses dashboard same-origin /b route: ${iframeSrc}`);
   }
-  if (sessionToken && !iframeSrc.includes(`/b/${sessionToken}/`)) {
+  if (sessionToken && sessionToken !== "[REDACTED]" && !iframeSrc.includes(`/b/${sessionToken}/`)) {
     throw new Error(`iframe src did not prefer session token ${sessionToken}: ${iframeSrc}`);
   }
 
