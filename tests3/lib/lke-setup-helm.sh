@@ -17,11 +17,14 @@ echo "  ────────────────────────
 # ── 0. Clear stale credentials ──────────────────
 rm -f "$STATE/admin_token" "$STATE/api_token"
 
-# ── 1. Read config from central .env ───────────────
-# Single source of truth: deploy/env-example → .env
+# ── 1. Read config from release state + central .env ───────────────
+# Release harness runs use STATE/image_tag as the candidate SSOT. Local ad-hoc
+# helm runs still fall back to .env for compatibility.
 TX_URL=$(grep -E '^TRANSCRIPTION_SERVICE_URL=' "$ROOT/.env" 2>/dev/null | cut -d= -f2- || echo "")
 TX_TOKEN=$(grep -E '^TRANSCRIPTION_SERVICE_TOKEN=' "$ROOT/.env" 2>/dev/null | cut -d= -f2- || echo "")
-IMAGE_TAG=$(grep -E '^IMAGE_TAG=' "$ROOT/.env" 2>/dev/null | cut -d= -f2- || echo "")
+ENV_IMAGE_TAG=$(grep -E '^IMAGE_TAG=' "$ROOT/.env" 2>/dev/null | cut -d= -f2- || echo "")
+STATE_IMAGE_TAG=$(cat "$STATE/image_tag" 2>/dev/null || echo "")
+IMAGE_TAG="${STATE_IMAGE_TAG:-$ENV_IMAGE_TAG}"
 
 if [ -n "$TX_URL" ]; then
     pass ".env: TX_URL=${TX_URL:0:40}..."
@@ -29,7 +32,11 @@ else
     info "no TRANSCRIPTION_SERVICE_URL in .env — transcription checks will skip"
 fi
 if [ -n "$IMAGE_TAG" ]; then
-    info ".env: IMAGE_TAG=$IMAGE_TAG"
+    if [ -n "$STATE_IMAGE_TAG" ]; then
+        info "state: IMAGE_TAG=$IMAGE_TAG"
+    else
+        info ".env: IMAGE_TAG=$IMAGE_TAG"
+    fi
 fi
 
 # ── 2. Verify cluster reachable ──────────────────
