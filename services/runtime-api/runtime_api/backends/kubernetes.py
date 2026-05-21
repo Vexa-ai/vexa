@@ -19,6 +19,29 @@ logger = logging.getLogger("runtime_api.backends.kubernetes")
 MANAGED_LABEL = "runtime.managed"
 
 
+def _normalize_kubernetes_auth(configuration) -> bool:
+    """Keep auth compatible across kubernetes Python client generations.
+
+    The 36.x generated client sends auth only from the `BearerToken` slot, while
+    `load_incluster_config()` can still populate `authorization` directly. When
+    left unnormalized, requests reach the API server without a bearer token and
+    are evaluated as `system:anonymous`.
+    """
+
+    token = configuration.api_key.get("BearerToken") or configuration.api_key.get(
+        "authorization"
+    )
+    if not token:
+        return False
+    if token.lower().startswith("bearer "):
+        token = token.split(" ", 1)[1]
+    configuration.api_key["BearerToken"] = token
+    configuration.api_key_prefix["BearerToken"] = "Bearer"
+    configuration.api_key.pop("authorization", None)
+    configuration.api_key_prefix.pop("authorization", None)
+    return True
+
+
 class KubernetesBackend(Backend):
     def __init__(self):
         self._api = None
@@ -38,7 +61,10 @@ class KubernetesBackend(Backend):
             except k8s_config.ConfigException:
                 logger.error("Could not load Kubernetes config")
                 raise
-        self._api = client.CoreV1Api()
+        configuration = client.Configuration.get_default_copy()
+        if _normalize_kubernetes_auth(configuration):
+            client.Configuration.set_default(configuration)
+        self._api = client.CoreV1Api(client.ApiClient(configuration))
         return self._api
 
     async def startup(self) -> None:

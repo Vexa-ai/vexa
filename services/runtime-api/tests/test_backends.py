@@ -288,6 +288,19 @@ def test_k8s_pod_spec_overrides():
     assert spec.k8s_overrides["annotations"]["prometheus.io/scrape"] == "true"
 
 
+def test_k8s_auth_normalization_maps_incluster_authorization_key():
+    """K8s backend: new client auth slot is populated from incluster config."""
+    from runtime_api.backends.kubernetes import _normalize_kubernetes_auth
+
+    class FakeConfiguration:
+        api_key = {"authorization": "bearer test-token"}
+        api_key_prefix = {}
+
+    assert _normalize_kubernetes_auth(FakeConfiguration) is True
+    assert FakeConfiguration.api_key == {"BearerToken": "test-token"}
+    assert FakeConfiguration.api_key_prefix == {"BearerToken": "Bearer"}
+
+
 # --- ContainerSpec / ContainerInfo dataclasses ---
 
 

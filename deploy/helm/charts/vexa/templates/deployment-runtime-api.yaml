@@ -86,7 +86,7 @@ spec:
             - name: ALLOW_PRIVATE_CALLBACKS
               value: "true"
             - name: BROWSER_IMAGE
-              value: {{ .Values.runtimeApi.browserImage | default (printf "%s:%s" .Values.meetingApi.image.repository .Values.meetingApi.image.tag) | quote }}
+              value: {{ include "vexa.botImage" . | quote }}
             {{- if eq (default "process" .Values.runtimeApi.orchestrator) "kubernetes" }}
             - name: K8S_NAMESPACE
               valueFrom:
