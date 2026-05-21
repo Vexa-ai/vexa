@@ -15,8 +15,13 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$ROOT_DIR/tests3/lib/common.sh"
 
 MODE="$(cat "$STATE/deploy_mode" 2>/dev/null || detect_mode)"
-detect_urls "$MODE"
-
+STATE_GATEWAY_URL="$(cat "$STATE/gateway_url" 2>/dev/null || true)"
+STATE_DASHBOARD_URL="$(cat "$STATE/dashboard_url" 2>/dev/null || true)"
+GATEWAY_URL="${GATEWAY_URL:-$STATE_GATEWAY_URL}"
+DASHBOARD_URL="${DASHBOARD_URL:-$STATE_DASHBOARD_URL}"
+if [ -z "$GATEWAY_URL" ] || [ -z "$DASHBOARD_URL" ]; then
+  detect_urls "$MODE"
+fi
 GATEWAY_URL="${GATEWAY_URL:-$(state_read gateway_url)}"
 DASHBOARD_URL="${DASHBOARD_URL:-$(state_read dashboard_url)}"
 API_TOKEN="${API_TOKEN:-$(state_read api_token)}"
