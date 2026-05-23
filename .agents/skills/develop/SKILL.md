@@ -77,9 +77,12 @@ The pack epic must follow the `pack` skill template and declare:
    when, what URLs/screenshots/log summaries were reviewed, and the verdict.
    This gate is never waived by a pack epic saying live meetings are not
    required; external meeting validation is a separate boundary.
-12. Run `vexa-meeting-deployment-test` only when the pack reaches an actual
-   external meeting boundary after synthetic, Compose, Lite, and human eyeball
-   checks.
+12. Run `vexa-meeting-deployment-test` for every pack against both the
+   pack-specific Compose lane and the pack-specific Lite lane after synthetic,
+   Compose, Lite, and human eyeball checks. Use the user-approved meeting
+   URL(s), configure `https://httpbin.org/post` webhooks, and record separate
+   Compose and Lite reports. A pack cannot be PR-ready until both lane reports
+   have `Status: pass`.
 13. Run `hardenloop` before the pack can be PR-ready.
 14. Check evidence with `scripts/pack-evidence-check.py`.
 15. Render the PR body with `scripts/render-pr-body.py`, open the PR, and keep
@@ -113,8 +116,10 @@ Minimum PR-ready evidence:
   ops/ops.jsonl
   tests/
   compose/
+    meeting-deployment-test.md
     human-eyeball.md
   lite/
+    meeting-deployment-test.md
     human-eyeball.md
   human/
     overall-functionality.md
@@ -123,9 +128,9 @@ Minimum PR-ready evidence:
   pr.md
 ```
 
-Compose, Lite, and human eyeball gates are mandatory for every pack. If an
-external live-meeting gate is intentionally not required, the pack epic must say
-so and the evidence checker must record the disposition.
+Compose, Lite, human eyeball, and live meeting deployment gates are mandatory
+for every pack. The live meeting deployment gate must run against both Compose
+and Lite lanes with separate evidence files.
 
 ## Operation Ledger
 
@@ -150,6 +155,6 @@ When reporting progress, include:
 - synthetic validation status;
 - Compose and Lite lane status, including blast-radius status;
 - human eyeball validation status for overall functionality and Compose/Lite;
-- external live-meeting boundary, if any;
+- external live-meeting validation status for Compose and Lite;
 - Hardenloop status;
 - PR/evidence readiness.

@@ -47,7 +47,9 @@ def main() -> int:
     if args.mode == "pr-ready":
         required.extend(
             [
+                "compose/meeting-deployment-test.md",
                 "compose/human-eyeball.md",
+                "lite/meeting-deployment-test.md",
                 "lite/human-eyeball.md",
                 "human/overall-functionality.md",
                 "hardenloop",
@@ -57,7 +59,9 @@ def main() -> int:
         )
 
     pass_files = {
+        "compose/meeting-deployment-test.md",
         "compose/human-eyeball.md",
+        "lite/meeting-deployment-test.md",
         "lite/human-eyeball.md",
         "human/overall-functionality.md",
     }
