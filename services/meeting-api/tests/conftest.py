@@ -198,9 +198,11 @@ async def client(mock_db, mock_redis) -> AsyncGenerator[AsyncClient, None]:
 
     from meeting_api.database import get_db
     from meeting_api.auth import get_user_and_token
+    from meeting_api.collector.auth import require_internal_secret
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_user_and_token] = override_auth
+    app.dependency_overrides[require_internal_secret] = lambda: None
 
     # Inject mock Redis
     meetings_mod.set_redis(mock_redis)
@@ -228,7 +230,9 @@ async def unauthed_client(mock_db, mock_redis) -> AsyncGenerator[AsyncClient, No
         yield mock_db
 
     from meeting_api.database import get_db
+    from meeting_api.collector.auth import require_internal_secret
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[require_internal_secret] = lambda: None
     meetings_mod.set_redis(mock_redis)
 
     # Enable standalone auth so missing key → 403

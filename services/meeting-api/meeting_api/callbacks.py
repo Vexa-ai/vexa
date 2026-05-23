@@ -34,6 +34,7 @@ from .meetings import (
 )
 from .post_meeting import run_all_tasks
 from .recording_finalizer import finalize_recording_master
+from .collector.auth import require_internal_secret
 
 logger = logging.getLogger("meeting_api.callbacks")
 
@@ -220,7 +221,7 @@ async def _classify_stopped_exit(
 
     return (MeetingStatus.COMPLETED, requested_reason)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_internal_secret)])
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +270,14 @@ class BotStatusChangePayload(BaseModel):
 # ---------------------------------------------------------------------------
 
 async def _find_meeting_by_session(session_uid: str, db: AsyncSession) -> tuple[Optional[MeetingSession], Optional[Meeting]]:
+    if session_uid.startswith("bs:"):
+        try:
+            meeting_id = int(session_uid[3:])
+        except ValueError:
+            return None, None
+        meeting = await db.get(Meeting, meeting_id)
+        return None, meeting
+
     session_stmt = select(MeetingSession).where(MeetingSession.session_uid == session_uid)
     meeting_session = (await db.execute(session_stmt)).scalars().first()
     if not meeting_session:

@@ -42,6 +42,7 @@ from .schemas import (
 )
 
 from .auth import get_user_and_token
+from .collector.auth import require_internal_secret
 from .config import (
     REDIS_URL,
     RUNTIME_API_URL,
@@ -134,6 +135,7 @@ async def update_meeting_status(
         select(Meeting)
         .where(Meeting.id == meeting.id)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     result = await db.execute(locked_stmt)
     meeting = result.scalar_one()
@@ -357,6 +359,7 @@ async def _schedule_bot_timeout(
                 "request": {
                     "method": "DELETE",
                     "url": f"{MEETING_API_URL}/bots/internal/timeout/{meeting_id}",
+                    "headers": {"X-Internal-Secret": os.getenv("INTERNAL_API_SECRET", "")},
                     "timeout": 30,
                 },
                 "metadata": {
@@ -403,6 +406,7 @@ async def _spawn_via_runtime_api(
     user_id: int,
     callback_url: str,
     metadata: Dict[str, Any],
+    callback_headers: Optional[Dict[str, str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Create a container via Runtime API POST /containers."""
     try:
@@ -414,6 +418,7 @@ async def _spawn_via_runtime_api(
                 "config": config,
                 "user_id": str(user_id),
                 "callback_url": callback_url,
+                "callback_headers": callback_headers or {},
                 "metadata": metadata,
             },
             timeout=30.0,
@@ -742,6 +747,7 @@ async def request_bot(
             user_id=current_user.id,
             callback_url=f"{MEETING_API_URL}/bots/internal/callback/exited",
             metadata={"meeting_id": new_meeting.id},
+            callback_headers={"X-Internal-Secret": os.getenv("INTERNAL_API_SECRET", "")},
         )
         if not result:
             new_meeting.status = MeetingStatus.FAILED.value
@@ -810,6 +816,7 @@ async def request_bot(
             "session_token": session_token,
             "redisUrl": REDIS_URL,
             "meetingApiCallbackUrl": f"{MEETING_API_URL}/bots/internal/callback/exited",
+            "internalSecret": os.getenv("INTERNAL_API_SECRET", ""),
             **s3_config,
         }
 
@@ -818,7 +825,11 @@ async def request_bot(
             config={"image": BOT_IMAGE_NAME, "env": {"BOT_CONFIG": json.dumps(bot_config), "BOT_MODE": "browser_session"}},
             user_id=current_user.id,
             callback_url=f"{MEETING_API_URL}/bots/internal/callback/exited",
-            metadata={"meeting_id": new_meeting.id},
+            callback_headers={"X-Internal-Secret": os.getenv("INTERNAL_API_SECRET", "")},
+            metadata={
+                "meeting_id": new_meeting.id,
+                "connection_id": f"bs:{new_meeting.id}",
+            },
         )
         if not result:
             new_meeting.status = MeetingStatus.FAILED.value
@@ -1084,6 +1095,7 @@ async def request_bot(
             "everyoneLeftTimeout": resolved_max_time_left_alone,
         },
         "meetingApiCallbackUrl": f"{MEETING_API_URL}/bots/internal/callback/exited",
+        "internalSecret": os.getenv("INTERNAL_API_SECRET", ""),
         "recordingEnabled": user_recording_config.get("enabled", os.getenv("RECORDING_ENABLED", "true").lower() == "true"),
         "transcribeEnabled": transcribe,
         "captureModes": user_recording_config.get("capture_modes", os.getenv("CAPTURE_MODES", "audio").split(",")),
@@ -1118,6 +1130,7 @@ async def request_bot(
     # Build env for Runtime API
     env_vars = {
         "BOT_CONFIG": json.dumps(bot_config),
+        "INTERNAL_API_SECRET": os.getenv("INTERNAL_API_SECRET", ""),
         "LOG_LEVEL": os.getenv("LOG_LEVEL", "INFO").upper(),
         "VIDEO_HWACCEL": os.getenv("VIDEO_HWACCEL", "none").lower(),
     }
@@ -1180,6 +1193,7 @@ async def request_bot(
         config={"image": BOT_IMAGE_NAME, "env": env_vars},
         user_id=current_user.id,
         callback_url=f"{MEETING_API_URL}/bots/internal/callback/exited",
+        callback_headers={"X-Internal-Secret": os.getenv("INTERNAL_API_SECRET", "")},
         metadata={"meeting_id": meeting_id, "connection_id": connection_id},
     )
 
@@ -1719,6 +1733,7 @@ async def stop_bot(
 async def scheduler_timeout_stop(
     meeting_id: int,
     background_tasks: BackgroundTasks,
+    _: None = Depends(require_internal_secret),
     db: AsyncSession = Depends(get_db),
 ):
     """Called by the scheduler when max_bot_time expires.
