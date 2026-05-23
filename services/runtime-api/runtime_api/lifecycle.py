@@ -181,9 +181,17 @@ async def handle_container_exit(redis, name: str, exit_code: int) -> None:
 
     Updates state and delivers the exit callback.
     """
+    container_data = await state.get_container(redis, name)
+    if not container_data:
+        logger.info(f"Container {name} exited with code {exit_code}; state already removed")
+        return
+
     status = "stopped" if exit_code == 0 else "failed"
     logger.info(f"Container {name} exited with code {exit_code} -> {status}")
     await state.set_stopped(redis, name, status=status, exit_code=exit_code)
+    if container_data.get("delete_requested"):
+        logger.info(f"Container {name} exit observed during explicit delete; delete path owns callback")
+        return
     await _fire_exit_callback(redis, name, exit_code=exit_code)
 
 

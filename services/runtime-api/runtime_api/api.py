@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from runtime_api import state
 from runtime_api.backends import Backend, ContainerSpec
+from runtime_api.lifecycle import _fire_exit_callback
 from runtime_api.profiles import get_profile, get_all_profiles
 
 logger = logging.getLogger("runtime_api.api")
@@ -337,9 +338,17 @@ async def delete_container(name: str, request: Request):
     backend = _get_backend(request)
     redis = _get_redis(request)
 
+    data = await state.get_container(redis, name)
+    if data:
+        data["delete_requested"] = True
+        await state.set_container(redis, name, data)
+
     await backend.stop(name)
     await backend.remove(name)
-    await state.set_stopped(redis, name)
+    if data:
+        await state.set_stopped(redis, name)
+        await _fire_exit_callback(redis, name, exit_code=0)
+        await state.delete_container(redis, name)
     logger.info(f"Stopped and removed {name}")
     return {"name": name, "status": "stopped"}
 
