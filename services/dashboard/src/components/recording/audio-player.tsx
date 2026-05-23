@@ -97,7 +97,8 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
     // Initialize fragment durations from props
     useEffect(() => {
       if (effectiveFragments.length > 0) {
-        setFragmentDurations(effectiveFragments.map(f => f.duration || 0));
+        const durations = effectiveFragments.map(f => f.duration || 0);
+        queueMicrotask(() => setFragmentDurations(durations));
       }
     }, [fragments, src]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -164,7 +165,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
       lastLoadedSrcRef.current = currentSrc;
 
       pendingSeekRef.current = currentTime;
-      setIsLoading(true);
+      queueMicrotask(() => setIsLoading(true));
       audio.src = currentSrc;
       audio.load();
       onFragmentChange?.(currentFragmentIndex);
@@ -173,6 +174,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
     useEffect(() => {
       const audio = audioRef.current;
       if (!audio) return;
+      let disposed = false;
 
       const handleTimeUpdate = () => {
         const time = audio.currentTime;
@@ -186,11 +188,15 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
         }
       };
 
-      const handleLoadedMetadata = () => {
-        const dur = audio.duration;
+      const syncMetadataFromElement = () => {
+        const dur = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 0;
         setDuration(dur);
         updateFragmentDuration(currentFragmentIndex, dur);
         setIsLoading(false);
+      };
+
+      const handleLoadedMetadata = () => {
+        syncMetadataFromElement();
 
         // If we have a pending seek from a fragment switch, apply it now
         if (pendingSeekRef.current !== null) {
@@ -235,6 +241,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
 
       audio.addEventListener("timeupdate", handleTimeUpdate);
       audio.addEventListener("loadedmetadata", handleLoadedMetadata);
+      audio.addEventListener("durationchange", syncMetadataFromElement);
       audio.addEventListener("canplay", handleCanPlay);
       audio.addEventListener("waiting", handleWaiting);
       audio.addEventListener("playing", handlePlaying);
@@ -242,13 +249,28 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
       audio.addEventListener("ended", handleEnded);
       audio.addEventListener("error", handleError);
 
+      // The browser can load cached/presigned media before React effects attach
+      // listeners. Reconcile from the element state so the UI cannot stay stuck
+      // at "Preparing audio..." after metadata is already available.
+      queueMicrotask(() => {
+        if (disposed || audioRef.current !== audio) return;
+        if (audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+          syncMetadataFromElement();
+        }
+        if (audio.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+          handleCanPlay();
+        }
+      });
+
       return () => {
+        disposed = true;
         if (retryTimerRef.current) {
           clearTimeout(retryTimerRef.current);
           retryTimerRef.current = null;
         }
         audio.removeEventListener("timeupdate", handleTimeUpdate);
         audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
+        audio.removeEventListener("durationchange", syncMetadataFromElement);
         audio.removeEventListener("canplay", handleCanPlay);
         audio.removeEventListener("waiting", handleWaiting);
         audio.removeEventListener("playing", handlePlaying);
@@ -256,7 +278,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
         audio.removeEventListener("ended", handleEnded);
         audio.removeEventListener("error", handleError);
       };
-    }, [onTimeUpdate, isMultiFragment, currentFragmentIndex, effectiveFragments.length, fragmentDurations, updateFragmentDuration]);
+    }, [onTimeUpdate, isMultiFragment, currentFragmentIndex, currentSrc, effectiveFragments.length, fragmentDurations, updateFragmentDuration]);
 
     const togglePlay = useCallback(() => {
       const audio = audioRef.current;
