@@ -353,6 +353,15 @@ async def run_all_tasks(meeting_id: int):
     except Exception as e:
         logger.error(f"Post-meeting hooks failed for meeting {meeting_id}: {e}", exc_info=True)
 
+    # Task 4: Extract frames if snapshots enabled
+    try:
+        from .frame_extractor import extract_frames_if_enabled
+        frame_count = await extract_frames_if_enabled(meeting_id)
+        if frame_count > 0:
+            logger.info(f"Extracted {frame_count} frames for meeting {meeting_id}")
+    except Exception as e:
+        logger.error(f"Frame extraction failed for meeting {meeting_id}: {e}", exc_info=True)
+
     logger.info(f"Post-meeting tasks completed for meeting {meeting_id}")
 
 
