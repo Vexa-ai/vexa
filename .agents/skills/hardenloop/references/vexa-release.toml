@@ -1,0 +1,95 @@
+# Hardenloop release scanner profile for Vexa release packs.
+#
+# This file lives with the hardenloop skill so release validation does not
+# depend on a deprecated external harness.
+
+[[tool]]
+name = "semgrep"
+command = [
+  "bash", "-lc",
+  "set -euo pipefail; target='{target}'; raw='{raw}'; base=$(git -C \"$target\" merge-base HEAD main 2>/dev/null || git -C \"$target\" rev-parse HEAD~1); cd \"$target\"; semgrep scan --config auto --sarif -o \"$raw/semgrep.sarif\" --baseline-commit \"$base\" --exclude services/dashboard/.next .",
+]
+raw_output = "semgrep.sarif"
+categories = ["sast"]
+rationale = "Release-scoped multi-language SAST against findings introduced after the branch baseline; full repo hardening debt is tracked separately."
+
+[[tool]]
+name = "gitleaks"
+command = [
+  "bash", "-lc",
+  "set -euo pipefail; target='{target}'; raw='{raw}'; tmp=$(mktemp -d); patch=$(mktemp); trap 'rm -rf \"$tmp\" \"$patch\"' EXIT; git -C \"$target\" archive HEAD | tar -x -C \"$tmp\"; git -C \"$target\" diff --binary > \"$patch\"; if [ -s \"$patch\" ]; then (cd \"$tmp\" && git apply \"$patch\"); fi; gitleaks detect --source \"$tmp\" --no-git --redact --report-format json --report-path \"$raw/gitleaks.json\" --no-banner",
+]
+raw_output = "gitleaks.json"
+categories = ["secrets"]
+rationale = "Secret scan current tracked source plus local tracked diff, without historical or ignored local artifacts."
+
+[[tool]]
+name = "trivy"
+command = [
+  "trivy", "fs",
+  "--skip-dirs", ".git",
+  "--skip-dirs", "services/dashboard/.next",
+  "--format", "sarif",
+  "--output", "{raw}/trivy.sarif",
+  "{target}",
+]
+raw_output = "trivy.sarif"
+categories = ["sca", "iac", "secrets"]
+rationale = "Filesystem dependency, IaC, secret, and vulnerability scan."
+
+[[tool]]
+name = "osv-scanner"
+command = [
+  "osv-scanner", "scan", "source",
+  "-r", "{target}",
+  "--no-resolve",
+  "--experimental-exclude", "services/dashboard/.next",
+  "--format", "json",
+]
+raw_output = "osv.json"
+categories = ["sca"]
+rationale = "Known vulnerable dependency detection from OSV advisories."
+
+[[tool]]
+name = "syft"
+command = ["syft", "{target}", "-o", "cyclonedx-json"]
+raw_output = "sbom.cyclonedx.json"
+categories = ["sbom"]
+rationale = "SBOM inventory for release and vulnerability correlation."
+
+[[tool]]
+name = "zizmor"
+command = ["zizmor", "--format", "sarif", "{target}"]
+raw_output = "zizmor.sarif"
+categories = ["ci-cd"]
+triggers = [".github/workflows"]
+rationale = "GitHub Actions supply-chain and workflow risk detection."
+
+[[tool]]
+name = "actionlint"
+command = ["actionlint", "-format", "{{json .}}"]
+raw_output = "actionlint.json"
+categories = ["ci-cd"]
+triggers = [".github/workflows"]
+rationale = "GitHub Actions syntax and workflow expression validation."
+
+[[tool]]
+name = "bandit"
+command = [
+  "bandit", "-r", ".",
+  "-x", ".git,.claude,.codex,.venv,venv,node_modules,dist,build,tests,services/dashboard/.next",
+  "-f", "json",
+  "-o", "{raw}/bandit.json",
+]
+raw_output = "bandit.json"
+categories = ["sast"]
+triggers = ["python"]
+rationale = "Python security bad-pattern scan."
+
+[[tool]]
+name = "pip-audit"
+command = ["pip-audit", "--path", "{target}", "--format", "json"]
+raw_output = "pip-audit.json"
+categories = ["sca"]
+triggers = ["pip"]
+rationale = "Python dependency vulnerability scan."

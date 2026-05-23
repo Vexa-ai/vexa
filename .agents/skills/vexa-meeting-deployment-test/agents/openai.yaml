@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vexa Meeting Deployment Test"
+  short_description: "Score listener transcripts from speaker bots"
+  default_prompt: "Use $vexa-meeting-deployment-test with the meeting URLs I provide. Deploy one test@vexa.ai listener bot plus two dedicated speaker bots by default, make the speaker bots speak the reusable ground-truth conversation, validate listener transcription and speaker identification quality, validate webhooks, stop all bots, and report telemetry."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Transcription Service Deploy"
+  short_description: "Deploy Vexa transcription service"
+  default_prompt: "Use $transcription-service-deploy to deploy and verify the Vexa transcription service from official deploy docs."

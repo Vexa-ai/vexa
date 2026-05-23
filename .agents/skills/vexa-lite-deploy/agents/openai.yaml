@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vexa Lite Deploy"
+  short_description: "Deploy Vexa Lite from official docs"
+  default_prompt: "Use $vexa-lite-deploy to deploy and verify Vexa Lite from official deploy docs."

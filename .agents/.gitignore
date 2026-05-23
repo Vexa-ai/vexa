@@ -1,0 +1,4 @@
+releases/
+packs/
+skills/*/.runs/
+**/__pycache__/
