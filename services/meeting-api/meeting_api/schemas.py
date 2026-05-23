@@ -1299,7 +1299,7 @@ class SpeakRequest(BaseModel):
     format: Optional[str] = Field("wav", description="Audio format: wav, mp3, pcm, opus")
     sample_rate: Optional[int] = Field(24000, description="Sample rate for PCM audio (Hz)")
     provider: Optional[str] = Field("piper", description="TTS provider: piper (default, local), openai, cartesia, elevenlabs")
-    voice: Optional[str] = Field("alloy", description="Voice ID for TTS")
+    voice: Optional[str] = Field("auto", description="Voice ID for TTS; auto chooses a local Piper voice from text language")
 
     @field_validator('text', 'audio_url', 'audio_base64')
     @classmethod

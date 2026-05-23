@@ -526,8 +526,8 @@ curl -X POST https://api.vexa.ai/bots/google_meet/abc-defg-hij/speak \
   -H "Content-Type: application/json" \
   -d '{
     "text": "Thanks for joining. I will be taking notes.",
-    "provider": "openai",
-    "voice": "alloy"
+    "provider": "piper",
+    "voice": "auto"
   }'
 # 202 Accepted → {"message": "Speak command sent", "meeting_id": 12345}
 

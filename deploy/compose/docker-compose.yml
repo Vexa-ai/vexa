@@ -129,6 +129,7 @@ services:
       - AGENT_IMAGE=${AGENT_IMAGE}
       - BROWSER_IMAGE=${BROWSER_IMAGE}
       - REDIS_URL=redis://redis:6379
+      - TTS_SERVICE_URL=http://tts-service:8002
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
@@ -377,7 +378,13 @@ services:
     mem_limit: 1g
     expose:
       - "8002"
+    # Host-expose TTS for pack-lane probes; override in isolated lanes.
+    ports:
+      - "127.0.0.1:${TTS_SERVICE_HOST_PORT:-8002}:8002"
     environment:
+      - PIPER_DEFAULT_VOICES=${PIPER_DEFAULT_VOICES:-major}
+      - PIPER_LOAD_VOICES=${PIPER_LOAD_VOICES:-en_US-amy-medium,en_US-danny-low,pt_BR-faber-medium,es_ES-davefx-medium}
+      - PIPER_PRELOAD_STRICT=${PIPER_PRELOAD_STRICT:-true}
       - TTS_API_TOKEN=${TTS_API_TOKEN:-}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:

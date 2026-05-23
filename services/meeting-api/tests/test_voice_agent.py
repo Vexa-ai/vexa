@@ -79,6 +79,27 @@ class TestSpeak:
         parsed = json.loads(payload)
         assert parsed["action"] == "speak"
         assert parsed["text"] == "Hello, world!"
+        assert parsed["provider"] == "piper"
+        assert parsed["voice"] == "auto"
+
+    @pytest.mark.asyncio
+    async def test_speak_text_explicit_provider_and_voice(self, client, mock_redis, active_meeting):
+        """POST /speak keeps explicit provider/voice overrides."""
+        with _patch_find_active(active_meeting):
+            resp = await client.post(
+                f"/bots/{TEST_PLATFORM}/{TEST_NATIVE_MEETING_ID}/speak",
+                json={
+                    "text": "Hello, world!",
+                    "provider": "openai",
+                    "voice": "alloy",
+                },
+            )
+
+        assert resp.status_code == 202
+        parsed = json.loads(mock_redis.publish.call_args[0][1])
+        assert parsed["action"] == "speak"
+        assert parsed["provider"] == "openai"
+        assert parsed["voice"] == "alloy"
 
     @pytest.mark.asyncio
     async def test_speak_audio_url(self, client, mock_redis, active_meeting):
@@ -92,6 +113,23 @@ class TestSpeak:
         assert resp.status_code == 202
         parsed = json.loads(mock_redis.publish.call_args[0][1])
         assert parsed["action"] == "speak_audio"
+        assert parsed["audio_url"] == "https://example.com/audio.wav"
+
+    @pytest.mark.asyncio
+    async def test_speak_audio_base64(self, client, mock_redis, active_meeting):
+        """POST /speak with audio_base64 → publishes speak_audio command."""
+        with _patch_find_active(active_meeting):
+            resp = await client.post(
+                f"/bots/{TEST_PLATFORM}/{TEST_NATIVE_MEETING_ID}/speak",
+                json={"audio_base64": "UklGRg==", "format": "wav", "sample_rate": 24000},
+            )
+
+        assert resp.status_code == 202
+        parsed = json.loads(mock_redis.publish.call_args[0][1])
+        assert parsed["action"] == "speak_audio"
+        assert parsed["audio_base64"] == "UklGRg=="
+        assert parsed["format"] == "wav"
+        assert parsed["sample_rate"] == 24000
 
     @pytest.mark.asyncio
     async def test_speak_no_content(self, client, mock_redis, active_meeting):
