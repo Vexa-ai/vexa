@@ -420,8 +420,9 @@ export const vexaAPI = {
         `getRecordingMasterStreamUrl(${recordingId}, ${type}) response had no url`
       );
     }
+    const mediaUrl = data.url || data.download_url || "";
     return {
-      url: withBasePath(`/api/vexa/recordings/${recordingId}/master?type=${type}&proxy=1`),
+      url: /^https?:\/\//.test(mediaUrl) ? mediaUrl : withBasePath(`/api/vexa${mediaUrl}`),
       duration_seconds: data.duration_seconds ?? null,
     };
   },
