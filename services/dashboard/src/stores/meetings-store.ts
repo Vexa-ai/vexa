@@ -25,6 +25,35 @@ function recordingsFromMeeting(meeting: Meeting | null): RecordingData[] {
   return Array.isArray(recordings) ? (recordings as RecordingData[]) : [];
 }
 
+export function recordingsStateSignature(meeting: Meeting | null): string {
+  return recordingsFromMeeting(meeting)
+    .map((recording) => {
+      const mediaFiles = Array.isArray(recording.media_files)
+        ? recording.media_files
+            .map((media) => [
+              media.id,
+              media.type,
+              media.format,
+              media.is_final === true ? "final" : "partial",
+              media.finalized_by ?? "",
+              media.storage_path ?? "",
+              media.file_size_bytes ?? "",
+              media.duration_seconds ?? "",
+            ].join(":"))
+            .join(",")
+        : "";
+      return [
+        recording.id,
+        recording.status,
+        recording.completed_at ?? "",
+        recording.playback_url?.audio ?? "",
+        recording.playback_url?.video ?? "",
+        mediaFiles,
+      ].join(";");
+    })
+    .join("|");
+}
+
 interface MeetingsState {
   // Data
   meetings: Meeting[];
@@ -228,11 +257,11 @@ export const useMeetingsStore = create<MeetingsState>((set, get) => ({
       const meeting = await vexaAPI.getMeeting(id);
       if (meeting) {
         const { currentMeeting, meetings } = get();
-        const currentRecordingCount = recordingsFromMeeting(currentMeeting).length;
-        const nextRecordingCount = recordingsFromMeeting(meeting).length;
+        const currentRecordingSignature = recordingsStateSignature(currentMeeting);
+        const nextRecordingSignature = recordingsStateSignature(meeting);
         if (currentMeeting?.status !== meeting.status ||
             currentMeeting?.updated_at !== meeting.updated_at ||
-            currentRecordingCount !== nextRecordingCount) {
+            currentRecordingSignature !== nextRecordingSignature) {
           // Update in meetings list if present
           const updatedMeetings = meetings.map((m) =>
             m.id.toString() === id ? meeting : m
