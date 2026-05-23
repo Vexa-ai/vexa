@@ -19,10 +19,10 @@ Worktree: `/home/dima/dev/vexa-pack-0.10.6x-pack-7-release-identity-packaging-ha
 - Dashboard release generator/assertion synthetic: pass. Evidence: `tests/dashboard-release-version.generated.json`.
 - Meeting API security headers pytest: pass under Python 3.11 with meeting-api requirements. Earlier Python 3.9 and missing-test-dependency attempts are retained in `ops/ops.jsonl`.
 - Helm lint/template: pass; rendered bot image helper with `vexaai/vexa-bot:0.10.6.2.1`. Evidence: `tests/helm-template.yaml`.
-- Compose machine gate: pass via `docker compose config` using allocated pack ports `44460` and `44461`, with `IMAGE_TAG=0.10.6.2.1` and `VEXA_VERSION=0.10.6.2.1`. Human Compose blast-radius eyeball validation is pending. Evidence: `compose/compose-config.yaml`, `compose/human-eyeball.md`.
-- Lite machine gate: source-level identity proof pass. Human Lite blast-radius eyeball validation is pending. Evidence: `lite/lite-identity-proof.json`, `lite/human-eyeball.md`.
+- Compose machine gate: pass via `docker compose config` using allocated pack ports `44460` and `44461`, with `IMAGE_TAG=0.10.6.2.1` and `VEXA_VERSION=0.10.6.2.1`. Human Compose blast-radius eyeball validation and Compose live meeting deployment validation are pending. Evidence: `compose/compose-config.yaml`, `compose/human-eyeball.md`, `compose/meeting-deployment-test.md`.
+- Lite machine gate: source-level identity proof pass. Human Lite blast-radius eyeball validation and Lite live meeting deployment validation are pending. Evidence: `lite/lite-identity-proof.json`, `lite/human-eyeball.md`, `lite/meeting-deployment-test.md`.
 - NPM lock consistency: pass via dry-run `npm ci` for transcript-rendering, dashboard, and vexa-bot package locks.
-- External live-meeting validation: not required for this pack directly per epic.
+- External live-meeting validation: now mandatory for every pack against both Compose and Lite. Google Meet `hsg-wddw-jhz` was approved for this validation; both lane runs are pending.
 - Overall functionality human eyeball validation: pending. Evidence placeholder: `human/overall-functionality.md`.
 
 ## Hardenloop
@@ -37,4 +37,5 @@ Worktree: `/home/dima/dev/vexa-pack-0.10.6x-pack-7-release-identity-packaging-ha
 ## Residual Risk
 
 - This draft is not PR-ready until human eyeball validation passes for overall functionality, Compose blast-radius behavior, and Lite blast-radius behavior.
+- This draft is not PR-ready until `vexa-meeting-deployment-test` passes against both the Compose and Lite lanes with human post-speech and playback/artifact confirmations recorded.
 - Hardenloop coverage is incomplete due missing local scanner tools. The pack may advance with this explicit caveat, but final release hardening should rerun with full scanner availability.

@@ -35,11 +35,11 @@ Release provenance, Docker images, Helm chart SemVer/appVersion, dashboard versi
 
 Synthetic: pass. Covered source identity proof, dashboard release generator/assertion proof, meeting-api security header unit tests, Helm lint/template, and npm lock consistency dry-runs.
 
-Compose: machine config proof pass. Human Compose blast-radius eyeball validation is pending and blocks PR-ready status.
+Compose: machine config proof pass. Human Compose blast-radius eyeball validation and Compose live meeting deployment validation are pending and block PR-ready status.
 
-Lite: source-level identity proof pass. Human Lite blast-radius eyeball validation is pending and blocks PR-ready status.
+Lite: source-level identity proof pass. Human Lite blast-radius eyeball validation and Lite live meeting deployment validation are pending and block PR-ready status.
 
-Live/human: external live-meeting validation is not required for this pack directly, but overall human eyeball validation is mandatory and pending.
+Live/human: live meeting deployment validation is now mandatory for every pack against both Compose and Lite. Google Meet `hsg-wddw-jhz` was approved for this validation. Overall human eyeball validation is mandatory and pending.
 
 Hardenloop: ran with `--fix none`; release blockers `0`; decision `incomplete_coverage` because several optional local scanners are not installed. Private advisory/raw finding payloads were omitted from committed evidence; see `hardenloop/state.md`.
 
@@ -50,8 +50,10 @@ Hardenloop: ran with `--fix none`; release blockers `0`; decision `incomplete_co
 - [x] `ops/ops.jsonl`
 - [x] `tests`
 - [x] `compose`
+- [ ] `compose/meeting-deployment-test.md` has `Status: pass`
 - [ ] `compose/human-eyeball.md` has `Status: pass`
 - [x] `lite`
+- [ ] `lite/meeting-deployment-test.md` has `Status: pass`
 - [ ] `lite/human-eyeball.md` has `Status: pass`
 - [ ] `human/overall-functionality.md` has `Status: pass`
 - [x] `hardenloop`
@@ -71,6 +73,8 @@ Hardenloop: ran with `--fix none`; release blockers `0`; decision `incomplete_co
 - [x] Synthetic checks pass before live/human checks.
 - [ ] Compose gate includes passed human eyeball blast-radius validation.
 - [ ] Lite gate includes passed human eyeball blast-radius validation.
+- [ ] Compose live meeting deployment validation passed.
+- [ ] Lite live meeting deployment validation passed.
 - [ ] Overall functionality human eyeball validation passed.
 - [x] Hardenloop is run for the pack.
 - [x] PR body links this epic and evidence root.

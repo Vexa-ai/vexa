@@ -34,7 +34,19 @@
       "exists": true,
       "kind": "file",
       "pass_status": false,
+      "path": "compose/meeting-deployment-test.md"
+    },
+    {
+      "exists": true,
+      "kind": "file",
+      "pass_status": false,
       "path": "compose/human-eyeball.md"
+    },
+    {
+      "exists": true,
+      "kind": "file",
+      "pass_status": false,
+      "path": "lite/meeting-deployment-test.md"
     },
     {
       "exists": true,
@@ -66,7 +78,9 @@
   ],
   "evidence_root": ".agents/packs/0.10.6x-pack-7-release-identity-packaging-hardening",
   "invalid": [
+    "compose/meeting-deployment-test.md",
     "compose/human-eyeball.md",
+    "lite/meeting-deployment-test.md",
     "lite/human-eyeball.md",
     "human/overall-functionality.md"
   ],
@@ -80,7 +94,9 @@
     "tests",
     "compose",
     "lite",
+    "compose/meeting-deployment-test.md",
     "compose/human-eyeball.md",
+    "lite/meeting-deployment-test.md",
     "lite/human-eyeball.md",
     "human/overall-functionality.md",
     "hardenloop",
