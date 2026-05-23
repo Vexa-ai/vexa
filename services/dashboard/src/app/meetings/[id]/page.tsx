@@ -55,7 +55,7 @@ import { useMeetingsStore } from "@/stores/meetings-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { useLiveTranscripts } from "@/hooks/use-live-transcripts";
 import { PLATFORM_CONFIG, getDetailedStatus } from "@/types/vexa";
-import type { MeetingStatus, Meeting } from "@/types/vexa";
+import type { MeetingStatus, Meeting, RecordingData } from "@/types/vexa";
 import { StatusHistory } from "@/components/meetings/status-history";
 import { cn, parseUTCTimestamp } from "@/lib/utils";
 import { vexaAPI } from "@/lib/api";
@@ -198,45 +198,80 @@ export default function MeetingDetailPage() {
   // shows a "Preparing audio…" state.
   const [recordingFragments, setRecordingFragments] = useState<AudioFragment[]>([]);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
+  // Surface connection errors from the master-stream-URL lookup. This is
+  // distinct from "master not ready yet" (404 -> null -> finalizing UI).
+  const [playbackConnectionError, setPlaybackConnectionError] = useState<string | null>(null);
+
+  const audioMediaSignature = useMemo(() => {
+    return recordings
+      .filter(r => (r.status === "completed" || r.status === "in_progress"))
+      .filter(r => r.playback_url?.audio)
+      .sort((a, b) => a.created_at.localeCompare(b.created_at))
+      .map(r => `${r.id}:${r.playback_url?.audio ?? ""}`)
+      .join("|");
+  }, [recordings]);
 
   useEffect(() => {
+    if (!audioMediaSignature) {
+      setRecordingFragments([]);
+      setPlaybackConnectionError(null);
+      return;
+    }
     let cancelled = false;
     (async () => {
       const availableRecordings = recordings
-        .filter(r => (r.status === "completed" || r.status === "in_progress") && r.media_files?.some(mf => mf.type === "audio"))
+        .filter(r => (r.status === "completed" || r.status === "in_progress") && r.playback_url?.audio)
         .sort((a, b) => a.created_at.localeCompare(b.created_at));
-      const frags = await Promise.all(availableRecordings.map(async rec => {
-        const audioMedia = rec.media_files.find(mf => mf.type === "audio")!;
-        const src = await vexaAPI.getRecordingAudioStreamUrl(rec.id, audioMedia.id);
-        return {
-          src,
-          duration: audioMedia.duration_seconds || 0,
-          sessionUid: rec.session_uid,
-          createdAt: rec.created_at,
-        } as AudioFragment;
-      }));
-      if (!cancelled) setRecordingFragments(frags);
+      try {
+        const results = await Promise.all(availableRecordings.map(async rec => {
+          const result = await vexaAPI.getRecordingMasterStreamUrl(rec.id, "audio");
+          if (!result) return null;
+          return {
+            src: result.url,
+            duration: result.duration_seconds ?? 0,
+            sessionUid: rec.session_uid,
+            createdAt: rec.created_at,
+          } as AudioFragment;
+        }));
+        if (!cancelled) {
+          setRecordingFragments(results.filter((f): f is AudioFragment => f !== null));
+          setPlaybackConnectionError(null);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setPlaybackConnectionError(err instanceof Error ? err.message : String(err));
+          setRecordingFragments([]);
+        }
+      }
     })();
     return () => { cancelled = true; };
-  }, [recordings]);
+  }, [audioMediaSignature, recordings]);
 
   const hasRecordingAudio = recordingFragments.length > 0;
 
-  // Find the first video media file across all recordings for the VideoPlayer.
-  // Same Pack U.8 contract as above — presigned URL with /raw fallback.
+  // Find the first finalized video master across all recordings for the VideoPlayer.
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      for (const rec of recordings) {
-        if (rec.status !== "completed" && rec.status !== "in_progress") continue;
-        const videoMedia = rec.media_files?.find((mf: { type: string }) => mf.type === "video");
-        if (videoMedia) {
-          const src = await vexaAPI.getRecordingVideoStreamUrl(rec.id, videoMedia.id);
-          if (!cancelled) setVideoSrc(src);
+      try {
+        for (const rec of recordings) {
+          if (rec.status !== "completed" && rec.status !== "in_progress") continue;
+          if (!rec.playback_url?.video) continue;
+          const result = await vexaAPI.getRecordingMasterStreamUrl(rec.id, "video");
+          if (!result) continue;
+          if (!cancelled) {
+            setVideoSrc(result.url);
+            setPlaybackConnectionError(null);
+          }
           return;
         }
+        if (!cancelled) setVideoSrc(null);
+      } catch (err) {
+        if (!cancelled) {
+          setPlaybackConnectionError(err instanceof Error ? err.message : String(err));
+          setVideoSrc(null);
+        }
       }
-      if (!cancelled) setVideoSrc(null);
     })();
     return () => { cancelled = true; };
   }, [recordings]);
@@ -675,6 +710,13 @@ export default function MeetingDetailPage() {
   const meetingNativeId = currentMeeting?.platform_specific_id;
   const meetingNumericId = currentMeeting?.id ? String(currentMeeting.id) : undefined;
   const meetingStatus = currentMeeting?.status;
+  const isPostMeetingStatus =
+    forcePostMeetingMode || meetingStatus === "stopping" || meetingStatus === "completed";
+  const shouldPollPostMeetingArtifacts =
+    isPostMeetingStatus &&
+    currentMeeting?.data?.recording_enabled !== false &&
+    !hasRecordingAudio &&
+    !playbackConnectionError;
 
   useEffect(() => {
     // Active browser sessions use VNC — no transcript fetch needed.
@@ -706,6 +748,38 @@ export default function MeetingDetailPage() {
       fetchChatMessages(meetingPlatform, meetingNativeId);
     }
   }, [shouldUseWebSocket, meetingPlatform, meetingNativeId, fetchChatMessages]);
+
+  // Recording masters are finalized asynchronously after the bot stops. The
+  // status WebSocket can report "completed" before playback_url/audio is ready,
+  // so keep refreshing post-meeting artifacts until the player can render.
+  useEffect(() => {
+    if (!meetingId || !meetingPlatform || !meetingNativeId) return;
+    if (!shouldPollPostMeetingArtifacts) return;
+
+    let cancelled = false;
+    const refreshPostMeetingArtifacts = () => {
+      if (cancelled) return;
+      refreshMeeting(meetingId);
+      fetchTranscripts(meetingPlatform, meetingNativeId, meetingNumericId, { silent: true });
+      fetchChatMessages(meetingPlatform, meetingNativeId);
+    };
+
+    refreshPostMeetingArtifacts();
+    const interval = window.setInterval(refreshPostMeetingArtifacts, 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [
+    meetingId,
+    meetingPlatform,
+    meetingNativeId,
+    meetingNumericId,
+    shouldPollPostMeetingArtifacts,
+    refreshMeeting,
+    fetchTranscripts,
+    fetchChatMessages,
+  ]);
 
   // Handle saving notes on blur
   const handleNotesBlur = useCallback(async () => {
@@ -839,13 +913,31 @@ export default function MeetingDetailPage() {
   const isPostMeetingFlow =
     forcePostMeetingMode ||
     currentMeeting.status === "stopping" || currentMeeting.status === "completed";
-  const hasRecordingEntries = recordings.length > 0;
+  const meetingRecordings = Array.isArray(currentMeeting.data?.recordings)
+    ? (currentMeeting.data.recordings as RecordingData[])
+    : [];
+  const effectiveRecordings = recordings.length > 0 ? recordings : meetingRecordings;
+  const hasRecordingEntries = effectiveRecordings.length > 0;
+  const hasActiveRecording = effectiveRecordings.some((recording) =>
+    recording.status === "in_progress" || recording.status === "uploading"
+  );
+  const recordingWasRequested = currentMeeting.data?.recording_enabled !== false;
   const noAudioRecordingForMeeting =
-    (currentMeeting.data?.recording_enabled === false && !hasRecordingAudio) ||
-    (currentMeeting.status === "completed" && !hasRecordingEntries);
-  const canUseSegmentPlayback = isPostMeetingFlow && !noAudioRecordingForMeeting;
-  const recordingTopBar = isPostMeetingFlow ? (
-    hasRecordingAudio ? (
+    currentMeeting.data?.recording_enabled === false && !hasRecordingAudio;
+  const missingRequestedRecording =
+    isPostMeetingFlow && recordingWasRequested && currentMeeting.status === "completed" && !hasRecordingEntries;
+  const canUseSegmentPlayback = isPostMeetingFlow && !noAudioRecordingForMeeting && !missingRequestedRecording;
+  const recordingTopBar = (isPostMeetingFlow || hasActiveRecording) ? (
+    hasActiveRecording && !isPostMeetingFlow ? (
+      <div className="flex items-center gap-2 px-4 py-2 bg-muted/50 rounded-lg border text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Recording in progress...
+      </div>
+    ) : playbackConnectionError ? (
+      <div className="flex items-center gap-2 px-4 py-2 bg-destructive/10 rounded-lg border border-destructive/30 text-sm text-destructive">
+        Connection error loading recording: {playbackConnectionError}
+      </div>
+    ) : hasRecordingAudio ? (
       <div className="flex flex-col gap-2">
         {videoSrc && (
           <VideoPlayer ref={videoPlayerRef} src={videoSrc} className="max-h-[360px]" />
@@ -861,6 +953,10 @@ export default function MeetingDetailPage() {
     ) : noAudioRecordingForMeeting ? (
       <div className="flex items-center gap-2 px-4 py-2 bg-muted/50 rounded-lg border text-sm text-muted-foreground">
         No audio recording for this meeting.
+      </div>
+    ) : missingRequestedRecording ? (
+      <div className="flex items-center gap-2 px-4 py-2 bg-destructive/10 rounded-lg border border-destructive/30 text-sm text-destructive">
+        Recording was enabled, but no finalized recording artifact is available yet.
       </div>
     ) : (
       <div className="flex items-center gap-2 px-4 py-2 bg-muted/50 rounded-lg border text-sm text-muted-foreground">

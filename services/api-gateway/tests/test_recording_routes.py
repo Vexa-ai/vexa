@@ -87,6 +87,19 @@ class TestGetRecording:
 
         assert resp.status_code == 404
 
+    async def test_get_recording_master_proxies(self, mock_http_client, mock_response):
+        mock_http_client.request = AsyncMock(return_value=mock_response(200, {"raw_url": "/recordings/5/media/3/raw"}))
+        app.state.http_client = mock_http_client
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get("/recordings/5/master?type=audio", headers={"x-api-key": "k"})
+
+        assert resp.status_code == 200
+        call_args = mock_http_client.request.call_args
+        assert call_args[0][0] == "GET"
+        assert "/recordings/5/master" in call_args[0][1]
+        assert call_args[1].get("params", {}).get("type") == "audio"
+
 
 @pytest.mark.asyncio
 class TestDownloadMedia:

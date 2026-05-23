@@ -460,8 +460,17 @@ export interface RecordingMediaFile {
   storage_backend: "minio" | "s3" | "local";
   file_size_bytes: number | null;
   duration_seconds: number | null;
+  finalized_by?: string | null; // "recording_finalizer.master" when master
+  is_final?: boolean;
   metadata?: Record<string, unknown>;
   created_at: string;
+}
+
+// v0.10.6.1 - canonical playback routes. Producer writes; consumer reads.
+// Null sub-field means no master for that type yet.
+export interface RecordingPlaybackUrl {
+  audio: string | null; // stable route, e.g. /recordings/<id>/master?type=audio
+  video: string | null;
 }
 
 export interface RecordingData {
@@ -473,7 +482,8 @@ export interface RecordingData {
   status: RecordingStatus;
   created_at: string;
   completed_at: string | null;
-  media_files: RecordingMediaFile[];
+  media_files: RecordingMediaFile[]; // deprecated in v0.10.6.1; removed in v0.10.7
+  playback_url?: RecordingPlaybackUrl | null; // v0.10.6.1 canonical
 }
 
 // ==========================================
