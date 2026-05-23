@@ -32,6 +32,24 @@
     },
     {
       "exists": true,
+      "kind": "file",
+      "pass_status": false,
+      "path": "compose/human-eyeball.md"
+    },
+    {
+      "exists": true,
+      "kind": "file",
+      "pass_status": false,
+      "path": "lite/human-eyeball.md"
+    },
+    {
+      "exists": true,
+      "kind": "file",
+      "pass_status": false,
+      "path": "human/overall-functionality.md"
+    },
+    {
+      "exists": true,
       "kind": "dir",
       "path": "hardenloop"
     },
@@ -47,6 +65,11 @@
     }
   ],
   "evidence_root": ".agents/packs/0.10.6x-pack-7-release-identity-packaging-hardening",
+  "invalid": [
+    "compose/human-eyeball.md",
+    "lite/human-eyeball.md",
+    "human/overall-functionality.md"
+  ],
   "missing": [],
   "mode": "pr-ready",
   "pack_id": "0.10.6x-pack-7-release-identity-packaging-hardening",
@@ -57,9 +80,12 @@
     "tests",
     "compose",
     "lite",
+    "compose/human-eyeball.md",
+    "lite/human-eyeball.md",
+    "human/overall-functionality.md",
     "hardenloop",
     "review.md",
     "pr.md"
   ],
-  "status": "pass"
+  "status": "fail"
 }

@@ -1,6 +1,6 @@
 # Lite Gate
 
-Status: source-level pass, runtime validation deferred
+Status: source-level machine pass; human eyeball pending
 
 The Lite Dockerfile embeds the same release identity path as the dashboard image:
 
@@ -9,7 +9,7 @@ The Lite Dockerfile embeds the same release identity path as the dashboard image
 - sets `VEXA_REPO_ROOT=/repo`;
 - runs `npm run assert-release-version` after `npm run build`.
 
-The pack epic says Lite image/version identity should be validated after product pack stitching. This pack records the source-level identity proof now and leaves runtime Lite image validation for stitched candidate evidence.
+Human Lite blast-radius eyeball validation is required before PR-ready status. See `lite/human-eyeball.md`.
 
 Evidence:
 

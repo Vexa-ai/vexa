@@ -19,10 +19,11 @@ Worktree: `/home/dima/dev/vexa-pack-0.10.6x-pack-7-release-identity-packaging-ha
 - Dashboard release generator/assertion synthetic: pass. Evidence: `tests/dashboard-release-version.generated.json`.
 - Meeting API security headers pytest: pass under Python 3.11 with meeting-api requirements. Earlier Python 3.9 and missing-test-dependency attempts are retained in `ops/ops.jsonl`.
 - Helm lint/template: pass; rendered bot image helper with `vexaai/vexa-bot:0.10.6.2.1`. Evidence: `tests/helm-template.yaml`.
-- Compose gate: pass via `docker compose config` using allocated pack ports `44460` and `44461`, with `IMAGE_TAG=0.10.6.2.1` and `VEXA_VERSION=0.10.6.2.1`. Evidence: `compose/compose-config.yaml`.
-- Lite gate: source-level identity proof pass; runtime image validation is deferred until product-pack stitching per the pack epic. Evidence: `lite/lite-identity-proof.json`.
+- Compose machine gate: pass via `docker compose config` using allocated pack ports `44460` and `44461`, with `IMAGE_TAG=0.10.6.2.1` and `VEXA_VERSION=0.10.6.2.1`. Human Compose blast-radius eyeball validation is pending. Evidence: `compose/compose-config.yaml`, `compose/human-eyeball.md`.
+- Lite machine gate: source-level identity proof pass. Human Lite blast-radius eyeball validation is pending. Evidence: `lite/lite-identity-proof.json`, `lite/human-eyeball.md`.
 - NPM lock consistency: pass via dry-run `npm ci` for transcript-rendering, dashboard, and vexa-bot package locks.
-- Live/human validation: not required for this pack directly per epic.
+- External live-meeting validation: not required for this pack directly per epic.
+- Overall functionality human eyeball validation: pending. Evidence placeholder: `human/overall-functionality.md`.
 
 ## Hardenloop
 
@@ -35,5 +36,5 @@ Worktree: `/home/dima/dev/vexa-pack-0.10.6x-pack-7-release-identity-packaging-ha
 
 ## Residual Risk
 
-- Full Lite image runtime validation is intentionally deferred until stitched candidate/product-pack integration because the epic defines that gate as after product pack stitching.
+- This draft is not PR-ready until human eyeball validation passes for overall functionality, Compose blast-radius behavior, and Lite blast-radius behavior.
 - Hardenloop coverage is incomplete due missing local scanner tools. The pack may advance with this explicit caveat, but final release hardening should rerun with full scanner availability.

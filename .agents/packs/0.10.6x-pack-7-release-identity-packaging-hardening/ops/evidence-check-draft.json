@@ -32,6 +32,7 @@
     }
   ],
   "evidence_root": ".agents/packs/0.10.6x-pack-7-release-identity-packaging-hardening",
+  "invalid": [],
   "missing": [],
   "mode": "draft",
   "pack_id": "0.10.6x-pack-7-release-identity-packaging-hardening",

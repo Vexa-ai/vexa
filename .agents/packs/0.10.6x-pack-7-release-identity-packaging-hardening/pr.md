@@ -35,11 +35,11 @@ Release provenance, Docker images, Helm chart SemVer/appVersion, dashboard versi
 
 Synthetic: pass. Covered source identity proof, dashboard release generator/assertion proof, meeting-api security header unit tests, Helm lint/template, and npm lock consistency dry-runs.
 
-Compose: pass. `docker compose config` rendered `IMAGE_TAG=0.10.6.2.1`, `VEXA_VERSION=0.10.6.2.1`, dashboard port `44460`, and gateway port `44461`.
+Compose: machine config proof pass. Human Compose blast-radius eyeball validation is pending and blocks PR-ready status.
 
-Lite: source-level pass. Runtime Lite image validation is deferred until product-pack stitching per the pack epic.
+Lite: source-level identity proof pass. Human Lite blast-radius eyeball validation is pending and blocks PR-ready status.
 
-Live/human: not required for this pack directly.
+Live/human: external live-meeting validation is not required for this pack directly, but overall human eyeball validation is mandatory and pending.
 
 Hardenloop: ran with `--fix none`; release blockers `0`; decision `incomplete_coverage` because several optional local scanners are not installed. Private advisory/raw finding payloads were omitted from committed evidence; see `hardenloop/state.md`.
 
@@ -50,7 +50,10 @@ Hardenloop: ran with `--fix none`; release blockers `0`; decision `incomplete_co
 - [x] `ops/ops.jsonl`
 - [x] `tests`
 - [x] `compose`
+- [ ] `compose/human-eyeball.md` has `Status: pass`
 - [x] `lite`
+- [ ] `lite/human-eyeball.md` has `Status: pass`
+- [ ] `human/overall-functionality.md` has `Status: pass`
 - [x] `hardenloop`
 - [x] `review.md`
 - [x] `pr.md`
@@ -66,8 +69,9 @@ Hardenloop: ran with `--fix none`; release blockers `0`; decision `incomplete_co
 - [x] Pack branch starts from `v0.10.6^{}`.
 - [x] Only this pack's committed reuse hunks are replayed.
 - [x] Synthetic checks pass before live/human checks.
-- [x] Compose gate is passed or explicitly marked not required in PR evidence.
-- [x] Lite gate is passed or explicitly marked not required in PR evidence.
+- [ ] Compose gate includes passed human eyeball blast-radius validation.
+- [ ] Lite gate includes passed human eyeball blast-radius validation.
+- [ ] Overall functionality human eyeball validation passed.
 - [x] Hardenloop is run for the pack.
 - [x] PR body links this epic and evidence root.
 - [x] Reviewer can map each reused hunk back to the commit list above.
