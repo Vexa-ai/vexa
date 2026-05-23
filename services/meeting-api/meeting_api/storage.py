@@ -9,7 +9,8 @@ Local filesystem is available for testing without object storage.
 import os
 import logging
 from abc import ABC, abstractmethod
-from typing import Optional
+import shutil
+from typing import IO, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,11 @@ class StorageClient(ABC):
     @abstractmethod
     def download_file(self, path: str) -> bytes:
         """Download file from storage. Returns file content as bytes."""
+        ...
+
+    @abstractmethod
+    def download_to_file(self, path: str, fileobj: IO[bytes]) -> None:
+        """Download file from storage to a file-like object (streaming, OOM-safe for large files)."""
         ...
 
     @abstractmethod
@@ -150,6 +156,10 @@ class MinIOStorageClient(StorageClient):
         logger.info(f"Downloaded {len(data)} bytes from {self.bucket}/{path}")
         return data
 
+    def download_to_file(self, path: str, fileobj: IO[bytes]) -> None:
+        self.client.download_fileobj(Bucket=self.bucket, Key=path, Fileobj=fileobj)
+        logger.info(f"Downloaded {self.bucket}/{path} to file object")
+
     def get_presigned_url(self, path: str, expires: int = 3600) -> str:
         # v0.10.5.3 Pack D-3 follow-up (Option B): sign against the PUBLIC
         # endpoint (browser-reachable) rather than the internal endpoint
@@ -222,6 +232,11 @@ class LocalStorageClient(StorageClient):
         full_path = self._full_path(path)
         with open(full_path, "rb") as f:
             return f.read()
+
+    def download_to_file(self, path: str, fileobj: IO[bytes]) -> None:
+        with open(self._full_path(path), "rb") as src:
+            shutil.copyfileobj(src, fileobj)
+        logger.info(f"Downloaded {self._full_path(path)} to file object")
 
     def get_presigned_url(self, path: str, expires: int = 3600) -> str:
         # Local storage doesn't support presigned URLs — return a file:// URI
