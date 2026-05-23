@@ -398,6 +398,16 @@ def _is_master_key(key: str) -> bool:
     return tail.startswith("master.")
 
 
+def _media_content_type(media_type: str, media_format: str) -> str:
+    fmt = str(media_format or "").lower()
+    typ = str(media_type or "").lower()
+    if fmt == "webm":
+        return "audio/webm" if typ == "audio" else "video/webm"
+    if fmt == "wav":
+        return "audio/wav"
+    return "application/octet-stream"
+
+
 # ---------------------------------------------------------------------------
 # Sync core (runs in a thread-pool from the async wrapper)
 # ---------------------------------------------------------------------------
@@ -407,6 +417,7 @@ def _finalize_one_media_file_sync(
     media_file_id: int,
     storage_path: str,
     declared_format: str,
+    media_type: str,
 ) -> Optional[str]:
     """Build and upload the master for one MediaFile. Returns the new
     storage_path (the master path) or None if no chunks were found.
@@ -472,7 +483,11 @@ def _finalize_one_media_file_sync(
         try:
             final_path = _inject_webm_duration_file(concat_path)
             try:
-                storage.upload_file_path(master_key, final_path, content_type="video/webm")
+                storage.upload_file_path(
+                    master_key,
+                    final_path,
+                    content_type=_media_content_type(media_type, "webm"),
+                )
             finally:
                 if final_path != concat_path:
                     try:
@@ -593,6 +608,7 @@ async def finalize_recording_master(meeting_id: int, db: AsyncSession) -> None:
                     mf_id or f"meeting_data:{meeting_id}/{rec_idx}/{mf_idx}",
                     mf_path,
                     mf_format,
+                    mf_type,
                 )
             except Exception as fin_err:
                 logger.error(

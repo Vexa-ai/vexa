@@ -88,6 +88,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
     // Update fragment durations when actual audio metadata loads
     const updateFragmentDuration = useCallback((index: number, dur: number) => {
       setFragmentDurations(prev => {
+        if (prev[index] === dur) return prev;
         const updated = [...prev];
         updated[index] = dur;
         return updated;
@@ -98,7 +99,13 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
     useEffect(() => {
       if (effectiveFragments.length > 0) {
         const durations = effectiveFragments.map(f => f.duration || 0);
-        queueMicrotask(() => setFragmentDurations(durations));
+        queueMicrotask(() => {
+          setFragmentDurations(prev => (
+            prev.length === durations.length && prev.every((value, index) => value === durations[index])
+              ? prev
+              : durations
+          ));
+        });
       }
     }, [fragments, src]); // eslint-disable-line react-hooks/exhaustive-deps
 

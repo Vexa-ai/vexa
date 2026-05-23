@@ -82,6 +82,21 @@ def _normalize_meeting_recording(recording: Dict[str, Any], meeting_id: int) -> 
     return rec
 
 
+def media_content_type(media_type: str, media_format: str) -> str:
+    fmt = str(media_format or "").lower()
+    typ = str(media_type or "").lower()
+    if fmt == "webm":
+        return "audio/webm" if typ == "audio" else "video/webm"
+    content_types = {
+        "wav": "audio/wav",
+        "opus": "audio/opus",
+        "mp3": "audio/mpeg",
+        "jpg": "image/jpeg",
+        "png": "image/png",
+    }
+    return content_types.get(fmt, "application/octet-stream")
+
+
 async def _list_meeting_data_recordings(db: AsyncSession, user_id: int, meeting_id: Optional[int] = None) -> List[Dict]:
     stmt = select(Meeting).where(Meeting.user_id == user_id)
     if meeting_id is not None:
@@ -222,8 +237,7 @@ async def internal_upload_recording(
     # showed video-player UI but the MinIO object was an audio-only blob
     # because audio overwrote video at .../000000.webm).
     storage_path = f"recordings/{user_id}/{storage_id}/{session_uid}/{media_type}/{chunk_seq:06d}.{media_format}"
-    content_types = {"wav": "audio/wav", "webm": "video/webm", "opus": "audio/opus", "mp3": "audio/mpeg", "jpg": "image/jpeg", "png": "image/png"}
-    content_type = content_types.get(media_format, "application/octet-stream")
+    content_type = media_content_type(media_type, media_format)
 
     try:
         storage = get_storage_client()
@@ -466,7 +480,6 @@ async def download_media_file(
     - 404 when the master file does not yet exist (meeting still in
       progress, finalizer crashed, etc.). Callers MUST handle this.
     """
-    content_type_map = {"wav": "audio/wav", "webm": "video/webm", "opus": "audio/opus", "mp3": "audio/mpeg", "jpg": "image/jpeg", "png": "image/png"}
     _, user = auth
 
     _, rec = await _find_meeting_data_recording(db, user.id, recording_id)
@@ -480,7 +493,7 @@ async def download_media_file(
     if not mf:
         raise HTTPException(status_code=404, detail="Media file not found")
     fmt = str(mf.get("format", "bin")).lower()
-    ct = content_type_map.get(fmt, "application/octet-stream")
+    ct = media_content_type(str(mf.get("type", "audio")), fmt)
     storage_path = mf.get("storage_path")
     storage_backend = mf.get("storage_backend")
     type_label = mf.get("type", "audio")
@@ -534,7 +547,6 @@ async def download_media_file_raw(
     db: AsyncSession = Depends(get_db),
 ):
     _, user = auth
-    content_type_map = {"wav": "audio/wav", "webm": "video/webm", "opus": "audio/opus", "mp3": "audio/mpeg", "jpg": "image/jpeg", "png": "image/png"}
 
     # Resolve the storage path and content type
     storage_path = None
@@ -548,8 +560,9 @@ async def download_media_file_raw(
         if int(f.get("id", -1)) == media_file_id:
             storage_path = f.get("storage_path")
             fmt = str(f.get("format", "bin")).lower()
-            ct = content_type_map.get(fmt, ct)
-            filename = f"{recording_id}_{f.get('type', 'audio')}.{fmt}"
+            type_label = str(f.get("type", "audio"))
+            ct = media_content_type(type_label, fmt)
+            filename = f"{recording_id}_{type_label}.{fmt}"
             break
 
     if not storage_path:
