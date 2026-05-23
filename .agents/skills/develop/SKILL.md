@@ -67,16 +67,22 @@ The pack epic must follow the `pack` skill template and declare:
 7. Implement only the pack scope in that worktree.
 8. Run synthetic checks first. Do not ask for a real Google Meet or Microsoft
    Teams room when the behavior can be generated locally.
-9. Validate local Compose through `compose-deploy` when the pack can affect
-   multi-service behavior.
-10. Validate local Lite through `vexa-lite-deploy` when the pack can affect
-   Lite, browser routing, dashboard config, recording, TTS, or single-container
-   behavior.
-11. Run `vexa-meeting-deployment-test` only when the pack reaches an actual
-   external meeting boundary after synthetic checks.
-12. Run `hardenloop` before the pack can be PR-ready.
-13. Check evidence with `scripts/pack-evidence-check.py`.
-14. Render the PR body with `scripts/render-pr-body.py`, open the PR, and keep
+9. Validate local Compose through `compose-deploy` for every pack, then run
+   pack-specific blast-radius checks against the Compose lane.
+10. Validate local Lite through `vexa-lite-deploy` for every pack, then run
+   pack-specific blast-radius checks against the Lite lane.
+11. Obtain human eyeball validation before the pack can be PR-ready. The human
+   must validate overall functionality and the pack's blast-radius behavior in
+   both Compose and Lite after machine checks pass. Record who validated it,
+   when, what URLs/screenshots/log summaries were reviewed, and the verdict.
+   This gate is never waived by a pack epic saying live meetings are not
+   required; external meeting validation is a separate boundary.
+12. Run `vexa-meeting-deployment-test` only when the pack reaches an actual
+   external meeting boundary after synthetic, Compose, Lite, and human eyeball
+   checks.
+13. Run `hardenloop` before the pack can be PR-ready.
+14. Check evidence with `scripts/pack-evidence-check.py`.
+15. Render the PR body with `scripts/render-pr-body.py`, open the PR, and keep
     it targeted at the release integration branch.
 
 ## Isolation Rules
@@ -92,6 +98,8 @@ The pack epic must follow the `pack` skill template and declare:
 - Do not broaden the pack because an adjacent bug is convenient. If a bug is
   outside the pack and not a regression, file/log it and continue.
 - Do not ask for human eyeball confirmation for machine-validated facts.
+  However, every pack still requires a human eyeball verdict for overall
+  functionality and Compose/Lite blast-radius behavior before PR-ready status.
 
 ## Evidence Contract
 
@@ -105,14 +113,19 @@ Minimum PR-ready evidence:
   ops/ops.jsonl
   tests/
   compose/
+    human-eyeball.md
   lite/
+    human-eyeball.md
+  human/
+    overall-functionality.md
   hardenloop/
   review.md
   pr.md
 ```
 
-If a gate is intentionally not required, the pack epic must say so and the
-evidence checker must record the disposition.
+Compose, Lite, and human eyeball gates are mandatory for every pack. If an
+external live-meeting gate is intentionally not required, the pack epic must say
+so and the evidence checker must record the disposition.
 
 ## Operation Ledger
 
@@ -135,7 +148,8 @@ When reporting progress, include:
 
 - pack id and branch/worktree;
 - synthetic validation status;
-- Compose and Lite lane status;
-- live/human boundary, if any;
+- Compose and Lite lane status, including blast-radius status;
+- human eyeball validation status for overall functionality and Compose/Lite;
+- external live-meeting boundary, if any;
 - Hardenloop status;
 - PR/evidence readiness.

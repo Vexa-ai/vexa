@@ -22,6 +22,16 @@ def check_path(root: Path, rel: str) -> dict[str, Any]:
     return {"path": rel, "exists": path.exists(), "kind": "dir" if path.is_dir() else "file"}
 
 
+def check_pass_file(root: Path, rel: str) -> dict[str, Any]:
+    path = root / rel
+    item = check_path(root, rel)
+    item["pass_status"] = False
+    if path.is_file():
+        text = path.read_text(encoding="utf-8", errors="replace").lower()
+        item["pass_status"] = "status: pass" in text or "status: passed" in text
+    return item
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pack-json", required=True)
@@ -33,24 +43,43 @@ def main() -> int:
     pack = json.loads(Path(args.pack_json).read_text(encoding="utf-8"))
     root = Path(args.evidence_root)
 
-    required = ["pack.json", "runtime.json", "ops/ops.jsonl", "tests"]
-    if gate_required(pack, "compose-validation-gate"):
-        required.append("compose")
-    if gate_required(pack, "lite-validation-gate"):
-        required.append("lite")
+    required = ["pack.json", "runtime.json", "ops/ops.jsonl", "tests", "compose", "lite"]
     if args.mode == "pr-ready":
-        required.extend(["hardenloop", "review.md", "pr.md"])
+        required.extend(
+            [
+                "compose/human-eyeball.md",
+                "lite/human-eyeball.md",
+                "human/overall-functionality.md",
+                "hardenloop",
+                "review.md",
+                "pr.md",
+            ]
+        )
 
-    checks = [check_path(root, rel) for rel in required]
+    pass_files = {
+        "compose/human-eyeball.md",
+        "lite/human-eyeball.md",
+        "human/overall-functionality.md",
+    }
+    checks = [
+        check_pass_file(root, rel) if rel in pass_files else check_path(root, rel)
+        for rel in required
+    ]
     missing = [item["path"] for item in checks if not item["exists"]]
+    invalid = [
+        item["path"]
+        for item in checks
+        if item["path"] in pass_files and item["exists"] and not item.get("pass_status")
+    ]
     result = {
-        "status": "pass" if not missing else "fail",
+        "status": "pass" if not missing and not invalid else "fail",
         "pack_id": pack.get("pack_id"),
         "evidence_root": str(root),
         "mode": args.mode,
         "required": required,
         "checks": checks,
         "missing": missing,
+        "invalid": invalid,
     }
 
     out = Path(args.out)
