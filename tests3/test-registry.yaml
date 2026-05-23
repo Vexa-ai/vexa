@@ -747,3 +747,16 @@ tests:
     script: tests/local-human-mechanical-gate.sh
     features: [dashboard, infrastructure, post-meeting-transcription, realtime-transcription]
     max_duration_sec: 30
+
+  # ── snapshots feature (Phase 1 PREFL-04 — functional stub) ─────────
+  # Registers tests3/tests/snapshots.sh so CI picks it up from day 1.
+  # Currently emits 3 step_skip entries (extraction/endpoint/gallery
+  # all pending Phase 2/3/4 implementation). When Phase 5 lands
+  # SHIP-03, the step_skip calls become real assertions and the
+  # features/snapshots/dods.yaml evidence.check: slots wire to them.
+  snapshots:
+    tier: cheap
+    runs_in: [lite, compose]
+    script: tests/snapshots.sh
+    features: [snapshots]
+    max_duration_sec: 10
