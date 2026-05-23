@@ -1,0 +1,62 @@
+# Phase 1 scaffolding — all 6 DoDs ship at weight=0 with evidence.check: TBD.
+# The placeholders will be wired to real check IDs registered in tests3/checks/
+# during Phase 5. gate.confidence_min: 0 is intentional (D-12) and will ratchet
+# to 70 in Phase 5 once evidence.check slots reference real assertions.
+
+gate:
+  confidence_min: 0    # intentionally un-gated until DoDs are wired (Phase 5 will ratchet to 70)
+
+dods:
+- id: frame_extractor_module_exists
+  label: "services/meeting-api/meeting_api/frame_extractor.py exists with extract_frames_for_meeting() exported"
+  weight: 0
+  evidence:
+    check: TBD
+    modes:
+    - lite
+    - compose
+
+- id: recording_frames_table_exists
+  label: "\\d recording_frames in psql shows columns with correct types (Integer timestamp_s, composite index, unique constraint)"
+  weight: 0
+  evidence:
+    check: TBD
+    modes:
+    - lite
+    - compose
+
+- id: snapshots_endpoint_returns_presigned_urls
+  label: "GET /recordings/{id}/frames returns {extraction_status, frames[], total} with presigned URLs"
+  weight: 0
+  evidence:
+    check: TBD
+    modes:
+    - lite
+    - compose
+
+- id: gallery_renders_with_click_to_seek
+  label: "clicking a thumbnail in the dashboard seeks videoPlayerRef.current (and audioPlayerRef.current) to the matching timestamp_s"
+  weight: 0
+  evidence:
+    check: TBD
+    modes:
+    - lite
+    - compose
+
+- id: gallery_renders_when_speaker_fields_empty
+  label: "gallery must NOT couple to broken diarization — snapshot frames are indexed by timestamp_s, not speaker label"
+  weight: 0
+  evidence:
+    check: TBD
+    modes:
+    - lite
+    - compose
+
+- id: extractor_skips_when_disabled
+  label: "SNAPSHOTS_ENABLED=false default is honored — worker early-returns; endpoint returns 404 snapshots disabled"
+  weight: 0
+  evidence:
+    check: TBD
+    modes:
+    - lite
+    - compose
