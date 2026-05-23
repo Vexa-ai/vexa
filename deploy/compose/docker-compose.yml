@@ -294,6 +294,9 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - ${LOCAL_STORAGE_VOLUME_SOURCE:-recordings-data}:/data/recordings
+      # LOCAL PATCH (issue Vexa-ai/vexa#355): fix Groq model name + verbose_json
+      # Remove this line once upstream merges the fix.
+      - ../../local-patches/meetings.py:/app/meeting_api/meetings.py:ro
     init: true
     depends_on:
       - redis
