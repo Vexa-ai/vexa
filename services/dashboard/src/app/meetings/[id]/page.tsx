@@ -185,13 +185,10 @@ export default function MeetingDetailPage() {
   // Sort by created_at so fragments play sequentially.
   //
   // Pack U.8 (v0.10.6, re-applies reverted Pack D-3 — commit a62d658 — on
-  // top of the new master-recording contract from Pack U.5+U.6): each
-  // fragment src is a 1-hour presigned MinIO URL pointing at
-  // <prefix>/master.{webm|wav}. The browser streams directly from MinIO
-  // with native HTTP Range — no in-process proxying through meeting-api.
-  // Pre-fix (v0.10.5.3): the /raw endpoint buffered the whole file in
-  // meeting-api memory before serving (#288). For 24-min meetings @ 10MB
-  // that was ~10s of dead-air on first byte.
+  // top of the new master-recording contract from Pack U.5+U.6): resolve the
+  // canonical master route, then prefer the dashboard same-origin raw route
+  // for browser playback. This keeps proxied/local deployments working when
+  // the browser cannot directly reach the object-store public endpoint.
   //
   // The async fetch happens once per recordings change. While in flight,
   // recordingFragments is the previous (or empty) array — the AudioPlayer

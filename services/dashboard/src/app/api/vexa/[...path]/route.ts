@@ -20,7 +20,7 @@ async function proxyRequest(
   const VEXA_API_KEY = userToken || process.env.VEXA_API_KEY || "";
 
   const { path } = await params;
-  let pathString = path.join("/");
+  const pathString = path.join("/");
 
   // /meetings list: primary source is GET /bots (meeting-api DB — all statuses).
   // Fallback to /bots/status (running containers only) if /bots fails.
@@ -47,7 +47,7 @@ async function proxyRequest(
     }
 
     // Fallback: running containers only (no history)
-    const meetings: any[] = [];
+    const meetings: Array<Record<string, unknown>> = [];
     try {
       const statusResp = await fetch(`${VEXA_API_URL}/bots/status`, {
         headers: { "X-API-Key": VEXA_API_KEY },
@@ -119,19 +119,20 @@ async function proxyRequest(
     const contentType = response.headers.get("content-type") || "";
 
     if (contentType.includes("audio") || contentType.includes("video") || contentType.includes("octet-stream")) {
-      const blob = await response.blob();
-      return new NextResponse(blob, {
+      const mediaHeaders = new Headers({ "Cache-Control": "no-store" });
+      for (const header of [
+        "content-type",
+        "content-length",
+        "content-range",
+        "accept-ranges",
+        "content-disposition",
+      ]) {
+        const value = response.headers.get(header);
+        if (value) mediaHeaders.set(header, value);
+      }
+      return new NextResponse(response.body, {
         status: response.status,
-        headers: {
-          "Content-Type": contentType,
-          "Content-Length": response.headers.get("content-length") || "",
-          ...(response.headers.get("content-range") && {
-            "Content-Range": response.headers.get("content-range")!,
-          }),
-          ...(response.headers.get("accept-ranges") && {
-            "Accept-Ranges": response.headers.get("accept-ranges")!,
-          }),
-        },
+        headers: mediaHeaders,
       });
     }
 

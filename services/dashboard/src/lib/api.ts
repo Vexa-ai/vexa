@@ -413,14 +413,15 @@ export const vexaAPI = {
     const data = (await response.json()) as {
       url?: string;
       download_url?: string;
+      raw_url?: string;
       duration_seconds?: number | null;
     };
-    if (!(data.url || data.download_url)) {
+    if (!(data.raw_url || data.url || data.download_url)) {
       throw new Error(
         `getRecordingMasterStreamUrl(${recordingId}, ${type}) response had no url`
       );
     }
-    const mediaUrl = data.url || data.download_url || "";
+    const mediaUrl = data.raw_url || data.url || data.download_url || "";
     return {
       url: /^https?:\/\//.test(mediaUrl) ? mediaUrl : withBasePath(`/api/vexa${mediaUrl}`),
       duration_seconds: data.duration_seconds ?? null,

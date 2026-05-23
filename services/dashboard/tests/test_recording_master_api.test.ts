@@ -38,7 +38,27 @@ describe("vexaAPI.getRecordingMasterStreamUrl", () => {
     });
   });
 
-  it("returns the presigned media URL for a resolved object-store master", async () => {
+  it("prefers the dashboard media proxy when the master response includes a raw route", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        status: 200,
+        ok: true,
+        json: async () => ({
+          url: "http://localhost:42268/vexa-recordings/master.wav?X-Amz-Signature=abc",
+          raw_url: "/recordings/42/media/7/raw",
+          duration_seconds: 12.5,
+        }),
+      })
+    );
+
+    await expect(vexaAPI.getRecordingMasterStreamUrl(42, "audio")).resolves.toEqual({
+      url: "/api/vexa/recordings/42/media/7/raw",
+      duration_seconds: 12.5,
+    });
+  });
+
+  it("falls back to the presigned media URL when no raw route is returned", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
