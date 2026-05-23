@@ -18,7 +18,8 @@ COPY ./services/calendar-service/ /app/
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-RUN useradd -r -s /bin/false appuser
+RUN useradd -r -s /bin/false appuser \
+    && chmod -R a+rX /app
 USER appuser
 
 EXPOSE 8050

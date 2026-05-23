@@ -1,3 +1,51 @@
+# Vexa v0.10.6.2 — v0.10.6.1 regression fix
+
+**Release date:** 2026-05-21
+**Cycle:** corrective patch for `v0.10.6.1`
+**Highlight:** `v0.10.6.2` is the same validated `v0.10.6.1` release with a
+small regression-fix layer for browser-facing dashboard URLs, browser view
+embedding, and Lite recording persistence.
+
+This is not a new feature release. It supersedes the published `v0.10.6.1`
+artifact because `v0.10.6.1` exposed deployment/browser regressions after
+publication.
+
+## What changed since v0.10.6.1
+
+- Fixed dashboard `/api/config` so browser clients receive public,
+  browser-reachable API and WebSocket URLs instead of Docker/Kubernetes
+  internal hostnames or `localhost` from the server environment.
+- Fixed dashboard browser/VNC view so iframe and fullscreen URLs go through the
+  runtime public gateway instead of raw same-origin `/b/...` paths.
+- Fixed gateway VNC CSP so same public host, different-port dashboard embeds
+  work while cross-host embedding remains denied.
+- Fixed Lite `make up` so local recordings are stored on a persistent Docker
+  volume at `/var/lib/vexa/recordings`; replacing the Lite container no longer
+  erases recording artifacts.
+- Bumped OSS version and Helm chart identity to `0.10.6.2`.
+
+## v0.10.6.1 status
+
+`v0.10.6.1` remains the base release: multilingual `/speak`, Teams/GMeet
+human validation, Compose/Lite/Helm runtime behavior, and Docker image promotion
+were validated there.
+
+Known bug fixed by `v0.10.6.2`: `v0.10.6.1` can expose browser-invalid
+dashboard API/VNC URLs in some deployments and Lite local recording artifacts
+can be lost across container replacement.
+
+## Docker tags
+
+Before `v0.10.6.2` publication, DockerHub `latest` and `dev` still point to the
+validated immutable `0.10.6.1-20051411` image set for all nine shipping images.
+The simple tags `0.10.6.1` and `0.10.6.2` are not used for those images.
+
+When `v0.10.6.2` is signed, publish a new immutable `0.10.6.2-*` image set,
+validate that set on Lite, Compose, and Helm/stage, then move `latest` and
+`dev` to the signed `0.10.6.2-*` digests.
+
+---
+
 # Vexa v0.10.4 — Zoom Web bot
 
 **Release date:** 2026-04-27

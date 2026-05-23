@@ -1,0 +1,108 @@
+{
+  "base_branch": "v0.10.6^{}",
+  "evidence_root": ".agents/packs/0.10.6x-pack-7-release-identity-packaging-hardening/",
+  "integration_branch": "codex/release-0.10.6x-pack-integration",
+  "is_pack_epic": true,
+  "label_names": [
+    "pack",
+    "status:in-progress"
+  ],
+  "lifecycle_status": "in-progress",
+  "lifecycle_statuses": [
+    "status:in-progress"
+  ],
+  "metadata": {
+    "base_branch": "v0.10.6^{}",
+    "evidence_root": ".agents/packs/0.10.6x-pack-7-release-identity-packaging-hardening/",
+    "integration_branch": "codex/release-0.10.6x-pack-integration",
+    "pack_id": "0.10.6x-pack-7-release-identity-packaging-hardening",
+    "release_id": "0.10.6.x replay",
+    "runtime_namespace": "0.10.6x-pack-7-release-identity-packaging-hardening"
+  },
+  "missing_sections": [],
+  "pack_epic": "https://github.com/Vexa-ai/vexa/issues/362",
+  "pack_id": "0.10.6x-pack-7-release-identity-packaging-hardening",
+  "release_id": "0.10.6.x replay",
+  "required_sections": [
+    "CEO outcome",
+    "CTO outcome",
+    "User outcome",
+    "Included raw issues / PRs",
+    "Explicitly out of scope",
+    "Blast radius",
+    "Data / schema / API / public-contract decisions",
+    "Isolation requirements",
+    "Compose validation gate",
+    "Lite validation gate",
+    "Synthetic validation gate",
+    "Live / human validation gate",
+    "PR readiness checklist",
+    "Stitching risk notes",
+    "Pack metadata"
+  ],
+  "runtime_namespace": "0.10.6x-pack-7-release-identity-packaging-hardening",
+  "sections": {
+    "Blast radius": "Release provenance, Docker images, Helm chart SemVer/appVersion, dashboard version display, dependency floors, security headers, CI workflows.",
+    "CEO outcome": "Operators can tell exactly what candidate is running and ship or roll back with confidence.",
+    "CTO outcome": "Source, Docker image, Helm chart, dashboard version, CI, and hardening metadata identify the same candidate and avoid release-only drift.",
+    "Compose validation gate": "Render/configure Compose with the intended candidate identity and image tag; validate dashboard release assertion where applicable.",
+    "Data / schema / API / public-contract decisions": "No product behavior pack is accepted by this pack alone; this pack verifies candidate identity, packaging, and hardening once product packs exist.",
+    "Explicitly out of scope": "- Current uncommitted product changes in the local worktree are excluded from this pack.\n- Dead release evidence folders are excluded as source truth.\n- Deprecated harness evidence is excluded; reusable checks must live in product tests or dedicated skills.\n- The removed realtime transcript regression pack is not replay scope here.",
+    "Included raw issues / PRs": "- #349\n- release/provenance/hardening scope from #348/#331",
+    "Isolation requirements": "- Develop from base `v0.10.6^{}` (`6da3abb`), not from current main.\n- One branch/worktree for this pack only.\n- Evidence root: `.agents/packs/0.10.6x-pack-7-release-identity-packaging-hardening/`.\n- Runtime namespace: `0.10.6x-pack-7-release-identity-packaging-hardening`.\n- Do not merge another product pack into this pack lane to make it pass.",
+    "Lite validation gate": "Validate Lite image/version identity and release metadata after product pack stitching.",
+    "Live / human validation gate": "Not required for this pack directly; final release sign consumes live validation from product packs/stitching.",
+    "PR readiness checklist": "- [ ] Pack branch starts from `v0.10.6^{}`.\n- [ ] Only this pack's committed reuse hunks are replayed.\n- [ ] Synthetic checks pass before live/human checks.\n- [ ] Compose gate is passed or explicitly marked not required in PR evidence.\n- [ ] Lite gate is passed or explicitly marked not required in PR evidence.\n- [ ] Hardenloop is run for the pack.\n- [ ] PR body links this epic and evidence root.\n- [ ] Reviewer can map each reused hunk back to the commit list above.",
+    "Pack metadata": "- Pack id: `0.10.6x-pack-7-release-identity-packaging-hardening`\n- Release: `0.10.6.x replay`\n- Base branch: `v0.10.6^{}`\n- Integration branch: `codex/release-0.10.6x-pack-integration`\n- Runtime namespace: `0.10.6x-pack-7-release-identity-packaging-hardening`\n- Evidence root: `.agents/packs/0.10.6x-pack-7-release-identity-packaging-hardening/`",
+    "Reusable committed code references": "Base: `v0.10.6^{}` = `6da3abb` / `6da3abb92fd50c1939f1c0ecfb85246db364e427`\n\nLineage head used for reusable committed work: `codex/release-0.10.6.2.1` = `e8cd9e7` / `e8cd9e73aa9967cd0ebb9f2ff3a0d701b9684106`\n\nReusable commits:\n- `1707445`\n- `4bff1e4`\n- `43ed25f`\n- `edefff3`\n- `dbb42f7`\n\nMain file surfaces:\n- `VERSION`\n- `RELEASE_NOTES.md`\n- `deploy/compose/docker-compose.yml`\n- `deploy/helm/charts/vexa/Chart.yaml`\n- `deploy/helm/charts/vexa/templates/_helpers.tpl`\n- `services/dashboard/scripts/assert-release-version.js`\n- `services/dashboard/scripts/generate-release-version.js`\n- `services/dashboard/src/lib/release-version.ts`\n- `services/meeting-api/meeting_api/security_headers.py`\n- `service Dockerfiles and dependency manifests touched by hardening commits`",
+    "Stitching risk notes": "- Shared files must be merged by hunk and reviewed against adjacent pack edits.\n- If stitching exposes a behavior bug, route it back to the responsible pack instead of hiding a stitch-time code change.\n- This epic is not a release sign-off; it is the delivery contract for one independently reviewable pack.",
+    "Synthetic validation gate": "Dashboard release assertion; Helm render/lint/client dry-run; source/image metadata proof; dependency/security check summary.",
+    "User outcome": "Self-hosted and production operators see coherent version/package behavior instead of mixed source/runtime identity."
+  },
+  "sections_by_key": {
+    "blast-radius": "Release provenance, Docker images, Helm chart SemVer/appVersion, dashboard version display, dependency floors, security headers, CI workflows.",
+    "ceo-outcome": "Operators can tell exactly what candidate is running and ship or roll back with confidence.",
+    "compose-validation-gate": "Render/configure Compose with the intended candidate identity and image tag; validate dashboard release assertion where applicable.",
+    "cto-outcome": "Source, Docker image, Helm chart, dashboard version, CI, and hardening metadata identify the same candidate and avoid release-only drift.",
+    "data-schema-api-public-contract-decisions": "No product behavior pack is accepted by this pack alone; this pack verifies candidate identity, packaging, and hardening once product packs exist.",
+    "explicitly-out-of-scope": "- Current uncommitted product changes in the local worktree are excluded from this pack.\n- Dead release evidence folders are excluded as source truth.\n- Deprecated harness evidence is excluded; reusable checks must live in product tests or dedicated skills.\n- The removed realtime transcript regression pack is not replay scope here.",
+    "included-raw-issues-prs": "- #349\n- release/provenance/hardening scope from #348/#331",
+    "isolation-requirements": "- Develop from base `v0.10.6^{}` (`6da3abb`), not from current main.\n- One branch/worktree for this pack only.\n- Evidence root: `.agents/packs/0.10.6x-pack-7-release-identity-packaging-hardening/`.\n- Runtime namespace: `0.10.6x-pack-7-release-identity-packaging-hardening`.\n- Do not merge another product pack into this pack lane to make it pass.",
+    "lite-validation-gate": "Validate Lite image/version identity and release metadata after product pack stitching.",
+    "live-human-validation-gate": "Not required for this pack directly; final release sign consumes live validation from product packs/stitching.",
+    "pack-metadata": "- Pack id: `0.10.6x-pack-7-release-identity-packaging-hardening`\n- Release: `0.10.6.x replay`\n- Base branch: `v0.10.6^{}`\n- Integration branch: `codex/release-0.10.6x-pack-integration`\n- Runtime namespace: `0.10.6x-pack-7-release-identity-packaging-hardening`\n- Evidence root: `.agents/packs/0.10.6x-pack-7-release-identity-packaging-hardening/`",
+    "pr-readiness-checklist": "- [ ] Pack branch starts from `v0.10.6^{}`.\n- [ ] Only this pack's committed reuse hunks are replayed.\n- [ ] Synthetic checks pass before live/human checks.\n- [ ] Compose gate is passed or explicitly marked not required in PR evidence.\n- [ ] Lite gate is passed or explicitly marked not required in PR evidence.\n- [ ] Hardenloop is run for the pack.\n- [ ] PR body links this epic and evidence root.\n- [ ] Reviewer can map each reused hunk back to the commit list above.",
+    "reusable-committed-code-references": "Base: `v0.10.6^{}` = `6da3abb` / `6da3abb92fd50c1939f1c0ecfb85246db364e427`\n\nLineage head used for reusable committed work: `codex/release-0.10.6.2.1` = `e8cd9e7` / `e8cd9e73aa9967cd0ebb9f2ff3a0d701b9684106`\n\nReusable commits:\n- `1707445`\n- `4bff1e4`\n- `43ed25f`\n- `edefff3`\n- `dbb42f7`\n\nMain file surfaces:\n- `VERSION`\n- `RELEASE_NOTES.md`\n- `deploy/compose/docker-compose.yml`\n- `deploy/helm/charts/vexa/Chart.yaml`\n- `deploy/helm/charts/vexa/templates/_helpers.tpl`\n- `services/dashboard/scripts/assert-release-version.js`\n- `services/dashboard/scripts/generate-release-version.js`\n- `services/dashboard/src/lib/release-version.ts`\n- `services/meeting-api/meeting_api/security_headers.py`\n- `service Dockerfiles and dependency manifests touched by hardening commits`",
+    "stitching-risk-notes": "- Shared files must be merged by hunk and reviewed against adjacent pack edits.\n- If stitching exposes a behavior bug, route it back to the responsible pack instead of hiding a stitch-time code change.\n- This epic is not a release sign-off; it is the delivery contract for one independently reviewable pack.",
+    "synthetic-validation-gate": "Dashboard release assertion; Helm render/lint/client dry-run; source/image metadata proof; dependency/security check summary.",
+    "user-outcome": "Self-hosted and production operators see coherent version/package behavior instead of mixed source/runtime identity."
+  },
+  "source": {
+    "body": "# Pack Epic: PACK 7 - Release Identity And Packaging Hardening\n\nStatus: proposed pack epic for `0.10.6.x` replay from `v0.10.6`.\n\n## CEO outcome\n\nOperators can tell exactly what candidate is running and ship or roll back with confidence.\n\n## CTO outcome\n\nSource, Docker image, Helm chart, dashboard version, CI, and hardening metadata identify the same candidate and avoid release-only drift.\n\n## User outcome\n\nSelf-hosted and production operators see coherent version/package behavior instead of mixed source/runtime identity.\n\n## Included raw issues / PRs\n\n- #349\n- release/provenance/hardening scope from #348/#331\n\n## Reusable committed code references\n\nBase: `v0.10.6^{}` = `6da3abb` / `6da3abb92fd50c1939f1c0ecfb85246db364e427`\n\nLineage head used for reusable committed work: `codex/release-0.10.6.2.1` = `e8cd9e7` / `e8cd9e73aa9967cd0ebb9f2ff3a0d701b9684106`\n\nReusable commits:\n- `1707445`\n- `4bff1e4`\n- `43ed25f`\n- `edefff3`\n- `dbb42f7`\n\nMain file surfaces:\n- `VERSION`\n- `RELEASE_NOTES.md`\n- `deploy/compose/docker-compose.yml`\n- `deploy/helm/charts/vexa/Chart.yaml`\n- `deploy/helm/charts/vexa/templates/_helpers.tpl`\n- `services/dashboard/scripts/assert-release-version.js`\n- `services/dashboard/scripts/generate-release-version.js`\n- `services/dashboard/src/lib/release-version.ts`\n- `services/meeting-api/meeting_api/security_headers.py`\n- `service Dockerfiles and dependency manifests touched by hardening commits`\n\n## Explicitly out of scope\n\n- Current uncommitted product changes in the local worktree are excluded from this pack.\n- Dead release evidence folders are excluded as source truth.\n- Deprecated harness evidence is excluded; reusable checks must live in product tests or dedicated skills.\n- The removed realtime transcript regression pack is not replay scope here.\n\n## Blast radius\n\nRelease provenance, Docker images, Helm chart SemVer/appVersion, dashboard version display, dependency floors, security headers, CI workflows.\n\n## Data / schema / API / public-contract decisions\n\nNo product behavior pack is accepted by this pack alone; this pack verifies candidate identity, packaging, and hardening once product packs exist.\n\n## Isolation requirements\n\n- Develop from base `v0.10.6^{}` (`6da3abb`), not from current main.\n- One branch/worktree for this pack only.\n- Evidence root: `.agents/packs/0.10.6x-pack-7-release-identity-packaging-hardening/`.\n- Runtime namespace: `0.10.6x-pack-7-release-identity-packaging-hardening`.\n- Do not merge another product pack into this pack lane to make it pass.\n\n## Compose validation gate\n\nRender/configure Compose with the intended candidate identity and image tag; validate dashboard release assertion where applicable.\n\n## Lite validation gate\n\nValidate Lite image/version identity and release metadata after product pack stitching.\n\n## Synthetic validation gate\n\nDashboard release assertion; Helm render/lint/client dry-run; source/image metadata proof; dependency/security check summary.\n\n## Live / human validation gate\n\nNot required for this pack directly; final release sign consumes live validation from product packs/stitching.\n\n## PR readiness checklist\n\n- [ ] Pack branch starts from `v0.10.6^{}`.\n- [ ] Only this pack's committed reuse hunks are replayed.\n- [ ] Synthetic checks pass before live/human checks.\n- [ ] Compose gate is passed or explicitly marked not required in PR evidence.\n- [ ] Lite gate is passed or explicitly marked not required in PR evidence.\n- [ ] Hardenloop is run for the pack.\n- [ ] PR body links this epic and evidence root.\n- [ ] Reviewer can map each reused hunk back to the commit list above.\n\n## Stitching risk notes\n\n- Shared files must be merged by hunk and reviewed against adjacent pack edits.\n- If stitching exposes a behavior bug, route it back to the responsible pack instead of hiding a stitch-time code change.\n- This epic is not a release sign-off; it is the delivery contract for one independently reviewable pack.\n\n## Pack metadata\n\n- Pack id: `0.10.6x-pack-7-release-identity-packaging-hardening`\n- Release: `0.10.6.x replay`\n- Base branch: `v0.10.6^{}`\n- Integration branch: `codex/release-0.10.6x-pack-integration`\n- Runtime namespace: `0.10.6x-pack-7-release-identity-packaging-hardening`\n- Evidence root: `.agents/packs/0.10.6x-pack-7-release-identity-packaging-hardening/`\n",
+    "labels": [
+      {
+        "color": "5319e7",
+        "description": "Pack epic issue",
+        "id": "LA_kwDON109P88AAAACkaJu0g",
+        "name": "pack"
+      },
+      {
+        "color": "fbca04",
+        "description": "Pack is actively being developed",
+        "id": "LA_kwDON109P88AAAACkaJvCQ",
+        "name": "status:in-progress"
+      }
+    ],
+    "milestone": {
+      "description": "Active hardening line for the 0.10 series. Most recently shipped: **v0.10.4** (cycle 260426-zoom, 2026-04-27) \u2014 Zoom Web Client as default join path, 4\u00d7 per-bot CPU reduction via Chromium `--in-process-gpu`, chat persistence race fix, awaiting-admission false-positive fix on Zoom waiting room. See [Release v0.10.4](https://github.com/Vexa-ai/vexa/releases/tag/v0.10.4).\n\nPrior cycles: 260424 (blue-stage shakedown), 260422 (release plumbing).\n\nIssues in this milestone are blue-stage / community-found defects scheduled to ship in 0.10.x point releases as they're fixed. Larger structural work goes to the [0.11 milestone](../milestone/13).",
+      "dueOn": null,
+      "number": 5,
+      "title": "0.10.x \u2014 Current hardening"
+    },
+    "number": 362,
+    "state": "OPEN",
+    "title": "[Pack] PACK 7 - Release Identity And Packaging Hardening",
+    "url": "https://github.com/Vexa-ai/vexa/issues/362"
+  },
+  "title": "[Pack] PACK 7 - Release Identity And Packaging Hardening"
+}
