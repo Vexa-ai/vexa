@@ -42,7 +42,10 @@ ensure_label() {
   local color="$2"
   local description="$3"
 
-  gh label create "$name" -R "$REPO" --color "$color" --description "$description" >/dev/null 2>&1 || true
+  gh api -X POST "repos/$REPO/labels" \
+    -f name="$name" \
+    -f color="$color" \
+    -f description="$description" >/dev/null 2>&1 || true
 }
 
 ensure_pack_labels() {
