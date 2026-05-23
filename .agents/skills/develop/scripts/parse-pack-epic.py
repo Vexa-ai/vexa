@@ -68,6 +68,30 @@ def read_issue(repo: str, issue: str) -> dict[str, Any]:
     return data
 
 
+def label_names(source: dict[str, Any]) -> list[str]:
+    labels = source.get("labels") or []
+    names: list[str] = []
+    for label in labels:
+        if isinstance(label, dict):
+            name = label.get("name")
+        else:
+            name = str(label)
+        if name:
+            names.append(name)
+    return names
+
+
+def lifecycle_status(labels: list[str]) -> str:
+    statuses = lifecycle_statuses(labels)
+    if len(statuses) == 1:
+        return statuses[0].removeprefix("status:")
+    return ""
+
+
+def lifecycle_statuses(labels: list[str]) -> list[str]:
+    return [label for label in labels if label.startswith("status:")]
+
+
 def parse_sections(body: str) -> dict[str, str]:
     sections: dict[str, list[str]] = {}
     current: str | None = None
@@ -135,6 +159,7 @@ def main() -> int:
             "milestone": None,
         }
 
+    labels = label_names(source)
     sections = parse_sections(body)
     sections_by_key = {key(name): content for name, content in sections.items()}
     required_by_key = {key(name): name for name in REQUIRED_SECTIONS}
@@ -149,6 +174,10 @@ def main() -> int:
         "pack_epic": source.get("url"),
         "title": source.get("title") or pack_id,
         "pack_id": pack_id,
+        "label_names": labels,
+        "lifecycle_status": lifecycle_status(labels),
+        "lifecycle_statuses": lifecycle_statuses(labels),
+        "is_pack_epic": "pack" in labels or str(source.get("state")) == "local",
         "release_id": metadata.get("release_id", ""),
         "base_branch": metadata.get("base_branch", "main"),
         "integration_branch": metadata.get("integration_branch", ""),

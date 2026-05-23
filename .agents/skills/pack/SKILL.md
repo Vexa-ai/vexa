@@ -20,6 +20,15 @@ engineering/business update that can later be delivered in isolation by the
 Hard stop: this skill does not create branches, worktrees, runtime lanes, code,
 or PRs.
 
+Pack epics created by this skill must be labeled:
+
+- `pack`
+- `status:available`
+
+The `status:available` label means the pack is unclaimed and ready for exactly
+one `develop` run. Do not use this skill to move a pack to
+`status:in-progress`; that transition belongs to `develop`.
+
 ## Inputs
 
 Use one of:
@@ -36,7 +45,8 @@ Default repo: `Vexa-ai/vexa`.
 2. Group by outcome cohesion with `scripts/propose-packs.py`.
 3. Render pack epic bodies with `scripts/render-epic-body.py`.
 4. Dry-run by default. Create/update GitHub pack epics only when explicitly
-   applying with `scripts/upsert-pack-epics.sh --apply`.
+   applying with `scripts/upsert-pack-epics.sh --apply`. Applied epics must have
+   the `pack` and `status:available` labels.
 5. Write local run evidence under `.agents/packs/_intake/<run-id>/` and, once
    pack ids exist, copy each rendered epic/report into
    `.agents/packs/<pack-id>/pack-intake/`.
@@ -68,6 +78,7 @@ Every pack epic issue body must include:
 - Live/human validation gate, only if needed
 - PR readiness checklist
 - Stitching risk notes
+- Pack lifecycle labels: `pack` and `status:available`
 
 Use `references/pack-epic-template.md` as the body contract.
 

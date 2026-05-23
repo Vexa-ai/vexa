@@ -48,6 +48,24 @@ if [ -n "$missing_sections" ]; then
   done <<< "$missing_sections"
 fi
 
+source_state="$(jq -r '.source.state // empty' "$PACK_JSON")"
+is_pack_epic="$(jq -r '.is_pack_epic // false' "$PACK_JSON")"
+lifecycle_status="$(jq -r '.lifecycle_status // empty' "$PACK_JSON")"
+lifecycle_status_count="$(jq -r '.lifecycle_statuses | length // 0' "$PACK_JSON")"
+if [ "$source_state" != "local" ]; then
+  if [ "$is_pack_epic" != "true" ]; then
+    errors+=("GitHub issue is not labeled pack")
+  fi
+  if [ "$lifecycle_status_count" != "1" ]; then
+    errors+=("GitHub pack must have exactly one status:* lifecycle label; found $lifecycle_status_count")
+  fi
+  if [ "$lifecycle_status" != "in-progress" ]; then
+    errors+=("GitHub pack must be claimed as status:in-progress before implementation; current status: ${lifecycle_status:-missing}")
+  fi
+else
+  warnings+=("local pack body can only be used for dry/preflight planning; implementation requires a claimed GitHub pack epic")
+fi
+
 ports="$(jq -r '.ports | .. | numbers? // empty' "$RUNTIME_JSON" || true)"
 for port in $ports; do
   case "$port" in

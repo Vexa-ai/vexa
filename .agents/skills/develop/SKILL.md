@@ -24,6 +24,17 @@ Input is one pack epic issue. Output is one PR plus evidence under:
 This skill owns pack implementation. Do not implement pack code directly from
 `pack` or `release`.
 
+Develop may only take a GitHub pack epic that is labeled:
+
+- `pack`
+- `status:available`
+
+Before creating a branch, worktree, runtime namespace, or code change, develop
+must claim the pack by changing the GitHub labels from `status:available` to
+`status:in-progress`. A local pack body can be used for dry/preflight planning,
+but it cannot be implemented until the corresponding GitHub issue is available
+and claimed.
+
 ## Required Inputs
 
 Use one of:
@@ -43,29 +54,36 @@ The pack epic must follow the `pack` skill template and declare:
 ## Workflow
 
 1. Parse the pack epic with `scripts/parse-pack-epic.py`.
-2. Allocate non-default runtime ports/namespaces with
+2. Claim the GitHub pack epic with `scripts/claim-pack-epic.sh --apply`. This
+   must reject issues without `pack` and `status:available`, remove
+   `status:available`, and add `status:in-progress`.
+3. Parse the pack epic again after claiming so evidence records the current
+   lifecycle label.
+4. Allocate non-default runtime ports/namespaces with
    `scripts/allocate-runtime.py`.
-3. Run `scripts/pack-preflight.sh` before creating worktrees or touching code.
-4. Create the isolated branch/worktree with
+5. Run `scripts/pack-preflight.sh` before creating worktrees or touching code.
+6. Create the isolated branch/worktree with
    `scripts/create-pack-worktree.sh --apply` only after preflight passes.
-5. Implement only the pack scope in that worktree.
-6. Run synthetic checks first. Do not ask for a real Google Meet or Microsoft
+7. Implement only the pack scope in that worktree.
+8. Run synthetic checks first. Do not ask for a real Google Meet or Microsoft
    Teams room when the behavior can be generated locally.
-7. Validate local Compose through `compose-deploy` when the pack can affect
+9. Validate local Compose through `compose-deploy` when the pack can affect
    multi-service behavior.
-8. Validate local Lite through `vexa-lite-deploy` when the pack can affect
+10. Validate local Lite through `vexa-lite-deploy` when the pack can affect
    Lite, browser routing, dashboard config, recording, TTS, or single-container
    behavior.
-9. Run `vexa-meeting-deployment-test` only when the pack reaches an actual
+11. Run `vexa-meeting-deployment-test` only when the pack reaches an actual
    external meeting boundary after synthetic checks.
-10. Run `hardenloop` before the pack can be PR-ready.
-11. Check evidence with `scripts/pack-evidence-check.py`.
-12. Render the PR body with `scripts/render-pr-body.py`, open the PR, and keep
+12. Run `hardenloop` before the pack can be PR-ready.
+13. Check evidence with `scripts/pack-evidence-check.py`.
+14. Render the PR body with `scripts/render-pr-body.py`, open the PR, and keep
     it targeted at the release integration branch.
 
 ## Isolation Rules
 
 - One pack, one branch, one worktree, one runtime namespace.
+- One pack can be claimed by only one active develop run. The GitHub issue
+  lifecycle label is the lock.
 - Do not use default local ports such as `3000`, `8056`, or `8080` for pack
   lanes.
 - Do not touch `tests3`. Helpful checks must live in product tests or skills.
@@ -82,6 +100,7 @@ Minimum PR-ready evidence:
 ```text
 .agents/packs/<pack-id>/
   pack.json
+  claim.json
   runtime.json
   ops/ops.jsonl
   tests/
