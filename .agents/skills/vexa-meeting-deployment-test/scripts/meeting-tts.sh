@@ -1008,10 +1008,17 @@ done
 
 LISTENER_BOT_ID="$(deploy_bot "$LISTENER_TOKEN" "listener-test-$CASE_ID" true true false)"
 log "listener deployed: bot_id=$LISTENER_BOT_ID"
+# Stagger bot starts: concurrent Chromium launches (3 within 1s) race on
+# DBus / shared resources and one bot's browserContext gets closed mid-init
+# ("browserContext.newPage: Target page, context or browser has been closed").
+# Adding a 5s gap between deploys eliminates the race deterministically.
+DEPLOY_STAGGER_SECONDS="${DEPLOY_STAGGER_SECONDS:-5}"
+sleep "$DEPLOY_STAGGER_SECONDS"
 for i in "${!SPEAKER_LABELS[@]}"; do
   bot_id="$(deploy_bot "${SPEAKER_TOKENS[$i]}" "${SPEAKER_NAMES[$i]}-$CASE_ID" false false true)"
   SPEAKER_BOT_IDS+=("$bot_id")
   log "speaker deployed: ${SPEAKER_NAMES[$i]} (${SPEAKER_LABELS[$i]}) bot_id=$bot_id"
+  [ "$i" -lt "$((${#SPEAKER_LABELS[@]} - 1))" ] && sleep "$DEPLOY_STAGGER_SECONDS"
 done
 
 cat >"$RUN_DIR/evidence.env" <<EOF
