@@ -563,11 +563,33 @@ async def finalize_recording_master(meeting_id: int, db: AsyncSession) -> None:
     rec_list = list(meeting_data.get("recordings") or [])
 
     if not rec_list:
+        # Race recovery: bot exit callback can fire before the chunk-write
+        # handler has populated meeting.data.recordings. Instead of bailing
+        # (and waiting up to ~120s for the sweep to recover), attempt the
+        # same JSONB recovery inline so playback_url is available on the
+        # post-meeting page immediately.
+        from .sweeps import recover_recordings_jsonb_from_storage
+        recovered = await recover_recordings_jsonb_from_storage(meeting, db)
+        if recovered:
+            # Re-read meeting after recovery seeded recordings.
+            meeting_q = await db.execute(
+                select(Meeting)
+                .where(Meeting.id == meeting_id)
+                .execution_options(populate_existing=True)
+            )
+            meeting = meeting_q.scalars().first()
+            meeting_data = dict(meeting.data or {})
+            rec_list = list(meeting_data.get("recordings") or [])
+        if not rec_list:
+            logger.info(
+                "[FINALIZER] meeting_id=%s — no recordings in meeting.data even after recovery; nothing to finalize",
+                meeting_id,
+            )
+            return
         logger.info(
-            "[FINALIZER] meeting_id=%s — no recordings in meeting.data; nothing to finalize",
-            meeting_id,
+            "[FINALIZER] meeting_id=%s — recovered %d recording entr(ies) inline before finalize",
+            meeting_id, len(rec_list),
         )
-        return
 
     for rec_idx, rec_payload in enumerate(rec_list):
         if not isinstance(rec_payload, dict):

@@ -30,6 +30,7 @@ import logging
 import os
 import time
 import uuid
+from datetime import datetime, timedelta
 from typing import Any, Callable, Optional
 
 from sqlalchemy import select
@@ -49,7 +50,7 @@ logger = logging.getLogger("meeting_api.sweeps")
 # means the canonical path genuinely failed — log loud, force-finalize.
 STALE_STOPPING_THRESHOLD_SECONDS = 300  # 5 min
 STALE_STOPPING_POLL_INTERVAL = 60  # check every 60 s
-UNFINALIZED_RECORDINGS_MIN_AGE_SECONDS = 120
+UNFINALIZED_RECORDINGS_MIN_AGE_SECONDS = 5
 UNFINALIZED_RECORDINGS_LIMIT = 100
 
 # v0.10.5 Pack K.5 (meeting-api side analog).
@@ -346,6 +347,117 @@ def _recording_has_playback_url(rec: dict) -> bool:
     if not isinstance(playback_url, dict):
         return False
     return bool(playback_url.get("audio") or playback_url.get("video"))
+
+
+async def recover_recordings_jsonb_from_storage(
+    meeting,
+    db: AsyncSession,
+) -> bool:
+    """Inline counterpart to the sweep's "recover JSONB from chunks" path.
+
+    Used when recording_finalizer is invoked but meeting.data.recordings is
+    empty even though chunks have already been written to storage. This
+    happens when the bot's exit callback fires before the chunk-write
+    handler has populated meeting.data — a race that previously waited
+    for the sweep (up to UNFINALIZED_RECORDINGS_MIN_AGE_SECONDS + sweep
+    interval, ~90-180s) to recover.
+
+    Returns True if at least one recording was seeded.
+    """
+    from .storage import create_storage_client
+
+    data = dict(meeting.data or {}) if isinstance(meeting.data, dict) else {}
+    if data.get("recording_enabled") is False:
+        return False
+
+    sessions = (await db.execute(
+        select(MeetingSession).where(MeetingSession.meeting_id == meeting.id)
+    )).scalars().all()
+    if not sessions:
+        return False
+
+    storage = create_storage_client()
+    now = datetime.utcnow().isoformat()
+    recordings = list(data.get("recordings") or [])
+    existing_sessions = {
+        rec.get("session_uid")
+        for rec in recordings
+        if isinstance(rec, dict) and rec.get("session_uid")
+    }
+    changed = False
+
+    for session in sessions:
+        if session.session_uid in existing_sessions:
+            continue
+        prefix = f"recordings/{meeting.user_id}/"
+        try:
+            keys = storage.list_objects_bounded(prefix)
+        except Exception as e:
+            logger.warning(
+                "[finalizer-recovery] storage list failed meeting_id=%s prefix=%s error=%s",
+                meeting.id, prefix, str(e)[:200],
+            )
+            continue
+
+        grouped: dict[tuple[int, str, str], list[str]] = {}
+        for key in keys:
+            parsed = _parse_recording_chunk_key(meeting.user_id, session.session_uid, key)
+            if parsed is None:
+                continue
+            grouped.setdefault(parsed, []).append(key)
+        if not grouped:
+            continue
+
+        media_files = []
+        recording_id = None
+        for (rec_id, media_type, media_format), chunk_keys in sorted(grouped.items()):
+            chunk_keys = sorted(chunk_keys)
+            recording_id = recording_id or rec_id
+            media_files.append({
+                "id": _new_recording_numeric_id(),
+                "type": media_type,
+                "format": media_format,
+                "storage_path": chunk_keys[-1],
+                "storage_backend": os.environ.get("STORAGE_BACKEND", "minio"),
+                "file_size_bytes": None,
+                "last_chunk_size_bytes": None,
+                "chunk_count": len(chunk_keys),
+                "duration_seconds": None,
+                "chunk_seq": len(chunk_keys) - 1,
+                "first_chunk_at": getattr(session.session_start_time, "isoformat", lambda: now)(),
+                "metadata": {},
+                "created_at": now,
+                "is_final": False,
+                "finalized_at": None,
+                "finalized_by": None,
+            })
+        if recording_id is None or not media_files:
+            continue
+        recordings.append({
+            "id": recording_id,
+            "meeting_id": meeting.id,
+            "user_id": meeting.user_id,
+            "session_uid": session.session_uid,
+            "source": "bot",
+            "status": "completed",
+            "created_at": now,
+            "completed_at": now,
+            "media_files": media_files,
+        })
+        existing_sessions.add(session.session_uid)
+        changed = True
+        logger.info(
+            "[finalizer-recovery] recovered JSONB metadata meeting_id=%s recording_id=%s session_uid=%s media_files=%s",
+            meeting.id, recording_id, session.session_uid, len(media_files),
+        )
+
+    if changed:
+        data["recordings"] = recordings
+        meeting.data = data
+        attributes.flag_modified(meeting, "data")
+        await db.commit()
+
+    return changed
 
 
 async def _sweep_unfinalized_recordings(
