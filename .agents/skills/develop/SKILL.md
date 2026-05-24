@@ -71,10 +71,18 @@ The pack epic must follow the `pack` skill template and declare:
    pack-specific blast-radius checks against the Compose lane.
 10. Validate local Lite through `vexa-lite-deploy` for every pack, then run
    pack-specific blast-radius checks against the Lite lane.
-11. Obtain human eyeball validation before the pack can be PR-ready. The human
-   must validate overall functionality and the pack's blast-radius behavior in
-   both Compose and Lite after machine checks pass. Record who validated it,
-   when, what URLs/screenshots/log summaries were reviewed, and the verdict.
+11. Obtain human eyeball validation before the pack can be PR-ready. Two
+   distinct eyeball verdicts are required and BOTH are mandatory for every
+   pack regardless of scope:
+   - (a) **Basic functionality** — the human confirms overall user-facing
+     behavior still works (sign-in, listing, opening a meeting, transcript
+     surface) in both Compose and Lite.
+   - (b) **Pack blast radius** — the human confirms the specific surfaces
+     this pack touches (per the pack epic's blast-radius declaration) behave
+     correctly in both Compose and Lite, including any UI/audio/playback
+     state that only a human can sense.
+   Record validator identity, timestamp, URLs/screenshots/log summaries
+   reviewed, and the explicit verdict for each of (a) and (b) per lane.
    This gate is never waived by a pack epic saying live meetings are not
    required; external meeting validation is a separate boundary.
 12. Run `vexa-meeting-deployment-test` for every pack against both the
@@ -83,9 +91,22 @@ The pack epic must follow the `pack` skill template and declare:
    URL(s), configure `https://httpbin.org/post` webhooks, and record separate
    Compose and Lite reports. A pack cannot be PR-ready until both lane reports
    have `Status: pass`.
-13. Run `hardenloop` before the pack can be PR-ready.
-14. Check evidence with `scripts/pack-evidence-check.py`.
-15. Render the PR body with `scripts/render-pr-body.py`, open the PR, and keep
+13. Obtain a **human code review** verdict before the pack can be PR-ready.
+   A human reviewer must read the actual code diff (not only the PR
+   description) and record:
+   - reviewer identity and timestamp;
+   - explicit verdict (`pass`, `pass with notes`, `changes requested`,
+     or `block`);
+   - notes covering each declared blast-radius surface;
+   - confirmation that the diff stays within the pack scope (no unrelated
+     refactors, no hidden stitch-time changes).
+   Record in `review.md` (machine-generated review skeleton allowed) and
+   `code-review.md` (human-authored verdict). Both files are required.
+   This gate is never granted by the develop skill or by Codex; it must
+   come from a human signal in the chat or in the PR review thread.
+14. Run `hardenloop` before the pack can be PR-ready.
+15. Check evidence with `scripts/pack-evidence-check.py`.
+16. Render the PR body with `scripts/render-pr-body.py`, open the PR, and keep
     it targeted at the release integration branch.
 
 ## Isolation Rules
@@ -102,7 +123,13 @@ The pack epic must follow the `pack` skill template and declare:
   outside the pack and not a regression, file/log it and continue.
 - Do not ask for human eyeball confirmation for machine-validated facts.
   However, every pack still requires a human eyeball verdict for overall
-  functionality and Compose/Lite blast-radius behavior before PR-ready status.
+  basic functionality AND Compose/Lite blast-radius behavior before
+  PR-ready status. These are two separate verdicts; one does not substitute
+  for the other.
+- Do not self-grant the code review verdict. Develop prepares the diff,
+  the PR body, and a review skeleton (`review.md`); a human reads the diff
+  and writes `code-review.md` with the explicit verdict. A pack is not
+  PR-ready without a human code review verdict on file.
 
 ## Evidence Contract
 
@@ -117,20 +144,27 @@ Minimum PR-ready evidence:
   tests/
   compose/
     meeting-deployment-test.md
-    human-eyeball.md
+    human-eyeball-basic.md
+    human-eyeball-blast-radius.md
   lite/
     meeting-deployment-test.md
-    human-eyeball.md
+    human-eyeball-basic.md
+    human-eyeball-blast-radius.md
   human/
     overall-functionality.md
   hardenloop/
   review.md
+  code-review.md
   pr.md
 ```
 
-Compose, Lite, human eyeball, and live meeting deployment gates are mandatory
-for every pack. The live meeting deployment gate must run against both Compose
-and Lite lanes with separate evidence files.
+Compose, Lite, both human eyeball verdicts (basic + blast-radius), live meeting
+deployment, and human code review are mandatory for every pack. The live
+meeting deployment gate must run against both Compose and Lite lanes with
+separate evidence files. The two human eyeball files in each lane (`-basic`
+and `-blast-radius`) capture the two distinct verdicts required by step 11;
+combining them into one file is not allowed because the verdicts are
+independent.
 
 ## Operation Ledger
 
@@ -154,7 +188,9 @@ When reporting progress, include:
 - pack id and branch/worktree;
 - synthetic validation status;
 - Compose and Lite lane status, including blast-radius status;
-- human eyeball validation status for overall functionality and Compose/Lite;
+- human eyeball verdicts — separately for basic functionality and for
+  blast-radius, in both Compose and Lite (four verdicts total);
 - external live-meeting validation status for Compose and Lite;
 - Hardenloop status;
+- human code review verdict (reviewer, timestamp, verdict, notes);
 - PR/evidence readiness.
