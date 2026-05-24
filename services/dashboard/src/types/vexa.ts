@@ -476,6 +476,23 @@ export interface RecordingData {
   media_files: RecordingMediaFile[];
 }
 
+// --- Frame Snapshots Types ---
+
+export interface RecordingFrame {
+  id: number;
+  timestamp_s: number;
+  url: string;
+  expires_at: string | null;
+  storage_path?: string;
+}
+
+export interface RecordingFrameListResponse {
+  extraction_status: "none" | "processing" | "complete" | "failed";
+  total: number;
+  frames: RecordingFrame[];
+  failure_reason?: string;
+}
+
 // ==========================================
 // Admin API Types
 // ==========================================

@@ -6,6 +6,8 @@ import type {
   BotConfigUpdate,
   Platform,
   RecordingData,
+  RecordingFrame,
+  RecordingFrameListResponse,
 } from "@/types/vexa";
 
 class VexaAPIError extends Error {
@@ -400,6 +402,17 @@ export const vexaAPI = {
 
   getRecordingVideoUrl(recordingId: number, mediaFileId: number): string {
     return withBasePath(`/api/vexa/recordings/${recordingId}/media/${mediaFileId}/raw`);
+  },
+
+  // Frame Snapshots
+  async getRecordingFrames(recordingId: number): Promise<RecordingFrameListResponse> {
+    const response = await fetch(withBasePath(`/api/vexa/recordings/${recordingId}/frames`));
+    return handleResponse<RecordingFrameListResponse>(response);
+  },
+
+  async getFrameUrl(recordingId: number, frameId: number): Promise<{ url: string; expires_at: string }> {
+    const response = await fetch(withBasePath(`/api/vexa/recordings/${recordingId}/frames/${frameId}/url`));
+    return handleResponse<{ url: string; expires_at: string }>(response);
   },
 
   // Transcribe a recorded meeting (deferred transcription)
