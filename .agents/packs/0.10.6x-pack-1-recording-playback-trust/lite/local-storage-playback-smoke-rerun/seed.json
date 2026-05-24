@@ -1,0 +1,9 @@
+{
+  "expected_duration_seconds": 0.25,
+  "expected_size_bytes": 8044,
+  "media_file_id": 496315132,
+  "recording_id": 496315131,
+  "storage_backend": "local",
+  "storage_path": "recordings/2/496315131/pack1-lite-smoke-17795496315131/audio/master.wav",
+  "token": "[redacted-generated-lite-token]"
+}

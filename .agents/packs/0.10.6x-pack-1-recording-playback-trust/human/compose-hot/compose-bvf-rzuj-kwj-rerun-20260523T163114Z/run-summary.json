@@ -1,0 +1,18 @@
+{
+  "run_id": "compose-bvf-rzuj-kwj-rerun-20260523T163114Z",
+  "case_id": "compose-case-a",
+  "platform": "google_meet",
+  "native_meeting_id": "bvf-rzuj-kwj",
+  "gateway_url": "http://localhost:42261",
+  "dashboard_url": "http://localhost:42260",
+  "listener_bot_id": "8",
+  "speaker_bot_ids": [
+    "9",
+    "10"
+  ],
+  "left_running": false,
+  "score": null,
+  "telemetry_score": null,
+  "ws_transcript_summary": null,
+  "webhook_summary": null
+}

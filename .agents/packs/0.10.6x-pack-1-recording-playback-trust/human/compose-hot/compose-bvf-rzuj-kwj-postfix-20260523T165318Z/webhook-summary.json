@@ -1,0 +1,16 @@
+{
+  "meeting_status": "completed",
+  "webhook_target_configured": true,
+  "status_delivery_count": 4,
+  "status_events": [
+    "meeting.started",
+    "meeting.status_change"
+  ],
+  "completion_status": "delivered",
+  "completion_http_status": null,
+  "retry_count": null,
+  "recording_count": 1,
+  "recording_status": "completed",
+  "recording_id_present": true,
+  "playback_or_master_url_present": true
+}

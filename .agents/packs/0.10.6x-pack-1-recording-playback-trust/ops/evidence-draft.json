@@ -1,0 +1,48 @@
+{
+  "checks": [
+    {
+      "exists": true,
+      "kind": "file",
+      "path": "pack.json"
+    },
+    {
+      "exists": true,
+      "kind": "file",
+      "path": "runtime.json"
+    },
+    {
+      "exists": true,
+      "kind": "file",
+      "path": "ops/ops.jsonl"
+    },
+    {
+      "exists": true,
+      "kind": "dir",
+      "path": "tests"
+    },
+    {
+      "exists": true,
+      "kind": "dir",
+      "path": "compose"
+    },
+    {
+      "exists": true,
+      "kind": "dir",
+      "path": "lite"
+    }
+  ],
+  "evidence_root": "/home/dima/dev/vexa-agents-pack-pipeline-strategy/.agents/packs/0.10.6x-pack-1-recording-playback-trust",
+  "invalid": [],
+  "missing": [],
+  "mode": "draft",
+  "pack_id": "0.10.6x-pack-1-recording-playback-trust",
+  "required": [
+    "pack.json",
+    "runtime.json",
+    "ops/ops.jsonl",
+    "tests",
+    "compose",
+    "lite"
+  ],
+  "status": "pass"
+}
