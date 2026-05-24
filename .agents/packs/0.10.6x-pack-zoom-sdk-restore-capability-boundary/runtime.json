@@ -1,0 +1,27 @@
+{
+  "compose_project": "vexa_0-10-6x-pack-zoom-sdk-restore-capability-boundary_compose",
+  "forbidden_ports": [
+    3000,
+    8056,
+    8080
+  ],
+  "lite_container": "vexa-0-10-6x-pack-zoom-sdk-restore-capability-boundary-lite",
+  "namespace": "pack-0-10-6x-pack-zoom-sdk-restore-capability-boundary",
+  "network_prefix": "pack-0-10-6x-pack-zoom-sdk-restore-capability-boundary",
+  "notes": [
+    "Ports are pack-scoped and intentionally avoid popular/default Vexa service ports.",
+    "Meeting API and other internal services should stay internal unless a deploy skill explicitly exposes a debug lane."
+  ],
+  "pack_id": "0-10-6x-pack-zoom-sdk-restore-capability-boundary",
+  "ports": {
+    "compose_browser_session": 43722,
+    "compose_dashboard": 43720,
+    "compose_gateway": 43721,
+    "compose_vnc": 43723,
+    "lite_dashboard": 43730,
+    "lite_gateway": 43731,
+    "lite_vnc": 43732
+  },
+  "release_id": "0.10.6.x replay",
+  "slot": 136
+}
