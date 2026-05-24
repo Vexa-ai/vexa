@@ -1,0 +1,12 @@
+{
+  "ran_at": "2026-05-24T14:38:06Z",
+  "passed": 5,
+  "failed": 0,
+  "scenarios": [
+    "scenario-06-browser-session-delete",
+    "scenario-05-force-kill",
+    "scenario-10-stop-during-joining",
+    "scenario-09-concurrent-stops",
+    "scenario-03-no-joined-timeout"
+  ]
+}
