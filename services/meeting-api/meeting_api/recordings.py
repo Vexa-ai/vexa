@@ -8,7 +8,7 @@ import json
 import logging
 import os
 import uuid as uuid_lib
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
@@ -19,10 +19,12 @@ from sqlalchemy.future import select
 from sqlalchemy.orm import attributes
 
 from .database import get_db
-from .models import Meeting, MeetingSession, Recording, MediaFile
+from .models import Meeting, MeetingSession, Recording, MediaFile, RecordingFrame
 from .schemas import (
     RecordingResponse,
     RecordingListResponse,
+    RecordingFrameResponse,
+    RecordingFrameListResponse,
     RecordingStatus,
     RecordingSource,
 )
@@ -33,6 +35,8 @@ from .config import get_recording_metadata_mode
 from .webhooks import send_event_webhook
 
 logger = logging.getLogger("meeting_api.recordings")
+
+FRAMES_URL_TTL = 900  # 15 minutes per D-03
 
 router = APIRouter()
 
@@ -719,6 +723,164 @@ async def download_media_file_raw(
         return Response(content=chunk, media_type=ct, status_code=206, headers=headers)
 
     return Response(content=data, media_type=ct, headers=headers)
+
+
+# ---------------------------------------------------------------------------
+# Frame snapshot endpoints
+# ---------------------------------------------------------------------------
+
+def _get_frames_status_jsonb(meeting: Meeting, recording_id: int) -> tuple:
+    """Extract frames_status and frames_failure_reason from meeting.data JSONB.
+
+    Returns (frames_status, failure_reason) tuple.
+    """
+    rec_list = list((meeting.data or {}).get("recordings") or [])
+    for rec in rec_list:
+        if isinstance(rec, dict) and rec.get("id") == recording_id:
+            status = rec.get("frames_status", "none")
+            reason = rec.get("frames_failure_reason")
+            return status, reason
+    return "none", None
+
+
+@router.get("/recordings/{recording_id}/frames",
+            response_model=RecordingFrameListResponse,
+            summary="Get frame snapshots for a recording",
+            description="Returns extraction status and presigned URLs for video frame "
+                        "thumbnails. URLs expire in 15 minutes. Requires SNAPSHOTS_ENABLED=true.")
+async def get_recording_frames(
+    recording_id: int,
+    auth: tuple = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    # Feature flag gate
+    if os.getenv("SNAPSHOTS_ENABLED", "false").lower() != "true":
+        raise HTTPException(status_code=404, detail="snapshots disabled")
+
+    _, user = auth
+    extraction_status = "none"
+    failure_reason = None
+    meeting = None
+
+    if get_recording_metadata_mode() == "meeting_data":
+        meeting, rec = await _find_meeting_data_recording(db, user.id, recording_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="Recording not found")
+        extraction_status, failure_reason = _get_frames_status_jsonb(meeting, recording_id)
+    else:
+        recording = await db.get(Recording, recording_id)
+        if not recording or recording.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Recording not found")
+        extraction_status = recording.frames_status or "none"
+        if extraction_status == "failed" and recording.extra_metadata:
+            failure_reason = recording.extra_metadata.get("frames_failure_reason")
+
+    # Return early for non-complete states
+    if extraction_status in ("none", "processing", "failed"):
+        return RecordingFrameListResponse(
+            extraction_status=extraction_status,
+            total=0,
+            frames=[],
+            failure_reason=failure_reason,
+        )
+
+    # Query RecordingFrame rows
+    if meeting is not None:
+        stmt = (
+            select(RecordingFrame)
+            .where(
+                RecordingFrame.recording_id == recording_id,
+                RecordingFrame.meeting_id == meeting.id,
+            )
+            .order_by(RecordingFrame.timestamp_s)
+        )
+    else:
+        stmt = (
+            select(RecordingFrame)
+            .where(RecordingFrame.recording_id == recording_id)
+            .order_by(RecordingFrame.timestamp_s)
+        )
+    result = await db.execute(stmt)
+    frame_rows = result.scalars().all()
+
+    # Build presigned URLs
+    storage = create_storage_client()
+    expires_at = datetime.utcnow() + timedelta(seconds=FRAMES_URL_TTL)
+    frames = []
+    for frame in frame_rows:
+        try:
+            url = storage.get_presigned_url(frame.storage_path, expires=FRAMES_URL_TTL)
+        except Exception:
+            url = f"file://{frame.storage_path}" if "local" in (os.getenv("STORAGE_BACKEND", "minio")) else frame.storage_path
+            expires_at = None
+        frames.append(RecordingFrameResponse(
+            id=frame.id,
+            timestamp_s=frame.timestamp_s,
+            url=url,
+            expires_at=expires_at if url.startswith("http") else None,
+            storage_path=frame.storage_path,
+        ))
+
+    return RecordingFrameListResponse(
+        extraction_status=extraction_status,
+        total=len(frames),
+        frames=frames,
+    )
+
+
+@router.get("/recordings/{recording_id}/frames/{frame_id}/url",
+            summary="Get a freshly-signed URL for a single frame",
+            description="Returns a single presigned URL for a specific frame thumbnail. "
+                        "Useful for JIT lazy loading with IntersectionObserver.")
+async def get_frame_url(
+    recording_id: int,
+    frame_id: int,
+    auth: tuple = Depends(get_user_and_token),
+    db: AsyncSession = Depends(get_db),
+):
+    # Feature flag gate
+    if os.getenv("SNAPSHOTS_ENABLED", "false").lower() != "true":
+        raise HTTPException(status_code=404, detail="snapshots disabled")
+
+    _, user = auth
+    meeting = None
+
+    # Ownership scoping
+    if get_recording_metadata_mode() == "meeting_data":
+        meeting, rec = await _find_meeting_data_recording(db, user.id, recording_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="Recording not found")
+    else:
+        recording = await db.get(Recording, recording_id)
+        if not recording or recording.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Recording not found")
+
+    # Find the frame
+    if meeting is not None:
+        stmt = select(RecordingFrame).where(
+            RecordingFrame.id == frame_id,
+            RecordingFrame.recording_id == recording_id,
+            RecordingFrame.meeting_id == meeting.id,
+        )
+    else:
+        stmt = select(RecordingFrame).where(
+            RecordingFrame.id == frame_id,
+            RecordingFrame.recording_id == recording_id,
+        )
+    result = await db.execute(stmt)
+    frame = result.scalars().first()
+    if frame is None:
+        raise HTTPException(status_code=404, detail="Frame not found")
+
+    # Generate fresh URL
+    storage = create_storage_client()
+    url = storage.get_presigned_url(frame.storage_path, expires=FRAMES_URL_TTL)
+    expires_at = datetime.utcnow() + timedelta(seconds=FRAMES_URL_TTL)
+
+    return {
+        "url": url,
+        "expires_at": expires_at.isoformat() if url.startswith("http") else None,
+    }
 
 
 @router.delete("/recordings/{recording_id}", summary="Delete a recording and its media files")

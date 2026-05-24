@@ -1286,6 +1286,25 @@ class RecordingResponse(BaseModel):
 
 class RecordingListResponse(BaseModel):
     recordings: List[RecordingResponse]
+
+# --- Frame Snapshots Schemas ---
+
+class RecordingFrameResponse(BaseModel):
+    id: int
+    timestamp_s: int
+    url: str
+    expires_at: Optional[datetime] = None
+    storage_path: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class RecordingFrameListResponse(BaseModel):
+    extraction_status: str
+    total: int
+    frames: List[RecordingFrameResponse] = Field(default_factory=list)
+    failure_reason: Optional[str] = None
+
 # --- END Recording Schemas ---
 
 
