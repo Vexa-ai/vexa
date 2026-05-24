@@ -827,8 +827,39 @@ fetch_listener_meeting_evidence() {
   if [ -z "$LISTENER_BOT_ID" ]; then
     return 0
   fi
-  request GET "$GATEWAY_URL/bots/id/$LISTENER_BOT_ID" "$LISTENER_TOKEN"
-  printf '%s\n' "$HTTP_BODY" >"$RUN_DIR/listener-meeting.json"
+  # Poll up to PLAYBACK_FINALIZE_MAX_SECONDS (default 90s) for the recording
+  # finalizer to populate playback_url on the recording record. The finalizer
+  # runs asynchronously after the bot's exit callback and on a slow lane can
+  # take 30-90s for the master.webm assembly + upload to complete. Without
+  # this poll, webhook-summary.json captures a pre-finalize snapshot that
+  # incorrectly reports playback_or_master_url_present=false even though
+  # the URL appears in the DB seconds later.
+  local poll_max="${PLAYBACK_FINALIZE_MAX_SECONDS:-90}"
+  local poll_step="${PLAYBACK_FINALIZE_POLL_SECONDS:-5}"
+  local elapsed=0
+  local has_url=0
+  while [ "$elapsed" -le "$poll_max" ]; do
+    request GET "$GATEWAY_URL/bots/id/$LISTENER_BOT_ID" "$LISTENER_TOKEN"
+    [ "$HTTP_CODE" != "200" ] && break
+    printf '%s\n' "$HTTP_BODY" >"$RUN_DIR/listener-meeting.json"
+    has_url=$(python3 -c '
+import json, sys
+try:
+    m = json.load(open(sys.argv[1]))
+except Exception:
+    print(0); sys.exit(0)
+data = m.get("data") or {}
+recs = data.get("recordings") or []
+rec = recs[0] if isinstance(recs, list) and recs else (data.get("recording") or {})
+pu = data.get("playback_url") or data.get("master_url") or rec.get("playback_url") or rec.get("master_url")
+if isinstance(pu, dict):
+    pu = pu.get("audio") or pu.get("video")
+print(1 if pu else 0)
+' "$RUN_DIR/listener-meeting.json" 2>/dev/null)
+    [ "$has_url" = "1" ] && break
+    sleep "$poll_step"
+    elapsed=$((elapsed + poll_step))
+  done
   if [ "$HTTP_CODE" = "200" ]; then
     python3 - "$RUN_DIR/listener-meeting.json" <<'PY' >"$RUN_DIR/webhook-summary.json"
 import json
