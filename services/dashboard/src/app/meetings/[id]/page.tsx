@@ -952,8 +952,9 @@ export default function MeetingDetailPage() {
         No audio recording for this meeting.
       </div>
     ) : missingRequestedRecording ? (
-      <div className="flex items-center gap-2 px-4 py-2 bg-destructive/10 rounded-lg border border-destructive/30 text-sm text-destructive">
-        Recording was enabled, but no finalized recording artifact is available yet.
+      <div className="flex items-center gap-2 px-4 py-2 bg-muted/50 rounded-lg border text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Recording is finalizing...
       </div>
     ) : (
       <div className="flex items-center gap-2 px-4 py-2 bg-muted/50 rounded-lg border text-sm text-muted-foreground">
