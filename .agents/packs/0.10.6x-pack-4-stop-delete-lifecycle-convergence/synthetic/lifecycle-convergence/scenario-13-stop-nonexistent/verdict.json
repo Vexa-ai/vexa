@@ -1,0 +1,6 @@
+{
+  "scenario_dir": "scenario-13-stop-nonexistent",
+  "completed_at": "2026-05-24T14:57:26Z",
+  "pass": true,
+  "note": "404 returned for nonexistent bot (no 5xx)"
+}

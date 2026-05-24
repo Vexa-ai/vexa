@@ -1,6 +1,6 @@
 {
   "scenario_dir": "scenario-03-no-joined-timeout",
-  "completed_at": "2026-05-24T14:38:06Z",
+  "completed_at": "2026-05-24T14:58:41Z",
   "pass": true,
   "note": "status=completed, container_removed, redis_keys=0, callbacks=0"
 }

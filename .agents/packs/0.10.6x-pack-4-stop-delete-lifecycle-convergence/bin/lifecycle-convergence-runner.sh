@@ -305,7 +305,144 @@ scenario_5() {
 }
 
 # ---------------------------------------------------------------
-# Run scenarios sequentially (each is short; total ~5-7 min)
+# Scenario 11: instant start-stop (DELETE within ~100ms of POST)
+# ---------------------------------------------------------------
+scenario_11() {
+  local DIR="$EVIDENCE_ROOT/scenario-11-instant-start-stop"
+  mkdir -p "$DIR"
+  log "=== Scenario 11: instant start-stop (no sleep) ==="
+  local NATIVE="conv-test-11-$(date +%s)"
+  local payload
+  payload=$(printf '{"platform":"google_meet","native_meeting_id":"%s","bot_name":"conv-11-listener","transcribe_enabled":true,"recording_enabled":true}' "$NATIVE")
+  local resp; resp=$(curl -s -X POST "$GATEWAY_URL/bots" -H "X-API-Key: $LISTENER_TOKEN" -H "Content-Type: application/json" -d "$payload" -w "\n%{http_code}")
+  local code; code=$(echo "$resp" | tail -1)
+  local body; body=$(echo "$resp" | sed '$d')
+  echo "$body" > "$DIR/deploy-response.json"
+  if [ "$code" != "201" ]; then
+    record_verdict "$DIR" "false" "deploy returned HTTP $code"
+    return
+  fi
+  local mid; mid=$(echo "$body" | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])" 2>/dev/null)
+  local cname; cname=$(echo "$body" | python3 -c "import json,sys;print(json.load(sys.stdin)['bot_container_id'])" 2>/dev/null)
+  # NO SLEEP - fire DELETE immediately
+  local del; del=$(curl -s -X DELETE "$GATEWAY_URL/bots/google_meet/$NATIVE" -H "X-API-Key: $LISTENER_TOKEN" -w "\n%{http_code}")
+  echo "$del" | sed '$d' > "$DIR/delete-response.json"
+  local del_code; del_code=$(echo "$del" | tail -1)
+  log "  bot $mid created + DELETEd in same shell tick (HTTP $del_code)"
+  local final; final=$(poll_db_terminal "$mid" 120)
+  local container_exists="true"
+  for i in $(seq 1 10); do
+    if ! docker_container_exists "$cname"; then container_exists="false"; break; fi
+    sleep 2
+  done
+  echo "{\"final_status\":\"$final\",\"container_present\":$container_exists,\"delete_http\":$del_code}" > "$DIR/state-after.json"
+  if [ "$final" != "TIMEOUT" ] && [ "$container_exists" = "false" ] && [ "$del_code" = "202" -o "$del_code" = "200" ]; then
+    record_verdict "$DIR" "true" "instant DELETE converged: status=$final del_http=$del_code"
+  else
+    record_verdict "$DIR" "false" "status=$final container_present=$container_exists del_http=$del_code"
+  fi
+  SCENARIO_LIST+=("scenario-11-instant-start-stop")
+}
+
+# ---------------------------------------------------------------
+# Scenario 12: double-stop idempotency (DELETE already-stopped bot)
+# ---------------------------------------------------------------
+scenario_12() {
+  local DIR="$EVIDENCE_ROOT/scenario-12-double-stop-idempotency"
+  mkdir -p "$DIR"
+  log "=== Scenario 12: double-stop idempotency ==="
+  local NATIVE="conv-test-12-$(date +%s)"
+  local payload
+  payload=$(printf '{"platform":"google_meet","native_meeting_id":"%s","bot_name":"conv-12-listener","transcribe_enabled":true,"recording_enabled":true}' "$NATIVE")
+  local body; body=$(curl -s -X POST "$GATEWAY_URL/bots" -H "X-API-Key: $LISTENER_TOKEN" -H "Content-Type: application/json" -d "$payload")
+  echo "$body" > "$DIR/deploy-response.json"
+  local mid; mid=$(echo "$body" | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])" 2>/dev/null)
+  if [ -z "$mid" ]; then record_verdict "$DIR" "false" "deploy failed"; return; fi
+  sleep 3
+  # First DELETE
+  local d1; d1=$(curl -s -X DELETE "$GATEWAY_URL/bots/google_meet/$NATIVE" -H "X-API-Key: $LISTENER_TOKEN" -w "\n%{http_code}")
+  local d1_code; d1_code=$(echo "$d1" | tail -1)
+  echo "$d1" | sed '$d' > "$DIR/delete-1.json"
+  local final1; final1=$(poll_db_terminal "$mid" 60)
+  # Second DELETE on already-terminal meeting
+  local d2; d2=$(curl -s -X DELETE "$GATEWAY_URL/bots/google_meet/$NATIVE" -H "X-API-Key: $LISTENER_TOKEN" -w "\n%{http_code}")
+  local d2_code; d2_code=$(echo "$d2" | tail -1)
+  echo "$d2" | sed '$d' > "$DIR/delete-2.json"
+  local final2; final2=$(db_meeting_status "$mid")
+  echo "{\"first_delete_http\":$d1_code,\"first_final\":\"$final1\",\"second_delete_http\":$d2_code,\"status_after_second\":\"$final2\"}" > "$DIR/state-after.json"
+  # Pass: first DELETE accepted (202/200), bot reaches terminal, second DELETE returns 4xx or no-op (NOT 5xx), terminal status preserved
+  if [ "$final1" != "TIMEOUT" ] && [ "$final1" = "$final2" ] && { [ "$d2_code" = "404" ] || [ "$d2_code" = "409" ] || [ "$d2_code" = "200" ] || [ "$d2_code" = "202" ]; }; then
+    record_verdict "$DIR" "true" "idempotent: 1st=$d1_code→$final1, 2nd=$d2_code (status preserved)"
+  else
+    record_verdict "$DIR" "false" "1st=$d1_code→$final1, 2nd=$d2_code→$final2"
+  fi
+  SCENARIO_LIST+=("scenario-12-double-stop-idempotency")
+}
+
+# ---------------------------------------------------------------
+# Scenario 13: stop nonexistent bot (404, clean)
+# ---------------------------------------------------------------
+scenario_13() {
+  local DIR="$EVIDENCE_ROOT/scenario-13-stop-nonexistent"
+  mkdir -p "$DIR"
+  log "=== Scenario 13: stop nonexistent bot ==="
+  local NATIVE="nonexistent-$(date +%s)"
+  local d; d=$(curl -s -X DELETE "$GATEWAY_URL/bots/google_meet/$NATIVE" -H "X-API-Key: $LISTENER_TOKEN" -w "\n%{http_code}")
+  local code; code=$(echo "$d" | tail -1)
+  echo "$d" | sed '$d' > "$DIR/delete-response.json"
+  echo "{\"http\":$code}" > "$DIR/state-after.json"
+  # Pass: clean 404 (not 5xx), no side effects
+  if [ "$code" = "404" ]; then
+    record_verdict "$DIR" "true" "404 returned for nonexistent bot (no 5xx)"
+  else
+    record_verdict "$DIR" "false" "HTTP $code (expected 404)"
+  fi
+  SCENARIO_LIST+=("scenario-13-stop-nonexistent")
+}
+
+# ---------------------------------------------------------------
+# Scenario 14: rapid start-stop loop (5x same URL, no leaks)
+# ---------------------------------------------------------------
+scenario_14() {
+  local DIR="$EVIDENCE_ROOT/scenario-14-rapid-loop"
+  mkdir -p "$DIR"
+  log "=== Scenario 14: rapid start-stop loop (5x) ==="
+  local NATIVE="conv-test-14-$(date +%s)"
+  local payload
+  payload=$(printf '{"platform":"google_meet","native_meeting_id":"%s","bot_name":"conv-14-listener","transcribe_enabled":true,"recording_enabled":true}' "$NATIVE")
+  local containers_before; containers_before=$(docker ps -a --format '{{.Names}}' | grep -c '^meeting-' || true)
+  local all_ids="["
+  local i
+  for i in 1 2 3 4 5; do
+    local body; body=$(curl -s -X POST "$GATEWAY_URL/bots" -H "X-API-Key: $LISTENER_TOKEN" -H "Content-Type: application/json" -d "$payload")
+    local mid; mid=$(echo "$body" | python3 -c "import json,sys;print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+    if [ -z "$mid" ]; then
+      record_verdict "$DIR" "false" "iteration $i deploy failed: $(echo $body | head -c 200)"
+      return
+    fi
+    all_ids="${all_ids}${mid},"
+    sleep 2
+    curl -s -X DELETE "$GATEWAY_URL/bots/google_meet/$NATIVE" -H "X-API-Key: $LISTENER_TOKEN" >/dev/null
+    sleep 3
+  done
+  all_ids="${all_ids%,}]"
+  echo "$all_ids" > "$DIR/all-meeting-ids.json"
+  sleep 10  # let cleanups complete
+  local containers_after; containers_after=$(docker ps -a --format '{{.Names}}' | grep -c '^meeting-' || true)
+  # Check none of the 5 are still in a non-terminal status
+  local stuck; stuck=$(docker exec "$PG_CONTAINER" psql -U postgres -d vexa -tA -c \
+    "SELECT count(*) FROM meetings WHERE id = ANY($(echo $all_ids | tr -d '[]' | awk -F, '{printf "ARRAY["; for(i=1;i<=NF;i++){if(i>1)printf ","; printf $i} printf "]"}')) AND status NOT IN ('completed','failed','cancelled');" 2>/dev/null | tr -d ' \n')
+  echo "{\"containers_before\":$containers_before,\"containers_after\":$containers_after,\"stuck_meetings\":$stuck}" > "$DIR/state-after.json"
+  if [ "$stuck" = "0" ] && [ "$containers_after" -le "$((containers_before + 1))" ]; then
+    record_verdict "$DIR" "true" "5x loop: 0 stuck meetings, container delta $((containers_after - containers_before))"
+  else
+    record_verdict "$DIR" "false" "stuck=$stuck containers_before=$containers_before containers_after=$containers_after"
+  fi
+  SCENARIO_LIST+=("scenario-14-rapid-loop")
+}
+
+# ---------------------------------------------------------------
+# Run scenarios sequentially
 # ---------------------------------------------------------------
 log "Lifecycle convergence runner starting"
 log "Evidence root: $EVIDENCE_ROOT"
@@ -313,8 +450,12 @@ log "Evidence root: $EVIDENCE_ROOT"
 scenario_6   # cheapest: browser-session DELETE
 scenario_5   # meeting bot force-kill
 scenario_10  # stop during JOINING
+scenario_11  # instant start-stop (no sleep at all)
+scenario_12  # double-stop idempotency
+scenario_13  # stop nonexistent bot
+scenario_14  # rapid start-stop loop
 scenario_9   # concurrent stops
-scenario_3   # no_one_joined_timeout (slowest; runs last)
+scenario_3   # max_wait_for_admission timeout (slowest; runs last)
 
 # Write summary
 cat > "$EVIDENCE_ROOT/summary.json" <<EOF

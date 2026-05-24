@@ -1,0 +1,6 @@
+{
+  "scenario_dir": "scenario-11-instant-start-stop",
+  "completed_at": "2026-05-24T14:57:22Z",
+  "pass": true,
+  "note": "instant DELETE converged: status=completed del_http=202"
+}
