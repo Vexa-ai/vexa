@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 import { AudioPlayer, type AudioPlayerHandle, type AudioFragment } from "@/components/recording/audio-player";
 import { VideoPlayer, type VideoPlayerHandle } from "@/components/recording/video-player";
+import { SnapshotGallery } from "@/components/recording/snapshot-gallery";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -393,6 +394,52 @@ export default function MeetingDetailPage() {
     setPlaybackTime(virtualOffset + startTimeSeconds);
     setIsPlaybackActive(true);
   }, [hasRecordingAudio, recordingFragments, transcripts, sessionStartMsBySessionUid]);
+
+  // Seek playback to a snapshot timestamp (same logic as handleSegmentClick
+  // but simplified — snapshots only provide timestampSeconds, no absolute time).
+  const handleSnapshotClick = useCallback((timestampSeconds: number) => {
+    if (!hasRecordingAudio) {
+      setPendingSeekTime(timestampSeconds);
+      return;
+    }
+
+    if (recordingFragments.length <= 1) {
+      audioPlayerRef.current?.seekTo(timestampSeconds);
+      videoPlayerRef.current?.seekTo(timestampSeconds);
+      setPlaybackTime(timestampSeconds);
+      setIsPlaybackActive(true);
+      return;
+    }
+
+    // Multi-fragment: find which fragment this timestamp belongs to
+    let targetFragmentIndex = 0;
+    let cumulativeDuration = 0;
+    for (let i = 0; i < recordingFragments.length; i++) {
+      if (timestampSeconds < cumulativeDuration + recordingFragments[i].duration) {
+        targetFragmentIndex = i;
+        break;
+      }
+      cumulativeDuration += recordingFragments[i].duration;
+      if (i === recordingFragments.length - 1) {
+        targetFragmentIndex = i;
+      }
+    }
+
+    const timeInFragment = timestampSeconds - recordingFragments.slice(0, targetFragmentIndex).reduce((sum, f) => sum + (f.duration || 0), 0);
+    audioPlayerRef.current?.seekToFragment(targetFragmentIndex, timeInFragment);
+    const virtualOffset = recordingFragments.slice(0, targetFragmentIndex).reduce((sum, f) => sum + (f.duration || 0), 0);
+    videoPlayerRef.current?.seekTo(virtualOffset + timeInFragment);
+    setPlaybackTime(virtualOffset + timeInFragment);
+    setIsPlaybackActive(true);
+  }, [hasRecordingAudio, recordingFragments]);
+
+  // Get the first recording ID that has video for the snapshot gallery
+  const snapshotRecordingId = useMemo(() => {
+    const videoRecording = recordings?.find(r =>
+      r.media_files?.some(mf => mf.type === "video")
+    );
+    return videoRecording?.id ?? null;
+  }, [recordings]);
 
   useEffect(() => {
     if (!hasRecordingAudio || pendingSeekTime == null) return;
@@ -1936,6 +1983,15 @@ export default function MeetingDetailPage() {
                   fetchTranscripts(currentMeeting.platform, currentMeeting.platform_specific_id, String(currentMeeting.id));
                 }
               }}
+            />
+          )}
+
+          {/* Snapshots Gallery */}
+          {snapshotRecordingId !== null && (
+            <SnapshotGallery
+              recordingId={snapshotRecordingId}
+              onTimestampClick={handleSnapshotClick}
+              hasVideo={true}
             />
           )}
           </>)}
