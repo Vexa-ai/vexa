@@ -1,0 +1,6 @@
+{
+  "scenario_dir": "scenario-10-stop-during-joining",
+  "completed_at": "2026-05-25T17:14:44Z",
+  "pass": true,
+  "note": "early-stop converged: status=failed callbacks=0"
+}

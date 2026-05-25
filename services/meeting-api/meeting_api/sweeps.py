@@ -67,8 +67,9 @@ async def _sweep_stale_stopping(
     """One iteration of the stale-stopping sweep.
 
     Scans for rows where status='stopping' AND the time since the meeting
-    last *progressed* (last status_transition.at, fall back to created_at)
-    exceeds STALE_STOPPING_THRESHOLD_SECONDS. Force-completes each with
+    last *progressed* (last status_transition.timestamp/at, fall back to
+    created_at) exceeds STALE_STOPPING_THRESHOLD_SECONDS. Force-completes
+    each with
     `completion_reason=STOPPED` + transition_reason='stale_stopping_sweep'
     so the source is visible in audit logs.
 
@@ -95,7 +96,8 @@ async def _sweep_stale_stopping(
     async with db_session_factory() as db:
         # SQL pre-filter: status='stopping' AND created_at < threshold.
         # created_at is immutable so it's safe; updated_at is poisoned by
-        # webhook retries (#313). Post-filter by status_transition below.
+        # webhook retries (#313) and other JSONB writes, so it cannot prove
+        # lifecycle progress. Post-filter by status_transition below.
         stmt = (
             select(Meeting)
             .where(Meeting.status == MeetingStatus.STOPPING.value)
@@ -112,10 +114,11 @@ async def _sweep_stale_stopping(
             data = (meeting.data or {}) if isinstance(meeting.data, dict) else {}
             transitions = data.get("status_transition") or []
             last_progress_at = meeting.created_at
-            for t in transitions:
-                if not isinstance(t, dict):
+            for transition in transitions:
+                if not isinstance(transition, dict):
                     continue
-                at_str = t.get("at")
+                # Pack 4 writes 'timestamp'; pre-pack-4 history wrote 'at'.
+                at_str = transition.get("timestamp") or transition.get("at")
                 if not at_str:
                     continue
                 try:
@@ -123,7 +126,7 @@ async def _sweep_stale_stopping(
                     # Strip tzinfo to compare with naive utcnow()-derived threshold.
                     if at_dt.tzinfo is not None:
                         at_dt = at_dt.replace(tzinfo=None)
-                except (ValueError, AttributeError):
+                except (TypeError, ValueError, AttributeError):
                     continue
                 if at_dt > last_progress_at:
                     last_progress_at = at_dt

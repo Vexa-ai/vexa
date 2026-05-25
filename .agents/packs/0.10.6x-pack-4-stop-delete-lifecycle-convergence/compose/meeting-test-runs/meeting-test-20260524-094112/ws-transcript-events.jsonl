@@ -1,0 +1,16 @@
+{"at": "2026-05-24T09:42:05Z", "event": "connect", "meeting_id": "22", "ws_url": "ws://localhost:46461/ws"}
+{"at": "2026-05-24T09:42:05Z", "event": "message", "meeting_id": "22", "message": {"meetings": [{"native_id": "qoh-kidc-pfx", "platform": "google_meet"}], "type": "subscribed"}, "text_segments": 0, "type": "subscribed"}
+{"at": "2026-05-24T09:42:35Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-24T09:43:05Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-24T09:43:35Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-24T09:44:05Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-24T09:44:35Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-24T09:45:05Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-24T09:45:35Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-24T09:46:05Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-24T09:46:35Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-24T09:47:05Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-24T09:47:35Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-24T09:48:05Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-24T09:48:35Z", "event": "wait", "seconds": 30}
+{"at": "2026-05-24T09:49:05Z", "event": "wait", "seconds": 30}

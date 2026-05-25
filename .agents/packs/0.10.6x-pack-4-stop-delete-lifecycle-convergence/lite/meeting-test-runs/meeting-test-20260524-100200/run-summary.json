@@ -1,0 +1,382 @@
+{
+  "run_id": "meeting-test-20260524-100200",
+  "case_id": "lite-bvf-r6",
+  "platform": "google_meet",
+  "native_meeting_id": "bvf-rzuj-kwj",
+  "gateway_url": "http://localhost:46471",
+  "dashboard_url": "http://localhost:46470",
+  "listener_bot_id": "13",
+  "speaker_bot_ids": [
+    "14",
+    "15"
+  ],
+  "left_running": false,
+  "score": {
+    "segment_count": 34,
+    "expected_turns": 16,
+    "key_anchors_total": 19,
+    "key_anchors_matched": 14,
+    "matched_anchors": [
+      "Maya Chen",
+      "Leo Santos",
+      "meeting intelligence",
+      "Google Meet",
+      "Microsoft Teams",
+      "API gateway",
+      "speaker labels",
+      "self-hosted",
+      "recordings",
+      "real time",
+      "support team",
+      "Spanish checkpoint",
+      "French checkpoint",
+      "final takeaway"
+    ],
+    "speaker_labels_seen": [
+      "Dmitriy Grankin",
+      "Leo Santos-lite-bvf-r6",
+      "listener-test-lite-bvf-r6"
+    ],
+    "speaker_label_count": 3,
+    "content_accuracy_summary": "14/19 key anchors matched",
+    "speaker_identification_summary": "3 distinct transcript speaker labels seen"
+  },
+  "telemetry_score": {
+    "ground_truth": {
+      "expected_turns": 16,
+      "matched_turns": 16,
+      "content_turn_match_rate": 1.0,
+      "key_anchors_total": 19,
+      "key_anchors_matched": 14,
+      "matched_anchors": [
+        "Maya Chen",
+        "Leo Santos",
+        "meeting intelligence",
+        "Google Meet",
+        "Microsoft Teams",
+        "API gateway",
+        "speaker labels",
+        "self-hosted",
+        "recordings",
+        "real time",
+        "support team",
+        "Spanish checkpoint",
+        "French checkpoint",
+        "final takeaway"
+      ],
+      "raw_transcript_segments": 34,
+      "scored_transcript_segments": 34,
+      "filtered_out_segments": 0
+    },
+    "speaker_identification": {
+      "labels_seen": [
+        "Dmitriy Grankin",
+        "Leo Santos-lite-bvf-r6",
+        "listener-test-lite-bvf-r6"
+      ],
+      "correct_matched_turns": 8,
+      "wrong_or_merged_matched_turns": 8,
+      "unknown_turns": 0
+    },
+    "latency": {
+      "first_speak_at": "2026-05-24T10:05:10.529115Z",
+      "first_transcript_created_at": "2026-05-24T10:05:57.354605Z",
+      "first_transcript_latency_seconds": 46.825,
+      "last_speak_at": "2026-05-24T10:09:14.798817Z",
+      "last_transcript_created_at": "2026-05-24T10:09:57.688218Z",
+      "last_transcript_lag_seconds": 42.889,
+      "transcript_window_start": "2026-05-24T10:04:40.529115Z",
+      "transcript_window_end": "2026-05-24T10:12:14.798817Z",
+      "per_speak_to_next_transcript_count": 16,
+      "per_speak_to_next_transcript_min_seconds": 0.689,
+      "per_speak_to_next_transcript_median_seconds": 10.37,
+      "per_speak_to_next_transcript_p95_seconds": 31.71,
+      "per_speak_to_next_transcript_max_seconds": 46.825
+    },
+    "webhooks": {
+      "target_configured": true,
+      "deliveries": [
+        {
+          "event_type": "meeting.status_change",
+          "status": "queued",
+          "attempts": null,
+          "status_code": null,
+          "delivered_at": null,
+          "next_retry_at": null,
+          "last_error": null
+        },
+        {
+          "event_type": "meeting.started",
+          "status": "delivered",
+          "attempts": null,
+          "status_code": 200,
+          "delivered_at": null,
+          "next_retry_at": null,
+          "last_error": null
+        },
+        {
+          "event_type": "meeting.completed",
+          "status": "delivered",
+          "attempts": 1,
+          "status_code": 200,
+          "delivered_at": "2026-05-24T10:10:07.591743+00:00",
+          "last_error": null
+        }
+      ],
+      "delivered_count": 2,
+      "retrying_count": 0,
+      "failed_count": 0
+    },
+    "recording": {
+      "recording_enabled": true,
+      "recording_count": 1,
+      "recording_status": "completed",
+      "recording_id_present": true,
+      "playback_or_master_url_present": false
+    },
+    "human_confirmation": {},
+    "playback_confirmation": {},
+    "turn_matches": [
+      {
+        "turn": 1,
+        "expected_speaker": "Maya Chen",
+        "voice": "en_US-amy-medium",
+        "matched": true,
+        "overlap_score": 0.5,
+        "best_overall_score": 0.5,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 0.5,
+        "matched_transcript_speaker": "listener-test-lite-bvf-r6",
+        "speaker_match": "wrong_or_merged",
+        "matched_text_prefix": "I will keep each turn short so we can test meeting intelligence without overlapping audio."
+      },
+      {
+        "turn": 2,
+        "expected_speaker": "Leo Santos",
+        "voice": "en_US-danny-low",
+        "matched": true,
+        "overlap_score": 1.0,
+        "best_overall_score": 1.0,
+        "best_expected_speaker_score": 1.0,
+        "best_wrong_speaker_score": 1.0,
+        "matched_transcript_speaker": "Leo Santos-lite-bvf-r6",
+        "speaker_match": "correct",
+        "matched_text_prefix": "Thanks Maya. This is Leo Santos. I will answer you directly and together we will test whether Vexa hears two named speak"
+      },
+      {
+        "turn": 3,
+        "expected_speaker": "Maya Chen",
+        "voice": "en_US-amy-medium",
+        "matched": true,
+        "overlap_score": 1.0,
+        "best_overall_score": 1.0,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 1.0,
+        "matched_transcript_speaker": "Leo Santos-lite-bvf-r6",
+        "speaker_match": "wrong_or_merged",
+        "matched_text_prefix": "First checkpoint, a developer calls the API Gateway, asks for a bot to join and Vexa handles browser control audio captu"
+      },
+      {
+        "turn": 4,
+        "expected_speaker": "Leo Santos",
+        "voice": "en_US-danny-low",
+        "matched": true,
+        "overlap_score": 0.706,
+        "best_overall_score": 1.0,
+        "best_expected_speaker_score": 0.706,
+        "best_wrong_speaker_score": 1.0,
+        "matched_transcript_speaker": "Leo Santos-lite-bvf-r6",
+        "speaker_match": "correct",
+        "matched_text_prefix": "I hear you. The second checkpoint is speaker. Listen to transcript and separate my channel from Leo Santos instead of mi"
+      },
+      {
+        "turn": 5,
+        "expected_speaker": "Maya Chen",
+        "voice": "es_ES-davefx-medium",
+        "matched": true,
+        "overlap_score": 0.733,
+        "best_overall_score": 0.733,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 0.733,
+        "matched_transcript_speaker": "listener-test-lite-bvf-r6",
+        "speaker_match": "wrong_or_merged",
+        "matched_text_prefix": "Spanish checkpoint. Buenos d\u00edas. Vexa convierte reuniones de Google Mate y Microsoft Terms en inteligencia de reuniones "
+      },
+      {
+        "turn": 6,
+        "expected_speaker": "Leo Santos",
+        "voice": "fr_FR-siwis-medium",
+        "matched": true,
+        "overlap_score": 0.769,
+        "best_overall_score": 0.769,
+        "best_expected_speaker_score": 0.769,
+        "best_wrong_speaker_score": 0.769,
+        "matched_transcript_speaker": "Leo Santos-lite-bvf-r6",
+        "speaker_match": "correct",
+        "matched_text_prefix": "French checkpoint. Bonjour Meya. Les webbooks doivent annoncer le statut de la r\u00e9union, les erreurs et la transcription "
+      },
+      {
+        "turn": 7,
+        "expected_speaker": "Maya Chen",
+        "voice": "en_US-amy-medium",
+        "matched": true,
+        "overlap_score": 0.875,
+        "best_overall_score": 0.875,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 0.875,
+        "matched_transcript_speaker": "listener-test-lite-bvf-r6",
+        "speaker_match": "wrong_or_merged",
+        "matched_text_prefix": "Nice. Back in English, a support team can do Xa to capture customer calls, action items, objections, and promised follow"
+      },
+      {
+        "turn": 8,
+        "expected_speaker": "Leo Santos",
+        "voice": "en_US-danny-low",
+        "matched": true,
+        "overlap_score": 0.667,
+        "best_overall_score": 0.667,
+        "best_expected_speaker_score": 0.667,
+        "best_wrong_speaker_score": 0.667,
+        "matched_transcript_speaker": "Leo Santos-lite-bvf-r6",
+        "speaker_match": "correct",
+        "matched_text_prefix": "and a developer who can fetch traffic to start the box, store recordings, and connect the output to an internal product."
+      },
+      {
+        "turn": 9,
+        "expected_speaker": "Maya Chen",
+        "voice": "pt_BR-faber-medium",
+        "matched": true,
+        "overlap_score": 0.643,
+        "best_overall_score": 0.643,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 0.643,
+        "matched_transcript_speaker": "listener-test-lite-bvf-r6",
+        "speaker_match": "wrong_or_merged",
+        "matched_text_prefix": "Portugu\u00eas e Check Point. Ol\u00e1, Leo. Infraestrutura Self-hosted ajuda a quiser controlar logs, armazenamento e tem cal de "
+      },
+      {
+        "turn": 10,
+        "expected_speaker": "Leo Santos",
+        "voice": "en_US-danny-low",
+        "matched": true,
+        "overlap_score": 0.8,
+        "best_overall_score": 0.8,
+        "best_expected_speaker_score": 0.8,
+        "best_wrong_speaker_score": 0.267,
+        "matched_transcript_speaker": "Leo Santos-lite-bvf-r6",
+        "speaker_match": "correct",
+        "matched_text_prefix": "A good hand-off, a self-hosting point matters because teams want reliable logs and predictable data boundaries."
+      },
+      {
+        "turn": 11,
+        "expected_speaker": "Maya Chen",
+        "voice": "en_US-amy-medium",
+        "matched": true,
+        "overlap_score": 0.636,
+        "best_overall_score": 0.636,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 0.636,
+        "matched_transcript_speaker": "listener-test-lite-bvf-r6",
+        "speaker_match": "wrong_or_merged",
+        "matched_text_prefix": "Para a scora\u00e7\u00e3o, eu respons\u00e1vel por meeting intelligence, a API gateway, o seu posto de deployment e final takeaway."
+      },
+      {
+        "turn": 12,
+        "expected_speaker": "Leo Santos",
+        "voice": "en_US-danny-low",
+        "matched": true,
+        "overlap_score": 0.7,
+        "best_overall_score": 0.7,
+        "best_expected_speaker_score": 0.7,
+        "best_wrong_speaker_score": 0.7,
+        "matched_transcript_speaker": "Leo Santos-lite-bvf-r6",
+        "speaker_match": "correct",
+        "matched_text_prefix": "For scoring, I am responsible for Google Meet, Microsoft Teams, speaker papers, web books and recording."
+      },
+      {
+        "turn": 13,
+        "expected_speaker": "Maya Chen",
+        "voice": "en_US-amy-medium",
+        "matched": true,
+        "overlap_score": 0.812,
+        "best_overall_score": 0.812,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 0.812,
+        "matched_transcript_speaker": "Leo Santos-lite-bvf-r6",
+        "speaker_match": "wrong_or_merged",
+        "matched_text_prefix": "Leo, we firm the operations report should include bot lifecycle, first transcript time, web book delivery and stop statu"
+      },
+      {
+        "turn": 14,
+        "expected_speaker": "Leo Santos",
+        "voice": "en_US-danny-low",
+        "matched": true,
+        "overlap_score": 0.933,
+        "best_overall_score": 1.0,
+        "best_expected_speaker_score": 0.933,
+        "best_wrong_speaker_score": 1.0,
+        "matched_transcript_speaker": "Leo Santos-lite-bvf-r6",
+        "speaker_match": "correct",
+        "matched_text_prefix": "Confirmed. Aye. The report should also mention whether the dashboard is updated in real time and whether playback or tra"
+      },
+      {
+        "turn": 15,
+        "expected_speaker": "Maya Chen",
+        "voice": "en_US-amy-medium",
+        "matched": true,
+        "overlap_score": 0.917,
+        "best_overall_score": 0.917,
+        "best_expected_speaker_score": 0.0,
+        "best_wrong_speaker_score": 0.917,
+        "matched_transcript_speaker": "listener-test-lite-bvf-r6",
+        "speaker_match": "wrong_or_merged",
+        "matched_text_prefix": "My final takeaway is that Brexit turns live meeting audio into programmable media intelligence for real products."
+      },
+      {
+        "turn": 16,
+        "expected_speaker": "Leo Santos",
+        "voice": "en_US-danny-low",
+        "matched": true,
+        "overlap_score": 0.933,
+        "best_overall_score": 0.933,
+        "best_expected_speaker_score": 0.933,
+        "best_wrong_speaker_score": 0.8,
+        "matched_transcript_speaker": "Leo Santos-lite-bvf-r6",
+        "speaker_match": "correct",
+        "matched_text_prefix": "My final takeaway is that this named two-speaker demo should prove the listener hurt Maya and Leo clearly. End of podcas"
+      }
+    ]
+  },
+  "ws_transcript_summary": {
+    "meeting_id": "13",
+    "native_id": "bvf-rzuj-kwj",
+    "platform": "google_meet",
+    "status": "validated",
+    "subscribed": true,
+    "subscription": [
+      {
+        "native_id": "bvf-rzuj-kwj",
+        "platform": "google_meet"
+      }
+    ],
+    "text_segments_seen": 2,
+    "transcript_messages": 1,
+    "validated_at": "2026-05-24T10:05:18Z"
+  },
+  "webhook_summary": {
+    "meeting_status": "completed",
+    "webhook_target_configured": true,
+    "status_delivery_count": 2,
+    "status_events": [
+      "meeting.started",
+      "meeting.status_change"
+    ],
+    "completion_status": "delivered",
+    "completion_http_status": null,
+    "retry_count": null,
+    "recording_count": 1,
+    "recording_status": "completed",
+    "recording_id_present": true,
+    "playback_or_master_url_present": false
+  }
+}

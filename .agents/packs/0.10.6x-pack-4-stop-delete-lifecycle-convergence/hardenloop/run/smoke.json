@@ -1,0 +1,56 @@
+[
+  {
+    "id": "scanner-semgrep",
+    "finding_id": null,
+    "status": "error",
+    "detail": "exit=127"
+  },
+  {
+    "id": "scanner-gitleaks",
+    "finding_id": null,
+    "status": "error",
+    "detail": "exit=127"
+  },
+  {
+    "id": "scanner-trivy",
+    "finding_id": null,
+    "status": "missing",
+    "detail": "trivy not installed."
+  },
+  {
+    "id": "scanner-osv-scanner",
+    "finding_id": null,
+    "status": "missing",
+    "detail": "osv-scanner not installed."
+  },
+  {
+    "id": "scanner-syft",
+    "finding_id": null,
+    "status": "missing",
+    "detail": "syft not installed."
+  },
+  {
+    "id": "scanner-zizmor",
+    "finding_id": null,
+    "status": "missing",
+    "detail": "zizmor not installed."
+  },
+  {
+    "id": "scanner-actionlint",
+    "finding_id": null,
+    "status": "missing",
+    "detail": "actionlint not installed."
+  },
+  {
+    "id": "scanner-bandit",
+    "finding_id": null,
+    "status": "ok",
+    "detail": "exit=1"
+  },
+  {
+    "id": "scanner-pip-audit",
+    "finding_id": null,
+    "status": "missing",
+    "detail": "pip-audit not installed."
+  }
+]
