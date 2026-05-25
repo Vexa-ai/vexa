@@ -352,9 +352,30 @@ async def bot_exit_callback(
             # to distinguish legitimate stops from STOPPED_BEFORE_ADMISSION
             # and STOPPED_WITH_NO_AUDIO.
             provided_reason = payload.completion_reason or MeetingCompletionReason.STOPPED
-            target_status, classified_reason = await _classify_stopped_exit(
-                meeting, db, provided_reason
-            )
+
+            # Orphan-window fix companion: if the bot already fired
+            # status_change with new_status=completed during graceful_leave,
+            # we deferred its classification to here. Re-use it instead of
+            # re-classifying — the bot's view at graceful-leave time is
+            # authoritative for segment counts / duration / etc.
+            bot_class = (meeting.data or {}).get("bot_exit_classification") if isinstance(meeting.data, dict) else None
+            if isinstance(bot_class, dict) and bot_class.get("target_status"):
+                try:
+                    target_status = MeetingStatus(bot_class["target_status"])
+                    classified_reason = MeetingCompletionReason(bot_class["completion_reason"]) if bot_class.get("completion_reason") else provided_reason
+                    logger.info(
+                        f"Exit callback: meeting {meeting.id} using bot's deferred "
+                        f"classification target={target_status.value} reason={classified_reason.value} "
+                        f"(bot signaled at {bot_class.get('bot_signaled_at')})"
+                    )
+                except (ValueError, KeyError):
+                    target_status, classified_reason = await _classify_stopped_exit(
+                        meeting, db, provided_reason
+                    )
+            else:
+                target_status, classified_reason = await _classify_stopped_exit(
+                    meeting, db, provided_reason
+                )
             logger.info(
                 f"Exit callback: session {session_uid} exit_code={exit_code} during stopping "
                 f"— Pack J classified as {target_status.value} reason={classified_reason.value} "
@@ -785,6 +806,41 @@ async def bot_status_change_callback(
                 f"STOPPING→{target_status.value} reason={classified_reason.value} "
                 f"(bot-reported: {effective_reason.value})"
             )
+
+            # Orphan-window fix: the bot fires graceful_leave (status_change
+            # with new_status=completed) BEFORE its container is actually
+            # torn down by runtime-api. Previously this flipped meeting to
+            # COMPLETED while the container was still actively running for
+            # another 5-15 s — DB lied vs reality. Defer the STOPPING→
+            # terminal transition until runtime-api's exit_callback fires
+            # (which only happens after `docker rm` succeeds). Persist the
+            # bot-side classification so the exit_callback handler can use
+            # it instead of re-classifying.
+            d = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            d["bot_exit_classification"] = {
+                "target_status": target_status.value,
+                "completion_reason": classified_reason.value if classified_reason else None,
+                "bot_reported_reason": effective_reason.value if effective_reason else None,
+                "bot_signaled_at": datetime.utcnow().isoformat(),
+            }
+            meeting.data = d
+            attributes.flag_modified(meeting, "data")
+            if payload.speaker_events:
+                d["speaker_events"] = payload.speaker_events
+                meeting.data = d
+                attributes.flag_modified(meeting, "data")
+            await db.commit()
+            await db.refresh(meeting)
+            logger.info(
+                f"orphan-fix: meeting {meeting.id} keeps status=STOPPING "
+                f"until runtime-api exit_callback (deferred target={target_status.value})"
+            )
+            return {
+                "status": "deferred",
+                "detail": "bot signaled exit; waiting for runtime-api exit_callback to flip status",
+                "meeting_id": meeting.id,
+                "meeting_status": meeting.status,
+            }
 
         success = await update_meeting_status(meeting, target_status, db, completion_reason=classified_reason)
         if success:

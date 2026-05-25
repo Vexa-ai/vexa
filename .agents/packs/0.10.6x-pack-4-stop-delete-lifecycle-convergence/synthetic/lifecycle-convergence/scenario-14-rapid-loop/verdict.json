@@ -1,6 +1,6 @@
 {
   "scenario_dir": "scenario-14-rapid-loop",
-  "completed_at": "2026-05-24T14:58:04Z",
+  "completed_at": "2026-05-25T17:16:13Z",
   "pass": true,
   "note": "5x loop: 0 stuck meetings, container delta 0"
 }

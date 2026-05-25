@@ -1,6 +1,6 @@
 {
   "scenario_dir": "scenario-09-concurrent-stops",
-  "completed_at": "2026-05-24T14:58:07Z",
+  "completed_at": "2026-05-25T17:16:20Z",
   "pass": true,
-  "note": "both converged: bot=completed browser=removed"
+  "note": "both converged: bot=failed browser=removed"
 }

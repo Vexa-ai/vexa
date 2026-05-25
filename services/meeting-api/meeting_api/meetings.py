@@ -1675,16 +1675,41 @@ async def stop_bot(
             target_status, classified_reason = await _classify_stopped_exit(
                 meeting, db, MeetingCompletionReason.STOPPED
             )
+
+            # Orphan-window fix (pack 4 follow-up): the previous behaviour
+            # flipped status straight to target_status (COMPLETED/FAILED)
+            # while only scheduling the container stop in the background.
+            # Result: DB reads completed for 5-15 s while the container is
+            # still actively running. Defer the terminal transition to
+            # runtime-api's exit_callback (after `docker rm`). Move to
+            # STOPPING here so users see honest state, and persist the
+            # classifier's verdict for the exit_callback to reuse.
             old_status = meeting.status
-            success = await update_meeting_status(meeting, target_status, db, completion_reason=classified_reason)
+            success = await update_meeting_status(
+                meeting, MeetingStatus.STOPPING, db,
+                transition_reason="User requested stop (fast-path)",
+            )
             if success:
-                await publish_meeting_status_change(meeting.id, target_status.value, redis_client, platform_value, native_meeting_id, meeting.user_id)
+                d = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+                d["bot_exit_classification"] = {
+                    "target_status": target_status.value,
+                    "completion_reason": classified_reason.value if classified_reason else None,
+                    "bot_reported_reason": None,
+                    "classified_at": datetime.utcnow().isoformat(),
+                    "classified_by": "meetings.fast_path_stop",
+                }
+                meeting.data = d
+                attributes.flag_modified(meeting, "data")
+                await db.commit()
+                await publish_meeting_status_change(meeting.id, MeetingStatus.STOPPING.value, redis_client, platform_value, native_meeting_id, meeting.user_id)
                 await schedule_status_webhook_task(
                     meeting=meeting, background_tasks=background_tasks,
-                    old_status=old_status, new_status=target_status.value,
+                    old_status=old_status, new_status=MeetingStatus.STOPPING.value,
                     reason="User requested stop (fast-path)", transition_source="user_stop",
                 )
-            background_tasks.add_task(run_all_tasks, meeting.id)
+            # NOT calling run_all_tasks here — that runs on terminal
+            # transition, which now happens in the exit_callback handler
+            # when the container is actually gone.
             continue
 
         # Send leave command via Redis

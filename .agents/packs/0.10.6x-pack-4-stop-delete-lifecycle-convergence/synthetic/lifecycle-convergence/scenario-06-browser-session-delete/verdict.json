@@ -1,6 +1,6 @@
 {
   "scenario_dir": "scenario-06-browser-session-delete",
-  "completed_at": "2026-05-24T14:56:54Z",
+  "completed_at": "2026-05-25T17:14:29Z",
   "pass": true,
   "note": "DELETE 200, container removed in <=3s"
 }
