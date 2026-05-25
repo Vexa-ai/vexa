@@ -1,0 +1,64 @@
+# Zoom SDK (native) real-time transcription DoDs.
+#
+# Pack 0.10.6x-pack-zoom-sdk-restore-capability-boundary (epic #370):
+# three DoDs that gate the native Zoom Meeting SDK track. These names
+# are the contract referenced by the pack epic's "PR readiness" list.
+#
+# The "live human Zoom meeting" gate is the only place these DoDs are
+# actually exercised end-to-end (no synthetic Zoom server exists).
+# Synthetic checks cover Pack F's static structure (image split,
+# pre-flight 4xx); live coverage is deferred to the human gate.
+#
+# No empirical score.json baseline yet — populated by the first clean
+# human-tier run after `vexa-bot:sdk` is buildable on the operator's
+# machine with a Zoom Marketplace app.
+
+gate:
+  confidence_min: 75
+
+dods:
+  - id: bot_joins_zoom_sdk
+    weight: 40
+    check: |
+      Bot joins a real Zoom meeting via the native Meeting SDK (no
+      Playwright fallback). Container loads zoom_sdk_wrapper.node,
+      authenticates against Marketplace credentials, and reaches
+      meeting_status=active within 30s of the API request.
+    evidence_shape: |
+      tier=meeting; live human Zoom meeting log shows native SDK
+      authentication success + meeting joined; bot container is the
+      vexa-bot:sdk image variant.
+    status_baseline: TODO
+
+  - id: recording_uploads_zoom_sdk
+    weight: 40
+    check: |
+      Native recording flow completes end-to-end:
+      RequestLocalRecordingPrivilege -> CanStartRawRecording ->
+      StartRawRecording -> audioHelper_->subscribe -> >=60s mixed-audio
+      captured -> uploaded to storage -> transcribed.
+    evidence_shape: |
+      tier=meeting; storage object reachable; transcript artifact
+      contains the spoken ground-truth utterances.
+    status_baseline: TODO
+
+  - id: pre_flight_rejects_missing_artifacts
+    weight: 20
+    check: |
+      POST /bots with platform=zoom_sdk returns 4xx (NOT 201) when the
+      dispatched bot image cannot load zoom_sdk_wrapper.node or required
+      Marketplace env vars (ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET) are
+      unset. Error body names the missing artifact or env var.
+    evidence_shape: |
+      tier=synthetic; unit test in services/meeting-api/tests covers
+      both branches (missing addon -> 4xx, all present -> 2xx stubbed).
+      tier=compose; live POST /bots against a Compose lane running the
+      web image returns 4xx with actionable message.
+    status_baseline: TODO
+
+# Known constraints (for humans):
+# - The Zoom Meeting SDK binary is NOT redistributed by this repo.
+#   Self-hosters download it under their own Zoom Marketplace EULA
+#   via scripts/build-zoom-sdk.sh.
+# - Same-account-only is the expected v1 capability; Marketplace
+#   publishing is a separate business action tracked as deferred.

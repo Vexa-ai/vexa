@@ -203,12 +203,28 @@ class Platform(str, Enum):
     """
     Platform identifiers for meeting platforms.
     The value is the external API name, while the bot_name is what's used internally by the bot.
+
+    Zoom variants (pack 0.10.6x-pack-zoom-sdk-restore-capability-boundary,
+    epic #370):
+    - `zoom` — DEPRECATED alias kept for backward-compat. At the API
+      boundary it resolves to `zoom_web` (the license-clean default that
+      ships in the `vexa-bot:web` image). Will be removed in a future
+      release.
+    - `zoom_web` — Playwright on zoom.us web client. Runs in any bot
+      image variant.
+    - `zoom_sdk` — Native Zoom Meeting SDK. Requires the SDK-capable
+      `vexa-bot:sdk` image variant AND Marketplace credentials
+      (`ZOOM_CLIENT_ID`, `ZOOM_CLIENT_SECRET`). meeting-api enforces
+      the capability boundary by rejecting zoom_sdk requests with 4xx
+      when the dispatched bot image cannot load the native addon.
     """
     GOOGLE_MEET = "google_meet"
-    ZOOM = "zoom"
+    ZOOM = "zoom"               # deprecated alias -> zoom_web at API boundary
+    ZOOM_SDK = "zoom_sdk"       # native Meeting SDK (requires vexa-bot:sdk)
+    ZOOM_WEB = "zoom_web"       # Playwright web-client (default)
     TEAMS = "teams"
     BROWSER_SESSION = "browser_session"
-    
+
     @property
     def bot_name(self) -> str:
         """
@@ -217,10 +233,35 @@ class Platform(str, Enum):
         """
         mapping = {
             Platform.GOOGLE_MEET: "google_meet",
-            Platform.ZOOM: "zoom",
+            Platform.ZOOM: "zoom",                # legacy passthrough
+            Platform.ZOOM_SDK: "zoom_sdk",
+            Platform.ZOOM_WEB: "zoom_web",
             Platform.TEAMS: "teams"
         }
         return mapping[self]
+
+    @classmethod
+    def is_zoom(cls, platform_str: str) -> bool:
+        """True iff platform is any Zoom variant (sdk/web/legacy alias)."""
+        return platform_str in ("zoom", "zoom_sdk", "zoom_web")
+
+    @classmethod
+    def resolve_legacy_zoom(cls, platform_str: str) -> str:
+        """
+        Normalize the deprecated `zoom` alias at the API boundary.
+
+        - `zoom_sdk` / `zoom_web` pass through unchanged (caller is
+          explicit about which track they want).
+        - `zoom` resolves to `zoom_web` (the license-clean default).
+        - Other values pass through unchanged.
+
+        Callers SHOULD log a deprecation warning and set the
+        X-Vexa-Deprecated-Platform response header when a rewrite
+        happens.
+        """
+        if platform_str == "zoom":
+            return "zoom_web"
+        return platform_str
     
     @classmethod
     def get_bot_name(cls, platform_str: str) -> str:
@@ -250,6 +291,8 @@ class Platform(str, Enum):
         reverse_mapping = {
             "google_meet": Platform.GOOGLE_MEET.value,
             "zoom": Platform.ZOOM.value,
+            "zoom_sdk": Platform.ZOOM_SDK.value,
+            "zoom_web": Platform.ZOOM_WEB.value,
             "teams": Platform.TEAMS.value
         }
         return reverse_mapping.get(bot_platform_name)
@@ -291,8 +334,10 @@ class Platform(str, Enum):
                         url += f"?p={passcode}"
                     return url
                 return None
-            elif platform == Platform.ZOOM:
-                # Zoom meeting ID (numeric, 9-11 digits) and optional passcode
+            elif platform in (Platform.ZOOM, Platform.ZOOM_SDK, Platform.ZOOM_WEB):
+                # All three Zoom variants share the same URL shape; only
+                # the meeting-flow implementation in the bot container
+                # differs (SDK native vs Playwright web-client).
                 if re.fullmatch(r"^\d{9,11}$", native_id):
                     base_url = f"https://zoom.us/j/{native_id}"
                     if passcode:
@@ -592,6 +637,10 @@ class MeetingCreate(BaseModel):
         None,
         description="Optional one-time Zoom OBF token. If omitted for Zoom meetings, the backend will mint one from the user's stored Zoom OAuth connection."
     )
+    zoom_zak_token: Optional[str] = Field(
+        None,
+        description="Optional one-time Zoom ZAK (Zoom Access Key) token. Only meaningful for `platform=zoom_sdk` when the caller wants to bring their own credentials instead of using server-side Marketplace creds. Opaque, not persisted in plaintext beyond the bot lifecycle."
+    )
     voice_agent_enabled: Optional[bool] = Field(
         False,
         description="Enable voice agent (TTS, chat, screen share, avatar streaming) capabilities for this meeting"
@@ -671,8 +720,20 @@ class MeetingCreate(BaseModel):
         """Validate OBF token usage based on platform."""
         if v is not None and v != "":
             platform = info.data.get('platform') if info.data else None
-            if platform != Platform.ZOOM:
+            platform_value = platform.value if isinstance(platform, Platform) else platform
+            if not Platform.is_zoom(platform_value or ""):
                 raise ValueError("zoom_obf_token is only supported for Zoom meetings")
+        return v
+
+    @field_validator('zoom_zak_token')
+    @classmethod
+    def validate_zoom_zak_token(cls, v, info: ValidationInfo):
+        """Validate ZAK token usage based on platform (zoom_sdk-only)."""
+        if v is not None and v != "":
+            platform = info.data.get('platform') if info.data else None
+            platform_value = platform.value if isinstance(platform, Platform) else platform
+            if platform_value != Platform.ZOOM_SDK.value:
+                raise ValueError("zoom_zak_token is only supported for platform=zoom_sdk")
         return v
 
     @field_validator('language')
