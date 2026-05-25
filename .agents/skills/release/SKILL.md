@@ -87,6 +87,50 @@ right pack, and have `develop` produce an updated pack PR. The release skill may
 resolve merge conflicts only when the resolution is mechanical and fully tied to
 the reviewed pack diffs; otherwise create a new pack.
 
+## Stitch Failure Triage Protocol
+
+A stitch deployment "fails" when any of these happen:
+
+- merge conflict is non-mechanical (requires a code judgement call);
+- any service image fails to build;
+- the stitched Compose or Lite stack fails to come up healthy;
+- a per-pack blast-radius regression suite fails on the stitched candidate
+  but passes on that pack's isolated lane.
+
+**Required behaviour:**
+
+1. **Stop progressing the stitch.** Do NOT patch the stitched candidate to
+   make it pass. Do NOT delete or amend pack commits in the candidate
+   without routing the fix back to the responsible pack.
+2. **Bisect to the responsible pack.** Re-run the failing build/deploy/test
+   against each pack's branch in isolation (or against partial stitches of
+   N-1, N-2 packs) to identify the smallest pack-set that reproduces the
+   failure. The first pack in the merge order whose addition causes the
+   failure is the responsible one.
+3. **Open or update a GitHub issue on that pack's epic** with:
+   - exact error / stack trace / failed assertion;
+   - the partial-stitch reproduction command;
+   - a finding name (e.g. `stitch-regression-<symptom>`).
+4. **Push a fix commit to the responsible pack's PR.** The fix must be
+   scoped to that pack's blast radius. If the fix expands scope, file a
+   new pack epic and route the fix there.
+5. **Rebuild + redeploy + rerun blast-radius** for that pack in isolation
+   AND in the stitched candidate. Both must pass before the stitch
+   resumes.
+6. Log every triage cycle in `.agents/releases/<version>/state.md` with
+   timestamps + the bisect path taken. The wall-time ledger
+   (`.agents/releases/<version>/ops/ops.jsonl`) records each operation.
+
+This protocol is the only path to a clean release candidate. It is
+strictly forbidden to:
+
+- silently downgrade a failing pack to a partial / feature-flagged ship;
+- monkey-patch the stitched candidate with code not present in any pack PR;
+- mark a pack `status:ready-for-stage` whose blast-radius suite fails on
+  the stitched stack;
+- ship a release candidate while any pack's blast-radius validation is
+  red.
+
 ## Operation Wall-Time Ledger
 
 Follow `.agents/AGENTS.md` for operation timing. Release-level spans go under:
