@@ -390,6 +390,44 @@ export const vexaAPI = {
     return this.getRecordingAudioStreamUrl(recordingId, mediaFileId);
   },
 
+  // v0.10.6.1 canonical playback path. Dashboard reads
+  // recording.playback_url.{audio,video} and asks the backend to resolve the
+  // stable master route to a stream URL. A 404 means the master is not ready
+  // yet; callers render an explicit finalizing state instead of falling back
+  // to the first chunk.
+  async getRecordingMasterStreamUrl(
+    recordingId: number,
+    type: "audio" | "video"
+  ): Promise<{ url: string; duration_seconds: number | null } | null> {
+    const response = await fetch(
+      withBasePath(`/api/vexa/recordings/${recordingId}/master?type=${type}`)
+    );
+    if (response.status === 404) {
+      return null;
+    }
+    if (!response.ok) {
+      throw new Error(
+        `getRecordingMasterStreamUrl(${recordingId}, ${type}) failed: HTTP ${response.status}`
+      );
+    }
+    const data = (await response.json()) as {
+      url?: string;
+      download_url?: string;
+      raw_url?: string;
+      duration_seconds?: number | null;
+    };
+    if (!(data.raw_url || data.url || data.download_url)) {
+      throw new Error(
+        `getRecordingMasterStreamUrl(${recordingId}, ${type}) response had no url`
+      );
+    }
+    const mediaUrl = data.raw_url || data.url || data.download_url || "";
+    return {
+      url: /^https?:\/\//.test(mediaUrl) ? mediaUrl : withBasePath(`/api/vexa${mediaUrl}`),
+      duration_seconds: data.duration_seconds ?? null,
+    };
+  },
+
   // Legacy synchronous helpers — return the /raw proxy URL directly.
   // Kept for callers that can't await (e.g. JSX `src=` on first paint).
   // New code should prefer getRecordingAudioStreamUrl (presigned URL +

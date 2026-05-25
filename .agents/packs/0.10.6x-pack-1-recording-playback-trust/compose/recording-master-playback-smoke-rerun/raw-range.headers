@@ -1,0 +1,17 @@
+HTTP/1.1 206 Partial Content
+date: Sat, 23 May 2026 15:12:38 GMT
+server: uvicorn
+date: Sat, 23 May 2026 15:12:38 GMT
+server: uvicorn
+content-disposition: inline; filename="910549158_audio.wav"
+accept-ranges: bytes
+content-range: bytes 0-15/8044
+content-length: 16
+content-type: audio/wav
+x-content-type-options: nosniff
+x-xss-protection: 1; mode=block
+referrer-policy: strict-origin-when-cross-origin
+x-frame-options: DENY
+x-ratelimit-remaining: 118
+x-ratelimit-limit: 120
+

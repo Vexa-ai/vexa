@@ -1,0 +1,5 @@
+{"voice": "en_US-amy-medium", "http_code": "OCI runtime exec failed: exec failed: unable to start container process: exec: \"curl\": executable file not found in $PATH\r"}
+{"voice": "en_US-danny-low", "http_code": "OCI runtime exec failed: exec failed: unable to start container process: exec: \"curl\": executable file not found in $PATH\r"}
+{"voice": "es_ES-davefx-medium", "http_code": "OCI runtime exec failed: exec failed: unable to start container process: exec: \"curl\": executable file not found in $PATH\r"}
+{"voice": "fr_FR-siwis-medium", "http_code": "OCI runtime exec failed: exec failed: unable to start container process: exec: \"curl\": executable file not found in $PATH\r"}
+{"voice": "pt_BR-faber-medium", "http_code": "OCI runtime exec failed: exec failed: unable to start container process: exec: \"curl\": executable file not found in $PATH\r"}
