@@ -21,6 +21,7 @@ export type BotConfig = {
   reconnectionIntervalMs?: number,
   meeting_id: number,  // Required, not optional
   meetingApiCallbackUrl?: string;
+  internalSecret?: string;
   recordingEnabled?: boolean;
   captureModes?: string[];  // e.g., ['audio'], ['audio', 'video'], ['audio', 'screenshots']
   recordingUploadUrl?: string;  // meeting-api internal upload endpoint
