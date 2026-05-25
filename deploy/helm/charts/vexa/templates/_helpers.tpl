@@ -96,6 +96,18 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
+{{- define "vexa.botImage" -}}
+{{- if .Values.global.imageTag -}}
+{{- printf "vexaai/vexa-bot:%s" .Values.global.imageTag -}}
+{{- else if .Values.runtimeApi.browserImage -}}
+{{- .Values.runtimeApi.browserImage -}}
+{{- else if .Values.meetingApi.botImageName -}}
+{{- .Values.meetingApi.botImageName -}}
+{{- else -}}
+{{- printf "%s:%s" .Values.meetingApi.image.repository .Values.meetingApi.image.tag -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "vexa.postgresCredentialsSecretName" -}}
 {{- if .Values.postgres.enabled -}}
 {{- .Values.postgres.credentialsSecretName | default "postgres-credentials" -}}
@@ -151,4 +163,3 @@ become non-blocking. Industry-standard Redis-as-stream-buffer config.
 {{- required "INVALID redis.durability config: stopWritesOnBgsaveError=yes requires appendonly=yes (paired AOF + BGSAVE durability invariant — see v0.10.5 Pack C.5). Without AOF, blocking writes on BGSAVE failure means writes that arrive while BGSAVE is failing have no durable record anywhere." "" -}}
 {{- end -}}
 {{- end -}}
-

@@ -31,7 +31,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "requests>=2.25.0",
+    "requests>=2.32.5",
 ]
 
 [project.urls]
