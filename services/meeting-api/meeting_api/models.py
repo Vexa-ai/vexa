@@ -1,6 +1,6 @@
 import sqlalchemy
 from sqlalchemy import (
-    Column, String, Text, Integer, DateTime, Float,
+    Column, String, Text, Integer, BigInteger, DateTime, Float,
     ForeignKey, Index, UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -104,14 +104,14 @@ class MeetingSession(Base):
 class Recording(Base):
     __tablename__ = "recordings"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(BigInteger, primary_key=True, index=True)  # BigInteger: bot generates snowflake IDs exceeding int32 range
     meeting_id = Column(Integer, ForeignKey("meetings.id"), nullable=True, index=True)
     user_id = Column(Integer, nullable=False, index=True)
     session_uid = Column(String, nullable=True, index=True)
     source = Column(String(50), nullable=False, default='bot')
     status = Column(String(50), nullable=False, default='in_progress', index=True)
     error_message = Column(Text, nullable=True)
-    frames_status = Column(String(20), nullable=False, default='none', server_default='none')
+    frames_status = Column(String(20), nullable=False, default='none', server_default=text("'none'"))
     extra_metadata = Column(
         "metadata", JSONB, nullable=False,
         server_default=text("'{}'::jsonb"), default=lambda: {},
@@ -133,7 +133,7 @@ class RecordingFrame(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     meeting_id = Column(Integer, ForeignKey("meetings.id", ondelete="CASCADE"), nullable=False, index=True)
-    recording_id = Column(Integer, nullable=False)  # NOT a FK — per D-07/D-26 (JSONB mode has no recordings SQL rows)
+    recording_id = Column(BigInteger, nullable=False)  # NOT a FK — per D-07/D-26 (JSONB mode has no recordings SQL rows). BigInteger: bot generates snowflake IDs exceeding int32 range.
     session_uid = Column(String, nullable=True)  # nullable to match Recording.session_uid
     timestamp_s = Column(Integer, nullable=False)  # Integer, NOT Float — schema-sync cannot alter types after creation
     storage_path = Column(String(1024), nullable=False)
@@ -150,8 +150,8 @@ class RecordingFrame(Base):
 class MediaFile(Base):
     __tablename__ = "media_files"
 
-    id = Column(Integer, primary_key=True, index=True)
-    recording_id = Column(Integer, ForeignKey("recordings.id"), nullable=False, index=True)
+    id = Column(BigInteger, primary_key=True, index=True)  # BigInteger: bot generates snowflake IDs exceeding int32 range
+    recording_id = Column(BigInteger, ForeignKey("recordings.id"), nullable=False, index=True)  # BigInteger: matches recordings.id
     type = Column(String(50), nullable=False)
     format = Column(String(20), nullable=False)
     storage_path = Column(String(1024), nullable=False)

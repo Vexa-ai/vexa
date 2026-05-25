@@ -32,8 +32,10 @@ COPY services/dashboard/components.json ./
 # them as its first-priority source.
 ARG NEXT_PUBLIC_VEXA_OSS_VERSION
 ARG NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE
+ARG VEXA_API_URL
 ENV NEXT_PUBLIC_VEXA_OSS_VERSION=$NEXT_PUBLIC_VEXA_OSS_VERSION
 ENV NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE=$NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE
+ENV VEXA_API_URL=$VEXA_API_URL
 
 # Build application (npm prebuild → generate-release-version.js → next build)
 RUN npm run build

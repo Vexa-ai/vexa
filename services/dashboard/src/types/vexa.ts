@@ -474,6 +474,10 @@ export interface RecordingData {
   created_at: string;
   completed_at: string | null;
   media_files: RecordingMediaFile[];
+  playback_url?: {
+    audio?: string;
+    video?: string;
+  };
 }
 
 // --- Frame Snapshots Types ---

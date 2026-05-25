@@ -831,7 +831,7 @@ export default function MeetingDetailPage() {
     const refreshPostMeetingArtifacts = () => {
       if (cancelled) return;
       refreshMeeting(meetingId);
-      fetchTranscripts(meetingPlatform, meetingNativeId, meetingNumericId, { silent: true });
+      fetchTranscripts(meetingPlatform, meetingNativeId, String(meetingNumericId));
       fetchChatMessages(meetingPlatform, meetingNativeId);
     };
 

@@ -1,0 +1,14 @@
+{
+  "id": "session-1779608682792",
+  "startedAt": "2026-05-24T07:44:42.792Z",
+  "cwd": "/home/aleix/Proyectos-Claude/Apps-Locales/vexa",
+  "context": {},
+  "metrics": {
+    "edits": 15,
+    "commands": 0,
+    "tasks": 0,
+    "errors": 0
+  },
+  "endedAt": "2026-05-24T08:16:47.985Z",
+  "duration": 1925193
+}
