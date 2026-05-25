@@ -43,11 +43,28 @@ Canonical release evidence:
 5. Validate the stitched candidate locally through Compose and Lite with
    `scripts/local-stitch-validate.sh` and the existing deployment skills:
    `compose-deploy` and `vexa-lite-deploy`.
+5a. **Per-pack blast-radius regression suite (machine).** For each
+    stitched pack, run its own blast-radius validation harness against
+    the stitched stack — not against the pack's isolated lane. This is
+    the only way to prove "no other pack broke this one's surface".
+    Each pack's `synthetic/` evidence dir contains runners or scripts
+    that exercise its blast radius; `scripts/stitched-blast-radius.sh`
+    walks every accepted pack and runs each one against the stitched
+    Compose + Lite. Failures here ROUTE BACK to the responsible pack;
+    they never become hidden stitch-time fixes.
 6. Run full stitched-candidate `hardenloop`.
 7. Stage in throwaway infrastructure with `throwaway-infra-deploy`, validating
    Compose, Lite, and Helm lanes through their deployment skills.
 8. Run `vexa-meeting-deployment-test` for live Google Meet / Microsoft Teams
    coverage only at gates that actually need external platform evidence.
+8a. **Human eyeball delivery focused on what changed.** Render a
+    pack-by-pack eyeball checklist that calls out specifically what
+    surfaces each pack changes and what the human reviewer must verify
+    visually in the stitched candidate (dashboard pages, audio playback,
+    browser-session VNC, transcript UI, version surfaces, etc.). The
+    helper `scripts/render-eyeball-checklist.sh` produces this from each
+    pack epic's blast-radius declaration. The human reviewer sees one
+    document, not seven.
 9. Render the sign packet with `scripts/render-sign-packet.py`.
 
 ## Hard Gates
