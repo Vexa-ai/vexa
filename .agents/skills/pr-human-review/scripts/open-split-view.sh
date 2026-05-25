@@ -71,6 +71,40 @@ echo "     .agents/packs/<pack-id>/code-review.md (reviewer, timestamp, verdict,
 echo "     blast-radius notes, scope-bounded check). Only the human reviewer"
 echo "     writes that file."
 
+# Build the filtered local diff so the reviewer can read in VS Code / less /
+# delta without GitHub's 100+-file viewer. The list of non-test files came
+# from list-non-test-files.sh above; we now reuse it as a --pathspec list to
+# `git diff` against the PR's base ref. Falls back to gracefully on
+# repos where the head branch isn't checked out locally.
+LOCAL_DIFF="/tmp/pr-${PR}-product.diff"
+# Find a local clone for the head branch (gh pr view tells us the head ref)
+HEAD_REF="$(gh pr view "$PR" --repo "$REPO" --json headRefName --jq .headRefName 2>/dev/null || true)"
+BASE_REF="$(gh pr view "$PR" --repo "$REPO" --json baseRefName --jq .baseRefName 2>/dev/null || true)"
+# Use the github-supplied diff for portability; filter to keep only product files.
+echo
+echo "## Filtered diff for offline read"
+echo
+if gh pr diff "$PR" --repo "$REPO" --patch > "${LOCAL_DIFF}.full" 2>/dev/null; then
+  python3 - "${LOCAL_DIFF}.full" "$LOCAL_DIFF" <<PY 2>/dev/null
+import sys, re
+KEEP = set('''$(printf '%s\n' "$files" | sed "s/'/'\\''/g")'''.strip().splitlines())
+with open(sys.argv[1]) as f:
+    full = f.read()
+chunks = re.split(r'(?m)^(?=diff --git )', full)
+kept = [c for c in chunks if any(f' a/{p} b/{p}' in c.split('\n',1)[0] for p in KEEP)]
+with open(sys.argv[2], 'w') as f:
+    f.write(''.join(kept))
+print(f'wrote {len(kept)} file diffs to {sys.argv[2]}')
+PY
+  rm -f "${LOCAL_DIFF}.full"
+  echo "  Open in your editor:"
+  echo "    code $LOCAL_DIFF"
+  echo "    delta $LOCAL_DIFF"
+  echo "    less -R $LOCAL_DIFF"
+else
+  echo "  (gh pr diff failed — install gh or check repo auth)"
+fi
+
 if [ "$OPEN" = "1" ]; then
   if command -v xdg-open >/dev/null 2>&1; then xdg-open "$URL" >/dev/null 2>&1 &
   elif command -v open >/dev/null 2>&1; then open "$URL" >/dev/null 2>&1 &
