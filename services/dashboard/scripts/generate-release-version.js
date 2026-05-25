@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable @typescript-eslint/no-require-imports */
 /**
  * Generate src/lib/release-version.generated.json from authoritative sources.
  *
@@ -6,10 +7,12 @@
  * checkout always regenerates from the current tree state.
  *
  * Source of truth, in priority order:
- *   1. NEXT_PUBLIC_VEXA_OSS_VERSION env var (CI / Docker build-arg override)
- *   2. deploy/helm/charts/vexa/Chart.yaml `appVersion`
+ *   1. NEXT_PUBLIC_VEXA_OSS_VERSION env var (CI / Docker build-arg override),
+ *      verified against VERSION / Chart.yaml when they are available
+ *   2. Root VERSION
+ *   3. deploy/helm/charts/vexa/Chart.yaml `appVersion`
  *      — authoritative source for the OSS release this dashboard ships in
- *   3. Latest git tag matching v\d+\.\d+\.\d+
+ *   4. Latest git tag matching v\d+\.\d+\.\d+
  *
  * Release date in priority order:
  *   1. NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE env var
@@ -21,25 +24,40 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 
 const HERE = __dirname;
-const REPO_ROOT = path.resolve(HERE, '..', '..', '..'); // services/dashboard/scripts → repo root
+const REPO_ROOT = process.env.VEXA_REPO_ROOT
+  ? path.resolve(process.env.VEXA_REPO_ROOT)
+  : path.resolve(HERE, '..', '..', '..'); // services/dashboard/scripts → repo root
+const VERSION_FILE = path.join(REPO_ROOT, 'VERSION');
 const CHART_YAML = path.join(REPO_ROOT, 'deploy', 'helm', 'charts', 'vexa', 'Chart.yaml');
 const OUT_FILE = path.join(HERE, '..', 'src', 'lib', 'release-version.generated.json');
+
+function normalizeVersion(value) {
+  if (!value) return null;
+  const text = String(value).trim().replace(/^v/, '');
+  return /^\d+(?:\.\d+)+$/.test(text) ? text : null;
+}
+
+function readRootVersion() {
+  if (!fs.existsSync(VERSION_FILE)) return null;
+  return normalizeVersion(fs.readFileSync(VERSION_FILE, 'utf-8'));
+}
 
 function readChartAppVersion() {
   if (!fs.existsSync(CHART_YAML)) return null;
   const text = fs.readFileSync(CHART_YAML, 'utf-8');
-  // appVersion: "0.10.5"  (line in Chart.yaml)
-  const m = text.match(/^\s*appVersion\s*:\s*['"]?(\d+\.\d+\.\d+)['"]?\s*$/m);
-  return m ? `v${m[1]}` : null;
+  // appVersion: "0.10.6.2.1"  (line in Chart.yaml)
+  const m = text.match(/^\s*appVersion\s*:\s*['"]?(\d+(?:\.\d+)+)['"]?\s*$/m);
+  return m ? normalizeVersion(m[1]) : null;
 }
 
 function latestGitTag() {
   try {
-    const out = execSync(
-      'git -C ' + JSON.stringify(REPO_ROOT) + ' describe --tags --abbrev=0 --match "v[0-9]*.[0-9]*.[0-9]*"',
+    const out = execFileSync(
+      'git',
+      ['-C', REPO_ROOT, 'describe', '--tags', '--abbrev=0', '--match', 'v[0-9]*.[0-9]*.[0-9]*'],
       { stdio: ['ignore', 'pipe', 'ignore'] }
     ).toString().trim();
     return out || null;
@@ -51,8 +69,9 @@ function latestGitTag() {
 function tagCommitDate(tag) {
   if (!tag) return null;
   try {
-    const out = execSync(
-      'git -C ' + JSON.stringify(REPO_ROOT) + ` log -1 --format=%cs ${JSON.stringify(tag)}`,
+    const out = execFileSync(
+      'git',
+      ['-C', REPO_ROOT, 'log', '-1', '--format=%cs', tag],
       { stdio: ['ignore', 'pipe', 'ignore'] }
     ).toString().trim();
     return out || null;
@@ -62,28 +81,59 @@ function tagCommitDate(tag) {
 }
 
 function main() {
-  const version =
-    process.env.NEXT_PUBLIC_VEXA_OSS_VERSION ||
-    readChartAppVersion() ||
-    latestGitTag();
+  const envVersion = normalizeVersion(process.env.NEXT_PUBLIC_VEXA_OSS_VERSION);
+  const rootVersion = readRootVersion();
+  const chartVersion = readChartAppVersion();
+  const gitTagVersion = normalizeVersion(latestGitTag());
+
+  if (process.env.NEXT_PUBLIC_VEXA_OSS_VERSION && !envVersion) {
+    throw new Error(
+      `[release-version] invalid NEXT_PUBLIC_VEXA_OSS_VERSION: ${process.env.NEXT_PUBLIC_VEXA_OSS_VERSION}`
+    );
+  }
+
+  const canonicalVersions = [
+    ['VERSION', rootVersion],
+    ['deploy/helm/charts/vexa/Chart.yaml appVersion', chartVersion],
+  ].filter(([, value]) => value);
+
+  if (envVersion) {
+    for (const [source, value] of canonicalVersions) {
+      if (value !== envVersion) {
+        throw new Error(
+          `[release-version] NEXT_PUBLIC_VEXA_OSS_VERSION=${envVersion} does not match ${source}=${value}`
+        );
+      }
+    }
+  }
+
+  if (rootVersion && chartVersion && rootVersion !== chartVersion) {
+    throw new Error(
+      `[release-version] VERSION=${rootVersion} does not match deploy/helm/charts/vexa/Chart.yaml appVersion=${chartVersion}`
+    );
+  }
+
+  const version = envVersion || rootVersion || chartVersion || gitTagVersion;
 
   if (!version) {
     throw new Error(
-      '[release-version] cannot derive version: no env var, no Chart.yaml ' +
-      'appVersion, no git tag. Set NEXT_PUBLIC_VEXA_OSS_VERSION or commit ' +
-      'a chart bump.'
+      '[release-version] cannot derive version: no env var, no VERSION, no ' +
+      'Chart.yaml appVersion, no git tag. Set NEXT_PUBLIC_VEXA_OSS_VERSION ' +
+      'or commit a version bump.'
     );
   }
 
   const releaseDate =
     process.env.NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE ||
-    tagCommitDate(version) ||
+    tagCommitDate(`v${version}`) ||
     new Date().toISOString().slice(0, 10);
 
   const source =
-    process.env.NEXT_PUBLIC_VEXA_OSS_VERSION
+    envVersion
       ? 'env'
-      : readChartAppVersion()
+      : rootVersion
+        ? 'VERSION'
+        : chartVersion
         ? 'deploy/helm/charts/vexa/Chart.yaml'
         : 'git tag';
 

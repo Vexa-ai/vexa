@@ -15,7 +15,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY services/mcp/ .
 
 # Run as non-root
-RUN useradd -r -s /bin/false appuser
+RUN useradd -r -s /bin/false appuser \
+    && chmod -R a+rX /app
 USER appuser
 
 EXPOSE 18888
