@@ -57,9 +57,29 @@ if [ -z "$NAME" ]; then
 fi
 
 BASE_REF="$(gh pr view "$PR" --repo "$REPO" --json baseRefName --jq .baseRefName 2>/dev/null || true)"
-[ -z "$BASE_REF" ] && BASE_REF="v0.10.6"
+# PR baseRefName usually points at the release integration branch (a thin
+# stitching target). For squash review we want the actual pack base ref
+# that's checked out locally — typically `v0.10.6` for the 0.10.6.x line.
+# Auto-fall-back if the PR base ref is unreachable in the worktree.
+if [ -z "$BASE_REF" ] || ! (cd "$WT" && git rev-parse --verify "$BASE_REF" >/dev/null 2>&1); then
+  BASE_REF="v0.10.6"
+fi
+
+# Auto-extract pack epic issue from PR body (looks for Pack epic: <url>
+# or Epic: <url> or "issue #N" pattern). The delivery output should give
+# the human BOTH the code-review URL AND the pack epic URL — the epic is
+# the source of truth for CEO/CTO outcomes + blast radius the diff must
+# match.
+PR_BODY="$(gh pr view "$PR" --repo "$REPO" --json body --jq .body 2>/dev/null || true)"
+EPIC_URL=""
+if [ -n "$PR_BODY" ]; then
+  EPIC_URL="$(printf '%s\n' "$PR_BODY" | grep -oE 'https://github\.com/[^/[:space:]]+/[^/[:space:]]+/issues/[0-9]+' | head -1)"
+fi
+PR_URL="https://github.com/${REPO}/pull/${PR}"
+PR_TITLE="$(gh pr view "$PR" --repo "$REPO" --json title --jq .title 2>/dev/null || true)"
 
 echo "[squash-for-review] PR=$PR repo=$REPO worktree=$WT name=$NAME base=$BASE_REF"
+[ -n "$EPIC_URL" ] && echo "[squash-for-review] epic: $EPIC_URL"
 
 # Compute product file list
 files="$("$LIST_SCRIPT" "$PR" --repo "$REPO")"
@@ -111,9 +131,21 @@ URL="https://github.com/${REPO}/commit/${sha}"
 SPLIT_URL="${URL}?diff=split&w=1"
 
 echo
-echo "## Code review delivery — ${NAME} (PR #${PR})"
+echo "## Code review delivery — ${NAME}"
 echo
-echo "Single-commit review URL (only product files, no evidence/tests):"
+[ -n "$PR_TITLE" ] && echo "**${PR_TITLE}**"
+echo
+echo "**Pack epic** (CEO/CTO outcomes, blast radius, validation gates):"
+if [ -n "$EPIC_URL" ]; then
+  echo "  $EPIC_URL"
+else
+  echo "  (no epic URL detected in PR body — please verify the PR links its pack epic)"
+fi
+echo
+echo "**Pack PR** (full evidence, gate markdowns, code-review draft thread):"
+echo "  $PR_URL"
+echo
+echo "**Code review URL** (single-commit, product files only, no test/evidence noise):"
 echo "  $URL"
 echo
 echo "  split-view + whitespace-ignored:"
@@ -122,8 +154,9 @@ echo
 echo "Stats: $nfiles files, $nlines lines"
 echo
 echo "Review workflow:"
-echo "  1. Open the URL above. GitHub renders the entire pack delta as ONE commit."
-echo "  2. Read top-to-bottom; leave inline comments via the '+' on any line."
-echo "  3. Reply 'pass' / 'fix-required <notes>' / 'block <notes>' to the chat."
-echo "  4. After verdict, the develop skill writes .agents/packs/<pack-id>/code-review.md"
+echo "  1. Skim the Pack epic for CEO/CTO outcomes + blast radius the diff must honor."
+echo "  2. Open the code review URL — GitHub renders the entire pack delta as ONE commit."
+echo "  3. Read top-to-bottom; leave inline comments via the '+' on any line."
+echo "  4. Reply 'pass' / 'fix-required <notes>' / 'block <notes>' in chat."
+echo "  5. After verdict, develop skill writes .agents/packs/<pack-id>/code-review.md"
 echo "     and flips the GitHub epic to status:ready-for-stage."
