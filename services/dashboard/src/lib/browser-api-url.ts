@@ -65,6 +65,13 @@ export function resolveBrowserApiUrl({
       const publicUrl = new URL(configured);
       if (isLoopbackHost(publicUrl.hostname) && !isLoopbackHost(requestHostname)) {
         publicUrl.hostname = requestHostname;
+      } else if (isLoopbackHost(publicUrl.hostname) && isLoopbackHost(requestHostname)) {
+        // Both the configured public URL and the request host are loopback.
+        // The configured port likely points at a container-internal gateway port
+        // (e.g. 8056) that is unreachable from the browser when the dashboard
+        // exposes a different host port (e.g. lite single-port publish). Fall
+        // back to same-origin so Next.js /ws + /api rewrites carry the traffic.
+        return { apiUrl: "", publicApiUrl: "" };
       }
       const normalized = normalizedUrl(publicUrl.toString());
       return { apiUrl: normalized, publicApiUrl: normalized };
