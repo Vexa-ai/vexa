@@ -28,6 +28,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
 from .database import async_session_local
+
+# Per-meeting lock: prevents two concurrent extraction calls for the same meeting
+# from both running ffmpeg (idempotency is guaranteed by DB ON CONFLICT DO NOTHING,
+# but the lock avoids wasted CPU from duplicate ffmpeg runs).
+_extraction_locks: Dict[int, asyncio.Lock] = {}
+_locks_mutex = asyncio.Lock()
+
+
+async def _get_meeting_lock(meeting_id: int) -> asyncio.Lock:
+    async with _locks_mutex:
+        if meeting_id not in _extraction_locks:
+            _extraction_locks[meeting_id] = asyncio.Lock()
+        return _extraction_locks[meeting_id]
 from .models import Meeting, MediaFile, Recording, RecordingFrame
 from .storage import StorageClient, create_storage_client
 
@@ -216,6 +229,17 @@ async def extract_frames_if_enabled(meeting_id: int) -> int:
         logger.debug("Snapshots disabled, skipping frame extraction for meeting %s", meeting_id)
         return 0
 
+    # Per-meeting idempotency lock — skip if already extracting
+    _lock = await _get_meeting_lock(meeting_id)
+    if _lock.locked():
+        logger.info("Extraction already in progress for meeting %s — skipping duplicate call", meeting_id)
+        return 0
+    async with _lock:
+        return await _do_extract_frames(meeting_id)
+
+
+async def _do_extract_frames(meeting_id: int) -> int:
+    """Inner implementation — called only when the per-meeting lock is held."""
     storage = create_storage_client()
 
     # Step 3 — First DB session: pre-checks + dual-path video lookup
