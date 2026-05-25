@@ -1,0 +1,143 @@
+# ==============================================================================
+# vexa-bot:web — license-clean browser-only variant (DEFAULT)
+# ==============================================================================
+#
+# Pack 0.10.6x-pack-zoom-sdk-restore-capability-boundary (epic #370).
+#
+# This is the default Vexa bot image. It uses Playwright + Chromium /
+# MS Edge to drive Google Meet, Microsoft Teams, and Zoom Web. It
+# contains NO Zoom Meeting SDK binaries and NO `zoom_sdk_wrapper.node`
+# addon. It cannot serve `platform=zoom_sdk` — meeting-api enforces
+# the capability boundary by returning 4xx for that platform when only
+# the web image is deployed.
+#
+# Why a separate Dockerfile from the default `Dockerfile`:
+#   - License firewall. The default `Dockerfile` retains the best-
+#     effort native-addon stage so legacy local builds keep working
+#     when an operator has dropped the SDK into the source tree. This
+#     file deliberately has NO native-builder stage, so an OSS CI
+#     publish of this Dockerfile cannot accidentally bake a Zoom SDK
+#     binary into a public image.
+#   - Capability auditability. A reviewer can grep `Dockerfile.web`
+#     for `libmeetingsdk` or `zoom_sdk_wrapper` and confirm absence in
+#     a single pass.
+#
+# Build context is `services/vexa-bot/` so that the workspace
+# package.json and binding.gyp are visible (binding.gyp is harmless
+# here — no native build step is invoked).
+# ==============================================================================
+
+# --- Build Stage ---
+FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS base
+
+# Install required OS dependencies (Xvfb, ffmpeg, fluxbox, etc.)
+RUN apt-get update && apt-get install -y \
+    xvfb \
+    ffmpeg \
+    x11-utils \
+    pulseaudio \
+    x11-xserver-utils \
+    fluxbox \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy core package files and install dependencies with npm
+# (No top-level package.json / binding.gyp — those exist for the SDK
+# variant only. Web variant builds straight from core/.)
+COPY core/package.json core/package-lock.json ./
+
+RUN npm install
+# Install TypeScript globally to avoid permission issues
+RUN npm install -g typescript
+
+# Copy core source (TypeScript app, assets, build-browser-utils, tsconfig).
+# Deliberately does NOT copy core/src/platforms/zoom/native/ — even
+# though the zoom-sdk TypeScript files live alongside, the native build
+# is unreachable without binding.gyp / libmeetingsdk.so, so the addon
+# never materializes. The runtime checks
+# `require('./build/Release/zoom_sdk_wrapper')` will fail fast, which is
+# the desired behavior — the capability boundary is enforced at
+# meeting-api before the bot ever runs.
+COPY core/tsconfig.json ./
+COPY core/build-browser-utils.js ./
+COPY core/src ./src
+COPY core/assets ./assets
+
+# Build the TypeScript code and browser utilities bundle
+RUN npm run build
+
+# Install Playwright dependencies
+RUN npx playwright install-deps && npx playwright install --with-deps
+
+# Install MS Edge for Teams support (skip on ARM64 - not supported)
+RUN arch=$(uname -m) && if [ "$arch" = "x86_64" ] || [ "$arch" = "amd64" ]; then \
+    npx playwright install msedge || true; \
+    else \
+    echo "Skipping msedge installation on $arch (not supported)"; \
+    fi
+
+# --- Runtime Stage ---
+FROM mcr.microsoft.com/playwright:v1.56.0-jammy AS runtime
+
+WORKDIR /app
+
+# Install runtime dependencies for Xvfb, VNC, SSH, and others
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    xvfb \
+    ffmpeg \
+    pulseaudio \
+    xserver-xephyr \
+    x11-utils \
+    x11-xserver-utils \
+    fluxbox \
+    x11vnc \
+    socat \
+    autocutsel \
+    openssh-server \
+    sshpass \
+    unzip \
+    curl \
+    python3-websockify \
+    novnc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install AWS CLI for S3/MinIO sync (used by authenticated bot mode)
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip \
+    && unzip -q /tmp/awscliv2.zip -d /tmp \
+    && /tmp/aws/install \
+    && rm -rf /tmp/awscliv2.zip /tmp/aws
+
+# Copy the built application and node_modules from the base stage
+COPY --from=base /app /app
+
+# Install MS Edge in runtime stage as well
+RUN arch=$(uname -m) && if [ "$arch" = "x86_64" ] || [ "$arch" = "amd64" ]; then \
+    npx playwright install msedge || true; \
+    else \
+    echo "Skipping msedge installation on $arch (not supported)"; \
+    fi
+
+# Ensure the Playwright cache directory has proper permissions
+RUN mkdir -p /root/ms-playwright && chmod -R 777 /root/ms-playwright
+
+# Create storage directory structure for bot data
+RUN mkdir -p /app/storage/screenshots /app/storage/logs /app/storage/temp && chmod -R 777 /app/storage
+
+# Copy an entrypoint script that will start Xvfb and run our bot
+COPY core/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+# Expose DISPLAY port for headful browser operations
+ENV DISPLAY=:99
+
+# License-firewall guard: assert no Zoom SDK binaries leaked in.
+# If any of these are present at runtime, the operator has made a
+# mistake; fail loud so a publicly-pushed image cannot ship binaries.
+RUN ! find /app -name 'libmeetingsdk.so*' -print -quit 2>/dev/null | grep -q . \
+    || (echo 'ERROR: vexa-bot:web image contains a Zoom SDK binary — license firewall breached' && exit 1)
+RUN ! find /app -name 'zoom_sdk_wrapper.node' -print -quit 2>/dev/null | grep -q . \
+    || (echo 'ERROR: vexa-bot:web image contains zoom_sdk_wrapper.node — license firewall breached' && exit 1)
+
+# Set the command to run our entrypoint script
+CMD ["/app/entrypoint.sh"]
