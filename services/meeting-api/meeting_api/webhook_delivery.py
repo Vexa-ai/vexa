@@ -17,6 +17,7 @@ import hmac
 import json
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from uuid import uuid4
@@ -31,6 +32,16 @@ RETRY_QUEUE_KEY = "webhook:retry_queue"
 
 # Module-level Redis client — set once at startup via set_redis_client().
 _redis_client: Any = None
+
+
+@dataclass(frozen=True)
+class DeliveryResult:
+    """Structured delivery outcome for callers that need ownership state."""
+
+    status: str
+    response: Optional[httpx.Response] = None
+    queued: bool = False
+    error: Optional[str] = None
 
 
 def set_redis_client(client: Any) -> None:
@@ -56,6 +67,7 @@ WEBHOOK_API_VERSION = "2026-03-01"
 _INTERNAL_DATA_KEYS = {
     "webhook_delivery", "webhook_deliveries", "webhook_secret", "webhook_secrets",
     "webhook_events", "webhook_url",
+    "outbound_events",
     "bot_container_id", "container_name",
 }
 
@@ -151,7 +163,7 @@ async def _enqueue_failed_webhook(
         return False
 
 
-async def deliver(
+async def deliver_with_result(
     url: str,
     payload: Dict[str, Any],
     webhook_secret: Optional[str] = None,
@@ -160,8 +172,8 @@ async def deliver(
     label: str = "",
     redis_client: Any = None,
     metadata: Optional[Dict[str, Any]] = None,
-) -> Optional[httpx.Response]:
-    """Deliver a webhook with exponential backoff retry.
+) -> DeliveryResult:
+    """Deliver a webhook and report whether HTTP, Redis, or nobody owns it.
 
     Args:
         url: Target URL.
@@ -179,7 +191,9 @@ async def deliver(
             the originating record on eventual success/failure.
 
     Returns:
-        The response on success, None on total failure.
+        ``DeliveryResult(status="delivered")`` on HTTP response,
+        ``status="queued"`` when Redis durable retry accepted it, otherwise
+        ``status="failed"``.
     """
     payload_bytes = json.dumps(payload).encode()
     headers = build_headers(webhook_secret, payload_bytes)
@@ -197,14 +211,44 @@ async def deliver(
             logger.info(f"Webhook delivered to {url}: {resp.status_code}")
         else:
             logger.warning(f"Webhook {url} returned {resp.status_code}: {resp.text[:200]}")
-        return resp
+        return DeliveryResult(status="delivered", response=resp)
     except Exception as e:
         logger.error(f"Webhook delivery failed after retries for {url}: {e}")
         # Persist to Redis retry queue if a client is available
         effective_redis = redis_client if redis_client is not None else _redis_client
         if effective_redis is not None:
-            await _enqueue_failed_webhook(
+            queued = await _enqueue_failed_webhook(
                 effective_redis, url, payload, headers, webhook_secret, label,
                 metadata=metadata,
             )
-        return None
+            if queued:
+                return DeliveryResult(status="queued", queued=True, error=str(e))
+        return DeliveryResult(status="failed", error=str(e))
+
+
+async def deliver(
+    url: str,
+    payload: Dict[str, Any],
+    webhook_secret: Optional[str] = None,
+    timeout: float = 30.0,
+    max_retries: int = 3,
+    label: str = "",
+    redis_client: Any = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[httpx.Response]:
+    """Backward-compatible webhook helper.
+
+    Existing callers expect an HTTP response or ``None``. New callers that need
+    to distinguish queued vs failed should use ``deliver_with_result``.
+    """
+    result = await deliver_with_result(
+        url=url,
+        payload=payload,
+        webhook_secret=webhook_secret,
+        timeout=timeout,
+        max_retries=max_retries,
+        label=label,
+        redis_client=redis_client,
+        metadata=metadata,
+    )
+    return result.response
