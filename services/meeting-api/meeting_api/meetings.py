@@ -892,7 +892,7 @@ async def request_bot(
         # run in the URL and use it if found. Falls back to URL hash
         # only when no numeric ID is present (e.g., truly opaque URLs).
         import re, hashlib
-        if req.platform.value == "zoom":
+        if Platform.is_zoom(req.platform.value):
             zoom_id_match = re.search(r"\b(\d{9,11})\b", req.meeting_url)
             if zoom_id_match:
                 native_meeting_id = zoom_id_match.group(1)
@@ -1128,23 +1128,83 @@ async def request_bot(
     if raw_capture:
         env_vars["RAW_CAPTURE"] = raw_capture
 
-    # Zoom credentials.
-    # Zoom Web is the bot's default — no env propagation needed for the
-    # web path. The native SDK path is opt-in via operator-set
-    # ZOOM_SDK=true plus ZOOM_CLIENT_ID/ZOOM_CLIENT_SECRET. We forward
-    # the legacy ZOOM_WEB=true too so operators with explicit overrides
-    # keep working until Wave 3 retires both env vars in favour of
-    # `platform: zoom_sdk`.
-    if req.platform.value == "zoom":
-        if os.getenv("ZOOM_WEB", "").strip() == "true":
-            env_vars["ZOOM_WEB"] = "true"
-        if os.getenv("ZOOM_SDK", "").strip() == "true":
+    # Zoom credentials + capability boundary (pack
+    # 0.10.6x-pack-zoom-sdk-restore-capability-boundary, epic #370).
+    #
+    # Variants:
+    #   - platform=zoom (legacy alias): forward whatever env operator
+    #     set; resolves to zoom_web at the bot dispatcher today.
+    #   - platform=zoom_web: explicit web-client path, license-clean.
+    #     Runs in any vexa-bot image.
+    #   - platform=zoom_sdk: native Meeting SDK path. REQUIRES the
+    #     vexa-bot:sdk image variant AND ZOOM_CLIENT_ID/ZOOM_CLIENT_SECRET
+    #     on meeting-api. If either is missing, return 4xx with an
+    #     actionable error (instead of letting the bot start and crash
+    #     with an undefined-symbol error inside the container).
+    if Platform.is_zoom(req.platform.value):
+        if req.platform.value == Platform.ZOOM_SDK.value:
+            zoom_cid = os.getenv("ZOOM_CLIENT_ID", "").strip()
+            zoom_csec = os.getenv("ZOOM_CLIENT_SECRET", "").strip()
+            bot_image = (BOT_IMAGE_NAME or "").lower()
+            # Heuristic: the SDK image is conventionally tagged with
+            # ":sdk" or ":sdk-<tag>". Operators who tag differently can
+            # disable this check by setting ZOOM_SDK_IMAGE_OVERRIDE=1.
+            sdk_image_ok = (
+                ":sdk" in bot_image
+                or os.getenv("ZOOM_SDK_IMAGE_OVERRIDE", "").strip() == "1"
+            )
+            missing = []
+            if not zoom_cid:
+                missing.append("ZOOM_CLIENT_ID")
+            if not zoom_csec:
+                missing.append("ZOOM_CLIENT_SECRET")
+            if not sdk_image_ok:
+                missing.append(
+                    "vexa-bot:sdk image (current BOT_IMAGE_NAME="
+                    f"{BOT_IMAGE_NAME!r} does not match :sdk tag pattern; "
+                    "set ZOOM_SDK_IMAGE_OVERRIDE=1 to bypass)"
+                )
+            if missing:
+                # Capability boundary: 422 (semantic precondition) so
+                # callers can distinguish from network/auth failures.
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "zoom_sdk_unavailable",
+                        "message": (
+                            "platform=zoom_sdk requires the vexa-bot:sdk "
+                            "image and Zoom Marketplace credentials on "
+                            "meeting-api. Missing: " + ", ".join(missing) +
+                            ". Either deploy vexa-bot:sdk and set the "
+                            "credentials, or use platform=zoom_web for "
+                            "the browser-automation path."
+                        ),
+                        "missing": missing,
+                    },
+                )
             env_vars["ZOOM_SDK"] = "true"
-            zoom_cid = os.getenv("ZOOM_CLIENT_ID")
-            zoom_csec = os.getenv("ZOOM_CLIENT_SECRET")
-            if zoom_cid and zoom_csec:
-                env_vars["ZOOM_CLIENT_ID"] = zoom_cid
-                env_vars["ZOOM_CLIENT_SECRET"] = zoom_csec
+            env_vars["ZOOM_CLIENT_ID"] = zoom_cid
+            env_vars["ZOOM_CLIENT_SECRET"] = zoom_csec
+        elif req.platform.value == Platform.ZOOM_WEB.value:
+            env_vars["ZOOM_WEB"] = "true"
+        else:
+            # Legacy `zoom` alias: respect existing operator env so
+            # explicit overrides keep working until the alias is retired.
+            if os.getenv("ZOOM_WEB", "").strip() == "true":
+                env_vars["ZOOM_WEB"] = "true"
+            if os.getenv("ZOOM_SDK", "").strip() == "true":
+                env_vars["ZOOM_SDK"] = "true"
+                zoom_cid = os.getenv("ZOOM_CLIENT_ID")
+                zoom_csec = os.getenv("ZOOM_CLIENT_SECRET")
+                if zoom_cid and zoom_csec:
+                    env_vars["ZOOM_CLIENT_ID"] = zoom_cid
+                    env_vars["ZOOM_CLIENT_SECRET"] = zoom_csec
+        # Forward per-request OBF/ZAK tokens (opaque, one-time, not
+        # persisted beyond the bot lifecycle).
+        if getattr(req, "zoom_obf_token", None):
+            env_vars["ZOOM_OBF_TOKEN"] = req.zoom_obf_token
+        if getattr(req, "zoom_zak_token", None):
+            env_vars["ZOOM_ZAK_TOKEN"] = req.zoom_zak_token
 
     # v0.10.5 Pack X — synthetic dry-run mode.
     # When req.dry_run=True, skip the runtime-api bot launch + scheduler
