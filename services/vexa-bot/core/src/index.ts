@@ -1016,7 +1016,7 @@ async function handleSpeakCommand(command: any, page: Page | null): Promise<void
 
   try {
     const provider = command.provider || process.env.DEFAULT_TTS_PROVIDER || 'piper';
-    const voice = command.voice || process.env.DEFAULT_TTS_VOICE || 'alloy';
+    const voice = command.voice || process.env.DEFAULT_TTS_VOICE || 'auto';
     await ttsPlaybackService.synthesizeAndPlay(command.text, provider, voice);
     await publishVoiceEvent('speak.completed');
   } catch (err: any) {

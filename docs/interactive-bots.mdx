@@ -19,7 +19,7 @@ The Interactive Bots feature transforms the Vexa bot from a passive transcriptio
 
 <Steps>
   <Step title="Send a bot to a meeting">
-    Interactive bot capabilities are **enabled by default** (`voice_agent_enabled: true`). Just send a regular bot:
+    Opt in to interactive audio with `voice_agent_enabled: true`. Recorder-only bots leave this disabled.
 
     ```bash
     curl -X POST "$API_BASE/bots" \
@@ -28,7 +28,8 @@ The Interactive Bots feature transforms the Vexa bot from a passive transcriptio
       -d '{
         "platform": "google_meet",
         "native_meeting_id": "abc-defg-hij",
-        "bot_name": "AI Assistant"
+        "bot_name": "AI Assistant",
+        "voice_agent_enabled": true
       }'
     ```
   </Step>
@@ -37,7 +38,16 @@ The Interactive Bots feature transforms the Vexa bot from a passive transcriptio
     curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
       -H "Content-Type: application/json" \
       -H "X-API-Key: $API_KEY" \
-      -d '{"text": "Hello everyone, I am the meeting assistant.", "voice": "nova"}'
+      -d '{"text": "Hello everyone, I am the meeting assistant.", "provider": "piper", "voice": "auto"}'
+    ```
+  </Step>
+  <Step title="Play a pre-rendered audio file">
+    ```bash
+    AUDIO_BASE64="$(base64 < greeting.wav | tr -d '\n')"
+    curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
+      -H "Content-Type: application/json" \
+      -H "X-API-Key: $API_KEY" \
+      -d "{\"audio_base64\":\"$AUDIO_BASE64\",\"format\":\"wav\"}"
     ```
   </Step>
   <Step title="Send a chat message">
@@ -92,19 +102,28 @@ When the meeting is not active, interactive endpoints return:
 
 ## How It Works
 
-When `voice_agent_enabled` is set, the bot's audio pipeline changes: instead of feeding silence as mic input, the bot reads from a PulseAudio virtual microphone that receives TTS audio. The bot starts muted and auto-unmutes only when speaking.
+When `voice_agent_enabled` is set, the bot reads from a PulseAudio virtual microphone. The bot starts muted, unmutes only while playing speech/audio, and re-mutes when playback finishes or is interrupted.
 
-### Audio Pipeline (TTS)
+### Audio Pipeline
 
 ```
-OpenAI TTS API
-  -> PCM stream (24 kHz, mono)
-  -> PulseAudio virtual sink
-  -> Chromium default audio source
-  -> WebRTC -> meeting participants hear speech
+POST /speak {"text": "...", "provider": "piper", "voice": "auto"}
+  -> Meeting API publishes Redis speak command
+  -> bot calls local Vexa TTS service (/v1/audio/speech)
+  -> Piper returns PCM stream (24 kHz, mono)
+  -> PulseAudio tts_sink -> virtual_mic
+  -> Chromium microphone -> WebRTC -> meeting participants hear speech
 ```
 
-The bot unmutes before playback and re-mutes once audio finishes or is interrupted.
+Pre-rendered audio uses the same meeting microphone path but skips synthesis:
+
+```
+POST /speak {"audio_url": "..."} or {"audio_base64": "...", "format": "wav"}
+  -> Meeting API publishes Redis speak_audio command
+  -> bot downloads/decodes the audio with ffmpeg
+  -> PulseAudio tts_sink -> virtual_mic
+  -> Chromium microphone -> WebRTC -> meeting participants hear the file
+```
 
 ### Screen Content Pipeline
 
@@ -225,16 +244,18 @@ When interactive bot mode is enabled, additional events are published on the [We
 
 ## Prerequisites
 
-<ResponseField name="OPENAI_API_KEY" type="string" required>
-  OpenAI API key for text-to-speech synthesis. Passed through `deploy/compose/docker-compose.yml` to the bot container.
+<ResponseField name="TTS_SERVICE_URL" type="string">
+  Base URL for the local Vexa TTS service. Compose and Lite wire this automatically.
 </ResponseField>
+
+No OpenAI key is required for default speech. The default `provider` is `piper`, and the default `voice` is `auto`, which chooses a prepared Piper voice from the input language.
 
 PulseAudio is already configured in the bot container (`entrypoint.sh`). No manual setup is needed.
 
 ## Known Limitations
 
 1. **Virtual camera is experimental** -- the canvas-based virtual camera works intermittently on Google Meet. Screen share is more reliable for displaying visual content.
-2. **Single TTS provider** -- currently only OpenAI TTS is implemented. The architecture supports adding other providers.
+2. **Text and file playback are separate paths** -- text requests synthesize through local Piper; `audio_url` and `audio_base64` play the supplied file directly through ffmpeg/PulseAudio.
 3. **Zoom requires native SDK artifacts** -- without Zoom Meeting SDK binaries, Zoom joins fail during startup.
 4. **No speech queue** -- rapid speak commands may overlap. Wait for the `speak.completed` WebSocket event before sending the next command, or use `DELETE /speak` to interrupt.
 5. **Teams avatar not visible** -- Teams SFU returns `a=inactive` for video from anonymous guests, so the bot's virtual camera/avatar is never visible to other Teams participants. Use screen share instead. ([#124](https://github.com/Vexa-ai/vexa/issues/124))

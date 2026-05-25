@@ -25,9 +25,12 @@ Bot lifecycle management service. Handles meeting CRUD, voice agent controls (TT
 - `PUT /bots/{platform}/{meeting_id}/config` — update config
 
 #### Voice Agent
-- `POST /bots/{platform}/{meeting_id}/speak` — TTS
+- `POST /bots/{platform}/{meeting_id}/speak` — make an active voice-agent bot speak. Text requests publish a `speak` command with local Piper defaults (`provider: "piper"`, `voice: "auto"`). `audio_url` and `audio_base64` requests publish `speak_audio` and play the supplied file directly through the bot.
+- `DELETE /bots/{platform}/{meeting_id}/speak` — interrupt current speech and re-mute the bot
 - `POST /bots/{platform}/{meeting_id}/chat` — chat message
 - `POST /bots/{platform}/{meeting_id}/screen` — screen content
+
+`/speak` requires the target bot to have been created with `voice_agent_enabled: true`; recorder-only bots do not expose the playback microphone path.
 
 #### Recordings
 - `GET /recordings` — list recordings for the authenticated user
@@ -147,4 +150,3 @@ The service has solid domain logic, good test coverage of happy paths, and a wel
 | 6 | Runtime API reachable at `RUNTIME_API_URL` for container lifecycle | 20 | ceiling | untested | — | — | — |
 
 Confidence: 0 (untested)
-

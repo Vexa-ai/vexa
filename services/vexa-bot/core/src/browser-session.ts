@@ -206,8 +206,8 @@ export async function runBrowserSession(config: BrowserSessionConfig): Promise<v
       if (command.action === 'speak') {
         console.log(`[browser-session] Speak command: "${(command.text || '').substring(0, 50)}"`);
         try {
-          const provider = command.provider || process.env.DEFAULT_TTS_PROVIDER || 'openai';
-          const voice = command.voice || process.env.DEFAULT_TTS_VOICE || 'alloy';
+          const provider = command.provider || process.env.DEFAULT_TTS_PROVIDER || 'piper';
+          const voice = command.voice || process.env.DEFAULT_TTS_VOICE || 'auto';
           await ttsPlaybackService.synthesizeAndPlay(command.text, provider, voice);
         } catch (err: any) {
           console.log(`[browser-session] TTS speak failed: ${err.message}`);

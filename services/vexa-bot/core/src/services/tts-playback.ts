@@ -312,13 +312,16 @@ export class TTSPlaybackService {
    */
   async synthesizeAndPlay(
     text: string,
-    provider: string = 'openai',
-    voice: string = 'alloy'
+    provider: string = 'piper',
+    voice: string = 'auto'
   ): Promise<void> {
     this._currentText = text;
     log(`[TTS] Synthesizing with ${provider}, voice=${voice}: "${text.substring(0, 50)}..."`);
-    await this.synthesizeViaTtsService(text, voice);
-    this._currentText = null;
+    try {
+      await this.synthesizeViaTtsService(text, voice);
+    } finally {
+      this._currentText = null;
+    }
   }
 
   /**

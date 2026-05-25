@@ -237,7 +237,10 @@ ENV ADMIN_API_URL=http://localhost:8057 \
 
 # TTS Service
 ENV TTS_SERVICE_URL=http://localhost:8059 \
-    OPENAI_API_KEY=
+    OPENAI_API_KEY= \
+    PIPER_DEFAULT_VOICES=major \
+    PIPER_LOAD_VOICES=en_US-amy-medium,en_US-danny-low,pt_BR-faber-medium,es_ES-davefx-medium \
+    PIPER_PRELOAD_STRICT=true
 
 # Display for headless browsers
 ENV DISPLAY=:99
