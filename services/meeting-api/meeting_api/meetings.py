@@ -2018,7 +2018,7 @@ async def transcribe_meeting(
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             files = {"file": (f"recording.{media_format}", audio_data, f"audio/{media_format}")}
-            form_data = {"model": "large-v3-turbo"}
+            form_data = {"model": "whisper-large-v3-turbo", "response_format": "verbose_json"}  # fix: Groq model name + verbose_json (issue #355)
             if req.language:
                 form_data["language"] = req.language
             headers = {}
