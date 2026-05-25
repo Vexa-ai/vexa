@@ -42,10 +42,13 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy core package files and install dependencies with npm
-# (No top-level package.json / binding.gyp — those exist for the SDK
-# variant only. Web variant builds straight from core/.)
-COPY core/package.json core/package-lock.json ./
+# Copy core package files and install dependencies with npm.
+# Note: services/vexa-bot/core/ ships package.json only; the
+# package-lock lives at services/vexa-bot/package-lock.json (top-level
+# workspace lock for the SDK variant). We deliberately copy ONLY
+# core/package.json here — npm will fresh-resolve, which matches what
+# services/vexa-bot/core/Dockerfile has done historically.
+COPY core/package.json ./
 
 RUN npm install
 # Install TypeScript globally to avoid permission issues
