@@ -1,6 +1,6 @@
 ---
 name: pr-human-review
-description: Open a GitHub PR in split-view, filtered to non-test product files, for a human reviewer to read the diff line by line and leave inline comments. Use when the user needs to do the actual human code-review gate (per the develop skill) — not the automated finder pass. The skill computes the non-test file list, opens the PR Files page with split view + whitespace-ignored, and walks the human through each product file in order.
+description: Deliver a code review to a human as ONE GitHub single-commit URL containing only the pack's product files (no test/evidence/lockfile noise). Use whenever the user needs to do the actual human code-review gate (per the develop skill). Primary path is `scripts/squash-for-review.sh <pr> --worktree <path>` which creates a `codex/review-squash/<name>` side branch and prints the GitHub single-commit URL. Always favor this over per-file or per-commit links — one URL, complete diff, clean GitHub native view.
 ---
 
 # PR Human Code Review
@@ -22,18 +22,38 @@ for an inline read-through and the human can return to them later if needed.
 - Optional: the local worktree path for the PR head branch (if the human wants
   the script to use local `git diff` instead of `gh pr diff`).
 
-## Workflow
+## Workflow — preferred (single-commit squash delivery)
 
-1. Use `scripts/list-non-test-files.sh <pr-number>` to compute the non-test,
-   non-evidence file list for the PR (uses `gh pr diff --name-only` then
-   filters out paths matching the patterns in
-   `references/test-file-patterns.txt`).
-2. Use `scripts/open-split-view.sh <pr-number>` to launch the PR Files page
-   in the user's browser with `?diff=split&w=1`. This is the canonical
-   "split view, ignore whitespace" mode for line-by-line reading.
-3. Print the non-test file list as a numbered navigation plan. The reviewer
-   uses GitHub's `t` shortcut (file finder) or the left file tree to click
-   through them in order.
+This is the primary delivery path. Always offer it first.
+
+1. Run `scripts/squash-for-review.sh <pr-number> --worktree <path> --name
+   <slug>`. The script:
+   - computes the non-test product files (via `list-non-test-files.sh`);
+   - creates a side branch `codex/review-squash/<name>` rooted at the PR's
+     base branch;
+   - applies the product-only diff from the PR head as one squashed commit;
+   - pushes to origin and prints the GitHub single-commit URL.
+2. The reviewer opens that one URL (append `?diff=split&w=1` for split
+   view + whitespace-ignored). GitHub renders the entire pack delta as a
+   single commit — no 100+-file PR clutter, no per-commit overlap.
+3. The reviewer reads top-to-bottom, leaves inline comments via the `+`
+   icon on any line, and replies with the verdict in chat.
+4. After the verdict lands, the develop skill writes
+   `.agents/packs/<pack-id>/code-review.md` and flips the GitHub epic to
+   `status:ready-for-stage`. This skill does NOT write the verdict file.
+
+## Workflow — fallback (per-file local diff)
+
+If the squash path can't be used (e.g. patch fails to apply cleanly
+because the PR head has merge conflicts with base), fall back to per-file
+local diffs:
+
+1. Use `scripts/list-non-test-files.sh <pr-number>` to compute the
+   non-test file list.
+2. Generate one `.diff` per file under `/tmp/review/<pack-name>/`
+   (e.g. `git diff <base>..HEAD -- <file>` per path).
+3. Tell the reviewer to open the folder in VS Code; each `.diff` renders
+   with syntax highlighting.
 4. For each file, the reviewer:
    - reads the diff in split view;
    - hovers a line number → `+` icon → leaves an inline comment if needed;
