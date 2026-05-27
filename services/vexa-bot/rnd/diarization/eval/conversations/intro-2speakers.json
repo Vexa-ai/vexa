@@ -1,0 +1,19 @@
+{
+  "id": "intro-2speakers",
+  "description": "Two distinct natural-voice speakers (piper en_US-ryan + en_US-amy) alternating in a podcast-style intro. 8 turns, ~30 s of audio. If diarization works at all on natural synthesized audio, the two voices should cluster cleanly.",
+  "tts": "piper",
+  "speakers": {
+    "host":  { "piper_voice": "en_US-ryan-medium" },
+    "guest": { "piper_voice": "en_US-amy-medium" }
+  },
+  "turns": [
+    { "speaker": "host",  "text": "Welcome back to the show. Today we have a special guest with us.", "pause_after_ms": 600 },
+    { "speaker": "guest", "text": "Thanks so much for having me. It's a real pleasure to be here today.", "pause_after_ms": 700 },
+    { "speaker": "host",  "text": "Let's start with the basics. Can you tell our listeners what you do?", "pause_after_ms": 500 },
+    { "speaker": "guest", "text": "Of course. I work on real time speech recognition systems and large neural networks.", "pause_after_ms": 800 },
+    { "speaker": "host",  "text": "That sounds fascinating. What got you interested in that field originally?", "pause_after_ms": 600 },
+    { "speaker": "guest", "text": "I've always been curious about how computers can understand what people are saying.", "pause_after_ms": 700 },
+    { "speaker": "host",  "text": "And what's the hardest part of that problem in your view?", "pause_after_ms": 500 },
+    { "speaker": "guest", "text": "Without a doubt, knowing who is speaking when multiple people are talking together.", "pause_after_ms": 0 }
+  ]
+}

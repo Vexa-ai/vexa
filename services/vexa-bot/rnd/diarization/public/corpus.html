@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Vexa diarization RnD — synthetic corpus</title>
+  <style>
+    :root {
+      --speaker-0: #1f77b4;
+      --speaker-1: #ff7f0e;
+      --speaker-2: #2ca02c;
+      --speaker-3: #d62728;
+      --speaker-4: #9467bd;
+      --speaker-5: #8c564b;
+    }
+    body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: #fafafa; color: #111; }
+    header { background: #fff; border-bottom: 1px solid #ddd; padding: 12px 18px; }
+    header h1 { margin: 0; font-size: 17px; font-weight: 600; }
+    header .meta { font-size: 13px; color: #555; margin-top: 4px; }
+    header .meta a { color: #06c; text-decoration: none; margin-right: 14px; }
+    main { padding: 16px 18px; max-width: 1240px; margin: 0 auto; }
+    .item { background: #fff; border: 1px solid #ddd; border-radius: 6px; margin-bottom: 18px; overflow: hidden; }
+    .item h2 { margin: 0; padding: 10px 14px; background: #f5f5f5; border-bottom: 1px solid #ddd; font-size: 15px; font-weight: 600; }
+    .item .player { padding: 12px 14px; }
+    .item audio { width: 100%; }
+    .item .files { font-size: 12px; color: #777; padding: 0 14px 8px; }
+    .item .files a { color: #06c; margin-right: 12px; }
+    .item .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border-top: 1px solid #eee; }
+    .item .columns .col { padding: 10px 14px; }
+    .item .columns .col h3 { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: #444; text-transform: uppercase; letter-spacing: 0.04em; }
+    .item .columns .col.gt { background: #fcfcfc; border-right: 1px solid #eee; }
+    .item .columns .col.hx { background: #fbfdff; }
+    .turn { display: grid; grid-template-columns: 76px 90px 1fr; gap: 8px; padding: 4px 0; font-size: 13px; line-height: 1.4; border-bottom: 1px dashed #eee; }
+    .turn:last-child { border-bottom: 0; }
+    .turn .t { font-family: ui-monospace, monospace; font-size: 11px; color: #888; padding-top: 2px; }
+    .turn .lbl {
+      display: inline-block; padding: 1px 8px; border-radius: 10px;
+      font-size: 11px; font-weight: 600; color: #fff;
+      text-align: center;
+      height: fit-content;
+    }
+    .turn .txt { font-size: 13px; line-height: 1.4; }
+    .turn.short .txt { color: #999; font-style: italic; }
+    .empty { padding: 16px; color: #888; text-align: center; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Vexa diarization RnD — synthetic corpus</h1>
+    <div class="meta">
+      <a href="/">Capture</a>
+      <a href="/dashboard">Dashboard</a>
+      <span>Renders live from <code>eval/corpus/</code> — refresh after running <code>npm run eval:render &amp;&amp; npm run eval:run</code></span>
+    </div>
+  </header>
+  <main id="items"><div class="empty">Loading corpus...</div></main>
+  <script src="/static/corpus.js"></script>
+</body>
+</html>

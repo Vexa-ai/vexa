@@ -1,0 +1,37 @@
+{
+  "id": "5speakers-meeting",
+  "description": "5-speaker conference call: 3 male voices (ryan, joe, norman) + 2 female voices (amy, kristin). Mix of long turns and short interjections, with natural overlap. The realistic Vexa Teams target. Same-gender stress test at 3 males AND 2 females simultaneously.",
+  "tts": "piper",
+  "speakers": {
+    "alex":   { "piper_voice": "en_US-ryan-medium" },
+    "bob":    { "piper_voice": "en_US-joe-medium" },
+    "carol":  { "piper_voice": "en_US-amy-medium" },
+    "dave":   { "piper_voice": "en_US-norman-medium" },
+    "elena":  { "piper_voice": "en_US-kristin-medium" }
+  },
+  "turns": [
+    { "speaker": "alex",  "text": "Alright everyone, let's get this meeting started. We have a lot of ground to cover today.",          "pause_after_ms": 400 },
+    { "speaker": "bob",   "text": "Sounds good. I have the agenda pulled up.",                                                          "pause_after_ms": 300 },
+    { "speaker": "alex",  "text": "Great. Let's start with the platform status report. Carol, can you take us through where we are?", "pause_after_ms": 300 },
+    { "speaker": "carol", "text": "Sure thing. So the deployment went out last Thursday without any major incidents. We've seen a healthy adoption curve and our error rates are well below baseline.", "pause_after_ms": 350 },
+    { "speaker": "dave",  "text": "That's really encouraging news.",                                                                     "overlap_with_prev_ms": 250, "pause_after_ms": 400 },
+    { "speaker": "carol", "text": "We did have one issue early Monday morning. About a fifteen minute window where latency spiked, but it self resolved before anyone paged.", "pause_after_ms": 300 },
+    { "speaker": "elena", "text": "Was that the database connection pool issue from the previous quarter?",                              "pause_after_ms": 350 },
+    { "speaker": "carol", "text": "We think so. Same fingerprint. Bob's team is looking into a permanent fix.",                          "pause_after_ms": 400 },
+    { "speaker": "bob",   "text": "Yeah, we have a draft proposal ready. I'll share it after this meeting.",                            "overlap_with_prev_ms": 200, "pause_after_ms": 500 },
+    { "speaker": "alex",  "text": "Excellent. Dave, how's the cost optimization work coming along?",                                     "pause_after_ms": 300 },
+    { "speaker": "dave",  "text": "We've identified about fifteen percent of compute spend that can come down without affecting performance. Most of it is in the batch processing pipeline.", "pause_after_ms": 350 },
+    { "speaker": "elena", "text": "Are we going to need to coordinate that with the data science team?",                                 "pause_after_ms": 300 },
+    { "speaker": "dave",  "text": "Yes, definitely. I've already opened a discussion thread with them.",                                  "pause_after_ms": 400 },
+    { "speaker": "alex",  "text": "Good. Elena, last topic on the agenda is the new hires.",                                             "pause_after_ms": 300 },
+    { "speaker": "elena", "text": "Right. We're bringing on two senior engineers and one product designer. Start dates are spread over the next three weeks.", "pause_after_ms": 300 },
+    { "speaker": "bob",   "text": "Will they need access to the staging environment?",                                                    "overlap_with_prev_ms": 200, "pause_after_ms": 400 },
+    { "speaker": "elena", "text": "Yes, all three of them. I'll send out the access request form later today.",                          "pause_after_ms": 350 },
+    { "speaker": "carol", "text": "I can help with onboarding the engineering hires.",                                                    "overlap_with_prev_ms": 150, "pause_after_ms": 400 },
+    { "speaker": "alex",  "text": "Perfect, thanks Carol. Any other items before we wrap?",                                              "pause_after_ms": 300 },
+    { "speaker": "dave",  "text": "Nothing from me.",                                                                                     "pause_after_ms": 200 },
+    { "speaker": "bob",   "text": "All good here.",                                                                                       "overlap_with_prev_ms": 150, "pause_after_ms": 250 },
+    { "speaker": "elena", "text": "Me neither.",                                                                                          "overlap_with_prev_ms": 200, "pause_after_ms": 300 },
+    { "speaker": "alex",  "text": "Alright, let's adjourn. Thanks everyone.",                                                            "pause_after_ms": 0 }
+  ]
+}

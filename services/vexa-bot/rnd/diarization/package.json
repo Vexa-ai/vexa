@@ -8,7 +8,11 @@
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
     "typecheck": "tsc --noEmit",
-    "test:contract": "tsx src/_contract-test.ts"
+    "test:contract": "tsx src/_contract-test.ts",
+    "eval:render": "python3 eval/render.py",
+    "eval:run": "tsx eval/run-eval.ts",
+    "eval:diff": "tsx eval/print-comparison.ts",
+    "eval:suite": "tsx eval/run-suite.ts"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",

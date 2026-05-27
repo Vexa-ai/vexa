@@ -1,1 +1,10 @@
 .env.local
+
+# Eval corpus dev artifacts: piper binary + voice models are downloaded
+# locally for dev use only. Voice files are 60-100 MB each.
+eval/tts-bin/
+eval/tts-voices/
+# Rendered corpus output. WAV + ground-truth + harness-output are
+# regenerated from conversations/*.json by `npm run eval:render` and
+# `npm run eval:run`, so they don't need to be checked in.
+eval/corpus/

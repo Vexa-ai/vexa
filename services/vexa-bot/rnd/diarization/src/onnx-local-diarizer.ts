@@ -46,12 +46,16 @@ const __dirname = path.dirname(__filename);
 const MODEL_ID = 'onnx-community/wespeaker-voxceleb-resnet34-LM';
 
 export interface OnnxLocalDiarizerConfig {
-  /** Cosine distance threshold for online clustering. Default 0.40. */
+  /** Cosine distance threshold for online clustering. Default 0.50.
+   *  Lower → more conservative (don't split same voice); higher → more
+   *  aggressive splitting. Tuned for fp32 wespeaker-resnet34-LM on tab audio. */
   newSpeakerThreshold?: number;
-  /** Min utterance length to embed. Shorter utterances emit the previous
-   *  speaker label and don't update the clusterer (their embeddings are
-   *  too noisy to trust). Default 600 ms. */
+  /** Min utterance length to *cluster* (i.e. emit a label). Default 600 ms. */
   minUtteranceMs?: number;
+  /** Min utterance length to *seed a brand new centroid*. Stricter than
+   *  `minUtteranceMs` because short first-impressions (intros, breaths)
+   *  contaminate the centroid for the rest of the session. Default 1500 ms. */
+  minSeedUtteranceMs?: number;
   /** Max utterance length before forcing an embed-commit. Default 8000 ms. */
   maxUtteranceMs?: number;
   /** RMS threshold above which a frame counts as speech. Default 0.012. */
@@ -60,8 +64,36 @@ export interface OnnxLocalDiarizerConfig {
   silenceRmsThreshold?: number;
   /** Min consecutive silent ms before declaring speech end. Default 350. */
   minSilenceMs?: number;
-  /** Optional upper bound on number of speakers. */
+  /** Optional HARD cap on speakers. Default unset (no cap). The hint from
+   *  meeting context (tile count, roster) goes here ONLY when it's reliable;
+   *  otherwise leave unset and let online clustering allocate freely.
+   *  Wiring this from NUM_SPEAKERS broke MVP1's first demo — capped clusters
+   *  forced wrong assignments. */
   maxSpeakers?: number;
+  /** Optional callback fired on every committed utterance (after embedding +
+   *  cluster assignment). Used by the eval pipeline to capture diarizer
+   *  decisions without parsing console.log. Fields:
+   *    - speakerId: the assigned cluster ID
+   *    - tStartMs: utterance start timestamp (per the frames the caller fed)
+   *    - tEndMs: utterance end timestamp
+   *    - centroidDist: cosine distance to assigned centroid (NaN if first-ever or seed-blocked)
+   *    - turnDist: cosine distance to previous committed utterance (NaN if first)
+   *    - isNew: true iff this commit allocated a brand-new cluster
+   *    - dbSize: total clusters after this commit
+   *    - seedAllowed: did the utterance pass the min-seed duration gate
+   */
+  onCommit?: (ev: CommitEvent) => void;
+}
+
+export interface CommitEvent {
+  speakerId: string;
+  tStartMs: number;
+  tEndMs: number;
+  centroidDist: number;
+  turnDist: number;
+  isNew: boolean;
+  dbSize: number;
+  seedAllowed: boolean;
 }
 
 const SAMPLE_RATE = 16_000;
@@ -74,6 +106,7 @@ export class OnnxLocalDiarizer implements Diarizer {
   private clustering: OnlineSpeakerClustering;
 
   private readonly minUtteranceSamples: number;
+  private readonly minSeedUtteranceSamples: number;
   private readonly maxUtteranceSamples: number;
   private readonly speechRms: number;
   private readonly silenceRms: number;
@@ -87,6 +120,19 @@ export class OnnxLocalDiarizer implements Diarizer {
   private inSpeech = false;
   private silenceSampleAccumulator = 0;
   private lastLabel: DiarizerLabel = { speakerId: 'speaker_0', speakerName: 'speaker_0' };
+  /** Embedding of the most-recently-committed utterance. Used purely for the
+   *  turn-distance diagnostic — we report how far the current utterance is
+   *  from the previous one, so we can see conversation dynamics in the log
+   *  even when the clusterer assigns both to the same speaker_N. */
+  private lastUtteranceEmb: Float32Array | null = null;
+  /** Cumulative transitive map of speaker_N → final_speaker_N after merges.
+   *  When two clusters get merged (e.g., a noisy short utterance allocated
+   *  a spurious cluster that later evidence merged back), we record the
+   *  mapping so consumers can rewrite past commit labels. Resolved
+   *  transitively: if A→B then later B→C, lookups for A return C. */
+  private labelRewrites = new Map<string, string>();
+
+  private readonly onCommit?: (ev: CommitEvent) => void;
 
   private constructor(
     model: PreTrainedModel,
@@ -95,15 +141,28 @@ export class OnnxLocalDiarizer implements Diarizer {
   ) {
     this.model = model;
     this.processor = processor;
+    this.onCommit = cfg.onCommit;
     this.clustering = new OnlineSpeakerClustering({
-      newSpeakerThreshold: cfg.newSpeakerThreshold,
+      // 0.45 with the second-nearest-gap rule. Single threshold alone
+      // can't separate "mixed-voice noise" (~0.55, multiple speakers
+      // overlapping) from "same-gender new speaker" (~0.55 too). The
+      // gap-rule resolves it: new-cluster allocation requires either
+      // (a) clear gap between nearest and second-nearest centroids,
+      // meaning the embedding is distinctively close to nothing, OR
+      // (b) very-far-from-everything (≥ veryFarThreshold).
+      newSpeakerThreshold: cfg.newSpeakerThreshold ?? 0.45,
       maxSpeakers: cfg.maxSpeakers,
     });
-    this.minUtteranceSamples = Math.floor(((cfg.minUtteranceMs ?? 600) / 1000) * SAMPLE_RATE);
-    this.maxUtteranceSamples = Math.floor(((cfg.maxUtteranceMs ?? 8000) / 1000) * SAMPLE_RATE);
+    // 500ms. minUtt=1000 dropped too much (short turns went unembedded
+    // entirely → kept previous label → wrong attribution for panel_b's
+    // many short turns). Iter 8 settings (500/3000/4000/200) gave the
+    // best useful-metric score so far (3/4).
+    this.minUtteranceSamples = Math.floor(((cfg.minUtteranceMs ?? 500) / 1000) * SAMPLE_RATE);
+    this.minSeedUtteranceSamples = Math.floor(((cfg.minSeedUtteranceMs ?? 3000) / 1000) * SAMPLE_RATE);
+    this.maxUtteranceSamples = Math.floor(((cfg.maxUtteranceMs ?? 4000) / 1000) * SAMPLE_RATE);
     this.speechRms = cfg.speechRmsThreshold ?? 0.012;
     this.silenceRms = cfg.silenceRmsThreshold ?? 0.006;
-    this.minSilenceSamples = Math.floor(((cfg.minSilenceMs ?? 350) / 1000) * SAMPLE_RATE);
+    this.minSilenceSamples = Math.floor(((cfg.minSilenceMs ?? 200) / 1000) * SAMPLE_RATE);
   }
 
   static async create(cfg: OnnxLocalDiarizerConfig = {}): Promise<OnnxLocalDiarizer> {
@@ -112,8 +171,12 @@ export class OnnxLocalDiarizer implements Diarizer {
 
     console.log(`[onnx-diarizer] loading processor (mel-fbank) for ${MODEL_ID}...`);
     const processor = await AutoProcessor.from_pretrained(MODEL_ID);
-    console.log(`[onnx-diarizer] loading model (quantized ONNX, ~6.6 MB)...`);
-    const model = await AutoModel.from_pretrained(MODEL_ID, { dtype: 'q8' });
+    // fp32 model (~25 MB) — cleaner embeddings than the q8 quantized variant.
+    // We pay ~18 MB more disk and ~3× inference time vs q8, but cluster
+    // assignment quality improves noticeably on real meeting audio. Tunable
+    // back to 'q8' for the cheaper path once accuracy is good enough.
+    console.log(`[onnx-diarizer] loading model (fp32 ONNX, ~25 MB)...`);
+    const model = await AutoModel.from_pretrained(MODEL_ID, { dtype: 'fp32' });
     console.log(`[onnx-diarizer] model ready (transformers.js handles ONNX inference internally)`);
     return new OnnxLocalDiarizer(model, processor, cfg);
   }
@@ -187,26 +250,76 @@ export class OnnxLocalDiarizer implements Diarizer {
     }
 
     const combined = concatFloat32(this.utteranceChunks, this.utteranceSamples);
+    const utteranceStartMs = this.utteranceStartTs ?? 0;
+    const utteranceEndMs = utteranceStartMs + Math.round((combined.length / SAMPLE_RATE) * 1000);
     this.utteranceChunks = [];
     this.utteranceSamples = 0;
     const utteranceTs = this.utteranceStartTs;
     this.utteranceStartTs = null;
 
+    // Seed rule: only utterances ≥ minSeedUtteranceMs are allowed to *seed*
+    // a brand-new centroid. Shorter utterances can be matched against
+    // existing centroids but can't allocate new ones — protects the centroid
+    // pool from being contaminated by intros, breaths, music, brief noise.
+    const canSeedNew = combined.length >= this.minSeedUtteranceSamples;
+
     try {
       const emb = await this.embedUtterance(combined);
       if (!emb) return;
-      const assignment = this.clustering.assign(emb);
+
+      // Turn-distance diagnostic: how far is this utterance from the LAST
+      // committed utterance's embedding? Big distance ≈ new speaker turn,
+      // small distance ≈ continuation of the same voice. This signal is
+      // independent of cluster assignment and tells us whether the
+      // conversation is actually changing voices — even when the clusterer
+      // assigns both to the same speaker_N. Useful for tuning threshold.
+      let turnDist = NaN;
+      if (this.lastUtteranceEmb) {
+        let dot = 0;
+        for (let i = 0; i < emb.length; i++) dot += emb[i] * this.lastUtteranceEmb[i];
+        turnDist = 1 - dot;
+      }
+      this.lastUtteranceEmb = emb;
+
+      const assignment = this.clustering.assignWithSeedGate(emb, canSeedNew);
+      // Post-assignment: try to merge close clusters. If a brand-new cluster
+      // was just allocated but it's actually within mergeThreshold of an
+      // existing cluster, merge happens transparently here.
+      const merges = this.clustering.mergeClose(0.20);
+      for (const [oldId, keptId] of merges) {
+        // Compose with existing rewrites: if keptId is itself remapped, walk through.
+        let target = keptId;
+        while (this.labelRewrites.has(target)) target = this.labelRewrites.get(target)!;
+        this.labelRewrites.set(oldId, target);
+      }
+      // Resolve final speaker id through the rewrite chain
+      let finalSpeakerId = assignment.speakerId;
+      while (this.labelRewrites.has(finalSpeakerId)) {
+        finalSpeakerId = this.labelRewrites.get(finalSpeakerId)!;
+      }
       this.lastLabel = {
-        speakerId: assignment.speakerId,
-        speakerName: assignment.speakerId,
+        speakerId: finalSpeakerId,
+        speakerName: finalSpeakerId,
       };
       console.log(
         `[onnx-diarizer] commit utterance ` +
           `dur=${(combined.length / SAMPLE_RATE).toFixed(2)}s ` +
           `→ ${assignment.speakerId} ` +
-          `(dist=${assignment.distance.toFixed(3)}, ` +
-          `new=${assignment.isNew}, total=${this.clustering.size()})`,
+          `(centroid_dist=${assignment.distance.toFixed(3)}, ` +
+          `turn_dist=${Number.isNaN(turnDist) ? '---' : turnDist.toFixed(3)}, ` +
+          `new=${assignment.isNew}, total=${this.clustering.size()}, ` +
+          `seed_allowed=${canSeedNew})`,
       );
+      this.onCommit?.({
+        speakerId: finalSpeakerId,
+        tStartMs: utteranceStartMs,
+        tEndMs: utteranceEndMs,
+        centroidDist: assignment.distance,
+        turnDist,
+        isNew: assignment.isNew && finalSpeakerId === assignment.speakerId,
+        dbSize: this.clustering.size(),
+        seedAllowed: canSeedNew,
+      });
     } catch (err: any) {
       console.error(`[onnx-diarizer] embed/cluster failed: ${err.message}`);
     }
@@ -219,7 +332,17 @@ export class OnnxLocalDiarizer implements Diarizer {
     this.inSpeech = false;
     this.silenceSampleAccumulator = 0;
     this.lastLabel = { speakerId: 'speaker_0', speakerName: 'speaker_0' };
+    this.lastUtteranceEmb = null;
+    this.labelRewrites.clear();
     this.clustering.reset();
+  }
+
+  /** Returns the transitive label-rewrite map accumulated over the session.
+   *  Consumers (eval pipeline, dashboard) use this to fix up previously
+   *  emitted commits when later evidence proves two clusters were the same
+   *  speaker. Resolves transitive rewrites: A→B then B→C → looking up A returns C. */
+  getLabelRewrites(): Map<string, string> {
+    return new Map(this.labelRewrites);
   }
 }
 

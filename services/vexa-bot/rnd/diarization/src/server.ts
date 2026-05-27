@@ -155,9 +155,14 @@ async function main() {
   //                    clustering; pure-Node, no Python)
   let diarizer: Diarizer;
   if (DIARIZER === 'onnx') {
-    console.log('[harness] DIARIZER=onnx — loading wespeaker ONNX (first run downloads ~10MB from HF)');
+    console.log('[harness] DIARIZER=onnx — loading wespeaker ONNX (first run downloads ~25MB from HF)');
     try {
-      diarizer = await OnnxLocalDiarizer.create({ maxSpeakers: NUM_SPEAKERS });
+      // Note: NUM_SPEAKERS env is intentionally NOT wired as `maxSpeakers`
+      // here. Capping the clusterer at a hint count forces wrong assignments
+      // once the cap is hit (the MVP1 v1 bug). Let online clustering allocate
+      // freely based on the cosine threshold; only set maxSpeakers when the
+      // hint comes from a *reliable* source (e.g. confirmed roster, tile count).
+      diarizer = await OnnxLocalDiarizer.create({});
     } catch (err: any) {
       console.error(`[harness] OnnxLocalDiarizer failed to start: ${err.message}`);
       console.error('[harness] falling back to VadRoundRobinDiarizer stub');
@@ -294,6 +299,33 @@ async function main() {
   app.use('/static', express.static(path.join(__dirname, '..', 'public')));
   app.get('/', (_req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'capture.html')));
   app.get('/dashboard', (_req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'dashboard.html')));
+
+  // Synthetic-corpus browser: list rendered WAVs with inline audio + ground truth.
+  const corpusDir = path.join(__dirname, '..', 'eval', 'corpus');
+  app.use('/corpus/files', express.static(corpusDir));
+  app.get('/corpus', (_req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'corpus.html')));
+  app.get('/corpus/index.json', async (_req, res) => {
+    try {
+      const fs = await import('fs/promises');
+      const entries = await fs.readdir(corpusDir);
+      const wavs = entries.filter((e) => e.endsWith('.wav')).sort();
+      const items = await Promise.all(wavs.map(async (wav) => {
+        const id = wav.replace(/\.wav$/, '');
+        const gtPath = path.join(corpusDir, `${id}.ground-truth.json`);
+        const hxPath = path.join(corpusDir, `${id}.harness-output.json`);
+        const has = async (p: string) => fs.access(p).then(() => true, () => false);
+        return {
+          id,
+          wav: `/corpus/files/${wav}`,
+          ground_truth: (await has(gtPath)) ? `/corpus/files/${id}.ground-truth.json` : null,
+          harness_output: (await has(hxPath)) ? `/corpus/files/${id}.harness-output.json` : null,
+        };
+      }));
+      res.json({ items });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
 
   const server = http.createServer(app);
   const audioWss = new WebSocketServer({ noServer: true });

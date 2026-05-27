@@ -1,0 +1,27 @@
+{
+  "id": "panel-natural-overlap",
+  "description": "Three-speaker panel: two same-gender females (amy + kristin) plus a male (ryan) moderator. Natural flow with interjections and short overlaps — the kind of dynamics a real podcast or panel show has. Tests whether the diarizer can hold three stable clusters even when same-gender voices alternate quickly.",
+  "tts": "piper",
+  "speakers": {
+    "mod":     { "piper_voice": "en_US-ryan-medium" },
+    "panel_a": { "piper_voice": "en_US-amy-medium" },
+    "panel_b": { "piper_voice": "en_US-kristin-medium" }
+  },
+  "turns": [
+    { "speaker": "mod",     "text": "Welcome to the panel. Today we're talking about real time speech diarization.",                   "pause_after_ms": 400 },
+    { "speaker": "panel_a", "text": "Glad to be here.",                                                                                "pause_after_ms": 250 },
+    { "speaker": "panel_b", "text": "Same.",                                                                                            "overlap_with_prev_ms": 150, "pause_after_ms": 500 },
+    { "speaker": "mod",     "text": "Let's start with what makes this problem hard. Why is it so much harder than transcription alone?", "pause_after_ms": 300 },
+    { "speaker": "panel_a", "text": "Transcription only has to find the words. Diarization has to figure out who said which words, in real time, which is a much harder constraint.", "pause_after_ms": 300 },
+    { "speaker": "panel_b", "text": "Right, and overlap makes it even worse.",                                                          "overlap_with_prev_ms": 200, "pause_after_ms": 400 },
+    { "speaker": "mod",     "text": "Where do you see the failure modes most often?",                                                   "pause_after_ms": 300 },
+    { "speaker": "panel_a", "text": "When two speakers have similar voices. Same gender, similar age, similar accent.",                 "pause_after_ms": 250 },
+    { "speaker": "panel_b", "text": "Exactly that.",                                                                                    "overlap_with_prev_ms": 200, "pause_after_ms": 350 },
+    { "speaker": "panel_b", "text": "And on top of that, when one speaker only contributes a quick word here and there.",               "pause_after_ms": 300 },
+    { "speaker": "mod",     "text": "Like a moderator's hmm or right.",                                                                 "pause_after_ms": 250 },
+    { "speaker": "panel_a", "text": "Yeah, those brief tokens are notoriously hard to attribute.",                                       "overlap_with_prev_ms": 150, "pause_after_ms": 500 },
+    { "speaker": "panel_b", "text": "So what do you think the path forward is?",                                                        "pause_after_ms": 300 },
+    { "speaker": "panel_a", "text": "Better embedding models trained specifically on conversational data, not just enrollment style speech.", "pause_after_ms": 300 },
+    { "speaker": "mod",     "text": "That makes sense.",                                                                                "overlap_with_prev_ms": 200, "pause_after_ms": 0 }
+  ]
+}

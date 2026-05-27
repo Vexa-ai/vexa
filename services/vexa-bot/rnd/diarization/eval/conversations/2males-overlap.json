@@ -1,0 +1,21 @@
+{
+  "id": "2males-overlap",
+  "description": "Two same-gender (male) piper voices having a natural back-and-forth. Some turns OVERLAP — the listener interjects ('Right.', 'Yeah, exactly.') before the speaker has fully finished, like real conversations. Same-gender + overlap is the realistic hard case the YouTube-tab demo hits in production. If diarization breaks down here, that's our bottleneck — not a corpus problem.",
+  "tts": "piper",
+  "speakers": {
+    "ryan": { "piper_voice": "en_US-ryan-medium" },
+    "joe":  { "piper_voice": "en_US-joe-medium" }
+  },
+  "turns": [
+    { "speaker": "ryan", "text": "So I've been thinking a lot about how speech recognition systems handle interruptions.",                   "pause_after_ms": 300 },
+    { "speaker": "joe",  "text": "Right, that's a hard problem.",                                                                          "overlap_with_prev_ms": 200, "pause_after_ms": 400 },
+    { "speaker": "ryan", "text": "Exactly. The classic pipeline assumes one speaker at a time, but real conversations don't work that way.", "pause_after_ms": 250 },
+    { "speaker": "joe",  "text": "Yeah, and you get all these awkward gaps when the system tries to wait for silence.",                    "pause_after_ms": 500 },
+    { "speaker": "ryan", "text": "The transcription quality drops too when there's even a hint of cross talk.",                            "pause_after_ms": 300 },
+    { "speaker": "joe",  "text": "Have you tried any of the newer end to end models?",                                                     "overlap_with_prev_ms": 250, "pause_after_ms": 400 },
+    { "speaker": "ryan", "text": "I've experimented with a few. They're better at robustness but still struggle with very fast turns.",     "pause_after_ms": 300 },
+    { "speaker": "joe",  "text": "What about diarization specifically?",                                                                   "pause_after_ms": 400 },
+    { "speaker": "ryan", "text": "Diarization is the bottleneck, especially when two speakers sound similar like we do.",                  "pause_after_ms": 300 },
+    { "speaker": "joe",  "text": "I see what you mean.",                                                                                   "overlap_with_prev_ms": 200, "pause_after_ms": 0 }
+  ]
+}
