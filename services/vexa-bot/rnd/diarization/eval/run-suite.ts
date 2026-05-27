@@ -273,41 +273,53 @@ function computeCollabAccuracy(
     const c = commits[i];
     rawLabels.push(dominantBlueBoxIn(blueBoxEvents, c.tStartMs + lagMs - widenMs, c.tEndMs + lagMs + widenMs));
   }
-  // Cluster-run consensus smoother: within a run of consecutive commits
-  // sharing the same diarizer cluster ID, the blue-box labels should be
-  // consistent. Multi-second flickers that disagree with the cluster-run
-  // majority get overridden. Threshold ≥50% of run weight.
-  const smoothedLabels = rawLabels.slice();
-  for (let i = 0; i < commits.length; i++) {
-    const cur = rawLabels[i];
-    if (cur === null) continue;
-    const curCluster = commits[i].speakerId;
-    let lo = i;
-    while (lo - 1 >= 0 && commits[lo - 1].speakerId === curCluster) lo--;
-    let hi = i;
-    while (hi + 1 < commits.length && commits[hi + 1].speakerId === curCluster) hi++;
-    if (hi === lo) continue;
-    const tally = new Map<string, number>();
-    let totalW = 0;
-    for (let k = lo; k <= hi; k++) {
-      const lab = rawLabels[k];
+  // Session-wide cluster vote: for each diarizer cluster ID, compute the
+  // duration-weighted majority blue-box label across EVERY commit with
+  // that cluster, anywhere in the session. Then for each commit, if the
+  // commit's raw label disagrees with its cluster's session majority,
+  // override to the majority.
+  //
+  // This is more robust to flickers than the contiguous-run smoother
+  // because flickers are temporally CLUMPED — a 2s flicker corrupts
+  // adjacent commits but can't corrupt all of a cluster's commits across
+  // a multi-minute session. The cluster's session-wide majority survives.
+  const clusterMajority = new Map<string, string>();
+  {
+    const tallies = new Map<string, Map<string, number>>();
+    for (let i = 0; i < commits.length; i++) {
+      const lab = rawLabels[i];
       if (!lab) continue;
-      const w = commits[k].tEndMs - commits[k].tStartMs;
-      tally.set(lab, (tally.get(lab) ?? 0) + w);
-      totalW += w;
+      const cluster = commits[i].speakerId;
+      if (!tallies.has(cluster)) tallies.set(cluster, new Map());
+      const row = tallies.get(cluster)!;
+      const w = commits[i].tEndMs - commits[i].tStartMs;
+      row.set(lab, (row.get(lab) ?? 0) + w);
     }
-    let bestLab: string | null = null;
-    let bestW = 0;
-    for (const [lab, w] of tally) {
-      if (w > bestW) {
-        bestW = w;
-        bestLab = lab;
+    for (const [cluster, row] of tallies) {
+      let bestLab: string | null = null;
+      let bestW = 0;
+      let totalW = 0;
+      for (const [lab, w] of row) {
+        totalW += w;
+        if (w > bestW) {
+          bestW = w;
+          bestLab = lab;
+        }
+      }
+      // Require a confident majority (≥50% of cluster's total weight) so
+      // we don't pin a label to a cluster whose true speaker is genuinely
+      // ambiguous.
+      if (bestLab && totalW > 0 && bestW / totalW >= 0.5) {
+        clusterMajority.set(cluster, bestLab);
       }
     }
-    if (bestLab && bestLab !== cur && totalW > 0 && bestW / totalW >= 0.5) {
-      smoothedLabels[i] = bestLab;
-    }
   }
+  const smoothedLabels = rawLabels.map((lab, i) => {
+    if (lab === null) return lab;
+    const cluster = commits[i].speakerId;
+    const major = clusterMajority.get(cluster);
+    return major ?? lab;
+  });
   const perCommit: CorpusResult['collabPerCommit'] = [];
   let correctMs = 0;
   let totalMs = 0;
