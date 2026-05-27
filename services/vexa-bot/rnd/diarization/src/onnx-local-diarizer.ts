@@ -81,6 +81,15 @@ export interface OnnxLocalDiarizerConfig {
   changePointCheckIntervalMs?: number;
   changePointHeadTailMs?: number;
   changePointDistThreshold?: number;
+  /** Periodic peek-based labeling cadence. Every `peekIntervalMs` of new
+   *  accumulated speech, embed the last `peekWindowMs` and read-only peek
+   *  the nearest cluster. If a confident match exists (cosine distance
+   *  below `peekConfidenceThreshold`), update lastLabel immediately —
+   *  giving sub-second live-label latency independent of the change-point
+   *  cadence. Set interval to 0 to disable. */
+  peekIntervalMs?: number;
+  peekWindowMs?: number;
+  peekConfidenceThreshold?: number;
   /** Optional callback fired on every committed utterance (after embedding +
    *  cluster assignment). Used by the eval pipeline to capture diarizer
    *  decisions without parsing console.log. Fields:
@@ -125,6 +134,10 @@ export class OnnxLocalDiarizer implements Diarizer {
   private readonly changePointCheckIntervalSamples: number;
   private readonly changePointHeadTailSamples: number;
   private readonly changePointDistThreshold: number;
+  private readonly peekIntervalSamples: number;
+  private readonly peekWindowSamples: number;
+  private readonly peekConfidenceThreshold: number;
+  private samplesAtLastPeek = 0;
 
   /** Audio of the current utterance — appended on each speech frame, embedded
    *  + cleared on each silence transition. */
@@ -199,6 +212,14 @@ export class OnnxLocalDiarizer implements Diarizer {
     this.changePointCheckIntervalSamples = Math.floor(((cfg.changePointCheckIntervalMs ?? 2000) / 1000) * SAMPLE_RATE);
     this.changePointHeadTailSamples = Math.floor(((cfg.changePointHeadTailMs ?? 1500) / 1000) * SAMPLE_RATE);
     this.changePointDistThreshold = cfg.changePointDistThreshold ?? 0.45;
+    // Periodic peek defaults: 500 ms cadence, 1000 ms window, 0.40 threshold.
+    // The window is shorter than the change-point detector's head/tail (1.5s)
+    // because peek is just a label refresh — we don't need maximum stability,
+    // we need responsiveness. 0.40 is stricter than newSpeakerThreshold to
+    // avoid flapping the label on borderline embeddings.
+    this.peekIntervalSamples = Math.floor(((cfg.peekIntervalMs ?? 500) / 1000) * SAMPLE_RATE);
+    this.peekWindowSamples = Math.floor(((cfg.peekWindowMs ?? 1000) / 1000) * SAMPLE_RATE);
+    this.peekConfidenceThreshold = cfg.peekConfidenceThreshold ?? 0.40;
   }
 
   static async create(cfg: OnnxLocalDiarizerConfig = {}): Promise<OnnxLocalDiarizer> {
@@ -260,6 +281,7 @@ export class OnnxLocalDiarizer implements Diarizer {
         this.utteranceChunks = [];
         this.utteranceSamples = 0;
         this.samplesAtLastCpCheck = 0;
+        this.samplesAtLastPeek = 0;
       }
       this.utteranceChunks.push(audio);
       this.utteranceSamples += audio.length;
@@ -277,6 +299,21 @@ export class OnnxLocalDiarizer implements Diarizer {
         await this.checkAndSplitChangePoint();
       }
 
+      // Periodic peek-based label refresh: cheaper than change-point detection
+      // (only ONE embed call) and fires more often (every 500 ms). Read-only —
+      // no centroid update, no commit, just lastLabel refresh against the
+      // existing centroid set. Gives the live dashboard sub-second label
+      // updates without waiting for the next commit or change-point split.
+      if (
+        this.peekIntervalSamples > 0 &&
+        this.utteranceSamples - this.samplesAtLastPeek >= this.peekIntervalSamples &&
+        this.utteranceSamples >= this.peekWindowSamples &&
+        this.clustering.size() > 0
+      ) {
+        this.samplesAtLastPeek = this.utteranceSamples;
+        await this.periodicPeek();
+      }
+
       // Cap-and-commit on long single-speaker monologue so we keep emitting
       // updated labels and don't accumulate unbounded audio.
       if (this.utteranceSamples >= this.maxUtteranceSamples) {
@@ -288,6 +325,37 @@ export class OnnxLocalDiarizer implements Diarizer {
     }
 
     return this.lastLabel;
+  }
+
+  /** Periodic peek: embed the last peekWindowSamples of buffered audio and
+   *  read-only look up the nearest cluster. If confidence is high, update
+   *  lastLabel. Cheap (1 embed call); fires every peekIntervalSamples. */
+  private async periodicPeek(): Promise<void> {
+    const totalSamples = this.utteranceSamples;
+    const win = this.peekWindowSamples;
+    if (totalSamples < win) return;
+    const slice = this.extractSlice(totalSamples - win, totalSamples);
+    let emb: Float32Array | null = null;
+    try {
+      emb = await this.embedUtterance(slice);
+    } catch {
+      return;
+    }
+    if (!emb) return;
+    const peek = this.clustering.peek(emb);
+    if (!peek) return;
+    if (peek.distance < this.peekConfidenceThreshold) {
+      // Resolve through the rewrite chain so we never show a stale merged label.
+      let target = peek.speakerId;
+      while (this.labelRewrites.has(target)) target = this.labelRewrites.get(target)!;
+      if (this.lastLabel.speakerId !== target) {
+        this.lastLabel = { speakerId: target, speakerName: target };
+        // Quiet log — fires every 500 ms during speech, don't spam unless label changed.
+        console.log(
+          `[onnx-diarizer] peek refresh → ${target} (dist=${peek.distance.toFixed(3)})`,
+        );
+      }
+    }
   }
 
   /** Extract a contiguous slice of samples [startSample, endSample) from the
@@ -526,6 +594,7 @@ export class OnnxLocalDiarizer implements Diarizer {
     this.utteranceSamples = 0;
     this.utteranceStartTs = null;
     this.samplesAtLastCpCheck = 0;
+    this.samplesAtLastPeek = 0;
     this.inSpeech = false;
     this.silenceSampleAccumulator = 0;
     this.lastLabel = { speakerId: 'speaker_0', speakerName: 'speaker_0' };
