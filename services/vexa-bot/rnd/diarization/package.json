@@ -1,0 +1,22 @@
+{
+  "name": "vexa-bot-rnd-diarization",
+  "private": true,
+  "version": "0.0.0-mvp0",
+  "type": "module",
+  "description": "MVP0 RnD harness: standalone hot-reload server that imports the production bot's vad.ts + transcription-client.ts, plugs a swappable Diarizer behind them, and demos diarization quality live against a shared browser tab.",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.11.0",
+    "@types/ws": "^8.5.10",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}
