@@ -149,54 +149,23 @@ async function main() {
   // Per-speaker confirmed-batch accumulator. Mirrors production's batching:
   // SpeakerStreamManager emits confirmed segments one-by-one via
   // onSegmentConfirmed; we collect per-speaker and call publishTranscript
-  // (the production atomic confirmed+pending bundle write).
+  // (the production atomic confirmed+pending bundle write) from
+  // onSegmentReady after each Whisper round-trip.
   const confirmedBatches = new Map<string, TranscriptionSegment[]>();
+  /** Last detected language per speaker — used for onSegmentConfirmed since the
+   *  Whisper result isn't available there. Matches production index.ts:161. */
+  const lastLanguagePerSpeaker = new Map<string, string>();
 
-  // Wire SpeakerStreamManager callbacks — same wiring shape as production
-  // (services/vexa-bot/core/src/index.ts ~1300-1450).
-  speakerManager.onSegmentReady = async (speakerId, speakerName, audioBuffer) => {
-    if (!transcription) {
-      // No transcription backend — surface a placeholder confirmed segment
-      // so the dashboard still shows the diarizer firing.
-      const startSec = (Date.now() - publisher.sessionStartMs) / 1000;
-      await publisher.publishTranscript(
-        speakerName,
-        [
-          {
-            speaker: speakerName,
-            text: `[transcription service offline — ${(audioBuffer.length / SAMPLE_RATE).toFixed(2)}s of ${speakerName}'s audio buffered]`,
-            start: startSec,
-            end: startSec + audioBuffer.length / SAMPLE_RATE,
-            language: 'unknown',
-            completed: true,
-            segment_id: `${speakerId}:placeholder:${Date.now()}`,
-            source: 'audio',
-            absolute_start_time: new Date(Date.now() - audioBuffer.length / SAMPLE_RATE * 1000).toISOString(),
-            absolute_end_time: new Date().toISOString(),
-          },
-        ],
-        [],
-      );
-      // Tell SpeakerStreamManager we got an "empty" Whisper result so it
-      // doesn't hang waiting for a transcription response.
-      speakerManager.handleTranscriptionResult(speakerId, '');
-      return;
-    }
-    try {
-      const result = await transcription.transcribe(audioBuffer);
-      speakerManager.handleTranscriptionResult(
-        speakerId,
-        result.text,
-        result.segments[result.segments.length - 1]?.end,
-        result.segments.map((s) => ({ text: s.text, start: s.start, end: s.end })),
-      );
-    } catch (err: any) {
-      console.error(`[harness] transcription error for ${speakerName}:`, err.message);
-      speakerManager.handleTranscriptionResult(speakerId, '');
-    }
-  };
-
-  speakerManager.onSegmentConfirmed = (speakerId, speakerName, transcript, bufferStartMs, bufferEndMs, segmentId) => {
+  // Wire SpeakerStreamManager callbacks. Mirrors production
+  // (services/vexa-bot/core/src/index.ts ~1340-1530):
+  //   onSegmentConfirmed → collect into per-speaker confirmedBatches
+  //                        (does NOT publish on its own)
+  //   onSegmentReady     → transcribe, feed handleTranscriptionResult,
+  //                        then publishTranscript with the drained
+  //                        confirmedBatches + a fresh pending[] from the
+  //                        current Whisper draft (filtered to drop any
+  //                        items already promoted to confirmed).
+  speakerManager.onSegmentConfirmed = (_speakerId, speakerName, transcript, bufferStartMs, bufferEndMs, segmentId) => {
     const startSec = (bufferStartMs - publisher.sessionStartMs) / 1000;
     const endSec = (bufferEndMs - publisher.sessionStartMs) / 1000;
     const seg: TranscriptionSegment = {
@@ -204,19 +173,96 @@ async function main() {
       text: transcript,
       start: startSec,
       end: endSec,
-      language: 'unknown',
+      language: lastLanguagePerSpeaker.get(speakerName) ?? 'en',
       completed: true,
-      segment_id: segmentId,
+      segment_id: `${publisher.sessionUid}:${segmentId}`,
       source: 'audio',
       absolute_start_time: new Date(bufferStartMs).toISOString(),
       absolute_end_time: new Date(bufferEndMs).toISOString(),
     };
-    const batch = confirmedBatches.get(speakerId) ?? [];
+    const batch = confirmedBatches.get(speakerName) ?? [];
     batch.push(seg);
-    confirmedBatches.set(speakerId, batch);
-    // Publish immediately as confirmed (no pending for MVP0). This produces
-    // the same atomic bundle shape the production gateway forwards to the dashboard.
-    void publisher.publishTranscript(speakerName, [seg], []);
+    confirmedBatches.set(speakerName, batch);
+  };
+
+  speakerManager.onSegmentReady = async (speakerId, speakerName, audioBuffer) => {
+    if (!transcription) {
+      // No transcription backend — emit a synthetic placeholder as a
+      // single confirmed segment so the dashboard still demonstrates
+      // pipeline shape. Mark Whisper result as empty so the manager
+      // doesn't wait forever.
+      const startMs = speakerManager.getBufferStartMs(speakerId);
+      const endMs = Date.now();
+      const placeholder: TranscriptionSegment = {
+        speaker: speakerName,
+        text: `[transcription service offline — ${(audioBuffer.length / SAMPLE_RATE).toFixed(2)}s of ${speakerName}'s audio buffered]`,
+        start: (startMs - publisher.sessionStartMs) / 1000,
+        end: (endMs - publisher.sessionStartMs) / 1000,
+        language: 'unknown',
+        completed: true,
+        segment_id: `${publisher.sessionUid}:${speakerId}:placeholder:${endMs}`,
+        source: 'audio',
+        absolute_start_time: new Date(startMs).toISOString(),
+        absolute_end_time: new Date(endMs).toISOString(),
+      };
+      await publisher.publishTranscript(speakerName, [placeholder], []);
+      speakerManager.handleTranscriptionResult(speakerId, '');
+      return;
+    }
+
+    try {
+      const result = await transcription.transcribe(audioBuffer);
+      if (result.language && result.language !== 'unknown') {
+        lastLanguagePerSpeaker.set(speakerName, result.language);
+      }
+
+      // Feed into manager — this may trigger onSegmentConfirmed callbacks
+      // that populate confirmedBatches.
+      const lastSeg = result.segments[result.segments.length - 1];
+      speakerManager.handleTranscriptionResult(
+        speakerId,
+        result.text,
+        lastSeg?.end,
+        result.segments.map((s) => ({ text: s.text, start: s.start, end: s.end })),
+      );
+
+      // Build pending from the current Whisper draft — one entry per Whisper
+      // segment so sentence boundaries survive into the dashboard.
+      if (!result.text) return;
+      const lang = lastLanguagePerSpeaker.get(speakerName) ?? result.language ?? 'en';
+      const bufStartMs = speakerManager.getBufferStartMs(speakerId);
+      const startSec = (bufStartMs - publisher.sessionStartMs) / 1000;
+      const draft = result.segments.length > 0 ? result.segments : [{ text: result.text, start: 0, end: 0 }];
+      const pendingSegs: TranscriptionSegment[] = draft
+        .map((ws): TranscriptionSegment => ({
+          speaker: speakerName,
+          text: (ws.text || '').trim(),
+          start: startSec + (ws.start || 0),
+          end: startSec + (ws.end || 0),
+          language: lang,
+          completed: false,
+          source: 'audio',
+          absolute_start_time: new Date(bufStartMs + (ws.start || 0) * 1000).toISOString(),
+          absolute_end_time: new Date(bufStartMs + (ws.end || 0) * 1000).toISOString(),
+        }))
+        .filter((s) => s.text);
+
+      // Drain this speaker's confirmed batch (collected via onSegmentConfirmed).
+      const speakerConfirmed = confirmedBatches.get(speakerName) ?? [];
+      confirmedBatches.set(speakerName, []);
+
+      // Filter pending entries that already overlap with the just-confirmed text.
+      const confirmedTexts = speakerConfirmed.map((c) => c.text.trim());
+      const pending = pendingSegs.filter((p) => {
+        const pt = p.text.trim();
+        return !confirmedTexts.some((ct) => pt === ct || pt.startsWith(ct) || ct.startsWith(pt));
+      });
+
+      await publisher.publishTranscript(speakerName, speakerConfirmed, pending);
+    } catch (err: any) {
+      console.error(`[harness] transcription error for ${speakerName}:`, err.message);
+      speakerManager.handleTranscriptionResult(speakerId, '');
+    }
   };
 
   await publisher.publishSessionStart();
