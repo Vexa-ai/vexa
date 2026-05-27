@@ -1,5 +1,16 @@
 # vexa-bot diarization RnD — MVP0
 
+> **NOTE (in-flight rebuild):** the harness pipeline implementation is
+> currently a stub. The previous parallel-pipeline implementation
+> (`transcription-client.ts`, `pipeline.ts`, `stub-diarizer.ts`) violated
+> the MVP0 constraint that the harness must reuse production bot code,
+> and has been archived to
+> `/home/dima/dev/vexa-archive-mvp0-parallel-pipeline/`. The harness is
+> being rebuilt on top of the production bot's modules
+> (`speaker-streams.ts`, `vad.ts`, `transcription-client.ts`,
+> `segment-publisher.ts`). Descriptions below may not match the current
+> code on disk until that rebuild lands.
+
 This is the **MVP0 walking skeleton** for the pack
 [`pack-msteams-local-diarization-rnd`](https://github.com/Vexa-ai/vexa/issues/378).
 It is a hot-reload Node + TypeScript harness that lets a human share any
