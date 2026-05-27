@@ -374,6 +374,29 @@ export class OnnxLocalDiarizer implements Diarizer {
     this.utteranceSamples = tailChunks.reduce((s, c) => s + c.length, 0);
     this.utteranceStartTs = tailStartMs;
     this.samplesAtLastCpCheck = this.utteranceSamples;
+
+    // PREEMPTIVE TAIL LABEL — fixes the live-label-lag bug. After splitting,
+    // the tail buffer is the NEW speaker but its full commit won't fire
+    // until silence (could be many seconds). Without this peek, every
+    // per-frame process() call would keep returning the head's label until
+    // the tail commits — that's the lag the live dashboard shows.
+    // Lookup is read-only against the existing centroid set; we update
+    // lastLabel optimistically. If the tail later commits to a different
+    // cluster (e.g. it's actually a brand new speaker not yet allocated),
+    // the lastLabel updates again at that final commit. If the tail
+    // matches no existing cluster well enough (>= newSpeakerThreshold),
+    // we keep showing the head's label until the final commit allocates.
+    const peek = this.clustering.peek(tailEmb);
+    const headSpeakerId = this.lastLabel.speakerId;
+    if (peek && peek.speakerId !== headSpeakerId && peek.distance < 0.45) {
+      let target = peek.speakerId;
+      while (this.labelRewrites.has(target)) target = this.labelRewrites.get(target)!;
+      this.lastLabel = { speakerId: target, speakerName: target };
+      console.log(
+        `[onnx-diarizer] preemptive tail label = ${target} (dist=${peek.distance.toFixed(3)}); ` +
+          `lastLabel updated without waiting for tail commit`,
+      );
+    }
   }
 
   /** Return chunks covering samples [0, splitSample). Splits at-most one chunk. */

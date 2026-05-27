@@ -164,6 +164,26 @@ export class OnlineSpeakerClustering {
     return { speakerId: newId, distance: nearestDist, isNew: true };
   }
 
+  /** Read-only "nearest cluster" lookup — does NOT modify any state.
+   *  Returns the nearest cluster ID and cosine distance, or null if no
+   *  clusters exist yet. Used by the diarizer's change-point detector to
+   *  preview the label for the tail of a just-split utterance, so it can
+   *  update lastLabel immediately without waiting for the tail's final
+   *  commit (which can be seconds away). */
+  peek(embedding: Float32Array): { speakerId: string; distance: number } | null {
+    if (this.centroids.size === 0) return null;
+    let nearestId = '';
+    let nearestDist = Infinity;
+    for (const [id, centroid] of this.centroids) {
+      const dist = 1 - dotProduct(embedding, centroid);
+      if (dist < nearestDist) {
+        nearestDist = dist;
+        nearestId = id;
+      }
+    }
+    return { speakerId: nearestId, distance: nearestDist };
+  }
+
   /** Returns a mapping {old_id → kept_id} describing clusters that were
    *  merged in this pass. Empty if nothing merged. Two clusters merge when
    *  their centroids are within `mergeThreshold` cosine distance — that
