@@ -712,42 +712,102 @@ export class OnnxLocalDiarizer implements Diarizer {
     return `${tStartMs}-${tEndMs}`;
   }
 
-  /** Re-evaluate every commit in history against the current centroid set.
-   *  When a commit's nearest centroid differs from its assignedId AND the
-   *  new nearestDist is at least `refinementDeltaMin` smaller than the old
-   *  one, rewrite the commit's label. The delta guard prevents thrashing:
-   *  borderline same-distance reassignments don't fire. Operates O(history
-   *  × centroids); both are small (≤256 commits, ≤~10 centroids). */
+  /** Re-evaluate every commit in history against the current centroid set,
+   *  then iteratively recompute refinement centroids from the new
+   *  assignments and re-evaluate again until convergence (k-means style).
+   *
+   *  Distinct from the clusterer's live EMA centroids: the live ones serve
+   *  online streaming and are only nudged on confident matches
+   *  (nearestTrueDist<0.25). The REFINEMENT centroids are a clean recompute
+   *  from every committed embedding currently labeled as that cluster — they
+   *  give a much sharper estimate of "what does this speaker actually sound
+   *  like" once enough audio has accumulated, and we can use them to
+   *  re-evaluate borderline early commits.
+   *
+   *  Caps iterations to avoid pathological loops. */
   private refineCommitHistory(): void {
+    if (this.commitHistory.length === 0) return;
     const refinementDeltaMin = 0.05;
-    for (const h of this.commitHistory) {
-      // Compute nearest among current centroids.
-      let bestId = '';
-      let bestDist = Infinity;
-      let assignedDist = Infinity;
-      // Resolve assignedId through cluster-level rewrites.
-      let assignedResolved = h.assignedId;
-      while (this.labelRewrites.has(assignedResolved)) assignedResolved = this.labelRewrites.get(assignedResolved)!;
-      for (const [id, centroid] of (this.clustering as any).centroids as Map<string, Float32Array>) {
-        let dot = 0;
-        for (let i = 0; i < h.emb.length; i++) dot += h.emb[i] * centroid[i];
-        const d = 1 - dot;
-        if (d < bestDist) {
-          bestDist = d;
-          bestId = id;
-        }
-        if (id === assignedResolved) assignedDist = d;
+    const maxIters = 10;
+    // Seed labels from live state (resolved through rewrites).
+    const labels = this.commitHistory.map((h) => {
+      let id = h.assignedId;
+      while (this.labelRewrites.has(id)) id = this.labelRewrites.get(id)!;
+      return id;
+    });
+    // Cluster IDs we'll iterate over: union of (a) live centroid IDs and
+    // (b) any label currently in use. Use the live centroids' embedding
+    // length as the dim.
+    const liveCentroids = (this.clustering as any).centroids as Map<string, Float32Array>;
+    const dim = this.commitHistory[0].emb.length;
+    let prevLabels = labels.slice();
+    for (let iter = 0; iter < maxIters; iter++) {
+      // Recompute refinement centroids from current labels.
+      const sums = new Map<string, Float32Array>();
+      const counts = new Map<string, number>();
+      for (let i = 0; i < this.commitHistory.length; i++) {
+        const lab = labels[i];
+        if (!sums.has(lab)) sums.set(lab, new Float32Array(dim));
+        const s = sums.get(lab)!;
+        const e = this.commitHistory[i].emb;
+        for (let j = 0; j < dim; j++) s[j] += e[j];
+        counts.set(lab, (counts.get(lab) ?? 0) + 1);
       }
-      // If no current centroid matches the assignment (e.g., it was merged
-      // out), assignedDist stays Infinity — definitely rewrite.
-      if (bestId && bestId !== assignedResolved && bestDist + refinementDeltaMin <= assignedDist) {
-        // Resolve bestId through cluster-level rewrites in case it's an alias.
-        let target = bestId;
-        while (this.labelRewrites.has(target)) target = this.labelRewrites.get(target)!;
-        this.commitRewrites.set(this.commitKey(h.tStartMs, h.tEndMs), target);
-        h.assignedId = target;
+      const refCentroids = new Map<string, Float32Array>();
+      for (const [lab, s] of sums) {
+        // Normalize the mean to unit length so cosine distance computes
+        // correctly against the unit-normalized commit embeddings.
+        let norm = 0;
+        for (let j = 0; j < dim; j++) norm += s[j] * s[j];
+        norm = Math.sqrt(norm);
+        if (norm < 1e-8) continue;
+        const c = new Float32Array(dim);
+        for (let j = 0; j < dim; j++) c[j] = s[j] / norm;
+        refCentroids.set(lab, c);
+      }
+      // Re-classify each commit against the refinement centroids. Only
+      // commit a label change if (a) the new label exists in liveCentroids
+      // (to avoid emitting unknown IDs) AND (b) it beats the current label
+      // by at least refinementDeltaMin.
+      let changed = false;
+      for (let i = 0; i < this.commitHistory.length; i++) {
+        const e = this.commitHistory[i].emb;
+        let bestLab = labels[i];
+        let bestDist = Infinity;
+        let curDist = Infinity;
+        for (const [lab, c] of refCentroids) {
+          let dot = 0;
+          for (let j = 0; j < dim; j++) dot += e[j] * c[j];
+          const d = 1 - dot;
+          if (d < bestDist) {
+            bestDist = d;
+            bestLab = lab;
+          }
+          if (lab === labels[i]) curDist = d;
+        }
+        if (bestLab !== labels[i] && bestDist + refinementDeltaMin <= curDist) {
+          labels[i] = bestLab;
+          changed = true;
+        }
+      }
+      if (!changed) break;
+      prevLabels = labels.slice();
+    }
+    // Emit per-commit rewrites for any labels that differ from the
+    // originally assigned (resolved) label. Only emit labels that exist
+    // in the live centroid pool — refinement centroids are computed from
+    // the same labels in use, so they should always match.
+    for (let i = 0; i < this.commitHistory.length; i++) {
+      const h = this.commitHistory[i];
+      let originalResolved = h.assignedId;
+      while (this.labelRewrites.has(originalResolved)) originalResolved = this.labelRewrites.get(originalResolved)!;
+      if (labels[i] !== originalResolved && liveCentroids.has(labels[i])) {
+        this.commitRewrites.set(this.commitKey(h.tStartMs, h.tEndMs), labels[i]);
+        h.assignedId = labels[i];
       }
     }
+    // Silence unused warning for prevLabels.
+    void prevLabels;
   }
 }
 
