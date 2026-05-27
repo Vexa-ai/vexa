@@ -1,0 +1,20 @@
+{
+  "id": "interruptions-2speakers",
+  "description": "Two speakers (different gender — easier baseline) where speaker B repeatedly interrupts speaker A mid-sentence. overlap_with_prev_ms is large (1200-2000ms) so the interruption produces a long mixed-audio region followed by the interrupter continuing alone. VAD never sees a pure silence boundary between A and B — this is what the change-point detector needs to catch.",
+  "tts": "piper",
+  "speakers": {
+    "alex":   { "piper_voice": "en_US-ryan-medium" },
+    "beth":   { "piper_voice": "en_US-amy-medium" }
+  },
+  "turns": [
+    { "speaker": "alex", "text": "So I was telling Lisa the other day that the most important thing in any engineering decision is to think very carefully about the long term implications, because once you commit to an architectural choice it becomes really hard to undo it later when the team has grown and there are many dependencies.", "pause_after_ms": 200 },
+    { "speaker": "beth", "text": "Wait, hold on, I have to push back on that one a bit because I think you're overstating the case here.",                                                                                              "overlap_with_prev_ms": 1500, "pause_after_ms": 200 },
+    { "speaker": "beth", "text": "We've all worked on projects where we made an architectural choice we later regretted, and you know what, in every single case we were able to migrate away from it.",                "pause_after_ms": 300 },
+    { "speaker": "alex", "text": "Yeah but the cost of those migrations was enormous each time. I'm not saying we shouldn't iterate, I'm saying we should think first.",                                                "pause_after_ms": 200 },
+    { "speaker": "beth", "text": "Okay sure, but I think the bigger risk is actually the opposite. We spend so much time analyzing that we never ship anything.",                                                       "overlap_with_prev_ms": 1300, "pause_after_ms": 300 },
+    { "speaker": "alex", "text": "That's a fair point. So how do we strike the balance between analysis paralysis and reckless commitment?",                                                                            "pause_after_ms": 250 },
+    { "speaker": "beth", "text": "Honestly I think it's mostly about having a clear hypothesis going in and a defined point where you'd cut your losses.",                                                              "pause_after_ms": 300 },
+    { "speaker": "alex", "text": "That makes sense. I'm going to try framing the next big technical decision that way and see how it goes.",                                                                            "overlap_with_prev_ms": 1200, "pause_after_ms": 200 },
+    { "speaker": "beth", "text": "Let me know how it works out.",                                                                                                                                                       "pause_after_ms": 0 }
+  ]
+}

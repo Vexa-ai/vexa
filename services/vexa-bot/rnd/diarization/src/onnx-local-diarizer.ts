@@ -70,6 +70,17 @@ export interface OnnxLocalDiarizerConfig {
    *  Wiring this from NUM_SPEAKERS broke MVP1's first demo — capped clusters
    *  forced wrong assignments. */
   maxSpeakers?: number;
+  /** Mid-utterance change-point detection — handles "interruption with no
+   *  silence gap" case where speaker B cuts speaker A off without a clean
+   *  VAD boundary. While a speech segment is accumulating, every
+   *  `changePointCheckIntervalMs` of new audio, compute embeddings on the
+   *  first `changePointHeadTailMs` (head) and the last `changePointHeadTailMs`
+   *  (tail). If they're > `changePointDistThreshold` apart in cosine
+   *  distance, commit head+middle as utterance N and restart the buffer
+   *  with the tail as utterance N+1. Set interval to 0 to disable. */
+  changePointCheckIntervalMs?: number;
+  changePointHeadTailMs?: number;
+  changePointDistThreshold?: number;
   /** Optional callback fired on every committed utterance (after embedding +
    *  cluster assignment). Used by the eval pipeline to capture diarizer
    *  decisions without parsing console.log. Fields:
@@ -111,12 +122,19 @@ export class OnnxLocalDiarizer implements Diarizer {
   private readonly speechRms: number;
   private readonly silenceRms: number;
   private readonly minSilenceSamples: number;
+  private readonly changePointCheckIntervalSamples: number;
+  private readonly changePointHeadTailSamples: number;
+  private readonly changePointDistThreshold: number;
 
   /** Audio of the current utterance — appended on each speech frame, embedded
    *  + cleared on each silence transition. */
   private utteranceChunks: Float32Array[] = [];
   private utteranceSamples = 0;
   private utteranceStartTs: number | null = null;
+  /** Sample-count high-water mark of the most-recent change-point check.
+   *  Used so we only re-check after another `changePointCheckIntervalSamples`
+   *  of new audio have accumulated. */
+  private samplesAtLastCpCheck = 0;
   private inSpeech = false;
   private silenceSampleAccumulator = 0;
   private lastLabel: DiarizerLabel = { speakerId: 'speaker_0', speakerName: 'speaker_0' };
@@ -159,10 +177,28 @@ export class OnnxLocalDiarizer implements Diarizer {
     // best useful-metric score so far (3/4).
     this.minUtteranceSamples = Math.floor(((cfg.minUtteranceMs ?? 500) / 1000) * SAMPLE_RATE);
     this.minSeedUtteranceSamples = Math.floor(((cfg.minSeedUtteranceMs ?? 3000) / 1000) * SAMPLE_RATE);
-    this.maxUtteranceSamples = Math.floor(((cfg.maxUtteranceMs ?? 4000) / 1000) * SAMPLE_RATE);
+    // With change-point detection active, allow longer utterances. The
+    // change-point check splits at speaker changes anyway, and longer
+    // buffers give it the head/tail material it needs to fire reliably.
+    // Previous 4000ms was force-committing BEFORE change-point could run
+    // on interruption-heavy corpora — change-point fires earliest at
+    // (2 * headTail + headTail/2) ≈ 3.75s, so cap must be well above that.
+    this.maxUtteranceSamples = Math.floor(((cfg.maxUtteranceMs ?? 10000) / 1000) * SAMPLE_RATE);
     this.speechRms = cfg.speechRmsThreshold ?? 0.012;
     this.silenceRms = cfg.silenceRmsThreshold ?? 0.006;
     this.minSilenceSamples = Math.floor(((cfg.minSilenceMs ?? 200) / 1000) * SAMPLE_RATE);
+    // Change-point detection (interruption-without-silence handler).
+    // Defaults tuned for the eval suite's interruption corpora:
+    //   - 2000ms check interval: balance compute (~2 embeds/check) vs latency
+    //     to detecting a mid-utterance change
+    //   - 1500ms head/tail: long enough for stable per-speaker embeddings,
+    //     short enough to leave a "middle" buffer that can absorb the
+    //     transition without contaminating either head or tail
+    //   - 0.45 threshold: same as newSpeakerThreshold; below this the two
+    //     halves are the same speaker continuing
+    this.changePointCheckIntervalSamples = Math.floor(((cfg.changePointCheckIntervalMs ?? 2000) / 1000) * SAMPLE_RATE);
+    this.changePointHeadTailSamples = Math.floor(((cfg.changePointHeadTailMs ?? 1500) / 1000) * SAMPLE_RATE);
+    this.changePointDistThreshold = cfg.changePointDistThreshold ?? 0.45;
   }
 
   static async create(cfg: OnnxLocalDiarizerConfig = {}): Promise<OnnxLocalDiarizer> {
@@ -223,9 +259,23 @@ export class OnnxLocalDiarizer implements Diarizer {
         this.utteranceStartTs = timestampMs;
         this.utteranceChunks = [];
         this.utteranceSamples = 0;
+        this.samplesAtLastCpCheck = 0;
       }
       this.utteranceChunks.push(audio);
       this.utteranceSamples += audio.length;
+
+      // Change-point check: every changePointCheckIntervalSamples of new audio,
+      // see if the speaker shifted mid-utterance (interruption with no silence).
+      // Only check once we have enough audio for two distinct head/tail windows
+      // plus a middle gap to absorb the transition itself.
+      if (
+        this.changePointCheckIntervalSamples > 0 &&
+        this.utteranceSamples - this.samplesAtLastCpCheck >= this.changePointCheckIntervalSamples &&
+        this.utteranceSamples >= 2 * this.changePointHeadTailSamples + this.changePointHeadTailSamples / 2
+      ) {
+        this.samplesAtLastCpCheck = this.utteranceSamples;
+        await this.checkAndSplitChangePoint();
+      }
 
       // Cap-and-commit on long single-speaker monologue so we keep emitting
       // updated labels and don't accumulate unbounded audio.
@@ -238,6 +288,129 @@ export class OnnxLocalDiarizer implements Diarizer {
     }
 
     return this.lastLabel;
+  }
+
+  /** Extract a contiguous slice of samples [startSample, endSample) from the
+   *  utteranceChunks ring as a single Float32Array. */
+  private extractSlice(startSample: number, endSample: number): Float32Array {
+    const out = new Float32Array(Math.max(0, endSample - startSample));
+    let dstOffset = 0;
+    let walked = 0;
+    for (const chunk of this.utteranceChunks) {
+      const chunkStart = walked;
+      const chunkEnd = walked + chunk.length;
+      const sliceFrom = Math.max(startSample, chunkStart);
+      const sliceTo = Math.min(endSample, chunkEnd);
+      if (sliceFrom < sliceTo) {
+        const localFrom = sliceFrom - chunkStart;
+        const localTo = sliceTo - chunkStart;
+        out.set(chunk.subarray(localFrom, localTo), dstOffset);
+        dstOffset += sliceTo - sliceFrom;
+      }
+      walked = chunkEnd;
+      if (walked >= endSample) break;
+    }
+    return out;
+  }
+
+  /** Run a change-point check on the current accumulated buffer.
+   *  If the embeddings of the first `changePointHeadTailSamples` (head) and
+   *  the last `changePointHeadTailSamples` (tail) are > `changePointDistThreshold`
+   *  apart, the buffer contains a speaker change. Split it: commit head+middle
+   *  as one utterance, restart accumulation with the tail. */
+  private async checkAndSplitChangePoint(): Promise<void> {
+    const totalSamples = this.utteranceSamples;
+    const headWin = this.changePointHeadTailSamples;
+    if (totalSamples < 2 * headWin) return;
+
+    const headSlice = this.extractSlice(0, headWin);
+    const tailSlice = this.extractSlice(totalSamples - headWin, totalSamples);
+
+    let headEmb: Float32Array | null = null;
+    let tailEmb: Float32Array | null = null;
+    try {
+      headEmb = await this.embedUtterance(headSlice);
+      tailEmb = await this.embedUtterance(tailSlice);
+    } catch (err: any) {
+      console.error(`[onnx-diarizer] change-point embed failed: ${err.message}`);
+      return;
+    }
+    if (!headEmb || !tailEmb) return;
+
+    let dot = 0;
+    for (let i = 0; i < headEmb.length; i++) dot += headEmb[i] * tailEmb[i];
+    const dist = 1 - dot;
+
+    if (dist < this.changePointDistThreshold) {
+      // Same speaker continuing — no split.
+      return;
+    }
+
+    // Change point detected. Split such that:
+    //   - utterance N = samples [0, totalSamples - headWin)  ← head + middle
+    //   - utterance N+1 starts with tail = samples [totalSamples - headWin, totalSamples)
+    const splitSample = totalSamples - headWin;
+    const firstPartChunks = this.chunksUpTo(splitSample);
+    const tailChunks = this.chunksFrom(splitSample);
+    const tailStartMs = (this.utteranceStartTs ?? 0) + Math.round((splitSample / SAMPLE_RATE) * 1000);
+
+    console.log(
+      `[onnx-diarizer] change-point detected at ${(splitSample / SAMPLE_RATE).toFixed(2)}s ` +
+        `(head/tail dist=${dist.toFixed(3)} > ${this.changePointDistThreshold}); splitting utterance`,
+    );
+
+    // Commit utterance N (head+middle). Temporarily swap state into the first part.
+    const savedFullChunks = this.utteranceChunks;
+    const savedFullSamples = this.utteranceSamples;
+    const savedFullStartTs = this.utteranceStartTs;
+
+    this.utteranceChunks = firstPartChunks;
+    this.utteranceSamples = firstPartChunks.reduce((s, c) => s + c.length, 0);
+    // utteranceStartTs unchanged for the first part
+    await this.commitUtterance();
+
+    // Restart accumulation with the tail as utterance N+1.
+    this.utteranceChunks = tailChunks;
+    this.utteranceSamples = tailChunks.reduce((s, c) => s + c.length, 0);
+    this.utteranceStartTs = tailStartMs;
+    this.samplesAtLastCpCheck = this.utteranceSamples;
+  }
+
+  /** Return chunks covering samples [0, splitSample). Splits at-most one chunk. */
+  private chunksUpTo(splitSample: number): Float32Array[] {
+    const out: Float32Array[] = [];
+    let walked = 0;
+    for (const chunk of this.utteranceChunks) {
+      if (walked >= splitSample) break;
+      const chunkEnd = walked + chunk.length;
+      if (chunkEnd <= splitSample) {
+        out.push(chunk);
+      } else {
+        out.push(chunk.subarray(0, splitSample - walked));
+      }
+      walked = chunkEnd;
+    }
+    return out;
+  }
+
+  /** Return chunks covering samples [splitSample, totalSamples). */
+  private chunksFrom(splitSample: number): Float32Array[] {
+    const out: Float32Array[] = [];
+    let walked = 0;
+    for (const chunk of this.utteranceChunks) {
+      const chunkEnd = walked + chunk.length;
+      if (chunkEnd <= splitSample) {
+        walked = chunkEnd;
+        continue;
+      }
+      if (walked >= splitSample) {
+        out.push(chunk);
+      } else {
+        out.push(chunk.subarray(splitSample - walked));
+      }
+      walked = chunkEnd;
+    }
+    return out;
   }
 
   private async commitUtterance(): Promise<void> {
@@ -329,6 +502,7 @@ export class OnnxLocalDiarizer implements Diarizer {
     this.utteranceChunks = [];
     this.utteranceSamples = 0;
     this.utteranceStartTs = null;
+    this.samplesAtLastCpCheck = 0;
     this.inSpeech = false;
     this.silenceSampleAccumulator = 0;
     this.lastLabel = { speakerId: 'speaker_0', speakerName: 'speaker_0' };

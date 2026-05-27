@@ -1,0 +1,28 @@
+{
+  "id": "interruption-stress",
+  "description": "Heated 3-speaker debate with frequent interruptions (1000-1800ms overlap). Mix of genders. The kind of pattern that breaks VAD-only segmentation entirely: speakers cut in regularly, no clean silence boundaries between turns. This is the production failure mode the change-point detector has to fix.",
+  "tts": "piper",
+  "speakers": {
+    "mod":   { "piper_voice": "en_US-ryan-medium" },
+    "alice": { "piper_voice": "en_US-amy-medium" },
+    "carlos": { "piper_voice": "en_US-norman-medium" }
+  },
+  "turns": [
+    { "speaker": "mod",    "text": "Welcome everyone to today's debate on the future of real time speech processing in conference call applications, which is a topic that has been generating a lot of interest lately.", "pause_after_ms": 250 },
+    { "speaker": "alice",  "text": "Thanks for having us. I have to say from the start that I think we are vastly underestimating how much improvement is still possible here.",                                            "pause_after_ms": 300 },
+    { "speaker": "carlos", "text": "Hold on Alice, I want to challenge that immediately. The gap between research models and production deployment is huge and we keep ignoring it.",                                       "overlap_with_prev_ms": 1500, "pause_after_ms": 200 },
+    { "speaker": "alice",  "text": "But Carlos that's exactly my point, the production deployment is where most of the wins are.",                                                                                          "overlap_with_prev_ms": 1700, "pause_after_ms": 200 },
+    { "speaker": "carlos", "text": "Sure but we have to be realistic about what's actually shippable. Latency budgets, compute budgets, language coverage, you name it.",                                                  "pause_after_ms": 250 },
+    { "speaker": "mod",    "text": "Let's slow down for a second. Alice, can you give us a concrete example of an improvement you think is achievable in the next year?",                                                    "pause_after_ms": 250 },
+    { "speaker": "alice",  "text": "Yes, real time diarization. We're nowhere near where we should be on multi speaker meetings.",                                                                                          "pause_after_ms": 300 },
+    { "speaker": "carlos", "text": "I disagree completely. The current models are already at human level on clean two speaker audio.",                                                                                       "overlap_with_prev_ms": 1200, "pause_after_ms": 200 },
+    { "speaker": "alice",  "text": "Clean two speaker is not the realistic case Carlos, real meetings are messier than that.",                                                                                              "overlap_with_prev_ms": 1500, "pause_after_ms": 250 },
+    { "speaker": "mod",    "text": "Carlos do you want to respond to that?",                                                                                                                                                "pause_after_ms": 200 },
+    { "speaker": "carlos", "text": "Yes absolutely. I think what Alice is describing is overlap handling specifically, which is a separate hard problem.",                                                                  "pause_after_ms": 300 },
+    { "speaker": "alice",  "text": "Right but that hard problem is the one people actually have to solve.",                                                                                                                 "overlap_with_prev_ms": 1300, "pause_after_ms": 250 },
+    { "speaker": "mod",    "text": "Let's take a step back. What are the three things you'd both agree are the highest priority improvements?",                                                                             "pause_after_ms": 300 },
+    { "speaker": "carlos", "text": "Speed of inference and lower latency. That has to be number one for any conference call use case.",                                                                                     "pause_after_ms": 250 },
+    { "speaker": "alice",  "text": "Speed yes but only if it doesn't sacrifice accuracy in the cases people actually care about.",                                                                                          "overlap_with_prev_ms": 1100, "pause_after_ms": 250 },
+    { "speaker": "mod",    "text": "Alright, we have to wrap up there. Thanks for a spirited discussion both of you.",                                                                                                      "pause_after_ms": 0 }
+  ]
+}
