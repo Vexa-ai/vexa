@@ -241,6 +241,34 @@ function generateBlueBoxStream(gt: GroundTruth, cfg: BlueBoxConfig): BlueBoxEven
   return events;
 }
 
+/** Filter transient flickers from a blue-box event stream. Any state that
+ *  lasts less than `minDwellMs` AND reverts to the previous state is
+ *  collapsed back into that previous state — modelling how production
+ *  code should treat sub-300ms toggles as DOM noise rather than a real
+ *  speaker change. Returns a new event list with the same shape. */
+function filterFlickers(events: BlueBoxEvent[], minDwellMs = 300): BlueBoxEvent[] {
+  if (events.length < 3) return events.slice();
+  const out: BlueBoxEvent[] = [events[0]];
+  for (let i = 1; i < events.length - 1; i++) {
+    const cur = events[i];
+    const next = events[i + 1];
+    const dwell = next.ts - cur.ts;
+    const prev = out[out.length - 1];
+    // If this state is short AND the next state reverts to prev's speaker,
+    // drop this transient.
+    if (dwell < minDwellMs && next.speaker === prev.speaker) {
+      // Skip cur AND next (next would just re-establish prev, redundant).
+      i++; // consume next
+      continue;
+    }
+    out.push(cur);
+  }
+  // Always include the last event (or its merged form if we skipped to it).
+  const last = events[events.length - 1];
+  if (out[out.length - 1].ts !== last.ts) out.push(last);
+  return out;
+}
+
 /** Given the sorted event stream, return the dominant speaker (most lit
  *  time) during the window [windowStart, windowEnd]. Returns null if the
  *  window only sees gaps. */
@@ -364,7 +392,10 @@ async function analyze(id: string, gt: GroundTruth, commits: CommitEvent[]): Pro
   // so the lag is built INTO the stream. We look at the stream within
   // [tStartMs + lag, tEndMs + lag] — the blue box at time T reflects
   // what was happening at audio time (T - lag).
-  const blueBoxEvents = generateBlueBoxStream(gt, DEFAULT_BLUEBOX);
+  const rawBlueBoxEvents = generateBlueBoxStream(gt, DEFAULT_BLUEBOX);
+  // Pre-filter sub-300ms revert flickers — production should do this on
+  // the live DOM signal too (the noisy box toggles back and forth).
+  const blueBoxEvents = filterFlickers(rawBlueBoxEvents, 600);
   const collabPerCommit: CorpusResult['collabPerCommit'] = [];
   let collabCorrectMs = 0;
   let collabTotalMs = 0;
@@ -372,8 +403,15 @@ async function analyze(id: string, gt: GroundTruth, commits: CommitEvent[]): Pro
     const c = commits[i];
     const purity = segmentPurity[i];
     if (!purity) continue;
-    const windowStart = c.tStartMs + DEFAULT_BLUEBOX.lagMs;
-    const windowEnd = c.tEndMs + DEFAULT_BLUEBOX.lagMs;
+    // Widen voting window so short commits get more blue-box context.
+    // Long commits absorb the widening at the edges (the GT speaker is
+    // typically the same as their own dominant), short commits gain
+    // resistance to in-window flickers. The widening shouldn't exceed
+    // half the blue-box lag — that's roughly the temporal granularity
+    // we can reason about anyway.
+    const widenMs = 500;
+    const windowStart = c.tStartMs + DEFAULT_BLUEBOX.lagMs - widenMs;
+    const windowEnd = c.tEndMs + DEFAULT_BLUEBOX.lagMs + widenMs;
     const bluebox = dominantBlueBoxIn(blueBoxEvents, windowStart, windowEnd);
     const truth = purity.dominantSpeaker;
     const correct = bluebox === truth;
