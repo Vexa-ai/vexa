@@ -20,6 +20,7 @@
  */
 
 import type { TranscriptionSegment } from '../../../core/src/services/segment-publisher';
+import type { MetricsSnapshot } from './metrics';
 
 export const SAMPLE_RATE = 16000;
 
@@ -65,9 +66,15 @@ export interface SpeakerEventWire {
   relative_ms: number;
 }
 
+export interface MetricsEvent {
+  kind: 'metrics';
+  snapshot: MetricsSnapshot;
+}
+
 export type DashboardEvent =
   | SessionInfoEvent
   | SessionStartEvent
   | SessionEndEvent
   | TranscriptEvent
-  | SpeakerEventWire;
+  | SpeakerEventWire
+  | MetricsEvent;

@@ -34,6 +34,36 @@
     .placeholder { color: #888; font-style: italic; }
     .session-boundary { padding: 8px 12px; color: #666; font-family: ui-monospace, monospace; font-size: 12px; text-align: center; }
     .empty { color: #888; padding: 32px 12px; text-align: center; }
+
+    /* Metrics panel */
+    .metrics {
+      position: sticky; top: 0; z-index: 5;
+      background: #f5f7fa; border-bottom: 1px solid #ddd;
+      padding: 10px 18px;
+      font-family: ui-monospace, monospace; font-size: 11px; color: #333;
+    }
+    .metrics .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 6px 18px;
+      max-width: 1200px; margin: 0 auto;
+    }
+    .metrics .card { background: #fff; border: 1px solid #e2e6eb; border-radius: 4px; padding: 6px 8px; }
+    .metrics .card .label { color: #666; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .metrics .card .v { font-size: 16px; font-weight: 600; color: #111; font-family: ui-monospace, monospace; }
+    .metrics .card .sub { color: #888; font-size: 10px; }
+    .metrics .card.warn .v { color: #b45309; }
+    .metrics .card.bad .v { color: #b91c1c; }
+    .metrics .card.ok .v { color: #047857; }
+    .metrics .histo { display: flex; align-items: flex-end; gap: 1px; height: 28px; margin-top: 2px; }
+    .metrics .histo .bar { background: #2563eb; min-width: 6px; flex: 1; }
+    .metrics .histo .bar.over { background: #dc2626; }
+    .metrics .histo-row { display: flex; gap: 0; font-size: 9px; color: #888; margin-top: 1px; }
+    .metrics .histo-row span { flex: 1; min-width: 6px; text-align: center; }
+    .metrics .row { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; padding-bottom: 6px; }
+    .metrics .row .title { font-weight: 600; color: #111; font-size: 12px; }
+    .metrics details summary { cursor: pointer; user-select: none; color: #555; padding: 2px 0; }
+    .metrics details[open] summary { color: #111; }
   </style>
 </head>
 <body>
@@ -48,6 +78,12 @@
       <span class="meta"><a href="/corpus" style="color:#06c">Corpus →</a></span>
     </div>
   </header>
+  <section class="metrics" id="metrics-panel">
+    <details open>
+      <summary><span class="title">Live metrics</span> <span id="metrics-elapsed" style="color:#888"></span></summary>
+      <div class="grid" id="metrics-grid"></div>
+    </details>
+  </section>
   <main>
     <div id="segments"><div class="empty">Waiting for audio. Open <a href="/">/</a> in another tab and share a YouTube tab there.</div></main>
   </main>

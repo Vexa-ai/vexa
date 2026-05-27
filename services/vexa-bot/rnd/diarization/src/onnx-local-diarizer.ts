@@ -39,6 +39,7 @@ import {
 
 import type { Diarizer, DiarizerLabel } from './diarizer';
 import { OnlineSpeakerClustering } from './online-clustering';
+import { metrics } from './metrics';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -274,6 +275,7 @@ export class OnnxLocalDiarizer implements Diarizer {
   }
 
   private async embedUtterance(utteranceAudio: Float32Array): Promise<Float32Array | null> {
+    const t0 = Date.now();
     // Processor turns raw PCM into the mel-fbank input the model expects.
     const inputs = await this.processor(utteranceAudio, { sampling_rate: SAMPLE_RATE });
     // Model.forward gives back { last_hidden_state: Tensor(1, 256) }.
@@ -284,7 +286,9 @@ export class OnnxLocalDiarizer implements Diarizer {
       return null;
     }
     const emb = new Float32Array(out.data as Float32Array);
-    return l2Normalize(emb);
+    const norm = l2Normalize(emb);
+    metrics.recordEmbedLatency(Date.now() - t0);
+    return norm;
   }
 
   async process(audio: Float32Array, timestampMs: number): Promise<DiarizerLabel> {
@@ -371,6 +375,7 @@ export class OnnxLocalDiarizer implements Diarizer {
         console.log(
           `[onnx-diarizer] peek refresh → ${target} (dist=${peek.distance.toFixed(3)})`,
         );
+        metrics.recordPeekRefresh();
       }
     }
   }
@@ -443,6 +448,7 @@ export class OnnxLocalDiarizer implements Diarizer {
       `[onnx-diarizer] change-point detected at ${(splitSample / SAMPLE_RATE).toFixed(2)}s ` +
         `(head/tail dist=${dist.toFixed(3)} > ${this.changePointDistThreshold}); splitting utterance`,
     );
+    metrics.recordChangePoint();
 
     // Commit utterance N (head+middle). Temporarily swap state into the first part.
     const savedFullChunks = this.utteranceChunks;
@@ -585,6 +591,7 @@ export class OnnxLocalDiarizer implements Diarizer {
         while (this.labelRewrites.has(target)) target = this.labelRewrites.get(target)!;
         this.labelRewrites.set(oldId, target);
       }
+      if (merges.size > 0) metrics.recordClusterMerge(merges.size);
       // Resolve final speaker id through the rewrite chain
       let finalSpeakerId = assignment.speakerId;
       while (this.labelRewrites.has(finalSpeakerId)) {
@@ -612,6 +619,19 @@ export class OnnxLocalDiarizer implements Diarizer {
         isNew: assignment.isNew && finalSpeakerId === assignment.speakerId,
         dbSize: this.clustering.size(),
         seedAllowed: canSeedNew,
+      });
+      // Label-emit latency: the user-perceived "how long after this
+      // utterance started did we publish a speaker label for it?". Measured
+      // as commit-time minus utterance-start in audio-frame timebase. With
+      // deferred routing this also equals the per-frame routing latency.
+      metrics.recordCommit({
+        speakerId: finalSpeakerId,
+        durMs: utteranceEndMs - utteranceStartMs,
+        centroidDist: assignment.distance,
+        turnDist,
+        isNew: assignment.isNew && finalSpeakerId === assignment.speakerId,
+        clusterCount: this.clustering.size(),
+        labelEmitLatencyMs: utteranceEndMs - utteranceStartMs,
       });
     } catch (err: any) {
       console.error(`[onnx-diarizer] embed/cluster failed: ${err.message}`);

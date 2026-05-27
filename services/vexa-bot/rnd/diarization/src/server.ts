@@ -45,6 +45,7 @@ import { JsonlSegmentPublisher, type TranscriptBundle } from './jsonl-segment-pu
 import type { Diarizer } from './diarizer';
 import type { DashboardEvent } from './ws-protocol';
 import { SAMPLE_RATE } from './ws-protocol';
+import { metrics } from './metrics';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -254,8 +255,10 @@ async function main() {
       return;
     }
 
+    const txT0 = Date.now();
     try {
       const result = await transcription.transcribe(audioBuffer);
+      metrics.recordTranscription({ latencyMs: Date.now() - txT0, ok: true });
       if (result.language && result.language !== 'unknown') {
         lastLanguagePerSpeaker.set(speakerName, result.language);
       }
@@ -305,6 +308,14 @@ async function main() {
       await publisher.publishTranscript(speakerName, speakerConfirmed, pending);
     } catch (err: any) {
       console.error(`[harness] transcription error for ${speakerName}:`, err.message);
+      const msg = String(err?.message ?? err);
+      metrics.recordTranscription({
+        latencyMs: Date.now() - txT0,
+        ok: false,
+        fatal: true,
+        busy503: /503/.test(msg) || /Service busy/i.test(msg),
+        retries: 0,
+      });
       speakerManager.handleTranscriptionResult(speakerId, '');
     }
   };
@@ -316,6 +327,7 @@ async function main() {
   app.use('/static', express.static(path.join(__dirname, '..', 'public')));
   app.get('/', (_req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'capture.html')));
   app.get('/dashboard', (_req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'dashboard.html')));
+  app.get('/metrics', (_req, res) => res.json(metrics.snapshot()));
 
   // Synthetic-corpus browser: list rendered WAVs with inline audio + ground truth.
   const corpusDir = path.join(__dirname, '..', 'eval', 'corpus');
@@ -362,6 +374,7 @@ async function main() {
   audioWss.on('connection', (ws) => {
     console.log('[harness] audio client connected');
     diarizer.reset();
+    metrics.reset();
     publisher.resetSessionStart();
     void publisher.publishSessionStart();
 
@@ -414,15 +427,22 @@ async function main() {
       // are routed to this speaker's stream; frames before tStartMs are
       // dropped (silence / non-speech the diarizer chose not to embed).
       let i = 0;
+      let routed = 0;
+      let dropped = 0;
       while (i < pendingFrames.length) {
         const pf = pendingFrames[i];
         if (pf.ts > ev.tEndMs) break;
         if (pf.ts >= ev.tStartMs) {
           speakerManager.feedAudio(resolved, pf.pcm);
+          routed++;
+        } else {
+          dropped++;
         }
         i++;
       }
       if (i > 0) pendingFrames.splice(0, i);
+      if (routed > 0) metrics.recordFrameRouted(routed);
+      if (dropped > 0) metrics.recordFrameDropped(dropped);
     };
 
     ws.on('message', async (data, isBinary) => {
@@ -444,10 +464,15 @@ async function main() {
           // Deferred routing: buffer the frame and let the diarizer's
           // onCommit drain it once a speaker label is decided.
           pendingFrames.push({ ts: wallClockMs, pcm: frame });
+          metrics.recordFrameIn();
           // Soft cap to avoid unbounded growth if the diarizer never
           // commits (e.g. continuous silence). 60s at 16kHz/1024-sample
           // frames ≈ 940 entries.
-          if (pendingFrames.length > 1500) pendingFrames.splice(0, pendingFrames.length - 1500);
+          if (pendingFrames.length > 1500) {
+            const overflow = pendingFrames.length - 1500;
+            pendingFrames.splice(0, overflow);
+            metrics.recordFrameOverflow(overflow);
+          }
           await diarizer.process(frame, wallClockMs);
         } else {
           // Stub diarizer (VAD round-robin) doesn't commit; route per-frame.
@@ -536,8 +561,17 @@ async function main() {
     console.log(`[harness] listening on http://localhost:${PORT}`);
     console.log(`[harness]   capture:   http://localhost:${PORT}/`);
     console.log(`[harness]   dashboard: http://localhost:${PORT}/dashboard`);
+    console.log(`[harness]   metrics:   http://localhost:${PORT}/metrics`);
     console.log(`[harness]   redis-emit-log: ${jsonlPath}`);
   });
+
+  // Broadcast metrics snapshot to dashboard clients once per second. The
+  // dashboard reads this and renders the metrics panel; the same snapshot
+  // is served on /metrics for scripts/Prometheus-style scrapes.
+  setInterval(() => {
+    if (dashboardClients.size === 0) return;
+    broadcast({ kind: 'metrics', snapshot: metrics.snapshot() });
+  }, 1000).unref();
 }
 
 /** Serialize float PCM chunks to a single 16-bit little-endian WAV (16kHz mono). */
