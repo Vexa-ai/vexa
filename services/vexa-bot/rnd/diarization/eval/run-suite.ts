@@ -153,11 +153,25 @@ interface BlueBoxConfig {
 
 const DEFAULT_BLUEBOX: BlueBoxConfig = {
   lagMs: 1000,
-  flickersPerMin: 6,
-  flickerMinMs: 200,
-  flickerMaxMs: 500,
+  // Realistic: flickers are seconds-long mic-hijack events (someone's open
+  // mic catches background or a cough, their tile gets the "speaking"
+  // halo). Not sub-second DOM toggles. 1.5–3s windows; 2 events/min.
+  flickersPerMin: 2,
+  flickerMinMs: 1500,
+  flickerMaxMs: 3000,
   seed: 42,
 };
+
+/** Scenarios used by the "noise sweep" mode of the suite. Lets us see
+ *  collab accuracy degrade as the blue-box signal gets noisier — and
+ *  catches regressions where a smoother that works in one regime breaks
+ *  another. */
+const SCENARIOS: Array<{ name: string; cfg: BlueBoxConfig }> = [
+  { name: 'clean',        cfg: { lagMs: 500,  flickersPerMin: 0, flickerMinMs: 1500, flickerMaxMs: 3000, seed: 42 } },
+  { name: 'realistic',    cfg: { lagMs: 1000, flickersPerMin: 2, flickerMinMs: 1500, flickerMaxMs: 3000, seed: 42 } },
+  { name: 'heavy',        cfg: { lagMs: 1500, flickersPerMin: 4, flickerMinMs: 1500, flickerMaxMs: 3000, seed: 42 } },
+  { name: 'pathological', cfg: { lagMs: 2000, flickersPerMin: 6, flickerMinMs: 2000, flickerMaxMs: 4000, seed: 42 } },
+];
 
 function makeSeededRng(seed: number): () => number {
   let state = (seed >>> 0) || 1;
@@ -239,6 +253,76 @@ function generateBlueBoxStream(gt: GroundTruth, cfg: BlueBoxConfig): BlueBoxEven
     }
   }
   return events;
+}
+
+/** Compute collab accuracy for a given corpus + blue-box config.
+ *  Returns { correctMs, totalMs, perCommit } so callers can aggregate.
+ *  Uses the cluster-run consensus smoother described inline. */
+function computeCollabAccuracy(
+  commits: CommitEvent[],
+  segmentPurity: CorpusResult['segmentPurity'],
+  blueBoxEvents: BlueBoxEvent[],
+  lagMs: number,
+): { correctMs: number; totalMs: number; perCommit: CorpusResult['collabPerCommit'] } {
+  // Per-commit blue-box raw label (majority vote over the lag-shifted
+  // window). Widening absorbs short flickers; multi-second flickers
+  // require the cross-commit smoother below.
+  const widenMs = 500;
+  const rawLabels: Array<string | null> = [];
+  for (let i = 0; i < commits.length; i++) {
+    const c = commits[i];
+    rawLabels.push(dominantBlueBoxIn(blueBoxEvents, c.tStartMs + lagMs - widenMs, c.tEndMs + lagMs + widenMs));
+  }
+  // Cluster-run consensus smoother: within a run of consecutive commits
+  // sharing the same diarizer cluster ID, the blue-box labels should be
+  // consistent. Multi-second flickers that disagree with the cluster-run
+  // majority get overridden. Threshold ≥50% of run weight.
+  const smoothedLabels = rawLabels.slice();
+  for (let i = 0; i < commits.length; i++) {
+    const cur = rawLabels[i];
+    if (cur === null) continue;
+    const curCluster = commits[i].speakerId;
+    let lo = i;
+    while (lo - 1 >= 0 && commits[lo - 1].speakerId === curCluster) lo--;
+    let hi = i;
+    while (hi + 1 < commits.length && commits[hi + 1].speakerId === curCluster) hi++;
+    if (hi === lo) continue;
+    const tally = new Map<string, number>();
+    let totalW = 0;
+    for (let k = lo; k <= hi; k++) {
+      const lab = rawLabels[k];
+      if (!lab) continue;
+      const w = commits[k].tEndMs - commits[k].tStartMs;
+      tally.set(lab, (tally.get(lab) ?? 0) + w);
+      totalW += w;
+    }
+    let bestLab: string | null = null;
+    let bestW = 0;
+    for (const [lab, w] of tally) {
+      if (w > bestW) {
+        bestW = w;
+        bestLab = lab;
+      }
+    }
+    if (bestLab && bestLab !== cur && totalW > 0 && bestW / totalW >= 0.5) {
+      smoothedLabels[i] = bestLab;
+    }
+  }
+  const perCommit: CorpusResult['collabPerCommit'] = [];
+  let correctMs = 0;
+  let totalMs = 0;
+  for (let i = 0; i < commits.length; i++) {
+    const c = commits[i];
+    const purity = segmentPurity[i];
+    if (!purity) continue;
+    const bluebox = smoothedLabels[i];
+    const truth = purity.dominantSpeaker;
+    const correct = bluebox === truth;
+    perCommit.push({ tStartMs: c.tStartMs, tEndMs: c.tEndMs, bluebox, truth, correct });
+    if (correct) correctMs += purity.overlapMs;
+    totalMs += purity.overlapMs;
+  }
+  return { correctMs, totalMs, perCommit };
 }
 
 /** Filter transient flickers from a blue-box event stream. Any state that
@@ -392,41 +476,14 @@ async function analyze(id: string, gt: GroundTruth, commits: CommitEvent[]): Pro
   // so the lag is built INTO the stream. We look at the stream within
   // [tStartMs + lag, tEndMs + lag] — the blue box at time T reflects
   // what was happening at audio time (T - lag).
-  const rawBlueBoxEvents = generateBlueBoxStream(gt, DEFAULT_BLUEBOX);
-  // Pre-filter sub-300ms revert flickers — production should do this on
-  // the live DOM signal too (the noisy box toggles back and forth).
-  const blueBoxEvents = filterFlickers(rawBlueBoxEvents, 600);
-  const collabPerCommit: CorpusResult['collabPerCommit'] = [];
-  let collabCorrectMs = 0;
-  let collabTotalMs = 0;
-  for (let i = 0; i < commits.length; i++) {
-    const c = commits[i];
-    const purity = segmentPurity[i];
-    if (!purity) continue;
-    // Widen voting window so short commits get more blue-box context.
-    // Long commits absorb the widening at the edges (the GT speaker is
-    // typically the same as their own dominant), short commits gain
-    // resistance to in-window flickers. The widening shouldn't exceed
-    // half the blue-box lag — that's roughly the temporal granularity
-    // we can reason about anyway.
-    const widenMs = 500;
-    const windowStart = c.tStartMs + DEFAULT_BLUEBOX.lagMs - widenMs;
-    const windowEnd = c.tEndMs + DEFAULT_BLUEBOX.lagMs + widenMs;
-    const bluebox = dominantBlueBoxIn(blueBoxEvents, windowStart, windowEnd);
-    const truth = purity.dominantSpeaker;
-    const correct = bluebox === truth;
-    collabPerCommit.push({
-      tStartMs: c.tStartMs,
-      tEndMs: c.tEndMs,
-      bluebox,
-      truth,
-      correct,
-    });
-    // Score by audio overlap ms — long commits count more.
-    if (correct) collabCorrectMs += purity.overlapMs;
-    collabTotalMs += purity.overlapMs;
-  }
-  const collabAccuracy = collabTotalMs > 0 ? collabCorrectMs / collabTotalMs : 0;
+  // With realistic multi-second flickers the dwell-time filter doesn't
+  // help — a 2s flicker looks like a real switch. Defense is instead
+  // *cross-commit consistency* via the cluster-run smoother in
+  // computeCollabAccuracy.
+  const blueBoxEvents = generateBlueBoxStream(gt, DEFAULT_BLUEBOX);
+  const { correctMs, totalMs, perCommit } = computeCollabAccuracy(commits, segmentPurity, blueBoxEvents, DEFAULT_BLUEBOX.lagMs);
+  const collabPerCommit = perCommit;
+  const collabAccuracy = totalMs > 0 ? correctMs / totalMs : 0;
 
   return {
     id,
@@ -656,6 +713,31 @@ async function main(): Promise<number> {
   console.log(
     `SCORE  recall@500=${(recallLoose * 100).toFixed(1)}  purity=${(purity * 100).toFixed(1)}  collab=${(collab * 100).toFixed(1)}  precision=${(precision * 100).toFixed(1)}`,
   );
+
+  // Noise sweep: re-run collab attribution against multiple blue-box
+  // noise configs to show how the pipeline degrades under different
+  // realistic conditions. Same diarizer commits, different blue-box
+  // streams from the same GT. Catches regressions where a smoother that
+  // works at one noise level breaks at another.
+  console.log();
+  console.log('NOISE SWEEP (same diarizer, varying blue-box noise):');
+  const corporaWithData = results.filter((r) => r.commits && r.gtTurns);
+  for (const scn of SCENARIOS) {
+    let sumCorrect = 0;
+    let sumTotal = 0;
+    for (const r of corporaWithData) {
+      const events = generateBlueBoxStream({ id: r.id, turns: r.gtTurns, total_duration_ms: 0 }, scn.cfg);
+      const { correctMs, totalMs } = computeCollabAccuracy(r.commits, r.segmentPurity, events, scn.cfg.lagMs);
+      sumCorrect += correctMs;
+      sumTotal += totalMs;
+    }
+    const acc = sumTotal > 0 ? sumCorrect / sumTotal : 0;
+    console.log(
+      `  ${scn.name.padEnd(14)}  lag=${scn.cfg.lagMs.toString().padStart(4)}ms  flicker=${scn.cfg.flickersPerMin}/min ` +
+        `(${scn.cfg.flickerMinMs}-${scn.cfg.flickerMaxMs}ms)  →  collab acc = ${(acc * 100).toFixed(1)}%`,
+    );
+  }
+
   return totalUseful === totalCorpora ? 0 : 1;
 }
 
