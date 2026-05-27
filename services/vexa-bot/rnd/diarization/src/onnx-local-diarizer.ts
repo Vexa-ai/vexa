@@ -806,9 +806,62 @@ export class OnnxLocalDiarizer implements Diarizer {
         h.assignedId = labels[i];
       }
     }
+    // Feed the converged refinement centroids back into the live clusterer.
+    // The refinement centroids are a strictly better estimate of each
+    // speaker's voice (recomputed from every assigned commit, not just
+    // EMA-nudged on confident matches) — using them for the next commit's
+    // nearest-cluster lookup makes future assignments sharper.
+    //
+    // Blend with the live centroid via a small mix factor so we don't
+    // completely overwrite if refinement is wrong on one cluster:
+    //   new_live = liveBlend * live + (1 - liveBlend) * refined  (then unit-normalize)
+    const liveBlend = 0.5;
+    const recompute = sumsForRecompute(this.commitHistory, labels, dim);
+    for (const [lab, refined] of recompute) {
+      const live = liveCentroids.get(lab);
+      if (!live) continue;
+      const mixed = new Float32Array(dim);
+      for (let j = 0; j < dim; j++) mixed[j] = liveBlend * live[j] + (1 - liveBlend) * refined[j];
+      let norm = 0;
+      for (let j = 0; j < dim; j++) norm += mixed[j] * mixed[j];
+      norm = Math.sqrt(norm);
+      if (norm < 1e-8) continue;
+      for (let j = 0; j < dim; j++) mixed[j] /= norm;
+      liveCentroids.set(lab, mixed);
+    }
     // Silence unused warning for prevLabels.
     void prevLabels;
   }
+}
+
+/** Helper: recompute refinement centroids (unit-normalized means) for each
+ *  cluster from the given commit-history slice and per-commit labels. */
+function sumsForRecompute(
+  history: Array<{ tStartMs: number; tEndMs: number; emb: Float32Array; assignedId: string }>,
+  labels: string[],
+  dim: number,
+): Map<string, Float32Array> {
+  const sums = new Map<string, Float32Array>();
+  const counts = new Map<string, number>();
+  for (let i = 0; i < history.length; i++) {
+    const lab = labels[i];
+    if (!sums.has(lab)) sums.set(lab, new Float32Array(dim));
+    const s = sums.get(lab)!;
+    const e = history[i].emb;
+    for (let j = 0; j < dim; j++) s[j] += e[j];
+    counts.set(lab, (counts.get(lab) ?? 0) + 1);
+  }
+  const out = new Map<string, Float32Array>();
+  for (const [lab, s] of sums) {
+    let norm = 0;
+    for (let j = 0; j < dim; j++) norm += s[j] * s[j];
+    norm = Math.sqrt(norm);
+    if (norm < 1e-8) continue;
+    const c = new Float32Array(dim);
+    for (let j = 0; j < dim; j++) c[j] = s[j] / norm;
+    out.set(lab, c);
+  }
+  return out;
 }
 
 function computeRms(audio: Float32Array): number {
