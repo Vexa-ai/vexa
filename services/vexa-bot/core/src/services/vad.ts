@@ -74,6 +74,10 @@ export class SileroVAD {
     const fs = require('fs');
 
     const candidates = [
+      // Allow callers outside the bot's container (e.g. RnD harness in
+      // services/vexa-bot/rnd/) to point at the model explicitly.
+      // Empty string falls through to the production candidates below.
+      ...(process.env.SILERO_VAD_PATH ? [process.env.SILERO_VAD_PATH] : []),
       path.resolve(__dirname, '..', '..', 'node_modules', '@jjhbw', 'silero-vad', 'weights', 'silero_vad.onnx'),
       path.resolve(__dirname, '..', '..', '..', 'node_modules', '@jjhbw', 'silero-vad', 'weights', 'silero_vad.onnx'),
       '/app/vexa-bot/core/node_modules/@jjhbw/silero-vad/weights/silero_vad.onnx',

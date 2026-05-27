@@ -180,3 +180,6 @@ tests3/.state-helm
 tests3/.state-*
 
 tests3/.current-stage
+
+# MVP0 harness runtime evidence — regenerated on every harness run
+.agents/packs/pack-msteams-local-diarization-rnd/mvp0/redis-emit-log.jsonl

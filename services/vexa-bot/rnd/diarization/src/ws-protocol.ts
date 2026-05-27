@@ -1,53 +1,73 @@
 /**
  * Wire format between browser pages and the harness.
  *
- * Two WebSocket channels:
- *   ws://host/audio    — capture page → harness; binary PCM frames
- *   ws://host/transcript — harness → dashboard; JSON segment events
+ *   ws://host/audio       — capture page → harness; binary PCM frames
+ *   ws://host/transcript  — harness → dashboard; JSON events
  *
- * AudioFrame protocol (binary):
- *   First 8 bytes : Float64 wall-clock ms (Date.now() when capture chunk arrived)
- *   Rest          : Float32 little-endian PCM samples, 16kHz mono
+ * AudioFrame protocol (binary): Float64 wall-clock ms (8 bytes) +
+ * Float32 little-endian PCM samples, 16 kHz mono.
  *
- * TranscriptEvent (JSON, harness → dashboard):
- *   { kind: "segment", speaker: "speaker_0", t0: number, t1: number, text: string }
- *   { kind: "diarizer-info", name: string, numSpeakers: number }
- *   { kind: "transcription-status", reachable: boolean, url: string, error?: string }
- *   { kind: "speech-state", inSpeech: boolean, speaker: string, ts: number }
+ * The dashboard event shapes mirror the bot's production Redis publish
+ * shapes (see services/vexa-bot/core/src/services/segment-publisher.ts):
+ *   - `TranscriptBundle` matches the bot's `tc:meeting:<id>:mutable` pub/sub
+ *     payload (confirmed[] + pending[] per speaker, atomic update).
+ *   - `SpeakerEventWire` matches the `speaker_events_relative` XADD fields.
+ *   - `SessionStart` / `SessionEnd` mirror the bot's session lifecycle.
+ *
+ * Downstream consumers (dashboard.js, future automated subscribers) read
+ * the same shape they would get from a production bot run. The transport
+ * is WebSocket instead of Redis only because MVP0 skips the Redis broker.
  */
 
-export interface SegmentEvent {
-  kind: 'segment';
+import type { TranscriptionSegment } from '../../../core/src/services/segment-publisher';
+
+export const SAMPLE_RATE = 16000;
+
+export interface SessionInfoEvent {
+  kind: 'session_info';
+  diarizer_name: string;
+  num_speakers: number;
+  session_uid: string;
+  meeting_id: string;
+  platform: string;
+  transcription_url: string;
+  transcription_reachable: boolean;
+  transcription_error?: string;
+}
+
+export interface SessionStartEvent {
+  kind: 'session_start';
+  uid: string;
+  meeting_id: string;
+  platform: string;
+  start_timestamp: string;
+}
+
+export interface SessionEndEvent {
+  kind: 'session_end';
+  uid: string;
+}
+
+export interface TranscriptEvent {
+  kind: 'transcript';
+  meeting_id: string;
   speaker: string;
-  t0: number;
-  t1: number;
-  text: string;
+  confirmed: TranscriptionSegment[];
+  pending: TranscriptionSegment[];
+  ts: string;
 }
 
-export interface DiarizerInfoEvent {
-  kind: 'diarizer-info';
-  name: string;
-  numSpeakers: number;
-}
-
-export interface TranscriptionStatusEvent {
-  kind: 'transcription-status';
-  reachable: boolean;
-  url: string;
-  error?: string;
-}
-
-export interface SpeechStateEvent {
-  kind: 'speech-state';
-  inSpeech: boolean;
+export interface SpeakerEventWire {
+  kind: 'speaker_event';
   speaker: string;
-  ts: number;
+  event_type: 'SPEAKER_START' | 'SPEAKER_END';
+  timestamp_ms: number;
+  relative_ms: number;
 }
 
 export type DashboardEvent =
-  | SegmentEvent
-  | DiarizerInfoEvent
-  | TranscriptionStatusEvent
-  | SpeechStateEvent;
-
-export const SAMPLE_RATE = 16000;
+  | SessionInfoEvent
+  | SessionStartEvent
+  | SessionEndEvent
+  | TranscriptEvent
+  | SpeakerEventWire;

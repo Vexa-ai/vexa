@@ -13,15 +13,16 @@
       --speaker-5: #8c564b;
     }
     body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: #fafafa; color: #111; }
-    header { background: #fff; border-bottom: 1px solid #ddd; padding: 12px 18px; display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap; }
+    header { background: #fff; border-bottom: 1px solid #ddd; padding: 12px 18px; }
     header h1 { margin: 0; font-size: 17px; font-weight: 600; }
-    header .meta { font-size: 13px; color: #555; }
-    header .meta b { color: #111; font-weight: 600; }
+    header .meta-row { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 6px; font-size: 13px; color: #555; }
+    header .meta b { color: #111; font-weight: 600; font-family: ui-monospace, monospace; font-size: 12px; }
     header .pill { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; }
     header .pill.ok  { background: #def7ec; color: #03543f; }
     header .pill.err { background: #fde8e8; color: #9b1c1c; }
-    main { padding: 16px 18px; max-width: 1200px; margin: 0 auto; }
-    .segment { display: grid; grid-template-columns: 110px 90px 1fr; gap: 12px; padding: 8px 10px; border-bottom: 1px solid #eee; align-items: baseline; }
+    main { padding: 12px 18px; max-width: 1200px; margin: 0 auto; }
+    .segment { display: grid; grid-template-columns: 110px 90px 1fr 180px; gap: 12px; padding: 6px 10px; border-bottom: 1px solid #eee; align-items: baseline; }
+    .segment.pending { background: #fffbe6; }
     .segment .ts { font-family: ui-monospace, monospace; font-size: 12px; color: #888; }
     .segment .chip {
       display: inline-block; padding: 2px 10px; border-radius: 12px;
@@ -29,16 +30,22 @@
       text-align: center;
     }
     .segment .text { font-size: 15px; line-height: 1.5; }
+    .segment .meta { font-family: ui-monospace, monospace; font-size: 11px; color: #999; text-align: right; }
     .placeholder { color: #888; font-style: italic; }
+    .session-boundary { padding: 8px 12px; color: #666; font-family: ui-monospace, monospace; font-size: 12px; text-align: center; }
     .empty { color: #888; padding: 32px 12px; text-align: center; }
   </style>
 </head>
 <body>
   <header>
-    <h1>Vexa diarization MVP0 — live</h1>
-    <span class="meta">Diarizer: <b id="diarizer-name">(loading)</b></span>
-    <span class="meta">Speakers: <b id="num-speakers">?</b></span>
-    <span class="meta">Transcription: <span class="pill" id="trx-pill">…</span> <b id="trx-url"></b></span>
+    <h1>Vexa diarization MVP0 — bot-native</h1>
+    <div class="meta-row">
+      <span class="meta">Diarizer: <b id="diarizer-name">(loading)</b></span>
+      <span class="meta">Speakers: <b id="num-speakers">?</b></span>
+      <span class="meta">Transcription: <span class="pill" id="trx-pill">…</span> <b id="trx-url"></b></span>
+      <span class="meta">Session: <b id="session-uid">?</b></span>
+      <span class="meta">Meeting: <b id="meeting-id">?</b></span>
+    </div>
   </header>
   <main>
     <div id="segments"><div class="empty">Waiting for audio. Open <a href="/">/</a> in another tab and share a YouTube tab there.</div></main>
