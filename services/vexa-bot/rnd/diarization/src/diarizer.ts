@@ -36,4 +36,8 @@ export interface Diarizer {
   reset(): void;
   /** Disposable name for logs/dashboard. */
   readonly name: string;
+  /** Optional: transitive cluster-id rewrites accumulated by post-hoc
+   *  merges. Implementations that don't merge clusters can omit this; the
+   *  harness treats `undefined` the same as an empty map. */
+  getLabelRewrites?(): Map<string, string>;
 }

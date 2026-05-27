@@ -40,7 +40,7 @@ import { TranscriptionClient } from '../../../core/src/services/transcription-cl
 import type { TranscriptionSegment } from '../../../core/src/services/segment-publisher';
 
 import { VadRoundRobinDiarizer } from './vad-round-robin-diarizer';
-import { OnnxLocalDiarizer } from './onnx-local-diarizer';
+import { OnnxLocalDiarizer, type CommitEvent } from './onnx-local-diarizer';
 import { JsonlSegmentPublisher, type TranscriptBundle } from './jsonl-segment-publisher';
 import type { Diarizer } from './diarizer';
 import type { DashboardEvent } from './ws-protocol';
@@ -153,6 +153,21 @@ async function main() {
   //   DIARIZER=onnx  → MVP1 OnnxLocalDiarizer (wespeaker-resnet34-LM via
   //                    onnxruntime-node + transformers.js fbank + TS online
   //                    clustering; pure-Node, no Python)
+  // Deferred-routing seam. Set by the audio-WS handler each time a client
+  // connects so per-session state (pendingFrames, the bound speakerManager)
+  // is fresh. The diarizer dispatches commits here via a thin trampoline so
+  // we can swap the closure without recreating the diarizer.
+  //
+  // Why this exists: OnnxLocalDiarizer commits a speaker LABEL only at the
+  // end of an utterance (sometimes seconds after the speaker actually
+  // started). The harness's job is to fan PCM frames to the right per-speaker
+  // Whisper buffer. If we route per-frame using diarizer.lastLabel, every
+  // frame BEFORE the commit lands gets the previous speaker's label — the
+  // "speaker switch lags behind utterance switch" failure from YouTube.
+  // Instead we buffer frames and drain them retroactively when the commit
+  // for their time range arrives.
+  let activeCommitHandler: ((ev: CommitEvent) => void) | null = null;
+
   let diarizer: Diarizer;
   if (DIARIZER === 'onnx') {
     console.log('[harness] DIARIZER=onnx — loading wespeaker ONNX (first run downloads ~25MB from HF)');
@@ -162,7 +177,9 @@ async function main() {
       // once the cap is hit (the MVP1 v1 bug). Let online clustering allocate
       // freely based on the cosine threshold; only set maxSpeakers when the
       // hint comes from a *reliable* source (e.g. confirmed roster, tile count).
-      diarizer = await OnnxLocalDiarizer.create({});
+      diarizer = await OnnxLocalDiarizer.create({
+        onCommit: (ev) => activeCommitHandler?.(ev),
+      });
     } catch (err: any) {
       console.error(`[harness] OnnxLocalDiarizer failed to start: ${err.message}`);
       console.error('[harness] falling back to VadRoundRobinDiarizer stub');
@@ -348,6 +365,66 @@ async function main() {
     publisher.resetSessionStart();
     void publisher.publishSessionStart();
 
+    // Append-only mirror of every frame this session received, in arrival
+    // order. Written to EVIDENCE_DIR/captured-<ts>.wav on disconnect so a
+    // problem session can be replayed offline through the diarizer.
+    const sessionPcmChunks: Float32Array[] = [];
+    let sessionSampleCount = 0;
+    // Per-connection buffer of raw frames awaiting a commit decision. Frames
+    // older than the most-recent commit's tEnd that didn't land inside any
+    // committed range are dropped on the next commit (they were silence or
+    // sub-threshold noise the diarizer chose not to embed).
+    const pendingFrames: Array<{ ts: number; pcm: Float32Array }> = [];
+    // Speakers we've already announced — gated separately from
+    // speakerManager.hasSpeaker because we may want to emit the "joined"
+    // dashboard event at commit time (when the cluster is first observed),
+    // not when the diarizer's lastLabel happens to fall on a fresh ID.
+    const announcedSpeakers = new Set<string>();
+
+    const announce = (speakerId: string, atMs: number) => {
+      if (announcedSpeakers.has(speakerId)) return;
+      announcedSpeakers.add(speakerId);
+      if (!speakerManager.hasSpeaker(speakerId)) {
+        speakerManager.addSpeaker(speakerId, speakerId);
+      }
+      void publisher.publishSpeakerEvent({
+        speaker: speakerId,
+        type: 'joined',
+        timestamp: atMs,
+      });
+      broadcast({
+        kind: 'speaker_event',
+        speaker: speakerId,
+        event_type: 'SPEAKER_START',
+        timestamp_ms: atMs,
+        relative_ms: atMs - publisher.sessionStartMs,
+      });
+    };
+
+    activeCommitHandler = (ev) => {
+      // Resolve label rewrites transitively — a commit's speakerId may
+      // already be aliased by an earlier mergeClose() pass.
+      let resolved = ev.speakerId;
+      const rewrites = diarizer.getLabelRewrites?.() ?? new Map<string, string>();
+      while (rewrites.has(resolved)) resolved = rewrites.get(resolved)!;
+
+      announce(resolved, ev.tStartMs);
+
+      // Drain pendingFrames in time order. Frames inside [tStartMs, tEndMs]
+      // are routed to this speaker's stream; frames before tStartMs are
+      // dropped (silence / non-speech the diarizer chose not to embed).
+      let i = 0;
+      while (i < pendingFrames.length) {
+        const pf = pendingFrames[i];
+        if (pf.ts > ev.tEndMs) break;
+        if (pf.ts >= ev.tStartMs) {
+          speakerManager.feedAudio(resolved, pf.pcm);
+        }
+        i++;
+      }
+      if (i > 0) pendingFrames.splice(0, i);
+    };
+
     ws.on('message', async (data, isBinary) => {
       if (!isBinary || !(data instanceof Buffer)) return;
       if (data.byteLength < 8) return;
@@ -357,27 +434,41 @@ async function main() {
       const frame = new Float32Array(numSamples);
       for (let i = 0; i < numSamples; i++) frame[i] = data.readFloatLE(8 + i * 4);
 
-      try {
-        // THE seam — replaces the Teams caption-DOM routing step.
-        const { speakerId, speakerName } = await diarizer.process(frame, wallClockMs);
+      // Mirror every frame for offline replay. Stored as Float32 in-memory;
+      // serialized to 16-bit PCM wav on session close.
+      sessionPcmChunks.push(frame);
+      sessionSampleCount += frame.length;
 
-        // From here down: bot code unchanged.
-        if (!speakerManager.hasSpeaker(speakerId)) {
-          speakerManager.addSpeaker(speakerId, speakerName);
-          await publisher.publishSpeakerEvent({
-            speaker: speakerName,
-            type: 'joined',
-            timestamp: wallClockMs,
-          });
-          broadcast({
-            kind: 'speaker_event',
-            speaker: speakerName,
-            event_type: 'SPEAKER_START',
-            timestamp_ms: wallClockMs,
-            relative_ms: wallClockMs - publisher.sessionStartMs,
-          });
+      try {
+        if (DIARIZER === 'onnx') {
+          // Deferred routing: buffer the frame and let the diarizer's
+          // onCommit drain it once a speaker label is decided.
+          pendingFrames.push({ ts: wallClockMs, pcm: frame });
+          // Soft cap to avoid unbounded growth if the diarizer never
+          // commits (e.g. continuous silence). 60s at 16kHz/1024-sample
+          // frames ≈ 940 entries.
+          if (pendingFrames.length > 1500) pendingFrames.splice(0, pendingFrames.length - 1500);
+          await diarizer.process(frame, wallClockMs);
+        } else {
+          // Stub diarizer (VAD round-robin) doesn't commit; route per-frame.
+          const { speakerId, speakerName } = await diarizer.process(frame, wallClockMs);
+          if (!speakerManager.hasSpeaker(speakerId)) {
+            speakerManager.addSpeaker(speakerId, speakerName);
+            await publisher.publishSpeakerEvent({
+              speaker: speakerName,
+              type: 'joined',
+              timestamp: wallClockMs,
+            });
+            broadcast({
+              kind: 'speaker_event',
+              speaker: speakerName,
+              event_type: 'SPEAKER_START',
+              timestamp_ms: wallClockMs,
+              relative_ms: wallClockMs - publisher.sessionStartMs,
+            });
+          }
+          speakerManager.feedAudio(speakerId, frame);
         }
-        speakerManager.feedAudio(speakerId, frame);
       } catch (err: any) {
         console.error('[harness] processFrame error:', err.message);
       }
@@ -385,6 +476,27 @@ async function main() {
 
     ws.on('close', async () => {
       console.log('[harness] audio client disconnected — flushing speaker buffers');
+      // Detach the commit handler before flushing so a late commit from
+      // diarizer.flush() / future GC doesn't try to feed audio into a
+      // half-removed speakerManager.
+      activeCommitHandler = null;
+      pendingFrames.length = 0;
+
+      // Dump captured PCM for offline replay.
+      if (sessionSampleCount > SAMPLE_RATE) {
+        try {
+          const fsMod = await import('fs/promises');
+          await fsMod.mkdir(EVIDENCE_DIR, { recursive: true });
+          const wavPath = path.join(EVIDENCE_DIR, `captured-${Date.now()}.wav`);
+          const wav = encodeWav16kMono(sessionPcmChunks, sessionSampleCount);
+          await fsMod.writeFile(wavPath, wav);
+          console.log(`[harness] captured PCM → ${wavPath} (${(sessionSampleCount / SAMPLE_RATE).toFixed(1)}s)`);
+        } catch (err: any) {
+          console.error('[harness] capture-wav write failed:', err.message);
+        }
+      }
+      sessionPcmChunks.length = 0;
+      sessionSampleCount = 0;
       // Final flush — matches production's cleanup path.
       const activeSpeakers = speakerManager.getActiveSpeakers();
       for (const speakerId of activeSpeakers) {
@@ -426,6 +538,34 @@ async function main() {
     console.log(`[harness]   dashboard: http://localhost:${PORT}/dashboard`);
     console.log(`[harness]   redis-emit-log: ${jsonlPath}`);
   });
+}
+
+/** Serialize float PCM chunks to a single 16-bit little-endian WAV (16kHz mono). */
+function encodeWav16kMono(chunks: Float32Array[], totalSamples: number): Buffer {
+  const byteLen = totalSamples * 2;
+  const buf = Buffer.alloc(44 + byteLen);
+  buf.write('RIFF', 0, 'ascii');
+  buf.writeUInt32LE(36 + byteLen, 4);
+  buf.write('WAVE', 8, 'ascii');
+  buf.write('fmt ', 12, 'ascii');
+  buf.writeUInt32LE(16, 16);
+  buf.writeUInt16LE(1, 20);
+  buf.writeUInt16LE(1, 22);
+  buf.writeUInt32LE(SAMPLE_RATE, 24);
+  buf.writeUInt32LE(SAMPLE_RATE * 2, 28);
+  buf.writeUInt16LE(2, 32);
+  buf.writeUInt16LE(16, 34);
+  buf.write('data', 36, 'ascii');
+  buf.writeUInt32LE(byteLen, 40);
+  let off = 44;
+  for (const chunk of chunks) {
+    for (let i = 0; i < chunk.length; i++) {
+      const s = Math.max(-1, Math.min(1, chunk[i]));
+      buf.writeInt16LE(Math.round(s * 32767), off);
+      off += 2;
+    }
+  }
+  return buf;
 }
 
 main().catch((err) => {

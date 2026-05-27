@@ -50,6 +50,9 @@ export interface OnnxLocalDiarizerConfig {
    *  Lower → more conservative (don't split same voice); higher → more
    *  aggressive splitting. Tuned for fp32 wespeaker-resnet34-LM on tab audio. */
   newSpeakerThreshold?: number;
+  /** "Clearly different voice" override for short utterances that can't pass
+   *  the seed gate. See OnlineSpeakerClusteringConfig.veryFarThreshold. */
+  veryFarThreshold?: number;
   /** Min utterance length to *cluster* (i.e. emit a label). Default 600 ms. */
   minUtteranceMs?: number;
   /** Min utterance length to *seed a brand new centroid*. Stricter than
@@ -90,6 +93,12 @@ export interface OnnxLocalDiarizerConfig {
   peekIntervalMs?: number;
   peekWindowMs?: number;
   peekConfidenceThreshold?: number;
+  /** Cooldown after a new cluster is allocated: no further new clusters can
+   *  be allocated until this much audio time has elapsed. Suppresses the
+   *  "chaotic transition → 4 new clusters in 4 seconds" pattern observed
+   *  on live YouTube where overlap/audio-glitches produce a short stretch
+   *  of unreliable embeddings. Default 4000 ms; set to 0 to disable. */
+  newClusterCooldownMs?: number;
   /** Optional callback fired on every committed utterance (after embedding +
    *  cluster assignment). Used by the eval pipeline to capture diarizer
    *  decisions without parsing console.log. Fields:
@@ -138,6 +147,11 @@ export class OnnxLocalDiarizer implements Diarizer {
   private readonly peekWindowSamples: number;
   private readonly peekConfidenceThreshold: number;
   private samplesAtLastPeek = 0;
+  private readonly newClusterCooldownMs: number;
+  /** Wall-clock-style timestamp of the last new-cluster allocation, in the
+   *  same timebase as utteranceStartTs. Initialized to -Infinity so the
+   *  first allocation isn't blocked. */
+  private lastNewClusterTs = -Infinity;
 
   /** Audio of the current utterance — appended on each speech frame, embedded
    *  + cleared on each silence transition. */
@@ -182,12 +196,13 @@ export class OnnxLocalDiarizer implements Diarizer {
       // meaning the embedding is distinctively close to nothing, OR
       // (b) very-far-from-everything (≥ veryFarThreshold).
       newSpeakerThreshold: cfg.newSpeakerThreshold ?? 0.45,
+      veryFarThreshold: cfg.veryFarThreshold,
       maxSpeakers: cfg.maxSpeakers,
     });
-    // 500ms. minUtt=1000 dropped too much (short turns went unembedded
-    // entirely → kept previous label → wrong attribution for panel_b's
-    // many short turns). Iter 8 settings (500/3000/4000/200) gave the
-    // best useful-metric score so far (3/4).
+    // 500ms. Tried 300ms: too noisy — every brief speech burst got embedded,
+    // producing flapping labels and (despite cooldown) too many short-window
+    // clusters. The visible responsiveness win comes from the periodic
+    // peek at 250 ms, which is read-only and doesn't allocate clusters.
     this.minUtteranceSamples = Math.floor(((cfg.minUtteranceMs ?? 500) / 1000) * SAMPLE_RATE);
     this.minSeedUtteranceSamples = Math.floor(((cfg.minSeedUtteranceMs ?? 3000) / 1000) * SAMPLE_RATE);
     // With change-point detection active, allow longer utterances. The
@@ -212,14 +227,16 @@ export class OnnxLocalDiarizer implements Diarizer {
     this.changePointCheckIntervalSamples = Math.floor(((cfg.changePointCheckIntervalMs ?? 2000) / 1000) * SAMPLE_RATE);
     this.changePointHeadTailSamples = Math.floor(((cfg.changePointHeadTailMs ?? 1500) / 1000) * SAMPLE_RATE);
     this.changePointDistThreshold = cfg.changePointDistThreshold ?? 0.45;
-    // Periodic peek defaults: 500 ms cadence, 1000 ms window, 0.40 threshold.
-    // The window is shorter than the change-point detector's head/tail (1.5s)
-    // because peek is just a label refresh — we don't need maximum stability,
-    // we need responsiveness. 0.40 is stricter than newSpeakerThreshold to
-    // avoid flapping the label on borderline embeddings.
-    this.peekIntervalSamples = Math.floor(((cfg.peekIntervalMs ?? 500) / 1000) * SAMPLE_RATE);
-    this.peekWindowSamples = Math.floor(((cfg.peekWindowMs ?? 1000) / 1000) * SAMPLE_RATE);
+    // Periodic peek defaults: 250 ms cadence, 750 ms window, 0.40 threshold.
+    // Tighter than the previous 500/1000 — label refresh visibly lagged on
+    // YouTube when peek fired only twice a second. 250 ms gives 4 label
+    // updates per second; 750 ms window is still enough for stable nearest-
+    // cluster lookup. 0.40 is stricter than newSpeakerThreshold to avoid
+    // flapping the label on borderline embeddings.
+    this.peekIntervalSamples = Math.floor(((cfg.peekIntervalMs ?? 250) / 1000) * SAMPLE_RATE);
+    this.peekWindowSamples = Math.floor(((cfg.peekWindowMs ?? 750) / 1000) * SAMPLE_RATE);
     this.peekConfidenceThreshold = cfg.peekConfidenceThreshold ?? 0.40;
+    this.newClusterCooldownMs = cfg.newClusterCooldownMs ?? 2000;
   }
 
   static async create(cfg: OnnxLocalDiarizerConfig = {}): Promise<OnnxLocalDiarizer> {
@@ -545,7 +562,19 @@ export class OnnxLocalDiarizer implements Diarizer {
       }
       this.lastUtteranceEmb = emb;
 
-      const assignment = this.clustering.assignWithSeedGate(emb, canSeedNew);
+      // Cooldown gate: don't allocate a new cluster within
+      // newClusterCooldownMs of the previous one. This is a temporal
+      // rate-limit that suppresses the "chaotic transition → 4 spurious
+      // clusters in 4 seconds" pattern. The utterance still gets matched
+      // to the nearest existing cluster — we just don't mint a new ID for
+      // it. Real new speakers settle in within a few seconds and their
+      // next utterance (after cooldown) will properly seed.
+      const utteranceEndTsForCooldown = utteranceTs! + Math.round((combined.length / SAMPLE_RATE) * 1000);
+      const allowNewCluster = (utteranceEndTsForCooldown - this.lastNewClusterTs) >= this.newClusterCooldownMs;
+      const assignment = this.clustering.assignWithSeedGate(emb, canSeedNew, allowNewCluster);
+      if (assignment.isNew) {
+        this.lastNewClusterTs = utteranceEndTsForCooldown;
+      }
       // Post-assignment: try to merge close clusters. If a brand-new cluster
       // was just allocated but it's actually within mergeThreshold of an
       // existing cluster, merge happens transparently here.
@@ -599,6 +628,7 @@ export class OnnxLocalDiarizer implements Diarizer {
     this.silenceSampleAccumulator = 0;
     this.lastLabel = { speakerId: 'speaker_0', speakerName: 'speaker_0' };
     this.lastUtteranceEmb = null;
+    this.lastNewClusterTs = -Infinity;
     this.labelRewrites.clear();
     this.clustering.reset();
   }

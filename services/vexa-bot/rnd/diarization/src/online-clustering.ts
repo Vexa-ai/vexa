@@ -48,16 +48,25 @@ export class OnlineSpeakerClustering {
 
   constructor(cfg: OnlineSpeakerClusteringConfig = {}) {
     this.threshold = cfg.newSpeakerThreshold ?? 0.45;
-    // Calibrated empirically against the 4-corpus eval suite:
+    // Calibrated against synthetic Piper suite + captured live YouTube audio:
     //   - 0.60 was too loose: noisy overlap embeddings landed at dist 0.60+
     //     from the speaker's own centroid → spurious cluster allocations
     //     (5speakers-meeting bob split into 4).
     //   - 1.5 (disabled) was too tight: short genuinely-different-voice
     //     utterances (intro guest 2.37s commit @ dist 0.908) couldn't seed
     //     and got force-matched to the wrong cluster.
-    //   - 0.85 keeps both: genuine new-voice short utts (dist ~0.9) bypass
-    //     the seed gate; in-cluster noisy short utts (dist ~0.5-0.7) match.
-    this.veryFarThreshold = cfg.veryFarThreshold ?? 0.85;
+    //   - 0.85 worked for Piper (different-speaker dist 0.85+) but on
+    //     AudioWorklet-decimated YouTube audio the different-speaker cliff
+    //     compresses to 0.70-0.85: a 5.6s second-voice stretch was stuck on
+    //     speaker_0 at centroid_dist=0.83 because it never crossed 0.85.
+    //   - 0.70: regressed Piper 5speakers-meeting (over-allocated 7 for 5 GT).
+    //   - 0.75: caught some real-world different voices but still missed
+    //     short transition utterances sitting at 0.55-0.70.
+    //   - 0.55: catches the YouTube transition case (cd=0.669 td=0.854 was
+    //     misrouted) — over-allocation now prevented by the diarizer's
+    //     temporal cooldown (newClusterCooldownMs) so short noisy chains
+    //     can't mint 4 clusters in 4s anymore.
+    this.veryFarThreshold = cfg.veryFarThreshold ?? 0.65;
     this.emaAlpha = cfg.emaAlpha ?? 0.85;
     this.maxSpeakers = cfg.maxSpeakers;
   }
@@ -89,10 +98,17 @@ export class OnlineSpeakerClustering {
    * embedding ALWAYS gets matched to the nearest existing centroid no
    * matter the distance (used for short utterances whose embeddings are
    * too noisy to safely allocate a new speaker from).
+   *
+   * `allowNewCluster` is a second gate: when false, even seed-eligible
+   * utterances are forced into nearest. Used by the diarizer to enforce a
+   * temporal cooldown right after a new cluster was just allocated — during
+   * chaotic transitions (overlap, audio glitches) the embeddings produced
+   * by short change-point tails can spuriously seed multiple clusters in
+   * quick succession. Defaults to true.
    */
-  assignWithSeedGate(embedding: Float32Array, canSeedNew: boolean): ClusterAssignment {
+  assignWithSeedGate(embedding: Float32Array, canSeedNew: boolean, allowNewCluster = true): ClusterAssignment {
     if (this.centroids.size === 0) {
-      if (!canSeedNew) {
+      if (!canSeedNew || !allowNewCluster) {
         // No centroids yet AND caller said "don't seed" — fall back to
         // speaker_0 without storing a centroid. The next eligible utterance
         // will properly seed speaker_0.
@@ -137,7 +153,7 @@ export class OnlineSpeakerClustering {
     const hasGap = (this.centroids.size < 2) ||
                    (secondNearestDist - nearestDist >= gapMargin) ||
                    (nearestDist >= this.veryFarThreshold);
-    const canAllocateNew = (canSeedNew || veryFarOverride) && underCap && hasGap;
+    const canAllocateNew = (canSeedNew || veryFarOverride) && underCap && hasGap && allowNewCluster;
     if (nearestDist < this.threshold || !canAllocateNew) {
       // Assign to existing speaker; update centroid via EMA, re-normalize.
       // Only update the centroid if this was actually a CONFIDENT match
