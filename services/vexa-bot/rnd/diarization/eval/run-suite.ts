@@ -206,6 +206,22 @@ async function main(): Promise<number> {
       }
       console.log(`[suite]   applied ${rewrites.size} merge rewrite(s)`);
     }
+    // Per-commit refinement rewrites (post-hoc re-evaluation of each
+    // commit against the stabilized centroid set). Distinct from the
+    // cluster-level rewrites above — these target individual commits.
+    const commitRewrites = (diarizer as any).getCommitRewrites?.() as Map<string, string> | undefined;
+    if (commitRewrites && commitRewrites.size > 0) {
+      let n = 0;
+      for (const c of commits) {
+        const key = `${c.tStartMs}-${c.tEndMs}`;
+        const target = commitRewrites.get(key);
+        if (target && target !== c.speakerId) {
+          c.speakerId = target;
+          n++;
+        }
+      }
+      console.log(`[suite]   applied ${n} per-commit refinement(s)`);
+    }
     // Persist harness output so /corpus browser shows it
     await fs.writeFile(
       path.join(CORPUS_DIR, `${id}.harness-output.json`),
@@ -256,8 +272,30 @@ async function main(): Promise<number> {
     totalCorpora++;
     if (r.useful) totalUseful++;
   }
+  // Aggregate score for autonomous tuning. Two numbers:
+  //   - meanCoverage: average primary-cluster coverage across every GT
+  //     speaker across every corpus. 1.00 = perfect (every speaker's
+  //     audio entirely on one cluster). Sub-second-precision feedback
+  //     for "did this knob help?".
+  //   - strictCorpora: how many corpora hit strict pass (every GT speaker
+  //     → exactly one cluster). 6/6 = the user-asked-for "perfect".
+  let speakerCount = 0;
+  let coverageSum = 0;
+  let strictCorpora = 0;
+  for (const r of results) {
+    const strict = r.splitCount === 0;
+    if (strict) strictCorpora++;
+    for (const p of r.primary.values()) {
+      speakerCount++;
+      // Cap at 1.00 — coverage can exceed when GT turn times overlap
+      // multiple commits (e.g. "alex 116%" in interruptions-2speakers).
+      coverageSum += Math.min(1, p.coverage);
+    }
+  }
+  const meanCoverage = speakerCount > 0 ? coverageSum / speakerCount : 0;
   console.log();
-  console.log(`OVERALL  useful=${totalUseful}/${totalCorpora}  ${totalUseful === totalCorpora ? '✓ ALL USEFUL' : 'still has broken corpora'}`);
+  console.log(`OVERALL  useful=${totalUseful}/${totalCorpora}  strict=${strictCorpora}/${totalCorpora}  meanCoverage=${(meanCoverage * 100).toFixed(1)}%  ${strictCorpora === totalCorpora ? '✓✓ ALL STRICT' : totalUseful === totalCorpora ? '✓ ALL USEFUL' : 'still has broken corpora'}`);
+  console.log(`SCORE  strict=${strictCorpora}  useful=${totalUseful}  meanCov=${(meanCoverage * 100).toFixed(1)}`);
   return totalUseful === totalCorpora ? 0 : 1;
 }
 

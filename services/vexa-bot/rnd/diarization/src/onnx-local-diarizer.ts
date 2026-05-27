@@ -177,6 +177,17 @@ export class OnnxLocalDiarizer implements Diarizer {
    *  mapping so consumers can rewrite past commit labels. Resolved
    *  transitively: if A→B then later B→C, lookups for A return C. */
   private labelRewrites = new Map<string, string>();
+  /** Stored commit history for post-hoc refinement. Every commit pushes
+   *  its embedding here; after each new commit, we re-evaluate past
+   *  commits against the current centroids and update assignedId if the
+   *  nearest cluster has changed meaningfully. Bounded to avoid unbounded
+   *  growth on long sessions (oldest committed commits drop). */
+  private commitHistory: Array<{ tStartMs: number; tEndMs: number; emb: Float32Array; assignedId: string }> = [];
+  private static readonly COMMIT_HISTORY_LIMIT = 256;
+  /** Per-commit rewrites discovered by post-hoc refinement. Keyed by
+   *  composite `${tStartMs}-${tEndMs}` since CommitEvents don't carry a
+   *  separate ID. Read by harness/eval through getCommitRewrites(). */
+  private commitRewrites = new Map<string, string>();
 
   private readonly onCommit?: (ev: CommitEvent) => void;
 
@@ -227,7 +238,7 @@ export class OnnxLocalDiarizer implements Diarizer {
     //     halves are the same speaker continuing
     this.changePointCheckIntervalSamples = Math.floor(((cfg.changePointCheckIntervalMs ?? 2000) / 1000) * SAMPLE_RATE);
     this.changePointHeadTailSamples = Math.floor(((cfg.changePointHeadTailMs ?? 1500) / 1000) * SAMPLE_RATE);
-    this.changePointDistThreshold = cfg.changePointDistThreshold ?? 0.45;
+    this.changePointDistThreshold = cfg.changePointDistThreshold ?? 0.50;
     // Periodic peek defaults: 250 ms cadence, 750 ms window, 0.40 threshold.
     // Tighter than the previous 500/1000 — label refresh visibly lagged on
     // YouTube when peek fired only twice a second. 250 ms gives 4 label
@@ -577,14 +588,21 @@ export class OnnxLocalDiarizer implements Diarizer {
       // next utterance (after cooldown) will properly seed.
       const utteranceEndTsForCooldown = utteranceTs! + Math.round((combined.length / SAMPLE_RATE) * 1000);
       const allowNewCluster = (utteranceEndTsForCooldown - this.lastNewClusterTs) >= this.newClusterCooldownMs;
-      const assignment = this.clustering.assignWithSeedGate(emb, canSeedNew, allowNewCluster);
+      // Stickiness hook (bias matching toward the previous commit's cluster
+      // when distances are close). Currently disabled (bias=0) — empirical
+      // suite sweeps showed no positive effect because the previous
+      // commit's cluster is wrong about half the time during heavy
+      // interleaving. The API is kept for future tuning against richer
+      // corpora that exhibit longer same-speaker continuations.
+      const stickyHint = this.lastLabel?.speakerId ?? null;
+      const assignment = this.clustering.assignWithSeedGate(emb, canSeedNew, allowNewCluster, stickyHint, 0);
       if (assignment.isNew) {
         this.lastNewClusterTs = utteranceEndTsForCooldown;
       }
       // Post-assignment: try to merge close clusters. If a brand-new cluster
       // was just allocated but it's actually within mergeThreshold of an
       // existing cluster, merge happens transparently here.
-      const merges = this.clustering.mergeClose(0.20);
+      const merges = this.clustering.mergeClose(0.30);
       for (const [oldId, keptId] of merges) {
         // Compose with existing rewrites: if keptId is itself remapped, walk through.
         let target = keptId;
@@ -620,6 +638,23 @@ export class OnnxLocalDiarizer implements Diarizer {
         dbSize: this.clustering.size(),
         seedAllowed: canSeedNew,
       });
+      // Push into bounded commit history for post-hoc refinement.
+      this.commitHistory.push({
+        tStartMs: utteranceStartMs,
+        tEndMs: utteranceEndMs,
+        emb,
+        assignedId: finalSpeakerId,
+      });
+      if (this.commitHistory.length > OnnxLocalDiarizer.COMMIT_HISTORY_LIMIT) {
+        this.commitHistory.shift();
+      }
+      // Post-hoc refinement: now that this commit may have refined a
+      // centroid (or allocated a new cluster), re-evaluate every past
+      // commit. If a past commit's nearest centroid (resolved through
+      // rewrites) is now a different cluster AND the new nearest dist is
+      // meaningfully smaller (>= refinementDeltaMin), rewrite the
+      // commit's label. Caps the search to recent history (LIMIT above).
+      this.refineCommitHistory();
       // Label-emit latency: the user-perceived "how long after this
       // utterance started did we publish a speaker label for it?". Measured
       // as commit-time minus utterance-start in audio-frame timebase. With
@@ -650,6 +685,8 @@ export class OnnxLocalDiarizer implements Diarizer {
     this.lastUtteranceEmb = null;
     this.lastNewClusterTs = -Infinity;
     this.labelRewrites.clear();
+    this.commitHistory.length = 0;
+    this.commitRewrites.clear();
     this.clustering.reset();
   }
 
@@ -659,6 +696,58 @@ export class OnnxLocalDiarizer implements Diarizer {
    *  speaker. Resolves transitive rewrites: A→B then B→C → looking up A returns C. */
   getLabelRewrites(): Map<string, string> {
     return new Map(this.labelRewrites);
+  }
+
+  /** Per-commit rewrites discovered by post-hoc refinement, keyed by
+   *  `${tStartMs}-${tEndMs}`. Distinct from getLabelRewrites which maps
+   *  clusters → clusters; this maps individual commits to (possibly
+   *  different) cluster IDs after re-evaluation against later-stabilized
+   *  centroids. The eval pipeline applies this to each commit during
+   *  alignment so misrouted-then-refined commits get the corrected label. */
+  getCommitRewrites(): Map<string, string> {
+    return new Map(this.commitRewrites);
+  }
+
+  private commitKey(tStartMs: number, tEndMs: number): string {
+    return `${tStartMs}-${tEndMs}`;
+  }
+
+  /** Re-evaluate every commit in history against the current centroid set.
+   *  When a commit's nearest centroid differs from its assignedId AND the
+   *  new nearestDist is at least `refinementDeltaMin` smaller than the old
+   *  one, rewrite the commit's label. The delta guard prevents thrashing:
+   *  borderline same-distance reassignments don't fire. Operates O(history
+   *  × centroids); both are small (≤256 commits, ≤~10 centroids). */
+  private refineCommitHistory(): void {
+    const refinementDeltaMin = 0.05;
+    for (const h of this.commitHistory) {
+      // Compute nearest among current centroids.
+      let bestId = '';
+      let bestDist = Infinity;
+      let assignedDist = Infinity;
+      // Resolve assignedId through cluster-level rewrites.
+      let assignedResolved = h.assignedId;
+      while (this.labelRewrites.has(assignedResolved)) assignedResolved = this.labelRewrites.get(assignedResolved)!;
+      for (const [id, centroid] of (this.clustering as any).centroids as Map<string, Float32Array>) {
+        let dot = 0;
+        for (let i = 0; i < h.emb.length; i++) dot += h.emb[i] * centroid[i];
+        const d = 1 - dot;
+        if (d < bestDist) {
+          bestDist = d;
+          bestId = id;
+        }
+        if (id === assignedResolved) assignedDist = d;
+      }
+      // If no current centroid matches the assignment (e.g., it was merged
+      // out), assignedDist stays Infinity — definitely rewrite.
+      if (bestId && bestId !== assignedResolved && bestDist + refinementDeltaMin <= assignedDist) {
+        // Resolve bestId through cluster-level rewrites in case it's an alias.
+        let target = bestId;
+        while (this.labelRewrites.has(target)) target = this.labelRewrites.get(target)!;
+        this.commitRewrites.set(this.commitKey(h.tStartMs, h.tEndMs), target);
+        h.assignedId = target;
+      }
+    }
   }
 }
 

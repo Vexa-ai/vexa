@@ -67,7 +67,7 @@ export class OnlineSpeakerClustering {
     //     temporal cooldown (newClusterCooldownMs) so short noisy chains
     //     can't mint 4 clusters in 4s anymore.
     this.veryFarThreshold = cfg.veryFarThreshold ?? 0.65;
-    this.emaAlpha = cfg.emaAlpha ?? 0.85;
+    this.emaAlpha = cfg.emaAlpha ?? 0.70;
     this.maxSpeakers = cfg.maxSpeakers;
   }
 
@@ -106,7 +106,21 @@ export class OnlineSpeakerClustering {
    * by short change-point tails can spuriously seed multiple clusters in
    * quick succession. Defaults to true.
    */
-  assignWithSeedGate(embedding: Float32Array, canSeedNew: boolean, allowNewCluster = true): ClusterAssignment {
+  /**
+   * Optional "stickiness" bias toward a hint cluster ID. When set, the
+   * nearest-cluster lookup subtracts `stickyBias` from that cluster's
+   * distance before comparing. Used by the diarizer to bias matching
+   * toward the previous-commit's cluster when distances are similar,
+   * since voices don't typically flip back and forth utterance-by-
+   * utterance. Set to 0 to disable.
+   */
+  assignWithSeedGate(
+    embedding: Float32Array,
+    canSeedNew: boolean,
+    allowNewCluster = true,
+    stickyHintId: string | null = null,
+    stickyBias = 0,
+  ): ClusterAssignment {
     if (this.centroids.size === 0) {
       if (!canSeedNew || !allowNewCluster) {
         // No centroids yet AND caller said "don't seed" — fall back to
@@ -119,21 +133,31 @@ export class OnlineSpeakerClustering {
       return { speakerId: id, distance: 0, isNew: true };
     }
 
-    // Compute all distances, find nearest AND second-nearest.
+    // Compute all distances, find nearest AND second-nearest. Apply
+    // stickyBias to the hint cluster's distance: nearestDist comparisons
+    // see (true_dist - stickyBias) for the hint; the assignment-side
+    // distances we report stay TRUE (no bias) so downstream gates and
+    // logs see the real cosine distance.
     let nearestId = '';
     let nearestDist = Infinity;
+    let nearestTrueDist = Infinity;
     let secondNearestDist = Infinity;
     for (const [id, centroid] of this.centroids) {
       const dot = dotProduct(embedding, centroid);
-      const dist = 1 - dot;
+      const trueDist = 1 - dot;
+      const dist = id === stickyHintId && stickyBias > 0 ? Math.max(0, trueDist - stickyBias) : trueDist;
       if (dist < nearestDist) {
         secondNearestDist = nearestDist;
         nearestDist = dist;
+        nearestTrueDist = trueDist;
         nearestId = id;
       } else if (dist < secondNearestDist) {
         secondNearestDist = dist;
       }
     }
+    // From here on, `nearestDist` is the (possibly biased) value used for
+    // gating; we use `nearestTrueDist` whenever we record/log the cosine
+    // distance to the assigned centroid.
 
     const underCap = this.maxSpeakers == null || this.centroids.size < this.maxSpeakers;
     // Very-far override: short utterance whose distance to nearest is very
@@ -163,7 +187,8 @@ export class OnlineSpeakerClustering {
       // (overlap, short utterance, room change) and shouldn't drift the
       // centroid even if the assignment is correct.
       const oldCentroid = this.centroids.get(nearestId)!;
-      if (nearestDist < 0.25) {
+      // Use TRUE distance for the centroid-update gate (don't bias).
+      if (nearestTrueDist < 0.25) {
         const updated = new Float32Array(oldCentroid.length);
         for (let i = 0; i < updated.length; i++) {
           updated[i] = this.emaAlpha * oldCentroid[i] + (1 - this.emaAlpha) * embedding[i];
@@ -171,13 +196,13 @@ export class OnlineSpeakerClustering {
         normalizeInPlace(updated);
         this.centroids.set(nearestId, updated);
       }
-      return { speakerId: nearestId, distance: nearestDist, isNew: false };
+      return { speakerId: nearestId, distance: nearestTrueDist, isNew: false };
     }
 
     // Allocate a fresh speaker.
     const newId = `speaker_${this.centroids.size}`;
     this.centroids.set(newId, copyAndNormalize(embedding));
-    return { speakerId: newId, distance: nearestDist, isNew: true };
+    return { speakerId: newId, distance: nearestTrueDist, isNew: true };
   }
 
   /** Read-only "nearest cluster" lookup — does NOT modify any state.
