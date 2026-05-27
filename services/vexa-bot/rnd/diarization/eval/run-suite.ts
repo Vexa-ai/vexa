@@ -86,8 +86,186 @@ interface CorpusResult {
   passCount: number;
   splitCount: number;
   /** "Useful" outcome: all GT speakers have a unique primary cluster AND
-   *  every primary coverage ≥ 0.60. Real-world good enough. */
+   *  every primary coverage ≥ 0.60. Kept for back-compat. */
   useful: boolean;
+  /** Raw commits (post-label-rewrite). Used by boundary metrics. */
+  commits: CommitEvent[];
+  /** GT turn list (start/end/speaker). Used by boundary metrics. */
+  gtTurns: GroundTruth['turns'];
+  /** Per-commit segment purity. Each commit's audio time may overlap
+   *  multiple GT speakers (a "straddle" = missed split). Pure fraction =
+   *  dominant_speaker_overlap / total_commit_overlap. 1.0 = pure. */
+  segmentPurity: Array<{
+    tStartMs: number;
+    tEndMs: number;
+    dominantSpeaker: string;
+    purity: number;
+    overlapMs: number;
+  }>;
+  /** Collaborative attribution: per commit, the speaker assigned by
+   *  blue-box majority vote inside the commit's window (shifted by lag).
+   *  Then per GT speaker: total correctly-attributed audio time. */
+  collabAccuracy: number;
+  collabPerCommit: Array<{
+    tStartMs: number;
+    tEndMs: number;
+    bluebox: string | null;
+    truth: string;
+    correct: boolean;
+  }>;
+}
+
+/**
+ * Synthetic blue-box stream.
+ *
+ * Models the MS Teams "who's-talking-now" UI indicator the bot would
+ * otherwise scrape. Realistic properties:
+ *
+ *   - LAG: when a speaker starts at T, the blue box lights at T + lagMs.
+ *     We use a fixed lag for the ground-truth turn boundaries; the END of
+ *     the lit interval also shifts by lagMs (the box stays lit a beat after
+ *     speech ends).
+ *
+ *   - FLICKER: occasionally an unrelated speaker's mic activates the wrong
+ *     box for a short window (200–500 ms). Models open-mic / cough /
+ *     room-noise capture that briefly hijacks the DOM signal.
+ *
+ *   - GAP: blue boxes can be momentarily UNLIT (no one), e.g. during a
+ *     silence or a too-quiet utterance.
+ *
+ * The stream is a sorted list of `(ts, speaker|null)` switch events.
+ * Lookups are: "what speaker was lit at time T?" via binary search.
+ */
+interface BlueBoxEvent {
+  ts: number;
+  speaker: string | null;
+}
+
+interface BlueBoxConfig {
+  lagMs: number;
+  /** Average flickers per minute of speech. */
+  flickersPerMin: number;
+  flickerMinMs: number;
+  flickerMaxMs: number;
+  /** Deterministic seed for reproducibility. */
+  seed: number;
+}
+
+const DEFAULT_BLUEBOX: BlueBoxConfig = {
+  lagMs: 1000,
+  flickersPerMin: 6,
+  flickerMinMs: 200,
+  flickerMaxMs: 500,
+  seed: 42,
+};
+
+function makeSeededRng(seed: number): () => number {
+  let state = (seed >>> 0) || 1;
+  return () => {
+    // xorshift32 — adequate for noise sim
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    return ((state >>> 0) % 1_000_000_007) / 1_000_000_007;
+  };
+}
+
+function generateBlueBoxStream(gt: GroundTruth, cfg: BlueBoxConfig): BlueBoxEvent[] {
+  // Build the base stream: each GT turn becomes a lit interval shifted by lag.
+  // Adjacent turns from the same speaker merge into one lit interval (the box
+  // doesn't blink between consecutive same-speaker turns).
+  const speakers = Array.from(new Set(gt.turns.map((t) => t.speaker)));
+  const intervals: Array<{ start: number; end: number; speaker: string }> = [];
+  for (const t of gt.turns) {
+    const start = t.start_ms + cfg.lagMs;
+    const end = t.end_ms + cfg.lagMs;
+    const prev = intervals[intervals.length - 1];
+    if (prev && prev.speaker === t.speaker && start - prev.end < 250) {
+      prev.end = Math.max(prev.end, end);
+    } else {
+      intervals.push({ start, end, speaker: t.speaker });
+    }
+  }
+
+  // Insert flickers. Total flickers = flickersPerMin * total_speech_minutes.
+  const rng = makeSeededRng(cfg.seed);
+  const totalSpeechMs = intervals.reduce((s, i) => s + (i.end - i.start), 0);
+  const nFlickers = Math.max(0, Math.floor((cfg.flickersPerMin * totalSpeechMs) / 60_000));
+  const totalDuration = intervals.length > 0 ? intervals[intervals.length - 1].end : 0;
+  const flickers: Array<{ start: number; end: number; speaker: string }> = [];
+  for (let i = 0; i < nFlickers; i++) {
+    const t = Math.floor(rng() * totalDuration);
+    const dur = cfg.flickerMinMs + Math.floor(rng() * (cfg.flickerMaxMs - cfg.flickerMinMs));
+    // Pick a speaker DIFFERENT from whoever is currently lit at t.
+    const currentSpeaker = (() => {
+      for (const iv of intervals) if (t >= iv.start && t < iv.end) return iv.speaker;
+      return null;
+    })();
+    const candidates = speakers.filter((s) => s !== currentSpeaker);
+    if (candidates.length === 0) continue;
+    const flickerSpk = candidates[Math.floor(rng() * candidates.length)];
+    flickers.push({ start: t, end: t + dur, speaker: flickerSpk });
+  }
+
+  // Emit events. At every ms boundary where the "currently lit" speaker
+  // changes, emit one event. We don't actually iterate ms — we sweep
+  // over the sorted set of (start, end) edges and recompute the topmost
+  // lit speaker at each edge. Flickers take precedence over the base
+  // interval (mic-hijack overrides).
+  type Edge = { ts: number };
+  const edges = new Set<number>();
+  for (const iv of intervals) {
+    edges.add(iv.start);
+    edges.add(iv.end);
+  }
+  for (const iv of flickers) {
+    edges.add(iv.start);
+    edges.add(iv.end);
+  }
+  const sortedEdges = [...edges].sort((a, b) => a - b);
+  const events: BlueBoxEvent[] = [];
+  let lastSpk: string | null | undefined = undefined;
+  const litAt = (t: number): string | null => {
+    // Flickers take precedence.
+    for (const iv of flickers) if (t >= iv.start && t < iv.end) return iv.speaker;
+    for (const iv of intervals) if (t >= iv.start && t < iv.end) return iv.speaker;
+    return null;
+  };
+  for (const ts of sortedEdges) {
+    const spk = litAt(ts);
+    if (spk !== lastSpk) {
+      events.push({ ts, speaker: spk });
+      lastSpk = spk;
+    }
+  }
+  return events;
+}
+
+/** Given the sorted event stream, return the dominant speaker (most lit
+ *  time) during the window [windowStart, windowEnd]. Returns null if the
+ *  window only sees gaps. */
+function dominantBlueBoxIn(events: BlueBoxEvent[], windowStart: number, windowEnd: number): string | null {
+  if (events.length === 0 || windowEnd <= windowStart) return null;
+  const tally = new Map<string, number>();
+  for (let i = 0; i < events.length; i++) {
+    const ts = events[i].ts;
+    const next = i + 1 < events.length ? events[i + 1].ts : Number.POSITIVE_INFINITY;
+    const a = Math.max(ts, windowStart);
+    const b = Math.min(next, windowEnd);
+    if (b <= a) continue;
+    const spk = events[i].speaker;
+    if (!spk) continue;
+    tally.set(spk, (tally.get(spk) ?? 0) + (b - a));
+  }
+  let best: string | null = null;
+  let bestMs = 0;
+  for (const [spk, ms] of tally) {
+    if (ms > bestMs) {
+      bestMs = ms;
+      best = spk;
+    }
+  }
+  return best;
 }
 
 async function analyze(id: string, gt: GroundTruth, commits: CommitEvent[]): Promise<CorpusResult> {
@@ -145,6 +323,73 @@ async function analyze(id: string, gt: GroundTruth, commits: CommitEvent[]): Pro
   }
   const useful = primaryClusters.size === primary.size && minCoverage >= 0.60;
 
+  // Segment purity per commit: for each commit, distribute its audio time
+  // across every overlapping GT turn (and so its speaker). Purity is the
+  // dominant-speaker fraction. A purity < 1 means the commit straddles a
+  // speaker change — that's a MISSED SPLIT, the failure mode we care most
+  // about: Whisper would receive two voices in one buffer.
+  const segmentPurity: CorpusResult['segmentPurity'] = [];
+  for (const c of commits) {
+    const perSpeakerOverlap = new Map<string, number>();
+    let totalOverlap = 0;
+    for (const t of gt.turns) {
+      const overlap = Math.max(0, Math.min(t.end_ms, c.tEndMs) - Math.max(t.start_ms, c.tStartMs));
+      if (overlap <= 0) continue;
+      perSpeakerOverlap.set(t.speaker, (perSpeakerOverlap.get(t.speaker) ?? 0) + overlap);
+      totalOverlap += overlap;
+    }
+    if (totalOverlap <= 0) continue;
+    let bestSpk = '';
+    let bestMs = 0;
+    for (const [spk, ms] of perSpeakerOverlap) {
+      if (ms > bestMs) {
+        bestMs = ms;
+        bestSpk = spk;
+      }
+    }
+    segmentPurity.push({
+      tStartMs: c.tStartMs,
+      tEndMs: c.tEndMs,
+      dominantSpeaker: bestSpk,
+      purity: bestMs / totalOverlap,
+      overlapMs: totalOverlap,
+    });
+  }
+
+  // Collaborative attribution: simulate the blue-box stream the bot would
+  // see in production (1s lag, periodic flicker), then for each commit
+  // assign the speaker that the blue box says was talking at the same
+  // wall-clock time. The commit's [tStartMs, tEndMs] is in audio time;
+  // blue-box ts is also audio-anchored (we generate it from GT turn ts),
+  // so the lag is built INTO the stream. We look at the stream within
+  // [tStartMs + lag, tEndMs + lag] — the blue box at time T reflects
+  // what was happening at audio time (T - lag).
+  const blueBoxEvents = generateBlueBoxStream(gt, DEFAULT_BLUEBOX);
+  const collabPerCommit: CorpusResult['collabPerCommit'] = [];
+  let collabCorrectMs = 0;
+  let collabTotalMs = 0;
+  for (let i = 0; i < commits.length; i++) {
+    const c = commits[i];
+    const purity = segmentPurity[i];
+    if (!purity) continue;
+    const windowStart = c.tStartMs + DEFAULT_BLUEBOX.lagMs;
+    const windowEnd = c.tEndMs + DEFAULT_BLUEBOX.lagMs;
+    const bluebox = dominantBlueBoxIn(blueBoxEvents, windowStart, windowEnd);
+    const truth = purity.dominantSpeaker;
+    const correct = bluebox === truth;
+    collabPerCommit.push({
+      tStartMs: c.tStartMs,
+      tEndMs: c.tEndMs,
+      bluebox,
+      truth,
+      correct,
+    });
+    // Score by audio overlap ms — long commits count more.
+    if (correct) collabCorrectMs += purity.overlapMs;
+    collabTotalMs += purity.overlapMs;
+  }
+  const collabAccuracy = collabTotalMs > 0 ? collabCorrectMs / collabTotalMs : 0;
+
   return {
     id,
     gtSpeakers: [...perSpeaker.keys()],
@@ -154,6 +399,11 @@ async function analyze(id: string, gt: GroundTruth, commits: CommitEvent[]): Pro
     passCount,
     splitCount,
     useful,
+    commits,
+    gtTurns: gt.turns,
+    segmentPurity,
+    collabAccuracy,
+    collabPerCommit,
   };
 }
 
@@ -272,31 +522,119 @@ async function main(): Promise<number> {
     totalCorpora++;
     if (r.useful) totalUseful++;
   }
-  // Aggregate score for autonomous tuning. Two numbers:
-  //   - meanCoverage: average primary-cluster coverage across every GT
-  //     speaker across every corpus. 1.00 = perfect (every speaker's
-  //     audio entirely on one cluster). Sub-second-precision feedback
-  //     for "did this knob help?".
-  //   - strictCorpora: how many corpora hit strict pass (every GT speaker
-  //     → exactly one cluster). 6/6 = the user-asked-for "perfect".
+  // PRIORITY METRICS for the "diarizer-as-segmenter + blue-box-as-identity"
+  // pipeline:
+  //
+  //   1. BOUNDARY RECALL: how often does the diarizer split AT a real GT
+  //      speaker change? Missed splits leave two voices in one commit →
+  //      Whisper hallucinates. (False splits — extra boundaries in the
+  //      middle of one speaker — are harmless because blue-box labels
+  //      both halves the same.)
+  //
+  //   2. SEGMENT PURITY: among commits the diarizer DID produce, what
+  //      fraction of audio time is a single voice? <100% means a commit
+  //      straddled a boundary.
+  //
+  //   3. COLLABORATIVE ATTRIBUTION ACCURACY: simulate the blue-box stream
+  //      with realistic noise (1s lag + flicker), label each commit by
+  //      blue-box majority vote, measure final per-commit accuracy vs GT.
+  //      This is the END-TO-END routing quality — what Whisper actually sees.
+  //
+  // We still report the legacy useful/strict/coverage numbers for context.
+  const TOLERANCE_MS = 500;
+  const STRICT_TOLERANCE_MS = 200;
+
+  let totalChanges = 0;
+  let hitsLoose = 0;
+  let hitsStrict = 0;
+  let totalBoundaries = 0;
+  let boundaryMatchesLoose = 0;
+  let strictCorpora = 0;
   let speakerCount = 0;
   let coverageSum = 0;
-  let strictCorpora = 0;
+  let purityWeightedMs = 0;
+  let purityTotalMs = 0;
+  let collabCorrectMs = 0;
+  let collabTotalMs = 0;
   for (const r of results) {
-    const strict = r.splitCount === 0;
-    if (strict) strictCorpora++;
+    if (r.splitCount === 0) strictCorpora++;
     for (const p of r.primary.values()) {
       speakerCount++;
-      // Cap at 1.00 — coverage can exceed when GT turn times overlap
-      // multiple commits (e.g. "alex 116%" in interruptions-2speakers).
       coverageSum += Math.min(1, p.coverage);
+    }
+    if (!r.commits || !r.gtTurns) continue;
+    const commitBoundaries = r.commits.map((c) => c.tStartMs).sort((a, b) => a - b);
+    const changes: number[] = [];
+    for (let i = 1; i < r.gtTurns.length; i++) {
+      if (r.gtTurns[i].speaker !== r.gtTurns[i - 1].speaker) changes.push(r.gtTurns[i].start_ms);
+    }
+    totalChanges += changes.length;
+    totalBoundaries += commitBoundaries.length;
+    for (const change of changes) {
+      const nearest = nearestDistance(commitBoundaries, change);
+      if (nearest <= STRICT_TOLERANCE_MS) hitsStrict++;
+      if (nearest <= TOLERANCE_MS) hitsLoose++;
+    }
+    for (const b of commitBoundaries) {
+      if (changes.length === 0) continue;
+      if (nearestDistance(changes, b) <= TOLERANCE_MS) boundaryMatchesLoose++;
+    }
+    // Segment purity (per commit, weighted by commit overlap ms).
+    for (const sp of r.segmentPurity) {
+      purityWeightedMs += sp.purity * sp.overlapMs;
+      purityTotalMs += sp.overlapMs;
+    }
+    // Collab accuracy (already computed per-corpus).
+    for (const cc of r.collabPerCommit) {
+      // Time-weight by commit duration.
+      const sp = r.segmentPurity.find((p) => p.tStartMs === cc.tStartMs && p.tEndMs === cc.tEndMs);
+      const w = sp?.overlapMs ?? 0;
+      if (cc.correct) collabCorrectMs += w;
+      collabTotalMs += w;
     }
   }
   const meanCoverage = speakerCount > 0 ? coverageSum / speakerCount : 0;
+  const recallLoose = totalChanges > 0 ? hitsLoose / totalChanges : 0;
+  const recallStrict = totalChanges > 0 ? hitsStrict / totalChanges : 0;
+  const precision = totalBoundaries > 0 ? boundaryMatchesLoose / totalBoundaries : 0;
+  const purity = purityTotalMs > 0 ? purityWeightedMs / purityTotalMs : 0;
+  const collab = collabTotalMs > 0 ? collabCorrectMs / collabTotalMs : 0;
+
   console.log();
-  console.log(`OVERALL  useful=${totalUseful}/${totalCorpora}  strict=${strictCorpora}/${totalCorpora}  meanCoverage=${(meanCoverage * 100).toFixed(1)}%  ${strictCorpora === totalCorpora ? '✓✓ ALL STRICT' : totalUseful === totalCorpora ? '✓ ALL USEFUL' : 'still has broken corpora'}`);
-  console.log(`SCORE  strict=${strictCorpora}  useful=${totalUseful}  meanCov=${(meanCoverage * 100).toFixed(1)}`);
+  console.log(
+    `OVERALL  boundary recall=${(recallLoose * 100).toFixed(1)}%  ` +
+      `(strict @±${STRICT_TOLERANCE_MS}ms=${(recallStrict * 100).toFixed(1)}%)   ` +
+      `boundary precision=${(precision * 100).toFixed(1)}%   ` +
+      `(${totalChanges} GT changes, ${totalBoundaries} commit boundaries)`,
+  );
+  console.log(
+    `         segment purity=${(purity * 100).toFixed(1)}%   ` +
+      `collab acc=${(collab * 100).toFixed(1)}%   ` +
+      `(blue-box lag=${DEFAULT_BLUEBOX.lagMs}ms flicker=${DEFAULT_BLUEBOX.flickersPerMin}/min)`,
+  );
+  console.log(
+    `         legacy: useful=${totalUseful}/${totalCorpora}  strict=${strictCorpora}/${totalCorpora}  meanCoverage=${(meanCoverage * 100).toFixed(1)}%`,
+  );
+  console.log(
+    `SCORE  recall@500=${(recallLoose * 100).toFixed(1)}  purity=${(purity * 100).toFixed(1)}  collab=${(collab * 100).toFixed(1)}  precision=${(precision * 100).toFixed(1)}`,
+  );
   return totalUseful === totalCorpora ? 0 : 1;
+}
+
+/** Find the absolute distance to the nearest value in a SORTED array. */
+function nearestDistance(sortedArr: number[], target: number): number {
+  if (sortedArr.length === 0) return Infinity;
+  // Binary search for insertion point.
+  let lo = 0;
+  let hi = sortedArr.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (sortedArr[mid] < target) lo = mid + 1;
+    else hi = mid;
+  }
+  const left = lo > 0 ? Math.abs(sortedArr[lo - 1] - target) : Infinity;
+  const right = lo < sortedArr.length ? Math.abs(sortedArr[lo] - target) : Infinity;
+  return Math.min(left, right);
 }
 
 main().then((c) => process.exit(c)).catch((err) => { console.error('[suite] fatal:', err); process.exit(1); });
