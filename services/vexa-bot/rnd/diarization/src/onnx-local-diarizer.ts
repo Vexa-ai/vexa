@@ -742,7 +742,12 @@ export class OnnxLocalDiarizer implements Diarizer {
     const dim = this.commitHistory[0].emb.length;
     let prevLabels = labels.slice();
     for (let iter = 0; iter < maxIters; iter++) {
-      // Recompute refinement centroids from current labels.
+      // Recompute refinement centroids from current labels. Weight each
+      // commit by its duration: long utterances are stronger signal than
+      // short ones (which are noisier and more likely to contain overlap
+      // or transitional audio). Embeddings ARE already unit-normalized,
+      // so duration-weighted sum biases toward longer-duration commits;
+      // we then renormalize the sum back to unit length.
       const sums = new Map<string, Float32Array>();
       const counts = new Map<string, number>();
       for (let i = 0; i < this.commitHistory.length; i++) {
@@ -750,7 +755,9 @@ export class OnnxLocalDiarizer implements Diarizer {
         if (!sums.has(lab)) sums.set(lab, new Float32Array(dim));
         const s = sums.get(lab)!;
         const e = this.commitHistory[i].emb;
-        for (let j = 0; j < dim; j++) s[j] += e[j];
+        const h = this.commitHistory[i];
+        const w = Math.max(1, h.tEndMs - h.tStartMs); // ms
+        for (let j = 0; j < dim; j++) s[j] += e[j] * w;
         counts.set(lab, (counts.get(lab) ?? 0) + 1);
       }
       const refCentroids = new Map<string, Float32Array>();
@@ -785,7 +792,15 @@ export class OnnxLocalDiarizer implements Diarizer {
           }
           if (lab === labels[i]) curDist = d;
         }
-        if (bestLab !== labels[i] && bestDist + refinementDeltaMin <= curDist) {
+        // Flip rule: bestLab beats curLab by either an absolute delta
+        // (refinementDeltaMin) OR a relative one (15% closer). The
+        // relative gate catches cases where both distances are small
+        // (e.g. 0.20 vs 0.22) — absolute delta wouldn't fire, but the
+        // relative gain is real. The absolute gate catches cases where
+        // both are large (e.g. 0.55 vs 0.45) — relative gain is small but
+        // the absolute difference matters.
+        const relGain = (curDist - bestDist) / Math.max(curDist, 1e-6);
+        if (bestLab !== labels[i] && (bestDist + refinementDeltaMin <= curDist || relGain >= 0.15)) {
           labels[i] = bestLab;
           changed = true;
         }
@@ -793,6 +808,7 @@ export class OnnxLocalDiarizer implements Diarizer {
       if (!changed) break;
       prevLabels = labels.slice();
     }
+
     // Emit per-commit rewrites for any labels that differ from the
     // originally assigned (resolved) label. Only emit labels that exist
     // in the live centroid pool — refinement centroids are computed from
