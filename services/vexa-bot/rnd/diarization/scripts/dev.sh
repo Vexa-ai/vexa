@@ -13,9 +13,23 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE/.."
 
+# Load local secrets if present (gitignored). HF_TOKEN lives here for MVP1.
+if [ -f .env.local ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env.local
+  set +a
+fi
+
 if [ ! -d node_modules ]; then
   echo "[dev.sh] installing dependencies..."
   npm install
+fi
+
+# MVP1: if DIARIZER=pyannote, make sure the Python sidecar venv exists.
+if [ "${DIARIZER:-stub}" = "pyannote" ] && [ ! -d sidecar/.venv ]; then
+  echo "[dev.sh] DIARIZER=pyannote — creating sidecar venv (one-time, ~5min)"
+  ( cd sidecar && uv venv --python 3.11 && uv pip install -e . )
 fi
 
 # tsx watch picks up src/**/*.ts changes and reloads the whole node process.

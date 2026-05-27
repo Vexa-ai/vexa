@@ -40,7 +40,9 @@ import { TranscriptionClient } from '../../../core/src/services/transcription-cl
 import type { TranscriptionSegment } from '../../../core/src/services/segment-publisher';
 
 import { VadRoundRobinDiarizer } from './vad-round-robin-diarizer';
+import { OnnxLocalDiarizer } from './onnx-local-diarizer';
 import { JsonlSegmentPublisher, type TranscriptBundle } from './jsonl-segment-publisher';
+import type { Diarizer } from './diarizer';
 import type { DashboardEvent } from './ws-protocol';
 import { SAMPLE_RATE } from './ws-protocol';
 
@@ -51,6 +53,10 @@ const PORT = Number(process.env.PORT ?? 43500);
 const NUM_SPEAKERS = Number(process.env.NUM_SPEAKERS ?? 2);
 const TRANSCRIPTION_URL = process.env.TRANSCRIPTION_URL ?? '';
 const TRANSCRIPTION_API_TOKEN = process.env.TRANSCRIPTION_API_TOKEN ?? '';
+/** DIARIZER selects the seam implementation. "stub" = MVP0 VAD round-robin
+ *  (default; no Python deps). "pyannote" = MVP1 PyannoteSidecarDiarizer
+ *  (requires sidecar venv + HF_TOKEN). One-line swap composition root. */
+const DIARIZER = (process.env.DIARIZER ?? 'stub').toLowerCase();
 const EVIDENCE_DIR =
   process.env.EVIDENCE_DIR ??
   path.resolve(__dirname, '..', '..', '..', '..', '..', '.agents', 'packs', 'pack-msteams-local-diarization-rnd', 'mvp0');
@@ -77,7 +83,7 @@ async function probeTranscription(url: string, apiToken: string): Promise<{ reac
 
 async function main() {
   console.log('[harness] MVP0 diarization RnD — bot-native edition');
-  console.log(`[harness] PORT=${PORT}  NUM_SPEAKERS=${NUM_SPEAKERS}`);
+  console.log(`[harness] PORT=${PORT}  NUM_SPEAKERS=${NUM_SPEAKERS}  DIARIZER=${DIARIZER}`);
   console.log(`[harness] TRANSCRIPTION_URL=${TRANSCRIPTION_URL || '(unset)'}`);
   console.log(`[harness] TRANSCRIPTION_API_TOKEN=${TRANSCRIPTION_API_TOKEN ? '(set, ' + TRANSCRIPTION_API_TOKEN.length + ' chars)' : '(unset)'}`);
   console.log(`[harness] EVIDENCE_DIR=${EVIDENCE_DIR}`);
@@ -142,8 +148,24 @@ async function main() {
     },
   });
 
-  // Diarizer — THE new seam this pack adds. Construct after deps so logs are clean.
-  const diarizer = await VadRoundRobinDiarizer.create({ numSpeakers: NUM_SPEAKERS });
+  // Diarizer — THE new seam this pack adds. Selectable via DIARIZER env:
+  //   DIARIZER=stub  → MVP0 VadRoundRobinDiarizer (bot's Silero VAD + round-robin)
+  //   DIARIZER=onnx  → MVP1 OnnxLocalDiarizer (wespeaker-resnet34-LM via
+  //                    onnxruntime-node + transformers.js fbank + TS online
+  //                    clustering; pure-Node, no Python)
+  let diarizer: Diarizer;
+  if (DIARIZER === 'onnx') {
+    console.log('[harness] DIARIZER=onnx — loading wespeaker ONNX (first run downloads ~10MB from HF)');
+    try {
+      diarizer = await OnnxLocalDiarizer.create({ maxSpeakers: NUM_SPEAKERS });
+    } catch (err: any) {
+      console.error(`[harness] OnnxLocalDiarizer failed to start: ${err.message}`);
+      console.error('[harness] falling back to VadRoundRobinDiarizer stub');
+      diarizer = await VadRoundRobinDiarizer.create({ numSpeakers: NUM_SPEAKERS });
+    }
+  } else {
+    diarizer = await VadRoundRobinDiarizer.create({ numSpeakers: NUM_SPEAKERS });
+  }
   console.log(`[harness] diarizer ready: ${diarizer.name}`);
 
   // Per-speaker confirmed-batch accumulator. Mirrors production's batching:

@@ -6,9 +6,12 @@
   "description": "MVP0 RnD harness: standalone hot-reload server that imports the production bot's vad.ts + transcription-client.ts, plugs a swappable Diarizer behind them, and demos diarization quality live against a shared browser tab.",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts"
+    "start": "tsx src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "test:contract": "tsx src/_contract-test.ts"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
     "express": "^4.19.2",
     "ws": "^8.18.0"
   },
