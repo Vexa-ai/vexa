@@ -1,0 +1,27 @@
+{
+  "compose_project": "vexa_pack-msteams-local-diarization-rnd_compose",
+  "forbidden_ports": [
+    3000,
+    8056,
+    8080
+  ],
+  "lite_container": "vexa-pack-msteams-local-diarization-rnd-lite",
+  "namespace": "pack-pack-msteams-local-diarization-rnd",
+  "network_prefix": "pack-pack-msteams-local-diarization-rnd",
+  "notes": [
+    "Ports are pack-scoped and intentionally avoid popular/default Vexa service ports.",
+    "Meeting API and other internal services should stay internal unless a deploy skill explicitly exposes a debug lane."
+  ],
+  "pack_id": "pack-msteams-local-diarization-rnd",
+  "ports": {
+    "compose_browser_session": 43502,
+    "compose_dashboard": 43500,
+    "compose_gateway": 43501,
+    "compose_vnc": 43503,
+    "lite_dashboard": 43510,
+    "lite_gateway": 43511,
+    "lite_vnc": 43512
+  },
+  "release_id": "",
+  "slot": 125
+}

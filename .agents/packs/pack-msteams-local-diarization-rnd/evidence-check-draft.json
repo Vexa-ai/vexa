@@ -1,0 +1,48 @@
+{
+  "checks": [
+    {
+      "exists": true,
+      "kind": "file",
+      "path": "pack.json"
+    },
+    {
+      "exists": true,
+      "kind": "file",
+      "path": "runtime.json"
+    },
+    {
+      "exists": true,
+      "kind": "file",
+      "path": "ops/ops.jsonl"
+    },
+    {
+      "exists": true,
+      "kind": "dir",
+      "path": "tests"
+    },
+    {
+      "exists": true,
+      "kind": "dir",
+      "path": "compose"
+    },
+    {
+      "exists": true,
+      "kind": "dir",
+      "path": "lite"
+    }
+  ],
+  "evidence_root": "/home/dima/dev/vexa-pack-pack-msteams-local-diarization-rnd/.agents/packs/pack-msteams-local-diarization-rnd",
+  "invalid": [],
+  "missing": [],
+  "mode": "draft",
+  "pack_id": "pack-msteams-local-diarization-rnd",
+  "required": [
+    "pack.json",
+    "runtime.json",
+    "ops/ops.jsonl",
+    "tests",
+    "compose",
+    "lite"
+  ],
+  "status": "pass"
+}

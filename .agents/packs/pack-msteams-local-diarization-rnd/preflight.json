@@ -1,0 +1,9 @@
+{
+  "status": "pass",
+  "pack_json": ".agents/packs/pack-msteams-local-diarization-rnd/pack.json",
+  "runtime_json": ".agents/packs/pack-msteams-local-diarization-rnd/runtime.json",
+  "repo_root": "/home/dima/dev/vexa-agents-pack-pipeline-strategy",
+  "worktree": "",
+  "errors": [],
+  "warnings": []
+}
