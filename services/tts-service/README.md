@@ -6,10 +6,22 @@ Bot containers need text-to-speech to participate as voice agents in meetings. T
 
 ## What
 
-A local text-to-speech service using **Piper TTS** (ONNX models). Exposes an OpenAI-compatible `/v1/audio/speech` endpoint so existing code that targets OpenAI's TTS API works without changes. Voice models are auto-downloaded from HuggingFace on first use.
+OpenAI-compatible `/v1/audio/speech` endpoint backed by **Piper TTS** local ONNX inference. There are no synth-time external network calls for prepared voices; remaining voices are auto-downloaded from HuggingFace on first request.
 
-Input: JSON body `{"model": "tts-1", "input": "text to speak", "voice": "nova", "response_format": "wav"}`
-Output: Audio (WAV 24kHz mono by default, or raw PCM)
+The endpoint shape stays OpenAI-compatible so clients can reuse their existing request body and consume interchangeable audio bytes.
+
+Input: JSON body
+```json
+{"model": "tts-1", "input": "Hola, ¿cómo estás?", "voice": "auto", "response_format": "wav"}
+```
+
+- `voice`: explicit Piper name (`en_US-amy-medium`), OpenAI-style alias (`alloy`/`nova`/...), or `auto` (auto-detects language from `input` and picks a matching voice; supported major languages are prepared by default).
+- `response_format`: `wav` (default) or `pcm` (raw Int16LE 24kHz mono).
+- `model`: accepted for OpenAI API compatibility and ignored by Piper.
+
+Output: audio bytes (WAV 24kHz mono by default, or raw PCM).
+
+In live meetings this service is used only for text requests to `POST /bots/{platform}/{native_meeting_id}/speak`. Meeting API publishes a `speak` command, the bot calls this service, and the returned PCM is played through the bot's PulseAudio virtual microphone. Pre-rendered `audio_url` and `audio_base64` `/speak` requests bypass this service; the bot decodes those files directly and plays them through the same microphone path.
 
 ### Endpoints
 
@@ -38,9 +50,9 @@ Supported formats: `wav` (default), `pcm` (raw Int16LE 24kHz mono)
 
 ### Dependencies
 
-- **Piper TTS** (bundled) — local ONNX inference, no external calls
-- No database, no Redis, no other Vexa services
-- No API keys required for operation
+- **Piper TTS** (bundled) — local ONNX inference, no external calls at synth time for prepared voices.
+- No database, no Redis, no other Vexa services.
+- No API keys required for speech synthesis.
 
 ## How
 
@@ -62,7 +74,9 @@ uvicorn main:app --host 0.0.0.0 --port 8002
 | `TTS_API_TOKEN` | Optional access token — if set, requests must include `X-API-Key` header |
 | `TTS_OUTPUT_SAMPLE_RATE` | Output sample rate (default: `24000`) |
 | `PIPER_VOICES_DIR` | Voice model storage directory (default: `/app/voices`) |
-| `PIPER_DEFAULT_VOICES` | Comma-separated voices to pre-load on startup (default: `en_US-amy-medium,en_US-danny-low`) |
+| `PIPER_DEFAULT_VOICES` | Comma-separated voices to prepare on startup, or `major` (default) for the release-supported major language set |
+| `PIPER_LOAD_VOICES` | Comma-separated prepared voices to also keep loaded in memory (default: English + Portuguese + Spanish) |
+| `PIPER_PRELOAD_STRICT` | If true, startup fails when a configured voice cannot be prepared (default: `true`) |
 | `LOG_LEVEL` | Logging level (default: `INFO`) |
 
 ### Test
@@ -77,14 +91,14 @@ curl http://localhost:8002/voices
 # Synthesize speech (save as WAV)
 curl -X POST http://localhost:8002/v1/audio/speech \
   -H "Content-Type: application/json" \
-  -d '{"model": "tts-1", "input": "Hello world", "voice": "nova", "response_format": "wav"}' \
+  -d '{"model": "tts-1", "input": "Hello world", "voice": "auto", "response_format": "wav"}' \
   --output speech.wav
 ```
 
 ### Debug
 
 - Logs to stdout: `%(asctime)s - %(name)s - %(levelname)s - %(message)s`
-- Voice models are downloaded on first use — first request for a new voice will be slower
+- Major supported voice models are prepared on startup; first request for a non-prepared voice may still be slower
 - Invalid voice names that can't be downloaded return 404
 - The `model` field is accepted but ignored (kept for OpenAI API compatibility)
 

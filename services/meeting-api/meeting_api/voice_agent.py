@@ -51,8 +51,8 @@ async def bot_speak(
             "action": "speak",
             "meeting_id": meeting.id,
             "text": req["text"],
-            "provider": req.get("provider", "openai"),
-            "voice": req.get("voice", "alloy"),
+            "provider": req.get("provider", "piper"),
+            "voice": req.get("voice", "auto"),
         }
     elif req.get("audio_url") or req.get("audio_base64"):
         command = {

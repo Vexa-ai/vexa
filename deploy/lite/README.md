@@ -94,7 +94,9 @@ Edit `.env` at repo root. Created automatically on first `make lite`.
 | `MINIO_ACCESS_KEY`  | --                         | MinIO access key                  |
 | `MINIO_SECRET_KEY`  | --                         | MinIO secret key                  |
 | `LOG_LEVEL`         | `info`                     | Logging level for all services    |
-| `OPENAI_API_KEY`    | --                         | For OpenAI TTS voices (optional)  |
+| `PIPER_DEFAULT_VOICES` | `major`                  | Piper voices prepared at startup for local TTS |
+| `PIPER_LOAD_VOICES` | English/Spanish/Portuguese subset | Prepared voices kept loaded in memory |
+| `PIPER_PRELOAD_STRICT` | `true`                  | Fail startup if configured voices cannot be prepared |
 
 
 ## Debugging
