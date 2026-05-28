@@ -5,8 +5,8 @@ Playwright-based bot integration for Google Meet. Handles the join flow, admissi
 ## Join Flow
 
 1. `join.ts`: Navigate to meeting URL, fill name input, click "Ask to join", enter waiting room, wait for admission. 5-second settle wait after navigation.
-2. `admission.ts`: Polls for admission. Handles org-restricted blocks (unauthenticated guest).
-3. `selectors.ts`: DOM selectors for name input, join button, mic/camera toggles. These are brittle -- Google changes their DOM periodically.
+2. `admission.ts`: Polls for admission. Handles org-restricted blocks (unauthenticated guest). Each polling iteration (both the primary and the late waiting-room loops) calls `throwIfGoogleAdmissionRejected` *before* re-checking the waiting-room indicator, because host denial can leave stale lobby text in the DOM — a rejection must short-circuit polling instead of being masked by the still-visible waiting-room UI. On detected rejection the bot throws `"Bot admission was rejected by meeting admin"`.
+3. `selectors.ts`: DOM selectors for name input, join button, mic/camera toggles. These are brittle -- Google changes their DOM periodically. `googleRejectionIndicators` includes waiting-room denial patterns (`"denied your request"`, `"weren't allowed to join"`, `"Ask to join again"`, etc.) so denial is detected even when the lobby copy is still rendered.
 
 ## Audio Capture
 
@@ -60,5 +60,6 @@ If selectors break, the fix is always: inspect a real Google Meet session, compa
 | File | Purpose |
 |------|---------|
 | `join.ts` | Meeting join flow orchestration |
-| `admission.ts` | Admission/waiting room handling |
-| `selectors.ts` | DOM selectors (brittle, needs periodic updates) |
+| `admission.ts` | Admission/waiting room handling, including the `throwIfGoogleAdmissionRejected` guard run before each waiting-room re-check |
+| `admission.test.ts` | Structural regression: pins that the rejection guard runs before the waiting-room check in both polling loops, and that selectors include host-denial copy |
+| `selectors.ts` | DOM selectors (brittle, needs periodic updates); includes host-denial copy in `googleRejectionIndicators` |

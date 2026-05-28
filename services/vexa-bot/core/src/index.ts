@@ -868,6 +868,7 @@ async function performGracefulLeave(
 
     const botConfig = {
       meetingApiCallbackUrl,
+      internalSecret: currentBotConfig?.internalSecret,
       connectionId: currentConnectionId,
       container_name: process.env.HOSTNAME || 'unknown'
     };
