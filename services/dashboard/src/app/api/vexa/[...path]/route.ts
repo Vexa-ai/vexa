@@ -215,19 +215,20 @@ async function proxyRequest(
     }
 
     if (contentType.includes("audio") || contentType.includes("video") || contentType.includes("octet-stream")) {
-      const blob = await response.blob();
-      return new NextResponse(blob, {
+      const mediaHeaders = new Headers({ "Cache-Control": "no-store" });
+      for (const header of [
+        "content-type",
+        "content-length",
+        "content-range",
+        "accept-ranges",
+        "content-disposition",
+      ]) {
+        const value = response.headers.get(header);
+        if (value) mediaHeaders.set(header, value);
+      }
+      return new NextResponse(response.body, {
         status: response.status,
-        headers: {
-          "Content-Type": contentType,
-          "Content-Length": response.headers.get("content-length") || "",
-          ...(response.headers.get("content-range") && {
-            "Content-Range": response.headers.get("content-range")!,
-          }),
-          ...(response.headers.get("accept-ranges") && {
-            "Accept-Ranges": response.headers.get("accept-ranges")!,
-          }),
-        },
+        headers: mediaHeaders,
       });
     }
 

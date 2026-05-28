@@ -193,23 +193,20 @@ export default function MeetingDetailPage() {
   // Sort by created_at so fragments play sequentially.
   //
   // Pack U.8 (v0.10.6, re-applies reverted Pack D-3 — commit a62d658 — on
-  // top of the new master-recording contract from Pack U.5+U.6): each
-  // fragment src is a 1-hour presigned MinIO URL pointing at
-  // <prefix>/master.{webm|wav}. The browser streams directly from MinIO
-  // with native HTTP Range — no in-process proxying through meeting-api.
-  // Pre-fix (v0.10.5.3): the /raw endpoint buffered the whole file in
-  // meeting-api memory before serving (#288). For 24-min meetings @ 10MB
-  // that was ~10s of dead-air on first byte.
+  // top of the new master-recording contract from Pack U.5+U.6): resolve the
+  // canonical master route, then prefer the dashboard same-origin raw route
+  // for browser playback. This keeps proxied/local deployments working when
+  // the browser cannot directly reach the object-store public endpoint.
   //
   // The async fetch happens once per recordings change. While in flight,
   // recordingFragments is the previous (or empty) array — the AudioPlayer
   // shows a "Preparing audio…" state.
   const [recordingFragments, setRecordingFragments] = useState<AudioFragment[]>([]);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
-  // v0.10.6.1 — surface connection errors from the master-stream-URL lookup.
-  // Distinct from "master not ready yet" (returned as null → "finalizing"
-  // UI). A non-null value here means a real network/HTTP failure that the
-  // user should see, not be silently retried-into-empty-state.
+  // Surface connection errors from the master-stream-URL lookup. This is
+  // distinct from "master not ready yet" (404 -> null -> finalizing UI).
+  // v0.10.6.1 — a non-null value here means a real network/HTTP failure
+  // that the user should see, not be silently retried-into-empty-state.
   const [playbackConnectionError, setPlaybackConnectionError] = useState<string | null>(null);
 
   // v0.10.6.1 — ADR-2 canonical playback path. Dashboard reads
@@ -233,6 +230,7 @@ export default function MeetingDetailPage() {
   useEffect(() => {
     if (!audioMediaSignature) {
       setRecordingFragments([]);
+      setPlaybackConnectionError(null);
       return;
     }
     let cancelled = false;
@@ -249,7 +247,7 @@ export default function MeetingDetailPage() {
           }
           return {
             src: result.url,
-            duration: result.duration_seconds ?? null,
+            duration: result.duration_seconds ?? 0,
             sessionUid: rec.session_uid,
             createdAt: rec.created_at,
           } as AudioFragment;
@@ -266,12 +264,11 @@ export default function MeetingDetailPage() {
       }
     })();
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [audioMediaSignature]);
+  }, [audioMediaSignature, recordings]);
 
   const hasRecordingAudio = recordingFragments.length > 0;
 
-  // Find the first video master across all recordings for the VideoPlayer.
+  // Find the first finalized video master across all recordings for the VideoPlayer.
   // v0.10.6.1 ADR-2: read recording.playback_url.video; no client-side
   // selection from media_files[].
   useEffect(() => {
@@ -979,8 +976,9 @@ export default function MeetingDetailPage() {
         No audio recording for this meeting.
       </div>
     ) : missingRequestedRecording ? (
-      <div className="flex items-center gap-2 px-4 py-2 bg-destructive/10 rounded-lg border border-destructive/30 text-sm text-destructive">
-        Recording was enabled, but no finalized recording artifact is available yet.
+      <div className="flex items-center gap-2 px-4 py-2 bg-muted/50 rounded-lg border text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Recording is finalizing...
       </div>
     ) : (
       <div className="flex items-center gap-2 px-4 py-2 bg-muted/50 rounded-lg border text-sm text-muted-foreground">

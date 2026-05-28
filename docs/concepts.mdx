@@ -103,9 +103,9 @@ Storage configuration:
 
 ## Interactive Bots (Meeting Interaction)
 
-By default (`voice_agent_enabled: true`), every bot is an interactive meeting participant. An external agent can instruct it to:
+When a bot is created with `voice_agent_enabled: true`, it becomes an interactive meeting participant. An external agent can instruct it to:
 
-- **Speak** via text-to-speech (OpenAI TTS → PulseAudio → meeting mic)
+- **Speak** via local Piper text-to-speech, or play a pre-rendered `audio_url` / `audio_base64` file through the same virtual microphone path
 - **Read/write chat** messages in the meeting
 - **Share screen** content (images, URLs, video)
 
@@ -120,4 +120,3 @@ Deleting a meeting is designed to be deliberate: it purges transcript artifacts 
 API details:
 
 - [`user_api_guide.md`](user_api_guide)
-

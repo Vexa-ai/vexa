@@ -39,9 +39,10 @@
     "access": "public"
   },
   "devDependencies": {
-    "tsup": "^8.0.0",
-    "typescript": "^5.4.0",
-    "vitest": "^2.0.0"
+    "@types/node": "20.19.37",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.7"
   },
   "license": "Apache-2.0"
 }

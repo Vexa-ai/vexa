@@ -223,7 +223,8 @@ async def test_callback_fired_on_exit(redis):
         "user_id": "user-1",
         "container_id": "cid-123",
         "callback_url": "http://example.com/hook",
-        "metadata": {"job": "abc"},
+        "callback_headers": {"X-Internal-Secret": "test-secret"},
+        "metadata": {"job": "abc", "connection_id": "conn-123"},
         "created_at": time.time(),
     }
     await state.set_container(redis, "cb-container", container_data)
@@ -254,7 +255,8 @@ async def test_callback_fired_on_exit(redis):
         assert payload["profile"] == "worker"
         assert payload["status"] == "stopped"
         assert payload["exit_code"] == 0
-        assert payload["metadata"] == {"job": "abc"}
+        assert payload["metadata"] == {"job": "abc", "connection_id": "conn-123"}
+        assert call_args[1]["headers"] == {"X-Internal-Secret": "test-secret"}
 
 
 @pytest.mark.asyncio
@@ -281,7 +283,7 @@ async def test_callback_failure_does_not_crash(redis):
         "profile": "worker",
         "user_id": "user-1",
         "callback_url": "http://unreachable.invalid/hook",
-        "metadata": {},
+        "metadata": {"connection_id": "conn-456"},
         "container_id": "cid-456",
         "created_at": time.time(),
     }

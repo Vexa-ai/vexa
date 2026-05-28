@@ -65,6 +65,13 @@ export function resolveBrowserApiUrl({
       const publicUrl = new URL(configured);
       if (isLoopbackHost(publicUrl.hostname) && !isLoopbackHost(requestHostname)) {
         publicUrl.hostname = requestHostname;
+      } else if (isLoopbackHost(publicUrl.hostname) && isLoopbackHost(requestHostname)) {
+        // Both the configured public URL and the request host are loopback.
+        // The configured port likely points at a container-internal gateway port
+        // (e.g. 8056) that is unreachable from the browser when the dashboard
+        // exposes a different host port (e.g. lite single-port publish). Fall
+        // back to same-origin so Next.js /ws + /api rewrites carry the traffic.
+        return { apiUrl: "", publicApiUrl: "" };
       }
       const normalized = normalizedUrl(publicUrl.toString());
       return { apiUrl: normalized, publicApiUrl: normalized };
@@ -75,8 +82,15 @@ export function resolveBrowserApiUrl({
   }
 
   if (gatewayHostPort && isInternalServiceUrl(internalApiUrl)) {
-    const inferred = publicUrlFromRequestHost(requestHost, requestProto, gatewayHostPort);
-    return { apiUrl: inferred, publicApiUrl: inferred };
+    // Compose case: dashboard is published on a different host port than the
+    // gateway (e.g. dashboard :41688, gateway :41680). Some browser/network
+    // environments only expose the dashboard's published port, so pointing the
+    // browser directly at the gateway port breaks WS + cross-origin REST.
+    // Prefer same-origin (empty publicApiUrl) so the browser uses the
+    // dashboard's own /ws + /api/vexa/* rewrites — which already proxy to the
+    // gateway service-internal URL. Curl-from-host can still reach the
+    // gateway port directly; this only affects what the browser is told.
+    return { apiUrl: "", publicApiUrl: "" };
   }
 
   if (isInternalServiceUrl(internalApiUrl)) {

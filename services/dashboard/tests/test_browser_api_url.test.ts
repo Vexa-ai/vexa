@@ -1,60 +1,69 @@
-import { describe, expect, it } from "vitest";
-import { resolveBrowserApiUrl } from "../src/lib/browser-api-url";
+import { describe, it, expect } from "vitest";
+import { resolveBrowserApiUrl } from "@/lib/browser-api-url";
 
-describe("resolveBrowserApiUrl", () => {
-  it("infers a browser-reachable Compose API URL from the request host", () => {
-    expect(
-      resolveBrowserApiUrl({
-        internalApiUrl: "http://api-gateway:8000",
-        requestHost: "172.238.172.154:3001",
-        requestProto: "http",
-        gatewayHostPort: "8056",
-      })
-    ).toEqual({
-      apiUrl: "http://172.238.172.154:8056",
-      publicApiUrl: "http://172.238.172.154:8056",
+describe("resolveBrowserApiUrl — stitched-candidate regression coverage (pack 6 fix)", () => {
+  it("falls back to same-origin when both configured + request host are loopback (lite single-port publish)", () => {
+    // Regression: lite supervisord sets NEXT_PUBLIC_API_URL=http://localhost:8056 (container-internal
+    // gateway port). Browser is at host port 41692 (dashboard). The configured loopback URL would
+    // tell the browser to talk to localhost:8056 which is unreachable. The resolver must instead
+    // return same-origin so Next.js /ws + /api rewrites carry the traffic.
+    const out = resolveBrowserApiUrl({
+      internalApiUrl: "http://localhost:8056",
+      configuredPublicApiUrl: "http://localhost:8056",
+      requestHost: "localhost:41692",
+      requestProto: "http",
     });
+    expect(out.apiUrl).toBe("");
+    expect(out.publicApiUrl).toBe("");
   });
 
-  it("normalizes a configured loopback public URL for remote self-hosted browsers", () => {
-    expect(
-      resolveBrowserApiUrl({
-        internalApiUrl: "http://api-gateway:8000",
-        configuredPublicApiUrl: "http://localhost:8056",
-        requestHost: "203.0.113.10:3001",
-        requestProto: "http",
-      })
-    ).toEqual({
-      apiUrl: "http://203.0.113.10:8056",
-      publicApiUrl: "http://203.0.113.10:8056",
+  it("rewrites configured loopback hostname to request hostname when request host is non-loopback", () => {
+    const out = resolveBrowserApiUrl({
+      internalApiUrl: "http://localhost:8056",
+      configuredPublicApiUrl: "http://localhost:8056",
+      requestHost: "vexa.example.com",
+      requestProto: "https",
     });
+    expect(out.apiUrl).toBe("http://vexa.example.com:8056");
+    expect(out.publicApiUrl).toBe("http://vexa.example.com:8056");
   });
 
-  it("preserves an explicitly configured public API URL", () => {
-    expect(
-      resolveBrowserApiUrl({
-        internalApiUrl: "http://api-gateway:8000",
-        configuredPublicApiUrl: "https://api.cloud.vexa.ai/",
-        requestHost: "dashboard.vexa.ai",
-        requestProto: "https",
-        gatewayHostPort: "8056",
-      })
-    ).toEqual({
-      apiUrl: "https://api.cloud.vexa.ai",
-      publicApiUrl: "https://api.cloud.vexa.ai",
+  it("keeps configured non-loopback URL as-is", () => {
+    const out = resolveBrowserApiUrl({
+      internalApiUrl: "http://api-gateway:8000",
+      configuredPublicApiUrl: "https://api.vexa.ai",
+      requestHost: "dashboard.vexa.ai",
+      requestProto: "https",
     });
+    expect(out.apiUrl).toBe("https://api.vexa.ai");
+    expect(out.publicApiUrl).toBe("https://api.vexa.ai");
   });
 
-  it("does not leak internal service URLs when no browser route can be inferred", () => {
-    expect(
-      resolveBrowserApiUrl({
-        internalApiUrl: "http://api-gateway:8000",
-        requestHost: "dashboard.example.test",
-        requestProto: "https",
-      })
-    ).toEqual({
-      apiUrl: "",
-      publicApiUrl: "",
+  it("falls back to same-origin even with gatewayHostPort when internal is an internal-service hostname (compose multi-port publish regression)", () => {
+    // Regression: compose publishes dashboard on :41688 and gateway on :41680 as
+    // separate host ports. Some browser environments only expose the dashboard
+    // port (browser sandboxes, single-port proxies). The dashboard already
+    // rewrites /ws to the gateway service URL — telling the browser to bypass
+    // that rewrite and connect directly to :41680 breaks WS in those
+    // environments. Prefer same-origin so the dashboard's /ws + /api/vexa/*
+    // rewrites carry the traffic.
+    const out = resolveBrowserApiUrl({
+      internalApiUrl: "http://api-gateway:8000",
+      requestHost: "localhost:41688",
+      requestProto: "http",
+      gatewayHostPort: "41680",
     });
+    expect(out.apiUrl).toBe("");
+    expect(out.publicApiUrl).toBe("");
+  });
+
+  it("returns empty for internal-service URL without gatewayHostPort hint (same-origin fallback)", () => {
+    const out = resolveBrowserApiUrl({
+      internalApiUrl: "http://api-gateway:8000",
+      requestHost: "dashboard.svc.cluster.local",
+      requestProto: "http",
+    });
+    expect(out.apiUrl).toBe("");
+    expect(out.publicApiUrl).toBe("");
   });
 });

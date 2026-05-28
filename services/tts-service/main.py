@@ -147,7 +147,7 @@ SUPPORTED_PIPER_VOICES: dict[str, str] = {
 # langdetect; for non-Latin scripts the script alone is enough to pick
 # a language with high confidence.
 _SCRIPT_RANGES: list[tuple[int, int, str]] = [
-    (0x0400, 0x04FF, "ru"),    # Cyrillic — overridden to "uk" if Ukrainian-only chars present (handled below)
+    (0x0400, 0x04FF, "ru"),    # Cyrillic; Ukrainian-only chars are handled before this fallback
     (0x0500, 0x052F, "ru"),    # Cyrillic Supplement
     (0x0590, 0x05FF, "he"),    # Hebrew (no voice today; falls through to en + WARN)
     (0x0600, 0x06FF, "ar"),    # Arabic
@@ -185,6 +185,8 @@ def _detect_language(text: str) -> Optional[str]:
         if (0xAC00 <= cp <= 0xD7AF):
             # Hangul anywhere → Korean.
             return "ko"
+        if ch in "ґєіїҐЄІЇ":
+            return "uk"
 
     # 2. Script heuristic — first non-ASCII char drives the decision.
     for ch in text:
@@ -450,8 +452,8 @@ async def speech(
     """
     Synthesize text to speech. OpenAI-compatible API.
 
-    Request body: {"input": "text", "voice": "alloy", "response_format": "wav"}
-    - voice: Piper voice name (e.g. "en_US-amy-medium") or alias ("alloy", "nova", etc.)
+    Request body: {"input": "text", "voice": "auto", "response_format": "wav"}
+    - voice: "auto", Piper voice name (e.g. "en_US-amy-medium"), or alias ("alloy", "nova", etc.)
     - response_format: "wav" (default) or "pcm" (raw Int16LE)
     - model: ignored (kept for OpenAI API compatibility)
 
@@ -463,7 +465,7 @@ async def speech(
         raise HTTPException(status_code=400, detail=f"Invalid JSON body: {e}") from e
 
     text = body.get("input", "")
-    voice_param = body.get("voice", "alloy")
+    voice_param = body.get("voice", "auto")
     response_format = body.get("response_format", "wav")
 
     if not text:

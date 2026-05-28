@@ -80,7 +80,7 @@ spec:
             - name: TRANSCRIPTION_COLLECTOR_URL
               value: "http://{{ include "vexa.componentName" (list . "meeting-api") }}:{{ .Values.meetingApi.service.port }}"
             - name: BOT_IMAGE_NAME
-              value: {{ .Values.meetingApi.botImageName | default "vexaai/vexa-bot:latest" | quote }}
+              value: {{ include "vexa.botImage" . | quote }}
             - name: TTS_SERVICE_URL
               value: "http://{{ include "vexa.componentName" (list . "tts-service") }}:{{ .Values.ttsService.service.port }}"
             - name: TRANSCRIPTION_SERVICE_URL

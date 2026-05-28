@@ -6,26 +6,22 @@ Bot containers need text-to-speech to participate as voice agents in meetings. T
 
 ## What
 
-OpenAI-compatible `/v1/audio/speech` endpoint with **two backends** the caller picks per-request:
+OpenAI-compatible `/v1/audio/speech` endpoint backed by **Piper TTS** local ONNX inference. There are no synth-time external network calls for prepared voices; remaining voices are auto-downloaded from HuggingFace on first request.
 
-| `provider` | Backend | Network calls | Auth | Quality |
-|---|---|---|---|---|
-| `piper` *(default)* | [Piper TTS](https://github.com/rhasspy/piper) — local ONNX inference | None at synth time for prepared voices; remaining voices auto-download from HuggingFace on first request | None required | Robotic but clear; ~30 languages |
-| `openai` | OpenAI `https://api.openai.com/v1/audio/speech` | Yes — every request | `OPENAI_API_KEY` env var | Higher; counts against your OpenAI usage |
-
-The endpoint shape stays identical — callers swap `provider` and the response is interchangeable audio bytes.
+The endpoint shape stays OpenAI-compatible so clients can reuse their existing request body and consume interchangeable audio bytes.
 
 Input: JSON body
 ```json
-{"model": "tts-1", "input": "Hola, ¿cómo estás?", "voice": "auto", "response_format": "wav", "provider": "piper"}
+{"model": "tts-1", "input": "Hola, ¿cómo estás?", "voice": "auto", "response_format": "wav"}
 ```
 
-- `provider`: `piper` (default) or `openai`. Omitted = `piper`.
-- `voice`: explicit Piper name (`en_US-amy-medium`), OpenAI alias (`alloy`/`nova`/...), or `auto` (Piper provider only — auto-detects language from `input` and picks a matching voice; supported major languages are prepared by default).
+- `voice`: explicit Piper name (`en_US-amy-medium`), OpenAI-style alias (`alloy`/`nova`/...), or `auto` (auto-detects language from `input` and picks a matching voice; supported major languages are prepared by default).
 - `response_format`: `wav` (default) or `pcm` (raw Int16LE 24kHz mono).
-- `model`: ignored by Piper, passed through to OpenAI.
+- `model`: accepted for OpenAI API compatibility and ignored by Piper.
 
 Output: audio bytes (WAV 24kHz mono by default, or raw PCM).
+
+In live meetings this service is used only for text requests to `POST /bots/{platform}/{native_meeting_id}/speak`. Meeting API publishes a `speak` command, the bot calls this service, and the returned PCM is played through the bot's PulseAudio virtual microphone. Pre-rendered `audio_url` and `audio_base64` `/speak` requests bypass this service; the bot decodes those files directly and plays them through the same microphone path.
 
 ### Endpoints
 
@@ -54,10 +50,9 @@ Supported formats: `wav` (default), `pcm` (raw Int16LE 24kHz mono)
 
 ### Dependencies
 
-- **Piper TTS** (bundled) — local ONNX inference, no external calls.
-- **OpenAI TTS** (optional) — only invoked when callers pass `provider=openai`. Requires `OPENAI_API_KEY`.
+- **Piper TTS** (bundled) — local ONNX inference, no external calls at synth time for prepared voices.
 - No database, no Redis, no other Vexa services.
-- No API keys required for the default Piper provider.
+- No API keys required for speech synthesis.
 
 ## How
 
@@ -96,7 +91,7 @@ curl http://localhost:8002/voices
 # Synthesize speech (save as WAV)
 curl -X POST http://localhost:8002/v1/audio/speech \
   -H "Content-Type: application/json" \
-  -d '{"model": "tts-1", "input": "Hello world", "voice": "nova", "response_format": "wav"}' \
+  -d '{"model": "tts-1", "input": "Hello world", "voice": "auto", "response_format": "wav"}' \
   --output speech.wav
 ```
 

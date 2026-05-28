@@ -159,14 +159,14 @@ Four independent capability flags control what the bot does in a meeting. Audio 
                      Default
 Audio IN  (capture)  always on    Per-speaker ScriptProcessors (Google Meet)
                                   or caption-driven mixed stream routing (Teams)
-Audio OUT (speak)    off          TTS playback via virtual mic (voiceAgentEnabled)
+Audio OUT (speak)    off          Local TTS or pre-rendered file playback via virtual mic (voiceAgentEnabled)
 Video IN  (see)      off          Receive participant video (videoReceiveEnabled)
 Video OUT (show)     off          Stream avatar via virtual camera (cameraEnabled)
 ```
 
 | Flag | Type field | API field | Default | What it controls |
 |------|-----------|-----------|---------|-----------------|
-| `voiceAgentEnabled` | `voice_agent_enabled` | `voice_agent_enabled` | `false` | TTS playback, microphone service, Redis event publishing. Does NOT require camera. |
+| `voiceAgentEnabled` | `voice_agent_enabled` | `voice_agent_enabled` | `false` | Local TTS playback, pre-rendered audio playback, microphone service, Redis event publishing. Does NOT require camera. |
 | `cameraEnabled` | `camera_enabled` | `camera_enabled` | `false` | Virtual camera init script, avatar streaming, `ScreenContentService`. Independent of voice agent. |
 | `videoReceiveEnabled` | `video_receive_enabled` | `video_receive_enabled` | `false` | When off, incoming video tracks are disabled at the WebRTC level (~87% CPU savings per bot). |
 | `transcribeEnabled` | `transcribe_enabled` | `transcribe_enabled` | `true` | Per-speaker transcription pipeline (SpeakerStreamManager, TranscriptionClient, SegmentPublisher). |
@@ -222,7 +222,13 @@ Redis subscriber on `bot_commands:meeting:<meeting_id>`:
 ```bash
 redis-cli PUBLISH bot_commands:meeting:123 '{"action":"leave"}'
 redis-cli PUBLISH bot_commands:meeting:123 '{"action":"reconfigure","language":"es"}'
+redis-cli PUBLISH bot_commands:meeting:123 '{"action":"speak","text":"Hello","provider":"piper","voice":"auto"}'
+redis-cli PUBLISH bot_commands:meeting:123 '{"action":"speak_audio","audio_base64":"UklGR...","format":"wav","sample_rate":24000}'
 ```
+
+`speak` calls the local Vexa TTS service (`TTS_SERVICE_URL`) and streams Piper PCM into `tts_sink`. `voice: "auto"` chooses a prepared Piper voice based on the text language; explicit Piper names and OpenAI-style aliases are accepted by the TTS service.
+
+`speak_audio` bypasses synthesis. The bot decodes `audio_url` or `audio_base64` with ffmpeg and plays the resulting audio through the same `tts_sink` / `virtual_mic` path. The bot unmutes before playback and re-mutes after completion or interruption.
 
 Status callbacks via HTTP POST to [meeting-api](../meeting-api/README.md): `joining`, `awaiting_admission`,
 `active`, `completed`, `failed`.

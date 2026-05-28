@@ -348,13 +348,11 @@ services:
     build:
       context: ../..
       dockerfile: services/dashboard/Dockerfile
-      # v0.10.5.3 Pack D-1 follow-up: thread version through to the
-      # prebuild generator. The chart yaml isn't in the dashboard build
-      # context (build context is repo root, but the script runs from
-      # /app inside the image), so we provide the version as a build-arg.
-      # VEXA_VERSION is read from the .env file by docker compose.
+      # Release identity guard: the dashboard Dockerfile copies VERSION and
+      # Chart.yaml into the build and rejects a stale VEXA_VERSION override.
+      # Empty VEXA_VERSION is allowed; the generator then uses VERSION.
       args:
-        NEXT_PUBLIC_VEXA_OSS_VERSION: ${VEXA_VERSION:-dev}
+        NEXT_PUBLIC_VEXA_OSS_VERSION: ${VEXA_VERSION:-}
         NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE: ${VEXA_RELEASE_DATE:-}
         VEXA_API_URL: http://api-gateway:8000
     image: vexaai/dashboard:${IMAGE_TAG}
@@ -389,11 +387,12 @@ services:
     mem_limit: 1g
     expose:
       - "8002"
+    # Host-expose TTS for pack-lane probes; override in isolated lanes.
     # v0.10.6.1 (scope.yaml tts-auto-language-detection.code_to_change):
     # host-expose the TTS port so host-side proves (TTS_AUTO_LANG_PICKS_RIGHT_VOICE,
     # TTS_NEW_LANG_VOICE_AUTO_DOWNLOAD_CACHED) can curl localhost:8002.
     ports:
-      - "127.0.0.1:8002:8002"
+      - "127.0.0.1:${TTS_SERVICE_HOST_PORT:-8002}:8002"
     environment:
       - PIPER_DEFAULT_VOICES=${PIPER_DEFAULT_VOICES:-major}
       - PIPER_LOAD_VOICES=${PIPER_LOAD_VOICES:-en_US-amy-medium,en_US-danny-low,pt_BR-faber-medium,es_ES-davefx-medium}

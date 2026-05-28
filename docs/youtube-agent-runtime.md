@@ -575,7 +575,7 @@ One API call. Platform and meeting ID. The Meeting API calls the Runtime API to 
 # Make the bot speak in the meeting
 curl -X POST https://api.vexa.ai/bots/google_meet/abc-defg-hij/speak \
   -H "X-API-Key: $API_KEY" \
-  -d '{"text": "Thanks for joining. I will be taking notes.", "voice": "alloy"}'
+  -d '{"text": "Thanks for joining. I will be taking notes.", "provider": "piper", "voice": "auto"}'
 
 # Send a chat message
 curl -X POST https://api.vexa.ai/bots/google_meet/abc-defg-hij/chat \

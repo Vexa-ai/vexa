@@ -181,9 +181,17 @@ async def handle_container_exit(redis, name: str, exit_code: int) -> None:
 
     Updates state and delivers the exit callback.
     """
+    container_data = await state.get_container(redis, name)
+    if not container_data:
+        logger.info(f"Container {name} exited with code {exit_code}; state already removed")
+        return
+
     status = "stopped" if exit_code == 0 else "failed"
     logger.info(f"Container {name} exited with code {exit_code} -> {status}")
     await state.set_stopped(redis, name, status=status, exit_code=exit_code)
+    if container_data.get("delete_requested"):
+        logger.info(f"Container {name} exit observed during explicit delete; delete path owns callback")
+        return
     await _fire_exit_callback(redis, name, exit_code=exit_code)
 
 
@@ -217,6 +225,7 @@ async def _fire_exit_callback(redis, name: str, exit_code: int = 0) -> None:
     # Store as pending for retry
     await state.store_pending_callback(redis, name, {
         "url": callback_url,
+        "headers": container_data.get("callback_headers") or {},
         "payload": payload,
         "attempts": 0,
     })
@@ -238,13 +247,14 @@ async def _deliver_callback(redis, name: str) -> None:
         return
 
     url = cb["url"]
+    headers = cb.get("headers") or {}
     payload = cb["payload"]
     backoff = config.CALLBACK_BACKOFF
 
     for attempt in range(config.CALLBACK_RETRIES):
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(url, json=payload)
+                resp = await client.post(url, json=payload, headers=headers)
                 if resp.status_code < 400:
                     logger.info(f"Callback delivered for {name} -> {url} (attempt {attempt + 1})")
                     await state.delete_pending_callback(redis, name)

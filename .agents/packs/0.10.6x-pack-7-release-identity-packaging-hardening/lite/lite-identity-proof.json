@@ -1,0 +1,10 @@
+{
+  "status": "pass",
+  "lite_gate": "source-level Lite identity proof; image runtime validation deferred until product-pack stitching per epic gate",
+  "checks": [
+    "COPY VERSION /repo/VERSION",
+    "COPY Chart.yaml into /repo",
+    "ENV VEXA_REPO_ROOT=/repo",
+    "npm run assert-release-version after build"
+  ]
+}

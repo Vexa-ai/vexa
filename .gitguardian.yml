@@ -26,6 +26,14 @@ secret:
     - "services/dashboard/agent-flow.js"
     - "services/dashboard/auth-validate*.js"
     - "services/dashboard/feature-validate.js"
+    # Evidence-file webhook test fixtures from vexa-meeting-deployment-test runs.
+    # These are per-test ephemeral HMAC keys used to sign payloads sent to
+    # https://httpbin.org/post — NOT real credentials, no production impact.
+    # Incidents 33129114, 33129115, 33129116.
+    - ".agents/packs/**/listener-meeting.json"
+    - ".agents/packs/**/transcript.json"
+    - ".agents/packs/**/meeting-test-runs/**"
+    - ".agents/packs/**/human/**/*.json"
 
   # Known test/dev patterns that are not real secrets
   ignored-matches:

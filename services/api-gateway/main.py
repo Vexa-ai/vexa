@@ -702,6 +702,16 @@ async def get_recording_proxy(recording_id: int, request: Request):
     url = f"{MEETING_API_URL}/recordings/{recording_id}"
     return await forward_request(app.state.http_client, "GET", url, request)
 
+@app.get("/recordings/{recording_id}/master",
+         tags=["Recordings"],
+         summary="Get canonical master media URL",
+         description="Resolves the finalized master recording media for browser playback.",
+         dependencies=[Depends(api_key_scheme)])
+async def get_recording_master_proxy(recording_id: int, request: Request):
+    """Forward request to Bot Manager to resolve the canonical master media."""
+    url = f"{MEETING_API_URL}/recordings/{recording_id}/master"
+    return await forward_request(app.state.http_client, "GET", url, request)
+
 @app.get("/recordings/{recording_id}/media/{media_file_id}/download",
          tags=["Recordings"],
          summary="Get download URL for a media file",

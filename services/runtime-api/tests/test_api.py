@@ -7,6 +7,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Optional
 from unittest.mock import AsyncMock
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -138,6 +139,26 @@ def test_delete_container(client):
     resp = client.delete(f"/containers/{name}")
     assert resp.status_code == 200
     assert resp.json()["status"] == "stopped"
+    assert client.get(f"/containers/{name}").status_code == 404
+
+
+def test_delete_container_fires_callback_before_removing_state(client):
+    create_resp = client.post("/containers", json={
+        "profile": "sandbox",
+        "user_id": "user-1",
+        "callback_url": "http://example.com/hook",
+        "metadata": {"connection_id": "bs:123"},
+    })
+    name = create_resp.json()["name"]
+
+    with patch("runtime_api.api._fire_exit_callback", new_callable=AsyncMock) as callback:
+        resp = client.delete(f"/containers/{name}")
+
+    assert resp.status_code == 200
+    callback.assert_awaited_once()
+    assert callback.await_args.args[1] == name
+    assert callback.await_args.kwargs["exit_code"] == 0
+    assert client.get(f"/containers/{name}").status_code == 404
 
 
 def test_touch_container(client):

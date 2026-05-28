@@ -158,6 +158,28 @@ class TestCreateMeeting:
 
         assert resp.status_code == 201
 
+    @pytest.mark.asyncio
+    async def test_create_browser_session_sets_exit_callback_contract(self, client, mock_db, mock_redis, monkeypatch):
+        """browser_session DELETE can complete because runtime gets a routable connection_id."""
+        monkeypatch.setenv("INTERNAL_API_SECRET", "test-internal-secret")
+        _setup_create_meeting_db(mock_db)
+
+        runtime_resp = {"container_id": TEST_CONTAINER_ID, "name": TEST_CONTAINER_NAME}
+        with patch("meeting_api.meetings._spawn_via_runtime_api", new_callable=AsyncMock, return_value=runtime_resp) as mock_spawn:
+            resp = await client.post("/bots", json={"mode": "browser_session"})
+
+        assert resp.status_code == 201
+        mock_spawn.assert_awaited_once()
+        kwargs = mock_spawn.await_args.kwargs
+        assert kwargs["profile"] == "browser-session"
+        assert kwargs["metadata"] == {
+            "meeting_id": TEST_MEETING_ID,
+            "connection_id": f"bs:{TEST_MEETING_ID}",
+        }
+        assert kwargs["callback_headers"] == {"X-Internal-Secret": "test-internal-secret"}
+        bot_config = json.loads(kwargs["config"]["env"]["BOT_CONFIG"])
+        assert bot_config["internalSecret"] == "test-internal-secret"
+
 
 # ===================================================================
 # GET /bots/status — list running bots

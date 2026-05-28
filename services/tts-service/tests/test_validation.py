@@ -67,6 +67,23 @@ class TestAutoLanguageVoiceResolution:
         assert main._detect_language(text) == "pt"
         assert main._resolve_voice_name("auto", text=text) == "pt_BR-faber-medium"
 
+    def test_non_latin_text_resolves_without_langdetect(self):
+        import main
+
+        assert main._detect_language("Привет, это проверка голоса Vexa.") == "ru"
+        assert main._resolve_voice_name("auto", text="Привет, это проверка голоса Vexa.") == "ru_RU-irina-medium"
+        assert main._detect_language("Привіт, це перевірка голосу Vexa.") == "uk"
+        assert main._resolve_voice_name("auto", text="Привіт, це перевірка голосу Vexa.") == "uk_UA-ukrainian_tts-medium"
+        assert main._detect_language("नमस्ते, यह Vexa की आवाज़ जाँच है.") == "hi"
+        assert main._resolve_voice_name("auto", text="नमस्ते, यह Vexa की आवाज़ जाँच है.") == "hi_IN-pratham-medium"
+
+    def test_alias_overrides_to_detected_voice_for_non_latin_text(self):
+        import main
+
+        text = "مرحبا، هذا اختبار صوت Vexa."
+
+        assert main._resolve_voice_name("alloy", text=text) == "ar_JO-kareem-medium"
+
 
 class TestVoicePathValidation:
     def test_rejects_path_traversal_voice_name(self):
