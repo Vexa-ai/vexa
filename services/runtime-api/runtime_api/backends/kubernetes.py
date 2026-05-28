@@ -30,19 +30,32 @@ class KubernetesBackend(Backend):
         import os
         from kubernetes import client, config as k8s_config
         in_cluster_token = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+        cfg = client.Configuration()
         if os.path.exists(in_cluster_token):
+            # Have the library populate cfg with the right api_key dict key
+            # for this version (varies between releases — e.g. "BearerToken"
+            # vs "authorization"). load_incluster_config also sets
+            # Configuration.set_default(cfg), but we bind cfg to the
+            # ApiClient explicitly so we don't depend on the singleton.
+            k8s_config.load_incluster_config(client_configuration=cfg)
+            # Defense-in-depth: ensure Authorization header WILL be sent no
+            # matter which dict-key convention this client version uses.
             with open(in_cluster_token) as f:
                 token = f.read().strip()
-            host = os.environ.get("KUBERNETES_SERVICE_HOST")
-            port = os.environ.get("KUBERNETES_SERVICE_PORT", "443")
-            cfg = client.Configuration()
-            cfg.host = f"https://{host}:{port}"
-            cfg.ssl_ca_cert = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-            cfg.verify_ssl = True
-            cfg.api_key = {"authorization": f"Bearer {token}"}
+            try:
+                cfg.api_key["authorization"] = token
+                cfg.api_key_prefix["authorization"] = "Bearer"
+                cfg.api_key["BearerToken"] = token
+                cfg.api_key_prefix["BearerToken"] = "Bearer"
+            except Exception:
+                pass
+            try:
+                cfg.access_token = token  # modern OpenAPI auth slot
+            except Exception:
+                pass
             api_client = client.ApiClient(configuration=cfg)
             self._api = client.CoreV1Api(api_client)
-            logger.info("Loaded in-cluster Kubernetes config (explicit SA token)")
+            logger.info("Loaded in-cluster Kubernetes config (explicit cfg + SA token)")
             return self._api
         try:
             k8s_config.load_kube_config()
