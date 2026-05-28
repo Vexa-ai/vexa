@@ -98,8 +98,11 @@ curl -X POST http://localhost:8002/v1/audio/speech \
 ### Debug
 
 - Logs to stdout: `%(asctime)s - %(name)s - %(levelname)s - %(message)s`
-- Major supported voice models are prepared on startup; first request for a non-prepared voice may still be slower
-- Invalid voice names that can't be downloaded return 404
+- Voice handling at request time:
+  - **Prepared and loaded** voice (in `PIPER_LOAD_VOICES`): served from the in-memory cache; first byte under ~100 ms.
+  - **Prepared but not loaded** voice (e.g. `de_DE-thorsten-medium` under the default `PIPER_DEFAULT_VOICES=major` set): the ONNX model is already on disk from startup, so the first request lazy-loads it into RAM in roughly 1 s and returns a normal WAV (verified during v0.10.6.3 stitch validation: `de_DE-thorsten-medium` → 200 / ~49 KB after a 1.2 s first-call latency).
+  - **Unsupported voice name** (any string not in the catalogue built from `MAJOR_DEFAULT_VOICES ∪ VOICE_ALIASES ∪ LANG_DEFAULT_VOICE`, e.g. `zz_ZZ-fake-medium`): `_voice_model_paths` rejects it with **HTTP 400 `Unsupported voice name`** without touching the network. This is the canonical "bad voice" failure mode.
+  - **Supported voice whose model download fails** (e.g. HuggingFace unreachable on first use of a catalogue voice that wasn't preloaded): `_download_voice_model` raises **HTTP 404 `Voice '<name>' not found and could not be downloaded`**.
 - The `model` field is accepted but ignored (kept for OpenAI API compatibility)
 
 ## DoD
