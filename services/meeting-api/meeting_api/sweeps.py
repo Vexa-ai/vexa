@@ -58,8 +58,9 @@ async def _sweep_stale_stopping(
 ) -> int:
     """One iteration of the stale-stopping sweep.
 
-    Scans for rows where status='stopping' AND updated_at older than
-    STALE_STOPPING_THRESHOLD_SECONDS. Force-completes each with
+    Scans for rows where status='stopping' AND the last recorded status
+    progress timestamp is older than STALE_STOPPING_THRESHOLD_SECONDS.
+    Force-completes each with
     `completion_reason=STOPPED` + transition_reason='stale_stopping_sweep'
     so the source is visible in audit logs.
 
@@ -77,16 +78,42 @@ async def _sweep_stale_stopping(
     swept = 0
 
     async with db_session_factory() as db:
+        # Pre-filter by immutable created_at. updated_at is bumped by webhook
+        # retries and other JSONB writes, so it cannot prove lifecycle progress.
         stmt = (
             select(Meeting)
             .where(Meeting.status == MeetingStatus.STOPPING.value)
-            .where(Meeting.updated_at < threshold)
-            .limit(50)  # bound per-iteration to avoid sweep starving other work
+            .where(Meeting.created_at < threshold)
+            .limit(200)
         )
-        rows = (await db.execute(stmt)).scalars().all()
+        candidates = (await db.execute(stmt)).scalars().all()
 
-        for meeting in rows:
-            stuck_for = (datetime.utcnow() - meeting.updated_at).total_seconds()
+        rows = []
+        for meeting in candidates:
+            data = (meeting.data or {}) if isinstance(meeting.data, dict) else {}
+            transitions = data.get("status_transition") or []
+            last_progress_at = meeting.created_at
+            for transition in transitions:
+                if not isinstance(transition, dict):
+                    continue
+                at_str = transition.get("timestamp") or transition.get("at")
+                if not at_str:
+                    continue
+                try:
+                    at_dt = datetime.fromisoformat(at_str.replace("Z", "+00:00"))
+                    if at_dt.tzinfo is not None:
+                        at_dt = at_dt.replace(tzinfo=None)
+                except (TypeError, ValueError):
+                    continue
+                if at_dt > last_progress_at:
+                    last_progress_at = at_dt
+            if last_progress_at < threshold:
+                rows.append((meeting, last_progress_at))
+            if len(rows) >= 50:
+                break
+
+        for meeting, last_progress_at in rows:
+            stuck_for = (datetime.utcnow() - last_progress_at).total_seconds()
             logger.warning(
                 f"[sweep] meeting {meeting.id} stuck stopping for {stuck_for:.0f}s — "
                 f"finalizing via stale-stopping sweep "
