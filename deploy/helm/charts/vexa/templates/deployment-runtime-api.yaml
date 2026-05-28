@@ -86,7 +86,7 @@ spec:
             - name: ALLOW_PRIVATE_CALLBACKS
               value: "true"
             - name: BROWSER_IMAGE
-              value: {{ .Values.runtimeApi.browserImage | default (printf "%s:%s" .Values.meetingApi.image.repository .Values.meetingApi.image.tag) | quote }}
+              value: {{ include "vexa.botImage" . | quote }}
             {{- if eq (default "process" .Values.runtimeApi.orchestrator) "kubernetes" }}
             - name: K8S_NAMESPACE
               valueFrom:
@@ -104,6 +104,8 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: TRANSCRIPTION_SERVICE_TOKEN
+            - name: TTS_SERVICE_URL
+              value: "http://{{ include "vexa.componentName" (list . "tts-service") }}:{{ .Values.ttsService.service.port }}"
             # v0.10.5 Pack B.3 — runtime-api needs MEETING_API_URL +
             # RECORDING_ENABLED + STORAGE_BACKEND + MINIO_SECURE on its own
             # env so profile-load-time `${VAR}` substitution resolves the

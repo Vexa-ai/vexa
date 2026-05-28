@@ -1,0 +1,16 @@
+{
+  "meeting_id": "25",
+  "native_id": "qoh-kidc-pfx",
+  "platform": "google_meet",
+  "status": "validated",
+  "subscribed": true,
+  "subscription": [
+    {
+      "native_id": "qoh-kidc-pfx",
+      "platform": "google_meet"
+    }
+  ],
+  "text_segments_seen": 1,
+  "transcript_messages": 1,
+  "validated_at": "2026-05-24T10:05:09Z"
+}

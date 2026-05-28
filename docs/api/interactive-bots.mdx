@@ -12,7 +12,7 @@ All interactive bot endpoints follow the pattern:
 Authentication: `X-API-Key` header (same as all Vexa endpoints).
 
 <Info>
-Interactive bot endpoints are available by default (`voice_agent_enabled` defaults to `true`). To disable, pass `voice_agent_enabled: false` when creating the bot. See [Bots API](bots) for the request format.
+Interactive bot endpoints require the bot to be created with `voice_agent_enabled: true`. The default is `false`, so recorder-only bots do not expose a meeting microphone unless you opt in. See [Bots API](bots) for the request format.
 </Info>
 
 <Info>
@@ -38,7 +38,7 @@ Most command endpoints return `202 Accepted` with this shape:
 
 ## Response Envelope (Codebase)
 
-The backend implementation for these endpoints is in `services/meeting-api/meeting_api/meetings.py` and returns stable command acknowledgements:
+The backend implementation for these endpoints is in `services/meeting-api/meeting_api/voice_agent.py` and returns stable command acknowledgements:
 
 | Endpoint | Status | Response |
 |---|---:|---|
@@ -67,8 +67,8 @@ curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
   -H "X-API-Key: $API_KEY" \
   -d '{
     "text": "Hello everyone, here is the summary.",
-    "provider": "openai",
-    "voice": "nova"
+    "provider": "piper",
+    "voice": "auto"
   }'
 ```
 
@@ -77,8 +77,8 @@ curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `text` | string | -- | Text to speak (mutually exclusive with `audio_url` / `audio_base64`) |
-| `provider` | string | `"openai"` | TTS provider |
-| `voice` | string | `"alloy"` | Voice ID. OpenAI voices: `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer` |
+| `provider` | string | `"piper"` | TTS provider. `piper` is the self-hosted default. |
+| `voice` | string | `"auto"` | Voice ID. `auto` detects the text language and chooses a prepared Piper voice. Piper voice names and OpenAI-style aliases (`alloy`, `nova`, etc.) are also accepted. |
   </Tab>
 
   <Tab title="Pre-rendered Audio (URL)">
@@ -96,10 +96,9 @@ curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `audio_url` | string | -- | URL to an audio file |
-| `format` | string | `"wav"` | Audio format: `wav`, `mp3`, `pcm`, `opus` |
-| `sample_rate` | int | `24000` | Sample rate in Hz (for PCM) |
-| `channels` | int | `1` | Channel count (for PCM) |
+| `audio_url` | string | -- | URL to a pre-rendered audio file. The bot downloads/decodes it directly; the TTS service is not called. |
+| `format` | string | `"wav"` | Audio format hint: `wav`, `mp3`, `pcm`, `opus` |
+| `sample_rate` | int | `24000` | Sample rate in Hz for raw PCM input |
   </Tab>
 
   <Tab title="Pre-rendered Audio (Base64)">
@@ -117,12 +116,15 @@ curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `audio_base64` | string | -- | Base64-encoded audio data |
-| `format` | string | `"wav"` | Audio format: `wav`, `mp3`, `pcm`, `opus` |
-| `sample_rate` | int | `24000` | Sample rate in Hz (for PCM) |
-| `channels` | int | `1` | Channel count (for PCM) |
+| `audio_base64` | string | -- | Base64-encoded pre-rendered audio data. Use this for stored/generated files that should play exactly as provided. |
+| `format` | string | `"wav"` | Audio format hint: `wav`, `mp3`, `pcm`, `opus` |
+| `sample_rate` | int | `24000` | Sample rate in Hz for raw PCM input |
   </Tab>
 </Tabs>
+
+For text requests, Meeting API publishes a `speak` command to the bot. The bot calls the local Vexa TTS service (`/v1/audio/speech`) and streams the resulting PCM into its virtual microphone.
+
+For `audio_url` or `audio_base64`, Meeting API publishes a `speak_audio` command instead. The bot decodes the supplied file with ffmpeg, plays it through the same virtual microphone, and re-mutes when playback ends.
 
 <Accordion title="Response (202)">
 

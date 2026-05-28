@@ -22,7 +22,7 @@
 #     -e DATABASE_URL="postgresql://user:pass@host:5432/vexa" \
 #     -e ADMIN_API_TOKEN="your-secret-token" \
 #     -e TRANSCRIPTION_SERVICE_URL="http://host:8083/v1/audio/transcriptions" \
-#     -e TRANSCRIPTION_SERVICE_TOKEN="your-api-key" \
+#     -e TRANSCRIPTION_SERVICE_TOKEN="<api-key>" \
 #     vexa-lite
 # =============================================================================
 
@@ -156,8 +156,8 @@ COPY packages/transcript-rendering/dist/ /transcript-rendering/dist/
 # Copy dashboard source (package.json only — no lockfile, to avoid path mismatch after sed)
 COPY services/dashboard/package.json /app/dashboard-build/
 RUN cd /app/dashboard-build && \
-    sed -i 's|file:../../../packages/transcript-rendering|file:/transcript-rendering|' package.json && \
-    npm install --ignore-scripts && \
+    sed -i 's|file:../../packages/transcript-rendering|file:/transcript-rendering|' package.json && \
+    npm install --ignore-scripts --legacy-peer-deps && \
     rm -rf node_modules/@vexaai/transcript-rendering && \
     cp -r /transcript-rendering node_modules/@vexaai/transcript-rendering
 
@@ -167,22 +167,23 @@ COPY services/dashboard/public /app/dashboard-build/public
 # which the package.json prebuild hook invokes. Without it, npm run build fails
 # with `Cannot find module .../scripts/generate-release-version.js`.
 COPY services/dashboard/scripts /app/dashboard-build/scripts
-# Pack D-1 follow-up #2: generator looks for deploy/helm/charts/vexa/Chart.yaml
-# OR a NEXT_PUBLIC_VEXA_OSS_VERSION env var. The chart yaml isn't normally in
-# the lite build context, so we provide the version as a build-arg sourced
-# from the repo VERSION file. Falls back to "dev" if not set (for ad-hoc
-# builds outside the make-driven pipeline).
-ARG NEXT_PUBLIC_VEXA_OSS_VERSION=dev
+# The dashboard release-version generator validates any env/build-arg override
+# against the canonical VERSION and Chart.yaml copied into /repo. That keeps
+# Lite's embedded dashboard from shipping a stale visible release identity.
+COPY VERSION /repo/VERSION
+COPY deploy/helm/charts/vexa/Chart.yaml /repo/deploy/helm/charts/vexa/Chart.yaml
+ARG NEXT_PUBLIC_VEXA_OSS_VERSION
 ARG NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE
 ENV NEXT_PUBLIC_VEXA_OSS_VERSION=$NEXT_PUBLIC_VEXA_OSS_VERSION
 ENV NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE=$NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE
+ENV VEXA_REPO_ROOT=/repo
 COPY services/dashboard/next.config.ts services/dashboard/tsconfig.json services/dashboard/postcss.config.mjs /app/dashboard-build/
 COPY services/dashboard/components.json /app/dashboard-build/
 # No tailwind.config — postcss handles it
 
 # Build-time env: rewrites in next.config.ts bake VEXA_API_URL into routes-manifest
 ENV VEXA_API_URL=http://localhost:8056
-RUN cd /app/dashboard-build && npm run build
+RUN cd /app/dashboard-build && npm run build && npm run assert-release-version
 
 # Move standalone output to final location
 # Next.js standalone: .next/standalone/ has server.js + node_modules
@@ -236,7 +237,10 @@ ENV ADMIN_API_URL=http://localhost:8057 \
 
 # TTS Service
 ENV TTS_SERVICE_URL=http://localhost:8059 \
-    OPENAI_API_KEY=
+    OPENAI_API_KEY= \
+    PIPER_DEFAULT_VOICES=major \
+    PIPER_LOAD_VOICES=en_US-amy-medium,en_US-danny-low,pt_BR-faber-medium,es_ES-davefx-medium \
+    PIPER_PRELOAD_STRICT=true
 
 # Display for headless browsers
 ENV DISPLAY=:99

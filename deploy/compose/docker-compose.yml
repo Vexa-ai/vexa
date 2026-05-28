@@ -129,6 +129,7 @@ services:
       - AGENT_IMAGE=${AGENT_IMAGE}
       - BROWSER_IMAGE=${BROWSER_IMAGE}
       - REDIS_URL=redis://redis:6379
+      - TTS_SERVICE_URL=http://tts-service:8002
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
@@ -341,13 +342,11 @@ services:
     build:
       context: ../..
       dockerfile: services/dashboard/Dockerfile
-      # v0.10.5.3 Pack D-1 follow-up: thread version through to the
-      # prebuild generator. The chart yaml isn't in the dashboard build
-      # context (build context is repo root, but the script runs from
-      # /app inside the image), so we provide the version as a build-arg.
-      # VEXA_VERSION is read from the .env file by docker compose.
+      # Release identity guard: the dashboard Dockerfile copies VERSION and
+      # Chart.yaml into the build and rejects a stale VEXA_VERSION override.
+      # Empty VEXA_VERSION is allowed; the generator then uses VERSION.
       args:
-        NEXT_PUBLIC_VEXA_OSS_VERSION: ${VEXA_VERSION:-dev}
+        NEXT_PUBLIC_VEXA_OSS_VERSION: ${VEXA_VERSION:-}
         NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE: ${VEXA_RELEASE_DATE:-}
     image: vexaai/dashboard:${IMAGE_TAG}
     mem_limit: 1g
@@ -377,7 +376,13 @@ services:
     mem_limit: 1g
     expose:
       - "8002"
+    # Host-expose TTS for pack-lane probes; override in isolated lanes.
+    ports:
+      - "127.0.0.1:${TTS_SERVICE_HOST_PORT:-8002}:8002"
     environment:
+      - PIPER_DEFAULT_VOICES=${PIPER_DEFAULT_VOICES:-major}
+      - PIPER_LOAD_VOICES=${PIPER_LOAD_VOICES:-en_US-amy-medium,en_US-danny-low,pt_BR-faber-medium,es_ES-davefx-medium}
+      - PIPER_PRELOAD_STRICT=${PIPER_PRELOAD_STRICT:-true}
       - TTS_API_TOKEN=${TTS_API_TOKEN:-}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:

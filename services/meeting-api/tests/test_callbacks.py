@@ -40,6 +40,24 @@ def _patch_flag_modified():
     return patch("meeting_api.callbacks.attributes.flag_modified", MagicMock())
 
 
+class TestFindMeetingBySession:
+
+    @pytest.mark.asyncio
+    async def test_browser_session_connection_id_routes_by_meeting_id(self, mock_db):
+        """browser_session exit callbacks use bs:<meeting_id> without a MeetingSession row."""
+        from meeting_api.callbacks import _find_meeting_by_session
+
+        meeting = make_meeting(id=123, platform="browser_session")
+        mock_db.get = AsyncMock(return_value=meeting)
+
+        session, found = await _find_meeting_by_session("bs:123", mock_db)
+
+        assert session is None
+        assert found is meeting
+        mock_db.get.assert_awaited_once()
+        assert mock_db.get.await_args.args[1] == 123
+
+
 # ===================================================================
 # POST /bots/internal/callback/exited
 # ===================================================================

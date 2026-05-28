@@ -1,13 +1,7 @@
 const { chromium } = require('playwright');
 
-const TOKEN = 'vxa_user_jIwBRUBlQcLeV0aCuYXOtvzNnlC28wpttcPxOXET';
-const USER = {
-  id: 2,
-  email: '2280905@gmail.com',
-  name: '2280905',
-  max_concurrent_bots: 3,
-  created_at: '2026-03-23T18:25:20.956223'
-};
+const TOKEN = process.env.VEXA_DASHBOARD_TEST_TOKEN || 'dev-placeholder-token';
+const USER = { id: 2, email: 'test-user@example.com', name: 'Test User', max_concurrent_bots: 3, created_at: '2026-01-01T00:00:00.000000' };
 
 const authState = JSON.stringify({
   state: {

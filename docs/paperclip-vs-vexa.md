@@ -382,7 +382,7 @@ curl -X POST /bots -d '{
 
 # Make the bot speak
 curl -X POST /bots/google_meet/abc-defg-hij/speak \
-  -d '{"text": "Thanks for joining. Taking notes.", "voice": "alloy"}'
+  -d '{"text": "Thanks for joining. Taking notes.", "provider": "piper", "voice": "auto"}'
 
 # Get live transcript
 curl /transcripts/google_meet/abc-defg-hij

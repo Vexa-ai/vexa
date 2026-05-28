@@ -1,0 +1,9 @@
+{
+  "status": "pass",
+  "version": "0.10.6.2.1",
+  "chart_app_version": "0.10.6.2.1",
+  "chart_version": "0.10.6+2.1",
+  "compose_dashboard_arg": "NEXT_PUBLIC_VEXA_OSS_VERSION defaults to empty VEXA_VERSION fallback",
+  "dashboard_dockerfile": "copies VERSION and Chart.yaml, sets VEXA_REPO_ROOT, runs assert-release-version",
+  "lite_dockerfile": "copies VERSION and Chart.yaml, sets VEXA_REPO_ROOT, runs assert-release-version"
+}

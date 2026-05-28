@@ -1,0 +1,18 @@
+{
+  "run_id": "meeting-test-20260524-094624",
+  "case_id": "lite-bvf-r4",
+  "platform": "google_meet",
+  "native_meeting_id": "bvf-rzuj-kwj",
+  "gateway_url": "http://localhost:46471",
+  "dashboard_url": "http://localhost:46470",
+  "listener_bot_id": "7",
+  "speaker_bot_ids": [
+    "8",
+    "9"
+  ],
+  "left_running": false,
+  "score": null,
+  "telemetry_score": null,
+  "ws_transcript_summary": null,
+  "webhook_summary": null
+}

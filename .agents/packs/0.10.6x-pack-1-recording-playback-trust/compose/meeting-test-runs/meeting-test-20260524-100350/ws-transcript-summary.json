@@ -1,0 +1,16 @@
+{
+  "meeting_id": "15",
+  "native_id": "ios-njgt-nnh",
+  "platform": "google_meet",
+  "status": "validated",
+  "subscribed": true,
+  "subscription": [
+    {
+      "native_id": "ios-njgt-nnh",
+      "platform": "google_meet"
+    }
+  ],
+  "text_segments_seen": 1,
+  "transcript_messages": 1,
+  "validated_at": "2026-05-24T10:05:25Z"
+}

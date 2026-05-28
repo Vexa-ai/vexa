@@ -27,17 +27,59 @@ class KubernetesBackend(Backend):
     def _get_api(self):
         if self._api is not None:
             return self._api
+        import os
         from kubernetes import client, config as k8s_config
-        try:
-            k8s_config.load_incluster_config()
-            logger.info("Loaded in-cluster Kubernetes config")
-        except k8s_config.ConfigException:
+        in_cluster_token = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+        cfg = client.Configuration()
+        if os.path.exists(in_cluster_token):
+            # Have the library populate cfg with the right api_key dict key
+            # for this version (varies between releases — e.g. "BearerToken"
+            # vs "authorization"). load_incluster_config also sets
+            # Configuration.set_default(cfg), but we bind cfg to the
+            # ApiClient explicitly so we don't depend on the singleton.
+            k8s_config.load_incluster_config(client_configuration=cfg)
+            # Defense-in-depth: ensure Authorization header WILL be sent no
+            # matter which dict-key convention this client version uses.
+            with open(in_cluster_token) as f:
+                token = f.read().strip()
             try:
-                k8s_config.load_kube_config()
-                logger.info("Loaded kubeconfig from file")
-            except k8s_config.ConfigException:
-                logger.error("Could not load Kubernetes config")
-                raise
+                cfg.api_key["authorization"] = token
+                cfg.api_key_prefix["authorization"] = "Bearer"
+                cfg.api_key["BearerToken"] = token
+                cfg.api_key_prefix["BearerToken"] = "Bearer"
+            except Exception:
+                pass
+            try:
+                cfg.access_token = token  # modern OpenAPI auth slot
+            except Exception:
+                pass
+            api_client = client.ApiClient(configuration=cfg)
+            # iter 2: belt-and-suspenders — manually set Authorization on the
+            # ApiClient's default_headers so EVERY request carries the bearer
+            # token regardless of how the Configuration auth dict is read.
+            try:
+                api_client.set_default_header(
+                    "Authorization", f"Bearer {token}",
+                )
+            except Exception:
+                try:
+                    api_client.default_headers["Authorization"] = (
+                        f"Bearer {token}"
+                    )
+                except Exception:
+                    pass
+            self._api = client.CoreV1Api(api_client)
+            logger.info(
+                "Loaded in-cluster Kubernetes config "
+                "(explicit cfg + SA token + default header)"
+            )
+            return self._api
+        try:
+            k8s_config.load_kube_config()
+            logger.info("Loaded kubeconfig from file")
+        except k8s_config.ConfigException:
+            logger.error("Could not load Kubernetes config")
+            raise
         self._api = client.CoreV1Api()
         return self._api
 

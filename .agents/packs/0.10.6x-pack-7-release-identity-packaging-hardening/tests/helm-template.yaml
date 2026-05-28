@@ -1,0 +1,1438 @@
+---
+# Source: vexa/templates/pdb.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: pack7-vexa-admin-api-pdb
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+    app.kubernetes.io/component: admin-api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vexa
+      app.kubernetes.io/instance: pack7
+      app.kubernetes.io/component: admin-api
+---
+# Source: vexa/templates/pdb.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: pack7-vexa-api-gateway-pdb
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+    app.kubernetes.io/component: api-gateway
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vexa
+      app.kubernetes.io/instance: pack7
+      app.kubernetes.io/component: api-gateway
+---
+# Source: vexa/templates/pdb.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: pack7-vexa-dashboard-pdb
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+    app.kubernetes.io/component: dashboard
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vexa
+      app.kubernetes.io/instance: pack7
+      app.kubernetes.io/component: dashboard
+---
+# Source: vexa/templates/pdb.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: pack7-vexa-meeting-api-pdb
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+    app.kubernetes.io/component: meeting-api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vexa
+      app.kubernetes.io/instance: pack7
+      app.kubernetes.io/component: meeting-api
+---
+# Source: vexa/templates/pdb.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: pack7-vexa-runtime-api-pdb
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+    app.kubernetes.io/component: runtime-api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vexa
+      app.kubernetes.io/instance: pack7
+      app.kubernetes.io/component: runtime-api
+---
+# Source: vexa/templates/secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pack7-vexa-secrets
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+type: Opaque
+stringData:
+  ADMIN_API_TOKEN: "CHANGE_ME"
+  TRANSCRIPTION_SERVICE_TOKEN: ""
+  INTERNAL_API_SECRET: "vexa-internal-secret"
+---
+# Source: vexa/templates/secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-credentials
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+type: Opaque
+stringData:
+  POSTGRES_DB: "vexa"
+  POSTGRES_USER: "postgres"
+  POSTGRES_PASSWORD: "postgres"
+---
+# Source: vexa/templates/configmap-runtime-profiles.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vexa-runtime-profiles
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+data:
+  profiles.yaml: |
+    profiles:
+      meeting:
+        image: "${BROWSER_IMAGE}"
+        command: ["/app/vexa-bot/entrypoint.sh"]
+        working_dir: "/app/vexa-bot"
+        resources:
+          cpu_request: "1000m"     # measured p95: 780m
+          cpu_limit: "1500m"       # 1.5x headroom for browser spikes
+          memory_request: "1100Mi"
+          memory_limit: "2560Mi"  # bumped 2026-04-21 (Bug B Teams OOM)
+          shm_size: 2147483648
+        idle_timeout: 0
+        auto_remove: false
+        # v0.10.5 Pack B.2 — bot pod scheduling per #240. Empty defaults
+        # ship without operator config; operators with dedicated bot
+        # pools override `runtimeProfiles` in their values overlay to
+        # populate `node_selector` and `k8s_overrides.tolerations`.
+        # Schema (services/runtime-api/runtime_api/profiles.py:65,67)
+        # accepts both fields; backend (kubernetes.py:131,141) applies them.
+        node_selector: {}
+        k8s_overrides:
+          tolerations: []
+        env:
+          DISPLAY: "${DISPLAY:-:99}"
+          NODE_ENV: "production"
+          REDIS_URL: "${REDIS_URL}"
+          TRANSCRIPTION_SERVICE_URL: "${TRANSCRIPTION_SERVICE_URL}"
+          TRANSCRIPTION_SERVICE_TOKEN: "${TRANSCRIPTION_SERVICE_TOKEN}"
+          # v0.10.5 Pack B.3 — propagate recording/storage env to bot pods (#235).
+          # Without these, bot transcribes (has TRANSCRIPTION_SERVICE_*) and
+          # silently skips recording upload (no MEETING_API_URL → no endpoint
+          # for /internal/recordings/upload). Prod evidence on #235: prod
+          # MinIO 0 objects despite real-time transcripts flowing normally.
+          MEETING_API_URL: "${MEETING_API_URL}"
+          RECORDING_ENABLED: "${RECORDING_ENABLED:-true}"
+          STORAGE_BACKEND: "${STORAGE_BACKEND:-minio}"
+          MINIO_ENDPOINT: "${MINIO_ENDPOINT}"
+          MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY}"
+          MINIO_SECRET_KEY: "${MINIO_SECRET_KEY}"
+          MINIO_BUCKET: "${MINIO_BUCKET:-vexa}"
+          MINIO_SECURE: "${MINIO_SECURE:-false}"
+        ports:
+          "9222/tcp": {}
+      browser-session:
+        image: "${BROWSER_IMAGE}"
+        command: ["/app/vexa-bot/entrypoint.sh"]
+        working_dir: "/app/vexa-bot"
+        resources:
+          cpu_request: "1000m"
+          cpu_limit: "1500m"
+          memory_request: "1100Mi"
+          memory_limit: "2560Mi"
+          shm_size: 2147483648
+        idle_timeout: 0
+        auto_remove: false
+        # v0.10.5 Pack B.2 — same scheduling extension point.
+        node_selector: {}
+        k8s_overrides:
+          tolerations: []
+        env:
+          DISPLAY: "${DISPLAY:-:99}"
+          NODE_ENV: "production"
+          REDIS_URL: "${REDIS_URL}"
+          # v0.10.5 Pack B.3 — recording/storage env propagation.
+          MEETING_API_URL: "${MEETING_API_URL}"
+          RECORDING_ENABLED: "${RECORDING_ENABLED:-true}"
+          STORAGE_BACKEND: "${STORAGE_BACKEND:-minio}"
+          MINIO_ENDPOINT: "${MINIO_ENDPOINT}"
+          MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY}"
+          MINIO_SECRET_KEY: "${MINIO_SECRET_KEY}"
+          MINIO_BUCKET: "${MINIO_BUCKET:-vexa}"
+          MINIO_SECURE: "${MINIO_SECURE:-false}"
+        ports:
+          "6080/tcp": {}
+          "9222/tcp": {}
+          "9223/tcp": {}
+---
+# Source: vexa/templates/pvc-redis.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pack7-vexa-redis-data
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+# Source: vexa/templates/pvc-tts-voices.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pack7-vexa-tts-voices
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+# Source: vexa/templates/service-admin-api.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: pack7-vexa-admin-api
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8001
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/component: admin-api
+---
+# Source: vexa/templates/service-api-gateway.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: pack7-vexa-api-gateway
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/component: api-gateway
+---
+# Source: vexa/templates/service-mcp.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: pack7-vexa-mcp
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 18888
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/component: mcp
+---
+# Source: vexa/templates/service-meeting-api.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: pack7-vexa-meeting-api
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/component: meeting-api
+---
+# Source: vexa/templates/service-minio.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: pack7-vexa-minio
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+spec:
+  type: ClusterIP
+  ports:
+    - name: api
+      port: 9000
+      targetPort: api
+    - name: console
+      port: 9001
+      targetPort: console
+  selector:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/component: minio
+---
+# Source: vexa/templates/service-postgres.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: pack7-vexa-postgres
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+spec:
+  clusterIP: None
+  ports:
+    - name: pg
+      port: 5432
+      targetPort: pg
+  selector:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/component: postgres
+---
+# Source: vexa/templates/service-redis.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: pack7-vexa-redis
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+spec:
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+  selector:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/component: redis
+---
+# Source: vexa/templates/service-runtime-api.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: pack7-vexa-runtime-api
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8090
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/component: runtime-api
+---
+# Source: vexa/templates/service-tts-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: pack7-vexa-tts-service
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8002
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/component: tts-service
+---
+# Source: vexa/templates/deployment-admin-api.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pack7-vexa-admin-api
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+spec:
+  replicas: 2
+  
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vexa
+      app.kubernetes.io/instance: pack7
+      app.kubernetes.io/component: admin-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vexa
+        app.kubernetes.io/instance: pack7
+        app.kubernetes.io/component: admin-api
+      annotations:
+        {}
+    spec:
+      securityContext:
+        {}
+      containers:
+        - name: admin-api
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+          image: "vexaai/admin-api:0.10.6.2.1"
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8001
+          env:
+            - name: DB_HOST
+              value: "pack7-vexa-postgres"
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: "postgres-credentials"
+                  key: POSTGRES_DB
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: "postgres-credentials"
+                  key: POSTGRES_USER
+            - name: DB_SSL_MODE
+              value: "disable"
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: "postgres-credentials"
+                  key: POSTGRES_PASSWORD
+            - name: ADMIN_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: pack7-vexa-secrets
+                  key: ADMIN_API_TOKEN
+            - name: INTERNAL_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: pack7-vexa-secrets
+                  key: INTERNAL_API_SECRET
+            - name: DB_POOL_SIZE
+              value: "10"
+            - name: DB_MAX_OVERFLOW
+              value: "5"
+            - name: DB_POOL_TIMEOUT
+              value: "10"
+          readinessProbe:
+            httpGet:
+              path: /docs
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /docs
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+---
+# Source: vexa/templates/deployment-api-gateway.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pack7-vexa-api-gateway
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+spec:
+  replicas: 2
+  
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vexa
+      app.kubernetes.io/instance: pack7
+      app.kubernetes.io/component: api-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vexa
+        app.kubernetes.io/instance: pack7
+        app.kubernetes.io/component: api-gateway
+      annotations:
+        {}
+    spec:
+      securityContext:
+        {}
+      containers:
+        - name: api-gateway
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+          image: "vexaai/api-gateway:0.10.6.2.1"
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: ADMIN_API_URL
+              value: "http://pack7-vexa-admin-api:8001"
+            - name: MEETING_API_URL
+              value: "http://pack7-vexa-meeting-api:8080"
+            - name: RUNTIME_API_URL
+              value: "http://pack7-vexa-runtime-api:8090"
+            - name: TRANSCRIPTION_COLLECTOR_URL
+              value: "http://pack7-vexa-meeting-api:8080"
+            - name: MCP_URL
+              value: "http://pack7-vexa-mcp:18888"
+            - name: REDIS_URL
+              value: "redis://pack7-vexa-redis.vexa-staging.svc.cluster.local:6379/0"
+            - name: REDIS_HOST
+              value: "redis://pack7-vexa-redis.vexa-staging.svc.cluster.local:6379/0"
+            - name: INTERNAL_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: pack7-vexa-secrets
+                  key: INTERNAL_API_SECRET
+          readinessProbe:
+            httpGet:
+              path: /docs
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /docs
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+---
+# Source: vexa/templates/deployment-mcp.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pack7-vexa-mcp
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+spec:
+  replicas: 2
+  
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vexa
+      app.kubernetes.io/instance: pack7
+      app.kubernetes.io/component: mcp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vexa
+        app.kubernetes.io/instance: pack7
+        app.kubernetes.io/component: mcp
+      annotations:
+        {}
+    spec:
+      securityContext:
+        {}
+      containers:
+        - name: mcp
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+          image: "vexaai/mcp:0.10.6.2.1"
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 18888
+          env:
+            - name: API_GATEWAY_URL
+              value: "http://pack7-vexa-api-gateway:8000"
+          readinessProbe:
+            httpGet:
+              path: /docs
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /docs
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+            requests:
+              cpu: 50m
+              memory: 128Mi
+---
+# Source: vexa/templates/deployment-meeting-api.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pack7-vexa-meeting-api
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+spec:
+  replicas: 2
+  
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vexa
+      app.kubernetes.io/instance: pack7
+      app.kubernetes.io/component: meeting-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vexa
+        app.kubernetes.io/instance: pack7
+        app.kubernetes.io/component: meeting-api
+      annotations:
+        {}
+    spec:
+      securityContext:
+        {}
+      containers:
+        - name: meeting-api
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+          image: "vexaai/meeting-api:0.10.6.2.1"
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: DB_HOST
+              value: "pack7-vexa-postgres"
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: "postgres-credentials"
+                  key: POSTGRES_DB
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: "postgres-credentials"
+                  key: POSTGRES_USER
+            - name: DB_SSL_MODE
+              value: "disable"
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: "postgres-credentials"
+                  key: POSTGRES_PASSWORD
+            - name: REDIS_URL
+              value: "redis://pack7-vexa-redis.vexa-staging.svc.cluster.local:6379/0"
+            - name: REDIS_HOST
+              value: "pack7-vexa-redis.vexa-staging.svc.cluster.local"
+            - name: REDIS_PORT
+              value: "6379"
+            - name: ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: pack7-vexa-secrets
+                  key: ADMIN_API_TOKEN
+            - name: INTERNAL_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: pack7-vexa-secrets
+                  key: INTERNAL_API_SECRET
+            - name: RUNTIME_API_URL
+              value: "http://pack7-vexa-runtime-api:8090"
+            - name: MEETING_API_URL
+              value: "http://pack7-vexa-meeting-api:8080"
+            - name: TRANSCRIPTION_COLLECTOR_URL
+              value: "http://pack7-vexa-meeting-api:8080"
+            - name: BOT_IMAGE_NAME
+              value: "vexaai/vexa-bot:0.10.6.2.1"
+            - name: TTS_SERVICE_URL
+              value: "http://pack7-vexa-tts-service:8002"
+            - name: TRANSCRIPTION_SERVICE_URL
+              value: ""
+            - name: TRANSCRIPTION_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: pack7-vexa-secrets
+                  key: TRANSCRIPTION_SERVICE_TOKEN
+            - name: RECORDING_ENABLED
+              value: "true"
+            - name: STORAGE_BACKEND
+              value: "minio"
+            - name: MINIO_ENDPOINT
+              value: "pack7-vexa-minio:9000"
+            - name: MINIO_ACCESS_KEY
+              value: "vexa-access-key"
+            - name: MINIO_SECRET_KEY
+              value: "vexa-secret-key"
+            - name: MINIO_BUCKET
+              value: "vexa"
+            - name: MINIO_SECURE
+              value: "false"
+            # v0.10.5.3 Pack D-3 follow-up (Option B): MINIO_PUBLIC_ENDPOINT
+            # is the browser-reachable hostname used to sign download URLs.
+            # MINIO_ENDPOINT (above) stays in-cluster for fast server-side I/O.
+            # When unset/empty, storage.py falls back to MINIO_ENDPOINT.
+            # Set this when MinIO Service.type=NodePort and you have an
+            # external IP, OR when an ingress fronts MinIO under an FQDN.
+            - name: MINIO_PUBLIC_ENDPOINT
+              value: ""
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: DB_POOL_SIZE
+              value: "20"
+            - name: DB_MAX_OVERFLOW
+              value: "20"
+            - name: DB_POOL_TIMEOUT
+              value: "10"
+          # v0.10.5 Pack C.4 — readinessProbe gated on consumer-up.
+          # /readyz returns 503 until startup_complete (Redis ping
+          # succeeded AND xgroup_create succeeded AND consumer tasks
+          # alive). K8s Service routes traffic only to Ready pods, so
+          # a pod with no working consumer never receives traffic.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+          # /health = HTTP-loop liveness (always 200 unless event loop wedges)
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 45
+            periodSeconds: 20
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+            requests:
+              cpu: 200m
+              memory: 512Mi
+---
+# Source: vexa/templates/deployment-redis.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pack7-vexa-redis
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+spec:
+  replicas: 1
+  # Redis uses Recreate (not the default RollingUpdate) because a single PVC
+  # cannot be mounted by two pods; a maxSurge > 0 rollout would stall.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vexa
+      app.kubernetes.io/instance: pack7
+      app.kubernetes.io/component: redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vexa
+        app.kubernetes.io/instance: pack7
+        app.kubernetes.io/component: redis
+    spec:
+      # v0.10.5 Pack I.s — stateful-pod anti-affinity (#272 iter-5).
+      # See deployment-minio.yaml header for the full rationale.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/component
+                      operator: In
+                      values: [postgres, minio, tts-service]
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: redis
+          image: "redis:7-alpine"
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--appendonly"
+            - "yes"
+            - "--appendfsync"
+            - "everysec"
+            - "--stop-writes-on-bgsave-error"
+            - "no"
+            - "--maxmemory"
+            - "1gb"
+            - "--maxmemory-policy"
+            - "allkeys-lru"
+          ports:
+            - name: redis
+              containerPort: 6379
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            tcpSocket:
+              port: redis
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: redis
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: pack7-vexa-redis-data
+---
+# Source: vexa/templates/deployment-runtime-api.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pack7-vexa-runtime-api
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+spec:
+  replicas: 2
+  
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vexa
+      app.kubernetes.io/instance: pack7
+      app.kubernetes.io/component: runtime-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vexa
+        app.kubernetes.io/instance: pack7
+        app.kubernetes.io/component: runtime-api
+      annotations:
+        {}
+    spec:
+      securityContext:
+        {}
+      containers:
+        - name: runtime-api
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+          image: "vexaai/runtime-api:0.10.6.2.1"
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8090
+          env:
+            - name: REDIS_URL
+              value: "redis://pack7-vexa-redis.vexa-staging.svc.cluster.local:6379/0"
+            - name: DB_HOST
+              value: "pack7-vexa-postgres"
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: "postgres-credentials"
+                  key: POSTGRES_DB
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: "postgres-credentials"
+                  key: POSTGRES_USER
+            - name: DB_SSL_MODE
+              value: "disable"
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: "postgres-credentials"
+                  key: POSTGRES_PASSWORD
+            - name: MINIO_ENDPOINT
+              value: "pack7-vexa-minio:9000"
+            - name: MINIO_ACCESS_KEY
+              value: "vexa-access-key"
+            - name: MINIO_SECRET_KEY
+              value: "vexa-secret-key"
+            - name: MINIO_BUCKET
+              value: "vexa"
+            - name: ORCHESTRATOR_BACKEND
+              value: "process"
+            - name: ALLOW_PRIVATE_CALLBACKS
+              value: "true"
+            - name: BROWSER_IMAGE
+              value: "vexaai/vexa-bot:0.10.6.2.1"
+            - name: TRANSCRIPTION_SERVICE_URL
+              value: ""
+            - name: TRANSCRIPTION_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: pack7-vexa-secrets
+                  key: TRANSCRIPTION_SERVICE_TOKEN
+            # v0.10.5 Pack B.3 — runtime-api needs MEETING_API_URL +
+            # RECORDING_ENABLED + STORAGE_BACKEND + MINIO_SECURE on its own
+            # env so profile-load-time `${VAR}` substitution resolves the
+            # values into bot pods' env (#235). meeting-api/redis/minio
+            # vars (above) cover the storage trio; these add the missing.
+            - name: MEETING_API_URL
+              value: "http://pack7-vexa-meeting-api:8080"
+            - name: RECORDING_ENABLED
+              value: "true"
+            - name: STORAGE_BACKEND
+              value: "minio"
+            - name: MINIO_SECURE
+              value: "false"
+            - name: PROFILES_PATH
+              value: "/app/profiles.yaml"
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: DB_POOL_SIZE
+              value: "10"
+            - name: DB_MAX_OVERFLOW
+              value: "5"
+            - name: DB_POOL_TIMEOUT
+              value: "10"
+          readinessProbe:
+            httpGet:
+              path: /docs
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /docs
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          volumeMounts:
+            - name: profiles
+              mountPath: /app/profiles.yaml
+              subPath: profiles.yaml
+          resources:
+            limits:
+              cpu: 200m
+              memory: 512Mi
+            requests:
+              cpu: 20m
+              memory: 128Mi
+      volumes:
+        - name: profiles
+          configMap:
+            name: vexa-runtime-profiles
+---
+# Source: vexa/templates/deployment-tts-service.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pack7-vexa-tts-service
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+spec:
+  replicas: 1
+  # TTS uses Recreate (not the default RollingUpdate) because its PVC for
+  # voice models cannot be mounted by two pods; a maxSurge > 0 rollout
+  # would stall.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vexa
+      app.kubernetes.io/instance: pack7
+      app.kubernetes.io/component: tts-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vexa
+        app.kubernetes.io/instance: pack7
+        app.kubernetes.io/component: tts-service
+      annotations:
+        {}
+    spec:
+      securityContext:
+        {}
+      # v0.10.5 Pack I.s — stateful-pod anti-affinity (#272 iter-5).
+      # See deployment-minio.yaml header for the full rationale.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/component
+                      operator: In
+                      values: [postgres, redis, minio]
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: tts-service
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+          image: "vexaai/tts-service:0.10.6.2.1"
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8002
+          env:
+            - name: TTS_API_TOKEN
+              value: ""
+            - name: LOG_LEVEL
+              value: "INFO"
+          volumeMounts:
+            - name: voices
+              mountPath: /app/voices
+          readinessProbe:
+            httpGet:
+              path: /docs
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /docs
+              port: http
+            initialDelaySeconds: 45
+            periodSeconds: 20
+          resources:
+            limits:
+              cpu: 100m
+              memory: 512Mi
+            requests:
+              cpu: 10m
+              memory: 256Mi
+      volumes:
+        - name: voices
+          persistentVolumeClaim:
+            claimName: pack7-vexa-tts-voices
+---
+# Source: vexa/templates/deployment-minio.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pack7-vexa-minio
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+spec:
+  serviceName: pack7-vexa-minio
+  replicas: 1
+  
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vexa
+      app.kubernetes.io/instance: pack7
+      app.kubernetes.io/component: minio
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vexa
+        app.kubernetes.io/instance: pack7
+        app.kubernetes.io/component: minio
+    spec:
+      # v0.10.5 Pack I.s — stateful-pod anti-affinity (#272 iter-4 fix).
+      #
+      # Linode LKE g6-standard-* nodes cap at 7 attached block volumes
+      # per instance (boot disk + system + user PVCs). When all four
+      # stateful pods (postgres + redis + minio + tts) co-locate on one
+      # node, the 4th PVC fails to attach with:
+      #   "max number of volumes (7) already attached to instance"
+      # MinIO is typically the sufferer (StatefulSet ordering + larger
+      # readiness probe + scheduler picks first-available-node first).
+      #
+      # Soft anti-affinity (preferredDuringSchedulingIgnoredDuringExecution)
+      # spreads stateful pods across nodes when ≥2 nodes are available
+      # without breaking single-node test deployments. Aligns with the
+      # Pack I (chart availability defaults) shape — robustness defaults
+      # should be safe-by-default, not require operator opt-in.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/component
+                      operator: In
+                      values: [postgres, redis, tts-service]
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: minio
+          image: "minio/minio:latest"
+          imagePullPolicy: IfNotPresent
+          command:
+            - minio
+            - server
+            - /data
+            - --console-address
+            - ":9001"
+          ports:
+            - name: api
+              containerPort: 9000
+            - name: console
+              containerPort: 9001
+          env:
+            - name: MINIO_ROOT_USER
+              value: "vexa-access-key"
+            - name: MINIO_ROOT_PASSWORD
+              value: "vexa-secret-key"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: api
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: api
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            limits:
+              cpu: 500m
+              memory: 1Gi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+---
+# Source: vexa/templates/statefulset-postgres.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pack7-vexa-postgres
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+spec:
+  serviceName: pack7-vexa-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vexa
+      app.kubernetes.io/instance: pack7
+      app.kubernetes.io/component: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vexa
+        app.kubernetes.io/instance: pack7
+        app.kubernetes.io/component: postgres
+    spec:
+      # v0.10.5 Pack I.s — stateful-pod anti-affinity (#272 iter-5).
+      # See deployment-minio.yaml header for the full rationale. Symmetric
+      # spread across postgres/redis/minio/tts-service so that on a 2+
+      # node cluster they distribute and avoid Linode's 7-vol-per-instance
+      # cap during chart-upgrade rolling restarts (which retains old PVs
+      # under reclaimPolicy=Retain, briefly causing 8+ volumes/node).
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/component
+                      operator: In
+                      values: [redis, minio, tts-service]
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: postgres
+          image: "postgres:17-alpine"
+          imagePullPolicy: IfNotPresent
+          # idle_in_transaction_session_timeout=60s auto-kills orphaned
+          # transactions (defense-in-depth against DB session leaks in meeting-api).
+          args:
+            - "-c"
+            - "idle_in_transaction_session_timeout=60000"
+          ports:
+            - name: pg
+              containerPort: 5432
+          env:
+            - name: PGDATA
+              value: "/var/lib/postgresql/data/pgdata"
+          envFrom:
+            - secretRef:
+                name: "postgres-credentials"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -h localhost -p 5432 -U $POSTGRES_USER -d $POSTGRES_DB"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -h localhost -p 5432 -U $POSTGRES_USER -d $POSTGRES_DB"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            limits:
+              cpu: 4000m
+              memory: 4Gi
+            requests:
+              cpu: 200m
+              memory: 512Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+---
+# Source: vexa/templates/job-minio-init.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pack7-vexa-minio-init
+  labels:
+    app.kubernetes.io/name: vexa
+    app.kubernetes.io/instance: pack7
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: vexa-0.10.6_2.1
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    # v0.10.5 Pack A.3 — drop `hook-succeeded` from delete-policy so failed
+    # Jobs stay around for diagnosis. The original policy auto-deleted on
+    # success which was fine, but auto-deleted on failure too — leaving no
+    # trace when subsequent runs failed (#249).
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vexa
+        app.kubernetes.io/instance: pack7
+        app.kubernetes.io/component: minio-init
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: minio-init
+          image: minio/mc:latest
+          imagePullPolicy: IfNotPresent
+          # v0.10.5 Pack A.3 — replace `sleep 5` with poll-until-ready (#249).
+          # On a fresh PVC, MinIO can take 30+ seconds to attach + initialize.
+          # Hardcoded 5s sleep races MinIO startup → `mc mb` runs against an
+          # unready server → bucket never created → recordings 500 forever
+          # with `NoSuchBucket`. Polling `mc ready` (or fallback HTTP probe)
+          # waits up to 120s for genuine readiness; if MinIO genuinely isn't
+          # up after 2 minutes, exit non-zero so the Job retries (backoffLimit=5)
+          # and the failure is visible in `kubectl get jobs`.
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              MINIO_HOST="http://pack7-vexa-minio:9000"
+              echo "Waiting for MinIO at $MINIO_HOST (up to 120s)..."
+              for attempt in $(seq 1 24); do
+                if mc alias set vexa "$MINIO_HOST" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" 2>/dev/null && \
+                   mc admin info vexa >/dev/null 2>&1; then
+                  echo "MinIO ready after $((attempt * 5))s"
+                  break
+                fi
+                echo "MinIO not ready yet (attempt $attempt/24), sleeping 5s..."
+                sleep 5
+              done
+              # Final readiness check — fail loud if MinIO genuinely isn't up
+              mc admin info vexa
+              mc mb --ignore-existing vexa/vexa
+              echo "Bucket vexa ensured"
+              exit 0
+          env:
+            - name: MINIO_ROOT_USER
+              value: "vexa-access-key"
+            - name: MINIO_ROOT_PASSWORD
+              value: "vexa-secret-key"

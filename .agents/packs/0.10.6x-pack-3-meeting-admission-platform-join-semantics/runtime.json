@@ -1,0 +1,27 @@
+{
+  "compose_project": "vexa_0-10-6x-pack-3-meeting-admission-platform-join-semantics_compose",
+  "forbidden_ports": [
+    3000,
+    8056,
+    8080
+  ],
+  "lite_container": "vexa-0-10-6x-pack-3-meeting-admission-platform-join-semantics-lite",
+  "namespace": "pack-0-10-6x-pack-3-meeting-admission-platform-join-semantics",
+  "network_prefix": "pack-0-10-6x-pack-3-meeting-admission-platform-join-semantics",
+  "notes": [
+    "Ports are pack-scoped and intentionally avoid popular/default Vexa service ports.",
+    "Meeting API and other internal services should stay internal unless a deploy skill explicitly exposes a debug lane."
+  ],
+  "pack_id": "0-10-6x-pack-3-meeting-admission-platform-join-semantics",
+  "ports": {
+    "compose_browser_session": 43802,
+    "compose_dashboard": 43800,
+    "compose_gateway": 43801,
+    "compose_vnc": 43803,
+    "lite_dashboard": 43810,
+    "lite_gateway": 43811,
+    "lite_vnc": 43812
+  },
+  "release_id": "0.10.6.x replay",
+  "slot": 140
+}

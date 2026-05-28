@@ -11,6 +11,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -52,15 +53,50 @@ def _is_event_enabled(meeting_data: Optional[Dict], event_type: str) -> bool:
     return event_type in default_enabled
 
 
-def _write_delivery_status(meeting: Meeting, status: dict):
+# #327 — Webhook bookkeeping must NOT bump meetings.updated_at.
+#
+# Rationale: meetings.updated_at is the "domain progress" signal — used by
+# Pack E.3.2 stale-stopping sweep (and analytics, change feeds, future
+# stale sweeps). Webhook retry storms used to bump updated_at via
+# SQLAlchemy onupdate every time we appended a delivery record, defeating
+# the sweep predicate (#313 root cause #2).
+#
+# These helpers now run a raw UPDATE that explicitly preserves
+# updated_at, so the row's "row last changed" timestamp continues to
+# reflect domain progress only — webhook bookkeeping is invisible to
+# updated_at consumers.
+#
+# We still mutate the in-memory `meeting.data` so the caller's
+# subsequent reads see the new state, but we do NOT call flag_modified
+# (no implicit ORM update on the next commit) and the explicit raw
+# UPDATE does the persistence.
+
+async def _persist_data_preserving_updated_at(db: AsyncSession, meeting: Meeting, data: dict) -> None:
+    """Run a raw UPDATE that writes meeting.data without bumping updated_at.
+
+    Uses the column's current value as the new value, which overrides
+    the SQLAlchemy onupdate=func.now() default.
+    """
+    await db.execute(
+        update(Meeting)
+        .where(Meeting.id == meeting.id)
+        .values(data=data, updated_at=meeting.updated_at)
+    )
+
+
+async def _write_delivery_status(db: AsyncSession, meeting: Meeting, status: dict):
     data = dict(meeting.data) if meeting.data else {}
     data["webhook_delivery"] = status
     meeting.data = data
-    flag_modified(meeting, "data")
+    await _persist_data_preserving_updated_at(db, meeting, data)
 
 
-def _append_delivery_log(meeting: Meeting, entry: dict, max_entries: int = 20):
-    """Append a delivery record to meeting.data.webhook_deliveries (bounded list)."""
+async def _append_delivery_log(db: AsyncSession, meeting: Meeting, entry: dict, max_entries: int = 20):
+    """Append a delivery record to meeting.data.webhook_deliveries (bounded list).
+
+    Persists via a raw UPDATE that preserves meetings.updated_at — see
+    _persist_data_preserving_updated_at for rationale (#327).
+    """
     data = dict(meeting.data) if meeting.data else {}
     log = list(data.get("webhook_deliveries") or [])
     log.append(entry)
@@ -68,7 +104,7 @@ def _append_delivery_log(meeting: Meeting, entry: dict, max_entries: int = 20):
         log = log[-max_entries:]
     data["webhook_deliveries"] = log
     meeting.data = data
-    flag_modified(meeting, "data")
+    await _persist_data_preserving_updated_at(db, meeting, data)
 
 
 def _get_webhook_config(meeting: Meeting) -> tuple[Optional[str], Optional[str]]:
@@ -129,7 +165,7 @@ async def send_completion_webhook(meeting: Meeting, db: AsyncSession):
         )
 
         if resp is not None:
-            _write_delivery_status(meeting, {
+            await _write_delivery_status(db, meeting, {
                 "url": webhook_url,
                 "status_code": resp.status_code,
                 "attempts": 1,
@@ -139,14 +175,14 @@ async def send_completion_webhook(meeting: Meeting, db: AsyncSession):
         else:
             effective_redis = get_redis_client()
             if effective_redis is not None:
-                _write_delivery_status(meeting, {
+                await _write_delivery_status(db, meeting, {
                     "url": webhook_url,
                     "attempts": 0,
                     "status": "queued",
                     "queued_at": now,
                 })
             else:
-                _write_delivery_status(meeting, {
+                await _write_delivery_status(db, meeting, {
                     "url": webhook_url,
                     "attempts": 3,
                     "status": "failed",
@@ -219,7 +255,7 @@ async def send_status_webhook(
             entry["status_code"] = resp.status_code
         else:
             entry["status"] = "queued" if get_redis_client() is not None else "failed"
-        _append_delivery_log(meeting, entry)
+        await _append_delivery_log(db, meeting, entry)
     except Exception as e:
         logger.error(f"Unexpected error sending status webhook for meeting {meeting.id}: {e}", exc_info=True)
 
