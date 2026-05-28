@@ -54,8 +54,25 @@ class KubernetesBackend(Backend):
             except Exception:
                 pass
             api_client = client.ApiClient(configuration=cfg)
+            # iter 2: belt-and-suspenders — manually set Authorization on the
+            # ApiClient's default_headers so EVERY request carries the bearer
+            # token regardless of how the Configuration auth dict is read.
+            try:
+                api_client.set_default_header(
+                    "Authorization", f"Bearer {token}",
+                )
+            except Exception:
+                try:
+                    api_client.default_headers["Authorization"] = (
+                        f"Bearer {token}"
+                    )
+                except Exception:
+                    pass
             self._api = client.CoreV1Api(api_client)
-            logger.info("Loaded in-cluster Kubernetes config (explicit cfg + SA token)")
+            logger.info(
+                "Loaded in-cluster Kubernetes config "
+                "(explicit cfg + SA token + default header)"
+            )
             return self._api
         try:
             k8s_config.load_kube_config()
