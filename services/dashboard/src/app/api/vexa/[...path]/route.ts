@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
+import { getAuthCookieName, getUserInfoCookieName } from "@/lib/auth-cookies";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -9,11 +10,18 @@ async function proxyRequest(
   params: Promise<{ path: string[] }>,
   method: string
 ): Promise<NextResponse> {
-  const VEXA_API_URL = process.env.VEXA_API_URL || "http://localhost:8066";
+  const VEXA_API_URL = process.env.VEXA_API_URL;
+  if (!VEXA_API_URL) {
+    return NextResponse.json(
+      { error: "VEXA_API_URL is required; dashboard API proxy has no API SSOT" },
+      { status: 500 }
+    );
+  }
+  const MINIO_INTERNAL_ENDPOINT = (process.env.MINIO_INTERNAL_ENDPOINT || "").trim();
 
   // Get user's token from HTTP-only cookie (set during login)
   const cookieStore = await cookies();
-  const userToken = cookieStore.get("vexa-token")?.value;
+  const userToken = cookieStore.get(getAuthCookieName())?.value;
 
   // VEXA_API_KEY from env is used ONLY for the meetings list endpoint
   // (pre-login browsing). All other endpoints require a user cookie.
@@ -80,7 +88,10 @@ async function proxyRequest(
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
-  const searchParams = request.nextUrl.searchParams.toString();
+  const upstreamSearchParams = new URLSearchParams(request.nextUrl.searchParams);
+  const proxyMasterMedia = method === "GET" && upstreamSearchParams.get("proxy") === "1";
+  upstreamSearchParams.delete("proxy");
+  const searchParams = upstreamSearchParams.toString();
   const url = `${VEXA_API_URL}/${pathString}${searchParams ? `?${searchParams}` : ""}`;
 
   const headers: HeadersInit = {
@@ -118,6 +129,91 @@ async function proxyRequest(
 
     const contentType = response.headers.get("content-type") || "";
 
+    if (proxyMasterMedia && response.ok && contentType.includes("application/json")) {
+      const data = (await response.json()) as {
+        url?: string;
+        download_url?: string;
+        raw_url?: string;
+        media_file_id?: number | string;
+        content_type?: string;
+      };
+
+      const match = pathString.match(/^recordings\/(\d+)\/master$/);
+      const recordingId = match?.[1] || "";
+      const mediaType = upstreamSearchParams.get("type") || "";
+      if (!recordingId || !/^(audio|video)$/.test(mediaType)) {
+        return NextResponse.json(
+          { error: "Invalid master media proxy request" },
+          { status: 502, headers: { "Cache-Control": "no-store" } }
+        );
+      }
+
+      const selectedUrl = data.url || data.download_url || "";
+      if (!selectedUrl) {
+        return NextResponse.json(
+          { error: `No canonical ${mediaType} playback URL for recording ${recordingId}` },
+          { status: 404, headers: { "Cache-Control": "no-store" } }
+        );
+      }
+
+      let mediaUrl: URL;
+      const mediaHeaders: HeadersInit = {};
+      if (selectedUrl.startsWith("/")) {
+        if (!selectedUrl.startsWith(`/recordings/${recordingId}/media/`)) {
+          return NextResponse.json(
+            { error: "Invalid canonical media URL returned by backend" },
+            { status: 502, headers: { "Cache-Control": "no-store" } }
+          );
+        }
+        mediaUrl = new URL(selectedUrl, `${VEXA_API_URL}/`);
+        if (VEXA_API_KEY) {
+          mediaHeaders["X-API-Key"] = VEXA_API_KEY;
+        }
+      } else {
+        mediaUrl = new URL(selectedUrl);
+        const isHostLocalUrl = ["localhost", "127.0.0.1", "[::1]"].includes(mediaUrl.hostname);
+        if (isHostLocalUrl && (data.raw_url || data.media_file_id)) {
+          const rawUrl = data.raw_url || `/recordings/${recordingId}/media/${data.media_file_id}/raw`;
+          mediaUrl = new URL(rawUrl, `${VEXA_API_URL}/`);
+          if (VEXA_API_KEY) {
+            mediaHeaders["X-API-Key"] = VEXA_API_KEY;
+          }
+        } else if (isHostLocalUrl && MINIO_INTERNAL_ENDPOINT) {
+          return NextResponse.json(
+            { error: "Host-local presigned media URL is not proxy-safe; backend raw_url missing" },
+            { status: 502, headers: { "Cache-Control": "no-store" } }
+          );
+        }
+      }
+
+      if (rangeHeader) {
+        mediaHeaders["Range"] = rangeHeader;
+      }
+      const mediaResponse = await fetch(mediaUrl, {
+        headers: mediaHeaders,
+        cache: "no-store",
+      });
+      const mediaBlob = await mediaResponse.blob();
+      const mediaContentType =
+        mediaResponse.headers.get("content-type") ||
+        data.content_type ||
+        "application/octet-stream";
+      return new NextResponse(mediaBlob, {
+        status: mediaResponse.status,
+        headers: {
+          "Content-Type": mediaContentType,
+          "Content-Length": mediaResponse.headers.get("content-length") || "",
+          "Cache-Control": "no-store",
+          ...(mediaResponse.headers.get("content-range") && {
+            "Content-Range": mediaResponse.headers.get("content-range")!,
+          }),
+          ...(mediaResponse.headers.get("accept-ranges") && {
+            "Accept-Ranges": mediaResponse.headers.get("accept-ranges")!,
+          }),
+        },
+      });
+    }
+
     if (contentType.includes("audio") || contentType.includes("video") || contentType.includes("octet-stream")) {
       const mediaHeaders = new Headers({ "Cache-Control": "no-store" });
       for (const header of [
@@ -137,6 +233,19 @@ async function proxyRequest(
     }
 
     const data = await response.text();
+    const upstreamAuthRejected =
+      (response.status === 401 || response.status === 403) &&
+      /invalid api key|missing api key|not authenticated|unauthorized/i.test(data);
+
+    if (upstreamAuthRejected && userToken) {
+      cookieStore.delete(getAuthCookieName());
+      cookieStore.delete(getUserInfoCookieName());
+      return NextResponse.json(
+        { error: "Authentication failed", detail: "Your session may have expired. Please log in again." },
+        { status: 401, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+
     try {
       return NextResponse.json(JSON.parse(data), {
         status: response.status,

@@ -8,6 +8,7 @@ source "$(dirname "$0")/common.sh"
 source "$(dirname "$0")/vm.sh"
 
 BRANCH=$(state_read vm_branch)
+IMAGE_TAG="$(state_read image_tag 2>/dev/null || true)"
 
 echo ""
 echo "  vm-setup-lite"
@@ -48,6 +49,13 @@ vm_ssh "cd /root/vexa && \
     sed -i 's|^#*TRANSCRIPTION_SERVICE_TOKEN=.*|TRANSCRIPTION_SERVICE_TOKEN=$TX_TOKEN|' .env"
 pass ".env configured with transcription creds"
 
+if [ -n "$IMAGE_TAG" ]; then
+    vm_ssh "cd /root/vexa && \
+        sed -i 's|^#*IMAGE_TAG=.*|IMAGE_TAG=$IMAGE_TAG|' .env && \
+        sed -i 's|^#*BROWSER_IMAGE=.*|BROWSER_IMAGE=vexaai/vexa-bot:$IMAGE_TAG|' .env"
+    pass ".env pinned to IMAGE_TAG=$IMAGE_TAG"
+fi
+
 # ── 5. Copy tests3 to VM ─────────────────────────
 info "syncing tests3 to VM..."
 VM_IP=$(state_read vm_ip)
@@ -56,11 +64,11 @@ rsync -az --exclude='.state/' \
     "$ROOT/tests3" "root@$VM_IP:/root/vexa/" 2>/dev/null
 pass "tests3 synced to VM"
 
-# ── 6. Deploy (same as user: make lite) ──────────
-info "running make lite (this pulls images — may take 3-5 minutes)..."
+# ── 6. Deploy ─────────────────────────────────────
+info "running lite deploy targets (this pulls images — may take 3-5 minutes)..."
 DEPLOY_OK=false
 for attempt in 1 2 3; do
-    if vm_ssh "cd /root/vexa && make lite 2>&1 | tail -5"; then
+    if vm_ssh "cd /root/vexa/deploy/lite && set -o pipefail && make preflight up init-db test 2>&1 | tail -5"; then
         DEPLOY_OK=true
         break
     fi
@@ -71,9 +79,9 @@ for attempt in 1 2 3; do
 done
 
 if [ "$DEPLOY_OK" = true ]; then
-    pass "make lite succeeded"
+    pass "lite deploy targets succeeded"
 else
-    fail "make lite failed after 3 attempts"
+    fail "lite deploy targets failed after 3 attempts"
     info "SSH in to debug: make -C tests3 vm-ssh"
     exit 1
 fi

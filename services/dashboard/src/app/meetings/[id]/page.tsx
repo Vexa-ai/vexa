@@ -122,8 +122,16 @@ export default function MeetingDetailPage() {
     clearCurrentMeeting,
   } = useMeetingsStore();
   const authToken = useAuthStore((s) => s.token);
-  const { config: runtimeConfig } = useRuntimeConfig();
-  const apiBaseUrl = runtimeConfig?.publicApiUrl || runtimeConfig?.apiUrl || "";
+  const { config: runtimeConfig, isLoading: isRuntimeConfigLoading } = useRuntimeConfig();
+  const apiBaseUrl = runtimeConfig?.apiUrl || "";
+  const gatewayBrowserBase = apiBaseUrl.replace(/\/+$/, "");
+  const browserRouteUrl = useCallback(
+    (path: string) => {
+      if (isRuntimeConfigLoading) return "";
+      return gatewayBrowserBase ? `${gatewayBrowserBase}${path}` : withBasePath(path);
+    },
+    [gatewayBrowserBase, isRuntimeConfigLoading]
+  );
 
   // Agent panel state
   const [agentPanelOpen, setAgentPanelOpen] = useState(false);
@@ -197,8 +205,19 @@ export default function MeetingDetailPage() {
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
   // Surface connection errors from the master-stream-URL lookup. This is
   // distinct from "master not ready yet" (404 -> null -> finalizing UI).
+  // v0.10.6.1 — a non-null value here means a real network/HTTP failure
+  // that the user should see, not be silently retried-into-empty-state.
   const [playbackConnectionError, setPlaybackConnectionError] = useState<string | null>(null);
 
+  // v0.10.6.1 — ADR-2 canonical playback path. Dashboard reads
+  // `recording.playback_url.audio` (a stable backend route) and calls
+  // vexaAPI.getRecordingMasterStreamUrl() to resolve it to a presigned
+  // URL. No client-side picking from media_files[]. Null playback_url
+  // → render "finalizing" UI state (no silent fallback to chunk 0).
+  //
+  // The signature pattern from pre-fix avoided URL refetch storms when
+  // recordings[] reference changed but content didn't — kept here on
+  // the playback_url field directly.
   const audioMediaSignature = useMemo(() => {
     return recordings
       .filter(r => (r.status === "completed" || r.status === "in_progress"))
@@ -222,7 +241,10 @@ export default function MeetingDetailPage() {
       try {
         const results = await Promise.all(availableRecordings.map(async rec => {
           const result = await vexaAPI.getRecordingMasterStreamUrl(rec.id, "audio");
-          if (!result) return null;
+          if (!result) {
+            // 404 — master not ready for this recording yet.
+            return null;
+          }
           return {
             src: result.url,
             duration: result.duration_seconds ?? 0,
@@ -247,6 +269,8 @@ export default function MeetingDetailPage() {
   const hasRecordingAudio = recordingFragments.length > 0;
 
   // Find the first finalized video master across all recordings for the VideoPlayer.
+  // v0.10.6.1 ADR-2: read recording.playback_url.video; no client-side
+  // selection from media_files[].
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -255,7 +279,10 @@ export default function MeetingDetailPage() {
           if (rec.status !== "completed" && rec.status !== "in_progress") continue;
           if (!rec.playback_url?.video) continue;
           const result = await vexaAPI.getRecordingMasterStreamUrl(rec.id, "video");
-          if (!result) continue;
+          if (!result) {
+            // 404 — video master not ready for this recording yet; try the next.
+            continue;
+          }
           if (!cancelled) {
             setVideoSrc(result.url);
             setPlaybackConnectionError(null);
@@ -698,9 +725,6 @@ export default function MeetingDetailPage() {
     setCurrentLanguage(fromSegment || "auto");
   }, [currentMeeting, transcripts, validLangCodes]);
 
-  // No longer need polling - WebSocket handles status updates for early states
-  // Removed auto-refresh polling since WebSocket provides real-time updates
-
   // Fetch transcripts when meeting is loaded
   // Use specific properties as dependencies to avoid unnecessary refetches
   const meetingPlatform = currentMeeting?.platform;
@@ -973,18 +997,29 @@ export default function MeetingDetailPage() {
 
   // Browser view available for any active meeting bot (VNC runs in all bot containers)
   const hasBrowserView = !!(['requested', 'joining', 'awaiting_admission', 'active'].includes(currentMeeting?.status));
+  const browserSessionEscalation = currentMeeting.data?.escalation as Record<string, unknown> | undefined;
+  const browserSessionToken =
+    (browserSessionEscalation?.session_token as string | undefined) ||
+    (currentMeeting.data?.session_token as string | undefined) ||
+    String(currentMeeting.id);
+  const browserVncUrl = browserSessionToken
+    ? browserRouteUrl(`/b/${browserSessionToken}/vnc/vnc.html?autoconnect=true&resize=scale&reconnect=true&view_only=false&path=b/${browserSessionToken}/vnc/websockify`)
+    : "";
 
   const browserViewIframe = hasBrowserView && viewMode === 'browser' ? (() => {
-    const meetingId = currentMeeting.id;
-    // VNC loads from same origin — nginx proxies /b/ routes to the gateway
-    const vncUrl = `/b/${meetingId}/vnc/vnc.html?autoconnect=true&resize=scale&reconnect=true&view_only=false&path=b/${meetingId}/vnc/websockify`;
     return (
       <div className="flex-1 overflow-hidden">
-        <iframe
-          src={vncUrl}
-          className="w-full h-full border-0"
-          allow="clipboard-read; clipboard-write"
-        />
+        {browserVncUrl ? (
+          <iframe
+            src={browserVncUrl}
+            className="w-full h-full border-0"
+            allow="clipboard-read; clipboard-write"
+          />
+        ) : (
+          <div className="h-full flex items-center justify-center">
+            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          </div>
+        )}
       </div>
     );
   })() : null;
@@ -1015,7 +1050,7 @@ export default function MeetingDetailPage() {
               Browser
             </Button>
           </div>
-          <Button variant="outline" size="sm" className="h-8" onClick={() => { const mid = currentMeeting.id; const url = `/b/${mid}/vnc/vnc.html?autoconnect=true&resize=scale&reconnect=true&view_only=false&path=b/${mid}/vnc/websockify`; window.open(url, "_blank"); }}>
+          <Button variant="outline" size="sm" className="h-8" disabled={!browserVncUrl} onClick={() => { if (browserVncUrl) window.open(browserVncUrl, "_blank"); }}>
             <ExternalLink className="h-3.5 w-3.5 mr-1" />
             Fullscreen
           </Button>
@@ -1774,13 +1809,16 @@ export default function MeetingDetailPage() {
                       const sessionToken = escalation?.session_token as string
                         || currentMeeting.data?.session_token as string;
                       if (!sessionToken) return null;
-                      const vncUrl = withBasePath(`/b/${sessionToken}/vnc/vnc.html?autoconnect=true&resize=scale&reconnect=true&view_only=false&path=b/${sessionToken}/vnc/websockify`);
+                      const vncUrl = browserRouteUrl(`/b/${sessionToken}/vnc/vnc.html?autoconnect=true&resize=scale&reconnect=true&view_only=false&path=b/${sessionToken}/vnc/websockify`);
                       return (
                         <Button
                           variant="default"
                           size="sm"
                           className="gap-2 bg-orange-600 hover:bg-orange-700"
-                          onClick={() => window.open(vncUrl, "_blank")}
+                          disabled={!vncUrl}
+                          onClick={() => {
+                            if (vncUrl) window.open(vncUrl, "_blank");
+                          }}
                         >
                           <Monitor className="h-4 w-4" />
                           Open Remote Browser
@@ -1799,7 +1837,9 @@ export default function MeetingDetailPage() {
                           className="gap-2"
                           onClick={async () => {
                             try {
-                              const response = await fetch(withBasePath(`/b/${sessionToken}/save`), {
+                              const saveUrl = browserRouteUrl(`/b/${sessionToken}/save`);
+                              if (!saveUrl) throw new Error("Runtime config is still loading");
+                              const response = await fetch(saveUrl, {
                                 method: "POST",
                               });
                               if (!response.ok) throw new Error(await response.text());

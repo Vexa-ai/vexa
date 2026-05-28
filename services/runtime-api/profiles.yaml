@@ -40,6 +40,7 @@ profiles:
       TRANSCRIPTION_SERVICE_URL: "${TRANSCRIPTION_SERVICE_URL}"
       TRANSCRIPTION_SERVICE_TOKEN: "${TRANSCRIPTION_SERVICE_TOKEN}"
       TTS_SERVICE_URL: "${TTS_SERVICE_URL}"
+      INTERNAL_API_SECRET: "${INTERNAL_API_SECRET}"
     ports:
       "9222/tcp": {}         # CDP debug port
 
@@ -62,6 +63,7 @@ profiles:
       NODE_ENV: "production"
       REDIS_URL: "${REDIS_URL}"
       TTS_SERVICE_URL: "${TTS_SERVICE_URL}"
+      INTERNAL_API_SECRET: "${INTERNAL_API_SECRET}"
     ports:
       "9222/tcp": {}         # CDP debug port
 

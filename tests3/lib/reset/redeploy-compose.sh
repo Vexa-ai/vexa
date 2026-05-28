@@ -14,12 +14,23 @@ git fetch origin "${VM_BRANCH}"
 git reset --hard "origin/${VM_BRANCH}"
 cd deploy/compose
 
-# Some deployments store IMAGE_TAG in /root/.env, others in /root/vexa/.env
 ENV_FILE="/root/vexa/.env"
-[ -f /root/.env ] && ENV_FILE="/root/.env"
 
 echo "  [redeploy-compose] using env: $ENV_FILE"
+if [ -n "${VM_IMAGE_TAG:-}" ]; then
+    for f in "$ENV_FILE" /root/.env; do
+        [ -f "$f" ] || continue
+        sed -i "s|^#*IMAGE_TAG=.*|IMAGE_TAG=${VM_IMAGE_TAG}|" "$f"
+        sed -i "s|^#*BROWSER_IMAGE=.*|BROWSER_IMAGE=vexaai/vexa-bot:${VM_IMAGE_TAG}|" "$f"
+    done
+    echo "  [redeploy-compose] pinned IMAGE_TAG=${VM_IMAGE_TAG}"
+fi
 docker compose --env-file "$ENV_FILE" pull 2>&1 | tail -5
+BOT_IMAGE="$(grep -E '^BROWSER_IMAGE=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
+if [ -n "$BOT_IMAGE" ]; then
+    echo "  [redeploy-compose] pulling runtime bot image: $BOT_IMAGE"
+    docker pull "$BOT_IMAGE" 2>&1 | tail -3
+fi
 docker compose --env-file "$ENV_FILE" up -d --force-recreate 2>&1 | tail -5
 
 # v0.10.5 R3 follow-up (#272 iter-5): re-validate dashboard's VEXA_API_KEY
@@ -40,3 +51,4 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
     sleep 2
 done
 make setup-api-key 2>&1 | tail -3 || echo "  [redeploy-compose] setup-api-key reported non-zero; continuing"
+docker compose --env-file "$ENV_FILE" up -d --force-recreate dashboard 2>&1 | tail -5 || true

@@ -289,3 +289,461 @@ tests:
     script: synthetic/run-all.sh
     features: [bot-lifecycle, post-meeting-transcription]
     max_duration_sec: 240
+
+  # ── v0.10.6.1 — hotfix + low-hanging-fruit cycle (260508-v0.10.6.1) ──
+  # Per-step entries: each script takes a $step arg and emits ONE registry
+  # check ID via step_pass <CHECK_ID> / step_fail <CHECK_ID>. The test-name
+  # is "<script-stem>-<step>" (matches `test_begin` inside each script);
+  # the report file is .state/reports/<mode>/<test-name>.json.
+  # Pattern-selected by run-matrix.sh scope-filtering via `v0.10.6.1-*`
+  # whitelist. See tests3/registry.yaml for the check-ID → semantic mapping.
+
+  # v0.10.6.1-dashboard-master-* — retired in 260508-v0.10.6.1 (script + steps
+  # tested the deleted pickMasterMediaFile() shape). Canonical playback proves
+  # live on `recording-playback-url-canonical` + `dashboard-playback-canonical`.
+
+  v0.10.6.1-speak-defaults-defaults_propagate:
+    tier: cheap
+    runs_in: [compose]
+    script: tests/v0.10.6.1-speak-defaults.sh defaults_propagate
+    features: [speaking-bot, realtime-transcription]
+    max_duration_sec: 30
+
+  v0.10.6.1-webhook-no-autotouch-no_autotouch:
+    tier: cheap
+    runs_in: [compose]
+    script: tests/v0.10.6.1-webhook-no-autotouch.sh no_autotouch
+    features: [webhooks, bot-lifecycle]
+    max_duration_sec: 5
+
+  # v0.10.6.1-media-files-unique-* — retired in 260508-v0.10.6.1: the
+  # media_files relational table is dropped this release (ADR-1).
+
+  v0.10.6.1-webm-duration-ebml_duration_present:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-webm-duration.sh ebml_duration_present
+    features: [post-meeting-transcription, dashboard]
+    max_duration_sec: 120
+
+  v0.10.6.1-gmeet-fast-fail-rejection_under_30s:
+    tier: cheap
+    runs_in: [compose]
+    script: tests/v0.10.6.1-gmeet-fast-fail.sh rejection_under_30s
+    features: [realtime-transcription/gmeet, bot-lifecycle]
+    max_duration_sec: 10
+
+  v0.10.6.1-gmeet-fast-fail-eviction_retry_or_fail_clean:
+    tier: cheap
+    runs_in: [compose]
+    script: tests/v0.10.6.1-gmeet-fast-fail.sh eviction_retry_or_fail_clean
+    features: [realtime-transcription/gmeet, bot-lifecycle]
+    max_duration_sec: 10
+
+  v0.10.6.1-arm64-manifest-arm64_in_manifest:
+    tier: cheap
+    runs_in: [compose]
+    script: tests/v0.10.6.1-arm64-manifest.sh arm64_in_manifest
+    features: [infrastructure]
+    max_duration_sec: 60
+
+  v0.10.6.1-tts-auto-lang-runtime_tts_env_wired:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-tts-auto-lang.sh runtime_tts_env_wired
+    features: [speaking-bot]
+    max_duration_sec: 10
+
+  v0.10.6.1-tts-auto-lang-major_voices_configured:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-tts-auto-lang.sh major_voices_configured
+    features: [speaking-bot]
+    max_duration_sec: 10
+
+  v0.10.6.1-tts-auto-lang-major_voice_first_call_prompt:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-tts-auto-lang.sh major_voice_first_call_prompt
+    features: [speaking-bot]
+    max_duration_sec: 10
+
+  v0.10.6.1-tts-auto-lang-detects_and_picks_voice:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-tts-auto-lang.sh detects_and_picks_voice
+    features: [speaking-bot]
+    max_duration_sec: 60
+
+  v0.10.6.1-tts-auto-lang-voice_download_caches:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-tts-auto-lang.sh voice_download_caches
+    features: [speaking-bot]
+    max_duration_sec: 120
+
+  v0.10.6.1-tts-byo-playback-handles_wav_and_mp3:
+    tier: cheap
+    runs_in: [compose]
+    script: tests/v0.10.6.1-tts-byo-playback.sh handles_wav_and_mp3
+    features: [speaking-bot]
+    max_duration_sec: 5
+
+  # ── v0.10.6.1 missing-script authorings (gap-2 repair, T-038) ───────
+  # These scripts didn't exist on disk; authored 2026-05-11 to close the
+  # last 4 prove-check gaps. Same shape as the 9 above: take $step arg,
+  # emit step_pass/step_fail <CHECK_ID>.
+
+  v0.10.6.1-tts-pod-pod_ready_after_first_boot:
+    tier: cheap
+    runs_in: [helm]
+    script: tests/v0.10.6.1-tts-pod.sh pod_ready_after_first_boot
+    features: [speaking-bot, infrastructure]
+    max_duration_sec: 180
+
+  v0.10.6.1-speak-e2e-speak_delivers_audio:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-speak-e2e.sh speak_delivers_audio
+    features: [speaking-bot, realtime-transcription]
+    max_duration_sec: 240
+
+  v0.10.6.1-stale-audit-decisions_filed:
+    tier: cheap
+    runs_in: [compose]
+    script: tests/v0.10.6.1-stale-audit.sh decisions_filed
+    features: []
+    max_duration_sec: 60
+
+  v0.10.6.1-teams-modal-modal_dismissed:
+    tier: cheap
+    runs_in: [compose]
+    script: tests/v0.10.6.1-teams-modal.sh modal_dismissed
+    features: [realtime-transcription/msteams, bot-lifecycle]
+    max_duration_sec: 180
+
+  # ── v0.10.6.1 auth-bucket proves (D13 closure) ────────────────────
+  # Pin the no-hostname-fallback + default-refuse + no-localhost-fallback
+  # contract surfaced by the D6-B and dashboard-proxy hardening
+  # (commits 714dada, 8fbd3c8). Static-only — no runtime stack required.
+
+  v0.10.6.1-direct-login-refused-no_hostname_fallback:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-direct-login-refused.sh no_hostname_fallback
+    features: [dashboard, infrastructure]
+    max_duration_sec: 30
+
+  v0.10.6.1-direct-login-refused-helm_default_false:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-direct-login-refused.sh helm_default_false
+    features: [dashboard, infrastructure]
+    max_duration_sec: 30
+
+  v0.10.6.1-agent-proxy-auth-no_localhost_fallback:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-agent-proxy-auth.sh no_localhost_fallback
+    features: [dashboard, infrastructure]
+    max_duration_sec: 30
+
+  v0.10.6.1-agent-proxy-auth-auth_threaded:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-agent-proxy-auth.sh auth_threaded
+    features: [dashboard, infrastructure]
+    max_duration_sec: 30
+
+  # ── v0.10.6.1 migration-surface prove (D13 m328/m331 closure) ────
+  # Pins the m328 dedup + m331 drop migration interface so a future
+  # editor can't accidentally remove dry-run defaults, advisory locks,
+  # or the m331 archive-before-drop guarantee.
+
+  v0.10.6.1-m328-m331-migrations-migration_surface_intact:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-m328-m331-migrations.sh migration_surface_intact
+    features: [infrastructure]
+    max_duration_sec: 30
+
+  v0.10.6.1-m328-m331-migrations-model_refs_dropped:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-m328-m331-migrations.sh model_refs_dropped
+    features: [infrastructure]
+    max_duration_sec: 30
+
+  # ── v0.10.6.1 blast-radius lifting proves (every M/M-H/L → H) ───
+  # These pin the five blast-radius rows that didn't have dedicated
+  # proves before this session. After these land, the min over §4 in
+  # STATE.md rises from L to H, clearing the confidence floor.
+
+  v0.10.6.1-api-gateway-cors-listsize-cors_wildcard_with_no_creds:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-api-gateway-cors-listsize.sh cors_wildcard_with_no_creds
+    features: [infrastructure, dashboard]
+    max_duration_sec: 30
+
+  v0.10.6.1-api-gateway-cors-listsize-list_size_capped:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-api-gateway-cors-listsize.sh list_size_capped
+    features: [infrastructure]
+    max_duration_sec: 30
+
+  v0.10.6.1-multichunk-playback-url-finalizer_writes_playback_url:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-multichunk-playback-url.sh finalizer_writes_playback_url
+    features: [post-meeting-transcription, dashboard]
+    max_duration_sec: 30
+
+  v0.10.6.1-multichunk-playback-url-master_endpoint_present:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-multichunk-playback-url.sh master_endpoint_present
+    features: [post-meeting-transcription, dashboard]
+    max_duration_sec: 30
+
+  v0.10.6.1-dashboard-playback-canonical-reads_playback_url:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-dashboard-playback-canonical.sh reads_playback_url
+    features: [dashboard]
+    max_duration_sec: 30
+
+  v0.10.6.1-dashboard-playback-canonical-no_pick_master_media_file:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-dashboard-playback-canonical.sh no_pick_master_media_file
+    features: [dashboard]
+    max_duration_sec: 30
+
+  v0.10.6.1-bot-cpu-budget-profiles_cap_cpu_1500m:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-bot-cpu-budget.sh profiles_cap_cpu_1500m
+    features: [infrastructure, bot-lifecycle]
+    max_duration_sec: 30
+
+  v0.10.6.1-bot-cpu-budget-bot_launches_inprocgpu:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-bot-cpu-budget.sh bot_launches_inprocgpu
+    features: [bot-lifecycle]
+    max_duration_sec: 30
+
+  v0.10.6.1-bot-acceptance-signals-bot_collects_signals:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-bot-acceptance-signals.sh bot_collects_signals
+    features: [bot-lifecycle]
+    max_duration_sec: 30
+
+  v0.10.6.1-bot-acceptance-signals-callbacks_persist_signals:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-bot-acceptance-signals.sh callbacks_persist_signals
+    features: [bot-lifecycle]
+    max_duration_sec: 30
+
+  # ── v0.10.6.1 CEO mid-task scope extension (items #17, #18) ─────────
+  # Authored 2026-05-11 alongside the dispatch-surface repair (T-038).
+  # Parallel code-fix agents author the underlying code; these tests
+  # are the regression invariants. Static-shape: same as the 9 wired
+  # above (single $step arg, emits one check ID).
+
+  v0.10.6.1-post-meeting-idempotency-fires_once_per_session:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-post-meeting-idempotency.sh fires_once_per_session
+    features: [post-meeting-transcription, webhooks]
+    max_duration_sec: 60
+
+  v0.10.6.1-dispatch-check-deny-bots_endpoint_honors_deny:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-dispatch-check-deny.sh bots_endpoint_honors_deny
+    features: [bot-lifecycle, auth-and-limits]
+    max_duration_sec: 30
+
+  v0.10.6.1-dispatch-check-noop-noop_when_unset:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: tests/v0.10.6.1-dispatch-check-noop.sh noop_when_unset
+    features: [bot-lifecycle, auth-and-limits]
+    max_duration_sec: 30
+
+  v0.10.6.1-dispatch-check-admin-deny-admin_bots_endpoint_honors_deny:
+    tier: cheap
+    runs_in: [compose, helm]
+    script: tests/v0.10.6.1-dispatch-check-admin-deny.sh admin_bots_endpoint_honors_deny
+    features: [bot-lifecycle, auth-and-limits, dashboard]
+    max_duration_sec: 30
+
+  # ── v0.10.6.1 grep-checks wrapper (registry.yaml type:grep → dispatched) ──
+  # Many scope.proves[] check IDs are type:grep in registry.yaml but have
+  # no runtime executor wired. This wrapper runs them all in one shot
+  # (same pattern as v0.10.6-static-greps.sh), emitting each as step_pass
+  # / step_fail <CHECK_ID>. Cheap (~5s); runs in every mode so the same
+  # grep evidence registers in compose, helm, and lite reports.
+  v0.10.6.1-static-greps:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: tests/v0.10.6.1-static-greps.sh
+    features: [bot-lifecycle, post-meeting-transcription, dashboard, webhooks, speaking-bot]
+    max_duration_sec: 30
+
+  # ── v0.10.6.1 architectural-cleanup proves (recordings-playback-url-canonical
+  # + drop-relational-recordings-tables scope items). Each script calls
+  # `test_begin <script-stem>` (no step suffix) so the test name in this
+  # registry must match the report filename exactly.
+
+  recording-playback-url-canonical:
+    tier: cheap
+    runs_in: [compose]
+    script: tests/recording-playback-url-canonical.sh
+    features: [post-meeting-transcription, dashboard]
+    max_duration_sec: 60
+
+  recording-finalizing-state:
+    tier: cheap
+    runs_in: [compose]
+    script: tests/recording-finalizing-state.sh
+    features: [post-meeting-transcription, dashboard]
+    max_duration_sec: 30
+
+  recordings-tables-dropped:
+    tier: cheap
+    runs_in: [compose]
+    script: tests/recordings-tables-dropped.sh
+    features: [post-meeting-transcription]
+    max_duration_sec: 15
+
+  dashboard-playback-canonical:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: tests/static/dashboard-playback-canonical.sh
+    features: [dashboard, post-meeting-transcription]
+    max_duration_sec: 5
+
+  no-recordings-table-references:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: tests/static/no-recordings-table-references.sh
+    features: [post-meeting-transcription]
+    max_duration_sec: 5
+
+  no-media-files-table-references:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: tests/static/no-media-files-table-references.sh
+    features: [post-meeting-transcription]
+    max_duration_sec: 5
+
+  no-placeholder-transcription-token:
+    tier: cheap
+    runs_in: [lite, compose]
+    script: tests/static/no-placeholder-transcription-token.sh
+    features: [bot-lifecycle, post-meeting-transcription, realtime-transcription, infrastructure]
+    max_duration_sec: 5
+
+  dashboard-config-ssot:
+    tier: cheap
+    runs_in: [lite, compose]
+    script: tests/static/dashboard-config-ssot.sh
+    features: [dashboard, infrastructure, realtime-transcription]
+    max_duration_sec: 5
+
+  lite-recording-storage-persistent:
+    tier: cheap
+    runs_in: [lite]
+    script: tests/static/lite-recording-storage-persistent.sh
+    features: [dashboard, post-meeting-transcription, infrastructure]
+    max_duration_sec: 5
+
+  dashboard-recording-state-ssot:
+    tier: cheap
+    runs_in: [lite, compose]
+    script: tests/static/dashboard-recording-state-ssot.sh
+    features: [dashboard, post-meeting-transcription]
+    max_duration_sec: 5
+
+  deferred-transcribe-master-gate:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: tests/static/deferred-transcribe-master-gate.sh
+    features: [post-meeting-transcription, bot-lifecycle]
+    max_duration_sec: 5
+
+  test-account-bot-limit:
+    tier: cheap
+    runs_in: [lite, compose]
+    script: tests/test-account-bot-limit.sh
+    features: [bot-lifecycle, auth-and-limits, dashboard]
+    max_duration_sec: 5
+
+  advisory-dependency-floors:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: tests/static/advisory-dependency-floors.sh
+    features: [dashboard, infrastructure, realtime-transcription]
+    max_duration_sec: 5
+
+  smoke-bot-transcription-roundtrip-roundtrip:
+    tier: cheap
+    runs_in: [lite, compose, helm]
+    script: tests/smoke-bot-transcription-roundtrip.sh roundtrip
+    features: [bot-lifecycle, post-meeting-transcription, realtime-transcription]
+    max_duration_sec: 30
+
+  dashboard-browser-auth:
+    tier: cheap
+    runs_in: [lite, compose]
+    script: tests/dashboard-browser-auth.sh
+    features: [dashboard]
+    max_duration_sec: 45
+
+  dashboard-browser-view:
+    tier: meeting
+    runs_in: [lite, compose, helm]
+    script: tests/dashboard-browser-view.sh
+    features: [dashboard, browser-session, remote-browser]
+    max_duration_sec: 90
+
+  dashboard-stale-auth-detail:
+    tier: cheap
+    runs_in: [lite, compose]
+    script: tests/dashboard-stale-auth-detail.sh
+    features: [dashboard]
+    max_duration_sec: 45
+
+  dashboard-cookie-isolation:
+    tier: cheap
+    runs_in: [compose]
+    script: tests/dashboard-cookie-isolation.sh
+    features: [dashboard]
+    max_duration_sec: 60
+
+  live-bot-transcript-pipeline:
+    tier: meeting
+    runs_in: [compose]
+    script: tests/live-bot-transcript-pipeline.sh
+    features: [bot-lifecycle, realtime-transcription, post-meeting-transcription, dashboard]
+    max_duration_sec: 30
+
+  dashboard-recording-playback-ready:
+    tier: cheap
+    runs_in: [compose]
+    script: tests/dashboard-recording-playback-ready.sh
+    features: [dashboard, post-meeting-transcription]
+    max_duration_sec: 60
+
+  local-human-mechanical-gate:
+    tier: cheap
+    runs_in: [compose]
+    script: tests/local-human-mechanical-gate.sh
+    features: [dashboard, infrastructure, post-meeting-transcription, realtime-transcription]
+    max_duration_sec: 30

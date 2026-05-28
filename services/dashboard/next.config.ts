@@ -25,7 +25,10 @@ function getVersion(): string {
   return "dev";
 }
 
-const VEXA_API_URL = process.env.VEXA_API_URL || "http://localhost:8066";
+const VEXA_API_URL = process.env.VEXA_API_URL;
+if (!VEXA_API_URL) {
+  throw new Error("VEXA_API_URL is required: dashboard rewrites must use the release/deploy SSOT, not a baked fallback");
+}
 
 const nextConfig: NextConfig = {
   // Only use standalone output for production builds

@@ -22,8 +22,16 @@ cd /root/vexa/deploy/compose
 
 # compose needs --env-file; IMAGE_TAG lives in the repo's .env
 ENV_FILE="/root/vexa/.env"
-[ -f /root/.env ] && ENV_FILE="/root/.env"
 echo "  [reset-compose] env file: $ENV_FILE"
+
+if [ -n "${VM_IMAGE_TAG:-}" ]; then
+    for f in "$ENV_FILE" /root/.env; do
+        [ -f "$f" ] || continue
+        sed -i "s|^#*IMAGE_TAG=.*|IMAGE_TAG=${VM_IMAGE_TAG}|" "$f"
+        sed -i "s|^#*BROWSER_IMAGE=.*|BROWSER_IMAGE=vexaai/vexa-bot:${VM_IMAGE_TAG}|" "$f"
+    done
+    echo "  [reset-compose] pinned IMAGE_TAG=${VM_IMAGE_TAG}"
+fi
 
 echo "  [reset-compose] docker compose down -v"
 docker compose --env-file "$ENV_FILE" down --volumes --remove-orphans 2>&1 | tail -5 || true
@@ -67,3 +75,11 @@ for i in $(seq 1 30); do
     fi
     sleep 2
 done
+
+# Fresh resets wipe Postgres, so any VEXA_API_KEY already present in the
+# compose env can point at a token row that no longer exists. Reuse the
+# canonical compose target to probe/regenerate the dashboard key, then restart
+# dashboard so its process environment reads the regenerated value.
+echo "  [reset-compose] reseating dashboard VEXA_API_KEY (probe-and-regenerate)..."
+make setup-api-key 2>&1 | tail -3 || echo "  [reset-compose] setup-api-key reported non-zero; continuing"
+docker compose --env-file "$ENV_FILE" up -d --force-recreate dashboard 2>&1 | tail -5 || true
