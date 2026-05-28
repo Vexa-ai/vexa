@@ -25,7 +25,7 @@
 >
 > google meet &nbsp; ms teams &nbsp; zoom &nbsp; streaming
 > *anything streamed in browser*
-> <5 sec latency
+> \<5 sec latency
 > WS &nbsp; API &nbsp; MCP
 
 **Narration:**
@@ -525,7 +525,7 @@ An agent that was costing you a dedicated VM 24/7? Now it costs you 3 minutes of
 >
 > google meet &nbsp; ms teams &nbsp; zoom &nbsp; streaming
 > *anything streamed in browser*
-> <5 sec latency
+> \<5 sec latency
 > WS &nbsp; API &nbsp; MCP
 
 **On screen (right side):** Container architecture diagram + live transcript screenshot

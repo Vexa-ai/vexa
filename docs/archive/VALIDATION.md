@@ -568,7 +568,7 @@ Human checklist:
 | TTS heard | [ ] | [ ] |
 | Transcript rendered | [ ] | [ ] |
 | Speaker labels correct | [ ] | [ ] |
-| Latency acceptable (<30s) | [ ] | [ ] |
+| Latency acceptable (\<30s) | [ ] | [ ] |
 
 ---
 

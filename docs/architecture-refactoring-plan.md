@@ -536,7 +536,7 @@ No big bang rewrite. Extract piece by piece while production keeps running.
 | Temporal | Meeting lifecycle becomes complex (retries, sagas) | Durable workflow above Runtime API |
 | Argo Workflows | Post-meeting pipeline grows | DAG-based processing chain |
 | K8s Operator (CRD) | K8s becomes primary backend | Declarative state, kubectl visibility |
-| Pre-warm pool | Startup latency critical (<5s) | Warm container inventory |
+| Pre-warm pool | Startup latency critical (\<5s) | Warm container inventory |
 
 ---
 
