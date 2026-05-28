@@ -44,6 +44,29 @@ When `v0.10.6.2` is signed, publish a new immutable `0.10.6.2-*` image set,
 validate that set on Lite, Compose, and Helm/stage, then move `latest` and
 `dev` to the signed `0.10.6.2-*` digests.
 
+## Release operator checklist — VERSION bump for `0.10.6.3`
+
+The repository currently carries `VERSION = 0.10.6.2.1` and
+`Chart.yaml appVersion = 0.10.6.2.1`, matching the hardening lineage shipped by
+the `0.10.6.x` release-identity pack (pack 7).
+
+Before a clean Docker rebuild of the `0.10.6.3` candidate, the release
+operator MUST bump the following so the new
+`services/dashboard/scripts/assert-release-version.js` guard does not fail
+the dashboard build:
+
+- Repo-root `VERSION` from `0.10.6.2.1` to `0.10.6.3`.
+- `deploy/helm/charts/vexa/Chart.yaml` `appVersion` `0.10.6.2.1` → `0.10.6.3`
+  (and the chart `version` field accordingly).
+- Any explicit `NEXT_PUBLIC_VEXA_OSS_VERSION` passed to the dashboard
+  build/runtime must either be empty (recommended; `VERSION` then wins) or
+  equal to `0.10.6.3`.
+
+This is a release-operator action and is intentionally **not** performed
+inside pack 7's code — pack 7 only ships the guard, the generator rewrite,
+the security-headers middleware mount, dependency floor bumps, and the
+matching Helm/Compose/CI identity wiring.
+
 ---
 
 # Vexa v0.10.4 — Zoom Web bot

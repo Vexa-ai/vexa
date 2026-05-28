@@ -13,6 +13,24 @@ Rules:
 - Never commit API keys, admin tokens, OAuth credentials, or object-storage secrets.
 - Rotate any credential immediately if it is exposed.
 
+## HTTP Security Headers
+
+As of the `0.10.6.x` release-identity hardening pack, meeting-api responses
+ship with a baseline security-header set, applied by `SecurityHeadersMiddleware`
+(mounted in `services/meeting-api/meeting_api/main.py`):
+
+- `X-Content-Type-Options: nosniff`
+- `X-XSS-Protection: 1; mode=block`
+- `Referrer-Policy: strict-origin-when-cross-origin`
+- `X-Frame-Options: DENY` on every non-VNC route
+
+Browser-session VNC pages under `/b/.../vnc/` are an explicit exception: the
+dashboard embeds them in an iframe and may run on a different port than the
+gateway, so those routes omit `X-Frame-Options` and instead send a
+`Content-Security-Policy: frame-ancestors …` allowing same-host dashboard
+embedding (different port OK) and denying cross-host embedding. Behavior is
+covered by `services/meeting-api/tests/test_security_headers.py`.
+
 ## What Data Is Stored
 
 Depending on configuration and per-meeting flags, Vexa may store:

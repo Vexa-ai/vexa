@@ -3,6 +3,73 @@ title: "Changelog"
 description: "Version history, migration guides, and breaking changes"
 ---
 
+## 0.10.6.x (May 2026) — release identity and packaging hardening
+
+Operator-facing hardening pack. No new product features. Goal: source, Docker
+image, Helm chart, dashboard runtime, CI, and hardening metadata all identify
+the same candidate, so operators can confidently tell what is running and
+ship or roll back without identity drift.
+
+### What's new
+
+- **Release-version assertion** — `services/dashboard/scripts/assert-release-version.js`
+  runs as part of the dashboard build and fails if the compiled Next.js bundle
+  does not contain the expected version derived from the repo-root `VERSION`
+  file (or, when set, `EXPECTED_VEXA_OSS_VERSION` / `NEXT_PUBLIC_VEXA_OSS_VERSION`).
+- **Stricter release-version generation** — `services/dashboard/scripts/generate-release-version.js`
+  now prefers the root `VERSION` file as the source of truth, falls back to
+  `Chart.yaml appVersion`, then the latest git tag, and refuses to build when
+  an explicit `NEXT_PUBLIC_VEXA_OSS_VERSION` does not match `VERSION` /
+  `Chart.yaml`. `execSync` was replaced with `execFileSync` to avoid shell
+  interpolation of the repo path.
+- **Compose build arg discipline** — `deploy/compose/docker-compose.yml` no
+  longer defaults `NEXT_PUBLIC_VEXA_OSS_VERSION` to `dev`; an empty value falls
+  through to `VERSION`, and a stale explicit override is rejected by the
+  assertion above.
+- **HTTP security headers** — `SecurityHeadersMiddleware` is now mounted in
+  `services/meeting-api/meeting_api/main.py`. Every response gains
+  `X-Content-Type-Options: nosniff`, `X-XSS-Protection: 1; mode=block`,
+  `Referrer-Policy: strict-origin-when-cross-origin`, and `X-Frame-Options: DENY`
+  on non-VNC routes. Browser-session VNC routes under `/b/.../vnc/` instead
+  emit `Content-Security-Policy: frame-ancestors …` allowing same-host
+  dashboard embeds (different port OK) and denying cross-host embeds. Covered
+  by `services/meeting-api/tests/test_security_headers.py`.
+- **Helm chart identity** — `deploy/helm/charts/vexa/Chart.yaml` carries
+  matched `version` and `appVersion` for the candidate, and the
+  `templates/_helpers.tpl` image-tag helpers identify the same candidate as
+  the compose stack.
+- **Dependency floor bumps** — Next.js bumped from `16.0.10` to `16.2.6`,
+  `eslint-config-next` to `16.2.6`, `nodemailer` pinned to `7.0.13`, plus
+  service Python and TypeScript manifests (`admin-api`, `agent-api`,
+  `api-gateway`, `calendar-service`, `mcp`, `meeting-api`, `runtime-api`,
+  `telegram-bot`, `transcription-service`, `tts-service`, `vexa-bot`,
+  `libs/admin-models`, `packages/vexa-client`, `packages/transcript-rendering`).
+- **CI** — `.github/workflows/chart-release.yml` and the per-service
+  `test-*.yml` workflows updated for the new release-identity story.
+
+### Operator action: VERSION bump before clean rebuild
+
+The hardening pack ships with repo-root `VERSION` at `0.10.6.2.1`. When
+cutting a clean `0.10.6.3` rebuild, the release operator MUST bump:
+
+1. Repo-root `VERSION` from `0.10.6.2.1` to `0.10.6.3`.
+2. The dashboard runtime env / build-arg `NEXT_PUBLIC_VEXA_OSS_VERSION` (if
+   passed explicitly) to match.
+3. `deploy/helm/charts/vexa/Chart.yaml` `appVersion` (and `version`) to match
+   the new candidate.
+
+`services/dashboard/scripts/assert-release-version.js` will fail the dashboard
+Docker build if these are not in sync, by design. This is a release-operator
+action, not a code change inside pack 7.
+
+### Compatibility
+
+- No public API changes.
+- No database schema changes.
+- Self-hosted deployments that previously passed `NEXT_PUBLIC_VEXA_OSS_VERSION`
+  as a stale or `dev` value via `.env` will now see the dashboard build fail
+  fast — set it empty (recommended; `VERSION` wins) or to the exact candidate.
+
 ## 0.10.0 (April 2026)
 
 Major architectural refactor. If upgrading from 0.9.x or earlier, read the migration guide below.

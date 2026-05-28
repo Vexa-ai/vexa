@@ -89,7 +89,7 @@ The service has solid domain logic, good test coverage of happy paths, and a wel
 
 1. **MeetingToken issuer** (fixed 2026-03-30): `verify_meeting_token()` in `collector/processors.py` accepts only `iss: "meeting-api"`. Legacy `bot-manager` issuer removed — all legacy tokens expired (2h TTL, service deleted 2026-03-26).
 
-2. **SecurityHeadersMiddleware not mounted**: `security_headers.py` defines the middleware and `main.py` imports it, but `app.add_middleware(SecurityHeadersMiddleware)` is never called. All security headers (X-Frame-Options, CSP, X-Content-Type-Options) are silently missing.
+2. **SecurityHeadersMiddleware mounted (fixed in 0.10.6.x pack 7)**: `main.py` now mounts `SecurityHeadersMiddleware` via `app.add_middleware(SecurityHeadersMiddleware)`. Every response sets `X-Content-Type-Options: nosniff`, `X-XSS-Protection: 1; mode=block`, and `Referrer-Policy: strict-origin-when-cross-origin`. Non-VNC routes also set `X-Frame-Options: DENY`; routes under `/b/.../vnc/` instead emit a `Content-Security-Policy: frame-ancestors …` allowing same-host dashboard embedding (different port OK) and denying cross-host. Covered by `services/meeting-api/tests/test_security_headers.py`.
 
 3. **admin_models coupling**: `collector/auth.py` and `collector/endpoints.py` import from `admin_models.models` and `admin_models.token_scope`. The Dockerfile copies and installs this shared library. This blocks true standalone operation and creates a fragile cross-package dependency.
 
@@ -111,7 +111,7 @@ The service has solid domain logic, good test coverage of happy paths, and a wel
 
 1. **Fix MeetingToken issuer** — align `iss` claim between `mint_meeting_token` and `verify_meeting_token`. Add a unit test that mints and verifies in sequence. *Moves confidence: +8*
 
-2. **Mount SecurityHeadersMiddleware** — add `app.add_middleware(SecurityHeadersMiddleware)` in `main.py`. Add test verifying headers present. *Moves confidence: +3*
+2. **Mount SecurityHeadersMiddleware** — DONE in 0.10.6.x pack 7. `app.add_middleware(SecurityHeadersMiddleware)` is wired in `main.py`; behavior verified in `tests/test_security_headers.py`. *Confidence: +3 (banked)*
 
 3. **Remove admin_models dependency** — inline the 2-3 needed types (APIToken, User, check_token_scope) into meeting-api's own models or remove the collector auth paths that reference them. Update Dockerfile to stop copying admin-models. *Moves confidence: +5*
 
