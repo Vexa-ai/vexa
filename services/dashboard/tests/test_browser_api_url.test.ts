@@ -39,15 +39,22 @@ describe("resolveBrowserApiUrl — stitched-candidate regression coverage (pack 
     expect(out.publicApiUrl).toBe("https://api.vexa.ai");
   });
 
-  it("infers public URL from request host + gatewayHostPort when internal is an internal-service hostname", () => {
+  it("falls back to same-origin even with gatewayHostPort when internal is an internal-service hostname (compose multi-port publish regression)", () => {
+    // Regression: compose publishes dashboard on :41688 and gateway on :41680 as
+    // separate host ports. Some browser environments only expose the dashboard
+    // port (browser sandboxes, single-port proxies). The dashboard already
+    // rewrites /ws to the gateway service URL — telling the browser to bypass
+    // that rewrite and connect directly to :41680 breaks WS in those
+    // environments. Prefer same-origin so the dashboard's /ws + /api/vexa/*
+    // rewrites carry the traffic.
     const out = resolveBrowserApiUrl({
       internalApiUrl: "http://api-gateway:8000",
-      requestHost: "localhost:18056",
+      requestHost: "localhost:41688",
       requestProto: "http",
-      gatewayHostPort: "18056",
+      gatewayHostPort: "41680",
     });
-    expect(out.apiUrl).toBe("http://localhost:18056");
-    expect(out.publicApiUrl).toBe("http://localhost:18056");
+    expect(out.apiUrl).toBe("");
+    expect(out.publicApiUrl).toBe("");
   });
 
   it("returns empty for internal-service URL without gatewayHostPort hint (same-origin fallback)", () => {
