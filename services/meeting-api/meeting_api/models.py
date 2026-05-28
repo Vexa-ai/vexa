@@ -165,3 +165,26 @@ class CalendarEvent(Base):
         Index('ix_calendar_events_start_time', 'start_time'),
         Index('ix_calendar_events_status', 'status'),
     )
+
+
+# ---------------------------------------------------------------------------
+# Highlight model (Phase 2 MVP)
+# ---------------------------------------------------------------------------
+
+class Highlight(Base):
+    __tablename__ = "highlights"
+
+    id = Column(Integer, primary_key=True, index=True)
+    meeting_id = Column(Integer, ForeignKey("meetings.id"), nullable=False, index=True)
+    start_time = Column(Float, nullable=False)
+    end_time = Column(Float, nullable=False)
+    title = Column(Text, nullable=True)
+    summary = Column(Text, nullable=True)
+    type = Column(String(50), nullable=True)
+    speaker = Column(String(255), nullable=True)
+    confidence = Column(Float, nullable=True)
+    source = Column(String(50), nullable=True)
+    clip_token = Column(String(255), nullable=True, index=True)
+    data = Column(JSONB, nullable=False, server_default="{}")
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

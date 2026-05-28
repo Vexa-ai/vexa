@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Settings, Menu, LogOut, User, BookOpen, ExternalLink } from "lucide-react";
+import { Settings, Menu, LogOut, User, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/ui/logo";
 import { VersionChip } from "@/components/version-chip";
@@ -13,14 +13,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { SearchBar } from "@/components/search-bar";
 import { useAuthStore } from "@/stores/auth-store";
-import { getDocsUrl } from "@/lib/docs/webapp-url";
 import { useRuntimeConfig } from "@/hooks/use-runtime-config";
 
 interface HeaderProps {
@@ -55,7 +50,7 @@ export function Header({ onMenuClick }: HeaderProps) {
         <div className="flex items-center gap-2.5">
           <Link href="/" className="flex items-center gap-2 group">
             <Logo size="md" showText={false} className="group-hover:scale-105 transition-transform" />
-            <span className="hidden sm:inline-block text-[15px] font-semibold tracking-[-0.01em] text-foreground">vexa</span>
+            <span className="hidden sm:inline-block text-[15px] font-semibold tracking-[-0.01em] text-foreground">Grainbox</span>
           </Link>
           <VersionChip className="hidden sm:inline-flex" />
         </div>
@@ -63,24 +58,14 @@ export function Header({ onMenuClick }: HeaderProps) {
         {/* Spacer */}
         <div className="flex-1" />
 
+        {/* Global Search — prominent, Grain-style */}
+        <div className="hidden md:flex w-80 lg:w-96 mx-4">
+          <SearchBar />
+        </div>
+        <div className="flex-1" />
+
         {/* Actions */}
         <div className="flex items-center gap-2">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" asChild className="text-muted-foreground">
-                {/* v0.10.5.3 Pack D-2: link to canonical docs.vexa.ai (was internal /docs).
-                    External link via <a> + getDocsUrl() since docs live in a separate site. */}
-                <a href={getDocsUrl("/")} target="_blank" rel="noopener noreferrer">
-                  <BookOpen className="h-5 w-5" />
-                  <span className="sr-only">Full Documentation</span>
-                </a>
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>Full API Documentation</p>
-            </TooltipContent>
-          </Tooltip>
-
           <ThemeToggle />
 
           <DropdownMenu>

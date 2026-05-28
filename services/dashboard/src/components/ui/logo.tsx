@@ -45,7 +45,7 @@ export function Logo({ className, size = "md", showText = false }: LogoProps) {
       <div className={cn("flex items-center gap-2", className)}>
         <div className={cn(sizeClasses[size], "bg-muted rounded-lg animate-pulse")} />
         {showText && (
-          <span className={cn("font-semibold", textSizeClasses[size])}>Vexa</span>
+          <span className={cn("font-semibold", textSizeClasses[size])}>Grainbox</span>
         )}
       </div>
     );
@@ -55,14 +55,14 @@ export function Logo({ className, size = "md", showText = false }: LogoProps) {
     <div className={cn("flex items-center gap-2", className)}>
       <Image
         src={logoSrc}
-        alt="Vexa Logo"
+        alt="Grainbox Logo"
         width={size === "sm" ? 24 : size === "md" ? 32 : 48}
         height={size === "sm" ? 24 : size === "md" ? 32 : 48}
         className={cn(sizeClasses[size], "object-contain")}
         priority
       />
       {showText && (
-        <span className={cn("font-semibold", textSizeClasses[size])}>Vexa</span>
+        <span className={cn("font-semibold", textSizeClasses[size])}>Grainbox</span>
       )}
     </div>
   );

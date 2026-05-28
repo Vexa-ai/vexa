@@ -6,7 +6,7 @@ import { withBasePath } from "@/lib/base-path";
 interface LoginResult {
   success: boolean;
   error?: string;
-  mode?: "direct" | "magic-link";
+  mode?: "direct" | "magic-link" | "dev-magic-link";
   user?: VexaUser;
   token?: string;
   isNewUser?: boolean;
@@ -70,6 +70,16 @@ export const useAuthStore = create<AuthState>()(
               user: data.user,
               token: data.token,
               isNewUser: data.isNewUser,
+            };
+          }
+
+          // Dev mode — magic link returned in response, navigate to it directly
+          if (data.magicLink) {
+            set({ isLoading: false });
+            window.location.href = data.magicLink;
+            return {
+              success: true,
+              mode: "dev-magic-link",
             };
           }
 

@@ -246,7 +246,19 @@ export async function POST(request: NextRequest) {
 
     const magicLink = `${baseUrl}/auth/verify?token=${encodeURIComponent(token)}`;
 
-    // Send email
+    // Send email (or log in dev mode)
+    const smtpHost = process.env.SMTP_HOST;
+    if (!smtpHost) {
+      // Dev mode: log the magic link instead of sending email
+      console.log(`[GRAINBOX DEV] Magic link for ${email}: ${magicLink}`);
+      return NextResponse.json({
+        success: true,
+        mode: "magic-link",
+        message: `Dev mode — magic link: ${magicLink}`,
+        magicLink, // return it so we can use it directly
+      });
+    }
+
     try {
       await sendMagicLinkEmail(email, magicLink);
     } catch (emailError) {

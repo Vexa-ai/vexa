@@ -17,8 +17,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Vexa Dashboard",
-  description: "Open source meeting transcription dashboard for Vexa",
+  title: "Grainbox",
+  description: "Self-hosted meeting intelligence — transcribe, search, and get AI notes from your meetings",
   icons: {
     icon: [
       {

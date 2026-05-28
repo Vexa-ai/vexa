@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
-import { Plus, RefreshCw, CreditCard, Video, Loader2, Search, Monitor } from "lucide-react";
+import { RefreshCw, Video, Loader2, Search, Monitor } from "lucide-react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { format, formatDistanceToNow } from "date-fns";
@@ -16,16 +16,11 @@ import {
 } from "@/components/ui/select";
 import { ErrorState } from "@/components/ui/error-state";
 import { useMeetingsStore } from "@/stores/meetings-store";
-import { useJoinModalStore } from "@/stores/join-modal-store";
 import type { Platform, MeetingStatus, Meeting } from "@/types/vexa";
 import { getDetailedStatus } from "@/types/vexa";
-import { DocsLink } from "@/components/docs/docs-link";
-import { getWebappUrl } from "@/lib/docs/webapp-url";
 import { Input } from "@/components/ui/input";
 import { cn, parseUTCTimestamp } from "@/lib/utils";
 import { usePendingMeeting } from "@/hooks/use-pending-meeting";
-import { toast } from "sonner";
-import { withBasePath } from "@/lib/base-path";
 
 function PlatformIcon({ platform }: { platform: string }) {
   if (platform === "google_meet") {
@@ -81,13 +76,11 @@ function formatDate(dateStr: string): string {
 export default function MeetingsPage() {
   usePendingMeeting();
   const router = useRouter();
-  const { meetings, isLoadingMeetings, isLoadingMore, hasMore, fetchMeetings, fetchMoreMeetings, error, subscriptionRequired } = useMeetingsStore();
-  const openJoinModal = useJoinModalStore((state) => state.openModal);
+  const { meetings, isLoadingMeetings, isLoadingMore, hasMore, fetchMeetings, fetchMoreMeetings, error } = useMeetingsStore();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [platformFilter, setPlatformFilter] = useState<Platform | "all">("all");
   const [statusFilter, setStatusFilter] = useState<MeetingStatus | "all">("all");
-  const [isCreatingBrowser, setIsCreatingBrowser] = useState(false);
 
   // Debounced server-side search
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(null);
@@ -101,37 +94,6 @@ export default function MeetingsPage() {
       platform: platform === "all" ? undefined : platform,
     });
   }, [fetchMeetings]);
-
-  async function handleStartBrowserSession() {
-    setIsCreatingBrowser(true);
-    try {
-      const body: Record<string, string> = { mode: "browser_session" };
-      // Read git workspace config from localStorage
-      try {
-        const git = JSON.parse(localStorage.getItem("vexa-browser-git") || "{}");
-        if (git.repo && git.token) {
-          body.workspaceGitRepo = git.repo;
-          body.workspaceGitToken = git.token;
-          body.workspaceGitBranch = git.branch || "main";
-        }
-      } catch {}
-      const response = await fetch(withBasePath("/api/vexa/bots"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({ detail: "Failed" }));
-        throw new Error(err.detail || "Failed to create session");
-      }
-      const meeting = await response.json();
-      // Navigate to the session
-      setTimeout(() => router.push(`/meetings/${meeting.id}`), 2000);
-    } catch (error) {
-      toast.error((error as Error).message);
-      setIsCreatingBrowser(false);
-    }
-  }
 
   // Initial load
   useEffect(() => {
@@ -176,56 +138,23 @@ export default function MeetingsPage() {
 
   const handleRefresh = () => applyFilters(searchQuery, statusFilter, platformFilter);
 
-  const handleSubscribe = () => {
-    window.open(`${getWebappUrl()}/pricing`, "_blank");
-  };
-
   return (
     <div className="space-y-6">
-      {subscriptionRequired && (
-        <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 p-4 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <CreditCard className="h-5 w-5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
-            <div>
-              <p className="text-sm font-medium text-amber-800 dark:text-amber-200">Subscription required</p>
-              <p className="text-xs text-amber-700 dark:text-amber-300">
-                Subscribe to a plan to create new bots and access the API.
-              </p>
-            </div>
-          </div>
-          <Button onClick={handleSubscribe} size="sm" className="bg-amber-600 hover:bg-amber-700 text-white flex-shrink-0">
-            View Plans
-          </Button>
-        </div>
-      )}
 
       {/* Header */}
       <div className="sticky top-0 z-10 bg-background -mx-4 md:-mx-6 px-4 md:px-6 py-4 -mt-4 md:-mt-6 border-b border-border/50 space-y-4">
         {/* Top row: title + join button */}
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-semibold tracking-[-0.02em] text-foreground">Meetings</h1>
-              <DocsLink href="/docs/rest/meetings#list-meetings" />
-            </div>
+            <h1 className="text-2xl font-semibold tracking-[-0.02em] text-foreground">Meetings</h1>
             <p className="text-sm text-muted-foreground">
-              Browse and search your meeting transcriptions
+              Your meetings, transcribed and analyzed
             </p>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
             <Button variant="outline" size="icon" onClick={handleRefresh} disabled={isLoadingMeetings}>
               <RefreshCw className={`h-4 w-4 ${isLoadingMeetings ? "animate-spin" : ""}`} />
             </Button>
-            {!subscriptionRequired && (
-              <div className="flex items-center">
-                <Button onClick={openJoinModal}>
-                  <Plus className="mr-2 h-4 w-4" />
-                  <span className="hidden sm:inline">Join Meeting</span>
-                  <span className="sm:hidden">Join</span>
-                </Button>
-                <DocsLink href="/docs/rest/bots#create-bot" />
-              </div>
-            )}
           </div>
         </div>
         {/* Filters row */}
@@ -268,119 +197,91 @@ export default function MeetingsPage() {
         </div>
       </div>
 
-      {/* Meetings table */}
+      {/* Meetings grid — Grain-style cards */}
       {error ? (
         <ErrorState error={error} onRetry={fetchMeetings} />
-      ) : subscriptionRequired && meetings.length === 0 ? (
-        <ErrorState
-          type="subscription"
-          title="Subscribe to continue"
-          message="Your trial has ended. Subscribe to a plan to create bots and access meeting transcriptions."
-          actionLabel="View Plans"
-          onAction={handleSubscribe}
-        />
       ) : (
-        <Card className="overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b text-xs text-muted-foreground uppercase tracking-wider">
-                  <th className="hidden sm:table-cell text-left px-5 py-3 font-medium">Platform</th>
-                  <th className="text-left px-5 py-3 font-medium">Meeting</th>
-                  <th className="text-left px-5 py-3 font-medium">Status</th>
-                  <th className="text-left px-5 py-3 font-medium">Duration</th>
-                  <th className="hidden lg:table-cell text-left px-5 py-3 font-medium">Participants</th>
-                  <th className="hidden sm:table-cell text-left px-5 py-3 font-medium">Time</th>
-                </tr>
-              </thead>
-              <tbody className="text-sm">
-                {isLoadingMeetings ? (
-                  <tr>
-                    <td colSpan={6} className="px-5 py-12 text-center">
-                      <Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" />
-                    </td>
-                  </tr>
-                ) : filteredMeetings.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="px-5 py-12 text-center">
-                      <div className="flex flex-col items-center gap-2">
-                        <Video className="h-8 w-8 text-muted-foreground/50" />
-                        <p className="text-sm text-muted-foreground">
-                          {searchQuery.trim() || platformFilter !== "all" || statusFilter !== "all"
-                            ? "No meetings match your filters"
-                            : "No meetings yet"}
-                        </p>
-                        {!searchQuery.trim() && platformFilter === "all" && statusFilter === "all" && !subscriptionRequired && (
-                          <Button onClick={openJoinModal} size="sm" variant="outline" className="mt-2">
-                            <Plus className="mr-2 h-3.5 w-3.5" />
-                            Join your first meeting
-                          </Button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ) : (
-                  filteredMeetings.map((meeting) => (
-                    <MeetingRow key={meeting.id} meeting={meeting} />
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+        <div className="space-y-2">
+          {isLoadingMeetings ? (
+            <div className="flex justify-center py-12">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : filteredMeetings.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <Video className="h-8 w-8 text-muted-foreground/50 mb-2" />
+              <p className="text-sm text-muted-foreground">
+                {searchQuery.trim() || platformFilter !== "all" || statusFilter !== "all"
+                  ? "No meetings match your filters"
+                  : "No meetings yet"}
+              </p>
+            </div>
+          ) : (
+            filteredMeetings.map((meeting) => (
+              <MeetingCard key={meeting.id} meeting={meeting} />
+            ))
+          )}
           {(hasMore || isLoadingMore) && (
             <div ref={sentinelRef} className="flex justify-center py-4">
               {isLoadingMore && <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />}
             </div>
           )}
-        </Card>
+        </div>
       )}
 
     </div>
   );
 }
 
-function MeetingRow({ meeting }: { meeting: Meeting }) {
+function MeetingCard({ meeting }: { meeting: Meeting }) {
   const router = useRouter();
   const statusConfig = getDetailedStatus(meeting.status, meeting.data);
   const displayTitle = meeting.data?.name || meeting.data?.title || meeting.platform_specific_id;
   const participants = meeting.data?.participants || [];
 
   return (
-      <tr
-        className="border-b border-border/50 hover:bg-muted/30 cursor-pointer transition-colors"
-        onClick={() => router.push(`/meetings/${meeting.id}`)}
-      >
-        <td className="hidden sm:table-cell px-5 py-3">
+    <Card
+      className="cursor-pointer transition-colors hover:bg-muted/40 border border-border rounded-lg py-2.5"
+      onClick={() => router.push(`/meetings/${meeting.id}`)}
+    >
+      <div className="flex items-center gap-4 px-4">
+        {/* Platform icon */}
+        <div className="flex-shrink-0 w-8 h-8">
           <PlatformIcon platform={meeting.platform} />
-        </td>
-        <td className="px-5 py-3">
-          <span className="font-medium">{displayTitle}</span>
+        </div>
+
+        {/* Title + ID */}
+        <div className="min-w-0 flex-1">
+          <span className="font-medium text-sm truncate block">{displayTitle}</span>
           {(meeting.data?.name || meeting.data?.title) && (
-            <span className="block text-xs text-muted-foreground font-mono mt-0.5">
+            <span className="block text-xs text-muted-foreground font-mono truncate">
               {meeting.platform_specific_id}
             </span>
           )}
-        </td>
-        <td className="px-5 py-3">
-          <span className="inline-flex items-center gap-1.5">
-            <StatusDot status={meeting.status} />
-            <span
-              className={cn(
-                "text-xs",
-                (meeting.status === "completed") && "text-emerald-400",
-                (meeting.status === "active" || meeting.status === "joining") && "text-emerald-400",
-                (meeting.status === "awaiting_admission" || meeting.status === "stopping") && "text-amber-400",
-                meeting.status === "failed" && "text-red-400"
-              )}
-            >
-              {statusConfig.label}
-            </span>
+        </div>
+
+        {/* Status */}
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          <StatusDot status={meeting.status} />
+          <span
+            className={cn(
+              "text-xs hidden sm:inline",
+              (meeting.status === "completed") && "text-emerald-400",
+              (meeting.status === "active" || meeting.status === "joining") && "text-emerald-400",
+              (meeting.status === "awaiting_admission" || meeting.status === "stopping") && "text-amber-400",
+              meeting.status === "failed" && "text-red-400"
+            )}
+          >
+            {statusConfig?.label}
           </span>
-        </td>
-        <td className="px-5 py-3 text-muted-foreground">
+        </div>
+
+        {/* Duration */}
+        <div className="text-muted-foreground text-xs w-12 text-right flex-shrink-0">
           {formatDuration(meeting.start_time, meeting.end_time)}
-        </td>
-        <td className="hidden lg:table-cell px-5 py-3 text-muted-foreground text-xs">
+        </div>
+
+        {/* Participants (hidden on small screens) */}
+        <div className="hidden lg:block text-muted-foreground text-xs w-32 flex-shrink-0 truncate">
           {participants.length > 0 ? (
             <span>
               {participants.slice(0, 2).join(", ")}
@@ -389,8 +290,10 @@ function MeetingRow({ meeting }: { meeting: Meeting }) {
           ) : (
             "—"
           )}
-        </td>
-        <td className="hidden sm:table-cell px-5 py-3 text-muted-foreground text-xs whitespace-nowrap">
+        </div>
+
+        {/* Time */}
+        <div className="hidden sm:block text-muted-foreground text-xs w-36 text-right flex-shrink-0 whitespace-nowrap">
           {meeting.start_time ? (
             <>
               {formatDate(meeting.start_time)}
@@ -403,7 +306,8 @@ function MeetingRow({ meeting }: { meeting: Meeting }) {
           ) : (
             "—"
           )}
-        </td>
-      </tr>
+        </div>
+      </div>
+    </Card>
   );
 }

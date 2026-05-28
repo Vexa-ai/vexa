@@ -52,6 +52,7 @@ import { WsEventLog, RestTranscriptsPreview, RestRecordingsPreview } from "@/com
 // ChatPanel removed — chat messages now render inline in TranscriptViewer
 import { AIChatPanel } from "@/components/ai";
 import { AiNotesCard } from "@/components/ai/ai-notes-card";
+import { HighlightsCard } from "@/components/ai/highlights-card";
 import { useMeetingsStore } from "@/stores/meetings-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { useLiveTranscripts } from "@/hooks/use-live-transcripts";
@@ -91,10 +92,6 @@ import {
   generateFilename,
 } from "@/lib/export";
 import { getCookie, setCookie } from "@/lib/cookies";
-import { DocsLink } from "@/components/docs/docs-link";
-import { MeetingAgentPanel } from "@/components/agent/meeting-agent-panel";
-import { WebhookDeliverySection } from "@/components/webhooks/webhook-delivery-section";
-import { BrowserSessionView } from "@/components/meetings/browser-session-view";
 import { useRuntimeConfig } from "@/hooks/use-runtime-config";
 
 export default function MeetingDetailPage() {
@@ -745,7 +742,7 @@ export default function MeetingDetailPage() {
       });
       if (!resp.ok) throw new Error("Regeneration failed");
       toast.success("AI notes regenerated");
-      await loadMeeting(currentMeeting.platform, currentMeeting.platform_specific_id);
+      router.refresh();
     } catch (err) {
       toast.error("Failed to regenerate AI notes");
     }
@@ -805,13 +802,6 @@ export default function MeetingDetailPage() {
     }
     return null;
   }, [playbackTime, isPlaybackActive, recordingFragments, sessionStartMsBySessionUid]);
-
-  // Browser session check runs first — transcript errors must not block the VNC view.
-  // The transcript fetch is skipped for active browser sessions, but if a stale error
-  // exists in the store (e.g. from a prior page visit), we still want to show the VNC.
-  if (currentMeeting && currentMeeting.data?.mode === "browser_session") {
-    return <BrowserSessionView meeting={currentMeeting} />;
-  }
 
   if (error) {
     return (
@@ -912,42 +902,6 @@ export default function MeetingDetailPage() {
     );
   })() : null;
 
-  // When browser view is active, render full-screen layout (like BrowserSessionView)
-  if (browserViewIframe) {
-    return (
-      <div className="flex flex-col h-[calc(100vh-64px)] -m-4 md:-m-6 relative z-10">
-        {/* Minimal toolbar */}
-        <div className="flex items-center gap-2 px-3 py-1.5 border-b bg-background">
-          <Button variant="ghost" size="sm" asChild className="h-8 px-2 text-muted-foreground hover:text-foreground">
-            <Link href="/meetings">
-              <ArrowLeft className="h-4 w-4" />
-            </Link>
-          </Button>
-          <span className="text-sm font-medium truncate">{currentMeeting.data?.name || currentMeeting.platform_specific_id}</span>
-          <Badge className={cn("shrink-0", statusConfig.bgColor, statusConfig.color)}>
-            {statusConfig.label}
-          </Badge>
-          <div className="flex-1" />
-          <div className="flex items-center border rounded-md overflow-hidden bg-background shadow-sm h-8">
-            <Button variant="ghost" size="sm" className={cn("rounded-r-none h-full gap-1.5 text-xs", viewMode === 'transcript' && "bg-muted")} onClick={() => setViewMode('transcript')}>
-              <FileText className="h-3.5 w-3.5" />
-              Transcript
-            </Button>
-            <Button variant="ghost" size="sm" className={cn("rounded-l-none h-full gap-1.5 text-xs", viewMode === 'browser' && "bg-muted")} onClick={() => setViewMode('browser')}>
-              <Monitor className="h-3.5 w-3.5" />
-              Browser
-            </Button>
-          </div>
-          <Button variant="outline" size="sm" className="h-8" onClick={() => { const mid = currentMeeting.id; const url = `/b/${mid}/vnc/vnc.html?autoconnect=true&resize=scale&reconnect=true&view_only=false&path=b/${mid}/vnc/websockify`; window.open(url, "_blank"); }}>
-            <ExternalLink className="h-3.5 w-3.5 mr-1" />
-            Fullscreen
-          </Button>
-        </div>
-        {browserViewIframe}
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-2 lg:space-y-6 h-full flex flex-col">
       {/* Desktop Header */}
@@ -1021,7 +975,6 @@ export default function MeetingDetailPage() {
                 >
                   <X className="h-4 w-4" />
                 </Button>
-                <DocsLink href="/docs/cookbook/rename-meeting" />
               </div>
               </div>
             </div>
@@ -1051,28 +1004,6 @@ export default function MeetingDetailPage() {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          {hasBrowserView && (
-            <div className="flex items-center border rounded-md overflow-hidden bg-background shadow-sm h-9">
-              <Button
-                variant="ghost"
-                size="sm"
-                className={cn("rounded-r-none h-full gap-1.5", viewMode === 'transcript' && "bg-muted")}
-                onClick={() => setViewMode('transcript')}
-              >
-                <FileText className="h-4 w-4" />
-                Transcript
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className={cn("rounded-l-none h-full gap-1.5", viewMode === 'browser' && "bg-muted")}
-                onClick={() => setViewMode('browser')}
-              >
-                <Monitor className="h-4 w-4" />
-                Browser
-              </Button>
-            </div>
-          )}
           {(currentMeeting.status === "active" || currentMeeting.status === "completed" || currentMeeting.status === "failed") && transcripts.length > 0 && (
             <div className="flex items-center gap-2">
               <AIChatPanel
@@ -1116,27 +1047,6 @@ export default function MeetingDetailPage() {
                   <DropdownMenuItem onClick={() => handleOpenInProvider("perplexity")}>
                     <Image src="/icons/icons8-perplexity-ai-100.png" alt="Perplexity" width={16} height={16} className="object-contain mr-2" />
                     Open in Perplexity
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem asChild>
-                    <Link href="/docs/cookbook/share-transcript-url" target="_blank" rel="noopener noreferrer" className="flex items-center">
-                      <ExternalLink className="h-4 w-4 mr-2" />
-                      API Docs: Share URL
-                    </Link>
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onClick={() => {
-                      if (!isChatgptPromptExpanded) {
-                        setEditedChatgptPrompt(chatgptPrompt);
-                        setIsChatgptPromptExpanded(true);
-                      } else {
-                        setIsChatgptPromptExpanded(false);
-                      }
-                    }}
-                  >
-                    <Settings className="h-4 w-4 mr-2" />
-                    Configure Prompt
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={() => handleExport("txt")}>
@@ -1189,7 +1099,6 @@ export default function MeetingDetailPage() {
                   )}
                 </DropdownMenuContent>
               </DropdownMenu>
-              <DocsLink href="/docs/cookbook/share-transcript-url" />
               </div>
             </div>
           )}
@@ -1256,7 +1165,6 @@ export default function MeetingDetailPage() {
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
-            <DocsLink href="/docs/rest/bots#stop-bot" />
             </div>
           )}
 
@@ -1372,7 +1280,6 @@ export default function MeetingDetailPage() {
                   >
                     {isSavingTitle ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
                   </Button>
-                  <DocsLink href="/docs/cookbook/rename-meeting" />
                 </div>
               ) : (
                 <div 
@@ -1526,7 +1433,6 @@ export default function MeetingDetailPage() {
                     )}
                 </DropdownMenuContent>
               </DropdownMenu>
-              <DocsLink href="/docs/cookbook/share-transcript-url" />
 
                 {currentMeeting.status === "active" && (
                   <AlertDialog>
@@ -1805,7 +1711,7 @@ export default function MeetingDetailPage() {
               wsConnected={wsConnected}
               wsError={wsError}
               wsReconnectAttempts={reconnectAttempts}
-              headerActions={<DocsLink href="/docs/cookbook/get-transcripts" />}
+              headerActions={null}
               topBarContent={recordingTopBar}
               playbackTime={playbackTime}
               playbackAbsoluteTime={playbackAbsoluteTime}
@@ -1827,12 +1733,7 @@ export default function MeetingDetailPage() {
         <div className="hidden lg:block order-1 lg:order-2">
           <div className="lg:sticky lg:top-6 space-y-6">
           {agentPanelOpen && (currentMeeting.status === "active" || currentMeeting.status === "completed") ? (
-            <div className="rounded-lg border bg-card shadow-sm overflow-hidden" style={{ height: "calc(100vh - 10rem)" }}>
-              <MeetingAgentPanel
-                meetingId={currentMeeting.platform_specific_id}
-                platform={currentMeeting.platform}
-              />
-            </div>
+            null
           ) : apiViewOpen ? (
             <>
             <WsEventLog
@@ -2021,7 +1922,6 @@ export default function MeetingDetailPage() {
                     <FileText className="h-4 w-4" />
                     Notes
                   </CardTitle>
-                  <DocsLink href="/docs/rest/meetings#update-meeting-data" />
                 </div>
                 {isSavingNotes && (
                   <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -2075,6 +1975,12 @@ export default function MeetingDetailPage() {
             meetingData={currentMeeting.data}
             meetingStatus={currentMeeting.status}
             onRegenerate={handleRegenerateNotes}
+          />
+
+          {/* Highlights (Phase 2 MVP) */}
+          <HighlightsCard
+            highlights={(currentMeeting.data as any)?.highlights}
+            meetingId={currentMeeting.id}
           />
 
           {/* TTS - Speak in Meeting */}
@@ -2136,13 +2042,6 @@ export default function MeetingDetailPage() {
           </div>
         </div>
       </div>
-
-      {/* Webhook Delivery Section */}
-      {currentMeeting.status === "completed" && (
-        <div className="mt-6">
-          <WebhookDeliverySection meetingId={meetingId} />
-        </div>
-      )}
 
     </div>
   );

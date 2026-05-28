@@ -96,11 +96,11 @@ export function AiNotesCard({ meetingData, meetingStatus, onRegenerate }: AiNote
           <div className="space-y-3">
             <Separator />
 
-            {aiNotes.key_moments?.length > 0 && (
+            {(aiNotes.key_moments?.length || 0) > 0 && (
               <div>
                 <h4 className="text-xs font-semibold text-muted-foreground mb-1.5">KEY MOMENTS</h4>
                 <ul className="space-y-1">
-                  {aiNotes.key_moments.map((m, i) => (
+                  {aiNotes.key_moments?.map((m, i) => (
                     <li key={i} className="text-xs">
                       {m.timestamp && <span className="text-muted-foreground">{m.timestamp}</span>}
                       {m.speaker && <span className="text-muted-foreground"> [{m.speaker}]</span>}
@@ -111,22 +111,22 @@ export function AiNotesCard({ meetingData, meetingStatus, onRegenerate }: AiNote
               </div>
             )}
 
-            {aiNotes.decisions?.length > 0 && (
+            {(aiNotes.decisions?.length || 0) > 0 && (
               <div>
                 <h4 className="text-xs font-semibold text-muted-foreground mb-1.5">DECISIONS</h4>
                 <ul className="space-y-1">
-                  {aiNotes.decisions.map((d, i) => (
+                  {aiNotes.decisions?.map((d, i) => (
                     <li key={i} className="text-xs">• {d}</li>
                   ))}
                 </ul>
               </div>
             )}
 
-            {aiNotes.action_items?.length > 0 && (
+            {(aiNotes.action_items?.length || 0) > 0 && (
               <div>
                 <h4 className="text-xs font-semibold text-muted-foreground mb-1.5">ACTION ITEMS</h4>
                 <ul className="space-y-1">
-                  {aiNotes.action_items.map((a, i) => (
+                  {aiNotes.action_items?.map((a, i) => (
                     <li key={i} className="text-xs">
                       □ {a.description}
                       {a.assignee && <span className="text-muted-foreground"> → {a.assignee}</span>}
@@ -137,11 +137,11 @@ export function AiNotesCard({ meetingData, meetingStatus, onRegenerate }: AiNote
               </div>
             )}
 
-            {aiNotes.unresolved?.length > 0 && (
+            {(aiNotes.unresolved?.length || 0) > 0 && (
               <div>
                 <h4 className="text-xs font-semibold text-muted-foreground mb-1.5">OPEN QUESTIONS</h4>
                 <ul className="space-y-1">
-                  {aiNotes.unresolved.map((u, i) => (
+                  {aiNotes.unresolved?.map((u, i) => (
                     <li key={i} className="text-xs">? {u}</li>
                   ))}
                 </ul>
@@ -174,13 +174,13 @@ function formatNotesForCopy(notes: AiNotesData): string {
     notes.summary,
   ];
   if (notes.decisions?.length) {
-    lines.push("\nDECISIONS", ...notes.decisions.map(d => `• ${d}`));
+    lines.push("\nDECISIONS", ...notes.decisions?.map(d => `• ${d}`));
   }
   if (notes.action_items?.length) {
-    lines.push("\nACTION ITEMS", ...notes.action_items.map(a => `□ ${a.description}${a.assignee ? ` → ${a.assignee}` : ''}`));
+    lines.push("\nACTION ITEMS", ...notes.action_items?.map(a => `□ ${a.description}${a.assignee ? ` → ${a.assignee}` : ''}`));
   }
   if (notes.unresolved?.length) {
-    lines.push("\nOPEN QUESTIONS", ...notes.unresolved.map(u => `? ${u}`));
+    lines.push("\nOPEN QUESTIONS", ...notes.unresolved?.map(u => `? ${u}`));
   }
   if (notes.follow_up_email) {
     lines.push("\nFOLLOW-UP EMAIL", notes.follow_up_email);

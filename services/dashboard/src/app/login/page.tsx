@@ -1,24 +1,20 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import Image from "next/image";
 import { signIn } from "next-auth/react";
-import { Mail, Loader2, CheckCircle, ArrowLeft, AlertTriangle, XCircle, ArrowRight, Plus } from "lucide-react";
+import { Mail, Loader2, CheckCircle, ArrowLeft, AlertTriangle, XCircle, ArrowRight } from "lucide-react";
 import { Logo } from "@/components/ui/logo";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { useAuthStore } from "@/stores/auth-store";
 import { toast } from "sonner";
-import { parseMeetingInput } from "@/lib/parse-meeting-input";
-import { savePendingMeetingUrl } from "@/lib/pending-meeting";
 import { cn } from "@/lib/utils";
 import { withBasePath } from "@/lib/base-path";
 
-type LoginState = "onboarding" | "email" | "sent";
+// Grainbox: direct email sign-in, no onboarding step
+type LoginState = "email" | "sent";
 
 interface HealthStatus {
   status: "ok" | "degraded" | "error";
@@ -38,16 +34,9 @@ export default function LoginPage() {
   const { sendMagicLink, isAuthenticated } = useAuthStore();
   const [email, setEmail] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [state, setState] = useState<LoginState>("onboarding");
-  const [meetingInput, setMeetingInput] = useState("");
+  const [state, setState] = useState<LoginState>("email");
   const [healthStatus, setHealthStatus] = useState<HealthStatus | null>(null);
   const [healthLoading, setHealthLoading] = useState(true);
-
-  const parsedInput = useMemo(() => parseMeetingInput(meetingInput), [meetingInput]);
-  const isMeetingValid = parsedInput !== null;
-  // Only allow Google Meet and Teams for now
-  const isSupportedPlatform = parsedInput?.platform === "google_meet" || parsedInput?.platform === "teams";
-  const canContinue = isMeetingValid && isSupportedPlatform;
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -94,25 +83,6 @@ export default function LoginPage() {
     checkHealth();
   }, []);
 
-  const handleMeetingContinue = () => {
-    if (!parsedInput) {
-      toast.error("Please enter a valid meeting URL");
-      return;
-    }
-    if (!isSupportedPlatform) {
-      toast.error("Only Google Meet and Microsoft Teams are supported right now");
-      return;
-    }
-    savePendingMeetingUrl(meetingInput);
-    setState("email");
-  };
-
-  const handleMeetingKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && canContinue) {
-      handleMeetingContinue();
-    }
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -127,9 +97,9 @@ export default function LoginPage() {
 
       if (result.success) {
         if (result.mode === "direct") {
-          toast.success(result.isNewUser ? "Account created! Welcome to Vexa." : "Welcome back!");
+          toast.success(result.isNewUser ? "Account created! Welcome to Grainbox." : "Welcome back!");
           router.push("/");
-          return; // Keep submitting state during redirect
+          return;
         } else {
           setState("sent");
           toast.success("Magic link sent! Check your email.");
@@ -193,139 +163,12 @@ export default function LoginPage() {
   const isOAuthEnabled = isGoogleAuthEnabled || isMicrosoftAuthEnabled;
   const isEmailAuthEnabled = !isOAuthEnabled && (healthStatus?.authMode === "magic-link" || healthStatus?.authMode === "direct");
 
-  // Landing page onboarding state
-  if (state === "onboarding") {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-background px-4">
-        {/* Large Vexa wordmark */}
-        <div className="mb-12 flex flex-col items-center gap-3">
-          <Logo size="lg" showText={false} />
-          <span className="text-lg font-semibold tracking-[-0.02em] text-foreground">vexa</span>
-        </div>
-
-        {/* Hero heading */}
-        <h1 className="text-3xl sm:text-4xl md:text-5xl font-semibold tracking-[-0.03em] text-foreground text-center max-w-2xl leading-[1.1]">
-          Drop a bot to your meeting
-        </h1>
-
-        {/* Input area */}
-        <div className="w-full max-w-xl mt-10">
-          <div className={cn(
-            "relative flex items-center rounded-2xl border bg-card shadow-[0_1px_3px_rgba(0,0,0,0.04),0_8px_32px_-8px_rgba(0,0,0,0.06)] transition-all",
-            meetingInput && canContinue
-              ? "border-border ring-1 ring-primary/20"
-              : meetingInput && isMeetingValid && !isSupportedPlatform
-              ? "border-orange-300"
-              : "border-border"
-          )}>
-            {/* Platform icon inside input */}
-            {parsedInput && isSupportedPlatform && (
-              <div className="absolute left-4 top-1/2 -translate-y-1/2 z-10">
-                <Image
-                  src={parsedInput.platform === "google_meet"
-                    ? "/icons/icons8-google-meet-96.png"
-                    : "/icons/icons8-teams-96.png"
-                  }
-                  alt={parsedInput.platform === "google_meet" ? "Google Meet" : "Microsoft Teams"}
-                  width={24}
-                  height={24}
-                  className="rounded"
-                />
-              </div>
-            )}
-            <input
-              type="text"
-              placeholder="Paste meeting URL..."
-              value={meetingInput}
-              onChange={(e) => setMeetingInput(e.target.value)}
-              onKeyDown={handleMeetingKeyDown}
-              className={cn(
-                "flex-1 bg-transparent px-5 py-4 text-base text-foreground placeholder:text-muted-foreground focus:outline-none",
-                parsedInput && isSupportedPlatform && "pl-12"
-              )}
-              autoFocus
-              autoComplete="off"
-            />
-            {/* Submit arrow button */}
-            <button
-              onClick={handleMeetingContinue}
-              disabled={!canContinue}
-              aria-label="Continue with meeting URL"
-              className={cn(
-                "mr-3 flex h-9 w-9 items-center justify-center rounded-xl transition-all",
-                canContinue
-                  ? "bg-foreground text-background hover:opacity-80 cursor-pointer"
-                  : "bg-muted text-muted-foreground cursor-not-allowed"
-              )}
-            >
-              <ArrowRight className="h-4 w-4" />
-            </button>
-          </div>
-
-          {/* Unsupported platform hint */}
-          {meetingInput && isMeetingValid && !isSupportedPlatform && (
-            <p className="mt-2 text-sm text-orange-600 dark:text-orange-400 text-center">
-              Only Google Meet and Microsoft Teams are supported right now
-            </p>
-          )}
-        </div>
-
-        {/* Platform chips */}
-        <div className="flex flex-wrap items-center justify-center gap-3 mt-8">
-          <div className="flex items-center gap-2.5 px-4 py-2.5 rounded-full border border-border bg-card text-sm text-muted-foreground">
-            <Image
-              src="/icons/icons8-google-meet-96.png"
-              alt="Google Meet"
-              width={20}
-              height={20}
-              className="rounded-sm"
-            />
-            Google Meet
-          </div>
-          <div className="flex items-center gap-2.5 px-4 py-2.5 rounded-full border border-border bg-card text-sm text-muted-foreground">
-            <Image
-              src="/icons/icons8-teams-96.png"
-              alt="Microsoft Teams"
-              width={20}
-              height={20}
-              className="rounded-sm"
-            />
-            Microsoft Teams
-          </div>
-          <a
-            href="https://meet.new"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 px-4 py-2.5 rounded-full border border-dashed border-border bg-card text-sm text-muted-foreground hover:text-foreground hover:border-gray-400 transition-colors"
-          >
-            <Plus className="h-4 w-4" />
-            Create a Meet
-          </a>
-        </div>
-
-        {/* Sign in link */}
-        <button
-          type="button"
-          onClick={() => setState("email")}
-          className="mt-10 text-sm text-muted-foreground hover:text-foreground transition-colors"
-        >
-          Already have an account? Sign in
-        </button>
-
-        <p className="absolute bottom-6 text-[11.5px] text-muted-foreground">
-          Open Source · Developer-first · API-first
-        </p>
-      </div>
-    );
-  }
-
-  // Auth states (email / sent) — also landing-page style
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-background px-4">
       {/* Logo */}
       <div className="mb-10 flex flex-col items-center gap-3">
         <Logo size="lg" showText={false} />
-        <span className="text-lg font-semibold tracking-[-0.02em] text-foreground">vexa</span>
+        <span className="text-lg font-semibold tracking-[-0.02em] text-foreground">Grainbox</span>
       </div>
 
       {/* Configuration Error Banner */}
@@ -366,10 +209,10 @@ export default function LoginPage() {
       {state === "email" ? (
         <div className="w-full max-w-sm">
           <h2 className="text-2xl font-semibold tracking-[-0.02em] text-foreground text-center mb-2">
-            Sign in to continue
+            Sign in to Grainbox
           </h2>
           <p className="text-sm text-muted-foreground text-center mb-8">
-            Choose your provider to get started
+            Enter your email to access your meetings
           </p>
 
           <div className="space-y-3">
@@ -471,14 +314,9 @@ export default function LoginPage() {
           )}
 
           <div className="mt-6 text-center">
-            <button
-              type="button"
-              onClick={() => setState("onboarding")}
-              className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <ArrowLeft className="inline mr-1 h-3 w-3" />
-              Back
-            </button>
+            <p className="text-sm text-muted-foreground">
+              Don't have an account? You'll be created one on first sign-in.
+            </p>
           </div>
         </div>
       ) : (
@@ -530,7 +368,7 @@ export default function LoginPage() {
       )}
 
       <p className="absolute bottom-6 text-[11.5px] text-muted-foreground">
-        Open Source · Developer-first · API-first
+        Self-hosted meeting intelligence
       </p>
     </div>
   );
