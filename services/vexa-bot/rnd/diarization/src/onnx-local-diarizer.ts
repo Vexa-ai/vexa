@@ -215,7 +215,7 @@ export class OnnxLocalDiarizer implements Diarizer {
     // producing flapping labels and (despite cooldown) too many short-window
     // clusters. The visible responsiveness win comes from the periodic
     // peek at 250 ms, which is read-only and doesn't allocate clusters.
-    this.minUtteranceSamples = Math.floor(((cfg.minUtteranceMs ?? 500) / 1000) * SAMPLE_RATE);
+    this.minUtteranceSamples = Math.floor(((cfg.minUtteranceMs ?? 300) / 1000) * SAMPLE_RATE);
     this.minSeedUtteranceSamples = Math.floor(((cfg.minSeedUtteranceMs ?? 3000) / 1000) * SAMPLE_RATE);
     // With change-point detection active, allow longer utterances. The
     // change-point check splits at speaker changes anyway, and longer
