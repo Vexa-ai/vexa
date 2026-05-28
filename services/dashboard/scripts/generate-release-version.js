@@ -48,7 +48,7 @@ function readRootVersion() {
 function readChartAppVersion() {
   if (!fs.existsSync(CHART_YAML)) return null;
   const text = fs.readFileSync(CHART_YAML, 'utf-8');
-  // appVersion: "0.10.6.2.1"  (line in Chart.yaml)
+  // appVersion: "0.10.6.3"  (line in Chart.yaml)
   const m = text.match(/^\s*appVersion\s*:\s*['"]?(\d+(?:\.\d+)+)['"]?\s*$/m);
   return m ? normalizeVersion(m[1]) : null;
 }
