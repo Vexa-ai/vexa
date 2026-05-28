@@ -18,7 +18,9 @@ RUN mkdir -p /app/voices
 ENV PIPER_VOICES_DIR=/app/voices
 
 # Run as non-root
-RUN useradd -r -s /bin/false appuser && chown -R appuser /app/voices
+RUN useradd -r -s /bin/false appuser \
+    && chmod -R a+rX /app \
+    && chown -R appuser /app/voices
 USER appuser
 
 EXPOSE 8002

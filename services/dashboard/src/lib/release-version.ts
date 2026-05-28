@@ -9,13 +9,14 @@
  *
  *   1. NEXT_PUBLIC_VEXA_OSS_VERSION / *_RELEASE_DATE env vars
  *      (CI / Docker build-arg override path)
- *   2. deploy/helm/charts/vexa/Chart.yaml `appVersion`
+ *   2. root VERSION
+ *   3. deploy/helm/charts/vexa/Chart.yaml `appVersion`
  *      — authoritative source for the OSS release this dashboard ships in
- *   3. Latest git tag matching `v\d+\.\d+\.\d+`
+ *   4. Latest git tag matching `v\d+\.\d+\.\d+`
  *
- * If none resolve, the generator throws — build fails loud rather than
- * shipping `unknown`. To bump the version, bump Chart.yaml appVersion (or
- * `git tag vX.Y.Z`) and the next build picks it up automatically.
+ * If a CI/Docker env override disagrees with VERSION / Chart.yaml, the
+ * generator throws — build fails loud rather than shipping a stale public
+ * release identity.
  */
 
 import generated from "./release-version.generated.json";
@@ -29,5 +30,6 @@ export const RELEASE = {
 
 /** GitHub release URL for the current version. */
 export function releaseUrl(version: string = RELEASE.version): string {
-  return `https://github.com/Vexa-ai/vexa/releases/tag/${version}`;
+  const tag = version.startsWith("v") ? version : `v${version}`;
+  return `https://github.com/Vexa-ai/vexa/releases/tag/${tag}`;
 }
