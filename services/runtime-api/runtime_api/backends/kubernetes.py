@@ -27,17 +27,29 @@ class KubernetesBackend(Backend):
     def _get_api(self):
         if self._api is not None:
             return self._api
+        import os
         from kubernetes import client, config as k8s_config
+        in_cluster_token = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+        if os.path.exists(in_cluster_token):
+            with open(in_cluster_token) as f:
+                token = f.read().strip()
+            host = os.environ.get("KUBERNETES_SERVICE_HOST")
+            port = os.environ.get("KUBERNETES_SERVICE_PORT", "443")
+            cfg = client.Configuration()
+            cfg.host = f"https://{host}:{port}"
+            cfg.ssl_ca_cert = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+            cfg.verify_ssl = True
+            cfg.api_key = {"authorization": f"Bearer {token}"}
+            api_client = client.ApiClient(configuration=cfg)
+            self._api = client.CoreV1Api(api_client)
+            logger.info("Loaded in-cluster Kubernetes config (explicit SA token)")
+            return self._api
         try:
-            k8s_config.load_incluster_config()
-            logger.info("Loaded in-cluster Kubernetes config")
+            k8s_config.load_kube_config()
+            logger.info("Loaded kubeconfig from file")
         except k8s_config.ConfigException:
-            try:
-                k8s_config.load_kube_config()
-                logger.info("Loaded kubeconfig from file")
-            except k8s_config.ConfigException:
-                logger.error("Could not load Kubernetes config")
-                raise
+            logger.error("Could not load Kubernetes config")
+            raise
         self._api = client.CoreV1Api()
         return self._api
 
