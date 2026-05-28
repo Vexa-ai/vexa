@@ -82,8 +82,15 @@ export function resolveBrowserApiUrl({
   }
 
   if (gatewayHostPort && isInternalServiceUrl(internalApiUrl)) {
-    const inferred = publicUrlFromRequestHost(requestHost, requestProto, gatewayHostPort);
-    return { apiUrl: inferred, publicApiUrl: inferred };
+    // Compose case: dashboard is published on a different host port than the
+    // gateway (e.g. dashboard :41688, gateway :41680). Some browser/network
+    // environments only expose the dashboard's published port, so pointing the
+    // browser directly at the gateway port breaks WS + cross-origin REST.
+    // Prefer same-origin (empty publicApiUrl) so the browser uses the
+    // dashboard's own /ws + /api/vexa/* rewrites — which already proxy to the
+    // gateway service-internal URL. Curl-from-host can still reach the
+    // gateway port directly; this only affects what the browser is told.
+    return { apiUrl: "", publicApiUrl: "" };
   }
 
   if (isInternalServiceUrl(internalApiUrl)) {
