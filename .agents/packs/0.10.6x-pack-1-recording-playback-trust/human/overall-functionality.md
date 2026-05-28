@@ -24,3 +24,5 @@ Live/human status:
 - Lite hot validation has not been rerun after the fix.
 
 Required next step: rerun hot validation against both Compose and Lite targets with admitted bots, record human observations in this evidence tree, rerun the evidence checker, and only then consider the PR ready to leave draft.
+
+Post-pass outcome (added after the fact, file otherwise preserved as historical record): the code reviewer signed off on the PR #364 split-view diff on 2026-05-24 (verdict `pass`, see `code-review.md`), the post-pass trust fixes `898b261 fix(dashboard): neutralize "missing recording" red banner` and `60644d2 fix(recordings): self-heal finalizer when bot exits before chunk-write` landed, and epic #356 was promoted to `status:ready-for-stage`. This pack PR was accepted into the 0.10.6.3 stitched candidate.

@@ -58,3 +58,11 @@ Fix: return absolute presigned object-store URLs directly and route relative `/r
 
 - Hot human-in-the-loop Compose and Lite validation remains pending.
 - Hardenloop remains `incomplete_coverage` due to missing local scanners, with zero normalized release blockers.
+
+## Post-pass follow-ups
+
+After the human reviewer signed off, three additional commits landed on the pack branch. None of them re-opened the code-review verdict; they are recorded here so the diff in PR #364 is fully explained:
+
+- `898b261 fix(dashboard): neutralize "missing recording" red banner` — `services/dashboard/src/app/meetings/[id]/page.tsx`: changes the red destructive banner to a neutral "Recording is finalizing..." state during the normal post-meeting finalization window. Pack 1 trust UX polish.
+- `60644d2 fix(recordings): self-heal finalizer when bot exits before chunk-write` — `services/meeting-api/meeting_api/recording_finalizer.py` and `services/meeting-api/meeting_api/sweeps.py`: finalizer now inline-recovers JSONB from storage when the meeting record's recordings list is empty due to a bot-exit-vs-chunk-write race; the unfinalized-sweep min-age cutoff drops from 120s to 5s so the safety net catches real escapes fast. Same blast radius (`recording_finalizer.py`, `sweeps.py`).
+- `5acf36c fix(pack-1): use @example.com (RFC 2606) instead of @example.invalid (RFC 6761)` — `ops/lite_playback_smoke.py` evidence-only fix: the seeded user email used `@example.invalid`, which Pydantic v2 EmailStr rejects, breaking `GET /admin/users` for any client after the stitched 0.10.6.3 candidate ran the smoke. Found by the autonomous stitch sweep. No product code touched.

@@ -66,3 +66,5 @@ Required next evidence:
 - Rerun Compose hot validation with admitted bots after commit `a7ba8f1`.
 - Human confirmation that the same live page, loaded after the patch, transitions from processing to playable recording without a manual reload and that Play starts the canonical recording.
 - Machine transcript/webhook/playback telemetry correlated to the same run.
+
+Post-pass outcome (added after the fact, file otherwise preserved as historical record): after the code-review pass verdict (`c56e4c0`) and the post-pass trust fixes `898b261 fix(dashboard): neutralize "missing recording" red banner` and `60644d2 fix(recordings): self-heal finalizer when bot exits before chunk-write`, epic #356 was promoted to `status:ready-for-stage` and this PR was accepted into the 0.10.6.3 stitched candidate.
