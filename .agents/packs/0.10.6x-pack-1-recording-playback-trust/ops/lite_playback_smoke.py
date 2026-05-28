@@ -56,7 +56,7 @@ async def main():
     rec_id = int(suffix[-9:])
     media_id = rec_id + 1
     token = generate_prefixed_token("tx", 40)
-    email = f"pack1-lite-smoke-{suffix}@example.invalid"
+    email = f"pack1-lite-smoke-{suffix}@example.com"
     session_uid = f"pack1-lite-smoke-{suffix}"
 
     async with async_session_local() as db:
