@@ -166,6 +166,18 @@ LOCAL_TRANSCRIPTION=true
 | MinIO                             | 9000  | Bucket `vexa-recordings`      |
 
 
+### Browser routing through the dashboard
+
+In compose, the dashboard (`DASHBOARD_HOST_PORT`, default 3001) and the API gateway (`API_GATEWAY_HOST_PORT`, default 8056) are published on different host ports. The dashboard does not tell the browser to talk directly to `:8056`. Instead, `/api/config` (computed by `resolveBrowserApiUrl()` in `services/dashboard/src/lib/browser-api-url.ts`) returns same-origin URLs, and the dashboard's `next.config.ts` rewrites carry browser traffic:
+
+| Browser path | Carries | Rewrite target |
+|---|---|---|
+| `/ws` | WebSocket upgrade (live transcripts) | `${VEXA_API_URL}/ws` |
+| `/api/vexa/*` | REST | `${VEXA_API_URL}/*` |
+| `/b/*` | VNC/CDP for browser sessions | `${VEXA_API_URL}/b/*` |
+
+This is intentional: some browser environments (sandboxes, single-port dev-tunnel proxies, certain CI browsers) only expose the dashboard's published port. Routing everything through the dashboard origin keeps WebSocket upgrades working in those environments. See `services/dashboard/README.md#runtime-config-ssot-apiconfig` for the full resolver behavior. Two 0.10.6.3 regression fixes (`df87805`, `3566512`) hardened this same-origin fallback for both Lite and compose lanes.
+
 ### Startup dependency order
 
 Services should start in this order due to dependencies:

@@ -79,10 +79,39 @@ All gateway requests from the browser go through Next.js server-side proxies —
 |---|---|---|
 | `/api/vexa/*` | `${VEXA_API_URL}/*` | `src/app/api/vexa/[...path]/route.ts` |
 | `/b/*` | `${VEXA_API_URL}/b/*` | `next.config.ts` rewrites |
+| `/ws` | `${VEXA_API_URL}/ws` (WS upgrade) | `next.config.ts` rewrites |
 
 **Rule:** Components must use relative paths (`/b/{token}/save`, `/api/vexa/meetings`) for fetch calls. The public gateway URL (`publicApiUrl` from `/api/config`) is only for display purposes (e.g., CDP connection strings for external tools).
 
 In Docker Compose, `VEXA_API_URL` comes from the root `.env`. In Kubernetes, it comes from a ConfigMap.
+
+## Runtime Config SSOT (`/api/config`)
+
+The dashboard's `/api/config` route is the runtime source of truth for what the browser is told to talk to. It returns `wsUrl`, `apiUrl`, `publicApiUrl`, `authToken`, `defaultBotName`, `hostedMode`, and `webappUrl`. The route fails closed (HTTP 500) if `VEXA_API_URL` is not set — there is no silent default.
+
+`apiUrl` and `publicApiUrl` are computed by `resolveBrowserApiUrl()` in `src/lib/browser-api-url.ts`. The resolver picks one of four outcomes:
+
+| Inputs | Result |
+|---|---|
+| Configured public URL is loopback **and** request host is loopback (Lite single-port publish, browser at e.g. `localhost:41692`) | Same-origin (`apiUrl=""`, `publicApiUrl=""`). Browser uses the dashboard `/ws` + `/api/vexa/*` rewrites. |
+| Configured public URL is loopback, request host is non-loopback (configured-on-localhost dashboard reached via real hostname) | Hostname swap: keeps the configured port, replaces hostname with the request hostname. |
+| Configured public URL is non-loopback (Helm/hosted with explicit `VEXA_PUBLIC_API_URL`) | Configured value passed through. |
+| No public URL configured, internal URL is an internal-service hostname (`api-gateway`, `*.svc`, `*.svc.cluster.local`, short DNS) — including when `API_GATEWAY_HOST_PORT` is set (Compose) | Same-origin. The dashboard's own `/ws` + `/api/vexa/*` rewrites carry the traffic. |
+
+This matters because some browser environments (sandboxes, single-port dev-tunnel proxies, certain CI browsers) can only reach the dashboard's published port — pointing the browser directly at the gateway port breaks WebSocket upgrades with close code 1006 even when `curl` from the host works fine. The resolver enforces same-origin in those cases so the dashboard's compiled-in rewrites handle the routing.
+
+`wsUrl` is derived from `publicApiUrl` when set, otherwise from `NEXT_PUBLIC_APP_URL` (when not localhost), otherwise from the request host (`${proto}://${host}/ws` — the same-origin path).
+
+### Cookie name SSOT
+
+`getAuthCookieName()` / `getUserInfoCookieName()` in `src/lib/auth-cookies.ts` are the cookie-name SSOT, overridable via:
+
+| Variable | Default |
+|---|---|
+| `VEXA_AUTH_COOKIE_NAME` | `vexa-token` |
+| `VEXA_USER_INFO_COOKIE_NAME` | `vexa-user-info` |
+
+Lite overrides these to `vexa-token-lite` / `vexa-user-info-lite` so a co-resident Compose dashboard does not collide. `/api/config` reads the auth cookie through this helper; the rest of the dashboard's cookie reads/writes are tracked for follow-on in [#382](https://github.com/Vexa-ai/vexa/issues/382) (dashboard auth resilience — full SSOT rewire).
 
 ## Zoom Notes
 
@@ -108,7 +137,8 @@ Zoom meeting joins require additional setup in the Vexa backend (Zoom Meeting SD
 | Registration policy | `ALLOW_REGISTRATIONS`, `ALLOWED_EMAIL_DOMAINS` |
 | Bot defaults | `DEFAULT_BOT_NAME` |
 | Hosted mode | `NEXT_PUBLIC_HOSTED_MODE` |
-| Frontend/public URLs | `NEXT_PUBLIC_APP_URL`, `NEXT_PUBLIC_BASE_URL`, `NEXT_PUBLIC_TRANSCRIPT_SHARE_BASE_URL`, `NEXT_PUBLIC_WEBAPP_URL` |
+| Frontend/public URLs | `NEXT_PUBLIC_APP_URL`, `NEXT_PUBLIC_BASE_URL`, `NEXT_PUBLIC_TRANSCRIPT_SHARE_BASE_URL`, `NEXT_PUBLIC_WEBAPP_URL`, `VEXA_PUBLIC_API_URL` (browser-facing gateway URL when different from `VEXA_API_URL`), `API_GATEWAY_HOST_PORT` (compose-mode hint for the resolver) |
+| Cookie names | `VEXA_AUTH_COOKIE_NAME` (default `vexa-token`), `VEXA_USER_INFO_COOKIE_NAME` (default `vexa-user-info`) |
 
 See `.env.example` for a complete template.
 
