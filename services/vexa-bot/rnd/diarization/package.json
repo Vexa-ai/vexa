@@ -13,7 +13,8 @@
     "eval:run": "tsx eval/run-eval.ts",
     "eval:diff": "tsx eval/print-comparison.ts",
     "eval:suite": "tsx eval/run-suite.ts",
-    "eval:wav": "tsx eval/run-wav.ts"
+    "eval:wav": "tsx eval/run-wav.ts",
+    "eval:score": "tsx eval/run-transcript-score.ts"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",

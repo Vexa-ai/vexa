@@ -1,0 +1,27 @@
+{
+  "id": "allin-273-benioff-neuralink-joke",
+  "description": "Two-speaker extended monologue pattern: Jason holds the floor across four consecutive same-speaker segments (all gaps > 4s, no merges), then Friedberg takes over for four more. Tests diarization of sustained single-speaker runs with clean inter-speaker handoff, no interjections or overlapping crosstalk present in this slice.",
+  "tts": "piper",
+  "speakers": {
+    "jason": {
+      "piper_voice": "en_US-ryan-medium"
+    },
+    "friedberg": {
+      "piper_voice": "en_US-norman-medium"
+    }
+  },
+  "turns": [
+    {
+      "speaker": "jason",
+      "text": "as not material to their well-being. So when you look at Trump being on a six-month timeline for the midterms and he's only got two more years in office after that, you got Xi who's working off of a hundred-year playbook. How does that dynamic play out with Trump and the midterms and his core constituency, MAGA, which is now evolving into America first, America only? And this kind of is rubbing that group of people the wrong way.",
+      "overlap_with_prev_ms": 0,
+      "pause_after_ms": 0
+    },
+    {
+      "speaker": "friedberg",
+      "text": "I think the second and third order effects of anything that comes out of China is what's going to be most consequential to the average voter, which is job security and income security and income growth. And then cost of living impact. The cost of living impact would be if there can be some deflationary effect from a trade deal that makes access to goods lower price for Americans. And then anything that America is exporting, there's increased demand. Like there's a follow-on effect to the soybean export market.",
+      "overlap_with_prev_ms": 0,
+      "pause_after_ms": 0
+    }
+  ]
+}

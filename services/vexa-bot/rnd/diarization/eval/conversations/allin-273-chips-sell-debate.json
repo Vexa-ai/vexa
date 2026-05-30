@@ -1,0 +1,90 @@
+{
+  "id": "allin-273-chips-sell-debate",
+  "description": "Three-speaker podcast excerpt where Jason rapid-fires questions at Benioff about Salesforce's China business (Alibaba partnership, data residency, CCP access) with a single Chamath interjection. Exercises rapid jason→benioff handoffs, a one-word interjection from a third speaker mid-benioff monologue, and an interruption where Jason cuts into Benioff before synthesis completes.",
+  "tts": "piper",
+  "speakers": {
+    "jason": {
+      "piper_voice": "en_US-ryan-medium"
+    },
+    "benioff": {
+      "piper_voice": "en_US-joe-medium"
+    },
+    "chamath": {
+      "piper_voice": "en_US-norman-medium"
+    }
+  },
+  "turns": [
+    {
+      "speaker": "benioff",
+      "text": "with each other. They're very — they have a sales orientation. So, I expect a lot of order books to come back.",
+      "overlap_with_prev_ms": 0,
+      "pause_after_ms": 445
+    },
+    {
+      "speaker": "jason",
+      "text": "I have a question for you. Are you allowed to sell software in China?",
+      "overlap_with_prev_ms": 0,
+      "pause_after_ms": 150
+    },
+    {
+      "speaker": "benioff",
+      "text": "Well, with the right — the Chinese have a lot of data residency laws. So you know we — we do — it is — we don't have any offices or employees in China. We never have. The only time we end up with any residue in China is when we buy a company and they have a presence over there and then we have to divest from it. We have an exclusive partnership with Alibaba. Everything just goes through them and we don't do anything in China.",
+      "overlap_with_prev_ms": 0,
+      "pause_after_ms": 530
+    },
+    {
+      "speaker": "jason",
+      "text": "Is it significant growing? Is it what percentage of your revenue is it?",
+      "overlap_with_prev_ms": 0,
+      "pause_after_ms": 40
+    },
+    {
+      "speaker": "benioff",
+      "text": "Yeah, it's it's great. You know, we have — it's a great partnership. Key customers of Salesforce like Louis Vuitton, you know, or Loro Piana, I know Chamath loves Loro Piana.",
+      "overlap_with_prev_ms": 0,
+      "pause_after_ms": 595
+    },
+    {
+      "speaker": "chamath",
+      "text": "Yeah.",
+      "overlap_with_prev_ms": 1500,
+      "pause_after_ms": 100
+    },
+    {
+      "speaker": "benioff",
+      "text": "And you know, Loro Piana sells a lot of sweaters in China and then, you know, in all other stores all over the world,",
+      "overlap_with_prev_ms": 200,
+      "pause_after_ms": 785
+    },
+    {
+      "speaker": "benioff",
+      "text": "they use Salesforce, but in China, it's Salesforce on Alibaba.",
+      "overlap_with_prev_ms": 0,
+      "pause_after_ms": 1500
+    },
+    {
+      "speaker": "jason",
+      "text": "It's still your code, but then it resides in their servers for data residency stuff.",
+      "overlap_with_prev_ms": 0,
+      "pause_after_ms": 1500
+    },
+    {
+      "speaker": "benioff",
+      "text": "Their data residency, their partnership. It's a totally unique relationship. It's the only place in the world that we do such a thing.",
+      "overlap_with_prev_ms": 0,
+      "pause_after_ms": 0
+    },
+    {
+      "speaker": "jason",
+      "text": "Yeah. And it has to be all the data has to be kept in China. All the data has to be accessible by the CCP.",
+      "overlap_with_prev_ms": 1985,
+      "pause_after_ms": 1500
+    },
+    {
+      "speaker": "benioff",
+      "text": "That's why it's so extraordinary. By the way, what Elon has — you know, Elon has Tesla in China, no partnership. He's the only one. He has a phenomenal relationship with Xi. When you look at Xi and Elon together, notice how deferential and respectful they are of each other. And here are these AI cars with all these cameras, American-made,",
+      "overlap_with_prev_ms": 0,
+      "pause_after_ms": 0
+    }
+  ]
+}
