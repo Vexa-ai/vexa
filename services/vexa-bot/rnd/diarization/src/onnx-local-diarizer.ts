@@ -236,9 +236,9 @@ export class OnnxLocalDiarizer implements Diarizer {
     //     transition without contaminating either head or tail
     //   - 0.45 threshold: same as newSpeakerThreshold; below this the two
     //     halves are the same speaker continuing
-    this.changePointCheckIntervalSamples = Math.floor(((cfg.changePointCheckIntervalMs ?? 2000) / 1000) * SAMPLE_RATE);
+    this.changePointCheckIntervalSamples = Math.floor(((cfg.changePointCheckIntervalMs ?? 1000) / 1000) * SAMPLE_RATE);
     this.changePointHeadTailSamples = Math.floor(((cfg.changePointHeadTailMs ?? 1500) / 1000) * SAMPLE_RATE);
-    this.changePointDistThreshold = cfg.changePointDistThreshold ?? 0.50;
+    this.changePointDistThreshold = cfg.changePointDistThreshold ?? 0.40;
     // Periodic peek defaults: 250 ms cadence, 750 ms window, 0.40 threshold.
     // Tighter than the previous 500/1000 — label refresh visibly lagged on
     // YouTube when peek fired only twice a second. 250 ms gives 4 label
